@@ -45,7 +45,7 @@ The primary use case was a **local coding agent**: point Kilo Code (or any OpenA
 
 The privacy angle is not an afterthought. My background is in social work, where you routinely handle information that genuinely should not leave the room. The idea of pasting case notes or client details into a cloud AI product is uncomfortable but workloads in the field are often challenging making tools like llm workflows for documentation helpful. Running a model locally means the data stays on the machine — no API calls phoning home, no training pipeline, no terms of service to read carefully or settings to change.
 
-The name is a small nod to all of this: a beaver, like a llama, is an animal (llama.cpp deserves the credit for making animal-named AI tools a thing). And a beaver builds a dam — which felt like a fitting metaphor for keeping your AI use contained.
+I named it beaver in part because of how much it relies on llama and because a beaver builds a dam which felt like a fitting metaphor for keeping your AI use contained.
 
 ---
 
