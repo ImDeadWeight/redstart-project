@@ -13,14 +13,14 @@
   ],
   "extraResources": [
     {
-      "from": "../beaver-dam/src/chat-ui/dist",
+      "from": "../../beaver-dam/src/chat-ui/dist",
       "to": "chat-ui",
       "filter": ["**/*"]
     }
   ],
   "win": {
     "target": "nsis",
-    "icon": "../beaver-dam/build/icon.ico"
+    "icon": "../../beaver-dam/build/icon.ico"
   },
   "nsis": {
     "oneClick": false,
@@ -30,8 +30,8 @@
     "createStartMenuShortcut": true,
     "shortcutName": "Beaver Log",
     "license": "LICENSE.txt",
-    "installerIcon": "../beaver-dam/build/icon.ico",
-    "uninstallerIcon": "../beaver-dam/build/icon.ico",
+    "installerIcon": "../../beaver-dam/build/icon.ico",
+    "uninstallerIcon": "../../beaver-dam/build/icon.ico",
     "runAfterFinish": true
   }
 }

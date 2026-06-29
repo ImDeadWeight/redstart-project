@@ -211,16 +211,15 @@ Download the `.gguf` file that matches your VRAM. The `Q3_K_XL` variant tested h
 
 ```
 beaver-project/
-├── beaver-dam/          # Beaver Dam Electron app
+├── beaver-dam/          # Beaver Dam Electron app (server manager)
 │   ├── electron/        # Electron main process
 │   ├── src/
 │   │   ├── App.tsx      # React UI (the launcher window)
 │   │   └── chat-ui/     # SvelteKit chat frontend (shared with all clients)
 │   │       └── android/ # Capacitor Android project
 │   └── electron-builder.json
-├── windows/             # Beaver Log Windows Electron app
-│   └── electron/
-└── beaver-log/          # Compiled Android APK drop folder
+└── beaver-log/          # Beaver Log client apps
+    └── windows/         # Beaver Log Windows Electron app
 ```
 
 ### Beaver Dam (dev mode)

@@ -37,7 +37,7 @@ npm-debug.log*
 .claude/
 
 # Compiled APK outputs
-beaver-log/
+beaver-log/*.apk
 
 # OS
 .DS_Store

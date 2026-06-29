@@ -54,7 +54,7 @@ let fileServer = null
 function startFileServer() {
   const chatUiDir = app.isPackaged
     ? path.join(process.resourcesPath, 'chat-ui')
-    : path.join(__dirname, '..', '..', '..', 'beaver-dam', 'src', 'chat-ui', 'dist')
+    : path.join(__dirname, '..', '..', '..', '..', 'beaver-dam', 'src', 'chat-ui', 'dist')
 
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
