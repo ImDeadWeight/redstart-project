@@ -35,6 +35,14 @@ contextBridge.exposeInMainWorld('beaverAPI', {
     applyConfig: (config) => ipcRenderer.invoke('tools:apply-config', config),
   },
 
+  mcp: {
+    getConfig: (config) => ipcRenderer.invoke('mcp:get-config', config),
+    listExternal: () => ipcRenderer.invoke('mcp:list-external'),
+    addExternal: (server) => ipcRenderer.invoke('mcp:add-external', server),
+    removeExternal: (id) => ipcRenderer.invoke('mcp:remove-external', id),
+    testExternal: (url) => ipcRenderer.invoke('mcp:test-external', url),
+  },
+
   chat: {
     open: (port, ssl) => ipcRenderer.invoke('chat:open', port, ssl),
   },

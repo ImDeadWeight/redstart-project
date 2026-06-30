@@ -19,8 +19,10 @@ import { promisify } from 'util'
 import * as path from 'path'
 import * as fs from 'fs'
 import { BUILTIN_TOOLS, BUILTIN_GROUPS } from './tools-definitions.mjs'
-import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup } from './tools-storage.mjs'
+import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup, getExternalServers, addExternalServer, deleteExternalServer } from './tools-storage.mjs'
 import { startGateway, stopGateway, updateGatewayConfig, getGatewayPort } from './tools-gateway.mjs'
+import { startMcpServer, stopMcpServer, updateMcpConfig, getMcpServerRunning } from './mcp-server.mjs'
+import * as crypto from 'crypto'
 import * as os from 'os'
 import * as zlib from 'zlib'
 import * as http from 'http'
@@ -386,6 +388,19 @@ function startBeaconServer() {
     // Always advertise the configured port — this is the gateway's public port.
     // llama-server runs on port+1 internally and is never exposed directly.
     const advertisePort = port
+    const mcpPort = advertisePort + 2
+
+    // Build MCP server list for auto-discovery by Beaver Log and other clients
+    const mcpServers = []
+    if (getMcpServerRunning()) {
+      mcpServers.push({
+        name: 'Beaver Built-in',
+        url: networkMode ? `http://${lanIp}:${mcpPort}/sse` : `http://127.0.0.1:${mcpPort}/sse`,
+      })
+    }
+    for (const s of getExternalServers()) {
+      if (s.enabled) mcpServers.push({ name: s.name, url: s.url })
+    }
 
     const payload = {
       app: 'beaver-dam',
@@ -397,6 +412,7 @@ function startBeaconServer() {
         localUrl:   `http://127.0.0.1:${advertisePort}`,
         networkUrl: networkMode ? `http://${lanIp}:${advertisePort}` : null,
       },
+      mcpServers,
     }
 
     res.writeHead(200, {
@@ -671,6 +687,7 @@ function ensureFirewallRule(gatewayPort) {
 app.on('before-quit', () => {
   killOrphanedServers()
   stopGateway()
+  stopMcpServer()
   if (serverProcess) {
     serverProcess = null
   }
@@ -879,8 +896,47 @@ $r | ConvertTo-Json -Compress
   // server is already running.
   ipcMain.handle('tools:apply-config', (_, llamaConfig) => {
     if (!getGatewayPort(llamaConfig?.port ?? 8080)) return false
-    updateGatewayConfig(buildGatewayConfig(llamaConfig))
+    const cfg = buildGatewayConfig(llamaConfig)
+    updateGatewayConfig(cfg)
+    updateMcpConfig(cfg)
     return true
+  })
+
+  // --- MCP ---
+
+  ipcMain.handle('mcp:get-config', (_, llamaConfig) => {
+    const port = (llamaConfig?.port ?? 8080) + 2
+    const running = getMcpServerRunning()
+    return { port, running, url: running ? `http://127.0.0.1:${port}/sse` : null }
+  })
+
+  ipcMain.handle('mcp:list-external', () => getExternalServers())
+
+  ipcMain.handle('mcp:add-external', (_, server) => {
+    const id = server.id || crypto.randomUUID()
+    const s = { ...server, id, enabled: server.enabled ?? true }
+    addExternalServer(s)
+    return s
+  })
+
+  ipcMain.handle('mcp:remove-external', (_, id) => deleteExternalServer(id))
+
+  ipcMain.handle('mcp:test-external', async (_, url) => {
+    const sseUrl = url.endsWith('/sse') ? url : url.replace(/\/$/, '') + '/sse'
+    try {
+      const res = await fetch(sseUrl, {
+        signal: AbortSignal.timeout(5000),
+        method: 'GET',
+        headers: { Accept: 'text/event-stream' },
+      })
+      const ct = res.headers.get('content-type') || ''
+      if (res.ok && ct.includes('text/event-stream')) {
+        return { ok: true, message: 'Connected' }
+      }
+      return { ok: false, message: `Unexpected response: ${res.status} (${ct || 'no content-type'})` }
+    } catch (err) {
+      return { ok: false, message: err.message }
+    }
   })
 
   // --- Llama command preview ---
@@ -945,13 +1001,24 @@ $r | ConvertTo-Json -Compress
       // Start the gateway on the public port. It injects the Beaver system
       // context into every completions request and proxies everything else
       // through to llama-server on config.port + 1 (localhost only).
+      const gwConfig = buildGatewayConfig(config)
       try {
-        await startGateway(config.port, buildGatewayConfig(config))
+        await startGateway(config.port, gwConfig)
         const gwPort = getGatewayPort(config.port)
         if (gwPort) ensureFirewallRule(gwPort)
       } catch (err) {
         console.warn('Tool gateway failed to start:', err.message)
         // Non-fatal — server still works, just without tool interception
+      }
+
+      // Start the built-in MCP server on port+2 so the chat-ui can call web_fetch
+      // with actual whitelist enforcement (not just prompt-level advisory).
+      try {
+        const mcpPort = config.port + 2
+        await startMcpServer(mcpPort, gwConfig)
+        if (getMcpServerRunning()) ensureFirewallRule(mcpPort)
+      } catch (err) {
+        console.warn('MCP server failed to start:', err.message)
       }
 
       if (openChat) openChatWindow(config.port, config.networkMode)
@@ -966,6 +1033,7 @@ $r | ConvertTo-Json -Compress
   ipcMain.handle('server:stop', async () => {
     closeChatWindow()
     stopGateway()
+    stopMcpServer()
     if (!serverProcess) return { success: true }
     serverProcess.kill()
     serverProcess = null

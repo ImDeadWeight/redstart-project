@@ -12,7 +12,7 @@
 - [Mission](#mission)
 - [What Is Beaver?](#what-is-beaver)
 - [How It Works](#how-it-works)
-- [Web Tools](#web-tools)
+- [Tools & MCP](#tools--mcp)
 - [Using as a Coding Agent](#using-as-a-coding-agent-kilo-code--continue-etc)
 - [Tested Configuration](#tested-configuration)
 - [Requirements](#requirements)
@@ -106,10 +106,11 @@ All three share the same [SvelteKit](https://kit.svelte.dev/) chat frontend, whi
 ```
 [ GPU PC ]                              [ Phone / Laptop / VS Code ]
   Beaver Dam                               Beaver Log  /  Kilo Code
-  ├─ Gateway :8080 (public)            ├─ Scans LAN on port 8765
+  ├─ Gateway     :8080 (public)        ├─ Scans LAN on port 8765
   │   └─ Injects Beaver context        ├─ Finds Beaver Dam automatically
-  ├─ llama-server :8081 (internal)     └─ Connect to http://IP:8080
-  └─ Beacon :8765
+  ├─ llama-server :8081 (localhost)    └─ Connects to http://IP:8080
+  ├─ MCP server   :8082 (web_fetch)
+  └─ Beacon      :8765
 ```
 
 **Discovery:** Beaver Dam broadcasts a JSON beacon on port 8765. Beaver Log (both Android and Windows) scans the local subnet on startup and connects automatically if a running server is found. No configuration required.
@@ -124,23 +125,80 @@ All three share the same [SvelteKit](https://kit.svelte.dev/) chat frontend, whi
 
 ---
 
-## Web Tools
+## Tools & MCP
 
-Beaver Dam includes an optional web fetch tool that lets the model look up live content from approved sources during a conversation — Wikipedia, GitHub, AP News, legal references, arXiv, PubMed, and others. This is off by default and saved per profile.
+Beaver Dam includes a built-in [Model Context Protocol](https://spec.modelcontextprotocol.io/) (MCP) server that gives the model access to live web content from approved sources — Wikipedia, GitHub, AP News, legal references, arXiv, PubMed, and others. This is off by default and configured per profile.
 
-**How it works:** Beaver Dam always runs a lightweight gateway on the configured public port (`:8080` by default). llama-server runs on the adjacent port (`:8081`) bound to localhost only — not reachable from the LAN. All clients connect through the gateway, which injects a Beaver identity and active-tool context into every completions request before forwarding it to llama-server. When the model decides to look something up, it calls `web_fetch`; the chat-ui's built-in agentic loop executes the fetch, strips the page to plain text, and feeds the result back to the model for the next turn.
+### Architecture
 
-**The whitelist is injected as context, not enforced as a proxy filter.** The gateway prepends the approved source list to every conversation as a system message. The model is explicitly told which domains it is allowed to fetch from and instructed not to go outside that list. A law firm might approve only the specific legal databases their practice relies on, scoped to their local jurisdiction. Large models can conflate laws from different states when synthesizing across multiple sources; a whitelist restricted to one jurisdiction's databases reduces that risk at the source. Prompt-level enforcement is the current approach — hard technical enforcement (intercepting and blocking tool calls at the gateway) is on the roadmap as the project matures toward small-business use.
+When the server starts, Beaver Dam launches three services alongside the AI model:
 
-The built-in source groups (General Knowledge, Developer, News, Legal US, Research) are proof-of-concept defaults — starting points that demonstrate what a group looks like. In practice, an organization would define their own groups from the sources they actually trust and control. That precision is the point.
+| Service | Port | Role |
+|---|---|---|
+| Gateway | `:8080` | Public-facing; injects Beaver identity + tool context into every completions request |
+| llama-server | `:8081` | Inference engine; localhost-only, not reachable from LAN |
+| MCP server | `:8082` | Exposes the `web_fetch` tool to the chat-ui via the MCP SSE protocol |
 
-**Configuring tools in Beaver Dam:**
+The chat-ui's built-in agentic loop handles the full tool call cycle: it sees the `web_fetch` tool available via the MCP server, the model emits a tool call when it needs to look something up, the chat-ui executes the fetch through the MCP server, and the result feeds back into the next model turn — all with full streaming preserved.
 
-The **Web Tools** card appears in the main configuration panel, between the model settings and the command preview. From there you can enable built-in source groups, toggle individual sources, create custom groups, add your own URLs to the whitelist, and set the per-fetch token budget. All settings are saved with the active profile — different profiles can have different tool configurations.
+### Whitelist Enforcement
 
-**Performance note:** Each tool call adds 2–5 seconds of latency. The model's response appears after all fetches complete. Context sizes below 8192 tokens are flagged with a warning since fetched content competes with your conversation history. Beaver Dam shows a red warning below 4096 tokens where tool use is likely to break the context entirely.
+The whitelist is enforced **at the MCP server level** — not just as a system prompt advisory. A request to a domain that is not on the approved list never leaves the machine. The MCP server validates every URL before the network call goes out and returns an `Access denied` error to the model if the domain is not whitelisted.
 
-**Custom sources:** User-defined tools and groups are stored in `tools.json` in the Electron userData directory alongside `profiles.json`. Built-in sources are proof-of-concept defaults and can be toggled off per-profile.
+The gateway also injects the approved source list into the system context of every conversation, so the model knows which domains are available and can make appropriate tool calls without guessing.
+
+A law firm might approve only the specific legal databases their practice relies on, scoped to their local jurisdiction. Large models can conflate laws from different states when synthesizing across multiple sources; a whitelist restricted to one jurisdiction's databases reduces that risk at the source — and technical enforcement at the MCP layer means a jailbreak attempt in the prompt cannot override it.
+
+### Source Groups
+
+Tools are organized into **source groups** — named collections of web sources that can be activated together. The built-in groups are:
+
+| Group | Sources |
+|---|---|
+| General Knowledge | Wikipedia, AP News |
+| Developer | GitHub, MDN Web Docs, Stack Overflow |
+| News | AP News, BBC, Reuters |
+| Legal (US) | Cornell LII, Congress.gov, Wikipedia |
+| Research | arXiv, PubMed, Wikipedia |
+
+These are proof-of-concept defaults. In practice, an organization defines their own groups from the sources they actually trust and control. A custom group for a specific use case — say, a healthcare provider's internal knowledge base plus PubMed — can be created in the UI and exported for deployment across multiple Beaver installations. Groups can be combined; their tool lists merge when multiple are active simultaneously.
+
+### External MCP Servers
+
+The **Tools** card in Beaver Dam also supports connecting to MCP servers running on **other devices**. An admin can enter any MCP SSE endpoint URL (e.g. `http://10.0.0.5:9000/sse`) and Beaver Dam will treat it as an additional tool source alongside the built-in server. This enables a few patterns:
+
+- **Dedicated MCP appliance** — the MCP server runs on a separate machine (a small server, NAS, or the future Beaver Box) with more generous network access policies, separate from the AI model host
+- **Shared company tool server** — one MCP server on the network serves multiple Beaver Dam installations without each needing its own whitelist configuration
+- **Specialized tool sets** — a legal practice might run a separate MCP server that connects to their document management system or jurisdiction-specific databases
+
+The Beaver Dam beacon (port 8765) advertises both the built-in MCP server URL and any active external servers, so Beaver Log clients and other devices on the LAN can discover the full tool set automatically.
+
+### Configuring in Beaver Dam
+
+The **Tools** card appears in the main configuration panel between the model settings and the command preview. It has two sections:
+
+**Web Sources** (top, toggle to enable/disable):
+- Enable or disable source groups with checkboxes
+- Toggle individual sources independently
+- Create custom source groups from any combination of built-in or custom sources
+- Add custom sources by URL and description
+- Set the per-fetch token budget (default: 2000 tokens per fetch)
+
+**External MCP Servers** (bottom, always visible):
+- Shows the built-in Beaver MCP URL (`http://localhost:8082/sse`) when enabled
+- Add external MCP servers by name and SSE URL
+- Test connectivity to any configured server with a single click
+- Remove servers that are no longer needed
+
+All settings are saved with the active profile — different profiles can have different tool configurations.
+
+### Performance
+
+Each tool call adds 2–5 seconds of latency. The model's response appears after all fetches complete. Context sizes below 8192 tokens are flagged with a warning since fetched content competes with conversation history. Beaver Dam shows a red warning below 4096 tokens where tool use is likely to break the context entirely.
+
+### Storage
+
+User-defined tools, groups, and external MCP server configurations are stored in `tools.json` in the Electron userData directory alongside `profiles.json`. Built-in sources and groups are hardcoded and can be toggled off per-profile but not deleted.
 
 ---
 
@@ -344,14 +402,23 @@ Settings saved per profile:
 - Model path
 - Context size, batch size, thread count
 - GPU layers
-- Port (default: 8080)
+- Port (default: 8080) — MCP server uses `port + 2` automatically
 - Network mode (localhost vs LAN)
-- Web tool configuration (enabled/disabled, active sources and groups, per-fetch token budget)
+- Web source configuration (enabled/disabled, active source groups, per-fetch token budget)
 
-Custom user-defined tools and groups are stored separately in:
+User-defined tools, groups, and external MCP server connections are stored separately in:
 
 ```
 C:\Users\<you>\AppData\Roaming\beaver\tools.json
+```
+
+The `tools.json` schema:
+```json
+{
+  "tools": [ { "id": "...", "name": "...", "baseUrl": "...", "description": "..." } ],
+  "groups": [ { "id": "...", "name": "...", "description": "...", "toolIds": ["..."] } ],
+  "externalServers": [ { "id": "...", "name": "...", "url": "...", "enabled": true } ]
+}
 ```
 
 Profile management (save, load, delete) is available directly in the Beaver Dam UI.
@@ -364,9 +431,10 @@ Profile management (save, load, delete) is available directly in the Beaver Dam 
 |---|---|
 | 8080 | Gateway — public-facing; all clients connect here (default, configurable in Beaver Dam) |
 | 8081 | llama-server — internal only, bound to `127.0.0.1`; not reachable from LAN |
+| 8082 | MCP server — built-in web_fetch tool endpoint; LAN-accessible when network mode is on |
 | 8765 | Beacon — Beaver Dam identity broadcast, always bound to `0.0.0.0` for LAN discovery |
 
-Port 8080 is LAN-accessible when network mode is on (Beaver Dam adds a Windows Firewall inbound rule automatically). Port 8081 is localhost only regardless of network mode. Both shift together if you change the configured port — llama-server is always `configured-port + 1`.
+Ports 8080 and 8082 are LAN-accessible when network mode is on (Beaver Dam adds Windows Firewall inbound rules automatically for both). Port 8081 is localhost only regardless of network mode. All three shift together if you change the configured port — llama-server is always `configured-port + 1`, and the MCP server is always `configured-port + 2`.
 
 ---
 
@@ -396,7 +464,9 @@ This is an honest work-in-progress. The project started as a personal home tool 
 - [x] Server log displayed in Beaver Dam UI (piped mode)
 - [x] OpenAI-compatible API for use with coding agents (Kilo Code, Continue, etc.)
 - [x] Direct browser access to chat UI at `http://127.0.0.1:8080`
-- [x] Web tools — whitelist-based `web_fetch` with built-in source groups (Wikipedia, GitHub, AP News, Legal, Research) and custom sources; saved per profile
+- [x] Built-in MCP server — exposes `web_fetch` tool via Model Context Protocol SSE transport; whitelist enforced at the server level (non-whitelisted URLs never leave the machine)
+- [x] Source groups — named bundles of web sources (General Knowledge, Developer, News, Legal US, Research) with per-profile activation; custom groups and sources supported
+- [x] External MCP server management — connect to MCP servers on other devices; beacon advertises all active MCP endpoints for auto-discovery
 
 ### Phase 2 — Small Office Ready
 Making Beaver usable in a small workplace rather than just on one person's home network.

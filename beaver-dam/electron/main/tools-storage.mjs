@@ -50,3 +50,26 @@ export function deleteUserGroup(id) {
   write(data)
   return true
 }
+
+// ---------------------------------------------------------------------------
+// External MCP servers
+// { id, name, url, enabled }
+// ---------------------------------------------------------------------------
+
+export function getExternalServers() { return read().externalServers || [] }
+
+export function addExternalServer(server) {
+  const data = read()
+  if (!data.externalServers) data.externalServers = []
+  data.externalServers = data.externalServers.filter(s => s.id !== server.id)
+  data.externalServers.push(server)
+  write(data)
+  return true
+}
+
+export function deleteExternalServer(id) {
+  const data = read()
+  data.externalServers = (data.externalServers || []).filter(s => s.id !== id)
+  write(data)
+  return true
+}

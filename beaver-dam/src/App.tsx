@@ -42,6 +42,19 @@ type ToolGroup = {
   builtIn: boolean
 }
 
+type ExternalMcpServer = {
+  id: string
+  name: string
+  url: string
+  enabled: boolean
+}
+
+type McpConfig = {
+  port: number
+  running: boolean
+  url: string | null
+}
+
 type ProfileTools = {
   enabled: boolean
   activeGroupIds: string[]
@@ -102,6 +115,13 @@ type BeaverAPI = {
     open: (port: number, ssl: boolean) => Promise<boolean>
   }
   github: { checkReleases: () => Promise<Record<string, string>> }
+  mcp: {
+    getConfig: (config: LlamaConfig) => Promise<McpConfig>
+    listExternal: () => Promise<ExternalMcpServer[]>
+    addExternal: (server: Omit<ExternalMcpServer, 'id'>) => Promise<ExternalMcpServer>
+    removeExternal: (id: string) => Promise<boolean>
+    testExternal: (url: string) => Promise<{ ok: boolean; message: string }>
+  }
   events: {
     onTokensPerMinute: (cb: (tpm: number) => void) => void
     offTokensPerMinute: () => void
@@ -164,6 +184,12 @@ export default function App() {
   const [newGroupName, setNewGroupName] = useState('')
   const [newGroupDesc, setNewGroupDesc] = useState('')
   const [newGroupToolIds, setNewGroupToolIds] = useState<string[]>([])
+  const [externalServers, setExternalServers] = useState<ExternalMcpServer[]>([])
+  const [mcpConfig, setMcpConfig] = useState<McpConfig | null>(null)
+  const [showAddExternal, setShowAddExternal] = useState(false)
+  const [newExtName, setNewExtName] = useState('')
+  const [newExtUrl, setNewExtUrl] = useState('')
+  const [mcpTestResults, setMcpTestResults] = useState<Record<string, { ok: boolean; message: string }>>({})
   const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const logEndRef = useRef<HTMLDivElement>(null)
   const configRef = useRef(config)
@@ -180,6 +206,7 @@ export default function App() {
 
     loadProfiles()
     loadToolDefs()
+    loadExternalServers()
     a.server.getIp().then(setLocalIp)
     a.settings.getResolvedBinary().then(setBinaryPath)
 
@@ -345,6 +372,47 @@ export default function App() {
     await api().tools.deleteGroup(id)
     setToolsField('activeGroupIds', (config.tools?.activeGroupIds ?? []).filter(g => g !== id))
     await loadToolDefs()
+  }
+
+  // --- External MCP servers ---
+
+  async function loadExternalServers() {
+    try {
+      const a = getAPI()
+      if (!a) return
+      const servers = await a.mcp.listExternal()
+      setExternalServers(servers)
+    } catch { /* unavailable */ }
+  }
+
+  async function refreshMcpConfig() {
+    try {
+      const a = getAPI()
+      if (!a) return
+      const cfg = await a.mcp.getConfig(config)
+      setMcpConfig(cfg)
+    } catch { /* unavailable */ }
+  }
+
+  async function addExternalMcpServer() {
+    const name = newExtName.trim()
+    const url = newExtUrl.trim()
+    if (!name || !url) return
+    const server = await api().mcp.addExternal({ name, url, enabled: true })
+    setExternalServers(prev => [...prev, server])
+    setNewExtName(''); setNewExtUrl(''); setShowAddExternal(false)
+  }
+
+  async function removeExternalMcpServer(id: string) {
+    await api().mcp.removeExternal(id)
+    setExternalServers(prev => prev.filter(s => s.id !== id))
+    setMcpTestResults(prev => { const n = { ...prev }; delete n[id]; return n })
+  }
+
+  async function testExternalMcpServer(id: string, url: string) {
+    setMcpTestResults(prev => ({ ...prev, [id]: { ok: false, message: 'Testing…' } }))
+    const result = await api().mcp.testExternal(url)
+    setMcpTestResults(prev => ({ ...prev, [id]: result }))
   }
 
   // --- Hardware scan ---
@@ -689,10 +757,10 @@ export default function App() {
             </div>
           </section>
 
-          {/* Web Tools */}
+          {/* Tools (Web Sources + MCP) */}
           <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xs uppercase tracking-widest text-zinc-500">Web Tools</h2>
+              <h2 className="text-xs uppercase tracking-widest text-zinc-500">Tools</h2>
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <span className="text-xs text-zinc-400">{config.tools?.enabled ? 'Enabled' : 'Disabled'}</span>
                 <div
@@ -854,8 +922,85 @@ export default function App() {
                 </div>
               </div>
             </>) : (
-              <p className="text-xs text-zinc-600">Enable web tools to allow the model to fetch live content from approved sources during inference. Settings are saved with the active profile.</p>
+              <p className="text-xs text-zinc-600">Enable web sources to allow the model to fetch live content from approved sites via the built-in MCP server. Settings are saved with the active profile.</p>
             )}
+
+            {/* External MCP Servers */}
+            <div className="mt-6 pt-4 border-t border-zinc-700">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs uppercase tracking-widest text-zinc-500">External MCP Servers</p>
+                {!showAddExternal && (
+                  <button
+                    onClick={() => setShowAddExternal(true)}
+                    className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
+                    + Add server
+                  </button>
+                )}
+              </div>
+
+              <div className="mb-3 px-3 py-2 bg-zinc-800/60 rounded text-xs text-zinc-400">
+                <span className="text-zinc-300 font-medium">Built-in Beaver MCP:</span>{' '}
+                {config.tools?.enabled
+                  ? <span className="text-green-400">http://localhost:{(config.port ?? 8080) + 2}/sse</span>
+                  : <span className="text-zinc-600">Starts with server (enable web sources above)</span>
+                }
+              </div>
+
+              {externalServers.length === 0 && !showAddExternal && (
+                <p className="text-xs text-zinc-600">No external MCP servers configured. Add a server URL to connect to an MCP server on another device.</p>
+              )}
+
+              <div className="space-y-2">
+                {externalServers.map(server => (
+                  <div key={server.id} className="flex items-start gap-2 bg-zinc-800/40 rounded px-3 py-2">
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm text-zinc-200">{server.name}</span>
+                      <span className="text-xs text-zinc-500 ml-2 break-all">{server.url}</span>
+                      {mcpTestResults[server.id] && (
+                        <span className={`block text-xs mt-0.5 ${mcpTestResults[server.id].ok ? 'text-green-400' : 'text-red-400'}`}>
+                          {mcpTestResults[server.id].message}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => testExternalMcpServer(server.id, server.url)}
+                      className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-1 flex-shrink-0">
+                      Test
+                    </button>
+                    <button
+                      onClick={() => removeExternalMcpServer(server.id)}
+                      className="text-xs text-zinc-600 hover:text-red-400 transition-colors px-1 flex-shrink-0">
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {showAddExternal && (
+                <div className="space-y-2 bg-zinc-800/60 p-3 rounded border border-zinc-700 mt-2">
+                  <input
+                    value={newExtName} onChange={e => setNewExtName(e.target.value)}
+                    placeholder="Server name (e.g. Legal DB Server)"
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500" />
+                  <input
+                    value={newExtUrl} onChange={e => setNewExtUrl(e.target.value)}
+                    placeholder="SSE URL (e.g. http://10.0.0.5:9000/sse)"
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500" />
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      onClick={addExternalMcpServer}
+                      className="px-3 py-1.5 bg-orange-500 hover:bg-orange-400 rounded text-xs font-medium transition-colors">
+                      Add server
+                    </button>
+                    <button
+                      onClick={() => { setShowAddExternal(false); setNewExtName(''); setNewExtUrl('') }}
+                      className="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors">
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </section>
 
           {/* Command preview */}
