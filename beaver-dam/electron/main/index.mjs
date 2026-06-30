@@ -284,7 +284,6 @@ function resolveBinary() {
 
 function buildGatewayConfig(llamaConfig) {
   const toolSettings = llamaConfig?.tools
-  if (!toolSettings?.enabled) return { allowedBaseUrls: [], maxFetchTokens: 2000 }
 
   const allTools = [
     ...BUILTIN_TOOLS.map(t => ({ ...t, builtIn: true })),
@@ -295,6 +294,10 @@ function buildGatewayConfig(llamaConfig) {
     ...getUserGroups(),
   ]
 
+  if (!toolSettings?.enabled) {
+    return { allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 }
+  }
+
   const toolIdSet = new Set(toolSettings.activeToolIds || [])
 
   // Add all tool IDs from active groups
@@ -304,13 +307,18 @@ function buildGatewayConfig(llamaConfig) {
   }
 
   const allowedBaseUrls = []
+  const activeTools = []
   for (const id of toolIdSet) {
     const tool = allTools.find(t => t.id === id)
-    if (tool?.baseUrl) allowedBaseUrls.push(tool.baseUrl)
+    if (tool?.baseUrl) {
+      allowedBaseUrls.push(tool.baseUrl)
+      activeTools.push({ name: tool.name, baseUrl: tool.baseUrl, description: tool.description || '' })
+    }
   }
 
   return {
     allowedBaseUrls,
+    activeTools,
     maxFetchTokens: toolSettings.maxFetchTokens ?? 2000,
   }
 }
@@ -375,10 +383,9 @@ function startBeaconServer() {
     const networkMode = lastServerConfig?.networkMode ?? false
     const lanIp       = getLocalIp()
 
-    // Advertise the tool gateway port when it's running so clients get tool
-    // support automatically. Gateway is a pure passthrough when no tools are
-    // active, so this is transparent to clients regardless of profile.
-    const advertisePort = getGatewayPort(port) ?? port
+    // Always advertise the configured port — this is the gateway's public port.
+    // llama-server runs on port+1 internally and is never exposed directly.
+    const advertisePort = port
 
     const payload = {
       app: 'beaver-dam',
@@ -935,8 +942,9 @@ $r | ConvertTo-Json -Compress
       serverProcess = child
       lastServerConfig = config
 
-      // Start the tool gateway alongside llama-server. It's a transparent
-      // passthrough when the profile has no tools enabled.
+      // Start the gateway on the public port. It injects the Beaver system
+      // context into every completions request and proxies everything else
+      // through to llama-server on config.port + 1 (localhost only).
       try {
         await startGateway(config.port, buildGatewayConfig(config))
         const gwPort = getGatewayPort(config.port)
@@ -1061,7 +1069,6 @@ $r | ConvertTo-Json -Compress
 
 function buildArgs(config, raw = false) {
   const q = raw ? (v) => v : (v) => `"${v}"`
-  const host = config.networkMode ? '0.0.0.0' : '127.0.0.1'
   const chatUiPath = app.isPackaged
     ? path.join(process.resourcesPath, 'chat-ui')
     : path.join(__dirname, '..', '..', 'src', 'chat-ui', 'dist')
@@ -1071,8 +1078,9 @@ function buildArgs(config, raw = false) {
     '-b', String(config.batchSize),
     '-t', String(config.threads),
     '-ngl', String(config.gpuLayers),
-    '--port', String(config.port),
-    '--host', host,
+    // Gateway owns the public port; llama-server runs on +1, localhost only.
+    '--port', String(config.port + 1),
+    '--host', '127.0.0.1',
     '--path', q(chatUiPath),
   ]
   if (config.nCpuMoe !== undefined && config.nCpuMoe !== null) {

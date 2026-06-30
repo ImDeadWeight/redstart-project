@@ -46,7 +46,7 @@ The primary use case was a **local coding agent**: point Kilo Code (or any OpenA
 
 The privacy angle is not an afterthought. My background is in social work, where you routinely handle information that genuinely should not leave the room. The idea of pasting case notes or client details into a cloud AI product is uncomfortable but workloads in the field are often challenging making tools like llm workflows for documentation helpful. Running a model locally means the data stays on the machine — no API calls phoning home, no training pipeline, no terms of service to read carefully or settings to change.
 
-I named it beaver in part because of how much it relies on llama and because a beaver builds a dam which felt like a fitting metaphor for keeping your AI use contained.
+The name is a small nod to all of this: a beaver, like a llama, is an animal (llama.cpp deserves the credit for making animal-named AI tools a thing). And a beaver builds a dam — which felt like a fitting metaphor for keeping your AI use contained.
 
 ---
 
@@ -104,12 +104,12 @@ All three share the same [SvelteKit](https://kit.svelte.dev/) chat frontend, whi
 ## How It Works
 
 ```
-[ GPU PC ]                          [ Phone / Laptop / VS Code ]
-  Beaver Dam                           Beaver Log  /  Kilo Code
-  ├─ llama-server (TurboQuant+)     ├─ Scans LAN on port 8765
-  ├─ Tool gateway (:port+1)         ├─ Finds Beaver Dam automatically
-  ├─ Beacon on :8765                └─ Or connect manually to http://IP:8080
-  └─ Chat UI + OpenAI API :8080
+[ GPU PC ]                              [ Phone / Laptop / VS Code ]
+  Beaver Dam                               Beaver Log  /  Kilo Code
+  ├─ Gateway :8080 (public)            ├─ Scans LAN on port 8765
+  │   └─ Injects Beaver context        ├─ Finds Beaver Dam automatically
+  ├─ llama-server :8081 (internal)     └─ Connect to http://IP:8080
+  └─ Beacon :8765
 ```
 
 **Discovery:** Beaver Dam broadcasts a JSON beacon on port 8765. Beaver Log (both Android and Windows) scans the local subnet on startup and connects automatically if a running server is found. No configuration required.
@@ -128,9 +128,9 @@ All three share the same [SvelteKit](https://kit.svelte.dev/) chat frontend, whi
 
 Beaver Dam includes an optional web fetch tool that lets the model look up live content from approved sources during a conversation — Wikipedia, GitHub, AP News, legal references, arXiv, PubMed, and others. This is off by default and saved per profile.
 
-**How it works:** When web tools are enabled, Beaver Dam starts a lightweight gateway proxy on the port adjacent to llama-server (e.g. `:8081` when the server runs on `:8080`). The beacon advertises this gateway port so clients connect through it automatically. When the model decides to look something up, it calls `web_fetch`, the gateway fetches the page, strips it to plain text, injects the result back into context, and the model continues. If no tools are enabled the gateway is a pure transparent proxy with no overhead.
+**How it works:** Beaver Dam always runs a lightweight gateway on the configured public port (`:8080` by default). llama-server runs on the adjacent port (`:8081`) bound to localhost only — not reachable from the LAN. All clients connect through the gateway, which injects a Beaver identity and active-tool context into every completions request before forwarding it to llama-server. When the model decides to look something up, it calls `web_fetch`; the chat-ui's built-in agentic loop executes the fetch, strips the page to plain text, and feeds the result back to the model for the next turn.
 
-**The whitelist is enforced at the gateway, not the client.** Because the gateway sits on the server machine rather than the client device, no connected user — and no prompt — can make the model fetch from a source that isn't on the approved list. A law firm might approve only the specific legal databases their practice relies on, scoped to their local jurisdiction. Large models can conflate laws from different states when synthesizing across multiple sources; a whitelist restricted to one jurisdiction's databases reduces that risk at the source rather than relying on the model to keep track of it. The model cannot be instructed to go outside that boundary regardless of what a user asks it to do.
+**The whitelist is injected as context, not enforced as a proxy filter.** The gateway prepends the approved source list to every conversation as a system message. The model is explicitly told which domains it is allowed to fetch from and instructed not to go outside that list. A law firm might approve only the specific legal databases their practice relies on, scoped to their local jurisdiction. Large models can conflate laws from different states when synthesizing across multiple sources; a whitelist restricted to one jurisdiction's databases reduces that risk at the source. Prompt-level enforcement is the current approach — hard technical enforcement (intercepting and blocking tool calls at the gateway) is on the roadmap as the project matures toward small-business use.
 
 The built-in source groups (General Knowledge, Developer, News, Legal US, Research) are proof-of-concept defaults — starting points that demonstrate what a group looks like. In practice, an organization would define their own groups from the sources they actually trust and control. That precision is the point.
 
@@ -220,10 +220,7 @@ Unsloth provides multiple quantization variants. The `UD-Q3_K_XL` tested here fi
 
 ### Beaver Log (Windows)
 1. Download `Beaver Log Setup 1.0.0.exe` from [Releases](../../releases)
-2. Install and open — it scans your local network automatically and connects if Beaver Dam is running
-3. If auto-scan doesn't find the server, open **Settings** in the app and enter the server address manually (e.g. `http://192.168.0.213:8080`)
-
-> **Note:** The initial release of Beaver Log Windows had a configuration error in the Electron main process that prevented the app from launching on most systems. This was caught during testing on a second machine and fixed before this release. Apologies — it should have been caught earlier. If you downloaded a copy that wouldn't open, please grab the latest installer from Releases.
+2. Install and open — it scans your network automatically
 
 ---
 
@@ -277,7 +274,7 @@ The Windows client has no dev server — it just loads the built chat-ui. Build 
 cd beaver-dam/src/chat-ui
 npm run build
 
-cd ../../../beaver-log/windows
+cd ../../../windows
 npm run dev
 ```
 
@@ -299,9 +296,9 @@ Then open `beaver-dam/src/chat-ui/android` in Android Studio and run on a device
 
 > **Just want to use it?** Download the installer from [Releases](../../releases) — the binaries are already bundled and no extra steps are needed.
 
-For contributors building the installer from scratch: Beaver Dam bundles `llama-server.exe` and its supporting DLLs (compiled from [TurboQuant+](https://github.com/TheTom/llama-cpp-turboquant)) at build time. These are not committed to this repository. You need to build TurboQuant+ first and place the output at `beaver-dam/llama-cpp-turboquant/build/bin/Release/`.
+For contributors building the installer from scratch: Beaver Dam bundles `llama-server.exe` and its supporting DLLs (compiled from [TurboQuant](https://github.com/TheTom/llama-cpp-turboquant)) at build time. These are not committed to this repository. You need to build TurboQuant first and place the output at `beaver-dam/llama-cpp-turboquant/build/bin/Release/`.
 
-Follow [TurboQuant+'s build instructions](https://github.com/TheTom/llama-cpp-turboquant) — you will need the NVIDIA CUDA Toolkit and Visual Studio C++ build tools. Once built, `npm run build` picks up the binaries automatically.
+Follow [TurboQuant's build instructions](https://github.com/TheTom/llama-cpp-turboquant) — you will need the NVIDIA CUDA Toolkit and Visual Studio C++ build tools. Once built, `npm run build` picks up the binaries automatically.
 
 ---
 
@@ -319,13 +316,11 @@ Output: `beaver-dam/release/1.0.0/Beaver Dam Setup 1.0.0.exe`
 ### Beaver Log Windows
 
 ```bash
-cd beaver-log/windows
+cd windows
 npm run build
 ```
 
-Output: `beaver-log/windows/release/1.0.0/Beaver Log Setup 1.0.0.exe`
-
-> **Note for contributors:** The Beaver Log Windows Electron main process uses CommonJS (`require`) rather than ESM (`import`). This is intentional — Electron's module interception only works with CJS. The `.cjs` extension on `main.cjs` and `preload.cjs` is load-bearing; do not convert these to `.mjs`.
+Output: `windows/release/1.0.0/Beaver Log Setup 1.0.0.exe`
 
 The Windows build script builds the chat-ui first, then packages the Electron app. Both installers are NSIS-based and self-contained.
 
@@ -367,11 +362,11 @@ Profile management (save, load, delete) is available directly in the Beaver Dam 
 
 | Port | Purpose |
 |---|---|
-| 8080 | llama-server (default, configurable in Beaver Dam) |
-| 8081 | Tool gateway proxy — advertised to clients when web tools are active (always port+1) |
-| 8765 | Beacon server — Beaver Dam identity broadcast |
+| 8080 | Gateway — public-facing; all clients connect here (default, configurable in Beaver Dam) |
+| 8081 | llama-server — internal only, bound to `127.0.0.1`; not reachable from LAN |
+| 8765 | Beacon — Beaver Dam identity broadcast, always bound to `0.0.0.0` for LAN discovery |
 
-Both 8080 and 8081 are local only unless network mode is enabled. Port 8765 always binds to `0.0.0.0` so LAN clients can discover the server. The gateway port shifts if you change the llama-server port — it is always `llama-server-port + 1`.
+Port 8080 is LAN-accessible when network mode is on (Beaver Dam adds a Windows Firewall inbound rule automatically). Port 8081 is localhost only regardless of network mode. Both shift together if you change the configured port — llama-server is always `configured-port + 1`.
 
 ---
 
@@ -431,10 +426,9 @@ The reliability bar for a small business is materially higher than for a persona
 
 ## Acknowledgements
 
-- [TurboQuant+](https://github.com/TheTom/llama-cpp-turboquant) — the inference engine at the core of Beaver Dam. TurboQuant+ is a production-grade fork of llama.cpp by TheTom, adding advanced weight and KV-cache quantization (TQ3_1S, TQ4_1S, turbo KV formats) while remaining fully compatible with all standard llama.cpp models and backends. The `llama-server.exe` bundled in Beaver Dam is compiled from this project.
-- [llama.cpp](https://github.com/ggerganov/llama.cpp) — the upstream project that TurboQuant+ is built on, and the source of the OpenAI-compatible API that makes Beaver work with coding agents and other tools
-- [Alibaba / Qwen Team](https://huggingface.co/Qwen) — creators of the Qwen3.6-35B-A3B model used during development and testing
-- [Unsloth AI](https://huggingface.co/unsloth) — converted the Qwen3.6-35B-A3B model to GGUF format with Unsloth Dynamic (UD) quantization, making it accessible and efficient for local inference
+- [llama.cpp](https://github.com/ggerganov/llama.cpp) — the inference engine that makes all of this possible
+- [TurboQuant](https://github.com/TheTom/llama-cpp-turboquant) — the llama.cpp build and quantization tooling used here; the included `llama-server.exe` comes from this project
+- [Unsloth](https://huggingface.co/unsloth) — pre-quantized GGUF models including the Qwen 3.6 model used during development
 - [llama.cpp web UI](https://github.com/ggerganov/llama.cpp/tree/master/examples/server) — the upstream chat UI that the Beaver chat frontend is forked from
 
 ---
