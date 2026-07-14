@@ -113,7 +113,7 @@ All three share the same [SvelteKit](https://kit.svelte.dev/) chat frontend, whi
   ├─ Gateway     :8080 (public)        ├─ Scans LAN on port 8765
   │   └─ Injects Beaver context        ├─ Finds Beaver Dam automatically
   ├─ llama-server :8081 (localhost)    └─ Connects to http://IP:8080
-  ├─ MCP server   :8082 (web_fetch)
+  ├─ MCP server   :8082 (web_fetch, Postgres, Documents)
   └─ Beacon      :8765
 ```
 
@@ -131,7 +131,7 @@ All three share the same [SvelteKit](https://kit.svelte.dev/) chat frontend, whi
 
 ## Tools & MCP
 
-Beaver Dam includes a built-in [Model Context Protocol](https://spec.modelcontextprotocol.io/) (MCP) server that gives the model access to live web content from approved sources — Wikipedia, GitHub, AP News, legal references, arXiv, PubMed, and others. This is off by default and configured per profile.
+Beaver Dam includes a built-in [Model Context Protocol](https://spec.modelcontextprotocol.io/) (MCP) server that gives the model access to live web content from approved sources — Wikipedia, GitHub, AP News, legal references, arXiv, PubMed, and others — plus two local capabilities: read-only Postgres access and local document generation. All of it is off by default and configured per profile.
 
 ### Architecture
 
@@ -141,9 +141,11 @@ When the server starts, Beaver Dam launches three services alongside the AI mode
 |---|---|---|
 | Gateway | `:8080` | Public-facing; injects Beaver identity + tool context into every completions request |
 | llama-server | `:8081` | Inference engine; localhost-only, not reachable from LAN |
-| MCP server | `:8082` | Exposes the `web_fetch` tool to the chat-ui via the MCP SSE protocol |
+| MCP server | `:8082` | Exposes tools to the chat-ui via the MCP SSE protocol — `web_fetch`, Postgres, and Document generation when enabled |
 
-The chat-ui's built-in agentic loop handles the full tool call cycle: it sees the `web_fetch` tool available via the MCP server, the model emits a tool call when it needs to look something up, the chat-ui executes the fetch through the MCP server, and the result feeds back into the next model turn — all with full streaming preserved.
+The MCP server itself is provider-driven: `web_fetch`, Postgres, and Documents are each a self-contained module that declares its own tools and handles its own calls, and the server just merges tool lists and routes calls to the right provider. Adding a future capability means adding a provider module, not touching the transport.
+
+The chat-ui's built-in agentic loop handles the full tool call cycle: it sees whichever tools are available via the MCP server, the model emits a tool call when it needs one, the chat-ui executes it through the MCP server, and the result feeds back into the next model turn — all with full streaming preserved.
 
 ### Whitelist Enforcement
 
@@ -177,9 +179,20 @@ The **Tools** card in Beaver Dam also supports connecting to MCP servers running
 
 The Beaver Dam beacon (port 8765) advertises both the built-in MCP server URL and any active external servers, so Beaver Log clients and other devices on the LAN can discover the full tool set automatically.
 
+### Local Capabilities (Postgres & Documents)
+
+Beyond web sources, the built-in MCP server ships two local capabilities — both pure local I/O, no network egress, which is why they're built in rather than proxied to a hosted service (see the note on Context7 below):
+
+- **Postgres** — `postgres_query`, `postgres_list_tables`, and `postgres_describe_table`. Every query runs inside a `BEGIN TRANSACTION READ ONLY` block, so Postgres itself rejects any write or DDL statement — enforcement happens at the database level, not by string-sniffing the query. Connect with a database role that's actually read-only for defense in depth.
+- **Documents** — a single `create_document` tool that writes a `.docx`, `.pdf`, or `.md` file to an admin-configured local folder. The model only ever supplies a title and content; the filename is derived server-side and checked to stay inside the configured folder, so the model can't write anywhere else on disk. Useful for case notes, summaries, and reports — the kind of deliverable a social work, legal, or healthcare-adjacent office actually produces.
+
+Both are configured once globally (a connection string for Postgres, an output folder for Documents) and then activated per profile, the same way web sources are — a profile can turn Postgres on without turning Documents on, or vice versa.
+
+**Why not Context7 (or similar hosted "tool" MCP servers)?** We looked at it and passed. Context7 (and services like it) are proprietary hosted indexes with no self-hosted option — using one, even proxied through Beaver Dam's own MCP server, means the built-in server itself makes an outbound call on every use. That's a different risk category than the whitelisted web sources above, which are an explicit, visible, admin-controlled exception. A "built-in" tool silently phoning out conflicts with the "conversations stay on the local network" premise this whole project is built on, so it's off the table unless a genuinely local alternative shows up.
+
 ### Configuring in Beaver Dam
 
-The **Tools** card appears in the main configuration panel between the model settings and the command preview. It has two sections:
+The **Tools** card appears in the main configuration panel between the model settings and the command preview. It has three sections:
 
 **Web Sources** (top, toggle to enable/disable):
 - Enable or disable source groups with checkboxes
@@ -187,6 +200,11 @@ The **Tools** card appears in the main configuration panel between the model set
 - Create custom source groups from any combination of built-in or custom sources
 - Add custom sources by URL and description
 - Set the per-fetch token budget (default: 2000 tokens per fetch)
+
+**Local Capabilities** (below Web Sources, inside the same card):
+- Postgres: enter a connection string, test it, save — the string is encrypted at rest via the OS's own secret storage (DPAPI on Windows) and never re-displayed once saved
+- Documents: pick an output folder with a native folder picker
+- Each capability can be individually enabled/disabled globally, and independently activated per profile in the same Individual Sources list as web sources
 
 **External MCP Servers** (bottom, always visible):
 - Shows the built-in Beaver MCP URL (`http://localhost:8082/sse`) when enabled
@@ -202,7 +220,7 @@ Each tool call adds 2–5 seconds of latency. The model's response appears after
 
 ### Storage
 
-User-defined tools, groups, and external MCP server configurations are stored in `tools.json` in the Electron userData directory alongside `profiles.json`. Built-in sources and groups are hardcoded and can be toggled off per-profile but not deleted.
+User-defined tools, groups, external MCP server configurations, and local capability config (Postgres connection string, Documents output folder) are stored in `tools.json` in the Electron userData directory alongside `profiles.json`. Built-in sources, groups, and capabilities are hardcoded and can be toggled off per-profile but not deleted. The Postgres connection string is the one secret in that file — it's encrypted with Electron's `safeStorage` (OS-level encryption) rather than stored in plaintext.
 
 ---
 
@@ -231,7 +249,7 @@ This is the hardware and model used during development. Results will vary by GPU
 | **GPU** | NVIDIA RTX 3060 12 GB |
 | **RAM** | 32 GB DDR5 |
 | **Model** | [Qwen3.6-35B-A3B-UD-Q3_K_XL](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) |
-| **Speed** | ~25–30 tokens/sec on light coding tasks and summarization |
+| **Speed** | ~25–30 tokens/sec on light coding tasks and summarization; 41–45 tokens/sec generating a 5-page report (29s total) after letting llama-server's own `--fit` auto-size GPU/CPU offload instead of a fixed manual split — see Roadmap/Changelog for details |
 
 **The model:** Qwen3.6-35B-A3B is an Alibaba model with a hybrid Gated DeltaNet and Gated Attention architecture, 256 experts with 8 routed and 1 shared active at a time — totalling ~3B active parameters out of 35B. That's why it fits and runs at useful speed on a 12 GB card that would be completely unusable with a dense 35B model.
 
@@ -421,7 +439,11 @@ The `tools.json` schema:
 {
   "tools": [ { "id": "...", "name": "...", "baseUrl": "...", "description": "..." } ],
   "groups": [ { "id": "...", "name": "...", "description": "...", "toolIds": ["..."] } ],
-  "externalServers": [ { "id": "...", "name": "...", "url": "...", "enabled": true } ]
+  "externalServers": [ { "id": "...", "name": "...", "url": "...", "enabled": true } ],
+  "capabilities": {
+    "postgres":  { "enabled": false, "connectionStringEnc": "...", "maxRows": 200 },
+    "documents": { "enabled": false, "outputDir": "..." }
+  }
 }
 ```
 
@@ -435,7 +457,7 @@ Profile management (save, load, delete) is available directly in the Beaver Dam 
 |---|---|
 | 8080 | Gateway — public-facing; all clients connect here (default, configurable in Beaver Dam) |
 | 8081 | llama-server — internal only, bound to `127.0.0.1`; not reachable from LAN |
-| 8082 | MCP server — built-in web_fetch tool endpoint; LAN-accessible when network mode is on |
+| 8082 | MCP server — built-in tool endpoint (web_fetch, Postgres, Documents); LAN-accessible when network mode is on |
 | 8765 | Beacon — Beaver Dam identity broadcast, always bound to `0.0.0.0` for LAN discovery |
 
 Ports 8080 and 8082 are LAN-accessible when network mode is on (Beaver Dam adds Windows Firewall inbound rules automatically for both). Port 8081 is localhost only regardless of network mode. All three shift together if you change the configured port — llama-server is always `configured-port + 1`, and the MCP server is always `configured-port + 2`.
@@ -446,7 +468,7 @@ Ports 8080 and 8082 are LAN-accessible when network mode is on (Beaver Dam adds 
 
 - **Unsigned installers** — both installers will trigger Windows Defender SmartScreen. This is expected for unsigned binaries distributed outside the Microsoft Store. A code signing certificate would resolve this.
 - **Android sideload required** — the app is not on the Play Store. Installation requires enabling "unknown sources."
-- **No authentication** — the llama-server API has no auth. Anyone on your home network can use it. Do not expose port 8080 to the public internet.
+- **Authentication is optional and off by default** — Beaver Dam supports a three-tier account model (a single Owner who creates/removes Admin accounts, Admins who manage regular Users day-to-day, and Users), session tokens, and API keys, gated behind a global "Require login" toggle (localhost is always exempt so you never lock yourself out on the host PC). The account/role logic is covered by an automated HTTP-level test suite (`scripts/test-auth.mjs`) that exercises the full hierarchy — cross-tier permission checks included — but the live GUI walkthrough (toggling it on, creating the Owner, logging in from a real browser/device) still hasn't been manually done end-to-end — treat it as new. With it off (the default), anyone on your network can use the server. Do not expose the gateway port to the public internet either way.
 - **Single profile active at a time** — Beaver Dam manages one running model at a time.
 - **Windows only for server** — Beaver Dam is Windows-only. The client apps (Beaver Log) can run anywhere, but the server manager requires Windows because it shells out to a Windows llama.cpp binary.
 - **Tokens/min display is unreliable** — the tok/min counter shown in the Beaver Dam header is a known bug. The number it displays is not accurate. This is a known issue and will be fixed in a future update.
@@ -468,14 +490,16 @@ This is an honest work-in-progress. The project started as a personal home tool 
 - [x] Server log displayed in Beaver Dam UI (piped mode)
 - [x] OpenAI-compatible API for use with coding agents (Kilo Code, Continue, etc.)
 - [x] Direct browser access to chat UI at `http://127.0.0.1:8080`
-- [x] Built-in MCP server — exposes `web_fetch` tool via Model Context Protocol SSE transport; whitelist enforced at the server level (non-whitelisted URLs never leave the machine)
+- [x] Built-in MCP server — provider-driven architecture exposing `web_fetch`, Postgres, and Document-generation tools via Model Context Protocol SSE transport; whitelist enforced at the server level (non-whitelisted URLs never leave the machine)
 - [x] Source groups — named bundles of web sources (General Knowledge, Developer, News, Legal US, Research) with per-profile activation; custom groups and sources supported
 - [x] External MCP server management — connect to MCP servers on other devices; beacon advertises all active MCP endpoints for auto-discovery
+- [x] Postgres capability — read-only SQL query, table listing, and column inspection against an admin-configured database; read-only enforced by the database itself (queries run inside a `READ ONLY` transaction), connection string encrypted at rest
+- [x] Document generation capability — model can create `.docx`/`.pdf`/`.md` files in an admin-configured local output folder for case notes, summaries, and reports
 
 ### Phase 2 — Small Office Ready
 Making Beaver usable in a small workplace rather than just on one person's home network.
 
-- [ ] Basic user authentication — staff accounts and an admin role so not everyone can change settings or restart the model
+- [x] Three-tier account roles — a single Owner creates/removes Admin accounts, Admins manage regular Users, session tokens and API keys behind a global "Require login" toggle; HTTP-verified with an automated hierarchy test suite, GUI walkthrough still pending
 - [ ] Per-user conversation history — currently all sessions share the same interface
 - [ ] Admin interface accessible from any device on the network — manage the server without touching the host PC
 - [ ] Auto-restart on crash — if the model dies at 9am Monday, it recovers without manual intervention

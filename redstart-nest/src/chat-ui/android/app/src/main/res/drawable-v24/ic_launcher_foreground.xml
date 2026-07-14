@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    American Redstart pixel-art icon (32x32, placeholder for a graphic
+    artist to replace) centred in a 48x48 viewport.
+    8-unit padding on each side keeps art inside the adaptive-icon safe zone (72dp of 108dp).
+    All coordinates = original SVG coord + 8.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+
+    <!-- feather black: crest, head, neck, throat outline, chest taper -->
+    <path
+        android:fillColor="#1c1917"
+        android:pathData="M 23,9 h 2 v 1 h -2 Z  M 23,10 h 2 v 1 h -2 Z  M 21,11 h 6 v 1 h -6 Z  M 20,12 h 8 v 1 h -8 Z  M 19,13 h 10 v 1 h -10 Z  M 18,14 h 12 v 1 h -12 Z  M 18,15 h 12 v 1 h -12 Z  M 18,16 h 2 v 1 h -2 Z  M 22,16 h 4 v 1 h -4 Z  M 28,16 h 2 v 1 h -2 Z  M 18,17 h 2 v 1 h -2 Z  M 22,17 h 4 v 1 h -4 Z  M 28,17 h 2 v 1 h -2 Z  M 18,18 h 12 v 1 h -12 Z  M 18,19 h 12 v 1 h -12 Z  M 19,20 h 10 v 1 h -10 Z  M 20,21 h 3 v 1 h -3 Z  M 25,21 h 3 v 1 h -3 Z  M 19,22 h 4 v 1 h -4 Z  M 25,22 h 4 v 1 h -4 Z  M 20,23 h 8 v 1 h -8 Z  M 19,24 h 10 v 1 h -10 Z  M 18,25 h 3 v 1 h -3 Z  M 22,25 h 4 v 1 h -4 Z  M 27,25 h 3 v 1 h -3 Z  M 19,26 h 1 v 1 h -1 Z  M 28,26 h 1 v 1 h -1 Z  M 18,29 h 1 v 1 h -1 Z  M 29,29 h 1 v 1 h -1 Z  M 18,30 h 1 v 1 h -1 Z  M 29,30 h 1 v 1 h -1 Z  M 18,31 h 1 v 1 h -1 Z  M 29,31 h 1 v 1 h -1 Z  M 16,32 h 3 v 1 h -3 Z  M 29,32 h 3 v 1 h -3 Z  M 15,33 h 5 v 1 h -5 Z  M 28,33 h 5 v 1 h -5 Z  M 16,34 h 5 v 1 h -5 Z  M 27,34 h 5 v 1 h -5 Z  M 16,35 h 16 v 1 h -16 Z  M 18,36 h 12 v 1 h -12 Z  M 19,37 h 10 v 1 h -10 Z" />
+
+    <!-- throat white: eyes, throat patch, belly -->
+    <path
+        android:fillColor="#fafaf9"
+        android:pathData="M 20,16 h 2 v 1 h -2 Z  M 26,16 h 2 v 1 h -2 Z  M 20,17 h 2 v 1 h -2 Z  M 26,17 h 2 v 1 h -2 Z  M 21,25 h 1 v 1 h -1 Z  M 26,25 h 1 v 1 h -1 Z  M 20,26 h 8 v 1 h -8 Z  M 19,27 h 10 v 1 h -10 Z  M 19,28 h 10 v 1 h -10 Z  M 19,29 h 10 v 1 h -10 Z  M 19,30 h 10 v 1 h -10 Z  M 19,31 h 10 v 1 h -10 Z  M 19,32 h 10 v 1 h -10 Z  M 20,33 h 8 v 1 h -8 Z  M 21,34 h 6 v 1 h -6 Z" />
+
+    <!-- signature orange: flank flashes (the redstart's field mark) -->
+    <path
+        android:fillColor="#f97316"
+        android:pathData="M 13,20 h 3 v 1 h -3 Z  M 32,20 h 3 v 1 h -3 Z  M 12,21 h 5 v 1 h -5 Z  M 31,21 h 5 v 1 h -5 Z  M 12,22 h 6 v 1 h -6 Z  M 30,22 h 6 v 1 h -6 Z  M 12,23 h 6 v 1 h -6 Z  M 30,23 h 6 v 1 h -6 Z  M 12,24 h 6 v 1 h -6 Z  M 30,24 h 6 v 1 h -6 Z  M 12,25 h 6 v 1 h -6 Z  M 30,25 h 6 v 1 h -6 Z  M 12,26 h 7 v 1 h -7 Z  M 29,26 h 7 v 1 h -7 Z  M 12,27 h 1 v 1 h -1 Z  M 15,27 h 4 v 1 h -4 Z  M 29,27 h 4 v 1 h -4 Z  M 35,27 h 1 v 1 h -1 Z  M 16,28 h 3 v 1 h -3 Z  M 29,28 h 3 v 1 h -3 Z  M 17,29 h 1 v 1 h -1 Z  M 30,29 h 1 v 1 h -1 Z  M 17,30 h 1 v 1 h -1 Z  M 30,30 h 1 v 1 h -1 Z  M 17,31 h 1 v 1 h -1 Z  M 30,31 h 1 v 1 h -1 Z" />
+
+    <!-- amber: beak -->
+    <path
+        android:fillColor="#d97706"
+        android:pathData="M 23,21 h 2 v 1 h -2 Z  M 23,22 h 2 v 1 h -2 Z" />
+
+    <!-- rust: shading beneath the flank flashes -->
+    <path
+        android:fillColor="#c2410c"
+        android:pathData="M 13,27 h 2 v 1 h -2 Z  M 33,27 h 2 v 1 h -2 Z  M 12,28 h 4 v 1 h -4 Z  M 32,28 h 4 v 1 h -4 Z  M 12,29 h 5 v 1 h -5 Z  M 31,29 h 5 v 1 h -5 Z  M 12,30 h 5 v 1 h -5 Z  M 31,30 h 5 v 1 h -5 Z  M 12,31 h 5 v 1 h -5 Z  M 31,31 h 5 v 1 h -5 Z  M 12,32 h 4 v 1 h -4 Z  M 32,32 h 4 v 1 h -4 Z  M 14,33 h 1 v 1 h -1 Z  M 33,33 h 1 v 1 h -1 Z" />
+</vector>

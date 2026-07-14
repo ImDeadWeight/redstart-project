@@ -10,14 +10,15 @@ build/
 # llama.cpp / TurboQuant — compiled binaries and full source tree.
 # The installer pulls from llama-cpp-turboquant/build/bin/Release/ at build time.
 # See README "Building from Source" for how to set this up.
-beaver-dam/llama-cpp-turboquant/
-beaver-dam/llama-server.exe
+redstart-nest/llama-cpp-turboquant/
+redstart-nest/llama-server.exe
+redstart-nest/deps/
 
 # Android build artifacts
-beaver-dam/src/chat-ui/android/.gradle/
-beaver-dam/src/chat-ui/android/app/build/
-beaver-dam/src/chat-ui/android/build/
-beaver-dam/src/chat-ui/android/local.properties
+redstart-nest/src/chat-ui/android/.gradle/
+redstart-nest/src/chat-ui/android/app/build/
+redstart-nest/src/chat-ui/android/build/
+redstart-nest/src/chat-ui/android/local.properties
 
 # Logs
 *.log
@@ -37,7 +38,7 @@ npm-debug.log*
 .claude/
 
 # Compiled APK outputs
-beaver-log/*.apk
+redstart-twig/*.apk
 
 # OS
 .DS_Store

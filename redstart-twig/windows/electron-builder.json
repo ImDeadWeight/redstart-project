@@ -1,0 +1,37 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "com.beaver.log",
+  "productName": "Beaver Log",
+  "directories": {
+    "output": "release/${version}"
+  },
+  "files": [
+    "electron/**/*"
+  ],
+  "asarUnpack": [
+    "electron/preload.cjs"
+  ],
+  "extraResources": [
+    {
+      "from": "../../redstart-nest/src/chat-ui/dist",
+      "to": "chat-ui",
+      "filter": ["**/*"]
+    }
+  ],
+  "win": {
+    "target": "nsis",
+    "icon": "../../redstart-nest/build/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowElevation": true,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Beaver Log",
+    "license": "LICENSE.txt",
+    "installerIcon": "../../redstart-nest/build/icon.ico",
+    "uninstallerIcon": "../../redstart-nest/build/icon.ico",
+    "runAfterFinish": true
+  }
+}
