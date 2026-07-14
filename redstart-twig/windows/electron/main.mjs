@@ -144,7 +144,7 @@ app.on('before-quit', () => {
 const BEACON_PORT = 8765
 
 // probeBeacon contacts a single IP and checks whether Redstart Nest is there.
-// I verify the app identity ("beaver-dam") before trusting the response so
+// I verify the app identity ("redstart-nest") before trusting the response so
 // that other HTTP services on port 8765 don't get mistaken for Redstart Nest.
 // I also require server.running to be true — if Redstart Nest is open but hasn't
 // started a model yet, there's nothing to connect to.
@@ -158,7 +158,7 @@ function probeBeacon(ip, timeout) {
         res.on('end', () => {
           try {
             const data = JSON.parse(body)
-            if (data.app !== 'beaver-dam' || !data.server?.running) { resolve(null); return }
+            if (data.app !== 'redstart-nest' || !data.server?.running) { resolve(null); return }
 
             // Same-machine discovery → use localUrl; LAN discovery → use networkUrl
             const url = ip === '127.0.0.1' ? data.server.localUrl : data.server.networkUrl

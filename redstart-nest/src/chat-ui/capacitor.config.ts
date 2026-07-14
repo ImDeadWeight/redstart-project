@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-	appId: 'com.beaver.app',
+	appId: 'com.redstart.app',
 	appName: 'Redstart',
 	webDir: 'dist',
 	server: {

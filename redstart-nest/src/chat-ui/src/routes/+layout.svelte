@@ -171,16 +171,16 @@
 		}
 	}
 
-	// handleDeepLink processes beaver://connect?url=http://... URIs that come in
+	// handleDeepLink processes redstart://connect?url=http://... URIs that come in
 	// when the user scans a QR code from Redstart Nest. I handle it in the layout
 	// (rather than a dedicated route) because the connection state needs to be
 	// set up before any child route renders, and the layout is always mounted.
-	// The beaver:// scheme is registered in AndroidManifest.xml so the OS knows
+	// The redstart:// scheme is registered in AndroidManifest.xml so the OS knows
 	// to open Redstart Twig when the camera sees one of these codes.
 	function handleDeepLink(url: string) {
 		try {
 			const parsed = new URL(url);
-			if (parsed.protocol === 'beaver:' && parsed.hostname === 'connect') {
+			if (parsed.protocol === 'redstart:' && parsed.hostname === 'connect') {
 				const serverUrl = parsed.searchParams.get('url');
 				if (serverUrl) {
 					settingsStore.updateConfig(SETTINGS_KEYS.SERVER_URL, serverUrl);

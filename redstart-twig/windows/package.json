@@ -1,5 +1,5 @@
 {
-  "name": "beaver-log-windows",
+  "name": "redstart-twig-windows",
   "version": "1.0.0",
   "description": "Lightweight Windows chat client for connecting to a Redstart Nest or llama.cpp-compatible server on your local network.",
   "author": "Patrick Carswell",

@@ -129,7 +129,7 @@ function probeBeacon(ip, timeout) {
             const data = JSON.parse(body)
             // Verify app identity and require a running model — avoids false
             // positives from other HTTP services on port 8765.
-            if (data.app !== 'beaver-dam' || !data.server?.running) { resolve(null); return }
+            if (data.app !== 'redstart-nest' || !data.server?.running) { resolve(null); return }
 
             const url = ip === '127.0.0.1' ? data.server.localUrl : data.server.networkUrl
             if (!url) { resolve(null); return }

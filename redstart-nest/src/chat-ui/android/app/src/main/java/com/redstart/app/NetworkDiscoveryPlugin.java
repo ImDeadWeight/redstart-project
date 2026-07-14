@@ -1,4 +1,4 @@
-package com.beaver.app;
+package com.redstart.app;
 
 import android.content.Context;
 import android.net.DhcpInfo;
@@ -156,7 +156,7 @@ public class NetworkDiscoveryPlugin extends Plugin {
             conn.disconnect();
 
             JSONObject json = new JSONObject(sb.toString());
-            if (!"beaver-dam".equals(json.optString("app"))) return null;
+            if (!"redstart-nest".equals(json.optString("app"))) return null;
 
             JSONObject serverInfo = json.optJSONObject("server");
             if (serverInfo == null) return null;

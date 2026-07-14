@@ -1,5 +1,5 @@
 /* === Redstart theme overlay for the llama.cpp web UI ===
- * Served by the beaver-chat:// protocol handler in electron/main/index.mjs.
+ * Served by the redstart-chat:// protocol handler in electron/main/index.mjs.
  * This file is injected as a stylesheet into every page load — edit here to
  * change the Redstart appearance without touching llama-cpp-turboquant source.
  */

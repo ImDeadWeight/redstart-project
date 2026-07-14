@@ -269,16 +269,16 @@ export default function App() {
   }, [logLines])
 
   // --- Update QR whenever network info changes ---
-  // The QR code encodes a deep link in the format beaver://connect?url=http://...
+  // The QR code encodes a deep link in the format redstart://connect?url=http://...
   // When an Android user scans this with their camera, the OS routes it to the
-  // Redstart Twig app (because the app registers the beaver:// URI scheme in its
+  // Redstart Twig app (because the app registers the redstart:// URI scheme in its
   // manifest). The app then reads the url parameter and auto-configures itself.
   // I chose a custom URI scheme over a plain URL because a plain http:// link
   // would just open the browser instead of the Redstart Twig app.
 
   useEffect(() => {
     if (!networkMode || !localIp) { setQrDataUrl(''); return }
-    const deepLink = `beaver://connect?url=${encodeURIComponent(`http://${localIp}:${config.port}`)}`
+    const deepLink = `redstart://connect?url=${encodeURIComponent(`http://${localIp}:${config.port}`)}`
     QRCode.toDataURL(deepLink, { width: 200, margin: 1 }).then(setQrDataUrl).catch(() => setQrDataUrl(''))
   }, [networkMode, localIp, config.port])
 

@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "com.beaver.dam",
-  "productName": "Beaver Dam",
+  "appId": "com.redstart.nest",
+  "productName": "Redstart Nest",
   "directories": {
     "output": "release/${version}"
   },
@@ -37,7 +37,7 @@
     "allowToChangeInstallationDirectory": true,
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
-    "shortcutName": "Beaver Dam",
+    "shortcutName": "Redstart Nest",
     "license": "LICENSE.txt",
     "installerIcon": "build/icon.ico",
     "uninstallerIcon": "build/icon.ico",

@@ -234,7 +234,7 @@ const REDSTART_SVG = [
 
 const REDSTART_FAVICON = 'data:image/svg+xml;base64,' + Buffer.from(REDSTART_SVG).toString('base64')
 
-// HTML injected before </head> on every page load via the beaver-chat:// protocol.
+// HTML injected before </head> on every page load via the redstart-chat:// protocol.
 // The script runs immediately (before Svelte boots) and uses a MutationObserver
 // to catch the greeting headline once Svelte has rendered it.
 const HEAD_INJECT = [
@@ -324,6 +324,33 @@ function readSettings() {
 
 function writeSettings(data) {
   fs.writeFileSync(getSettingsPath(), JSON.stringify(data, null, 2), 'utf8')
+}
+
+// ---------------------------------------------------------------------------
+// userData migration (Beaver -> Redstart rename)
+// ---------------------------------------------------------------------------
+// package.json's "name" changed from "beaver" to "redstart", which moves
+// Electron's userData directory from %APPDATA%\beaver\ to %APPDATA%\redstart\.
+// This copies the old profile/account/tool/settings files over once so an
+// existing install doesn't look wiped after the update. One-time and
+// idempotent: only copies a file if it doesn't already exist at the new
+// location, and only if the old directory is actually there. Must run before
+// anything reads profiles.json/accounts.json/tools.json/settings.json.
+function migrateUserDataFromBeaver() {
+  const newDir = app.getPath('userData')
+  const oldDir = path.join(app.getPath('appData'), 'beaver')
+  if (oldDir === newDir || !fs.existsSync(oldDir)) return
+
+  const files = ['profiles.json', 'accounts.json', 'tools.json', 'settings.json']
+  for (const file of files) {
+    const oldPath = path.join(oldDir, file)
+    const newPath = path.join(newDir, file)
+    if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) {
+      fs.mkdirSync(newDir, { recursive: true })
+      fs.copyFileSync(oldPath, newPath)
+      console.log(`Migrated ${file} from the old Beaver userData directory`)
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -525,7 +552,7 @@ function startBeaconServer() {
     }
 
     const payload = {
-      app: 'beaver-dam',
+      app: 'redstart-nest',
       version: '1.0.0',
       server: {
         running,
@@ -763,6 +790,7 @@ function createWindow() {
 app.disableHardwareAcceleration()
 
 app.whenReady().then(async () => {
+  migrateUserDataFromBeaver()
   applyCSP(session.defaultSession)
   killOrphanedServers()
   startBeaconServer()
@@ -786,7 +814,7 @@ function killOrphanedServers() {
 // if the rule is missing — so UAC only fires once per port, ever.
 function ensureFirewallRule(gatewayPort) {
   if (process.platform !== 'win32') return
-  const ruleName = `BeaverDam Gateway ${gatewayPort}`
+  const ruleName = `RedstartNest Gateway ${gatewayPort}`
 
   execFile('netsh', ['advfirewall', 'firewall', 'show', 'rule', `name=${ruleName}`, 'dir=in'],
     (_err, stdout) => {

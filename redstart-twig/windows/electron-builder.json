@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "com.beaver.log",
-  "productName": "Beaver Log",
+  "appId": "com.redstart.twig",
+  "productName": "Redstart Twig",
   "directories": {
     "output": "release/${version}"
   },
@@ -28,7 +28,7 @@
     "allowToChangeInstallationDirectory": true,
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
-    "shortcutName": "Beaver Log",
+    "shortcutName": "Redstart Twig",
     "license": "LICENSE.txt",
     "installerIcon": "../../redstart-nest/build/icon.ico",
     "uninstallerIcon": "../../redstart-nest/build/icon.ico",

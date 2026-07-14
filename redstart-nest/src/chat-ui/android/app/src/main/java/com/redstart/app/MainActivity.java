@@ -1,4 +1,4 @@
-package com.beaver.app;
+package com.redstart.app;
 
 import android.webkit.WebSettings;
 import com.getcapacitor.BridgeActivity;
