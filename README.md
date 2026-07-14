@@ -1,3 +1,5 @@
+> **📦 This project has moved.** Beaver is being renamed to **American Redstart** (unrelated naming conflict with an established beaver-named project in the same space). Active development now happens at **[github.com/ImDeadWeight/redstart-project](https://github.com/ImDeadWeight/redstart-project)** — this repo is kept in place so existing links keep working, but it will not receive further updates. Please update your bookmarks/links when convenient.
+
 <p align="center">
   <img src="beaver-dam/public/beaver.svg" alt="Beaver logo" width="120" />
 </p>
