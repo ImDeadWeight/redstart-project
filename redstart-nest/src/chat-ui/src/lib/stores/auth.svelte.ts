@@ -12,7 +12,14 @@ import { AUTH_TOKEN_LOCALSTORAGE_KEY } from '$lib/constants/storage';
  * /auth/me) and clears the stale token rather than looping.
  */
 
-export type AuthUser = { id: string; username: string; role: 'owner' | 'admin' | 'user' };
+export type AuthUser = {
+	id: string;
+	username: string;
+	role: 'owner' | 'admin' | 'user';
+	apiKeyPrefix?: string;
+	createdAt?: string;
+	lastLoginAt?: string | null;
+};
 
 class AuthStore {
 	private tokenState = persisted<string | null>(AUTH_TOKEN_LOCALSTORAGE_KEY, null);
@@ -67,6 +74,21 @@ class AuthStore {
 		this.user = result.user;
 	}
 
+	/**
+	 * Rotate the current user's own API key. Returns the new full key, which is
+	 * shown to the user exactly once (the server only ever stores its hash).
+	 * Updates this.user with the fresh apiKeyPrefix so the menu reflects it.
+	 */
+	async regenerateOwnApiKey(): Promise<string> {
+		const result = await apiPost<{ account: AuthUser; apiKey: string }>(
+			'/auth/me/regenerate-key',
+			{},
+			{ authOnly: true }
+		);
+		this.user = result.account;
+		return result.apiKey;
+	}
+
 	async logout(): Promise<void> {
 		try {
 			await apiPost('/auth/logout', {}, { authOnly: true });
@@ -79,11 +101,19 @@ class AuthStore {
 
 	/**
 	 * Drop a stale/revoked session so the reactive login gate reappears.
-	 * Call this wherever an authenticated request comes back 401 mid-session
-	 * (server restarted, admin revoked the account, session expired) rather
-	 * than leaving the app to show a generic connectivity error.
+	 * Called centrally whenever an authenticated request comes back 401
+	 * mid-session (server restarted, admin revoked the account, session
+	 * expired) rather than leaving the app to show a generic connectivity
+	 * error.
+	 *
+	 * A 401 also proves the server requires auth, so force authRequired true:
+	 * this closes the gap where /auth/config couldn't be reached at startup
+	 * (init() defaults authRequired to false on failure), which would
+	 * otherwise leave the app showing the chat UI with 401 errors instead of
+	 * the login gate.
 	 */
 	handleUnauthorized(): void {
+		this.authRequired = true;
 		this.tokenState.value = null;
 		this.user = null;
 	}

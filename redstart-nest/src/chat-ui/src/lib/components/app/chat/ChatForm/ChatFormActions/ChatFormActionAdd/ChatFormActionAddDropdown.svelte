@@ -26,7 +26,6 @@
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
 		onMcpPromptClick?: () => void;
-		onMcpSettingsClick?: () => void;
 		onMcpResourcesClick?: () => void;
 	}
 
@@ -41,16 +40,10 @@
 		onFileUpload,
 		onSystemPromptClick,
 		onMcpPromptClick,
-		onMcpSettingsClick,
 		onMcpResourcesClick
 	}: Props = $props();
 
 	let dropdownOpen = $state(false);
-
-	function handleMcpSettingsClick() {
-		dropdownOpen = false;
-		onMcpSettingsClick?.();
-	}
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
@@ -149,7 +142,7 @@
 
 			<ChatFormActionAddToolsSubmenu />
 
-			<ChatFormActionAddMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
+			<ChatFormActionAddMcpServersSubmenu />
 
 			{#if hasMcpPromptsSupport}
 				<DropdownMenu.Separator />

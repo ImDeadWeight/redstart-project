@@ -189,17 +189,6 @@
 										Reload app
 									</Button>
 								</div>
-
-								{#if authStore.user}
-									<div class="flex items-center justify-between border-t border-border/30 pt-4">
-										<p class="text-sm text-muted-foreground">
-											Signed in as <span class="font-medium">{authStore.user.username}</span>
-										</p>
-										<Button variant="outline" size="sm" onclick={() => authStore.logout()}>
-											Log out
-										</Button>
-									</div>
-								{/if}
 							{/if}
 						</div>
 					{/if}

@@ -42,7 +42,7 @@ function verifyPassword(password, passwordHash, passwordSalt) {
 // ---------------------------------------------------------------------------
 
 function generateApiKey() {
-  return 'bvr_' + crypto.randomBytes(24).toString('hex')
+  return 'rst_' + crypto.randomBytes(24).toString('hex')
 }
 
 function hashApiKey(rawKey) {
@@ -107,7 +107,14 @@ function bearerToken(req) {
 
 function toPublicAccount(record) {
   if (!record) return null
-  return { id: record.id, username: record.username, role: record.role }
+  return {
+    id: record.id,
+    username: record.username,
+    role: record.role,
+    apiKeyPrefix: record.apiKeyPrefix,
+    createdAt: record.createdAt,
+    lastLoginAt: record.lastLoginAt ?? null,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -274,5 +281,17 @@ export function regenerateApiKey(actor, id) {
   if (!canManage(actor, target.role)) return { ok: false, error: 'Not permitted to modify this account' }
   const apiKey = generateApiKey()
   const account = accounts.updateAccount(id, { apiKeyHash: hashApiKey(apiKey), apiKeyPrefix: apiKey.slice(0, 8) })
+  return { ok: true, account, apiKey }
+}
+
+// Self-service: a logged-in user rotating their OWN key. No canManage() check
+// because the target is always the caller's own account — the route passes the
+// authenticated account straight through as the actor, so there's no id to
+// spoof. Deliberately separate from regenerateApiKey() (admin-managing-others).
+export function regenerateOwnApiKey(actor) {
+  if (!actor) return { ok: false, error: 'Not authenticated' }
+  const apiKey = generateApiKey()
+  const account = accounts.updateAccount(actor.id, { apiKeyHash: hashApiKey(apiKey), apiKeyPrefix: apiKey.slice(0, 8) })
+  if (!account) return { ok: false, error: 'Account not found' }
   return { ok: true, account, apiKey }
 }

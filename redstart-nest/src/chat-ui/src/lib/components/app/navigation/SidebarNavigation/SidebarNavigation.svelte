@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { Trash2, Pencil, Pin, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { DialogConfirmation } from '$lib/components/app';
+	import { DialogConfirmation, UserMenu } from '$lib/components/app';
 	import SidebarNavigationActions from './SidebarNavigationActions.svelte';
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
@@ -180,22 +180,26 @@
 <div class="flex h-full flex-col">
 	<ScrollArea class="h-full flex-1">
 		<Sidebar.Header class="gap-4 bg-sidebar/50 p-3 backdrop-blur-lg md:pt-4 md:pb-2">
-			<div class="flex items-center justify-between">
+			<div class="flex items-center justify-between gap-2">
 				<a href={ROUTES.START} onclick={handleMobileSidebarItemClick}>
 					<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">
 						{APP_NAME}
 					</h1>
 				</a>
 
-				<Button
-					class="rounded-full md:hidden"
-					variant="ghost"
-					size="icon"
-					onclick={() => sidebar.toggle()}
-				>
-					<X class="h-4 w-4" />
-					<span class="sr-only">Close sidebar</span>
-				</Button>
+				<div class="flex items-center gap-1">
+					<UserMenu />
+
+					<Button
+						class="rounded-full md:hidden"
+						variant="ghost"
+						size="icon"
+						onclick={() => sidebar.toggle()}
+					>
+						<X class="h-4 w-4" />
+						<span class="sr-only">Close sidebar</span>
+					</Button>
+				</div>
 			</div>
 
 			<SidebarNavigationActions

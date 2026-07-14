@@ -1,7 +1,5 @@
 import { PropsService } from '$lib/services/props.service';
 import { ServerRole } from '$lib/enums';
-import { ApiError } from '$lib/utils';
-import { authStore } from './auth.svelte';
 
 /**
  * serverStore - Server connection state, configuration, and role detection
@@ -85,13 +83,9 @@ class ServerStore {
 				this.error = null;
 				this.detectRole(props);
 			} catch (error: unknown) {
-				// A 401 here means the session died mid-use (server restarted, admin
-				// revoked the account) rather than the server being unreachable —
-				// drop the stale session so the reactive login gate reappears
-				// instead of leaving a generic "server unavailable" error on screen.
-				if (error instanceof ApiError && error.status === 401) {
-					authStore.handleUnauthorized();
-				}
+				// A 401 (session died mid-use) is handled centrally in apiFetch,
+				// which clears the session so the login gate reappears. Here we
+				// just record the error message for the connectivity case.
 				this.error = error instanceof Error ? error.message : String(error);
 				console.error('Error fetching server properties:', error);
 			} finally {

@@ -54,12 +54,6 @@ export { default as SettingsChatImportExportTab } from './SettingsChat/SettingsC
 export { default as SettingsChatImportExportSection } from './SettingsChat/SettingsChatImportExportSection.svelte';
 
 /**
- * MCP Servers configuration panel.
- * Provides UI for managing Model Context Protocol (MCP) server connections.
- */
-export { default as SettingsMcpServers } from './SettingsMcpServers.svelte';
-
-/**
  * Form fields renderer for individual settings. Generates appropriate input
  * components based on field type (text, number, select, checkbox, textarea).
  * Handles validation, help text display, and parameter source indicators.

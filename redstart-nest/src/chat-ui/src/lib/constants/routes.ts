@@ -8,7 +8,6 @@ export const SETTINGS_SECTION_SLUGS = {
 	PENALTIES: 'penalties',
 	AGENTIC: 'agentic',
 	DEVELOPER: 'developer',
-	MCP: 'mcp',
 	TOOLS: 'tools',
 	IMPORT_EXPORT: 'import-export',
 	SERVER: 'server',
@@ -22,8 +21,6 @@ export const ROUTES = {
 	NEW_CHAT: `?${NEW_CHAT_PARAM}=true#/`,
 	/** Chat base — for dynamic chat URLs use RouterService. */
 	CHAT: '#/chat',
-	/** MCP servers. */
-	MCP_SERVERS: '#/mcp-servers',
 	/** Settings base — for dynamic settings URLs use RouterService. */
 	SETTINGS: '#/settings'
 } as const;

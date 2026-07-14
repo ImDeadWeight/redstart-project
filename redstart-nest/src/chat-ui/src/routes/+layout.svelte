@@ -13,6 +13,7 @@
 	import RedstartLoadingScreen from '$lib/components/app/RedstartLoadingScreen.svelte';
 	import { LoginForm } from '$lib/components/app';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import { setUnauthorizedHandler } from '$lib/utils';
 	import { App as CapApp } from '@capacitor/app';
 	import { NetworkDiscovery, type NetworkDiscoveryPlugin } from '$lib/plugins/network-discovery';
 	import { isCapacitorAndroid, isElectronLog, getServerBaseUrl } from '$lib/utils/server-url';
@@ -274,6 +275,13 @@
 	}
 
 	onMount(() => {
+		// Route every authenticated request's 401 through the auth store so a
+		// dead session drops back to the login gate. Registered here at runtime
+		// (not at module scope in the auth store) to avoid a circular-import
+		// evaluation cycle during SvelteKit's prerender analysis. Set before
+		// initApp() so the very first auth check is already covered.
+		setUnauthorizedHandler(() => authStore.handleUnauthorized());
+
 		updateFavicon();
 		mounted = true;
 		void initApp();
@@ -305,6 +313,9 @@
 		if (serverProps) {
 			untrack(() => {
 				settingsStore.syncWithServerDefaults();
+				// MCP servers are managed centrally in Redstart Nest — pull the
+				// current list from the host instead of per-device settings.
+				void mcpStore.syncServersFromHost();
 			});
 		}
 	});
@@ -437,10 +448,15 @@
 		onCancel={handleTitleUpdateCancel}
 	/>
 
-	{#if authStore.authRequired && !authStore.user}
-		<LoginForm />
-	{:else}
-		<Sidebar.Provider bind:open={sidebarOpen}>
+	<!-- Nothing below the loading screen mounts until auth state is resolved
+	     (appReady) — this prevents chat components from instantiating and
+	     firing premature 401s underneath the loading overlay, and guarantees
+	     the login gate, not the chat UI, is the first thing revealed. -->
+	{#if appReady}
+		{#if authStore.authRequired && !authStore.user}
+			<LoginForm />
+		{:else}
+			<Sidebar.Provider bind:open={sidebarOpen}>
 			<div class="flex h-dvh w-full">
 				<Sidebar.Root variant="floating" class="h-full"
 					><SidebarNavigation bind:this={chatSidebar} /></Sidebar.Root
@@ -477,6 +493,7 @@
 				</Sidebar.Inset>
 			</div>
 		</Sidebar.Provider>
+		{/if}
 	{/if}
 </Tooltip.Provider>
 

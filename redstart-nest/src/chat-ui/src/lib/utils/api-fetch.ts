@@ -30,6 +30,24 @@ export class ApiError extends Error {
 }
 
 /**
+ * Central 401 handler, registered once by the auth store (see auth.svelte.ts).
+ * Any authenticated request that comes back 401 — session expired, Redstart
+ * Nest restarted (sessions are in-memory), or the account was revoked — drops
+ * the session so the reactive login gate reappears, instead of every call site
+ * reinventing this or surfacing a generic "server unavailable" error.
+ *
+ * 401 only: a 403 means "logged in but not permitted" (e.g. a non-admin
+ * hitting an admin route) and must NOT clear the session. Registered via a
+ * callback rather than importing authStore here, to avoid a circular import
+ * (the auth store imports this module).
+ */
+let onUnauthorized: (() => void) | null = null;
+
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+	onUnauthorized = handler;
+}
+
+/**
  * Resolves an API path to an absolute URL.
  * When running inside the Capacitor Android shell, prepends the user-configured
  * server base URL so that paths like '/v1/models' or './props' hit the correct
@@ -99,6 +117,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 	}
 
 	if (!response.ok) {
+		if (response.status === 401) onUnauthorized?.();
 		const errorMessage = await parseErrorMessage(response);
 		throw new ApiError(errorMessage, response.status);
 	}
@@ -153,6 +172,7 @@ export async function apiFetchWithParams<T>(
 	}
 
 	if (!response.ok) {
+		if (response.status === 401) onUnauthorized?.();
 		const errorMessage = await parseErrorMessage(response);
 		throw new ApiError(errorMessage, response.status);
 	}

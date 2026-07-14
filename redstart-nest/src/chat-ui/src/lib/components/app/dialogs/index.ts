@@ -11,14 +11,6 @@
  */
 
 /**
- * **DialogMcpServerAddNew** - Add new MCP server dialog
- *
- * Modal dialog for adding a new MCP server with URL and optional headers.
- * Validates URL format and integrates with mcpStore and conversationsStore.
- */
-export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte';
-
-/**
  * **DialogExportSettings** - Settings export dialog with sensitive data warning
  *
  * Dialog for exporting settings with an option to include or exclude

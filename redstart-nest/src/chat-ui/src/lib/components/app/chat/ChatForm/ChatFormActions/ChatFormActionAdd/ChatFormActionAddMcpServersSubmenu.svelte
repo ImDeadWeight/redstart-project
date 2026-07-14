@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { Settings, Plus } from '@lucide/svelte';
 	import { Switch } from '$lib/components/ui/switch';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { McpLogo, DropdownMenuSearchable, McpServerIdentity } from '$lib/components/app';
@@ -7,14 +6,6 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { HealthCheckStatus } from '$lib/enums';
 	import type { MCPServerSettingsEntry } from '$lib/types';
-	import { goto } from '$app/navigation';
-	import { ROUTES } from '$lib/constants/routes';
-
-	interface Props {
-		onMcpSettingsClick?: () => void;
-	}
-
-	let { onMcpSettingsClick }: Props = $props();
 
 	let mcpSearchQuery = $state('');
 	let allMcpServers = $derived(mcpStore.getServersSorted());
@@ -48,12 +39,6 @@
 			mcpSearchQuery = '';
 			mcpStore.runHealthChecksForServers(allMcpServers);
 		}
-	}
-
-	function handleMcpSettingsClick() {
-		onMcpSettingsClick?.();
-
-		goto(`${hasMcpServers ? '' : '?add'}${ROUTES.MCP_SERVERS}`);
 	}
 </script>
 
@@ -118,32 +103,12 @@
 						{/each}
 					</div>
 
-					{#snippet footer()}
-						<DropdownMenu.Item
-							class="flex cursor-pointer items-center gap-2"
-							onclick={handleMcpSettingsClick}
-						>
-							<Settings class="h-4 w-4" />
-
-							<span>Manage MCP Servers</span>
-						</DropdownMenu.Item>
-					{/snippet}
 				</DropdownMenuSearchable>
 			{:else}
 				<div class="px-2 py-3 text-center text-sm text-muted-foreground">
-					No MCP servers configured
+					No MCP servers available.<br />
+					MCP servers are managed in Redstart Nest.
 				</div>
-
-				<DropdownMenu.Separator />
-
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={handleMcpSettingsClick}
-				>
-					<Plus class="h-4 w-4" />
-
-					<span>Add MCP Servers</span>
-				</DropdownMenu.Item>
 			{/if}
 		</DropdownMenu.SubContent>
 	</DropdownMenu.Sub>

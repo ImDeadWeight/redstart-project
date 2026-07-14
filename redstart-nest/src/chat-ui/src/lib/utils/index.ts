@@ -9,7 +9,14 @@
 
 // API utilities
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
-export { apiFetch, apiFetchWithParams, apiPost, ApiError, type ApiFetchOptions } from './api-fetch';
+export {
+	apiFetch,
+	apiFetchWithParams,
+	apiPost,
+	ApiError,
+	setUnauthorizedHandler,
+	type ApiFetchOptions
+} from './api-fetch';
 export { getServerBaseUrl, isCapacitorAndroid } from './server-url';
 export { validateApiKey } from './api-key-validation';
 

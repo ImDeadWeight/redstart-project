@@ -30,7 +30,8 @@ import {
 	parseMcpServerSettings,
 	detectMcpTransportFromUrl,
 	uuid,
-	extractRootDomain
+	extractRootDomain,
+	apiFetch
 } from '$lib/utils';
 import {
 	MCPConnectionPhase,
@@ -523,6 +524,42 @@ class MCPStore {
 		return [...servers].sort((a, b) =>
 			this.getServerLabel(a).localeCompare(this.getServerLabel(b))
 		);
+	}
+
+	/**
+	 * Fetches the MCP server list from the Redstart Nest host and replaces the
+	 * local server list with it. MCP servers are managed centrally in the Nest
+	 * (built-in server + external registrations), so clients auto-configure
+	 * instead of each device maintaining its own list.
+	 *
+	 * IDs are derived from the server URL so per-chat enable overrides (keyed
+	 * by server ID) survive restarts and re-syncs. If the endpoint is missing
+	 * (e.g. plain llama-server without a Nest), the existing list is left
+	 * untouched.
+	 */
+	async syncServersFromHost(): Promise<void> {
+		let fetched: { servers?: { name?: string; url?: string }[] };
+		try {
+			fetched = await apiFetch<{ servers?: { name?: string; url?: string }[] }>(
+				'/redstart/mcp-servers'
+			);
+		} catch {
+			return;
+		}
+
+		const list = Array.isArray(fetched?.servers) ? fetched.servers : [];
+		const entries: MCPServerSettingsEntry[] = list
+			.filter((s) => typeof s?.url === 'string' && s.url.trim())
+			.map((s) => ({
+				id: `redstart-${(s.url as string).trim().replace(/[^a-zA-Z0-9]+/g, '-')}`,
+				enabled: true,
+				url: (s.url as string).trim(),
+				name: s.name,
+				requestTimeoutSeconds:
+					Number(config().mcpRequestTimeoutSeconds) || DEFAULT_MCP_CONFIG.requestTimeoutSeconds
+			}));
+
+		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, JSON.stringify(entries));
 	}
 
 	addServer(
