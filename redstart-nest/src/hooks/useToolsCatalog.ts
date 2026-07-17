@@ -48,10 +48,22 @@ export function useToolsCatalog(
         activeGroupIds: [],
         activeToolIds: [],
         maxFetchTokens: 2000,
+        disabledToolIds: [],
         ...(prev.tools || {}),
         [key]: value,
       },
     }))
+  }
+
+  // Server-enforced tool bans. Banning a capability/tool ID removes every tool
+  // it produces from the model's vocabulary for all clients (gateway strips
+  // them); users cannot re-enable a banned tool client-side.
+  function toggleDisabledTool(toolId: string) {
+    const current = config.tools?.disabledToolIds ?? []
+    const next = current.includes(toolId)
+      ? current.filter(id => id !== toolId)
+      : [...current, toolId]
+    setToolsField('disabledToolIds', next)
   }
 
   function toggleGroup(groupId: string) {
@@ -107,7 +119,7 @@ export function useToolsCatalog(
     newToolUrl, setNewToolUrl, newToolDesc, setNewToolDesc,
     showAddGroup, setShowAddGroup, newGroupName, setNewGroupName,
     newGroupDesc, setNewGroupDesc, newGroupToolIds, setNewGroupToolIds,
-    setToolsField, toggleGroup, toggleTool,
+    setToolsField, toggleGroup, toggleTool, toggleDisabledTool,
     addCustomTool, deleteCustomTool, addCustomGroup, deleteCustomGroup,
   }
 }

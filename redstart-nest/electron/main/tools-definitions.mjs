@@ -121,6 +121,43 @@ export const BUILTIN_CAPABILITIES = [
   },
 ]
 
+// Maps a capability/tool ID to the actual MCP tool function names it exposes.
+// The gateway enforces tool bans by function name (that's what the model sees),
+// so an admin banning a capability ID (e.g. 'file_system') must expand to every
+// function name it produces (fs_read_file, fs_write_file, ...). Built-in web
+// sources (web_fetch/web_search) are gated by the whitelist, not by name, so
+// they're intentionally absent here.
+export const CAPABILITY_TOOL_NAMES = {
+  postgres: ['postgres_query', 'postgres_list_tables', 'postgres_describe_table'],
+  documents: ['create_document', 'read_document', 'list_documents'],
+  sqlite: ['sqlite_query', 'sqlite_list_tables', 'sqlite_describe_table'],
+  vault: ['vault_search', 'vault_get', 'vault_tags'],
+  git: ['git_status', 'git_log', 'git_diff'],
+  file_system: [
+    'fs_read_file',
+    'fs_write_file',
+    'fs_edit_file',
+    'fs_list_directory',
+    'fs_search_files',
+    'fs_get_file_info',
+    'fs_create_directory',
+    'fs_delete_file',
+  ],
+  scholar: ['scholar_search', 'scholar_get', 'scholar_save_pdf'],
+}
+
+// Expand a list of banned capability/tool IDs into the concrete tool function
+// names the gateway should strip. Unknown IDs are ignored (defensive against
+// stale profiles referencing removed capabilities).
+export function expandDisabledToolIds(ids = []) {
+  const names = new Set()
+  for (const id of ids) {
+    const toolNames = CAPABILITY_TOOL_NAMES[id]
+    if (toolNames) toolNames.forEach((n) => names.add(n))
+  }
+  return [...names]
+}
+
 export const BUILTIN_GROUPS = [
   {
     id: 'general',

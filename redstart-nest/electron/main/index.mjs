@@ -18,7 +18,7 @@ import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import * as path from 'path'
 import * as fs from 'fs'
-import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES } from './tools-definitions.mjs'
+import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES, expandDisabledToolIds } from './tools-definitions.mjs'
 import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup, getExternalServers, addExternalServer, deleteExternalServer, getCapabilities, setCapabilityConfig, ensureDefaultCapabilityFolders } from './tools-storage.mjs'
 import { startGateway, stopGateway, updateGatewayConfig, getGatewayPort } from './tools-gateway.mjs'
 import { startMcpServer, stopMcpServer, updateMcpConfig, getMcpServerRunning, closeAllMcpSessions, estimateActiveToolTokens } from './mcp-server.mjs'
@@ -385,6 +385,11 @@ function resolveBinary() {
 function buildGatewayConfig(llamaConfig) {
   const toolSettings = llamaConfig?.tools
 
+  // Server-enforced tool bans. The admin disables capability/tool IDs at the
+  // profile level; expand them to the concrete MCP function names the model
+  // sees so the gateway can strip them from every completions request.
+  const disabledTools = expandDisabledToolIds(toolSettings?.disabledToolIds)
+
   const allTools = [
     ...BUILTIN_TOOLS.map(t => ({ ...t, builtIn: true })),
     ...getUserTools(),
@@ -396,6 +401,7 @@ function buildGatewayConfig(llamaConfig) {
 
   if (!toolSettings?.enabled) {
     return {
+      disabledTools,
       webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 },
       postgres: { enabled: false },
       documents: { enabled: false },
@@ -449,6 +455,7 @@ function buildGatewayConfig(llamaConfig) {
   const scholarWanted = toolIdSet.has('scholar') && capabilities.scholar.enabled
 
   return {
+    disabledTools,
     webFetch: {
       enabled: true,
       // Per-profile toggle: with the whitelist OFF the model may fetch any

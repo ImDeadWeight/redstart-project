@@ -52,6 +52,12 @@ export type ProfileTools = {
   activeToolIds: string[]
   maxFetchTokens: number
   whitelistEnabled?: boolean  // default true; false = model may fetch any public http(s) URL (LAN/private always blocked)
+  // Server-enforced tool bans. Tool names listed here are removed from the
+  // model's vocabulary for every client (gateway strips them from the
+  // completions request), regardless of a user's local enable/disable toggle.
+  // An admin uses this to enforce an org policy (e.g. disable fs_write_file)
+  // that non-technical staff cannot override client-side.
+  disabledToolIds: string[]
 }
 
 export type LlamaConfig = {
@@ -80,5 +86,6 @@ export type ServerState = 'stopped' | 'starting' | 'running' | 'stopping'
 export const DEFAULT_CONFIG: LlamaConfig = {
   modelPath: '', ctxSize: 4096, batchSize: 256, threads: 4,
   gpuLayers: undefined, port: 19080, host: '0.0.0.0', networkMode: true,
+  advertisedHost: 'redstart.local',
   nCpuMoe: undefined, kvCache: 'balanced', additionalArgs: '',
 }

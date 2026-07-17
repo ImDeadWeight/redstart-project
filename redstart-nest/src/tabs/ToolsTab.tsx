@@ -91,7 +91,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
     newToolUrl, setNewToolUrl, newToolDesc, setNewToolDesc,
     showAddGroup, setShowAddGroup, newGroupName, setNewGroupName,
     newGroupDesc, setNewGroupDesc, newGroupToolIds, setNewGroupToolIds,
-    setToolsField, toggleGroup, toggleTool,
+    setToolsField, toggleGroup, toggleTool, toggleDisabledTool,
     addCustomTool, deleteCustomTool, addCustomGroup, deleteCustomGroup,
   } = toolsCatalog
   const {
@@ -447,6 +447,28 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
             </div>
           </div>
         )}
+      {/* Banned tools — server-enforced, applies to every client */}
+      <div className="mt-6 pt-4 border-t border-zinc-700">
+        <p className="text-xs uppercase tracking-widest text-zinc-500 mb-1">Banned Tools</p>
+        <p className="text-xs text-zinc-600 mb-3">
+          Banned tools are removed from the model's vocabulary for every connected client — staff cannot re-enable them in their settings. Use this to enforce an org policy (e.g. disable file writes).
+        </p>
+        <div className="space-y-1.5">
+          {allTools.filter(t => t.kind === 'capability').map(tool => {
+            const banned = (config.tools?.disabledToolIds ?? []).includes(tool.id)
+            return (
+              <label key={tool.id} className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox" checked={banned}
+                  onChange={() => toggleDisabledTool(tool.id)}
+                  className="accent-orange-500"
+                />
+                <span className="text-sm text-zinc-200">{tool.name}</span>
+                <span className="text-xs text-zinc-600">{tool.description}</span>
+              </label>
+            )
+          })}
+        </div>
       </div>
     </section>
   )

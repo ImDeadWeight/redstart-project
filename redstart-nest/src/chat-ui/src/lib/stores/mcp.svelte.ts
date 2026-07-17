@@ -25,6 +25,10 @@ import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
+// Lazy cross-store reference: tools.svelte.ts also imports mcpStore, so this
+// forms a cycle. It's safe because toolsStore is only touched at runtime
+// (inside syncServersFromHost), never at module init.
+import { toolsStore } from '$lib/stores/tools.svelte';
 import { mode } from 'mode-watcher';
 import {
 	parseMcpServerSettings,
@@ -538,9 +542,9 @@ class MCPStore {
 	 * untouched.
 	 */
 	async syncServersFromHost(): Promise<void> {
-		let fetched: { servers?: { name?: string; url?: string }[] };
+		let fetched: { servers?: { name?: string; url?: string }[]; disabledTools?: string[] };
 		try {
-			fetched = await apiFetch<{ servers?: { name?: string; url?: string }[] }>(
+			fetched = await apiFetch<{ servers?: { name?: string; url?: string }[]; disabledTools?: string[] }>(
 				'/redstart/mcp-servers'
 			);
 		} catch {
@@ -560,6 +564,13 @@ class MCPStore {
 			}));
 
 		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, JSON.stringify(entries));
+
+		// Server-enforced tool bans. The gateway is the real enforcement point,
+		// but we capture the list here so toolsStore can keep a banned tool from
+		// being locally re-enabled in the UI, and so it applies before the next
+		// MCP re-sync.
+		const disabled = Array.isArray(fetched?.disabledTools) ? fetched.disabledTools : [];
+		toolsStore.setServerDisabledTools(disabled);
 	}
 
 	addServer(

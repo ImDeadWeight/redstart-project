@@ -46,6 +46,11 @@ class ToolsStore {
 	private _loading = $state(false);
 	private _error = $state<string | null>(null);
 	private _disabledTools = $state(new SvelteSet<string>());
+	// Server-enforced tool bans (function names), pushed from Redstart Nest via
+	// /redstart/mcp-servers. A banned tool is always treated as disabled
+	// regardless of the user's local toggle, mirroring the gateway's own
+	// enforcement so the UI can't re-enable what the org disabled.
+	private _serverDisabledTools = $state(new SvelteSet<string>());
 	private _toolsEndpointUnreachable = $state(false);
 
 	constructor() {
@@ -239,7 +244,7 @@ class ToolsStore {
 	getEnabledToolsForLLM(): OpenAIToolDefinition[] {
 		const enabledNames = new SvelteSet<string>();
 		for (const entry of this.allTools) {
-			if (!this._disabledTools.has(entry.key)) {
+			if (!this._disabledTools.has(entry.key) && !this._serverDisabledTools.has(entry.definition.function.name)) {
 				enabledNames.add(entry.definition.function.name);
 			}
 		}
@@ -282,11 +287,32 @@ class ToolsStore {
 		return this._disabledTools;
 	}
 
+	/** Tool function names banned by the server (read-only in the UI). */
+	get serverDisabledTools(): SvelteSet<string> {
+		return this._serverDisabledTools;
+	}
+
 	isToolEnabled(key: string): boolean {
-		return !this._disabledTools.has(key);
+		return !this._disabledTools.has(key) && !this.isServerDisabled(key);
+	}
+
+	/** A tool is server-banned when its function name is in the server's deny list. */
+	isServerDisabled(key: string): boolean {
+		const entry = this.allTools.find((t) => t.key === key);
+		const name = entry?.definition.function.name;
+		return !!name && this._serverDisabledTools.has(name);
+	}
+
+	/** Replace the server-enforced ban set (called from the MCP server sync). */
+	setServerDisabledTools(names: string[]): void {
+		this._serverDisabledTools = new SvelteSet(
+			Array.isArray(names) ? names.filter((n) => typeof n === 'string') : []
+		);
 	}
 
 	toggleTool(key: string): void {
+		// Never allow re-enabling a server-banned tool via the UI.
+		if (this.isServerDisabled(key)) return;
 		if (this._disabledTools.has(key)) {
 			this._disabledTools.delete(key);
 		} else {
@@ -308,7 +334,9 @@ class ToolsStore {
 		const connection = mcpStore.getConnections().get(serverId);
 		if (!connection) return;
 		for (const tool of connection.tools) {
-			this._disabledTools.delete(toolKey(ToolSource.MCP, tool.name, serverId));
+			const key = toolKey(ToolSource.MCP, tool.name, serverId);
+			if (this.isServerDisabled(key)) continue;
+			this._disabledTools.delete(key);
 		}
 		this.persistDisabledTools();
 	}
@@ -316,6 +344,11 @@ class ToolsStore {
 	toggleGroup(group: ToolGroup): void {
 		const allEnabled = group.tools.every((t) => this.isToolEnabled(t.key));
 		for (const tool of group.tools) {
+			// Never flip a server-banned tool on.
+			if (this.isServerDisabled(tool.key)) {
+				this._disabledTools.add(tool.key);
+				continue;
+			}
 			this.setToolEnabled(tool.key, !allEnabled);
 		}
 		this.persistDisabledTools();

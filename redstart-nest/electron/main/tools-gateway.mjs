@@ -72,6 +72,56 @@ function injectSystemContext(messages, config) {
 }
 
 // ---------------------------------------------------------------------------
+// Server-enforced tool allow-list.
+//
+// The server (Redstart Nest) may ban specific tool function names
+// (activeConfig.disabledTools) so an org policy can't be overridden by a
+// client's local enable/disable toggle. We strip those names from the tool
+// list the model receives AND from any pre-baked tool_calls in the request
+// body (defense in depth against a client that hands the model a banned
+// call). The model never learns a banned tool exists, so it cannot invoke it.
+// ---------------------------------------------------------------------------
+
+function getDisabledToolNames(config) {
+  const list = config?.disabledTools
+  return Array.isArray(list) ? list : []
+}
+
+function enforceToolAllowList(parsed, config) {
+  const banned = getDisabledToolNames(config)
+  if (banned.length === 0) return parsed
+
+  const bannedSet = new Set(banned)
+
+  if (Array.isArray(parsed.tools)) {
+    parsed.tools = parsed.tools.filter(t => {
+      const name = typeof t === 'object' && t !== null ? t.function?.name : t?.name
+      return !name || !bannedSet.has(name)
+    })
+    if (parsed.tools.length === 0) delete parsed.tools
+  }
+
+  // Strip tool_choice that points at a banned tool.
+  if (parsed.tool_choice && typeof parsed.tool_choice === 'object' && parsed.tool_choice.function?.name) {
+    if (bannedSet.has(parsed.tool_choice.function.name)) delete parsed.tool_choice
+  }
+
+  // Strip assistant messages that already carry a banned tool call.
+  if (Array.isArray(parsed.messages)) {
+    for (const msg of parsed.messages) {
+      if (msg?.role !== 'assistant' || !Array.isArray(msg.tool_calls)) continue
+      msg.tool_calls = msg.tool_calls.filter(tc => {
+        const name = tc?.function?.name
+        return !name || !bannedSet.has(name)
+      })
+      if (msg.tool_calls.length === 0) delete msg.tool_calls
+    }
+  }
+
+  return parsed
+}
+
+// ---------------------------------------------------------------------------
 // Forward a modified completions request to llama-server, piping the response
 // back unchanged — handles both streaming SSE and non-streaming JSON.
 // ---------------------------------------------------------------------------
@@ -398,8 +448,12 @@ export function startGateway(publicPort, config) {
         for (const s of getExternalServers()) {
           if (s.enabled) servers.push({ name: s.name, url: s.url })
         }
+        // Server-enforced tool bans — the chat-ui intersects these with the
+        // user's own enable/disable toggles so a banned tool can't be locally
+        // re-enabled. The gateway is the real enforcement point; this is UX.
+        const disabledTools = getDisabledToolNames(activeConfig)
         res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
-        res.end(JSON.stringify({ servers }))
+        res.end(JSON.stringify({ servers, disabledTools }))
         return
       }
 
@@ -476,6 +530,7 @@ export function startGateway(publicPort, config) {
         }
 
         parsed.messages = injectSystemContext([...(parsed.messages || [])], activeConfig)
+        parsed = enforceToolAllowList(parsed, activeConfig)
 
         try {
           forwardModified(res, internalPort, parsed)
