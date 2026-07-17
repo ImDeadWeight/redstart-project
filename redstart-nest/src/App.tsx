@@ -14,169 +14,11 @@
 
 import { useState, useEffect, useRef } from 'react'
 import QRCode from 'qrcode'
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-type HardwareSpecs = {
-  cpu: { name: string; cores: number; threads: number; architecture: string; supportsAVX: boolean }
-  gpu: { name: string; vram: number; cudaAvailable: boolean }
-  memory: { total: number; available: number }
-  os: { platform: string; arch: string }
-}
-
-type WebFetchTool = {
-  id: string
-  name: string
-  baseUrl?: string
-  description: string
-  builtIn: boolean
-  kind?: 'web' | 'capability'
-}
-
-type CapabilityConfig = {
-  postgres: { enabled: boolean; hasConnectionString: boolean; maxRows: number }
-  documents: { enabled: boolean; outputDir: string | null }
-  sqlite: { enabled: boolean; rootDir: string | null; maxRows: number }
-  vault: { enabled: boolean; rootDir: string | null }
-  git: { enabled: boolean; rootDir: string | null }
-  file_system: { enabled: boolean; rootDir: string | null }
-  scholar: { enabled: boolean; venueFilter: string | null }
-}
-
-type ToolGroup = {
-  id: string
-  name: string
-  description: string
-  toolIds: string[]
-  builtIn: boolean
-}
-
-type ExternalMcpServer = {
-  id: string
-  name: string
-  url: string
-  enabled: boolean
-}
-
-type ProfileTools = {
-  enabled: boolean
-  activeGroupIds: string[]
-  activeToolIds: string[]
-  maxFetchTokens: number
-  whitelistEnabled?: boolean  // default true; false = model may fetch any public http(s) URL (LAN/private always blocked)
-}
-
-type LlamaConfig = {
-  modelPath: string
-  ctxSize: number
-  batchSize: number
-  threads: number
-  gpuLayers?: number
-  port: number
-  host: string
-  networkMode?: boolean
-  nCpuMoe?: number
-  priority?: 'high'
-  noMmap?: boolean
-  kvCache?: 'off' | 'conservative' | 'balanced' | 'aggressive'
-  additionalArgs?: string
-  tools?: ProfileTools
-  advertisedHost?: string
-}
-
-type RedstartAPI = {
-  hardware: {
-    scan: () => Promise<HardwareSpecs>
-    selectModel: () => Promise<string | null>
-  }
-  llama: {
-    generateCommand: (config: LlamaConfig) => Promise<string>
-    launch: (config: LlamaConfig) => Promise<{ success: boolean; error?: string; pid?: number }>
-  }
-  server: {
-    stop: (config: LlamaConfig) => Promise<{ success: boolean }>
-    status: (config: LlamaConfig) => Promise<{ running: boolean; health: string | null; pid?: number }>
-    getIp: () => Promise<string>
-  }
-  profiles: {
-    list: () => Promise<string[]>
-    save: (name: string, config: LlamaConfig) => Promise<boolean>
-    load: (name: string) => Promise<LlamaConfig | null>
-    delete: (name: string) => Promise<boolean>
-    generateDefaults: (hardware: HardwareSpecs) => Promise<LlamaConfig[]>
-  }
-  tools: {
-    listAll: () => Promise<{ builtinTools: WebFetchTool[], builtinGroups: ToolGroup[], builtinCapabilities: WebFetchTool[], userTools: WebFetchTool[], userGroups: ToolGroup[] }>
-    addTool: (tool: Omit<WebFetchTool, 'builtIn'>) => Promise<boolean>
-    deleteTool: (id: string) => Promise<boolean>
-    addGroup: (group: Omit<ToolGroup, 'builtIn'>) => Promise<boolean>
-    deleteGroup: (id: string) => Promise<boolean>
-    applyConfig: (config: LlamaConfig) => Promise<boolean>
-  }
-  settings: {
-    getBinaryPath: () => Promise<string | null>
-    setBinaryPath: (p: string | null) => Promise<boolean>
-    selectBinary: () => Promise<string | null>
-    getResolvedBinary: () => Promise<string | null>
-  }
-  github: { checkReleases: () => Promise<Record<string, string>> }
-  auth: {
-    getConfig: () => Promise<{ authRequired: boolean; hasOwner: boolean }>
-    setRequired: (required: boolean) => Promise<boolean>
-    createFirstAdmin: (username: string, password: string) => Promise<{ success: boolean; error?: string; apiKey?: string; id?: string }>
-  }
-  mcp: {
-    listExternal: () => Promise<ExternalMcpServer[]>
-    addExternal: (server: Omit<ExternalMcpServer, 'id'>) => Promise<ExternalMcpServer>
-    removeExternal: (id: string) => Promise<boolean>
-    testExternal: (url: string) => Promise<{ ok: boolean; message: string }>
-  }
-  capabilities: {
-    get: () => Promise<CapabilityConfig>
-    setPostgres: (config: { connectionString?: string; maxRows?: number; enabled?: boolean }) => Promise<{ ok: boolean; error?: string }>
-    testPostgres: (connectionString?: string) => Promise<{ ok: boolean; message: string }>
-    selectDocumentsFolder: () => Promise<string | null>
-    setDocumentsFolder: (config: { outputDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
-    selectSqliteFolder: () => Promise<string | null>
-    setSqlite: (config: { rootDir?: string; maxRows?: number; enabled?: boolean }) => Promise<{ ok: boolean }>
-    estimateToolContext: (config: LlamaConfig) => Promise<{ toolCount: number; approxTokens: number }>
-    selectVaultFolder: () => Promise<string | null>
-    setVault: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
-    selectGitFolder: () => Promise<string | null>
-    setGit: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
-    selectFileSystemFolder: () => Promise<string | null>
-    setFileSystem: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
-    setScholar: (config: { venueFilter?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
-  }
-  events: {
-    onTokensPerMinute: (cb: (tpm: number) => void) => void
-    offTokensPerMinute: () => void
-    onServerLog: (cb: (line: string) => void) => void
-    offServerLog: () => void
-    onServerStopped: (cb: () => void) => void
-    offServerStopped: () => void
-  }
-}
-
-const getAPI = (): RedstartAPI | undefined => (window as unknown as { redstartAPI?: RedstartAPI }).redstartAPI
-const api = (): RedstartAPI => {
-  const a = getAPI()
-  if (!a) throw new Error('redstartAPI not available — preload may have failed')
-  return a
-}
-
-// networkMode defaults to true because the main use case is serving other
-// devices on the home network. A toggle exists to switch to localhost-only
-// (useful if the user only wants to use the chat from the same PC).
-const DEFAULT_CONFIG: LlamaConfig = {
-  modelPath: '', ctxSize: 4096, batchSize: 256, threads: 4,
-  gpuLayers: undefined, port: 19080, host: '0.0.0.0', networkMode: true,
-  nCpuMoe: undefined, kvCache: 'balanced', additionalArgs: '',
-}
-
-type ServerState = 'stopped' | 'starting' | 'running' | 'stopping'
+import type { HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup, ExternalMcpServer, ProfileTools, LlamaConfig, ServerState } from './types'
+import { DEFAULT_CONFIG } from './types'
+import { api, getAPI } from './api/redstart'
+import { TogglePill } from './components/ui'
+import { useStatusMessage } from './hooks/useStatusMessage'
 
 // ---------------------------------------------------------------------------
 // Component
@@ -197,7 +39,7 @@ export default function App() {
   const [selectedProfile, setSelectedProfile] = useState<string>('')
   const [saveProfileName, setSaveProfileName] = useState('')
   const [showSaveInput, setShowSaveInput] = useState(false)
-  const [statusMsg, setStatusMsg] = useState('')
+  const { statusMsg, show: showStatus, clear: clearStatus } = useStatusMessage()
   const [activeTab, setActiveTab] = useState<'config' | 'tools' | 'server'>('config')
   const [logLines, setLogLines] = useState<string[]>([])
   const [confirmStop, setConfirmStop] = useState(false)
@@ -244,7 +86,7 @@ export default function App() {
   useEffect(() => {
     const a = getAPI()
     if (!a) {
-      setStatusMsg('ERROR: redstartAPI not found — preload script may have failed to load.')
+      showStatus('ERROR: redstartAPI not found — preload script may have failed to load.', 0)
       return
     }
 
@@ -269,8 +111,7 @@ export default function App() {
       a.events.offServerLog()
       if (isUserStopRef.current) {
         isUserStopRef.current = false
-        setStatusMsg('Server stopped.')
-        setTimeout(() => setStatusMsg(''), 3000)
+        showStatus('Server stopped.')
       }
     })
 
@@ -323,7 +164,7 @@ export default function App() {
       const list = await api().profiles.list()
       setProfiles(list)
     } catch {
-      setStatusMsg('Failed to load profiles — settings may be corrupted.')
+      showStatus('Failed to load profiles — settings may be corrupted.', 0)
     }
   }
 
@@ -345,16 +186,14 @@ export default function App() {
     setShowSaveInput(false)
     setSelectedProfile(name)
     await loadProfiles()
-    setStatusMsg(`Profile "${name}" saved.`)
-    setTimeout(() => setStatusMsg(''), 3000)
+    showStatus(`Profile "${name}" saved.`)
   }
 
   async function generateDefaultProfiles() {
     if (!hardware) return
     await api().profiles.generateDefaults(hardware)
     await loadProfiles()
-    setStatusMsg('Default profiles generated from hardware scan.')
-    setTimeout(() => setStatusMsg(''), 3000)
+    showStatus('Default profiles generated from hardware scan.')
   }
 
   // --- Auth / accounts ---
@@ -363,8 +202,7 @@ export default function App() {
     await api().auth.setRequired(next)
     setAuthRequiredState(next)
     setConfirmEnableAuthNoAdmin(false)
-    setStatusMsg(next ? 'Login now required for LAN/remote access.' : 'Login requirement disabled.')
-    setTimeout(() => setStatusMsg(''), 3000)
+    showStatus(next ? 'Login now required for LAN/remote access.' : 'Login requirement disabled.')
   }
 
   function toggleAuthRequired() {
@@ -378,8 +216,7 @@ export default function App() {
     if (!username || !bootstrapPassword) return
     const result = await api().auth.createFirstAdmin(username, bootstrapPassword)
     if (!result.success) {
-      setStatusMsg(result.error || 'Failed to create owner account.')
-      setTimeout(() => setStatusMsg(''), 3000)
+      showStatus(result.error || 'Failed to create owner account.')
       return
     }
     setHasOwnerAccount(true)
@@ -700,7 +537,7 @@ export default function App() {
 
   async function launchServer() {
     setServerState('starting')
-    setStatusMsg('')
+    clearStatus()
     setLogLines([])
     setActiveTab('server')
 
@@ -718,7 +555,7 @@ export default function App() {
       startStatusPoll()
     } else {
       setServerState('stopped')
-      setStatusMsg(`Launch error: ${result.error}`)
+      showStatus(`Launch error: ${result.error}`, 0)
       getAPI()?.events.offServerLog()
     }
   }
@@ -736,7 +573,7 @@ export default function App() {
     setConfirmStop(false)
     isUserStopRef.current = true
     setServerState('stopping')
-    setStatusMsg('Stopping server…')
+    showStatus('Stopping server…', 0)
     await api().server.stop(config)
     // onServerStopped handles state cleanup and the "Server stopped." message
   }
@@ -892,11 +729,7 @@ export default function App() {
           <section>
             <h2 className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Network</h2>
             <label className="flex items-center gap-2 cursor-pointer select-none">
-              <div
-                onClick={() => setNetworkMode(v => !v)}
-                className={`w-10 h-5 rounded-full transition-colors relative ${networkMode ? 'bg-orange-500' : 'bg-zinc-700'}`}>
-                   <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${networkMode ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
-              </div>
+              <TogglePill checked={networkMode} onToggle={() => setNetworkMode(v => !v)} />
               <span className="text-xs text-zinc-300">{networkMode ? 'Local network (HTTP)' : 'Localhost only'}</span>
             </label>
 
@@ -931,11 +764,7 @@ export default function App() {
           <section>
             <h2 className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Accounts</h2>
             <label className="flex items-center gap-2 cursor-pointer select-none">
-              <div
-                onClick={toggleAuthRequired}
-                className={`w-10 h-5 rounded-full transition-colors relative ${authRequired ? 'bg-orange-500' : 'bg-zinc-700'}`}>
-                   <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${authRequired ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
-              </div>
+              <TogglePill checked={authRequired} onToggle={toggleAuthRequired} />
               <span className="text-xs text-zinc-300">{authRequired ? 'Require login' : 'Login not required'}</span>
             </label>
             <p className="mt-1 text-xs text-zinc-600">Requests from this PC are always exempt — only LAN/remote clients are gated.</p>
@@ -1155,11 +984,7 @@ export default function App() {
               <h2 className="text-xs uppercase tracking-widest text-zinc-500">Tools</h2>
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <span className="text-xs text-zinc-400">{config.tools?.enabled ? 'Enabled' : 'Disabled'}</span>
-                <div
-                  onClick={() => setToolsField('enabled', !(config.tools?.enabled))}
-                  className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer ${config.tools?.enabled ? 'bg-orange-500' : 'bg-zinc-700'}`}>
-                   <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${config.tools?.enabled ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
-                </div>
+                <TogglePill checked={!!config.tools?.enabled} onToggle={() => setToolsField('enabled', !(config.tools?.enabled))} />
               </label>
             </div>
 
@@ -1174,11 +999,11 @@ export default function App() {
                       : 'Whitelist off — the model can fetch any public website. Local network addresses are always blocked.'}
                   </p>
                 </div>
-                <button
-                  onClick={() => setToolsField('whitelistEnabled', config.tools?.whitelistEnabled === false)}
-                  className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer flex-shrink-0 ${config.tools?.whitelistEnabled !== false ? 'bg-orange-500' : 'bg-zinc-700'}`}>
-                   <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${config.tools?.whitelistEnabled !== false ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
-                </button>
+                <TogglePill
+                  checked={config.tools?.whitelistEnabled !== false}
+                  onToggle={() => setToolsField('whitelistEnabled', config.tools?.whitelistEnabled === false)}
+                  className="flex-shrink-0"
+                />
               </div>
 
               {config.tools?.whitelistEnabled === false && (
