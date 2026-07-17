@@ -304,7 +304,7 @@ export function startGateway(publicPort, config) {
       }
 
       // Everything else requires a valid session/API key when auth is
-      // required — localhost is always exempt (see auth.mjs isLocalhost).
+      // required — no localhost exemption; every HTTP client authenticates.
       const authResult = authenticate(req)
       if (!authResult.ok) {
         res.writeHead(401, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
@@ -313,15 +313,13 @@ export function startGateway(publicPort, config) {
       }
 
       // Conversation API — scoped to the authenticated account, or to the
-      // client-supplied device ID when there is no account (auth off, or the
-      // anonymous localhost bypass). Only these routes need an identity to
-      // scope storage by; completions and the passthrough below must keep
-      // working for token-less clients, so the accountId requirement is
-      // enforced HERE and not as a gate over everything that follows.
-      // The device ID is client-chosen and unauthenticated — acceptable for
-      // the trusted-LAN, auth-off posture; with auth on, real accounts are
-      // resolved first and the header is only a fallback for anonymous
-      // localhost sessions.
+      // client-supplied device ID when auth is off. Only these routes need an
+      // identity to scope storage by; completions and the passthrough below
+      // must keep working for token-less clients when auth is off, so the
+      // accountId requirement is enforced HERE and not as a gate over
+      // everything that follows. The device ID is client-chosen and
+      // unauthenticated — acceptable only for the deliberate auth-off
+      // posture; with auth on, every request already carries a real account.
       const accountId = authResult.account?.id || req.headers['x-redstart-device-id']
       const isConversationRoute = urlPath === '/conversations' || /^\/conversations\/[^/]+$/.test(urlPath)
       if (isConversationRoute && !accountId) {

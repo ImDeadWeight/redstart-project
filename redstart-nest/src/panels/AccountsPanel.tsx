@@ -15,7 +15,7 @@ export function AccountsPanel({ auth }: { auth: ReturnType<typeof useAuthSetup> 
         <TogglePill checked={authRequired} onToggle={toggleAuthRequired} />
         <span className="text-xs text-zinc-300">{authRequired ? 'Require login' : 'Login not required'}</span>
       </label>
-      <p className="mt-1 text-xs text-zinc-600">Requests from this PC are always exempt — only LAN/remote clients are gated.</p>
+      <p className="mt-1 text-xs text-zinc-600">Applies to every client on the network, including browsers on this PC. This launcher itself never needs a login.</p>
 
       {confirmEnableAuthNoAdmin && (
         <div className="mt-2 rounded-lg border border-amber-800 bg-zinc-900 px-3 py-2 space-y-2">

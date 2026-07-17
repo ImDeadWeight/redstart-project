@@ -248,6 +248,7 @@ Redstart Nest has an optional account system, gated behind a global **Require lo
 - **Three-tier roles.** A single **Owner** creates and removes **Admin** accounts; Admins manage regular **Users** day-to-day; Users just log in and chat. Sessions are token-based and persist across app launches (they're held in memory server-side, so restarting Redstart Nest signs everyone out — clients handle that by returning to the login screen rather than erroring).
 - **Account menu.** Logged-in users get an account menu in the sidebar header showing their username, role, account-created / last-login timestamps, and API key. From there they can **regenerate their own API key** (the new key is shown once) and **log out**.
 - **API keys.** Each account has a long-lived API key (prefixed `rst_`) for OpenAI-compatible clients like Kilo Code. Only a hash is stored server-side, so an existing key is only ever shown as its prefix — regenerate to get a fresh full key. Admins can also manage keys for the accounts they oversee.
+- **First run.** The Owner account is created in the Redstart Nest launcher itself — deliberately, there is no HTTP route for bootstrap, so creating the first account requires physical access to the host machine. Since login is on by default, do this before expecting any device (including a browser on the host PC) to sign in.
 
 The account/role logic is covered by an automated HTTP-level test suite (`redstart-nest/scripts/test-auth.mjs`) that exercises the full hierarchy, including cross-tier permission checks. The login flow itself has been verified working from a remote browser. This is a newer subsystem — treat the account-management surface as still stabilizing, and **do not expose the gateway port to the public internet** regardless of whether login is on.
 
@@ -318,8 +319,9 @@ Unsloth provides multiple quantization variants. The `UD-Q3_K_XL` tested here fi
 ### Redstart Nest
 1. Download `Redstart Nest Setup 1.0.0.exe` from [Releases](../../releases)
 2. Run the installer — Windows Defender may warn about an unsigned binary, click **More info → Run anyway**
-3. Open Redstart Nest, point it at a `.gguf` model file, and click **Start Server**
-4. Turn on **Local network** mode to make the server reachable from other devices
+3. Open Redstart Nest and **create the Owner account** in the sidebar's Accounts section. Login is required by default, so until an Owner exists no device — including a browser on this PC — can sign in to the chat UI. (Home users who don't want accounts can flip **Require login** off instead.)
+4. Point it at a `.gguf` model file and click **Start Server**
+5. Turn on **Local network** mode to make the server reachable from other devices — each person signs in with an account the Owner/Admins create
 
 ### Redstart Twig (Android)
 1. Download `redstart-twig.apk` from [Releases](../../releases)
@@ -544,6 +546,7 @@ Making Redstart usable in a small workplace rather than just on one person's hom
 
 - [x] Per-user conversation history — conversations are stored server-side in `conversations.json`, scoped to the logged-in account (or device ID when auth is off), and sync across all devices on the network; unused conversations auto-delete after 30 days
 - [x] mDNS discovery — server advertises as `redstart.local` by default (configurable); clients can connect by hostname instead of IP
+- [ ] Guided onboarding & in-app instruction — first-run walkthrough (create the Owner account, pick a model, launch), contextual help on the tools/capabilities panels, and plain-language explanations aimed at non-technical staff in a small office
 - [ ] Admin interface accessible from any device on the network — manage the server without touching the host PC
 - [ ] Auto-restart on crash — if the model dies at 9am Monday, it recovers without manual intervention
 - [ ] Signed installers — removes the Windows Defender SmartScreen warning, looks professional in a workplace setting

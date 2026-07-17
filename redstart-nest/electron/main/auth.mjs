@@ -8,9 +8,12 @@
 // than touching accounts-storage.mjs directly, so there is exactly one
 // resolution path from "incoming request" to "account" in each process.
 //
-// Requests from localhost are always exempt (see isLocalhost). When
-// authRequired is off (default), authenticate() bypasses everyone —
-// preserves today's zero-config LAN behavior until an admin opts in.
+// Auth is ON by default (accounts-storage defaults authRequired: true) and
+// there is deliberately NO localhost exemption — every HTTP client, including
+// a browser on the host machine, must authenticate. The launcher itself talks
+// to the main process over IPC, not HTTP, so owner bootstrap never needs a
+// token. Toggling authRequired off opens the gateway to everyone, matching
+// plain llama.cpp behavior for home setups that don't want accounts.
 // =============================================================================
 
 import * as crypto from 'crypto'
@@ -90,15 +93,6 @@ export function revokeSessionsForAccount(accountId) {
 // Request authentication
 // ---------------------------------------------------------------------------
 
-function normalizeIp(ip) {
-  return ip?.startsWith('::ffff:') ? ip.slice(7) : ip
-}
-
-export function isLocalhost(req) {
-  const ip = normalizeIp(req.socket.remoteAddress)
-  return ip === '127.0.0.1' || ip === '::1'
-}
-
 function bearerToken(req) {
   const header = req.headers['authorization'] || ''
   const match = /^Bearer\s+(.+)$/i.exec(header)
@@ -141,11 +135,6 @@ export function hasAdminAccess(account) {
 export function authenticate(req) {
   if (!accounts.getAuthRequired()) return { ok: true, account: null }
 
-  // Resolve a token first, before the localhost bypass — otherwise a
-  // legitimately logged-in admin sitting at the physical Redstart Nest machine
-  // would always be treated as anonymous (localhost short-circuits before
-  // their token is ever read), permanently locking them out of the
-  // admin-only account-management routes even from a trusted session.
   const token = bearerToken(req)
   if (token) {
     const session = validateSession(token)
@@ -158,12 +147,8 @@ export function authenticate(req) {
     if (record) return { ok: true, account: toPublicAccount(record) }
   }
 
-  // No (valid) token. Localhost is exempt: physical presence at the host
-  // machine is the trust anchor (same as the owner bootstrap flow), so a
-  // token-less local request proceeds anonymously. Everyone else gets a 401.
-  // Note this runs AFTER token resolution on purpose — a logged-in admin on
-  // the host machine must keep their identity (see the comment above).
-  if (isLocalhost(req)) return { ok: true, account: null }
+  // No (valid) token — require authentication from every client, localhost
+  // included ("authenticate or don't get in"; see the module header).
   return { ok: false, reason: 'unauthorized' }
 }
 

@@ -31,6 +31,13 @@ process.env.REDSTART_TEST_USERDATA_DIR = tmpUserDataDir
 register('./auth-test-loader.mjs', import.meta.url)
 
 const { startMcpServer, stopMcpServer } = await import('../electron/main/mcp-server.mjs')
+const { setAuthRequired } = await import('../electron/main/auth.mjs')
+
+// Auth is ON by default (secure default, no localhost bypass) and this suite's
+// MCP client connects token-less. Auth behavior has its own suite
+// (test-auth.mjs); here it is explicitly switched off so capability tests
+// exercise the providers, not the gate.
+setAuthRequired(false)
 
 const MCP_PORT = 48091
 const PG_URL = process.env.REDSTART_TEST_PG_URL || 'postgresql://postgres:postgres@127.0.0.1:5432/postgres'
