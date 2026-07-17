@@ -1,531 +1,419 @@
-import Dexie, { type EntityTable } from 'dexie';
-import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
-import { IDXDB_TABLES, IDXDB_STORES, STORAGE_APP_NAME } from '$lib/constants';
-import { MessageRole } from '$lib/enums';
-import type { McpServerOverride } from '$lib/types/database';
+import { resolveApiPath } from '$lib/utils/api-fetch';
+import { uuid, filterByLeafNodeId } from '$lib/utils';
+import type { DatabaseConversation, DatabaseMessage, McpServerOverride } from '$lib/types/database';
 
-class LlamaUiDatabase extends Dexie {
-	[IDXDB_TABLES.conversations]!: EntityTable<DatabaseConversation, string>;
-	[IDXDB_TABLES.messages]!: EntityTable<DatabaseMessage, string>;
+const DEVICE_ID_KEY = 'redstart-device-id';
 
-	constructor() {
-		super(STORAGE_APP_NAME);
-
-		this.version(1).stores(IDXDB_STORES);
-	}
+function getDeviceId(): string {
+  let id = localStorage.getItem(DEVICE_ID_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(DEVICE_ID_KEY, id);
+  }
+  return id;
 }
 
-const db = new LlamaUiDatabase();
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(resolveApiPath(path), {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Redstart-Device-Id': getDeviceId(),
+      ...(init?.headers || {})
+    }
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`API error ${res.status}: ${text || res.statusText}`);
+  }
+  if (res.status === 204) return undefined as T;
+  return res.json();
+}
 
 export class DatabaseService {
-	/**
-	 *
-	 *
-	 * Conversations
-	 *
-	 *
-	 */
+  static async createConversation(name: string): Promise<DatabaseConversation> {
+    const conv = await apiFetch<DatabaseConversation>('/conversations', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: crypto.randomUUID(),
+        name,
+        currNode: '',
+        lastModified: Date.now(),
+        mcpServerOverrides: [],
+        thinkingEnabled: false,
+        reasoningEffort: null,
+        forkedFromConversationId: null,
+        pinned: false,
+        contextSummary: null,
+        messages: []
+      })
+    });
+    return conv;
+  }
 
-	/**
-	 * Creates a new conversation.
-	 *
-	 * @param name - Name of the conversation
-	 * @returns The created conversation
-	 */
-	static async createConversation(name: string): Promise<DatabaseConversation> {
-		const conversation: DatabaseConversation = {
-			id: uuid(),
-			name,
-			lastModified: Date.now(),
-			currNode: ''
-		};
+  static async createMessageBranch(
+    message: Omit<DatabaseMessage, 'id'>,
+    parentId: string | null
+  ): Promise<DatabaseMessage> {
+    const conv = await apiFetch<DatabaseConversation>(`/conversations/${message.convId}`, {
+      method: 'GET',
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
 
-		await db[IDXDB_TABLES.conversations].add(conversation);
-		return conversation;
-	}
+    if (!conv) throw new Error('Conversation not found');
 
-	/**
-	 *
-	 *
-	 * Messages
-	 *
-	 *
-	 */
+    const allMessages = conv.messages || [];
+    const newMessage: DatabaseMessage = {
+      ...message,
+      id: uuid(),
+      parent: parentId,
+      toolCalls: message.toolCalls ?? '',
+      children: []
+    };
 
-	/**
-	 * Creates a new message branch by adding a message and updating parent/child relationships.
-	 * Also updates the conversation's currNode to point to the new message.
-	 *
-	 * @param message - Message to add (without id)
-	 * @param parentId - Parent message ID to attach to
-	 * @returns The created message
-	 */
-	static async createMessageBranch(
-		message: Omit<DatabaseMessage, 'id'>,
-		parentId: string | null
-	): Promise<DatabaseMessage> {
-		return await db.transaction(
-			'rw',
-			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
-			async () => {
-				// Handle null parent (root message case)
-				if (parentId !== null) {
-					const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
-					if (!parentMessage) {
-						throw new Error(`Parent message ${parentId} not found`);
-					}
-				}
+    if (parentId !== null) {
+      const parent = allMessages.find(m => m.id === parentId);
+      if (!parent) throw new Error('Parent message not found');
+      parent.children = [...parent.children, newMessage.id];
+    }
 
-				const newMessage: DatabaseMessage = {
-					...message,
-					id: uuid(),
-					parent: parentId,
-					toolCalls: message.toolCalls ?? '',
-					children: []
-				};
+    allMessages.push(newMessage);
 
-				await db[IDXDB_TABLES.messages].add(newMessage);
+    await apiFetch(`/conversations/${message.convId}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        currNode: newMessage.id,
+        messages: allMessages,
+        lastModified: Date.now()
+      }),
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
 
-				// Update parent's children array if parent exists
-				if (parentId !== null) {
-					const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
-					if (parentMessage) {
-						await db[IDXDB_TABLES.messages].update(parentId, {
-							children: [...parentMessage.children, newMessage.id]
-						});
-					}
-				}
+    return newMessage;
+  }
 
-				await this.updateConversation(message.convId, {
-					currNode: newMessage.id
-				});
+  static async createRootMessage(convId: string): Promise<string> {
+    const conv = await apiFetch<DatabaseConversation>(`/conversations/${convId}`, {
+      method: 'GET',
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
+    if (!conv) throw new Error('Conversation not found');
 
-				return newMessage;
-			}
-		);
-	}
+    const rootMessage: DatabaseMessage = {
+      id: uuid(),
+      convId,
+      type: 'root',
+      timestamp: Date.now(),
+      role: 'system',
+      content: '',
+      parent: null,
+      toolCalls: '',
+      children: []
+    };
 
-	/**
-	 * Creates a root message for a new conversation.
-	 * Root messages are not displayed but serve as the tree root for branching.
-	 *
-	 * @param convId - Conversation ID
-	 * @returns The created root message
-	 */
-	static async createRootMessage(convId: string): Promise<string> {
-		const rootMessage: DatabaseMessage = {
-			id: uuid(),
-			convId,
-			type: 'root',
-			timestamp: Date.now(),
-			role: MessageRole.SYSTEM,
-			content: '',
-			parent: null,
-			toolCalls: '',
-			children: []
-		};
+    const messages = conv.messages || [];
+    messages.push(rootMessage);
 
-		await db[IDXDB_TABLES.messages].add(rootMessage);
-		return rootMessage.id;
-	}
+    await apiFetch(`/conversations/${convId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ messages, lastModified: Date.now() }),
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
 
-	/**
-	 * Creates a system prompt message for a conversation.
-	 *
-	 * @param convId - Conversation ID
-	 * @param systemPrompt - The system prompt content (must be non-empty)
-	 * @param parentId - Parent message ID (typically the root message)
-	 * @returns The created system message
-	 * @throws Error if systemPrompt is empty
-	 */
-	static async createSystemMessage(
-		convId: string,
-		systemPrompt: string,
-		parentId: string
-	): Promise<DatabaseMessage> {
-		const trimmedPrompt = systemPrompt.trim();
-		if (!trimmedPrompt) {
-			throw new Error('Cannot create system message with empty content');
-		}
+    return rootMessage.id;
+  }
 
-		const systemMessage: DatabaseMessage = {
-			id: uuid(),
-			convId,
-			type: MessageRole.SYSTEM,
-			timestamp: Date.now(),
-			role: MessageRole.SYSTEM,
-			content: trimmedPrompt,
-			parent: parentId,
-			children: []
-		};
+  static async createSystemMessage(
+    convId: string,
+    systemPrompt: string,
+    parentId: string
+  ): Promise<DatabaseMessage> {
+    const conv = await apiFetch<DatabaseConversation>(`/conversations/${convId}`, {
+      method: 'GET',
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
+    if (!conv) throw new Error('Conversation not found');
 
-		await db[IDXDB_TABLES.messages].add(systemMessage);
+    const systemMessage: DatabaseMessage = {
+      id: uuid(),
+      convId,
+      type: 'system',
+      timestamp: Date.now(),
+      role: 'system',
+      content: systemPrompt,
+      parent: parentId,
+      children: []
+    };
 
-		const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
-		if (parentMessage) {
-			await db[IDXDB_TABLES.messages].update(parentId, {
-				children: [...parentMessage.children, systemMessage.id]
-			});
-		}
+    const messages = conv.messages || [];
+    const parent = messages.find(m => m.id === parentId);
+    if (parent) {
+      parent.children = [...parent.children, systemMessage.id];
+    }
+    messages.push(systemMessage);
 
-		return systemMessage;
-	}
+    await apiFetch(`/conversations/${convId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ messages, lastModified: Date.now() }),
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
 
-	/**
-	 * Deletes a conversation and all its messages.
-	 *
-	 * @param id - Conversation ID
-	 */
-	static async deleteConversation(
-		id: string,
-		options?: { deleteWithForks?: boolean }
-	): Promise<void> {
-		await db.transaction(
-			'rw',
-			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
-			async () => {
-				if (options?.deleteWithForks) {
-					// Recursively collect all descendant IDs
-					const idsToDelete: string[] = [];
-					const queue = [id];
+    return systemMessage;
+  }
 
-					while (queue.length > 0) {
-						const parentId = queue.pop()!;
-						const children = await db[IDXDB_TABLES.conversations]
-							.filter((c) => c.forkedFromConversationId === parentId)
-							.toArray();
+  static async deleteConversation(
+    id: string,
+    options?: { deleteWithForks?: boolean }
+  ): Promise<void> {
+    const url = new URL(resolveApiPath(`/conversations/${id}`), 'http://x');
+    if (options?.deleteWithForks) url.searchParams.set('deleteWithForks', 'true');
 
-						for (const child of children) {
-							idsToDelete.push(child.id);
-							queue.push(child.id);
-						}
-					}
+    await fetch(url.toString(), {
+      method: 'DELETE',
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
+  }
 
-					for (const forkId of idsToDelete) {
-						await db[IDXDB_TABLES.conversations].delete(forkId);
-						await db[IDXDB_TABLES.messages].where('convId').equals(forkId).delete();
-					}
-				} else {
-					// Reparent direct children to deleted conv's parent
-					const conv = await db[IDXDB_TABLES.conversations].get(id);
-					const newParent = conv?.forkedFromConversationId;
-					const directChildren = await db[IDXDB_TABLES.conversations]
-						.filter((c) => c.forkedFromConversationId === id)
-						.toArray();
+  static async deleteMessage(messageId: string): Promise<void> {
+    // Find which conversation contains this message
+    const convs = await apiFetch<DatabaseConversation[]>('/conversations', {
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
 
-					for (const child of directChildren) {
-						await db[IDXDB_TABLES.conversations].update(child.id, {
-							forkedFromConversationId: newParent ?? undefined
-						});
-					}
-				}
+    for (const conv of convs) {
+      const messages = conv.messages || [];
+      const msgIdx = messages.findIndex(m => m.id === messageId);
+      if (msgIdx === -1) continue;
 
-				await db[IDXDB_TABLES.conversations].delete(id);
-				await db[IDXDB_TABLES.messages].where('convId').equals(id).delete();
-			}
-		);
-	}
+      const msg = messages[msgIdx];
+      if (msg.parent) {
+        const parent = messages.find(m => m.id === msg.parent);
+        if (parent) {
+          parent.children = parent.children.filter((cid: string) => cid !== messageId);
+        }
+      }
 
-	/**
-	 * Deletes a message and removes it from its parent's children array.
-	 *
-	 * @param messageId - ID of the message to delete
-	 */
-	static async deleteMessage(messageId: string): Promise<void> {
-		await db.transaction('rw', db[IDXDB_TABLES.messages], async () => {
-			const message = await db[IDXDB_TABLES.messages].get(messageId);
-			if (!message) return;
+      messages.splice(msgIdx, 1);
 
-			// Remove this message from its parent's children array
-			if (message.parent) {
-				const parent = await db[IDXDB_TABLES.messages].get(message.parent);
-				if (parent) {
-					parent.children = parent.children.filter((childId: string) => childId !== messageId);
-					await db[IDXDB_TABLES.messages].put(parent);
-				}
-			}
+      await apiFetch(`/conversations/${conv.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ messages, lastModified: Date.now() }),
+        headers: { 'X-Redstart-Device-Id': getDeviceId() }
+      });
+      return;
+    }
+  }
 
-			// Delete the message
-			await db[IDXDB_TABLES.messages].delete(messageId);
-		});
-	}
+  static async deleteMessageCascading(
+    conversationId: string,
+    messageId: string
+  ): Promise<string[]> {
+    const conv = await apiFetch<DatabaseConversation>(`/conversations/${conversationId}`, {
+      method: 'GET',
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
+    if (!conv) return [];
 
-	/**
-	 * Deletes a message and all its descendant messages (cascading deletion).
-	 * This removes the entire branch starting from the specified message.
-	 *
-	 * @param conversationId - ID of the conversation containing the message
-	 * @param messageId - ID of the root message to delete (along with all descendants)
-	 * @returns Array of all deleted message IDs
-	 */
-	static async deleteMessageCascading(
-		conversationId: string,
-		messageId: string
-	): Promise<string[]> {
-		return await db.transaction('rw', db[IDXDB_TABLES.messages], async () => {
-			// Get all messages in the conversation to find descendants
-			const allMessages = await db[IDXDB_TABLES.messages]
-				.where('convId')
-				.equals(conversationId)
-				.toArray();
+    const messages = conv.messages || [];
+    const allIds = new Set<string>([messageId]);
 
-			// Find all descendant messages
-			const descendants = findDescendantMessages(allMessages, messageId);
-			const allToDelete = [messageId, ...descendants];
+    function collectDescendants(parentId: string) {
+      for (const m of messages) {
+        if (m.parent === parentId) {
+          allIds.add(m.id);
+          collectDescendants(m.id);
+        }
+      }
+    }
+    collectDescendants(messageId);
 
-			// Get the message to delete for parent cleanup
-			const message = await db[IDXDB_TABLES.messages].get(messageId);
-			if (message && message.parent) {
-				const parent = await db[IDXDB_TABLES.messages].get(message.parent);
-				if (parent) {
-					parent.children = parent.children.filter((childId: string) => childId !== messageId);
-					await db[IDXDB_TABLES.messages].put(parent);
-				}
-			}
+    const msg = messages.find(m => m.id === messageId);
+    if (msg?.parent) {
+      const parent = messages.find(m => m.id === msg.parent);
+      if (parent) {
+        parent.children = parent.children.filter((cid: string) => !allIds.has(cid));
+      }
+    }
 
-			// Delete all messages in the branch
-			await db[IDXDB_TABLES.messages].bulkDelete(allToDelete);
+    const remaining = messages.filter(m => !allIds.has(m.id));
 
-			return allToDelete;
-		});
-	}
+    await apiFetch(`/conversations/${conversationId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ messages: remaining, lastModified: Date.now() }),
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
 
-	/**
-	 * Gets all conversations, sorted by last modified time (newest first).
-	 *
-	 * @returns Array of conversations
-	 */
-	static async getAllConversations(): Promise<DatabaseConversation[]> {
-		return await db[IDXDB_TABLES.conversations].orderBy('lastModified').reverse().toArray();
-	}
+    return Array.from(allIds);
+  }
 
-	/**
-	 * Gets a conversation by ID.
-	 *
-	 * @param id - Conversation ID
-	 * @returns The conversation if found, otherwise undefined
-	 */
-	static async getConversation(id: string): Promise<DatabaseConversation | undefined> {
-		return await db[IDXDB_TABLES.conversations].get(id);
-	}
+  static async getAllConversations(): Promise<DatabaseConversation[]> {
+    return apiFetch<DatabaseConversation[]>('/conversations', {
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
+  }
 
-	/**
-	 * Gets all messages in a conversation, sorted by timestamp (oldest first).
-	 *
-	 * @param convId - Conversation ID
-	 * @returns Array of messages in the conversation
-	 */
-	static async getConversationMessages(convId: string): Promise<DatabaseMessage[]> {
-		return await db[IDXDB_TABLES.messages].where('convId').equals(convId).sortBy('timestamp');
-	}
+  static async getConversation(id: string): Promise<DatabaseConversation | undefined> {
+    const conv = await apiFetch<DatabaseConversation>(`/conversations/${id}`, {
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
+    return conv || undefined;
+  }
 
-	/**
-	 * Updates a conversation.
-	 *
-	 * @param id - Conversation ID
-	 * @param updates - Partial updates to apply
-	 * @returns Promise that resolves when the conversation is updated
-	 */
-	static async updateConversation(
-		id: string,
-		updates: Partial<Omit<DatabaseConversation, 'id'>>
-	): Promise<void> {
-		await db[IDXDB_TABLES.conversations].update(id, {
-			...updates,
-			lastModified: Date.now()
-		});
-	}
+  static async getConversationMessages(convId: string): Promise<DatabaseMessage[]> {
+    const conv = await apiFetch<DatabaseConversation>(`/conversations/${convId}`, {
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
+    if (!conv) return [];
+    return (conv.messages || []).sort((a, b) => a.timestamp - b.timestamp);
+  }
 
-	/**
-	 *
-	 *
-	 * Navigation
-	 *
-	 *
-	 */
+  static async updateConversation(
+    id: string,
+    updates: Partial<Omit<DatabaseConversation, 'id'>>
+  ): Promise<void> {
+    await apiFetch(`/conversations/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
+  }
 
-	/**
-	 * Toggles the pinned status of a conversation.
-	 *
-	 * @param id - Conversation ID
-	 * @returns The new pinned status
-	 */
-	static async toggleConversationPin(id: string): Promise<boolean> {
-		const conversation = await db.conversations.get(id);
-		if (!conversation) {
-			throw new Error(`Conversation ${id} not found`);
-		}
-		const newPinnedState = !conversation.pinned;
-		await this.updateConversation(id, { pinned: newPinnedState });
-		return newPinnedState;
-	}
+  static async toggleConversationPin(id: string): Promise<boolean> {
+    const conv = await apiFetch<DatabaseConversation>(`/conversations/${id}`, {
+      method: 'GET',
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
+    if (!conv) throw new Error(`Conversation ${id} not found`);
+    const newPinnedState = !conv.pinned;
+    await this.updateConversation(id, { pinned: newPinnedState });
+    return newPinnedState;
+  }
 
-	/**
-	 * Updates the conversation's current node (active branch).
-	 * This determines which conversation path is currently being viewed.
-	 *
-	 * @param convId - Conversation ID
-	 * @param nodeId - Message ID to set as current node
-	 */
-	static async updateCurrentNode(convId: string, nodeId: string): Promise<void> {
-		await this.updateConversation(convId, {
-			currNode: nodeId
-		});
-	}
+  static async updateCurrentNode(convId: string, nodeId: string): Promise<void> {
+    await this.updateConversation(convId, { currNode: nodeId });
+  }
 
-	/**
-	 * Updates a message.
-	 *
-	 * @param id - Message ID
-	 * @param updates - Partial updates to apply
-	 * @returns Promise that resolves when the message is updated
-	 */
-	static async updateMessage(
-		id: string,
-		updates: Partial<Omit<DatabaseMessage, 'id'>>
-	): Promise<void> {
-		await db[IDXDB_TABLES.messages].update(id, updates);
-	}
+  static async updateMessage(
+    id: string,
+    updates: Partial<Omit<DatabaseMessage, 'id'>>
+  ): Promise<void> {
+    const convs = await apiFetch<DatabaseConversation[]>('/conversations', {
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
 
-	/**
-	 *
-	 *
-	 * Import
-	 *
-	 *
-	 */
+    for (const conv of convs) {
+      const messages = conv.messages || [];
+      const idx = messages.findIndex(m => m.id === id);
+      if (idx === -1) continue;
 
-	/**
-	 * Imports multiple conversations and their messages.
-	 * Skips conversations that already exist.
-	 *
-	 * @param data - Array of { conv, messages } objects
-	 */
-	static async importConversations(
-		data: { conv: DatabaseConversation; messages: DatabaseMessage[] }[]
-	): Promise<{ imported: number; skipped: number }> {
-		let importedCount = 0;
-		let skippedCount = 0;
+      messages[idx] = { ...messages[idx], ...updates };
 
-		return await db.transaction(
-			'rw',
-			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
-			async () => {
-				for (const item of data) {
-					const { conv, messages } = item;
+      await apiFetch(`/conversations/${conv.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ messages, lastModified: Date.now() }),
+        headers: { 'X-Redstart-Device-Id': getDeviceId() }
+      });
+      return;
+    }
+  }
 
-					const existing = await db[IDXDB_TABLES.conversations].get(conv.id);
-					if (existing) {
-						console.warn(`Conversation "${conv.name}" already exists, skipping...`);
-						skippedCount++;
-						continue;
-					}
+  static async importConversations(
+    data: { conv: DatabaseConversation; messages: DatabaseMessage[] }[]
+  ): Promise<{ imported: number; skipped: number }> {
+    let importedCount = 0;
+    let skippedCount = 0;
 
-					await db[IDXDB_TABLES.conversations].add(conv);
-					for (const msg of messages) {
-						await db[IDXDB_TABLES.messages].put(msg);
-					}
+    for (const item of data) {
+      const { conv, messages } = item;
 
-					importedCount++;
-				}
+      try {
+        const existing = await apiFetch<DatabaseConversation>(`/conversations/${conv.id}`, {
+          headers: { 'X-Redstart-Device-Id': getDeviceId() }
+        });
+        if (existing) {
+          console.warn(`Conversation "${conv.name}" already exists, skipping...`);
+          skippedCount++;
+          continue;
+        }
 
-				return { imported: importedCount, skipped: skippedCount };
-			}
-		);
-	}
+        await apiFetch('/conversations', {
+          method: 'POST',
+          body: JSON.stringify({
+            ...conv,
+            messages
+          }),
+          headers: { 'X-Redstart-Device-Id': getDeviceId() }
+        });
 
-	/**
-	 *
-	 *
-	 * Forking
-	 *
-	 *
-	 */
+        importedCount++;
+      } catch (err) {
+        console.error('Failed to import conversation:', err);
+      }
+    }
 
-	/**
-	 * Forks a conversation at a specific message, creating a new conversation
-	 * containing all messages from the root up to (and including) the target message.
-	 *
-	 * @param sourceConvId - The source conversation ID
-	 * @param atMessageId - The message ID to fork at (the new conversation ends here)
-	 * @param options - Fork options (name and whether to include attachments)
-	 * @returns The newly created conversation
-	 */
-	static async forkConversation(
-		sourceConvId: string,
-		atMessageId: string,
-		options: { name: string; includeAttachments: boolean }
-	): Promise<DatabaseConversation> {
-		return await db.transaction(
-			'rw',
-			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
-			async () => {
-				const sourceConv = await db[IDXDB_TABLES.conversations].get(sourceConvId);
-				if (!sourceConv) {
-					throw new Error(`Source conversation ${sourceConvId} not found`);
-				}
+    return { imported: importedCount, skipped: skippedCount };
+  }
 
-				const allMessages = await db[IDXDB_TABLES.messages]
-					.where('convId')
-					.equals(sourceConvId)
-					.toArray();
+  static async forkConversation(
+    sourceConvId: string,
+    atMessageId: string,
+    options: { name: string; includeAttachments: boolean }
+  ): Promise<DatabaseConversation> {
+    const sourceConv = await apiFetch<DatabaseConversation>(`/conversations/${sourceConvId}`, {
+      method: 'GET',
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
+    if (!sourceConv) throw new Error('Source conversation not found');
 
-				const pathMessages = filterByLeafNodeId(
-					allMessages,
-					atMessageId,
-					true
-				) as DatabaseMessage[];
-				if (pathMessages.length === 0) {
-					throw new Error(`Could not resolve message path to ${atMessageId}`);
-				}
+    const allMessages = sourceConv.messages || [];
+    const pathMessages = filterByLeafNodeId(allMessages, atMessageId, true) as DatabaseMessage[];
+    if (pathMessages.length === 0) throw new Error(`Could not resolve message path to ${atMessageId}`);
 
-				const idMap = new Map<string, string>();
+    const idMap = new Map<string, string>();
+    for (const msg of pathMessages) {
+      idMap.set(msg.id, uuid());
+    }
 
-				for (const msg of pathMessages) {
-					idMap.set(msg.id, uuid());
-				}
+    const newConvId = uuid();
+    const clonedMessages: DatabaseMessage[] = pathMessages.map((msg) => {
+      const newId = idMap.get(msg.id)!;
+      const newParent = msg.parent ? (idMap.get(msg.parent) ?? null) : null;
+      const newChildren = msg.children
+        .filter((childId: string) => idMap.has(childId))
+        .map((childId: string) => idMap.get(childId)!);
 
-				const newConvId = uuid();
-				const clonedMessages: DatabaseMessage[] = pathMessages.map((msg) => {
-					const newId = idMap.get(msg.id)!;
-					const newParent = msg.parent ? (idMap.get(msg.parent) ?? null) : null;
-					const newChildren = msg.children
-						.filter((childId: string) => idMap.has(childId))
-						.map((childId: string) => idMap.get(childId)!);
+      return {
+        ...msg,
+        id: newId,
+        convId: newConvId,
+        parent: newParent,
+        children: newChildren,
+        extra: options.includeAttachments ? msg.extra : undefined
+      };
+    });
 
-					return {
-						...msg,
-						id: newId,
-						convId: newConvId,
-						parent: newParent,
-						children: newChildren,
-						extra: options.includeAttachments ? msg.extra : undefined
-					};
-				});
+    const lastClonedMessage = clonedMessages[clonedMessages.length - 1];
+    const newConv: DatabaseConversation = {
+      id: newConvId,
+      name: options.name,
+      lastModified: Date.now(),
+      currNode: lastClonedMessage.id,
+      forkedFromConversationId: sourceConvId,
+      mcpServerOverrides: sourceConv.mcpServerOverrides
+        ? sourceConv.mcpServerOverrides.map((o: McpServerOverride) => ({
+            serverId: o.serverId,
+            enabled: o.enabled
+          }))
+        : undefined,
+      messages: clonedMessages
+    };
 
-				const lastClonedMessage = clonedMessages[clonedMessages.length - 1];
-				const newConv: DatabaseConversation = {
-					id: newConvId,
-					name: options.name,
-					lastModified: Date.now(),
-					currNode: lastClonedMessage.id,
-					forkedFromConversationId: sourceConvId,
-					mcpServerOverrides: sourceConv.mcpServerOverrides
-						? sourceConv.mcpServerOverrides.map((o: McpServerOverride) => ({
-								serverId: o.serverId,
-								enabled: o.enabled
-							}))
-						: undefined
-				};
+    await apiFetch('/conversations', {
+      method: 'POST',
+      body: JSON.stringify(newConv),
+      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    });
 
-				await db[IDXDB_TABLES.conversations].add(newConv);
-
-				for (const msg of clonedMessages) {
-					await db[IDXDB_TABLES.messages].add(msg);
-				}
-
-				return newConv;
-			}
-		);
-	}
+    return newConv;
+  }
 }

@@ -135,6 +135,18 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
+				key: SETTINGS_KEYS.CONTEXT_COMPACTION,
+				label: 'Automatic context compaction',
+				help: 'When a long conversation approaches the model\'s context limit, automatically summarize the oldest messages (using the local model) instead of failing. Recent messages are kept verbatim; the visible chat history is never altered.',
+				defaultValue: true,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				sync: {
+					serverKey: SETTINGS_KEYS.CONTEXT_COMPACTION,
+					paramType: SyncableParameterType.BOOLEAN
+				}
+			},
+			{
 				key: SETTINGS_KEYS.PDF_AS_IMAGE,
 				label: 'Parse PDF as image',
 				help: 'Parse PDF as image instead of text. Automatically falls back to text processing for non-vision models.',

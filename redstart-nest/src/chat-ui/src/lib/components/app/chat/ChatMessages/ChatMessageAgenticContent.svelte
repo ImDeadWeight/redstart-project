@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Wrench, Loader2, Brain } from '@lucide/svelte';
+	import { Wrench, Loader2, Brain, Download } from '@lucide/svelte';
 	import {
 		ChatMessageStatistics,
 		CollapsibleContentBlock,
@@ -24,6 +24,7 @@
 		deriveAgenticSections,
 		formatJsonPretty,
 		parseToolResultWithImages,
+		downloadFile,
 		type AgenticSection,
 		type ToolResultLine
 	} from '$lib/utils';
@@ -277,6 +278,20 @@
 						Waiting for result...
 					</div>
 				{:else if section.toolResult}
+					{@const filePaths = section.parsedLines.filter(l => l.filePath).map(l => l.filePath!)}
+					{#if filePaths.length > 0}
+						<div class="mb-2 flex flex-wrap gap-2">
+							{#each filePaths as fp (fp)}
+								<button
+									onclick={() => downloadFile(fp)}
+									class="inline-flex items-center gap-1.5 rounded bg-orange-500/10 px-2.5 py-1.5 text-xs font-medium text-orange-400 hover:bg-orange-500/20 transition-colors"
+								>
+									<Download class="h-3.5 w-3.5" />
+									Download {fp.split('/').pop() || fp}
+								</button>
+							{/each}
+						</div>
+					{/if}
 					<div class="overflow-auto rounded-lg border border-border bg-muted p-4">
 						{#each section.parsedLines as line, i (i)}
 							<div class="font-mono text-xs leading-relaxed whitespace-pre-wrap">

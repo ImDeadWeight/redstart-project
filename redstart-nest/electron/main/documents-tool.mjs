@@ -1,21 +1,35 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — MCP Provider: Document generation
+// Redstart Nest — MCP Provider: Documents (create + read)
 // =============================================================================
-// Lets the model write a real deliverable (case notes, summaries, reports) to
-// disk as .docx / .pdf / .md — pure local file I/O, no network egress. Output
-// is confined to one admin-configured directory (cfg.documents.outputDir); the
-// model only ever supplies a title, never a path — the filename is derived
-// server-side and checked to stay inside that directory.
+// One admin-configured folder (cfg.documents.outputDir), two directions:
+//   - create_document writes a deliverable (case notes, summaries, reports)
+//     as .docx / .pdf / .md; the model supplies a title, never a path — the
+//     filename is derived server-side.
+//   - read_document / list_documents let the model read source material the
+//     user drops into the same folder (.pdf / .docx / .txt / .md), extracted
+//     on-device with pure-JS parsers (pdf-parse, mammoth) — no network egress.
+// All paths are confined to the configured folder via the shared path-scope
+// containment (symlink-aware).
 // =============================================================================
 
 import * as fs from 'fs'
 import * as path from 'path'
 import { Document, Packer, Paragraph, HeadingLevel } from 'docx'
 import PDFDocument from 'pdfkit'
+import { PDFParse } from 'pdf-parse'
+import mammoth from 'mammoth'
+import ExcelJS from 'exceljs'
+import { resolveWithinRoot } from './path-scope.mjs'
 
 const FORMATS = ['markdown', 'docx', 'pdf']
+const TOOL_NAMES = ['create_document', 'read_document', 'list_documents']
+const READABLE_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.xlsx', '.csv']
+const MAX_SHEET_ROWS = 1000               // per sheet; keeps huge workbooks bounded
+const MAX_READ_CHARS = 8000               // per call; offset paginates longer documents
+const MAX_READ_FILE_BYTES = 50 * 1024 * 1024
+const MAX_LIST_ENTRIES = 500
 
 // ---------------------------------------------------------------------------
 // Lightweight markdown-style parsing — headings, bullets, paragraphs.
@@ -93,19 +107,130 @@ function slugify(title) {
 
 function resolveOutputPath(outputDir, title, extension) {
   const slug = slugify(title)
-  let candidate = path.join(outputDir, `${slug}.${extension}`)
+  let filename = `${slug}.${extension}`
   let n = 2
-  while (fs.existsSync(candidate)) {
-    candidate = path.join(outputDir, `${slug}-${n}.${extension}`)
+  while (fs.existsSync(path.join(outputDir, filename))) {
+    filename = `${slug}-${n}.${extension}`
     n++
   }
+  // Shared containment check (path-scope.mjs) — also symlink-aware, unlike the
+  // lexical resolve+startsWith this replaced. Belt-and-suspenders here since
+  // slugify() already strips separators, but the shared util is the audit point.
+  return resolveWithinRoot(outputDir, filename)
+}
 
-  const resolvedDir = path.resolve(outputDir)
-  const resolvedCandidate = path.resolve(candidate)
-  if (resolvedCandidate !== resolvedDir && !resolvedCandidate.startsWith(resolvedDir + path.sep)) {
-    throw new Error('Resolved output path escapes the configured output directory')
+// ---------------------------------------------------------------------------
+// Reading — on-device text extraction
+// ---------------------------------------------------------------------------
+
+// Renders one worksheet as a pipe-separated text table the model can read.
+// ExcelJS row.values is 1-based (index 0 is always empty); formula cells carry
+// {formula, result} objects — the model wants the computed result.
+function sheetToText(worksheet) {
+  const lines = []
+  let rows = 0
+  worksheet.eachRow({ includeEmpty: false }, (row) => {
+    if (++rows > MAX_SHEET_ROWS) return
+    const cells = row.values.slice(1).map((v) => {
+      if (v === null || v === undefined) return ''
+      if (typeof v === 'object') {
+        if (v.result !== undefined) return String(v.result)      // formula cell
+        if (v.text !== undefined) return String(v.text)          // rich text / hyperlink
+        if (v instanceof Date) return v.toISOString().slice(0, 10)
+        return JSON.stringify(v)
+      }
+      return String(v)
+    })
+    lines.push(cells.join(' | '))
+  })
+  if (rows > MAX_SHEET_ROWS) lines.push(`[Showing first ${MAX_SHEET_ROWS} of ${rows} rows]`)
+  return lines.join('\n')
+}
+
+async function extractText(filePath) {
+  const extension = path.extname(filePath).toLowerCase()
+
+  if (extension === '.txt' || extension === '.md' || extension === '.csv') {
+    return fs.readFileSync(filePath, 'utf8')
   }
-  return resolvedCandidate
+  if (extension === '.xlsx') {
+    const workbook = new ExcelJS.Workbook()
+    await workbook.xlsx.readFile(filePath)
+    const parts = []
+    workbook.eachSheet((worksheet) => {
+      parts.push(`=== Sheet: ${worksheet.name} ===\n${sheetToText(worksheet)}`)
+    })
+    return parts.join('\n\n') || '[Workbook contains no sheets]'
+  }
+  if (extension === '.docx') {
+    const result = await mammoth.extractRawText({ buffer: fs.readFileSync(filePath) })
+    return result.value
+  }
+  if (extension === '.pdf') {
+    const parser = new PDFParse({ data: new Uint8Array(fs.readFileSync(filePath)) })
+    try {
+      const result = await parser.getText()
+      return result.text
+    } finally {
+      await parser.destroy?.()
+    }
+  }
+  throw new Error(`Unsupported file type "${extension}" — readable types: ${READABLE_EXTENSIONS.join(', ')}`)
+}
+
+async function readDocument(docCfg, args) {
+  const { path: docPath, offset } = args || {}
+  if (!docPath || typeof docPath !== 'string') {
+    return { isError: true, content: [{ type: 'text', text: 'Missing required argument: path' }] }
+  }
+
+  let filePath
+  try {
+    filePath = resolveWithinRoot(docCfg.outputDir, docPath)
+  } catch {
+    return { isError: true, content: [{ type: 'text', text: 'Path is outside the configured documents folder' }] }
+  }
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    return { isError: true, content: [{ type: 'text', text: `File not found: ${docPath}. Use list_documents to see available files.` }] }
+  }
+  if (fs.statSync(filePath).size > MAX_READ_FILE_BYTES) {
+    return { isError: true, content: [{ type: 'text', text: `File is larger than the ${(MAX_READ_FILE_BYTES / 1048576).toFixed(0)} MB read limit` }] }
+  }
+
+  const text = (await extractText(filePath)).replace(/\r\n/g, '\n')
+  const start = Math.max(0, Number.isFinite(+offset) ? Math.trunc(+offset) : 0)
+  const slice = text.slice(start, start + MAX_READ_CHARS)
+
+  let out = slice
+  if (start > 0) out = `[...continuing from character ${start}]\n` + out
+  if (start + MAX_READ_CHARS < text.length) {
+    out += `\n\n[Truncated — showing characters ${start}–${start + slice.length} of ${text.length}. Call read_document again with offset=${start + slice.length} for more.]`
+  }
+  if (!out.trim()) out = '[Document contains no extractable text]'
+  return { content: [{ type: 'text', text: out }] }
+}
+
+function listDocuments(docCfg) {
+  const root = path.resolve(docCfg.outputDir)
+  const entries = []
+  // Recursive walk of the configured folder only — readdirSync never follows
+  // the tree outward, and reads of individual files re-check containment.
+  const files = fs.readdirSync(root, { recursive: true, withFileTypes: false })
+  for (const rel of files) {
+    if (entries.length >= MAX_LIST_ENTRIES) break
+    const full = path.join(root, String(rel))
+    let stat
+    try { stat = fs.statSync(full) } catch { continue }
+    if (!stat.isFile()) continue
+    if (!READABLE_EXTENSIONS.includes(path.extname(full).toLowerCase())) continue
+    entries.push(`${String(rel).replace(/\\/g, '/')}  (${(stat.size / 1024).toFixed(1)} KB)`)
+  }
+  if (entries.length === 0) {
+    return { content: [{ type: 'text', text: `No readable documents found (looking for ${READABLE_EXTENSIONS.join(', ')}).` }] }
+  }
+  let text = entries.join('\n')
+  if (entries.length >= MAX_LIST_ENTRIES) text += `\n\n[Showing first ${MAX_LIST_ENTRIES} files]`
+  return { content: [{ type: 'text', text }] }
 }
 
 // ---------------------------------------------------------------------------
@@ -114,27 +239,61 @@ function resolveOutputPath(outputDir, title, extension) {
 
 export function toolDefs(cfg) {
   if (!cfg?.documents?.enabled) return []
-  return [{
-    name: 'create_document',
-    description: 'Create a new document and save it to the local output folder. Use simple markdown-style formatting in content: "# Heading", "## Subheading", "- bullet", blank lines between paragraphs.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        title: { type: 'string', description: 'Document title — also used to name the file' },
-        content: { type: 'string', description: 'Document body, using simple markdown-style formatting' },
-        format: { type: 'string', enum: FORMATS, description: 'Output file format' },
+  return [
+    {
+      name: 'create_document',
+      description: 'Create a new document and save it to the local documents folder. Use simple markdown-style formatting in content: "# Heading", "## Subheading", "- bullet", blank lines between paragraphs.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Document title — also used to name the file' },
+          content: { type: 'string', description: 'Document body, using simple markdown-style formatting' },
+          format: { type: 'string', enum: FORMATS, description: 'Output file format' },
+        },
+        required: ['title', 'content', 'format'],
       },
-      required: ['title', 'content', 'format'],
     },
-  }]
+    {
+      name: 'read_document',
+      description: 'Read the text content of a document (.pdf, .docx, .txt, .md, .xlsx, .csv) in the local documents folder. Spreadsheets are rendered as one text table per sheet. Long documents are returned in chunks — follow the offset instructions at the end of a truncated result to read more.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path relative to the documents folder (e.g. "brief.pdf" or "cases/intake-notes.docx")' },
+          offset: { type: 'number', description: 'Character position to continue reading from (from a previous truncated read)' },
+        },
+        required: ['path'],
+      },
+    },
+    {
+      name: 'list_documents',
+      description: 'List the readable documents (.pdf, .docx, .txt, .md, .xlsx, .csv) in the local documents folder, with sizes.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+  ]
 }
 
 export async function callTool(name, args, cfg) {
-  if (name !== 'create_document') return null
+  if (!TOOL_NAMES.includes(name)) return null
 
   const docCfg = cfg?.documents
   if (!docCfg?.enabled || !docCfg?.outputDir) {
-    return { isError: true, content: [{ type: 'text', text: 'Document generation is not configured or enabled.' }] }
+    return { isError: true, content: [{ type: 'text', text: 'Documents capability is not configured or enabled.' }] }
+  }
+
+  if (name === 'read_document') {
+    try {
+      return await readDocument(docCfg, args)
+    } catch (err) {
+      return { isError: true, content: [{ type: 'text', text: `Failed to read document: ${err.message}` }] }
+    }
+  }
+  if (name === 'list_documents') {
+    try {
+      return listDocuments(docCfg)
+    } catch (err) {
+      return { isError: true, content: [{ type: 'text', text: `Failed to list documents: ${err.message}` }] }
+    }
   }
 
   const { title, content, format } = args || {}

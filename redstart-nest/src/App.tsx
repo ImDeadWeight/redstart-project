@@ -38,6 +38,11 @@ type WebFetchTool = {
 type CapabilityConfig = {
   postgres: { enabled: boolean; hasConnectionString: boolean; maxRows: number }
   documents: { enabled: boolean; outputDir: string | null }
+  sqlite: { enabled: boolean; rootDir: string | null; maxRows: number }
+  vault: { enabled: boolean; rootDir: string | null }
+  git: { enabled: boolean; rootDir: string | null }
+  file_system: { enabled: boolean; rootDir: string | null }
+  scholar: { enabled: boolean; venueFilter: string | null }
 }
 
 type ToolGroup = {
@@ -60,6 +65,7 @@ type ProfileTools = {
   activeGroupIds: string[]
   activeToolIds: string[]
   maxFetchTokens: number
+  whitelistEnabled?: boolean  // default true; false = model may fetch any public http(s) URL (LAN/private always blocked)
 }
 
 type LlamaConfig = {
@@ -72,10 +78,12 @@ type LlamaConfig = {
   host: string
   networkMode?: boolean
   nCpuMoe?: number
-  priority?: 'high'  // absent/undefined = normal (llama-server default); explicit high sets --prio 2
-  noMmap?: boolean  // sets --no-mmap; llama-server recommends this when CPU-offloaded MoE tensor overrides are in use
+  priority?: 'high'
+  noMmap?: boolean
+  kvCache?: 'off' | 'conservative' | 'balanced' | 'aggressive'
   additionalArgs?: string
   tools?: ProfileTools
+  advertisedHost?: string
 }
 
 type RedstartAPI = {
@@ -85,7 +93,7 @@ type RedstartAPI = {
   }
   llama: {
     generateCommand: (config: LlamaConfig) => Promise<string>
-    launch: (config: LlamaConfig, showTerminal?: boolean, openChat?: boolean) => Promise<{ success: boolean; error?: string; pid?: number }>
+    launch: (config: LlamaConfig) => Promise<{ success: boolean; error?: string; pid?: number }>
   }
   server: {
     stop: (config: LlamaConfig) => Promise<{ success: boolean }>
@@ -113,9 +121,6 @@ type RedstartAPI = {
     selectBinary: () => Promise<string | null>
     getResolvedBinary: () => Promise<string | null>
   }
-  chat: {
-    open: (port: number, ssl: boolean) => Promise<boolean>
-  }
   github: { checkReleases: () => Promise<Record<string, string>> }
   auth: {
     getConfig: () => Promise<{ authRequired: boolean; hasOwner: boolean }>
@@ -134,6 +139,16 @@ type RedstartAPI = {
     testPostgres: (connectionString?: string) => Promise<{ ok: boolean; message: string }>
     selectDocumentsFolder: () => Promise<string | null>
     setDocumentsFolder: (config: { outputDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
+    selectSqliteFolder: () => Promise<string | null>
+    setSqlite: (config: { rootDir?: string; maxRows?: number; enabled?: boolean }) => Promise<{ ok: boolean }>
+    estimateToolContext: (config: LlamaConfig) => Promise<{ toolCount: number; approxTokens: number }>
+    selectVaultFolder: () => Promise<string | null>
+    setVault: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
+    selectGitFolder: () => Promise<string | null>
+    setGit: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
+    selectFileSystemFolder: () => Promise<string | null>
+    setFileSystem: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
+    setScholar: (config: { venueFilter?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
   }
   events: {
     onTokensPerMinute: (cb: (tpm: number) => void) => void
@@ -158,7 +173,7 @@ const api = (): RedstartAPI => {
 const DEFAULT_CONFIG: LlamaConfig = {
   modelPath: '', ctxSize: 4096, batchSize: 256, threads: 4,
   gpuLayers: undefined, port: 19080, host: '0.0.0.0', networkMode: true,
-  nCpuMoe: undefined, additionalArgs: '',
+  nCpuMoe: undefined, kvCache: 'balanced', additionalArgs: '',
 }
 
 type ServerState = 'stopped' | 'starting' | 'running' | 'stopping'
@@ -176,14 +191,14 @@ export default function App() {
   const [generatedCommand, setGeneratedCommand] = useState('')
   const [networkMode, setNetworkMode] = useState(true)
   const [localIp, setLocalIp] = useState('')
+  const [advertisedHost, setAdvertisedHost] = useState('redstart.local')
   const [qrDataUrl, setQrDataUrl] = useState('')
   const [profiles, setProfiles] = useState<string[]>([])
   const [selectedProfile, setSelectedProfile] = useState<string>('')
   const [saveProfileName, setSaveProfileName] = useState('')
   const [showSaveInput, setShowSaveInput] = useState(false)
   const [statusMsg, setStatusMsg] = useState('')
-  const [showLog, setShowLog] = useState(false)
-  const [openChatOnLaunch, setOpenChatOnLaunch] = useState(false)
+  const [activeTab, setActiveTab] = useState<'config' | 'tools' | 'server'>('config')
   const [logLines, setLogLines] = useState<string[]>([])
   const [confirmStop, setConfirmStop] = useState(false)
   const [binaryPath, setBinaryPath] = useState<string | null>(null)
@@ -208,6 +223,9 @@ export default function App() {
   const [pgTestResult, setPgTestResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [pgSaving, setPgSaving] = useState(false)
   const [docsSaving, setDocsSaving] = useState(false)
+  const [sqliteSaving, setSqliteSaving] = useState(false)
+  const [toolContextEstimate, setToolContextEstimate] = useState<{ toolCount: number; approxTokens: number } | null>(null)
+  const [scholarVenueFilter, setScholarVenueFilter] = useState('')
   const [authRequired, setAuthRequiredState] = useState(false)
   // Defaults true so the bootstrap form doesn't flash before auth:get-config
   // resolves on mount (this comes from disk, unlike networkMode's hardcoded default).
@@ -276,11 +294,18 @@ export default function App() {
   // I chose a custom URI scheme over a plain URL because a plain http:// link
   // would just open the browser instead of the Redstart Twig app.
 
+  // Sync advertisedHost to config whenever it changes
   useEffect(() => {
-    if (!networkMode || !localIp) { setQrDataUrl(''); return }
-    const deepLink = `redstart://connect?url=${encodeURIComponent(`http://${localIp}:${config.port}`)}`
+    setConfig(prev => ({ ...prev, advertisedHost }))
+  }, [advertisedHost])
+
+  useEffect(() => {
+    if (!networkMode) { setQrDataUrl(''); return }
+    const host = (advertisedHost || localIp || '').trim()
+    if (!host) { setQrDataUrl(''); return }
+    const deepLink = `redstart://connect?url=${encodeURIComponent(`http://${host}:${config.port}`)}`
     QRCode.toDataURL(deepLink, { width: 200, margin: 1 }).then(setQrDataUrl).catch(() => setQrDataUrl(''))
-  }, [networkMode, localIp, config.port])
+  }, [networkMode, advertisedHost, localIp, config.port])
 
   // --- Config networkMode sync ---
 
@@ -305,7 +330,11 @@ export default function App() {
   async function selectProfile(name: string) {
     if (!name) { setSelectedProfile(''); return }
     const loaded = await api().profiles.load(name)
-    if (loaded) { setConfig(prev => ({ ...loaded, networkMode: prev.networkMode })); setSelectedProfile(name) }
+    if (loaded) {
+      setConfig(prev => ({ ...loaded, networkMode: prev.networkMode }))
+      setAdvertisedHost(loaded.advertisedHost || '')
+      setSelectedProfile(name)
+    }
   }
 
   async function saveProfile() {
@@ -381,6 +410,7 @@ export default function App() {
       const data = await api().capabilities.get()
       setCapabilityConfig(data)
       setPgMaxRows(data.postgres.maxRows)
+      setScholarVenueFilter(data.scholar.venueFilter || '')
     } catch { /* capabilities unavailable */ }
   }
 
@@ -431,6 +461,89 @@ export default function App() {
   async function toggleDocumentsEnabled() {
     if (!capabilityConfig) return
     await api().capabilities.setDocumentsFolder({ enabled: !capabilityConfig.documents.enabled })
+    await loadCapabilities()
+  }
+
+  // Live estimate of the context-window cost of the active tool set. Every
+  // active tool's JSON schema is sent with every completion request, so this
+  // is a standing per-request cost — recomputed whenever the tool selection
+  // or capability config changes (small debounce to avoid IPC chatter).
+  useEffect(() => {
+    if (!config.tools?.enabled) { setToolContextEstimate(null); return }
+    const t = setTimeout(async () => {
+      try {
+        setToolContextEstimate(await api().capabilities.estimateToolContext(config))
+      } catch { setToolContextEstimate(null) }
+    }, 300)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(config.tools), capabilityConfig])
+
+  async function chooseSqliteFolder() {
+    const dir = await api().capabilities.selectSqliteFolder()
+    if (!dir) return
+    setSqliteSaving(true)
+    try {
+      await api().capabilities.setSqlite({ rootDir: dir, enabled: true })
+      await loadCapabilities()
+    } finally {
+      setSqliteSaving(false)
+    }
+  }
+
+  async function toggleSqliteEnabled() {
+    if (!capabilityConfig) return
+    await api().capabilities.setSqlite({ enabled: !capabilityConfig.sqlite.enabled })
+    await loadCapabilities()
+  }
+
+  async function chooseVaultFolder() {
+    const dir = await api().capabilities.selectVaultFolder()
+    if (!dir) return
+    await api().capabilities.setVault({ rootDir: dir, enabled: true })
+    await loadCapabilities()
+  }
+
+  async function toggleVaultEnabled() {
+    if (!capabilityConfig) return
+    await api().capabilities.setVault({ enabled: !capabilityConfig.vault.enabled })
+    await loadCapabilities()
+  }
+
+  async function toggleScholarEnabled() {
+    if (!capabilityConfig) return
+    await api().capabilities.setScholar({ enabled: !capabilityConfig.scholar.enabled })
+    await loadCapabilities()
+  }
+
+  async function saveScholarVenueFilter() {
+    await api().capabilities.setScholar({ venueFilter: scholarVenueFilter })
+    await loadCapabilities()
+  }
+
+  async function chooseGitFolder() {
+    const dir = await api().capabilities.selectGitFolder()
+    if (!dir) return
+    await api().capabilities.setGit({ rootDir: dir, enabled: true })
+    await loadCapabilities()
+  }
+
+  async function toggleGitEnabled() {
+    if (!capabilityConfig) return
+    await api().capabilities.setGit({ enabled: !capabilityConfig.git.enabled })
+    await loadCapabilities()
+  }
+
+  async function chooseFileSystemFolder() {
+    const dir = await api().capabilities.selectFileSystemFolder()
+    if (!dir) return
+    await api().capabilities.setFileSystem({ rootDir: dir, enabled: true })
+    await loadCapabilities()
+  }
+
+  async function toggleFileSystemEnabled() {
+    if (!capabilityConfig) return
+    await api().capabilities.setFileSystem({ enabled: !capabilityConfig.file_system.enabled })
     await loadCapabilities()
   }
 
@@ -589,15 +702,16 @@ export default function App() {
     setServerState('starting')
     setStatusMsg('')
     setLogLines([])
+    setActiveTab('server')
 
-    if (showLog) {
+    {
       const a = getAPI()
       a?.events.onServerLog(line => {
         if (line.trim()) setLogLines(prev => [...prev.slice(-1000), line])
       })
     }
 
-    const result = await api().llama.launch(config, false, openChatOnLaunch)
+    const result = await api().llama.launch(config)
     if (result.success) {
       setServerState('running')
       setHealth('starting')
@@ -676,13 +790,6 @@ export default function App() {
             <div className="text-xs text-zinc-400">
               <span className="text-orange-400 font-semibold">{tokensPerMin.toLocaleString()}</span> tok/min
             </div>
-          )}
-          {isRunning && (
-            <button
-              onClick={() => api().chat.open(config.port, false)}
-              className="text-xs px-3 py-1.5 bg-orange-500 hover:bg-orange-400 text-white rounded font-semibold transition-colors">
-              Open Chat
-            </button>
           )}
         </div>
       </header>
@@ -788,15 +895,27 @@ export default function App() {
               <div
                 onClick={() => setNetworkMode(v => !v)}
                 className={`w-10 h-5 rounded-full transition-colors relative ${networkMode ? 'bg-orange-500' : 'bg-zinc-700'}`}>
-                <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${networkMode ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                   <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${networkMode ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
               </div>
               <span className="text-xs text-zinc-300">{networkMode ? 'Local network (HTTP)' : 'Localhost only'}</span>
             </label>
 
             {networkMode && (
               <div className="mt-3 space-y-2">
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Advertised hostname <span className="text-zinc-600">(blank = auto-detect IP)</span></label>
+                  <input
+                    type="text"
+                    value={advertisedHost}
+                    onChange={e => setAdvertisedHost(e.target.value)}
+                    placeholder="e.g. redstart.local"
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500 transition-colors placeholder:text-zinc-600"
+                  />
+                  <p className="text-[10px] text-zinc-600 mt-1">Use a hostname like redstart.local for mDNS, or a custom IP. Leave blank to use the detected device IP.</p>
+                </div>
                 <div className="text-xs text-zinc-400">
-                  Server IP: <span className="text-orange-400 font-semibold">{localIp}:{config.port}</span>
+                  Server address: <span className="text-orange-400 font-semibold">{(advertisedHost || localIp)}:{config.port}</span>
+                  {advertisedHost && <span className="text-zinc-500 ml-1">(mDNS: {advertisedHost})</span>}
                 </div>
                 {qrDataUrl && (
                   <div>
@@ -815,7 +934,7 @@ export default function App() {
               <div
                 onClick={toggleAuthRequired}
                 className={`w-10 h-5 rounded-full transition-colors relative ${authRequired ? 'bg-orange-500' : 'bg-zinc-700'}`}>
-                <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${authRequired ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                   <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${authRequired ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
               </div>
               <span className="text-xs text-zinc-300">{authRequired ? 'Require login' : 'Login not required'}</span>
             </label>
@@ -878,7 +997,31 @@ export default function App() {
         {/* ── Main content ── */}
         <main className="flex-1 flex flex-col overflow-y-auto p-5 gap-5">
 
+          {/* ── Tab bar (browser-style) ── */}
+          <div className="flex items-end gap-1 border-b border-zinc-800 -mx-5 px-5 -mt-2 pt-2 sticky top-0 bg-zinc-950 z-10">
+            {([
+              ['config', 'Configuration'],
+              ['tools', 'Tools'],
+              ['server', 'Server'],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setActiveTab(id)}
+                className={`px-4 py-2 rounded-t-lg text-sm border border-b-0 transition-colors flex items-center gap-2 ${
+                  activeTab === id
+                    ? 'bg-zinc-900 border-zinc-800 text-white'
+                    : 'bg-transparent border-transparent text-zinc-500 hover:text-zinc-300'
+                }`}>
+                {label}
+                {id === 'server' && serverState !== 'stopped' && (
+                  <span className={`w-1.5 h-1.5 rounded-full ${serverState === 'running' ? 'bg-green-400' : 'bg-amber-400 animate-pulse'}`} />
+                )}
+              </button>
+            ))}
+          </div>
+
           {/* Config grid */}
+          {activeTab === 'config' && (
           <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
             <h2 className="text-xs uppercase tracking-widest text-zinc-500 mb-4">Configuration</h2>
             <div className="grid grid-cols-3 gap-4">
@@ -962,6 +1105,35 @@ export default function App() {
               </div>
             </div>
 
+            <div className="mt-4 grid grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs text-zinc-500 mb-1">
+                  KV Cache <span className="text-zinc-600">(TurboQuant)</span>
+                </label>
+                <select
+                  value={config.kvCache ?? 'off'}
+                  onChange={e => setConfig(prev => ({ ...prev, kvCache: e.target.value as LlamaConfig['kvCache'] }))}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500 transition-colors"
+                >
+                  <option value="off">Off (f16 — largest VRAM)</option>
+                  <option value="conservative">Conservative — q8_0 / turbo4</option>
+                  <option value="balanced">Balanced — q8_0 / turbo3 (recommended)</option>
+                  <option value="aggressive">Aggressive (MoE) — q8_0 / turbo2</option>
+                </select>
+              </div>
+              <div className="col-span-2 flex items-end">
+                <p className="text-xs text-zinc-500 leading-relaxed">
+                  {config.kvCache === 'off'
+                    ? 'Full-precision f16 KV cache. Largest memory footprint — context is capped by VRAM.'
+                    : config.kvCache === 'conservative'
+                    ? 'Lightest turbo tier. Near-identical to f16; a modest KV memory win.'
+                    : config.kvCache === 'aggressive'
+                    ? '~2-bit V with Boundary V layer protection — best for MoE models like Qwen3.6. Fits the most context; validate quality on your model.'
+                    : 'Near-lossless K, ~4.6× compressed V (<1.5% PPL loss). Total KV ~3–4× smaller than f16 — lets you roughly 3–4× the context on the same card.'}
+                </p>
+              </div>
+            </div>
+
             <div className="mt-4">
               <label className="block text-xs text-zinc-500 mb-1">Additional args</label>
               <input
@@ -974,7 +1146,10 @@ export default function App() {
             </div>
           </section>
 
+          )}
+
           {/* Tools (Web Sources + MCP) */}
+          {activeTab === 'tools' && (
           <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xs uppercase tracking-widest text-zinc-500">Tools</h2>
@@ -983,12 +1158,35 @@ export default function App() {
                 <div
                   onClick={() => setToolsField('enabled', !(config.tools?.enabled))}
                   className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer ${config.tools?.enabled ? 'bg-orange-500' : 'bg-zinc-700'}`}>
-                  <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${config.tools?.enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                   <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${config.tools?.enabled ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
                 </div>
               </label>
             </div>
 
             {config.tools?.enabled ? (<>
+              {/* Whitelist toggle — restriction is the default posture */}
+              <div className="mb-4 flex items-center justify-between px-3 py-2 bg-zinc-800/60 rounded">
+                <div>
+                  <p className="text-sm text-zinc-200">Restrict to approved sources</p>
+                  <p className="text-xs text-zinc-500">
+                    {config.tools?.whitelistEnabled !== false
+                      ? 'The model can only fetch from the sources selected below.'
+                      : 'Whitelist off — the model can fetch any public website. Local network addresses are always blocked.'}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setToolsField('whitelistEnabled', config.tools?.whitelistEnabled === false)}
+                  className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer flex-shrink-0 ${config.tools?.whitelistEnabled !== false ? 'bg-orange-500' : 'bg-zinc-700'}`}>
+                   <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${config.tools?.whitelistEnabled !== false ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
+                </button>
+              </div>
+
+              {config.tools?.whitelistEnabled === false && (
+                <div className="mb-4 px-3 py-2 rounded text-xs border bg-yellow-900/30 border-yellow-700 text-yellow-300">
+                  ⚠ Open web access: the model can reach any public site, including ones you haven't reviewed. Fetched pages can contain wrong or manipulative content. Sources selected below still power web_search and the model's source hints.
+                </div>
+              )}
+
               {/* Performance warning */}
               <div className={`mb-4 px-3 py-2 rounded text-xs border ${
                 config.ctxSize < 4096
@@ -1060,14 +1258,14 @@ export default function App() {
                         placeholder="Description (optional)" className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500" />
                       <p className="text-xs text-zinc-500">Select sources for this group:</p>
                       <div className="space-y-1 max-h-40 overflow-y-auto">
-                        {allTools.map(tool => (
-                          <label key={tool.id} className="flex items-center gap-2 cursor-pointer select-none">
-                            <input type="checkbox" checked={newGroupToolIds.includes(tool.id)}
-                              onChange={() => setNewGroupToolIds(prev => prev.includes(tool.id) ? prev.filter(id => id !== tool.id) : [...prev, tool.id])}
-                              className="accent-orange-500" />
-                            <span className="text-sm text-zinc-300">{tool.name}</span>
-                          </label>
-                        ))}
+                         {allTools.filter(t => t.kind === 'web').map(tool => (
+                           <label key={tool.id} className="flex items-center gap-2 cursor-pointer select-none">
+                             <input type="checkbox" checked={newGroupToolIds.includes(tool.id)}
+                               onChange={() => setNewGroupToolIds(prev => prev.includes(tool.id) ? prev.filter(id => id !== tool.id) : [...prev, tool.id])}
+                               className="accent-orange-500" />
+                             <span className="text-sm text-zinc-300">{tool.name}</span>
+                           </label>
+                         ))}
                       </div>
                       <div className="flex gap-2 pt-1">
                         <button onClick={addCustomGroup} className="px-3 py-1.5 bg-orange-500 hover:bg-orange-400 rounded text-xs font-medium transition-colors">Save group</button>
@@ -1081,7 +1279,7 @@ export default function App() {
                 <div>
                   <p className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Individual Sources</p>
                   <div className="space-y-1.5 mb-4">
-                    {allTools.map(tool => {
+                    {allTools.filter(t => t.kind === 'web').map(tool => {
                       const inActiveGroup = (config.tools?.activeGroupIds ?? []).some(gid => {
                         const grp = allGroups.find(g => g.id === gid)
                         return grp?.toolIds.includes(tool.id)
@@ -1138,10 +1336,21 @@ export default function App() {
                     />
                     <span className="text-xs text-zinc-600">of {config.ctxSize} ctx tokens</span>
                   </div>
+
+                  {toolContextEstimate && toolContextEstimate.toolCount > 0 && (
+                    <p className={`text-xs mt-2 ${
+                      toolContextEstimate.approxTokens > config.ctxSize * 0.25 ? 'text-amber-400' : 'text-zinc-500'
+                    }`}>
+                      {toolContextEstimate.toolCount} active tool{toolContextEstimate.toolCount === 1 ? '' : 's'} ≈ {toolContextEstimate.approxTokens.toLocaleString()} tokens of context on every request
+                      {toolContextEstimate.approxTokens > config.ctxSize * 0.25
+                        ? ` — over a quarter of your ${config.ctxSize.toLocaleString()}-token window. Consider activating fewer tools per profile.`
+                        : ''}
+                    </p>
+                  )}
                 </div>
               </div>
 
-              {/* Capability configuration (Postgres, Documents) — global setup, activated per-profile above */}
+              {/* Capability configuration (Postgres, Documents, SQLite, Vault, Git, Scholar) — global setup, activated per-profile above */}
               <div className="mt-6 pt-4 border-t border-zinc-700">
                 <p className="text-xs uppercase tracking-widest text-zinc-500 mb-3">Local Capabilities</p>
 
@@ -1209,6 +1418,124 @@ export default function App() {
                         </button>
                       )}
                     </div>
+                    <p className="text-xs text-zinc-600 mt-1.5">The model can create documents in this folder and read documents and spreadsheets (.pdf, .docx, .txt, .md, .xlsx, .csv) you place in it. All extraction happens on-device.</p>
+                  </div>
+
+                  {/* SQLite */}
+                  <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm text-zinc-200">SQLite</span>
+                      <span className={`text-xs ${capabilityConfig?.sqlite.rootDir ? (capabilityConfig.sqlite.enabled ? 'text-green-400' : 'text-zinc-500') : 'text-zinc-600'}`}>
+                        {capabilityConfig?.sqlite.rootDir ? (capabilityConfig.sqlite.enabled ? 'Enabled' : 'Disabled') : 'Not configured'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="flex-1 min-w-0 text-xs text-zinc-400 truncate">
+                        {capabilityConfig?.sqlite.rootDir || 'No database folder chosen'}
+                      </span>
+                      <button onClick={chooseSqliteFolder} disabled={sqliteSaving} className="px-2.5 py-1 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 rounded text-xs transition-colors flex-shrink-0">
+                        Choose folder…
+                      </button>
+                      {capabilityConfig?.sqlite.rootDir && (
+                        <button onClick={toggleSqliteEnabled} className="px-2.5 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors flex-shrink-0">
+                          {capabilityConfig.sqlite.enabled ? 'Disable' : 'Enable'}
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-zinc-600 mt-1.5">Read-only queries against .sqlite/.db files in the chosen folder. The files are never opened for writing.</p>
+                  </div>
+
+                  {/* Vault */}
+                  <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm text-zinc-200">Vault</span>
+                      <span className={`text-xs ${capabilityConfig?.vault.rootDir ? (capabilityConfig.vault.enabled ? 'text-green-400' : 'text-zinc-500') : 'text-zinc-600'}`}>
+                        {capabilityConfig?.vault.rootDir ? (capabilityConfig.vault.enabled ? 'Enabled' : 'Disabled') : 'Not configured'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="flex-1 min-w-0 text-xs text-zinc-400 truncate">
+                        {capabilityConfig?.vault.rootDir || 'No notes folder chosen'}
+                      </span>
+                      <button onClick={chooseVaultFolder} className="px-2.5 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors flex-shrink-0">
+                        Choose folder…
+                      </button>
+                      {capabilityConfig?.vault.rootDir && (
+                        <button onClick={toggleVaultEnabled} className="px-2.5 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors flex-shrink-0">
+                          {capabilityConfig.vault.enabled ? 'Disable' : 'Enable'}
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-zinc-600 mt-1.5">Read-only search across markdown notes (Obsidian vault or any folder of .md files) — search, read notes, browse tags.</p>
+                  </div>
+
+                  {/* Git */}
+                  <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm text-zinc-200">Git</span>
+                      <span className={`text-xs ${capabilityConfig?.git.rootDir ? (capabilityConfig.git.enabled ? 'text-green-400' : 'text-zinc-500') : 'text-zinc-600'}`}>
+                        {capabilityConfig?.git.rootDir ? (capabilityConfig.git.enabled ? 'Enabled' : 'Disabled') : 'Not configured'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="flex-1 min-w-0 text-xs text-zinc-400 truncate">
+                        {capabilityConfig?.git.rootDir || 'No repository folder chosen'}
+                      </span>
+                      <button onClick={chooseGitFolder} className="px-2.5 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors flex-shrink-0">
+                        Choose folder…
+                      </button>
+                      {capabilityConfig?.git.rootDir && (
+                        <button onClick={toggleGitEnabled} className="px-2.5 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors flex-shrink-0">
+                          {capabilityConfig.git.enabled ? 'Disable' : 'Enable'}
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-zinc-600 mt-1.5">Read-only repository context (status, recent commits, uncommitted diffs). Choose a repository or a folder containing repositories. Requires git on the server machine.</p>
+                  </div>
+
+                  {/* File System */}
+                  <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm text-zinc-200">File System</span>
+                      <span className={`text-xs ${capabilityConfig?.file_system.rootDir ? (capabilityConfig.file_system.enabled ? 'text-green-400' : 'text-zinc-500') : 'text-zinc-600'}`}>
+                        {capabilityConfig?.file_system.rootDir ? (capabilityConfig.file_system.enabled ? 'Enabled' : 'Disabled') : 'Not configured'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="flex-1 min-w-0 text-xs text-zinc-400 truncate">
+                        {capabilityConfig?.file_system.rootDir || 'No folder chosen'}
+                      </span>
+                      <button onClick={chooseFileSystemFolder} className="px-2.5 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors flex-shrink-0">
+                        Choose folder…
+                      </button>
+                      {capabilityConfig?.file_system.rootDir && (
+                        <button onClick={toggleFileSystemEnabled} className="px-2.5 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors flex-shrink-0">
+                          {capabilityConfig.file_system.enabled ? 'Disable' : 'Enable'}
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-zinc-600 mt-1.5">Read and write files within a chosen folder — read configs, write scripts, edit project files. Paths are contained to the chosen root.</p>
+                  </div>
+
+                  {/* Scholar */}
+                  <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm text-zinc-200">Scholar</span>
+                      <span className={`text-xs ${capabilityConfig?.scholar.enabled ? 'text-green-400' : 'text-zinc-500'}`}>
+                        {capabilityConfig?.scholar.enabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <input
+                        type="text" value={scholarVenueFilter} onChange={e => setScholarVenueFilter(e.target.value)}
+                        placeholder="Optional venue whitelist: journal ISSNs and/or arXiv categories (e.g. 1932-6203, cs.CL)"
+                        className="flex-1 min-w-0 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500 placeholder:text-zinc-600" />
+                      <button onClick={saveScholarVenueFilter} className="px-2.5 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors flex-shrink-0">Save filter</button>
+                      <button onClick={toggleScholarEnabled} className="px-2.5 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors flex-shrink-0">
+                        {capabilityConfig?.scholar.enabled ? 'Disable' : 'Enable'}
+                      </button>
+                    </div>
+                    <p className="text-xs text-zinc-600 mt-1.5">Search open academic literature (OpenAlex, arXiv, PubMed) and save open-access PDFs into the Documents folder. Leave the whitelist empty for all venues; when set, searches and downloads are restricted to those journals/categories at the API level.</p>
                   </div>
                 </div>
               </div>
@@ -1294,7 +1621,10 @@ export default function App() {
             </div>
           </section>
 
+          )}
+
           {/* Command preview */}
+          {activeTab === 'config' && (
           <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
             <div className="flex justify-between items-center mb-2">
               <h2 className="text-xs uppercase tracking-widest text-zinc-500">Command Preview</h2>
@@ -1307,6 +1637,7 @@ export default function App() {
               {generatedCommand || 'Click Generate to preview the launch command'}
             </pre>
           </section>
+          )}
 
           {/* Status message */}
           {statusMsg && (
@@ -1356,62 +1687,45 @@ export default function App() {
               </div>
             )}
 
-            {/* Show terminal checkbox */}
-            <label className="flex items-center gap-2 cursor-pointer select-none shrink-0 text-xs text-zinc-400 hover:text-zinc-200 transition-colors">
-              <input
-                type="checkbox"
-                checked={showLog}
-                onChange={e => setShowLog(e.target.checked)}
-                className="w-3.5 h-3.5 accent-orange-500 cursor-pointer"
-              />
-              Show server log
-            </label>
-            {/* Open chat on launch checkbox */}
-            <label className="flex items-center gap-2 cursor-pointer select-none shrink-0 text-xs text-zinc-400 hover:text-zinc-200 transition-colors">
-              <input
-                type="checkbox"
-                checked={openChatOnLaunch}
-                onChange={e => setOpenChatOnLaunch(e.target.checked)}
-                className="w-3.5 h-3.5 accent-orange-500 cursor-pointer"
-              />
-              Open chat on launch
-            </label>
           </div>
 
-          {/* Health detail when running */}
-          {isRunning && (
-            <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 flex items-center justify-between">
-              <span className="text-xs text-zinc-500">Server health</span>
-              <span className={`text-xs font-semibold ${healthColor}`}>{healthLabel}</span>
-            </div>
-          )}
+          {/* ── Server tab: health + terminal ── */}
+          {activeTab === 'server' && (
+            <>
+              {isRunning && (
+                <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 flex items-center justify-between">
+                  <span className="text-xs text-zinc-500">Server health</span>
+                  <span className={`text-xs font-semibold ${healthColor}`}>{healthLabel}</span>
+                </div>
+              )}
 
-          {/* Server log panel */}
-          {showLog && serverState !== 'stopped' && (
-            <section className="flex flex-col bg-black rounded-lg border border-zinc-800 overflow-hidden">
-              <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900 border-b border-zinc-800 shrink-0">
-                <span className="text-xs text-zinc-500 uppercase tracking-widest">Server Terminal</span>
-                <button
-                  onClick={() => setLogLines([])}
-                  className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">
-                  Clear
-                </button>
-              </div>
-              <div className="h-64 overflow-y-auto p-3 font-mono text-xs leading-relaxed">
-                {logLines.length === 0 ? (
-                  <span className="text-zinc-600">Waiting for output…</span>
-                ) : (
-                  logLines.map((line, i) => (
-                    <div key={i} className={`whitespace-pre-wrap break-all ${
-                      /error|fail|warn/i.test(line) ? 'text-red-400' :
-                      /load|ready|listen/i.test(line) ? 'text-orange-400' :
-                      'text-zinc-300'
-                    }`}>{line}</div>
-                  ))
-                )}
-                <div ref={logEndRef} />
-              </div>
-            </section>
+              <section className="flex flex-col flex-1 min-h-64 bg-black rounded-lg border border-zinc-800 overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900 border-b border-zinc-800 shrink-0">
+                  <span className="text-xs text-zinc-500 uppercase tracking-widest">Server Terminal</span>
+                  <button
+                    onClick={() => setLogLines([])}
+                    className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">
+                    Clear
+                  </button>
+                </div>
+                <div className="flex-1 min-h-56 overflow-y-auto p-3 font-mono text-xs leading-relaxed">
+                  {serverState === 'stopped' && logLines.length === 0 ? (
+                    <span className="text-zinc-600">Server is not running. Launch it to see output here.</span>
+                  ) : logLines.length === 0 ? (
+                    <span className="text-zinc-600">Waiting for output…</span>
+                  ) : (
+                    logLines.map((line, i) => (
+                      <div key={i} className={`whitespace-pre-wrap break-all ${
+                        /error|fail|warn/i.test(line) ? 'text-red-400' :
+                        /load|ready|listen/i.test(line) ? 'text-orange-400' :
+                        'text-zinc-300'
+                      }`}>{line}</div>
+                    ))
+                  )}
+                  <div ref={logEndRef} />
+                </div>
+              </section>
+            </>
           )}
 
         </main>

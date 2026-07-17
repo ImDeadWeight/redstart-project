@@ -19,9 +19,9 @@ import { promisify } from 'util'
 import * as path from 'path'
 import * as fs from 'fs'
 import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES } from './tools-definitions.mjs'
-import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup, getExternalServers, addExternalServer, deleteExternalServer, getCapabilities, setCapabilityConfig } from './tools-storage.mjs'
+import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup, getExternalServers, addExternalServer, deleteExternalServer, getCapabilities, setCapabilityConfig, ensureDefaultCapabilityFolders } from './tools-storage.mjs'
 import { startGateway, stopGateway, updateGatewayConfig, getGatewayPort } from './tools-gateway.mjs'
-import { startMcpServer, stopMcpServer, updateMcpConfig, getMcpServerRunning, closeAllMcpSessions } from './mcp-server.mjs'
+import { startMcpServer, stopMcpServer, updateMcpConfig, getMcpServerRunning, closeAllMcpSessions, estimateActiveToolTokens } from './mcp-server.mjs'
 import { getAuthRequired, setAuthRequired, hasOwner, createOwner } from './auth.mjs'
 import { encryptSecret, decryptSecret } from './secrets.mjs'
 import { testConnection as testPostgresConnection } from './postgres-tool.mjs'
@@ -29,6 +29,9 @@ import * as crypto from 'crypto'
 import * as os from 'os'
 import * as zlib from 'zlib'
 import * as http from 'http'
+import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
+import { startMdnsAdvertiser, stopMdnsAdvertiser } from './mdns-advertiser.mjs'
+import { cleanupOldConversations } from './conversations-storage.mjs'
 import { fileURLToPath } from 'url'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -292,21 +295,12 @@ try {
 }
 
 let mainWindow = null
-let chatWindow = null
 let serverProcess = null
 let serverEma = 0
 const EMA_ALPHA = 0.2
 
-// I run a lightweight HTTP server on a fixed side-channel port (8765) that I
-// call the "beacon." Its only job is to identify this machine as a Redstart Nest
-// instance and tell clients whether the llama-server is running and what URL
-// to connect to. I chose a dedicated port rather than trying to talk to the
-// llama-server port directly because the beacon stays alive even when the
-// llama-server is stopped or still loading — that way Redstart Twig can always
-// find Redstart Nest on the network, even between server restarts.
-const BEACON_PORT = 8765
-let beaconServer = null
 let lastServerConfig = null  // set on launch, cleared on stop/exit
+let beaconServerInstance = null
 
 // ---------------------------------------------------------------------------
 // Settings helpers
@@ -402,9 +396,14 @@ function buildGatewayConfig(llamaConfig) {
 
   if (!toolSettings?.enabled) {
     return {
-      webFetch: { allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 },
+      webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 },
       postgres: { enabled: false },
       documents: { enabled: false },
+      sqlite: { enabled: false },
+      vault:     { enabled: false },
+      file_system: { enabled: false },
+      git:       { enabled: false },
+      scholar: { enabled: false },
     }
   }
 
@@ -443,9 +442,19 @@ function buildGatewayConfig(llamaConfig) {
   }
 
   const documentsWanted = toolIdSet.has('documents') && capabilities.documents.enabled && !!capabilities.documents.outputDir
+  const sqliteWanted = toolIdSet.has('sqlite') && capabilities.sqlite.enabled && !!capabilities.sqlite.rootDir
+  const vaultWanted = toolIdSet.has('vault') && capabilities.vault.enabled && !!capabilities.vault.rootDir
+  const gitWanted = toolIdSet.has('git') && capabilities.git.enabled && !!capabilities.git.rootDir
+  const fileSystemWanted = toolIdSet.has('file_system') && capabilities.file_system.enabled && !!capabilities.file_system.rootDir
+  const scholarWanted = toolIdSet.has('scholar') && capabilities.scholar.enabled
 
   return {
     webFetch: {
+      enabled: true,
+      // Per-profile toggle: with the whitelist OFF the model may fetch any
+      // public http(s) URL (private/LAN addresses always blocked in the
+      // provider). Defaults to ON — restriction is the out-of-box posture.
+      whitelistEnabled: toolSettings.whitelistEnabled !== false,
       allowedBaseUrls,
       activeTools,
       maxFetchTokens: toolSettings.maxFetchTokens ?? 2000,
@@ -458,6 +467,30 @@ function buildGatewayConfig(llamaConfig) {
     documents: {
       enabled: documentsWanted,
       outputDir: capabilities.documents.outputDir,
+    },
+    sqlite: {
+      enabled: sqliteWanted,
+      rootDir: capabilities.sqlite.rootDir,
+      maxRows: capabilities.sqlite.maxRows,
+      maxFileBytes: capabilities.sqlite.maxFileBytes,
+    },
+    vault: {
+      enabled: vaultWanted,
+      rootDir: capabilities.vault.rootDir,
+    },
+    git: {
+      enabled: gitWanted,
+      rootDir: capabilities.git.rootDir,
+    },
+    file_system: {
+      enabled: fileSystemWanted,
+      rootDir: capabilities.file_system.rootDir,
+    },
+    scholar: {
+      enabled: scholarWanted,
+      venueFilter: capabilities.scholar.venueFilter,
+      // PDFs land in the Documents folder so read_document can pick them up.
+      saveDir: capabilities.documents.outputDir,
     },
   }
 }
@@ -527,223 +560,20 @@ function parseEvalTokensPerSec(line) {
 // confirm it found a real Redstart Nest instance and to get the actual server URL.
 // ---------------------------------------------------------------------------
 
-function startBeaconServer() {
-  const server = http.createServer((req, res) => {
-    const running     = !!serverProcess
-    const port        = lastServerConfig?.port        ?? 19080
-    const networkMode = lastServerConfig?.networkMode ?? false
-    const lanIp       = getLocalIp()
-
-    // Always advertise the configured port — this is the gateway's public port.
-    // llama-server runs on port+1 internally and is never exposed directly.
-    const advertisePort = port
-    const mcpPort = advertisePort + 2
-
-    // Build MCP server list for auto-discovery by Redstart Twig and other clients
-    const mcpServers = []
-    if (getMcpServerRunning()) {
-      mcpServers.push({
-        name: 'Redstart Built-in',
-        url: networkMode ? `http://${lanIp}:${mcpPort}/sse` : `http://127.0.0.1:${mcpPort}/sse`,
-      })
-    }
-    for (const s of getExternalServers()) {
-      if (s.enabled) mcpServers.push({ name: s.name, url: s.url })
-    }
-
-    const payload = {
-      app: 'redstart-nest',
-      version: '1.0.0',
-      server: {
-        running,
-        port: advertisePort,
-        ssl: false,
-        localUrl:   `http://127.0.0.1:${advertisePort}`,
-        networkUrl: networkMode ? `http://${lanIp}:${advertisePort}` : null,
-        authRequired: getAuthRequired(),
-      },
-      mcpServers,
-    }
-
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-    })
-    res.end(JSON.stringify(payload))
-  })
-
-  server.listen(BEACON_PORT, '0.0.0.0', () => {
-    beaconServer = server
-    console.log(`Redstart Nest beacon listening on port ${BEACON_PORT}`)
-  })
-
-  server.on('error', err => {
-    console.warn(`Beacon server error (port ${BEACON_PORT}): ${err.message}`)
-    beaconServer = null
-  })
+async function startDiscoveryBeacon() {
+  beaconServerInstance = await startBeaconServer(
+    () => !!serverProcess,
+    () => lastServerConfig?.port ?? 19080,
+  )
+  console.log(`Redstart Nest beacon listening on port 8765`)
 }
 
 // ---------------------------------------------------------------------------
 // Redstart proxy server
 // ---------------------------------------------------------------------------
-// When the user clicks "Open Chat," I start a small local HTTP server on a
-// random port and load that URL in an Electron BrowserWindow. This proxy
-// forwards API requests to the running llama-server and serves the SvelteKit
-// chat-ui build for everything else. I went with a plain Node http.Server
-// rather than Electron's protocol API because the protocol API has quirks with
-// server-sent events (SSE), which llama-server uses for streaming responses.
-
-let proxyServer = null
-
-// API paths that should be forwarded to the llama-server
-const LLAMA_API_PREFIXES = ['/v1/', '/props', '/models', '/tools', '/slots', '/cors-proxy']
-
-function isApiPath(url) {
-  return LLAMA_API_PREFIXES.some(prefix => url === prefix || url.startsWith(prefix + '?') || url.startsWith(prefix + '/'))
-}
-
-const MIME_TYPES = {
-  '.html': 'text/html; charset=utf-8',
-  '.js':   'application/javascript',
-  '.mjs':  'application/javascript',
-  '.css':  'text/css',
-  '.svg':  'image/svg+xml',
-  '.png':  'image/png',
-  '.ico':  'image/x-icon',
-  '.woff2':'font/woff2',
-  '.woff': 'font/woff',
-  '.json': 'application/json',
-  '.webmanifest': 'application/manifest+json',
-}
-
-function startProxyServer(llamaPort, useSsl) {
-  if (proxyServer) { proxyServer.close(); proxyServer = null }
-
-  // Packaged: chat-ui build is placed at resources/chat-ui/
-  // Dev (shouldn't reach here): src/chat-ui/dist/
-  const chatUiDir = app.isPackaged
-    ? path.join(process.resourcesPath, 'chat-ui')
-    : path.join(__dirname, '..', '..', 'src', 'chat-ui', 'dist')
-
-  return new Promise((resolve, reject) => {
-    const server = http.createServer((req, res) => {
-      const urlPath = req.url.split('?')[0]
-
-      // Forward llama-server API calls (llama always runs HTTP — no SSL)
-      if (isApiPath(req.url)) {
-        const options = {
-          hostname: '127.0.0.1',
-          port: llamaPort,
-          path: req.url,
-          method: req.method,
-          headers: { ...req.headers, host: `127.0.0.1:${llamaPort}` },
-        }
-
-        const proxyReq = http.request(options, (proxyRes) => {
-          res.writeHead(proxyRes.statusCode, proxyRes.headers)
-          proxyRes.pipe(res)
-        })
-        req.pipe(proxyReq)
-        proxyReq.on('error', err => {
-          if (!res.headersSent) {
-            res.writeHead(502, { 'Content-Type': 'text/plain' })
-            res.end(`Proxy error: ${err.message}`)
-          }
-        })
-        return
-      }
-
-      // Serve SvelteKit static build
-      const ext = path.extname(urlPath)
-      const resolved = path.resolve(chatUiDir, '.' + urlPath)
-      if (!resolved.startsWith(chatUiDir + path.sep) && resolved !== chatUiDir) {
-        res.writeHead(403, { 'Content-Type': 'text/plain' })
-        res.end('Forbidden')
-        return
-      }
-      let filePath = resolved
-
-      // SPA fallback — all non-asset routes serve index.html
-      if (!ext || !fs.existsSync(filePath)) {
-        filePath = path.join(chatUiDir, 'index.html')
-      }
-
-      try {
-        const content = fs.readFileSync(filePath)
-        const fileExt = path.extname(filePath)
-        const mime = MIME_TYPES[fileExt] || 'application/octet-stream'
-        res.writeHead(200, { 'Content-Type': mime })
-        res.end(content)
-      } catch {
-        res.writeHead(404, { 'Content-Type': 'text/plain' })
-        res.end('Not found')
-      }
-    })
-
-    server.listen(0, '127.0.0.1', () => {
-      proxyServer = server
-      resolve(server.address().port)
-    })
-    server.on('error', reject)
-  })
-}
-
+// Chat UI is served directly by llama-server via --path and accessed through
+// the gateway in any browser. No captive BrowserWindow or local proxy needed.
 // ---------------------------------------------------------------------------
-// Windows
-// ---------------------------------------------------------------------------
-
-function openChatWindow(port, ssl) {
-  if (chatWindow && !chatWindow.isDestroyed()) {
-    chatWindow.focus()
-    return
-  }
-
-  chatWindow = new BrowserWindow({
-    width: 1150,
-    height: 820,
-    title: 'Redstart',
-    icon: redstartIcon,
-    webPreferences: { contextIsolation: true },
-  })
-
-  chatWindow.on('page-title-updated', (event) => { event.preventDefault() })
-  chatWindow.webContents.on('before-input-event', (_, input) => {
-    if (input.type === 'keyDown' && input.key === 'F12') chatWindow?.webContents.toggleDevTools()
-  })
-  chatWindow.on('closed', () => {
-    chatWindow = null
-    if (proxyServer) { proxyServer.close(); proxyServer = null }
-  })
-
-  if (!app.isPackaged) {
-    // Dev: SvelteKit dev server runs on 5174 and proxies API calls to the llama server.
-    // The proxy target is configured via VITE_PUBLIC_SERVER_ORIGIN in src/chat-ui/.env.
-    // Retry on connection failure — 5174 may still be compiling when the user clicks Launch.
-    const DEV_CHAT_URL = 'http://localhost:5174/'
-    chatWindow.webContents.on('did-fail-load', (_event, errorCode) => {
-      if (errorCode === -102 || errorCode === -7) {
-        setTimeout(() => chatWindow?.loadURL(DEV_CHAT_URL), 1000)
-      }
-    })
-    chatWindow.webContents.openDevTools()
-    chatWindow.loadURL(DEV_CHAT_URL)
-  } else {
-    // Prod: start a local proxy/file server that serves the built SvelteKit UI
-    // and forwards API calls to the running llama-server.
-    startProxyServer(port, ssl).then((proxyPort) => {
-      chatWindow?.loadURL(`http://127.0.0.1:${proxyPort}/`)
-    }).catch((err) => {
-      console.error('Failed to start proxy server:', err)
-    })
-  }
-}
-
-function closeChatWindow() {
-  if (chatWindow && !chatWindow.isDestroyed()) {
-    chatWindow.close()
-    chatWindow = null
-  }
-}
 
 const CSP = [
   "default-src 'self'",
@@ -791,9 +621,16 @@ app.disableHardwareAcceleration()
 
 app.whenReady().then(async () => {
   migrateUserDataFromBeaver()
+  // Pre-provision default capability folders (<Documents>\Redstart\...) so
+  // Documents/SQLite/Vault/Git are one-click enable out of the box. Fills
+  // only unset paths — a user-chosen folder is never overridden — and leaves
+  // every capability disabled.
+  ensureDefaultCapabilityFolders(path.join(app.getPath('documents'), 'Redstart'))
   applyCSP(session.defaultSession)
   killOrphanedServers()
-  startBeaconServer()
+  const cleanedConversations = cleanupOldConversations()
+  if (cleanedConversations > 0) console.log(`Cleaned ${cleanedConversations} conversations older than 30 days`)
+  startDiscoveryBeacon()
   createWindow()
   setupIpcHandlers()
 })
@@ -844,16 +681,13 @@ app.on('before-quit', () => {
   killOrphanedServers()
   stopGateway()
   stopMcpServer()
+  stopMdnsAdvertiser()
   if (serverProcess) {
     serverProcess = null
   }
-  if (proxyServer) {
-    proxyServer.close()
-    proxyServer = null
-  }
-  if (beaconServer) {
-    beaconServer.close()
-    beaconServer = null
+  if (beaconServerInstance) {
+    stopBeaconServer(beaconServerInstance)
+    beaconServerInstance = null
   }
 })
 
@@ -984,18 +818,22 @@ $r | ConvertTo-Json -Compress
       threads: inferThreads,
       port: 19080,
       host: '127.0.0.1',
+      kvCache: 'balanced',
       additionalArgs: '',
+      advertisedHost: 'redstart.local',
     }
 
     const productivity = {
       name: 'Productivity',
       modelPath: '',
-      ctxSize: 8192,    // 16384 was too large — KV cache alone could blow 12 GB
+      ctxSize: 16384,
       batchSize: 512,
       threads: inferThreads,
       port: 19080,
       host: '127.0.0.1',
+      kvCache: 'balanced',
       additionalArgs: '',
+      advertisedHost: 'redstart.local',
     }
 
     const data = readProfiles()
@@ -1083,6 +921,27 @@ $r | ConvertTo-Json -Compress
         enabled: caps.documents.enabled,
         outputDir: caps.documents.outputDir,
       },
+      sqlite: {
+        enabled: caps.sqlite.enabled,
+        rootDir: caps.sqlite.rootDir,
+        maxRows: caps.sqlite.maxRows,
+      },
+      vault: {
+        enabled: caps.vault.enabled,
+        rootDir: caps.vault.rootDir,
+      },
+      git: {
+        enabled: caps.git.enabled,
+        rootDir: caps.git.rootDir,
+      },
+      file_system: {
+        enabled: caps.file_system.enabled,
+        rootDir: caps.file_system.rootDir,
+      },
+      scholar: {
+        enabled: caps.scholar.enabled,
+        venueFilter: caps.scholar.venueFilter,
+      },
     }
   })
 
@@ -1130,6 +989,53 @@ $r | ConvertTo-Json -Compress
     return { ok: true }
   })
 
+  // Estimates the per-request context cost of the tool set the given profile
+  // config would activate — same resolution path as an actual launch.
+  ipcMain.handle('tools:estimate-context', (_, llamaConfig) => {
+    return estimateActiveToolTokens(buildGatewayConfig(llamaConfig))
+  })
+
+  ipcMain.handle('capabilities:select-sqlite-folder', async () => {
+    const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
+    return result.canceled ? null : result.filePaths[0]
+  })
+
+  ipcMain.handle('capabilities:set-sqlite', (_, { rootDir, maxRows, enabled }) => {
+    const patch = {}
+    if (typeof enabled === 'boolean') patch.enabled = enabled
+    if (typeof maxRows === 'number') patch.maxRows = maxRows
+    if (rootDir) patch.rootDir = rootDir
+    setCapabilityConfig('sqlite', patch)
+    refreshLiveToolsConfig()
+    return { ok: true }
+  })
+
+  ipcMain.handle('capabilities:set-scholar', (_, { venueFilter, enabled }) => {
+    const patch = {}
+    if (typeof enabled === 'boolean') patch.enabled = enabled
+    if (venueFilter !== undefined) patch.venueFilter = String(venueFilter || '').trim() || null
+    setCapabilityConfig('scholar', patch)
+    refreshLiveToolsConfig()
+    return { ok: true }
+  })
+
+  // Vault and Git share the folder-scoped capability shape: pick a folder,
+  // toggle enabled. One generic pair of handlers keeps them uniform.
+  for (const cap of ['vault', 'git', 'file_system']) {
+    ipcMain.handle(`capabilities:select-${cap}-folder`, async () => {
+      const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
+      return result.canceled ? null : result.filePaths[0]
+    })
+    ipcMain.handle(`capabilities:set-${cap}`, (_, { rootDir, enabled }) => {
+      const patch = {}
+      if (typeof enabled === 'boolean') patch.enabled = enabled
+      if (rootDir) patch.rootDir = rootDir
+      setCapabilityConfig(cap, patch)
+      refreshLiveToolsConfig()
+      return { ok: true }
+    })
+  }
+
   // --- Llama command preview ---
 
   ipcMain.handle('llama:generate-command', (_, config) => {
@@ -1139,7 +1045,7 @@ $r | ConvertTo-Json -Compress
 
   // --- Server launch ---
 
-  ipcMain.handle('llama:launch', async (_, config, _showTerminal = false, openChat = false) => {
+  ipcMain.handle('llama:launch', async (_, config) => {
     if (serverProcess) return { success: false, error: 'Server is already running' }
 
     const binaryPath = resolveBinary()
@@ -1197,6 +1103,7 @@ $r | ConvertTo-Json -Compress
         await startGateway(config.port, gwConfig)
         const gwPort = getGatewayPort(config.port)
         if (gwPort) ensureFirewallRule(gwPort)
+        startMdnsAdvertiser(config)
       } catch (err) {
         console.warn('Tool gateway failed to start:', err.message)
         // Non-fatal — server still works, just without tool interception
@@ -1212,7 +1119,6 @@ $r | ConvertTo-Json -Compress
         console.warn('MCP server failed to start:', err.message)
       }
 
-      if (openChat) openChatWindow(config.port, config.networkMode)
       return { success: true, pid: child.pid }
     } catch (e) {
       return { success: false, error: e.message }
@@ -1222,9 +1128,9 @@ $r | ConvertTo-Json -Compress
   // --- Server stop (graceful) ---
 
   ipcMain.handle('server:stop', async () => {
-    closeChatWindow()
     stopGateway()
     stopMcpServer()
+    stopMdnsAdvertiser()
     if (!serverProcess) return { success: true }
     serverProcess.kill()
     serverProcess = null
@@ -1251,13 +1157,6 @@ $r | ConvertTo-Json -Compress
   // --- Network info ---
 
   ipcMain.handle('server:get-ip', () => getLocalIp())
-
-  // --- Chat window ---
-
-  ipcMain.handle('chat:open', (_, port, ssl) => {
-    openChatWindow(port, ssl)
-    return true
-  })
 
   // --- Settings ---
 
@@ -1346,6 +1245,20 @@ $r | ConvertTo-Json -Compress
 // mode because the whole point of Redstart is to serve other devices at home.
 // ---------------------------------------------------------------------------
 
+// TurboQuant KV-cache quantization presets. This is the whole reason Redstart
+// runs on the TurboQuant+ fork: its Walsh-Hadamard-rotated polar codec shrinks
+// the KV cache ~3-4x vs the f16 default, which is what lets a 12 GB card hold a
+// usable context instead of blowing VRAM at 16k tokens. The asymmetric-K/V rule
+// from the fork's own papers is encoded here — K stays high-precision (q8_0),
+// only V drops to a turbo tier; we never lead with a turbo K, which is where
+// models break. Flash attention is already 'auto' in the binary and self-enables
+// for turbo KV, so there's nothing to add on that front.
+const KV_CACHE_PRESETS = {
+  conservative: { k: 'q8_0', v: 'turbo4' }, // lightest turbo V; first contact
+  balanced:     { k: 'q8_0', v: 'turbo3' }, // recommended default: near-lossless K, ~4.6x V
+  aggressive:   { k: 'q8_0', v: 'turbo2' }, // MoE-aware; Boundary V auto-protects sensitive layers
+}
+
 function buildArgs(config, raw = false) {
   const q = raw ? (v) => v : (v) => `"${v}"`
   const chatUiPath = app.isPackaged
@@ -1377,6 +1290,12 @@ function buildArgs(config, raw = false) {
   }
   if (config.noMmap) {
     args.push('--no-mmap')
+  }
+  // KV-cache quantization via TurboQuant. Omitted entirely when unset or 'off'
+  // so legacy profiles keep the exact f16 behavior they had before.
+  const kv = KV_CACHE_PRESETS[config.kvCache]
+  if (kv) {
+    args.push('-ctk', kv.k, '-ctv', kv.v)
   }
   if (config.additionalArgs?.trim()) {
     args.push(...config.additionalArgs.trim().split(/\s+/))

@@ -162,6 +162,7 @@ export { parseHeadersToArray, serializeHeaders } from './headers';
 export {
 	deriveAgenticSections,
 	parseToolResultWithImages,
+	downloadFile,
 	hasAgenticContent,
 	type AgenticSection,
 	type ToolResultLine

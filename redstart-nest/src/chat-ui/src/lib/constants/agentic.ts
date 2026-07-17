@@ -1,6 +1,7 @@
 import type { AgenticConfig } from '$lib/types/agentic';
 
 export const ATTACHMENT_SAVED_REGEX = /\[Attachment saved: ([^\]]+)\]/;
+export const FILE_PATH_REGEX = /^\[FILE:\s*([^\]]+)\]/;
 
 export const NEWLINE_SEPARATOR = '\n';
 

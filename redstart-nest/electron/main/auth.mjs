@@ -22,13 +22,13 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days, sliding
 // Password hashing (scrypt — no native deps, no Electron ABI rebuild)
 // ---------------------------------------------------------------------------
 
-function hashPassword(password) {
+export function hashPassword(password) {
   const salt = crypto.randomBytes(16)
   const hash = crypto.scryptSync(password, salt, 64)
   return { passwordHash: hash.toString('hex'), passwordSalt: salt.toString('hex') }
 }
 
-function verifyPassword(password, passwordHash, passwordSalt) {
+export function verifyPassword(password, passwordHash, passwordSalt) {
   const salt = Buffer.from(passwordSalt, 'hex')
   const candidate = crypto.scryptSync(password, salt, 64)
   const stored = Buffer.from(passwordHash, 'hex')
@@ -41,11 +41,11 @@ function verifyPassword(password, passwordHash, passwordSalt) {
 // (Kilo Code, Continue, etc.). Stored only as a hash, like a password.
 // ---------------------------------------------------------------------------
 
-function generateApiKey() {
+export function generateApiKey() {
   return 'rst_' + crypto.randomBytes(24).toString('hex')
 }
 
-function hashApiKey(rawKey) {
+export function hashApiKey(rawKey) {
   return crypto.createHash('sha256').update(rawKey).digest('hex')
 }
 
@@ -76,11 +76,11 @@ function validateSession(token) {
   return session
 }
 
-function revokeSession(token) {
+export function revokeSession(token) {
   sessions.delete(token)
 }
 
-function revokeSessionsForAccount(accountId) {
+export function revokeSessionsForAccount(accountId) {
   for (const [token, session] of sessions) {
     if (session.accountId === accountId) sessions.delete(token)
   }
@@ -158,10 +158,7 @@ export function authenticate(req) {
     if (record) return { ok: true, account: toPublicAccount(record) }
   }
 
-  // No (valid) token — localhost is still trusted as anonymous so basic
-  // chat keeps working without forcing a login on the host machine itself.
-  if (isLocalhost(req)) return { ok: true, account: null }
-
+  // No (valid) token — require authentication from every client.
   return { ok: false, reason: 'unauthorized' }
 }
 

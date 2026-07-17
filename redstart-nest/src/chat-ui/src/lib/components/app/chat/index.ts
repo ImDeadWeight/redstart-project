@@ -175,6 +175,7 @@ export { default as ChatFormActionsAdd } from './ChatForm/ChatFormActions/ChatFo
  * supports audio modality and setting for automatic audio input is enabled. Shows recording duration while active.
  */
 export { default as ChatFormActionRecord } from './ChatForm/ChatFormActions/ChatFormActionRecord.svelte';
+export { default as ChatFormActionContext } from './ChatForm/ChatFormActions/ChatFormActionContext.svelte';
 
 /**
  * Container for chat form action buttons. Arranges file attachment, audio record,

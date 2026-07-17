@@ -15,7 +15,6 @@ contextBridge.exposeInMainWorld('redstartAPI', {
     stop: (config) => ipcRenderer.invoke('server:stop', config),
     status: (config) => ipcRenderer.invoke('server:status', config),
     getIp: () => ipcRenderer.invoke('server:get-ip'),
-    getCertFingerprint: () => ipcRenderer.invoke('server:get-cert-fingerprint'),
   },
 
   profiles: {
@@ -48,10 +47,16 @@ contextBridge.exposeInMainWorld('redstartAPI', {
     testPostgres: (connectionString) => ipcRenderer.invoke('capabilities:test-postgres', connectionString),
     selectDocumentsFolder: () => ipcRenderer.invoke('capabilities:select-documents-folder'),
     setDocumentsFolder: (config) => ipcRenderer.invoke('capabilities:set-documents-folder', config),
-  },
-
-  chat: {
-    open: (port, ssl) => ipcRenderer.invoke('chat:open', port, ssl),
+    selectSqliteFolder: () => ipcRenderer.invoke('capabilities:select-sqlite-folder'),
+    setSqlite: (config) => ipcRenderer.invoke('capabilities:set-sqlite', config),
+    estimateToolContext: (config) => ipcRenderer.invoke('tools:estimate-context', config),
+    selectVaultFolder: () => ipcRenderer.invoke('capabilities:select-vault-folder'),
+    setVault: (config) => ipcRenderer.invoke('capabilities:set-vault', config),
+    selectGitFolder: () => ipcRenderer.invoke('capabilities:select-git-folder'),
+    setGit: (config) => ipcRenderer.invoke('capabilities:set-git', config),
+    selectFileSystemFolder: () => ipcRenderer.invoke('capabilities:select-file-system-folder'),
+    setFileSystem: (config) => ipcRenderer.invoke('capabilities:set-file-system', config),
+    setScholar: (config) => ipcRenderer.invoke('capabilities:set-scholar', config),
   },
 
   settings: {

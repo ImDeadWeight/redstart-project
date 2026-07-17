@@ -12,6 +12,7 @@ export const SETTINGS_KEYS = {
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',
 	SEND_ON_ENTER: 'sendOnEnter',
 	ENABLE_CONTINUE_GENERATION: 'enableContinueGeneration',
+	CONTEXT_COMPACTION: 'contextCompaction',
 	PDF_AS_IMAGE: 'pdfAsImage',
 	TITLE_GENERATION_USE_FIRST_LINE: 'titleGenerationUseFirstLine',
 	MAX_IMAGE_RESOLUTION: 'maxImageMPixels',

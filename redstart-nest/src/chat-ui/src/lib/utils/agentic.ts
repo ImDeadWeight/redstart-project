@@ -1,5 +1,5 @@
 import { AgenticSectionType, ContinueIntentKind, MessageRole } from '$lib/enums';
-import { ATTACHMENT_SAVED_REGEX, NEWLINE_SEPARATOR } from '$lib/constants';
+import { ATTACHMENT_SAVED_REGEX, FILE_PATH_REGEX, NEWLINE_SEPARATOR } from '$lib/constants';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type {
 	DatabaseMessage,
@@ -7,6 +7,7 @@ import type {
 	DatabaseMessageExtraImageFile
 } from '$lib/types/database';
 import { AttachmentType } from '$lib/enums';
+import { getServerBaseUrl } from './server-url';
 
 /**
  * Represents a parsed section of agentic content for display
@@ -22,11 +23,12 @@ export interface AgenticSection {
 }
 
 /**
- * Represents a tool result line that may reference an image attachment
+ * Represents a tool result line that may reference an image attachment or a file path
  */
 export type ToolResultLine = {
 	text: string;
 	image?: DatabaseMessageExtraImageFile;
+	filePath?: string;
 };
 
 /**
@@ -185,7 +187,10 @@ export function parseToolResultWithImages(
 	const lines = toolResult.split(NEWLINE_SEPARATOR);
 	return lines.map((line) => {
 		const match = line.match(ATTACHMENT_SAVED_REGEX);
-		if (!match || !extras) return { text: line };
+		if (!match || !extras) {
+			const fileMatch = line.match(FILE_PATH_REGEX);
+			return { text: line, filePath: fileMatch?.[1] };
+		}
 
 		const attachmentName = match[1];
 		const image = extras.find(
@@ -285,4 +290,29 @@ export function classifyContinueIntent(messages: DatabaseMessage[], idx: number)
 	}
 
 	return { kind: ContinueIntentKind.RERUN_TURN, truncateAfter: idx - 1 };
+}
+
+/**
+ * Download a file created by the fs_write_file tool. The server exposes
+ * /files/download?path=<relative-path> which validates path containment
+ * against the configured file system root before streaming the file.
+ */
+export async function downloadFile(relativePath: string, fileName?: string): Promise<void> {
+	const base = getServerBaseUrl().replace(/\/$/, '');
+	const url = `${base}/files/download?path=${encodeURIComponent(relativePath)}`;
+	const response = await fetch(url, {
+		headers: getAuthHeaders(),
+	});
+	if (!response.ok) {
+		throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+	}
+	const blob = await response.blob();
+	const blobUrl = URL.createObjectURL(blob);
+	const a = document.createElement('a');
+	a.href = blobUrl;
+	a.download = fileName || relativePath.split('/').pop() || 'download';
+	document.body.appendChild(a);
+	a.click();
+	document.body.removeChild(a);
+	URL.revokeObjectURL(blobUrl);
 }
