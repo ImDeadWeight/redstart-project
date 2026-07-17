@@ -26,6 +26,12 @@ import { useCapabilities } from './hooks/useCapabilities'
 import { useHardwareAndBinary } from './hooks/useHardwareAndBinary'
 import { useProfiles } from './hooks/useProfiles'
 import { useServerLifecycle } from './hooks/useServerLifecycle'
+import { HardwarePanel } from './panels/HardwarePanel'
+import { ProfilesPanel } from './panels/ProfilesPanel'
+import { BinaryPanel } from './panels/BinaryPanel'
+import { ModelPanel } from './panels/ModelPanel'
+import { NetworkPanel } from './panels/NetworkPanel'
+import { AccountsPanel } from './panels/AccountsPanel'
 
 // ---------------------------------------------------------------------------
 // Component
@@ -104,17 +110,8 @@ export default function App() {
   // Local names matching what the JSX has always used. Phase 3 removes these
   // by passing the hook objects to the extracted panel/tab components directly.
 
-  const { hardware, binaryPath, scanHardware, selectBinary, clearBinaryOverride, selectModel } = hw
-  const {
-    profiles, selectedProfile, saveProfileName, setSaveProfileName,
-    showSaveInput, setShowSaveInput, selectProfile, saveProfile,
-  } = profilesHook
-  const generateDefaultProfiles = () => profilesHook.generateDefaultProfiles(hardware)
-  const {
-    authRequired, hasOwnerAccount, confirmEnableAuthNoAdmin, setConfirmEnableAuthNoAdmin,
-    bootstrapUsername, setBootstrapUsername, bootstrapPassword, setBootstrapPassword,
-    revealedApiKey, setRevealedApiKey, applyAuthRequired, toggleAuthRequired, createFirstAdmin,
-  } = auth
+  const { selectModel } = hw
+  const generateDefaultProfiles = () => profilesHook.generateDefaultProfiles(hw.hardware)
   const {
     allTools, allGroups,
     showAddTool, setShowAddTool, newToolName, setNewToolName,
@@ -210,191 +207,22 @@ export default function App() {
         {/* ── Sidebar ── */}
         <aside className="w-64 bg-zinc-900 border-r border-zinc-800 flex flex-col gap-5 p-4 overflow-y-auto shrink-0">
 
-          {/* Hardware */}
-          <section>
-            <h2 className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Hardware</h2>
-            <button onClick={scanHardware}
-              className="w-full px-3 py-2 bg-orange-500 hover:bg-orange-400 text-white rounded text-xs font-semibold transition-colors">
-              Scan Hardware
-            </button>
-            {hardware && (
-              <div className="mt-3 space-y-1 text-xs text-zinc-400">
-                <div><span className="text-white">{hardware.cpu.name || 'CPU'}</span> — {hardware.cpu.cores}C / {hardware.cpu.threads}T</div>
-                <div><span className="text-white">{hardware.gpu.name || 'GPU'}</span> — {hardware.gpu.vram} MB {hardware.gpu.cudaAvailable ? '· CUDA' : ''}</div>
-                <div><span className="text-white">RAM</span> — {hardware.memory.total.toFixed(1)} GB</div>
-              </div>
-            )}
-            {hardware && (
-              <button onClick={generateDefaultProfiles}
-                className="mt-2 w-full px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-xs transition-colors">
-                Generate Default Profiles
-              </button>
-            )}
-          </section>
+          <HardwarePanel hw={hw} onGenerateDefaults={generateDefaultProfiles} />
+          <ProfilesPanel profilesHook={profilesHook} />
+          <BinaryPanel hw={hw} />
+          <ModelPanel modelPath={config.modelPath} onSelectModel={selectModel} />
 
-          {/* Profiles */}
-          <section>
-            <h2 className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Profiles</h2>
-            {profiles.length > 0 ? (
-              <select
-                value={selectedProfile}
-                onChange={e => selectProfile(e.target.value)}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-orange-500">
-                <option value="">— select profile —</option>
-                {profiles.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
-            ) : (
-              <p className="text-xs text-zinc-600">No profiles saved yet.</p>
-            )}
-            {!showSaveInput ? (
-              <button onClick={() => { setSaveProfileName(selectedProfile); setShowSaveInput(true) }}
-                className="mt-2 w-full px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-xs transition-colors">
-                Save Current as Profile
-              </button>
-            ) : (
-              <div className="mt-2 flex gap-1">
-                <input
-                  autoFocus
-                  value={saveProfileName}
-                  onChange={e => setSaveProfileName(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') saveProfile(); if (e.key === 'Escape') setShowSaveInput(false) }}
-                  placeholder="Profile name"
-                  className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-orange-500"
-                />
-                <button onClick={saveProfile} className="px-2 py-1 bg-orange-500 hover:bg-orange-400 rounded text-xs transition-colors">✓</button>
-                <button onClick={() => setShowSaveInput(false)} className="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors">✕</button>
-              </div>
-            )}
-          </section>
+          <NetworkPanel
+            networkMode={networkMode}
+            onToggleNetworkMode={() => setNetworkMode(v => !v)}
+            advertisedHost={advertisedHost}
+            setAdvertisedHost={setAdvertisedHost}
+            localIp={localIp}
+            port={config.port}
+            qrDataUrl={qrDataUrl}
+          />
 
-          {/* Server Binary */}
-          <section>
-            <h2 className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Server Binary</h2>
-            <button onClick={selectBinary}
-              className="w-full px-3 py-2 bg-orange-500 hover:bg-orange-400 text-white rounded text-xs font-semibold transition-colors">
-              Select llama-server.exe
-            </button>
-            {binaryPath ? (
-              <div className="mt-2 space-y-1">
-                <p className="text-xs text-zinc-400 break-all">{binaryPath}</p>
-                <button onClick={clearBinaryOverride}
-                  className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors underline">
-                  Reset to auto-detect
-                </button>
-              </div>
-            ) : (
-              <p className="mt-2 text-xs text-red-400">Not found — select binary above</p>
-            )}
-          </section>
-
-          {/* Model */}
-          <section>
-            <h2 className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Model</h2>
-            <button onClick={selectModel}
-              className="w-full px-3 py-2 bg-orange-500 hover:bg-orange-400 text-white rounded text-xs font-semibold transition-colors">
-              Select .gguf File
-            </button>
-            {config.modelPath && (
-              <p className="mt-2 text-xs text-zinc-400 break-all">{config.modelPath}</p>
-            )}
-          </section>
-
-          {/* Network mode */}
-          <section>
-            <h2 className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Network</h2>
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <TogglePill checked={networkMode} onToggle={() => setNetworkMode(v => !v)} />
-              <span className="text-xs text-zinc-300">{networkMode ? 'Local network (HTTP)' : 'Localhost only'}</span>
-            </label>
-
-            {networkMode && (
-              <div className="mt-3 space-y-2">
-                <div>
-                  <label className="block text-xs text-zinc-500 mb-1">Advertised hostname <span className="text-zinc-600">(blank = auto-detect IP)</span></label>
-                  <input
-                    type="text"
-                    value={advertisedHost}
-                    onChange={e => setAdvertisedHost(e.target.value)}
-                    placeholder="e.g. redstart.local"
-                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500 transition-colors placeholder:text-zinc-600"
-                  />
-                  <p className="text-[10px] text-zinc-600 mt-1">Use a hostname like redstart.local for mDNS, or a custom IP. Leave blank to use the detected device IP.</p>
-                </div>
-                <div className="text-xs text-zinc-400">
-                  Server address: <span className="text-orange-400 font-semibold">{(advertisedHost || localIp)}:{config.port}</span>
-                  {advertisedHost && <span className="text-zinc-500 ml-1">(mDNS: {advertisedHost})</span>}
-                </div>
-                {qrDataUrl && (
-                  <div>
-                    <p className="text-xs text-zinc-500 mb-1">Scan with Android camera to open Redstart Twig and connect automatically:</p>
-                    <img src={qrDataUrl} alt="Connection QR" className="rounded bg-white p-1" />
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-
-          {/* Account management */}
-          <section>
-            <h2 className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Accounts</h2>
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <TogglePill checked={authRequired} onToggle={toggleAuthRequired} />
-              <span className="text-xs text-zinc-300">{authRequired ? 'Require login' : 'Login not required'}</span>
-            </label>
-            <p className="mt-1 text-xs text-zinc-600">Requests from this PC are always exempt — only LAN/remote clients are gated.</p>
-
-            {confirmEnableAuthNoAdmin && (
-              <div className="mt-2 rounded-lg border border-amber-800 bg-zinc-900 px-3 py-2 space-y-2">
-                <p className="text-xs text-amber-400">No owner account exists yet — LAN/remote users won't be able to log in until you create one below. Enable anyway?</p>
-                <div className="flex gap-2">
-                  <button onClick={() => applyAuthRequired(true)}
-                    className="flex-1 px-3 py-1.5 bg-red-700 hover:bg-red-600 text-white rounded text-xs font-semibold transition-colors">
-                    Enable Anyway
-                  </button>
-                  <button onClick={() => setConfirmEnableAuthNoAdmin(false)}
-                    className="flex-1 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded text-xs transition-colors">
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {!hasOwnerAccount && (
-              <div className="mt-3 space-y-2">
-                <p className="text-xs text-zinc-500">Create the owner account — the one sys-admin account that can create/remove Admin accounts. Admins then manage regular Users from the chat UI's Accounts tab.</p>
-                <input
-                  value={bootstrapUsername}
-                  onChange={e => setBootstrapUsername(e.target.value)}
-                  placeholder="Owner username"
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-orange-500 placeholder:text-zinc-600"
-                />
-                <input
-                  type="password"
-                  value={bootstrapPassword}
-                  onChange={e => setBootstrapPassword(e.target.value)}
-                  placeholder="Owner password"
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-orange-500 placeholder:text-zinc-600"
-                />
-                <button onClick={createFirstAdmin}
-                  disabled={!bootstrapUsername.trim() || !bootstrapPassword}
-                  className="w-full px-3 py-1.5 bg-orange-500 hover:bg-orange-400 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-white rounded text-xs font-semibold transition-colors">
-                  Create Owner Account
-                </button>
-              </div>
-            )}
-
-            {revealedApiKey && (
-              <div className="mt-3 rounded-lg border border-orange-800 bg-zinc-900 px-3 py-2 space-y-1">
-                <p className="text-xs text-orange-400">API key (also works as a Kilo Code / Continue Bearer token) — shown once, copy it now:</p>
-                <div className="flex gap-1">
-                  <code className="flex-1 text-xs text-zinc-200 bg-zinc-800 rounded px-2 py-1 break-all">{revealedApiKey}</code>
-                  <button onClick={() => navigator.clipboard.writeText(revealedApiKey)}
-                    className="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors">Copy</button>
-                </div>
-                <button onClick={() => setRevealedApiKey(null)} className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors underline">Dismiss</button>
-              </div>
-            )}
-          </section>
+          <AccountsPanel auth={auth} />
         </aside>
 
         {/* ── Main content ── */}
