@@ -14,72 +14,47 @@
 
 import { useState, useEffect, useRef } from 'react'
 import QRCode from 'qrcode'
-import type { HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup, ExternalMcpServer, ProfileTools, LlamaConfig, ServerState } from './types'
+import type { LlamaConfig } from './types'
 import { DEFAULT_CONFIG } from './types'
 import { api, getAPI } from './api/redstart'
 import { TogglePill } from './components/ui'
 import { useStatusMessage } from './hooks/useStatusMessage'
+import { useAuthSetup } from './hooks/useAuthSetup'
+import { useExternalMcp } from './hooks/useExternalMcp'
+import { useToolsCatalog } from './hooks/useToolsCatalog'
+import { useCapabilities } from './hooks/useCapabilities'
+import { useHardwareAndBinary } from './hooks/useHardwareAndBinary'
+import { useProfiles } from './hooks/useProfiles'
+import { useServerLifecycle } from './hooks/useServerLifecycle'
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 export default function App() {
-  const [hardware, setHardware] = useState<HardwareSpecs | null>(null)
   const [config, setConfig] = useState<LlamaConfig>(DEFAULT_CONFIG)
-  const [serverState, setServerState] = useState<ServerState>('stopped')
-  const [health, setHealth] = useState<string | null>(null)
-  const [tokensPerMin, setTokensPerMin] = useState<number>(0)
   const [generatedCommand, setGeneratedCommand] = useState('')
   const [networkMode, setNetworkMode] = useState(true)
   const [localIp, setLocalIp] = useState('')
   const [advertisedHost, setAdvertisedHost] = useState('redstart.local')
   const [qrDataUrl, setQrDataUrl] = useState('')
-  const [profiles, setProfiles] = useState<string[]>([])
-  const [selectedProfile, setSelectedProfile] = useState<string>('')
-  const [saveProfileName, setSaveProfileName] = useState('')
-  const [showSaveInput, setShowSaveInput] = useState(false)
-  const { statusMsg, show: showStatus, clear: clearStatus } = useStatusMessage()
   const [activeTab, setActiveTab] = useState<'config' | 'tools' | 'server'>('config')
-  const [logLines, setLogLines] = useState<string[]>([])
-  const [confirmStop, setConfirmStop] = useState(false)
-  const [binaryPath, setBinaryPath] = useState<string | null>(null)
-  const [allTools, setAllTools] = useState<WebFetchTool[]>([])
-  const [allGroups, setAllGroups] = useState<ToolGroup[]>([])
-  const [showAddTool, setShowAddTool] = useState(false)
-  const [newToolName, setNewToolName] = useState('')
-  const [newToolUrl, setNewToolUrl] = useState('')
-  const [newToolDesc, setNewToolDesc] = useState('')
-  const [showAddGroup, setShowAddGroup] = useState(false)
-  const [newGroupName, setNewGroupName] = useState('')
-  const [newGroupDesc, setNewGroupDesc] = useState('')
-  const [newGroupToolIds, setNewGroupToolIds] = useState<string[]>([])
-  const [externalServers, setExternalServers] = useState<ExternalMcpServer[]>([])
-  const [showAddExternal, setShowAddExternal] = useState(false)
-  const [newExtName, setNewExtName] = useState('')
-  const [newExtUrl, setNewExtUrl] = useState('')
-  const [mcpTestResults, setMcpTestResults] = useState<Record<string, { ok: boolean; message: string }>>({})
-  const [capabilityConfig, setCapabilityConfig] = useState<CapabilityConfig | null>(null)
-  const [pgConnectionString, setPgConnectionString] = useState('')
-  const [pgMaxRows, setPgMaxRows] = useState(200)
-  const [pgTestResult, setPgTestResult] = useState<{ ok: boolean; message: string } | null>(null)
-  const [pgSaving, setPgSaving] = useState(false)
-  const [docsSaving, setDocsSaving] = useState(false)
-  const [sqliteSaving, setSqliteSaving] = useState(false)
-  const [toolContextEstimate, setToolContextEstimate] = useState<{ toolCount: number; approxTokens: number } | null>(null)
-  const [scholarVenueFilter, setScholarVenueFilter] = useState('')
-  const [authRequired, setAuthRequiredState] = useState(false)
-  // Defaults true so the bootstrap form doesn't flash before auth:get-config
-  // resolves on mount (this comes from disk, unlike networkMode's hardcoded default).
-  const [hasOwnerAccount, setHasOwnerAccount] = useState(true)
-  const [confirmEnableAuthNoAdmin, setConfirmEnableAuthNoAdmin] = useState(false)
-  const [bootstrapUsername, setBootstrapUsername] = useState('')
-  const [bootstrapPassword, setBootstrapPassword] = useState('')
-  const [revealedApiKey, setRevealedApiKey] = useState<string | null>(null)
-  const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const logEndRef = useRef<HTMLDivElement>(null)
-  const configRef = useRef(config)
-  const isUserStopRef = useRef(false)
+
+  const { statusMsg, show: showStatus, clear: clearStatus } = useStatusMessage()
+
+  // Domain hooks — each owns one slice of state and its IPC calls; App only
+  // wires them together and renders. See src/hooks/.
+  const auth = useAuthSetup(showStatus)
+  const mcp = useExternalMcp()
+  const toolsCatalog = useToolsCatalog(config, setConfig)
+  const caps = useCapabilities(config)
+  const hw = useHardwareAndBinary(setConfig)
+  const profilesHook = useProfiles(config, setConfig, setAdvertisedHost, showStatus)
+  const server = useServerLifecycle({
+    config, showStatus, clearStatus,
+    onLaunchStarted: () => setActiveTab('server'),
+  })
 
   // --- Bootstrap ---
 
@@ -89,43 +64,14 @@ export default function App() {
       showStatus('ERROR: redstartAPI not found — preload script may have failed to load.', 0)
       return
     }
-
-    loadProfiles()
-    loadToolDefs()
-    loadExternalServers()
-    loadCapabilities()
     a.server.getIp().then(setLocalIp)
-    a.settings.getResolvedBinary().then(setBinaryPath)
-    a.auth.getConfig().then(({ authRequired, hasOwner }) => {
-      setAuthRequiredState(authRequired)
-      setHasOwnerAccount(hasOwner)
-    })
-
-    a.events.onTokensPerMinute(setTokensPerMin)
-    a.events.onServerStopped(() => {
-      setServerState('stopped')
-      setHealth(null)
-      setTokensPerMin(0)
-      setConfirmStop(false)
-      stopStatusPoll()
-      a.events.offServerLog()
-      if (isUserStopRef.current) {
-        isUserStopRef.current = false
-        showStatus('Server stopped.')
-      }
-    })
-
-    return () => {
-      a.events.offTokensPerMinute()
-      a.events.offServerStopped()
-      a.events.offServerLog()
-    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Auto-scroll log to bottom on new lines
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'auto' })
-  }, [logLines])
+  }, [server.logLines])
 
   // --- Update QR whenever network info changes ---
   // The QR code encodes a deep link in the format redstart://connect?url=http://...
@@ -154,429 +100,57 @@ export default function App() {
     setConfig(prev => ({ ...prev, networkMode }))
   }, [networkMode])
 
-  // Keep configRef current so the status poll always uses the latest config
-  useEffect(() => { configRef.current = config }, [config])
+  // --- Hook aliases ---
+  // Local names matching what the JSX has always used. Phase 3 removes these
+  // by passing the hook objects to the extracted panel/tab components directly.
 
-  // --- Profile helpers ---
-
-  async function loadProfiles() {
-    try {
-      const list = await api().profiles.list()
-      setProfiles(list)
-    } catch {
-      showStatus('Failed to load profiles — settings may be corrupted.', 0)
-    }
-  }
-
-  async function selectProfile(name: string) {
-    if (!name) { setSelectedProfile(''); return }
-    const loaded = await api().profiles.load(name)
-    if (loaded) {
-      setConfig(prev => ({ ...loaded, networkMode: prev.networkMode }))
-      setAdvertisedHost(loaded.advertisedHost || '')
-      setSelectedProfile(name)
-    }
-  }
-
-  async function saveProfile() {
-    const name = saveProfileName.trim()
-    if (!name) return
-    await api().profiles.save(name, config)
-    setSaveProfileName('')
-    setShowSaveInput(false)
-    setSelectedProfile(name)
-    await loadProfiles()
-    showStatus(`Profile "${name}" saved.`)
-  }
-
-  async function generateDefaultProfiles() {
-    if (!hardware) return
-    await api().profiles.generateDefaults(hardware)
-    await loadProfiles()
-    showStatus('Default profiles generated from hardware scan.')
-  }
-
-  // --- Auth / accounts ---
-
-  async function applyAuthRequired(next: boolean) {
-    await api().auth.setRequired(next)
-    setAuthRequiredState(next)
-    setConfirmEnableAuthNoAdmin(false)
-    showStatus(next ? 'Login now required for LAN/remote access.' : 'Login requirement disabled.')
-  }
-
-  function toggleAuthRequired() {
-    const next = !authRequired
-    if (next && !hasOwnerAccount) { setConfirmEnableAuthNoAdmin(true); return }
-    applyAuthRequired(next)
-  }
-
-  async function createFirstAdmin() {
-    const username = bootstrapUsername.trim()
-    if (!username || !bootstrapPassword) return
-    const result = await api().auth.createFirstAdmin(username, bootstrapPassword)
-    if (!result.success) {
-      showStatus(result.error || 'Failed to create owner account.')
-      return
-    }
-    setHasOwnerAccount(true)
-    setRevealedApiKey(result.apiKey ?? null)
-    setBootstrapUsername('')
-    setBootstrapPassword('')
-  }
-
-  // --- Tools ---
-
-  async function loadToolDefs() {
-    try {
-      const data = await api().tools.listAll()
-      setAllTools([
-        ...data.builtinTools.map(t => ({ ...t, builtIn: true, kind: 'web' as const })),
-        ...(data.builtinCapabilities ?? []).map(c => ({ ...c, builtIn: true, kind: 'capability' as const })),
-        ...data.userTools.map(t => ({ ...t, builtIn: false, kind: 'web' as const })),
-      ])
-      setAllGroups([
-        ...data.builtinGroups.map(g => ({ ...g, builtIn: true })),
-        ...data.userGroups.map(g => ({ ...g, builtIn: false })),
-      ])
-    } catch { /* tools unavailable */ }
-  }
-
-  async function loadCapabilities() {
-    try {
-      const data = await api().capabilities.get()
-      setCapabilityConfig(data)
-      setPgMaxRows(data.postgres.maxRows)
-      setScholarVenueFilter(data.scholar.venueFilter || '')
-    } catch { /* capabilities unavailable */ }
-  }
-
-  async function savePostgresConfig() {
-    setPgSaving(true)
-    try {
-      const result = await api().capabilities.setPostgres({
-        connectionString: pgConnectionString || undefined,
-        maxRows: pgMaxRows,
-        enabled: true,
-      })
-      if (!result.ok) {
-        setPgTestResult({ ok: false, message: result.error || 'Failed to save' })
-        return
-      }
-      setPgConnectionString('')
-      setPgTestResult(null)
-      await loadCapabilities()
-    } finally {
-      setPgSaving(false)
-    }
-  }
-
-  async function togglePostgresEnabled() {
-    if (!capabilityConfig) return
-    await api().capabilities.setPostgres({ enabled: !capabilityConfig.postgres.enabled })
-    await loadCapabilities()
-  }
-
-  async function testPostgresConnection() {
-    setPgTestResult(null)
-    const result = await api().capabilities.testPostgres(pgConnectionString || undefined)
-    setPgTestResult(result)
-  }
-
-  async function chooseDocumentsFolder() {
-    const dir = await api().capabilities.selectDocumentsFolder()
-    if (!dir) return
-    setDocsSaving(true)
-    try {
-      await api().capabilities.setDocumentsFolder({ outputDir: dir, enabled: true })
-      await loadCapabilities()
-    } finally {
-      setDocsSaving(false)
-    }
-  }
-
-  async function toggleDocumentsEnabled() {
-    if (!capabilityConfig) return
-    await api().capabilities.setDocumentsFolder({ enabled: !capabilityConfig.documents.enabled })
-    await loadCapabilities()
-  }
-
-  // Live estimate of the context-window cost of the active tool set. Every
-  // active tool's JSON schema is sent with every completion request, so this
-  // is a standing per-request cost — recomputed whenever the tool selection
-  // or capability config changes (small debounce to avoid IPC chatter).
-  useEffect(() => {
-    if (!config.tools?.enabled) { setToolContextEstimate(null); return }
-    const t = setTimeout(async () => {
-      try {
-        setToolContextEstimate(await api().capabilities.estimateToolContext(config))
-      } catch { setToolContextEstimate(null) }
-    }, 300)
-    return () => clearTimeout(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(config.tools), capabilityConfig])
-
-  async function chooseSqliteFolder() {
-    const dir = await api().capabilities.selectSqliteFolder()
-    if (!dir) return
-    setSqliteSaving(true)
-    try {
-      await api().capabilities.setSqlite({ rootDir: dir, enabled: true })
-      await loadCapabilities()
-    } finally {
-      setSqliteSaving(false)
-    }
-  }
-
-  async function toggleSqliteEnabled() {
-    if (!capabilityConfig) return
-    await api().capabilities.setSqlite({ enabled: !capabilityConfig.sqlite.enabled })
-    await loadCapabilities()
-  }
-
-  async function chooseVaultFolder() {
-    const dir = await api().capabilities.selectVaultFolder()
-    if (!dir) return
-    await api().capabilities.setVault({ rootDir: dir, enabled: true })
-    await loadCapabilities()
-  }
-
-  async function toggleVaultEnabled() {
-    if (!capabilityConfig) return
-    await api().capabilities.setVault({ enabled: !capabilityConfig.vault.enabled })
-    await loadCapabilities()
-  }
-
-  async function toggleScholarEnabled() {
-    if (!capabilityConfig) return
-    await api().capabilities.setScholar({ enabled: !capabilityConfig.scholar.enabled })
-    await loadCapabilities()
-  }
-
-  async function saveScholarVenueFilter() {
-    await api().capabilities.setScholar({ venueFilter: scholarVenueFilter })
-    await loadCapabilities()
-  }
-
-  async function chooseGitFolder() {
-    const dir = await api().capabilities.selectGitFolder()
-    if (!dir) return
-    await api().capabilities.setGit({ rootDir: dir, enabled: true })
-    await loadCapabilities()
-  }
-
-  async function toggleGitEnabled() {
-    if (!capabilityConfig) return
-    await api().capabilities.setGit({ enabled: !capabilityConfig.git.enabled })
-    await loadCapabilities()
-  }
-
-  async function chooseFileSystemFolder() {
-    const dir = await api().capabilities.selectFileSystemFolder()
-    if (!dir) return
-    await api().capabilities.setFileSystem({ rootDir: dir, enabled: true })
-    await loadCapabilities()
-  }
-
-  async function toggleFileSystemEnabled() {
-    if (!capabilityConfig) return
-    await api().capabilities.setFileSystem({ enabled: !capabilityConfig.file_system.enabled })
-    await loadCapabilities()
-  }
-
-  function setToolsField<K extends keyof ProfileTools>(key: K, value: ProfileTools[K]) {
-    setConfig(prev => ({
-      ...prev,
-      tools: {
-        enabled: false,
-        activeGroupIds: [],
-        activeToolIds: [],
-        maxFetchTokens: 2000,
-        ...(prev.tools || {}),
-        [key]: value,
-      },
-    }))
-  }
-
-  function toggleGroup(groupId: string) {
-    const current = config.tools?.activeGroupIds ?? []
-    const next = current.includes(groupId)
-      ? current.filter(id => id !== groupId)
-      : [...current, groupId]
-    setToolsField('activeGroupIds', next)
-  }
-
-  function toggleTool(toolId: string) {
-    const current = config.tools?.activeToolIds ?? []
-    const next = current.includes(toolId)
-      ? current.filter(id => id !== toolId)
-      : [...current, toolId]
-    setToolsField('activeToolIds', next)
-  }
-
-  async function addCustomTool() {
-    const name = newToolName.trim()
-    const url  = newToolUrl.trim()
-    if (!name || !url) return
-    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_')
-    await api().tools.addTool({ id, name, baseUrl: url, description: newToolDesc.trim() })
-    setNewToolName(''); setNewToolUrl(''); setNewToolDesc(''); setShowAddTool(false)
-    await loadToolDefs()
-  }
-
-  async function deleteCustomTool(id: string) {
-    await api().tools.deleteTool(id)
-    setToolsField('activeToolIds', (config.tools?.activeToolIds ?? []).filter(t => t !== id))
-    await loadToolDefs()
-  }
-
-  async function addCustomGroup() {
-    const name = newGroupName.trim()
-    if (!name || newGroupToolIds.length === 0) return
-    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_')
-    await api().tools.addGroup({ id, name, description: newGroupDesc.trim(), toolIds: newGroupToolIds })
-    setNewGroupName(''); setNewGroupDesc(''); setNewGroupToolIds([]); setShowAddGroup(false)
-    await loadToolDefs()
-  }
-
-  async function deleteCustomGroup(id: string) {
-    await api().tools.deleteGroup(id)
-    setToolsField('activeGroupIds', (config.tools?.activeGroupIds ?? []).filter(g => g !== id))
-    await loadToolDefs()
-  }
-
-  // --- External MCP servers ---
-
-  async function loadExternalServers() {
-    try {
-      const a = getAPI()
-      if (!a) return
-      const servers = await a.mcp.listExternal()
-      setExternalServers(servers)
-    } catch { /* unavailable */ }
-  }
-
-  async function addExternalMcpServer() {
-    const name = newExtName.trim()
-    const url = newExtUrl.trim()
-    if (!name || !url) return
-    const server = await api().mcp.addExternal({ name, url, enabled: true })
-    setExternalServers(prev => [...prev, server])
-    setNewExtName(''); setNewExtUrl(''); setShowAddExternal(false)
-  }
-
-  async function removeExternalMcpServer(id: string) {
-    await api().mcp.removeExternal(id)
-    setExternalServers(prev => prev.filter(s => s.id !== id))
-    setMcpTestResults(prev => { const n = { ...prev }; delete n[id]; return n })
-  }
-
-  async function testExternalMcpServer(id: string, url: string) {
-    setMcpTestResults(prev => ({ ...prev, [id]: { ok: false, message: 'Testing…' } }))
-    const result = await api().mcp.testExternal(url)
-    setMcpTestResults(prev => ({ ...prev, [id]: result }))
-  }
-
-  // --- Hardware scan ---
-
-  async function scanHardware() {
-    const specs = await api().hardware.scan()
-    setHardware(specs)
-    setConfig(prev => ({
-      ...prev,
-      threads: specs.cpu.threads || 4,
-      // gpuLayers left unset — llama-server's own --fit picks the real value
-      // live against actual free VRAM and the model's tensor sizes, which a
-      // flat guess here can't match.
-      gpuLayers: undefined,
-    }))
-  }
-
-  // --- Binary selection ---
-
-  async function selectBinary() {
-    const p = await api().settings.selectBinary()
-    if (p) {
-      await api().settings.setBinaryPath(p)
-      setBinaryPath(p)
-    }
-  }
-
-  async function clearBinaryOverride() {
-    await api().settings.setBinaryPath(null)
-    const resolved = await api().settings.getResolvedBinary()
-    setBinaryPath(resolved)
-  }
-
-  // --- Model selection ---
-
-  async function selectModel() {
-    const p = await api().hardware.selectModel()
-    if (p) setConfig(prev => ({ ...prev, modelPath: p }))
-  }
-
-  // --- Status polling ---
-
-  // I poll the server health every 3 seconds rather than relying on an event
-  // because llama-server doesn't push status updates — I have to ask. The
-  // configRef pattern is needed because setInterval closes over the initial
-  // config value; without the ref, the poll would always use stale config.
-  function startStatusPoll() {
-    stopStatusPoll()
-    statusPollRef.current = setInterval(async () => {
-      const s = await api().server.status(configRef.current)
-      setHealth(s.health)
-    }, 3000)
-  }
-
-  function stopStatusPoll() {
-    if (statusPollRef.current) { clearInterval(statusPollRef.current); statusPollRef.current = null }
-  }
-
-  // --- Launch ---
-
-  async function launchServer() {
-    setServerState('starting')
-    clearStatus()
-    setLogLines([])
-    setActiveTab('server')
-
-    {
-      const a = getAPI()
-      a?.events.onServerLog(line => {
-        if (line.trim()) setLogLines(prev => [...prev.slice(-1000), line])
-      })
-    }
-
-    const result = await api().llama.launch(config)
-    if (result.success) {
-      setServerState('running')
-      setHealth('starting')
-      startStatusPoll()
-    } else {
-      setServerState('stopped')
-      showStatus(`Launch error: ${result.error}`, 0)
-      getAPI()?.events.offServerLog()
-    }
-  }
-
-  // --- Stop ---
-
-  // I added a two-step confirmation for stopping the server because clicking
-  // stop mid-generation kills the response immediately with no way to recover
-  // it. The extra click is a small annoyance but prevents accidental data loss.
-  function requestStopServer() {
-    setConfirmStop(true)
-  }
-
-  async function confirmStopServer() {
-    setConfirmStop(false)
-    isUserStopRef.current = true
-    setServerState('stopping')
-    showStatus('Stopping server…', 0)
-    await api().server.stop(config)
-    // onServerStopped handles state cleanup and the "Server stopped." message
-  }
+  const { hardware, binaryPath, scanHardware, selectBinary, clearBinaryOverride, selectModel } = hw
+  const {
+    profiles, selectedProfile, saveProfileName, setSaveProfileName,
+    showSaveInput, setShowSaveInput, selectProfile, saveProfile,
+  } = profilesHook
+  const generateDefaultProfiles = () => profilesHook.generateDefaultProfiles(hardware)
+  const {
+    authRequired, hasOwnerAccount, confirmEnableAuthNoAdmin, setConfirmEnableAuthNoAdmin,
+    bootstrapUsername, setBootstrapUsername, bootstrapPassword, setBootstrapPassword,
+    revealedApiKey, setRevealedApiKey, applyAuthRequired, toggleAuthRequired, createFirstAdmin,
+  } = auth
+  const {
+    allTools, allGroups,
+    showAddTool, setShowAddTool, newToolName, setNewToolName,
+    newToolUrl, setNewToolUrl, newToolDesc, setNewToolDesc,
+    showAddGroup, setShowAddGroup, newGroupName, setNewGroupName,
+    newGroupDesc, setNewGroupDesc, newGroupToolIds, setNewGroupToolIds,
+    setToolsField, toggleGroup, toggleTool,
+    addCustomTool, deleteCustomTool, addCustomGroup, deleteCustomGroup,
+  } = toolsCatalog
+  const {
+    capabilityConfig, pgConnectionString, setPgConnectionString, pgMaxRows, setPgMaxRows,
+    pgTestResult, pgSaving, savePostgresConfig, togglePostgresEnabled, testPostgresConnection,
+    scholarVenueFilter, setScholarVenueFilter, toggleScholarEnabled, saveScholarVenueFilter,
+    toolContextEstimate,
+  } = caps
+  const docsSaving = caps.savingCap === 'documents'
+  const sqliteSaving = caps.savingCap === 'sqlite'
+  const chooseDocumentsFolder = () => caps.chooseFolder('documents')
+  const toggleDocumentsEnabled = () => caps.toggleCapEnabled('documents')
+  const chooseSqliteFolder = () => caps.chooseFolder('sqlite')
+  const toggleSqliteEnabled = () => caps.toggleCapEnabled('sqlite')
+  const chooseVaultFolder = () => caps.chooseFolder('vault')
+  const toggleVaultEnabled = () => caps.toggleCapEnabled('vault')
+  const chooseGitFolder = () => caps.chooseFolder('git')
+  const toggleGitEnabled = () => caps.toggleCapEnabled('git')
+  const chooseFileSystemFolder = () => caps.chooseFolder('file_system')
+  const toggleFileSystemEnabled = () => caps.toggleCapEnabled('file_system')
+  const {
+    externalServers, showAddExternal, setShowAddExternal,
+    newExtName, setNewExtName, newExtUrl, setNewExtUrl, mcpTestResults,
+    addExternalMcpServer, removeExternalMcpServer, testExternalMcpServer,
+  } = mcp
+  const {
+    serverState, health, tokensPerMin, logLines, clearLog,
+    confirmStop, setConfirmStop, launchServer, requestStopServer, confirmStopServer,
+  } = server
 
   // --- Command preview ---
 
@@ -1528,7 +1102,7 @@ export default function App() {
                 <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900 border-b border-zinc-800 shrink-0">
                   <span className="text-xs text-zinc-500 uppercase tracking-widest">Server Terminal</span>
                   <button
-                    onClick={() => setLogLines([])}
+                    onClick={clearLog}
                     className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">
                     Clear
                   </button>
