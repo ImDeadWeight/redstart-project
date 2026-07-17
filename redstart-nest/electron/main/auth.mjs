@@ -158,7 +158,12 @@ export function authenticate(req) {
     if (record) return { ok: true, account: toPublicAccount(record) }
   }
 
-  // No (valid) token — require authentication from every client.
+  // No (valid) token. Localhost is exempt: physical presence at the host
+  // machine is the trust anchor (same as the owner bootstrap flow), so a
+  // token-less local request proceeds anonymously. Everyone else gets a 401.
+  // Note this runs AFTER token resolution on purpose — a logged-in admin on
+  // the host machine must keep their identity (see the comment above).
+  if (isLocalhost(req)) return { ok: true, account: null }
   return { ok: false, reason: 'unauthorized' }
 }
 
