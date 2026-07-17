@@ -14,6 +14,7 @@
 import { SvelteMap } from 'svelte/reactivity';
 import { DatabaseService } from '$lib/services/database.service';
 import { ChatService } from '$lib/services/chat.service';
+import { ContextCompactionService } from '$lib/services/context-compaction.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
@@ -632,6 +633,17 @@ class ChatStore {
 		onError?: (error: Error) => void,
 		modelOverride?: string | null
 	): Promise<void> {
+		// Proactive context compaction: if the assembled history would overflow
+		// the model's context window, fold the oldest turns into a running
+		// summary before anything is sent (see ContextCompactionService). This
+		// single choke point covers both the agentic and plain streaming paths.
+		// The rewrite affects only the API payload — the stored conversation and
+		// visible history are untouched.
+		({ messages: allMessages } = await ContextCompactionService.maybeCompact(
+			assistantMessage.convId,
+			allMessages
+		));
+
 		let effectiveModel = modelOverride;
 
 		if (isRouterMode() && !effectiveModel) {

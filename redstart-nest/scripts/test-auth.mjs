@@ -4,8 +4,9 @@
 // Spins up the REAL tools-gateway.mjs and mcp-server.mjs HTTP servers
 // (production code, unmodified) against a throwaway accounts.json, then
 // drives them over real HTTP from both a loopback and a real LAN-interface
-// address — because the "localhost is always exempt" rule can only be
-// exercised honestly by actually connecting from a non-loopback socket.
+// address — proving that localhost gets NO special treatment (the old
+// localhost bypass was deliberately removed in the hardening pass) requires
+// actually connecting from both socket types.
 //
 // electron/main/accounts-storage.mjs calls Electron's app.getPath(), which
 // doesn't exist under plain Node — auth-test-loader.mjs stubs just that one
@@ -94,13 +95,15 @@ async function main() {
   const gw = (host) => `http://${host}:${GATEWAY_PORT}`
   const mcp = (host) => `http://${host}:${MCP_PORT}`
 
-  console.log('-- Before any accounts exist / auth off (default) --')
+  console.log('-- Before any accounts exist / auth ON (secure default) --')
 
-  await test('GET /auth/config defaults to authRequired:false with no accounts.json', async () => {
+  await test('GET /auth/config defaults to authRequired:true with no accounts.json', async () => {
+    // Secure by default: a fresh install requires login until an admin
+    // explicitly toggles it off (small-business posture — see README).
     const res = await fetch(`${gw('127.0.0.1')}/auth/config`)
     const body = await json(res)
     assert(res.status === 200, `expected 200, got ${res.status}`)
-    assert(body.authRequired === false, `expected authRequired:false, got ${JSON.stringify(body)}`)
+    assert(body.authRequired === true, `expected authRequired:true, got ${JSON.stringify(body)}`)
   })
 
   await test('POST /auth/login with no accounts yet -> 401 (no username enumeration)', async () => {
@@ -208,39 +211,28 @@ async function main() {
     console.log('  skip - no non-loopback interface found on this machine; LAN-exemption cases skipped')
   }
 
-  await test('localhost client, no token, auth required: still 200 (localhost bypass)', async () => {
+  await test('localhost client, no token, auth required -> 401 (no localhost bypass)', async () => {
     const res = await fetch(`${gw('127.0.0.1')}/auth/me`)
-    const body = await json(res)
-    assert(res.status === 200, `expected 200 (localhost exempt), got ${res.status}`)
-    assert(body.user === null, `expected anonymous/bypassed user, got ${JSON.stringify(body.user)}`)
+    assert(res.status === 401, `expected 401 (localhost gets no exemption), got ${res.status}`)
   })
 
   console.log('\n-- account management (admin-tier routes) --')
 
-  // These specifically use the LAN address (not 127.0.0.1) for the
-  // "no token" cases: localhost never requires a token at all (see
-  // isLocalhost bypass), so a "no token" request from 127.0.0.1 is
-  // legitimately anonymous-but-allowed, not "unauthenticated" in the
-  // 401 sense — testing that distinction from localhost would conflate
-  // two different rejection reasons. LAN has no such bypass, so it's the
-  // clean way to exercise "no credentials at all -> 401".
+  // With no localhost bypass, "no credentials -> 401" behaves identically
+  // from any address; the LAN address is still preferred when available so
+  // the non-loopback path gets exercised too.
   const remoteHost = lanIp ?? '127.0.0.1'
 
-  if (lanIp) {
-    await test('GET /auth/accounts with no token, from a real remote address -> 401', async () => {
-      const res = await fetch(`${gw(remoteHost)}/auth/accounts`)
-      assert(res.status === 401, `expected 401, got ${res.status}`)
-    })
-  } else {
-    console.log('  skip - no LAN interface; "no token -> 401" case skipped (would be 403 from localhost, a different rejection reason)')
-  }
+  await test('GET /auth/accounts with no token -> 401', async () => {
+    const res = await fetch(`${gw(remoteHost)}/auth/accounts`)
+    assert(res.status === 401, `expected 401, got ${res.status}`)
+  })
 
   await test('🔍 Owner logged in from localhost (127.0.0.1) CAN reach /auth/accounts with a valid token', async () => {
-    // Regression check for a real bug this test suite found: authenticate()
-    // used to check isLocalhost() before resolving the token, so a genuinely
-    // logged-in local admin was always treated as anonymous and got 403 from
-    // every admin-only route. Fixed in auth.mjs — token resolution now runs
-    // first, localhost is only a fallback for the *no-token* case.
+    // Regression check for a real bug this suite once found: an early
+    // localhost check used to short-circuit before token resolution, so a
+    // genuinely logged-in local admin was treated as anonymous and got 403
+    // from every admin-only route. Tokens must be honored from any address.
     const res = await fetch(`${gw('127.0.0.1')}/auth/accounts`, {
       headers: { Authorization: `Bearer ${ownerToken ?? ownerApiKey}` },
     })
@@ -455,11 +447,9 @@ async function main() {
     controller.abort()
   })
 
-  await test('localhost client, no token, auth required: GET /sse still 200 (localhost bypass at MCP layer too)', async () => {
-    const controller = new AbortController()
-    const res = await fetch(`${mcp('127.0.0.1')}/sse`, { signal: controller.signal })
-    assert(res.status === 200, `expected 200, got ${res.status}`)
-    controller.abort()
+  await test('localhost client, no token, auth required: GET /sse -> 401 (no bypass at MCP layer either)', async () => {
+    const res = await fetch(`${mcp('127.0.0.1')}/sse`)
+    assert(res.status === 401, `expected 401, got ${res.status}`)
   })
 
   console.log('\n-- toggling auth back off --')
@@ -484,7 +474,7 @@ async function main() {
 
     await test('🔍 LAN client, no token, auth OFF: GET /auth/accounts still 403 (admin-route lockout is unconditional, by design)', async () => {
       const res = await fetch(`${gw(lanIp)}/auth/accounts`)
-      assert(res.status === 403, `expected 403 even with auth off (no account attached to bypass), got ${res.status}`)
+      assert(res.status === 403, `expected 403 even with auth off (anonymous carries no admin role), got ${res.status}`)
     })
   }
 

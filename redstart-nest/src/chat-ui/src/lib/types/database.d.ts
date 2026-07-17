@@ -16,6 +16,8 @@ export interface DatabaseConversation {
 	reasoningEffort?: ReasoningEffort;
 	forkedFromConversationId?: string;
 	pinned?: boolean;
+	contextSummary?: { text: string; upToMessageId: string };
+	messages?: DatabaseMessage[];
 }
 
 export interface DatabaseMessageExtraAudioFile {

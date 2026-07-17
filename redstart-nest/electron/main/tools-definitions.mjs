@@ -87,7 +87,37 @@ export const BUILTIN_CAPABILITIES = [
     id: 'documents',
     name: 'Documents',
     kind: 'capability',
-    description: 'Create docx/pdf/markdown documents in a configured local output folder',
+    description: 'Create docx/pdf/markdown documents in a configured local folder, and read/summarize documents and spreadsheets (.pdf, .docx, .txt, .md, .xlsx, .csv) stored there',
+  },
+  {
+    id: 'sqlite',
+    name: 'SQLite',
+    kind: 'capability',
+    description: 'Read-only SQL access to local SQLite database files in a configured folder — query, list tables, describe columns',
+  },
+  {
+    id: 'vault',
+    name: 'Vault',
+    kind: 'capability',
+    description: 'Read-only access to a folder of markdown notes (Obsidian vault or any markdown folder) — search, read notes, browse tags',
+  },
+  {
+    id: 'git',
+    name: 'Git',
+    kind: 'capability',
+    description: 'Read-only repository context (status, recent commits, uncommitted diffs) from local git repositories in a configured folder',
+  },
+  {
+    id: 'file_system',
+    name: 'File System',
+    kind: 'capability',
+    description: 'Read and write files within a configured local folder — read configs, write scripts, edit project files, create documents. Paths are contained to the chosen root.',
+  },
+  {
+    id: 'scholar',
+    name: 'Scholar',
+    kind: 'capability',
+    description: 'Search open academic literature (OpenAlex, arXiv, PubMed) — abstracts, citations, and open-access PDFs saved into the Documents folder; optional journal/category whitelist',
   },
 ]
 

@@ -23,8 +23,13 @@ import { authenticate } from './auth.mjs'
 import * as webFetchTool from './web-fetch-tool.mjs'
 import * as postgresTool from './postgres-tool.mjs'
 import * as documentsTool from './documents-tool.mjs'
+import * as sqliteTool from './sqlite-tool.mjs'
+import * as vaultTool from './vault-tool.mjs'
+import * as gitTool from './git-tool.mjs'
+import * as fsTool from './fs-tool.mjs'
+import * as scholarTool from './scholar-tool.mjs'
 
-const PROVIDERS = [webFetchTool, postgresTool, documentsTool]
+const PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, fsTool, scholarTool]
 
 let mcpServer = null
 let activeToolsConfig = null   // { webFetch: {...}, postgres: {...}, documents: {...} }
@@ -60,7 +65,23 @@ async function handleRpc(msg, send) {
   }
 
   if (method === 'tools/list') {
-    const tools = PROVIDERS.flatMap(provider => provider.toolDefs(activeToolsConfig))
+    // Merge across providers, guarding against duplicate tool names: tools/call
+    // routes to the FIRST provider that claims a name, so a duplicate would be
+    // silently unreachable. Keep first + warn, so the advertised list always
+    // matches actual routing. Convention: providers namespace their tool names
+    // (postgres_query, create_document, sqlite_query, ...) so this never fires.
+    const tools = []
+    const seen = new Set()
+    for (const provider of PROVIDERS) {
+      for (const tool of provider.toolDefs(activeToolsConfig)) {
+        if (seen.has(tool.name)) {
+          console.warn(`MCP: duplicate tool name "${tool.name}" — keeping the first provider's definition. Namespace your tool names.`)
+          continue
+        }
+        seen.add(tool.name)
+        tools.push(tool)
+      }
+    }
     send({ jsonrpc: '2.0', id, result: { tools } })
     return
   }
@@ -205,4 +226,22 @@ export function closeAllMcpSessions() {
 
 export function getMcpServerRunning() {
   return mcpServer !== null
+}
+
+// Estimates the context-window cost of the tool set a given config would
+// expose. Every active tool's JSON schema rides along in the prompt of every
+// completion request, so this is a per-request standing cost — surfaced in
+// the Tools UI so users see why "turn everything on" is a bad default.
+// chars/4 is the usual rough token heuristic; close enough for a warning.
+export function estimateActiveToolTokens(config) {
+  const seen = new Set()
+  const tools = []
+  for (const provider of PROVIDERS) {
+    for (const tool of provider.toolDefs(config)) {
+      if (seen.has(tool.name)) continue
+      seen.add(tool.name)
+      tools.push(tool)
+    }
+  }
+  return { toolCount: tools.length, approxTokens: Math.ceil(JSON.stringify(tools).length / 4) }
 }

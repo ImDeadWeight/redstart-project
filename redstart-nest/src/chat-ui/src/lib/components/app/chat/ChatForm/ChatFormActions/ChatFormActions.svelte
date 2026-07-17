@@ -4,6 +4,7 @@
 	import { ChatService } from '$lib/services';
 	import {
 		ChatFormActionsAdd,
+		ChatFormActionContext,
 		ChatFormActionModels,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
@@ -106,6 +107,8 @@
 				{onMcpPromptClick}
 				{onMcpResourcesClick}
 			/>
+
+			<ChatFormActionContext {isLoading} />
 		</div>
 	{/if}
 

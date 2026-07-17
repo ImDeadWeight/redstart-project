@@ -80,17 +80,68 @@ export function deleteExternalServer(id) {
 // profile's tools.activeToolIds, same as web sources.
 // ---------------------------------------------------------------------------
 
+// Registry of built-in capabilities and their global-config defaults.
+// Adding a new capability provider (sqlite, vault, filesystem, ...) means
+// adding ONE entry here (its defaults) plus its entry in
+// tools-definitions.mjs BUILTIN_CAPABILITIES — getCapabilities/
+// setCapabilityConfig below are registry-driven and need no edits.
+//
+// Convention: every capability has `enabled` (global on/off, distinct from
+// per-profile activation) plus whatever config it needs. Directory-scoped
+// capabilities name their root `rootDir` (Documents predates this and keeps
+// `outputDir` for back-compat with existing tools.json files).
 const DEFAULT_CAPABILITIES = {
-  postgres:  { enabled: false, connectionStringEnc: null, maxRows: 200 },
-  documents: { enabled: false, outputDir: null },
+  postgres:    { enabled: false, connectionStringEnc: null, maxRows: 200 },
+  documents:   { enabled: false, outputDir: null },
+  sqlite:      { enabled: false, rootDir: null, maxRows: 200, maxFileBytes: 200 * 1024 * 1024 },
+  vault:       { enabled: false, rootDir: null },
+  git:         { enabled: false, rootDir: null },
+  file_system: { enabled: false, rootDir: null },
+  scholar:     { enabled: false, venueFilter: null },
 }
 
 export function getCapabilities() {
   const data = read()
-  return {
-    postgres:  { ...DEFAULT_CAPABILITIES.postgres,  ...(data.capabilities?.postgres  || {}) },
-    documents: { ...DEFAULT_CAPABILITIES.documents, ...(data.capabilities?.documents || {}) },
+  const out = {}
+  for (const [name, defaults] of Object.entries(DEFAULT_CAPABILITIES)) {
+    out[name] = { ...defaults, ...(data.capabilities?.[name] || {}) }
   }
+  return out
+}
+
+// Maps each folder-scoped capability to the subfolder it gets under the
+// Redstart base directory (created at startup). Postgres has no folder.
+const DEFAULT_FOLDER_NAMES = {
+  documents:   { field: 'outputDir', folder: 'Documents' },
+  sqlite:      { field: 'rootDir',   folder: 'Databases' },
+  vault:       { field: 'rootDir',   folder: 'Notes' },
+  git:         { field: 'rootDir',   folder: 'Repos' },
+  file_system: { field: 'rootDir',   folder: 'Workspace' },
+}
+
+// Pre-provisions default folders for folder-scoped capabilities so enabling
+// one is a single click instead of configure-then-enable. Called at startup
+// with e.g. <user Documents>\Redstart as the base. Idempotent, and never
+// touches a capability whose path the user has already set — only fills
+// null/missing paths. Capabilities stay DISABLED; this sets paths only, so
+// the two-key activation model (enable globally + activate per profile) is
+// unchanged.
+export function ensureDefaultCapabilityFolders(baseDir) {
+  const capabilities = getCapabilities()
+  const applied = {}
+  for (const [name, { field, folder }] of Object.entries(DEFAULT_FOLDER_NAMES)) {
+    if (capabilities[name][field]) continue // user already chose a path — leave it
+    const dir = path.join(baseDir, folder)
+    try {
+      fs.mkdirSync(dir, { recursive: true })
+      setCapabilityConfig(name, { [field]: dir })
+      applied[name] = dir
+    } catch (err) {
+      // Non-fatal: the capability just stays "Not configured" as before.
+      console.warn(`Could not provision default folder for ${name}:`, err.message)
+    }
+  }
+  return applied
 }
 
 export function setCapabilityConfig(name, patch) {

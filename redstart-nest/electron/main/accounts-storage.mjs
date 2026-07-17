@@ -8,8 +8,8 @@ function getPath() {
   return path.join(app.getPath('userData'), 'accounts.json')
 }
 
-function defaults() {
-  return { authRequired: false, accounts: [] }
+export function defaults() {
+  return { authRequired: true, accounts: [] }
 }
 
 // Normalizes fields that may be absent on records written before they
@@ -24,13 +24,13 @@ function normalizeAccount(a) {
   }
 }
 
-function read() {
+export function read() {
   const p = getPath()
   if (!fs.existsSync(p)) return defaults()
   try {
     const data = JSON.parse(fs.readFileSync(p, 'utf8'))
     if (!Array.isArray(data.accounts)) data.accounts = []
-    if (typeof data.authRequired !== 'boolean') data.authRequired = false
+    if (typeof data.authRequired !== 'boolean') data.authRequired = true
 
     data.accounts = data.accounts.map(normalizeAccount)
 
@@ -50,7 +50,7 @@ function read() {
   } catch { return defaults() }
 }
 
-function write(data) {
+export function write(data) {
   fs.writeFileSync(getPath(), JSON.stringify(data, null, 2), 'utf8')
 }
 

@@ -8,9 +8,12 @@
 // than touching accounts-storage.mjs directly, so there is exactly one
 // resolution path from "incoming request" to "account" in each process.
 //
-// Requests from localhost are always exempt (see isLocalhost). When
-// authRequired is off (default), authenticate() bypasses everyone —
-// preserves today's zero-config LAN behavior until an admin opts in.
+// Auth is ON by default (accounts-storage defaults authRequired: true) and
+// there is deliberately NO localhost exemption — every HTTP client, including
+// a browser on the host machine, must authenticate. The launcher itself talks
+// to the main process over IPC, not HTTP, so owner bootstrap never needs a
+// token. Toggling authRequired off opens the gateway to everyone, matching
+// plain llama.cpp behavior for home setups that don't want accounts.
 // =============================================================================
 
 import * as crypto from 'crypto'
@@ -22,13 +25,13 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days, sliding
 // Password hashing (scrypt — no native deps, no Electron ABI rebuild)
 // ---------------------------------------------------------------------------
 
-function hashPassword(password) {
+export function hashPassword(password) {
   const salt = crypto.randomBytes(16)
   const hash = crypto.scryptSync(password, salt, 64)
   return { passwordHash: hash.toString('hex'), passwordSalt: salt.toString('hex') }
 }
 
-function verifyPassword(password, passwordHash, passwordSalt) {
+export function verifyPassword(password, passwordHash, passwordSalt) {
   const salt = Buffer.from(passwordSalt, 'hex')
   const candidate = crypto.scryptSync(password, salt, 64)
   const stored = Buffer.from(passwordHash, 'hex')
@@ -41,11 +44,11 @@ function verifyPassword(password, passwordHash, passwordSalt) {
 // (Kilo Code, Continue, etc.). Stored only as a hash, like a password.
 // ---------------------------------------------------------------------------
 
-function generateApiKey() {
+export function generateApiKey() {
   return 'rst_' + crypto.randomBytes(24).toString('hex')
 }
 
-function hashApiKey(rawKey) {
+export function hashApiKey(rawKey) {
   return crypto.createHash('sha256').update(rawKey).digest('hex')
 }
 
@@ -76,11 +79,11 @@ function validateSession(token) {
   return session
 }
 
-function revokeSession(token) {
+export function revokeSession(token) {
   sessions.delete(token)
 }
 
-function revokeSessionsForAccount(accountId) {
+export function revokeSessionsForAccount(accountId) {
   for (const [token, session] of sessions) {
     if (session.accountId === accountId) sessions.delete(token)
   }
@@ -89,15 +92,6 @@ function revokeSessionsForAccount(accountId) {
 // ---------------------------------------------------------------------------
 // Request authentication
 // ---------------------------------------------------------------------------
-
-function normalizeIp(ip) {
-  return ip?.startsWith('::ffff:') ? ip.slice(7) : ip
-}
-
-export function isLocalhost(req) {
-  const ip = normalizeIp(req.socket.remoteAddress)
-  return ip === '127.0.0.1' || ip === '::1'
-}
 
 function bearerToken(req) {
   const header = req.headers['authorization'] || ''
@@ -141,11 +135,6 @@ export function hasAdminAccess(account) {
 export function authenticate(req) {
   if (!accounts.getAuthRequired()) return { ok: true, account: null }
 
-  // Resolve a token first, before the localhost bypass — otherwise a
-  // legitimately logged-in admin sitting at the physical Redstart Nest machine
-  // would always be treated as anonymous (localhost short-circuits before
-  // their token is ever read), permanently locking them out of the
-  // admin-only account-management routes even from a trusted session.
   const token = bearerToken(req)
   if (token) {
     const session = validateSession(token)
@@ -158,10 +147,8 @@ export function authenticate(req) {
     if (record) return { ok: true, account: toPublicAccount(record) }
   }
 
-  // No (valid) token — localhost is still trusted as anonymous so basic
-  // chat keeps working without forcing a login on the host machine itself.
-  if (isLocalhost(req)) return { ok: true, account: null }
-
+  // No (valid) token — require authentication from every client, localhost
+  // included ("authenticate or don't get in"; see the module header).
   return { ok: false, reason: 'unauthorized' }
 }
 

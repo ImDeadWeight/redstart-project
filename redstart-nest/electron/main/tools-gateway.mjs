@@ -17,9 +17,13 @@
 // =============================================================================
 
 import * as http from 'http'
+import * as path from 'path'
 import { authenticate, login, logout, listAccounts, getAuthRequired, createAccount, deleteAccount, resetPassword, regenerateApiKey, regenerateOwnApiKey, hasAdminAccess } from './auth.mjs'
 import { getMcpServerRunning } from './mcp-server.mjs'
 import { getExternalServers } from './tools-storage.mjs'
+import { resolveWithinRoot } from './path-scope.mjs'
+import { getConversations, getConversation as getConv, createConversation, updateConversation, deleteConversation, deleteConversationsWithForks } from './conversations-storage.mjs'
+import * as fs from 'fs'
 
 let gatewayServer = null
 
@@ -300,12 +304,84 @@ export function startGateway(publicPort, config) {
       }
 
       // Everything else requires a valid session/API key when auth is
-      // required — localhost is always exempt (see auth.mjs isLocalhost).
+      // required — no localhost exemption; every HTTP client authenticates.
       const authResult = authenticate(req)
       if (!authResult.ok) {
         res.writeHead(401, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
         res.end(JSON.stringify({ error: { message: 'Unauthorized', type: 'auth_error' } }))
         return
+      }
+
+      // Conversation API — scoped to the authenticated account, or to the
+      // client-supplied device ID when auth is off. Only these routes need an
+      // identity to scope storage by; completions and the passthrough below
+      // must keep working for token-less clients when auth is off, so the
+      // accountId requirement is enforced HERE and not as a gate over
+      // everything that follows. The device ID is client-chosen and
+      // unauthenticated — acceptable only for the deliberate auth-off
+      // posture; with auth on, every request already carries a real account.
+      const accountId = authResult.account?.id || req.headers['x-redstart-device-id']
+      const isConversationRoute = urlPath === '/conversations' || /^\/conversations\/[^/]+$/.test(urlPath)
+      if (isConversationRoute && !accountId) {
+        res.writeHead(401, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+        res.end(JSON.stringify({ error: { message: 'Unauthorized — no account or device ID', type: 'auth_error' } }))
+        return
+      }
+
+      if (req.method === 'GET' && urlPath === '/conversations') {
+        const convs = getConversations(accountId)
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+        return res.end(JSON.stringify(convs))
+      }
+
+      const convMatch = /^\/conversations\/([^/]+)$/.exec(urlPath)
+      if (convMatch) {
+        const [, convId] = convMatch
+
+        if (req.method === 'GET') {
+          const conv = getConv(accountId, convId)
+          if (!conv) return sendJson(res, 404, { error: { message: 'Not found', type: 'not_found' } })
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+          return res.end(JSON.stringify(conv))
+        }
+
+        if (req.method === 'PUT') {
+          const body = await readJsonBody(req)
+          if (!body) return sendJson(res, 400, { error: { message: 'Bad request', type: 'invalid_request_error' } })
+          const updated = updateConversation(accountId, convId, body)
+          if (!updated) return sendJson(res, 404, { error: { message: 'Not found', type: 'not_found' } })
+          return sendJson(res, 200, updated)
+        }
+
+        if (req.method === 'DELETE') {
+          const url = new URL(req.url, 'http://x')
+          const deleteWithForks = url.searchParams.get('deleteWithForks') === 'true'
+          if (deleteWithForks) {
+            deleteConversationsWithForks(accountId, convId)
+          } else {
+            deleteConversation(accountId, convId)
+          }
+          return sendJson(res, 204)
+        }
+      }
+
+      if (req.method === 'POST' && urlPath === '/conversations') {
+        const body = await readJsonBody(req)
+        if (!body?.name) return sendJson(res, 400, { error: { message: 'Name required', type: 'invalid_request_error' } })
+        const conv = createConversation(accountId, {
+          id: body.id || crypto.randomUUID(),
+          name: body.name,
+          currNode: body.currNode || '',
+          lastModified: Date.now(),
+          mcpServerOverrides: body.mcpServerOverrides,
+          thinkingEnabled: body.thinkingEnabled,
+          reasoningEffort: body.reasoningEffort,
+          forkedFromConversationId: body.forkedFromConversationId,
+          pinned: body.pinned,
+          contextSummary: body.contextSummary,
+          messages: body.messages || []
+        })
+        return sendJson(res, 201, conv)
       }
 
       // MCP server discovery — the chat-ui fetches this at startup to
@@ -324,6 +400,66 @@ export function startGateway(publicPort, config) {
         }
         res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
         res.end(JSON.stringify({ servers }))
+        return
+      }
+
+      // Serve files created by the File System capability (fs_write_file, etc.)
+      // Auth + path containment enforced — the resolved path must stay within the
+      // configured fileSystem.rootDir, same as the MCP provider.
+      if (req.method === 'GET' && urlPath === '/files/download') {
+        const authResult = authenticate(req)
+        if (!authResult.ok) {
+          res.writeHead(401, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+          res.end(JSON.stringify({ error: { message: 'Unauthorized', type: 'auth_error' } }))
+          return
+        }
+
+        const fsRoot = activeConfig?.fileSystem?.rootDir
+        if (!fsRoot) {
+          res.writeHead(404, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+          res.end(JSON.stringify({ error: { message: 'File system capability is not configured', type: 'not_found' } }))
+          return
+        }
+
+        const url = new URL(req.url, 'http://x')
+        const relPath = url.searchParams.get('path')
+        if (!relPath) {
+          res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+          res.end(JSON.stringify({ error: { message: 'Missing required query parameter: path', type: 'invalid_request_error' } }))
+          return
+        }
+
+        let fullPath
+        try {
+          fullPath = resolveWithinRoot(fsRoot, relPath)
+        } catch {
+          res.writeHead(403, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+          res.end(JSON.stringify({ error: { message: 'Path is outside the configured file system root', type: 'forbidden' } }))
+          return
+        }
+
+        if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+          res.writeHead(404, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+          res.end(JSON.stringify({ error: { message: 'File not found', type: 'not_found' } }))
+          return
+        }
+
+        const stat = fs.statSync(fullPath)
+        const fileName = path.basename(fullPath)
+        res.writeHead(200, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': stat.size,
+          'Content-Disposition': `attachment; filename="${fileName}"`,
+          'Access-Control-Allow-Origin': '*',
+        })
+        const readStream = fs.createReadStream(fullPath)
+        readStream.pipe(res)
+        readStream.on('error', () => {
+          if (!res.headersSent) {
+            res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+            res.end(JSON.stringify({ error: { message: 'Failed to read file', type: 'internal_error' } }))
+          }
+        })
         return
       }
 

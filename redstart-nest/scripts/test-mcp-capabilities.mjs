@@ -23,11 +23,21 @@ import pg from 'pg'
 
 const tmpUserDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-userdata-'))
 const tmpDocsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-docs-'))
+const tmpSqliteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-sqlite-'))
+const tmpVaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-vault-'))
+const tmpGitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-git-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpUserDataDir
 
 register('./auth-test-loader.mjs', import.meta.url)
 
 const { startMcpServer, stopMcpServer } = await import('../electron/main/mcp-server.mjs')
+const { setAuthRequired } = await import('../electron/main/auth.mjs')
+
+// Auth is ON by default (secure default, no localhost bypass) and this suite's
+// MCP client connects token-less. Auth behavior has its own suite
+// (test-auth.mjs); here it is explicitly switched off so capability tests
+// exercise the providers, not the gate.
+setAuthRequired(false)
 
 const MCP_PORT = 48091
 const PG_URL = process.env.REDSTART_TEST_PG_URL || 'postgresql://postgres:postgres@127.0.0.1:5432/postgres'
@@ -143,13 +153,59 @@ async function main() {
   console.log(`documents output dir: ${tmpDocsDir}`)
 
   const baseConfig = {
-    webFetch: { allowedBaseUrls: ['https://en.wikipedia.org'], activeTools: [{ name: 'Wikipedia', baseUrl: 'https://en.wikipedia.org', description: '' }], maxFetchTokens: 2000 },
+    webFetch: { enabled: true, whitelistEnabled: true, allowedBaseUrls: ['https://en.wikipedia.org'], activeTools: [{ name: 'Wikipedia', baseUrl: 'https://en.wikipedia.org', description: '' }], maxFetchTokens: 2000 },
     postgres: { enabled: false, connectionString: null, maxRows: 200 },
     documents: { enabled: false, outputDir: tmpDocsDir },
+    sqlite: { enabled: false, rootDir: tmpSqliteDir, maxRows: 200 },
+    vault: { enabled: false, rootDir: tmpVaultDir },
+    git: { enabled: false, rootDir: tmpGitDir },
+    scholar: { enabled: false, venueFilter: null, saveDir: tmpDocsDir },
   }
 
   await startMcpServer(MCP_PORT, baseConfig)
   const mcpUrl = `http://127.0.0.1:${MCP_PORT}`
+
+  console.log('\n-- default capability folder provisioning --')
+
+  {
+    const storage = await import('../electron/main/tools-storage.mjs')
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-default-folders-'))
+
+    await test('first run provisions Documents/Databases/Notes/Repos and sets paths', async () => {
+      const applied = storage.ensureDefaultCapabilityFolders(base)
+      for (const [cap, sub] of [['documents', 'Documents'], ['sqlite', 'Databases'], ['vault', 'Notes'], ['git', 'Repos']]) {
+        const expected = path.join(base, sub)
+        assert(fs.existsSync(expected), `folder missing: ${expected}`)
+        assert(applied[cap] === expected, `path not applied for ${cap}: ${JSON.stringify(applied)}`)
+      }
+      const caps = storage.getCapabilities()
+      assert(caps.documents.outputDir === path.join(base, 'Documents'), 'documents outputDir not persisted')
+      assert(caps.vault.rootDir === path.join(base, 'Notes'), 'vault rootDir not persisted')
+    })
+
+    await test('capabilities stay disabled after provisioning (two-key model intact)', async () => {
+      const caps = storage.getCapabilities()
+      for (const cap of ['documents', 'sqlite', 'vault', 'git']) {
+        assert(caps[cap].enabled === false, `${cap} unexpectedly enabled`)
+      }
+    })
+
+    await test('re-run is idempotent and never overrides a user-chosen path', async () => {
+      const userChoice = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-user-vault-'))
+      storage.setCapabilityConfig('vault', { rootDir: userChoice })
+      const applied = storage.ensureDefaultCapabilityFolders(base)
+      assert(!('vault' in applied), `vault path was re-applied: ${JSON.stringify(applied)}`)
+      assert(storage.getCapabilities().vault.rootDir === userChoice, 'user-chosen vault path was clobbered')
+      fs.rmSync(userChoice, { recursive: true, force: true })
+    })
+
+    // Reset paths the provisioning wrote so later sections configure their own
+    // temp dirs from a clean slate.
+    for (const [cap, field] of [['documents', 'outputDir'], ['sqlite', 'rootDir'], ['vault', 'rootDir'], ['git', 'rootDir']]) {
+      storage.setCapabilityConfig(cap, { [field]: null })
+    }
+    fs.rmSync(base, { recursive: true, force: true })
+  }
 
   console.log('\n-- provider registry / regression check --')
 
@@ -178,10 +234,73 @@ async function main() {
     assert(res.error?.code === -32601, `expected -32601, got ${JSON.stringify(res)}`)
   })
 
+  const { updateMcpConfig } = await import('../electron/main/mcp-server.mjs')
+
+  console.log('\n-- web_fetch / web_search policy (offline) --')
+
+  await test('tools/list includes web_search when a search-capable source is whitelisted', async () => {
+    const res = await client.call('tools/list')
+    const search = res.result.tools.find(t => t.name === 'web_search')
+    assert(search, 'web_search missing')
+    assert(search.inputSchema.properties.source.enum.includes('wikipedia'), `wikipedia not offered: ${JSON.stringify(search.inputSchema.properties.source)}`)
+    assert(!search.inputSchema.properties.source.enum.includes('mdn'), 'mdn offered despite not being whitelisted')
+  })
+
+  await test('web_search on a non-whitelisted source -> isError listing what is available', async () => {
+    const res = await client.call('tools/call', { name: 'web_search', arguments: { source: 'mdn', query: 'flexbox' } })
+    assert(res.result?.isError === true && res.result.content[0].text.includes('wikipedia'), `unexpected: ${JSON.stringify(res.result)}`)
+  })
+
+  await test('🔍 whitelist ON: non-whitelisted domain fetch is denied without a network call', async () => {
+    const res = await client.call('tools/call', { name: 'web_fetch', arguments: { url: 'https://example.com/page' } })
+    assert(res.result?.isError === true && res.result.content[0].text.includes('Access denied'), `unexpected: ${JSON.stringify(res.result)}`)
+  })
+
+  {
+    const openConfig = { ...baseConfig, webFetch: { enabled: true, whitelistEnabled: false, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 } }
+    updateMcpConfig(openConfig)
+
+    await test('whitelist OFF: web_search offers every search source', async () => {
+      const res = await client.call('tools/list')
+      const search = res.result.tools.find(t => t.name === 'web_search')
+      for (const s of ['wikipedia', 'arxiv', 'pubmed', 'mdn', 'stackoverflow']) {
+        assert(search.inputSchema.properties.source.enum.includes(s), `${s} missing from open-mode sources`)
+      }
+    })
+
+    await test('🔍 whitelist OFF: private/LAN addresses are still blocked (SSRF guard)', async () => {
+      for (const url of ['http://192.168.1.1/admin', 'http://127.0.0.1:19082/sse', 'http://localhost:19080/', 'http://10.0.0.5/', 'http://169.254.1.1/', 'http://[::1]:19081/']) {
+        const res = await client.call('tools/call', { name: 'web_fetch', arguments: { url } })
+        assert(res.result?.isError === true && res.result.content[0].text.includes('not a public http(s) address'), `${url} was not blocked: ${JSON.stringify(res.result)}`)
+      }
+    })
+
+    await test('🔍 whitelist OFF: non-http schemes are blocked', async () => {
+      const res = await client.call('tools/call', { name: 'web_fetch', arguments: { url: 'file:///C:/Windows/system.ini' } })
+      assert(res.result?.isError === true, `file:// not blocked: ${JSON.stringify(res.result)}`)
+    })
+
+    updateMcpConfig(baseConfig)
+  }
+
+  if (process.env.REDSTART_TEST_LIVE_WEB === '1') {
+    await test('LIVE: web_search(wikipedia) returns titled results', async () => {
+      const res = await client.call('tools/call', { name: 'web_search', arguments: { source: 'wikipedia', query: 'community health worker' } })
+      assert(!res.result?.isError && res.result.content[0].text.includes('en.wikipedia.org/wiki/'), `unexpected: ${JSON.stringify(res.result)}`)
+    })
+    await test('LIVE: web_fetch extracts article body, not nav soup', async () => {
+      const res = await client.call('tools/call', { name: 'web_fetch', arguments: { url: 'https://en.wikipedia.org/wiki/Community_health_worker' } })
+      const text = res.result.content[0].text
+      assert(text.includes('# Community health worker'), `no extracted title: ${text.slice(0, 200)}`)
+      assert(text.includes('community') && !text.slice(0, 500).includes('Jump to content'), `looks like nav soup: ${text.slice(0, 200)}`)
+    })
+  } else {
+    console.log('  skip - live web tests (set REDSTART_TEST_LIVE_WEB=1 to run)')
+  }
+
   console.log('\n-- documents provider --')
 
   // Live-update config: documents enabled, postgres still off.
-  const { updateMcpConfig } = await import('../electron/main/mcp-server.mjs')
   updateMcpConfig({ ...baseConfig, documents: { enabled: true, outputDir: tmpDocsDir } })
 
   await test('tools/list includes create_document once enabled', async () => {
@@ -246,6 +365,404 @@ async function main() {
     assert(res.result?.isError === true, `expected isError:true, got ${JSON.stringify(res.result)}`)
   })
 
+  console.log('\n-- documents provider: reading --')
+
+  await test('tools/list includes read_document and list_documents alongside create_document', async () => {
+    const res = await client.call('tools/list')
+    const names = res.result.tools.map(t => t.name)
+    for (const n of ['read_document', 'list_documents']) assert(names.includes(n), `expected ${n} in ${JSON.stringify(names)}`)
+  })
+
+  await test('round trip: create_document (.md) then read_document returns the content', async () => {
+    const created = await client.call('tools/call', { name: 'create_document', arguments: { title: 'Round Trip', content: 'The quarterly summary mentions Maple Street.', format: 'markdown' } })
+    assert(!created.result?.isError, `create failed: ${JSON.stringify(created.result)}`)
+    const filename = path.basename(created.result.content[0].text.match(/Document created: (.+)$/)[1])
+    const read = await client.call('tools/call', { name: 'read_document', arguments: { path: filename } })
+    assert(!read.result?.isError, `read failed: ${JSON.stringify(read.result)}`)
+    assert(read.result.content[0].text.includes('Maple Street'), `content missing: ${read.result.content[0].text}`)
+  })
+
+  await test('round trip: create_document (.docx) then read_document extracts the text', async () => {
+    const created = await client.call('tools/call', { name: 'create_document', arguments: { title: 'Docx Round Trip', content: 'Intake notes reference case 4417.', format: 'docx' } })
+    const filename = path.basename(created.result.content[0].text.match(/Document created: (.+)$/)[1])
+    const read = await client.call('tools/call', { name: 'read_document', arguments: { path: filename } })
+    assert(!read.result?.isError, `read failed: ${JSON.stringify(read.result)}`)
+    assert(read.result.content[0].text.includes('case 4417'), `content missing: ${read.result.content[0].text}`)
+  })
+
+  await test('round trip: create_document (.pdf) then read_document extracts the text', async () => {
+    const created = await client.call('tools/call', { name: 'create_document', arguments: { title: 'Pdf Round Trip', content: 'The policy manual covers reimbursement.', format: 'pdf' } })
+    const filename = path.basename(created.result.content[0].text.match(/Document created: (.+)$/)[1])
+    const read = await client.call('tools/call', { name: 'read_document', arguments: { path: filename } })
+    assert(!read.result?.isError, `read failed: ${JSON.stringify(read.result)}`)
+    assert(read.result.content[0].text.includes('reimbursement'), `content missing: ${read.result.content[0].text}`)
+  })
+
+  await test('read_document paginates long files via offset', async () => {
+    fs.writeFileSync(path.join(tmpDocsDir, 'long.txt'), 'A'.repeat(9000) + 'ZEBRA-MARKER')
+    const first = await client.call('tools/call', { name: 'read_document', arguments: { path: 'long.txt' } })
+    const firstText = first.result.content[0].text
+    assert(firstText.includes('Truncated') && firstText.includes('offset=8000'), `expected truncation notice: ...${firstText.slice(-140)}`)
+    const second = await client.call('tools/call', { name: 'read_document', arguments: { path: 'long.txt', offset: 8000 } })
+    assert(second.result.content[0].text.includes('ZEBRA-MARKER'), `expected tail content: ${second.result.content[0].text.slice(0, 160)}`)
+  })
+
+  await test('list_documents lists readable files with sizes', async () => {
+    const res = await client.call('tools/call', { name: 'list_documents', arguments: {} })
+    const text = res.result.content[0].text
+    assert(text.includes('long.txt') && text.includes('KB'), `unexpected listing: ${text}`)
+  })
+
+  await test('🔍 read_document with traversal segments is rejected', async () => {
+    const res = await client.call('tools/call', { name: 'read_document', arguments: { path: '../../../../windows/system.ini' } })
+    assert(res.result?.isError === true, `expected isError:true, got ${JSON.stringify(res.result)}`)
+    assert(res.result.content[0].text.includes('outside the configured'), `unexpected message: ${res.result.content[0].text}`)
+  })
+
+  await test('read_document on an unsupported extension -> isError', async () => {
+    fs.writeFileSync(path.join(tmpDocsDir, 'binary.exe'), 'MZ')
+    const res = await client.call('tools/call', { name: 'read_document', arguments: { path: 'binary.exe' } })
+    assert(res.result?.isError === true && res.result.content[0].text.includes('Unsupported'), `expected unsupported-type error, got ${JSON.stringify(res.result)}`)
+  })
+
+  await test('read_document on a missing file -> isError suggesting list_documents', async () => {
+    const res = await client.call('tools/call', { name: 'read_document', arguments: { path: 'no-such-file.pdf' } })
+    assert(res.result?.isError === true && res.result.content[0].text.includes('list_documents'), `unexpected: ${JSON.stringify(res.result)}`)
+  })
+
+  await test('read_document reads a multi-sheet .xlsx as text tables (formulas resolved)', async () => {
+    const ExcelJS = (await import('exceljs')).default
+    const wb = new ExcelJS.Workbook()
+    const ws = wb.addWorksheet('Caseload')
+    ws.addRow(['Client', 'Sessions'])
+    ws.addRow(['Henderson', 12])
+    ws.addRow(['Alvarez', 3])
+    ws.addRow(['Total', { formula: 'SUM(B2:B3)', result: 15 }])
+    wb.addWorksheet('Budget').addRow(['Rent assistance', 1250.5])
+    await wb.xlsx.writeFile(path.join(tmpDocsDir, 'caseload.xlsx'))
+
+    const res = await client.call('tools/call', { name: 'read_document', arguments: { path: 'caseload.xlsx' } })
+    assert(!res.result?.isError, `read failed: ${JSON.stringify(res.result)}`)
+    const text = res.result.content[0].text
+    assert(text.includes('=== Sheet: Caseload ==='), `missing sheet header: ${text}`)
+    assert(text.includes('Henderson | 12'), `missing row: ${text}`)
+    assert(text.includes('Total | 15'), `formula not resolved to result: ${text}`)
+    assert(text.includes('=== Sheet: Budget ===') && text.includes('1250.5'), `missing second sheet: ${text}`)
+  })
+
+  await test('read_document reads a .csv file', async () => {
+    fs.writeFileSync(path.join(tmpDocsDir, 'export.csv'), 'name,status\nHenderson,active\nAlvarez,waitlist\n')
+    const res = await client.call('tools/call', { name: 'read_document', arguments: { path: 'export.csv' } })
+    assert(!res.result?.isError, `read failed: ${JSON.stringify(res.result)}`)
+    assert(res.result.content[0].text.includes('Alvarez,waitlist'), `unexpected csv content: ${res.result.content[0].text}`)
+  })
+
+  await test('list_documents includes the spreadsheet files', async () => {
+    const res = await client.call('tools/call', { name: 'list_documents', arguments: {} })
+    const text = res.result.content[0].text
+    assert(text.includes('caseload.xlsx') && text.includes('export.csv'), `unexpected listing: ${text}`)
+  })
+
+  console.log('\n-- sqlite provider --')
+
+  // Fixture database, built with sql.js itself and exported to disk — no
+  // sqlite3 CLI dependency. 250 rows exercises the maxRows cap.
+  const { default: initSqlJs } = await import('sql.js')
+  const SQL = await initSqlJs()
+  {
+    const fixture = new SQL.Database()
+    fixture.run('CREATE TABLE clients (id INTEGER PRIMARY KEY, name TEXT NOT NULL, active INTEGER DEFAULT 1)')
+    fixture.run('CREATE VIEW active_clients AS SELECT * FROM clients WHERE active = 1')
+    for (let i = 1; i <= 250; i++) fixture.run('INSERT INTO clients (name) VALUES (?)', [`client-${i}`])
+    fs.writeFileSync(path.join(tmpSqliteDir, 'cases.db'), Buffer.from(fixture.export()))
+    fixture.close()
+  }
+  const fixtureBytesBefore = fs.readFileSync(path.join(tmpSqliteDir, 'cases.db'))
+
+  await test('tools/list omits sqlite_* while the capability is disabled', async () => {
+    const res = await client.call('tools/list')
+    const names = res.result.tools.map(t => t.name)
+    assert(!names.some(n => n.startsWith('sqlite_')), `did not expect sqlite_* in ${JSON.stringify(names)}`)
+  })
+
+  updateMcpConfig({ ...baseConfig, sqlite: { enabled: true, rootDir: tmpSqliteDir, maxRows: 200 } })
+
+  await test('tools/list includes sqlite_query/list_tables/describe_table once enabled', async () => {
+    const res = await client.call('tools/list')
+    const names = res.result.tools.map(t => t.name)
+    for (const n of ['sqlite_query', 'sqlite_list_tables', 'sqlite_describe_table']) {
+      assert(names.includes(n), `expected ${n} in ${JSON.stringify(names)}`)
+    }
+  })
+
+  await test('sqlite_list_tables lists the fixture table and view', async () => {
+    const res = await client.call('tools/call', { name: 'sqlite_list_tables', arguments: { database: 'cases.db' } })
+    assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
+    const text = res.result.content[0].text
+    assert(text.includes('clients') && text.includes('active_clients (view)'), `unexpected listing: ${text}`)
+  })
+
+  await test('sqlite_describe_table reports columns, types, and PK', async () => {
+    const res = await client.call('tools/call', { name: 'sqlite_describe_table', arguments: { database: 'cases.db', table: 'clients' } })
+    assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
+    const text = res.result.content[0].text
+    assert(text.includes('id') && text.includes('PRIMARY KEY') && text.includes('name') && text.includes('NOT NULL'), `unexpected describe: ${text}`)
+  })
+
+  await test('sqlite_query returns rows', async () => {
+    const res = await client.call('tools/call', { name: 'sqlite_query', arguments: { database: 'cases.db', sql: 'SELECT id, name FROM clients WHERE id <= 3 ORDER BY id' } })
+    assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
+    const text = res.result.content[0].text
+    assert(text.includes('client-1') && text.includes('client-3'), `unexpected rows: ${text}`)
+  })
+
+  await test('sqlite_query caps output at maxRows', async () => {
+    const res = await client.call('tools/call', { name: 'sqlite_query', arguments: { database: 'cases.db', sql: 'SELECT * FROM clients' } })
+    const text = res.result.content[0].text
+    assert(text.includes('Showing first 200 of 250 rows'), `expected row cap notice, got tail: ...${text.slice(-120)}`)
+  })
+
+  await test('🔍 write statement is rejected by the engine (query_only)', async () => {
+    const res = await client.call('tools/call', { name: 'sqlite_query', arguments: { database: 'cases.db', sql: "INSERT INTO clients (name) VALUES ('mallory')" } })
+    assert(res.result?.isError === true, `expected isError:true, got ${JSON.stringify(res.result)}`)
+    assert(/readonly/i.test(res.result.content[0].text), `expected a readonly rejection, got: ${res.result.content[0].text}`)
+  })
+
+  await test('🔍 on-disk database is byte-identical after the attempted write', async () => {
+    const after = fs.readFileSync(path.join(tmpSqliteDir, 'cases.db'))
+    assert(fixtureBytesBefore.equals(after), 'database file changed on disk')
+  })
+
+  await test('🔍 database path with traversal segments is rejected', async () => {
+    const res = await client.call('tools/call', { name: 'sqlite_query', arguments: { database: '../../outside.db', sql: 'SELECT 1' } })
+    assert(res.result?.isError === true, `expected isError:true, got ${JSON.stringify(res.result)}`)
+    assert(res.result.content[0].text.includes('outside the configured'), `unexpected message: ${res.result.content[0].text}`)
+  })
+
+  await test('missing database file -> isError, not a crash', async () => {
+    const res = await client.call('tools/call', { name: 'sqlite_query', arguments: { database: 'nope.db', sql: 'SELECT 1' } })
+    assert(res.result?.isError === true, `expected isError:true, got ${JSON.stringify(res.result)}`)
+  })
+
+  await test('invalid SQL -> isError with the engine message', async () => {
+    const res = await client.call('tools/call', { name: 'sqlite_query', arguments: { database: 'cases.db', sql: 'SELEC oops' } })
+    assert(res.result?.isError === true, `expected isError:true, got ${JSON.stringify(res.result)}`)
+  })
+
+  await test('file over maxFileBytes is refused', async () => {
+    updateMcpConfig({ ...baseConfig, sqlite: { enabled: true, rootDir: tmpSqliteDir, maxRows: 200, maxFileBytes: 1024 } })
+    const res = await client.call('tools/call', { name: 'sqlite_query', arguments: { database: 'cases.db', sql: 'SELECT 1' } })
+    assert(res.result?.isError === true && res.result.content[0].text.includes('limit'), `expected size-limit error, got ${JSON.stringify(res.result)}`)
+    updateMcpConfig({ ...baseConfig, sqlite: { enabled: true, rootDir: tmpSqliteDir, maxRows: 200 } })
+  })
+
+  console.log('\n-- vault provider --')
+
+  // Fixture notes: tags in both inline and frontmatter form, a subfolder,
+  // and an .obsidian dir that must be ignored.
+  fs.mkdirSync(path.join(tmpVaultDir, 'cases'), { recursive: true })
+  fs.mkdirSync(path.join(tmpVaultDir, '.obsidian'), { recursive: true })
+  fs.writeFileSync(path.join(tmpVaultDir, 'meeting-notes.md'),
+    '---\ntags: [intake, followup]\n---\n# Meeting\nDiscussed the Henderson housing application deadline.')
+  fs.writeFileSync(path.join(tmpVaultDir, 'cases', 'henderson.md'),
+    '# Henderson case\n#intake\nHousing application filed in March. Deadline extended.')
+  fs.writeFileSync(path.join(tmpVaultDir, 'unrelated.md'), '# Groceries\nMilk, eggs.')
+  fs.writeFileSync(path.join(tmpVaultDir, '.obsidian', 'hidden.md'), 'Henderson should never appear from here.')
+
+  updateMcpConfig({ ...baseConfig, vault: { enabled: true, rootDir: tmpVaultDir } })
+
+  await test('tools/list includes vault_search/get/tags once enabled', async () => {
+    const res = await client.call('tools/list')
+    const names = res.result.tools.map(t => t.name)
+    for (const n of ['vault_search', 'vault_get', 'vault_tags']) assert(names.includes(n), `expected ${n} in ${JSON.stringify(names)}`)
+  })
+
+  await test('vault_search finds matching notes with snippets, skipping .obsidian', async () => {
+    const res = await client.call('tools/call', { name: 'vault_search', arguments: { query: 'henderson housing' } })
+    const text = res.result.content[0].text
+    assert(text.includes('henderson.md') && text.includes('meeting-notes.md'), `unexpected results: ${text}`)
+    assert(!text.includes('.obsidian'), `.obsidian leaked into results: ${text}`)
+    assert(!text.includes('unrelated.md'), `non-matching note returned: ${text}`)
+  })
+
+  await test('vault_get reads a note from a subfolder', async () => {
+    const res = await client.call('tools/call', { name: 'vault_get', arguments: { path: 'cases/henderson.md' } })
+    assert(res.result.content[0].text.includes('Deadline extended'), `unexpected content: ${res.result.content[0].text}`)
+  })
+
+  await test('vault_tags lists tags from both inline and frontmatter forms', async () => {
+    const res = await client.call('tools/call', { name: 'vault_tags', arguments: {} })
+    const text = res.result.content[0].text
+    assert(text.includes('#intake (2)') && text.includes('#followup (1)'), `unexpected tags: ${text}`)
+  })
+
+  await test('vault_tags with a tag argument lists the tagged notes', async () => {
+    const res = await client.call('tools/call', { name: 'vault_tags', arguments: { tag: '#intake' } })
+    const text = res.result.content[0].text
+    assert(text.includes('henderson.md') && text.includes('meeting-notes.md'), `unexpected notes: ${text}`)
+  })
+
+  await test('🔍 vault_get with traversal segments is rejected', async () => {
+    const res = await client.call('tools/call', { name: 'vault_get', arguments: { path: '../../secrets.md' } })
+    assert(res.result?.isError === true, `expected isError:true, got ${JSON.stringify(res.result)}`)
+  })
+
+  await test('vault_get on a non-markdown path is rejected', async () => {
+    fs.writeFileSync(path.join(tmpVaultDir, 'data.bin'), 'x')
+    const res = await client.call('tools/call', { name: 'vault_get', arguments: { path: 'data.bin' } })
+    assert(res.result?.isError === true && res.result.content[0].text.includes('.md'), `unexpected: ${JSON.stringify(res.result)}`)
+  })
+
+  console.log('\n-- git provider --')
+
+  const { execFileSync } = await import('node:child_process')
+  let gitAvailable = true
+  try { execFileSync('git', ['--version'], { stdio: 'ignore' }) } catch { gitAvailable = false }
+
+  if (!gitAvailable) {
+    console.log('  skip - git not found on PATH')
+  } else {
+    // Real fixture repo: one commit, then an uncommitted modification.
+    const repoDir = path.join(tmpGitDir, 'myrepo')
+    fs.mkdirSync(repoDir, { recursive: true })
+    const git = (...a) => execFileSync('git', ['-C', repoDir, ...a], { stdio: 'pipe' })
+    git('init', '-q')
+    git('config', 'user.email', 'test@redstart.local')
+    git('config', 'user.name', 'Redstart Test')
+    fs.writeFileSync(path.join(repoDir, 'readme.txt'), 'hello\n')
+    git('add', '.')
+    git('commit', '-q', '-m', 'initial commit for provider test')
+    fs.writeFileSync(path.join(repoDir, 'readme.txt'), 'hello world\n')
+
+    updateMcpConfig({ ...baseConfig, git: { enabled: true, rootDir: tmpGitDir } })
+
+    await test('tools/list includes git_status/log/diff once enabled', async () => {
+      const res = await client.call('tools/list')
+      const names = res.result.tools.map(t => t.name)
+      for (const n of ['git_status', 'git_log', 'git_diff']) assert(names.includes(n), `expected ${n} in ${JSON.stringify(names)}`)
+    })
+
+    await test('git_status reports the modified file', async () => {
+      const res = await client.call('tools/call', { name: 'git_status', arguments: { repo: 'myrepo' } })
+      assert(res.result.content[0].text.includes('readme.txt'), `unexpected status: ${res.result.content[0].text}`)
+    })
+
+    await test('git_log shows the commit', async () => {
+      const res = await client.call('tools/call', { name: 'git_log', arguments: { repo: 'myrepo' } })
+      assert(res.result.content[0].text.includes('initial commit for provider test'), `unexpected log: ${res.result.content[0].text}`)
+    })
+
+    await test('git_diff shows the uncommitted change', async () => {
+      const res = await client.call('tools/call', { name: 'git_diff', arguments: { repo: 'myrepo' } })
+      const text = res.result.content[0].text
+      assert(text.includes('+hello world'), `unexpected diff: ${text}`)
+    })
+
+    await test('git tools work when the configured root is itself the repo (repo omitted)', async () => {
+      updateMcpConfig({ ...baseConfig, git: { enabled: true, rootDir: repoDir } })
+      const res = await client.call('tools/call', { name: 'git_status', arguments: {} })
+      assert(res.result.content[0].text.includes('readme.txt'), `unexpected status: ${res.result.content[0].text}`)
+      updateMcpConfig({ ...baseConfig, git: { enabled: true, rootDir: tmpGitDir } })
+    })
+
+    await test('🔍 repo path with traversal segments is rejected', async () => {
+      const res = await client.call('tools/call', { name: 'git_diff', arguments: { repo: '../../somewhere' } })
+      assert(res.result?.isError === true, `expected isError:true, got ${JSON.stringify(res.result)}`)
+      assert(res.result.content[0].text.includes('outside the configured'), `unexpected message: ${res.result.content[0].text}`)
+    })
+
+    await test('non-repo folder -> friendly "not a git repository" error', async () => {
+      fs.mkdirSync(path.join(tmpGitDir, 'plain-folder'), { recursive: true })
+      const res = await client.call('tools/call', { name: 'git_status', arguments: { repo: 'plain-folder' } })
+      assert(res.result?.isError === true && res.result.content[0].text.includes('Not a git repository'), `unexpected: ${JSON.stringify(res.result)}`)
+    })
+
+    await test('🔍 file argument to git_diff cannot smuggle flags (option injection)', async () => {
+      const res = await client.call('tools/call', { name: 'git_diff', arguments: { repo: 'myrepo', file: '--output=/tmp/pwned' } })
+      // Behind "--" git treats it as a (nonexistent) path — must not error out
+      // with a file written, and must not be interpreted as an option.
+      const text = res.result?.isError ? res.result.content[0].text : res.result.content[0].text
+      assert(!fs.existsSync('/tmp/pwned'), 'flag injection wrote a file!')
+      assert(typeof text === 'string', 'no response text')
+    })
+  }
+
+  console.log('\n-- scholar provider --')
+
+  await test('tools/list omits scholar_* while disabled', async () => {
+    const res = await client.call('tools/list')
+    assert(!res.result.tools.some(t => t.name.startsWith('scholar_')), 'scholar tools leaked while disabled')
+  })
+
+  updateMcpConfig({ ...baseConfig, scholar: { enabled: true, venueFilter: null, saveDir: tmpDocsDir } })
+
+  await test('tools/list includes scholar_search/get/save_pdf once enabled (saveDir set)', async () => {
+    const res = await client.call('tools/list')
+    const names = res.result.tools.map(t => t.name)
+    for (const n of ['scholar_search', 'scholar_get', 'scholar_save_pdf']) assert(names.includes(n), `expected ${n}`)
+  })
+
+  await test('scholar_save_pdf is hidden when no documents folder is configured', async () => {
+    updateMcpConfig({ ...baseConfig, scholar: { enabled: true, venueFilter: null, saveDir: null } })
+    const res = await client.call('tools/list')
+    const names = res.result.tools.map(t => t.name)
+    assert(names.includes('scholar_search') && !names.includes('scholar_save_pdf'), `unexpected: ${JSON.stringify(names)}`)
+    updateMcpConfig({ ...baseConfig, scholar: { enabled: true, venueFilter: null, saveDir: tmpDocsDir } })
+  })
+
+  await test('scholar_get with an unrecognized identifier -> isError with guidance', async () => {
+    const res = await client.call('tools/call', { name: 'scholar_get', arguments: { id: 'not-a-real-id' } })
+    assert(res.result?.isError === true && res.result.content[0].text.includes('doi:'), `unexpected: ${JSON.stringify(res.result)}`)
+  })
+
+  await test('🔍 venue whitelist with only arXiv categories blocks OpenAlex/PubMed search (no network)', async () => {
+    updateMcpConfig({ ...baseConfig, scholar: { enabled: true, venueFilter: 'cs.CL, stat.ML', saveDir: tmpDocsDir } })
+    for (const source of ['openalex', 'pubmed']) {
+      const res = await client.call('tools/call', { name: 'scholar_search', arguments: { query: 'anything', source } })
+      assert(res.result?.isError === true && res.result.content[0].text.includes('no journal ISSNs'), `${source} not blocked: ${JSON.stringify(res.result)}`)
+    }
+  })
+
+  await test('🔍 venue whitelist with only ISSNs blocks arXiv search (no network)', async () => {
+    updateMcpConfig({ ...baseConfig, scholar: { enabled: true, venueFilter: '1932-6203', saveDir: tmpDocsDir } })
+    const res = await client.call('tools/call', { name: 'scholar_search', arguments: { query: 'anything', source: 'arxiv' } })
+    assert(res.result?.isError === true && res.result.content[0].text.includes('no arXiv categories'), `unexpected: ${JSON.stringify(res.result)}`)
+    updateMcpConfig({ ...baseConfig, scholar: { enabled: true, venueFilter: null, saveDir: tmpDocsDir } })
+  })
+
+  if (process.env.REDSTART_TEST_LIVE_WEB === '1') {
+    await test('LIVE: scholar_search(openalex) returns titled results with ids', async () => {
+      const res = await client.call('tools/call', { name: 'scholar_search', arguments: { query: 'trauma informed care' } })
+      assert(!res.result?.isError, `search failed: ${JSON.stringify(res.result)}`)
+      assert(res.result.content[0].text.includes('id: doi:'), `no DOIs in results: ${res.result.content[0].text.slice(0, 300)}`)
+    })
+
+    await test('LIVE: scholar_get(arxiv) returns an abstract', async () => {
+      const res = await client.call('tools/call', { name: 'scholar_get', arguments: { id: 'arxiv:1706.03762' } })
+      assert(!res.result?.isError, `get failed: ${JSON.stringify(res.result)}`)
+      assert(/attention/i.test(res.result.content[0].text), `unexpected abstract: ${res.result.content[0].text.slice(0, 200)}`)
+    })
+
+    await test('LIVE: 🔍 scholar_get outside an ISSN whitelist is refused', async () => {
+      updateMcpConfig({ ...baseConfig, scholar: { enabled: true, venueFilter: '9999-9999', saveDir: tmpDocsDir } })
+      const res = await client.call('tools/call', { name: 'scholar_get', arguments: { id: 'doi:10.7717/peerj.4375' } })
+      assert(res.result?.isError === true && res.result.content[0].text.includes('not on the venue whitelist'), `unexpected: ${JSON.stringify(res.result)}`)
+      updateMcpConfig({ ...baseConfig, scholar: { enabled: true, venueFilter: null, saveDir: tmpDocsDir }, documents: { enabled: true, outputDir: tmpDocsDir } })
+    })
+
+    await test('LIVE: scholar_save_pdf(arxiv) -> read_document reads the paper', async () => {
+      const saved = await client.call('tools/call', { name: 'scholar_save_pdf', arguments: { id: 'arxiv:1706.03762' } })
+      assert(!saved.result?.isError, `save failed: ${JSON.stringify(saved.result)}`)
+      const filename = saved.result.content[0].text.match(/Saved: (\S+\.pdf)/)[1]
+      const bytes = fs.readFileSync(path.join(tmpDocsDir, filename))
+      assert(bytes.subarray(0, 4).toString() === '%PDF', 'saved file is not a PDF')
+      const read = await client.call('tools/call', { name: 'read_document', arguments: { path: filename } })
+      assert(!read.result?.isError && /attention/i.test(read.result.content[0].text), `read-back failed: ${JSON.stringify(read.result).slice(0, 300)}`)
+    })
+  } else {
+    console.log('  skip - live scholar tests (set REDSTART_TEST_LIVE_WEB=1 to run)')
+  }
+
   console.log('\n-- postgres provider --')
 
   const pgReachable = await isPostgresReachable(PG_URL)
@@ -291,6 +808,9 @@ async function main() {
   await stopMcpServer()
   fs.rmSync(tmpUserDataDir, { recursive: true, force: true })
   fs.rmSync(tmpDocsDir, { recursive: true, force: true })
+  fs.rmSync(tmpSqliteDir, { recursive: true, force: true })
+  fs.rmSync(tmpVaultDir, { recursive: true, force: true })
+  fs.rmSync(tmpGitDir, { recursive: true, force: true })
 
   console.log('\n' + '='.repeat(60))
   const passed = results.filter(r => r.pass).length
