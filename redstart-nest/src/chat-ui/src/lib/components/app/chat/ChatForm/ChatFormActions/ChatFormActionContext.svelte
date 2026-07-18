@@ -33,8 +33,21 @@
 		return () => clearTimeout(refreshTimer);
 	});
 
-	const barColor = $derived(
-		!usage ? '' : usage.percent >= 90 ? 'bg-red-500' : usage.percent >= 70 ? 'bg-amber-500' : 'bg-emerald-500'
+	// Circular "torus" gauge geometry (see the SVG ring below).
+	const RING_SIZE = 16;
+	const RING_STROKE = 2.5;
+	const RING_R = (RING_SIZE - RING_STROKE) / 2;
+	const RING_C = 2 * Math.PI * RING_R;
+
+	// How much of the ring is "unfilled" — dashoffset shrinks as usage grows.
+	const ringOffset = $derived(
+		usage ? RING_C * (1 - Math.min(100, Math.max(0, usage.percent)) / 100) : RING_C
+	);
+
+	// System orange accent by default; escalate to red at 80% so the "getting
+	// full / about to auto-compact" warning shows before overflow.
+	const ringColor = $derived(
+		!usage ? '' : usage.percent >= 80 ? 'text-red-500' : 'text-orange-500'
 	);
 
 	const tooltip = $derived(
@@ -79,11 +92,38 @@
 			disabled={compacting}
 			onclick={handleCompact}
 		>
-			<span class="bg-muted relative block h-1.5 w-14 overflow-hidden rounded-full">
-				<span
-					class="absolute inset-y-0 left-0 rounded-full transition-[width] duration-300 {barColor}"
-					style="width: {Math.max(3, usage.percent)}%"
-				></span>
+			<span class="relative inline-flex items-center justify-center">
+				<svg
+					width={RING_SIZE}
+					height={RING_SIZE}
+					viewBox="0 0 {RING_SIZE} {RING_SIZE}"
+					class="-rotate-90"
+					aria-hidden="true"
+				>
+					<!-- track -->
+					<circle
+						cx={RING_SIZE / 2}
+						cy={RING_SIZE / 2}
+						r={RING_R}
+						fill="none"
+						stroke="currentColor"
+						stroke-width={RING_STROKE}
+						class="text-muted-foreground/25"
+					/>
+					<!-- usage arc -->
+					<circle
+						cx={RING_SIZE / 2}
+						cy={RING_SIZE / 2}
+						r={RING_R}
+						fill="none"
+						stroke="currentColor"
+						stroke-width={RING_STROKE}
+						stroke-linecap="round"
+						stroke-dasharray={RING_C}
+						stroke-dashoffset={ringOffset}
+						class="{ringColor} transition-[stroke-dashoffset] duration-300"
+					/>
+				</svg>
 			</span>
 
 			<span class="text-muted-foreground text-[10px] tabular-nums select-none">

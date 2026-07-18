@@ -2,7 +2,7 @@
 	import { CircleUser, LogOut, RefreshCw, Copy } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { Button } from '$lib/components/ui/button';
+	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { copyToClipboard } from '$lib/utils';
@@ -41,7 +41,7 @@
 {#if user}
 	<DropdownMenu.Root>
 		<DropdownMenu.Trigger
-			class="flex max-w-[9rem] items-center gap-1.5 rounded-full px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+			class="{buttonVariants({ variant: 'ghost' })} w-full justify-start gap-2 px-2 backdrop-blur-none!"
 			aria-label="Account menu"
 		>
 			<CircleUser class="h-4 w-4 shrink-0" />

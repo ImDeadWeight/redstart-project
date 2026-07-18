@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { Trash2, Pencil, Pin, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { DialogConfirmation, UserMenu } from '$lib/components/app';
+	import { DialogConfirmation } from '$lib/components/app';
 	import SidebarNavigationActions from './SidebarNavigationActions.svelte';
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
@@ -188,8 +188,6 @@
 				</a>
 
 				<div class="flex items-center gap-1">
-					<UserMenu />
-
 					<Button
 						class="rounded-full md:hidden"
 						variant="ghost"

@@ -2,7 +2,7 @@
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import type { Component } from 'svelte';
-	import { SearchInput } from '$lib/components/app';
+	import { SearchInput, UserMenu } from '$lib/components/app';
 	import { page } from '$app/state';
 	import { SIDEBAR_ACTIONS_ITEMS } from '$lib/constants/ui';
 
@@ -52,6 +52,8 @@
 			{isCancelAlwaysVisible}
 		/>
 	{:else}
+		<UserMenu />
+
 		{#each SIDEBAR_ACTIONS_ITEMS as item (item.route)}
 			{#if !item.route}
 				<Button
