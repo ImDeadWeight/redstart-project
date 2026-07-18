@@ -447,6 +447,8 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
             </div>
           </div>
         )}
+      </div>
+
       {/* Banned tools — server-enforced, applies to every client */}
       <div className="mt-6 pt-4 border-t border-zinc-700">
         <p className="text-xs uppercase tracking-widest text-zinc-500 mb-1">Banned Tools</p>

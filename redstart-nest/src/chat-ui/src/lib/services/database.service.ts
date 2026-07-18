@@ -1,13 +1,29 @@
 import { resolveApiPath } from '$lib/utils/api-fetch';
 import { uuid, filterByLeafNodeId } from '$lib/utils';
+import { AUTH_TOKEN_LOCALSTORAGE_KEY } from '$lib/constants/storage';
 import type { DatabaseConversation, DatabaseMessage, McpServerOverride } from '$lib/types/database';
 
 const DEVICE_ID_KEY = 'redstart-device-id';
 
+// The /conversations routes require a valid session when auth is enabled. Read
+// the token straight from localStorage (where the auth store persists it,
+// JSON-stringified) rather than importing getAuthHeaders — this service reads
+// storage directly by design to avoid a circular dependency with the stores.
+function getAuthHeader(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(AUTH_TOKEN_LOCALSTORAGE_KEY);
+    const token = raw ? (JSON.parse(raw) as string | null) : null;
+    if (token) return { Authorization: `Bearer ${token}` };
+  } catch {
+    /* fall through — unauthenticated request */
+  }
+  return {};
+}
+
 function getDeviceId(): string {
   let id = localStorage.getItem(DEVICE_ID_KEY);
   if (!id) {
-    id = crypto.randomUUID();
+    id = uuid();
     localStorage.setItem(DEVICE_ID_KEY, id);
   }
   return id;
@@ -19,6 +35,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       'Content-Type': 'application/json',
       'X-Redstart-Device-Id': getDeviceId(),
+      ...getAuthHeader(),
       ...(init?.headers || {})
     }
   });
@@ -35,7 +52,7 @@ export class DatabaseService {
     const conv = await apiFetch<DatabaseConversation>('/conversations', {
       method: 'POST',
       body: JSON.stringify({
-        id: crypto.randomUUID(),
+        id: uuid(),
         name,
         currNode: '',
         lastModified: Date.now(),

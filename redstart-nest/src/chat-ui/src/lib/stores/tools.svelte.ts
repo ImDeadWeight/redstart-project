@@ -3,6 +3,7 @@ import { ToolsService } from '$lib/services/tools.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$lib/enums';
 import { config } from '$lib/stores/settings.svelte';
+import { twigFsApi } from '$lib/utils/twig';
 import {
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	SANDBOX_TOOL_DEFINITION,
@@ -21,6 +22,8 @@ function toolKey(source: ToolSource, name: string, serverId?: string): string {
 			return `custom:${name}`;
 		case ToolSource.FRONTEND:
 			return `frontend:${name}`;
+		case ToolSource.LOCAL_FS:
+			return `local_fs:${name}`;
 		default:
 			return `builtin:${name}`;
 	}
@@ -52,6 +55,9 @@ class ToolsStore {
 	// enforcement so the UI can't re-enable what the org disabled.
 	private _serverDisabledTools = $state(new SvelteSet<string>());
 	private _toolsEndpointUnreachable = $state(false);
+	// Local file system tools provided by the Redstart Twig desktop shell. Empty
+	// on web/Android and until the user grants a folder inside Twig.
+	private _localFsTools = $state<OpenAIToolDefinition[]>([]);
 
 	constructor() {
 		try {
@@ -69,6 +75,27 @@ class ToolsStore {
 		}
 
 		this.fetchBuiltinTools();
+		this.loadLocalFsTools();
+	}
+
+	/**
+	 * Load the Twig desktop shell's local fs tool definitions, if present. No-op
+	 * on web/Android. Call again after the user grants a folder so the newly
+	 * available tools appear.
+	 */
+	async loadLocalFsTools(): Promise<void> {
+		const api = twigFsApi();
+		if (!api) return;
+		try {
+			const defs = await api.getTools();
+			this._localFsTools = Array.isArray(defs) ? defs : [];
+		} catch (err) {
+			console.error('[ToolsStore] Failed to load local fs tools:', err);
+		}
+	}
+
+	get localFsTools(): OpenAIToolDefinition[] {
+		return this._localFsTools;
 	}
 
 	private persistDisabledTools(): void {
@@ -163,6 +190,19 @@ class ToolsStore {
 			entries.push(entry);
 		};
 
+		// Local fs tools are pushed BEFORE server builtins so that, inside Twig,
+		// a local fs_* tool wins name resolution over an identically named
+		// server-side tool — the model is offered (and the agentic loop routes to)
+		// the local executor, never the remote one. Prevents double execution.
+		for (const def of this._localFsTools) {
+			const name = def.function.name;
+			push({
+				source: ToolSource.LOCAL_FS,
+				key: toolKey(ToolSource.LOCAL_FS, name),
+				definition: def
+			});
+		}
+
 		for (const def of this._builtinTools) {
 			const name = def.function.name;
 			push({ source: ToolSource.BUILTIN, key: toolKey(ToolSource.BUILTIN, name), definition: def });
@@ -231,6 +271,8 @@ class ToolsStore {
 				return TOOL_GROUP_LABELS[ToolSource.CUSTOM];
 			case ToolSource.FRONTEND:
 				return TOOL_GROUP_LABELS[ToolSource.FRONTEND];
+			case ToolSource.LOCAL_FS:
+				return TOOL_GROUP_LABELS[ToolSource.LOCAL_FS];
 			default:
 				return TOOL_GROUP_LABELS[ToolSource.BUILTIN];
 		}
@@ -259,6 +301,8 @@ class ToolsStore {
 			result.push(def);
 		};
 
+		// Local fs tools first so they shadow any identically named server tool.
+		for (const def of this._localFsTools) take(def);
 		for (const def of this._builtinTools) take(def);
 		for (const def of this.frontendTools) take(def);
 		for (const def of mcpStore.getToolDefinitionsForLLM()) take(def);
@@ -399,6 +443,7 @@ class ToolsStore {
 		if (entry.source === ToolSource.BUILTIN) return TOOL_SERVER_LABELS[ToolSource.BUILTIN];
 		if (entry.source === ToolSource.CUSTOM) return TOOL_SERVER_LABELS[ToolSource.CUSTOM];
 		if (entry.source === ToolSource.FRONTEND) return TOOL_SERVER_LABELS[ToolSource.FRONTEND];
+		if (entry.source === ToolSource.LOCAL_FS) return TOOL_SERVER_LABELS[ToolSource.LOCAL_FS];
 		return '';
 	}
 

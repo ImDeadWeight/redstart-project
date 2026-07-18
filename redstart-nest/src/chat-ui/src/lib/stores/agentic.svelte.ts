@@ -31,6 +31,8 @@ import { SvelteMap } from 'svelte/reactivity';
 import { ToolsService } from '$lib/services/tools.service';
 import { SandboxService } from '$lib/services/sandbox.service';
 import { isAbortError } from '$lib/utils';
+import { twigFsApi } from '$lib/utils/twig';
+import { parseToolCallsFromText, createApiToolCalls } from '$lib/utils/tool-call-parser';
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE_SEPARATOR } from '$lib/constants';
 import {
 	IMAGE_MIME_TO_EXTENSION,
@@ -618,19 +620,33 @@ class AgenticStore {
 					signal
 				);
 
-				this.updateSession(conversationId, { streamingToolCall: null });
+			this.updateSession(conversationId, { streamingToolCall: null });
 
-				if (turnTimings) {
-					agenticTimings.llm.predicted_n += turnTimings.predicted_n || 0;
-					agenticTimings.llm.predicted_ms += turnTimings.predicted_ms || 0;
-					agenticTimings.llm.prompt_n += turnTimings.prompt_n || 0;
-					agenticTimings.llm.prompt_ms += turnTimings.prompt_ms || 0;
-					turnStats.llm.predicted_n = turnTimings.predicted_n || 0;
-					turnStats.llm.predicted_ms = turnTimings.predicted_ms || 0;
-					turnStats.llm.prompt_n = turnTimings.prompt_n || 0;
-					turnStats.llm.prompt_ms = turnTimings.prompt_ms || 0;
+			if (turnTimings) {
+				agenticTimings.llm.predicted_n += turnTimings.predicted_n || 0;
+				agenticTimings.llm.predicted_ms += turnTimings.predicted_ms || 0;
+				agenticTimings.llm.prompt_n += turnTimings.prompt_n || 0;
+				agenticTimings.llm.prompt_ms += turnTimings.prompt_ms || 0;
+				turnStats.llm.predicted_n = turnTimings.predicted_n || 0;
+				turnStats.llm.predicted_ms = turnTimings.predicted_ms || 0;
+				turnStats.llm.prompt_n = turnTimings.prompt_n || 0;
+				turnStats.llm.prompt_ms = turnTimings.prompt_ms || 0;
+			}
+
+			if (turnToolCalls.length === 0 && config().toolCallFallbackParserEnabled) {
+				const patternList: string[] = (config().toolCallFallbackParserPatterns || '')
+					.split(',')
+					.map((p: string) => p.trim())
+					.filter(Boolean);
+				const parsed = parseToolCallsFromText(turnContent, {
+					patterns: patternList,
+					availableTools: toolsStore.allTools.map((t) => ({ name: t.definition.function.name }))
+				});
+				if (parsed.length > 0) {
+					turnToolCalls = createApiToolCalls(parsed);
 				}
-			} catch (error) {
+			}
+		} catch (error) {
 				if (signal?.aborted) {
 					// Save whatever we have for this turn before exiting
 					await onAssistantTurnComplete?.(
@@ -779,7 +795,19 @@ class AgenticStore {
 					toolSuccess = false;
 				} else {
 					try {
-						if (toolSource === ToolSource.BUILTIN) {
+						if (toolSource === ToolSource.LOCAL_FS) {
+							const api = twigFsApi();
+							const args = this.parseToolArguments(toolCall.function.arguments);
+							if (!api) {
+								result =
+									'Local file system tools are only available in the Redstart Twig desktop app.';
+								toolSuccess = false;
+							} else {
+								const executionResult = await api.execute(toolName, args);
+								result = (executionResult.content ?? []).map((c) => c.text).join('\n');
+								if (executionResult.isError) toolSuccess = false;
+							}
+						} else if (toolSource === ToolSource.BUILTIN) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
 							const executionResult = await ToolsService.executeTool(toolName, args, signal);
 

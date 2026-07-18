@@ -19,7 +19,13 @@ export function startBeaconServer(getRunning, getPort) {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
     })
-    res.end(JSON.stringify({ running, port }))
+    // Minimal identity + liveness contract. The `app` marker lets clients tell
+    // a Redstart Nest apart from any other service that happens to listen on
+    // 8765 (positive identification), without leaking config/version/auth/URLs.
+    // The same identity is already broadcast in cleartext over mDNS, so this
+    // discloses nothing new. Clients build the connection URL from the
+    // responding IP + this port themselves.
+    res.end(JSON.stringify({ app: 'redstart-nest', running, port }))
   })
 
   return new Promise((resolve, reject) => {

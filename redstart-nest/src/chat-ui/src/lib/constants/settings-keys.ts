@@ -64,5 +64,7 @@ export const SETTINGS_KEYS = {
 	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
 	JS_SANDBOX_ENABLED: 'jsSandboxEnabled',
 	CUSTOM_JSON: 'customJson',
-	CUSTOM_CSS: 'customCss'
+	CUSTOM_CSS: 'customCss',
+	TOOL_CALL_FALLBACK_PARSER_ENABLED: 'toolCallFallbackParserEnabled',
+	TOOL_CALL_FALLBACK_PARSER_PATTERNS: 'toolCallFallbackParserPatterns'
 } as const;

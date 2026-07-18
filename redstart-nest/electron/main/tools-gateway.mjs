@@ -126,6 +126,22 @@ function enforceToolAllowList(parsed, config) {
 // back unchanged — handles both streaming SSE and non-streaming JSON.
 // ---------------------------------------------------------------------------
 
+// llama-server reflects the request's Origin back into its own
+// Access-Control-Allow-Origin header. If we spread its headers and then also set
+// our own '*', the response carries TWO values for that header (the reflected
+// origin AND '*') — which browsers reject as invalid CORS, silently blocking
+// every cross-origin call from a UI served on a different origin (Twig's file
+// server, the web dev server). Strip any upstream CORS-origin header
+// (case-insensitively) so the gateway emits exactly one value.
+function withoutUpstreamCors(headers) {
+  const out = {}
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() === 'access-control-allow-origin') continue
+    out[k] = v
+  }
+  return out
+}
+
 function forwardModified(res, internalPort, parsed) {
   const payload = JSON.stringify(parsed)
   const options = {
@@ -142,7 +158,7 @@ function forwardModified(res, internalPort, parsed) {
 
   const proxyReq = http.request(options, proxyRes => {
     res.writeHead(proxyRes.statusCode, {
-      ...proxyRes.headers,
+      ...withoutUpstreamCors(proxyRes.headers),
       'Access-Control-Allow-Origin': '*',
     })
     proxyRes.pipe(res)
@@ -173,7 +189,7 @@ function passthrough(req, res, internalPort) {
 
   const proxyReq = http.request(options, proxyRes => {
     res.writeHead(proxyRes.statusCode, {
-      ...proxyRes.headers,
+      ...withoutUpstreamCors(proxyRes.headers),
       'Access-Control-Allow-Origin': '*',
     })
     proxyRes.pipe(res)
@@ -332,7 +348,10 @@ export function startGateway(publicPort, config) {
         res.writeHead(204, {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          // X-Redstart-Device-Id is sent by the chat-ui's DatabaseService on
+          // every /conversations call; without it here, browsers block those
+          // cross-origin requests at preflight.
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Redstart-Device-Id',
           'Access-Control-Max-Age': '86400',
         })
         res.end()

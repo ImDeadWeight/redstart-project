@@ -4,7 +4,8 @@
   "description": "Lightweight Windows chat client for connecting to a Redstart Nest or llama.cpp-compatible server on your local network.",
   "author": "Patrick Carswell",
   "private": true,
-  "main": "electron/main.cjs",
+  "type": "module",
+  "main": "electron/main.mjs",
   "scripts": {
     "build:chat": "npm --prefix ../../redstart-nest/src/chat-ui run build",
     "build": "npm run build:chat && node ../../redstart-nest/scripts/make-icon.mjs && electron-builder",

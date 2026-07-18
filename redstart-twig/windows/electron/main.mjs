@@ -14,20 +14,23 @@
 // both clients work identically without duplicating server-side logic.
 // =============================================================================
 
-// Static import of 'electron' fails in some Electron 33 builds because Node.js
-// statically analyses node_modules/electron/index.js (the npm install shim)
-// during the link phase, before Electron's own built-in API provider is active.
-// Dynamic import runs at execution time, when Electron's module system IS ready.
+// Electron 33 supports an ESM main entry: import the built-in `electron` module
+// statically and Electron's own ESM loader hook resolves the bare specifier to
+// the live API (this is the same pattern Redstart Nest's index.mjs uses). A
+// dynamic `await import('electron')` must NOT be used here — it sends the CJS
+// install shim through Node's ESM export-preparse and crashes at startup.
+import { app, BrowserWindow, ipcMain, session, dialog } from 'electron'
 import * as http from 'node:http'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const { app, BrowserWindow, ipcMain, session } = await import('electron')
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+// Set once the main window exists, so dialogs can be parented to it.
+let mainWindow = null
 
 // ---------------------------------------------------------------------------
 // Static file server
@@ -59,7 +62,7 @@ let fileServer = null
 function startFileServer() {
   const chatUiDir = app.isPackaged
     ? path.join(process.resourcesPath, 'chat-ui')
-    : path.join(__dirname, '..', '..', '..', '..', 'redstart-nest', 'src', 'chat-ui', 'dist')
+    : path.join(__dirname, '..', '..', '..', 'redstart-nest', 'src', 'chat-ui', 'dist')
 
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
@@ -146,7 +149,7 @@ const BEACON_PORT = 8765
 // probeBeacon contacts a single IP and checks whether Redstart Nest is there.
 // I verify the app identity ("redstart-nest") before trusting the response so
 // that other HTTP services on port 8765 don't get mistaken for Redstart Nest.
-// I also require server.running to be true — if Redstart Nest is open but hasn't
+// I also require running to be true — if Redstart Nest is open but hasn't
 // started a model yet, there's nothing to connect to.
 function probeBeacon(ip, timeout) {
   return new Promise((resolve) => {
@@ -158,13 +161,15 @@ function probeBeacon(ip, timeout) {
         res.on('end', () => {
           try {
             const data = JSON.parse(body)
-            if (data.app !== 'redstart-nest' || !data.server?.running) { resolve(null); return }
+            if (data.app !== 'redstart-nest' || !data.running) { resolve(null); return }
 
-            // Same-machine discovery → use localUrl; LAN discovery → use networkUrl
-            const url = ip === '127.0.0.1' ? data.server.localUrl : data.server.networkUrl
-            if (!url) { resolve(null); return }
+            // The beacon sends a minimal { app, running, port } payload, so we
+            // build the connection URL from the responding IP + port ourselves
+            // rather than trusting a server-supplied URL.
+            const port = data.port
+            if (!port) { resolve(null); return }
 
-            resolve({ url, ip, port: data.server.port })
+            resolve({ url: `http://${ip}:${port}`, ip, port })
           } catch { resolve(null) }
         })
       }
@@ -210,7 +215,107 @@ ipcMain.handle('network:scan', async (_, { subnet, timeout = 400 }) => {
   return { servers: found }
 })
 
+// ---------------------------------------------------------------------------
+// Local file system tools (Option A — "Claude Desktop" style)
+// ---------------------------------------------------------------------------
+// When the chat-ui runs inside Twig, fs_* tool calls execute HERE, against a
+// folder on THIS machine that the user explicitly grants — instead of running
+// on the remote Redstart Nest server. The tool logic is reused verbatim from
+// Redstart Nest (fs-tool.mjs + path-scope.mjs) so behaviour and the
+// path-containment security model stay identical on both.
+// ---------------------------------------------------------------------------
+
+const fsConfigPath = () => path.join(app.getPath('userData'), 'twig-fs-config.json')
+
+let fsRootDir = null
+
+function loadFsRoot() {
+  try {
+    return JSON.parse(fs.readFileSync(fsConfigPath(), 'utf8')).rootDir || null
+  } catch {
+    return null
+  }
+}
+
+function saveFsRoot(rootDir) {
+  try {
+    fs.writeFileSync(fsConfigPath(), JSON.stringify({ rootDir }, null, 2))
+  } catch (err) {
+    console.warn('Could not persist fs root:', err.message)
+  }
+}
+
+// Shape expected by fs-tool.mjs. Default-deny: no granted folder → disabled.
+function twigFsCfg() {
+  return { fileSystem: { enabled: !!fsRootDir, rootDir: fsRootDir } }
+}
+
+// Lazily import the shared Nest fs-tool module. In dev it lives in the source
+// tree; in a packaged build it's copied next to the app via extraResources
+// (see electron-builder.json). Dynamic import — safe for this plain-ESM module,
+// unlike the electron shim — lets the path differ between the two layouts.
+let fsToolModule = null
+async function getFsTool() {
+  if (fsToolModule) return fsToolModule
+  const fsToolPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'fs-tool', 'fs-tool.mjs')
+    : path.join(__dirname, '..', '..', '..', 'redstart-nest', 'electron', 'main', 'fs-tool.mjs')
+  fsToolModule = await import(pathToFileURL(fsToolPath).href)
+  return fsToolModule
+}
+
+// fs-tool.mjs emits MCP-shaped defs; the chat-ui speaks OpenAI function-calling.
+function toOpenAiToolDefs(defs) {
+  return defs.map((d) => ({
+    type: 'function',
+    function: { name: d.name, description: d.description, parameters: d.inputSchema },
+  }))
+}
+
+ipcMain.handle('fs:get-tools', async () => {
+  if (!fsRootDir) return []
+  const t = await getFsTool()
+  return toOpenAiToolDefs(t.toolDefs(twigFsCfg()))
+})
+
+ipcMain.handle('fs:execute', async (_e, { name, args }) => {
+  const t = await getFsTool()
+  return t.callTool(name, args, twigFsCfg())
+})
+
+ipcMain.handle('fs:pick-root', async () => {
+  const opts = {
+    title: 'Choose a folder Redstart Twig may read and write',
+    properties: ['openDirectory', 'createDirectory'],
+  }
+  const res = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, opts)
+    : await dialog.showOpenDialog(opts)
+  if (res.canceled || !res.filePaths?.length) return { rootDir: fsRootDir }
+  fsRootDir = res.filePaths[0]
+  saveFsRoot(fsRootDir)
+  return { rootDir: fsRootDir }
+})
+
+ipcMain.handle('fs:get-root', () => ({ rootDir: fsRootDir }))
+
 app.whenReady().then(async () => {
+  fsRootDir = loadFsRoot()
+
+  // The chat-ui ships as a PWA. In this desktop shell the service worker only
+  // causes stale-content bugs: it precaches an app shell and keeps serving it
+  // across launches (Windows reuses ephemeral ports, so a previously registered
+  // SW re-takes control of the local file server's origin), shadowing the
+  // freshly built UI on disk. Purge the SW + HTTP caches on every startup so we
+  // always load the current UI. localStorage/IndexedDB — settings, saved
+  // conversations — are deliberately preserved.
+  try {
+    await session.defaultSession.clearStorageData({ storages: ['serviceworkers', 'cachestorage'] })
+    await session.defaultSession.clearCache()
+  } catch (err) {
+    console.warn('Could not clear cached UI storage:', err.message)
+  }
+
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
@@ -222,7 +327,7 @@ app.whenReady().then(async () => {
 
   const port = await startFileServer()
 
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
     title: 'Redstart Twig',
@@ -237,13 +342,15 @@ app.whenReady().then(async () => {
     },
   })
 
-  win.once('ready-to-show', () => win.show())
+  mainWindow.once('ready-to-show', () => mainWindow.show())
 
-  win.webContents.on('before-input-event', (_, input) => {
-    if (input.type === 'keyDown' && input.key === 'F12') win.webContents.toggleDevTools()
+  mainWindow.webContents.on('before-input-event', (_, input) => {
+    if (input.type === 'keyDown' && input.key === 'F12') mainWindow.webContents.toggleDevTools()
   })
 
-  win.loadURL(`http://127.0.0.1:${port}/`)
+  mainWindow.on('closed', () => { mainWindow = null })
+
+  mainWindow.loadURL(`http://127.0.0.1:${port}/`)
 })
 
 app.on('window-all-closed', () => {

@@ -663,6 +663,20 @@ const NON_UI_SETTINGS: SettingsEntry[] = [
 		defaultValue: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 		type: SettingsFieldType.INPUT,
 		isPositiveInteger: true
+	},
+	{
+		key: SETTINGS_KEYS.TOOL_CALL_FALLBACK_PARSER_ENABLED,
+		label: 'Enable text-based tool call parser',
+		help: 'When enabled, tool calls emitted as raw text (e.g. toolName{...}) are parsed and executed automatically.',
+		defaultValue: true,
+		type: SettingsFieldType.CHECKBOX
+	},
+	{
+		key: SETTINGS_KEYS.TOOL_CALL_FALLBACK_PARSER_PATTERNS,
+		label: 'Tool call parser patterns',
+		help: 'Comma-separated list of patterns to try: braces, xml, fn. Order matters — first match wins.',
+		defaultValue: 'braces,xml,fn',
+		type: SettingsFieldType.INPUT
 	}
 	// {
 	// 	key: SETTINGS_KEYS.PY_INTERPRETER_ENABLED,

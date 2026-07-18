@@ -5,6 +5,7 @@
 	let password = $state('');
 	let submitting = $state(false);
 	let error = $state('');
+	let accountLocked = $state(false);
 
 	async function handleSubmit(e: SubmitEvent) {
 		e.preventDefault();
@@ -16,7 +17,9 @@
 		try {
 			await authStore.login(username.trim(), password);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Login failed';
+			const message = e instanceof Error ? e.message : 'Login failed';
+			error = message;
+			accountLocked = message.toLowerCase().includes('disabled');
 		} finally {
 			submitting = false;
 		}
@@ -49,7 +52,12 @@
 			/>
 		</div>
 
-		{#if error}
+		{#if accountLocked}
+			<div class="w-full rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-center">
+				<p class="text-sm font-medium text-red-400">Account locked</p>
+				<p class="text-xs text-red-400/80 mt-1">This account has been disabled. Contact an administrator to regain access.</p>
+			</div>
+		{:else if error}
 			<p class="text-xs text-red-400">{error}</p>
 		{/if}
 

@@ -78,10 +78,13 @@ export default function App() {
   // A custom URI scheme is used over a plain URL because a plain http:// link
   // would just open the browser instead of the Redstart Twig app.
 
-  // Sync advertisedHost to config whenever it changes
+  // Sync advertisedHost to config whenever it changes. In network mode a blank
+  // host defaults to redstart.local so mDNS always advertises a resolvable
+  // .local name; localhost-only mode keeps whatever was typed (usually blank).
   useEffect(() => {
-    setConfig(prev => ({ ...prev, advertisedHost }))
-  }, [advertisedHost])
+    const host = networkMode ? (advertisedHost.trim() || 'redstart.local') : advertisedHost
+    setConfig(prev => ({ ...prev, advertisedHost: host }))
+  }, [advertisedHost, networkMode])
 
   useEffect(() => {
     if (!networkMode) { setQrDataUrl(''); return }

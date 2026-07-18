@@ -35,7 +35,10 @@ export function useProfiles(
     const loaded = await api().profiles.load(name)
     if (loaded) {
       setConfig(prev => ({ ...loaded, networkMode: prev.networkMode }))
-      onAdvertisedHostLoaded(loaded.advertisedHost || '')
+      // A loaded profile may omit advertisedHost; default to redstart.local in
+      // network mode so mDNS keeps advertising a resolvable .local name.
+      const safeNetworkMode = loaded.networkMode ?? true
+      onAdvertisedHostLoaded(loaded.advertisedHost || (safeNetworkMode ? 'redstart.local' : ''))
       setSelectedProfile(name)
     }
   }

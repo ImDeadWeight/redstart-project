@@ -31,6 +31,7 @@ import * as zlib from 'zlib'
 import * as http from 'http'
 import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
 import { startMdnsAdvertiser, stopMdnsAdvertiser } from './mdns-advertiser.mjs'
+import { startPort80Proxy, stopPort80Proxy } from './port80-proxy.mjs'
 import { cleanupOldConversations } from './conversations-storage.mjs'
 import { fileURLToPath } from 'url'
 
@@ -689,6 +690,7 @@ app.on('before-quit', () => {
   stopGateway()
   stopMcpServer()
   stopMdnsAdvertiser()
+  stopPort80Proxy()
   if (serverProcess) {
     serverProcess = null
   }
@@ -1111,6 +1113,13 @@ $r | ConvertTo-Json -Compress
         const gwPort = getGatewayPort(config.port)
         if (gwPort) ensureFirewallRule(gwPort)
         startMdnsAdvertiser(config)
+        // Serve the login/chat UI on plain port 80 too, so users can browse to
+        // http://redstart.local without the :port suffix. Falls back silently
+        // to the gateway port if 80 is unavailable.
+        if (config.networkMode && config.port !== 80) {
+          ensureFirewallRule(80)
+          startPort80Proxy(config)
+        }
       } catch (err) {
         console.warn('Tool gateway failed to start:', err.message)
         // Non-fatal — server still works, just without tool interception
@@ -1138,6 +1147,7 @@ $r | ConvertTo-Json -Compress
     stopGateway()
     stopMcpServer()
     stopMdnsAdvertiser()
+    stopPort80Proxy()
     if (!serverProcess) return { success: true }
     serverProcess.kill()
     serverProcess = null

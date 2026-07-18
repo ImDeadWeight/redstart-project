@@ -2,7 +2,10 @@ export enum ToolSource {
 	BUILTIN = 'builtin',
 	MCP = 'mcp',
 	CUSTOM = 'custom',
-	FRONTEND = 'frontend'
+	FRONTEND = 'frontend',
+	// Local file system tools executed by the Redstart Twig desktop shell against
+	// a folder on the user's own machine (not the remote server).
+	LOCAL_FS = 'local_fs'
 }
 
 export enum ToolPermissionDecision {

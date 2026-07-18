@@ -9,13 +9,21 @@
     "electron/**/*"
   ],
   "asarUnpack": [
-    "electron/preload.cjs"
+    "electron/preload.mjs"
   ],
   "extraResources": [
     {
       "from": "../../redstart-nest/src/chat-ui/dist",
       "to": "chat-ui",
       "filter": ["**/*"]
+    },
+    {
+      "from": "../../redstart-nest/electron/main/fs-tool.mjs",
+      "to": "fs-tool/fs-tool.mjs"
+    },
+    {
+      "from": "../../redstart-nest/electron/main/path-scope.mjs",
+      "to": "fs-tool/path-scope.mjs"
     }
   ],
   "win": {

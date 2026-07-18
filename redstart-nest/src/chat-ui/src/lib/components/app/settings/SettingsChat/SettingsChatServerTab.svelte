@@ -1,13 +1,16 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { isCapacitorAndroid, isElectronLog } from '$lib/utils/server-url';
+	import { twigFsApi } from '$lib/utils/twig';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
+	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
 	import { NetworkDiscovery, type DiscoveredServer, type NetworkDiscoveryPlugin } from '$lib/plugins/network-discovery';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
-	import { Wifi, RefreshCw, Check, AlertCircle, Loader } from '@lucide/svelte';
+	import { Wifi, RefreshCw, Check, AlertCircle, Loader, FolderOpen } from '@lucide/svelte';
 
 	// ── State ─────────────────────────────────────────────────────────────────
 
@@ -20,6 +23,39 @@
 
 	const onAndroid = isCapacitorAndroid();
 	const onElectron = isElectronLog();
+
+	// ── Local file access (Twig desktop only) ─────────────────────────────────
+
+	let localFsRoot = $state<string | null>(null);
+	let fsBusy = $state(false);
+
+	onMount(async () => {
+		const api = twigFsApi();
+		if (!api) return;
+		try {
+			const { rootDir } = await api.getRoot();
+			localFsRoot = rootDir;
+		} catch {
+			/* not available */
+		}
+	});
+
+	async function pickLocalFolder() {
+		const api = twigFsApi();
+		if (!api) return;
+		fsBusy = true;
+		try {
+			const { rootDir } = await api.pickRoot();
+			localFsRoot = rootDir;
+			// Refresh the advertised tool set so the fs_* tools appear (or update)
+			// immediately after the folder is granted.
+			await toolsStore.loadLocalFsTools();
+		} catch {
+			/* user cancelled or bridge error */
+		} finally {
+			fsBusy = false;
+		}
+	}
 
 	// ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -183,6 +219,39 @@
 					{/each}
 				</ul>
 			{/if}
+		</div>
+	{/if}
+
+	<!-- Local file access (Twig desktop only) -->
+	{#if onElectron}
+		<div class="space-y-4 border-t border-border/40 pt-6">
+			<div>
+				<h4 class="text-sm font-medium">Local Files</h4>
+				<p class="text-xs text-muted-foreground">
+					Grant a folder on this PC that the assistant may read and write directly. File tools stay
+					inside the folder you choose. Leave unset to keep local file access off.
+				</p>
+			</div>
+
+			{#if localFsRoot}
+				<p class="flex items-center gap-1.5 text-sm">
+					<Check class="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" />
+					<span class="break-all font-mono text-xs">{localFsRoot}</span>
+				</p>
+			{:else}
+				<p class="text-xs text-muted-foreground">
+					No folder granted — local file tools are disabled.
+				</p>
+			{/if}
+
+			<Button variant="outline" size="sm" onclick={pickLocalFolder} disabled={fsBusy}>
+				{#if fsBusy}
+					<Loader class="h-3.5 w-3.5 animate-spin" /> Working…
+				{:else}
+					<FolderOpen class="h-3.5 w-3.5" />
+					{localFsRoot ? 'Change folder' : 'Choose folder'}
+				{/if}
+			</Button>
 		</div>
 	{/if}
 

@@ -17,4 +17,14 @@ contextBridge.exposeInMainWorld('redstartTwigAPI', {
     getLocalNetworkInfo: () => ipcRenderer.invoke('network:get-info'),
     scanForServers: (options) => ipcRenderer.invoke('network:scan', options),
   },
+  // Local file system tools — the chat-ui routes fs_* tool calls here (instead
+  // of to the remote server) when running inside Twig, so files are written to
+  // THIS machine's disk. getTools() returns OpenAI-shaped tool definitions and
+  // is empty until the user grants a folder via pickRoot().
+  fs: {
+    getTools: () => ipcRenderer.invoke('fs:get-tools'),
+    execute: (name, args) => ipcRenderer.invoke('fs:execute', { name, args }),
+    pickRoot: () => ipcRenderer.invoke('fs:pick-root'),
+    getRoot: () => ipcRenderer.invoke('fs:get-root'),
+  },
 })

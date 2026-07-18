@@ -7,7 +7,6 @@
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
-	import { cubicOut } from 'svelte/easing';
 	import { toast } from 'svelte-sonner';
 
 	import RedstartLoadingScreen from '$lib/components/app/RedstartLoadingScreen.svelte';
@@ -73,6 +72,11 @@
 	// Keep the hook object intact: destructuring needRefreshByStorage reads the getter once and freezes it
 	const pwa = usePwa();
 	const { needRefresh, updateServiceWorker } = pwa;
+
+	// Native shells (Twig Windows, Android) talk to a *remote* server, so a
+	// reachable connection is not guaranteed the way it is for the web-ui served
+	// directly by Redstart Nest. Used to gate the chat and to offer server setup.
+	const onNative = isCapacitorAndroid() || isElectronLog();
 
 	function updateFavicon() {
 		const dark = theme.isSystemDark;
@@ -255,6 +259,8 @@
 			if (!authStore.authRequired || authStore.user) {
 				await serverStore.fetch().catch(() => {});
 			}
+		} else {
+			await authStore.init().catch(() => {});
 		}
 
 		appReady = true;
@@ -272,6 +278,20 @@
 				});
 			}, 550);
 		}
+	}
+
+	// Re-attempt the connection from the loading screen's Retry button. Mirrors
+	// the initApp connect sequence: resolve auth first, then fetch props.
+	async function retryConnect() {
+		await authStore.init().catch(() => {});
+		if (!authStore.authRequired || authStore.user) {
+			await serverStore.fetch().catch(() => {});
+		}
+	}
+
+	// Let the user reach server setup from the loading screen when disconnected.
+	function openServerSettings() {
+		goto(RouterService.settings('server'));
 	}
 
 	onMount(() => {
@@ -430,32 +450,23 @@
 
 	<Toaster richColors />
 
-	<!-- Loading screen — covers everything until server init completes -->
+	<!-- Pre-chat gate. The chat is never revealed until there is a live server
+	     connection (and a session, when login is required). Loading and
+	     connection-error states live HERE, on the loading screen — not inside the
+	     chat window. Native shells can still reach server settings while
+	     disconnected so they can point the app at a server. -->
 	{#if !appReady}
-		<div
-			out:fade={{ duration: 500, easing: cubicOut }}
-			class="fixed inset-0 z-9999"
-		>
-			<RedstartLoadingScreen phase={loadingPhase} />
-		</div>
-	{/if}
-
-	<DialogConversationTitleUpdate
-		bind:open={titleUpdateDialogOpen}
-		currentTitle={titleUpdateCurrentTitle}
-		newTitle={titleUpdateNewTitle}
-		onConfirm={handleTitleUpdateConfirm}
-		onCancel={handleTitleUpdateCancel}
-	/>
-
-	<!-- Nothing below the loading screen mounts until auth state is resolved
-	     (appReady) — this prevents chat components from instantiating and
-	     firing premature 401s underneath the loading overlay, and guarantees
-	     the login gate, not the chat UI, is the first thing revealed. -->
-	{#if appReady}
-		{#if authStore.authRequired && !authStore.user}
-			<LoginForm />
-		{:else}
+		<RedstartLoadingScreen phase={loadingPhase} />
+	{:else if authStore.authRequired && !authStore.user}
+		<LoginForm />
+	{:else if !(serverStore.props && !serverStore.error) && !(onNative && panelNav.isSettingsRoute)}
+		<RedstartLoadingScreen
+			phase="connecting"
+			error={serverStore.error}
+			onRetry={retryConnect}
+			onOpenSettings={onNative ? openServerSettings : undefined}
+		/>
+	{:else}
 			<Sidebar.Provider bind:open={sidebarOpen}>
 			<div class="flex h-dvh w-full">
 				<Sidebar.Root variant="floating" class="h-full"
@@ -493,8 +504,15 @@
 				</Sidebar.Inset>
 			</div>
 		</Sidebar.Provider>
-		{/if}
 	{/if}
+
+	<DialogConversationTitleUpdate
+		bind:open={titleUpdateDialogOpen}
+		currentTitle={titleUpdateCurrentTitle}
+		newTitle={titleUpdateNewTitle}
+		onConfirm={handleTitleUpdateConfirm}
+		onCancel={handleTitleUpdateCancel}
+	/>
 </Tooltip.Provider>
 
 <svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />

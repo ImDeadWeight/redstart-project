@@ -47,7 +47,6 @@ import type {
 	ErrorDialogState
 } from '$lib/types/chat';
 import type {
-	ApiChatMessageData,
 	ApiProcessingState,
 	DatabaseMessage,
 	DatabaseMessageExtra

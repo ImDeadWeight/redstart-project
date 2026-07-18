@@ -1,56 +1,43 @@
 import { browser } from '$app/environment';
-import { useRegisterSW } from 'virtual:pwa-register/svelte';
+import { writable } from 'svelte/store';
 import { versionStore } from '$lib/stores/version.svelte';
 import { BUILD_VERSION_LOCALSTORAGE_KEY } from '$lib/constants/storage';
-import { SW_CONFIG } from '$lib/constants/pwa';
 
 /**
- * Hook for PWA service worker registration, update polling, and build version mismatch detection.
+ * Build-version update detection — deliberately WITHOUT a service worker.
  *
- * Combines two concerns that always belong together:
- * 1. SW registration with periodic polling for updates
- * 2. localStorage-based version tracking for non-PWA users
+ * Redstart is a client for a LAN server: with the server unreachable there is
+ * nothing useful to do offline, so the PWA service worker's only real effect
+ * here was caching a stale app shell that shadowed freshly-deployed builds (it
+ * repeatedly made new builds look like they "didn't load"). We therefore do NOT
+ * register it, and we tear down any service worker + caches a previous PWA build
+ * left behind so affected browsers self-heal on next load.
+ *
+ * Update awareness is preserved cheaply: SvelteKit emits a build version
+ * (_app/version.json); when it changes since the last load we surface a
+ * "reload for the new version" prompt — all the update signal, none of the
+ * stale-cache cost.
  */
 export function usePwa() {
-	let swCheckInterval: ReturnType<typeof setInterval> | null = null;
+	// Self-heal: unregister any service worker and drop its caches from earlier
+	// PWA builds. Runs once on hook init (i.e. app load).
+	if (browser && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+		navigator.serviceWorker
+			.getRegistrations()
+			.then((regs) => regs.forEach((r) => r.unregister()))
+			.catch(() => {});
+		if ('caches' in window) {
+			caches
+				.keys()
+				.then((keys) => keys.forEach((k) => caches.delete(k)))
+				.catch(() => {});
+		}
+	}
+
 	let needRefreshByStorage = $state(false);
 
-	const {
-		// offlineReady, // to do - add installation banners for iOS
-		needRefresh: pwaNeedRefresh,
-		updateServiceWorker
-	} = useRegisterSW({
-		onRegisteredSW(swUrl: string, r: ServiceWorkerRegistration | undefined) {
-			if (swCheckInterval) {
-				clearInterval(swCheckInterval);
-			}
-			swCheckInterval = setInterval(async () => {
-				if (!r || r.installing || !navigator?.onLine) return;
-
-				try {
-					const resp = await fetch(swUrl, {
-						cache: SW_CONFIG.UPDATE_FETCH_OPTIONS.CACHE,
-						headers: {
-							cache: SW_CONFIG.UPDATE_FETCH_OPTIONS.HEADERS.CACHE,
-							'cache-control': SW_CONFIG.UPDATE_FETCH_OPTIONS.HEADERS.CACHE_CONTROL
-						}
-					});
-					if (resp?.status === 200) {
-						await r.update();
-					}
-				} catch (e) {
-					console.error(e);
-				}
-			}, SW_CONFIG.CHECK_INTERVAL_MS);
-		},
-		onRegisterError(error: unknown) {
-			console.error('[PWA] SW registration error:', error);
-		}
-	});
-
-	// Detect version mismatch via localStorage.
-	// _app/version.json is SvelteKit's native version file for PWA cache invalidation.
-	// This comparison detects server upgrades for non-PWA users.
+	// Detect a newly deployed build and prompt a reload. _app/version.json is
+	// SvelteKit's native build-version file.
 	$effect(() => {
 		if (!browser) return;
 
@@ -66,13 +53,18 @@ export function usePwa() {
 		}
 	});
 
+	// Kept false: there is no service-worker update signal anymore.
+	const noRefresh = writable(false);
+
 	return {
-		/** Writable that is true when a PWA service worker update is available */
 		get needRefresh() {
-			return pwaNeedRefresh;
+			return noRefresh;
 		},
-		updateServiceWorker,
-		/** Version mismatch detected via localStorage (non-PWA users) */
+		/** With no service worker, applying an update is just a reload. */
+		updateServiceWorker: () => {
+			if (browser) window.location.reload();
+		},
+		/** True when the deployed build version changed since the last load. */
 		get needRefreshByStorage() {
 			return needRefreshByStorage;
 		}
