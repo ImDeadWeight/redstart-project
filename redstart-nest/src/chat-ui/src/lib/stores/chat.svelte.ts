@@ -11,7 +11,6 @@
  * @see ChatService in services/chat.service.ts for API operations
  */
 
-import { SvelteMap } from 'svelte/reactivity';
 import { DatabaseService } from '$lib/services/database.service';
 import { ChatService } from '$lib/services/chat.service';
 import { ContextCompactionService } from '$lib/services/context-compaction.service';
@@ -23,11 +22,10 @@ import { isRouterMode } from '$lib/stores/server.svelte';
 import { selectedModelName, modelsStore } from '$lib/stores/models.svelte';
 import {
 	getApiOptions as computeApiOptions,
-	getContextTotal as computeContextTotal,
-	getConversationModel as computeConversationModel,
-	parseTimingData as computeTimingData
+	getConversationModel as computeConversationModel
 } from '$lib/stores/chat/chat-options';
 import { ChatUiState } from '$lib/stores/chat/chat-ui-state.svelte';
+import { ChatRuntimeState } from '$lib/stores/chat/chat-runtime.svelte';
 import {
 	normalizeModelName,
 	filterByLeafNodeId,
@@ -38,11 +36,7 @@ import {
 	generateConversationTitle
 } from '$lib/utils';
 import { classifyContinueIntent } from '$lib/utils/agentic';
-import {
-	MAX_INACTIVE_CONVERSATION_STATES,
-	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
-	SYSTEM_MESSAGE_PLACEHOLDER
-} from '$lib/constants';
+import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
 import type {
 	ChatMessageTimings,
 	ChatMessagePromptProgress,
@@ -56,27 +50,12 @@ import type {
 } from '$lib/types';
 import { ContinueIntentKind, ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
 
-interface ConversationStateEntry {
-	lastAccessed: number;
-}
-
 class ChatStore {
 	readonly ui = new ChatUiState();
 
-	activeProcessingState = $state<ApiProcessingState | null>(null);
-	currentResponse = $state('');
-	isLoading = $state(false);
-	// true while the active conversation streams reasoning content but no visible content yet
-	isReasoning = $state(false);
-	chatLoadingStates = new SvelteMap<string, boolean>();
-	chatReasoningStates = new SvelteMap<string, boolean>();
-	chatStreamingStates = new SvelteMap<string, { response: string; messageId: string }>();
-	private abortControllers = new SvelteMap<string, AbortController>();
+	readonly runtime = new ChatRuntimeState();
+
 	private preEncodeAbortController: AbortController | null = null;
-	private processingStates = new SvelteMap<string, ApiProcessingState | null>();
-	private conversationStateTimestamps = new SvelteMap<string, ConversationStateEntry>();
-	private activeConversationId = $state<string | null>(null);
-	private isStreamingActive = $state(false);
 
 	/** Reactive UI state (error dialog, edit mode, drafts, pending-message queue). */
 	get errorDialogState(): ErrorDialogState | null {
@@ -87,132 +66,69 @@ class ChatStore {
 		return this.ui.pendingEditMessageId;
 	}
 
-	private setChatLoading(convId: string, loading: boolean): void {
-		this.touchConversationState(convId);
-		if (loading) {
-			this.chatLoadingStates.set(convId, true);
-			if (convId === conversationsStore.activeConversation?.id) this.isLoading = true;
-		} else {
-			this.chatLoadingStates.delete(convId);
-			if (convId === conversationsStore.activeConversation?.id) this.isLoading = false;
-			this.setChatReasoning(convId, false);
-		}
+	/** Reactive runtime state, forwarded from ChatRuntimeState (read + write). */
+	get isLoading(): boolean {
+		return this.runtime.isLoading;
+	}
+	set isLoading(value: boolean) {
+		this.runtime.isLoading = value;
 	}
 
-	private setChatReasoning(convId: string, reasoning: boolean): void {
-		if (reasoning) {
-			this.chatReasoningStates.set(convId, true);
-			if (convId === conversationsStore.activeConversation?.id) this.isReasoning = true;
-		} else {
-			this.chatReasoningStates.delete(convId);
-			if (convId === conversationsStore.activeConversation?.id) this.isReasoning = false;
-		}
+	get isReasoning(): boolean {
+		return this.runtime.isReasoning;
 	}
-	private setChatStreaming(convId: string, response: string, messageId: string): void {
-		this.touchConversationState(convId);
-		this.chatStreamingStates.set(convId, { response, messageId });
-		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = response;
+	set isReasoning(value: boolean) {
+		this.runtime.isReasoning = value;
 	}
-	private clearChatStreaming(convId: string): void {
-		this.chatStreamingStates.delete(convId);
-		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = '';
+
+	get currentResponse(): string {
+		return this.runtime.currentResponse;
 	}
-	private getChatStreaming(convId: string): { response: string; messageId: string } | undefined {
-		return this.chatStreamingStates.get(convId);
+	set currentResponse(value: string) {
+		this.runtime.currentResponse = value;
 	}
+
+	get activeProcessingState(): ApiProcessingState | null {
+		return this.runtime.activeProcessingState;
+	}
+	set activeProcessingState(value: ApiProcessingState | null) {
+		this.runtime.activeProcessingState = value;
+	}
+
 	syncLoadingStateForChat(convId: string): void {
-		this.isLoading = this.chatLoadingStates.get(convId) || false;
-		this.isReasoning = this.chatReasoningStates.get(convId) || false;
-		const s = this.chatStreamingStates.get(convId);
-		this.currentResponse = s?.response || '';
-		this.isStreamingActive = s !== undefined;
-		this.setActiveProcessingConversation(convId);
-		// Sync streaming content to activeMessages so UI displays current content
-		if (s?.response && s?.messageId) {
-			const idx = conversationsStore.findMessageIndex(s.messageId);
-			if (idx !== -1) {
-				conversationsStore.updateMessageAtIndex(idx, { content: s.response });
-			}
-		}
+		this.runtime.syncLoadingStateForChat(convId);
 	}
 
 	clearUIState(): void {
-		this.isLoading = false;
-		this.currentResponse = '';
-		this.isStreamingActive = false;
+		this.runtime.clearUIState();
 	}
 
 	setActiveProcessingConversation(conversationId: string | null): void {
-		this.activeConversationId = conversationId;
-		this.activeProcessingState = conversationId
-			? this.processingStates.get(conversationId) || null
-			: null;
+		this.runtime.setActiveProcessingConversation(conversationId);
 	}
 
 	getProcessingState(conversationId: string): ApiProcessingState | null {
-		return this.processingStates.get(conversationId) || null;
-	}
-
-	private setProcessingState(conversationId: string, state: ApiProcessingState | null): void {
-		if (state === null) this.processingStates.delete(conversationId);
-		else this.processingStates.set(conversationId, state);
-		if (conversationId === this.activeConversationId) this.activeProcessingState = state;
+		return this.runtime.getProcessingState(conversationId);
 	}
 
 	clearProcessingState(conversationId: string): void {
-		this.processingStates.delete(conversationId);
-		if (conversationId === this.activeConversationId) this.activeProcessingState = null;
+		this.runtime.clearProcessingState(conversationId);
 	}
 
 	getActiveProcessingState(): ApiProcessingState | null {
-		return this.activeProcessingState;
+		return this.runtime.getActiveProcessingState();
 	}
 
 	getCurrentProcessingStateSync(): ApiProcessingState | null {
-		return this.activeProcessingState;
-	}
-
-	private setStreamingActive(active: boolean): void {
-		this.isStreamingActive = active;
+		return this.runtime.getCurrentProcessingStateSync();
 	}
 
 	isStreaming(): boolean {
-		return this.isStreamingActive;
+		return this.runtime.isStreaming();
 	}
 
-	private getOrCreateAbortController(convId: string): AbortController {
-		let c = this.abortControllers.get(convId);
-		if (!c || c.signal.aborted) {
-			c = new AbortController();
-			this.abortControllers.set(convId, c);
-		}
-		return c;
-	}
-
-	private abortRequest(convId?: string): void {
-		if (convId) {
-			const c = this.abortControllers.get(convId);
-			if (c) {
-				c.abort();
-				this.abortControllers.delete(convId);
-			}
-		} else {
-			for (const c of this.abortControllers.values()) c.abort();
-			this.abortControllers.clear();
-		}
-	}
-
-	/**
-	 * Abort the current agentic flow signal without clearing loading state.
-	 * Used by "Send immediately" to force the agentic loop to exit so that
-	 * the pending steering message can be re-sent.
-	 */
 	abortCurrentFlow(convId: string): void {
-		const c = this.abortControllers.get(convId);
-		if (c) {
-			c.abort();
-			this.abortControllers.delete(convId);
-		}
+		this.runtime.abortCurrentFlow(convId);
 	}
 
 	dismissErrorDialog(): void {
@@ -252,27 +168,23 @@ class ChatStore {
 	}
 
 	getAllLoadingChats(): string[] {
-		return Array.from(this.chatLoadingStates.keys());
+		return this.runtime.getAllLoadingChats();
 	}
 
 	getAllStreamingChats(): string[] {
-		return Array.from(this.chatStreamingStates.keys());
+		return this.runtime.getAllStreamingChats();
 	}
 
 	getChatStreamingPublic(convId: string): { response: string; messageId: string } | undefined {
-		return this.getChatStreaming(convId);
+		return this.runtime.getChatStreamingPublic(convId);
 	}
 
 	isChatLoadingPublic(convId: string): boolean {
-		return this.chatLoadingStates.get(convId) || false;
+		return this.runtime.isChatLoadingPublic(convId);
 	}
 
 	isChatReasoningPublic(convId: string): boolean {
-		return this.chatReasoningStates.get(convId) || false;
-	}
-
-	private isChatLoadingInternal(convId: string): boolean {
-		return this.chatLoadingStates.has(convId) || this.chatStreamingStates.has(convId);
+		return this.runtime.isChatReasoningPublic(convId);
 	}
 
 	hasPendingMessage(convId: string): boolean {
@@ -295,62 +207,12 @@ class ChatStore {
 		this.ui.clearPendingMessage(convId);
 	}
 
-	private touchConversationState(convId: string): void {
-		this.conversationStateTimestamps.set(convId, { lastAccessed: Date.now() });
+	cleanupOldConversationStates(activeConversationIds?: string[]): number {
+		return this.runtime.cleanupOldConversationStates(activeConversationIds);
 	}
 
-	cleanupOldConversationStates(activeConversationIds?: string[]): number {
-		const now = Date.now();
-		const activeIdsList = activeConversationIds ?? [];
-		const preserveIds = this.activeConversationId
-			? [...activeIdsList, this.activeConversationId]
-			: activeIdsList;
-		const allConvIds = [
-			...new Set([
-				...this.chatLoadingStates.keys(),
-				...this.chatStreamingStates.keys(),
-				...this.abortControllers.keys(),
-				...this.processingStates.keys(),
-				...this.conversationStateTimestamps.keys()
-			])
-		];
-		const cleanupCandidates: Array<{ convId: string; lastAccessed: number }> = [];
-		for (const convId of allConvIds) {
-			if (preserveIds.includes(convId)) continue;
-			if (this.chatLoadingStates.get(convId)) continue;
-			if (this.chatStreamingStates.has(convId)) continue;
-			const ts = this.conversationStateTimestamps.get(convId);
-			cleanupCandidates.push({ convId, lastAccessed: ts?.lastAccessed ?? 0 });
-		}
-		cleanupCandidates.sort((a, b) => a.lastAccessed - b.lastAccessed);
-		let cleanedUp = 0;
-		for (const { convId, lastAccessed } of cleanupCandidates) {
-			if (
-				cleanupCandidates.length - cleanedUp > MAX_INACTIVE_CONVERSATION_STATES ||
-				now - lastAccessed > INACTIVE_CONVERSATION_STATE_MAX_AGE_MS
-			) {
-				this.cleanupConversationState(convId);
-				cleanedUp++;
-			}
-		}
-		return cleanedUp;
-	}
-	private cleanupConversationState(convId: string): void {
-		const c = this.abortControllers.get(convId);
-		if (c && !c.signal.aborted) c.abort();
-		this.chatLoadingStates.delete(convId);
-		this.chatStreamingStates.delete(convId);
-		this.abortControllers.delete(convId);
-		this.processingStates.delete(convId);
-		this.conversationStateTimestamps.delete(convId);
-	}
 	getTrackedConversationCount(): number {
-		return new Set([
-			...this.chatLoadingStates.keys(),
-			...this.chatStreamingStates.keys(),
-			...this.abortControllers.keys(),
-			...this.processingStates.keys()
-		]).size;
+		return this.runtime.getTrackedConversationCount();
 	}
 
 	private getMessageByIdWithRole(
@@ -526,7 +388,7 @@ class ChatStore {
 		}
 
 		// If non-agentic streaming is active, queue as a pending message to send after completion
-		if (activeConv && this.isChatLoadingInternal(activeConv.id)) {
+		if (activeConv && this.runtime.isChatLoadingInternal(activeConv.id)) {
 			this.injectPendingMessage(activeConv.id, content, extras);
 			return;
 		}
@@ -546,8 +408,8 @@ class ChatStore {
 		const currentConv = conversationsStore.activeConversation;
 		if (!currentConv) return;
 		this.ui.showErrorDialog(null);
-		this.setChatLoading(currentConv.id, true);
-		this.clearChatStreaming(currentConv.id);
+		this.runtime.setChatLoading(currentConv.id, true);
+		this.runtime.clearChatStreaming(currentConv.id);
 		try {
 			let parentIdForUserMessage: string | undefined;
 			if (isNewConversation) {
@@ -584,11 +446,11 @@ class ChatStore {
 			);
 		} catch (error) {
 			if (isAbortError(error)) {
-				this.setChatLoading(currentConv.id, false);
+				this.runtime.setChatLoading(currentConv.id, false);
 				return;
 			}
 			console.error('Failed to send message:', error);
-			this.setChatLoading(currentConv.id, false);
+			this.runtime.setChatLoading(currentConv.id, false);
 			const dialogType =
 				error instanceof Error && error.name === 'TimeoutError'
 					? ErrorDialogType.TIMEOUT
@@ -670,37 +532,37 @@ class ChatStore {
 		};
 
 		const updateStreamingUI = () => {
-			this.setChatStreaming(convId, streamedContent, currentMessageId);
+			this.runtime.setChatStreaming(convId, streamedContent, currentMessageId);
 			const idx = conversationsStore.findMessageIndex(currentMessageId);
 			conversationsStore.updateMessageAtIndex(idx, { content: streamedContent });
 		};
 
 		const cleanupStreamingState = () => {
-			this.setStreamingActive(false);
-			this.setChatLoading(convId, false);
-			this.clearChatStreaming(convId);
-			this.setProcessingState(convId, null);
+			this.runtime.setStreamingActive(false);
+			this.runtime.setChatLoading(convId, false);
+			this.runtime.clearChatStreaming(convId);
+			this.runtime.setProcessingState(convId, null);
 		};
 
-		this.setStreamingActive(true);
+		this.runtime.setStreamingActive(true);
 		this.setActiveProcessingConversation(convId);
-		const abortController = this.getOrCreateAbortController(convId);
+		const abortController = this.runtime.getOrCreateAbortController(convId);
 
 		const streamCallbacks: ChatStreamCallbacks = {
 			onChunk: (chunk: string) => {
 				streamedContent += chunk;
 				updateStreamingUI();
-				this.setChatReasoning(convId, false);
+				this.runtime.setChatReasoning(convId, false);
 			},
 			onReasoningChunk: (chunk: string) => {
 				streamedReasoningContent += chunk;
 				// mark streaming state so a stop mid-thinking can persist the partial reasoning
-				this.setChatStreaming(convId, streamedContent, currentMessageId);
+				this.runtime.setChatStreaming(convId, streamedContent, currentMessageId);
 				const idx = conversationsStore.findMessageIndex(currentMessageId);
 				conversationsStore.updateMessageAtIndex(idx, {
 					reasoningContent: streamedReasoningContent
 				});
-				this.setChatReasoning(convId, true);
+				this.runtime.setChatReasoning(convId, true);
 			},
 			onToolCallsStreaming: (toolCalls) => {
 				const idx = conversationsStore.findMessageIndex(currentMessageId);
@@ -839,7 +701,7 @@ class ChatStore {
 				}
 			},
 			onError: async (error: Error) => {
-				this.setStreamingActive(false);
+				this.runtime.setStreamingActive(false);
 				if (isAbortError(error)) {
 					cleanupStreamingState();
 					// If aborted with a pending message (e.g. "Send immediately"), re-send it
@@ -952,18 +814,18 @@ class ChatStore {
 	}
 	async stopGenerationForChat(convId: string): Promise<void> {
 		await this.savePartialResponseIfNeeded(convId);
-		this.setStreamingActive(false);
-		this.abortRequest(convId);
-		this.setChatLoading(convId, false);
-		this.clearChatStreaming(convId);
-		this.setProcessingState(convId, null);
+		this.runtime.setStreamingActive(false);
+		this.runtime.abortRequest(convId);
+		this.runtime.setChatLoading(convId, false);
+		this.runtime.clearChatStreaming(convId);
+		this.runtime.setProcessingState(convId, null);
 		this.clearPendingMessage(convId);
 	}
 
 	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
 		const conversationId = convId || conversationsStore.activeConversation?.id;
 		if (!conversationId) return;
-		const streamingState = this.getChatStreaming(conversationId);
+		const streamingState = this.runtime.getChatStreaming(conversationId);
 		if (!streamingState) return;
 		const messages =
 			conversationId === conversationsStore.activeConversation?.id
@@ -1015,7 +877,7 @@ class ChatStore {
 	async updateMessage(messageId: string, newContent: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv) return;
-		if (this.isChatLoadingInternal(activeConv.id)) await this.stopGeneration();
+		if (this.runtime.isChatLoadingInternal(activeConv.id)) await this.stopGeneration();
 		const result = this.getMessageByIdWithRole(messageId, MessageRole.USER);
 		if (!result) return;
 		const { message: messageToUpdate, index: messageIndex } = result;
@@ -1035,8 +897,8 @@ class ChatStore {
 			for (const message of messagesToRemove) await DatabaseService.deleteMessage(message.id);
 			conversationsStore.sliceActiveMessages(messageIndex + 1);
 			conversationsStore.updateConversationTimestamp();
-			this.setChatLoading(activeConv.id, true);
-			this.clearChatStreaming(activeConv.id);
+			this.runtime.setChatLoading(activeConv.id, true);
+			this.runtime.clearChatStreaming(activeConv.id);
 			const assistantMessage = await this.createAssistantMessage();
 			conversationsStore.addMessageToActive(assistantMessage);
 			await conversationsStore.updateCurrentNode(assistantMessage.id);
@@ -1057,7 +919,7 @@ class ChatStore {
 
 	async regenerateMessage(messageId: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
-		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
+		if (!activeConv || this.runtime.isChatLoadingInternal(activeConv.id)) return;
 		this.cancelPreEncode();
 		const result = this.getMessageByIdWithRole(messageId, MessageRole.ASSISTANT);
 		if (!result) return;
@@ -1067,8 +929,8 @@ class ChatStore {
 			for (const message of messagesToRemove) await DatabaseService.deleteMessage(message.id);
 			conversationsStore.sliceActiveMessages(messageIndex);
 			conversationsStore.updateConversationTimestamp();
-			this.setChatLoading(activeConv.id, true);
-			this.clearChatStreaming(activeConv.id);
+			this.runtime.setChatLoading(activeConv.id, true);
+			this.runtime.clearChatStreaming(activeConv.id);
 			const parentMessageId =
 				conversationsStore.activeMessages.length > 0
 					? conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1].id
@@ -1081,13 +943,13 @@ class ChatStore {
 			);
 		} catch (error) {
 			if (!isAbortError(error)) console.error('Failed to regenerate message:', error);
-			this.setChatLoading(activeConv?.id || '', false);
+			this.runtime.setChatLoading(activeConv?.id || '', false);
 		}
 	}
 
 	async regenerateMessageWithBranching(messageId: string, modelOverride?: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
-		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
+		if (!activeConv || this.runtime.isChatLoadingInternal(activeConv.id)) return;
 		this.cancelPreEncode();
 		try {
 			const idx = conversationsStore.findMessageIndex(messageId);
@@ -1097,8 +959,8 @@ class ChatStore {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const parentMessage = findMessageById(allMessages, msg.parent);
 			if (!parentMessage) return;
-			this.setChatLoading(activeConv.id, true);
-			this.clearChatStreaming(activeConv.id);
+			this.runtime.setChatLoading(activeConv.id, true);
+			this.runtime.clearChatStreaming(activeConv.id);
 			const newAssistantMessage = await DatabaseService.createMessageBranch(
 				{
 					convId: msg.convId,
@@ -1131,7 +993,7 @@ class ChatStore {
 		} catch (error) {
 			if (!isAbortError(error))
 				console.error('Failed to regenerate message with branching:', error);
-			this.setChatLoading(activeConv?.id || '', false);
+			this.runtime.setChatLoading(activeConv?.id || '', false);
 		}
 	}
 
@@ -1240,13 +1102,13 @@ class ChatStore {
 		const anchor = conversationsStore.activeMessages[anchorIndex];
 		if (!anchor) return;
 		this.cancelPreEncode();
-		this.setChatLoading(activeConv.id, true);
-		this.clearChatStreaming(activeConv.id);
+		this.runtime.setChatLoading(activeConv.id, true);
+		this.runtime.clearChatStreaming(activeConv.id);
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const anchorMessage = findMessageById(allMessages, anchor.id);
 			if (!anchorMessage) {
-				this.setChatLoading(activeConv.id, false);
+				this.runtime.setChatLoading(activeConv.id, false);
 				return;
 			}
 			const newAssistantMessage = await DatabaseService.createMessageBranch(
@@ -1273,13 +1135,13 @@ class ChatStore {
 			await this.streamChatCompletion(conversationPath, newAssistantMessage);
 		} catch (error) {
 			if (!isAbortError(error)) console.error('Failed to continue agentic turn:', error);
-			this.setChatLoading(activeConv.id, false);
+			this.runtime.setChatLoading(activeConv.id, false);
 		}
 	}
 
 	async continueAssistantMessage(messageId: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
-		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
+		if (!activeConv || this.runtime.isChatLoadingInternal(activeConv.id)) return;
 		const result = this.getMessageByIdWithRole(messageId, MessageRole.ASSISTANT);
 
 		if (!result) return;
@@ -1300,14 +1162,14 @@ class ChatStore {
 
 		try {
 			this.ui.showErrorDialog(null);
-			this.setChatLoading(activeConv.id, true);
-			this.clearChatStreaming(activeConv.id);
+			this.runtime.setChatLoading(activeConv.id, true);
+			this.runtime.clearChatStreaming(activeConv.id);
 
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const dbMessage = findMessageById(allMessages, messageId);
 
 			if (!dbMessage) {
-				this.setChatLoading(activeConv.id, false);
+				this.runtime.setChatLoading(activeConv.id, false);
 				return;
 			}
 
@@ -1324,11 +1186,11 @@ class ChatStore {
 			let hasReceivedContent = false;
 
 			const updateStreamingContent = (fullContent: string) => {
-				this.setChatStreaming(msg.convId, fullContent, msg.id);
+				this.runtime.setChatStreaming(msg.convId, fullContent, msg.id);
 				conversationsStore.updateMessageAtIndex(idx, { content: fullContent });
 			};
 
-			const abortController = this.getOrCreateAbortController(msg.convId);
+			const abortController = this.runtime.getOrCreateAbortController(msg.convId);
 
 			await ChatService.sendMessage(
 				contextWithContinue,
@@ -1339,17 +1201,17 @@ class ChatStore {
 						appendedContent += chunk;
 						hasReceivedContent = true;
 						updateStreamingContent(originalContent + appendedContent);
-						this.setChatReasoning(msg.convId, false);
+						this.runtime.setChatReasoning(msg.convId, false);
 					},
 					onReasoningChunk: (chunk: string) => {
 						appendedReasoning += chunk;
 						hasReceivedContent = true;
 						// mark streaming state so a stop mid-thinking can persist the partial reasoning
-						this.setChatStreaming(msg.convId, originalContent + appendedContent, msg.id);
+						this.runtime.setChatStreaming(msg.convId, originalContent + appendedContent, msg.id);
 						conversationsStore.updateMessageAtIndex(idx, {
 							reasoningContent: originalReasoning + appendedReasoning
 						});
-						this.setChatReasoning(msg.convId, true);
+						this.runtime.setChatReasoning(msg.convId, true);
 					},
 					onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
 						const tokensPerSecond =
@@ -1396,9 +1258,9 @@ class ChatStore {
 
 						conversationsStore.updateConversationTimestamp();
 
-						this.setChatLoading(msg.convId, false);
-						this.clearChatStreaming(msg.convId);
-						this.setProcessingState(msg.convId, null);
+						this.runtime.setChatLoading(msg.convId, false);
+						this.runtime.clearChatStreaming(msg.convId);
+						this.runtime.setProcessingState(msg.convId, null);
 					},
 					onError: async (error: Error) => {
 						if (isAbortError(error)) {
@@ -1416,9 +1278,9 @@ class ChatStore {
 								});
 							}
 
-							this.setChatLoading(msg.convId, false);
-							this.clearChatStreaming(msg.convId);
-							this.setProcessingState(msg.convId, null);
+							this.runtime.setChatLoading(msg.convId, false);
+							this.runtime.clearChatStreaming(msg.convId);
+							this.runtime.setProcessingState(msg.convId, null);
 
 							return;
 						}
@@ -1436,9 +1298,9 @@ class ChatStore {
 							timestamp: Date.now()
 						});
 
-						this.setChatLoading(msg.convId, false);
-						this.clearChatStreaming(msg.convId);
-						this.setProcessingState(msg.convId, null);
+						this.runtime.setChatLoading(msg.convId, false);
+						this.runtime.clearChatStreaming(msg.convId);
+						this.runtime.setProcessingState(msg.convId, null);
 						this.ui.showErrorDialog({
 							type:
 								error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER,
@@ -1452,7 +1314,7 @@ class ChatStore {
 			);
 		} catch (error) {
 			if (!isAbortError(error)) console.error('Failed to continue message:', error);
-			if (activeConv) this.setChatLoading(activeConv.id, false);
+			if (activeConv) this.runtime.setChatLoading(activeConv.id, false);
 		}
 	}
 
@@ -1462,7 +1324,7 @@ class ChatStore {
 		shouldBranch: boolean
 	): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
-		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
+		if (!activeConv || this.runtime.isChatLoadingInternal(activeConv.id)) return;
 
 		const result = this.getMessageByIdWithRole(messageId, MessageRole.ASSISTANT);
 		if (!result) return;
@@ -1542,7 +1404,7 @@ class ChatStore {
 		newExtras?: DatabaseMessageExtra[]
 	): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
-		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
+		if (!activeConv || this.runtime.isChatLoadingInternal(activeConv.id)) return;
 		let result = this.getMessageByIdWithRole(messageId, MessageRole.USER);
 		if (!result) result = this.getMessageByIdWithRole(messageId, MessageRole.SYSTEM);
 		if (!result) return;
@@ -1615,8 +1477,8 @@ class ChatStore {
 		if (!activeConv) return;
 
 		this.ui.showErrorDialog(null);
-		this.setChatLoading(activeConv.id, true);
-		this.clearChatStreaming(activeConv.id);
+		this.runtime.setChatLoading(activeConv.id, true);
+		this.runtime.clearChatStreaming(activeConv.id);
 
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
@@ -1644,14 +1506,8 @@ class ChatStore {
 			await this.streamChatCompletion(conversationPath, assistantMessage);
 		} catch (error) {
 			console.error('Failed to generate response:', error);
-			this.setChatLoading(activeConv.id, false);
+			this.runtime.setChatLoading(activeConv.id, false);
 		}
-	}
-
-	private getContextTotal(): number | null {
-		const activeConvId = this.activeConversationId;
-		const activeState = activeConvId ? this.getProcessingState(activeConvId) : null;
-		return computeContextTotal(activeState);
 	}
 
 	updateProcessingStateFromTimings(
@@ -1665,43 +1521,11 @@ class ChatStore {
 		},
 		conversationId?: string
 	): void {
-		const processingState = this.parseTimingData(timingData);
-
-		if (processingState === null) {
-			console.warn('Failed to parse timing data - skipping update');
-			return;
-		}
-
-		const targetId = conversationId || this.activeConversationId;
-		if (targetId) {
-			this.setProcessingState(targetId, processingState);
-		}
-	}
-
-	private parseTimingData(timingData: Record<string, unknown>): ApiProcessingState | null {
-		return computeTimingData(timingData, this.getContextTotal());
+		this.runtime.updateProcessingStateFromTimings(timingData, conversationId);
 	}
 
 	restoreProcessingStateFromMessages(messages: DatabaseMessage[], conversationId: string): void {
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const message = messages[i];
-			if (message.role === MessageRole.ASSISTANT && message.timings) {
-				const restoredState = this.parseTimingData({
-					prompt_n: message.timings.prompt_n || 0,
-					prompt_ms: message.timings.prompt_ms,
-					predicted_n: message.timings.predicted_n || 0,
-					predicted_per_second:
-						message.timings.predicted_n && message.timings.predicted_ms
-							? (message.timings.predicted_n / message.timings.predicted_ms) * 1000
-							: 0,
-					cache_n: message.timings.cache_n || 0
-				});
-				if (restoredState) {
-					this.setProcessingState(conversationId, restoredState);
-					return;
-				}
-			}
-		}
+		this.runtime.restoreProcessingStateFromMessages(messages, conversationId);
 	}
 
 	getConversationModel(messages: DatabaseMessage[]): string | null {
