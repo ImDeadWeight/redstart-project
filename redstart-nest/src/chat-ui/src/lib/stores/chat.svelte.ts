@@ -27,6 +27,7 @@ import {
 	getConversationModel as computeConversationModel,
 	parseTimingData as computeTimingData
 } from '$lib/stores/chat/chat-options';
+import { ChatUiState } from '$lib/stores/chat/chat-ui-state.svelte';
 import {
 	normalizeModelName,
 	filterByLeafNodeId,
@@ -60,9 +61,10 @@ interface ConversationStateEntry {
 }
 
 class ChatStore {
+	readonly ui = new ChatUiState();
+
 	activeProcessingState = $state<ApiProcessingState | null>(null);
 	currentResponse = $state('');
-	errorDialogState = $state<ErrorDialogState | null>(null);
 	isLoading = $state(false);
 	// true while the active conversation streams reasoning content but no visible content yet
 	isReasoning = $state(false);
@@ -75,20 +77,15 @@ class ChatStore {
 	private conversationStateTimestamps = new SvelteMap<string, ConversationStateEntry>();
 	private activeConversationId = $state<string | null>(null);
 	private isStreamingActive = $state(false);
-	private isEditModeActive = $state(false);
-	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
-	pendingEditMessageId = $state<string | null>(null);
-	private messageUpdateCallback:
-		| ((messageId: string, updates: Partial<DatabaseMessage>) => void)
-		| null = null;
-	private _pendingDraftMessage = $state<string>('');
-	private _pendingDraftFiles = $state<ChatUploadedFile[]>([]);
 
-	/** Reactive: queued pending messages for non-agentic streaming */
-	private _pendingMessages = new SvelteMap<
-		string,
-		{ content: string; extras?: DatabaseMessageExtra[] }
-	>();
+	/** Reactive UI state (error dialog, edit mode, drafts, pending-message queue). */
+	get errorDialogState(): ErrorDialogState | null {
+		return this.ui.errorDialogState;
+	}
+
+	get pendingEditMessageId(): string | null {
+		return this.ui.pendingEditMessageId;
+	}
 
 	private setChatLoading(convId: string, loading: boolean): void {
 		this.touchConversationState(convId);
@@ -218,51 +215,40 @@ class ChatStore {
 		}
 	}
 
-	private showErrorDialog(state: ErrorDialogState | null): void {
-		this.errorDialogState = state;
-	}
-
 	dismissErrorDialog(): void {
-		this.errorDialogState = null;
+		this.ui.dismissErrorDialog();
 	}
 
 	clearEditMode(): void {
-		this.isEditModeActive = false;
-		this.addFilesHandler = null;
+		this.ui.clearEditMode();
 	}
 
 	isEditing(): boolean {
-		return this.isEditModeActive;
+		return this.ui.isEditing();
 	}
 
 	setEditModeActive(handler: (files: File[]) => void): void {
-		this.isEditModeActive = true;
-		this.addFilesHandler = handler;
+		this.ui.setEditModeActive(handler);
 	}
 
 	getAddFilesHandler(): ((files: File[]) => void) | null {
-		return this.addFilesHandler;
+		return this.ui.getAddFilesHandler();
 	}
 
 	clearPendingEditMessageId(): void {
-		this.pendingEditMessageId = null;
+		this.ui.clearPendingEditMessageId();
 	}
 
 	savePendingDraft(message: string, files: ChatUploadedFile[]): void {
-		this._pendingDraftMessage = message;
-		this._pendingDraftFiles = [...files];
+		this.ui.savePendingDraft(message, files);
 	}
 
 	consumePendingDraft(): { message: string; files: ChatUploadedFile[] } | null {
-		if (!this._pendingDraftMessage && this._pendingDraftFiles.length === 0) return null;
-		const d = { message: this._pendingDraftMessage, files: [...this._pendingDraftFiles] };
-		this._pendingDraftMessage = '';
-		this._pendingDraftFiles = [];
-		return d;
+		return this.ui.consumePendingDraft();
 	}
 
 	hasPendingDraft(): boolean {
-		return Boolean(this._pendingDraftMessage) || this._pendingDraftFiles.length > 0;
+		return this.ui.hasPendingDraft();
 	}
 
 	getAllLoadingChats(): string[] {
@@ -290,32 +276,23 @@ class ChatStore {
 	}
 
 	hasPendingMessage(convId: string): boolean {
-		return this._pendingMessages.has(convId);
+		return this.ui.hasPendingMessage(convId);
 	}
 
 	pendingMessageContent(convId: string): string | null {
-		return this._pendingMessages.get(convId)?.content ?? null;
+		return this.ui.pendingMessageContent(convId);
 	}
 
 	pendingMessageExtras(convId: string): DatabaseMessageExtra[] | undefined {
-		return this._pendingMessages.get(convId)?.extras;
+		return this.ui.pendingMessageExtras(convId);
 	}
 
 	injectPendingMessage(convId: string, content: string, extras?: DatabaseMessageExtra[]): void {
-		this._pendingMessages.set(convId, { content, extras });
+		this.ui.injectPendingMessage(convId, content, extras);
 	}
 
 	clearPendingMessage(convId: string): void {
-		this._pendingMessages.delete(convId);
-	}
-
-	consumePendingMessage(
-		convId: string
-	): { content: string; extras?: DatabaseMessageExtra[] } | null {
-		const msg = this._pendingMessages.get(convId);
-		if (!msg) return null;
-		this._pendingMessages.delete(convId);
-		return msg;
+		this.ui.clearPendingMessage(convId);
 	}
 
 	private touchConversationState(convId: string): void {
@@ -442,7 +419,7 @@ class ChatStore {
 				(m) => m.role === MessageRole.SYSTEM && m.parent === rootId
 			);
 			if (existingSystemMessage) {
-				this.pendingEditMessageId = existingSystemMessage.id;
+				this.ui.pendingEditMessageId = existingSystemMessage.id;
 				if (!conversationsStore.activeMessages.some((m) => m.id === existingSystemMessage.id))
 					conversationsStore.activeMessages.unshift(existingSystemMessage);
 				return;
@@ -477,7 +454,7 @@ class ChatStore {
 					});
 			}
 			conversationsStore.activeMessages.unshift(systemMessage);
-			this.pendingEditMessageId = systemMessage.id;
+			this.ui.pendingEditMessageId = systemMessage.id;
 			conversationsStore.updateConversationTimestamp();
 		} catch (error) {
 			console.error('Failed to add system prompt:', error);
@@ -568,7 +545,7 @@ class ChatStore {
 		}
 		const currentConv = conversationsStore.activeConversation;
 		if (!currentConv) return;
-		this.showErrorDialog(null);
+		this.ui.showErrorDialog(null);
 		this.setChatLoading(currentConv.id, true);
 		this.clearChatStreaming(currentConv.id);
 		try {
@@ -619,7 +596,7 @@ class ChatStore {
 			const contextInfo = (
 				error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
 			).contextInfo;
-			this.showErrorDialog({
+			this.ui.showErrorDialog({
 				type: dialogType,
 				message: error instanceof Error ? error.message : 'Unknown error',
 				contextInfo
@@ -866,7 +843,7 @@ class ChatStore {
 				if (isAbortError(error)) {
 					cleanupStreamingState();
 					// If aborted with a pending message (e.g. "Send immediately"), re-send it
-					const pending = this.consumePendingMessage(convId);
+					const pending = this.ui.consumePendingMessage(convId);
 					if (pending) {
 						this.sendMessage(pending.content, pending.extras);
 					}
@@ -881,7 +858,7 @@ class ChatStore {
 				const contextInfo = (
 					error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
 				).contextInfo;
-				this.showErrorDialog({
+				this.ui.showErrorDialog({
 					type: error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER,
 					message: error.message,
 					contextInfo
@@ -956,7 +933,7 @@ class ChatStore {
 					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
 
 					// Check if there's a pending message queued during streaming
-					const pending = this.consumePendingMessage(convId);
+					const pending = this.ui.consumePendingMessage(convId);
 					if (pending) {
 						await this.sendMessage(pending.content, pending.extras);
 					}
@@ -1322,7 +1299,7 @@ class ChatStore {
 		}
 
 		try {
-			this.showErrorDialog(null);
+			this.ui.showErrorDialog(null);
 			this.setChatLoading(activeConv.id, true);
 			this.clearChatStreaming(activeConv.id);
 
@@ -1462,7 +1439,7 @@ class ChatStore {
 						this.setChatLoading(msg.convId, false);
 						this.clearChatStreaming(msg.convId);
 						this.setProcessingState(msg.convId, null);
-						this.showErrorDialog({
+						this.ui.showErrorDialog({
 							type:
 								error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER,
 							message: error.message
@@ -1637,7 +1614,7 @@ class ChatStore {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv) return;
 
-		this.showErrorDialog(null);
+		this.ui.showErrorDialog(null);
 		this.setChatLoading(activeConv.id, true);
 		this.clearChatStreaming(activeConv.id);
 
