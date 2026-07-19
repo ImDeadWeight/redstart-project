@@ -18,13 +18,12 @@ import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import * as path from 'path'
 import * as fs from 'fs'
-import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES, expandDisabledToolIds } from './tools-definitions.mjs'
-import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup, getExternalServers, addExternalServer, deleteExternalServer, getCapabilities, setCapabilityConfig, ensureDefaultCapabilityFolders } from './tools-storage.mjs'
+import { BUILTIN_TOOLS, BUILTIN_GROUPS, expandDisabledToolIds } from './tools-definitions.mjs'
+import { getUserTools, getUserGroups, getCapabilities, setCapabilityConfig, ensureDefaultCapabilityFolders } from './tools-storage.mjs'
 import { startGateway, stopGateway, updateGatewayConfig, getGatewayPort } from './tools-gateway.mjs'
 import { startMcpServer, stopMcpServer, updateMcpConfig, getMcpServerRunning, estimateActiveToolTokens } from './mcp-server.mjs'
 import { encryptSecret, decryptSecret } from './secrets.mjs'
 import { testConnection as testPostgresConnection } from './postgres-tool.mjs'
-import * as crypto from 'crypto'
 import * as os from 'os'
 import * as zlib from 'zlib'
 import * as http from 'http'
@@ -38,6 +37,8 @@ import { registerHardwareHandlers } from './ipc/hardware.mjs'
 import { registerSettingsHandlers } from './ipc/settings.mjs'
 import { registerAuthHandlers } from './ipc/auth.mjs'
 import { registerProfilesHandlers } from './ipc/profiles.mjs'
+import { registerToolsHandlers } from './ipc/tools.mjs'
+import { registerMcpHandlers } from './ipc/mcp.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -722,6 +723,8 @@ function registerIpcHandlers(deps) {
   registerSettingsHandlers(deps)
   registerAuthHandlers()
   registerProfilesHandlers(deps)
+  registerToolsHandlers(deps)
+  registerMcpHandlers()
 }
 
 function setupIpcHandlers() {
@@ -733,65 +736,7 @@ function setupIpcHandlers() {
     selectBinaryDefaultPath: path.join(__dirname, '..', '..', 'llama-cpp-turboquant', 'build', 'bin', 'Release'),
     readProfiles,
     writeProfiles,
-  })
-
-  // --- Tools ---
-
-  ipcMain.handle('tools:list-all', () => {
-    return {
-      builtinTools:        BUILTIN_TOOLS,
-      builtinGroups:       BUILTIN_GROUPS,
-      builtinCapabilities: BUILTIN_CAPABILITIES,
-      userTools:           getUserTools(),
-      userGroups:          getUserGroups(),
-    }
-  })
-
-  ipcMain.handle('tools:add-tool', (_, tool) => addUserTool(tool))
-  ipcMain.handle('tools:delete-tool', (_, id) => deleteUserTool(id))
-  ipcMain.handle('tools:add-group', (_, group) => addUserGroup(group))
-  ipcMain.handle('tools:delete-group', (_, id) => deleteUserGroup(id))
-
-  // Apply a live tool config change without restarting the server.
-  // Called when the user saves a profile that has tools configured while the
-  // server is already running.
-  ipcMain.handle('tools:apply-config', (_, llamaConfig) => {
-    if (!getGatewayPort(llamaConfig?.port ?? 19080)) return false
-    const cfg = buildGatewayConfig(llamaConfig)
-    updateGatewayConfig(cfg)
-    updateMcpConfig(cfg)
-    return true
-  })
-
-  // --- MCP ---
-
-  ipcMain.handle('mcp:list-external', () => getExternalServers())
-
-  ipcMain.handle('mcp:add-external', (_, server) => {
-    const id = server.id || crypto.randomUUID()
-    const s = { ...server, id, enabled: server.enabled ?? true }
-    addExternalServer(s)
-    return s
-  })
-
-  ipcMain.handle('mcp:remove-external', (_, id) => deleteExternalServer(id))
-
-  ipcMain.handle('mcp:test-external', async (_, url) => {
-    const sseUrl = url.endsWith('/sse') ? url : url.replace(/\/$/, '') + '/sse'
-    try {
-      const res = await fetch(sseUrl, {
-        signal: AbortSignal.timeout(5000),
-        method: 'GET',
-        headers: { Accept: 'text/event-stream' },
-      })
-      const ct = res.headers.get('content-type') || ''
-      if (res.ok && ct.includes('text/event-stream')) {
-        return { ok: true, message: 'Connected' }
-      }
-      return { ok: false, message: `Unexpected response: ${res.status} (${ct || 'no content-type'})` }
-    } catch (err) {
-      return { ok: false, message: err.message }
-    }
+    buildGatewayConfig,
   })
 
   // --- Capabilities (Postgres, Documents) ---
