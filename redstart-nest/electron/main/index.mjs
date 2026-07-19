@@ -661,6 +661,13 @@ function buildArgs(config, raw = false) {
     '--port', String(config.port + 1),
     '--host', '127.0.0.1',
     '--path', q(chatUiPath),
+    // Enable the model's Jinja chat template so llama-server formats the request's
+    // `tools` into the prompt AND runs the model-specific tool-call parser on the
+    // output. Without this, a model's tool call is passed through as plain
+    // assistant `content` (a raw JSON blob) instead of a structured `tool_calls`
+    // field, so the chat-ui's agentic loop never sees a call to execute. Always
+    // on: the gateway is built around native OpenAI tool-calling.
+    '--jinja',
   ]
   // gpuLayers/nCpuMoe are omitted when unset rather than defaulted here —
   // llama-server's own --fit (on by default) only auto-adjusts arguments that
