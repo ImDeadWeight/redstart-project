@@ -1,13 +1,12 @@
 import { SectionTitle, TogglePill, inputCls } from '../components/ui'
 
-export function NetworkPanel({ networkMode, onToggleNetworkMode, advertisedHost, setAdvertisedHost, localIp, port, qrDataUrl }: {
+export function NetworkPanel({ networkMode, onToggleNetworkMode, advertisedHost, setAdvertisedHost, localIp, port }: {
   networkMode: boolean
   onToggleNetworkMode: () => void
   advertisedHost: string
   setAdvertisedHost: (host: string) => void
   localIp: string
   port: number
-  qrDataUrl: string
 }) {
   return (
     <section>
@@ -34,12 +33,6 @@ export function NetworkPanel({ networkMode, onToggleNetworkMode, advertisedHost,
             Server address: <span className="text-orange-400 font-semibold">{(advertisedHost || localIp)}:{port}</span>
             {advertisedHost && <span className="text-zinc-500 ml-1">(mDNS: {advertisedHost})</span>}
           </div>
-          {qrDataUrl && (
-            <div>
-              <p className="text-xs text-zinc-500 mb-1">Scan with Android camera to open Redstart Twig and connect automatically:</p>
-              <img src={qrDataUrl} alt="Connection QR" className="rounded bg-white p-1" />
-            </div>
-          )}
         </div>
       )}
     </section>

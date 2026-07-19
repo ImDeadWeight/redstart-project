@@ -12,7 +12,6 @@
 // =============================================================================
 
 import { useState, useEffect } from 'react'
-import QRCode from 'qrcode'
 import type { LlamaConfig } from './types'
 import { DEFAULT_CONFIG } from './types'
 import { api, getAPI } from './api/redstart'
@@ -41,7 +40,6 @@ export default function App() {
   const [networkMode, setNetworkMode] = useState(true)
   const [localIp, setLocalIp] = useState('')
   const [advertisedHost, setAdvertisedHost] = useState('redstart.local')
-  const [qrDataUrl, setQrDataUrl] = useState('')
   const [activeTab, setActiveTab] = useState<'config' | 'tools' | 'server'>('config')
 
   const { statusMsg, show: showStatus, clear: clearStatus } = useStatusMessage()
@@ -70,14 +68,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // --- Network / QR ---
-  // The QR code encodes a deep link in the format redstart://connect?url=http://...
-  // When an Android user scans this with their camera, the OS routes it to the
-  // Redstart Twig app (because the app registers the redstart:// URI scheme in its
-  // manifest). The app then reads the url parameter and auto-configures itself.
-  // A custom URI scheme is used over a plain URL because a plain http:// link
-  // would just open the browser instead of the Redstart Twig app.
-
   // Sync advertisedHost to config whenever it changes. In network mode a blank
   // host defaults to redstart.local so mDNS always advertises a resolvable
   // .local name; localhost-only mode keeps whatever was typed (usually blank).
@@ -85,14 +75,6 @@ export default function App() {
     const host = networkMode ? (advertisedHost.trim() || 'redstart.local') : advertisedHost
     setConfig(prev => ({ ...prev, advertisedHost: host }))
   }, [advertisedHost, networkMode])
-
-  useEffect(() => {
-    if (!networkMode) { setQrDataUrl(''); return }
-    const host = (advertisedHost || localIp || '').trim()
-    if (!host) { setQrDataUrl(''); return }
-    const deepLink = `redstart://connect?url=${encodeURIComponent(`http://${host}:${config.port}`)}`
-    QRCode.toDataURL(deepLink, { width: 200, margin: 1 }).then(setQrDataUrl).catch(() => setQrDataUrl(''))
-  }, [networkMode, advertisedHost, localIp, config.port])
 
   useEffect(() => {
     setConfig(prev => ({ ...prev, networkMode }))
@@ -155,7 +137,6 @@ export default function App() {
             setAdvertisedHost={setAdvertisedHost}
             localIp={localIp}
             port={config.port}
-            qrDataUrl={qrDataUrl}
           />
           <AccountsPanel auth={auth} />
         </aside>
