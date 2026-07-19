@@ -1,14 +1,19 @@
 /**
- * chatStore - Reactive State Store for Chat Operations
+ * chatStore - Facade over the decomposed chat sub-stores.
  *
- * Manages chat lifecycle, streaming, message operations, and processing state.
+ * Thin delegating facade that preserves the original public API. State and logic
+ * live in focused sub-stores under `chat/`, composed and wired together here:
+ * - **ui** (ChatUiState): error dialog, edit mode, drafts, pending-message queue.
+ * - **runtime** (ChatRuntimeState): loading / reasoning / streaming maps,
+ *   processing state, abort controllers, conversation-state GC.
+ * - **send** (ChatSendController): sendMessage, streaming, stop, pre-encode.
+ * - **ops** (ChatMessageOps): edit / regenerate / delete / continue.
  *
- * **Architecture & Relationships:**
- * - **ChatService**: Stateless API layer (sendMessage, streaming)
- * - **chatStore** (this): Reactive state + business logic
- * - **conversationsStore**: Conversation persistence and navigation
+ * Reactive state is re-exposed via forwarding getters (never copied) so the
+ * dependency graph reaches the owning `$state`. Consumers import from
+ * `$lib/stores/chat.svelte` unchanged.
  *
- * @see ChatService in services/chat.service.ts for API operations
+ * @see chat-message-repo.ts for the stateless DB/persistence helpers.
  */
 
 import { getConversationModel as computeConversationModel } from '$lib/stores/chat/chat-options';
@@ -23,7 +28,6 @@ import { MessageRole, MessageType } from '$lib/enums';
 
 class ChatStore {
 	readonly ui = new ChatUiState();
-
 	readonly runtime = new ChatRuntimeState();
 	readonly send = new ChatSendController(this.runtime, this.ui);
 	readonly ops = new ChatMessageOps(this.runtime, this.ui, this.send);
