@@ -21,8 +21,7 @@ import * as fs from 'fs'
 import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES, expandDisabledToolIds } from './tools-definitions.mjs'
 import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup, getExternalServers, addExternalServer, deleteExternalServer, getCapabilities, setCapabilityConfig, ensureDefaultCapabilityFolders } from './tools-storage.mjs'
 import { startGateway, stopGateway, updateGatewayConfig, getGatewayPort } from './tools-gateway.mjs'
-import { startMcpServer, stopMcpServer, updateMcpConfig, getMcpServerRunning, closeAllMcpSessions, estimateActiveToolTokens } from './mcp-server.mjs'
-import { getAuthRequired, setAuthRequired, hasOwner, createOwner } from './auth.mjs'
+import { startMcpServer, stopMcpServer, updateMcpConfig, getMcpServerRunning, estimateActiveToolTokens } from './mcp-server.mjs'
 import { encryptSecret, decryptSecret } from './secrets.mjs'
 import { testConnection as testPostgresConnection } from './postgres-tool.mjs'
 import * as crypto from 'crypto'
@@ -35,6 +34,9 @@ import { startPort80Proxy, stopPort80Proxy } from './port80-proxy.mjs'
 import { cleanupOldConversations } from './conversations-storage.mjs'
 import { fileURLToPath } from 'url'
 import { registerGithubHandlers } from './ipc/github.mjs'
+import { registerHardwareHandlers } from './ipc/hardware.mjs'
+import { registerSettingsHandlers } from './ipc/settings.mjs'
+import { registerAuthHandlers } from './ipc/auth.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -713,80 +715,20 @@ app.on('window-all-closed', () => {
 // collaborators are threaded through `deps` so the modules never reach for
 // index.mjs globals. Namespaces still living inline below are migrated one
 // seam per commit; this dispatcher is where each lands as it moves out.
-function registerIpcHandlers() {
+function registerIpcHandlers(deps) {
   registerGithubHandlers()
+  registerHardwareHandlers(deps)
+  registerSettingsHandlers(deps)
+  registerAuthHandlers()
 }
 
 function setupIpcHandlers() {
-  registerIpcHandlers()
-
-  // --- Hardware ---
-
-  ipcMain.handle('hardware:scan', async () => {
-    const specs = {
-      cpu: { name: '', cores: 0, threads: 0, architecture: process.arch, supportsAVX: false },
-      gpu: { name: '', vram: 0, cudaAvailable: false },
-      memory: { total: 0, available: 0 },
-      os: { platform: process.platform, arch: process.arch },
-    }
-
-    // Single PowerShell call queries everything and returns JSON — no wmic, no header-row parsing bug
-    const psScript = `
-$r = @{ cpu = @{ name=''; cores=0; threads=0 }; memory = @{ totalBytes=0 }; gpu = @{ name=''; vramMb=0; cuda=$false } }
-try {
-  $c = Get-CimInstance Win32_Processor | Select-Object -First 1
-  $r.cpu.name    = [string]$c.Name
-  $r.cpu.cores   = [int]$c.NumberOfCores
-  $r.cpu.threads = [int]$c.NumberOfLogicalProcessors
-} catch {}
-try {
-  $r.memory.totalBytes = [long](Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
-} catch {}
-try {
-  $nv = & nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>$null
-  if ($nv) {
-    $p = $nv -split ','
-    $r.gpu.name   = $p[0].Trim()
-    $r.gpu.vramMb = [int]$p[1].Trim()
-    $r.gpu.cuda   = $true
-  }
-} catch {}
-if (-not $r.gpu.cuda) {
-  try {
-    $g = Get-CimInstance Win32_VideoController | Select-Object -First 1
-    $r.gpu.name   = [string]$g.Name
-    $r.gpu.vramMb = if ($g.AdapterRAM) { [int]([Math]::Round($g.AdapterRAM / 1MB)) } else { 0 }
-  } catch {}
-}
-$r | ConvertTo-Json -Compress
-`
-    try {
-      const out = await execFileAsync('powershell', [
-        '-NoProfile', '-NonInteractive', '-Command', psScript,
-      ])
-      const raw = JSON.parse(out.stdout.trim())
-      specs.cpu.name    = raw.cpu?.name    || ''
-      specs.cpu.cores   = raw.cpu?.cores   || 0
-      specs.cpu.threads = raw.cpu?.threads || 0
-      specs.memory.total       = (raw.memory?.totalBytes || 0) / (1024 ** 3)
-      specs.gpu.name           = raw.gpu?.name   || ''
-      specs.gpu.vram           = raw.gpu?.vramMb || 0
-      specs.gpu.cudaAvailable  = !!raw.gpu?.cuda
-      specs.cpu.supportsAVX    = /AVX/i.test(specs.cpu.name) ||
-                                  /AVX/i.test(process.env.PROCESSOR_IDENTIFIER || '')
-    } catch (e) {
-      console.error('Hardware scan error:', e)
-    }
-
-    return specs
-  })
-
-  ipcMain.handle('hardware:select-model', async () => {
-    const result = await dialog.showOpenDialog({
-      properties: ['openFile'],
-      filters: [{ name: 'GGUF Models', extensions: ['gguf'] }, { name: 'All Files', extensions: ['*'] }],
-    })
-    return result.canceled ? null : result.filePaths[0]
+  registerIpcHandlers({
+    execFileAsync,
+    readSettings,
+    writeSettings,
+    resolveBinary,
+    selectBinaryDefaultPath: path.join(__dirname, '..', '..', 'llama-cpp-turboquant', 'build', 'bin', 'Release'),
   })
 
   // --- Profiles ---
@@ -1185,53 +1127,6 @@ $r | ConvertTo-Json -Compress
   // --- Network info ---
 
   ipcMain.handle('server:get-ip', () => getLocalIp())
-
-  // --- Settings ---
-
-  ipcMain.handle('settings:get-binary-path', () => {
-    const s = readSettings()
-    return s.serverBinPath || null
-  })
-
-  ipcMain.handle('settings:set-binary-path', (_, p) => {
-    const s = readSettings()
-    if (p) s.serverBinPath = p
-    else delete s.serverBinPath
-    writeSettings(s)
-    return true
-  })
-
-  ipcMain.handle('settings:select-binary', async () => {
-    const result = await dialog.showOpenDialog({
-      title: 'Select llama-server.exe',
-      properties: ['openFile'],
-      filters: [{ name: 'Executable', extensions: ['exe'] }, { name: 'All Files', extensions: ['*'] }],
-      defaultPath: path.join(__dirname, '..', '..', 'llama-cpp-turboquant', 'build', 'bin', 'Release'),
-    })
-    return result.canceled ? null : result.filePaths[0]
-  })
-
-  ipcMain.handle('settings:get-resolved-binary', () => resolveBinary())
-
-  // --- Auth ---
-
-  ipcMain.handle('auth:get-config', () => ({
-    authRequired: getAuthRequired(),
-    hasOwner: hasOwner(),
-  }))
-
-  ipcMain.handle('auth:set-required', (_, required) => {
-    setAuthRequired(required)
-    if (required) closeAllMcpSessions()
-    return true
-  })
-
-  ipcMain.handle('auth:create-first-admin', (_, username, password) => {
-    if (hasOwner()) return { success: false, error: 'An owner account already exists' }
-    const result = createOwner({ username, password })
-    if (!result.ok) return { success: false, error: result.error }
-    return { success: true, apiKey: result.apiKey, id: result.account.id }
-  })
 
 }
 
