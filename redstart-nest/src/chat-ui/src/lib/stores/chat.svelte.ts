@@ -27,6 +27,7 @@ import {
 import { ChatUiState } from '$lib/stores/chat/chat-ui-state.svelte';
 import { ChatRuntimeState } from '$lib/stores/chat/chat-runtime.svelte';
 import * as messageRepo from '$lib/stores/chat/chat-message-repo';
+import { ChatSendController } from '$lib/stores/chat/chat-send.svelte';
 import {
 	normalizeModelName,
 	filterByLeafNodeId,
@@ -54,6 +55,7 @@ class ChatStore {
 	readonly ui = new ChatUiState();
 
 	readonly runtime = new ChatRuntimeState();
+	readonly send = new ChatSendController(this.runtime, this.ui);
 
 	private preEncodeAbortController: AbortController | null = null;
 
@@ -569,7 +571,7 @@ class ChatStore {
 				}
 				console.error('Streaming error:', error);
 				// keep whatever was streamed so far, the message stays in memory and in DB
-				await this.savePartialResponseIfNeeded(convId);
+				await this.send.savePartialResponseIfNeeded(convId);
 				cleanupStreamingState();
 				this.clearPendingMessage(convId);
 
@@ -664,70 +666,11 @@ class ChatStore {
 	}
 
 	async stopGeneration(): Promise<void> {
-		const activeConv = conversationsStore.activeConversation;
-		if (!activeConv) return;
-		await this.stopGenerationForChat(activeConv.id);
+		return this.send.stopGeneration();
 	}
+
 	async stopGenerationForChat(convId: string): Promise<void> {
-		await this.savePartialResponseIfNeeded(convId);
-		this.runtime.setStreamingActive(false);
-		this.runtime.abortRequest(convId);
-		this.runtime.setChatLoading(convId, false);
-		this.runtime.clearChatStreaming(convId);
-		this.runtime.setProcessingState(convId, null);
-		this.clearPendingMessage(convId);
-	}
-
-	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
-		const conversationId = convId || conversationsStore.activeConversation?.id;
-		if (!conversationId) return;
-		const streamingState = this.runtime.getChatStreaming(conversationId);
-		if (!streamingState) return;
-		const messages =
-			conversationId === conversationsStore.activeConversation?.id
-				? conversationsStore.activeMessages
-				: await conversationsStore.getConversationMessages(conversationId);
-		if (!messages.length) return;
-		const lastMessage = messages[messages.length - 1];
-		if (lastMessage?.role !== MessageRole.ASSISTANT) return;
-
-		const partialContent = streamingState.response;
-		const partialReasoning = lastMessage.reasoningContent || '';
-
-		// nothing to persist when both content and reasoning are empty (e.g. stop before any token)
-		if (!partialContent.trim() && !partialReasoning.trim()) return;
-
-		try {
-			const updateData: {
-				content: string;
-				reasoningContent?: string;
-				timings?: ChatMessageTimings;
-			} = {
-				content: partialContent
-			};
-			if (partialReasoning) {
-				updateData.reasoningContent = partialReasoning;
-			}
-			const lastKnownState = this.getProcessingState(conversationId);
-			if (lastKnownState) {
-				updateData.timings = {
-					prompt_n: lastKnownState.promptTokens || 0,
-					prompt_ms: lastKnownState.promptMs,
-					predicted_n: lastKnownState.tokensDecoded || 0,
-					cache_n: lastKnownState.cacheTokens || 0,
-					predicted_ms:
-						lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
-							? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
-							: undefined
-				};
-			}
-			await DatabaseService.updateMessage(lastMessage.id, updateData);
-			lastMessage.content = partialContent;
-			if (updateData.timings) lastMessage.timings = updateData.timings;
-		} catch (error) {
-			lastMessage.content = partialContent;
-			console.error('Failed to save partial response:', error);
-		}
+		return this.send.stopGenerationForChat(convId);
 	}
 
 	async updateMessage(messageId: string, newContent: string): Promise<void> {
