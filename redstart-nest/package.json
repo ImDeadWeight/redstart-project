@@ -11,7 +11,9 @@
     "build": "npm run build:chat && node scripts/make-icon.mjs && vite build && electron-builder",
     "build:chat": "npm --prefix src/chat-ui run build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:mjs": "node -e \"const cp=require('child_process'),fs=require('fs'),p='electron/main';for(const f of fs.readdirSync(p).filter(f=>f.endsWith('.mjs'))) cp.execSync(`node --check ${p}/${f}`);for(const f of fs.readdirSync(p+'/ipc').filter(f=>f.endsWith('.mjs'))) cp.execSync(`node --check ${p}/ipc/${f}`);console.log('node --check clean: electron/main/**/*.mjs')\"",
+    "test:security": "node scripts/test-path-scope.mjs && node scripts/test-auth.mjs && node scripts/test-mcp-capabilities.mjs && npm --prefix src/chat-ui run test:security"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",

@@ -179,7 +179,7 @@ describe('auth.mjs', () => {
 // ---------------------------------------------------------------------------
 
 describe('beacon payload', () => {
-  it('returns only running and port — no version, auth, or server URLs', async () => {
+  it('returns only the app identity marker, running, and port — no version, auth, or server URLs', async () => {
     const { startBeaconServer, stopBeaconServer } = await import('$lib/../../../../electron/main/beacon.mjs')
 
     const server = await startBeaconServer(
@@ -202,8 +202,12 @@ describe('beacon payload', () => {
       }).on('error', reject)
     })
 
-    expect(result).toEqual({ running: true, port: 19080 })
-    expect(Object.keys(result)).toHaveLength(2)
+    // The `app` marker is an intentional identity string (already public via
+    // mDNS) so clients can positively identify a Redstart Nest; it is NOT a
+    // config leak. The security contract is that nothing beyond these three
+    // fields — no version, auth state, MCP URLs, or LAN IP — is disclosed.
+    expect(result).toEqual({ app: 'redstart-nest', running: true, port: 19080 })
+    expect(Object.keys(result)).toHaveLength(3)
 
     stopBeaconServer(server)
   })

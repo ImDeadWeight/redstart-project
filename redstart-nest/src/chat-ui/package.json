@@ -21,6 +21,7 @@
 		"test:client": "vitest --project=client",
 		"test:unit": "vitest --project=unit",
 		"test:unit:pwa": "vitest --project=unit --run tests/unit/pwa.spec.ts",
+		"test:security": "vitest --project=unit --run tests/unit/security.test.ts",
 		"test:pwa": "npm run test:unit:pwa && npm run test:e2e:pwa",
 		"test:ui": "vitest --project=ui",
 		"storybook": "storybook dev -p 6006",
