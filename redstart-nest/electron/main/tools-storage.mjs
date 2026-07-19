@@ -96,7 +96,12 @@ const DEFAULT_CAPABILITIES = {
   sqlite:      { enabled: false, rootDir: null, maxRows: 200, maxFileBytes: 200 * 1024 * 1024 },
   vault:       { enabled: false, rootDir: null },
   git:         { enabled: false, rootDir: null },
-  file_system: { enabled: false, rootDir: null },
+  // allowWrite / allowDestructive are the per-capability permission policy:
+  // writes are on by design (File System is the read/write capability), but
+  // destructive ops (fs_delete_file) are off by default — the model can't delete
+  // local files until an admin explicitly opts in. Enforced server-side at the
+  // MCP tools/call chokepoint (see mcp-server.mjs + tools-definitions classify).
+  file_system: { enabled: false, rootDir: null, allowWrite: true, allowDestructive: false },
   scholar:     { enabled: false, venueFilter: null },
 }
 

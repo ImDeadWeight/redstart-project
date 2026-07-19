@@ -14,6 +14,7 @@ import { startGateway, stopGateway, getGatewayPort } from '../tools-gateway.mjs'
 import { startMcpServer, stopMcpServer, getMcpServerRunning } from '../mcp-server.mjs'
 import { startMdnsAdvertiser, stopMdnsAdvertiser } from '../mdns-advertiser.mjs'
 import { startPort80Proxy, stopPort80Proxy } from '../port80-proxy.mjs'
+import { logEvent } from '../logger.mjs'
 
 // EMA smoothing factor for the tokens/sec readout (moved here with its sole
 // consumer, the launch handler's stdout parser).
@@ -119,6 +120,8 @@ export function registerServerHandlers({
         console.warn('MCP server failed to start:', err.message)
       }
 
+      // Log the port only — never the model path or other config (privacy).
+      logEvent('server', 'model_started', { port: config.port, networkMode: !!config.networkMode })
       return { success: true, pid: child.pid }
     } catch (e) {
       return { success: false, error: e.message }
@@ -137,6 +140,7 @@ export function registerServerHandlers({
     serverState.process = null
     serverState.ema = 0
     serverState.lastConfig = null
+    logEvent('server', 'model_stopped', {})
     return { success: true }
   })
 

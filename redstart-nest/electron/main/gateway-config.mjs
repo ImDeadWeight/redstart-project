@@ -132,6 +132,10 @@ export function buildGatewayConfig(llamaConfig) {
     fileSystem: {
       enabled: fileSystemWanted,
       rootDir: capabilities.file_system.rootDir,
+      // Permission policy consumed by the MCP tools/call gate. Default posture:
+      // writes on, deletes off (see DEFAULT_CAPABILITIES.file_system).
+      allowWrite: capabilities.file_system.allowWrite !== false,
+      allowDestructive: capabilities.file_system.allowDestructive === true,
     },
     scholar: {
       enabled: scholarWanted,

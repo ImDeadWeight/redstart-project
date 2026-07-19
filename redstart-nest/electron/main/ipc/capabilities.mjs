@@ -41,6 +41,10 @@ export function registerCapabilitiesHandlers({ refreshLiveToolsConfig }) {
       file_system: {
         enabled: caps.file_system.enabled,
         rootDir: caps.file_system.rootDir,
+        // Permission policy — writes on by default, deletes off (see
+        // DEFAULT_CAPABILITIES). Surfaced so the UI can show/toggle them.
+        allowWrite: caps.file_system.allowWrite !== false,
+        allowDestructive: caps.file_system.allowDestructive === true,
       },
       scholar: {
         enabled: caps.scholar.enabled,
@@ -127,10 +131,16 @@ export function registerCapabilitiesHandlers({ refreshLiveToolsConfig }) {
       const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
       return result.canceled ? null : result.filePaths[0]
     })
-    ipcMain.handle(`capabilities:set-${slug}`, (_, { rootDir, enabled }) => {
+    ipcMain.handle(`capabilities:set-${slug}`, (_, { rootDir, enabled, allowWrite, allowDestructive }) => {
       const patch = {}
       if (typeof enabled === 'boolean') patch.enabled = enabled
       if (rootDir) patch.rootDir = rootDir
+      // File System carries a write/destructive permission policy; vault/git do
+      // not, so only thread these through for that capability.
+      if (cap === 'file_system') {
+        if (typeof allowWrite === 'boolean') patch.allowWrite = allowWrite
+        if (typeof allowDestructive === 'boolean') patch.allowDestructive = allowDestructive
+      }
       setCapabilityConfig(cap, patch)     // storage key stays 'file_system'
       refreshLiveToolsConfig()
       return { ok: true }

@@ -791,7 +791,9 @@ async function main() {
     await test('tools/list advertises fs_* once File System is active (regression: config key)', async () => {
       const res = await client.call('tools/list')
       const names = res.result.tools.map(t => t.name)
-      for (const n of ['fs_read_file', 'fs_write_file', 'fs_delete_file']) {
+      // Non-destructive tools only — fs_delete_file is gated off by default (see
+      // the permission-gate tests below); this guards the config-key wiring.
+      for (const n of ['fs_read_file', 'fs_write_file', 'fs_list_directory']) {
         assert(names.includes(n), `expected ${n} in ${JSON.stringify(names)}`)
       }
     })
@@ -801,6 +803,51 @@ async function main() {
       assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
       assert(res.result.content[0].text.includes('hello world'), `unexpected content: ${res.result.content[0].text}`)
     })
+
+    // --- Permission gate (Plan 2): writes on, deletes off by default ---
+
+    await test('🔍 fs_delete_file is NOT advertised under the default policy (destructive off)', async () => {
+      const names = (await client.call('tools/list')).result.tools.map(t => t.name)
+      assert(!names.includes('fs_delete_file'), `fs_delete_file must be hidden by default; got ${JSON.stringify(names.filter(n => n.startsWith('fs_')))}`)
+      assert(names.includes('fs_write_file'), 'fs_write_file should be advertised (writes on by default)')
+    })
+
+    await test('🔍 fs_delete_file is refused by the server gate even when called directly (default policy)', async () => {
+      fs.writeFileSync(path.join(tmpFsDir, 'victim.txt'), 'delete me')
+      const res = await client.call('tools/call', { name: 'fs_delete_file', arguments: { path: 'victim.txt' } })
+      assert(res.result?.isError === true, `expected gate refusal, got ${JSON.stringify(res.result)}`)
+      assert(fs.existsSync(path.join(tmpFsDir, 'victim.txt')), 'file must NOT be deleted while destructive ops are disabled')
+    })
+
+    await test('fs_write_file works under the default policy (writes allowed)', async () => {
+      const res = await client.call('tools/call', { name: 'fs_write_file', arguments: { path: 'written.txt', content: 'hi there' } })
+      assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
+      assert(fs.readFileSync(path.join(tmpFsDir, 'written.txt'), 'utf8').includes('hi there'), 'file was not written')
+    })
+
+    storageFs.setCapabilityConfig('file_system', { allowDestructive: true })
+    updateMcpConfig(buildGatewayConfig(fsProfile))
+
+    await test('fs_delete_file is advertised and works once destructive ops are enabled', async () => {
+      const names = (await client.call('tools/list')).result.tools.map(t => t.name)
+      assert(names.includes('fs_delete_file'), 'fs_delete_file should be advertised after opt-in')
+      const res = await client.call('tools/call', { name: 'fs_delete_file', arguments: { path: 'victim.txt' } })
+      assert(!res.result?.isError, `delete failed after opt-in: ${JSON.stringify(res.result)}`)
+      assert(!fs.existsSync(path.join(tmpFsDir, 'victim.txt')), 'file should be deleted after opt-in')
+    })
+
+    storageFs.setCapabilityConfig('file_system', { allowWrite: false, allowDestructive: false })
+    updateMcpConfig(buildGatewayConfig(fsProfile))
+
+    await test('🔍 fs_write_file is refused when writes are disabled by policy', async () => {
+      const res = await client.call('tools/call', { name: 'fs_write_file', arguments: { path: 'blocked.txt', content: 'x' } })
+      assert(res.result?.isError === true, `expected write refusal, got ${JSON.stringify(res.result)}`)
+      assert(!fs.existsSync(path.join(tmpFsDir, 'blocked.txt')), 'file must not be written when writes are disabled')
+    })
+
+    // restore default policy so any later capability reads see the secure default
+    storageFs.setCapabilityConfig('file_system', { allowWrite: true, allowDestructive: false })
+    updateMcpConfig(baseConfig)
   }
 
   console.log('\n-- postgres provider --')

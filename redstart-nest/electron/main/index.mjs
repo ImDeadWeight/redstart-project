@@ -28,6 +28,7 @@ import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
 import { stopMdnsAdvertiser } from './mdns-advertiser.mjs'
 import { stopPort80Proxy } from './port80-proxy.mjs'
 import { cleanupOldConversations } from './conversations-storage.mjs'
+import { initLogger, closeLogger, logEvent } from './logger.mjs'
 import { fileURLToPath } from 'url'
 import { registerGithubHandlers } from './ipc/github.mjs'
 import { registerHardwareHandlers } from './ipc/hardware.mjs'
@@ -502,6 +503,10 @@ app.disableHardwareAcceleration()
 
 app.whenReady().then(async () => {
   migrateUserDataFromBeaver()
+  // Structured logging to <userData>\redstart.log. First thing after the
+  // userData migration so subsequent startup steps are captured.
+  initLogger(app.getPath('userData'))
+  logEvent('app', 'ready', { platform: process.platform })
   // Pre-provision default capability folders (<Documents>\Redstart\...) so
   // Documents/SQLite/Vault/Git are one-click enable out of the box. Fills
   // only unset paths — a user-chosen folder is never overridden — and leaves
@@ -559,6 +564,7 @@ function ensureFirewallRule(gatewayPort) {
 }
 
 app.on('before-quit', () => {
+  logEvent('app', 'quit', {})
   killOrphanedServers()
   stopGateway()
   stopMcpServer()
@@ -571,6 +577,7 @@ app.on('before-quit', () => {
     stopBeaconServer(beaconServerInstance)
     beaconServerInstance = null
   }
+  closeLogger()
 })
 
 app.on('window-all-closed', () => {

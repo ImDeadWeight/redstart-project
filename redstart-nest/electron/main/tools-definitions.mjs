@@ -158,6 +158,74 @@ export function expandDisabledToolIds(ids = []) {
   return [...names]
 }
 
+// ---------------------------------------------------------------------------
+// Tool classification — the permission model's foundation.
+//
+// Every built-in MCP tool is tagged by the kind of access it grants, so the
+// server can apply per-class policy (e.g. block destructive ops unless the admin
+// explicitly opts in). This is a static, exhaustive map keyed by the concrete
+// function name the model calls:
+//   read        — reads local data, no mutation, no network egress
+//   write       — creates or modifies local files
+//   destructive — deletes / irreversibly removes local data
+//   network     — makes an outbound request (whitelist/SSRF-governed separately)
+//
+// New tools MUST be classified here; classifyTool() defaults an unknown name to
+// 'read', which is intentionally the least-privileged bucket for the gate (it
+// only ever *restricts* write/destructive), so a forgotten entry fails open on
+// capability but never silently grants a destructive op a class it lacks.
+// ---------------------------------------------------------------------------
+export const TOOL_CLASS = {
+  read: 'read',
+  write: 'write',
+  destructive: 'destructive',
+  network: 'network',
+}
+
+export const TOOL_CLASSES = {
+  // Web (egress governed by the whitelist/SSRF guard, tagged network here)
+  web_fetch: 'network',
+  web_search: 'network',
+  // Postgres — read-only SQL (READ ONLY txn enforced by the DB)
+  postgres_query: 'read',
+  postgres_list_tables: 'read',
+  postgres_describe_table: 'read',
+  // Documents — create is a write; read/list are reads
+  create_document: 'write',
+  read_document: 'read',
+  list_documents: 'read',
+  // SQLite — read-only SQL
+  sqlite_query: 'read',
+  sqlite_list_tables: 'read',
+  sqlite_describe_table: 'read',
+  // Vault / Git — read-only local context
+  vault_search: 'read',
+  vault_get: 'read',
+  vault_tags: 'read',
+  git_status: 'read',
+  git_log: 'read',
+  git_diff: 'read',
+  // File System — the one read/write/delete capability
+  fs_read_file: 'read',
+  fs_list_directory: 'read',
+  fs_search_files: 'read',
+  fs_get_file_info: 'read',
+  fs_write_file: 'write',
+  fs_edit_file: 'write',
+  fs_create_directory: 'write',
+  fs_delete_file: 'destructive',
+  // Scholar — searches are network; saving a PDF writes to the Documents folder
+  scholar_search: 'network',
+  scholar_get: 'network',
+  scholar_save_pdf: 'write',
+}
+
+// Classify a tool by its function name. Unknown names default to 'read' — see
+// the note above TOOL_CLASSES for why that is the safe default for the gate.
+export function classifyTool(name) {
+  return TOOL_CLASSES[name] ?? 'read'
+}
+
 export const BUILTIN_GROUPS = [
   {
     id: 'general',

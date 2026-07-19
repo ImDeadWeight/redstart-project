@@ -19,6 +19,7 @@
 import * as http from 'http'
 import * as path from 'path'
 import { authenticate, login, logout, listAccounts, getAuthRequired, createAccount, deleteAccount, resetPassword, regenerateApiKey, regenerateOwnApiKey, hasAdminAccess } from './auth.mjs'
+import { logEvent } from './logger.mjs'
 import { getMcpServerRunning } from './mcp-server.mjs'
 import { getExternalServers } from './tools-storage.mjs'
 import { resolveWithinRoot } from './path-scope.mjs'
@@ -230,7 +231,12 @@ async function handleAuthRoute(req, res, urlPath) {
     const body = await readJsonBody(req)
     if (!body?.username || !body?.password) return sendJson(res, 400, { error: 'Username and password required' })
     const result = login(body.username, body.password)
-    if (!result.ok) return sendJson(res, 401, { error: result.error })
+    if (!result.ok) {
+      // Log the outcome + role, never the password or token.
+      logEvent('auth', 'login_failed', { username: String(body.username).slice(0, 64) })
+      return sendJson(res, 401, { error: result.error })
+    }
+    logEvent('auth', 'login_ok', { username: result.user?.username, role: result.user?.role })
     return sendJson(res, 200, { token: result.token, user: result.user })
   }
 

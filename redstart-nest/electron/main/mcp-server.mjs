@@ -28,8 +28,34 @@ import * as vaultTool from './vault-tool.mjs'
 import * as gitTool from './git-tool.mjs'
 import * as fsTool from './fs-tool.mjs'
 import * as scholarTool from './scholar-tool.mjs'
+import { classifyTool, CAPABILITY_TOOL_NAMES } from './tools-definitions.mjs'
+import { logEvent } from './logger.mjs'
 
 const PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, fsTool, scholarTool]
+
+// ---------------------------------------------------------------------------
+// Permission gate — server-side, non-bypassable enforcement of the per-class
+// tool policy. Currently governs the File System capability (the one read/write
+// capability): writes obey fileSystem.allowWrite, deletes obey
+// fileSystem.allowDestructive (see gateway-config.mjs / DEFAULT_CAPABILITIES).
+// Returns { allowed, cls, reason? }. Applied at tools/call (enforcement) and
+// tools/list (so a blocked tool isn't even advertised to the model).
+// ---------------------------------------------------------------------------
+const FS_TOOL_NAMES = new Set(CAPABILITY_TOOL_NAMES.file_system)
+
+function evaluateToolPolicy(toolName, config) {
+  const cls = classifyTool(toolName)
+  if (FS_TOOL_NAMES.has(toolName)) {
+    const fsPolicy = config?.fileSystem || {}
+    if (cls === 'destructive' && fsPolicy.allowDestructive !== true) {
+      return { allowed: false, cls, reason: 'Destructive file-system operations (delete) are disabled by policy. An administrator must enable them for the File System capability.' }
+    }
+    if (cls === 'write' && fsPolicy.allowWrite === false) {
+      return { allowed: false, cls, reason: 'File-system writes are disabled by policy. An administrator must enable them for the File System capability.' }
+    }
+  }
+  return { allowed: true, cls }
+}
 
 let mcpServer = null
 let activeToolsConfig = null   // { webFetch: {...}, postgres: {...}, documents: {...} }
@@ -79,6 +105,10 @@ async function handleRpc(msg, send) {
           continue
         }
         seen.add(tool.name)
+        // Don't advertise a tool the policy would refuse — the model never sees
+        // (and so won't attempt) a blocked destructive/write op. tools/call is
+        // the actual enforcement backstop for a client that calls it anyway.
+        if (!evaluateToolPolicy(tool.name, activeToolsConfig).allowed) continue
         tools.push(tool)
       }
     }
@@ -90,14 +120,28 @@ async function handleRpc(msg, send) {
     const toolName = params?.name
     const args = params?.arguments ?? {}
 
+    // Permission gate — the non-bypassable enforcement point. A blocked call is
+    // refused here even if a client bypasses the filtered tools/list.
+    const policy = evaluateToolPolicy(toolName, activeToolsConfig)
+    if (!policy.allowed) {
+      logEvent('tool', 'denied', { tool: toolName, class: policy.cls })
+      send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: policy.reason }] } })
+      return
+    }
+
+    const startedAt = Date.now()
     for (const provider of PROVIDERS) {
       const result = await provider.callTool(toolName, args, activeToolsConfig)
       if (result !== null && result !== undefined) {
+        // Log the shape only — name, class, error-or-not, duration. Never args
+        // or results (see logger.mjs privacy contract).
+        logEvent('tool', 'called', { tool: toolName, class: policy.cls, isError: !!result.isError, durationMs: Date.now() - startedAt })
         send({ jsonrpc: '2.0', id, result })
         return
       }
     }
 
+    logEvent('tool', 'unknown', { tool: toolName })
     send({ jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown tool: ${toolName}` }})
     return
   }
@@ -191,6 +235,7 @@ export function startMcpServer(port, config) {
   return new Promise((resolve, reject) => {
     server.listen(port, '0.0.0.0', () => {
       mcpServer = server
+      logEvent('mcp', 'started', { port })
       resolve(port)
     })
     server.on('error', (err) => {
