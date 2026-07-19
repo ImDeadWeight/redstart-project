@@ -34,6 +34,7 @@ import { startMdnsAdvertiser, stopMdnsAdvertiser } from './mdns-advertiser.mjs'
 import { startPort80Proxy, stopPort80Proxy } from './port80-proxy.mjs'
 import { cleanupOldConversations } from './conversations-storage.mjs'
 import { fileURLToPath } from 'url'
+import { registerGithubHandlers } from './ipc/github.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -708,7 +709,16 @@ app.on('window-all-closed', () => {
 // IPC handlers
 // ---------------------------------------------------------------------------
 
+// Per-namespace IPC registrars extracted from setupIpcHandlers(). Shared
+// collaborators are threaded through `deps` so the modules never reach for
+// index.mjs globals. Namespaces still living inline below are migrated one
+// seam per commit; this dispatcher is where each lands as it moves out.
+function registerIpcHandlers() {
+  registerGithubHandlers()
+}
+
 function setupIpcHandlers() {
+  registerIpcHandlers()
 
   // --- Hardware ---
 
@@ -1031,11 +1041,12 @@ $r | ConvertTo-Json -Compress
   // Vault and Git share the folder-scoped capability shape: pick a folder,
   // toggle enabled. One generic pair of handlers keeps them uniform.
   for (const cap of ['vault', 'git', 'file_system']) {
-    ipcMain.handle(`capabilities:select-${cap}-folder`, async () => {
+    const slug = cap.replace(/_/g, '-')   // file_system -> file-system; vault/git unchanged
+    ipcMain.handle(`capabilities:select-${slug}-folder`, async () => {
       const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
       return result.canceled ? null : result.filePaths[0]
     })
-    ipcMain.handle(`capabilities:set-${cap}`, (_, { rootDir, enabled }) => {
+    ipcMain.handle(`capabilities:set-${slug}`, (_, { rootDir, enabled }) => {
       const patch = {}
       if (typeof enabled === 'boolean') patch.enabled = enabled
       if (rootDir) patch.rootDir = rootDir
@@ -1222,28 +1233,6 @@ $r | ConvertTo-Json -Compress
     return { success: true, apiKey: result.apiKey, id: result.account.id }
   })
 
-  // --- GitHub releases (unchanged) ---
-
-  ipcMain.handle('github:check-releases', async () => {
-    const releases = {}
-    const repos = [
-      { owner: 'ggerganov', repo: 'llama.cpp' },
-      { owner: 'turboderp', repo: 'llama.cpp' },
-      { owner: 'tiannml', repo: 'TurboQuant' },
-    ]
-    for (const { owner, repo } of repos) {
-      try {
-        const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`)
-        if (res.ok) {
-          const data = await res.json()
-          releases[`${owner}/${repo}`] = data.tag_name
-        }
-      } catch {
-        releases[`${owner}/${repo}`] = 'unavailable'
-      }
-    }
-    return releases
-  })
 }
 
 // ---------------------------------------------------------------------------
