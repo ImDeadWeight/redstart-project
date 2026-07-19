@@ -669,6 +669,19 @@ function buildArgs(config, raw = false) {
     // on: the gateway is built around native OpenAI tool-calling.
     '--jinja',
   ]
+  // Optional chat-template override. --jinja uses the template embedded in the
+  // GGUF by default; if that template doesn't render tools in a format
+  // llama.cpp can parse back into tool_calls, the model's call leaks into
+  // `content`. Overriding the template forces the correct tool-call format for
+  // that model. chatTemplateFile (a path to a .jinja) takes precedence over
+  // chatTemplate (a built-in template name, e.g. 'chatml', or an inline
+  // template string). Both are passed through q() so a path with spaces is one
+  // argv element on spawn and stays quoted in the copy-pasteable UI preview.
+  if (config.chatTemplateFile?.trim()) {
+    args.push('--chat-template-file', q(config.chatTemplateFile.trim()))
+  } else if (config.chatTemplate?.trim()) {
+    args.push('--chat-template', q(config.chatTemplate.trim()))
+  }
   // gpuLayers/nCpuMoe are omitted when unset rather than defaulted here —
   // llama-server's own --fit (on by default) only auto-adjusts arguments that
   // are still at their default value, so leaving these unset lets it compute
