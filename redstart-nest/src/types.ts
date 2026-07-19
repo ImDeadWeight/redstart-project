@@ -27,7 +27,7 @@ export type CapabilityConfig = {
   sqlite: { enabled: boolean; rootDir: string | null; maxRows: number }
   vault: { enabled: boolean; rootDir: string | null }
   git: { enabled: boolean; rootDir: string | null }
-  file_system: { enabled: boolean; rootDir: string | null }
+  file_system: { enabled: boolean; rootDir: string | null; allowWrite: boolean; allowDestructive: boolean }
   scholar: { enabled: boolean; venueFilter: string | null }
 }
 

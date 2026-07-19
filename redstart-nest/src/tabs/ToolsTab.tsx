@@ -70,6 +70,39 @@ function FolderCapabilityCard({ caps, cap, title, emptyText, description }: {
           </button>
         )}
       </div>
+
+      {/* File System is the one read/write/delete capability, so it carries a
+          server-enforced permission policy. Deletes are off by default. */}
+      {cap === 'file_system' && dir && caps.capabilityConfig && (
+        <div className="mt-2 pt-2 border-t border-zinc-700/50 space-y-2">
+          <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
+            <span className="min-w-0">
+              <span className="text-xs text-zinc-300">Allow writes</span>
+              <span className="block text-xs text-zinc-600">Create and edit files. Off = read-only access.</span>
+            </span>
+            <TogglePill
+              checked={caps.capabilityConfig.file_system.allowWrite !== false}
+              onToggle={() => caps.toggleFsPolicy('allowWrite')}
+              className="flex-shrink-0"
+            />
+          </label>
+          <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
+            <span className="min-w-0">
+              <span className="text-xs text-zinc-300">Allow file deletion</span>
+              <span className="block text-xs text-zinc-600">Let the model delete files (fs_delete_file). Off by default.</span>
+            </span>
+            <TogglePill
+              checked={!!caps.capabilityConfig.file_system.allowDestructive}
+              onToggle={() => caps.toggleFsPolicy('allowDestructive')}
+              className="flex-shrink-0"
+            />
+          </label>
+          {caps.capabilityConfig.file_system.allowDestructive && (
+            <p className="text-xs text-yellow-500/90">⚠ The model can permanently delete files within the chosen folder.</p>
+          )}
+        </div>
+      )}
+
       <p className="text-xs text-zinc-600 mt-1.5">{description}</p>
     </div>
   )

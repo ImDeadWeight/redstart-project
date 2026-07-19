@@ -71,6 +71,14 @@ export function useCapabilities(config: LlamaConfig) {
     await loadCapabilities()
   }
 
+  // File System permission policy (writes / destructive). Server-enforced at the
+  // MCP tools/call gate; this just flips the stored flag. Deletes default off.
+  async function toggleFsPolicy(field: 'allowWrite' | 'allowDestructive') {
+    if (!capabilityConfig) return
+    await api().capabilities.setFileSystem({ [field]: !capabilityConfig.file_system[field] })
+    await loadCapabilities()
+  }
+
   // --- Postgres (connection string + row cap) ---
 
   async function savePostgresConfig() {
@@ -141,7 +149,7 @@ export function useCapabilities(config: LlamaConfig) {
     capabilityConfig, loadCapabilities,
     pgConnectionString, setPgConnectionString, pgMaxRows, setPgMaxRows,
     pgTestResult, pgSaving, savePostgresConfig, togglePostgresEnabled, testPostgresConnection,
-    savingCap, chooseFolder, toggleCapEnabled,
+    savingCap, chooseFolder, toggleCapEnabled, toggleFsPolicy,
     scholarVenueFilter, setScholarVenueFilter, toggleScholarEnabled, saveScholarVenueFilter,
     toolContextEstimate,
   }

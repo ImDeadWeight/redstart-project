@@ -73,7 +73,7 @@ export type RedstartAPI = {
     selectGitFolder: () => Promise<string | null>
     setGit: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
     selectFileSystemFolder: () => Promise<string | null>
-    setFileSystem: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
+    setFileSystem: (config: { rootDir?: string; enabled?: boolean; allowWrite?: boolean; allowDestructive?: boolean }) => Promise<{ ok: boolean }>
     setScholar: (config: { venueFilter?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
   }
   events: {
