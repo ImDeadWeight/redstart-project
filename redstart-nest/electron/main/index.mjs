@@ -13,22 +13,22 @@
 // Key architectural decisions documented inline below.
 // =============================================================================
 
-import { app, BrowserWindow, ipcMain, dialog, nativeImage, session } from 'electron'
-import { execFile, spawn } from 'child_process'
+import { app, BrowserWindow, nativeImage, session } from 'electron'
+import { execFile } from 'child_process'
 import { promisify } from 'util'
 import * as path from 'path'
 import * as fs from 'fs'
 import { BUILTIN_TOOLS, BUILTIN_GROUPS, expandDisabledToolIds } from './tools-definitions.mjs'
 import { getUserTools, getUserGroups, getCapabilities, ensureDefaultCapabilityFolders } from './tools-storage.mjs'
-import { startGateway, stopGateway, updateGatewayConfig, getGatewayPort } from './tools-gateway.mjs'
-import { startMcpServer, stopMcpServer, updateMcpConfig, getMcpServerRunning } from './mcp-server.mjs'
+import { stopGateway, updateGatewayConfig, getGatewayPort } from './tools-gateway.mjs'
+import { stopMcpServer, updateMcpConfig } from './mcp-server.mjs'
 import { decryptSecret } from './secrets.mjs'
 import * as os from 'os'
 import * as zlib from 'zlib'
 import * as http from 'http'
 import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
-import { startMdnsAdvertiser, stopMdnsAdvertiser } from './mdns-advertiser.mjs'
-import { startPort80Proxy, stopPort80Proxy } from './port80-proxy.mjs'
+import { stopMdnsAdvertiser } from './mdns-advertiser.mjs'
+import { stopPort80Proxy } from './port80-proxy.mjs'
 import { cleanupOldConversations } from './conversations-storage.mjs'
 import { fileURLToPath } from 'url'
 import { registerGithubHandlers } from './ipc/github.mjs'
@@ -39,6 +39,7 @@ import { registerProfilesHandlers } from './ipc/profiles.mjs'
 import { registerToolsHandlers } from './ipc/tools.mjs'
 import { registerMcpHandlers } from './ipc/mcp.mjs'
 import { registerCapabilitiesHandlers } from './ipc/capabilities.mjs'
+import { registerServerHandlers } from './ipc/server.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -301,11 +302,13 @@ try {
 }
 
 let mainWindow = null
-let serverProcess = null
-let serverEma = 0
-const EMA_ALPHA = 0.2
 
-let lastServerConfig = null  // set on launch, cleared on stop/exit
+// Live server process state, shared by reference between the server IPC handlers
+// (ipc/server.mjs, which owns launch/stop/status) and the lifecycle +
+// gateway-refresh code in this file that reads it. process: the spawned
+// llama-server child; ema: smoothed tokens/sec; lastConfig: set on launch,
+// cleared on stop/exit.
+const serverState = { process: null, ema: 0, lastConfig: null }
 let beaconServerInstance = null
 
 // ---------------------------------------------------------------------------
@@ -513,9 +516,9 @@ function buildGatewayConfig(llamaConfig) {
 // string, output folder) so a change takes effect without a full restart.
 // No-op if the server isn't running or no profile has been launched yet.
 function refreshLiveToolsConfig() {
-  if (!lastServerConfig) return
-  if (!getGatewayPort(lastServerConfig.port ?? 19080)) return
-  const cfg = buildGatewayConfig(lastServerConfig)
+  if (!serverState.lastConfig) return
+  if (!getGatewayPort(serverState.lastConfig.port ?? 19080)) return
+  const cfg = buildGatewayConfig(serverState.lastConfig)
   updateGatewayConfig(cfg)
   updateMcpConfig(cfg)
 }
@@ -575,8 +578,8 @@ function parseEvalTokensPerSec(line) {
 
 async function startDiscoveryBeacon() {
   beaconServerInstance = await startBeaconServer(
-    () => !!serverProcess,
-    () => lastServerConfig?.port ?? 19080,
+    () => !!serverState.process,
+    () => serverState.lastConfig?.port ?? 19080,
   )
   console.log(`Redstart Nest beacon listening on port 8765`)
 }
@@ -696,8 +699,8 @@ app.on('before-quit', () => {
   stopMcpServer()
   stopMdnsAdvertiser()
   stopPort80Proxy()
-  if (serverProcess) {
-    serverProcess = null
+  if (serverState.process) {
+    serverState.process = null
   }
   if (beaconServerInstance) {
     stopBeaconServer(beaconServerInstance)
@@ -726,6 +729,7 @@ function registerIpcHandlers(deps) {
   registerToolsHandlers(deps)
   registerMcpHandlers()
   registerCapabilitiesHandlers(deps)
+  registerServerHandlers(deps)
 }
 
 function setupIpcHandlers() {
@@ -739,138 +743,13 @@ function setupIpcHandlers() {
     writeProfiles,
     buildGatewayConfig,
     refreshLiveToolsConfig,
+    serverState,
+    getMainWindow: () => mainWindow,
+    buildArgs,
+    parseEvalTokensPerSec,
+    ensureFirewallRule,
+    getLocalIp,
   })
-
-  // --- Llama command preview ---
-
-  ipcMain.handle('llama:generate-command', (_, config) => {
-    const args = buildArgs(config)
-    return `llama-server.exe ${args.join(' ')}`
-  })
-
-  // --- Server launch ---
-
-  ipcMain.handle('llama:launch', async (_, config) => {
-    if (serverProcess) return { success: false, error: 'Server is already running' }
-
-    const binaryPath = resolveBinary()
-    if (!binaryPath) {
-      return { success: false, error: `llama-server.exe not found.\nPlace it in llama-cpp-turboquant/build/bin/Release/, the project root, or set a custom path via Settings.` }
-    }
-    const binaryDir = path.dirname(binaryPath)
-
-    const spawnArgs = buildArgs(config, true)
-
-    try {
-      // --- Piped mode (in-app log + token tracking) ---
-      serverEma = 0
-      // cwd = binary dir so Windows DLL search finds companion DLLs
-      const child = spawn(binaryPath, spawnArgs, { stdio: ['ignore', 'pipe', 'pipe'], cwd: binaryDir })
-
-      const forwardLines = (chunk) => {
-        for (const line of chunk.toString().split('\n')) {
-          const tps = parseEvalTokensPerSec(line)
-          if (tps !== null) {
-            serverEma = serverEma === 0 ? tps : EMA_ALPHA * tps + (1 - EMA_ALPHA) * serverEma
-            mainWindow?.webContents.send('server:tpm', Math.round(serverEma * 60))
-          }
-          mainWindow?.webContents.send('server:log', line)
-        }
-      }
-
-      child.stdout.on('data', forwardLines)
-      child.stderr.on('data', forwardLines)
-
-      child.on('error', err => {
-        mainWindow?.webContents.send('server:log', `SPAWN ERROR: ${err.message}`)
-        mainWindow?.webContents.send('server:stopped')
-        serverProcess = null
-      })
-
-      child.on('exit', (code, signal) => {
-        if (code !== 0) {
-          mainWindow?.webContents.send('server:log', `Process exited with code ${code} (signal: ${signal})`)
-        }
-        serverProcess = null
-        serverEma = 0
-        lastServerConfig = null
-        mainWindow?.webContents.send('server:stopped')
-      })
-
-      serverProcess = child
-      lastServerConfig = config
-
-      // Start the gateway on the public port. It injects the Redstart system
-      // context into every completions request and proxies everything else
-      // through to llama-server on config.port + 1 (localhost only).
-      const gwConfig = buildGatewayConfig(config)
-      try {
-        await startGateway(config.port, gwConfig)
-        const gwPort = getGatewayPort(config.port)
-        if (gwPort) ensureFirewallRule(gwPort)
-        startMdnsAdvertiser(config)
-        // Serve the login/chat UI on plain port 80 too, so users can browse to
-        // http://redstart.local without the :port suffix. Falls back silently
-        // to the gateway port if 80 is unavailable.
-        if (config.networkMode && config.port !== 80) {
-          ensureFirewallRule(80)
-          startPort80Proxy(config)
-        }
-      } catch (err) {
-        console.warn('Tool gateway failed to start:', err.message)
-        // Non-fatal — server still works, just without tool interception
-      }
-
-      // Start the built-in MCP server on port+2 so the chat-ui can call web_fetch
-      // with actual whitelist enforcement (not just prompt-level advisory).
-      try {
-        const mcpPort = config.port + 2
-        await startMcpServer(mcpPort, gwConfig)
-        if (getMcpServerRunning()) ensureFirewallRule(mcpPort)
-      } catch (err) {
-        console.warn('MCP server failed to start:', err.message)
-      }
-
-      return { success: true, pid: child.pid }
-    } catch (e) {
-      return { success: false, error: e.message }
-    }
-  })
-
-  // --- Server stop (graceful) ---
-
-  ipcMain.handle('server:stop', async () => {
-    stopGateway()
-    stopMcpServer()
-    stopMdnsAdvertiser()
-    stopPort80Proxy()
-    if (!serverProcess) return { success: true }
-    serverProcess.kill()
-    serverProcess = null
-    serverEma = 0
-    lastServerConfig = null
-    return { success: true }
-  })
-
-  // --- Server status ---
-
-  ipcMain.handle('server:status', async (_, config) => {
-    if (!serverProcess) return { running: false, health: null }
-    try {
-      const res = await fetch(`http://127.0.0.1:${config?.port || 19080}/health`, {
-        signal: AbortSignal.timeout(1500),
-      })
-      const data = await res.json()
-      return { running: true, health: data.status }
-    } catch {
-      return { running: true, health: 'unreachable' }
-    }
-  })
-
-  // --- Network info ---
-
-  ipcMain.handle('server:get-ip', () => getLocalIp())
-
 }
 
 // ---------------------------------------------------------------------------
