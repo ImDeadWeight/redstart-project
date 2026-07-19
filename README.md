@@ -357,6 +357,8 @@ redstart-project/
     └── windows/           # Redstart Twig Windows Electron app
 ```
 
+**Chat-ui state architecture.** The chat frontend's largest store, `chat.svelte.ts`, is a thin **facade** that delegates to focused sub-stores under `redstart-nest/src/chat-ui/src/lib/stores/chat/`: UI dialog/edit state (`ChatUiState`), per-conversation runtime state (`ChatRuntimeState`), message persistence (`chat-message-repo`), the send/stream pipeline (`ChatSendController`), message edit/regenerate/delete operations (`ChatMessageOps`), and pure option/timing helpers (`chat-options`). Dependencies flow one way and the public API is unchanged, so consumers import from `$lib/stores/chat.svelte` exactly as before.
+
 ### Redstart Nest (dev mode)
 
 ```bash

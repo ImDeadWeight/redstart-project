@@ -4,6 +4,21 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ---
 
+## 2026-07-18
+
+- **Decomposed the chat-ui god store (`chat.svelte.ts`) into a thin facade over six focused sub-stores.** The single ~1,928-line `ChatStore` class had accreted six unrelated responsibilities — UI dialog/edit state, per-conversation runtime state, message persistence, the send/stream pipeline, message edit/regenerate/delete operations, and a pile of pure helpers — which made the streaming engine (the part most likely to change) impossible to touch without wading through dialog state and DB persistence. It's now a **323-line delegating facade** backed by modules under `redstart-nest/src/chat-ui/src/lib/stores/chat/`. Purely a maintainability refactor: no behavior, features, or public API changed.
+  - **`chat-options.ts`** (stateless) — pure option/timing helpers: `getApiOptions`, `getConversationModel`, `getContextTotal`, `parseTimingData`.
+  - **`chat-ui-state.svelte.ts`** (`ChatUiState`) — error dialog, edit mode, the pending system-prompt edit id, the draft-message stash, and the queued pending-message map.
+  - **`chat-runtime.svelte.ts`** (`ChatRuntimeState`) — per-conversation transient state: loading / reasoning / streaming maps, processing state, abort controllers, and inactive-conversation-state garbage collection.
+  - **`chat-message-repo.ts`** (stateless) — message create/persist orchestration over `DatabaseService` + `conversationsStore`.
+  - **`chat-send.svelte.ts`** (`ChatSendController`) — the send pipeline: `sendMessage`, the ~340-line `streamChatCompletion`, generation stop/save, and KV-cache pre-encoding.
+  - **`chat-message-ops.svelte.ts`** (`ChatMessageOps`) — edit / regenerate / delete / continue operations, which reuse the send controller to (re)generate replies.
+  - **Composition & dependency direction.** The facade owns one instance of each and wires dependencies one way (facade → ops → send → runtime/ui → repo/options); collaborators are passed in via constructor/param, never imported upward, so there are **no circular imports** (verified with `madge` after every step). Reactive `$state` stays declared in the class that owns it; the facade re-exposes it via forwarding getters — and setters where the old field was writable (e.g. a Storybook story assigns `chatStore.isLoading`) — so reactivity is preserved without copying values across the boundary.
+  - **Public API unchanged.** The singleton `chatStore` and every module-level named export keep identical names, signatures, and reactive behavior; the **~15 files** that import `$lib/stores/chat.svelte` were not touched.
+  - **Method, not a rewrite.** Done as **nine commits, one seam per commit**, each verified green before starting the next — a pure move-and-delegate. The handful of pre-existing `chat.svelte.ts` type errors were moved *verbatim* into the sub-stores that carry the offending code rather than fixed, to keep each commit a clean relocation with no smuggled-in behavior change.
+
+- **Verified:** `npm run build` green after every commit; `svelte-check` error count held steady at its pre-refactor baseline the whole way (the pre-existing errors migrated with the code they belong to; none were added or removed); `madge --circular` clean on `src/lib/stores/chat` throughout. Smoke-tested end-to-end after each seam — send + stream + stop mid-stream, conversation switching mid-stream, per-chat loading indicators, context/processing readout, new-conversation-with-system-prompt, pending-message queueing, regenerate, continue, and all edit/delete variants. One path — MCP tool-calling — could not be exercised end-to-end because of an **unrelated pre-existing Electron bug** (the preload invokes `capabilities:set-file-system` / `capabilities:select-file-system-folder` but no `ipcMain.handle` is registered for them, so the File System tool can't be enabled in the Electron app); the agentic invocation itself moved verbatim and is functionally unchanged.
+
 ## 2026-07-17
 
 - **Security hardening pass: auth is now on by default, localhost bypass removed, beacon payload minimized, Open Chat removed.** The session shifted the security posture from "opt-in auth with a localhost escape hatch" to "authenticate or don't get in," and stripped the beacon of every field that wasn't strictly needed for discovery.
