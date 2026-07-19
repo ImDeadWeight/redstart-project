@@ -361,15 +361,20 @@ redstart-project/
 
 ### Redstart Nest (dev mode)
 
+The launcher and the chat-ui are **two separate npm packages** — you must install both:
+
 ```bash
 cd redstart-nest
-npm install
+npm install                       # launcher / Electron main-process deps
+npm install --prefix src/chat-ui  # the SvelteKit chat-ui is its own package
 npm run dev
 ```
 
-This starts Vite (React launcher UI), the SvelteKit chat-ui dev server, and Electron concurrently.
+This starts Vite (React launcher UI), the SvelteKit chat-ui dev server, and Electron concurrently. (`npm install` in `redstart-nest` does **not** install the chat-ui's dependencies — `npm run dev` launches the chat-ui dev server via `--prefix src/chat-ui`, so its `node_modules` must exist first.)
 
 > **Note:** In dev mode the chat-ui runs on its own port (`:5174`). The `--path` flag that serves it through llama-server only applies in production builds.
+
+> **Starting a model in dev:** the launcher UI runs fine without the inference binary, but **Start Server** needs `llama-server.exe`. In dev it's looked up at `redstart-nest/llama-cpp-turboquant/build/bin/Release/llama-server.exe` (or point at a custom path in Settings). See [Building from Source](#building-from-source--llama-server-binary) to produce it.
 
 ### Chat UI only
 
@@ -409,15 +414,53 @@ Then open `redstart-nest/src/chat-ui/android` in Android Studio and run on a dev
 
 > **Just want to use it?** Download the installer from [Releases](../../releases) — the binaries are already bundled and no extra steps are needed.
 
-For contributors building the installer from scratch: Redstart Nest bundles `llama-server.exe` and its supporting DLLs (compiled from [TurboQuant](https://github.com/TheTom/llama-cpp-turboquant)) at build time. These are not committed to this repository. You need to build TurboQuant first and place the output at `redstart-nest/llama-cpp-turboquant/build/bin/Release/`.
+Redstart Nest does **not** commit the inference binary or its runtime DLLs — they're large and platform-specific, so the entire `redstart-nest/llama-cpp-turboquant/` tree and `redstart-nest/deps/` are git-ignored. A fresh clone has neither. Building the installer from scratch means assembling two things by hand.
 
-Follow [TurboQuant's build instructions](https://github.com/TheTom/llama-cpp-turboquant) — you will need the NVIDIA CUDA Toolkit and Visual Studio C++ build tools. Once built, `npm run build` picks up the binaries automatically.
+### 1. Build the TurboQuant `llama-server`
+
+Clone [TurboQuant](https://github.com/TheTom/llama-cpp-turboquant) **into `redstart-nest/llama-cpp-turboquant/`** (that exact path — it's where both the dev binary lookup and `electron-builder` expect it) and build it there:
+
+```bash
+cd redstart-nest
+git clone https://github.com/TheTom/llama-cpp-turboquant.git
+# then follow TurboQuant's own CMake build instructions
+```
+
+You'll need the **NVIDIA CUDA Toolkit 13.x** and the **Visual Studio C++ build tools**. A successful build produces `llama-server.exe` plus the `ggml-*.dll` / `llama.dll` set at:
+
+```
+redstart-nest/llama-cpp-turboquant/build/bin/Release/
+```
+
+### 2. Supply the runtime DLLs — `redstart-nest/deps/windows/`
+
+`llama-server.exe` also needs Visual C++ and CUDA **runtime** libraries that the TurboQuant build does **not** produce. Create the git-ignored folder `redstart-nest/deps/windows/` and place these in it:
+
+| DLL(s) | Where to get them |
+|---|---|
+| `MSVCP140.dll`, `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll`, `VCOMP140.DLL` | Visual C++ Redistributable / your Visual Studio install |
+| `cublas64_13.dll`, `cublasLt64_13.dll` | NVIDIA CUDA Toolkit 13.x `bin/` directory |
+
+Without these, the packaged `llama-server.exe` fails to load on any machine that doesn't already have the CUDA 13 / VC++ runtimes installed. (The `64_13` suffix is CUDA major version 13 — match it to the toolkit you built against.)
+
+### 3. Build the installer
+
+```bash
+cd redstart-nest
+npm install                       # if not already
+npm install --prefix src/chat-ui  # the build compiles the chat-ui too
+npm run build
+```
+
+`npm run build` builds the chat-ui, then runs `electron-builder`, which copies **both** `llama-cpp-turboquant/build/bin/Release/` and `deps/windows/` into the installer's `bin/` folder automatically.
 
 ---
 
 ## Building Installers
 
 ### Redstart Nest
+
+Prerequisites: both packages' dependencies installed (`npm install` in `redstart-nest` **and** `npm install --prefix src/chat-ui`), plus the llama-server binary and `deps/windows/` DLLs in place — see [Building from Source](#building-from-source--llama-server-binary).
 
 ```bash
 cd redstart-nest
