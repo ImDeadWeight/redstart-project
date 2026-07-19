@@ -17,3 +17,19 @@ export const app = {
     return process.cwd()
   },
 }
+
+// secrets.mjs imports safeStorage at module load (transitively, via
+// gateway-config.mjs -> secrets.mjs). A functional round-trip stub — no real OS
+// encryption, just a reversible encoding — so any encrypt/decrypt path a test
+// happens to hit still works, not merely the import.
+export const safeStorage = {
+  isEncryptionAvailable() {
+    return true
+  },
+  encryptString(plaintext) {
+    return Buffer.from(String(plaintext), 'utf8')
+  },
+  decryptString(buffer) {
+    return Buffer.from(buffer).toString('utf8')
+  },
+}

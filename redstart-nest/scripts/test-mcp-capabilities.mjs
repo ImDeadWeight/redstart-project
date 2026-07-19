@@ -26,6 +26,7 @@ const tmpDocsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-docs
 const tmpSqliteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-sqlite-'))
 const tmpVaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-vault-'))
 const tmpGitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-git-'))
+const tmpFsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-fs-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpUserDataDir
 
 register('./auth-test-loader.mjs', import.meta.url)
@@ -159,6 +160,7 @@ async function main() {
     sqlite: { enabled: false, rootDir: tmpSqliteDir, maxRows: 200 },
     vault: { enabled: false, rootDir: tmpVaultDir },
     git: { enabled: false, rootDir: tmpGitDir },
+    fileSystem: { enabled: false, rootDir: tmpFsDir },
     scholar: { enabled: false, venueFilter: null, saveDir: tmpDocsDir },
   }
 
@@ -763,6 +765,44 @@ async function main() {
     console.log('  skip - live scholar tests (set REDSTART_TEST_LIVE_WEB=1 to run)')
   }
 
+  console.log('\n-- file system provider (via buildGatewayConfig) --')
+
+  // File System is the one read/write capability, so it's exercised end-to-end
+  // through the REAL producer (buildGatewayConfig) and the MCP HTTP path — not a
+  // hand-built config. The vitest fs suite calls fs-tool directly with a
+  // hand-built { fileSystem: ... } config, which can't catch a producer that
+  // emits the wrong key (the snake_case `file_system` bug that silently disabled
+  // the capability in production). These tests go through the seam that hid it.
+  {
+    const { buildGatewayConfig } = await import('../electron/main/gateway-config.mjs')
+    const storageFs = await import('../electron/main/tools-storage.mjs')
+    storageFs.setCapabilityConfig('file_system', { enabled: true, rootDir: tmpFsDir })
+    fs.writeFileSync(path.join(tmpFsDir, 'note.txt'), 'hello world')
+    const fsProfile = { tools: { enabled: true, activeToolIds: ['file_system'] } }
+
+    await test('🔍 buildGatewayConfig emits camelCase fileSystem (producer/consumer keys agree)', async () => {
+      const cfg = buildGatewayConfig(fsProfile)
+      assert(cfg.fileSystem?.enabled === true, `expected cfg.fileSystem.enabled true; keys: ${JSON.stringify(Object.keys(cfg))}`)
+      assert(cfg.file_system === undefined, 'must not emit snake_case file_system — fs-tool reads cfg.fileSystem')
+    })
+
+    updateMcpConfig(buildGatewayConfig(fsProfile))
+
+    await test('tools/list advertises fs_* once File System is active (regression: config key)', async () => {
+      const res = await client.call('tools/list')
+      const names = res.result.tools.map(t => t.name)
+      for (const n of ['fs_read_file', 'fs_write_file', 'fs_delete_file']) {
+        assert(names.includes(n), `expected ${n} in ${JSON.stringify(names)}`)
+      }
+    })
+
+    await test('fs_read_file reads a file within the configured root', async () => {
+      const res = await client.call('tools/call', { name: 'fs_read_file', arguments: { path: 'note.txt' } })
+      assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
+      assert(res.result.content[0].text.includes('hello world'), `unexpected content: ${res.result.content[0].text}`)
+    })
+  }
+
   console.log('\n-- postgres provider --')
 
   const pgReachable = await isPostgresReachable(PG_URL)
@@ -811,6 +851,7 @@ async function main() {
   fs.rmSync(tmpSqliteDir, { recursive: true, force: true })
   fs.rmSync(tmpVaultDir, { recursive: true, force: true })
   fs.rmSync(tmpGitDir, { recursive: true, force: true })
+  fs.rmSync(tmpFsDir, { recursive: true, force: true })
 
   console.log('\n' + '='.repeat(60))
   const passed = results.filter(r => r.pass).length

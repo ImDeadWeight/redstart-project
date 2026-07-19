@@ -43,7 +43,7 @@ export function buildGatewayConfig(llamaConfig) {
       documents: { enabled: false },
       sqlite: { enabled: false },
       vault:     { enabled: false },
-      file_system: { enabled: false },
+      fileSystem: { enabled: false },
       git:       { enabled: false },
       scholar: { enabled: false },
     }
@@ -125,7 +125,11 @@ export function buildGatewayConfig(llamaConfig) {
       enabled: gitWanted,
       rootDir: capabilities.git.rootDir,
     },
-    file_system: {
+    // NOTE: camelCase `fileSystem` — the fs-tool provider and the gateway's
+    // /files/download endpoint both read cfg.fileSystem (matching the webFetch
+    // convention). Emitting snake_case here silently disabled the whole
+    // capability in production (tools never advertised, calls rejected).
+    fileSystem: {
       enabled: fileSystemWanted,
       rootDir: capabilities.file_system.rootDir,
     },
