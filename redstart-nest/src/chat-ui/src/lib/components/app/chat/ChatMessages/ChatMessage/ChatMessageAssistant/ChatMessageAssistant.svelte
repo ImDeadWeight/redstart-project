@@ -231,7 +231,7 @@
 						}}
 					/>
 				{:else}
-					<ModelBadge model={displayedModel || undefined} onclick={handleCopyModel} />
+					<ModelBadge model={displayedModel || undefined} onclick={handleCopyModel} compact />
 				{/if}
 
 				{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}

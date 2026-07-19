@@ -12,6 +12,8 @@
 		onclick?: () => void;
 		showCopyIcon?: boolean;
 		showTooltip?: boolean;
+		/** Render only the clean model name (no params/quant/tag badges). */
+		compact?: boolean;
 	}
 
 	let {
@@ -19,7 +21,8 @@
 		model: modelProp,
 		onclick,
 		showCopyIcon = false,
-		showTooltip = false
+		showTooltip = false,
+		compact = false
 	}: Props = $props();
 
 	let model = $derived(modelProp || modelsStore.singleModelName);
@@ -34,7 +37,7 @@
 		{/snippet}
 
 		{#if model}
-			<ModelId modelId={model} />
+			<ModelId modelId={model} {compact} />
 		{/if}
 
 		{#if showCopyIcon}

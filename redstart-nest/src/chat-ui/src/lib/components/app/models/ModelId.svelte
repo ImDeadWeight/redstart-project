@@ -9,6 +9,8 @@
 		showRaw?: boolean;
 		hideQuantization?: boolean;
 		hideTags?: boolean;
+		/** Render only the clean model name (no org/params/quant/tag badges). */
+		compact?: boolean;
 		aliases?: string[];
 		tags?: string[];
 		class?: string;
@@ -20,6 +22,7 @@
 		showRaw = undefined,
 		hideQuantization,
 		hideTags,
+		compact = false,
 		aliases,
 		tags,
 		class: className = '',
@@ -45,6 +48,8 @@
 
 {#if resolvedShowRaw}
 	<TruncatedText class="font-medium {className}" showTooltip={false} text={modelId} {...rest} />
+{:else if compact}
+	<span class="min-w-0 truncate font-medium {className}" {...rest}>{displayName}</span>
 {:else}
 	<span class="flex min-w-0 flex-wrap items-center gap-1 {className}" {...rest}>
 		<span class="min-w-0 truncate font-medium">
