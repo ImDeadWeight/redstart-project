@@ -174,7 +174,7 @@ function listDirectory(rootDir, dirPath) {
 
   entries = entries.slice(0, MAX_DIR_ENTRIES)
   const items = entries.map(e => {
-    const rel = path.join(target, e.name).replace(rootDir, '').replace(/^\\/, '')
+    const rel = path.join(target, e.name).replace(rootDir, '').replace(/^[\\/]/, '')
     if (e.isDirectory()) return `[DIR]  ${rel}/`
     const size = fs.statSync(path.join(target, e.name)).size
     const sizeStr = size < 1024 ? `${size}B` : size < 1048576 ? `${(size / 1024).toFixed(1)}KB` : `${(size / 1048576).toFixed(1)}MB`
@@ -202,7 +202,7 @@ function searchFiles(rootDir, pattern) {
 
     for (const entry of entries) {
       const full = path.join(dir, entry.name)
-      const rel = full.replace(rootDir, '').replace(/^\\/, '')
+      const rel = full.replace(rootDir, '').replace(/^[\\/]/, '')
       if (entry.isDirectory()) {
         // Skip hidden and common noise dirs
         if (!entry.name.startsWith('.') && entry.name !== 'node_modules' && entry.name !== '__pycache__') {
@@ -235,7 +235,7 @@ function getFileInfo(rootDir, filePath) {
   if (!fs.existsSync(full)) return mcpErr(`Path not found: ${filePath}`)
 
   const stat = fs.statSync(full)
-  const rel = full.replace(rootDir, '').replace(/^\\/, '')
+  const rel = full.replace(rootDir, '').replace(/^[\\/]/, '')
   const info = {
     path: rel,
     type: stat.isDirectory() ? 'directory' : 'file',

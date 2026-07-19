@@ -50,11 +50,19 @@ jobs:
       - name: Syntax-check electron/main (node --check)
         run: npm run check:mjs
 
-      # path containment + symlink escape, auth/session/role hierarchy, SSRF /
-      # redirect / whitelist enforcement, capability gating, and the minimal
-      # beacon payload. Postgres and live-web cases self-skip when no DB /
-      # network resource is present. Full svelte-check is intentionally NOT run
-      # here — it reports pre-existing test-file type errors unrelated to these
-      # security guarantees.
-      - name: Security test suite
-        run: npm run test:security
+      # Security suites run as four separate steps so a failure is identifiable
+      # from the step name via the API alone (no log access needed). Postgres and
+      # live-web cases self-skip when no DB / network resource is present. Full
+      # svelte-check is intentionally NOT run — it reports pre-existing test-file
+      # type errors unrelated to these guarantees.
+      - name: "Security: path containment (path-scope)"
+        run: node scripts/test-path-scope.mjs
+
+      - name: "Security: auth / sessions / roles"
+        run: node scripts/test-auth.mjs
+
+      - name: "Security: MCP capability gating"
+        run: node scripts/test-mcp-capabilities.mjs
+
+      - name: "Security: fs-tool / SSRF / beacon (vitest)"
+        run: npm --prefix src/chat-ui run test:security
