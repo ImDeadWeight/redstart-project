@@ -29,7 +29,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # chat-ui depends on @capacitor/cli (engines: node >=22) and its
+          # .npmrc sets engine-strict=true, so anything below 22 fails npm ci.
+          node-version: 22
           cache: npm
           cache-dependency-path: |
             redstart-nest/package-lock.json

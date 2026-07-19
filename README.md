@@ -338,7 +338,7 @@ Unsloth provides multiple quantization variants. The `UD-Q3_K_XL` tested here fi
 ## Development Setup
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) 20+
+- [Node.js](https://nodejs.org/) 22+ (the chat-ui's `@capacitor/cli` requires Node ≥ 22)
 - [Android Studio](https://developer.android.com/studio) (for Android builds only)
 - [Java 17+](https://adoptium.net/) (for Android builds only)
 
