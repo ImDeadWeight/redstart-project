@@ -7,7 +7,7 @@ import { ipcMain } from 'electron'
 import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES } from '../tools-definitions.mjs'
 import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup } from '../tools-storage.mjs'
 import { updateGatewayConfig, getGatewayPort } from '../tools-gateway.mjs'
-import { updateMcpConfig } from '../mcp-server.mjs'
+import { updateMcpConfig, estimateActiveToolTokens } from '../mcp-server.mjs'
 
 export function registerToolsHandlers({ buildGatewayConfig }) {
   // --- Tools ---
@@ -36,5 +36,11 @@ export function registerToolsHandlers({ buildGatewayConfig }) {
     updateGatewayConfig(cfg)
     updateMcpConfig(cfg)
     return true
+  })
+
+  // Estimates the per-request context cost of the tool set the given profile
+  // config would activate — same resolution path as an actual launch.
+  ipcMain.handle('tools:estimate-context', (_, llamaConfig) => {
+    return estimateActiveToolTokens(buildGatewayConfig(llamaConfig))
   })
 }

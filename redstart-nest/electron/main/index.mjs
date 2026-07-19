@@ -19,11 +19,10 @@ import { promisify } from 'util'
 import * as path from 'path'
 import * as fs from 'fs'
 import { BUILTIN_TOOLS, BUILTIN_GROUPS, expandDisabledToolIds } from './tools-definitions.mjs'
-import { getUserTools, getUserGroups, getCapabilities, setCapabilityConfig, ensureDefaultCapabilityFolders } from './tools-storage.mjs'
+import { getUserTools, getUserGroups, getCapabilities, ensureDefaultCapabilityFolders } from './tools-storage.mjs'
 import { startGateway, stopGateway, updateGatewayConfig, getGatewayPort } from './tools-gateway.mjs'
-import { startMcpServer, stopMcpServer, updateMcpConfig, getMcpServerRunning, estimateActiveToolTokens } from './mcp-server.mjs'
-import { encryptSecret, decryptSecret } from './secrets.mjs'
-import { testConnection as testPostgresConnection } from './postgres-tool.mjs'
+import { startMcpServer, stopMcpServer, updateMcpConfig, getMcpServerRunning } from './mcp-server.mjs'
+import { decryptSecret } from './secrets.mjs'
 import * as os from 'os'
 import * as zlib from 'zlib'
 import * as http from 'http'
@@ -39,6 +38,7 @@ import { registerAuthHandlers } from './ipc/auth.mjs'
 import { registerProfilesHandlers } from './ipc/profiles.mjs'
 import { registerToolsHandlers } from './ipc/tools.mjs'
 import { registerMcpHandlers } from './ipc/mcp.mjs'
+import { registerCapabilitiesHandlers } from './ipc/capabilities.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -725,6 +725,7 @@ function registerIpcHandlers(deps) {
   registerProfilesHandlers(deps)
   registerToolsHandlers(deps)
   registerMcpHandlers()
+  registerCapabilitiesHandlers(deps)
 }
 
 function setupIpcHandlers() {
@@ -737,139 +738,8 @@ function setupIpcHandlers() {
     readProfiles,
     writeProfiles,
     buildGatewayConfig,
+    refreshLiveToolsConfig,
   })
-
-  // --- Capabilities (Postgres, Documents) ---
-  // Global config, per-profile activation via tools.activeToolIds (see
-  // buildGatewayConfig). Secrets never round-trip to the renderer in plaintext.
-
-  ipcMain.handle('capabilities:get', () => {
-    const caps = getCapabilities()
-    return {
-      postgres: {
-        enabled: caps.postgres.enabled,
-        hasConnectionString: !!caps.postgres.connectionStringEnc,
-        maxRows: caps.postgres.maxRows,
-      },
-      documents: {
-        enabled: caps.documents.enabled,
-        outputDir: caps.documents.outputDir,
-      },
-      sqlite: {
-        enabled: caps.sqlite.enabled,
-        rootDir: caps.sqlite.rootDir,
-        maxRows: caps.sqlite.maxRows,
-      },
-      vault: {
-        enabled: caps.vault.enabled,
-        rootDir: caps.vault.rootDir,
-      },
-      git: {
-        enabled: caps.git.enabled,
-        rootDir: caps.git.rootDir,
-      },
-      file_system: {
-        enabled: caps.file_system.enabled,
-        rootDir: caps.file_system.rootDir,
-      },
-      scholar: {
-        enabled: caps.scholar.enabled,
-        venueFilter: caps.scholar.venueFilter,
-      },
-    }
-  })
-
-  ipcMain.handle('capabilities:set-postgres', (_, { connectionString, maxRows, enabled }) => {
-    const patch = {}
-    if (typeof enabled === 'boolean') patch.enabled = enabled
-    if (typeof maxRows === 'number') patch.maxRows = maxRows
-    if (connectionString) {
-      try {
-        patch.connectionStringEnc = encryptSecret(connectionString)
-      } catch (err) {
-        return { ok: false, error: err.message }
-      }
-    }
-    setCapabilityConfig('postgres', patch)
-    refreshLiveToolsConfig()
-    return { ok: true }
-  })
-
-  ipcMain.handle('capabilities:test-postgres', async (_, connectionString) => {
-    let target = connectionString
-    if (!target) {
-      const caps = getCapabilities()
-      if (!caps.postgres.connectionStringEnc) return { ok: false, message: 'No connection string configured' }
-      try {
-        target = decryptSecret(caps.postgres.connectionStringEnc)
-      } catch (err) {
-        return { ok: false, message: err.message }
-      }
-    }
-    return await testPostgresConnection(target)
-  })
-
-  ipcMain.handle('capabilities:select-documents-folder', async () => {
-    const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
-    return result.canceled ? null : result.filePaths[0]
-  })
-
-  ipcMain.handle('capabilities:set-documents-folder', (_, { outputDir, enabled }) => {
-    const patch = {}
-    if (typeof enabled === 'boolean') patch.enabled = enabled
-    if (outputDir) patch.outputDir = outputDir
-    setCapabilityConfig('documents', patch)
-    refreshLiveToolsConfig()
-    return { ok: true }
-  })
-
-  // Estimates the per-request context cost of the tool set the given profile
-  // config would activate — same resolution path as an actual launch.
-  ipcMain.handle('tools:estimate-context', (_, llamaConfig) => {
-    return estimateActiveToolTokens(buildGatewayConfig(llamaConfig))
-  })
-
-  ipcMain.handle('capabilities:select-sqlite-folder', async () => {
-    const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
-    return result.canceled ? null : result.filePaths[0]
-  })
-
-  ipcMain.handle('capabilities:set-sqlite', (_, { rootDir, maxRows, enabled }) => {
-    const patch = {}
-    if (typeof enabled === 'boolean') patch.enabled = enabled
-    if (typeof maxRows === 'number') patch.maxRows = maxRows
-    if (rootDir) patch.rootDir = rootDir
-    setCapabilityConfig('sqlite', patch)
-    refreshLiveToolsConfig()
-    return { ok: true }
-  })
-
-  ipcMain.handle('capabilities:set-scholar', (_, { venueFilter, enabled }) => {
-    const patch = {}
-    if (typeof enabled === 'boolean') patch.enabled = enabled
-    if (venueFilter !== undefined) patch.venueFilter = String(venueFilter || '').trim() || null
-    setCapabilityConfig('scholar', patch)
-    refreshLiveToolsConfig()
-    return { ok: true }
-  })
-
-  // Vault and Git share the folder-scoped capability shape: pick a folder,
-  // toggle enabled. One generic pair of handlers keeps them uniform.
-  for (const cap of ['vault', 'git', 'file_system']) {
-    const slug = cap.replace(/_/g, '-')   // file_system -> file-system; vault/git unchanged
-    ipcMain.handle(`capabilities:select-${slug}-folder`, async () => {
-      const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
-      return result.canceled ? null : result.filePaths[0]
-    })
-    ipcMain.handle(`capabilities:set-${slug}`, (_, { rootDir, enabled }) => {
-      const patch = {}
-      if (typeof enabled === 'boolean') patch.enabled = enabled
-      if (rootDir) patch.rootDir = rootDir
-      setCapabilityConfig(cap, patch)
-      refreshLiveToolsConfig()
-      return { ok: true }
-    })
-  }
 
   // --- Llama command preview ---
 
