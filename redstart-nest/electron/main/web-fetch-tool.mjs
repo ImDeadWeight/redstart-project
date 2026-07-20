@@ -74,19 +74,18 @@ function isPublicHttpUrl(url) {
 // web_fetch — Readability extraction with tag-strip fallback
 // ---------------------------------------------------------------------------
 
+// Uses a real HTML parser (linkedom, same one Readability runs on) rather
+// than regex tag-stripping, so malformed or adversarial markup can't smuggle
+// tags past the strip, and entity decoding happens exactly once.
 function stripTags(html) {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim()
+  try {
+    const { document } = parseHTML(html)
+    for (const el of document.querySelectorAll('script, style, noscript')) el.remove()
+    const text = document.documentElement?.textContent ?? ''
+    return text.replace(/\s+/g, ' ').trim()
+  } catch {
+    return ''
+  }
 }
 
 // Follows redirects MANUALLY so every hop is re-validated against the same
@@ -215,8 +214,10 @@ const SEARCH_PROVIDERS = {
   },
 }
 
+// &amp; is decoded LAST — decoding it first turns "&amp;lt;" into "&lt;" and
+// then into "<", i.e. a double-unescape of content the source escaped once.
 function decodeHtml(s) {
-  return String(s).replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+  return String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
 }
 
 // Which search providers this profile may use: all of them when the whitelist
