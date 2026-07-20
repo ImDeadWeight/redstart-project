@@ -48,6 +48,12 @@ export function generateApiKey() {
   return 'rst_' + crypto.randomBytes(24).toString('hex')
 }
 
+// Plain SHA-256, deliberately NOT scrypt: API keys are 24 CSPRNG bytes (192 bits of entropy), not human-chosen
+// passwords, so offline brute force of the hash is infeasible and a slow KDF
+// adds nothing. The hash must also stay deterministic and salt-free so
+// findByApiKeyHash() can do an O(1) lookup on every request; a salted KDF
+// would force an scrypt run per stored account per request. Passwords —
+// the low-entropy secret — go through scrypt above.
 export function hashApiKey(rawKey) {
   return crypto.createHash('sha256').update(rawKey).digest('hex')
 }
@@ -95,8 +101,9 @@ export function revokeSessionsForAccount(accountId) {
 
 function bearerToken(req) {
   const header = req.headers['authorization'] || ''
-  const match = /^Bearer\s+(.+)$/i.exec(header)
-  return match ? match[1].trim() : null
+  if (!/^bearer /i.test(header)) return null
+  const token = header.slice(7).trim()
+  return token || null
 }
 
 function toPublicAccount(record) {

@@ -67,11 +67,21 @@ function startFileServer() {
 
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
-      const urlPath = req.url.split('?')[0]
+      let urlPath
+      try {
+        urlPath = decodeURIComponent(req.url.split('?')[0])
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'text/plain' })
+        res.end('Bad request')
+        return
+      }
       const ext = path.extname(urlPath)
       const resolved = path.resolve(chatUiDir, '.' + urlPath)
 
-      if (!resolved.startsWith(chatUiDir + path.sep) && resolved !== chatUiDir) {
+      // Containment check via path.relative: anything outside chatUiDir
+      // yields a relative path that is absolute or starts with "..".
+      const rel = path.relative(chatUiDir, resolved)
+      if (path.isAbsolute(rel) || rel === '..' || rel.startsWith('..' + path.sep)) {
         res.writeHead(403, { 'Content-Type': 'text/plain' })
         res.end('Forbidden')
         return
