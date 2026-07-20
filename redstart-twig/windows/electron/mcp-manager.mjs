@@ -112,7 +112,14 @@ function startServer(id) {
   // shell:true is deprecated — DEP0190 — because Node concatenates without
   // quoting); elsewhere spawn the command directly with the args array.
   const useShell = process.platform === 'win32'
-  const quote = (a) => (/[\s"&|<>^%]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a)
+  // Standard Windows argv quoting: backslash runs immediately before a quote
+  // (or the closing quote we add) must be doubled, then quotes escaped —
+  // otherwise an arg ending in `\` (any folder path) escapes its own closing
+  // quote and mangles the rest of the command line.
+  const quote = (a) =>
+    /[\s"&|<>^%]/.test(a) || a === ''
+      ? '"' + a.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1') + '"'
+      : a
 
   let child
   try {
