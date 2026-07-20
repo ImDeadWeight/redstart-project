@@ -7,6 +7,7 @@
  */
 
 import { detectMcpTransportFromUrl } from '$lib/utils';
+import { MCPTransportType } from '$lib/enums';
 import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants';
 import type {
 	MCPClientConfig,
@@ -62,6 +63,7 @@ export function parseServerSettings(rawServers: unknown): MCPServerSettingsEntry
 	return parsed.map((entry, index) => {
 		const url = typeof entry?.url === 'string' ? entry.url.trim() : '';
 		const headers = typeof entry?.headers === 'string' ? entry.headers.trim() : undefined;
+		const isStdio = (entry as { transport?: unknown })?.transport === 'stdio';
 
 		return {
 			id: generateServerId((entry as { id?: unknown })?.id, index),
@@ -72,7 +74,23 @@ export function parseServerSettings(rawServers: unknown): MCPServerSettingsEntry
 				(entry as { requestTimeoutSeconds?: number })?.requestTimeoutSeconds ??
 				DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			headers: headers || undefined,
-			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
+			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy),
+			...(isStdio
+				? {
+						transport: 'stdio' as const,
+						command:
+							typeof (entry as { command?: unknown })?.command === 'string'
+								? (entry as { command: string }).command
+								: undefined,
+						args: Array.isArray((entry as { args?: unknown })?.args)
+							? ((entry as { args: unknown[] }).args.map(String) as string[])
+							: undefined,
+						envJson:
+							typeof (entry as { envJson?: unknown })?.envJson === 'string'
+								? (entry as { envJson: string }).envJson
+								: undefined
+					}
+				: {})
 		} satisfies MCPServerSettingsEntry;
 	});
 }
@@ -84,6 +102,17 @@ export function buildServerConfig(
 	entry: MCPServerSettingsEntry,
 	connectionTimeoutMs = DEFAULT_MCP_CONFIG.connectionTimeoutMs
 ): MCPServerConfig | undefined {
+	// Local stdio entries have no URL — the transport resolves the entry id
+	// against the desktop-local twig-mcp.json (which owns command/args/env).
+	if (entry?.transport === 'stdio') {
+		return {
+			transport: MCPTransportType.STDIO,
+			stdioId: entry.id,
+			handshakeTimeoutMs: connectionTimeoutMs,
+			requestTimeoutMs: Math.round(entry.requestTimeoutSeconds * 1000)
+		};
+	}
+
 	if (!entry?.url) {
 		return undefined;
 	}
@@ -185,6 +214,21 @@ export function buildCapabilitiesInfo(
 			tasks: !!clientCaps?.tasks
 		}
 	};
+}
+
+/**
+ * Merges Nest-synced servers into the existing list without clobbering local
+ * entries. Nest-sourced entries (id prefix `redstart-`) are fully replaced by
+ * the fetch; everything else — user-added network servers and local stdio
+ * entries — survives the sync. (Before this merge, syncServersFromHost
+ * replaced the whole list and silently deleted local entries.)
+ */
+export function mergeNestServers(
+	existing: MCPServerSettingsEntry[],
+	nestEntries: MCPServerSettingsEntry[]
+): MCPServerSettingsEntry[] {
+	const localEntries = existing.filter((s) => !s.id.startsWith('redstart-'));
+	return [...nestEntries, ...localEntries];
 }
 
 /**

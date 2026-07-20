@@ -2,6 +2,7 @@
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
+	import ChatFormTwigFolder from '$lib/components/app/chat/ChatForm/ChatFormTwigFolder.svelte';
 	import { onMount } from 'svelte';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 
@@ -123,4 +124,6 @@
 		onSystemPromptClick={handleSystemPromptClick}
 		onUploadedFileRemove={handleUploadedFileRemove}
 	/>
+	<!-- Twig desktop: current local-files folder + change button (no-op elsewhere) -->
+	<ChatFormTwigFolder />
 </div>

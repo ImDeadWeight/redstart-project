@@ -34,6 +34,7 @@ import { parseMcpServerSettings, detectMcpTransportFromUrl, uuid, apiFetch } fro
 import {
 	MCPConnectionPhase,
 	MCPLogLevel,
+	MCPTransportType,
 	HealthCheckStatus,
 	MCPRefType,
 	ColorMode,
@@ -72,8 +73,10 @@ import {
 	checkServerEnabled,
 	buildMcpClientConfig,
 	buildCapabilitiesInfo,
+	mergeNestServers,
 	parseHeaders
 } from '$lib/stores/mcp/mcp-config';
+import { twigMcpApi } from '$lib/utils/twig';
 import { normalizeSchemaProperties, parseToolArguments } from '$lib/stores/mcp/mcp-schema';
 import { getMcpIconUrl, getServerFaviconFallback } from '$lib/stores/mcp/mcp-icons';
 
@@ -197,12 +200,14 @@ class MCPStore {
 
 	getServerLabel(server: MCPServerSettingsEntry): string {
 		const healthState = this.getHealthCheckState(server.id);
+		// Local stdio entries have no URL — fall back to name, then command.
+		const fallback = server.url || server.name || server.command || server.id;
 
 		if (healthState?.status === HealthCheckStatus.SUCCESS)
 			return (
-				healthState.serverInfo?.title || healthState.serverInfo?.name || server.name || server.url
+				healthState.serverInfo?.title || healthState.serverInfo?.name || server.name || fallback
 			);
-		return server.url;
+		return fallback;
 	}
 
 	getServerById(serverId: string): MCPServerSettingsEntry | undefined {
@@ -271,10 +276,9 @@ class MCPStore {
 	}
 
 	/**
-	 * Fetches the MCP server list from the Redstart Nest host and replaces the
-	 * local server list with it. MCP servers are managed centrally in the Nest
-	 * (built-in server + external registrations), so clients auto-configure
-	 * instead of each device maintaining its own list.
+	 * Fetches the MCP server list from the Redstart Nest host and merges it
+	 * into the local server list. Nest-sourced entries (id prefix `redstart-`)
+	 * are replaced by the fetch; user-added and local stdio entries survive.
 	 *
 	 * IDs are derived from the server URL so per-chat enable overrides (keyed
 	 * by server ID) survive restarts and re-syncs. If the endpoint is missing
@@ -303,7 +307,10 @@ class MCPStore {
 					Number(config().mcpRequestTimeoutSeconds) || DEFAULT_MCP_CONFIG.requestTimeoutSeconds
 			}));
 
-		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, JSON.stringify(entries));
+		settingsStore.updateConfig(
+			SETTINGS_KEYS.MCP_SERVERS,
+			JSON.stringify(mergeNestServers(this.getServers(), entries))
+		);
 
 		// Server-enforced tool bans. The gateway is the real enforcement point,
 		// but we capture the list here so toolsStore can keep a banned tool from
@@ -311,6 +318,50 @@ class MCPStore {
 		// MCP re-sync.
 		const disabled = Array.isArray(fetched?.disabledTools) ? fetched.disabledTools : [];
 		toolsStore.setServerDisabledTools(disabled);
+	}
+
+	/**
+	 * Mirrors the desktop-local twig-mcp.json entries into the settings server
+	 * list as stdio entries, so hand-edited file entries appear in the UI
+	 * without a manual add. Settings ids equal the twig-mcp.json keys (the
+	 * manager resolves spawns by that key); `transport: 'stdio'` marks the
+	 * mirrored entries so stale ones are pruned on re-sync. twig-mcp.json is
+	 * the source of truth: settings carry only display data (command/args) and
+	 * the enabled flag, never spawn authority. No-op outside the Twig shell.
+	 */
+	async syncLocalServersFromTwig(): Promise<void> {
+		const api = twigMcpApi();
+		if (!api) return;
+
+		let fileEntries: Awaited<ReturnType<typeof api.list>>;
+		try {
+			fileEntries = await api.list();
+		} catch {
+			return;
+		}
+
+		const servers = this.getServers();
+		const nonLocal = servers.filter((s) => s.transport !== 'stdio');
+		const localEntries: MCPServerSettingsEntry[] = fileEntries.map((entry) => {
+			const existing = servers.find((s) => s.id === entry.id);
+			return {
+				id: entry.id,
+				enabled: existing?.enabled ?? true,
+				url: '',
+				name: entry.id,
+				requestTimeoutSeconds:
+					existing?.requestTimeoutSeconds ??
+					(Number(config().mcpRequestTimeoutSeconds) || DEFAULT_MCP_CONFIG.requestTimeoutSeconds),
+				transport: 'stdio',
+				command: entry.command,
+				args: entry.args
+			};
+		});
+
+		settingsStore.updateConfig(
+			SETTINGS_KEYS.MCP_SERVERS,
+			JSON.stringify([...nonLocal, ...localEntries])
+		);
 	}
 
 	addServer(
@@ -350,7 +401,9 @@ class MCPStore {
 	}
 
 	hasAvailableServers(): boolean {
-		return parseMcpServerSettings(config().mcpServers).some((s) => s.enabled && s.url.trim());
+		return parseMcpServerSettings(config().mcpServers).some(
+			(s) => s.enabled && (s.url.trim() || s.transport === 'stdio')
+		);
 	}
 	hasEnabledServers(perChatOverrides?: McpServerOverride[]): boolean {
 		return Boolean(buildMcpClientConfig(config(), perChatOverrides));
@@ -1015,13 +1068,17 @@ class MCPStore {
 			url: string;
 			requestTimeoutSeconds: number;
 			headers?: string;
+			transport?: 'stdio';
 		}[],
 		skipIfChecked = true,
 		promoteToActive = false
 	): Promise<void> {
+		// stdio entries have no URL — they are checkable whenever they exist.
+		const isCheckable = (s: { url: string; transport?: 'stdio' }) =>
+			Boolean(s.url.trim()) || s.transport === 'stdio';
 		const serversToCheck = skipIfChecked
-			? servers.filter((s) => !this.hasHealthCheck(s.id) && s.url.trim())
-			: servers.filter((s) => s.url.trim());
+			? servers.filter((s) => !this.hasHealthCheck(s.id) && isCheckable(s))
+			: servers.filter(isCheckable);
 
 		if (serversToCheck.length === 0) {
 			return;
@@ -1089,7 +1146,7 @@ class MCPStore {
 		const logs: MCPConnectionLog[] = [];
 		let currentPhase: MCPConnectionPhase = MCPConnectionPhase.IDLE;
 
-		if (!trimmedUrl) {
+		if (!trimmedUrl && server.transport !== 'stdio') {
 			this.updateHealthCheck(server.id, {
 				status: HealthCheckStatus.ERROR,
 				message: 'Please enter a server URL first.',
@@ -1108,14 +1165,24 @@ class MCPStore {
 		const headers = parseHeaders(server.headers);
 
 		try {
-			const serverConfig: MCPServerConfig = {
-				url: trimmedUrl,
-				transport: detectMcpTransportFromUrl(trimmedUrl),
-				handshakeTimeoutMs: DEFAULT_MCP_CONFIG.connectionTimeoutMs,
-				requestTimeoutMs: timeoutMs,
-				headers,
-				useProxy: server.useProxy
-			};
+			// A stdio health check spawns (or reuses) the local child through the
+			// same connect path as any other transport.
+			const serverConfig: MCPServerConfig =
+				server.transport === 'stdio'
+					? {
+							transport: MCPTransportType.STDIO,
+							stdioId: server.id,
+							handshakeTimeoutMs: DEFAULT_MCP_CONFIG.connectionTimeoutMs,
+							requestTimeoutMs: timeoutMs
+						}
+					: {
+							url: trimmedUrl,
+							transport: detectMcpTransportFromUrl(trimmedUrl),
+							handshakeTimeoutMs: DEFAULT_MCP_CONFIG.connectionTimeoutMs,
+							requestTimeoutMs: timeoutMs,
+							headers,
+							useProxy: server.useProxy
+						};
 
 			// Store config for reconnection
 			this.serverConfigs.set(server.id, serverConfig);

@@ -83,6 +83,8 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 				? (entry as { id: string }).id.trim()
 				: `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
 
+		const isStdio = (entry as { transport?: unknown })?.transport === 'stdio';
+
 		return {
 			id,
 			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
@@ -92,7 +94,23 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 				(entry as { requestTimeoutSeconds?: number })?.requestTimeoutSeconds ??
 				DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			headers: headers || undefined,
-			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
+			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy),
+			...(isStdio
+				? {
+						transport: 'stdio' as const,
+						command:
+							typeof (entry as { command?: unknown })?.command === 'string'
+								? (entry as { command: string }).command
+								: undefined,
+						args: Array.isArray((entry as { args?: unknown })?.args)
+							? ((entry as { args: unknown[] }).args.map(String) as string[])
+							: undefined,
+						envJson:
+							typeof (entry as { envJson?: unknown })?.envJson === 'string'
+								? (entry as { envJson: string }).envJson
+								: undefined
+					}
+				: {})
 		} satisfies MCPServerSettingsEntry;
 	});
 }

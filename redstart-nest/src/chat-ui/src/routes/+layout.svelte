@@ -31,7 +31,8 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
-	import { ModeWatcher } from 'mode-watcher';
+	import { ModeWatcher, mode } from 'mode-watcher';
+	import { twigShellApi } from '$lib/utils/twig';
 	import { ROUTES } from '$lib/constants/routes';
 	import { RouterService } from '$lib/services/router.service';
 	import { Toaster } from 'svelte-sonner';
@@ -306,6 +307,11 @@
 		mounted = true;
 		void initApp();
 
+		// Twig desktop only (no-op elsewhere): mirror local stdio MCP servers
+		// from twig-mcp.json into the settings list. Runs on mount, not on
+		// server-props load, because local servers exist without a Nest.
+		void mcpStore.syncLocalServersFromTwig();
+
 		// Handle QR deep links while the app is already running
 		if (isCapacitorAndroid()) {
 			CapApp.addListener('appUrlOpen', (data) => handleDeepLink(data.url));
@@ -324,6 +330,22 @@
 
 			return;
 		}
+	});
+
+	// Twig desktop only: keep the window-controls overlay (min/max/close) in
+	// step with the app's light/dark theme. No-op elsewhere.
+	$effect(() => {
+		const theme = mode.current;
+		const shell = twigShellApi();
+		if (shell && theme) void shell.setTheme(theme);
+	});
+
+	// Twig desktop runs frameless (hidden title bar + window-controls overlay).
+	// The `twig-desktop` class activates the drag strip and the layout offsets
+	// that make room for it (see app.css).
+	const inTwigShell = twigShellApi() !== null;
+	$effect(() => {
+		if (inTwigShell) document.documentElement.classList.add('twig-desktop');
 	});
 
 	// Sync settings when server props are loaded
@@ -435,6 +457,13 @@
 
 	<PwaMetaTags />
 </svelte:head>
+
+{#if inTwigShell}
+	<!-- Frameless-window drag strip. Spans the top edge under the OS-drawn
+	     min/max/close overlay buttons; -webkit-app-region: drag makes it the
+	     window's title bar (drag to move, double-click to maximize). -->
+	<div class="twig-titlebar" aria-hidden="true"></div>
+{/if}
 
 <!-- PWA update prompt -->
 <div class="fixed right-4 bottom-4 z-9999 flex flex-col items-end gap-1">
