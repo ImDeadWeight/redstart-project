@@ -13,7 +13,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "check:mjs": "node scripts/check-mjs.mjs",
-    "test:security": "node scripts/test-path-scope.mjs && node scripts/test-auth.mjs && node scripts/test-mcp-capabilities.mjs && npm --prefix src/chat-ui run test:security"
+    "test:security": "node scripts/test-path-scope.mjs && node scripts/test-conversation-isolation.mjs && node scripts/test-tool-policy.mjs && node scripts/test-llama-args.mjs && node scripts/test-discovery-robustness.mjs && node scripts/test-auth.mjs && node scripts/test-mcp-capabilities.mjs && node scripts/test-provider-conformance.mjs && node scripts/test-contracts.mjs && npm --prefix src/chat-ui run test:security"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",

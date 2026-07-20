@@ -19,6 +19,7 @@ import { register } from 'node:module'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import * as http from 'node:http'
 import pg from 'pg'
 
 const tmpUserDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-userdata-'))
@@ -64,73 +65,8 @@ function assert(cond, message) {
   if (!cond) throw new Error(message)
 }
 
-// ---------------------------------------------------------------------------
-// Minimal MCP SSE/JSON-RPC client — enough to drive tools/list + tools/call
-// against the real running server, the same way the chat-ui's MCP client does.
-// ---------------------------------------------------------------------------
-
-async function connectMcpClient(baseUrl) {
-  const sseRes = await fetch(`${baseUrl}/sse`)
-  if (!sseRes.ok || !sseRes.body) throw new Error(`SSE connect failed: ${sseRes.status}`)
-
-  const reader = sseRes.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let endpointPath = null
-  const pending = new Map()
-  let nextId = 0
-
-  ;(async function pump() {
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        let idx
-        while ((idx = buffer.indexOf('\n\n')) !== -1) {
-          const rawEvent = buffer.slice(0, idx)
-          buffer = buffer.slice(idx + 2)
-          const lines = rawEvent.split('\n')
-          const eventLine = lines.find(l => l.startsWith('event: '))
-          const dataLine = lines.find(l => l.startsWith('data: '))
-          if (!dataLine) continue
-          const data = JSON.parse(dataLine.slice(6))
-          const eventType = eventLine ? eventLine.slice(7) : 'message'
-          if (eventType === 'endpoint') {
-            endpointPath = data
-          } else if (data?.id !== undefined && pending.has(data.id)) {
-            pending.get(data.id).resolve(data)
-            pending.delete(data.id)
-          }
-        }
-      }
-    } catch { /* stream closed */ }
-  })()
-
-  const start = Date.now()
-  while (!endpointPath) {
-    if (Date.now() - start > 5000) throw new Error('Timed out waiting for SSE endpoint event')
-    await new Promise(r => setTimeout(r, 20))
-  }
-
-  async function call(method, params) {
-    const id = ++nextId
-    const promise = new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject })
-      setTimeout(() => {
-        if (pending.has(id)) { pending.delete(id); reject(new Error(`Timed out waiting for response to ${method}`)) }
-      }, 8000)
-    })
-    await fetch(`${baseUrl}${endpointPath}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
-    })
-    return promise
-  }
-
-  return { call, close: () => reader.cancel().catch(() => {}) }
-}
+// Minimal MCP SSE/JSON-RPC client — shared with the other boundary suites.
+import { connectMcpClient } from './lib/mcp-test-client.mjs'
 
 async function isPostgresReachable(connectionString) {
   const client = new pg.Client({ connectionString, connectionTimeoutMillis: 1500 })
@@ -283,6 +219,82 @@ async function main() {
     })
 
     updateMcpConfig(baseConfig)
+  }
+
+  console.log('\n-- web_fetch redirect re-validation (SSRF via redirect) --')
+
+  // web-fetch-tool.mjs follows redirects MANUALLY, re-validating every hop
+  // against the SAME policy as the original URL, so a whitelisted page cannot
+  // bounce the fetch to a disallowed destination (a shortener, a consent page —
+  // or, the SSRF case, a public/allowed URL redirecting to a LAN address). This
+  // guard is implemented but was previously untested; these cases lock it in.
+  //
+  // Two throwaway loopback origins stand in for "approved" and "off-limits":
+  // isAllowed() matches on hostname, so the whitelist trusts host `localhost`
+  // while the redirect target host `127.0.0.1` is a different, untrusted host.
+  // The off-limits server counts every hit, so we can prove the blocked hop
+  // generates NO network traffic to the destination.
+  {
+    let secretHits = 0
+    const offLimits = http.createServer((req, res) => {
+      secretHits++
+      res.writeHead(200, { 'Content-Type': 'text/plain' })
+      res.end('TOP SECRET LAN CONTENT — should never be reached')
+    })
+    const origin = http.createServer((req, res) => {
+      const url = req.url || '/'
+      if (url.startsWith('/redirect-to-blocked')) {
+        // Bounce to a different (untrusted) host — the SSRF-via-redirect move.
+        res.writeHead(302, { Location: `http://127.0.0.1:${offLimits.address().port}/secret` })
+        res.end()
+      } else if (url.startsWith('/redirect-to-allowed')) {
+        // Bounce within the approved host — must be followed, not blocked.
+        res.writeHead(302, { Location: `http://localhost:${origin.address().port}/final` })
+        res.end()
+      } else if (url.startsWith('/final')) {
+        res.writeHead(200, { 'Content-Type': 'text/plain' })
+        res.end('REDIRECT_FOLLOWED_OK — this is the real destination body.')
+      } else if (url.startsWith('/loop')) {
+        res.writeHead(302, { Location: `http://localhost:${origin.address().port}/loop` })
+        res.end()
+      } else {
+        res.writeHead(404); res.end()
+      }
+    })
+
+    await new Promise(r => offLimits.listen(0, r))
+    await new Promise(r => origin.listen(0, r))
+    const originUrl = `http://localhost:${origin.address().port}`
+
+    // Whitelist ONLY the approved origin host. Port is irrelevant to isAllowed
+    // (it matches on hostname), which is exactly why the 127.0.0.1 target is
+    // out of scope even though it is also loopback.
+    const redirectConfig = { ...baseConfig, webFetch: { enabled: true, whitelistEnabled: true, allowedBaseUrls: [originUrl], activeTools: [{ name: 'Origin', baseUrl: originUrl, description: '' }], maxFetchTokens: 2000 } }
+    updateMcpConfig(redirectConfig)
+
+    try {
+      await test('🔍 an approved page redirecting to an off-limits host is refused, with NO request to the destination', async () => {
+        const res = await client.call('tools/call', { name: 'web_fetch', arguments: { url: `${originUrl}/redirect-to-blocked` } })
+        assert(res.result?.isError === true, `expected isError, got ${JSON.stringify(res.result)}`)
+        assert(/not an approved address/.test(res.result.content[0].text), `unexpected message: ${res.result.content[0].text}`)
+        assert(secretHits === 0, `the blocked destination was contacted ${secretHits} time(s) — re-validation happened too late`)
+      })
+
+      await test('a redirect within the approved host is followed and returns the destination body', async () => {
+        const res = await client.call('tools/call', { name: 'web_fetch', arguments: { url: `${originUrl}/redirect-to-allowed` } })
+        assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
+        assert(res.result.content[0].text.includes('REDIRECT_FOLLOWED_OK'), `did not follow to destination: ${res.result.content[0].text.slice(0, 120)}`)
+      })
+
+      await test('a redirect loop is bounded and reported, not hung', async () => {
+        const res = await client.call('tools/call', { name: 'web_fetch', arguments: { url: `${originUrl}/loop` } })
+        assert(res.result?.isError === true && /Too many redirects/i.test(res.result.content[0].text), `unexpected: ${JSON.stringify(res.result)}`)
+      })
+    } finally {
+      updateMcpConfig(baseConfig)
+      await new Promise(r => origin.close(r))
+      await new Promise(r => offLimits.close(r))
+    }
   }
 
   if (process.env.REDSTART_TEST_LIVE_WEB === '1') {
@@ -843,6 +855,31 @@ async function main() {
       const res = await client.call('tools/call', { name: 'fs_write_file', arguments: { path: 'blocked.txt', content: 'x' } })
       assert(res.result?.isError === true, `expected write refusal, got ${JSON.stringify(res.result)}`)
       assert(!fs.existsSync(path.join(tmpFsDir, 'blocked.txt')), 'file must not be written when writes are disabled')
+    })
+
+    // --- Permission escalation: a caller cannot grant itself permission by
+    // smuggling policy fields into the tool arguments. The gate reads the
+    // server-side capability config, never the call's arguments, so these are
+    // inert. (Policy is still writes-off / destructive-off from above.)
+
+    await test('🔍 fs_write_file cannot self-promote via policy fields in arguments', async () => {
+      const res = await client.call('tools/call', { name: 'fs_write_file', arguments: {
+        path: 'escalate.txt', content: 'x',
+        allowWrite: true, allowDestructive: true,
+        policy: { allowWrite: true }, fileSystem: { allowWrite: true },
+      } })
+      assert(res.result?.isError === true, `write self-promotion was allowed: ${JSON.stringify(res.result)}`)
+      assert(!fs.existsSync(path.join(tmpFsDir, 'escalate.txt')), 'file was written despite writes being disabled')
+    })
+
+    await test('🔍 fs_delete_file cannot self-promote via policy fields in arguments', async () => {
+      fs.writeFileSync(path.join(tmpFsDir, 'keep.txt'), 'do not delete')
+      const res = await client.call('tools/call', { name: 'fs_delete_file', arguments: {
+        path: 'keep.txt',
+        allowDestructive: true, policy: { allowDestructive: true },
+      } })
+      assert(res.result?.isError === true, `delete self-promotion was allowed: ${JSON.stringify(res.result)}`)
+      assert(fs.existsSync(path.join(tmpFsDir, 'keep.txt')), 'file was deleted despite destructive ops being disabled')
     })
 
     // restore default policy so any later capability reads see the secure default

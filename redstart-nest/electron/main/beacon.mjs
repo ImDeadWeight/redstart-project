@@ -10,7 +10,9 @@ import { createServer } from 'http'
 
 const BEACON_PORT = 8765
 
-export function startBeaconServer(getRunning, getPort) {
+// bindPort defaults to the well-known beacon port; callers (tests) may pass 0
+// to bind an ephemeral port and avoid colliding with a running instance.
+export function startBeaconServer(getRunning, getPort, bindPort = BEACON_PORT) {
   const server = createServer((req, res) => {
     const running = !!getRunning()
     const port = getPort()
@@ -29,7 +31,7 @@ export function startBeaconServer(getRunning, getPort) {
   })
 
   return new Promise((resolve, reject) => {
-    server.listen(BEACON_PORT, '0.0.0.0', () => {
+    server.listen(bindPort, '0.0.0.0', () => {
       resolve(server)
     })
     server.on('error', reject)

@@ -252,6 +252,8 @@ Redstart Nest has an optional account system, gated behind a global **Require lo
 
 The account/role logic is covered by an automated HTTP-level test suite (`redstart-nest/scripts/test-auth.mjs`) that exercises the full hierarchy, including cross-tier permission checks. The login flow itself has been verified working from a remote browser. This is a newer subsystem — treat the account-management surface as still stabilizing, and **do not expose the gateway port to the public internet** regardless of whether login is on.
 
+More broadly, `npm run test:security` (in `redstart-nest`) runs the full security suite — **~274 automated checks** across ten suites that guard Redstart's architectural invariants at the service boundary: authentication and the three-tier role hierarchy, filesystem path containment (plus a property fuzzer) and symlink-escape protection, per-account conversation isolation, the tool-permission model and escalation guards, SSRF and redirect re-validation on web fetch, the llama-server localhost-only bind, discovery-beacon robustness, response-shape contracts (proving the public account view leaks no secrets), and a provider-conformance battery every MCP capability must pass. The suite drives the real gateway and MCP servers over HTTP, uses throwaway data and ports, and runs safely alongside a live instance.
+
 ---
 
 ## Using as a Coding Agent (Kilo Code / Continue / etc.)

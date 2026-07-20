@@ -161,6 +161,62 @@ await test('still throws on missing root (config error, not model input)', () =>
 })
 
 // ---------------------------------------------------------------------------
+// Property fuzz — the containment invariant under many random adversarial
+// inputs. For ANY input string, resolveWithinRoot must resolve to a path inside
+// the root or reject it; it must never yield a path outside the root. This
+// complements the hand-picked cases above by covering combinations (mixed
+// separators, encodings, drive letters, unicode, repeated traversal) no one
+// enumerated. Deterministic RNG so a breach reproduces from the printed seed.
+// ---------------------------------------------------------------------------
+
+console.log('\n--- resolveWithinRoot: property fuzz ---')
+
+await test('🔍 fuzz: no random input ever resolves outside the root', () => {
+  const realRoot = fs.realpathSync.native(root)
+  const TOKENS = ['..', '.', 'sub', 'outside', 'a.txt', 'secret.txt', '/', '\\', 'C:', 'C:\\', '~',
+    '%2e%2e', '%2f', '....//', ' ', 'café', '日本', '..%2f', 'sub/..', 'link-out', 'foo.txt', '']
+  const SEPS = ['/', '\\', '', path.sep]
+
+  // Small seeded LCG (deterministic, reproducible).
+  const SEED = 0x9e3779b9
+  let state = SEED
+  const rnd = () => (state = (state * 1664525 + 1013904223) >>> 0) / 0x100000000
+  const pick = (arr) => arr[Math.floor(rnd() * arr.length)]
+
+  const N = 3000
+  let contained = 0, rejected = 0
+  for (let i = 0; i < N; i++) {
+    const n = 1 + Math.floor(rnd() * 8)
+    let p = ''
+    for (let j = 0; j < n; j++) p += pick(TOKENS) + (j < n - 1 ? pick(SEPS) : '')
+
+    let out
+    try {
+      out = tryResolveWithinRoot(root, p)
+    } catch (err) {
+      // Only genuine config errors (missing/invalid root) may throw here; the
+      // root is valid, so any throw is a bug in the guard.
+      throw new Error(`unexpected throw for input ${JSON.stringify(p)}: ${err.message}`)
+    }
+    if (out === null) { rejected++; continue }
+
+    // Containment == string prefix under the root, mirroring resolveWithinRoot's
+    // own comparable() check (case-insensitive on win32). Using path.relative is
+    // unreliable here: a contained path that happens to contain a literal "C:"
+    // segment makes relative()/isAbsolute() mis-parse it as drive-absolute.
+    const norm = (s) => process.platform === 'win32' ? s.toLowerCase() : s
+    const r = norm(realRoot)
+    const o = norm(out)
+    const inside = o === r || o.startsWith(r + path.sep)
+    if (!inside) {
+      throw new Error(`CONTAINMENT BREACH (seed ${SEED}, iter ${i}): input=${JSON.stringify(p)} -> ${out}`)
+    }
+    contained++
+  }
+  return `${N} inputs: ${contained} contained, ${rejected} rejected, 0 escaped`
+})
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 
