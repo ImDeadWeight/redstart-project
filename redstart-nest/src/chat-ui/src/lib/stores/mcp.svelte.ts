@@ -30,29 +30,19 @@ import { serverStore } from '$lib/stores/server.svelte';
 // (inside syncServersFromHost), never at module init.
 import { toolsStore } from '$lib/stores/tools.svelte';
 import { mode } from 'mode-watcher';
-import {
-	parseMcpServerSettings,
-	detectMcpTransportFromUrl,
-	uuid,
-	extractRootDomain,
-	apiFetch
-} from '$lib/utils';
+import { parseMcpServerSettings, detectMcpTransportFromUrl, uuid, apiFetch } from '$lib/utils';
 import {
 	MCPConnectionPhase,
 	MCPLogLevel,
 	HealthCheckStatus,
 	MCPRefType,
 	ColorMode,
-	UrlProtocol,
 	JsonSchemaType,
 	ToolCallType
 } from '$lib/enums';
 import {
 	DEFAULT_CACHE_TTL_MS,
 	DEFAULT_MCP_CONFIG,
-	EXPECTED_THEMED_ICON_PAIR_COUNT,
-	MCP_ALLOWED_ICON_MIME_TYPES,
-	MCP_SERVER_ID_PREFIX,
 	MCP_RECONNECT_INITIAL_DELAY,
 	MCP_RECONNECT_BACKOFF_MULTIPLIER,
 	MCP_RECONNECT_MAX_DELAY,
@@ -66,9 +56,6 @@ import type {
 	MCPClientConfig,
 	MCPConnection,
 	HealthCheckParams,
-	ServerCapabilities,
-	ClientCapabilities,
-	MCPCapabilitiesInfo,
 	MCPConnectionLog,
 	MCPPromptInfo,
 	GetPromptResult,
@@ -76,13 +63,19 @@ import type {
 	HealthCheckState,
 	MCPServerSettingsEntry,
 	MCPServerConfig,
-	MCPResourceIcon,
 	MCPResourceAttachment,
 	MCPResourceContent
 } from '$lib/types';
 import type { ListChangedHandlers } from '@modelcontextprotocol/sdk/types.js';
 import type { DatabaseMessageExtraMcpResource, McpServerOverride } from '$lib/types/database';
-import type { SettingsConfigType } from '$lib/types/settings';
+import {
+	checkServerEnabled,
+	buildMcpClientConfig,
+	buildCapabilitiesInfo,
+	parseHeaders
+} from '$lib/stores/mcp/mcp-config';
+import { normalizeSchemaProperties, parseToolArguments } from '$lib/stores/mcp/mcp-schema';
+import { getMcpIconUrl, getServerFaviconFallback } from '$lib/stores/mcp/mcp-icons';
 
 class MCPStore {
 	private _isInitializing = $state(false);
@@ -101,174 +94,6 @@ class MCPStore {
 
 	get isProxyAvailable(): boolean {
 		return serverStore.props?.cors_proxy_enabled ?? false;
-	}
-
-	/**
-	 * Generates a unique server ID from an optional ID string or index.
-	 */
-	#generateServerId(id: unknown, index: number): string {
-		if (typeof id === 'string' && id.trim()) {
-			return id.trim();
-		}
-
-		return `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
-	}
-
-	/**
-	 * Parses raw server settings from config into MCPServerSettingsEntry array.
-	 */
-	#parseServerSettings(rawServers: unknown): MCPServerSettingsEntry[] {
-		if (!rawServers) {
-			return [];
-		}
-
-		let parsed: unknown;
-		if (typeof rawServers === 'string') {
-			const trimmed = rawServers.trim();
-			if (!trimmed) {
-				return [];
-			}
-
-			try {
-				parsed = JSON.parse(trimmed);
-			} catch (error) {
-				console.warn('[MCP] Failed to parse mcpServers JSON:', error);
-
-				return [];
-			}
-		} else {
-			parsed = rawServers;
-		}
-		if (!Array.isArray(parsed)) {
-			return [];
-		}
-
-		return parsed.map((entry, index) => {
-			const url = typeof entry?.url === 'string' ? entry.url.trim() : '';
-			const headers = typeof entry?.headers === 'string' ? entry.headers.trim() : undefined;
-
-			return {
-				id: this.#generateServerId((entry as { id?: unknown })?.id, index),
-				enabled: Boolean((entry as { enabled?: unknown })?.enabled),
-				url,
-				name: (entry as { name?: string })?.name,
-				requestTimeoutSeconds:
-					(entry as { requestTimeoutSeconds?: number })?.requestTimeoutSeconds ??
-					DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
-				headers: headers || undefined,
-				useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
-			} satisfies MCPServerSettingsEntry;
-		});
-	}
-
-	/**
-	 * Builds server configuration from a settings entry.
-	 */
-	#buildServerConfig(
-		entry: MCPServerSettingsEntry,
-		connectionTimeoutMs = DEFAULT_MCP_CONFIG.connectionTimeoutMs
-	): MCPServerConfig | undefined {
-		if (!entry?.url) {
-			return undefined;
-		}
-
-		let headers: Record<string, string> | undefined;
-		if (entry.headers) {
-			try {
-				const parsed = JSON.parse(entry.headers);
-				if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed))
-					headers = parsed as Record<string, string>;
-			} catch {
-				console.warn('[MCP] Failed to parse custom headers JSON:', entry.headers);
-			}
-		}
-
-		return {
-			url: entry.url,
-			transport: detectMcpTransportFromUrl(entry.url),
-			handshakeTimeoutMs: connectionTimeoutMs,
-			requestTimeoutMs: Math.round(entry.requestTimeoutSeconds * 1000),
-			headers,
-			useProxy: entry.useProxy
-		};
-	}
-
-	/**
-	 * Checks if a server is enabled for a given chat.
-	 * Only per-chat overrides (persisted in localStorage for new chats,
-	 * or in IndexedDB for existing conversations) control enabled state.
-	 */
-	#checkServerEnabled(
-		server: MCPServerSettingsEntry,
-		perChatOverrides?: McpServerOverride[]
-	): boolean {
-		const override = perChatOverrides?.find((o) => o.serverId === server.id);
-		return override?.enabled ?? false;
-	}
-
-	/**
-	 * Builds MCP client configuration from settings.
-	 */
-	#buildMcpClientConfig(
-		cfg: SettingsConfigType,
-		perChatOverrides?: McpServerOverride[]
-	): MCPClientConfig | undefined {
-		const rawServers = this.#parseServerSettings(cfg.mcpServers);
-		if (!rawServers.length) {
-			return undefined;
-		}
-
-		const servers: Record<string, MCPServerConfig> = {};
-
-		for (const [index, entry] of rawServers.entries()) {
-			if (!this.#checkServerEnabled(entry, perChatOverrides)) continue;
-			const normalized = this.#buildServerConfig(entry);
-			if (normalized) servers[this.#generateServerId(entry.id, index)] = normalized;
-		}
-
-		if (Object.keys(servers).length === 0) {
-			return undefined;
-		}
-
-		return {
-			protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
-			capabilities: DEFAULT_MCP_CONFIG.capabilities,
-			clientInfo: DEFAULT_MCP_CONFIG.clientInfo,
-			requestTimeoutMs: Math.round(DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000),
-			servers
-		};
-	}
-
-	/**
-	 * Builds capabilities info from server and client capabilities.
-	 */
-	#buildCapabilitiesInfo(
-		serverCaps?: ServerCapabilities,
-		clientCaps?: ClientCapabilities
-	): MCPCapabilitiesInfo {
-		return {
-			server: {
-				tools: serverCaps?.tools ? { listChanged: serverCaps.tools.listChanged } : undefined,
-				prompts: serverCaps?.prompts ? { listChanged: serverCaps.prompts.listChanged } : undefined,
-				resources: serverCaps?.resources
-					? {
-							subscribe: serverCaps.resources.subscribe,
-							listChanged: serverCaps.resources.listChanged
-						}
-					: undefined,
-				logging: !!serverCaps?.logging,
-				completions: !!serverCaps?.completions,
-				tasks: !!serverCaps?.tasks
-			},
-			client: {
-				roots: clientCaps?.roots ? { listChanged: clientCaps.roots.listChanged } : undefined,
-				sampling: !!clientCaps?.sampling,
-				elicitation: clientCaps?.elicitation
-					? { form: !!clientCaps.elicitation.form, url: !!clientCaps.elicitation.url }
-					: undefined,
-				tasks: !!clientCaps?.tasks
-			}
-		};
 	}
 
 	get isInitializing(): boolean {
@@ -296,7 +121,7 @@ class MCPStore {
 	}
 
 	get isEnabled(): boolean {
-		const mcpConfig = this.#buildMcpClientConfig(config());
+		const mcpConfig = buildMcpClientConfig(config());
 		return (
 			mcpConfig !== null && mcpConfig !== undefined && Object.keys(mcpConfig.servers).length > 0
 		);
@@ -394,65 +219,6 @@ class MCPStore {
 	}
 
 	/**
-	 * Validates that an icon URI uses a safe scheme (https: or data:).
-	 */
-	#isValidIconUri(src: string): boolean {
-		try {
-			if (src.startsWith(UrlProtocol.DATA)) return true;
-
-			const url = new URL(src);
-
-			return url.protocol === UrlProtocol.HTTPS;
-		} catch {
-			return false;
-		}
-	}
-
-	/**
-	 * Selects the best icon URL from an MCP icons array.
-	 * Follows security guidelines from the MCP specification:
-	 * - Only allows https: and data: URIs
-	 * - Filters to supported MIME types
-	 *
-	 * Selection priority:
-	 * 1. Icon matching the current color scheme (dark/light)
-	 * 2. Universal icon (no theme specified); if exactly 2, assumes [0]=light, [1]=dark
-	 * 3. First valid icon as last resort
-	 */
-	#getMcpIconUrl(icons: MCPResourceIcon[] | undefined, isDark = false): string | null {
-		if (!icons?.length) return null;
-
-		const validIcons = icons.filter((icon) => {
-			if (!icon.src || !this.#isValidIconUri(icon.src)) return false;
-			if (icon.mimeType && !MCP_ALLOWED_ICON_MIME_TYPES.has(icon.mimeType)) return false;
-			return true;
-		});
-
-		if (validIcons.length === 0) return null;
-
-		const preferredTheme = isDark ? ColorMode.DARK : ColorMode.LIGHT;
-
-		// 1. Prefer icon explicitly matching the current color scheme
-		const themedIcon = validIcons.find((icon) => icon.theme === preferredTheme);
-		if (themedIcon) return themedIcon.src;
-
-		// 2. Handle universal icons (no theme specified)
-		const universalIcons = validIcons.filter((icon) => !icon.theme);
-
-		if (universalIcons.length === EXPECTED_THEMED_ICON_PAIR_COUNT) {
-			// Heuristic: two theme-less icons → assume [0] = light, [1] = dark
-			return universalIcons[isDark ? 1 : 0].src;
-		}
-
-		if (universalIcons.length > 0) {
-			return universalIcons[0].src;
-		}
-
-		// 3. Last resort: use opposite-theme icon
-		return validIcons[0].src;
-	}
-
-	/**
 	 * Get icon URL for an MCP server by its ID.
 	 * Returns the best icon from the MCP server's `icons` array
 	 * (see MCP spec: spec.modelcontextprotocol.io).
@@ -467,7 +233,7 @@ class MCPStore {
 		const isDark = mode.current === ColorMode.DARK;
 		const healthState = this.getHealthCheckState(serverId);
 		if (healthState.status === HealthCheckStatus.SUCCESS && healthState.serverInfo?.icons) {
-			const mcpIconUrl = this.#getMcpIconUrl(healthState.serverInfo.icons, isDark);
+			const mcpIconUrl = getMcpIconUrl(healthState.serverInfo.icons, isDark);
 
 			if (mcpIconUrl) {
 				return mcpIconUrl;
@@ -475,35 +241,9 @@ class MCPStore {
 		}
 
 		// Fallback: try favicon from root domain
-		const fallbackUrl = this.#getServerFaviconFallback(server.url);
+		const fallbackUrl = getServerFaviconFallback(server.url);
 		if (fallbackUrl) {
 			return fallbackUrl;
-		}
-
-		return null;
-	}
-
-	/**
-	 * Construct a fallback favicon URL from the MCP server URL.
-	 * e.g. https://mcp.exa.ai/mcp -> https://exa.ai/favicon.ico
-	 */
-	#getServerFaviconFallback(serverUrl: string): string | null {
-		try {
-			const url = new URL(serverUrl);
-			const rootDomain = extractRootDomain(url);
-			if (!rootDomain) return null;
-
-			const origin = `${url.protocol}//${rootDomain}`;
-			const candidates = ['favicon.ico', 'favicon.png'];
-
-			for (const path of candidates) {
-				const faviconUrl = `${origin}/${path}`;
-				if (this.#isValidIconUri(faviconUrl)) {
-					return faviconUrl;
-				}
-			}
-		} catch {
-			// Invalid URL, return null
 		}
 
 		return null;
@@ -613,14 +353,14 @@ class MCPStore {
 		return parseMcpServerSettings(config().mcpServers).some((s) => s.enabled && s.url.trim());
 	}
 	hasEnabledServers(perChatOverrides?: McpServerOverride[]): boolean {
-		return Boolean(this.#buildMcpClientConfig(config(), perChatOverrides));
+		return Boolean(buildMcpClientConfig(config(), perChatOverrides));
 	}
 
 	getEnabledServersForConversation(
 		perChatOverrides?: McpServerOverride[]
 	): MCPServerSettingsEntry[] {
 		return this.getServers().filter((server) => {
-			return this.#checkServerEnabled(server, perChatOverrides);
+			return checkServerEnabled(server, perChatOverrides);
 		});
 	}
 
@@ -629,7 +369,7 @@ class MCPStore {
 			return false;
 		}
 
-		const mcpConfig = this.#buildMcpClientConfig(config(), perChatOverrides);
+		const mcpConfig = buildMcpClientConfig(config(), perChatOverrides);
 		const signature = mcpConfig ? JSON.stringify(mcpConfig) : null;
 		if (!signature) {
 			await this.shutdown();
@@ -1011,55 +751,13 @@ class MCPStore {
 					function: {
 						name: tool.name,
 						description: tool.description,
-						parameters: this.normalizeSchemaProperties(rawSchema)
+						parameters: normalizeSchemaProperties(rawSchema)
 					}
 				});
 			}
 		}
 
 		return tools;
-	}
-
-	private normalizeSchemaProperties(schema: Record<string, unknown>): Record<string, unknown> {
-		if (!schema || typeof schema !== 'object') {
-			return schema;
-		}
-
-		const normalized = { ...schema };
-		if (normalized.properties && typeof normalized.properties === 'object') {
-			const props = normalized.properties as Record<string, Record<string, unknown>>;
-			const normalizedProps: Record<string, Record<string, unknown>> = {};
-			for (const [key, prop] of Object.entries(props)) {
-				if (!prop || typeof prop !== 'object') {
-					normalizedProps[key] = prop;
-					continue;
-				}
-				const normalizedProp = { ...prop };
-				if (!normalizedProp.type && normalizedProp.default !== undefined) {
-					const defaultVal = normalizedProp.default;
-					if (typeof defaultVal === 'string') normalizedProp.type = 'string';
-					else if (typeof defaultVal === 'number')
-						normalizedProp.type = Number.isInteger(defaultVal) ? 'integer' : 'number';
-					else if (typeof defaultVal === 'boolean') normalizedProp.type = 'boolean';
-					else if (Array.isArray(defaultVal)) normalizedProp.type = 'array';
-					else if (typeof defaultVal === 'object' && defaultVal !== null)
-						normalizedProp.type = 'object';
-				}
-				if (normalizedProp.properties)
-					Object.assign(
-						normalizedProp,
-						this.normalizeSchemaProperties(normalizedProp as Record<string, unknown>)
-					);
-				if (normalizedProp.items && typeof normalizedProp.items === 'object')
-					normalizedProp.items = this.normalizeSchemaProperties(
-						normalizedProp.items as Record<string, unknown>
-					);
-				normalizedProps[key] = normalizedProp;
-			}
-			normalized.properties = normalizedProps;
-		}
-
-		return normalized;
 	}
 
 	getToolNames(): string[] {
@@ -1191,7 +889,7 @@ class MCPStore {
 		const connection = this.connections.get(serverName);
 		if (!connection) throw new Error(`Server "${serverName}" is not connected`);
 
-		const args = this.parseToolArguments(toolCall.function.arguments);
+		const args = parseToolArguments(toolCall.function.arguments);
 
 		try {
 			return await MCPService.callTool(connection, { name: toolName, arguments: args }, signal);
@@ -1234,33 +932,6 @@ class MCPStore {
 
 			throw error;
 		}
-	}
-
-	private parseToolArguments(args: string | Record<string, unknown>): Record<string, unknown> {
-		if (typeof args === 'string') {
-			const trimmed = args.trim();
-			if (trimmed === '') {
-				return {};
-			}
-
-			try {
-				const parsed = JSON.parse(trimmed);
-				if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
-					throw new Error(
-						`Tool arguments must be an object, got ${Array.isArray(parsed) ? 'array' : typeof parsed}`
-					);
-
-				return parsed as Record<string, unknown>;
-			} catch (error) {
-				throw new Error(`Failed to parse tool arguments as JSON: ${(error as Error).message}`);
-			}
-		}
-
-		if (typeof args === 'object' && args !== null && !Array.isArray(args)) {
-			return args;
-		}
-
-		throw new Error(`Invalid tool arguments type: ${typeof args}`);
 	}
 
 	async getPromptCompletions(
@@ -1337,22 +1008,6 @@ class MCPStore {
 		}
 	}
 
-	private parseHeaders(headersJson?: string): Record<string, string> | undefined {
-		if (!headersJson?.trim()) {
-			return undefined;
-		}
-
-		try {
-			const parsed = JSON.parse(headersJson);
-			if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed))
-				return parsed as Record<string, string>;
-		} catch {
-			console.warn('[MCPStore] Failed to parse custom headers JSON:', headersJson);
-		}
-
-		return undefined;
-	}
-
 	async runHealthChecksForServers(
 		servers: {
 			id: string;
@@ -1400,7 +1055,7 @@ class MCPStore {
 			// Reuse existing connection - just refresh tools list
 			try {
 				const tools = await MCPService.listTools(existingConnection);
-				const capabilities = this.#buildCapabilitiesInfo(
+				const capabilities = buildCapabilitiesInfo(
 					existingConnection.serverCapabilities,
 					existingConnection.clientCapabilities
 				);
@@ -1450,7 +1105,7 @@ class MCPStore {
 		});
 
 		const timeoutMs = Math.round(server.requestTimeoutSeconds * 1000);
-		const headers = this.parseHeaders(server.headers);
+		const headers = parseHeaders(server.headers);
 
 		try {
 			const serverConfig: MCPServerConfig = {
@@ -1495,7 +1150,7 @@ class MCPStore {
 				title: tool.title
 			}));
 
-			const capabilities = this.#buildCapabilitiesInfo(
+			const capabilities = buildCapabilitiesInfo(
 				connection.serverCapabilities,
 				connection.clientCapabilities
 			);
