@@ -182,14 +182,18 @@ describe('beacon payload', () => {
   it('returns only the app identity marker, running, and port — no version, auth, or server URLs', async () => {
     const { startBeaconServer, stopBeaconServer } = await import('$lib/../../../../electron/main/beacon.mjs')
 
+    // Bind an ephemeral port (0) so this test never collides with a running
+    // Redstart instance already holding the real beacon port 8765.
     const server = await startBeaconServer(
       () => true,
       () => 19080,
+      0,
     )
+    const boundPort = server.address().port
 
     const result = await new Promise((resolve, reject) => {
       const http = require('http')
-      http.get('http://127.0.0.1:8765', (res) => {
+      http.get(`http://127.0.0.1:${boundPort}`, (res) => {
         let data = ''
         res.on('data', chunk => data += chunk)
         res.on('end', () => {

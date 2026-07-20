@@ -8,6 +8,9 @@
 // import is the real, unmodified production module.
 
 export const app = {
+  // llama-args.mjs reads app.isPackaged to pick the chat-ui static path; tests
+  // run the unpackaged (dev) branch.
+  isPackaged: false,
   getPath(name) {
     if (name === 'userData') {
       const dir = process.env.REDSTART_TEST_USERDATA_DIR
