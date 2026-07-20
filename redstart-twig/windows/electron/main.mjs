@@ -19,7 +19,8 @@
 // the live API (this is the same pattern Redstart Nest's index.mjs uses). A
 // dynamic `await import('electron')` must NOT be used here — it sends the CJS
 // install shim through Node's ESM export-preparse and crashes at startup.
-import { app, BrowserWindow, ipcMain, session, dialog } from 'electron'
+import { app, BrowserWindow, Menu, ipcMain, nativeTheme, session, dialog } from 'electron'
+import { initMcpManager } from './mcp-manager.mjs'
 import * as http from 'node:http'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -299,8 +300,62 @@ ipcMain.handle('fs:pick-root', async () => {
 
 ipcMain.handle('fs:get-root', () => ({ rootDir: fsRootDir }))
 
+// ---------------------------------------------------------------------------
+// Shell chrome
+// ---------------------------------------------------------------------------
+// The window runs with a hidden title bar (no icon, no app name, no menu) and
+// a Window Controls Overlay: Windows draws only the minimize/maximize/close
+// buttons, floating over the web content, in colors we control. The chat-ui
+// renders a slim drag strip along the top edge (see `.twig-titlebar` in the
+// chat-ui CSS) so the window can still be moved, and reports its light/dark
+// theme here so both the overlay buttons and nativeTheme follow the app.
+
+// Overlay height must match the chat-ui's --twig-titlebar-height drag strip.
+const TITLEBAR_HEIGHT = 32
+const TITLEBAR_COLORS = {
+  dark:  { color: '#09090b', symbolColor: '#e4e4e7', height: TITLEBAR_HEIGHT },
+  light: { color: '#ffffff', symbolColor: '#18181b', height: TITLEBAR_HEIGHT },
+}
+
+ipcMain.handle('shell:set-theme', (_e, { theme }) => {
+  const mode = theme === 'light' ? 'light' : 'dark'
+  nativeTheme.themeSource = mode
+  try {
+    mainWindow?.setTitleBarOverlay(TITLEBAR_COLORS[mode])
+  } catch {
+    /* overlay not supported (non-Windows) */
+  }
+})
+
 app.whenReady().then(async () => {
   fsRootDir = loadFsRoot()
+
+  // Default grant: <Documents>\Redstart-twig. Created on first launch so the
+  // local file tools work out of the box, scoped to a folder that is clearly
+  // the app's own. The user can point elsewhere via the picker at any time.
+  if (!fsRootDir) {
+    try {
+      const defaultRoot = path.join(app.getPath('documents'), 'Redstart-twig')
+      fs.mkdirSync(defaultRoot, { recursive: true })
+      fsRootDir = defaultRoot
+      saveFsRoot(fsRootDir)
+    } catch (err) {
+      console.warn('Could not create default fs root:', err.message)
+    }
+  }
+
+  // No File/Edit/View menu — the chat-ui is the whole interface. F12 devtools
+  // is re-bound below via before-input-event, so nothing of value is lost.
+  Menu.setApplicationMenu(null)
+
+  // Default the window chrome to dark (matches backgroundColor #09090b) until
+  // the renderer reports its actual theme via shell:set-theme.
+  nativeTheme.themeSource = 'dark'
+
+  // Local stdio MCP servers (Claude Desktop model) — process supervision +
+  // JSONL pipe live in mcp-manager.mjs; the chat-ui's MCP client drives them
+  // over the preload bridge like any other MCP connection.
+  initMcpManager({ app, ipcMain, getWindow: () => mainWindow })
 
   // The chat-ui ships as a PWA. In this desktop shell the service worker only
   // causes stale-content bugs: it precaches an app shell and keeps serving it
@@ -333,6 +388,10 @@ app.whenReady().then(async () => {
     title: 'Redstart Twig',
     show: false,
     backgroundColor: '#09090b',
+    // Hidden title bar + Window Controls Overlay: no native bar, no app
+    // icon/name — just themed min/max/close buttons over the web content.
+    titleBarStyle: 'hidden',
+    titleBarOverlay: TITLEBAR_COLORS.dark,
     webPreferences: {
       contextIsolation: true,
       sandbox: false,

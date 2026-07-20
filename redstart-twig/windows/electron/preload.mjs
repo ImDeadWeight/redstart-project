@@ -27,4 +27,34 @@ contextBridge.exposeInMainWorld('redstartTwigAPI', {
     pickRoot: () => ipcRenderer.invoke('fs:pick-root'),
     getRoot: () => ipcRenderer.invoke('fs:get-root'),
   },
+  // Shell chrome — lets the chat-ui keep the native window frame (Windows 11
+  // title bar) in step with its own light/dark theme.
+  shell: {
+    setTheme: (theme) => ipcRenderer.invoke('shell:set-theme', { theme }),
+  },
+  // Local stdio MCP servers (Claude Desktop model). The main process spawns
+  // servers from <userData>/twig-mcp.json and pipes newline-framed JSON-RPC;
+  // the chat-ui's MCP SDK client speaks the protocol over this surface. Both
+  // onMessage and onExit return an unsubscribe so the renderer transport can
+  // detach cleanly on close() — otherwise listeners leak across reconnects.
+  mcp: {
+    list: () => ipcRenderer.invoke('mcp-local:list'),
+    start: (id) => ipcRenderer.invoke('mcp-local:start', { id }),
+    stop: (id) => ipcRenderer.invoke('mcp-local:stop', { id }),
+    send: (id, line) => ipcRenderer.invoke('mcp-local:send', { id, line }),
+    add: (id, config) => ipcRenderer.invoke('mcp-local:add', { id, ...config }),
+    remove: (id) => ipcRenderer.invoke('mcp-local:remove', { id }),
+    onMessage: (id, callback) => {
+      const channel = `mcp-local:message:${id}`
+      const handler = (_event, line) => callback(line)
+      ipcRenderer.on(channel, handler)
+      return () => ipcRenderer.removeListener(channel, handler)
+    },
+    onExit: (id, callback) => {
+      const channel = `mcp-local:exit:${id}`
+      const handler = (_event, info) => callback(info)
+      ipcRenderer.on(channel, handler)
+      return () => ipcRenderer.removeListener(channel, handler)
+    },
+  },
 })

@@ -201,3 +201,47 @@
 		scrollbar-width: none;
 	}
 }
+
+/* ---------------------------------------------------------------------------
+ * Redstart Twig desktop window chrome
+ * ---------------------------------------------------------------------------
+ * The Twig Electron shell runs frameless (hidden title bar + window-controls
+ * overlay); +layout adds `twig-desktop` on <html> and renders `.twig-titlebar`.
+ * The strip is the draggable "title bar"; the offsets below push the app and
+ * the fixed-position sidebar out from under it. The height must match
+ * TITLEBAR_HEIGHT in redstart-twig/windows/electron/main.mjs.
+ */
+html.twig-desktop {
+	--twig-titlebar-height: 32px;
+}
+
+html.twig-desktop .twig-titlebar {
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: var(--twig-titlebar-height);
+	z-index: 1000;
+	-webkit-app-region: drag;
+	background: var(--background);
+}
+
+html.twig-desktop body {
+	padding-top: var(--twig-titlebar-height);
+}
+
+/* Full-height layout containers sit inside the padded body */
+html.twig-desktop .h-dvh {
+	height: calc(100dvh - var(--twig-titlebar-height));
+}
+
+html.twig-desktop .min-h-svh {
+	min-height: calc(100svh - var(--twig-titlebar-height));
+}
+
+/* The sidebar container is position:fixed (ignores body padding) — shift it
+ * below the strip and shorten it by the same amount. */
+html.twig-desktop [data-slot='sidebar-container'] {
+	top: var(--twig-titlebar-height);
+	height: calc(100dvh - 1.5rem - var(--twig-titlebar-height)) !important;
+}

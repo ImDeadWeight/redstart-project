@@ -12,6 +12,8 @@ import type {
 	ListChangedHandlers
 } from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { IpcStdioTransport } from '$lib/services/mcp-stdio-transport';
+import { twigMcpApi } from '$lib/utils/twig';
 import {
 	DEFAULT_MCP_CONFIG,
 	DEFAULT_CLIENT_VERSION,
@@ -361,6 +363,38 @@ export class MCPService {
 		type: MCPTransportType;
 		stopPhaseLogging: () => void;
 	} {
+		if (config.transport === MCPTransportType.STDIO) {
+			// Defense in depth: the UI never offers stdio entries outside the Twig
+			// desktop shell, but if one reaches us anyway, fail with a clear error
+			// instead of a missing-url message. The diagnostic-fetch machinery is
+			// HTTP-only and does not apply here.
+			const api = twigMcpApi();
+			if (!api) {
+				throw new Error(
+					'Local stdio MCP servers are only available in the Redstart Twig desktop app'
+				);
+			}
+
+			const serverId = config.stdioId ?? serverName;
+
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+				console.log(`[MCPService] Creating stdio transport for local server "${serverId}"`);
+			}
+
+			onLog?.(
+				this.createLog(
+					MCPConnectionPhase.TRANSPORT_CREATING,
+					`Starting local stdio server "${serverId}"`
+				)
+			);
+
+			return {
+				transport: new IpcStdioTransport(serverId, api),
+				type: MCPTransportType.STDIO,
+				stopPhaseLogging: () => {}
+			};
+		}
+
 		if (!config.url) {
 			throw new Error('MCP server configuration is missing url');
 		}
@@ -518,7 +552,7 @@ export class MCPService {
 			MCPConnectionPhase.TRANSPORT_CREATING,
 			this.createLog(
 				MCPConnectionPhase.TRANSPORT_CREATING,
-				`Creating transport for ${serverConfig.url}`
+				`Creating transport for ${serverConfig.url ?? `local stdio server "${serverName}"`}`
 			)
 		);
 
@@ -532,13 +566,19 @@ export class MCPService {
 			stopPhaseLogging
 		} = this.createTransport(serverName, serverConfig, (log) => onPhase?.(log.phase, log));
 
-		// Setup WebSocket reconnection handler
-		if (transportType === MCPTransportType.WEBSOCKET) {
+		// Setup reconnection handler for connection-oriented transports. For
+		// stdio, the manager restarts a crashed child but the fresh process has
+		// no session state — the host must reconnect (re-initialize) like any
+		// dropped connection.
+		if (
+			transportType === MCPTransportType.WEBSOCKET ||
+			transportType === MCPTransportType.STDIO
+		) {
 			transport.onclose = () => {
-				console.log(`[MCPService][${serverName}] WebSocket closed, notifying for reconnection`);
+				console.log(`[MCPService][${serverName}] Connection closed, notifying for reconnection`);
 				onPhase?.(
 					MCPConnectionPhase.DISCONNECTED,
-					this.createLog(MCPConnectionPhase.DISCONNECTED, 'WebSocket connection closed')
+					this.createLog(MCPConnectionPhase.DISCONNECTED, `Connection closed (${transportType})`)
 				);
 			};
 		}
@@ -608,10 +648,13 @@ export class MCPService {
 			client.onerror = runtimeErrorHandler;
 		} catch (error) {
 			client.onerror = runtimeErrorHandler;
-			const url =
-				(serverConfig.useProxy ?? false)
+			// stdio entries have no URL — skip the browser/CORS diagnostics that
+			// only make sense for HTTP transports.
+			const url = serverConfig.url
+				? (serverConfig.useProxy ?? false)
 					? buildProxiedUrl(serverConfig.url)
-					: new URL(serverConfig.url);
+					: new URL(serverConfig.url)
+				: undefined;
 
 			onPhase?.(
 				MCPConnectionPhase.ERROR,
@@ -626,7 +669,7 @@ export class MCPService {
 						config: {
 							serverName,
 							configuredUrl: serverConfig.url,
-							effectiveUrl: url.href,
+							effectiveUrl: url?.href,
 							transportType,
 							useProxy: serverConfig.useProxy ?? false,
 							headers: sanitizeHeaders(
@@ -636,8 +679,8 @@ export class MCPService {
 							),
 							credentials: serverConfig.credentials
 						},
-						browser: this.getBrowserContext(url, serverConfig.useProxy ?? false),
-						hints: this.getConnectionHints(url, serverConfig, error)
+						browser: url ? this.getBrowserContext(url, serverConfig.useProxy ?? false) : undefined,
+						hints: url ? this.getConnectionHints(url, serverConfig, error) : []
 					}
 				)
 			);

@@ -177,11 +177,16 @@ export interface HealthCheckParams {
 	requestTimeoutSeconds: number;
 	headers?: string;
 	useProxy?: boolean;
+	/** 'stdio' entries are health-checked by spawning/reusing the local child. */
+	transport?: 'stdio';
 }
 
 export type MCPServerConfig = {
 	transport?: MCPTransportType;
-	url: string;
+	/** Required for network transports; absent for local stdio servers. */
+	url?: string;
+	/** twig-mcp.json entry id for stdio servers (Twig desktop only). */
+	stdioId?: string;
 	protocols?: string | string[];
 	headers?: Record<string, string>;
 	credentials?: RequestCredentials;
@@ -212,12 +217,19 @@ export type MCPToolCall = {
 export type MCPServerSettingsEntry = {
 	id: string;
 	enabled: boolean;
+	/** Empty string for local stdio entries (which have no URL). */
 	url: string;
 	requestTimeoutSeconds: number;
 	headers?: string;
 	name?: string;
 	iconUrl?: string;
 	useProxy?: boolean;
+	/** 'stdio' marks a local desktop server spawned from twig-mcp.json. */
+	transport?: 'stdio';
+	/** Display-only spawn command for stdio entries (source of truth is twig-mcp.json). */
+	command?: string;
+	args?: string[];
+	envJson?: string;
 };
 
 export interface MCPHostManagerConfig {

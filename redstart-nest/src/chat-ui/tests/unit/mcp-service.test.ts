@@ -20,7 +20,7 @@ const createDiagnosticFetch = (
 ) =>
 	(
 		MCPService as unknown as { createDiagnosticFetch: DiagnosticFetchFactory }
-	).createDiagnosticFetch('test-server', config, baseInit, new URL(config.url), false, onLog);
+	).createDiagnosticFetch('test-server', config, baseInit, new URL(config.url!), false, onLog);
 
 describe('MCPService', () => {
 	afterEach(() => {
@@ -44,12 +44,12 @@ describe('MCPService', () => {
 
 		const controller = createDiagnosticFetch(config, (log) => logs.push(log));
 
-		await controller.fetch(config.url, { method: 'POST', body: '{}' });
+		await controller.fetch(config.url!, { method: 'POST', body: '{}' });
 		expect(logs).toHaveLength(2);
 		expect(logs.every((log) => log.message.includes('https://example.com/mcp'))).toBe(true);
 
 		controller.disable();
-		await controller.fetch(config.url, { method: 'POST', body: '{}' });
+		await controller.fetch(config.url!, { method: 'POST', body: '{}' });
 
 		expect(logs).toHaveLength(2);
 	});
@@ -76,7 +76,7 @@ describe('MCPService', () => {
 			headers: config.headers
 		});
 
-		await controller.fetch(config.url, {
+		await controller.fetch(config.url!, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: '{}'
@@ -113,7 +113,7 @@ describe('MCPService', () => {
 
 		const controller = createDiagnosticFetch(config, (log) => logs.push(log));
 
-		await controller.fetch(config.url, {
+		await controller.fetch(config.url!, {
 			method: 'POST',
 			headers: {
 				'content-type': 'application/json',
@@ -157,7 +157,7 @@ describe('MCPService', () => {
 
 		const controller = createDiagnosticFetch(config, (log) => logs.push(log));
 
-		await controller.fetch(config.url, {
+		await controller.fetch(config.url!, {
 			method: 'POST',
 			body: JSON.stringify([
 				{ jsonrpc: '2.0', id: 1, method: 'initialize' },
@@ -190,7 +190,7 @@ describe('MCPService', () => {
 
 		const controller = createDiagnosticFetch(config, (log) => logs.push(log));
 
-		await expect(controller.fetch(config.url, { method: 'POST', body: '{}' })).rejects.toThrow(
+		await expect(controller.fetch(config.url!, { method: 'POST', body: '{}' })).rejects.toThrow(
 			'Failed to fetch'
 		);
 

@@ -1,16 +1,17 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { isCapacitorAndroid, isElectronLog } from '$lib/utils/server-url';
-	import { twigFsApi } from '$lib/utils/twig';
+	import { twigFsApi, twigMcpApi, type TwigMcpServerEntry } from '$lib/utils/twig';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
 	import { NetworkDiscovery, type DiscoveredServer, type NetworkDiscoveryPlugin } from '$lib/plugins/network-discovery';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
-	import { Wifi, RefreshCw, Check, AlertCircle, Loader, FolderOpen } from '@lucide/svelte';
+	import { Wifi, RefreshCw, Check, AlertCircle, Loader, FolderOpen, Plus, Trash2 } from '@lucide/svelte';
 
 	// ── State ─────────────────────────────────────────────────────────────────
 
@@ -29,7 +30,71 @@
 	let localFsRoot = $state<string | null>(null);
 	let fsBusy = $state(false);
 
+	// ── Local MCP servers (Twig desktop only) ─────────────────────────────────
+	// Backed by <userData>/twig-mcp.json — the desktop-local, never-synced
+	// config file. This UI writes that file via the bridge; the settings list
+	// mirrors it (mcpStore.syncLocalServersFromTwig) for the tool picker.
+
+	const twigMcp = twigMcpApi();
+	let localMcpServers = $state<TwigMcpServerEntry[]>([]);
+	let mcpName = $state('');
+	let mcpCommand = $state('');
+	let mcpArgs = $state('');
+	let mcpBusy = $state(false);
+	let mcpError = $state('');
+
+	async function refreshLocalMcpServers() {
+		if (!twigMcp) return;
+		try {
+			localMcpServers = await twigMcp.list();
+		} catch {
+			/* bridge unavailable */
+		}
+	}
+
+	async function addLocalMcpServer() {
+		if (!twigMcp) return;
+		const id = mcpName.trim();
+		const command = mcpCommand.trim();
+		if (!id || !command) {
+			mcpError = 'Name and command are required.';
+			return;
+		}
+		mcpBusy = true;
+		mcpError = '';
+		try {
+			// Naive whitespace split is enough here; paths with spaces can be
+			// hand-edited in twig-mcp.json, which stays the source of truth.
+			const args = mcpArgs.trim() ? mcpArgs.trim().split(/\s+/) : [];
+			const res = await twigMcp.add(id, { command, args });
+			if (!res.ok) {
+				mcpError = res.error ?? 'Could not save the server.';
+				return;
+			}
+			mcpName = '';
+			mcpCommand = '';
+			mcpArgs = '';
+			await refreshLocalMcpServers();
+			await mcpStore.syncLocalServersFromTwig();
+		} finally {
+			mcpBusy = false;
+		}
+	}
+
+	async function removeLocalMcpServer(id: string) {
+		if (!twigMcp) return;
+		mcpBusy = true;
+		try {
+			await twigMcp.remove(id);
+			await refreshLocalMcpServers();
+			await mcpStore.syncLocalServersFromTwig();
+		} finally {
+			mcpBusy = false;
+		}
+	}
+
 	onMount(async () => {
+		void refreshLocalMcpServers();
 		const api = twigFsApi();
 		if (!api) return;
 		try {
@@ -252,6 +317,82 @@
 					{localFsRoot ? 'Change folder' : 'Choose folder'}
 				{/if}
 			</Button>
+		</div>
+	{/if}
+
+	<!-- Local MCP servers (Twig desktop only) -->
+	{#if twigMcp}
+		<div class="space-y-4 border-t border-border/40 pt-6">
+			<div>
+				<h4 class="text-sm font-medium">Local MCP Servers (desktop)</h4>
+				<p class="text-xs text-muted-foreground">
+					Run MCP servers as local processes on this PC — the Claude Desktop model. Servers are
+					stored in <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">twig-mcp.json</code>
+					and their tools appear in the chat tool picker. Commands run with your user account's
+					permissions — only add servers you trust.
+				</p>
+			</div>
+
+			{#if localMcpServers.length > 0}
+				<ul class="space-y-2">
+					{#each localMcpServers as server (server.id)}
+						<li class="flex items-center justify-between rounded-md border border-border/50 bg-muted/30 px-3 py-2">
+							<div class="min-w-0">
+								<p class="text-sm font-medium">{server.id}</p>
+								<p class="break-all font-mono text-xs text-muted-foreground">
+									{server.command} {server.args.join(' ')}
+								</p>
+							</div>
+							<div class="flex shrink-0 items-center gap-2">
+								{#if server.running}
+									<span class="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+										<Check class="h-3.5 w-3.5" /> Running
+									</span>
+								{/if}
+								<Button
+									size="sm"
+									variant="ghost"
+									onclick={() => removeLocalMcpServer(server.id)}
+									disabled={mcpBusy}
+								>
+									<Trash2 class="h-3.5 w-3.5" />
+								</Button>
+							</div>
+						</li>
+					{/each}
+				</ul>
+			{:else}
+				<p class="text-xs text-muted-foreground">No local servers configured.</p>
+			{/if}
+
+			<div class="space-y-2">
+				<Input placeholder="Name (e.g. filesystem)" bind:value={mcpName} disabled={mcpBusy} />
+				<Input
+					placeholder="Command (e.g. npx)"
+					bind:value={mcpCommand}
+					disabled={mcpBusy}
+					class="font-mono"
+				/>
+				<Input
+					placeholder="Arguments (e.g. -y @modelcontextprotocol/server-everything)"
+					bind:value={mcpArgs}
+					disabled={mcpBusy}
+					class="font-mono"
+				/>
+				{#if mcpError}
+					<p class="flex items-center gap-1.5 text-sm text-destructive">
+						<AlertCircle class="h-4 w-4" />
+						{mcpError}
+					</p>
+				{/if}
+				<Button variant="outline" size="sm" onclick={addLocalMcpServer} disabled={mcpBusy}>
+					{#if mcpBusy}
+						<Loader class="h-3.5 w-3.5 animate-spin" /> Working…
+					{:else}
+						<Plus class="h-3.5 w-3.5" /> Add server
+					{/if}
+				</Button>
+			</div>
 		</div>
 	{/if}
 

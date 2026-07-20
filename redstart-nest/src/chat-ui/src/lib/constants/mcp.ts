@@ -1,4 +1,4 @@
-import { Zap, Globe, Radio } from '@lucide/svelte';
+import { Zap, Globe, Radio, Terminal } from '@lucide/svelte';
 import { MCPTransportType } from '$lib/enums';
 import type { ClientCapabilities, Implementation } from '$lib/types';
 import type { Component } from 'svelte';
@@ -75,12 +75,14 @@ export const REDACTED_HEADERS = new Set([
 export const MCP_TRANSPORT_LABELS: Record<MCPTransportType, string> = {
 	[MCPTransportType.WEBSOCKET]: 'WebSocket',
 	[MCPTransportType.STREAMABLE_HTTP]: 'HTTP',
-	[MCPTransportType.SSE]: 'SSE'
+	[MCPTransportType.SSE]: 'SSE',
+	[MCPTransportType.STDIO]: 'Local (stdio)'
 };
 
 /** Icon components for MCP transport types */
 export const MCP_TRANSPORT_ICONS: Record<MCPTransportType, Component> = {
 	[MCPTransportType.WEBSOCKET]: Zap,
 	[MCPTransportType.STREAMABLE_HTTP]: Globe,
-	[MCPTransportType.SSE]: Radio
+	[MCPTransportType.SSE]: Radio,
+	[MCPTransportType.STDIO]: Terminal
 };

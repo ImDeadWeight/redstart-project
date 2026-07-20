@@ -28,7 +28,9 @@ export enum MCPLogLevel {
 export enum MCPTransportType {
 	WEBSOCKET = 'websocket',
 	STREAMABLE_HTTP = 'streamable_http',
-	SSE = 'sse'
+	SSE = 'sse',
+	/** Local child process over the Twig desktop IPC bridge (desktop only). */
+	STDIO = 'stdio'
 }
 
 /**
