@@ -10,7 +10,9 @@ import { readdirSync } from 'node:fs'
 import * as path from 'node:path'
 
 const base = 'electron/main'
-const dirs = [base, path.join(base, 'ipc')]
+// ../shared holds repo-level modules (stdio MCP supervisor) imported by both
+// nest's main process and twig's — checked here since nest's CI runs this.
+const dirs = [base, path.join(base, 'ipc'), '../shared']
 
 let count = 0
 for (const dir of dirs) {
@@ -21,4 +23,4 @@ for (const dir of dirs) {
   }
 }
 
-console.log(`node --check clean: ${count} files under electron/main`)
+console.log(`node --check clean: ${count} files under electron/main + shared`)
