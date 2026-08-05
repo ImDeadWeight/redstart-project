@@ -16,7 +16,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { Document, Packer, Paragraph, HeadingLevel } from 'docx'
+import { Document, Packer, Paragraph, HeadingLevel, Table, TableRow, TableCell, TextRun, WidthType } from 'docx'
 import PDFDocument from 'pdfkit'
 import { PDFParse } from 'pdf-parse'
 import mammoth from 'mammoth'
@@ -32,11 +32,41 @@ const MAX_READ_FILE_BYTES = 50 * 1024 * 1024
 const MAX_LIST_ENTRIES = 500
 
 // ---------------------------------------------------------------------------
-// Lightweight markdown-style parsing — headings, bullets, paragraphs.
-// Not full CommonMark, just enough structure for reports/notes.
+// Lightweight markdown-style parsing — headings, bullets, paragraphs, tables.
+// Not full CommonMark, just enough structure for reports/notes/logs.
 // ---------------------------------------------------------------------------
 
-function parseBlocks(content) {
+// A markdown table is a header row, then a separator row made only of dashes,
+// colons, pipes and spaces, then body rows. Leading/trailing pipes optional.
+const TABLE_SEPARATOR_REGEX = /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/
+
+function isTableSeparator(line) {
+  return line.includes('-') && TABLE_SEPARATOR_REGEX.test(line)
+}
+
+// Split one table row into trimmed cells. A pipe escaped as \| is a literal.
+function splitTableRow(line) {
+  let s = line.trim()
+  if (s.startsWith('|')) s = s.slice(1)
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1)
+  return s
+    .split(/(?<!\\)\|/)
+    .map((cell) => cell.replace(/\\\|/g, '|').trim())
+}
+
+// Every row is normalized to the header's column count: ragged rows are a
+// common model output, and a jagged table breaks both renderers.
+function normalizeRow(cells, columnCount) {
+  const row = cells.slice(0, columnCount)
+  while (row.length < columnCount) row.push('')
+  return row
+}
+
+// Exported for unit tests — the block model is where table detection can go
+// subtly wrong (bullets, horizontal rules and prose containing "|" must not
+// become tables), and that is cheaper to pin down here than through a rendered
+// .docx. Production callers should use callTool().
+export function parseBlocks(content) {
   const lines = content.replace(/\r\n/g, '\n').split('\n')
   const blocks = []
   let paragraphBuffer = []
@@ -48,9 +78,29 @@ function parseBlocks(content) {
     }
   }
 
-  for (const rawLine of lines) {
-    const line = rawLine.trim()
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
     if (line === '') { flushParagraph(); continue }
+
+    // Table: current line has cells and the next line is a separator. Consume
+    // the whole table here so its rows never fall through to paragraph text.
+    const next = lines[i + 1]?.trim()
+    if (line.includes('|') && next && isTableSeparator(next)) {
+      flushParagraph()
+      const header = splitTableRow(line)
+      const columnCount = header.length
+      const rows = []
+      let j = i + 2
+      for (; j < lines.length; j++) {
+        const bodyLine = lines[j].trim()
+        if (bodyLine === '' || !bodyLine.includes('|')) break
+        rows.push(normalizeRow(splitTableRow(bodyLine), columnCount))
+      }
+      blocks.push({ type: 'table', header, rows })
+      i = j - 1
+      continue
+    }
+
     if (line.startsWith('## ')) { flushParagraph(); blocks.push({ type: 'heading2', text: line.slice(3).trim() }); continue }
     if (line.startsWith('# ')) { flushParagraph(); blocks.push({ type: 'heading1', text: line.slice(2).trim() }); continue }
     if (line.startsWith('- ') || line.startsWith('* ')) { flushParagraph(); blocks.push({ type: 'bullet', text: line.slice(2).trim() }); continue }
@@ -64,15 +114,112 @@ function parseBlocks(content) {
 // Format writers
 // ---------------------------------------------------------------------------
 
+// A real Word table (not pipe-text paragraphs): header row bold and marked as a
+// header so Word repeats it across page breaks.
+function buildDocxTable(block) {
+  const columnCount = block.header.length
+  const makeRow = (cells, isHeader) =>
+    new TableRow({
+      // Only set on the header row: docx emits the <w:tblHeader/> flag whenever
+      // the property is present, so passing `false` would mark every body row
+      // as a repeating header too.
+      ...(isHeader ? { tableHeader: true } : {}),
+      children: Array.from({ length: columnCount }, (_, i) =>
+        new TableCell({
+          children: [new Paragraph({ children: [new TextRun({ text: String(cells[i] ?? ''), bold: isHeader })] })],
+        })
+      ),
+    })
+
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [makeRow(block.header, true), ...block.rows.map((row) => makeRow(row, false))],
+  })
+}
+
 function buildDocx(title, blocks) {
   const children = [new Paragraph({ text: title, heading: HeadingLevel.TITLE })]
   for (const block of blocks) {
     if (block.type === 'heading1') children.push(new Paragraph({ text: block.text, heading: HeadingLevel.HEADING_1 }))
     else if (block.type === 'heading2') children.push(new Paragraph({ text: block.text, heading: HeadingLevel.HEADING_2 }))
     else if (block.type === 'bullet') children.push(new Paragraph({ text: block.text, bullet: { level: 0 } }))
+    else if (block.type === 'table') {
+      children.push(buildDocxTable(block))
+      // Word merges consecutive tables that aren't separated by a paragraph.
+      children.push(new Paragraph({ text: '' }))
+    }
     else children.push(new Paragraph({ text: block.text }))
   }
   return new Document({ sections: [{ children }] })
+}
+
+// pdfkit 0.15 has no table primitive, so the grid is drawn by hand: column
+// widths weighted by content length, per-row height from the tallest wrapped
+// cell, an explicit page break before any row that would overflow, and the
+// header repeated at the top of each new page.
+const PDF_TABLE_FONT_SIZE = 9
+const PDF_TABLE_PADDING = 4
+const PDF_BODY_FONT_SIZE = 11
+
+function drawPdfTable(doc, block) {
+  const columnCount = block.header.length
+  const usableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right
+
+  // Weight each column by its longest cell, clamped so one verbose column
+  // can't starve the rest.
+  const weights = []
+  for (let i = 0; i < columnCount; i++) {
+    let longest = String(block.header[i] ?? '').length
+    for (const row of block.rows) longest = Math.max(longest, String(row[i] ?? '').length)
+    weights.push(Math.min(Math.max(longest, 4), 40))
+  }
+  const totalWeight = weights.reduce((sum, w) => sum + w, 0)
+  const widths = weights.map((w) => (w / totalWeight) * usableWidth)
+
+  doc.fontSize(PDF_TABLE_FONT_SIZE)
+
+  const measureRow = (cells, isHeader) => {
+    doc.font(isHeader ? 'Helvetica-Bold' : 'Helvetica')
+    let tallest = 0
+    for (let i = 0; i < columnCount; i++) {
+      const height = doc.heightOfString(String(cells[i] ?? ''), { width: widths[i] - PDF_TABLE_PADDING * 2 })
+      tallest = Math.max(tallest, height)
+    }
+    return tallest + PDF_TABLE_PADDING * 2
+  }
+
+  const renderRow = (cells, isHeader, height) => {
+    const top = doc.y
+    let x = doc.page.margins.left
+    doc.font(isHeader ? 'Helvetica-Bold' : 'Helvetica')
+    for (let i = 0; i < columnCount; i++) {
+      doc.rect(x, top, widths[i], height).stroke()
+      doc.text(String(cells[i] ?? ''), x + PDF_TABLE_PADDING, top + PDF_TABLE_PADDING, {
+        width: widths[i] - PDF_TABLE_PADDING * 2,
+      })
+      x += widths[i]
+    }
+    // Each doc.text moved the cursor; put it back on the row boundary.
+    doc.y = top + height
+  }
+
+  const bottomLimit = () => doc.page.height - doc.page.margins.bottom
+
+  const headerHeight = measureRow(block.header, true)
+  if (doc.y + headerHeight > bottomLimit()) doc.addPage()
+  renderRow(block.header, true, headerHeight)
+
+  for (const row of block.rows) {
+    const height = measureRow(row, false)
+    if (doc.y + height > bottomLimit()) {
+      doc.addPage()
+      renderRow(block.header, true, measureRow(block.header, true))
+    }
+    renderRow(row, false, height)
+  }
+
+  doc.font('Helvetica').fontSize(PDF_BODY_FONT_SIZE)
+  doc.moveDown(0.5)
 }
 
 function writePdf(outputPath, title, blocks) {
@@ -87,6 +234,7 @@ function writePdf(outputPath, title, blocks) {
       if (block.type === 'heading1') { doc.fontSize(16).text(block.text); doc.moveDown(0.5) }
       else if (block.type === 'heading2') { doc.fontSize(14).text(block.text); doc.moveDown(0.5) }
       else if (block.type === 'bullet') { doc.fontSize(11).text(`•  ${block.text}`, { indent: 20 }); doc.moveDown(0.2) }
+      else if (block.type === 'table') { drawPdfTable(doc, block) }
       else { doc.fontSize(11).text(block.text); doc.moveDown(0.5) }
     }
     doc.end()
@@ -321,7 +469,13 @@ export async function callTool(name, args, cfg) {
       await writePdf(outputPath, title, parseBlocks(content))
     }
 
-    return { content: [{ type: 'text', text: `Document created: ${outputPath}` }] }
+    // The [FILE: ...] marker is what the chat UI turns into a download button
+    // (FILE_PATH_REGEX in chat-ui constants/agentic.ts). It must be the start of
+    // its own line and carry the path RELATIVE to a served root — /files/download
+    // resolves it against the documents folder. Without this line a created
+    // document is unreachable from a browser client.
+    const relativePath = path.relative(docCfg.outputDir, outputPath).split(path.sep).join('/')
+    return { content: [{ type: 'text', text: `[FILE: ${relativePath}]\nDocument created: ${outputPath}` }] }
   } catch (err) {
     return { isError: true, content: [{ type: 'text', text: `Failed to create document: ${err.message}` }] }
   }

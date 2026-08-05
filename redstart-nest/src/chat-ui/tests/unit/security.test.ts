@@ -581,6 +581,9 @@ describe('gateway /files/download endpoint', () => {
     const gw = await import('$lib/../../../../electron/main/tools-gateway.mjs')
     await gw.startGateway(TEST_PORT, {
       fileSystem: { enabled: true, rootDir: join(TEST_DIR, 'workspace') },
+      // Documents has its own root: create_document writes here, and a browser
+      // client must be able to download what it produced.
+      documents: { enabled: true, outputDir: join(TEST_DIR, 'docs-out') },
       webFetch: { enabled: false },
     })
     gatewayPort = gw.getGatewayPort(TEST_PORT)!
@@ -603,6 +606,10 @@ describe('gateway /files/download endpoint', () => {
     const workspace = join(TEST_DIR, 'workspace')
     mkdirSync(workspace, { recursive: true })
     writeFileSync(join(workspace, 'README.md'), '# Hello\n\nThis is a test file.\n')
+
+    const docsOut = join(TEST_DIR, 'docs-out')
+    mkdirSync(docsOut, { recursive: true })
+    writeFileSync(join(docsOut, 'purchase-log.md'), '# Purchase Log\n\nCreated by create_document.\n')
   })
 
   async function authFetch(path: string): Promise<Response> {
@@ -633,6 +640,21 @@ describe('gateway /files/download endpoint', () => {
     expect(res.headers.get('content-disposition')).toContain('README.md')
     const text = await res.text()
     expect(text).toContain('# Hello')
+  })
+
+  // A document created by create_document lives under the documents root, not
+  // the file-system root. Serving only the latter made every created document
+  // undownloadable from a browser client.
+  it('streams a file from the documents folder', async () => {
+    const res = await authFetch('/files/download?path=purchase-log.md')
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-disposition')).toContain('purchase-log.md')
+    expect(await res.text()).toContain('Created by create_document')
+  })
+
+  it('404s a contained path with no file behind it', async () => {
+    const res = await authFetch('/files/download?path=no-such-file.md')
+    expect(res.status).toBe(404)
   })
 })
 
