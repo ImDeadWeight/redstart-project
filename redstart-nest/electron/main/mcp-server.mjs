@@ -26,12 +26,18 @@ import * as documentsTool from './documents-tool.mjs'
 import * as sqliteTool from './sqlite-tool.mjs'
 import * as vaultTool from './vault-tool.mjs'
 import * as gitTool from './git-tool.mjs'
-import * as fsTool from './fs-tool.mjs'
+import * as filesystemProvider from './filesystem-mcp-provider.mjs'
 import * as scholarTool from './scholar-tool.mjs'
 import { classifyTool, CAPABILITY_TOOL_NAMES } from './tools-definitions.mjs'
 import { logEvent } from './logger.mjs'
 
-const PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, fsTool, scholarTool]
+// File System is served by the official @modelcontextprotocol/server-filesystem,
+// spawned as a stdio child (filesystem-mcp-provider.mjs) — standard tool names
+// (write_file, read_text_file, ...) that local models call far more reliably
+// than the old bespoke fs_* schema. Its child-process lifecycle is driven from
+// the server IPC handlers; here it's just another provider in the merge/route
+// loop below.
+const PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, scholarTool]
 
 // ---------------------------------------------------------------------------
 // Permission gate — server-side, non-bypassable enforcement of the per-class

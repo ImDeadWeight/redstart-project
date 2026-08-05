@@ -97,10 +97,13 @@ const DEFAULT_CAPABILITIES = {
   vault:       { enabled: false, rootDir: null },
   git:         { enabled: false, rootDir: null },
   // allowWrite / allowDestructive are the per-capability permission policy:
-  // writes are on by design (File System is the read/write capability), but
-  // destructive ops (fs_delete_file) are off by default — the model can't delete
-  // local files until an admin explicitly opts in. Enforced server-side at the
-  // MCP tools/call chokepoint (see mcp-server.mjs + tools-definitions classify).
+  // writes are on by design (File System is the read/write capability), and
+  // allowDestructive stays off by default so a future delete tool would be
+  // gated until an admin opts in. NOTE: the current provider
+  // (@modelcontextprotocol/server-filesystem) exposes no delete tool, so no
+  // 'destructive'-class file_system tool exists today — allowDestructive is
+  // reserved, not yet load-bearing. Enforced server-side at the MCP tools/call
+  // chokepoint (see mcp-server.mjs + tools-definitions classify).
   file_system: { enabled: false, rootDir: null, allowWrite: true, allowDestructive: false },
   scholar:     { enabled: false, venueFilter: null },
 }

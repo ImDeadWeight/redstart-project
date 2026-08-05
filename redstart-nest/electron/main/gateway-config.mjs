@@ -12,10 +12,12 @@
 //
 // Note: tools-gateway.mjs RUNS the gateway (proxy, auth, allow-list, system
 // context) and CONSUMES this config; this module PRODUCES it. No overlap.
+import * as path from 'path'
 import { BUILTIN_TOOLS, BUILTIN_GROUPS, expandDisabledToolIds } from './tools-definitions.mjs'
 import { getUserTools, getUserGroups, getCapabilities } from './tools-storage.mjs'
 import { updateGatewayConfig, getGatewayPort } from './tools-gateway.mjs'
 import { updateMcpConfig } from './mcp-server.mjs'
+import { syncFilesystemProvider } from './filesystem-mcp-provider.mjs'
 import { decryptSecret } from './secrets.mjs'
 
 export function buildGatewayConfig(llamaConfig) {
@@ -150,12 +152,16 @@ export function buildGatewayConfig(llamaConfig) {
 // server — used after a capability's global config changes (connection
 // string, output folder) so a change takes effect without a full restart.
 // No-op if the server isn't running or no profile has been launched yet.
-export function createRefreshLiveToolsConfig(serverState) {
+export function createRefreshLiveToolsConfig(serverState, userDataDir) {
   return function refreshLiveToolsConfig() {
     if (!serverState.lastConfig) return
     if (!getGatewayPort(serverState.lastConfig.port ?? 19080)) return
     const cfg = buildGatewayConfig(serverState.lastConfig)
     updateGatewayConfig(cfg)
     updateMcpConfig(cfg)
+    // Fire-and-forget: the File System child process takes a moment to spawn
+    // and handshake, and this refresh path isn't awaited by its callers.
+    syncFilesystemProvider(cfg.fileSystem, path.join(userDataDir, 'mcp-fs-logs'))
+      .catch((err) => console.warn('[filesystem-mcp-provider] sync failed:', err.message))
   }
 }

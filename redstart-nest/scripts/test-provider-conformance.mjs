@@ -46,6 +46,7 @@ register('./auth-test-loader.mjs', import.meta.url)
 const { startMcpServer, stopMcpServer, updateMcpConfig } = await import('../electron/main/mcp-server.mjs')
 const { setAuthRequired } = await import('../electron/main/auth.mjs')
 const { CAPABILITY_TOOL_NAMES } = await import('../electron/main/tools-definitions.mjs')
+const fsProvider = await import('../electron/main/filesystem-mcp-provider.mjs')
 
 // This suite exercises providers, not the auth gate (which has its own suite).
 setAuthRequired(false)
@@ -108,9 +109,11 @@ function disabledBase() {
 
 // ---------------------------------------------------------------------------
 // Provider registry. Each entry: the tool names it owns, how to enable it, the
-// tools it should advertise once enabled (fs_delete_file is destructive and
-// gated off by the default policy, so it is intentionally excluded), and a
-// deliberately-malformed call for the bad-input invariant.
+// tools it should advertise once enabled, and a deliberately-malformed call for
+// the bad-input invariant. An entry may also define async setup/teardown hooks
+// (awaited around the enabled phase) — file-system needs them to spawn/stop its
+// external server-filesystem child process, which the in-process providers
+// don't require.
 // ---------------------------------------------------------------------------
 
 const PROVIDERS = [
@@ -153,8 +156,13 @@ const PROVIDERS = [
     name: 'file-system',
     tools: CAPABILITY_TOOL_NAMES.file_system,
     enable: () => ({ fileSystem: { enabled: true, rootDir: dirs.fs } }),
-    advertised: CAPABILITY_TOOL_NAMES.file_system.filter(n => n !== 'fs_delete_file'),
-    badCall: { name: 'fs_read_file', arguments: { path: '../../../etc/passwd' } }, // traversal
+    // No delete tool upstream, so nothing is policy-gated out of the list.
+    advertised: CAPABILITY_TOOL_NAMES.file_system,
+    badCall: { name: 'read_text_file', arguments: { path: '../../../etc/passwd' } }, // traversal (containment gate)
+    // Served by a spawned server-filesystem child — spawn + handshake before the
+    // enabled-phase checks, tear the process down after.
+    setup: async (cfg) => { await fsProvider.syncFilesystemProvider(cfg.fileSystem) },
+    teardown: () => { fsProvider.stopFilesystemProvider() },
   },
   {
     name: 'scholar',
@@ -212,7 +220,9 @@ async function main() {
       continue
     }
 
-    updateMcpConfig({ ...disabledBase(), ...p.enable() })
+    const enabledConfig = { ...disabledBase(), ...p.enable() }
+    updateMcpConfig(enabledConfig)
+    if (p.setup) await p.setup(enabledConfig)
 
     await test(`[${p.name}] enabled: advertises its tools`, async () => {
       const names = await listNames()
@@ -225,6 +235,7 @@ async function main() {
       assert(res.result?.isError === true, `expected isError for ${p.badCall.name}, got ${JSON.stringify(res.result ?? res.error)}`)
     })
 
+    if (p.teardown) await p.teardown()
     updateMcpConfig(disabledBase())
   }
 

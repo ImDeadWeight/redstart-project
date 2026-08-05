@@ -315,7 +315,9 @@ let beaconServerInstance = null
 // Live tool-config refresh, bound to serverState. buildGatewayConfig +
 // createRefreshLiveToolsConfig live in gateway-config.mjs; index.mjs only owns
 // the serverState the refresh closes over.
-const refreshLiveToolsConfig = createRefreshLiveToolsConfig(serverState)
+// Bound inside setupIpcHandlers() (after app.whenReady, when app.getPath is
+// safe to call) rather than here at module scope — see below.
+let refreshLiveToolsConfig
 
 // ---------------------------------------------------------------------------
 // Settings helpers
@@ -606,6 +608,8 @@ function registerIpcHandlers(deps) {
 }
 
 function setupIpcHandlers() {
+  const userDataDir = app.getPath('userData')
+  refreshLiveToolsConfig = createRefreshLiveToolsConfig(serverState, userDataDir)
   registerIpcHandlers({
     execFileAsync,
     readSettings,
@@ -622,6 +626,7 @@ function setupIpcHandlers() {
     parseEvalTokensPerSec,
     ensureFirewallRule,
     getLocalIp,
+    userDataDir,
   })
 }
 
