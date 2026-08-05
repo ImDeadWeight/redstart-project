@@ -56,6 +56,39 @@ function tryParseJson(str: string): string | null {
 	}
 }
 
+// Some models emit Python-style keyword arguments instead of JSON, e.g.
+// create_document(content='Hello World', filename='hello_world.md', format='md').
+// Parse key=value pairs (quoted strings, numbers, true/false/null) into a JSON
+// object so the call can still execute. Bails (returns null) unless the matched
+// pairs account for most of the string, so it doesn't misfire on prose that
+// merely contains an "=" sign.
+function tryParseKwargs(str: string): string | null {
+	const trimmed = str.trim();
+	if (!trimmed) return '{}';
+
+	const pairRegex =
+		/([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"|(-?\d+(?:\.\d+)?)|(true|false|null))/g;
+	const obj: Record<string, unknown> = {};
+	let match: RegExpExecArray | null;
+	let consumedLength = 0;
+
+	while ((match = pairRegex.exec(trimmed)) !== null) {
+		consumedLength += match[0].length;
+		const key = match[1];
+		if (match[2] !== undefined) obj[key] = match[2].replace(/\\(['"\\])/g, '$1');
+		else if (match[3] !== undefined) obj[key] = match[3].replace(/\\(['"\\])/g, '$1');
+		else if (match[4] !== undefined) obj[key] = Number(match[4]);
+		else obj[key] = match[5] === 'null' ? null : match[5] === 'true';
+	}
+
+	if (consumedLength === 0) return null;
+
+	const nonSeparatorLength = trimmed.replace(/[\s,]/g, '').length;
+	if (consumedLength < nonSeparatorLength * 0.8) return null;
+
+	return JSON.stringify(obj);
+}
+
 function validateToolName(name: string, availableTools: Array<{ name: string }>): boolean {
 	return availableTools.some((t) => t.name === name);
 }
@@ -82,7 +115,7 @@ export function parseToolCallsFromText(
 					const name = m[1];
 					const argsStr = m[2];
 					if (validateToolName(name, config.availableTools)) {
-						const args = tryParseJson(argsStr) ?? argsStr.trim();
+						const args = tryParseJson(argsStr) ?? tryParseKwargs(argsStr) ?? argsStr.trim();
 						results.push({ name, arguments: args });
 					}
 				}
@@ -95,7 +128,7 @@ export function parseToolCallsFromText(
 					const name = m[1];
 					const argsStr = m[2];
 					if (validateToolName(name, config.availableTools)) {
-						const args = tryParseJson(argsStr) ?? argsStr.trim();
+						const args = tryParseJson(argsStr) ?? tryParseKwargs(argsStr) ?? argsStr.trim();
 						results.push({ name, arguments: args });
 					}
 				}
@@ -108,7 +141,7 @@ export function parseToolCallsFromText(
 					const name = m[1];
 					const argsStr = m[2];
 					if (validateToolName(name, config.availableTools)) {
-						const args = tryParseJson(argsStr) ?? argsStr.trim();
+						const args = tryParseJson(argsStr) ?? tryParseKwargs(argsStr) ?? argsStr.trim();
 						results.push({ name, arguments: args });
 					}
 				}
