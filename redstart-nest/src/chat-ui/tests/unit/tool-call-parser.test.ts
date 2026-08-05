@@ -105,6 +105,97 @@ describe('parseToolCallsFromText — Python-style kwargs fallback', () => {
 	});
 });
 
+describe('parseToolCallsFromText — canonical JSON tool calls', () => {
+	const jsonCfg = (patterns = ['json']): ToolCallParserConfig => ({
+		patterns,
+		availableTools: TOOLS
+	});
+
+	it('parses a bare JSON tool call', () => {
+		const calls = parseToolCallsFromText(
+			'{"name": "create_document", "arguments": {"title": "Log", "format": "docx"}}',
+			jsonCfg()
+		);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].name).toBe('create_document');
+		expect(JSON.parse(calls[0].arguments)).toStrictEqual({ title: 'Log', format: 'docx' });
+	});
+
+	it('parses a call wrapped in <tool_call> tags', () => {
+		const calls = parseToolCallsFromText(
+			'<tool_call>\n{"name": "write_file", "arguments": {"path": "a.txt"}}\n</tool_call>',
+			jsonCfg()
+		);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].name).toBe('write_file');
+	});
+
+	it('parses a call inside a json code fence', () => {
+		const calls = parseToolCallsFromText(
+			'Here is the call:\n```json\n{"name": "write_file", "arguments": {"path": "a.txt"}}\n```',
+			jsonCfg()
+		);
+		expect(calls).toHaveLength(1);
+	});
+
+	it('handles nested objects and braces inside string values', () => {
+		const calls = parseToolCallsFromText(
+			'{"name": "create_document", "arguments": {"content": "a } brace { in text", "meta": {"deep": {"x": 1}}}}',
+			jsonCfg()
+		);
+		expect(calls).toHaveLength(1);
+		const args = JSON.parse(calls[0].arguments);
+		expect(args.content).toBe('a } brace { in text');
+		expect(args.meta.deep.x).toBe(1);
+	});
+
+	it('accepts parameters as an alias for arguments', () => {
+		const calls = parseToolCallsFromText(
+			'{"name": "write_file", "parameters": {"path": "a.txt"}}',
+			jsonCfg()
+		);
+		expect(JSON.parse(calls[0].arguments)).toStrictEqual({ path: 'a.txt' });
+	});
+
+	it('parses multiple sequential tool calls', () => {
+		const calls = parseToolCallsFromText(
+			'<tool_call>{"name":"write_file","arguments":{"path":"a"}}</tool_call>' +
+				'<tool_call>{"name":"search_files","arguments":{"pattern":"b"}}</tool_call>',
+			jsonCfg()
+		);
+		expect(calls.map((c) => c.name)).toEqual(['write_file', 'search_files']);
+	});
+
+	it('ignores JSON objects that are not tool calls', () => {
+		expect(parseToolCallsFromText('{"foo": "bar"}', jsonCfg())).toHaveLength(0);
+		expect(parseToolCallsFromText('{"name": "not_a_real_tool"}', jsonCfg())).toHaveLength(0);
+	});
+
+	it('ignores malformed JSON', () => {
+		expect(parseToolCallsFromText('{"name": "write_file", oops}', jsonCfg())).toHaveLength(0);
+	});
+
+	// Installs that saved the previous default pattern list must still recover
+	// a plain JSON call — this is the shape templates actually emit.
+	it('is tried as a last resort even when not in the pattern list', () => {
+		const calls = parseToolCallsFromText(
+			'{"name": "create_document", "arguments": {"title": "Log"}}',
+			jsonCfg(['braces', 'xml', 'fn'])
+		);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].name).toBe('create_document');
+	});
+
+	it('does not override a call the configured patterns already found', () => {
+		const calls = parseToolCallsFromText(
+			'write_file({"path": "from-fn.txt"})',
+			jsonCfg(['fn'])
+		);
+		expect(calls).toHaveLength(1);
+		expect(JSON.parse(calls[0].arguments)).toStrictEqual({ path: 'from-fn.txt' });
+	});
+});
+
 describe('parseToolCallsFromTurn — reasoning fallback', () => {
 	it('prefers a call in the visible answer', () => {
 		const calls = parseToolCallsFromTurn(

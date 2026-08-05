@@ -11,6 +11,8 @@ import type { ApiChatCompletionToolCall } from '$lib/types/api';
  *  - braces : toolName{...} — JSON args inside braces
  *  - xml    : <function=toolName>args</function>
  *  - fn     : toolName(args)
+ *  - json   : {"name": "toolName", "arguments": {...}} — the canonical shape,
+ *             including inside <tool_call> tags or a ```json fence
  */
 
 export interface ToolCallParserConfig {
@@ -23,7 +25,7 @@ export interface ParsedToolCall {
 	arguments: string;
 }
 
-const DEFAULT_PATTERNS = ['braces', 'xml', 'fn'] as const;
+const DEFAULT_PATTERNS = ['braces', 'xml', 'fn', 'json'] as const;
 type PatternName = typeof DEFAULT_PATTERNS[number];
 
 function escapeRegex(str: string): string {
@@ -93,6 +95,77 @@ function validateToolName(name: string, availableTools: Array<{ name: string }>)
 	return availableTools.some((t) => t.name === name);
 }
 
+// Every balanced {...} region in the text. A regex can't do this: tool arguments
+// are themselves objects, so the closing brace has to be found by counting depth
+// while ignoring braces inside strings.
+function extractJsonObjects(text: string): string[] {
+	const found: string[] = [];
+	for (let start = 0; start < text.length; start++) {
+		if (text[start] !== '{') continue;
+		let depth = 0;
+		let inString = false;
+		let escaped = false;
+		for (let i = start; i < text.length; i++) {
+			const ch = text[i];
+			if (escaped) {
+				escaped = false;
+			} else if (ch === '\\') {
+				escaped = true;
+			} else if (ch === '"') {
+				inString = !inString;
+			} else if (!inString) {
+				if (ch === '{') depth++;
+				else if (ch === '}') {
+					depth--;
+					if (depth === 0) {
+						found.push(text.slice(start, i + 1));
+						start = i; // continue scanning after this object
+						break;
+					}
+				}
+			}
+		}
+	}
+	return found;
+}
+
+/**
+ * Tool calls in the canonical `{"name": ..., "arguments": {...}}` shape.
+ *
+ * This is what chat templates instruct models to emit (usually wrapped in
+ * <tool_call> tags), so it is what leaks into visible content whenever
+ * llama.cpp fails to parse the call back into structured tool_calls — a
+ * mismatched template, a missing wrapper tag, or stray indentation is enough.
+ * Surrounding tags or a ```json fence don't matter here: the object is located
+ * by brace matching, not by its delimiters.
+ */
+function parseJsonToolCalls(
+	content: string,
+	availableTools: Array<{ name: string }>
+): ParsedToolCall[] {
+	const results: ParsedToolCall[] = [];
+	for (const candidate of extractJsonObjects(content)) {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(candidate);
+		} catch {
+			continue;
+		}
+		if (!parsed || typeof parsed !== 'object') continue;
+		const obj = parsed as Record<string, unknown>;
+		const name = obj.name;
+		if (typeof name !== 'string' || !validateToolName(name, availableTools)) continue;
+
+		// `parameters` is a common stand-in for `arguments`.
+		const rawArgs = obj.arguments ?? obj.parameters ?? {};
+		results.push({
+			name,
+			arguments: typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs)
+		});
+	}
+	return results;
+}
+
 export function parseToolCallsFromText(
 	content: string,
 	config: ToolCallParserConfig
@@ -147,7 +220,20 @@ export function parseToolCallsFromText(
 				}
 				break;
 			}
+			case 'json': {
+				results.push(...parseJsonToolCalls(content, config.availableTools));
+				break;
+			}
 		}
+	}
+
+	// The canonical JSON shape is tried even when it isn't in the pattern list.
+	// It predates being listable, so installs that saved the older default
+	// ("braces,xml,fn") would otherwise never recover a plain JSON tool call —
+	// the single most common way a call leaks into visible content. Only runs
+	// when the configured patterns found nothing, so it can't override them.
+	if (results.length === 0 && !config.patterns.includes('json')) {
+		results.push(...parseJsonToolCalls(content, config.availableTools));
 	}
 
 	return results;
