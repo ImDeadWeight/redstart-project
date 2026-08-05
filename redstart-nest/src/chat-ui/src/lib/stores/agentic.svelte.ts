@@ -32,7 +32,7 @@ import { ToolsService } from '$lib/services/tools.service';
 import { SandboxService } from '$lib/services/sandbox.service';
 import { isAbortError } from '$lib/utils';
 import { twigFsApi } from '$lib/utils/twig';
-import { parseToolCallsFromText, createApiToolCalls } from '$lib/utils/tool-call-parser';
+import { parseToolCallsFromTurn, createApiToolCalls } from '$lib/utils/tool-call-parser';
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE_SEPARATOR } from '$lib/constants';
 import {
 	IMAGE_MIME_TO_EXTENSION,
@@ -638,10 +638,14 @@ class AgenticStore {
 					.split(',')
 					.map((p: string) => p.trim())
 					.filter(Boolean);
-				const parsed = parseToolCallsFromText(turnContent, {
+				// Scans the visible answer, then the reasoning stream — a reasoning
+				// model often writes the call in its thinking block and only
+				// narrates it in the answer, which would otherwise drop it silently.
+				const parsed = parseToolCallsFromTurn(turnContent, turnReasoningContent, {
 					patterns: patternList,
 					availableTools: toolsStore.allTools.map((t) => ({ name: t.definition.function.name }))
 				});
+
 				if (parsed.length > 0) {
 					turnToolCalls = createApiToolCalls(parsed);
 				}

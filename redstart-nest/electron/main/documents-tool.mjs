@@ -390,13 +390,17 @@ export function toolDefs(cfg) {
   return [
     {
       name: 'create_document',
-      description: 'Create a new document and save it to the local documents folder. Use simple markdown-style formatting in content: "# Heading", "## Subheading", "- bullet", blank lines between paragraphs.',
+      description:
+        'Create a new document and save it to the local documents folder. ' +
+        'Takes exactly three arguments: title, content, format. There is NO file_path or filename argument — the file name is derived from title, and the folder is fixed by the server. ' +
+        'Format content with simple markdown: "# Heading", "## Subheading", "- bullet", blank lines between paragraphs, ' +
+        'and markdown pipe tables ("| A | B |" then "| --- | --- |" then one line per row) which are rendered as real tables in .docx and .pdf.',
       inputSchema: {
         type: 'object',
         properties: {
-          title: { type: 'string', description: 'Document title — also used to name the file' },
-          content: { type: 'string', description: 'Document body, using simple markdown-style formatting' },
-          format: { type: 'string', enum: FORMATS, description: 'Output file format' },
+          title: { type: 'string', description: 'Document title — also used to name the file. Do not include a path or extension.' },
+          content: { type: 'string', description: 'Full document body as markdown text. Include every row of any table here; the content is written verbatim.' },
+          format: { type: 'string', enum: FORMATS, description: `Output file format — one of: ${FORMATS.join(', ')}` },
         },
         required: ['title', 'content', 'format'],
       },
@@ -445,14 +449,19 @@ export async function callTool(name, args, cfg) {
   }
 
   const { title, content, format } = args || {}
+  // Models frequently invent a file_path/filename argument for this tool. The
+  // error a retry sees has to name the real arguments, or the model just
+  // repeats the same malformed call.
+  const USAGE = 'create_document takes exactly: title (string), content (markdown string), format (one of: ' +
+    `${FORMATS.join(', ')}). There is no file_path or filename argument — the file name comes from title.`
   if (!title || typeof title !== 'string') {
-    return { isError: true, content: [{ type: 'text', text: 'Missing required argument: title' }] }
+    return { isError: true, content: [{ type: 'text', text: `Missing required argument: title. ${USAGE}` }] }
   }
   if (!content || typeof content !== 'string') {
-    return { isError: true, content: [{ type: 'text', text: 'Missing required argument: content' }] }
+    return { isError: true, content: [{ type: 'text', text: `Missing required argument: content. ${USAGE}` }] }
   }
   if (!FORMATS.includes(format)) {
-    return { isError: true, content: [{ type: 'text', text: `format must be one of: ${FORMATS.join(', ')}` }] }
+    return { isError: true, content: [{ type: 'text', text: `Invalid format. ${USAGE}` }] }
   }
 
   try {

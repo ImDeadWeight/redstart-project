@@ -153,6 +153,29 @@ export function parseToolCallsFromText(
 	return results;
 }
 
+/**
+ * Resolve fallback tool calls for a turn that produced no structured
+ * `tool_calls`, scanning the visible answer first and the reasoning stream
+ * second.
+ *
+ * Reasoning models routinely emit the call inside their thinking block and then
+ * only narrate it in the answer ("I've saved the file"), which leaves the user
+ * told a tool ran when nothing did. `reasoning_content` arrives on a separate
+ * stream from the answer, so it has to be scanned explicitly — but only as a
+ * last resort, since a call in the visible answer is the stronger signal of
+ * intent.
+ */
+export function parseToolCallsFromTurn(
+	content: string,
+	reasoningContent: string | undefined,
+	config: ToolCallParserConfig
+): ParsedToolCall[] {
+	const fromAnswer = parseToolCallsFromText(content, config);
+	if (fromAnswer.length > 0) return fromAnswer;
+	if (!reasoningContent) return [];
+	return parseToolCallsFromText(reasoningContent, config);
+}
+
 export function createApiToolCalls(parsed: ParsedToolCall[]): ApiChatCompletionToolCall[] {
 	return parsed.map((tc, i) => ({
 		id: `fallback_tool_${Date.now()}_${i}`,

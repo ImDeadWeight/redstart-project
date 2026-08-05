@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseToolCallsFromText } from '$lib/utils/tool-call-parser';
+import { parseToolCallsFromText, parseToolCallsFromTurn } from '$lib/utils/tool-call-parser';
 import type { ToolCallParserConfig } from '$lib/utils/tool-call-parser';
 
 const TOOLS = [
@@ -102,5 +102,59 @@ describe('parseToolCallsFromText — Python-style kwargs fallback', () => {
 		const calls = parseToolCallsFromText('search_files(just some words)', cfg());
 		expect(calls).toHaveLength(1);
 		expect(calls[0].arguments).toBe('just some words');
+	});
+});
+
+describe('parseToolCallsFromTurn — reasoning fallback', () => {
+	it('prefers a call in the visible answer', () => {
+		const calls = parseToolCallsFromTurn(
+			"write_file(path='answer.txt')",
+			"write_file(path='reasoning.txt')",
+			cfg()
+		);
+		expect(calls).toHaveLength(1);
+		expect(JSON.parse(calls[0].arguments)).toStrictEqual({ path: 'answer.txt' });
+	});
+
+	it('finds a call left in the reasoning stream when the answer has none', () => {
+		const calls = parseToolCallsFromTurn(
+			'I have saved the file for you.',
+			"I'll call create_document(content='the table', filename='log.docx') now.",
+			cfg()
+		);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].name).toBe('create_document');
+	});
+
+	it('recovers the real-world case: model narrates success but only called in its thinking', () => {
+		// Condensed from an actual session — the visible answer claimed the file
+		// was written while the only call lived in the reasoning block.
+		const reasoning = [
+			'I should verify the create_document tool signature.',
+			"create_document(title='Tiling Purchase Log', content='| Date | Item |', format='docx')",
+			'All steps complete.'
+		].join('\n');
+		const answer =
+			'I have generated the purchase log with exactly 50 rows.\n' +
+			'It has been saved as a formatted .docx file for you.';
+
+		expect(parseToolCallsFromText(answer, cfg())).toHaveLength(0);
+
+		const calls = parseToolCallsFromTurn(answer, reasoning, cfg());
+		expect(calls).toHaveLength(1);
+		expect(calls[0].name).toBe('create_document');
+		expect(JSON.parse(calls[0].arguments)).toStrictEqual({
+			title: 'Tiling Purchase Log',
+			content: '| Date | Item |',
+			format: 'docx'
+		});
+	});
+
+	it('returns nothing when neither stream has a call', () => {
+		expect(parseToolCallsFromTurn('just prose', 'more prose', cfg())).toHaveLength(0);
+	});
+
+	it('handles missing reasoning content', () => {
+		expect(parseToolCallsFromTurn('just prose', undefined, cfg())).toHaveLength(0);
 	});
 });
