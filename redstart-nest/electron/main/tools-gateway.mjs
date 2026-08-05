@@ -482,7 +482,7 @@ export function startGateway(publicPort, config) {
         return
       }
 
-      // Serve files created by the File System capability (fs_write_file, etc.)
+      // Serve files created by the File System capability (write_file, etc.)
       // Auth + path containment enforced — the resolved path must stay within the
       // configured fileSystem.rootDir, same as the MCP provider.
       if (req.method === 'GET' && urlPath === '/files/download') {

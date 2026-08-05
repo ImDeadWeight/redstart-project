@@ -259,18 +259,20 @@ export function getCachedFilesystemTools() {
   return cachedTools
 }
 
-// Reject any path argument that escapes the configured root (including via a
+// Reject any path argument that escapes the given root (including via a
 // symlink the upstream server would follow). Returns an MCP isError result to
 // send back verbatim, or null when every path is contained. Config errors
 // (missing/invalid root) are allowed to throw — that's a setup fault, not an
 // attack, and the caller's catch turns it into an error result.
-function containmentError(args) {
+// Exported (with rootDir as a parameter rather than module state) so the
+// security suite can drive the gate directly without a child process.
+export function containmentError(rootDir, args) {
   if (!args || typeof args !== 'object') return null
   const offenders = []
   const check = (value) => {
     if (typeof value !== 'string') return
     try {
-      resolveWithinRoot(currentRootDir, value)
+      resolveWithinRoot(rootDir, value)
     } catch (err) {
       if (err.message === 'No root directory configured') throw err
       offenders.push(value)
@@ -290,7 +292,7 @@ function containmentError(args) {
 /** @param {string} name @param {object} args */
 export async function callFilesystemTool(name, args) {
   if (!ready) throw new Error('filesystem MCP server is not ready')
-  const blocked = containmentError(args)
+  const blocked = containmentError(currentRootDir, args)
   if (blocked) return blocked
   return request('tools/call', { name, arguments: args })
 }

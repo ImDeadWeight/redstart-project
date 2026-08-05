@@ -124,7 +124,7 @@ export const BUILTIN_CAPABILITIES = [
 // Maps a capability/tool ID to the actual MCP tool function names it exposes.
 // The gateway enforces tool bans by function name (that's what the model sees),
 // so an admin banning a capability ID (e.g. 'file_system') must expand to every
-// function name it produces (fs_read_file, fs_write_file, ...). Built-in web
+// function name it produces (read_text_file, write_file, ...). Built-in web
 // sources (web_fetch/web_search) are gated by the whitelist, not by name, so
 // they're intentionally absent here.
 export const CAPABILITY_TOOL_NAMES = {

@@ -127,7 +127,7 @@ export function buildGatewayConfig(llamaConfig) {
       enabled: gitWanted,
       rootDir: capabilities.git.rootDir,
     },
-    // NOTE: camelCase `fileSystem` — the fs-tool provider and the gateway's
+    // NOTE: camelCase `fileSystem` — the filesystem provider and the gateway's
     // /files/download endpoint both read cfg.fileSystem (matching the webFetch
     // convention). Emitting snake_case here silently disabled the whole
     // capability in production (tools never advertised, calls rejected).

@@ -293,7 +293,7 @@ export function classifyContinueIntent(messages: DatabaseMessage[], idx: number)
 }
 
 /**
- * Download a file created by the fs_write_file tool. The server exposes
+ * Download a file created by the File System write_file tool. The server exposes
  * /files/download?path=<relative-path> which validates path containment
  * against the configured file system root before streaming the file.
  */
