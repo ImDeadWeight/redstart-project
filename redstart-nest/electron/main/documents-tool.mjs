@@ -448,7 +448,24 @@ export async function callTool(name, args, cfg) {
     }
   }
 
-  const { title, content, format } = args || {}
+  let { title, content, format } = args || {}
+
+  // Models overwhelmingly want to name the output file, and reach for
+  // filename/file_path/path to do it even though the schema says title. The
+  // call is otherwise complete, so derive the title from the name rather than
+  // rejecting it: strip the directory and extension, and let the extension
+  // supply the format when none was given. The file still lands in the
+  // configured folder under a server-derived name — no path is honored.
+  if (!title) {
+    const named = args?.filename ?? args?.fileName ?? args?.file_path ?? args?.path
+    if (typeof named === 'string' && named.trim()) {
+      const base = path.basename(named.trim())
+      const ext = path.extname(base).slice(1).toLowerCase()
+      const stem = ext ? base.slice(0, -(ext.length + 1)) : base
+      title = stem.replace(/[_-]+/g, ' ').trim() || stem
+      if (!format && ext) format = ext === 'md' ? 'markdown' : ext
+    }
+  }
   // Models frequently invent a file_path/filename argument for this tool. The
   // error a retry sees has to name the real arguments, or the model just
   // repeats the same malformed call.

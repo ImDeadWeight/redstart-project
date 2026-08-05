@@ -245,6 +245,61 @@ describe('parseToolCallsFromTurn — reasoning fallback', () => {
 		expect(parseToolCallsFromTurn('just prose', 'more prose', cfg())).toHaveLength(0);
 	});
 
+	describe('orphan arguments (payload in the answer, tool named in reasoning)', () => {
+		// Reproduces an observed session: the answer was prose plus a ```json
+		// fence holding only the arguments — no "name" key anywhere — while the
+		// tool was named solely in the reasoning.
+		const answer =
+			"I'll generate the DOCX file with your requested purchase log table.\n\n" +
+			'```json\n' +
+			'{\n"filename": "Tiling_Company_Purchase_Log.docx",\n' +
+			'"content": "| Pricing | Items |\\n|---|---|\\n| 2,450.00 | Ceramic Floor Tiles |",\n' +
+			'"format": "docx"\n}\n' +
+			'```';
+		const reasoning =
+			"I'll now create the document using create_document.\n" +
+			'create_document(filename="Tiling_Company_Purchase_Log.docx", content=markdown_table, format="docx")';
+
+		it('attributes the payload to the tool named in reasoning', () => {
+			const calls = parseToolCallsFromTurn(answer, reasoning, cfg());
+			expect(calls).toHaveLength(1);
+			expect(calls[0].name).toBe('create_document');
+			const args = JSON.parse(calls[0].arguments);
+			expect(args.filename).toBe('Tiling_Company_Purchase_Log.docx');
+			expect(args.format).toBe('docx');
+			// The answer's real table, not the reasoning's "markdown_table" placeholder.
+			expect(args.content).toContain('Ceramic Floor Tiles');
+		});
+
+		// In the negative cases the reasoning-text scan is still free to recover
+		// something on its own — that is a separate path. What must never happen
+		// is the answer's payload being routed to a guessed tool.
+		const attributedThePayload = (calls: Array<{ arguments: string }>) =>
+			calls.some((c) => c.arguments.includes('Ceramic Floor Tiles'));
+
+		it('refuses to guess when several tools are named', () => {
+			const ambiguous = `${reasoning}\nOr maybe write_file would be better.`;
+			expect(attributedThePayload(parseToolCallsFromTurn(answer, ambiguous, cfg()))).toBe(false);
+		});
+
+		it('refuses to guess when no tool is named anywhere', () => {
+			expect(parseToolCallsFromTurn(answer, 'No tool mentioned here.', cfg())).toHaveLength(0);
+		});
+
+		it('ignores a turn with several candidate objects', () => {
+			const twoObjects = '```json\n{"a": 1}\n```\n```json\n{"b": 2}\n```';
+			const calls = parseToolCallsFromTurn(twoObjects, reasoning, cfg());
+			expect(calls.some((c) => /"[ab]"\s*:/.test(c.arguments))).toBe(false);
+		});
+
+		it('does not hijack a properly named tool call', () => {
+			const named = '{"name": "write_file", "arguments": {"path": "a.txt"}}';
+			const calls = parseToolCallsFromTurn(named, reasoning, cfg());
+			expect(calls).toHaveLength(1);
+			expect(calls[0].name).toBe('write_file');
+		});
+	});
+
 	it('handles missing reasoning content', () => {
 		expect(parseToolCallsFromTurn('just prose', undefined, cfg())).toHaveLength(0);
 	});

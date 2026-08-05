@@ -177,15 +177,52 @@ describe('create_document — table rendering', () => {
 
 	// A local model that guesses the signature will retry, so the error it sees
 	// has to name the real arguments or it just repeats the same bad call.
-	it('rejects the invented file_path signature with usage guidance', async () => {
+	it('gives usage guidance when the document cannot be named at all', async () => {
 		const result = await callDocumentTool('create_document', {
-			file_path: 'tiling_purchase_log.docx',
-			content: '| A |\n|---|\n| 1 |'
+			content: '| A |\n|---|\n| 1 |',
+			format: 'docx'
 		})
 		expect(result.isError).toBe(true)
 		expect(result.content[0].text).toContain('title')
 		expect(result.content[0].text).toContain('format')
-		expect(result.content[0].text).toContain('no file_path')
+	})
+
+	it('still requires content even when a filename is supplied', async () => {
+		const result = await callDocumentTool('create_document', { filename: 'empty.docx' })
+		expect(result.isError).toBe(true)
+		expect(result.content[0].text).toContain('content')
+	})
+
+	// The recovered orphan payload arrives with the model's own key names. It is
+	// otherwise a complete, valid call, so accept it rather than bouncing it.
+	it('accepts filename as an alias for title and infers format from it', async () => {
+		const result = await callDocumentTool('create_document', {
+			filename: 'Tiling_Company_Purchase_Log.docx',
+			content: '| Pricing | Items |\n|---|---|\n| 2,450.00 | Ceramic Floor Tiles |'
+		})
+		expect(result.isError).toBeFalsy()
+		expect(result.content[0].text.split('\n')[0]).toBe('[FILE: tiling-company-purchase-log.docx]')
+		expect(existsSync(join(outputDir, 'tiling-company-purchase-log.docx'))).toBe(true)
+	})
+
+	it('honors an explicit format over the filename extension', async () => {
+		const result = await callDocumentTool('create_document', {
+			filename: 'report.docx',
+			content: 'Body',
+			format: 'markdown'
+		})
+		expect(result.isError).toBeFalsy()
+		expect(existsSync(join(outputDir, 'report.md'))).toBe(true)
+	})
+
+	it('ignores any directory in the supplied filename', async () => {
+		const result = await callDocumentTool('create_document', {
+			file_path: '../../escape/Secret Notes.pdf',
+			content: 'Body'
+		})
+		expect(result.isError).toBeFalsy()
+		// Server-derived name in the configured folder — no traversal honored.
+		expect(existsSync(join(outputDir, 'secret-notes.pdf'))).toBe(true)
 	})
 
 	it('names the valid formats when format is invalid', async () => {

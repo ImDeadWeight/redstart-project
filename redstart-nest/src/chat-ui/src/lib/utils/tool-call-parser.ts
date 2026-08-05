@@ -240,6 +240,55 @@ export function parseToolCallsFromText(
 }
 
 /**
+ * Recover a tool call whose arguments were emitted without the tool's name.
+ *
+ * A model that writes its call as a ```json fence often emits only the
+ * arguments object — `{"filename": ..., "content": ..., "format": ...}` — with
+ * the tool it belongs to named nowhere in that object, and sometimes only in
+ * its reasoning. No pattern can match that, because nothing in the JSON says
+ * which tool it is.
+ *
+ * Attribution is deliberately conservative: it requires exactly one available
+ * tool to be named across the turn, so a payload can never be routed to the
+ * wrong tool when several are in play. The answer is preferred over the
+ * reasoning as the argument source, because reasoning frequently holds a
+ * *plan* with placeholder values ("content=markdown_table") while the answer
+ * carries the real payload.
+ */
+function recoverOrphanArguments(
+	content: string,
+	reasoningContent: string | undefined,
+	config: ToolCallParserConfig
+): ParsedToolCall | null {
+	const orphans = extractJsonObjects(content)
+		.map((candidate) => {
+			try {
+				return JSON.parse(candidate) as unknown;
+			} catch {
+				return null;
+			}
+		})
+		.filter((parsed): parsed is Record<string, unknown> => {
+			if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+			const obj = parsed as Record<string, unknown>;
+			if (Object.keys(obj).length === 0) return false;
+			// A recognized envelope is not an orphan — parseJsonToolCalls owns it.
+			return !(typeof obj.name === 'string' && validateToolName(obj.name, config.availableTools));
+		});
+
+	if (orphans.length !== 1) return null;
+
+	const haystack = `${content}\n${reasoningContent ?? ''}`;
+	const named = config.availableTools
+		.map((t) => t.name)
+		.filter((name) => new RegExp(`\\b${escapeRegex(name)}\\b`).test(haystack));
+
+	if (named.length !== 1) return null;
+
+	return { name: named[0], arguments: JSON.stringify(orphans[0]) };
+}
+
+/**
  * Resolve fallback tool calls for a turn that produced no structured
  * `tool_calls`, scanning the visible answer first and the reasoning stream
  * second.
@@ -258,6 +307,14 @@ export function parseToolCallsFromTurn(
 ): ParsedToolCall[] {
 	const fromAnswer = parseToolCallsFromText(content, config);
 	if (fromAnswer.length > 0) return fromAnswer;
+
+	// Before falling back to the reasoning stream: the answer may hold a bare
+	// arguments object whose tool is named only in the reasoning. That payload
+	// is the real one — the reasoning's version of the call is typically a plan
+	// with placeholders — so it must win over anything parsed out of reasoning.
+	const orphan = recoverOrphanArguments(content, reasoningContent, config);
+	if (orphan) return [orphan];
+
 	if (!reasoningContent) return [];
 	return parseToolCallsFromText(reasoningContent, config);
 }
