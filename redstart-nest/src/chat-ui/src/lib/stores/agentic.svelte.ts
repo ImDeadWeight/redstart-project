@@ -92,6 +92,13 @@ function createDefaultSession(): AgenticSession {
 	};
 }
 
+/**
+ * Shared, frozen stand-in returned for a conversation that has no session yet.
+ * Frozen so an accidental write surfaces immediately instead of silently
+ * corrupting the value every session-less conversation reads.
+ */
+const EMPTY_SESSION: AgenticSession = Object.freeze(createDefaultSession());
+
 function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 	return messages.map((message) => {
 		if (
@@ -162,13 +169,17 @@ class AgenticStore {
 		return false;
 	}
 
+	/**
+	 * Read a conversation's agentic session, or a shared empty one.
+	 *
+	 * Must not insert: this is called during render (deriving a message subtitle
+	 * reads lastError, for example), and writing to the reactive map mid-render
+	 * throws state_unsafe_mutation in Svelte 5 — an uncaught error that aborts
+	 * the render pass. A session is created lazily by updateSession instead,
+	 * which only ever runs from event handlers.
+	 */
 	getSession(conversationId: string): AgenticSession {
-		let session = this._sessions.get(conversationId);
-		if (!session) {
-			session = createDefaultSession();
-			this._sessions.set(conversationId, session);
-		}
-		return session;
+		return this._sessions.get(conversationId) ?? EMPTY_SESSION;
 	}
 
 	private updateSession(conversationId: string, update: Partial<AgenticSession>): void {
