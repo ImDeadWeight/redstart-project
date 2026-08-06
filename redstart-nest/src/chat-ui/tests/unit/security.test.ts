@@ -491,8 +491,19 @@ describe('filesystem provider containment gate', () => {
       await expectBlocked({ path: join(TEST_DIR, 'outside-root', 'file.txt') })
     })
 
-    it('blocks Windows drive-qualified paths', async () => {
-      await expectBlocked({ path: 'C:/Windows/system.ini' })
+    // Drive-qualification is a Windows concept. path.resolve treats "C:/..." as
+    // absolute there, so it escapes the root and must be refused. On POSIX a
+    // colon is an ordinary filename character, so the identical string is a
+    // relative path that genuinely lives inside the root — asserting a block
+    // there would be asserting a bug. Production is Windows and CI is Linux, so
+    // both halves are pinned rather than skipping one platform.
+    it('refuses a drive-qualified path on win32, treats it as contained on posix', async () => {
+      const args = { path: 'C:/Windows/system.ini' }
+      if (process.platform === 'win32') {
+        await expectBlocked(args)
+      } else {
+        expect(await gate(args)).toBeNull()
+      }
     })
 
     it('blocks escapes via move_file source and destination', async () => {
