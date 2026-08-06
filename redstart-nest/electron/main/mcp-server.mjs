@@ -196,7 +196,13 @@ export function startMcpServer(port, config) {
       })
       const send = (data) => sseEvent(res, 'message', data)
       sessions.set(sessionId, { send, account: authResult.account })
-      res.write(`event: endpoint\ndata: ${JSON.stringify('/message?sessionId=' + sessionId)}\n\n`)
+      // The endpoint event carries the raw URI, NOT a JSON string (MCP
+      // 2024-11-05 SSE transport). JSON.stringify here emitted
+      // data: "/message?sessionId=..." — quotes included — and a spec-compliant
+      // client (the MCP SDK) uses that verbatim, producing a POST to
+      // /"/message?sessionId=..." that 404s. Every real connection failed while
+      // our own test client, which JSON.parsed the value back, saw nothing wrong.
+      res.write(`event: endpoint\ndata: /message?sessionId=${sessionId}\n\n`)
       req.on('close', () => sessions.delete(sessionId))
       return
     }

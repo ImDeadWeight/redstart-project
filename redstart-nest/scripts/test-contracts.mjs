@@ -126,6 +126,35 @@ async function main() {
   await startMcpServer(MCP_PORT, {
     webFetch: { enabled: true, whitelistEnabled: false, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 },
   })
+  // The SSE handshake itself is a contract. The endpoint event must carry a
+  // BARE URI: a JSON-encoded one ("/message?...") is taken verbatim by a
+  // spec-compliant client and produces a POST to /"/message?..." that 404s, so
+  // no real client can connect. Asserted on the raw stream rather than through
+  // the test client, because a client that parses the value would repair the
+  // defect and hide it — which is exactly what happened before.
+  await test('SSE endpoint event carries a bare URI, not a JSON string', async () => {
+    const res = await fetch(`http://127.0.0.1:${MCP_PORT}/sse`)
+    assert(res.ok && res.body, `SSE connect failed: ${res.status}`)
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let dataLine = null
+    const deadline = Date.now() + 5000
+    while (!dataLine && Date.now() < deadline) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const frame = buffer.split('\n\n')[0]
+      if (frame.includes('event: endpoint')) {
+        dataLine = frame.split('\n').find((l) => l.startsWith('data: '))?.slice(6) ?? null
+      }
+    }
+    reader.cancel().catch(() => {})
+    assert(dataLine !== null, 'no endpoint event received')
+    assert(!dataLine.startsWith('"'), `endpoint URI is JSON-encoded: ${dataLine}`)
+    assert(dataLine.startsWith('/message?sessionId='), `unexpected endpoint URI: ${dataLine}`)
+  })
+
   const client = await connectMcpClient(`http://127.0.0.1:${MCP_PORT}`)
 
   await test('initialize returns protocolVersion + capabilities + serverInfo{name,version}', async () => {
