@@ -660,10 +660,14 @@ class ConversationsStore {
 	 * Returns pending overrides if no active conversation.
 	 */
 	getAllMcpServerOverrides(): McpServerOverride[] {
-		if (this.activeConversation?.mcpServerOverrides) {
-			return this.activeConversation.mcpServerOverrides;
-		}
-		return this.pendingMcpServerOverrides;
+		const own: McpServerOverride[] = this.activeConversation?.mcpServerOverrides ?? [];
+		// Merge rather than replace, matching getMcpServerOverride: the
+		// conversation's explicit choices win, and saved defaults fill in for
+		// servers it never made a choice about. Returning only `own` would drop
+		// the defaults for any conversation holding even one unrelated entry.
+		const chosen = new Set(own.map((o) => o.serverId));
+		const defaults = this.pendingMcpServerOverrides.filter((o) => !chosen.has(o.serverId));
+		return [...own, ...defaults];
 	}
 
 	/**

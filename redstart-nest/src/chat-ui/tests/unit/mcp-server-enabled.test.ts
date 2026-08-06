@@ -127,6 +127,46 @@ function resolveOverride(
 	return defaults.find((o) => o.serverId === serverId);
 }
 
+/**
+ * Merge order for the full override list, mirroring
+ * ConversationsStore.getAllMcpServerOverrides. This is the list handed to
+ * buildMcpClientConfig, so a default dropped here means no connection at all.
+ */
+function resolveAll(
+	conversationOverrides: McpServerOverride[] | undefined,
+	defaults: McpServerOverride[]
+): McpServerOverride[] {
+	const own = conversationOverrides ?? [];
+	const chosen = new Set(own.map((o) => o.serverId));
+	return [...own, ...defaults.filter((o) => !chosen.has(o.serverId))];
+}
+
+describe('full override list handed to the client builder', () => {
+	const settings = { mcpServers: JSON.stringify([NEST_SERVER]) } as Parameters<
+		typeof buildMcpClientConfig
+	>[0];
+	const defaults = overrides({ serverId: NEST_SERVER.id, enabled: true });
+
+	it('connects for a conversation that never chose', () => {
+		const all = resolveAll(undefined, defaults);
+		expect(buildMcpClientConfig(settings, all)).toBeDefined();
+	});
+
+	// The regression that kept tools dark: a conversation holding one unrelated
+	// entry used to shadow the defaults entirely, so nothing connected.
+	it('connects for a conversation holding only unrelated choices', () => {
+		const unrelated = overrides({ serverId: 'other-server', enabled: false });
+		const all = resolveAll(unrelated, defaults);
+		expect(buildMcpClientConfig(settings, all)).toBeDefined();
+	});
+
+	it('stays disconnected when the conversation explicitly turned it off', () => {
+		const explicitOff = overrides({ serverId: NEST_SERVER.id, enabled: false });
+		const all = resolveAll(explicitOff, defaults);
+		expect(buildMcpClientConfig(settings, all)).toBeUndefined();
+	});
+});
+
 describe('conversation override resolution', () => {
 	const defaults = overrides({ serverId: NEST_SERVER.id, enabled: true });
 
