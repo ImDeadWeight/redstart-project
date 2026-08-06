@@ -36,9 +36,21 @@ let activeConfig = null
 // System context injection
 // ---------------------------------------------------------------------------
 
-function buildSystemContext(config) {
+// `hasTools` = the request actually carries tool definitions.
+//
+// Capability claims below are only TRUE when it does. Whether a tool is
+// reachable is decided by the client (it owns the MCP connection), not by this
+// config — an admin can have Documents enabled here while the client sends no
+// tools at all. Claiming "you have access to create_document" in that state
+// teaches the model to invent a call format for a tool it cannot reach: it
+// emits a plausible-looking blob, nothing executes, and it reports success for
+// work that never happened. Identity is always safe to state; capabilities are
+// conditional on the plumbing actually being there.
+function buildSystemContext(config, hasTools) {
   const base = 'You are a local AI assistant running inside Redstart — a private, on-premises AI system. Your conversations stay on the local network and do not leave the building.'
   const parts = [base]
+
+  if (!hasTools) return parts.join('\n\n')
 
   const tools = config?.webFetch?.activeTools
   if (tools?.length) {
@@ -61,8 +73,8 @@ function buildSystemContext(config) {
   return parts.join('\n\n')
 }
 
-function injectSystemContext(messages, config) {
-  const context = buildSystemContext(config)
+function injectSystemContext(messages, config, hasTools) {
+  const context = buildSystemContext(config, hasTools)
   const sysIdx = messages.findIndex(m => m.role === 'system')
   if (sysIdx >= 0) {
     messages[sysIdx] = { ...messages[sysIdx], content: `${context}\n\n${messages[sysIdx].content}` }
@@ -578,7 +590,8 @@ export function startGateway(publicPort, config) {
           return
         }
 
-        parsed.messages = injectSystemContext([...(parsed.messages || [])], activeConfig)
+        const requestHasTools = Array.isArray(parsed.tools) && parsed.tools.length > 0
+        parsed.messages = injectSystemContext([...(parsed.messages || [])], activeConfig, requestHasTools)
         parsed = enforceToolAllowList(parsed, activeConfig)
 
         try {
