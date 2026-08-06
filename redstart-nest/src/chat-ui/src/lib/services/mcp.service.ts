@@ -453,6 +453,27 @@ export class MCPService {
 			console.log(`[MCPService] Using CORS proxy for ${config.url} -> ${url.href}`);
 		}
 
+		// An explicitly detected SSE endpoint goes straight to the SSE transport.
+		// The StreamableHTTP attempt below is not a safe probe for it: the
+		// constructor succeeds for any URL, so the catch never runs, and the
+		// mismatch only surfaces as a POST 404 at connect time — which reads as
+		// "server unreachable" rather than "wrong transport".
+		if (config.transport === MCPTransportType.SSE) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+				console.log(`[MCPService] Creating SSE transport for ${url.href}`);
+			}
+
+			return {
+				transport: new SSEClientTransport(url, {
+					requestInit,
+					fetch: diagnosticFetch,
+					eventSourceInit: { fetch: diagnosticFetch }
+				}),
+				type: MCPTransportType.SSE,
+				stopPhaseLogging
+			};
+		}
+
 		try {
 			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 				console.log(`[MCPService] Creating StreamableHTTP transport for ${url.href}`);
