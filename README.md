@@ -142,6 +142,8 @@ When the server starts, Redstart Nest launches three services alongside the AI m
 
 The MCP server itself is provider-driven: each capability (web_fetch, web_search, Postgres, Documents, SQLite, Vault, Git, File System, Scholar) is a self-contained module that declares its own tools and handles its own calls, and the server just merges tool lists and routes calls to the right provider. Adding a future capability means adding a provider module, not touching the transport.
 
+Providers do not all have to run in-process. **File System** is served by the official [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers), spawned as a stdio child process and wrapped in a provider that speaks the same `toolDefs`/`callTool` interface as the rest. The supervisor that manages that child (`shared/mcp-stdio-process.mjs`) is shared with Redstart Twig, which uses it to run local stdio MCP servers on the desktop. This is the sanctioned path for third-party tools: they run out-of-process with their own trust boundary, and the permission gate still governs every call they expose.
+
 The chat-ui's built-in agentic loop handles the full tool call cycle: it sees whichever tools are available via the MCP server, the model emits a tool call when it needs one, the chat-ui executes it through the MCP server, and the result feeds back into the next model turn — all with full streaming preserved.
 
 ### Centralized MCP management
@@ -186,14 +188,16 @@ The Redstart Nest beacon (port 8765) advertises both the built-in MCP server URL
 
 ### Local Capabilities
 
-Beyond web sources, the built-in MCP server ships six local capabilities — all pure local I/O with no network egress, which is why they're built in rather than proxied to a hosted service:
+Beyond web sources, the built-in MCP server ships seven local capabilities — all local I/O with no network egress except Scholar, which queries open academic indexes, which is why they're built in rather than proxied to a hosted service:
 
 - **Postgres** — `postgres_query`, `postgres_list_tables`, and `postgres_describe_table`. Every query runs inside a `BEGIN TRANSACTION READ ONLY` block, so Postgres itself rejects any write or DDL statement — enforcement happens at the database level, not by string-sniffing the query. Connect with a database role that's actually read-only for defense in depth.
-- **Documents** — `create_document` writes a `.docx`, `.pdf`, or `.md` file to an admin-configured local folder. The model only ever supplies a title and content; the filename is derived server-side and checked to stay inside the configured folder, so the model can't write anywhere else on disk. The model can also read and summarize existing `.pdf`, `.docx`, `.txt`, `.md`, `.xlsx`, and `.csv` files in that folder. Useful for case notes, summaries, and reports — the kind of deliverable a social work, legal, or healthcare-adjacent office actually produces.
+- **Documents** — `create_document` writes a `.docx`, `.pdf`, or `.md` file to an admin-configured local folder. The model supplies a title, content, and format; the filename is derived server-side and checked to stay inside the configured folder, so the model can't write anywhere else on disk. (A model that supplies `filename` instead of `title` — a common habit — is accommodated: the name is stripped of any directory and extension, and no supplied path is ever honored.) Content is markdown, including **pipe tables, which render as real tables** in `.docx` and `.pdf` — a Word table with a repeating header row, and a hand-drawn grid in PDF that paginates and redraws its header on each page. Created files surface in the chat as a **download button**, served over an authenticated endpoint that enforces the same containment. The model can also read and summarize existing `.pdf`, `.docx`, `.txt`, `.md`, `.xlsx`, and `.csv` files in that folder. Useful for case notes, summaries, and reports — the kind of deliverable a social work, legal, or healthcare-adjacent office actually produces.
 - **SQLite** — `sqlite_query`, `sqlite_list_tables`, and `sqlite_describe_table`. Read-only SQL access to local SQLite database files in an admin-configured folder. Same read-only enforcement model as Postgres.
 - **Vault** — read-only access to a folder of markdown notes (Obsidian vault or any markdown folder). The model can search notes, read individual files, and browse tags — useful for organizations that keep their knowledge base in markdown.
 - **Git** — read-only repository context from local git repositories in an admin-configured folder. The model can inspect status, recent commits, and uncommitted diffs — useful for code review and project context without giving the model write access.
-- **File System** — general-purpose read/write access to a user-chosen folder. The model can read configs, write scripts, edit project files, and create documents. All paths pass through `resolveWithinRoot()`, which resolves symlinks and enforces containment so the model cannot escape the chosen root — even via symlinks planted inside it.
+- **File System** — general-purpose read/write access to a user-chosen folder, served by the official `@modelcontextprotocol/server-filesystem` running as a stdio child process. The model can read configs, write scripts, and edit project files using the ecosystem-standard tool names (`read_text_file`, `write_file`, `edit_file`, `list_directory`, `directory_tree`, `search_files`, `move_file`, and others) — which local models call far more reliably than a bespoke schema. The upstream server enforces its own containment; on top of that, every path argument is independently re-validated through Redstart's own symlink-aware `resolveWithinRoot()` before the call reaches the child, so containment survives even if an upstream version ever regresses. The pinned server exposes no delete tool, so the `allowDestructive` policy toggle is currently reserved rather than load-bearing.
+
+- **Scholar** — search open academic literature (OpenAlex, arXiv, PubMed) for abstracts and citations, with open-access PDFs saved into the Documents folder. An optional journal/category whitelist restricts which venues results may come from. This is the one local capability that makes outbound requests, and only to those indexes.
 
 All are configured once globally (connection strings, output folders, or root directories) and then activated per profile, the same way web sources are — a profile can mix and match freely.
 
@@ -218,7 +222,7 @@ The **Tools** card appears in the main configuration panel between the model set
 - Git: pick a folder containing local git repositories with a native folder picker
 - File System: pick a root folder with a native folder picker; all model file operations are confined to this root
 - Scholar: optionally enter a journal/category whitelist to restrict academic search results
-- Each capability can be individually enabled/disabled globally, and independently activated per profile in the same Individual Sources list as web sources
+- Each capability can be individually enabled/disabled globally here, and then activated per profile from the **Local Capabilities** checklist beside the web sources. Both halves are required: a capability produces tools only when it is configured and enabled globally **and** selected for the running profile. A capability that is selected for the profile but not yet configured is flagged inline, since that combination otherwise produces no tools and no error.
 
 **External MCP Servers** (bottom, always visible):
 - Shows the built-in Redstart MCP URL (`http://localhost:19082/sse`) when enabled
@@ -355,6 +359,8 @@ redstart-project/
 │   │   └── chat-ui/       # SvelteKit chat frontend (shared with all clients)
 │   │       └── android/   # Capacitor Android project (Redstart Twig for Android)
 │   └── electron-builder.json
+├── shared/                # Code shared between Nest and Twig main processes
+│   └── mcp-stdio-process.mjs   # stdio MCP child-process supervisor
 └── redstart-twig/         # Redstart Twig client apps
     └── windows/           # Redstart Twig Windows Electron app
 ```
@@ -551,6 +557,7 @@ Ports 19080 and 19082 are LAN-accessible when network mode is on (Redstart Nest 
 - **Unsigned installers** — both installers will trigger Windows Defender SmartScreen. This is expected for unsigned binaries distributed outside the Microsoft Store. A code signing certificate would resolve this.
 - **Android sideload required** — the app is not on the Play Store. Installation requires enabling "unknown sources."
 - **Accounts are on by default** — Redstart Nest supports a three-tier account model (Owner → Admin → User), session tokens, and `rst_` API keys behind a global "Require login" toggle, with a login gate, an account/profile menu, and self-service key regeneration (see [Accounts & Login](#accounts--login)). The account/role logic has an automated HTTP-level test suite and remote-browser login has been verified. With login on (the default), every client on the LAN must authenticate. Do not expose the gateway port to the public internet.
+- **Sessions do not survive a server restart** — login sessions are held in memory, so restarting Redstart Nest invalidates every client's token. Clients keep showing a logged-in UI until their next request fails, then prompt for login again. Harmless but confusing on a LAN; persisting sessions is a deliberate open decision, since it means writing credentials to disk.
 - **Single profile active at a time** — Redstart Nest manages one running model at a time.
 - **Windows only for server** — Redstart Nest is Windows-only. The client apps (Redstart Twig) can run anywhere, but the server manager requires Windows because it shells out to a Windows llama.cpp binary.
 - **Tokens/min display is unreliable** — the tok/min counter shown in the Redstart Nest header is a known bug. The number it displays is not accurate. This is a known issue and will be fixed in a future update.
@@ -573,18 +580,18 @@ This is an honest work-in-progress. The project started as a personal home tool 
 - [x] Server log displayed in Redstart Nest UI (piped mode)
 - [x] OpenAI-compatible API for use with coding agents (Kilo Code, Continue, etc.)
 - [x] Direct browser access to chat UI at `http://127.0.0.1:19080`
-- [x] Built-in MCP server — provider-driven architecture exposing `web_fetch`, Postgres, and Document-generation tools via Model Context Protocol SSE transport; whitelist enforced at the server level (non-whitelisted URLs never leave the machine)
+- [x] Built-in MCP server — provider-driven architecture exposing web fetch/search plus seven local capabilities via Model Context Protocol SSE transport; providers may run in-process or as supervised stdio child processes; whitelist enforced at the server level (non-whitelisted URLs never leave the machine)
 - [x] Centralized MCP management — tool servers are configured once in Redstart Nest and auto-discovered by every client; per-device MCP config removed
 - [x] Source groups — named bundles of web sources (General Knowledge, Developer, News, Legal US, Research) with per-profile activation; custom groups and sources supported
 - [x] External MCP server management — connect to MCP servers on other devices; beacon advertises all active MCP endpoints for auto-discovery
 - [x] Postgres capability — read-only SQL query, table listing, and column inspection against an admin-configured database; read-only enforced by the database itself (queries run inside a `READ ONLY` transaction), connection string encrypted at rest
-- [x] Document generation capability — model can create `.docx`/`.pdf`/`.md` files in an admin-configured local output folder for case notes, summaries, and reports
+- [x] Document generation capability — model can create `.docx`/`.pdf`/`.md` files in an admin-configured local output folder for case notes, summaries, and reports; markdown pipe tables render as real Word/PDF tables, and created files surface in chat as an authenticated download
 - [x] Three-tier accounts with login gate — Owner/Admin/User roles, session tokens, `rst_` API keys, a login screen that guards the chat UI (remote browsers included), an account/profile menu, and self-service key regeneration; auth on by default, localhost bypass removed
 - [x] `web_search` tool — first-party search APIs (Wikipedia OpenSearch, arXiv, PubMed, MDN, Stack Exchange); no third-party search engine involved
 - [x] SQLite capability — read-only SQL query, table listing, and column inspection against local SQLite database files in an admin-configured folder
 - [x] Vault capability — read-only search and read access to a folder of markdown notes (Obsidian vault or any markdown folder), including tag browsing
 - [x] Git capability — read-only repository context (status, recent commits, uncommitted diffs) from local git repositories in an admin-configured folder
-- [x] File System capability — read and write files within a user-chosen root directory (`fs_read_file`, `fs_write_file`, `fs_edit_file`, `fs_list_directory`, `fs_search_files`, `fs_get_file_info`, `fs_create_directory`, `fs_delete_file`); path containment enforced via symlink-aware `resolveWithinRoot()`, binary extension blocking, and a 50 MB file size limit
+- [x] File System capability — read and write files within a user-chosen root directory, served by the official `@modelcontextprotocol/server-filesystem` as a stdio child process with ecosystem-standard tool names (`read_text_file`, `write_file`, `edit_file`, `list_directory`, `directory_tree`, `search_files`, `move_file`, …); every path argument independently re-validated through symlink-aware `resolveWithinRoot()` before reaching the child
 - [x] Scholar capability — search open academic literature (OpenAlex, arXiv, PubMed) with abstracts, citations, and open-access PDFs saved into the Documents folder; optional journal/category whitelist
 - [x] Security hardening — beacon returns minimal `{ running, port }` payload only (no version, auth state, MCP URLs, or LAN IPs); SSRF guard blocks loopback/RFC1918/link-local for `web_fetch`; web fetch redirects validated hop-by-hop; path containment utility shared across all file-based capabilities; chat-ui context compaction service
 
