@@ -50,19 +50,48 @@ jobs:
       - name: Syntax-check electron/main (node --check)
         run: npm run check:mjs
 
-      # Security suites run as four separate steps so a failure is identifiable
-      # from the step name via the API alone (no log access needed). Postgres and
-      # live-web cases self-skip when no DB / network resource is present. Full
-      # svelte-check is intentionally NOT run — it reports pre-existing test-file
-      # type errors unrelated to these guarantees.
+      # Security suites run as separate steps so a failure is identifiable from
+      # the step name via the API alone (no log access needed). This list must
+      # stay in sync with the `test:security` script in package.json — a suite
+      # that exists locally but not here is a suite that does not gate merges.
+      # Postgres and live-web cases self-skip when no DB / network resource is
+      # present. Full svelte-check is intentionally NOT run — it reports
+      # pre-existing test-file type errors unrelated to these guarantees.
+      - name: "Security: CI parity (this list vs test:security)"
+        run: node scripts/test-ci-parity.mjs
+
       - name: "Security: path containment (path-scope)"
         run: node scripts/test-path-scope.mjs
+
+      - name: "Security: conversation isolation"
+        run: node scripts/test-conversation-isolation.mjs
+
+      - name: "Security: tool policy classification"
+        run: node scripts/test-tool-policy.mjs
+
+      - name: "Security: llama-server localhost-only args"
+        run: node scripts/test-llama-args.mjs
+
+      - name: "Security: discovery robustness (beacon)"
+        run: node scripts/test-discovery-robustness.mjs
 
       - name: "Security: auth / sessions / roles"
         run: node scripts/test-auth.mjs
 
+      - name: "Security: gateway routes / request rewriting"
+        run: node scripts/test-gateway-routes.mjs
+
+      - name: "Security: preload/main IPC contract"
+        run: node scripts/test-ipc-contract.mjs
+
       - name: "Security: MCP capability gating"
         run: node scripts/test-mcp-capabilities.mjs
+
+      - name: "Security: provider conformance"
+        run: node scripts/test-provider-conformance.mjs
+
+      - name: "Security: boundary response contracts"
+        run: node scripts/test-contracts.mjs
 
       - name: "Security: containment / SSRF / beacon / download endpoint (vitest)"
         run: npm --prefix src/chat-ui run test:security

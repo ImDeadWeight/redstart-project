@@ -36,3 +36,52 @@ export const safeStorage = {
     return Buffer.from(buffer).toString('utf8')
   },
 }
+
+// Recording ipcMain — lets scripts/test-ipc-contract.mjs run the REAL
+// registerXHandlers() functions and observe every channel they actually
+// register, including the ones built dynamically in a loop (which a static
+// grep of the source cannot see). Handlers are kept callable so a test can
+// invoke one directly.
+export const ipcMain = {
+  handlers: new Map(),
+  listeners: new Map(),
+  handle(channel, fn) {
+    if (this.handlers.has(channel)) {
+      throw new Error(`ipcMain.handle called twice for the same channel: ${channel}`)
+    }
+    this.handlers.set(channel, fn)
+  },
+  on(channel, fn) {
+    if (!this.listeners.has(channel)) this.listeners.set(channel, [])
+    this.listeners.get(channel).push(fn)
+  },
+  removeHandler(channel) {
+    this.handlers.delete(channel)
+  },
+}
+
+// Registration-time only — no handler under test opens a dialog or a window
+// unless invoked, and the contract test never invokes those.
+export const dialog = {
+  showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+  showSaveDialog: async () => ({ canceled: true, filePath: undefined }),
+  showMessageBox: async () => ({ response: 0 }),
+}
+
+export const BrowserWindow = {
+  getAllWindows: () => [],
+  getFocusedWindow: () => null,
+}
+
+export const shell = {
+  openExternal: async () => {},
+  openPath: async () => '',
+}
+
+export const nativeImage = {
+  createFromPath: () => ({ isEmpty: () => true }),
+}
+
+export const session = {
+  defaultSession: { webRequest: { onHeadersReceived() {} } },
+}
