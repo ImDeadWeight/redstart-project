@@ -201,7 +201,7 @@ Beyond web sources, the built-in MCP server ships seven local capabilities — a
 
 All are configured once globally (connection strings, output folders, or root directories) and then activated per profile, the same way web sources are — a profile can mix and match freely.
 
-**Why not Context7 (or similar hosted "tool" MCP servers)?** We looked at it and passed. Context7 (and services like it) are proprietary hosted indexes with no self-hosted option — using one, even proxied through Redstart Nest's own MCP server, means the built-in server itself makes an outbound call on every use. That's a different risk category than the whitelisted web sources above, which are an explicit, visible, admin-controlled exception. A "built-in" tool silently phoning out conflicts with the "conversations stay on the local network" premise this whole project is built on, so it's off the table unless a genuinely local alternative shows up.
+**Why no hosted "tool" MCP servers?** A number of third-party services package documentation or code search behind a hosted MCP endpoint. They were considered and passed over: they're proprietary hosted indexes with no self-hosted option, so using one — even proxied through Redstart Nest's own MCP server — means the built-in server itself makes an outbound call on every use. That's a different risk category from the whitelisted web sources above, which are an explicit, visible, admin-controlled exception. A "built-in" tool silently phoning out conflicts with the "conversations stay on the local network" premise this whole project is built on, so it stays off the table unless a genuinely local alternative shows up.
 
 ### Configuring in Redstart Nest
 
