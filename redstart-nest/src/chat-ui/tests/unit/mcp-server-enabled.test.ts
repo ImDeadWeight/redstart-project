@@ -1,5 +1,14 @@
-import { describe, expect, it } from 'vitest';
-import { buildMcpClientConfig, checkServerEnabled } from '$lib/stores/mcp/mcp-config';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('$lib/utils/api-headers', () => ({
+	getAuthHeaders: () => ({ Authorization: 'Bearer session-token' })
+}));
+
+import {
+	buildMcpClientConfig,
+	buildServerConfig,
+	checkServerEnabled
+} from '$lib/stores/mcp/mcp-config';
 import type { MCPServerSettingsEntry } from '$lib/types';
 import type { McpServerOverride } from '$lib/types/database';
 
@@ -68,6 +77,37 @@ describe('buildMcpClientConfig', () => {
 		const empty = { mcpServers: JSON.stringify([]) } as Parameters<typeof buildMcpClientConfig>[0];
 		const on = overrides({ serverId: NEST_SERVER.id, enabled: true });
 		expect(buildMcpClientConfig(empty, on)).toBeUndefined();
+	});
+});
+
+describe('auth headers on the MCP connection', () => {
+	// The Nest MCP endpoint 401s without a token, so a provisioned server that
+	// carries no Authorization header fails its handshake and shows as ERROR —
+	// with no tools reaching the model.
+	it('attaches the session token to a host-provisioned server', () => {
+		const built = buildServerConfig(NEST_SERVER);
+		expect(built?.headers?.Authorization).toBe('Bearer session-token');
+	});
+
+	// Security boundary: a third-party server the user added must never receive
+	// this deployment's bearer token.
+	it('never attaches the session token to a user-added server', () => {
+		const thirdParty: MCPServerSettingsEntry = {
+			id: 'user-added-1',
+			enabled: true,
+			url: 'https://example.com/mcp',
+			name: 'Someone Else',
+			requestTimeoutSeconds: 30
+		};
+		expect(buildServerConfig(thirdParty)?.headers).toBeUndefined();
+	});
+
+	it('lets an explicit custom header win over the session token', () => {
+		const withHeader: MCPServerSettingsEntry = {
+			...NEST_SERVER,
+			headers: JSON.stringify({ Authorization: 'Bearer explicit-override' })
+		};
+		expect(buildServerConfig(withHeader)?.headers?.Authorization).toBe('Bearer explicit-override');
 	});
 });
 

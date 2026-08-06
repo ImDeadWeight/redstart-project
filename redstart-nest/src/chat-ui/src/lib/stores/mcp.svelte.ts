@@ -20,7 +20,7 @@
  */
 
 import { browser } from '$app/environment';
-import { SETTINGS_KEYS } from '$lib/constants';
+import { SETTINGS_KEYS, NEST_MCP_SERVER_ID_PREFIX } from '$lib/constants';
 import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
@@ -302,7 +302,7 @@ class MCPStore {
 		const entries: MCPServerSettingsEntry[] = list
 			.filter((s) => typeof s?.url === 'string' && s.url.trim())
 			.map((s) => ({
-				id: `redstart-${(s.url as string).trim().replace(/[^a-zA-Z0-9]+/g, '-')}`,
+				id: `${NEST_MCP_SERVER_ID_PREFIX}${(s.url as string).trim().replace(/[^a-zA-Z0-9]+/g, '-')}`,
 				enabled: true,
 				url: (s.url as string).trim(),
 				name: s.name,
