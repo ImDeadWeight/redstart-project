@@ -44,3 +44,12 @@ redstart-twig/*.apk
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Working planning / design documents.
+# README.md and CHANGELOG.md are the only architecture docs that ship; plans,
+# strategies and status notes are scratch and go stale the moment they land.
+/*Plan*.md
+/*Strategy*.md
+/*PLAN*.md
+/ACTION-ITEMS.md
+/Redstart *.md
