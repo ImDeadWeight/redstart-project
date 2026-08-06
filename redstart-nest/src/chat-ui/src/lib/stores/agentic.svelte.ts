@@ -414,6 +414,17 @@ class AgenticStore {
 
 		const tools = toolsStore.getEnabledToolsForLLM();
 		if (tools.length === 0) {
+			// Bailing here sends the turn with no tools, which looks identical to
+			// the model simply choosing not to call one — the failure that made
+			// every tool-delivery bug in this stack invisible. Say which link
+			// broke instead of returning silently.
+			console.warn('[AgenticStore] No tools available — sending this turn without tools.', {
+				mcpServersConfigured: mcpStore.getServers().length,
+				mcpEnabledForThisChat: hasMcpServers,
+				mcpOverridesSeen: perChatOverrides?.length ?? 0,
+				mcpLiveConnections: mcpStore.getConnections().size,
+				builtinToolsFromServer: toolsStore.builtinTools.length
+			});
 			return { handled: false };
 		}
 
