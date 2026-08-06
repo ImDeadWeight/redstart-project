@@ -8,6 +8,7 @@ import type {
 } from '$lib/types/database';
 import { AttachmentType } from '$lib/enums';
 import { getServerBaseUrl } from './server-url';
+import { getAuthHeaders } from './api-headers';
 
 /**
  * Represents a parsed section of agentic content for display
