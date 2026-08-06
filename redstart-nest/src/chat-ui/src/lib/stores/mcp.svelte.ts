@@ -25,6 +25,9 @@ import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
+// One-way edge: conversations.svelte.ts imports no store that reaches back
+// here, so this does not create an import cycle.
+import { conversationsStore } from '$lib/stores/conversations.svelte';
 // Lazy cross-store reference: tools.svelte.ts also imports mcpStore, so this
 // forms a cycle. It's safe because toolsStore is only touched at runtime
 // (inside syncServersFromHost), never at module init.
@@ -311,6 +314,17 @@ class MCPStore {
 			SETTINGS_KEYS.MCP_SERVERS,
 			JSON.stringify(mergeNestServers(this.getServers(), entries))
 		);
+
+		// Host-provisioned servers are on by default. checkServerEnabled consults
+		// only per-chat overrides and defaults to false, so without seeding one
+		// here a centrally-provisioned server can never be used: it never
+		// connects, and the tools picker lists groups only for *connected*
+		// servers — leaving no control anywhere to turn it on. The admin already
+		// made this decision server-side, so honor it. Seeded as a default, not a
+		// forced value: an explicit per-chat "off" is never overwritten.
+		for (const entry of entries) {
+			conversationsStore.seedMcpServerDefault(entry.id, true);
+		}
 
 		// Server-enforced tool bans. The gateway is the real enforcement point,
 		// but we capture the list here so toolsStore can keep a banned tool from
