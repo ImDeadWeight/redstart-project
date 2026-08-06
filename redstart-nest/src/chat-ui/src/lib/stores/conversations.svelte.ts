@@ -114,14 +114,13 @@ class ConversationsStore {
 
 	/** Load thinking-enabled default from localStorage */
 	private static loadThinkingDefaults(): boolean {
-		if (typeof globalThis.localStorage === 'undefined') return false;
+		if (typeof globalThis.localStorage === 'undefined') return true;
 		try {
 			const raw = localStorage.getItem(THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY);
-			if (!raw) return false;
-			const parsed = raw === 'true';
-			return typeof parsed === 'boolean' ? parsed : false;
+			if (!raw) return true;
+			return raw === 'true';
 		} catch {
-			return false;
+			return true;
 		}
 	}
 
@@ -643,11 +642,16 @@ class ConversationsStore {
 	 * @returns The override if set, undefined if using global setting
 	 */
 	getMcpServerOverride(serverId: string): McpServerOverride | undefined {
-		if (this.activeConversation) {
-			return this.activeConversation.mcpServerOverrides?.find(
-				(o: McpServerOverride) => o.serverId === serverId
-			);
-		}
+		const own = this.activeConversation?.mcpServerOverrides?.find(
+			(o: McpServerOverride) => o.serverId === serverId
+		);
+		// An explicit per-conversation choice always wins — including an explicit
+		// "off", which must not be undone by the default below.
+		if (own) return own;
+		// Otherwise fall back to the saved defaults. A conversation that never
+		// made a choice about this server (e.g. it was provisioned by the host
+		// after the conversation started) should follow the default rather than
+		// be silently treated as disabled.
 		return this.pendingMcpServerOverrides.find((o) => o.serverId === serverId);
 	}
 
@@ -656,10 +660,14 @@ class ConversationsStore {
 	 * Returns pending overrides if no active conversation.
 	 */
 	getAllMcpServerOverrides(): McpServerOverride[] {
-		if (this.activeConversation?.mcpServerOverrides) {
-			return this.activeConversation.mcpServerOverrides;
-		}
-		return this.pendingMcpServerOverrides;
+		const own: McpServerOverride[] = this.activeConversation?.mcpServerOverrides ?? [];
+		// Merge rather than replace, matching getMcpServerOverride: the
+		// conversation's explicit choices win, and saved defaults fill in for
+		// servers it never made a choice about. Returning only `own` would drop
+		// the defaults for any conversation holding even one unrelated entry.
+		const chosen = new Set(own.map((o) => o.serverId));
+		const defaults = this.pendingMcpServerOverrides.filter((o) => !chosen.has(o.serverId));
+		return [...own, ...defaults];
 	}
 
 	/**
@@ -722,6 +730,18 @@ class ConversationsStore {
 				newOverrides.length > 0 ? newOverrides : undefined;
 			this.conversations = [...this.conversations];
 		}
+	}
+
+	/**
+	 * Seeds the default enabled-state for a host-provisioned MCP server.
+	 *
+	 * No-op when any choice already exists — a saved default, or an explicit
+	 * choice in the active conversation — so a user's decision, including an
+	 * explicit "off", is never overwritten by re-provisioning.
+	 */
+	seedMcpServerDefault(serverId: string, enabled: boolean): void {
+		if (this.getMcpServerOverride(serverId)) return;
+		this.setPendingMcpServerOverride(serverId, enabled);
 	}
 
 	/**

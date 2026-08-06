@@ -674,8 +674,8 @@ const NON_UI_SETTINGS: SettingsEntry[] = [
 	{
 		key: SETTINGS_KEYS.TOOL_CALL_FALLBACK_PARSER_PATTERNS,
 		label: 'Tool call parser patterns',
-		help: 'Comma-separated list of patterns to try: braces, xml, fn. Order matters — first match wins.',
-		defaultValue: 'braces,xml,fn',
+		help: 'Comma-separated list of patterns to try: braces, xml, fn, json. Order matters — first match wins. The json shape ({"name":…,"arguments":…}) is always tried as a last resort.',
+		defaultValue: 'braces,xml,fn,json',
 		type: SettingsFieldType.INPUT
 	}
 	// {

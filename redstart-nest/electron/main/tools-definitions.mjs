@@ -124,7 +124,7 @@ export const BUILTIN_CAPABILITIES = [
 // Maps a capability/tool ID to the actual MCP tool function names it exposes.
 // The gateway enforces tool bans by function name (that's what the model sees),
 // so an admin banning a capability ID (e.g. 'file_system') must expand to every
-// function name it produces (fs_read_file, fs_write_file, ...). Built-in web
+// function name it produces (read_text_file, write_file, ...). Built-in web
 // sources (web_fetch/web_search) are gated by the whitelist, not by name, so
 // they're intentionally absent here.
 export const CAPABILITY_TOOL_NAMES = {
@@ -133,15 +133,23 @@ export const CAPABILITY_TOOL_NAMES = {
   sqlite: ['sqlite_query', 'sqlite_list_tables', 'sqlite_describe_table'],
   vault: ['vault_search', 'vault_get', 'vault_tags'],
   git: ['git_status', 'git_log', 'git_diff'],
+  // Served by @modelcontextprotocol/server-filesystem (see
+  // filesystem-mcp-provider.mjs). Keep in sync with FILESYSTEM_TOOL_NAMES there.
   file_system: [
-    'fs_read_file',
-    'fs_write_file',
-    'fs_edit_file',
-    'fs_list_directory',
-    'fs_search_files',
-    'fs_get_file_info',
-    'fs_create_directory',
-    'fs_delete_file',
+    'read_file',
+    'read_text_file',
+    'read_media_file',
+    'read_multiple_files',
+    'write_file',
+    'edit_file',
+    'create_directory',
+    'list_directory',
+    'list_directory_with_sizes',
+    'directory_tree',
+    'move_file',
+    'search_files',
+    'get_file_info',
+    'list_allowed_directories',
   ],
   scholar: ['scholar_search', 'scholar_get', 'scholar_save_pdf'],
 }
@@ -205,15 +213,26 @@ export const TOOL_CLASSES = {
   git_status: 'read',
   git_log: 'read',
   git_diff: 'read',
-  // File System — the one read/write/delete capability
-  fs_read_file: 'read',
-  fs_list_directory: 'read',
-  fs_search_files: 'read',
-  fs_get_file_info: 'read',
-  fs_write_file: 'write',
-  fs_edit_file: 'write',
-  fs_create_directory: 'write',
-  fs_delete_file: 'destructive',
+  // File System — @modelcontextprotocol/server-filesystem. Reads are read;
+  // create/overwrite/edit/move are writes. The upstream server exposes no
+  // delete tool, so file_system currently has no 'destructive'-class tool (the
+  // allowDestructive policy has nothing to gate here until a delete tool is
+  // added). move_file removes its source but cannot overwrite an existing
+  // destination (upstream fails the op), so it's a write, not destructive.
+  read_file: 'read',
+  read_text_file: 'read',
+  read_media_file: 'read',
+  read_multiple_files: 'read',
+  list_directory: 'read',
+  list_directory_with_sizes: 'read',
+  directory_tree: 'read',
+  search_files: 'read',
+  get_file_info: 'read',
+  list_allowed_directories: 'read',
+  write_file: 'write',
+  edit_file: 'write',
+  create_directory: 'write',
+  move_file: 'write',
   // Scholar — searches are network; saving a PDF writes to the Documents folder
   scholar_search: 'network',
   scholar_get: 'network',

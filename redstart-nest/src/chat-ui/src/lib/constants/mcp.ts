@@ -36,6 +36,14 @@ export const DEFAULT_MCP_CONFIG = {
 
 export const MCP_SERVER_ID_PREFIX = 'LlamaUI-MCP-Server';
 
+/**
+ * Id prefix for servers provisioned by the Redstart Nest host (as opposed to
+ * user-added or desktop-local ones). Marks entries the sync owns and may
+ * replace, and — because these live behind the host's own auth — the only
+ * entries the client attaches its session token to.
+ */
+export const NEST_MCP_SERVER_ID_PREFIX = 'redstart-';
+
 export const MCP_RECONNECT_INITIAL_DELAY = 1000;
 export const MCP_RECONNECT_BACKOFF_MULTIPLIER = 2;
 export const MCP_RECONNECT_MAX_DELAY = 30000;

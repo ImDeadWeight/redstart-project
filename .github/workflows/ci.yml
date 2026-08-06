@@ -64,5 +64,12 @@ jobs:
       - name: "Security: MCP capability gating"
         run: node scripts/test-mcp-capabilities.mjs
 
-      - name: "Security: fs-tool / SSRF / beacon (vitest)"
+      - name: "Security: containment / SSRF / beacon / download endpoint (vitest)"
         run: npm --prefix src/chat-ui run test:security
+
+      # The security-focused vitest step above runs only security.test.ts. The
+      # rest of the unit project guards behavior that has silently regressed
+      # before — document table rendering, the tool-call fallback parser — so it
+      # runs here too rather than only on developer machines.
+      - name: "Unit tests (vitest)"
+        run: npm --prefix src/chat-ui run test:unit -- --run

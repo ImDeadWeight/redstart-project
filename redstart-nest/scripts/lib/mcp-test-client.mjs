@@ -33,13 +33,21 @@ export async function connectMcpClient(baseUrl) {
           const eventLine = lines.find(l => l.startsWith('event: '))
           const dataLine = lines.find(l => l.startsWith('data: '))
           if (!dataLine) continue
-          const data = JSON.parse(dataLine.slice(6))
+          const raw = dataLine.slice(6)
           const eventType = eventLine ? eventLine.slice(7) : 'message'
           if (eventType === 'endpoint') {
-            endpointPath = data
-          } else if (data?.id !== undefined && pending.has(data.id)) {
-            pending.get(data.id).resolve(data)
-            pending.delete(data.id)
+            // Taken VERBATIM, exactly as the MCP SDK does. This used to
+            // JSON.parse the value, which silently repaired a server that
+            // JSON-encoded the URI — so the suite stayed green while no real
+            // client could connect. Parsing here would re-hide that bug.
+            endpointPath = raw.trim()
+          } else {
+            let data
+            try { data = JSON.parse(raw) } catch { continue }
+            if (data?.id !== undefined && pending.has(data.id)) {
+              pending.get(data.id).resolve(data)
+              pending.delete(data.id)
+            }
           }
         }
       }

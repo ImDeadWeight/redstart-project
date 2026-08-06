@@ -777,17 +777,17 @@ async function main() {
     console.log('  skip - live scholar tests (set REDSTART_TEST_LIVE_WEB=1 to run)')
   }
 
-  console.log('\n-- file system provider (via buildGatewayConfig) --')
+  console.log('\n-- file system provider (@modelcontextprotocol/server-filesystem, spawned) --')
 
-  // File System is the one read/write capability, so it's exercised end-to-end
-  // through the REAL producer (buildGatewayConfig) and the MCP HTTP path — not a
-  // hand-built config. The vitest fs suite calls fs-tool directly with a
-  // hand-built { fileSystem: ... } config, which can't catch a producer that
-  // emits the wrong key (the snake_case `file_system` bug that silently disabled
-  // the capability in production). These tests go through the seam that hid it.
+  // File System is served by the official server-filesystem, spawned as a stdio
+  // child (filesystem-mcp-provider.mjs). Exercised end-to-end through the REAL
+  // producer (buildGatewayConfig) -> MCP server -> spawned child -> disk. The
+  // child must be spawned + handshaked (syncFilesystemProvider) before its tools
+  // appear, since toolDefs() serves the cached tools/list from the live child.
   {
     const { buildGatewayConfig } = await import('../electron/main/gateway-config.mjs')
     const storageFs = await import('../electron/main/tools-storage.mjs')
+    const fsProvider = await import('../electron/main/filesystem-mcp-provider.mjs')
     storageFs.setCapabilityConfig('file_system', { enabled: true, rootDir: tmpFsDir })
     fs.writeFileSync(path.join(tmpFsDir, 'note.txt'), 'hello world')
     const fsProfile = { tools: { enabled: true, activeToolIds: ['file_system'] } }
@@ -795,75 +795,71 @@ async function main() {
     await test('🔍 buildGatewayConfig emits camelCase fileSystem (producer/consumer keys agree)', async () => {
       const cfg = buildGatewayConfig(fsProfile)
       assert(cfg.fileSystem?.enabled === true, `expected cfg.fileSystem.enabled true; keys: ${JSON.stringify(Object.keys(cfg))}`)
-      assert(cfg.file_system === undefined, 'must not emit snake_case file_system — fs-tool reads cfg.fileSystem')
+      assert(cfg.file_system === undefined, 'must not emit snake_case file_system — the provider reads cfg.fileSystem')
     })
 
+    // Spawn + handshake the child, then push the same config to the MCP server.
+    await fsProvider.syncFilesystemProvider(buildGatewayConfig(fsProfile).fileSystem)
     updateMcpConfig(buildGatewayConfig(fsProfile))
 
-    await test('tools/list advertises fs_* once File System is active (regression: config key)', async () => {
+    await test('the filesystem child spawns and hands off its tool list', async () => {
+      assert(fsProvider.isFilesystemProviderReady(), 'provider did not reach ready (child spawn/handshake failed — is npx available?)')
+    })
+
+    await test('tools/list advertises the standard server-filesystem tools once active', async () => {
       const res = await client.call('tools/list')
       const names = res.result.tools.map(t => t.name)
-      // Non-destructive tools only — fs_delete_file is gated off by default (see
-      // the permission-gate tests below); this guards the config-key wiring.
-      for (const n of ['fs_read_file', 'fs_write_file', 'fs_list_directory']) {
+      // Standard upstream names — the whole point of the swap (local models call
+      // write_file/read_text_file far more reliably than the old fs_* schema).
+      for (const n of ['read_text_file', 'write_file', 'list_directory']) {
         assert(names.includes(n), `expected ${n} in ${JSON.stringify(names)}`)
       }
     })
 
-    await test('fs_read_file reads a file within the configured root', async () => {
-      const res = await client.call('tools/call', { name: 'fs_read_file', arguments: { path: 'note.txt' } })
+    await test('read_text_file reads a file within the configured root', async () => {
+      const res = await client.call('tools/call', { name: 'read_text_file', arguments: { path: 'note.txt' } })
       assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
       assert(res.result.content[0].text.includes('hello world'), `unexpected content: ${res.result.content[0].text}`)
     })
 
-    // --- Permission gate (Plan 2): writes on, deletes off by default ---
-
-    await test('🔍 fs_delete_file is NOT advertised under the default policy (destructive off)', async () => {
-      const names = (await client.call('tools/list')).result.tools.map(t => t.name)
-      assert(!names.includes('fs_delete_file'), `fs_delete_file must be hidden by default; got ${JSON.stringify(names.filter(n => n.startsWith('fs_')))}`)
-      assert(names.includes('fs_write_file'), 'fs_write_file should be advertised (writes on by default)')
-    })
-
-    await test('🔍 fs_delete_file is refused by the server gate even when called directly (default policy)', async () => {
-      fs.writeFileSync(path.join(tmpFsDir, 'victim.txt'), 'delete me')
-      const res = await client.call('tools/call', { name: 'fs_delete_file', arguments: { path: 'victim.txt' } })
-      assert(res.result?.isError === true, `expected gate refusal, got ${JSON.stringify(res.result)}`)
-      assert(fs.existsSync(path.join(tmpFsDir, 'victim.txt')), 'file must NOT be deleted while destructive ops are disabled')
-    })
-
-    await test('fs_write_file works under the default policy (writes allowed)', async () => {
-      const res = await client.call('tools/call', { name: 'fs_write_file', arguments: { path: 'written.txt', content: 'hi there' } })
+    await test('write_file works under the default policy (writes allowed)', async () => {
+      const res = await client.call('tools/call', { name: 'write_file', arguments: { path: 'written.txt', content: 'hi there' } })
       assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
       assert(fs.readFileSync(path.join(tmpFsDir, 'written.txt'), 'utf8').includes('hi there'), 'file was not written')
     })
 
-    storageFs.setCapabilityConfig('file_system', { allowDestructive: true })
-    updateMcpConfig(buildGatewayConfig(fsProfile))
+    // --- Containment: the provider re-validates every path argument through the
+    // symlink-aware path-scope gate BEFORE forwarding to the child, so a ".."
+    // escape is refused even though the request reached the MCP layer. ---
 
-    await test('fs_delete_file is advertised and works once destructive ops are enabled', async () => {
-      const names = (await client.call('tools/list')).result.tools.map(t => t.name)
-      assert(names.includes('fs_delete_file'), 'fs_delete_file should be advertised after opt-in')
-      const res = await client.call('tools/call', { name: 'fs_delete_file', arguments: { path: 'victim.txt' } })
-      assert(!res.result?.isError, `delete failed after opt-in: ${JSON.stringify(res.result)}`)
-      assert(!fs.existsSync(path.join(tmpFsDir, 'victim.txt')), 'file should be deleted after opt-in')
+    await test('🔍 read_text_file with a "../" escape is refused by the containment gate', async () => {
+      const res = await client.call('tools/call', { name: 'read_text_file', arguments: { path: '../../secret.txt' } })
+      assert(res.result?.isError === true, `expected containment refusal, got ${JSON.stringify(res.result)}`)
     })
+
+    // --- Permission gate: writes obey allowWrite. ---
 
     storageFs.setCapabilityConfig('file_system', { allowWrite: false, allowDestructive: false })
     updateMcpConfig(buildGatewayConfig(fsProfile))
 
-    await test('🔍 fs_write_file is refused when writes are disabled by policy', async () => {
-      const res = await client.call('tools/call', { name: 'fs_write_file', arguments: { path: 'blocked.txt', content: 'x' } })
+    await test('🔍 write_file is not advertised when writes are disabled by policy', async () => {
+      const names = (await client.call('tools/list')).result.tools.map(t => t.name)
+      assert(!names.includes('write_file'), `write_file must be hidden when writes disabled; got ${JSON.stringify(names)}`)
+      assert(names.includes('read_text_file'), 'read_text_file should still be advertised (reads unaffected)')
+    })
+
+    await test('🔍 write_file is refused by the server gate when writes are disabled', async () => {
+      const res = await client.call('tools/call', { name: 'write_file', arguments: { path: 'blocked.txt', content: 'x' } })
       assert(res.result?.isError === true, `expected write refusal, got ${JSON.stringify(res.result)}`)
       assert(!fs.existsSync(path.join(tmpFsDir, 'blocked.txt')), 'file must not be written when writes are disabled')
     })
 
     // --- Permission escalation: a caller cannot grant itself permission by
     // smuggling policy fields into the tool arguments. The gate reads the
-    // server-side capability config, never the call's arguments, so these are
-    // inert. (Policy is still writes-off / destructive-off from above.)
+    // server-side capability config, never the call's arguments. ---
 
-    await test('🔍 fs_write_file cannot self-promote via policy fields in arguments', async () => {
-      const res = await client.call('tools/call', { name: 'fs_write_file', arguments: {
+    await test('🔍 write_file cannot self-promote via policy fields in arguments', async () => {
+      const res = await client.call('tools/call', { name: 'write_file', arguments: {
         path: 'escalate.txt', content: 'x',
         allowWrite: true, allowDestructive: true,
         policy: { allowWrite: true }, fileSystem: { allowWrite: true },
@@ -872,18 +868,10 @@ async function main() {
       assert(!fs.existsSync(path.join(tmpFsDir, 'escalate.txt')), 'file was written despite writes being disabled')
     })
 
-    await test('🔍 fs_delete_file cannot self-promote via policy fields in arguments', async () => {
-      fs.writeFileSync(path.join(tmpFsDir, 'keep.txt'), 'do not delete')
-      const res = await client.call('tools/call', { name: 'fs_delete_file', arguments: {
-        path: 'keep.txt',
-        allowDestructive: true, policy: { allowDestructive: true },
-      } })
-      assert(res.result?.isError === true, `delete self-promotion was allowed: ${JSON.stringify(res.result)}`)
-      assert(fs.existsSync(path.join(tmpFsDir, 'keep.txt')), 'file was deleted despite destructive ops being disabled')
-    })
-
-    // restore default policy so any later capability reads see the secure default
+    // restore default policy + stop the child so later capability reads see the
+    // secure default and no orphaned process survives the suite.
     storageFs.setCapabilityConfig('file_system', { allowWrite: true, allowDestructive: false })
+    fsProvider.stopFilesystemProvider()
     updateMcpConfig(baseConfig)
   }
 

@@ -8,6 +8,7 @@ import type {
 } from '$lib/types/database';
 import { AttachmentType } from '$lib/enums';
 import { getServerBaseUrl } from './server-url';
+import { getAuthHeaders } from './api-headers';
 
 /**
  * Represents a parsed section of agentic content for display
@@ -293,9 +294,9 @@ export function classifyContinueIntent(messages: DatabaseMessage[], idx: number)
 }
 
 /**
- * Download a file created by the fs_write_file tool. The server exposes
- * /files/download?path=<relative-path> which validates path containment
- * against the configured file system root before streaming the file.
+ * Download a file a tool produced. The server exposes
+ * /files/download?path=<relative-path>, which validates path containment
+ * against each configured root (File System and Documents) before streaming.
  */
 export async function downloadFile(relativePath: string, fileName?: string): Promise<void> {
 	const base = getServerBaseUrl().replace(/\/$/, '');
@@ -304,7 +305,17 @@ export async function downloadFile(relativePath: string, fileName?: string): Pro
 		headers: getAuthHeaders(),
 	});
 	if (!response.ok) {
-		throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+		// The endpoint explains itself in the body ("outside the configured file
+		// roots", "File not found", ...). Reporting only the status code throws
+		// that away and leaves a failed download indistinguishable by cause.
+		let detail = '';
+		try {
+			const body = await response.json();
+			detail = body?.error?.message ? ` — ${body.error.message}` : '';
+		} catch {
+			/* non-JSON body; the status alone will have to do */
+		}
+		throw new Error(`Download failed: ${response.status} ${response.statusText}${detail}`);
 	}
 	const blob = await response.blob();
 	const blobUrl = URL.createObjectURL(blob);

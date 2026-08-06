@@ -55,7 +55,7 @@ export type ProfileTools = {
   // Server-enforced tool bans. Tool names listed here are removed from the
   // model's vocabulary for every client (gateway strips them from the
   // completions request), regardless of a user's local enable/disable toggle.
-  // An admin uses this to enforce an org policy (e.g. disable fs_write_file)
+  // An admin uses this to enforce an org policy (e.g. disable write_file)
   // that non-technical staff cannot override client-side.
   disabledToolIds: string[]
 }

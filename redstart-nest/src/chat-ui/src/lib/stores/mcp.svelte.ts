@@ -20,11 +20,14 @@
  */
 
 import { browser } from '$app/environment';
-import { SETTINGS_KEYS } from '$lib/constants';
+import { SETTINGS_KEYS, NEST_MCP_SERVER_ID_PREFIX } from '$lib/constants';
 import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
+// One-way edge: conversations.svelte.ts imports no store that reaches back
+// here, so this does not create an import cycle.
+import { conversationsStore } from '$lib/stores/conversations.svelte';
 // Lazy cross-store reference: tools.svelte.ts also imports mcpStore, so this
 // forms a cycle. It's safe because toolsStore is only touched at runtime
 // (inside syncServersFromHost), never at module init.
@@ -291,7 +294,12 @@ class MCPStore {
 			fetched = await apiFetch<{ servers?: { name?: string; url?: string }[]; disabledTools?: string[] }>(
 				'/redstart/mcp-servers'
 			);
-		} catch {
+		} catch (err) {
+			// Endpoint absent (plain llama-server, no Nest) is expected. A 401 is
+			// not: it means this ran before a session existed, and nothing here
+			// retries — so the host's servers are never learned. Either way it
+			// used to fail silently, which hid the cause completely.
+			console.warn('[MCPStore] Could not fetch MCP servers from host:', err);
 			return;
 		}
 
@@ -299,7 +307,7 @@ class MCPStore {
 		const entries: MCPServerSettingsEntry[] = list
 			.filter((s) => typeof s?.url === 'string' && s.url.trim())
 			.map((s) => ({
-				id: `redstart-${(s.url as string).trim().replace(/[^a-zA-Z0-9]+/g, '-')}`,
+				id: `${NEST_MCP_SERVER_ID_PREFIX}${(s.url as string).trim().replace(/[^a-zA-Z0-9]+/g, '-')}`,
 				enabled: true,
 				url: (s.url as string).trim(),
 				name: s.name,
@@ -307,10 +315,37 @@ class MCPStore {
 					Number(config().mcpRequestTimeoutSeconds) || DEFAULT_MCP_CONFIG.requestTimeoutSeconds
 			}));
 
-		settingsStore.updateConfig(
-			SETTINGS_KEYS.MCP_SERVERS,
-			JSON.stringify(mergeNestServers(this.getServers(), entries))
-		);
+		// An empty list almost always means the host's MCP server is not running
+		// yet (the gateway only advertises it while it is up), not that the admin
+		// removed it. Merging an empty list would delete the known entry and leave
+		// nothing to reconnect to when it comes back, so the server list is left
+		// alone in that case. Tool bans below still apply either way.
+		if (entries.length === 0) {
+			console.warn(
+				'[MCPStore] Host advertised no MCP servers (is the model server running?) — keeping the existing list.'
+			);
+		} else {
+			console.log(
+				`[MCPStore] Host provisioned ${entries.length} MCP server(s):`,
+				entries.map((e) => e.id)
+			);
+
+			settingsStore.updateConfig(
+				SETTINGS_KEYS.MCP_SERVERS,
+				JSON.stringify(mergeNestServers(this.getServers(), entries))
+			);
+
+			// Host-provisioned servers are on by default. checkServerEnabled
+			// consults only per-chat overrides and defaults to false, so without
+			// seeding one here a centrally-provisioned server can never be used: it
+			// never connects, and the tools picker lists groups only for
+			// *connected* servers — leaving no control anywhere to turn it on. The
+			// admin already made this decision server-side, so honor it. Seeded as
+			// a default, not a forced value: an explicit per-chat "off" survives.
+			for (const entry of entries) {
+				conversationsStore.seedMcpServerDefault(entry.id, true);
+			}
+		}
 
 		// Server-enforced tool bans. The gateway is the real enforcement point,
 		// but we capture the list here so toolsStore can keep a banned tool from

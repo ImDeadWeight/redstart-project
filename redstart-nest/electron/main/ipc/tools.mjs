@@ -4,12 +4,14 @@
 // buildGatewayConfig lives in index.mjs and is threaded via deps; everything
 // else is imported directly from the storage/gateway/definition modules.
 import { ipcMain } from 'electron'
+import * as path from 'path'
 import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES } from '../tools-definitions.mjs'
 import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup } from '../tools-storage.mjs'
 import { updateGatewayConfig, getGatewayPort } from '../tools-gateway.mjs'
 import { updateMcpConfig, estimateActiveToolTokens } from '../mcp-server.mjs'
+import { syncFilesystemProvider } from '../filesystem-mcp-provider.mjs'
 
-export function registerToolsHandlers({ buildGatewayConfig }) {
+export function registerToolsHandlers({ buildGatewayConfig, userDataDir }) {
   // --- Tools ---
 
   ipcMain.handle('tools:list-all', () => {
@@ -35,6 +37,10 @@ export function registerToolsHandlers({ buildGatewayConfig }) {
     const cfg = buildGatewayConfig(llamaConfig)
     updateGatewayConfig(cfg)
     updateMcpConfig(cfg)
+    // Fire-and-forget: spawning/handshaking the File System child process
+    // takes a moment and this IPC call isn't awaited by its caller.
+    syncFilesystemProvider(cfg.fileSystem, path.join(userDataDir, 'mcp-fs-logs'))
+      .catch((err) => console.warn('[filesystem-mcp-provider] sync failed:', err.message))
     return true
   })
 

@@ -32,7 +32,7 @@ import { ToolsService } from '$lib/services/tools.service';
 import { SandboxService } from '$lib/services/sandbox.service';
 import { isAbortError } from '$lib/utils';
 import { twigFsApi } from '$lib/utils/twig';
-import { parseToolCallsFromText, createApiToolCalls } from '$lib/utils/tool-call-parser';
+import { parseToolCallsFromTurn, createApiToolCalls } from '$lib/utils/tool-call-parser';
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE_SEPARATOR } from '$lib/constants';
 import {
 	IMAGE_MIME_TO_EXTENSION,
@@ -91,6 +91,13 @@ function createDefaultSession(): AgenticSession {
 		pendingPermissionRequest: null
 	};
 }
+
+/**
+ * Shared, frozen stand-in returned for a conversation that has no session yet.
+ * Frozen so an accidental write surfaces immediately instead of silently
+ * corrupting the value every session-less conversation reads.
+ */
+const EMPTY_SESSION: AgenticSession = Object.freeze(createDefaultSession());
 
 function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 	return messages.map((message) => {
@@ -162,13 +169,17 @@ class AgenticStore {
 		return false;
 	}
 
+	/**
+	 * Read a conversation's agentic session, or a shared empty one.
+	 *
+	 * Must not insert: this is called during render (deriving a message subtitle
+	 * reads lastError, for example), and writing to the reactive map mid-render
+	 * throws state_unsafe_mutation in Svelte 5 — an uncaught error that aborts
+	 * the render pass. A session is created lazily by updateSession instead,
+	 * which only ever runs from event handlers.
+	 */
 	getSession(conversationId: string): AgenticSession {
-		let session = this._sessions.get(conversationId);
-		if (!session) {
-			session = createDefaultSession();
-			this._sessions.set(conversationId, session);
-		}
-		return session;
+		return this._sessions.get(conversationId) ?? EMPTY_SESSION;
 	}
 
 	private updateSession(conversationId: string, update: Partial<AgenticSession>): void {
@@ -414,6 +425,17 @@ class AgenticStore {
 
 		const tools = toolsStore.getEnabledToolsForLLM();
 		if (tools.length === 0) {
+			// Bailing here sends the turn with no tools, which looks identical to
+			// the model simply choosing not to call one — the failure that made
+			// every tool-delivery bug in this stack invisible. Say which link
+			// broke instead of returning silently.
+			console.warn('[AgenticStore] No tools available — sending this turn without tools.', {
+				mcpServersConfigured: mcpStore.getServers().length,
+				mcpEnabledForThisChat: hasMcpServers,
+				mcpOverridesSeen: perChatOverrides?.length ?? 0,
+				mcpLiveConnections: mcpStore.getConnections().size,
+				builtinToolsFromServer: toolsStore.builtinTools.length
+			});
 			return { handled: false };
 		}
 
@@ -638,10 +660,14 @@ class AgenticStore {
 					.split(',')
 					.map((p: string) => p.trim())
 					.filter(Boolean);
-				const parsed = parseToolCallsFromText(turnContent, {
+				// Scans the visible answer, then the reasoning stream — a reasoning
+				// model often writes the call in its thinking block and only
+				// narrates it in the answer, which would otherwise drop it silently.
+				const parsed = parseToolCallsFromTurn(turnContent, turnReasoningContent, {
 					patterns: patternList,
 					availableTools: toolsStore.allTools.map((t) => ({ name: t.definition.function.name }))
 				});
+
 				if (parsed.length > 0) {
 					turnToolCalls = createApiToolCalls(parsed);
 				}

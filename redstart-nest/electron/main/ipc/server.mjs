@@ -14,6 +14,7 @@ import { startGateway, stopGateway, getGatewayPort } from '../tools-gateway.mjs'
 import { startMcpServer, stopMcpServer, getMcpServerRunning } from '../mcp-server.mjs'
 import { startMdnsAdvertiser, stopMdnsAdvertiser } from '../mdns-advertiser.mjs'
 import { startPort80Proxy, stopPort80Proxy } from '../port80-proxy.mjs'
+import { syncFilesystemProvider, stopFilesystemProvider } from '../filesystem-mcp-provider.mjs'
 import { logEvent } from '../logger.mjs'
 
 // EMA smoothing factor for the tokens/sec readout (moved here with its sole
@@ -29,6 +30,7 @@ export function registerServerHandlers({
   buildGatewayConfig,
   ensureFirewallRule,
   getLocalIp,
+  userDataDir,
 }) {
   // --- Llama command preview ---
 
@@ -120,6 +122,12 @@ export function registerServerHandlers({
         console.warn('MCP server failed to start:', err.message)
       }
 
+      // File System capability's child process — fire-and-forget, since spawn
+      // + MCP handshake takes a moment and this handler already returned
+      // success for the llama-server launch itself.
+      syncFilesystemProvider(gwConfig.fileSystem, path.join(userDataDir, 'mcp-fs-logs'))
+        .catch((err) => console.warn('[filesystem-mcp-provider] sync failed:', err.message))
+
       // Log the port only — never the model path or other config (privacy).
       logEvent('server', 'model_started', { port: config.port, networkMode: !!config.networkMode })
       return { success: true, pid: child.pid }
@@ -133,6 +141,7 @@ export function registerServerHandlers({
   ipcMain.handle('server:stop', async () => {
     stopGateway()
     stopMcpServer()
+    stopFilesystemProvider()
     stopMdnsAdvertiser()
     stopPort80Proxy()
     if (!serverState.process) return { success: true }

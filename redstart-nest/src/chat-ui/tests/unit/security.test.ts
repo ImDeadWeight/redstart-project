@@ -417,300 +417,126 @@ describe('auth.mjs — sessions and roles', () => {
 })
 
 // ---------------------------------------------------------------------------
-// fs-tool.mjs — file system capability
+// filesystem-mcp-provider.mjs — File System capability containment gate
 // ---------------------------------------------------------------------------
+// The File System capability is served by @modelcontextprotocol/server-filesystem
+// as a stdio child; tool behavior is covered end-to-end at the service boundary
+// by scripts/test-mcp-capabilities.mjs + test-provider-conformance.mjs. What is
+// unit-tested here is OUR half of the defense-in-depth: containmentError, the
+// gate every path argument passes through before a call reaches the child.
 
-describe('fs-tool', () => {
+describe('filesystem provider containment gate', () => {
   let rootDir: string
 
   beforeEach(() => {
     rootDir = join(TEST_DIR, 'workspace')
     mkdirSync(rootDir, { recursive: true })
     mkdirSync(join(rootDir, 'src'), { recursive: true })
-    mkdirSync(join(rootDir, 'docs'), { recursive: true })
-    writeFileSync(join(rootDir, 'README.md'), `# Hello\n\nThis is a test file.\n`.repeat(500))
-    writeFileSync(join(rootDir, 'src', 'index.ts'), 'export const x = 1;\n')
-    writeFileSync(join(rootDir, 'docs', 'notes.txt'), 'Some notes here.\n')
+    writeFileSync(join(rootDir, 'README.md'), '# Hello\n')
   })
 
-  async function callTool(name: string, args: Record<string, unknown>, cfg = { fileSystem: { enabled: true, rootDir } }) {
-    const { callTool: call } = await import('$lib/../../../../electron/main/fs-tool.mjs')
-    return call(name, args, cfg)
+  async function gate(args: Record<string, unknown>, root = rootDir) {
+    const { containmentError } = await import('$lib/../../../../electron/main/filesystem-mcp-provider.mjs')
+    return containmentError(root, args)
   }
 
-  describe('toolDefs', () => {
-    it('returns no tools when disabled', async () => {
-      const { toolDefs } = await import('$lib/../../../../electron/main/fs-tool.mjs')
-      expect(toolDefs({ fileSystem: { enabled: false } })).toEqual([])
+  describe('contained paths pass', () => {
+    it('allows a relative path inside the root', async () => {
+      expect(await gate({ path: 'README.md' })).toBeNull()
     })
 
-    it('returns 8 tools when enabled', async () => {
-      const { toolDefs } = await import('$lib/../../../../electron/main/fs-tool.mjs')
-      const defs = toolDefs({ fileSystem: { enabled: true, rootDir } })
-      expect(defs).toHaveLength(8)
-      expect(defs.map(d => d.name)).toEqual([
-        'fs_read_file',
-        'fs_write_file',
-        'fs_edit_file',
-        'fs_list_directory',
-        'fs_search_files',
-        'fs_get_file_info',
-        'fs_create_directory',
-        'fs_delete_file',
-      ])
+    it('allows nested relative paths', async () => {
+      expect(await gate({ path: 'src/index.ts' })).toBeNull()
     })
 
-    it('each tool has name, description, and inputSchema', async () => {
-      const { toolDefs } = await import('$lib/../../../../electron/main/fs-tool.mjs')
-      const defs = toolDefs({ fileSystem: { enabled: true, rootDir } })
-      for (const def of defs) {
-        expect(def.name).toBeTruthy()
-        expect(def.description).toBeTruthy()
-        expect(def.inputSchema).toEqual({ type: 'object', properties: expect.any(Object), required: expect.any(Array) })
+    it('allows an absolute path inside the root', async () => {
+      expect(await gate({ path: join(rootDir, 'README.md') })).toBeNull()
+    })
+
+    it('allows a paths array where every entry is contained', async () => {
+      expect(await gate({ paths: ['README.md', 'src/index.ts'] })).toBeNull()
+    })
+
+    it('ignores non-path arguments entirely', async () => {
+      expect(await gate({ content: '../../etc/passwd', pattern: 'C:/Windows', dryRun: true })).toBeNull()
+    })
+
+    it('ignores non-string values under path keys', async () => {
+      expect(await gate({ path: 42, source: null, paths: [7, true] })).toBeNull()
+    })
+
+    it('returns null for missing or non-object args', async () => {
+      expect(await gate(null as unknown as Record<string, unknown>)).toBeNull()
+      expect(await gate(undefined as unknown as Record<string, unknown>)).toBeNull()
+    })
+  })
+
+  describe('escapes are blocked', () => {
+    async function expectBlocked(args: Record<string, unknown>) {
+      const result = await gate(args)
+      expect(result).not.toBeNull()
+      expect(result!.isError).toBe(true)
+      expect(result!.content[0].text).toContain('outside')
+    }
+
+    it('blocks ../ traversal in path', async () => {
+      await expectBlocked({ path: '../../etc/passwd' })
+    })
+
+    it('blocks traversal hidden mid-path', async () => {
+      await expectBlocked({ path: 'src/../../outside.txt' })
+    })
+
+    it('blocks absolute paths outside the root', async () => {
+      await expectBlocked({ path: join(TEST_DIR, 'outside-root', 'file.txt') })
+    })
+
+    // Drive-qualification is a Windows concept. path.resolve treats "C:/..." as
+    // absolute there, so it escapes the root and must be refused. On POSIX a
+    // colon is an ordinary filename character, so the identical string is a
+    // relative path that genuinely lives inside the root — asserting a block
+    // there would be asserting a bug. Production is Windows and CI is Linux, so
+    // both halves are pinned rather than skipping one platform.
+    it('refuses a drive-qualified path on win32, treats it as contained on posix', async () => {
+      const args = { path: 'C:/Windows/system.ini' }
+      if (process.platform === 'win32') {
+        await expectBlocked(args)
+      } else {
+        expect(await gate(args)).toBeNull()
       }
     })
-  })
 
-  describe('fs_read_file', () => {
-    it('reads a file within the root', async () => {
-      const result = await callTool('fs_read_file', { path: 'README.md' })
-      expect(result.isError).toBeFalsy()
-      expect(result.content[0].text).toContain('# Hello')
+    it('blocks escapes via move_file source and destination', async () => {
+      await expectBlocked({ source: '../../etc/passwd', destination: 'copy.txt' })
+      await expectBlocked({ source: 'README.md', destination: '../../exfil.txt' })
     })
 
-    it('rejects paths outside the root', async () => {
-      const result = await callTool('fs_read_file', { path: '../../etc/passwd' })
-      expect(result.isError).toBe(true)
-      expect(result.content[0].text).toContain('outside')
+    it('blocks a paths array where any one entry escapes', async () => {
+      await expectBlocked({ paths: ['README.md', '../../etc/passwd'] })
     })
 
-    it('rejects missing files', async () => {
-      const result = await callTool('fs_read_file', { path: 'nonexistent.txt' })
-      expect(result.isError).toBe(true)
-    })
-
-    it('rejects missing path argument', async () => {
-      const result = await callTool('fs_read_file', {})
-      expect(result.isError).toBe(true)
-      expect(result.content[0].text).toContain('Missing required argument')
-    })
-
-    it('truncates long files with pagination hint', async () => {
-      const result = await callTool('fs_read_file', { path: 'README.md' })
-      expect(result.isError).toBeFalsy()
-      expect(result.content[0].text).toContain('showing first')
-    })
-  })
-
-  describe('fs_write_file', () => {
-    it('creates a new file', async () => {
-      const result = await callTool('fs_write_file', { path: 'newfile.txt', content: 'hello world' })
-      expect(result.isError).toBeFalsy()
-      expect(result.content[0].text).toContain('Written to')
-      expect(readFileSync(join(rootDir, 'newfile.txt'), 'utf8')).toBe('hello world')
-    })
-
-    it('overwrites existing files', async () => {
-      const result = await callTool('fs_write_file', { path: 'README.md', content: 'REPLACED' })
-      expect(result.isError).toBeFalsy()
-      expect(readFileSync(join(rootDir, 'README.md'), 'utf8')).toBe('REPLACED')
-    })
-
-    it('creates parent directories', async () => {
-      const result = await callTool('fs_write_file', { path: 'deep/nested/file.txt', content: 'nested' })
-      expect(result.isError).toBeFalsy()
-      expect(existsSync(join(rootDir, 'deep', 'nested', 'file.txt'))).toBe(true)
-    })
-
-    it('rejects paths outside the root', async () => {
-      const result = await callTool('fs_write_file', { path: '../../outside.txt', content: 'bad' })
-      expect(result.isError).toBe(true)
-    })
-
-    it('rejects binary extensions', async () => {
-      const result = await callTool('fs_write_file', { path: 'malware.exe', content: 'fake exe' })
-      expect(result.isError).toBe(true)
-    })
-
-    it('rejects missing arguments', async () => {
-      const result = await callTool('fs_write_file', { path: 'test.txt' })
-      expect(result.isError).toBe(true)
-    })
-  })
-
-  describe('fs_edit_file', () => {
-    it('replaces a string exactly once', async () => {
-      writeFileSync(join(rootDir, 'README.md'), 'UNIQUE_MARKER placeholder text\n')
-      const result = await callTool('fs_edit_file', { path: 'README.md', find: 'UNIQUE_MARKER', replace: 'REPLACED' })
-      expect(result.isError).toBeFalsy()
-      expect(result.content[0].text).toContain('Edited 1 occurrence')
-      expect(readFileSync(join(rootDir, 'README.md'), 'utf8')).toContain('REPLACED')
-    })
-
-    it('rejects when string appears multiple times', async () => {
-      const result = await callTool('fs_edit_file', { path: 'README.md', find: 'test', replace: 'X' })
-      expect(result.isError).toBe(true)
-      expect(result.content[0].text).toContain('appears')
-    })
-
-    it('rejects when string not found', async () => {
-      const result = await callTool('fs_edit_file', { path: 'README.md', find: 'ZZZNONE', replace: 'X' })
-      expect(result.isError).toBe(true)
-    })
-
-    it('rejects paths outside the root', async () => {
-      const result = await callTool('fs_edit_file', { path: '../../etc/hostname', find: 'x', replace: 'y' })
-      expect(result.isError).toBe(true)
-    })
-  })
-
-  describe('fs_list_directory', () => {
-    it('lists root directory', async () => {
-      const result = await callTool('fs_list_directory', {})
-      expect(result.isError).toBeFalsy()
-      expect(result.content[0].text).toContain('README.md')
-      expect(result.content[0].text).toContain('src/')
-      expect(result.content[0].text).toContain('docs/')
-    })
-
-    it('lists subdirectory', async () => {
-      const result = await callTool('fs_list_directory', { path: 'src' })
-      expect(result.isError).toBeFalsy()
-      expect(result.content[0].text).toContain('index.ts')
-    })
-
-    it('rejects paths outside the root', async () => {
-      const result = await callTool('fs_list_directory', { path: '../../' })
-      expect(result.isError).toBe(true)
-    })
-  })
-
-  describe('fs_search_files', () => {
-    it('finds files by name substring', async () => {
-      const result = await callTool('fs_search_files', { pattern: '.md' })
-      expect(result.isError).toBeFalsy()
-      expect(result.content[0].text).toContain('README.md')
-    })
-
-    it('finds files by path substring', async () => {
-      const result = await callTool('fs_search_files', { pattern: 'src' })
-      expect(result.isError).toBeFalsy()
-      expect(result.content[0].text).toContain('src')
-      expect(result.content[0].text).toContain('index.ts')
-    })
-
-    it('returns empty for no matches', async () => {
-      const result = await callTool('fs_search_files', { pattern: 'ZZZNOMATCH' })
-      expect(result.isError).toBeFalsy()
-      expect(result.content[0].text).toContain('No files matching')
-    })
-
-    it('requires pattern argument', async () => {
-      const result = await callTool('fs_search_files', {})
-      expect(result.isError).toBe(true)
-    })
-  })
-
-  describe('fs_get_file_info', () => {
-    it('returns metadata for a file', async () => {
-      const result = await callTool('fs_get_file_info', { path: 'README.md' })
-      expect(result.isError).toBeFalsy()
-      const info = JSON.parse(result.content[0].text)
-      expect(info.type).toBe('file')
-      expect(info.size).toBeGreaterThan(0)
-      expect(info.path).toBe('README.md')
-    })
-
-    it('returns metadata for a directory', async () => {
-      const result = await callTool('fs_get_file_info', { path: 'src' })
-      expect(result.isError).toBeFalsy()
-      const info = JSON.parse(result.content[0].text)
-      expect(info.type).toBe('directory')
-    })
-
-    it('rejects paths outside the root', async () => {
-      const result = await callTool('fs_get_file_info', { path: '../../etc' })
-      expect(result.isError).toBe(true)
-    })
-  })
-
-  describe('fs_create_directory', () => {
-    it('creates a new directory', async () => {
-      const result = await callTool('fs_create_directory', { path: 'newdir' })
-      expect(result.isError).toBeFalsy()
-      expect(result.content[0].text).toContain('Created directory')
-      expect(statSync(join(rootDir, 'newdir')).isDirectory()).toBe(true)
-    })
-
-    it('creates nested directories', async () => {
-      const result = await callTool('fs_create_directory', { path: 'a/b/c' })
-      expect(result.isError).toBeFalsy()
-      expect(statSync(join(rootDir, 'a', 'b', 'c')).isDirectory()).toBe(true)
-    })
-
-    it('rejects existing paths', async () => {
-      const result = await callTool('fs_create_directory', { path: 'src' })
-      expect(result.isError).toBe(true)
-    })
-
-    it('rejects paths outside the root', async () => {
-      const result = await callTool('fs_create_directory', { path: '../../outside' })
-      expect(result.isError).toBe(true)
-    })
-  })
-
-  describe('fs_delete_file', () => {
-    it('deletes a file', async () => {
-      const result = await callTool('fs_delete_file', { path: 'docs/notes.txt' })
-      expect(result.isError).toBeFalsy()
-      expect(result.content[0].text).toContain('Deleted')
-      expect(existsSync(join(rootDir, 'docs', 'notes.txt'))).toBe(false)
-    })
-
-    it('deletes an empty directory', async () => {
-      mkdirSync(join(rootDir, 'emptydir'))
-      const result = await callTool('fs_delete_file', { path: 'emptydir' })
-      expect(result.isError).toBeFalsy()
-      expect(existsSync(join(rootDir, 'emptydir'))).toBe(false)
-    })
-
-    it('refuses to delete non-empty directories', async () => {
-      const result = await callTool('fs_delete_file', { path: 'src' })
-      expect(result.isError).toBe(true)
-      expect(result.content[0].text).toContain('not empty')
-    })
-
-    it('rejects missing files', async () => {
-      const result = await callTool('fs_delete_file', { path: 'nonexistent.txt' })
-      expect(result.isError).toBe(true)
-    })
-
-    it('rejects paths outside the root', async () => {
-      const result = await callTool('fs_delete_file', { path: '../../etc/passwd' })
-      expect(result.isError).toBe(true)
-    })
-  })
-
-  describe('path containment', () => {
-    it('blocks absolute paths', async () => {
-      const outsidePath = join(TEST_DIR, 'outside-root', 'file.txt')
-      const result = await callTool('fs_read_file', { path: outsidePath })
-      expect(result.isError).toBe(true)
-    })
-
-    it('blocks Windows drive-qualified paths', async () => {
-      const result = await callTool('fs_read_file', { path: 'C:/Windows/system.ini' })
-      expect(result.isError).toBe(true)
+    it('reports every offending path in the error text', async () => {
+      const result = await gate({ source: '../a.txt', destination: '../b.txt' })
+      expect(result).not.toBeNull()
+      expect(result!.isError).toBe(true)
+      expect(result!.content[0].text).toContain('../a.txt')
+      expect(result!.content[0].text).toContain('../b.txt')
     })
 
     it('blocks symlink escape (if symlink exists)', async () => {
+      mkdirSync(join(TEST_DIR, 'outside-symlink'), { recursive: true })
       try {
         symlinkSync(join(TEST_DIR, 'outside-symlink'), join(rootDir, 'symlink-out'))
       } catch {
-        return
+        return // symlink creation needs privileges on some Windows setups
       }
-      const result = await callTool('fs_read_file', { path: 'symlink-out/README.md' })
-      expect(result.isError).toBe(true)
+      await expectBlocked({ path: 'symlink-out/README.md' })
+    })
+  })
+
+  describe('config faults throw (setup error, not treated as attack)', () => {
+    it('throws when no root is configured', async () => {
+      await expect(gate({ path: 'README.md' }, null as unknown as string)).rejects.toThrow()
     })
   })
 })
@@ -766,6 +592,9 @@ describe('gateway /files/download endpoint', () => {
     const gw = await import('$lib/../../../../electron/main/tools-gateway.mjs')
     await gw.startGateway(TEST_PORT, {
       fileSystem: { enabled: true, rootDir: join(TEST_DIR, 'workspace') },
+      // Documents has its own root: create_document writes here, and a browser
+      // client must be able to download what it produced.
+      documents: { enabled: true, outputDir: join(TEST_DIR, 'docs-out') },
       webFetch: { enabled: false },
     })
     gatewayPort = gw.getGatewayPort(TEST_PORT)!
@@ -788,6 +617,10 @@ describe('gateway /files/download endpoint', () => {
     const workspace = join(TEST_DIR, 'workspace')
     mkdirSync(workspace, { recursive: true })
     writeFileSync(join(workspace, 'README.md'), '# Hello\n\nThis is a test file.\n')
+
+    const docsOut = join(TEST_DIR, 'docs-out')
+    mkdirSync(docsOut, { recursive: true })
+    writeFileSync(join(docsOut, 'purchase-log.md'), '# Purchase Log\n\nCreated by create_document.\n')
   })
 
   async function authFetch(path: string): Promise<Response> {
@@ -818,6 +651,21 @@ describe('gateway /files/download endpoint', () => {
     expect(res.headers.get('content-disposition')).toContain('README.md')
     const text = await res.text()
     expect(text).toContain('# Hello')
+  })
+
+  // A document created by create_document lives under the documents root, not
+  // the file-system root. Serving only the latter made every created document
+  // undownloadable from a browser client.
+  it('streams a file from the documents folder', async () => {
+    const res = await authFetch('/files/download?path=purchase-log.md')
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-disposition')).toContain('purchase-log.md')
+    expect(await res.text()).toContain('Created by create_document')
+  })
+
+  it('404s a contained path with no file behind it', async () => {
+    const res = await authFetch('/files/download?path=no-such-file.md')
+    expect(res.status).toBe(404)
   })
 })
 

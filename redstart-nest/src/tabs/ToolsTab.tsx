@@ -39,6 +39,25 @@ function capDir(caps: ReturnType<typeof useCapabilities>, cap: FolderCap): strin
   return cap === 'documents' ? cc.documents.outputDir : cc[cap].rootDir
 }
 
+// Mirrors the *Wanted checks in buildGatewayConfig: a capability only produces
+// tools when it is enabled AND has whatever it needs to run (a folder, or a
+// connection string). Selecting one for a profile without that setup is the
+// silent-no-op case this warns about.
+type CapabilityConfig = ReturnType<typeof useCapabilities>['capabilityConfig']
+function isCapabilityReady(cc: CapabilityConfig, id: string): boolean {
+  if (!cc) return false
+  switch (id) {
+    case 'postgres': return cc.postgres.enabled && cc.postgres.hasConnectionString
+    case 'documents': return cc.documents.enabled && !!cc.documents.outputDir
+    case 'scholar': return cc.scholar.enabled
+    case 'sqlite':
+    case 'vault':
+    case 'git':
+    case 'file_system': return cc[id].enabled && !!cc[id].rootDir
+    default: return true
+  }
+}
+
 function FolderCapabilityCard({ caps, cap, title, emptyText, description }: {
   caps: ReturnType<typeof useCapabilities>
   cap: FolderCap
@@ -71,8 +90,11 @@ function FolderCapabilityCard({ caps, cap, title, emptyText, description }: {
         )}
       </div>
 
-      {/* File System is the one read/write/delete capability, so it carries a
-          server-enforced permission policy. Deletes are off by default. */}
+      {/* File System is the one read/write capability, so it carries a
+          server-enforced permission policy. The current server
+          (@modelcontextprotocol/server-filesystem) exposes no delete tool, so
+          the destructive toggle is reserved: it pre-gates any future
+          destructive-class file tool but currently changes nothing. */}
       {cap === 'file_system' && dir && caps.capabilityConfig && (
         <div className="mt-2 pt-2 border-t border-zinc-700/50 space-y-2">
           <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
@@ -88,8 +110,8 @@ function FolderCapabilityCard({ caps, cap, title, emptyText, description }: {
           </label>
           <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
             <span className="min-w-0">
-              <span className="text-xs text-zinc-300">Allow file deletion</span>
-              <span className="block text-xs text-zinc-600">Let the model delete files (fs_delete_file). Off by default.</span>
+              <span className="text-xs text-zinc-300">Allow destructive operations</span>
+              <span className="block text-xs text-zinc-600">Reserved: the current file server has no delete tool, so this gates nothing yet. If a future update adds one, it stays blocked until this is on.</span>
             </span>
             <TogglePill
               checked={!!caps.capabilityConfig.file_system.allowDestructive}
@@ -98,7 +120,7 @@ function FolderCapabilityCard({ caps, cap, title, emptyText, description }: {
             />
           </label>
           {caps.capabilityConfig.file_system.allowDestructive && (
-            <p className="text-xs text-yellow-500/90">⚠ The model can permanently delete files within the chosen folder.</p>
+            <p className="text-xs text-yellow-500/90">⚠ If a future file server adds destructive tools, the model will be allowed to use them within the chosen folder.</p>
           )}
         </div>
       )}
@@ -285,6 +307,36 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
                     </label>
                     {!tool.builtIn && (
                       <button onClick={() => deleteCustomTool(tool.id)} className="text-xs text-zinc-600 hover:text-red-400 transition-colors flex-shrink-0 px-1">✕</button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Local capabilities are per-profile just like web sources: the
+                gateway only activates one when this profile's activeToolIds
+                contains it AND it is configured+enabled in the cards below
+                (see buildGatewayConfig). Without this list there was no way to
+                satisfy the first half, so a configured capability stayed dark. */}
+            <p className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Local Capabilities</p>
+            <div className="space-y-1.5 mb-4">
+              {allTools.filter(t => t.kind === 'capability').map(tool => {
+                const active = config.tools?.activeToolIds?.includes(tool.id) ?? false
+                const ready = isCapabilityReady(capabilityConfig, tool.id)
+                return (
+                  <div key={tool.id}>
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input type="checkbox" checked={active}
+                        onChange={() => toggleTool(tool.id)} className="accent-orange-500" />
+                      <span className="text-sm text-zinc-200">{tool.name}</span>
+                      {active && !ready && (
+                        <span className="text-xs text-yellow-500/90">needs setup below</span>
+                      )}
+                    </label>
+                    {active && !ready && (
+                      <p className="text-xs text-zinc-600 ml-6">
+                        Selected for this profile, but not yet enabled with a folder/connection below — the model will not see its tools.
+                      </p>
                     )}
                   </div>
                 )

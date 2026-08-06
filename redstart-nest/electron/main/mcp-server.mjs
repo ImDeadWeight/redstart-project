@@ -26,12 +26,23 @@ import * as documentsTool from './documents-tool.mjs'
 import * as sqliteTool from './sqlite-tool.mjs'
 import * as vaultTool from './vault-tool.mjs'
 import * as gitTool from './git-tool.mjs'
-import * as fsTool from './fs-tool.mjs'
+import * as filesystemProvider from './filesystem-mcp-provider.mjs'
 import * as scholarTool from './scholar-tool.mjs'
 import { classifyTool, CAPABILITY_TOOL_NAMES } from './tools-definitions.mjs'
 import { logEvent } from './logger.mjs'
 
-const PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, fsTool, scholarTool]
+// File System is served by the official @modelcontextprotocol/server-filesystem,
+// spawned as a stdio child (filesystem-mcp-provider.mjs) — standard tool names
+// (write_file, read_text_file, ...) that local models call far more reliably
+// than the old bespoke fs_* schema. Its child-process lifecycle is driven from
+// the server IPC handlers; here it's just another provider in the merge/route
+// loop below.
+const PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, scholarTool]
+
+// Request headers a browser MCP client may send. Exported so the contract suite
+// can assert the preflight against the same list the server answers with.
+export const ALLOWED_CORS_HEADERS =
+  'Content-Type, Authorization, mcp-protocol-version, mcp-session-id, last-event-id'
 
 // ---------------------------------------------------------------------------
 // Permission gate — server-side, non-bypassable enforcement of the per-class
@@ -164,7 +175,16 @@ export function startMcpServer(port, config) {
       res.writeHead(204, {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        // MCP clients send protocol headers alongside Content-Type/Authorization
+        // (the SDK's SSE transport sets mcp-protocol-version on every POST;
+        // Streamable HTTP adds mcp-session-id and last-event-id). A browser
+        // preflight fails the whole request if any requested header is missing
+        // here, so omitting them made the server unreachable from any browser
+        // client while node-based callers — which do no preflight — worked fine.
+        'Access-Control-Allow-Headers': ALLOWED_CORS_HEADERS,
+        // Streamable HTTP assigns the session id via a response header; a
+        // cross-origin client cannot read it unless it is exposed.
+        'Access-Control-Expose-Headers': 'mcp-session-id',
         'Access-Control-Max-Age': '86400',
       })
       res.end()
@@ -190,7 +210,13 @@ export function startMcpServer(port, config) {
       })
       const send = (data) => sseEvent(res, 'message', data)
       sessions.set(sessionId, { send, account: authResult.account })
-      res.write(`event: endpoint\ndata: ${JSON.stringify('/message?sessionId=' + sessionId)}\n\n`)
+      // The endpoint event carries the raw URI, NOT a JSON string (MCP
+      // 2024-11-05 SSE transport). JSON.stringify here emitted
+      // data: "/message?sessionId=..." — quotes included — and a spec-compliant
+      // client (the MCP SDK) uses that verbatim, producing a POST to
+      // /"/message?sessionId=..." that 404s. Every real connection failed while
+      // our own test client, which JSON.parsed the value back, saw nothing wrong.
+      res.write(`event: endpoint\ndata: /message?sessionId=${sessionId}\n\n`)
       req.on('close', () => sessions.delete(sessionId))
       return
     }

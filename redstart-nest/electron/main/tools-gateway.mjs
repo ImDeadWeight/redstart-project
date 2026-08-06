@@ -36,9 +36,21 @@ let activeConfig = null
 // System context injection
 // ---------------------------------------------------------------------------
 
-function buildSystemContext(config) {
+// `hasTools` = the request actually carries tool definitions.
+//
+// Capability claims below are only TRUE when it does. Whether a tool is
+// reachable is decided by the client (it owns the MCP connection), not by this
+// config — an admin can have Documents enabled here while the client sends no
+// tools at all. Claiming "you have access to create_document" in that state
+// teaches the model to invent a call format for a tool it cannot reach: it
+// emits a plausible-looking blob, nothing executes, and it reports success for
+// work that never happened. Identity is always safe to state; capabilities are
+// conditional on the plumbing actually being there.
+function buildSystemContext(config, hasTools) {
   const base = 'You are a local AI assistant running inside Redstart — a private, on-premises AI system. Your conversations stay on the local network and do not leave the building.'
   const parts = [base]
+
+  if (!hasTools) return parts.join('\n\n')
 
   const tools = config?.webFetch?.activeTools
   if (tools?.length) {
@@ -61,8 +73,8 @@ function buildSystemContext(config) {
   return parts.join('\n\n')
 }
 
-function injectSystemContext(messages, config) {
-  const context = buildSystemContext(config)
+function injectSystemContext(messages, config, hasTools) {
+  const context = buildSystemContext(config, hasTools)
   const sysIdx = messages.findIndex(m => m.role === 'system')
   if (sysIdx >= 0) {
     messages[sysIdx] = { ...messages[sysIdx], content: `${context}\n\n${messages[sysIdx].content}` }
@@ -482,7 +494,7 @@ export function startGateway(publicPort, config) {
         return
       }
 
-      // Serve files created by the File System capability (fs_write_file, etc.)
+      // Serve files created by the File System capability (write_file, etc.)
       // Auth + path containment enforced — the resolved path must stay within the
       // configured fileSystem.rootDir, same as the MCP provider.
       if (req.method === 'GET' && urlPath === '/files/download') {
@@ -493,10 +505,18 @@ export function startGateway(publicPort, config) {
           return
         }
 
-        const fsRoot = activeConfig?.fileSystem?.rootDir
-        if (!fsRoot) {
+        // Two capabilities write files a client may need to fetch: File System
+        // (write_file) and Documents (create_document). Each has its own root
+        // and neither is a subpath of the other, so try both — containment is
+        // still enforced per-root by resolveWithinRoot.
+        const servedRoots = [
+          activeConfig?.fileSystem?.rootDir,
+          activeConfig?.documents?.outputDir,
+        ].filter(Boolean)
+
+        if (servedRoots.length === 0) {
           res.writeHead(404, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
-          res.end(JSON.stringify({ error: { message: 'File system capability is not configured', type: 'not_found' } }))
+          res.end(JSON.stringify({ error: { message: 'No file-serving capability is configured', type: 'not_found' } }))
           return
         }
 
@@ -508,16 +528,32 @@ export function startGateway(publicPort, config) {
           return
         }
 
-        let fullPath
-        try {
-          fullPath = resolveWithinRoot(fsRoot, relPath)
-        } catch {
+        // A path that escapes EVERY root is a containment violation (403); one
+        // that resolves inside a root but has no file there is simply missing
+        // (404). Keeping those distinct preserves the endpoint's contract.
+        let fullPath = null
+        let containedInSomeRoot = false
+        for (const root of servedRoots) {
+          let candidate
+          try {
+            candidate = resolveWithinRoot(root, relPath)
+          } catch {
+            continue // outside this root — try the next
+          }
+          containedInSomeRoot = true
+          if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+            fullPath = candidate
+            break
+          }
+        }
+
+        if (!containedInSomeRoot) {
           res.writeHead(403, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
-          res.end(JSON.stringify({ error: { message: 'Path is outside the configured file system root', type: 'forbidden' } }))
+          res.end(JSON.stringify({ error: { message: 'Path is outside the configured file roots', type: 'forbidden' } }))
           return
         }
 
-        if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+        if (!fullPath) {
           res.writeHead(404, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
           res.end(JSON.stringify({ error: { message: 'File not found', type: 'not_found' } }))
           return
@@ -554,7 +590,8 @@ export function startGateway(publicPort, config) {
           return
         }
 
-        parsed.messages = injectSystemContext([...(parsed.messages || [])], activeConfig)
+        const requestHasTools = Array.isArray(parsed.tools) && parsed.tools.length > 0
+        parsed.messages = injectSystemContext([...(parsed.messages || [])], activeConfig, requestHasTools)
         parsed = enforceToolAllowList(parsed, activeConfig)
 
         try {

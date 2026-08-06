@@ -53,18 +53,23 @@ const MUTATING = new Set(['write', 'destructive'])
 
 console.log('\n-- tool classification (permission-gate foundation) --')
 
-await test('the known destructive op (fs_delete_file) is classified destructive', async () => {
-  assert(classifyTool('fs_delete_file') === 'destructive', `got ${classifyTool('fs_delete_file')}`)
+await test('the File System provider exposes no destructive tool (upstream server-filesystem has no delete)', async () => {
+  // @modelcontextprotocol/server-filesystem ships no delete tool, so file_system
+  // currently has no 'destructive'-class tool. allowDestructive is reserved for a
+  // future delete tool (see DEFAULT_CAPABILITIES.file_system). If a destructive fs
+  // tool is later added, classify it AND revisit this assertion.
+  const destructive = CAPABILITY_TOOL_NAMES.file_system.filter(t => classifyTool(t) === 'destructive')
+  assert(destructive.length === 0, `expected no destructive fs tool, got ${JSON.stringify(destructive)}`)
 })
 
 await test('the known write ops are classified write', async () => {
-  for (const t of ['fs_write_file', 'fs_edit_file', 'fs_create_directory', 'create_document', 'scholar_save_pdf']) {
+  for (const t of ['write_file', 'edit_file', 'create_directory', 'move_file', 'create_document', 'scholar_save_pdf']) {
     assert(classifyTool(t) === 'write', `${t} classified ${classifyTool(t)}, expected write`)
   }
 })
 
 await test('read-only tools are classified read (not accidentally elevated)', async () => {
-  for (const t of ['fs_read_file', 'fs_list_directory', 'sqlite_query', 'postgres_query', 'vault_get', 'git_diff']) {
+  for (const t of ['read_text_file', 'list_directory', 'sqlite_query', 'postgres_query', 'vault_get', 'git_diff']) {
     assert(classifyTool(t) === 'read', `${t} classified ${classifyTool(t)}, expected read`)
   }
 })

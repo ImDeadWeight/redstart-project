@@ -7,8 +7,13 @@
  */
 
 import { detectMcpTransportFromUrl } from '$lib/utils';
+import { getAuthHeaders } from '$lib/utils/api-headers';
 import { MCPTransportType } from '$lib/enums';
-import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants';
+import {
+	DEFAULT_MCP_CONFIG,
+	MCP_SERVER_ID_PREFIX,
+	NEST_MCP_SERVER_ID_PREFIX
+} from '$lib/constants';
 import type {
 	MCPClientConfig,
 	MCPServerConfig,
@@ -95,6 +100,11 @@ export function parseServerSettings(rawServers: unknown): MCPServerSettingsEntry
 	});
 }
 
+/** True for servers provisioned by the Redstart Nest host, not user-added. */
+export function isNestProvisionedServer(entry: { id: string }): boolean {
+	return entry.id.startsWith(NEST_MCP_SERVER_ID_PREFIX);
+}
+
 /**
  * Builds server configuration from a settings entry.
  */
@@ -126,6 +136,17 @@ export function buildServerConfig(
 		} catch {
 			console.warn('[MCP] Failed to parse custom headers JSON:', entry.headers);
 		}
+	}
+
+	// Host-provisioned servers sit behind the same auth as the rest of the Nest
+	// API (the MCP endpoint 401s without a token), and this client is already
+	// authenticated to that host — so carry the session header or the connection
+	// is rejected before the handshake. Deliberately scoped to the `redstart-`
+	// prefix: a user-added third-party server must never receive this
+	// deployment's bearer token. An explicit custom header still wins.
+	if (isNestProvisionedServer(entry)) {
+		const auth = getAuthHeaders();
+		if (auth.Authorization) headers = { ...auth, ...headers };
 	}
 
 	return {
@@ -227,7 +248,7 @@ export function mergeNestServers(
 	existing: MCPServerSettingsEntry[],
 	nestEntries: MCPServerSettingsEntry[]
 ): MCPServerSettingsEntry[] {
-	const localEntries = existing.filter((s) => !s.id.startsWith('redstart-'));
+	const localEntries = existing.filter((s) => !isNestProvisionedServer(s));
 	return [...nestEntries, ...localEntries];
 }
 

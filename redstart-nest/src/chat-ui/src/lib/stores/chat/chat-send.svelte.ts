@@ -391,7 +391,12 @@ export class ChatSendController {
 			}
 		};
 
-		const perChatOverrides = conversationsStore.activeConversation?.mcpServerOverrides;
+		// Must go through getAllMcpServerOverrides, not the conversation's raw
+		// array: a conversation that never chose has no entry, and reading the
+		// array directly hides the saved defaults — which is how every
+		// host-provisioned server ended up disabled on the one path that decides
+		// whether tools reach the model.
+		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
 
 		{
 			const agenticResult = await agenticStore.runAgenticFlow({

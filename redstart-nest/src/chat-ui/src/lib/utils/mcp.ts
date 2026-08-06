@@ -36,15 +36,35 @@ import type { MimeTypeUnion } from '$lib/types/common';
 
 /**
  * Detects the MCP transport type from a URL.
- * WebSocket URLs (ws:// or wss://) use 'websocket', others use 'streamable_http'.
+ *
+ * WebSocket URLs (ws:// or wss://) use 'websocket'. A path ending in `/sse` is
+ * the conventional endpoint of the two-endpoint SSE transport (MCP 2024-11-05:
+ * GET /sse to open the stream, POST /message to send), which the Redstart
+ * built-in server implements — and which is NOT compatible with Streamable
+ * HTTP, where the same path is POSTed to directly. Misreading one for the other
+ * produces a 404 on connect with no other symptom. Everything else defaults to
+ * 'streamable_http'.
  */
 export function detectMcpTransportFromUrl(url: string): MCPTransportType {
 	const normalized = url.trim().toLowerCase();
 
-	return normalized.startsWith(UrlProtocol.WEBSOCKET) ||
+	if (
+		normalized.startsWith(UrlProtocol.WEBSOCKET) ||
 		normalized.startsWith(UrlProtocol.WEBSOCKET_SECURE)
-		? MCPTransportType.WEBSOCKET
-		: MCPTransportType.STREAMABLE_HTTP;
+	) {
+		return MCPTransportType.WEBSOCKET;
+	}
+
+	// Compare on the path only, so a query string or fragment doesn't hide it.
+	let path = normalized;
+	try {
+		path = new URL(normalized).pathname;
+	} catch {
+		/* not absolute — fall back to matching the raw string */
+	}
+	if (path.endsWith('/sse')) return MCPTransportType.SSE;
+
+	return MCPTransportType.STREAMABLE_HTTP;
 }
 
 /**
