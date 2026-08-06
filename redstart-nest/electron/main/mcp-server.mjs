@@ -39,6 +39,11 @@ import { logEvent } from './logger.mjs'
 // loop below.
 const PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, scholarTool]
 
+// Request headers a browser MCP client may send. Exported so the contract suite
+// can assert the preflight against the same list the server answers with.
+export const ALLOWED_CORS_HEADERS =
+  'Content-Type, Authorization, mcp-protocol-version, mcp-session-id, last-event-id'
+
 // ---------------------------------------------------------------------------
 // Permission gate — server-side, non-bypassable enforcement of the per-class
 // tool policy. Currently governs the File System capability (the one read/write
@@ -170,7 +175,16 @@ export function startMcpServer(port, config) {
       res.writeHead(204, {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        // MCP clients send protocol headers alongside Content-Type/Authorization
+        // (the SDK's SSE transport sets mcp-protocol-version on every POST;
+        // Streamable HTTP adds mcp-session-id and last-event-id). A browser
+        // preflight fails the whole request if any requested header is missing
+        // here, so omitting them made the server unreachable from any browser
+        // client while node-based callers — which do no preflight — worked fine.
+        'Access-Control-Allow-Headers': ALLOWED_CORS_HEADERS,
+        // Streamable HTTP assigns the session id via a response header; a
+        // cross-origin client cannot read it unless it is exposed.
+        'Access-Control-Expose-Headers': 'mcp-session-id',
         'Access-Control-Max-Age': '86400',
       })
       res.end()

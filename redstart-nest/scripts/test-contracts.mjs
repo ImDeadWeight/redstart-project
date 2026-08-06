@@ -126,6 +126,26 @@ async function main() {
   await startMcpServer(MCP_PORT, {
     webFetch: { enabled: true, whitelistEnabled: false, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 },
   })
+  // A browser fails the entire request when a preflight omits any header the
+  // client asked for, so the CORS allow-list is part of the transport contract.
+  // Node's fetch performs no preflight, which is why every suite here passed
+  // while no browser client could POST a single message.
+  await test('CORS preflight allows the MCP protocol headers', async () => {
+    const res = await fetch(`http://127.0.0.1:${MCP_PORT}/message?sessionId=x`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'http://127.0.0.1:19080',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'content-type, authorization, mcp-protocol-version',
+      },
+    })
+    assert(res.status === 204 || res.ok, `preflight status ${res.status}`)
+    const allowed = (res.headers.get('access-control-allow-headers') || '').toLowerCase()
+    for (const header of ['content-type', 'authorization', 'mcp-protocol-version']) {
+      assert(allowed.includes(header), `preflight does not allow "${header}": ${allowed}`)
+    }
+  })
+
   // The SSE handshake itself is a contract. The endpoint event must carry a
   // BARE URI: a JSON-encoded one ("/message?...") is taken verbatim by a
   // spec-compliant client and produces a POST to /"/message?..." that 404s, so
