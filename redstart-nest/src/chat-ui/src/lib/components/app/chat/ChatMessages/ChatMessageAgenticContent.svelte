@@ -36,6 +36,26 @@
 		agenticLastError
 	} from '$lib/stores/agentic.svelte';
 	import { config } from '$lib/stores/settings.svelte';
+	import { toast } from 'svelte-sonner';
+
+	/**
+	 * Download a file a tool produced, reporting failures.
+	 *
+	 * The click handler used to call downloadFile directly, floating the
+	 * promise: a rejected download surfaced nowhere at all — no toast, no
+	 * console entry — so a broken download and a working one looked identical
+	 * to the user.
+	 */
+	async function handleDownload(relativePath: string): Promise<void> {
+		try {
+			await downloadFile(relativePath);
+		} catch (err) {
+			console.error('[Download] Failed to download', relativePath, err);
+			toast.error(`Could not download ${relativePath}`, {
+				description: err instanceof Error ? err.message : String(err)
+			});
+		}
+	}
 
 	interface Props {
 		message: DatabaseMessage;
@@ -283,7 +303,7 @@
 						<div class="mb-2 flex flex-wrap gap-2">
 							{#each filePaths as fp (fp)}
 								<button
-									onclick={() => downloadFile(fp)}
+									onclick={() => handleDownload(fp)}
 									class="inline-flex items-center gap-1.5 rounded bg-orange-500/10 px-2.5 py-1.5 text-xs font-medium text-orange-400 hover:bg-orange-500/20 transition-colors"
 								>
 									<Download class="h-3.5 w-3.5" />
