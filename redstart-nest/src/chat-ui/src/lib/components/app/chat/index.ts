@@ -251,6 +251,15 @@ export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFo
 export { default as ChatFormReasoningToggle } from './ChatForm/ChatFormActions/ChatFormReasoningToggle.svelte';
 
 /**
+ * **ChatFormModeToggle** - Task mode picker for the active conversation
+ *
+ * Lists the deployment's modes from `GET /prompt-modes` and stores the chosen
+ * ID on the conversation. Only the ID is sent; the gateway resolves it into
+ * the system prompt. Hides itself when the server offers no modes.
+ */
+export { default as ChatFormModeToggle } from './ChatForm/ChatFormActions/ChatFormModeToggle.svelte';
+
+/**
  * Hidden file input element for programmatic file selection.
  */
 export { default as ChatFormFileInputInvisible } from './ChatForm/ChatFormFileInputInvisible.svelte';

@@ -21,6 +21,10 @@ function normalizeAccount(a) {
     status: a.status === 'disabled' ? 'disabled' : 'active',
     createdBy: a.createdBy ?? null,
     lastLoginAt: a.lastLoginAt ?? null,
+    // Per-connector credentials (system-prompt spec §8). Each entry binds a
+    // key to one surface, so the server derives which app is calling from the
+    // credential rather than believing a header.
+    clientKeys: Array.isArray(a.clientKeys) ? a.clientKeys : [],
   }
 }
 
@@ -55,7 +59,13 @@ export function write(data) {
 }
 
 function stripSecrets(account) {
-  const { passwordHash, passwordSalt, apiKeyHash, ...safe } = account
+  const { passwordHash, passwordSalt, apiKeyHash, clientKeys, ...safe } = account
+  // clientKeys carries a keyHash per entry. Destructuring the array out is not
+  // enough — the metadata is genuinely useful to show ("Blueprints key, issued
+  // March 4"), so it is rebuilt without the hash rather than dropped.
+  safe.clientKeys = (Array.isArray(clientKeys) ? clientKeys : []).map(
+    ({ keyHash, ...publicFields }) => publicFields
+  )
   return safe
 }
 
@@ -85,6 +95,21 @@ export function findById(id) {
 
 export function findByApiKeyHash(apiKeyHash) {
   return read().accounts.find(a => a.apiKeyHash === apiKeyHash) || null
+}
+
+/**
+ * Resolve a per-connector credential (spec §8) to its account AND the surface
+ * it was issued for. Returning both together is the point: surface must come
+ * from the credential, never from a header a client can set.
+ *
+ * @returns {{ account: object, clientKey: object } | null}
+ */
+export function findByClientKeyHash(keyHash) {
+  for (const account of read().accounts) {
+    const clientKey = (account.clientKeys || []).find(k => k.keyHash === keyHash)
+    if (clientKey) return { account, clientKey }
+  }
+  return null
 }
 
 export function hasOwner() {

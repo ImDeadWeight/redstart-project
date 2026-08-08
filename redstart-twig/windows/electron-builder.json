@@ -11,19 +11,26 @@
   "asarUnpack": [
     "electron/preload.mjs"
   ],
+  "extraFiles": [
+    {
+      "from": "../../shared",
+      "to": "shared",
+      "filter": [
+        "**/*.mjs"
+      ]
+    }
+  ],
   "extraResources": [
     {
       "from": "../../redstart-nest/src/chat-ui/dist",
       "to": "chat-ui",
-      "filter": ["**/*"]
+      "filter": [
+        "**/*"
+      ]
     },
     {
-      "from": "../../redstart-nest/electron/main/fs-tool.mjs",
-      "to": "fs-tool/fs-tool.mjs"
-    },
-    {
-      "from": "../../redstart-nest/electron/main/path-scope.mjs",
-      "to": "fs-tool/path-scope.mjs"
+      "from": "../../redstart-nest/build/icon.ico",
+      "to": "icon.ico"
     }
   ],
   "win": {

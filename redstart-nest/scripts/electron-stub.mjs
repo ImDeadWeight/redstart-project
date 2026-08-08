@@ -76,6 +76,12 @@ export const BrowserWindow = {
 export const shell = {
   openExternal: async () => {},
   openPath: async () => '',
+  // No real recycle bin under plain node. Returning false (the "failed"
+  // signal Electron <14 used) makes fs-delete-tool fall through to its
+  // .trash/ folder fallback — which is the path the boundary suites can
+  // actually observe, since a file in the OS bin is not inspectable from a
+  // test. The recycle-bin tier itself is covered by manual smoke testing.
+  trashItem: async () => false,
 }
 
 export const nativeImage = {

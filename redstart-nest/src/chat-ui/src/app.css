@@ -4,63 +4,21 @@
 @plugin '@tailwindcss/typography';
 @import 'tw-animate-css';
 
+/* Redstart is dark-only. `.dark` is still applied unconditionally to <html>
+   (see app.html) because ~85 `dark:` utilities across the components depend on
+   this variant resolving — the class is now a constant, not a mode. There is no
+   light palette to switch to: the single :root block below is the whole theme.
+
+   It used to be two blocks, :root and .dark, holding near-identical values.
+   That was the bug behind the "broken theme": choosing Light removed the class,
+   so `dark:` utilities flipped to their light styling while the CSS variables
+   stayed dark, and half the UI changed. */
 @custom-variant dark (&:is(.dark *));
 
 :root {
 	--radius: 0.625rem;
-	/* Redstart theme: zinc-950 background, orange-500 primary, white text */
-	--background: oklch(0.12 0 0);
-	--foreground: oklch(0.985 0 0);
-	--card: oklch(0.18 0 0);
-	--card-foreground: oklch(0.985 0 0);
-	--popover: oklch(0.18 0 0);
-	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.705 0.191 44.5);
-	--primary-foreground: oklch(0.12 0 0);
-	--secondary: oklch(0.25 0 0);
-	--secondary-foreground: oklch(0.985 0 0);
-	--muted: oklch(0.22 0 0);
-	--muted-foreground: oklch(0.62 0 0);
-	--accent: oklch(0.25 0 0);
-	--accent-foreground: oklch(0.985 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.27 0 0);
-	--input: oklch(0.27 0 0);
-	--ring: oklch(0.705 0.191 44.5);
-	--chart-1: oklch(0.705 0.191 44.5);
-	--chart-2: oklch(0.6 0.118 184.704);
-	--chart-3: oklch(0.398 0.07 227.392);
-	--chart-4: oklch(0.828 0.189 84.429);
-	--chart-5: oklch(0.769 0.188 70.08);
-	--sidebar: oklch(0.155 0 0);
-	--sidebar-foreground: oklch(0.985 0 0);
-	--sidebar-primary: oklch(0.705 0.191 44.5);
-	--sidebar-primary-foreground: oklch(0.12 0 0);
-	--sidebar-accent: oklch(0.25 0 0);
-	--sidebar-accent-foreground: oklch(0.985 0 0);
-	--sidebar-border: oklch(0.27 0 0);
-	--sidebar-ring: oklch(0.705 0.191 44.5);
-	--code-background: oklch(0.18 0 0);
-	--code-foreground: oklch(0.875 0 0);
-	--font-mono:
-		ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
-		'Liberation Mono', Menlo, monospace;
-	--layer-popover: 1000000;
-
-	--chat-form-area-height: 8rem;
-	--chat-form-area-offset: 2rem;
-	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));
-}
-
-@media (min-width: 640px) {
-	:root {
-		--chat-form-area-height: 24rem;
-		--chat-form-area-offset: 12rem;
-	}
-}
-
-.dark {
-	/* Same Redstart theme in dark mode */
+	/* Redstart theme: near-black background (#060606 — darker than zinc-950,
+	   which several screens used to hardcode), orange-500 primary, white text */
 	--background: oklch(0.12 0 0);
 	--foreground: oklch(0.985 0 0);
 	--card: oklch(0.18 0 0);
@@ -94,6 +52,21 @@
 	--sidebar-ring: oklch(0.705 0.191 44.5);
 	--code-background: oklch(0.18 0 0);
 	--code-foreground: oklch(0.875 0 0);
+	--font-mono:
+		ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
+		'Liberation Mono', Menlo, monospace;
+	--layer-popover: 1000000;
+
+	--chat-form-area-height: 8rem;
+	--chat-form-area-offset: 2rem;
+	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));
+}
+
+@media (min-width: 640px) {
+	:root {
+		--chat-form-area-height: 24rem;
+		--chat-form-area-offset: 12rem;
+	}
 }
 
 @theme inline {
@@ -212,7 +185,13 @@
  * TITLEBAR_HEIGHT in redstart-twig/windows/electron/main.mjs.
  */
 html.twig-desktop {
-	--twig-titlebar-height: 32px;
+	/* CSS pixels, and the Twig shell zooms its web content (UI_ZOOM in
+	 * main.mjs), so this is NOT the height the OS-drawn window-controls overlay
+	 * uses — that one is in device pixels and is derived over there as
+	 * TITLEBAR_CSS_HEIGHT * UI_ZOOM. Keep this value equal to
+	 * TITLEBAR_CSS_HEIGHT: if they disagree, the draggable strip stops lining up
+	 * with the minimise/maximise/close buttons it sits beside. */
+	--twig-titlebar-height: 40px;
 }
 
 html.twig-desktop .twig-titlebar {
@@ -244,4 +223,23 @@ html.twig-desktop .min-h-svh {
 html.twig-desktop [data-slot='sidebar-container'] {
 	top: var(--twig-titlebar-height);
 	height: calc(100dvh - 1.5rem - var(--twig-titlebar-height)) !important;
+}
+
+/* The sidebar toggle is position:absolute with no positioned ancestor, so its
+ * containing block is the viewport — it ignores the body padding that offsets
+ * everything else, and lands under the opaque drag strip (which sits above it
+ * at z-1000). Push it below the strip. margin-top rather than a translate
+ * override because the component sets `translate` inline for its slide
+ * animation, and overriding that would fight the transition. */
+html.twig-desktop [data-slot='sidebar-trigger'] {
+	margin-top: var(--twig-titlebar-height);
+}
+
+/* The collapsed icon rail is position:fixed too, so it also ignores the body
+ * padding. It has to move down by the SAME amount as the trigger above it —
+ * offsetting only the trigger pushed it into the rail's first icon, which is
+ * the Profile button. The two are vertically related by the rail's own top
+ * margin, so they only stay clear of each other if they shift together. */
+html.twig-desktop [data-slot='desktop-icon-strip'] {
+	top: var(--twig-titlebar-height);
 }

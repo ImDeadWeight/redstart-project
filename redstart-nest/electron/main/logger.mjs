@@ -16,6 +16,11 @@
 // entirely, so a careless caller can never leak PII, credentials, or user data
 // into a log line.
 //
+// ONE documented exception exists: logAudit() at the bottom of this file records
+// the path of a destructive (delete) operation, because a deletion nobody can
+// name is a deletion nobody can undo. It is a closed allowlist of fields, it
+// never records file contents, and nothing else in the codebase may use it.
+//
 // No Electron dependency: index.mjs calls initLogger(app.getPath('userData'))
 // once at startup. Until then (e.g. under the test harness) logging is a no-op
 // beyond nothing — so importing this module never pulls in Electron and never
@@ -79,4 +84,42 @@ export function logEvent(category, event, fields = {}) {
   try { stream.write(JSON.stringify(record) + '\n') } catch { /* ignore write errors */ }
   const extra = Object.keys(safe).length ? ' ' + JSON.stringify(safe) : ''
   console.log(`[${category}] ${event}${extra}`)
+}
+
+// ---------------------------------------------------------------------------
+// THE ONE EXCEPTION TO THE PRIVACY CONTRACT ABOVE.
+//
+// Destructive-class tool calls — currently only the File System capability's
+// delete — record WHAT was deleted. Nothing else in Redstart logs a path, and
+// this does not open the door to anything else doing so: the field list below
+// is a closed allowlist, values are truncated, and file CONTENTS are never
+// logged by anything, ever.
+//
+// Why this is worth an exception rather than a principle quietly bent. A model
+// deciding what to delete is a different situation from a model reading or
+// writing: the user finds out what happened after it has happened, and "which
+// file did it remove?" is the first question they will ask. Deletions are
+// recoverable (they go to the recycle bin), but recovery needs a name to
+// recover. A log that records only "a destructive call succeeded in 12ms" is
+// useless at precisely the moment logging exists to be useful.
+//
+// The path recorded is the one RELATIVE to the caller's own storage, so the log
+// carries no server layout and no other account's namespace.
+// ---------------------------------------------------------------------------
+const AUDIT_FIELDS = ['tool', 'path', 'scope', 'kind', 'recoverable']
+const MAX_AUDIT_VALUE = 512
+
+export function logAudit(event, fields = {}) {
+  const safe = {}
+  for (const key of AUDIT_FIELDS) {
+    const value = fields[key]
+    if (value === null || value === undefined) continue
+    const t = typeof value
+    if (t !== 'string' && t !== 'number' && t !== 'boolean') continue
+    safe[key] = t === 'string' ? value.slice(0, MAX_AUDIT_VALUE) : value
+  }
+  if (!stream) return
+  const record = { t: new Date().toISOString(), cat: 'audit', event, ...safe }
+  try { stream.write(JSON.stringify(record) + '\n') } catch { /* ignore write errors */ }
+  console.log(`[audit] ${event} ${JSON.stringify(safe)}`)
 }

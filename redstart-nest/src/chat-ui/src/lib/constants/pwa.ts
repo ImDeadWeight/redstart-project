@@ -49,8 +49,10 @@ export const PWA_MANIFEST = {
 	description: 'Local AI chat interface powered by llama.cpp',
 	start_url: './',
 	display: 'standalone' as const,
-	background_color: THEME_COLORS.BACKGROUND_LIGHT,
-	theme_color: THEME_COLORS.BACKGROUND_LIGHT,
+	// Dark-only app: a light splash/theme colour made the installed PWA flash
+	// white before the first paint.
+	background_color: THEME_COLORS.BACKGROUND_DARK,
+	theme_color: THEME_COLORS.BACKGROUND_DARK,
 	icons: [
 		{ src: 'pwa-64x64.png', sizes: '64x64', type: 'image/png' },
 		{ src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },

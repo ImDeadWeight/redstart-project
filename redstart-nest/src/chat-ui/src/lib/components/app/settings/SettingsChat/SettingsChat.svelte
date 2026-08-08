@@ -5,7 +5,9 @@
 		SettingsChatFields,
 		SettingsChatImportExportTab,
 		SettingsChatMobileHeader,
+		SettingsChatConnectorsTab,
 		SettingsChatServerTab,
+		SettingsChatSystemPromptTab,
 		SettingsChatToolsTab,
 		SettingsFooter
 	} from '$lib/components/app/settings';
@@ -19,8 +21,6 @@
 		type SettingsSection
 	} from '$lib/constants';
 	import { RouterService } from '$lib/services/router.service';
-	import { setMode } from 'mode-watcher';
-	import { ColorMode } from '$lib/enums/ui.enums';
 	import { fade } from 'svelte/transition';
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
@@ -72,18 +72,12 @@
 		}
 	});
 
-	function handleThemeChange(newTheme: string) {
-		localConfig.theme = newTheme;
-		setMode(newTheme as ColorMode);
-	}
-
 	function handleConfigChange(key: string, value: string | boolean) {
 		localConfig[key] = value;
 	}
 
 	function handleReset() {
 		localConfig = { ...config() };
-		setMode(localConfig.theme as ColorMode);
 		mobileHeader?.updateCarousel();
 	}
 
@@ -132,8 +126,7 @@
 		get localConfig() {
 			return localConfig;
 		},
-		handleConfigChange,
-		handleThemeChange
+		handleConfigChange
 	});
 </script>
 
@@ -173,13 +166,16 @@
 						<SettingsChatServerTab />
 					{:else if currentSection.title === SETTINGS_SECTION_TITLES.ACCOUNTS}
 						<SettingsChatAccountsTab />
+					{:else if currentSection.title === SETTINGS_SECTION_TITLES.SYSTEM_PROMPT}
+						<SettingsChatSystemPromptTab />
+					{:else if currentSection.title === SETTINGS_SECTION_TITLES.CONNECTORS}
+						<SettingsChatConnectorsTab />
 					{:else if currentSection.fields}
 						<div class="space-y-6">
 							<SettingsChatFields
 								fields={currentSection.fields}
 								{localConfig}
 								onConfigChange={handleConfigChange}
-								onThemeChange={handleThemeChange}
 							/>
 
 							{#if currentSection.title === SETTINGS_SECTION_TITLES.GENERAL}

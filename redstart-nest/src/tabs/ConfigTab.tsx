@@ -1,10 +1,19 @@
 import type { LlamaConfig } from '../types'
 import { SectionTitle, inputCls } from '../components/ui'
+import { NetworkPanel } from '../panels/NetworkPanel'
 
-export function ConfigTab({ config, setConfig, networkMode, generatedCommand, onGenerateCommand }: {
+export function ConfigTab({
+  config, setConfig, networkMode, onToggleNetworkMode,
+  advertisedHost, setAdvertisedHost, localIp,
+  generatedCommand, onGenerateCommand,
+}: {
   config: LlamaConfig
   setConfig: React.Dispatch<React.SetStateAction<LlamaConfig>>
   networkMode: boolean
+  onToggleNetworkMode: () => void
+  advertisedHost: string
+  setAdvertisedHost: (host: string) => void
+  localIp: string
   generatedCommand: string
   onGenerateCommand: () => void
 }) {
@@ -133,6 +142,17 @@ export function ConfigTab({ config, setConfig, networkMode, generatedCommand, on
           />
         </div>
       </section>
+
+      {/* Sits directly under Configuration because it governs the Host field
+          above it — network mode forces Host to 0.0.0.0. */}
+      <NetworkPanel
+        networkMode={networkMode}
+        onToggleNetworkMode={onToggleNetworkMode}
+        advertisedHost={advertisedHost}
+        setAdvertisedHost={setAdvertisedHost}
+        localIp={localIp}
+        port={config.port}
+      />
 
       <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
         <div className="flex justify-between items-center mb-2">

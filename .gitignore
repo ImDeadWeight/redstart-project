@@ -30,6 +30,18 @@ npm-debug.log*
 *.pem
 *.key
 
+# Runtime user data. These normally live in the Electron userData directory
+# (%APPDATA%\redstart\) and never appear in the repo — this is belt-and-braces
+# for the case where someone copies one in to debug, or points userData at a
+# working tree. They contain real conversation history, account records and
+# per-profile config, none of which belongs in a public repository.
+conversations.json
+accounts.json
+profiles.json
+tools.json
+redstart.log
+mcp-fs-logs/
+
 # IDE
 .idea/
 .vscode/
@@ -53,3 +65,9 @@ desktop.ini
 /*PLAN*.md
 /ACTION-ITEMS.md
 /Redstart *.md
+# The patterns above are case-sensitive and assume spaces, so they missed the
+# lowercase hyphenated working notes (redstart-observations.md,
+# redstart-settings-audit.md, redstart-system-prompt-spec.md, …). Only
+# README.md and CHANGELOG.md are tracked at the root, so this is safe.
+# Contracts that ship live in docs/ and are deliberately NOT covered here.
+/redstart-*.md

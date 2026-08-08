@@ -184,7 +184,10 @@ export function toolDefs(cfg) {
   ]
 }
 
-export async function callTool(name, args, cfg) {
+// Provider interface: callTool(name, args, cfg, ctx). `ctx.account` is the
+// authenticated caller (null when auth is off). Unused here — this capability
+// is shared reference material and is the same for every account.
+export async function callTool(name, args, cfg, _ctx) {
   if (!TOOL_NAMES.includes(name)) return null
 
   const pgCfg = cfg?.postgres

@@ -9,7 +9,8 @@
   "scripts": {
     "build:chat": "npm --prefix ../../redstart-nest/src/chat-ui run build",
     "build": "npm run build:chat && node ../../redstart-nest/scripts/make-icon.mjs && electron-builder",
-    "dev": "electron ."
+    "dev": "electron .",
+    "test": "node scripts/test-fs-tool.mjs && node scripts/test-color.mjs && node scripts/test-window-chrome.mjs"
   },
   "devDependencies": {
     "electron": "^33.4.11",

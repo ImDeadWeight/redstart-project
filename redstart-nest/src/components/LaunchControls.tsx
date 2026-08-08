@@ -16,7 +16,7 @@ export function LaunchControls({ server, modelPath }: {
           onClick={launchServer}
           disabled={!canLaunch}
           className="flex-1 py-3 bg-orange-500 hover:bg-orange-400 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed rounded-lg font-semibold text-sm transition-colors">
-          {modelPath ? 'Launch LlamaCpp Server' : 'Select a model to launch'}
+          {modelPath ? 'Start Server' : 'Select a model to launch'}
         </button>
       )}
       {serverState === 'starting' && (

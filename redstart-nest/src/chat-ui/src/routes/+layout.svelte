@@ -31,7 +31,6 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
-	import { ModeWatcher, mode } from 'mode-watcher';
 	import { twigShellApi } from '$lib/utils/twig';
 	import { ROUTES } from '$lib/constants/routes';
 	import { RouterService } from '$lib/services/router.service';
@@ -194,7 +193,9 @@
 					toast.success('Connected to Redstart Nest!', { duration: 3000 });
 				}
 			}
-		} catch { /* invalid URL */ }
+		} catch {
+			/* invalid URL */
+		}
 	}
 
 	function raceTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -204,21 +205,46 @@
 		]);
 	}
 
-	async function initApp() {
-		let scanFailed = false;
+	// ---------------------------------------------------------------------------
+	// Startup connect, with retries.
+	//
+	// The common case for a desktop client is being opened BEFORE the server —
+	// the person turns on their laptop, then goes and starts the model. A single
+	// scan at startup fails in that situation and left the app on the loading
+	// screen permanently: nothing re-scanned, no server URL was ever stored, and
+	// because the connect step was skipped entirely `serverStore.error` stayed
+	// null — so even the error state (which has a Retry button) never rendered.
+	// The only way out was restarting Twig.
+	//
+	// So: keep trying for a couple of minutes, then hand over to the user with a
+	// visible Retry. Both halves matter — silent retrying that never ends is just
+	// a nicer-looking hang.
+	// ---------------------------------------------------------------------------
 
-		// If the app was opened via QR deep link, apply it before anything else.
-		// This sets SERVER_URL so needsScan becomes false and we skip the scan.
-		if (isCapacitorAndroid()) {
-			try {
-				const launchUrl = await CapApp.getLaunchUrl();
-				if (launchUrl?.url) handleDeepLink(launchUrl.url);
-			} catch { /* ignore */ }
-		}
+	const RETRY_INTERVAL_MS = 10_000;
+	const RETRY_WINDOW_MS = 120_000;
 
-		const needsScan = (isCapacitorAndroid() || isElectronLog()) && !getServerBaseUrl();
+	/** Retrying in the background; drives the loading screen's "retrying" text. */
+	let retrying = $state(false);
+	/** The retry window elapsed without a connection — the user takes over. */
+	let retriesExhausted = $state(false);
 
-		if (needsScan) {
+	const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+	/**
+	 * Did we reach a server? Reaching the LOGIN screen counts — that is a server
+	 * answering, and the retry loop's job is connectivity, not authentication.
+	 */
+	function isConnected(): boolean {
+		if (authStore.serverReachable) return true;
+		return !!serverStore.props && !serverStore.error;
+	}
+
+	/** One connect attempt: discover if needed, then resolve auth and props. */
+	async function attemptConnect(): Promise<boolean> {
+		const onNativePlatform = isCapacitorAndroid() || isElectronLog();
+
+		if (onNativePlatform && !getServerBaseUrl()) {
 			loadingPhase = 'scanning';
 			try {
 				// Both Android (Capacitor) and Redstart Twig Windows expose the same
@@ -227,7 +253,7 @@
 				const discovery: NetworkDiscoveryPlugin = isCapacitorAndroid()
 					? NetworkDiscovery
 					: (window as unknown as { redstartTwigAPI: { network: NetworkDiscoveryPlugin } })
-						.redstartTwigAPI.network;
+							.redstartTwigAPI.network;
 
 				const info = await raceTimeout(discovery.getLocalNetworkInfo(), 5000);
 				const result = await raceTimeout(
@@ -236,58 +262,78 @@
 				);
 				if (result.servers.length > 0) {
 					settingsStore.updateConfig(SETTINGS_KEYS.SERVER_URL, result.servers[0].url);
-				} else {
-					scanFailed = true;
 				}
 			} catch {
-				scanFailed = true;
+				/* scan failed this round — the caller decides whether to try again */
 			}
 		}
 
 		loadingPhase = 'connecting';
-		// On native platforms (Redstart Twig Windows/Android), only fetch if we actually
-		// have a server URL — either pre-configured or just found by the scan.
-		// Skipping when there's no URL prevents the error banner from appearing
-		// alongside the "no server found" toast after a failed scan.
-		const onNativePlatform = isCapacitorAndroid() || isElectronLog();
-		if (!onNativePlatform || getServerBaseUrl()) {
-			// Resolve auth state BEFORE fetching protected data. Fetching /props
-			// first (the old order) meant an unauthenticated device always sent a
-			// doomed request when login is required, surfacing a generic "server
-			// unavailable" error instead of the login gate below ever getting a
-			// chance to show.
-			await authStore.init().catch(() => {});
-			if (!authStore.authRequired || authStore.user) {
-				await serverStore.fetch().catch(() => {});
-			}
-		} else {
-			await authStore.init().catch(() => {});
-		}
+		if (onNativePlatform && !getServerBaseUrl()) return false; // nothing to connect to yet
 
-		appReady = true;
-
-		// After the loading screen fades out, nudge the user if no server was found
-		if (scanFailed) {
-			setTimeout(() => {
-				toast('No server found automatically.', {
-					description: 'Go to Settings → Server to enter your server address.',
-					duration: 12000,
-					action: {
-						label: 'Open Settings',
-						onClick: () => goto(RouterService.settings('server'))
-					}
-				});
-			}, 550);
-		}
-	}
-
-	// Re-attempt the connection from the loading screen's Retry button. Mirrors
-	// the initApp connect sequence: resolve auth first, then fetch props.
-	async function retryConnect() {
+		// Resolve auth state BEFORE fetching protected data. Fetching /props
+		// first (the old order) meant an unauthenticated device always sent a
+		// doomed request when login is required, surfacing a generic "server
+		// unavailable" error instead of the login gate below ever getting a
+		// chance to show.
 		await authStore.init().catch(() => {});
 		if (!authStore.authRequired || authStore.user) {
 			await serverStore.fetch().catch(() => {});
 		}
+		return isConnected();
+	}
+
+	/** Attempt, then keep attempting on an interval until the window elapses. */
+	async function connectWithRetries() {
+		retriesExhausted = false;
+		if (await attemptConnect()) {
+			retrying = false;
+			return;
+		}
+
+		retrying = true;
+		const deadline = Date.now() + RETRY_WINDOW_MS;
+		while (Date.now() < deadline) {
+			await sleep(RETRY_INTERVAL_MS);
+			// A URL entered in Settings, or a QR deep link, resolves this from
+			// elsewhere — stop rather than fighting whatever the user just did.
+			if (isConnected()) break;
+			if (await attemptConnect()) break;
+		}
+
+		retrying = false;
+		if (!isConnected()) retriesExhausted = true;
+	}
+
+	async function initApp() {
+		// If the app was opened via QR deep link, apply it before anything else.
+		// This sets SERVER_URL so the scan below is skipped.
+		if (isCapacitorAndroid()) {
+			try {
+				const launchUrl = await CapApp.getLaunchUrl();
+				if (launchUrl?.url) handleDeepLink(launchUrl.url);
+			} catch {
+				/* ignore */
+			}
+		}
+
+		// One attempt before revealing the UI, so an already-running server
+		// connects instantly with no flash of a "retrying" message.
+		await attemptConnect();
+		appReady = true;
+
+		// Not connected yet: keep trying in the background while the loading
+		// screen explains what is happening.
+		if (!isConnected()) void connectWithRetries();
+	}
+
+	// The loading screen's Retry button: restart the whole loop, including
+	// rediscovery. Previously this only re-fetched auth + props, so on a device
+	// that had never found a server there was nothing to re-fetch and the button
+	// did nothing visible.
+	async function retryConnect() {
+		if (retrying) return; // already trying; a second loop would double the traffic
+		await connectWithRetries();
 	}
 
 	// Let the user reach server setup from the loading screen when disconnected.
@@ -332,12 +378,22 @@
 		}
 	});
 
-	// Twig desktop only: keep the window-controls overlay (min/max/close) in
-	// step with the app's light/dark theme. No-op elsewhere.
+	// Twig desktop only: colour the window-controls overlay (min/max/close) to
+	// match the app. No-op elsewhere. The theme name is a constant now that the
+	// app is dark-only, but the background is still read from the DOM (below).
 	$effect(() => {
-		const theme = mode.current;
 		const shell = twigShellApi();
-		if (shell && theme) void shell.setTheme(theme);
+		if (!shell) return;
+		// Send the background colour the app is ACTUALLY painting, not just the
+		// theme name. The Electron shell colours the window-controls overlay (the
+		// strip behind minimise/maximise/close), and it used to map theme -> a
+		// hardcoded hex. Those two values drifted: the app renders
+		// oklch(0.12 0 0) = #060606 while the overlay was #09090b, leaving a
+		// visibly lighter band behind the buttons. Reading the computed value
+		// means the overlay follows the theme by construction instead of by two
+		// constants happening to agree.
+		const background = getComputedStyle(document.body).backgroundColor;
+		void shell.setTheme('dark', background);
 	});
 
 	// Twig desktop runs frameless (hidden title bar + window-controls overlay).
@@ -475,8 +531,6 @@
 </div>
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
-	<ModeWatcher />
-
 	<Toaster richColors />
 
 	<!-- Pre-chat gate. The chat is never revealed until there is a live server
@@ -489,14 +543,20 @@
 	{:else if authStore.authRequired && !authStore.user}
 		<LoginForm />
 	{:else if !(serverStore.props && !serverStore.error) && !(onNative && panelNav.isSettingsRoute)}
+		<!-- `error` is null when the connect step never ran (no server found to
+		     connect TO), which used to render a bare spinner with no way out.
+		     `retrying`/`retriesExhausted` carry that case: keep the user informed
+		     while we retry, then show Retry once we stop. -->
 		<RedstartLoadingScreen
 			phase="connecting"
 			error={serverStore.error}
+			{retrying}
+			showRetry={retriesExhausted || !!serverStore.error}
 			onRetry={retryConnect}
 			onOpenSettings={onNative ? openServerSettings : undefined}
 		/>
 	{:else}
-			<Sidebar.Provider bind:open={sidebarOpen}>
+		<Sidebar.Provider bind:open={sidebarOpen}>
 			<div class="flex h-dvh w-full">
 				<Sidebar.Root variant="floating" class="h-full"
 					><SidebarNavigation bind:this={chatSidebar} /></Sidebar.Root

@@ -504,11 +504,11 @@ div.markdown-user-content :global(.table-wrapper) {
 	}
 }
 
-/* Dark mode adjustments */
-@media (prefers-color-scheme: dark) {
-	.markdown-content :global(blockquote:hover) {
-		background: var(--muted);
-	}
+/* The app is always dark, so this is unconditional. It used to sit behind
+   `@media (prefers-color-scheme: dark)`, which meant the hover state silently
+   did nothing for anyone whose OS was set to light. */
+.markdown-content :global(blockquote:hover) {
+	background: var(--muted);
 }
 
 /* Image load error fallback */

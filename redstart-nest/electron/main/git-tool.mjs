@@ -19,7 +19,7 @@ import * as path from 'path'
 import { execFile } from 'child_process'
 import { resolveWithinRoot } from './path-scope.mjs'
 
-const TOOL_NAMES = ['git_status', 'git_log', 'git_diff']
+const TOOL_NAMES = ['git_list_repos', 'git_status', 'git_log', 'git_diff']
 const MAX_OUTPUT_CHARS = 8000
 const GIT_TIMEOUT_MS = 10000
 const MAX_LOG_COUNT = 50
@@ -79,17 +79,70 @@ const REPO_ARG = {
   },
 }
 
+// ---------------------------------------------------------------------------
+// Repository discovery.
+//
+// `repo` defaults to the configured root, so a root that is itself a repo works
+// without discovery. A root holding SEVERAL repos in subfolders does not: the
+// model has to name one, and nothing tells it the names. Same shape of gap as
+// SQLite had — a capability you cannot enumerate is one you cannot use.
+// ---------------------------------------------------------------------------
+const MAX_REPOS = 100
+
+function listRepos(gitCfg) {
+  const root = path.resolve(gitCfg.rootDir)
+  const found = []
+
+  const isRepo = (dir) => {
+    try {
+      return fs.existsSync(path.join(dir, '.git'))
+    } catch {
+      return false
+    }
+  }
+
+  if (isRepo(root)) found.push('.')
+
+  let entries = []
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true })
+  } catch {
+    return { isError: true, content: [{ type: 'text', text: 'Could not read the configured git folder.' }] }
+  }
+  // One level deep only: repos are conventionally direct children of a projects
+  // folder, and descending further would walk every node_modules on the disk.
+  for (const entry of entries) {
+    if (found.length >= MAX_REPOS) break
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+    if (isRepo(path.join(root, entry.name))) found.push(entry.name)
+  }
+
+  if (found.length === 0) {
+    return { content: [{ type: 'text', text: 'No git repositories found in the configured folder.' }] }
+  }
+  const heading = `${found.length} repositor${found.length === 1 ? 'y' : 'ies'} available. ` +
+    'Pass one of these as the "repo" argument:'
+  return {
+    content: [{ type: 'text', text: [heading, ...found].join('\n') }],
+  }
+}
+
 export function toolDefs(cfg) {
   if (!cfg?.git?.enabled) return []
   return [
     {
+      name: 'git_list_repos',
+      description: 'List the git repositories available on the Redstart server. Start here when the folder holds more than one repository — the other git tools address a repository by name.',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+    },
+    {
       name: 'git_status',
-      description: 'Show the working-tree status of a local git repository: current branch and modified/added/deleted/untracked files.',
+      description: 'Show the working-tree status of a git repository stored on the Redstart server, not on the machine the user is sitting at: current branch and modified/added/deleted/untracked files.',
       inputSchema: { type: 'object', properties: { ...REPO_ARG } },
     },
     {
       name: 'git_log',
-      description: 'Show recent commits of a local git repository (hash, author, date, message).',
+      description: 'Show recent commits of a git repository stored on the Redstart server (hash, author, date, message).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -100,7 +153,7 @@ export function toolDefs(cfg) {
     },
     {
       name: 'git_diff',
-      description: 'Show uncommitted changes (working tree + staged) of a local git repository. Optionally limited to one file path.',
+      description: 'Show uncommitted changes (working tree + staged) of a git repository stored on the Redstart server. Optionally limited to one file path.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -112,13 +165,20 @@ export function toolDefs(cfg) {
   ]
 }
 
-export async function callTool(name, args, cfg) {
+// Provider interface: callTool(name, args, cfg, ctx). `ctx.account` is the
+// authenticated caller (null when auth is off). Unused here — this capability
+// is shared reference material and is the same for every account.
+export async function callTool(name, args, cfg, _ctx) {
   if (!TOOL_NAMES.includes(name)) return null
 
   const gitCfg = cfg?.git
   if (!gitCfg?.enabled || !gitCfg?.rootDir) {
     return { isError: true, content: [{ type: 'text', text: 'Git is not configured or enabled.' }] }
   }
+
+  // Before resolveRepo: discovery is what the model calls when it does not yet
+  // know a repo name, so it cannot be made to supply one.
+  if (name === 'git_list_repos') return listRepos(gitCfg)
 
   let repoPath
   try {

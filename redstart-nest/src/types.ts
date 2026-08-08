@@ -21,6 +21,17 @@ export type WebFetchTool = {
   kind?: 'web' | 'capability'
 }
 
+// A client application that ships its own tools (Twig today; Blueprints,
+// Greenhouse, Yellowscript later). Unlike a capability, these tools do not run
+// on this server — they arrive already inside the completions request, so the
+// gateway's name-strip is the only control the server has over them.
+export type ClientApp = {
+  id: string
+  name: string
+  description: string
+  toolNames: string[]
+}
+
 export type CapabilityConfig = {
   postgres: { enabled: boolean; hasConnectionString: boolean; maxRows: number }
   documents: { enabled: boolean; outputDir: string | null }

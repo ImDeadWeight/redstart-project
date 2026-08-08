@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { ModeWatcher } from 'mode-watcher';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -8,26 +7,13 @@
 
 	let { children }: Props = $props();
 
+	// The app is dark-only, so stories render dark unconditionally. This used to
+	// read the mode-watcher key and fall back to the OS preference, which meant
+	// stories could render light while the app itself never can.
 	onMount(() => {
-		const root = document.documentElement;
-		const theme = localStorage.getItem('mode-watcher-mode') || 'system';
-
-		if (theme === 'dark') {
-			root.classList.add('dark');
-		} else if (theme === 'light') {
-			root.classList.remove('dark');
-		} else {
-			const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-			if (prefersDark) {
-				root.classList.add('dark');
-			} else {
-				root.classList.remove('dark');
-			}
-		}
+		document.documentElement.classList.add('dark');
 	});
 </script>
-
-<ModeWatcher />
 
 {#if children}
 	{@const Component = children}

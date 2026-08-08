@@ -27,6 +27,8 @@ import * as http from 'http'
 import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
 import { stopMdnsAdvertiser } from './mdns-advertiser.mjs'
 import { stopPort80Proxy } from './port80-proxy.mjs'
+import { ensureFirewallRule } from './firewall.mjs'
+import { getPrimaryLanIp } from './net-interfaces.mjs'
 import { cleanupOldConversations } from './conversations-storage.mjs'
 import { initLogger, closeLogger, logEvent } from './logger.mjs'
 import { fileURLToPath } from 'url'
@@ -414,14 +416,12 @@ function writeProfiles(data) {
 // Network helpers
 // ---------------------------------------------------------------------------
 
+// Delegates to net-interfaces.mjs, which skips Hyper-V/WSL/VirtualBox/VPN
+// adapters. Taking the first non-internal IPv4 (as this did) routinely handed
+// back a virtual-switch address that nothing else on the LAN can reach — and
+// that address is what the UI shows and what the QR code encodes.
 function getLocalIp() {
-  const interfaces = os.networkInterfaces()
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) return iface.address
-    }
-  }
-  return '127.0.0.1'
+  return getPrimaryLanIp()
 }
 
 // ---------------------------------------------------------------------------
@@ -535,36 +535,9 @@ function killOrphanedServers() {
   } catch { /* no orphans, fine */ }
 }
 
-// Ensure Windows Firewall has an inbound rule for the gateway port so LAN
-// clients can reach it. Checks first (no elevation) and only calls elevate.exe
-// if the rule is missing — so UAC only fires once per port, ever.
-function ensureFirewallRule(gatewayPort) {
-  if (process.platform !== 'win32') return
-  const ruleName = `RedstartNest Gateway ${gatewayPort}`
-
-  execFile('netsh', ['advfirewall', 'firewall', 'show', 'rule', `name=${ruleName}`, 'dir=in'],
-    (_err, stdout) => {
-      if (stdout && stdout.includes(ruleName)) return // Rule already present
-
-      const elevatePath = app.isPackaged
-        ? path.join(process.resourcesPath, 'elevate.exe')
-        : null
-      if (!elevatePath || !fs.existsSync(elevatePath)) {
-        console.warn(`Gateway firewall: elevate.exe not found, skipping rule for port ${gatewayPort}`)
-        return
-      }
-
-      execFile(elevatePath, [
-        'netsh', 'advfirewall', 'firewall', 'add', 'rule',
-        `name=${ruleName}`,
-        'dir=in', 'action=allow', 'protocol=TCP',
-        `localport=${gatewayPort}`,
-      ], err => {
-        if (err) console.warn(`Could not add firewall rule for gateway port ${gatewayPort}:`, err.message)
-      })
-    }
-  )
-}
+// Inbound firewall rules now live in firewall.mjs so the mDNS advertiser can
+// reuse the same elevate.exe path for its UDP 5353 rule. `ensureFirewallRule`
+// is imported above and re-exported through the deps object below unchanged.
 
 app.on('before-quit', () => {
   logEvent('app', 'quit', {})

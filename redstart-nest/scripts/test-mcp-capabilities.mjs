@@ -28,12 +28,24 @@ const tmpSqliteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-sq
 const tmpVaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-vault-'))
 const tmpGitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-git-'))
 const tmpFsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-fs-'))
+
+// Per-account storage: every capability that WRITES now serves each caller from
+// its own folder inside the configured root, so a fixture dropped in the root
+// itself is invisible to the tools. This suite runs with auth off, which is the
+// defined anonymous scope — so these are the directories the tools actually
+// read from and write to. (Cross-account isolation itself is proven separately
+// in test-file-isolation.mjs; here the scoped dirs are only fixture plumbing.)
+const scopedDocsDir = path.join(tmpDocsDir, 'user_files', '_local')
+const scopedFsDir = path.join(tmpFsDir, 'user_files', '_local')
+fs.mkdirSync(scopedDocsDir, { recursive: true })
+fs.mkdirSync(scopedFsDir, { recursive: true })
 process.env.REDSTART_TEST_USERDATA_DIR = tmpUserDataDir
 
 register('./auth-test-loader.mjs', import.meta.url)
 
 const { startMcpServer, stopMcpServer } = await import('../electron/main/mcp-server.mjs')
 const { setAuthRequired } = await import('../electron/main/auth.mjs')
+const { capabilityForTool, classifyTool } = await import('../electron/main/tools-definitions.mjs')
 
 // Auth is ON by default (secure default, no localhost bypass) and this suite's
 // MCP client connects token-less. Auth behavior has its own suite
@@ -349,6 +361,66 @@ async function main() {
     })
   }
 
+  await test('create_document writes a runnable .py script verbatim (no title heading)', async () => {
+    const source = 'import sys\n\n\ndef main():\n    if len(sys.argv) > 1:\n        print(sys.argv[1])\n\n\nmain()'
+    const res = await client.call('tools/call', {
+      name: 'create_document',
+      arguments: { title: 'Echo Arg', content: source, format: 'python' },
+    })
+    assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
+    const filePath = res.result.content[0].text.match(/Document created: (.+)$/)[1]
+    assert(filePath.endsWith('.py'), `expected a .py file, got ${filePath}`)
+    const written = fs.readFileSync(filePath, 'utf8')
+    assert(written === source, `script was not written verbatim:\n${JSON.stringify(written)}`)
+    assert(!written.startsWith('#'), 'a title heading was prepended to the script')
+    return path.basename(filePath)
+  })
+
+  await test('create_document (python) strips an enclosing markdown code fence', async () => {
+    const res = await client.call('tools/call', {
+      name: 'create_document',
+      arguments: { title: 'Fenced Script', content: '```python\nprint("hi")\n```', format: 'python' },
+    })
+    const filePath = res.result.content[0].text.match(/Document created: (.+)$/)[1]
+    const written = fs.readFileSync(filePath, 'utf8')
+    assert(!written.includes('```'), `fence survived into the script: ${JSON.stringify(written)}`)
+    assert(written.trim() === 'print("hi")', `unexpected script body: ${JSON.stringify(written)}`)
+  })
+
+  await test('create_document (python) emits a [FILE:] marker so the UI can offer a download', async () => {
+    const res = await client.call('tools/call', {
+      name: 'create_document',
+      arguments: { title: 'Downloadable Script', content: 'print(1)', format: 'python' },
+    })
+    const text = res.result.content[0].text
+    const marker = text.match(/^\[FILE: (.+)\]$/m)
+    assert(marker, `no [FILE:] marker in result: ${text}`)
+    assert(marker[1].endsWith('.py'), `marker path is not the script: ${marker[1]}`)
+    assert(fs.existsSync(path.join(scopedDocsDir, marker[1])), `marker path does not resolve under the caller's docs root: ${marker[1]}`)
+  })
+
+  await test('a filename argument ending in .py infers the python format', async () => {
+    const res = await client.call('tools/call', {
+      name: 'create_document',
+      arguments: { filename: 'batch_rename.py', content: 'print("renamed")' },
+    })
+    assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
+    const filePath = res.result.content[0].text.match(/Document created: (.+)$/)[1]
+    assert(filePath.endsWith('.py'), `expected a .py file, got ${filePath}`)
+    assert(fs.readFileSync(filePath, 'utf8').trim() === 'print("renamed")', 'script body was altered')
+  })
+
+  await test('round trip: create_document (python) then read_document returns the source', async () => {
+    const created = await client.call('tools/call', {
+      name: 'create_document',
+      arguments: { title: 'Readable Script', content: 'THRESHOLD = 4417\nprint(THRESHOLD)', format: 'python' },
+    })
+    const filename = path.basename(created.result.content[0].text.match(/Document created: (.+)$/)[1])
+    const read = await client.call('tools/call', { name: 'read_document', arguments: { path: filename } })
+    assert(!read.result?.isError, `read failed: ${JSON.stringify(read.result)}`)
+    assert(read.result.content[0].text.includes('THRESHOLD = 4417'), `source missing: ${read.result.content[0].text}`)
+  })
+
   await test('a second create_document with the same title gets a distinct filename, not an overwrite', async () => {
     const first = await client.call('tools/call', { name: 'create_document', arguments: { title: 'Duplicate Title', content: 'first', format: 'markdown' } })
     const second = await client.call('tools/call', { name: 'create_document', arguments: { title: 'Duplicate Title', content: 'second', format: 'markdown' } })
@@ -363,7 +435,7 @@ async function main() {
     const res = await client.call('tools/call', { name: 'create_document', arguments: { title: '../../../../evil', content: 'x', format: 'markdown' } })
     assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
     const filePath = res.result.content[0].text.match(/Document created: (.+)$/)[1]
-    const resolvedDocsDir = path.resolve(tmpDocsDir)
+    const resolvedDocsDir = path.resolve(scopedDocsDir)
     const resolvedFile = path.resolve(filePath)
     assert(resolvedFile === resolvedDocsDir || resolvedFile.startsWith(resolvedDocsDir + path.sep),
       `file escaped the output directory: ${resolvedFile}`)
@@ -413,7 +485,7 @@ async function main() {
   })
 
   await test('read_document paginates long files via offset', async () => {
-    fs.writeFileSync(path.join(tmpDocsDir, 'long.txt'), 'A'.repeat(9000) + 'ZEBRA-MARKER')
+    fs.writeFileSync(path.join(scopedDocsDir, 'long.txt'), 'A'.repeat(9000) + 'ZEBRA-MARKER')
     const first = await client.call('tools/call', { name: 'read_document', arguments: { path: 'long.txt' } })
     const firstText = first.result.content[0].text
     assert(firstText.includes('Truncated') && firstText.includes('offset=8000'), `expected truncation notice: ...${firstText.slice(-140)}`)
@@ -434,7 +506,7 @@ async function main() {
   })
 
   await test('read_document on an unsupported extension -> isError', async () => {
-    fs.writeFileSync(path.join(tmpDocsDir, 'binary.exe'), 'MZ')
+    fs.writeFileSync(path.join(scopedDocsDir, 'binary.exe'), 'MZ')
     const res = await client.call('tools/call', { name: 'read_document', arguments: { path: 'binary.exe' } })
     assert(res.result?.isError === true && res.result.content[0].text.includes('Unsupported'), `expected unsupported-type error, got ${JSON.stringify(res.result)}`)
   })
@@ -453,7 +525,7 @@ async function main() {
     ws.addRow(['Alvarez', 3])
     ws.addRow(['Total', { formula: 'SUM(B2:B3)', result: 15 }])
     wb.addWorksheet('Budget').addRow(['Rent assistance', 1250.5])
-    await wb.xlsx.writeFile(path.join(tmpDocsDir, 'caseload.xlsx'))
+    await wb.xlsx.writeFile(path.join(scopedDocsDir, 'caseload.xlsx'))
 
     const res = await client.call('tools/call', { name: 'read_document', arguments: { path: 'caseload.xlsx' } })
     assert(!res.result?.isError, `read failed: ${JSON.stringify(res.result)}`)
@@ -465,7 +537,7 @@ async function main() {
   })
 
   await test('read_document reads a .csv file', async () => {
-    fs.writeFileSync(path.join(tmpDocsDir, 'export.csv'), 'name,status\nHenderson,active\nAlvarez,waitlist\n')
+    fs.writeFileSync(path.join(scopedDocsDir, 'export.csv'), 'name,status\nHenderson,active\nAlvarez,waitlist\n')
     const res = await client.call('tools/call', { name: 'read_document', arguments: { path: 'export.csv' } })
     assert(!res.result?.isError, `read failed: ${JSON.stringify(res.result)}`)
     assert(res.result.content[0].text.includes('Alvarez,waitlist'), `unexpected csv content: ${res.result.content[0].text}`)
@@ -500,6 +572,46 @@ async function main() {
   })
 
   updateMcpConfig({ ...baseConfig, sqlite: { enabled: true, rootDir: tmpSqliteDir, maxRows: 200 } })
+
+  // --- Discovery. Every other sqlite tool REQUIRES a database path, so without
+  // a listing the capability is unusable unless the model already knows a
+  // filename — and nothing tells it one. A model asked to find databases falls
+  // back to the file-system tools (a different root entirely), finds nothing,
+  // and reports that no databases exist. Observed in practice; these lock the
+  // fix in. ---
+
+  await test('🔍 sqlite_list_databases finds databases without being told a filename', async () => {
+    const res = await client.call('tools/call', { name: 'sqlite_list_databases', arguments: {} })
+    assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
+    const text = res.result.content[0].text
+    assert(text.includes('cases.db'), `the fixture database was not listed: ${text}`)
+  })
+
+  await test('sqlite_list_databases reports files in subfolders too', async () => {
+    fs.mkdirSync(path.join(tmpSqliteDir, 'archive'), { recursive: true })
+    fs.copyFileSync(path.join(tmpSqliteDir, 'cases.db'), path.join(tmpSqliteDir, 'archive', 'old.db'))
+    const res = await client.call('tools/call', { name: 'sqlite_list_databases', arguments: {} })
+    assert(res.result.content[0].text.includes('archive/old.db'), `nested database missing: ${res.result.content[0].text}`)
+  })
+
+  await test('🔍 a file merely NAMED .db is not offered as a database', async () => {
+    // Listing it would send the model off to query something that cannot be
+    // opened, and the failure would look like a permissions problem.
+    fs.writeFileSync(path.join(tmpSqliteDir, 'notes.db'), 'this is not a database')
+    const res = await client.call('tools/call', { name: 'sqlite_list_databases', arguments: {} })
+    assert(!res.result.content[0].text.includes('notes.db'), `a non-SQLite file was listed: ${res.result.content[0].text}`)
+    fs.rmSync(path.join(tmpSqliteDir, 'notes.db'))
+  })
+
+  await test('sqlite_list_databases needs no arguments (it is the entry point)', async () => {
+    const tools = (await client.call('tools/list')).result.tools
+    const listTool = tools.find(t => t.name === 'sqlite_list_databases')
+    assert(listTool, 'sqlite_list_databases is not advertised')
+    assert(
+      !listTool.inputSchema.required || listTool.inputSchema.required.length === 0,
+      `discovery must not require an argument: ${JSON.stringify(listTool.inputSchema.required)}`,
+    )
+  })
 
   await test('tools/list includes sqlite_query/list_tables/describe_table once enabled', async () => {
     const res = await client.call('tools/list')
@@ -580,6 +692,12 @@ async function main() {
     '---\ntags: [intake, followup]\n---\n# Meeting\nDiscussed the Henderson housing application deadline.')
   fs.writeFileSync(path.join(tmpVaultDir, 'cases', 'henderson.md'),
     '# Henderson case\n#intake\nHousing application filed in March. Deadline extended.')
+  // The YAML dash-list tag form. Obsidian writes this by default, and it had no
+  // coverage: the inline-value regex used \s* (which matches newlines), so it
+  // captured "- review" as an inline tag, skipped the dash-list branch, and lost
+  // every tag after the first. Keep a note that uses ONLY this form.
+  fs.writeFileSync(path.join(tmpVaultDir, 'dash-list.md'),
+    '---\ntags:\n  - review\n  - followup\n---\n# Quarterly review\nNothing inline here.')
   fs.writeFileSync(path.join(tmpVaultDir, 'unrelated.md'), '# Groceries\nMilk, eggs.')
   fs.writeFileSync(path.join(tmpVaultDir, '.obsidian', 'hidden.md'), 'Henderson should never appear from here.')
 
@@ -607,7 +725,18 @@ async function main() {
   await test('vault_tags lists tags from both inline and frontmatter forms', async () => {
     const res = await client.call('tools/call', { name: 'vault_tags', arguments: {} })
     const text = res.result.content[0].text
-    assert(text.includes('#intake (2)') && text.includes('#followup (1)'), `unexpected tags: ${text}`)
+    // intake: one inline #tag + one frontmatter list. followup: the frontmatter
+    // list here plus dash-list.md, which carries it in the YAML dash form.
+    assert(text.includes('#intake (2)') && text.includes('#followup (2)'), `unexpected tags: ${text}`)
+  })
+
+  await test('vault_tags reads the YAML dash-list tag form', async () => {
+    const res = await client.call('tools/call', { name: 'vault_tags', arguments: {} })
+    const text = res.result.content[0].text
+    // Both entries, not just the first — and no "- review" artefact.
+    assert(text.includes('#review (1)'), `dash-list tag missing: ${text}`)
+    assert(text.includes('#followup (2)'), `dash-list note not counted under followup: ${text}`)
+    assert(!/#-\s/.test(text), `malformed tag parsed from the dash list: ${text}`)
   })
 
   await test('vault_tags with a tag argument lists the tagged notes', async () => {
@@ -653,7 +782,16 @@ async function main() {
     await test('tools/list includes git_status/log/diff once enabled', async () => {
       const res = await client.call('tools/list')
       const names = res.result.tools.map(t => t.name)
-      for (const n of ['git_status', 'git_log', 'git_diff']) assert(names.includes(n), `expected ${n} in ${JSON.stringify(names)}`)
+      for (const n of ['git_list_repos', 'git_status', 'git_log', 'git_diff']) assert(names.includes(n), `expected ${n} in ${JSON.stringify(names)}`)
+    })
+
+    await test('🔍 git_list_repos finds repositories in subfolders', async () => {
+      // `repo` defaults to the configured root, so a root that IS a repo works
+      // without discovery — but a folder holding several repos leaves the model
+      // guessing names. Same gap sqlite had.
+      const res = await client.call('tools/call', { name: 'git_list_repos', arguments: {} })
+      assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
+      assert(res.result.content[0].text.includes('myrepo'), `repo not listed: ${res.result.content[0].text}`)
     })
 
     await test('git_status reports the modified file', async () => {
@@ -768,7 +906,7 @@ async function main() {
       const saved = await client.call('tools/call', { name: 'scholar_save_pdf', arguments: { id: 'arxiv:1706.03762' } })
       assert(!saved.result?.isError, `save failed: ${JSON.stringify(saved.result)}`)
       const filename = saved.result.content[0].text.match(/Saved: (\S+\.pdf)/)[1]
-      const bytes = fs.readFileSync(path.join(tmpDocsDir, filename))
+      const bytes = fs.readFileSync(path.join(scopedDocsDir, filename))
       assert(bytes.subarray(0, 4).toString() === '%PDF', 'saved file is not a PDF')
       const read = await client.call('tools/call', { name: 'read_document', arguments: { path: filename } })
       assert(!read.result?.isError && /attention/i.test(read.result.content[0].text), `read-back failed: ${JSON.stringify(read.result).slice(0, 300)}`)
@@ -786,10 +924,11 @@ async function main() {
   // appear, since toolDefs() serves the cached tools/list from the live child.
   {
     const { buildGatewayConfig } = await import('../electron/main/gateway-config.mjs')
+    const { expandDisabledToolIds } = await import('../electron/main/tools-definitions.mjs')
     const storageFs = await import('../electron/main/tools-storage.mjs')
     const fsProvider = await import('../electron/main/filesystem-mcp-provider.mjs')
     storageFs.setCapabilityConfig('file_system', { enabled: true, rootDir: tmpFsDir })
-    fs.writeFileSync(path.join(tmpFsDir, 'note.txt'), 'hello world')
+    fs.writeFileSync(path.join(scopedFsDir, 'note.txt'), 'hello world')
     const fsProfile = { tools: { enabled: true, activeToolIds: ['file_system'] } }
 
     await test('🔍 buildGatewayConfig emits camelCase fileSystem (producer/consumer keys agree)', async () => {
@@ -825,7 +964,57 @@ async function main() {
     await test('write_file works under the default policy (writes allowed)', async () => {
       const res = await client.call('tools/call', { name: 'write_file', arguments: { path: 'written.txt', content: 'hi there' } })
       assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
-      assert(fs.readFileSync(path.join(tmpFsDir, 'written.txt'), 'utf8').includes('hi there'), 'file was not written')
+      assert(fs.readFileSync(path.join(scopedFsDir, 'written.txt'), 'utf8').includes('hi there'), 'file was not written')
+    })
+
+    await test('write_file emits a [FILE:] marker so a written script is downloadable', async () => {
+      // Nested on purpose: the marker path must be relative to the root and
+      // forward-slashed, since /files/download resolves it as a URL parameter.
+      // The upstream server does not create parent dirs, hence create_directory.
+      const made = await client.call('tools/call', { name: 'create_directory', arguments: { path: 'scripts' } })
+      assert(!made.result?.isError, `create_directory failed: ${JSON.stringify(made.result)}`)
+      const res = await client.call('tools/call', { name: 'write_file', arguments: { path: 'scripts/tidy.py', content: 'print("tidy")' } })
+      assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
+      const text = res.result.content[0].text
+      const marker = text.match(/^\[FILE: (.+)\]$/m)
+      assert(marker, `no [FILE:] marker in result: ${text}`)
+      assert(marker[1] === 'scripts/tidy.py', `expected a forward-slash path relative to the root, got ${marker[1]}`)
+      assert(fs.existsSync(path.join(scopedFsDir, 'scripts', 'tidy.py')), 'script was not written')
+    })
+
+    // --- Per-account scoping: the model addresses its own folder and is never
+    // told where that folder actually is. Absolute server paths in a tool
+    // result would disclose the on-disk layout, the account-folder naming
+    // scheme, and the existence of sibling accounts. ---
+
+    await test('🔍 no tool result leaks the absolute server path of the capability root', async () => {
+      const scopedRoot = path.join(tmpFsDir, 'user_files', '_local')
+      fs.writeFileSync(path.join(scopedRoot, 'visible.txt'), 'hi')
+      for (const call of [
+        { name: 'list_allowed_directories', arguments: {} },
+        { name: 'list_directory', arguments: { path: '.' } },
+        { name: 'directory_tree', arguments: { path: '.' } },
+        { name: 'search_files', arguments: { path: '.', pattern: 'visible' } },
+        { name: 'get_file_info', arguments: { path: 'visible.txt' } },
+        { name: 'write_file', arguments: { path: 'echoed.txt', content: 'x' } },
+      ]) {
+        const res = await client.call('tools/call', call)
+        const text = (res.result?.content ?? []).map(c => c.text).join('\n')
+        assert(!text.includes(tmpFsDir), `${call.name} leaked the capability root: ${text.slice(0, 200)}`)
+        assert(!text.includes('user_files'), `${call.name} leaked the account-folder layout: ${text.slice(0, 200)}`)
+      }
+    })
+
+    await test('a relative path still resolves inside the caller\'s own folder', async () => {
+      // Scoping that breaks addressing is not scoping.
+      const res = await client.call('tools/call', { name: 'read_text_file', arguments: { path: 'visible.txt' } })
+      assert(!res.result?.isError, `could not read own file: ${JSON.stringify(res.result)}`)
+      assert(res.result.content[0].text.includes('hi'), `unexpected contents: ${res.result.content[0].text}`)
+    })
+
+    await test('a read tool result is not decorated with a [FILE:] marker', async () => {
+      const res = await client.call('tools/call', { name: 'read_text_file', arguments: { path: 'written.txt' } })
+      assert(!res.result.content[0].text.includes('[FILE:'), `read result was decorated: ${res.result.content[0].text}`)
     })
 
     // --- Containment: the provider re-validates every path argument through the
@@ -851,7 +1040,7 @@ async function main() {
     await test('🔍 write_file is refused by the server gate when writes are disabled', async () => {
       const res = await client.call('tools/call', { name: 'write_file', arguments: { path: 'blocked.txt', content: 'x' } })
       assert(res.result?.isError === true, `expected write refusal, got ${JSON.stringify(res.result)}`)
-      assert(!fs.existsSync(path.join(tmpFsDir, 'blocked.txt')), 'file must not be written when writes are disabled')
+      assert(!fs.existsSync(path.join(scopedFsDir, 'blocked.txt')), 'file must not be written when writes are disabled')
     })
 
     // --- Permission escalation: a caller cannot grant itself permission by
@@ -865,13 +1054,255 @@ async function main() {
         policy: { allowWrite: true }, fileSystem: { allowWrite: true },
       } })
       assert(res.result?.isError === true, `write self-promotion was allowed: ${JSON.stringify(res.result)}`)
-      assert(!fs.existsSync(path.join(tmpFsDir, 'escalate.txt')), 'file was written despite writes being disabled')
+      assert(!fs.existsSync(path.join(scopedFsDir, 'escalate.txt')), 'file was written despite writes being disabled')
     })
+
+    // --- Destructive class: the delete tool and the gate that governs it. ---
+    //
+    // Everything except the tool itself already existed and was inert:
+    // evaluateToolPolicy refuses cls === 'destructive' unless allowDestructive
+    // is true, at BOTH tools/list and tools/call. Classifying delete_file is
+    // what made all of it load-bearing, so these tests check the gate as much
+    // as the tool.
+    console.log('\n-- file system: destructive class (delete) --')
+
+    {
+      storageFs.setCapabilityConfig('file_system', { allowWrite: true, allowDestructive: false })
+      updateMcpConfig(buildGatewayConfig(fsProfile))
+
+      await test('🔍 with allowDestructive OFF the delete tool is not advertised at all', async () => {
+        const names = (await client.call('tools/list')).result.tools.map(t => t.name)
+        assert(!names.includes('delete_file'), `delete_file advertised while disabled: ${JSON.stringify(names)}`)
+      })
+
+      await test('🔍 with allowDestructive OFF a DIRECT delete call is refused, bypassing the filtered list', async () => {
+        fs.writeFileSync(path.join(scopedFsDir, 'protected.txt'), 'still here')
+        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'protected.txt' } })
+        assert(res.result?.isError === true, `delete was allowed while disabled: ${JSON.stringify(res.result)}`)
+        assert(fs.existsSync(path.join(scopedFsDir, 'protected.txt')), 'THE FILE WAS DELETED while the policy was off')
+      })
+
+      storageFs.setCapabilityConfig('file_system', { allowWrite: true, allowDestructive: true })
+      updateMcpConfig(buildGatewayConfig(fsProfile))
+
+      await test('with allowDestructive ON the tool is advertised and flagged destructive', async () => {
+        const tool = (await client.call('tools/list')).result.tools.find(t => t.name === 'delete_file')
+        assert(tool, 'delete_file not advertised despite the policy being on')
+        assert(tool._meta['redstart/class'] === 'destructive', `class is ${tool._meta['redstart/class']}`)
+        assert(tool.annotations.destructiveHint === true, 'destructiveHint not set')
+        assert(tool._meta['redstart/capability'] === 'file_system', 'not attributed to the file_system capability')
+      })
+
+      await test('🔍 a deleted file is RECOVERABLE, not destroyed', async () => {
+        // The property that makes exposing a delete to a local model defensible.
+        // Under the test stub there is no OS recycle bin, so this exercises the
+        // .trash/ fallback — the tier that must never degrade to a real delete.
+        fs.writeFileSync(path.join(scopedFsDir, 'doomed.txt'), 'recover me')
+        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'doomed.txt' } })
+        assert(!res.result?.isError, `delete failed: ${JSON.stringify(res.result)}`)
+        assert(!fs.existsSync(path.join(scopedFsDir, 'doomed.txt')), 'the file is still at its original path')
+
+        const trashRoot = path.join(scopedFsDir, '.trash')
+        const found = []
+        const stack = [trashRoot]
+        while (stack.length) {
+          const dir = stack.pop()
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name)
+            if (entry.isDirectory()) stack.push(full)
+            else found.push(full)
+          }
+        }
+        const recovered = found.filter(f => f.endsWith('doomed.txt'))
+        assert(recovered.length === 1, `expected 1 recoverable copy, found ${recovered.length}`)
+        assert(fs.readFileSync(recovered[0], 'utf8') === 'recover me', 'the recoverable copy lost its contents')
+        assert(/recoverable/i.test(res.result.content[0].text), `reply does not mention recoverability: ${res.result.content[0].text}`)
+      })
+
+      await test('🔍 containment: a path outside the caller\'s storage is refused', async () => {
+        const outside = path.join(tmpFsDir, 'outside-victim.txt')
+        fs.writeFileSync(outside, 'not yours')
+        for (const attempt of ['../outside-victim.txt', '../../outside-victim.txt', outside]) {
+          const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: attempt } })
+          assert(res.result?.isError === true, `escape allowed via "${attempt}": ${JSON.stringify(res.result)}`)
+        }
+        assert(fs.existsSync(outside), 'A FILE OUTSIDE THE CALLER\'S STORAGE WAS DELETED')
+      })
+
+      await test('🔍 the storage root itself cannot be deleted', async () => {
+        for (const attempt of ['.', '', './']) {
+          const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: attempt } })
+          assert(res.result?.isError === true, `root delete allowed via "${attempt}"`)
+        }
+        assert(fs.existsSync(scopedFsDir), 'THE STORAGE ROOT WAS DELETED')
+      })
+
+      await test('🔍 a non-empty directory is refused and its contents survive', async () => {
+        fs.mkdirSync(path.join(scopedFsDir, 'keepdir'), { recursive: true })
+        fs.writeFileSync(path.join(scopedFsDir, 'keepdir', 'inner.txt'), 'inner')
+        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'keepdir' } })
+        assert(res.result?.isError === true, `non-empty directory was deleted: ${JSON.stringify(res.result)}`)
+        assert(fs.existsSync(path.join(scopedFsDir, 'keepdir', 'inner.txt')), 'directory contents were removed')
+      })
+
+      await test('an empty directory is accepted', async () => {
+        fs.mkdirSync(path.join(scopedFsDir, 'emptydir'), { recursive: true })
+        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'emptydir' } })
+        assert(!res.result?.isError, `empty directory delete failed: ${JSON.stringify(res.result)}`)
+        assert(!fs.existsSync(path.join(scopedFsDir, 'emptydir')), 'the empty directory is still there')
+      })
+
+      await test('🔍 an item already in .trash/ is refused, never permanently removed', async () => {
+        // Emptying the bin is a different operation with a different risk
+        // profile. Allowing it here would hand the model a path it could use to
+        // make this tool destructive after all.
+        fs.mkdirSync(path.join(scopedFsDir, '.trash', 'bucket'), { recursive: true })
+        const trashed = path.join(scopedFsDir, '.trash', 'bucket', 'gone.txt')
+        fs.writeFileSync(trashed, 'already trashed')
+        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: '.trash/bucket/gone.txt' } })
+        assert(res.result?.isError === true, `trash emptying was allowed: ${JSON.stringify(res.result)}`)
+        assert(fs.existsSync(trashed), 'a trashed file was PERMANENTLY removed')
+      })
+
+      await test('a missing path reports not-found rather than succeeding silently', async () => {
+        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'no-such-file.txt' } })
+        assert(res.result?.isError === true, `expected an error: ${JSON.stringify(res.result)}`)
+      })
+
+      await test('banning file_system also removes the delete tool', async () => {
+        // delete_file is in CAPABILITY_TOOL_NAMES.file_system, so a capability
+        // ban expands to cover it — the tool most worth banning must not be the
+        // one the ban misses.
+        const banned = { ...buildGatewayConfig(fsProfile), disabledTools: expandDisabledToolIds(['file_system']) }
+        updateMcpConfig(banned)
+        const names = (await client.call('tools/list')).result.tools.map(t => t.name)
+        assert(!names.includes('delete_file'), 'a file_system ban did not cover delete_file')
+        updateMcpConfig(buildGatewayConfig(fsProfile))
+      })
+    }
 
     // restore default policy + stop the child so later capability reads see the
     // secure default and no orphaned process survives the suite.
     storageFs.setCapabilityConfig('file_system', { allowWrite: true, allowDestructive: false })
     fsProvider.stopFilesystemProvider()
+    updateMcpConfig(baseConfig)
+  }
+
+  // -------------------------------------------------------------------------
+  // Tool provenance annotation + admin tool bans.
+  //
+  // Two properties, both of which used to be missing:
+  //
+  //   1. tools/list carries the capability and class of every tool in _meta, so
+  //      a client can act on capability IDENTITY rather than tool names. The
+  //      chat-ui's filesystem precedence rule was previously expressed as a name
+  //      collision and stopped working, silently, when Nest renamed its file
+  //      tools.
+  //
+  //   2. Bans are enforced HERE, not only in the completions proxy. Previously
+  //      disabledTools was read exclusively by tools-gateway.mjs, so a banned
+  //      tool was stripped from the model's vocabulary while this server still
+  //      advertised it AND still executed it for anyone calling tools/call
+  //      directly — which is what an MCP client does by definition.
+  // -------------------------------------------------------------------------
+  console.log('\n-- tool provenance annotation --')
+
+  {
+    updateMcpConfig({ ...baseConfig, documents: { enabled: true, outputDir: tmpDocsDir } })
+
+    await test('every advertised tool carries its capability and class in _meta', async () => {
+      const res = await client.call('tools/list')
+      for (const tool of res.result.tools) {
+        assert(tool._meta, `${tool.name} has no _meta`)
+        assert(
+          Object.prototype.hasOwnProperty.call(tool._meta, 'redstart/capability'),
+          `${tool.name} is missing redstart/capability`,
+        )
+        assert(
+          typeof tool._meta['redstart/class'] === 'string',
+          `${tool.name} is missing redstart/class`,
+        )
+      }
+      return `${res.result.tools.length} tools`
+    })
+
+    await test('the annotated capability matches CAPABILITY_TOOL_NAMES', async () => {
+      const res = await client.call('tools/list')
+      for (const tool of res.result.tools) {
+        assert(
+          tool._meta['redstart/capability'] === capabilityForTool(tool.name),
+          `${tool.name} claims capability ${tool._meta['redstart/capability']}, expected ${capabilityForTool(tool.name)}`,
+        )
+      }
+    })
+
+    await test('the annotated class matches classifyTool — the same map the gate uses', async () => {
+      const res = await client.call('tools/list')
+      for (const tool of res.result.tools) {
+        assert(
+          tool._meta['redstart/class'] === classifyTool(tool.name),
+          `${tool.name} claims class ${tool._meta['redstart/class']}, expected ${classifyTool(tool.name)}`,
+        )
+      }
+    })
+
+    await test('standard MCP annotation hints mirror the class', async () => {
+      const res = await client.call('tools/list')
+      const doc = res.result.tools.find(t => t.name === 'create_document')
+      const read = res.result.tools.find(t => t.name === 'read_document')
+      const fetch = res.result.tools.find(t => t.name === 'web_fetch')
+      assert(doc?.annotations?.readOnlyHint === false, 'create_document is not marked as mutating')
+      assert(read?.annotations?.readOnlyHint === true, 'read_document is not marked read-only')
+      assert(fetch?.annotations?.openWorldHint === true, 'web_fetch is not marked open-world')
+      assert(
+        res.result.tools.every(t => t.annotations.destructiveHint === false),
+        'a tool is flagged destructive while no destructive tool exists yet',
+      )
+    })
+
+    updateMcpConfig(baseConfig)
+  }
+
+  console.log('\n-- admin tool bans (enforced at the MCP chokepoint) --')
+
+  {
+    const bannedConfig = {
+      ...baseConfig,
+      documents: { enabled: true, outputDir: tmpDocsDir },
+      disabledTools: ['create_document'],
+    }
+    updateMcpConfig(bannedConfig)
+
+    await test('a banned tool is not advertised in tools/list', async () => {
+      const res = await client.call('tools/list')
+      const names = res.result.tools.map(t => t.name)
+      assert(!names.includes('create_document'), `banned tool still advertised: ${JSON.stringify(names)}`)
+      // Its siblings from the same capability are untouched — the ban is by
+      // tool name, not by capability.
+      assert(names.includes('read_document'), 'the ban took out the whole capability')
+    })
+
+    await test('🔍 a banned tool is REFUSED on a direct tools/call, bypassing the filtered list', async () => {
+      // The regression that mattered: the completions proxy stripped the name
+      // from the payload, but this server executed it happily for any client
+      // that called it directly.
+      const res = await client.call('tools/call', {
+        name: 'create_document',
+        arguments: { title: 'banned', content: 'should not exist', format: 'markdown' },
+      })
+      assert(res.result?.isError === true, `banned tool executed: ${JSON.stringify(res.result)}`)
+      assert(
+        /disabled by an administrator/i.test(res.result.content[0].text),
+        `unexpected refusal reason: ${res.result.content[0].text}`,
+      )
+    })
+
+    await test('lifting the ban restores the tool', async () => {
+      updateMcpConfig({ ...bannedConfig, disabledTools: [] })
+      const res = await client.call('tools/list')
+      assert(res.result.tools.map(t => t.name).includes('create_document'), 'tool did not come back')
+    })
+
     updateMcpConfig(baseConfig)
   }
 

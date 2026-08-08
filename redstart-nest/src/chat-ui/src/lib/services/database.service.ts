@@ -68,8 +68,14 @@ export class DatabaseService {
     return conv;
   }
 
+  /**
+   * `parent` is excluded deliberately: this function sets it from `parentId`
+   * below, so a caller-supplied value would be silently discarded. Requiring
+   * a field the implementation ignores made ten call sites either pass a lie
+   * or omit it and fail typecheck.
+   */
   static async createMessageBranch(
-    message: Omit<DatabaseMessage, 'id'>,
+    message: Omit<DatabaseMessage, 'id' | 'parent'>,
     parentId: string | null
   ): Promise<DatabaseMessage> {
     const conv = await apiFetch<DatabaseConversation>(`/conversations/${message.convId}`, {

@@ -18,6 +18,7 @@
 
 import * as crypto from 'crypto'
 import * as accounts from './accounts-storage.mjs'
+import { isKnownSurface } from './system-prompt.mjs'
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days, sliding
 
@@ -152,6 +153,19 @@ export function authenticate(req) {
 
     const record = accounts.findByApiKeyHash(hashApiKey(token))
     if (record) return { ok: true, account: toPublicAccount(record) }
+
+    // Per-connector credential (spec §8). The surface travels with the key, so
+    // the server knows which app is calling without trusting a header. Checked
+    // after the account-wide key so an existing key keeps its exact behaviour.
+    const bound = accounts.findByClientKeyHash(hashApiKey(token))
+    if (bound && bound.account.status !== 'disabled') {
+      return {
+        ok: true,
+        account: toPublicAccount(bound.account),
+        surface: bound.clientKey.surface,
+        clientKeyId: bound.clientKey.id,
+      }
+    }
   }
 
   // No (valid) token — require authentication from every client, localhost
@@ -282,6 +296,71 @@ export function regenerateApiKey(actor, id) {
 // because the target is always the caller's own account — the route passes the
 // authenticated account straight through as the actor, so there's no id to
 // spoof. Deliberately separate from regenerateApiKey() (admin-managing-others).
+// ---------------------------------------------------------------------------
+// Per-connector credentials (system-prompt spec §8)
+// ---------------------------------------------------------------------------
+// Self-service, like regenerateOwnApiKey: a user issues keys for their OWN
+// account and no one else's. Issuing keys for another account would be an
+// impersonation primitive, so it is deliberately not offered — an admin who
+// needs a connector key for someone else resets that account instead.
+//
+// The raw key is returned exactly once. Only its hash is stored.
+
+/**
+ * The actor's own connector keys, minus hashes.
+ *
+ * Deliberately NOT built on listAccounts(), which filters by role — an admin
+ * listing accounts sees only 'user' records and so would not find themselves.
+ * Self-service reads must not depend on a management-visibility rule.
+ */
+export function getOwnClientKeys(actor) {
+  if (!actor) return []
+  const record = accounts.findById(actor.id)
+  return (record?.clientKeys || []).map(({ keyHash, ...publicFields }) => publicFields)
+}
+
+export function issueClientKey(actor, { surface, label } = {}) {
+  if (!actor) return { ok: false, error: 'Not authenticated' }
+  if (!isKnownSurface(surface)) {
+    return { ok: false, error: `Unknown surface: ${String(surface)}` }
+  }
+
+  const record = accounts.findById(actor.id)
+  if (!record) return { ok: false, error: 'Account not found' }
+
+  const apiKey = generateApiKey()
+  const entry = {
+    id: crypto.randomUUID(),
+    surface,
+    label: typeof label === 'string' && label.trim() ? label.trim().slice(0, 64) : surface,
+    keyHash: hashApiKey(apiKey),
+    keyPrefix: apiKey.slice(0, 8),
+    createdAt: new Date().toISOString(),
+  }
+
+  const account = accounts.updateAccount(actor.id, {
+    clientKeys: [...(record.clientKeys || []), entry],
+  })
+  if (!account) return { ok: false, error: 'Account not found' }
+
+  return { ok: true, account, apiKey, clientKey: { ...entry, keyHash: undefined } }
+}
+
+export function revokeClientKey(actor, keyId) {
+  if (!actor) return { ok: false, error: 'Not authenticated' }
+
+  const record = accounts.findById(actor.id)
+  if (!record) return { ok: false, error: 'Account not found' }
+
+  const remaining = (record.clientKeys || []).filter(k => k.id !== keyId)
+  if (remaining.length === (record.clientKeys || []).length) {
+    return { ok: false, error: 'Key not found' }
+  }
+
+  const account = accounts.updateAccount(actor.id, { clientKeys: remaining })
+  return { ok: true, account }
+}
+
 export function regenerateOwnApiKey(actor) {
   if (!actor) return { ok: false, error: 'Not authenticated' }
   const apiKey = generateApiKey()

@@ -9,6 +9,7 @@
 import { DatabaseService } from '$lib/services/database.service';
 import { ChatService } from '$lib/services/chat.service';
 import { ContextCompactionService } from '$lib/services/context-compaction.service';
+import { PromptService } from '$lib/services/prompt.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
@@ -87,6 +88,19 @@ export class ChatSendController {
 					conversationsStore.addMessageToActive(systemMessage);
 					parentIdForUserMessage = systemMessage.id;
 				} else parentIdForUserMessage = rootId;
+
+				// Record which admin policy and mode this conversation starts
+				// under (spec §5). Best-effort by design: captureSnapshot()
+				// returns null instead of throwing, because a missing provenance
+				// record must never stop someone sending a message.
+				const snapshot = await PromptService.captureSnapshot(
+					conversationsStore.getPromptMode()
+				);
+				if (snapshot) {
+					await DatabaseService.updateConversation(currentConv.id, {
+						promptSnapshot: snapshot
+					});
+				}
 			}
 			const userMessage = await messageRepo.addMessage(
 				MessageRole.USER,

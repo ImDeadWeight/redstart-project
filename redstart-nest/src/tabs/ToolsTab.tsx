@@ -111,7 +111,7 @@ function FolderCapabilityCard({ caps, cap, title, emptyText, description }: {
           <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
             <span className="min-w-0">
               <span className="text-xs text-zinc-300">Allow destructive operations</span>
-              <span className="block text-xs text-zinc-600">Reserved: the current file server has no delete tool, so this gates nothing yet. If a future update adds one, it stays blocked until this is on.</span>
+              <span className="block text-xs text-zinc-600">Lets the model delete files in its own storage. Deletions go to the Recycle Bin and can be recovered, and the model must ask before every single one — "always allow" is never offered for deletion.</span>
             </span>
             <TogglePill
               checked={!!caps.capabilityConfig.file_system.allowDestructive}
@@ -120,7 +120,7 @@ function FolderCapabilityCard({ caps, cap, title, emptyText, description }: {
             />
           </label>
           {caps.capabilityConfig.file_system.allowDestructive && (
-            <p className="text-xs text-yellow-500/90">⚠ If a future file server adds destructive tools, the model will be allowed to use them within the chosen folder.</p>
+            <p className="text-xs text-yellow-500/90">⚠ The model can delete files in each user's own storage under this folder. Deletions are recoverable from the Recycle Bin and are confirmed one at a time.</p>
           )}
         </div>
       )}
@@ -141,7 +141,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
   mcp: ReturnType<typeof useExternalMcp>
 }) {
   const {
-    allTools, allGroups,
+    allTools, allGroups, clientApps,
     showAddTool, setShowAddTool, newToolName, setNewToolName,
     newToolUrl, setNewToolUrl, newToolDesc, setNewToolDesc,
     showAddGroup, setShowAddGroup, newGroupName, setNewGroupName,
@@ -534,28 +534,39 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
         )}
       </div>
 
-      {/* Banned tools — server-enforced, applies to every client */}
+      {/* Banned tools — the only control that reaches tools this server does
+          not provide. Deliberately NOT a second list of the capabilities above:
+          for a capability, unticking it in Local Capabilities already stops the
+          tools being served at all, so listing capabilities here was two
+          checkbox lists over the same names meaning opposite things — while the
+          set that genuinely needs banning could not be named at all. */}
       <div className="mt-6 pt-4 border-t border-zinc-700">
         <p className="text-xs uppercase tracking-widest text-zinc-500 mb-1">Banned Tools</p>
         <p className="text-xs text-zinc-600 mb-3">
-          Banned tools are removed from the model's vocabulary for every connected client — staff cannot re-enable them in their settings. Use this to enforce an org policy (e.g. disable file writes).
+          Client apps bring their own tools, which arrive already inside the request — this server never offers them, so it cannot withhold them either. Banning strips them by name from every request this profile serves, and clients cannot re-enable them. Applies to <span className="text-zinc-500">this profile</span>; other profiles have their own list.
         </p>
-        <div className="space-y-1.5">
-          {allTools.filter(t => t.kind === 'capability').map(tool => {
-            const banned = (config.tools?.disabledToolIds ?? []).includes(tool.id)
+        <div className="space-y-2.5">
+          {clientApps.map(app => {
+            const banned = (config.tools?.disabledToolIds ?? []).includes(app.id)
             return (
-              <label key={tool.id} className="flex items-center gap-2 cursor-pointer select-none">
+              <label key={app.id} className="flex items-start gap-2 cursor-pointer select-none">
                 <input
                   type="checkbox" checked={banned}
-                  onChange={() => toggleDisabledTool(tool.id)}
-                  className="accent-orange-500"
+                  onChange={() => toggleDisabledTool(app.id)}
+                  className="accent-orange-500 mt-0.5 flex-shrink-0"
                 />
-                <span className="text-sm text-zinc-200">{tool.name}</span>
-                <span className="text-xs text-zinc-600">{tool.description}</span>
+                <span className="min-w-0">
+                  <span className="text-sm text-zinc-200">{app.name}</span>
+                  <span className="text-xs text-zinc-600 ml-1.5">({app.toolNames.length} tools)</span>
+                  <span className="block text-xs text-zinc-600">{app.description}</span>
+                </span>
               </label>
             )
           })}
         </div>
+        <p className="text-xs text-zinc-600 mt-3">
+          To turn off one of this server's own capabilities, untick it under Local Capabilities above — that stops it being served at all. To make the File System capability read-only, use its "Allow writes" toggle rather than banning the whole thing.
+        </p>
       </div>
     </section>
   )

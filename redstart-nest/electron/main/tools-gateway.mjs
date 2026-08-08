@@ -18,11 +18,16 @@
 
 import * as http from 'http'
 import * as path from 'path'
-import { authenticate, login, logout, listAccounts, getAuthRequired, createAccount, deleteAccount, resetPassword, regenerateApiKey, regenerateOwnApiKey, hasAdminAccess } from './auth.mjs'
+import { authenticate, login, logout, listAccounts, getAuthRequired, createAccount, deleteAccount, resetPassword, regenerateApiKey, regenerateOwnApiKey, hasAdminAccess, issueClientKey, revokeClientKey, getOwnClientKeys } from './auth.mjs'
 import { logEvent } from './logger.mjs'
 import { getMcpServerRunning } from './mcp-server.mjs'
 import { getExternalServers } from './tools-storage.mjs'
+import { CLIENT_APP_TOOL_NAMES } from './tools-definitions.mjs'
 import { resolveWithinRoot } from './path-scope.mjs'
+import { resolveUserRoot } from './user-scope.mjs'
+import { handleFilesRequest } from './files-api.mjs'
+import { composePrompt, deriveEgressFacts, DEFAULT_TOKEN_BUDGET, listModes, SURFACE_IDS } from './system-prompt.mjs'
+import { getPromptBlocks, getPromptBlocksMeta, setPromptBlocks, MAX_BLOCK_CHARS } from './prompt-storage.mjs'
 import { getConversations, getConversation as getConv, createConversation, updateConversation, deleteConversation, deleteConversationsWithForks } from './conversations-storage.mjs'
 import * as fs from 'fs'
 
@@ -36,45 +41,54 @@ let activeConfig = null
 // System context injection
 // ---------------------------------------------------------------------------
 
-// `hasTools` = the request actually carries tool definitions.
+// Assembly itself lives in system-prompt.mjs — pure, synchronous, and testable
+// without a server (spec §11). This function's only job is to resolve the live
+// facts the composer needs and hand them over.
 //
-// Capability claims below are only TRUE when it does. Whether a tool is
-// reachable is decided by the client (it owns the MCP connection), not by this
-// config — an admin can have Documents enabled here while the client sends no
-// tools at all. Claiming "you have access to create_document" in that state
-// teaches the model to invent a call format for a tool it cannot reach: it
-// emits a plausible-looking blob, nothing executes, and it reports success for
-// work that never happened. Identity is always safe to state; capabilities are
-// conditional on the plumbing actually being there.
-function buildSystemContext(config, hasTools) {
-  const base = 'You are a local AI assistant running inside Redstart — a private, on-premises AI system. Your conversations stay on the local network and do not leave the building.'
-  const parts = [base]
-
-  if (!hasTools) return parts.join('\n\n')
-
-  const tools = config?.webFetch?.activeTools
-  if (tools?.length) {
-    const list = tools.map(t => {
-      let hostname = t.baseUrl
-      try { hostname = new URL(t.baseUrl).hostname } catch {}
-      return `- ${t.name} (${hostname})${t.description ? ` — ${t.description}` : ''}`
-    }).join('\n')
-    parts.push(`You have access to the web_fetch tool to retrieve live content from approved sources.\n\nApproved sources:\n${list}\n\nOnly fetch from these approved domains. Do not attempt to access any other URLs.`)
-  }
-
-  if (config?.postgres?.enabled) {
-    parts.push('You have access to postgres_query, postgres_list_tables, and postgres_describe_table to read from a connected local Postgres database. Queries are read-only.')
-  }
-
-  if (config?.documents?.enabled) {
-    parts.push('You have access to create_document to save a docx, pdf, or markdown file to a local output folder for the user.')
-  }
-
-  return parts.join('\n\n')
+// `hasTools` = the request actually carries tool definitions, and gates every
+// capability claim; see the substantiation rule in system-prompt.mjs.
+function buildSystemContext(config, hasTools, account, mode, surface, clientToolNames) {
+  const { prompt } = composePrompt({
+    config,
+    hasTools,
+    externalServers: getExternalServers(),
+    account,
+    admin: getPromptBlocks(),
+    mode,
+    surface,
+    clientToolNames,
+  })
+  return prompt
 }
 
-function injectSystemContext(messages, config, hasTools) {
-  const context = buildSystemContext(config, hasTools)
+// Tool names in this request that execute on the CLIENT'S machine — Redstart
+// Twig's fs_* file tools, which act on a folder the user granted on their own
+// PC. Read from the payload rather than inferred from the surface: a Twig user
+// who has granted no folder sends none of them, and for that session there is
+// only one machine to talk about.
+//
+// This is the same rule the rest of the prompt follows: a claim is made only
+// when the request substantiates it.
+function clientToolNamesIn(parsed) {
+  if (!Array.isArray(parsed?.tools)) return []
+  const present = new Set()
+  for (const tool of parsed.tools) {
+    const name = typeof tool === 'object' && tool !== null ? tool.function?.name : tool?.name
+    if (typeof name === 'string') present.add(name)
+  }
+  const local = []
+  for (const names of Object.values(CLIENT_APP_TOOL_NAMES)) {
+    for (const name of names) if (present.has(name)) local.push(name)
+  }
+  return local
+}
+
+// The composed prompt is PREPENDED to any client-supplied system message, so
+// client text lands after the precedence clause and is thereby subordinated to
+// admin policy (spec §4). Phase 7 stops accepting client system prose
+// altogether; until then this ordering is what makes the floor hold.
+function injectSystemContext(messages, config, hasTools, account, mode, surface, clientToolNames) {
+  const context = buildSystemContext(config, hasTools, account, mode, surface, clientToolNames)
   const sysIdx = messages.findIndex(m => m.role === 'system')
   if (sysIdx >= 0) {
     messages[sysIdx] = { ...messages[sysIdx], content: `${context}\n\n${messages[sysIdx].content}` }
@@ -264,6 +278,47 @@ async function handleAuthRoute(req, res, urlPath) {
     return sendJson(res, 200, { authRequired: getAuthRequired(), user: authResult.account })
   }
 
+  // Per-connector credentials (spec §8). Self-service only: a user issues keys
+  // for their own account, because issuing one for another account would be an
+  // impersonation primitive. Placed with the other self-service routes, before
+  // the admin gate below.
+  if (req.method === 'GET' && urlPath === '/auth/me/client-keys') {
+    const authResult = authenticate(req)
+    if (!authResult.ok || !authResult.account) return sendJson(res, 401, { error: 'Unauthorized' })
+    return sendJson(res, 200, {
+      clientKeys: getOwnClientKeys(authResult.account),
+      surfaces: SURFACE_IDS,
+    })
+  }
+
+  if (req.method === 'POST' && urlPath === '/auth/me/client-keys') {
+    const authResult = authenticate(req)
+    if (!authResult.ok || !authResult.account) return sendJson(res, 401, { error: 'Unauthorized' })
+    const body = await readJsonBody(req)
+    const result = issueClientKey(authResult.account, {
+      surface: body?.surface,
+      label: body?.label,
+    })
+    if (!result.ok) return sendJson(res, 400, { error: result.error })
+    logEvent('auth', 'client_key_issued', {
+      username: authResult.account.username,
+      surface: body?.surface,
+    })
+    // The raw key is returned exactly once and never stored.
+    return sendJson(res, 200, { apiKey: result.apiKey, clientKey: result.clientKey })
+  }
+
+  if (req.method === 'DELETE' && urlPath.startsWith('/auth/me/client-keys/')) {
+    const authResult = authenticate(req)
+    if (!authResult.ok || !authResult.account) return sendJson(res, 401, { error: 'Unauthorized' })
+    const keyId = urlPath.slice('/auth/me/client-keys/'.length)
+    const result = revokeClientKey(authResult.account, keyId)
+    if (!result.ok) return sendJson(res, 404, { error: result.error })
+    logEvent('auth', 'client_key_revoked', { username: authResult.account.username })
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*' })
+    return res.end()
+  }
+
   // Self-service key rotation — any logged-in user, acting on their own
   // account. Placed before the admin gate below because it is NOT an
   // account-management action. Requires a real authenticated account (an
@@ -415,6 +470,82 @@ export function startGateway(publicPort, config) {
         return
       }
 
+      // Egress audit (spec §7). The same facts the data_handling block is
+      // built from, served as data so "where does my data go?" is a question
+      // with a checkable answer rather than a sentence the model paraphrases.
+      //
+      // hasTools is TRUE here on purpose: the prompt describes only egress the
+      // current request can actually reach, but an audit must report every
+      // path the deployment is CONFIGURED for, whether or not this particular
+      // client sent tool definitions. Understating configured egress to an
+      // auditor is the same failure as overstating privacy to a user.
+      if (req.method === 'GET' && urlPath === '/egress') {
+        const facts = deriveEgressFacts(activeConfig, getExternalServers(), true)
+        return sendJson(res, 200, {
+          inference: facts.inference,
+          webDomains: facts.webDomains,
+          remoteToolServers: facts.remoteToolServers,
+          localStores: facts.localStores,
+          hasEgress: facts.hasEgress,
+          // Redstart records no retention/training terms for third parties.
+          // Reporting the absence is the point — see spec §7.
+          externalTermsKnown: false,
+        })
+      }
+
+      // Available task modes (spec §9). Clients send the ID, so they need to
+      // know which IDs exist; the preset text is returned for display only —
+      // sending it back has no effect, since the composer resolves IDs.
+      if (req.method === 'GET' && urlPath === '/prompt-modes') {
+        return sendJson(res, 200, { modes: listModes() })
+      }
+
+      // Admin-owned prompt blocks (spec §3).
+      //
+      // READ is open to any authenticated user, deliberately: the policy block
+      // governs how the assistant treats them, and a rule you are subject to
+      // but cannot read is not a policy the user can hold the deployment to.
+      // WRITE is admin-tier, which is what makes it a floor rather than a
+      // preference (spec §4).
+      if (req.method === 'GET' && urlPath === '/prompt-blocks') {
+        const meta = getPromptBlocksMeta()
+        const preview = composePrompt({
+          config: activeConfig,
+          hasTools: true,
+          externalServers: getExternalServers(),
+          account: authResult.account,
+          admin: getPromptBlocks(),
+        })
+        return sendJson(res, 200, {
+          blocks: meta,
+          limits: { maxBlockChars: MAX_BLOCK_CHARS, tokenBudget: DEFAULT_TOKEN_BUDGET },
+          // Live budget feedback for the Settings UI (spec §10). Advisory:
+          // overBudget is surfaced to the admin, never enforced on the request.
+          composed: {
+            tokens: preview.tokens,
+            overBudget: preview.overBudget,
+            blocks: preview.blocks,
+            prompt: preview.prompt,
+          },
+          canEdit: hasAdminAccess(authResult.account),
+        })
+      }
+
+      if (req.method === 'PUT' && urlPath === '/prompt-blocks') {
+        if (!hasAdminAccess(authResult.account)) {
+          return sendJson(res, 403, { error: 'Admin role required' })
+        }
+        const body = await readJsonBody(req)
+        if (!body) return sendJson(res, 400, { error: 'Invalid JSON' })
+        const result = setPromptBlocks(body, authResult.account?.username)
+        if (!result.ok) return sendJson(res, 400, { error: result.error })
+        logEvent('prompt', 'blocks_updated', {
+          username: authResult.account?.username,
+          keys: Object.keys(body).filter(k => typeof body[k] === 'string'),
+        })
+        return sendJson(res, 200, { blocks: result.blocks })
+      }
+
       if (req.method === 'GET' && urlPath === '/conversations') {
         const convs = getConversations(accountId)
         res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
@@ -494,6 +625,25 @@ export function startGateway(publicPort, config) {
         return
       }
 
+      // File explorer API (list / preview / mkdir / rename / delete / upload).
+      // Authenticated HERE, once, and the account is handed to the handler —
+      // files-api.mjs never inspects a header, so there is exactly one place
+      // where identity is established for every one of those routes, and no way
+      // for a client to name a user it is not.
+      if (urlPath.startsWith('/files/') && urlPath !== '/files/download') {
+        const authResult = authenticate(req)
+        if (!authResult.ok) {
+          res.writeHead(401, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+          res.end(JSON.stringify({ error: { message: 'Unauthorized', type: 'auth_error' } }))
+          return
+        }
+        const handled = await handleFilesRequest(req, res, urlPath, {
+          config: activeConfig,
+          account: authResult.account ?? null,
+        })
+        if (handled) return
+      }
+
       // Serve files created by the File System capability (write_file, etc.)
       // Auth + path containment enforced — the resolved path must stay within the
       // configured fileSystem.rootDir, same as the MCP provider.
@@ -509,9 +659,25 @@ export function startGateway(publicPort, config) {
         // (write_file) and Documents (create_document). Each has its own root
         // and neither is a subpath of the other, so try both — containment is
         // still enforced per-root by resolveWithinRoot.
+        //
+        // Scoped to the CALLER'S OWN folder inside each root, matching where
+        // the tools now write. This endpoint authenticated the caller and then
+        // resolved against the shared roots with no account scoping at all, so
+        // any signed-in user could download any other user's files by naming
+        // them — and list_documents handed out the names. Scoping it here means
+        // another account's path resolves inside your own folder and 404s;
+        // there is no ownership comparison to get wrong.
+        const scopedRoot = (root) => {
+          if (!root) return null
+          try {
+            return resolveUserRoot(root, authResult.account)
+          } catch {
+            return null // malformed account — serve nothing rather than the shared root
+          }
+        }
         const servedRoots = [
-          activeConfig?.fileSystem?.rootDir,
-          activeConfig?.documents?.outputDir,
+          scopedRoot(activeConfig?.fileSystem?.rootDir),
+          scopedRoot(activeConfig?.documents?.outputDir),
         ].filter(Boolean)
 
         if (servedRoots.length === 0) {
@@ -591,7 +757,20 @@ export function startGateway(publicPort, config) {
         }
 
         const requestHasTools = Array.isArray(parsed.tools) && parsed.tools.length > 0
-        parsed.messages = injectSystemContext([...(parsed.messages || [])], activeConfig, requestHasTools)
+        // Redstart-specific request field: a MODE ID, never mode prose. The
+        // composer validates it against MODE_IDS and drops anything unknown,
+        // so a client cannot inject an instruction block by naming a mode
+        // that does not exist. Deleted below before forwarding — llama-server
+        // has no such parameter and must not see it.
+        const requestedMode = parsed.redstart_mode
+        delete parsed.redstart_mode
+
+        // account is null when auth is off (see the posture note above) — the
+        // composer degrades to a date-only session block rather than failing.
+        // Surface comes from authResult — i.e. from the credential the caller
+        // presented (spec §8) — never from a header. X-Redstart-Surface stays
+        // accepted and inert; the connector-contract suite asserts that.
+        parsed.messages = injectSystemContext([...(parsed.messages || [])], activeConfig, requestHasTools, authResult.account, requestedMode, authResult.surface, clientToolNamesIn(parsed))
         parsed = enforceToolAllowList(parsed, activeConfig)
 
         try {
@@ -622,7 +801,16 @@ export function startGateway(publicPort, config) {
 }
 
 export function stopGateway() {
-  if (gatewayServer) { gatewayServer.close(); gatewayServer = null }
+  if (gatewayServer) {
+    // Force-close live sockets before close(). server.close() only stops NEW
+    // connections and waits for existing ones to end — and HTTP keep-alive means
+    // an idle client holds one open indefinitely, so the port stays bound long
+    // after a profile switch or shutdown says it was released. stopMcpServer()
+    // already does this for the same reason.
+    gatewayServer.closeAllConnections()
+    gatewayServer.close()
+    gatewayServer = null
+  }
   activeConfig = null
 }
 

@@ -4,6 +4,11 @@ import { mcpStore } from '$lib/stores/mcp.svelte';
 import { HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$lib/enums';
 import { config } from '$lib/stores/settings.svelte';
 import { twigFsApi } from '$lib/utils/twig';
+import { isDestructiveClass } from '$lib/stores/tools/tool-class';
+import {
+	LOCAL_OVERRIDDEN_CAPABILITY,
+	suppressedServerToolNames
+} from '$lib/stores/tools/precedence';
 import {
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	SANDBOX_TOOL_DEFINITION,
@@ -58,6 +63,10 @@ class ToolsStore {
 	// Local file system tools provided by the Redstart Twig desktop shell. Empty
 	// on web/Android and until the user grants a folder inside Twig.
 	private _localFsTools = $state<OpenAIToolDefinition[]>([]);
+	// Class ('read' | 'write' | 'destructive') per local tool name, as reported
+	// by the Twig bridge. These tools never travel over MCP, so there is no
+	// `_meta` to carry the class — this map is the only source for them.
+	private _localFsToolClasses = $state<Record<string, string>>({});
 
 	constructor() {
 		try {
@@ -88,7 +97,16 @@ class ToolsStore {
 		if (!api) return;
 		try {
 			const defs = await api.getTools();
-			this._localFsTools = Array.isArray(defs) ? defs : [];
+			// Older Twig builds return a bare array; current ones return
+			// { tools, classes }. The chat-ui ships independently of the desktop
+			// shell, so both shapes stay supported.
+			if (Array.isArray(defs)) {
+				this._localFsTools = defs;
+				this._localFsToolClasses = {};
+			} else {
+				this._localFsTools = Array.isArray(defs?.tools) ? defs.tools : [];
+				this._localFsToolClasses = defs?.classes ?? {};
+			}
 		} catch (err) {
 			console.error('[ToolsStore] Failed to load local fs tools:', err);
 		}
@@ -96,6 +114,28 @@ class ToolsStore {
 
 	get localFsTools(): OpenAIToolDefinition[] {
 		return this._localFsTools;
+	}
+
+	/**
+	 * The class Redstart reports for a tool, or null when it has none.
+	 *
+	 * Two sources, because the two filesystems reach us by different transports:
+	 * Twig's local tools carry theirs over the IPC bridge, and Nest's arrive on
+	 * `tools/list` in `_meta`. Only sources Redstart controls are trusted — see
+	 * `mcpStore.redstartMeta`.
+	 */
+	getToolClass(toolName: string): string | null {
+		const local = this._localFsToolClasses[toolName];
+		if (typeof local === 'string') return local;
+		return mcpStore.getNestToolMeta(toolName).toolClass;
+	}
+
+	/**
+	 * True when a tool irreversibly removes data, so it must prompt every time
+	 * and can never be remembered as "always allow".
+	 */
+	isDestructiveTool(toolName: string): boolean {
+		return isDestructiveClass(this.getToolClass(toolName));
 	}
 
 	private persistDisabledTools(): void {
@@ -190,10 +230,20 @@ class ToolsStore {
 			entries.push(entry);
 		};
 
-		// Local fs tools are pushed BEFORE server builtins so that, inside Twig,
-		// a local fs_* tool wins name resolution over an identically named
-		// server-side tool — the model is offered (and the agentic loop routes to)
-		// the local executor, never the remote one. Prevents double execution.
+		// When this device has its own filesystem (Twig with a granted folder),
+		// Nest's server-side File System capability is withheld, so the model is
+		// offered ONE filesystem instead of two pointing at different computers.
+		//
+		// Ordering alone does not achieve this and never did: `toolKey` is scoped
+		// by source, so a local `fs_write_file` and a server `write_file` produce
+		// different keys and the dedupe above never sees a collision. Resolved on
+		// capability identity from `_meta`, so a rename on either side flows
+		// through instead of silently dissolving the rule.
+		const suppressedServerTools = suppressedServerToolNames(
+			this._localFsTools.length,
+			mcpStore.getNestToolNamesForCapability(LOCAL_OVERRIDDEN_CAPABILITY)
+		);
+
 		for (const def of this._localFsTools) {
 			const name = def.function.name;
 			push({
@@ -219,6 +269,7 @@ class ToolsStore {
 
 		for (const { serverId, serverName, definition } of this.mcpEntries()) {
 			const name = definition.function.name;
+			if (suppressedServerTools.has(name)) continue;
 			push({
 				source: ToolSource.MCP,
 				serverId,

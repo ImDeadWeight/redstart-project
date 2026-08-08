@@ -26,7 +26,9 @@
 	}
 </script>
 
-<div class="fixed inset-0 z-9999 flex items-center justify-center bg-zinc-950">
+<!-- Same full-window shell as RedstartLoadingScreen — keep the background token
+     in step with it, or the two pre-chat screens differ from each other. -->
+<div class="fixed inset-0 z-9999 flex items-center justify-center bg-background">
 	<form onsubmit={handleSubmit} class="flex w-full max-w-xs flex-col items-center gap-6 px-6">
 		<img src="/redstart.svg" alt="Redstart" width="64" height="64" style="image-rendering: pixelated" />
 

@@ -8,6 +8,7 @@
 		ChatFormActionModels,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
+		ChatFormModeToggle,
 		ChatFormReasoningToggle
 	} from '$lib/components/app';
 	import { FileTypeCategory } from '$lib/enums';
@@ -113,6 +114,8 @@
 	{/if}
 
 	<div class="flex items-center gap-2">
+		<ChatFormModeToggle />
+
 		<ChatFormReasoningToggle />
 
 		{#if showModelSelector}

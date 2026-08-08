@@ -7,6 +7,13 @@
 	// Twig desktop only: shows which local folder the file tools operate on,
 	// right where the user is about to ask for file work. Renders nothing on
 	// web/Android (no bridge) — the whole component is a no-op there.
+	//
+	// Twig no longer grants a folder on first launch, so the ungranted state is
+	// now the state every new install starts in — and it is the one where this
+	// control matters most. Showing nothing until a folder existed meant the
+	// in-chat way to grant one disappeared exactly when it was needed, leaving
+	// Settings → Server as the only route to a capability the user is, by
+	// definition, in the middle of trying to use.
 
 	const api = twigFsApi();
 
@@ -38,21 +45,27 @@
 	}
 </script>
 
-{#if api && rootDir}
+{#if api}
 	<div class="mt-1.5 flex items-center justify-center gap-1.5 px-2 text-muted-foreground">
 		<button
 			type="button"
 			class="flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 text-xs transition-colors hover:bg-muted hover:text-foreground"
 			onclick={changeFolder}
 			disabled={busy}
-			title="Change the folder local file tools may read and write"
+			title={rootDir
+				? 'Change the folder local file tools may read and write'
+				: 'Choose a folder on this PC that local file tools may read and write'}
 		>
 			{#if busy}
 				<Loader class="h-3 w-3 shrink-0 animate-spin" />
 			{:else}
 				<FolderOpen class="h-3 w-3 shrink-0" />
 			{/if}
-			<span class="truncate font-mono">{rootDir}</span>
+			{#if rootDir}
+				<span class="truncate font-mono">{rootDir}</span>
+			{:else}
+				<span class="truncate">Grant a folder on this PC for local file tools</span>
+			{/if}
 		</button>
 	</div>
 {/if}

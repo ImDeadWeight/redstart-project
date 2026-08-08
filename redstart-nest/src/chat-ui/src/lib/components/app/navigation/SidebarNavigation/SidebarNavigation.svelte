@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { Trash2, Pencil, Pin, X } from '@lucide/svelte';
+	import { Trash2, Pencil, Pin, X, LogOut } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { DialogConfirmation } from '$lib/components/app';
 	import SidebarNavigationActions from './SidebarNavigationActions.svelte';
@@ -19,6 +19,7 @@
 		buildConversationTree
 	} from '$lib/stores/conversations.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
+	import { authStore } from '$lib/stores/auth.svelte';
 	import { getPreviewText } from '$lib/utils';
 	import { APP_NAME } from '$lib/constants';
 
@@ -175,6 +176,11 @@
 	function handleStopGeneration(id: string) {
 		chatStore.stopGenerationForChat(id);
 	}
+
+	async function handleLogout() {
+		handleMobileSidebarItemClick();
+		await authStore.logout();
+	}
 </script>
 
 <div class="flex h-full flex-col">
@@ -289,6 +295,23 @@
 			</Sidebar.GroupContent>
 		</Sidebar.Group>
 	</ScrollArea>
+
+	<!--
+		Pinned below the scroll area, so it stays put however long the
+		conversation list grows. Sits outside ScrollArea deliberately.
+	-->
+	{#if authStore.user}
+		<div class="border-t border-sidebar-border/50 bg-sidebar/50 p-3 backdrop-blur-lg">
+			<Button
+				class="w-full justify-start gap-2 px-2 backdrop-blur-none!"
+				variant="ghost"
+				onclick={handleLogout}
+			>
+				<LogOut class="h-4 w-4 shrink-0" />
+				<span>Log out</span>
+			</Button>
+		</div>
+	{/if}
 </div>
 
 <DialogConfirmation

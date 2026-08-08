@@ -12,6 +12,7 @@
 	import { circIn } from 'svelte/easing';
 	import { onMount } from 'svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
+	import { authStore } from '$lib/stores/auth.svelte';
 
 	interface Props {
 		sidebarOpen: boolean;
@@ -21,6 +22,13 @@
 	let { sidebarOpen = false, onSearchClick }: Props = $props();
 
 	const { handleKeydown } = useKeyboardShortcuts({ activateSearchMode: () => onSearchClick() });
+
+	// Same filter as the expanded sidebar, from the same registry — the rail is
+	// the sidebar's collapsed form, so an action present in one and absent from
+	// the other reads as a bug.
+	let visibleActions = $derived(
+		SIDEBAR_ACTIONS_ITEMS.filter((item) => !item.requiresAuth || !!authStore.user)
+	);
 
 	let initialized = $state(false);
 	let showIcons = $derived(!sidebarOpen);
@@ -32,7 +40,10 @@
 
 		setTimeout(() => {
 			initialized = true;
-		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * SIDEBAR_ACTIONS_ITEMS.length);
+			// Matches the staggered fade-in below, which indexes the VISIBLE items —
+			// using the full registry here would leave `initialized` false for one
+			// item's worth of delay too long when an action is filtered out.
+		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * visibleActions.length);
 	});
 </script>
 
@@ -44,12 +55,13 @@
 		: 'w-[calc(var(--sidebar-width-icon)+1.5rem)]'}"
 ></div>
 <aside
+	data-slot="desktop-icon-strip"
 	class="fixed top-0 bottom-0 left-0 z-10 hidden w-[calc(var(--sidebar-width-icon)+1.5rem)] flex-col items-center justify-between py-3 transition-opacity duration-200 ease-linear md:flex {sidebarOpen
 		? 'pointer-events-none opacity-0'
 		: 'opacity-100'}"
 >
 	<div class="mt-12 flex flex-col items-center gap-1">
-		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
+		{#each visibleActions as item, i (item.tooltip)}
 			{@const onclick = item.route ? () => goto(item.route!) : onSearchClick}
 			{@const isActive = item.activeRouteId
 				? page.route.id === item.activeRouteId

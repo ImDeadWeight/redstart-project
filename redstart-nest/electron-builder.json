@@ -10,11 +10,21 @@
     "electron/preload",
     "dist"
   ],
+  "asarUnpack": [
+    "**/*.node",
+    "node_modules/@modelcontextprotocol/server-filesystem/**",
+    "node_modules/sql.js/dist/**"
+  ],
   "extraResources": [
     {
       "from": "src/chat-ui/dist",
       "to": "chat-ui",
       "filter": ["**/*"]
+    },
+    {
+      "from": "../shared",
+      "to": "shared",
+      "filter": ["**/*.mjs"]
     },
     {
       "from": "llama-cpp-turboquant/build/bin/Release",

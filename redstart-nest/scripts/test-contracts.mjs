@@ -185,18 +185,39 @@ async function main() {
     assert(r.serverInfo && typeof r.serverInfo.name === 'string' && typeof r.serverInfo.version === 'string', `serverInfo drifted: ${JSON.stringify(r.serverInfo)}`)
   })
 
-  await test('🔍 every tools/list entry has exactly { name, description, inputSchema } with a valid schema', async () => {
+  // The advertised tool shape is { name, description, inputSchema } plus the two
+  // MCP-standard optional fields we populate: `annotations` (spec hints) and
+  // `_meta` (Redstart provenance — capability + class, consumed by the chat-ui
+  // to key filesystem precedence on capability identity rather than tool
+  // names). Anything BEYOND that list is drift: providers must not leak their
+  // internal fields (outputSchema, execution metadata) into what the model and
+  // third-party MCP clients see.
+  await test('🔍 every tools/list entry has exactly { name, description, inputSchema, annotations, _meta } with a valid schema', async () => {
     const res = await client.call('tools/list')
     const tools = res.result?.tools
     assert(Array.isArray(tools) && tools.length > 0, `no tools advertised: ${JSON.stringify(res.result)}`)
     for (const t of tools) {
-      assert(sameKeys(t, ['name', 'description', 'inputSchema']), `tool "${t.name}" keys drifted -> ${JSON.stringify(Object.keys(t))}`)
+      assert(sameKeys(t, ['name', 'description', 'inputSchema', 'annotations', '_meta']), `tool "${t.name}" keys drifted -> ${JSON.stringify(Object.keys(t))}`)
       assert(typeof t.name === 'string' && t.name.length > 0, 'tool name missing')
       assert(typeof t.description === 'string' && t.description.length > 0, `tool ${t.name} description missing`)
       assert(t.inputSchema && t.inputSchema.type === 'object' && typeof t.inputSchema.properties === 'object', `tool ${t.name} inputSchema is not a valid JSON-Schema object`)
       if ('required' in t.inputSchema) assert(Array.isArray(t.inputSchema.required), `tool ${t.name} required is not an array`)
     }
     return `${tools.length} tools`
+  })
+
+  await test('🔍 every tools/list entry carries Redstart provenance in _meta', async () => {
+    // The chat-ui reads these to decide which filesystem the model is offered
+    // (and, later, which tools may never be "always allowed"). A tool arriving
+    // without them silently opts out of both rules, so absence is a failure
+    // rather than a default.
+    const res = await client.call('tools/list')
+    for (const t of res.result.tools) {
+      assert(t._meta && typeof t._meta === 'object', `tool ${t.name} has no _meta`)
+      assert(Object.prototype.hasOwnProperty.call(t._meta, 'redstart/capability'), `tool ${t.name} is missing redstart/capability`)
+      assert(typeof t._meta['redstart/class'] === 'string', `tool ${t.name} is missing redstart/class`)
+      assert(typeof t.annotations?.readOnlyHint === 'boolean', `tool ${t.name} is missing the readOnlyHint annotation`)
+    }
   })
 
   client.close()

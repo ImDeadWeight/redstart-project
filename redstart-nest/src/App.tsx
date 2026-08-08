@@ -27,7 +27,6 @@ import { HardwarePanel } from './panels/HardwarePanel'
 import { ProfilesPanel } from './panels/ProfilesPanel'
 import { BinaryPanel } from './panels/BinaryPanel'
 import { ModelPanel } from './panels/ModelPanel'
-import { NetworkPanel } from './panels/NetworkPanel'
 import { AccountsPanel } from './panels/AccountsPanel'
 import { ConfigTab } from './tabs/ConfigTab'
 import { ToolsTab } from './tabs/ToolsTab'
@@ -105,7 +104,7 @@ export default function App() {
       {/* ── Top bar ── */}
       <header className="flex items-center justify-between px-5 py-3 bg-zinc-900 border-b border-zinc-800 shrink-0">
         <h1 className="text-lg font-bold tracking-wide">
-          Redstart <span className="text-orange-500">/ LlamaCpp Launcher</span>
+          <span className="text-orange-500">Redstart Nest</span>
         </h1>
         <div className="flex items-center gap-5">
           <div className="flex items-center gap-2">
@@ -130,14 +129,6 @@ export default function App() {
           <ProfilesPanel profilesHook={profilesHook} />
           <BinaryPanel hw={hw} />
           <ModelPanel modelPath={config.modelPath} onSelectModel={hw.selectModel} />
-          <NetworkPanel
-            networkMode={networkMode}
-            onToggleNetworkMode={() => setNetworkMode(v => !v)}
-            advertisedHost={advertisedHost}
-            setAdvertisedHost={setAdvertisedHost}
-            localIp={localIp}
-            port={config.port}
-          />
           <AccountsPanel auth={auth} />
         </aside>
 
@@ -172,6 +163,10 @@ export default function App() {
               config={config}
               setConfig={setConfig}
               networkMode={networkMode}
+              onToggleNetworkMode={() => setNetworkMode(v => !v)}
+              advertisedHost={advertisedHost}
+              setAdvertisedHost={setAdvertisedHost}
+              localIp={localIp}
               generatedCommand={generatedCommand}
               onGenerateCommand={generateCommand}
             />

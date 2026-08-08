@@ -168,3 +168,14 @@ export type { ReasoningEffortLevel } from './reasoning';
 
 // Splash
 export type { SplashDimensions } from './splash';
+
+// System prompt (admin blocks + derived egress facts)
+export type {
+	PromptBlockEdits,
+	PromptBlocks,
+	PromptBlocksResponse,
+	PromptMode,
+	PromptSnapshot,
+	EgressDestination,
+	EgressFacts
+} from './prompt';

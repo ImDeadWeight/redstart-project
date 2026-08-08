@@ -14,7 +14,7 @@
 //     child speaks MCP; nothing here interprets tool semantics)
 //   - caching its tools/list result, since the rest of the app calls toolDefs()
 //     synchronously
-//   - a toolDefs(cfg)/callTool(name, args, cfg) provider interface so it drops
+//   - a toolDefs(cfg)/callTool(name, args, cfg, ctx) provider interface so it drops
 //     into mcp-server.mjs's PROVIDERS array in place of the old fs-tool.mjs
 //
 // Tool names are the official server's own (write_file, read_text_file, ...) —
@@ -26,6 +26,7 @@ import { createRequire } from 'node:module'
 import * as path from 'node:path'
 import { createStdioProcessManager } from '../../../shared/mcp-stdio-process.mjs'
 import { resolveWithinRoot } from './path-scope.mjs'
+import { resolveUserRoot } from './user-scope.mjs'
 
 const SERVER_ID = 'filesystem'
 
@@ -289,16 +290,72 @@ export function containmentError(rootDir, args) {
   }
 }
 
-/** @param {string} name @param {object} args */
-export async function callFilesystemTool(name, args) {
+// Rewrite every path argument from "relative to the caller's own folder" into
+// the absolute path the child process needs.
+//
+// The child is spawned ONCE, rooted at the capability root, and shared by every
+// account — spawning one server per user would multiply processes by users for
+// no security gain. So scoping happens here instead: we resolve the model's
+// path inside the caller's own folder (which containmentError has already
+// verified) and hand the child an absolute path. That path is a subpath of the
+// child's own root, so the child allows it; our gate has already confirmed it
+// is inside the CALLER'S root, which is the narrower claim.
+//
+// The model keeps speaking in paths relative to its own folder throughout — it
+// is never told the absolute layout, and pathsToRelative() puts results back
+// into the same terms on the way out.
+export function toAbsolutePathArgs(userRoot, args) {
+  if (!args || typeof args !== 'object') return args
+  const out = { ...args }
+  const abs = (value) => (typeof value === 'string' ? resolveWithinRoot(userRoot, value) : value)
+  for (const [key, value] of Object.entries(args)) {
+    if (PATH_STRING_KEYS.has(key)) out[key] = abs(value)
+    else if (PATH_ARRAY_KEYS.has(key) && Array.isArray(value)) out[key] = value.map(abs)
+  }
+  return out
+}
+
+// Strip the caller's absolute root back out of the child's response text.
+//
+// The upstream server echoes absolute paths ("Successfully wrote to
+// C:\...\user_files\pat-a1b2\notes.md"), and directory_tree / search_files /
+// list_allowed_directories are made almost entirely of them. Left alone they
+// would tell every model the server's on-disk layout, the account-folder naming
+// scheme, and by extension that other accounts' folders sit alongside — an
+// invitation to go looking. Replaced with paths relative to the caller's own
+// root, which is the only frame the model has any business reasoning in.
+export function pathsToRelative(result, userRoot) {
+  if (!result || !Array.isArray(result.content)) return result
+  // Match both separator conventions: the child reports native win32 paths,
+  // while some fields come back POSIX-normalised.
+  const variants = [userRoot, userRoot.split(path.sep).join('/')]
+  const escaped = variants.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const pattern = new RegExp(`(${escaped.join('|')})[\\\\/]?`, 'gi')
+  return {
+    ...result,
+    content: result.content.map((part) =>
+      part?.type === 'text' && typeof part.text === 'string'
+        ? { ...part, text: part.text.replace(pattern, '') || '.' }
+        : part,
+    ),
+  }
+}
+
+/**
+ * @param {string} name @param {object} args
+ * @param {string} [userRoot] the caller's own folder; defaults to the whole
+ *   capability root, which is what the boundary suites drive directly.
+ */
+export async function callFilesystemTool(name, args, userRoot = currentRootDir) {
   if (!ready) throw new Error('filesystem MCP server is not ready')
-  const blocked = containmentError(currentRootDir, args)
+  const blocked = containmentError(userRoot, args)
   if (blocked) return blocked
-  return request('tools/call', { name, arguments: args })
+  const result = await request('tools/call', { name, arguments: toAbsolutePathArgs(userRoot, args) })
+  return pathsToRelative(result, userRoot)
 }
 
 // ---------------------------------------------------------------------------
-// Provider interface — matches the toolDefs(cfg)/callTool(name, args, cfg)
+// Provider interface — matches the toolDefs(cfg)/callTool(name, args, cfg, ctx)
 // shape mcp-server.mjs expects from every entry in its PROVIDERS array, so this
 // module drops into that list in place of the old in-process fs-tool.mjs. The
 // child process's lifecycle is driven separately via syncFilesystemProvider()
@@ -308,24 +365,90 @@ export async function callFilesystemTool(name, args) {
 
 export function toolDefs(cfg) {
   if (!cfg?.fileSystem?.enabled) return []
-  // Only what the LLM/MCP client needs — drop the server's extra annotation/
+  // Only what the LLM/MCP client needs — drop the upstream server's
   // outputSchema/execution fields to match the other providers' tool shape.
+  //
+  // `annotations` is deliberately KEPT (it used to be dropped with the rest):
+  // mcp-server.mjs stamps every advertised tool with Redstart's own provenance
+  // annotation, and stripping the field here just meant the merge loop had to
+  // rebuild from nothing. Upstream's own hints are preserved underneath ours.
   return getCachedFilesystemTools().map((t) => ({
     name: t.name,
     description: t.description,
     inputSchema: t.inputSchema,
+    ...(t.annotations ? { annotations: t.annotations } : {}),
   }))
 }
 
-export async function callTool(name, args, cfg) {
+// Tools whose success means "a file now exists at args.path". Their results get
+// a [FILE: ...] marker so the chat UI renders a download button — the upstream
+// server just says "Successfully wrote to ...", which left every file written
+// through this capability (scripts especially) unreachable from a browser
+// client even though /files/download already serves the fileSystem root.
+const FILE_PRODUCING_TOOLS = new Set(['write_file', 'edit_file'])
+
+// The marker must start its own line and carry the path RELATIVE to the served
+// root — see documents-tool.mjs for the other end of the same contract.
+function withDownloadMarker(result, rootDir, requestedPath) {
+  if (result?.isError || typeof requestedPath !== 'string' || !Array.isArray(result?.content)) return result
+  let relativePath
+  try {
+    relativePath = path.relative(rootDir, resolveWithinRoot(rootDir, requestedPath)).split(path.sep).join('/')
+  } catch {
+    return result // uncontained or unresolvable — no download link to offer
+  }
+  // path.relative returns '' when the argument IS the root (a directory, not a
+  // file), and a '..' prefix would mean it escaped; neither is downloadable.
+  if (!relativePath || relativePath.startsWith('..')) return result
+  const first = result.content[0]
+  if (first?.type !== 'text') return result
+  return {
+    ...result,
+    content: [{ ...first, text: `[FILE: ${relativePath}]\n${first.text}` }, ...result.content.slice(1)],
+  }
+}
+
+// Provider interface: callTool(name, args, cfg, ctx). `ctx.account` is the
+// authenticated caller (null when auth is off).
+//
+// PER-ACCOUNT SCOPING. Every call is confined to the caller's own folder inside
+// the configured root, not to the root itself. This is the capability with the
+// widest blast radius — arbitrary reads and writes over one folder shared by
+// the entire server — so the containment the model faces is the narrower of the
+// two roots, always.
+export async function callTool(name, args, cfg, ctx) {
   if (!FILESYSTEM_TOOL_NAME_SET.has(name)) return null // not ours — let the next provider try
 
   const fsCfg = cfg?.fileSystem
   if (!fsCfg?.enabled || !fsCfg?.rootDir) {
     return { isError: true, content: [{ type: 'text', text: 'File system is not configured or enabled.' }] }
   }
+  let userRoot
   try {
-    return await callFilesystemTool(name, args ?? {})
+    userRoot = resolveUserRoot(fsCfg.rootDir, ctx?.account, { create: true })
+  } catch (err) {
+    return { isError: true, content: [{ type: 'text', text: `Could not open your file storage: ${err.message}` }] }
+  }
+
+  // Answered here rather than by the child. The child was spawned with the
+  // CAPABILITY root and would report that — a path pathsToRelative cannot strip,
+  // because it is a prefix of the caller's root rather than a match. Reporting
+  // it would hand every model the server's on-disk layout and the fact that
+  // sibling account folders live next door. The caller's own storage is the only
+  // directory it can reach, and it addresses everything relative to it anyway.
+  if (name === 'list_allowed_directories') {
+    return {
+      content: [{
+        type: 'text',
+        text: 'Allowed directories:\n. (your own file storage on the Redstart server — give every path relative to it)',
+      }],
+    }
+  }
+
+  try {
+    const result = await callFilesystemTool(name, args ?? {}, userRoot)
+    if (FILE_PRODUCING_TOOLS.has(name)) return withDownloadMarker(result, userRoot, args?.path)
+    return result
   } catch (err) {
     return { isError: true, content: [{ type: 'text', text: `File system error: ${err.message}` }] }
   }

@@ -87,13 +87,22 @@ export default defineConfig({
 	},
 
 	server: {
+		// `vite dev` is the fast path for UI work: Nest keeps running, the chat-ui
+		// hot-reloads, and neither the bundle build nor an Electron relaunch is
+		// needed. That only holds if the dev server forwards every route the UI
+		// calls — the llama-server ones AND Redstart's own. Without the three
+		// below, anything using a relative path (the file explorer, sign-in, MCP
+		// server discovery) 404s against Vite instead of reaching the gateway.
 		proxy: {
 			'/v1': SERVER_ORIGIN,
 			'/props': SERVER_ORIGIN,
 			'/models': SERVER_ORIGIN,
 			'/tools': SERVER_ORIGIN,
 			'/slots': SERVER_ORIGIN,
-			'/cors-proxy': SERVER_ORIGIN
+			'/cors-proxy': SERVER_ORIGIN,
+			'/auth': SERVER_ORIGIN,
+			'/files': SERVER_ORIGIN,
+			'/redstart': SERVER_ORIGIN
 		},
 		fs: {
 			allow: [searchForWorkspaceRoot(process.cwd()), resolve(__dirname, 'tests')]

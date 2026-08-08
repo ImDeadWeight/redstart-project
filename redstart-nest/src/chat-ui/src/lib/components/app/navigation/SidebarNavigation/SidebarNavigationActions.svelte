@@ -2,9 +2,10 @@
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import type { Component } from 'svelte';
-	import { SearchInput, UserMenu } from '$lib/components/app';
+	import { SearchInput } from '$lib/components/app';
 	import { page } from '$app/state';
 	import { SIDEBAR_ACTIONS_ITEMS } from '$lib/constants/ui';
+	import { authStore } from '$lib/stores/auth.svelte';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
@@ -23,6 +24,13 @@
 	}: Props = $props();
 
 	let searchInputRef = $state<HTMLInputElement | null>(null);
+
+	// Profile is auth-gated; everything else is always available. Filtered from
+	// the shared registry rather than special-cased in the markup, so this
+	// surface and the collapsed icon rail show the same items in the same order.
+	let visibleActions = $derived(
+		SIDEBAR_ACTIONS_ITEMS.filter((item) => !item.requiresAuth || !!authStore.user)
+	);
 
 	function handleSearchModeDeactivate() {
 		isSearchModeActive = false;
@@ -52,9 +60,7 @@
 			{isCancelAlwaysVisible}
 		/>
 	{:else}
-		<UserMenu />
-
-		{#each SIDEBAR_ACTIONS_ITEMS as item (item.route)}
+		{#each visibleActions as item (item.tooltip)}
 			{#if !item.route}
 				<Button
 					class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"

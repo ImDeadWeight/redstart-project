@@ -22,10 +22,38 @@ import { PDFParse } from 'pdf-parse'
 import mammoth from 'mammoth'
 import ExcelJS from 'exceljs'
 import { resolveWithinRoot } from './path-scope.mjs'
+import { resolveUserRoot } from './user-scope.mjs'
 
-const FORMATS = ['markdown', 'docx', 'pdf']
+const FORMATS = ['markdown', 'docx', 'pdf', 'python']
 const TOOL_NAMES = ['create_document', 'read_document', 'list_documents']
-const READABLE_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.xlsx', '.csv']
+const READABLE_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.xlsx', '.csv', '.py']
+
+// Format -> file extension. 'python' is the one non-prose format: the content
+// is written verbatim (no title heading, no block parsing) so the result is a
+// runnable script, and the [FILE:] marker makes it downloadable from the chat
+// UI like any other deliverable.
+const FORMAT_EXTENSIONS = { markdown: 'md', docx: 'docx', pdf: 'pdf', python: 'py' }
+
+// Reverse lookup for the filename-inference path below — a model that passes
+// filename "cleanup.py" and no format means format: 'python'.
+const EXTENSION_FORMATS = { md: 'markdown', markdown: 'markdown', docx: 'docx', pdf: 'pdf', py: 'python' }
+
+// Models routinely wrap code in a markdown fence even when asked for a raw
+// file. Written verbatim that produces a .py whose first line is ```python — a
+// syntax error, i.e. a script that cannot run. Strip one enclosing fence; a
+// fence in the MIDDLE of the content is left alone (it's real content then).
+function stripCodeFence(content) {
+  const trimmed = content.trim()
+  if (!trimmed.startsWith('```')) return content
+  const firstNewline = trimmed.indexOf('\n')
+  if (firstNewline === -1) return content
+  // The opening line must be the fence plus an optional language tag only.
+  if (!/^```[a-zA-Z0-9_+-]*$/.test(trimmed.slice(0, firstNewline).trim())) return content
+  const lastFence = trimmed.lastIndexOf('```')
+  if (lastFence <= firstNewline) return content
+  if (trimmed.slice(lastFence + 3).trim() !== '') return content
+  return trimmed.slice(firstNewline + 1, lastFence).replace(/\n+$/, '') + '\n'
+}
 const MAX_SHEET_ROWS = 1000               // per sheet; keeps huge workbooks bounded
 const MAX_READ_CHARS = 8000               // per call; offset paginates longer documents
 const MAX_READ_FILE_BYTES = 50 * 1024 * 1024
@@ -295,10 +323,13 @@ function sheetToText(worksheet) {
   return lines.join('\n')
 }
 
-async function extractText(filePath) {
+// Exported so the file explorer can offer previews through the same on-device
+// extraction the model's read_document uses — .pdf/.docx/.xlsx are parsed
+// locally, so a preview never sends anything off the machine.
+export async function extractText(filePath) {
   const extension = path.extname(filePath).toLowerCase()
 
-  if (extension === '.txt' || extension === '.md' || extension === '.csv') {
+  if (extension === '.txt' || extension === '.md' || extension === '.csv' || extension === '.py') {
     return fs.readFileSync(filePath, 'utf8')
   }
   if (extension === '.xlsx') {
@@ -391,15 +422,16 @@ export function toolDefs(cfg) {
     {
       name: 'create_document',
       description:
-        'Create a new document and save it to the local documents folder. ' +
+        'Create a new document or script and save it to the local documents folder, where the user can download it. ' +
         'Takes exactly three arguments: title, content, format. There is NO file_path or filename argument — the file name is derived from title, and the folder is fixed by the server. ' +
-        'Format content with simple markdown: "# Heading", "## Subheading", "- bullet", blank lines between paragraphs, ' +
+        'Use format "python" to write a runnable .py script: put the raw source in content, with no markdown fences and no explanation around it. ' +
+        'For the prose formats (markdown, docx, pdf) format content with simple markdown: "# Heading", "## Subheading", "- bullet", blank lines between paragraphs, ' +
         'and markdown pipe tables ("| A | B |" then "| --- | --- |" then one line per row) which are rendered as real tables in .docx and .pdf.',
       inputSchema: {
         type: 'object',
         properties: {
           title: { type: 'string', description: 'Document title — also used to name the file. Do not include a path or extension.' },
-          content: { type: 'string', description: 'Full document body as markdown text. Include every row of any table here; the content is written verbatim.' },
+          content: { type: 'string', description: 'Full body of the file. For prose formats, markdown text — include every row of any table here. For format "python", the raw script source, written to the .py file verbatim.' },
           format: { type: 'string', enum: FORMATS, description: `Output file format — one of: ${FORMATS.join(', ')}` },
         },
         required: ['title', 'content', 'format'],
@@ -407,7 +439,7 @@ export function toolDefs(cfg) {
     },
     {
       name: 'read_document',
-      description: 'Read the text content of a document (.pdf, .docx, .txt, .md, .xlsx, .csv) in the local documents folder. Spreadsheets are rendered as one text table per sheet. Long documents are returned in chunks — follow the offset instructions at the end of a truncated result to read more.',
+      description: 'Read the text content of a document or script (.pdf, .docx, .txt, .md, .xlsx, .csv, .py) in your documents folder on the Redstart server. Spreadsheets are rendered as one text table per sheet. Long documents are returned in chunks — follow the offset instructions at the end of a truncated result to read more.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -419,18 +451,53 @@ export function toolDefs(cfg) {
     },
     {
       name: 'list_documents',
-      description: 'List the readable documents (.pdf, .docx, .txt, .md, .xlsx, .csv) in the local documents folder, with sizes.',
+      description: 'List the readable documents and scripts (.pdf, .docx, .txt, .md, .xlsx, .csv, .py) in your documents folder on the Redstart server, with sizes.',
       inputSchema: { type: 'object', properties: {} },
     },
   ]
 }
 
-export async function callTool(name, args, cfg) {
+// Provider interface: callTool(name, args, cfg, ctx). `ctx.account` is the
+// authenticated caller (null when auth is off).
+//
+// PER-ACCOUNT SCOPING. Everything below this point operates on `docCfg`, whose
+// outputDir is swapped for the CALLER'S OWN folder inside the configured root:
+//
+//     <documents.outputDir>/user_files/<slug>-<id>/
+//
+// One substitution scopes create, read and list at once, because all three
+// already route through docCfg.outputDir — including the [FILE:] marker's
+// relative path, which /files/download resolves against the same per-account
+// root on the other side.
+//
+// What this closes: list_documents used to enumerate every readable file in the
+// shared root to every caller, and read_document would then read any of them.
+// Filenames are server-derived slugs (quarterly-report.md), so they were
+// guessable even without the listing. Now another account's slug resolves
+// inside YOUR folder, finds nothing, and 404s — no ownership check to forget.
+//
+// Files already sitting in the configured root are deliberately NOT visible.
+// They are left exactly where they are (that folder is often the machine
+// owner's real Documents directory, not a Redstart-managed one, so relocating
+// them would be unacceptable), but serving them to every account is the hole
+// this change exists to close. An admin who wants them reachable can move them
+// into a specific account's folder.
+export async function callTool(name, args, cfg, ctx) {
   if (!TOOL_NAMES.includes(name)) return null
 
-  const docCfg = cfg?.documents
-  if (!docCfg?.enabled || !docCfg?.outputDir) {
+  const configuredCfg = cfg?.documents
+  if (!configuredCfg?.enabled || !configuredCfg?.outputDir) {
     return { isError: true, content: [{ type: 'text', text: 'Documents capability is not configured or enabled.' }] }
+  }
+
+  let docCfg
+  try {
+    docCfg = {
+      ...configuredCfg,
+      outputDir: resolveUserRoot(configuredCfg.outputDir, ctx?.account, { create: true }),
+    }
+  } catch (err) {
+    return { isError: true, content: [{ type: 'text', text: `Could not open your documents folder: ${err.message}` }] }
   }
 
   if (name === 'read_document') {
@@ -463,7 +530,7 @@ export async function callTool(name, args, cfg) {
       const ext = path.extname(base).slice(1).toLowerCase()
       const stem = ext ? base.slice(0, -(ext.length + 1)) : base
       title = stem.replace(/[_-]+/g, ' ').trim() || stem
-      if (!format && ext) format = ext === 'md' ? 'markdown' : ext
+      if (!format && ext) format = EXTENSION_FORMATS[ext] ?? ext
     }
   }
   // Models frequently invent a file_path/filename argument for this tool. The
@@ -483,10 +550,15 @@ export async function callTool(name, args, cfg) {
 
   try {
     fs.mkdirSync(docCfg.outputDir, { recursive: true })
-    const extension = format === 'markdown' ? 'md' : format
+    const extension = FORMAT_EXTENSIONS[format]
     const outputPath = resolveOutputPath(docCfg.outputDir, title, extension)
 
-    if (format === 'markdown') {
+    if (format === 'python') {
+      // Verbatim — no title heading and no block parsing. A "# Title" line
+      // prepended to a script is a comment at best; the markdown block model
+      // would mangle indentation, which in Python is syntax.
+      fs.writeFileSync(outputPath, stripCodeFence(content), 'utf8')
+    } else if (format === 'markdown') {
       fs.writeFileSync(outputPath, `# ${title}\n\n${content}`, 'utf8')
     } else if (format === 'docx') {
       const buffer = await Packer.toBuffer(buildDocx(title, parseBlocks(content)))

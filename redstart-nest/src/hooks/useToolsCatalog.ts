@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, getAPI } from '../api/redstart'
-import type { LlamaConfig, ProfileTools, ToolGroup, WebFetchTool } from '../types'
+import type { ClientApp, LlamaConfig, ProfileTools, ToolGroup, WebFetchTool } from '../types'
 
 // Tool/group catalog (built-in + user-defined web sources) and the per-profile
 // tool selection stored under config.tools. Owns the add-tool / add-group form
@@ -12,6 +12,8 @@ export function useToolsCatalog(
 ) {
   const [allTools, setAllTools] = useState<WebFetchTool[]>([])
   const [allGroups, setAllGroups] = useState<ToolGroup[]>([])
+  // Client apps that supply their own tools — the Banned Tools list's subject.
+  const [clientApps, setClientApps] = useState<ClientApp[]>([])
   const [showAddTool, setShowAddTool] = useState(false)
   const [newToolName, setNewToolName] = useState('')
   const [newToolUrl, setNewToolUrl] = useState('')
@@ -33,6 +35,7 @@ export function useToolsCatalog(
         ...data.builtinGroups.map(g => ({ ...g, builtIn: true })),
         ...data.userGroups.map(g => ({ ...g, builtIn: false })),
       ])
+      setClientApps(data.clientApps ?? [])
     } catch { /* tools unavailable */ }
   }
 
@@ -114,7 +117,7 @@ export function useToolsCatalog(
   }
 
   return {
-    allTools, allGroups,
+    allTools, allGroups, clientApps,
     showAddTool, setShowAddTool, newToolName, setNewToolName,
     newToolUrl, setNewToolUrl, newToolDesc, setNewToolDesc,
     showAddGroup, setShowAddGroup, newGroupName, setNewGroupName,

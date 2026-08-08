@@ -20,5 +20,14 @@ export const API_TOOLS = {
 	EXECUTE: '/tools'
 };
 
+// Admin-owned system prompt blocks + the data-handling audit they are
+// composed against (system-prompt spec §3, §7). Both are Redstart gateway
+// routes, not llama-server ones.
+export const API_PROMPT = {
+	BLOCKS: '/prompt-blocks',
+	MODES: '/prompt-modes',
+	EGRESS: '/egress'
+};
+
 /** CORS proxy endpoint path */
 export const CORS_PROXY_ENDPOINT = '/cors-proxy';

@@ -320,7 +320,14 @@ class AgenticStore {
 		signal?: AbortSignal
 	): Promise<ToolPermissionDecision> {
 		const permissionKey = toolsStore.getPermissionKey(toolName);
-		if (permissionKey && permissionsStore.hasTool(permissionKey)) {
+		// A destructive tool always prompts, even if it somehow acquired a
+		// persisted grant — an allow-list entry written before the tool was
+		// classified, or one swept in by "always allow all tools from this
+		// server". Checked before the short-circuit rather than only at the point
+		// of granting, so a stale entry in localStorage cannot silently authorise
+		// unattended deletion.
+		const destructive = toolsStore.isDestructiveTool(toolName);
+		if (!destructive && permissionKey && permissionsStore.hasTool(permissionKey)) {
 			return ToolPermissionDecision.ONCE;
 		}
 
@@ -335,15 +342,20 @@ class AgenticStore {
 
 			this._permissionResolvers.set(conversationId, (decision) => {
 				this._pendingPermissions.set(conversationId, null);
-				if (decision === ToolPermissionDecision.ALWAYS && permissionKey) {
+				if (decision === ToolPermissionDecision.ALWAYS && permissionKey && !destructive) {
 					permissionsStore.allowTool(permissionKey);
 				} else if (decision === ToolPermissionDecision.ALWAYS_SERVER) {
+					// Destructive tools are excluded from the sweep. "Always allow all
+					// tools from Redstart Built-in" is a menu item about convenience;
+					// silently including a delete would make it a menu item about
+					// unattended data loss, under a label that never says so.
 					const serverToolKeys = toolsStore.allTools
 						.filter((t) =>
 							t.serverName
 								? t.serverName === serverLabel
 								: toolsStore.getToolServerLabel(t.definition.function.name) === serverLabel
 						)
+						.filter((t) => !toolsStore.isDestructiveTool(t.definition.function.name))
 						.map((t) => toolsStore.getPermissionKey(t.definition.function.name)!)
 						.filter((k): k is string => k !== null);
 					permissionsStore.allowTools(serverToolKeys);
@@ -642,37 +654,37 @@ class AgenticStore {
 					signal
 				);
 
-			this.updateSession(conversationId, { streamingToolCall: null });
+				this.updateSession(conversationId, { streamingToolCall: null });
 
-			if (turnTimings) {
-				agenticTimings.llm.predicted_n += turnTimings.predicted_n || 0;
-				agenticTimings.llm.predicted_ms += turnTimings.predicted_ms || 0;
-				agenticTimings.llm.prompt_n += turnTimings.prompt_n || 0;
-				agenticTimings.llm.prompt_ms += turnTimings.prompt_ms || 0;
-				turnStats.llm.predicted_n = turnTimings.predicted_n || 0;
-				turnStats.llm.predicted_ms = turnTimings.predicted_ms || 0;
-				turnStats.llm.prompt_n = turnTimings.prompt_n || 0;
-				turnStats.llm.prompt_ms = turnTimings.prompt_ms || 0;
-			}
-
-			if (turnToolCalls.length === 0 && config().toolCallFallbackParserEnabled) {
-				const patternList: string[] = (config().toolCallFallbackParserPatterns || '')
-					.split(',')
-					.map((p: string) => p.trim())
-					.filter(Boolean);
-				// Scans the visible answer, then the reasoning stream — a reasoning
-				// model often writes the call in its thinking block and only
-				// narrates it in the answer, which would otherwise drop it silently.
-				const parsed = parseToolCallsFromTurn(turnContent, turnReasoningContent, {
-					patterns: patternList,
-					availableTools: toolsStore.allTools.map((t) => ({ name: t.definition.function.name }))
-				});
-
-				if (parsed.length > 0) {
-					turnToolCalls = createApiToolCalls(parsed);
+				if (turnTimings) {
+					agenticTimings.llm.predicted_n += turnTimings.predicted_n || 0;
+					agenticTimings.llm.predicted_ms += turnTimings.predicted_ms || 0;
+					agenticTimings.llm.prompt_n += turnTimings.prompt_n || 0;
+					agenticTimings.llm.prompt_ms += turnTimings.prompt_ms || 0;
+					turnStats.llm.predicted_n = turnTimings.predicted_n || 0;
+					turnStats.llm.predicted_ms = turnTimings.predicted_ms || 0;
+					turnStats.llm.prompt_n = turnTimings.prompt_n || 0;
+					turnStats.llm.prompt_ms = turnTimings.prompt_ms || 0;
 				}
-			}
-		} catch (error) {
+
+				if (turnToolCalls.length === 0 && config().toolCallFallbackParserEnabled) {
+					const patternList: string[] = (config().toolCallFallbackParserPatterns || '')
+						.split(',')
+						.map((p: string) => p.trim())
+						.filter(Boolean);
+					// Scans the visible answer, then the reasoning stream — a reasoning
+					// model often writes the call in its thinking block and only
+					// narrates it in the answer, which would otherwise drop it silently.
+					const parsed = parseToolCallsFromTurn(turnContent, turnReasoningContent, {
+						patterns: patternList,
+						availableTools: toolsStore.allTools.map((t) => ({ name: t.definition.function.name }))
+					});
+
+					if (parsed.length > 0) {
+						turnToolCalls = createApiToolCalls(parsed);
+					}
+				}
+			} catch (error) {
 				if (signal?.aborted) {
 					// Save whatever we have for this turn before exiting
 					await onAssistantTurnComplete?.(
