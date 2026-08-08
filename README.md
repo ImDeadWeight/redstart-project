@@ -4,17 +4,21 @@
 
 # Redstart
 
-**A local LLM ecosystem for home/office use.** Run a model on your PC to use it as a coding agent or chat with it from any device on your home network — phone, laptop, or another desktop — with no cloud, no subscriptions, and no data leaving your house.
+**A local LLM ecosystem for home/office use.** Run a model on your own PC, then reach it from every tool you work in — chat from your phone or laptop, query your data, or drive a coding agent in your IDE — with no cloud, no subscriptions, and no data leaving your building.
+
+**The apps:** [Nest](#what-is-redstart) (the server) · [Twig](#what-is-redstart) (chat client) · [Blueprints](https://github.com/ImDeadWeight/redstart-blueprints) (SQL data workbench) · [Yellowscript](https://github.com/ImDeadWeight/redstart-yellowscript) (VS Code agent) · [Greenhouse](https://github.com/ImDeadWeight/redstart-greenhouse) (project management, planned)
 
 ---
 
 ## Contents
 - [Mission](#mission)
-- [What Is Redstart?](#what-is-redstart)
+- [What Is Redstart?](#what-is-redstart) — the app ecosystem
 - [How It Works](#how-it-works)
 - [Tools & MCP](#tools--mcp)
+- [Per-account file storage](#per-account-file-storage)
 - [Accounts & Login](#accounts--login)
-- [Using as a Coding Agent](#using-as-a-coding-agent-kilo-code--continue-etc)
+- [System Prompt & Task Modes](#system-prompt--task-modes)
+- [Using as a Coding Agent](#using-as-a-coding-agent-kilo-code--continue--etc)
 - [Tested Configuration](#tested-configuration)
 - [Requirements](#requirements)
 - [Installation](#installation-end-users)
@@ -88,16 +92,21 @@ The project isn't there yet. But that's the direction.
 
 ## What Is Redstart?
 
-Redstart is a small ecosystem of apps built around [TurboQuant+](https://github.com/TheTom/llama-cpp-turboquant), a production-grade fork of [llama.cpp](https://github.com/ggerganov/llama.cpp) that adds advanced weight and KV-cache quantization. The core idea: your home PC probably has a GPU capable of running a decent LLM locally. Redstart makes it easy to start a model on that PC and reach it from any device on your home network.
+Redstart is an **ecosystem of applications** around one idea: a model you own, running on hardware you own, reachable from every tool you work in. It is built on [TurboQuant+](https://github.com/TheTom/llama-cpp-turboquant), a production-grade fork of [llama.cpp](https://github.com/ggerganov/llama.cpp) that adds advanced weight and KV-cache quantization — because your existing PC probably has a GPU capable of running a decent LLM already.
 
-There are two components:
+**Redstart Nest hosts the model. Everything else is a client** that finds it on the network, signs in with a Redstart account, and gets the same tools and policy the admin configured once.
 
-| App | Platform | Role |
-|---|---|---|
-| **Redstart Nest** | Windows (Electron) | Server manager — loads and runs the model, manages tools/accounts, broadcasts its location on the LAN |
-| **Redstart Twig** | Android (Capacitor) & Windows (Electron) | Client — scans for Redstart Nest automatically, or connect via QR code; same chat UI on both platforms |
+| App | Platform | Role | Status |
+|---|---|---|---|
+| **Redstart Nest** | Windows (Electron) | Server manager — runs the model, hosts the tools, accounts and policy, and broadcasts itself on the LAN | In this repo |
+| **Redstart Twig** | Android & Windows | Lightweight chat client; finds Nest automatically, no configuration | In this repo |
+| **[Redstart Blueprints](https://github.com/ImDeadWeight/redstart-blueprints)** | Windows (Electron) | A local-first SQL data workbench with optional AI assistance — register flat files, query them with DuckDB, build notebooks with charts and dashboards. The workbench works fully without a model; the assistant is a dockable panel you summon | Separate repo |
+| **[Redstart Yellowscript](https://github.com/ImDeadWeight/redstart-yellowscript)** | VS Code extension | A coding agent that talks to a local Nest instead of a cloud — zero-config discovery, Redstart login, and workspace-aware tools | Separate repo |
+| **[Redstart Greenhouse](https://github.com/ImDeadWeight/redstart-greenhouse)** | Windows (Electron), planned | Project management, built the way Blueprints is built — the tool works fully on its own and the model is an optional assistant. Where Blueprints is the analytics application, Greenhouse is the planning one | Separate repo, not yet started |
 
-Both share the same [SvelteKit](https://kit.svelte.dev/) chat frontend, which is a modified fork of the upstream llama.cpp web UI. The chat UI is also reachable directly in any browser — no client app required.
+Nest, Twig and Blueprints share the same [SvelteKit](https://kit.svelte.dev/) frontend, a modified fork of the upstream llama.cpp web UI. The chat UI is also reachable directly in any browser — no client app required.
+
+**What makes it an ecosystem rather than a pile of apps** is that the integration points are contracts, not conventions. Every client authenticates with a per-connector key that carries its own *surface* (`nest-chat`, `twig`, `blueprints`, `yellowscript`, `greenhouse`), so the server knows which app is calling from the credential rather than a header it could fake. Client-supplied tools carry an app prefix (`fs_`/`twig_`, `bp_`, `ys_`, `gh_`) so an admin's tool bans stay targetable, and a test fails the build if two apps ever collide. See [`docs/connector-contract.md`](docs/connector-contract.md) and [`docs/tool-namespacing.md`](docs/tool-namespacing.md).
 
 ---
 
@@ -114,9 +123,19 @@ Both share the same [SvelteKit](https://kit.svelte.dev/) chat frontend, which is
   └─ mDNS        redstart.local (advertises the server on the local network)
 ```
 
-**Discovery:** Redstart Nest broadcasts a JSON beacon on port 8765 and advertises itself via mDNS as `redstart.local` by default (configurable). Redstart Twig (both Android and Windows) scans the local subnet on startup and connects automatically if a running server is found. No configuration required. On modern OSes you can also just type `http://redstart.local:19080` into a browser.
+**Discovery:** Redstart Nest broadcasts a JSON beacon on port 8765 and advertises itself via mDNS as `redstart.local` by default (configurable). Redstart Twig (both Android and Windows) scans the local subnet on startup and connects automatically if a running server is found — the beacon scan needs no hostname, so Twig never depends on mDNS.
 
-**QR Connect:** Redstart Nest displays a QR code in the UI when network mode is on. Scanning it with the Android camera opens Redstart Twig and connects to the server in one tap via a `redstart://connect` deep link.
+**Reaching the server from a browser:** no single address reaches every client, so the launcher's **Configuration → Network** panel lists three and lets you pick whichever works, with the direct IP as a QR code:
+
+| Address | Reaches | Cost |
+|---|---|---|
+| `http://<LAN-IP>:19080` | **everything, including Android** | none — no name resolution at all |
+| `http://redstart.local:19080` | iOS, macOS, Windows 10 1703+, Linux with avahi + `nss-mdns` | **not Android** |
+| `http://<dashed-ip>.sslip.io:19080` | everything, including Android | needs internet DNS; blocked by routers with DNS-rebind protection |
+
+The QR code encodes the **direct IP URL** — pointing a phone camera at it opens the chat UI in the browser with no resolver involved, which is the only approach that works universally. It is not the old `redstart://connect` deep link (removed in the 2026-07-20 launcher cleanup); it does not require Redstart Twig to be installed.
+
+Prefer the IP and give the host a DHCP reservation on your router. The hostnames are conveniences layered on top, and each one fails somewhere — see [Known Limitations](#known-limitations).
 
 **OpenAI-compatible API:** llama-server exposes `/v1/chat/completions` and related endpoints, so any tool that accepts a custom OpenAI base URL can use Redstart Nest as its backend — including coding agents, scripts, and API clients.
 
@@ -130,35 +149,29 @@ Both share the same [SvelteKit](https://kit.svelte.dev/) chat frontend, which is
 
 Redstart Nest includes a built-in [Model Context Protocol](https://spec.modelcontextprotocol.io/) (MCP) server that gives the model access to live web content from approved sources — Wikipedia, GitHub, AP News, legal references, arXiv, PubMed, and others — plus local capabilities for file system access, read-only SQL (Postgres and SQLite), document generation, Obsidian-style vault search, git repository context, and academic literature search. All capabilities are off by default and configured per profile.
 
+Writes are per-account: each account gets its own storage inside the configured folders, and can neither see nor reach another's. Reads of shared reference material (notes, repositories, databases) are shared by design. Deletion is off by default, and recoverable when enabled.
+
 ### Architecture
 
-When the server starts, Redstart Nest launches three services alongside the AI model:
+Starting the server launches three services alongside the model — the gateway (`:19080`, public), llama-server (`:19081`, localhost-only) and the MCP server (`:19082`). See [Ports Used](#ports-used).
 
-| Service | Port | Role |
-|---|---|---|
-| Gateway | `:19080` | Public-facing; injects Redstart identity + tool context into every completions request, and enforces login when accounts are enabled |
-| llama-server | `:19081` | Inference engine; localhost-only, not reachable from LAN |
-| MCP server | `:19082` | Exposes tools to the chat-ui via the MCP SSE protocol — `web_fetch`, `web_search`, Postgres, Documents, SQLite, Vault, Git, File System, and Scholar when enabled |
+The MCP server is provider-driven: each capability is a self-contained module declaring its own tools and handling its own calls, and the server merges tool lists and routes to the right provider. Adding a capability means adding a provider, not touching the transport.
 
-The MCP server itself is provider-driven: each capability (web_fetch, web_search, Postgres, Documents, SQLite, Vault, Git, File System, Scholar) is a self-contained module that declares its own tools and handles its own calls, and the server just merges tool lists and routes calls to the right provider. Adding a future capability means adding a provider module, not touching the transport.
+Providers need not run in-process. File System is spawned as a stdio child and wrapped in a provider speaking the same `toolDefs`/`callTool` interface. Its supervisor (`shared/mcp-stdio-process.mjs`) is shared with Twig, which uses it for local stdio MCP servers. This is the sanctioned path for third-party tools: out-of-process, with their own trust boundary, and the permission gate still governs every call.
 
-Providers do not all have to run in-process. **File System** is served by the official [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers), spawned as a stdio child process and wrapped in a provider that speaks the same `toolDefs`/`callTool` interface as the rest. The supervisor that manages that child (`shared/mcp-stdio-process.mjs`) is shared with Redstart Twig, which uses it to run local stdio MCP servers on the desktop. This is the sanctioned path for third-party tools: they run out-of-process with their own trust boundary, and the permission gate still governs every call they expose.
-
-The chat-ui's built-in agentic loop handles the full tool call cycle: it sees whichever tools are available via the MCP server, the model emits a tool call when it needs one, the chat-ui executes it through the MCP server, and the result feeds back into the next model turn — all with full streaming preserved.
+The chat-ui's agentic loop runs the full cycle — model emits a tool call, the chat-ui executes it through the MCP server, the result feeds the next turn — with streaming preserved throughout.
 
 ### Centralized MCP management
 
-MCP servers are managed in **one place — Redstart Nest** — not per device. The chat clients (browser, Redstart Twig) no longer carry their own MCP configuration UI; instead they fetch the active server list from Redstart Nest on startup and configure themselves automatically. Add or remove a tool server once in Redstart Nest, and every connected client picks up the change on its next load. This keeps a single source of truth for what tools exist and removes the need to reconfigure each device separately.
+MCP servers are managed in **one place — Redstart Nest** — not per device. Clients carry no MCP configuration UI; they fetch the active server list on startup and configure themselves. Add or remove a tool server once, and every client picks it up on its next load.
 
 ### Whitelist & SSRF Enforcement
 
-The whitelist is enforced **at the MCP server level** — not just as a system prompt advisory. A request to a domain that is not on the approved list never leaves the machine. The MCP server validates every URL before the network call goes out and returns an `Access denied` error to the model if the domain is not whitelisted.
+The whitelist is enforced **at the MCP server level**, not as a system-prompt advisory: a request to a non-approved domain never leaves the machine, and the model gets `Access denied`. Redirects are validated hop-by-hop, so a whitelisted page cannot bounce the fetch elsewhere. The gateway injects the approved list into the system context so the model doesn't have to guess.
 
-When the whitelist is toggled off, `web_fetch` still blocks private and loopback addresses (SSRF guard): RFC1918 ranges, `localhost`, `.local`, link-local, and IPv6 loopback are all rejected so the model cannot probe the LAN, the gateway, or a router admin page.
+With the whitelist off, `web_fetch` still blocks RFC1918, `localhost`, `.local`, link-local and IPv6 loopback (SSRF guard), so the model cannot probe the LAN, the gateway, or a router admin page.
 
-The gateway also injects the approved source list into the system context of every conversation, so the model knows which domains are available and can make appropriate tool calls without guessing. Redirects are validated hop-by-hop before being followed — a whitelisted page cannot silently bounce the fetch to a disallowed domain.
-
-A law firm might approve only the specific legal databases their practice relies on, scoped to their local jurisdiction. Large models can conflate laws from different states when synthesizing across multiple sources; a whitelist restricted to one jurisdiction's databases reduces that risk at the source — and technical enforcement at the MCP layer means a jailbreak attempt in the prompt cannot override it.
+Because enforcement is at the MCP layer, a prompt-level jailbreak cannot override it — which is the point for something like a law firm scoping sources to one jurisdiction's databases.
 
 ### Source Groups
 
@@ -174,63 +187,89 @@ Tools are organized into **source groups** — named collections of web sources 
 
 `web_search` is available alongside `web_fetch` for sources that expose a first-party search API (Wikipedia OpenSearch, arXiv, PubMed, MDN, Stack Exchange). No third-party search engine is ever involved — the query goes only to the site being searched.
 
-These are proof-of-concept defaults. In practice, an organization defines their own groups from the sources they actually trust and control. A custom group for a specific use case — say, a healthcare provider's internal knowledge base plus PubMed — can be created in the UI and exported for deployment across multiple Redstart installations. Groups can be combined; their tool lists merge when multiple are active simultaneously.
+These are proof-of-concept defaults — organizations define their own from sources they trust. Custom groups can be created in the UI and exported to other Redstart installations, and combine freely: their tool lists merge when several are active.
 
 ### External MCP Servers
 
-The **Tools** card in Redstart Nest also supports connecting to MCP servers running on **other devices**. An admin can enter any MCP SSE endpoint URL (e.g. `http://10.0.0.5:9000/sse`) and Redstart Nest will treat it as an additional tool source alongside the built-in server. This enables a few patterns:
+Redstart Nest can also treat an MCP SSE endpoint on **another device** (e.g. `http://10.0.0.5:9000/sse`) as an additional tool source — useful for a dedicated MCP appliance with different network policies, one shared tool server across several Nest installations, or a specialized set like a legal practice's document management system.
 
-- **Dedicated MCP appliance** — the MCP server runs on a separate machine (a small server, NAS, or the future Redstart Box) with more generous network access policies, separate from the AI model host
-- **Shared company tool server** — one MCP server on the network serves multiple Redstart Nest installations without each needing its own whitelist configuration
-- **Specialized tool sets** — a legal practice might run a separate MCP server that connects to their document management system or jurisdiction-specific databases
-
-The Redstart Nest beacon (port 8765) advertises both the built-in MCP server URL and any active external servers, and chat clients fetch the same list from Redstart Nest directly, so every device on the LAN discovers the full tool set automatically.
+Clients fetch the full list from Redstart Nest directly, so every device on the LAN discovers built-in and external tools alike.
 
 ### Local Capabilities
 
-Beyond web sources, the built-in MCP server ships seven local capabilities — all local I/O with no network egress except Scholar, which queries open academic indexes, which is why they're built in rather than proxied to a hosted service:
+Seven local capabilities ship with the built-in MCP server. All are local I/O with no network egress except Scholar, which queries open academic indexes.
 
-- **Postgres** — `postgres_query`, `postgres_list_tables`, and `postgres_describe_table`. Every query runs inside a `BEGIN TRANSACTION READ ONLY` block, so Postgres itself rejects any write or DDL statement — enforcement happens at the database level, not by string-sniffing the query. Connect with a database role that's actually read-only for defense in depth.
-- **Documents** — `create_document` writes a `.docx`, `.pdf`, or `.md` file to an admin-configured local folder. The model supplies a title, content, and format; the filename is derived server-side and checked to stay inside the configured folder, so the model can't write anywhere else on disk. (A model that supplies `filename` instead of `title` — a common habit — is accommodated: the name is stripped of any directory and extension, and no supplied path is ever honored.) Content is markdown, including **pipe tables, which render as real tables** in `.docx` and `.pdf` — a Word table with a repeating header row, and a hand-drawn grid in PDF that paginates and redraws its header on each page. Created files surface in the chat as a **download button**, served over an authenticated endpoint that enforces the same containment. The model can also read and summarize existing `.pdf`, `.docx`, `.txt`, `.md`, `.xlsx`, and `.csv` files in that folder. Useful for case notes, summaries, and reports — the kind of deliverable a social work, legal, or healthcare-adjacent office actually produces.
-- **SQLite** — `sqlite_query`, `sqlite_list_tables`, and `sqlite_describe_table`. Read-only SQL access to local SQLite database files in an admin-configured folder. Same read-only enforcement model as Postgres.
-- **Vault** — read-only access to a folder of markdown notes (Obsidian vault or any markdown folder). The model can search notes, read individual files, and browse tags — useful for organizations that keep their knowledge base in markdown.
-- **Git** — read-only repository context from local git repositories in an admin-configured folder. The model can inspect status, recent commits, and uncommitted diffs — useful for code review and project context without giving the model write access.
-- **File System** — general-purpose read/write access to a user-chosen folder, served by the official `@modelcontextprotocol/server-filesystem` running as a stdio child process. The model can read configs, write scripts, and edit project files using the ecosystem-standard tool names (`read_text_file`, `write_file`, `edit_file`, `list_directory`, `directory_tree`, `search_files`, `move_file`, and others) — which local models call far more reliably than a bespoke schema. The upstream server enforces its own containment; on top of that, every path argument is independently re-validated through Redstart's own symlink-aware `resolveWithinRoot()` before the call reaches the child, so containment survives even if an upstream version ever regresses. The pinned server exposes no delete tool, so the `allowDestructive` policy toggle is currently reserved rather than load-bearing.
+| Capability | Access | Notes |
+|---|---|---|
+| **Postgres** | Read-only SQL | Every query runs inside `BEGIN TRANSACTION READ ONLY`, so the database itself rejects writes and DDL — not string-sniffing. Use a read-only role too. |
+| **SQLite** | Read-only SQL | Same enforcement, against `.db` files in a configured folder. Verifies the SQLite file header rather than trusting the extension. |
+| **Vault** | Read-only | Search, read and tag-browse a folder of markdown notes (Obsidian or otherwise). |
+| **Git** | Read-only | `git_status`, `git_log`, `git_diff` over local repositories in a configured folder. |
+| **Documents** | Read + create | Creates `.docx`/`.pdf`/`.md` from markdown; pipe tables render as real Word/PDF tables with repeating headers. Reads `.pdf`/`.docx`/`.txt`/`.md`/`.xlsx`/`.csv`. Filenames are derived server-side — a model-supplied path is never honored. Created files appear in chat as an authenticated download. |
+| **File System** | Read/write | Served by the official [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers) as a stdio child, using ecosystem-standard tool names (`read_text_file`, `write_file`, `edit_file`, …) that local models call far more reliably than a bespoke schema. Every path argument is independently re-validated through Redstart's symlink-aware `resolveWithinRoot()` before reaching the child, so containment survives an upstream regression. |
+| **Scholar** | Read-only, outbound | OpenAlex, arXiv and PubMed search; open-access PDFs save into Documents. Optional venue whitelist. The one capability that makes outbound requests. |
 
-- **Scholar** — search open academic literature (OpenAlex, arXiv, PubMed) for abstracts and citations, with open-access PDFs saved into the Documents folder. An optional journal/category whitelist restricts which venues results may come from. This is the one local capability that makes outbound requests, and only to those indexes.
+The upstream filesystem server ships no delete tool, so `delete_file` is Redstart-owned and is the system's only **destructive-class** tool — off by default, refused at both `tools/list` and `tools/call`. See [Destructive operations](#destructive-operations).
 
-All are configured once globally (connection strings, output folders, or root directories) and then activated per profile, the same way web sources are — a profile can mix and match freely.
+Each capability is configured once globally, then activated per profile — both halves are required.
 
-**Why no hosted "tool" MCP servers?** A number of third-party services package documentation or code search behind a hosted MCP endpoint. They were considered and passed over: they're proprietary hosted indexes with no self-hosted option, so using one — even proxied through Redstart Nest's own MCP server — means the built-in server itself makes an outbound call on every use. That's a different risk category from the whitelisted web sources above, which are an explicit, visible, admin-controlled exception. A "built-in" tool silently phoning out conflicts with the "conversations stay on the local network" premise this whole project is built on, so it stays off the table unless a genuinely local alternative shows up.
+### Per-account file storage
+
+The capabilities that **write** — Documents, File System, and Scholar's saved PDFs — give each account its own folder inside the configured root:
+
+```
+<configured root>/user_files/<username>-<account-id>/
+```
+
+Everything an account creates lands there, and everything it reads comes from there. This is enforced structurally rather than by an ownership check: another account's filename resolves inside *your* folder, finds nothing, and 404s. There is no "is this mine?" comparison to forget on one of the several code paths that reach the same bytes — the MCP tools, the download endpoint, and the file explorer all resolve the same way.
+
+Folders are keyed on the account **id**, not the username. Usernames are validated for uniqueness only, so a username like `../../etc` or a Windows reserved name (`CON`, `PRN`) would otherwise be a path-traversal or create-failure primitive the moment it became a directory name. The username still appears, slugified, so an admin browsing the disk can tell whose folder is whose.
+
+Folders are created **lazily**, on first use — a tool call or opening the Files tab. An account that has never touched a file has no folder, which is normal rather than a fault. When login is disabled there is one defined `_local/` scope; a request with no identity never falls through to the capability root.
+
+The **read-only reference capabilities are deliberately not per-account.** Vault, Git, SQLite and Postgres are shared: a per-user vault would be empty and useless, and shared repositories are the whole point. Today that sharing is all-or-nothing — see [Known Limitations](#known-limitations).
+
+> **If you are upgrading:** files already sitting in a configured root are left exactly where they are, but are no longer served to anyone, because serving them to every account is the exposure this change closes. Move them into a specific account's folder to make them reachable again.
+
+### Your files (web UI)
+
+The chat UI's **Profile → Files** tab is a browser for your own storage on the server: navigate folders, preview `.pdf`/`.docx`/`.xlsx`/`.csv` (extracted on-device by the same code `read_document` uses — nothing leaves the machine), download, rename, create folders, and delete. Drag to move, with multi-select; drag files in from your desktop to upload. Deletions go to the recycle bin, same as the model's.
+
+Uploading is the one place a person can put arbitrary bytes on the server, so it has its own limits rather than the model-facing ones: a size cap enforced against the bytes actually received (not the declared `Content-Length`), an extension denylist for anything a double-click would execute, a filename that must be a bare name rather than a path, and no silent overwrite.
+
+Scoping is server-side from the authenticated session throughout — the client never sends a user id, so it cannot ask for someone else's files even by trying.
+
+### Destructive operations
+
+Destructive-class tools (currently only `delete_file`) are governed twice, on purpose.
+
+**Server side**, `allowDestructive` is off by default and enforced at the MCP chokepoint, so a client that skips the advertised tool list is still refused.
+
+**Client side**, a destructive tool can never be granted "always allow": the prompt hides the option, the agentic loop refuses to honour a persisted grant, and "allow all from this server" filters destructive tools out before saving. Otherwise one click on a menu item that never mentions deletion would make every future deletion silent — and recoverability only helps if someone notices in time.
+
+Twig needs its own version, since its local file tools never travel over MCP and no server-side policy reaches them. It reports each tool's class over its own bridge; `fs_delete_file` is likewise never remembered.
+
+Deletions go to the OS recycle bin, falling back to a `.trash/` folder in the caller's own storage. Nothing in Redstart permanently destroys data — a delete that cannot be made recoverable fails and leaves the file alone. It refuses the storage root, refuses non-empty directories (there is deliberately no `recursive` option), and deletes a symlink as a link rather than following it.
+
+### Tool bans
+
+A profile can ban tools by name, which is the only lever the server has over tools it does not itself provide. Client applications across the ecosystem (Twig today; Blueprints, Yellowscript and Greenhouse as they grow tools) embed their own and hand them to the model already inside the completions request — the server never offered them, so it cannot withhold them either. Banning strips them by name from every request the profile serves, and clients cannot re-enable them.
+
+Bans are enforced at **both** chokepoints: the completions proxy and the built-in MCP server. (The MCP half matters more than it sounds — talking to the MCP server directly *is* the transport, so a ban enforced only in the proxy is not a ban.)
+
+Because the strip is a flat name match across every source, tool naming is a written contract rather than a habit: client-app tools carry an app prefix (`fs_`/`twig_`, `ys_`, `bp_`, `gh_`), Redstart's own capability tools use their unprefixed upstream names, and a test fails the build if the two ever collide. See [`docs/tool-namespacing.md`](docs/tool-namespacing.md).
+
+To make a capability read-only, use **Allow writes** on its card rather than banning it — a ban removes the whole capability, reads included.
+
+**Why no hosted "tool" MCP servers?** Third-party services that package docs or code search behind a hosted MCP endpoint were considered and passed over. They are proprietary indexes with no self-hosted option, so a "built-in" tool would phone out on every use — a different risk category from the whitelisted web sources, which are an explicit, admin-controlled exception. That conflicts with the premise this project is built on, so it stays off the table unless a local alternative appears.
 
 ### Configuring in Redstart Nest
 
-The **Tools** card appears in the main configuration panel between the model settings and the command preview. It has three sections:
+The **Tools** card in the main configuration panel has four sections: **Web Sources** (source groups, individual sources, custom sources, and the per-fetch token budget — default 2000), **Local Capabilities**, **Banned Tools** (see [Tool bans](#tool-bans)), and **External MCP Servers**.
 
-**Web Sources** (top, toggle to enable/disable):
-- Enable or disable source groups with checkboxes
-- Toggle individual sources independently
-- Create custom source groups from any combination of built-in or custom sources
-- Add custom sources by URL and description
-- Set the per-fetch token budget (default: 2000 tokens per fetch)
+Capabilities are configured with a native folder picker, except Postgres, which takes a connection string — encrypted at rest via the OS secret store (DPAPI on Windows) and never re-displayed. File System carries two policy toggles: **Allow writes** (on) and **Allow destructive operations** (off).
 
-**Local Capabilities** (below Web Sources, inside the same card):
-- Postgres: enter a connection string, test it, save — the string is encrypted at rest via the OS's own secret storage (DPAPI on Windows) and never re-displayed once saved
-- Documents: pick an output folder with a native folder picker; the model can read existing documents and create new ones
-- SQLite: pick a folder containing `.db`/`.sqlite` files with a native folder picker
-- Vault: pick a folder of markdown notes with a native folder picker
-- Git: pick a folder containing local git repositories with a native folder picker
-- File System: pick a root folder with a native folder picker; all model file operations are confined to this root
-- Scholar: optionally enter a journal/category whitelist to restrict academic search results
-- Each capability can be individually enabled/disabled globally here, and then activated per profile from the **Local Capabilities** checklist beside the web sources. Both halves are required: a capability produces tools only when it is configured and enabled globally **and** selected for the running profile. A capability that is selected for the profile but not yet configured is flagged inline, since that combination otherwise produces no tools and no error.
-
-**External MCP Servers** (bottom, always visible):
-- Shows the built-in Redstart MCP URL (`http://localhost:19082/sse`) when enabled
-- Add external MCP servers by name and SSE URL
-- Test connectivity to any configured server with a single click
-- Remove servers that are no longer needed
-
-All settings are saved with the active profile — different profiles can have different tool configurations.
+A capability produces tools only when it is configured and enabled globally **and** activated for the running profile. Selecting one for a profile without configuring it is flagged inline, since that combination otherwise yields no tools and no error. All settings save with the active profile.
 
 ### Performance
 
@@ -238,9 +277,9 @@ Each tool call adds 2–5 seconds of latency. The model's response appears after
 
 ### Storage
 
-User-defined tools, groups, external MCP server configurations, and local capability config (Postgres connection string, Documents/SQLite/Vault/Git/File System output folders, Scholar venue filter) are stored in `tools.json` in the Electron userData directory alongside `profiles.json`. Built-in sources, groups, and capabilities are hardcoded and can be toggled off per-profile but not deleted. The Postgres connection string is the one secret in that file — it's encrypted with Electron's `safeStorage` (OS-level encryption) rather than stored in plaintext.
+Tool and capability configuration lives in `tools.json`; built-in sources, groups and capabilities are hardcoded and can be toggled off per profile but not deleted. See [Configuration](#configuration) for the files and schema.
 
-Conversations are stored server-side in `conversations.json` in the same userData directory, scoped to the logged-in account. When login is off, conversations are scoped to a device-specific ID stored in the browser's localStorage, so each device keeps its own history. All conversations are automatically deleted after 30 days of inactivity.
+Files the model and users create live under the configured capability roots, one folder per account — see [Per-account file storage](#per-account-file-storage). Conversations are stored server-side per account (per device ID when login is off) and auto-delete after 30 days of inactivity.
 
 ---
 
@@ -250,13 +289,30 @@ Redstart Nest has an optional account system, gated behind a global **Require lo
 
 - **Login gate.** When accounts are required, the chat UI is not reachable until you sign in — a device that isn't logged in gets the login screen, not the chat. This holds for browsers on other devices too, not just the app.
 - **Three-tier roles.** A single **Owner** creates and removes **Admin** accounts; Admins manage regular **Users** day-to-day; Users just log in and chat. Sessions are token-based and persist across app launches (they're held in memory server-side, so restarting Redstart Nest signs everyone out — clients handle that by returning to the login screen rather than erroring).
-- **Account menu.** Logged-in users get an account menu in the sidebar header showing their username, role, account-created / last-login timestamps, and API key. From there they can **regenerate their own API key** (the new key is shown once) and **log out**.
+- **Profile page.** A **Profile** entry in the sidebar (and in the collapsed icon rail) opens a full-page account view rather than a dropdown. Its **Account** tab shows role, account-created / last-login timestamps and API key management; its **Files** tab browses your own storage on the server (see [Your files](#your-files-web-ui)). A regenerated key is shown once and stays on the page until dismissed — the previous dropdown put it in a modal that a stray click could dismiss, and the server keeps only a hash, so a key lost that way is gone for good.
 - **API keys.** Each account has a long-lived API key (prefixed `rst_`) for OpenAI-compatible clients like Kilo Code. Only a hash is stored server-side, so an existing key is only ever shown as its prefix — regenerate to get a fresh full key. Admins can also manage keys for the accounts they oversee.
+- **Per-connector keys.** An account can also issue keys bound to a specific *surface* (`nest-chat`, `twig`, `blueprints`, `yellowscript`, `greenhouse`), managed under Settings → Connectors. The surface travels with the credential, so the server derives which app is calling from the key itself rather than believing a header.
 - **First run.** The Owner account is created in the Redstart Nest launcher itself — deliberately, there is no HTTP route for bootstrap, so creating the first account requires physical access to the host machine. Since login is on by default, do this before expecting any device (including a browser on the host PC) to sign in.
 
-The account/role logic is covered by an automated HTTP-level test suite (`redstart-nest/scripts/test-auth.mjs`) that exercises the full hierarchy, including cross-tier permission checks. The login flow itself has been verified working from a remote browser. This is a newer subsystem — treat the account-management surface as still stabilizing, and **do not expose the gateway port to the public internet** regardless of whether login is on.
+This is a newer subsystem — treat the account-management surface as still stabilizing, and **do not expose the gateway port to the public internet** regardless of whether login is on.
 
-More broadly, `npm run test:security` (in `redstart-nest`) runs the full security suite — **~274 automated checks** across ten suites that guard Redstart's architectural invariants at the service boundary: authentication and the three-tier role hierarchy, filesystem path containment (plus a property fuzzer) and symlink-escape protection, per-account conversation isolation, the tool-permission model and escalation guards, SSRF and redirect re-validation on web fetch, the llama-server localhost-only bind, discovery-beacon robustness, response-shape contracts (proving the public account view leaks no secrets), and a provider-conformance battery every MCP capability must pass. The suite drives the real gateway and MCP servers over HTTP, uses throwaway data and ports, and runs safely alongside a live instance.
+`npm run test:security` (in `redstart-nest`) runs **437 automated checks** across eighteen suites, plus the chat UI's own security suite, covering the architectural invariants: auth and the role hierarchy, path containment and symlink escape, per-account conversation and file isolation, storage-scope naming against hostile usernames, tool permissions and namespacing, SSRF and redirect re-validation, the llama-server localhost-only bind, LAN interface selection, beacon robustness, response-shape contracts, system-prompt claims, connector credentials, and a conformance battery every MCP provider must pass. It drives the real gateway and MCP servers over HTTP with throwaway data and ports, so it runs safely alongside a live instance. The chat UI adds its own unit and real-browser suites.
+
+---
+
+## System Prompt & Task Modes
+
+Every completions request gets a server-composed system prompt prepended to whatever the client sends. It states who the model is, what it can actually reach, and the admin's policy — and it is assembled server-side precisely so a client cannot talk its way out of it.
+
+**Capability claims are substantiated, never assumed.** The prompt only tells the model it has a tool if the request actually carries that tool. This sounds pedantic and is not: an earlier build injected *"You have access to create_document"* whenever the capability was enabled server-side, regardless of whether the tools were delivered. Told it had a tool it could not reach and given no schema, the model did what that invites — invented a call format, emitted a plausible blob, and reported success. Three sessions produced three different inventions. Now, when the plumbing is broken, the model says so instead of faking it.
+
+**Privacy claims are derived, not asserted.** What the prompt says about where data goes is computed from the live configuration — which local stores exist, which domains are approved, whether any external tool server is remote. If a capability is on, it is named; the model is never given a blanket "everything stays local" line that the configuration might contradict.
+
+**Admin blocks** (Settings → System Prompt) let an admin add standing policy — house style, jurisdiction, escalation rules. Admin text is placed ahead of any client-supplied system message and above a precedence clause, so client prose is subordinated to it rather than competing with it. Every account can *read* the policy that governs them; only admins can edit it.
+
+**Task modes** are a small preset the user picks in the composer — **Research** (accuracy and provenance), **Drafting** (complete, editable prose), or **Coding** (working code over description). The client sends a mode *ID*, never mode prose, and the server validates it against a known list and drops anything unrecognised — so a mode cannot be used to smuggle an instruction block into the prompt.
+
+**Surfaces.** Requests are attributed to the app they came from (`nest-chat`, `twig`, `blueprints`, `yellowscript`, `greenhouse`), derived from the credential rather than from a header a client could set.
 
 ---
 
@@ -327,13 +383,13 @@ Unsloth provides multiple quantization variants. The `UD-Q3_K_XL` tested here fi
 2. Run the installer — Windows Defender may warn about an unsigned binary, click **More info → Run anyway**
 3. Open Redstart Nest and **create the Owner account** in the sidebar's Accounts section. Login is required by default, so until an Owner exists no device — including a browser on this PC — can sign in to the chat UI. (Home users who don't want accounts can flip **Require login** off instead.)
 4. Point it at a `.gguf` model file and click **Start Server**
-5. Turn on **Local network** mode to make the server reachable from other devices — each person signs in with an account the Owner/Admins create
+5. In **Configuration → Network**, turn on **Local network** mode to make the server reachable from other devices — each person signs in with an account the Owner/Admins create. The same panel shows the addresses to browse to, including a QR code to scan from a phone
 
 ### Redstart Twig (Android)
 1. Download `redstart-twig.apk` from [Releases](../../releases)
 2. On your phone, allow installation from unknown sources (Settings → Apps → Special app access → Install unknown apps)
 3. Install the APK
-4. Open the app — it scans automatically, or scan the QR code in Redstart Nest to connect
+4. Open the app — it finds the server automatically by scanning the LAN for the beacon on port 8765; no hostname or QR code needed
 
 ### Redstart Twig (Windows)
 1. Download `Redstart Twig Setup 1.0.0.exe` from [Releases](../../releases)
@@ -352,8 +408,10 @@ Unsloth provides multiple quantization variants. The `UD-Q3_K_XL` tested here fi
 
 ```
 redstart-project/
+├── docs/                  # Contracts and specs (tool namespacing, connectors)
 ├── redstart-nest/         # Redstart Nest Electron app (server manager)
-│   ├── electron/          # Electron main process
+│   ├── electron/main/     # Electron main process — gateway, MCP server, providers
+│   ├── scripts/           # Security/contract test suites (npm run test:security)
 │   ├── src/
 │   │   ├── App.tsx        # React UI (the launcher window)
 │   │   └── chat-ui/       # SvelteKit chat frontend (shared with all clients)
@@ -363,9 +421,13 @@ redstart-project/
 │   └── mcp-stdio-process.mjs   # stdio MCP child-process supervisor
 └── redstart-twig/         # Redstart Twig client apps
     └── windows/           # Redstart Twig Windows Electron app
+        ├── electron/fs/   # Twig's own local file tools (fs_*) — see below
+        └── SMOKE.md       # Manual checklist for what the suites cannot reach
 ```
 
-**Chat-ui state architecture.** The chat frontend's largest store, `chat.svelte.ts`, is a thin **facade** that delegates to focused sub-stores under `redstart-nest/src/chat-ui/src/lib/stores/chat/`: UI dialog/edit state (`ChatUiState`), per-conversation runtime state (`ChatRuntimeState`), message persistence (`chat-message-repo`), the send/stream pipeline (`ChatSendController`), message edit/regenerate/delete operations (`ChatMessageOps`), and pure option/timing helpers (`chat-options`). Dependencies flow one way and the public API is unchanged, so consumers import from `$lib/stores/chat.svelte` exactly as before.
+**Twig owns its local file tools.** Twig's `fs_*` tools act on a folder on the *user's* machine and live in `redstart-twig/windows/electron/fs/`. They keep the `fs_*` prefix rather than adopting the upstream server's names, so the model — and an admin writing a tool ban — can tell Twig's local filesystem from Nest's server-side one. Only `path-scope.mjs` is duplicated between the apps; it is kept in sync by hand, and both copies say so.
+
+**Chat-ui state.** `chat.svelte.ts` is a thin facade over focused sub-stores in `lib/stores/chat/` (UI state, runtime state, message repo, send pipeline, message ops, helpers). Dependencies flow one way and the public API is unchanged.
 
 ### Redstart Nest (dev mode)
 
@@ -389,8 +451,19 @@ This starts Vite (React launcher UI), the SvelteKit chat-ui dev server, and Elec
 ```bash
 cd redstart-nest/src/chat-ui
 npm install
-npm run dev:redstart
+npm run dev:redstart      # Vite on :5174, hot-reloads on save
 ```
+
+This is the fast loop for UI work: Redstart Nest keeps running and serving the API, the chat-ui hot-reloads, and neither a bundle build nor an Electron relaunch is needed. The dev server proxies the API routes (`/v1`, `/props`, `/models`, `/tools`, `/slots`, `/auth`, `/files`, `/redstart`) to a Nest on `http://localhost:19080`; override with `VITE_PUBLIC_SERVER_ORIGIN`.
+
+For component work with no server at all:
+
+```bash
+npm run test:client -- --run     # real Chromium, mocked fetch
+npm run storybook                # interactive, per-component
+```
+
+> **Remember to build before testing in the real app.** Nest and Twig serve the built `dist`, so chat-ui edits are invisible until `npm run build:chat` (from `redstart-nest`). This has bitten the project more than once.
 
 ### Redstart Twig Windows (dev mode)
 
@@ -498,44 +571,36 @@ Build an APK in Android Studio:
 
 ## Configuration
 
-Redstart Nest stores its configuration at:
+Everything lives in `C:\Users\<you>\AppData\Roaming\redstart\`:
 
-```
-C:\Users\<you>\AppData\Roaming\redstart\profiles.json
-```
+| File | Holds |
+|---|---|
+| `profiles.json` | Per profile: model path, context/batch/threads, GPU layers, port, network mode, and web source config. Also the per-profile `tools` block — whether tools are on, the whitelist and active sources/groups, activated capabilities (`activeToolIds`) and banned tools (`disabledToolIds`). |
+| `tools.json` | User-defined tools, groups, external MCP servers, and global capability config (schema below). |
+| `accounts.json` | Accounts, when login is enabled. Passwords and API keys are stored only as hashes. |
+| `conversations.json` | Server-side conversation history, scoped per account. |
 
-Settings saved per profile:
-- Model path
-- Context size, batch size, thread count
-- GPU layers
-- Port (default: 19080) — llama-server uses `port + 1`, MCP server uses `port + 2` automatically
-- Network mode (localhost vs LAN)
-- Web source configuration (enabled/disabled, active source groups, per-fetch token budget)
-
-User-defined tools, groups, and external MCP server connections are stored separately in:
-
-```
-C:\Users\<you>\AppData\Roaming\redstart\tools.json
-```
-
-The `tools.json` schema:
+`tools.json` schema:
 ```json
 {
   "tools": [ { "id": "...", "name": "...", "baseUrl": "...", "description": "..." } ],
   "groups": [ { "id": "...", "name": "...", "description": "...", "toolIds": ["..."] } ],
   "externalServers": [ { "id": "...", "name": "...", "url": "...", "enabled": true } ],
   "capabilities": {
-    "postgres":  { "enabled": false, "connectionStringEnc": "...", "maxRows": 200 },
-    "documents": { "enabled": false, "outputDir": "..." }
+    "postgres":    { "enabled": false, "connectionStringEnc": "...", "maxRows": 200 },
+    "documents":   { "enabled": false, "outputDir": "..." },
+    "sqlite":      { "enabled": false, "rootDir": "...", "maxRows": 200, "maxFileBytes": 209715200 },
+    "vault":       { "enabled": false, "rootDir": "..." },
+    "git":         { "enabled": false, "rootDir": "..." },
+    "file_system": { "enabled": false, "rootDir": "...", "allowWrite": true, "allowDestructive": false },
+    "scholar":     { "enabled": false, "venueFilter": null }
   }
 }
 ```
 
-Accounts (when login is enabled) are stored in `accounts.json` in the same directory. Passwords and API keys are stored only as hashes, never in plaintext.
+`allowDestructive` is the switch that permits `delete_file` — off by default, meaning the tool is neither advertised nor executable. The Postgres connection string is the one secret in the file, encrypted with Electron's `safeStorage`. Profiles are managed (save, load, delete) in the Redstart Nest UI.
 
-> **Note on upgrading from Beaver:** on first launch, Redstart Nest migrates existing `profiles.json` / `accounts.json` / `tools.json` from the old `%APPDATA%\beaver\` directory to `%APPDATA%\redstart\` automatically (one-time, idempotent — it never overwrites files already present in the new location). API keys created under the old build keep their original `bvr_` prefix and continue to work; newly generated keys use `rst_`.
-
-Profile management (save, load, delete) is available directly in the Redstart Nest UI.
+> **Upgrading from Beaver:** on first launch Redstart Nest migrates `profiles.json` / `accounts.json` / `tools.json` from `%APPDATA%\beaver\` (one-time, idempotent, never overwriting files already in the new location). Keys created under the old build keep their `bvr_` prefix and keep working.
 
 ---
 
@@ -548,7 +613,7 @@ Profile management (save, load, delete) is available directly in the Redstart Ne
 | 19082 | MCP server — built-in tool endpoint (web_fetch, web_search, Postgres, Documents, SQLite, Vault, Git, File System, Scholar); LAN-accessible when network mode is on |
 | 8765 | Beacon — Redstart Nest identity broadcast, always bound to `0.0.0.0` for LAN discovery |
 
-Ports 19080 and 19082 are LAN-accessible when network mode is on (Redstart Nest adds Windows Firewall inbound rules automatically for both). Port 19081 is localhost only regardless of network mode. The gateway and its two internal services shift together if you change the configured port — llama-server is always `configured-port + 1`, and the MCP server is always `configured-port + 2`.
+Ports 19080 and 19082 are LAN-accessible when network mode is on (Redstart Nest adds Windows Firewall inbound rules automatically for both, plus inbound UDP 5353 for mDNS and TCP 80 when the clean-URL proxy starts). Rules are added via the bundled `elevate.exe`, so UAC prompts at most once per rule and never again; in an unpackaged dev checkout `elevate.exe` is absent and rule creation is skipped with a warning. Port 19081 is localhost only regardless of network mode. The gateway and its two internal services shift together if you change the configured port — llama-server is always `configured-port + 1`, and the MCP server is always `configured-port + 2`.
 
 ---
 
@@ -561,7 +626,13 @@ Ports 19080 and 19082 are LAN-accessible when network mode is on (Redstart Nest 
 - **Single profile active at a time** — Redstart Nest manages one running model at a time.
 - **Windows only for server** — Redstart Nest is Windows-only. The client apps (Redstart Twig) can run anywhere, but the server manager requires Windows because it shells out to a Windows llama.cpp binary.
 - **Tokens/min display is unreliable** — the tok/min counter shown in the Redstart Nest header is a known bug. The number it displays is not accurate. This is a known issue and will be fixed in a future update.
-- **mDNS requires compatible clients** — `redstart.local` resolves natively on macOS and Linux; Windows 10+ resolves it via LLMNR on the same subnet. If a client can't resolve it, use the IP address directly or install Apple Bonjour on Windows.
+- **`redstart.local` does not work on Android, and cannot be made to** — Android's resolver does not answer `.local` for browser navigation. It works on iOS, macOS, Windows 10 1703+ and Linux with avahi + `nss-mdns`, but mDNS is multicast and also dies against Wi-Fi client isolation and IGMP snooping. Treat the hostname as a convenience and the IP (or its QR code) as the real address; for a hostname Android *can* resolve, add a static DNS entry on your router or use the `sslip.io` URL the Network panel offers.
+- **Windows clients on a "Public" network profile cannot resolve it either** — Windows blocks Network Discovery on Public networks and defaults new connections to Public. The failure is client-side; check `Get-NetConnectionProfile` on that machine and set the network to Private. Nest's own rule covers all three profiles, so it always answers.
+- **On a host with virtual adapters, `redstart.local` may resolve to a dead IP** — `bonjour-service` publishes an A record for every non-internal IPv4, so a machine running Hyper-V/WSL/VirtualBox advertises its virtual-switch IPs too. The launcher's address display and QR code filter these out; the mDNS record set is built inside the library with no injection point and is not filtered yet.
+- **Shared capabilities are all-or-nothing** — Vault, Git, SQLite and Postgres are shared across every account by design, but there is no way to grant one account access and withhold it from another. "This analyst gets the databases folder but not the repositories" is not expressible today; a capability is either active for a profile or not. Per-account grants over shared folders are the next planned piece of work.
+- **No migration for pre-existing files** — when per-account storage arrived, files already sitting in a configured capability root stayed on disk but stopped being served to anyone. Making them reachable means moving them into an account's folder by hand; there is no tooling for it.
+- **Twig's local MCP servers are unmoderated** — Redstart Twig can run local stdio MCP servers from a file on the user's own machine. That is arbitrary command execution by design (the trust boundary is the local disk), and nothing on the server side governs what those servers expose. Tool bans can strip their tools by name from requests, but the server never sees them registered.
+- **The chat UI is served from a built bundle** — Nest and Twig both serve `redstart-nest/src/chat-ui/dist`. Editing chat-ui source without running `npm run build:chat` leaves the running app on the old bundle, and nothing warns you. For UI work, `npm --prefix src/chat-ui run dev:redstart` is the faster loop.
 
 ---
 
@@ -574,32 +645,33 @@ This is an honest work-in-progress. The project started as a personal home tool 
 - [x] LAN network mode with automatic port binding
 - [x] Beacon-based zero-configuration device discovery
 - [x] Android app with automatic LAN scan on launch
-- [x] QR code deep link — scan to open app and auto-connect
+- [x] QR code in the Network panel — encodes the direct-IP chat URL, so any phone camera opens the chat UI with no name resolution and no app install
 - [x] Windows desktop client (Redstart Twig)
 - [x] Shared SvelteKit chat UI across all clients
 - [x] Server log displayed in Redstart Nest UI (piped mode)
 - [x] OpenAI-compatible API for use with coding agents (Kilo Code, Continue, etc.)
 - [x] Direct browser access to chat UI at `http://127.0.0.1:19080`
-- [x] Built-in MCP server — provider-driven architecture exposing web fetch/search plus seven local capabilities via Model Context Protocol SSE transport; providers may run in-process or as supervised stdio child processes; whitelist enforced at the server level (non-whitelisted URLs never leave the machine)
-- [x] Centralized MCP management — tool servers are configured once in Redstart Nest and auto-discovered by every client; per-device MCP config removed
-- [x] Source groups — named bundles of web sources (General Knowledge, Developer, News, Legal US, Research) with per-profile activation; custom groups and sources supported
-- [x] External MCP server management — connect to MCP servers on other devices; beacon advertises all active MCP endpoints for auto-discovery
-- [x] Postgres capability — read-only SQL query, table listing, and column inspection against an admin-configured database; read-only enforced by the database itself (queries run inside a `READ ONLY` transaction), connection string encrypted at rest
-- [x] Document generation capability — model can create `.docx`/`.pdf`/`.md` files in an admin-configured local output folder for case notes, summaries, and reports; markdown pipe tables render as real Word/PDF tables, and created files surface in chat as an authenticated download
-- [x] Three-tier accounts with login gate — Owner/Admin/User roles, session tokens, `rst_` API keys, a login screen that guards the chat UI (remote browsers included), an account/profile menu, and self-service key regeneration; auth on by default, localhost bypass removed
-- [x] `web_search` tool — first-party search APIs (Wikipedia OpenSearch, arXiv, PubMed, MDN, Stack Exchange); no third-party search engine involved
-- [x] SQLite capability — read-only SQL query, table listing, and column inspection against local SQLite database files in an admin-configured folder
-- [x] Vault capability — read-only search and read access to a folder of markdown notes (Obsidian vault or any markdown folder), including tag browsing
-- [x] Git capability — read-only repository context (status, recent commits, uncommitted diffs) from local git repositories in an admin-configured folder
-- [x] File System capability — read and write files within a user-chosen root directory, served by the official `@modelcontextprotocol/server-filesystem` as a stdio child process with ecosystem-standard tool names (`read_text_file`, `write_file`, `edit_file`, `list_directory`, `directory_tree`, `search_files`, `move_file`, …); every path argument independently re-validated through symlink-aware `resolveWithinRoot()` before reaching the child
-- [x] Scholar capability — search open academic literature (OpenAlex, arXiv, PubMed) with abstracts, citations, and open-access PDFs saved into the Documents folder; optional journal/category whitelist
-- [x] Security hardening — beacon returns minimal `{ running, port }` payload only (no version, auth state, MCP URLs, or LAN IPs); SSRF guard blocks loopback/RFC1918/link-local for `web_fetch`; web fetch redirects validated hop-by-hop; path containment utility shared across all file-based capabilities; chat-ui context compaction service
+- [x] Built-in MCP server — provider-driven, in-process or supervised stdio children, whitelist enforced at the server level
+- [x] Centralized MCP management — configured once in Nest, auto-discovered by every client; per-device config removed
+- [x] Source groups, custom sources, and external MCP servers on other devices
+- [x] Seven local capabilities — Postgres, SQLite, Vault, Git, Documents, File System, Scholar
+- [x] `web_search` over first-party APIs — no third-party search engine involved
+- [x] Three-tier accounts with login gate — Owner/Admin/User, session tokens, `rst_` API keys; on by default, localhost bypass removed
+- [x] Per-account file storage — structurally enforced across the MCP tools, download endpoint and file explorer alike
+- [x] File explorer — Profile → Files: navigate, preview, download, rename, drag-to-move, upload
+- [x] Recoverable deletion — the one destructive-class tool, off by default, deletes to the recycle bin, and always prompts
+- [x] Tool bans + a tested namespacing contract, enforced at both the completions proxy and the MCP server
+- [x] Server-composed system prompt — capability claims substantiated, privacy claims derived from live config, admin policy above client prose
+- [x] Security hardening — minimal beacon payload, SSRF guard, hop-by-hop redirect validation, shared path containment
+- [x] Dark-only UI — the light and system themes are gone; see the changelog for why they were broken
 
 ### Phase 2 — Small Office Ready
 Making Redstart usable in a small workplace rather than just on one person's home network.
 
 - [x] Per-user conversation history — conversations are stored server-side in `conversations.json`, scoped to the logged-in account (or device ID when auth is off), and sync across all devices on the network; unused conversations auto-delete after 30 days
-- [x] mDNS discovery — server advertises as `redstart.local` by default (configurable); clients can connect by hostname instead of IP
+- [x] mDNS discovery — server advertises as `redstart.local` by default (configurable), re-announcing on network change and sending goodbye packets on stop; a convenience layer only, since Android cannot resolve `.local` at all
+- [x] Universal browser access — the Configuration tab offers the direct IP (as a QR code), the mDNS name, and an `sslip.io` DNS name, so every client has at least one address that works
+- [ ] **Folder access grants** — per-account access to the shared "company" folders (Vault, Git, SQLite), so an admin can give a data analyst the databases folder without also handing over the code repositories. Personal `user_files` stay private; admins reach everything by role. Read-only by default, since two accounts writing one folder re-creates exactly what per-account storage removed. Must surface in both the file explorer and the system prompt — a granted folder the model cannot enumerate is, from the model's side, indistinguishable from one it was never given
 - [ ] Guided onboarding & in-app instruction — first-run walkthrough (create the Owner account, pick a model, launch), contextual help on the tools/capabilities panels, and plain-language explanations aimed at non-technical staff in a small office
 - [ ] Admin interface accessible from any device on the network — manage the server without touching the host PC
 - [ ] Auto-restart on crash — if the model dies at 9am Monday, it recovers without manual intervention
@@ -647,7 +719,7 @@ If you just want to run a model on a single PC, these are more mature options:
 
 All three can technically be reached from other devices on your LAN if you manually configure them to bind to `0.0.0.0` — but you are then on your own for finding the IP address and entering it in whatever client you use. None have a mobile app that discovers the server automatically, and none have a QR-to-connect flow.
 
-Redstart's niche is making the **home network experience feel like a first-class feature** rather than a manual network configuration exercise. If single-PC use is all you need, LM Studio is probably the better starting point.
+Redstart's niche is two things those don't try to be: making the **home network experience a first-class feature** rather than a manual network-configuration exercise, and being an **ecosystem of applications** — chat, data workbench, IDE agent, project management — that all share one server, one account system, and one tool policy. If single-PC use is all you need, LM Studio is probably the better starting point.
 
 ---
 

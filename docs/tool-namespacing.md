@@ -1,0 +1,85 @@
+# Tool namespacing contract
+
+**Status:** binding. Enforced by `redstart-nest/scripts/test-tool-namespacing.mjs`, which runs in
+`npm run test:security`.
+
+Every tool name the model can see comes from one of two places, and the name has to say which.
+
+---
+
+## The rule
+
+| Source | Naming | Example |
+|---|---|---|
+| A **Redstart Nest capability** | the provider's own names, unprefixed | `read_text_file`, `vault_search`, `postgres_query` |
+| A **client application** | prefixed with the app's namespace | `fs_read_file` (Twig), `ys_*`, `bp_*`, `gh_*` |
+
+Reserved app prefixes:
+
+| Prefix | App |
+|---|---|
+| `fs_` | Redstart Twig — local file tools (historical; `twig_` would be clearer, but renaming a shipped tool set costs more than it buys) |
+| `ys_` | Yellowscript |
+| `bp_` | Blueprints |
+| `gh_` | Greenhouse |
+
+**No client-app tool name may equal a Nest tool name.** That is the part the test enforces; the
+rest is convention the test cannot check.
+
+---
+
+## Why this is a contract and not a style preference
+
+Nest's gateway is **provenance-blind**. `enforceToolAllowList` sees
+`parsed.tools[].function.name` and nothing else — there is no field saying which app or server
+contributed each tool, and adding one would mean changing the OpenAI completions payload that every
+client and llama-server already agree on. So a ban is a flat name match across every source
+simultaneously.
+
+That has a consequence people find surprising: **a ban cannot be scoped to one app.** If
+Yellowscript shipped a `read_file`, banning it would also strip Nest's `read_file` from every
+request, for every client, on that profile. The namespace is the only thing making a ban targetable.
+
+The failure mode is not hypothetical. Nest's File System capability *used* to use `fs_*` names —
+the same as Twig's local tools — and the chat-ui relied on that collision to shadow the remote tools
+with the local ones so the model would not see two filesystems at once. The FS MCP migration renamed
+Nest's side to the upstream names. The collision disappeared, the shadowing silently stopped
+happening, and nothing failed: no error, no test, no log line. The model was simply handed two
+complete filesystem APIs pointing at two different computers, with nothing in either tool's
+description saying which machine it acted on.
+
+Two rules come out of that:
+
+1. **A safety property expressed as a naming coincidence is not a safety property.** Precedence is
+   now keyed on capability identity carried in `_meta` on `tools/list`, not on spelling
+   (`mcp-server.mjs` → `annotateTool`, consumed by `tools.svelte.ts`).
+2. **Namespaces still have to hold**, because bans genuinely cannot work any other way.
+
+---
+
+## Adding tools to a client app
+
+1. Prefix every name with the app's namespace.
+2. Register the app in `CLIENT_APPS` in `redstart-nest/electron/main/tools-definitions.mjs`, listing
+   every tool name. This is what lets an admin ban the app's whole set by naming the app, and it is
+   what the collision test checks against.
+3. Run `npm run test:security` in `redstart-nest`. A collision fails the build.
+
+Registering the app also makes it appear in **Tools → Banned Tools** automatically.
+
+## Adding tools to a Nest capability
+
+1. Use the provider's natural names — no prefix. Local models call standard names
+   (`read_text_file`, `write_file`) far more reliably than bespoke schemas, which is why the
+   filesystem capability moved to the upstream server in the first place.
+2. Add every name to `CAPABILITY_TOOL_NAMES[<capability>]` **and** classify each in `TOOL_CLASSES`.
+   The permission gate reads `classifyTool()`, and an unclassified tool defaults to `read` — for a
+   mutating tool that is a silent privilege escalation. `test-tool-policy.mjs` fails if a capability
+   tool is missing a classification.
+
+## If a name has to collide
+
+Don't. If a client app genuinely needs a tool that does what a Nest tool does, the answer is
+usually that it should call the Nest one. If it truly must run locally — the Twig case, where the
+whole point is acting on the user's own machine rather than the server's — the local one takes the
+app prefix and both remain individually nameable.
