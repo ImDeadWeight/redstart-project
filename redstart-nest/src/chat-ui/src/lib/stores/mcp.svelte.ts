@@ -32,7 +32,6 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 // forms a cycle. It's safe because toolsStore is only touched at runtime
 // (inside syncServersFromHost), never at module init.
 import { toolsStore } from '$lib/stores/tools.svelte';
-import { mode } from 'mode-watcher';
 import { parseMcpServerSettings, detectMcpTransportFromUrl, uuid, apiFetch } from '$lib/utils';
 import {
 	MCPConnectionPhase,
@@ -40,7 +39,6 @@ import {
 	MCPTransportType,
 	HealthCheckStatus,
 	MCPRefType,
-	ColorMode,
 	JsonSchemaType,
 	ToolCallType
 } from '$lib/enums';
@@ -238,10 +236,10 @@ class MCPStore {
 			return null;
 		}
 
-		const isDark = mode.current === ColorMode.DARK;
 		const healthState = this.getHealthCheckState(serverId);
 		if (healthState.status === HealthCheckStatus.SUCCESS && healthState.serverInfo?.icons) {
-			const mcpIconUrl = getMcpIconUrl(healthState.serverInfo.icons, isDark);
+			// Always request the dark-theme variant — the app has no light mode.
+			const mcpIconUrl = getMcpIconUrl(healthState.serverInfo.icons, true);
 
 			if (mcpIconUrl) {
 				return mcpIconUrl;
@@ -291,9 +289,10 @@ class MCPStore {
 	async syncServersFromHost(): Promise<void> {
 		let fetched: { servers?: { name?: string; url?: string }[]; disabledTools?: string[] };
 		try {
-			fetched = await apiFetch<{ servers?: { name?: string; url?: string }[]; disabledTools?: string[] }>(
-				'/redstart/mcp-servers'
-			);
+			fetched = await apiFetch<{
+				servers?: { name?: string; url?: string }[];
+				disabledTools?: string[];
+			}>('/redstart/mcp-servers');
 		} catch (err) {
 			// Endpoint absent (plain llama-server, no Nest) is expected. A 401 is
 			// not: it means this ran before a session existed, and nothing here
@@ -821,6 +820,63 @@ class MCPStore {
 				this.autoReconnect(serverName);
 			}
 		}
+	}
+
+	/**
+	 * Redstart provenance carried on a tool's `_meta` by Redstart Nest's
+	 * built-in MCP server: which capability produced it, and its class.
+	 *
+	 * Honoured ONLY for Nest-provisioned servers (id prefix `redstart-`, set in
+	 * syncServersFromHost from the host's own advertised list). `_meta` is an
+	 * open passthrough field that any MCP server can populate with anything, so
+	 * reading it from an arbitrary third-party server would let that server
+	 * claim to be one of Nest's capabilities — or, once tool class drives the
+	 * permission prompt, declare its own destructive tool harmless. The trust
+	 * boundary is the server, so it is checked here rather than at each caller.
+	 */
+	private redstartMeta(
+		serverId: string,
+		tool: { _meta?: Record<string, unknown> }
+	): { capability: string | null; toolClass: string | null } {
+		if (!serverId.startsWith(NEST_MCP_SERVER_ID_PREFIX)) {
+			return { capability: null, toolClass: null };
+		}
+		const meta = tool._meta ?? {};
+		const capability = meta['redstart/capability'];
+		const toolClass = meta['redstart/class'];
+		return {
+			capability: typeof capability === 'string' ? capability : null,
+			toolClass: typeof toolClass === 'string' ? toolClass : null
+		};
+	}
+
+	/** Public accessor for a tool's provenance, by name. See redstartMeta. */
+	getNestToolMeta(toolName: string): { capability: string | null; toolClass: string | null } {
+		for (const [serverId, connection] of this.connections) {
+			for (const tool of connection.tools) {
+				if (tool.name === toolName) return this.redstartMeta(serverId, tool);
+			}
+		}
+		return { capability: null, toolClass: null };
+	}
+
+	/**
+	 * Names of the tools a given Nest capability is currently serving.
+	 *
+	 * Derived live from what the server actually advertised, so the caller can
+	 * act on capability IDENTITY without hardcoding tool names. That distinction
+	 * is the whole point: the previous filesystem precedence rule was expressed
+	 * as a name collision, and it stopped working — silently — the moment Nest
+	 * renamed its file tools.
+	 */
+	getNestToolNamesForCapability(capability: string): Set<string> {
+		const names = new Set<string>();
+		for (const [serverId, connection] of this.connections) {
+			for (const tool of connection.tools) {
+				if (this.redstartMeta(serverId, tool).capability === capability) names.add(tool.name);
+			}
+		}
+		return names;
 	}
 
 	getToolDefinitionsForLLM(): OpenAIToolDefinition[] {

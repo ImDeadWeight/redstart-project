@@ -1,14 +1,14 @@
 <script lang="ts">
-	import { APPLE_META_TAGS, MEDIA_QUERIES, THEME_COLORS } from '$lib/constants/pwa';
+	import { APPLE_META_TAGS, THEME_COLORS } from '$lib/constants/pwa';
 	import { APP_NAME } from '$lib/constants';
 
 	let { appName = APP_NAME } = $props();
 </script>
 
 <svelte:head>
-	<!-- Theme color for light/dark modes -->
-	<meta name="theme-color" content={THEME_COLORS.LIGHT} media={MEDIA_QUERIES.PREFERS_LIGHT} />
-	<meta name="theme-color" content={THEME_COLORS.DARK} media={MEDIA_QUERIES.PREFERS_DARK} />
+	<!-- Single theme colour: the app is dark-only, so the browser/OS chrome
+	     should not follow the device preference away from it. -->
+	<meta name="theme-color" content={THEME_COLORS.DARK} />
 
 	<!-- Apple mobile web app meta tags -->
 	<meta

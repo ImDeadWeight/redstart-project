@@ -1,4 +1,3 @@
-import { ColorMode } from '$lib/enums/ui.enums';
 import { SettingsFieldType } from '$lib/enums/settings.enums';
 import { SyncableParameterType } from '$lib/enums';
 import {
@@ -10,17 +9,18 @@ import {
 	Sliders,
 	PencilRuler,
 	Database,
-	Monitor as MonitorIcon,
-	Sun,
-	Moon,
 	Server,
-	Users
+	Users,
+	ScrollText,
+	KeyRound,
+	SlidersHorizontal
 } from '@lucide/svelte';
 import type { Component } from 'svelte';
 import type {
 	SettingsConfigValue,
 	SyncableParameter,
 	SettingsEntry,
+	SettingsFieldConfig,
 	SettingsSectionTitle,
 	SettingsSectionEntry,
 	SettingsSection
@@ -39,7 +39,10 @@ export const SETTINGS_SECTION_TITLES = {
 	IMPORT_EXPORT: 'Import/Export',
 	DEVELOPER: 'Developer',
 	SERVER: 'Server',
-	ACCOUNTS: 'Accounts'
+	ACCOUNTS: 'Accounts',
+	SYSTEM_PROMPT: 'System Prompt',
+	CONNECTORS: 'Connectors',
+	ADVANCED: 'Advanced'
 } as const;
 
 const STANDALONE_SECTIONS: { title: SettingsSectionTitle; slug: string; icon: Component }[] = [
@@ -52,13 +55,22 @@ const STANDALONE_SECTIONS: { title: SettingsSectionTitle; slug: string; icon: Co
 	{ title: SETTINGS_SECTION_TITLES.SERVER, slug: SETTINGS_SECTION_SLUGS.SERVER, icon: Server },
 	// Filtered to admins only at render time in SettingsChat.svelte (authStore.isAdmin) —
 	// this static array can't see auth state.
-	{ title: SETTINGS_SECTION_TITLES.ACCOUNTS, slug: SETTINGS_SECTION_SLUGS.ACCOUNTS, icon: Users }
-];
-
-const COLOR_MODE_OPTIONS: Array<{ value: string; label: string; icon: Component }> = [
-	{ value: ColorMode.SYSTEM, label: 'System', icon: MonitorIcon },
-	{ value: ColorMode.LIGHT, label: 'Light', icon: Sun },
-	{ value: ColorMode.DARK, label: 'Dark', icon: Moon }
+	{ title: SETTINGS_SECTION_TITLES.ACCOUNTS, slug: SETTINGS_SECTION_SLUGS.ACCOUNTS, icon: Users },
+	// Visible to everyone: a user may READ the policy that governs them, and
+	// the tab itself renders read-only for non-admins (canEdit from the server).
+	// The server enforces the write gate regardless of what the UI shows.
+	{
+		title: SETTINGS_SECTION_TITLES.SYSTEM_PROMPT,
+		slug: SETTINGS_SECTION_SLUGS.SYSTEM_PROMPT,
+		icon: ScrollText
+	},
+	// Self-service, so visible to everyone: connector keys act on the current
+	// account only, and the server enforces that regardless of the UI.
+	{
+		title: SETTINGS_SECTION_TITLES.CONNECTORS,
+		slug: SETTINGS_SECTION_SLUGS.CONNECTORS,
+		icon: KeyRound
+	}
 ];
 
 const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
@@ -67,16 +79,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 		slug: SETTINGS_SECTION_SLUGS.GENERAL,
 		icon: Sliders,
 		settings: [
-			{
-				key: SETTINGS_KEYS.THEME,
-				label: 'Theme',
-				help: 'Choose the color theme for the interface. You can choose between System (follows your device settings), Light, or Dark.',
-				defaultValue: ColorMode.SYSTEM,
-				type: SettingsFieldType.SELECT,
-				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				options: COLOR_MODE_OPTIONS,
-				sync: { serverKey: SETTINGS_KEYS.THEME, paramType: SyncableParameterType.STRING }
-			},
 			{
 				key: SETTINGS_KEYS.API_KEY,
 				label: 'API Key',
@@ -137,7 +139,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.CONTEXT_COMPACTION,
 				label: 'Automatic context compaction',
-				help: 'When a long conversation approaches the model\'s context limit, automatically summarize the oldest messages (using the local model) instead of failing. Recent messages are kept verbatim; the visible chat history is never altered.',
+				help: "When a long conversation approaches the model's context limit, automatically summarize the oldest messages (using the local model) instead of failing. Recent messages are kept verbatim; the visible chat history is never altered.",
 				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
@@ -292,7 +294,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 					serverKey: SETTINGS_KEYS.SHOW_MODEL_TAGS,
 					paramType: SyncableParameterType.BOOLEAN
 				}
-			},
+			}
 		]
 	},
 	[SETTINGS_SECTION_SLUGS.SAMPLING]: {
@@ -708,29 +710,64 @@ export const SETTING_CONFIG_INFO: Record<string, string> = Object.fromEntries(
 	getAllSettings().map((s) => [s.key, s.help])
 ) as Record<string, string>;
 
-/** Theme select options. */
-export const SETTINGS_COLOR_MODES_CONFIG = COLOR_MODE_OPTIONS;
-
 export type { SettingsSectionTitle } from '$lib/types';
 export type { SettingsSection } from '$lib/types';
 
+/**
+ * Sections folded into Advanced.
+ *
+ * Sampling and Penalties are 20 of the ~47 settings — over 40% of the surface —
+ * and are inference-tuning knobs inherited from the llama.cpp webui this UI was
+ * forked from. They are wired and they work; they simply are not what most
+ * people using Redstart are here to adjust, and as top-level sidebar entries
+ * they crowded out everything Redstart-specific.
+ *
+ * The registry entries stay intact — defaults, sync metadata and
+ * `getAllSettings()` all still see them. Only the sidebar composition changes,
+ * so nothing about how these settings behave is affected by demoting them.
+ */
+const ADVANCED_SECTION_SLUGS: string[] = [
+	SETTINGS_SECTION_SLUGS.SAMPLING,
+	SETTINGS_SECTION_SLUGS.PENALTIES,
+	SETTINGS_SECTION_SLUGS.DEVELOPER
+];
+
+function toField(s: SettingsEntry, group?: string): SettingsFieldConfig {
+	return {
+		key: s.key,
+		label: s.label,
+		type: s.type,
+		isExperimental: s.isExperimental,
+		isPositiveInteger: s.isPositiveInteger,
+		help: s.help,
+		options: s.options,
+		group
+	};
+}
+
 /** Sidebar sections + field configs (as consumed by UI). */
 export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
-	...Object.values(SETTINGS_REGISTRY).map((section) => ({
-		title: section.title,
-		slug: section.slug,
-		icon: section.icon,
-		fields: section.settings.map((s) => ({
-			key: s.key,
-			label: s.label,
-			type: s.type,
-			isExperimental: s.isExperimental,
-			isPositiveInteger: s.isPositiveInteger,
-			help: s.help,
-			options: s.options
-		}))
-	})),
-	...STANDALONE_SECTIONS
+	...Object.values(SETTINGS_REGISTRY)
+		.filter((section) => !ADVANCED_SECTION_SLUGS.includes(section.slug))
+		.map((section) => ({
+			title: section.title,
+			slug: section.slug,
+			icon: section.icon,
+			fields: section.settings.map((s) => toField(s))
+		})),
+	...STANDALONE_SECTIONS,
+	// Last on purpose: the door you open when you know what you're looking for.
+	// Each former section keeps its name as a subheading inside, so the fields
+	// stay findable rather than becoming one undifferentiated list.
+	{
+		title: SETTINGS_SECTION_TITLES.ADVANCED,
+		slug: SETTINGS_SECTION_SLUGS.ADVANCED,
+		icon: SlidersHorizontal,
+		fields: ADVANCED_SECTION_SLUGS.flatMap((slug) => {
+			const section = SETTINGS_REGISTRY[slug];
+			return section.settings.map((s) => toField(s, section.title));
+		})
+	}
 ];
 
 /** INPUT-type settings whose value is a number. */

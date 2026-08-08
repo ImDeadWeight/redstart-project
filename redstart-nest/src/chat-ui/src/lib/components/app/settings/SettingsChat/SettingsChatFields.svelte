@@ -18,10 +18,9 @@
 		fields: SettingsFieldConfig[];
 		localConfig: SettingsConfigType;
 		onConfigChange: (key: string, value: string | boolean) => void;
-		onThemeChange?: (theme: string) => void;
 	}
 
-	let { fields, localConfig, onConfigChange, onThemeChange }: Props = $props();
+	let { fields, localConfig, onConfigChange }: Props = $props();
 
 	let currentModelParams = $derived.by(() => {
 		propsCacheVersion();
@@ -42,7 +41,19 @@
 	});
 </script>
 
-{#each fields as field (field.key)}
+{#each fields as field, index (field.key)}
+	<!--
+		Subheading whenever the group changes. Advanced merges several former
+		sections, so without these its twenty fields would read as one
+		undifferentiated list and nothing would be findable.
+	-->
+	{#if field.group && field.group !== fields[index - 1]?.group}
+		<div class="pt-2 first:pt-0">
+			<h4 class="text-sm font-semibold text-foreground">{field.group}</h4>
+			<div class="mt-2 border-b border-border/40"></div>
+		</div>
+	{/if}
+
 	<div class="space-y-2">
 		{#if field.type === SettingsFieldType.INPUT}
 			{@const currentValue = String(localConfig[field.key] ?? '')}
@@ -179,13 +190,7 @@
 			<Select.Root
 				type="single"
 				value={currentValue}
-				onValueChange={(value) => {
-					if (field.key === SETTINGS_KEYS.THEME && value && onThemeChange) {
-						onThemeChange(value);
-					} else {
-						onConfigChange(field.key, value);
-					}
-				}}
+				onValueChange={(value) => onConfigChange(field.key, value)}
 			>
 				<div class="relative w-full md:w-auto">
 					<Select.Trigger class="w-full">

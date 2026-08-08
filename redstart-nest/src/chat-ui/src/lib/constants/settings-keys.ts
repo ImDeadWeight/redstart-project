@@ -6,7 +6,6 @@
  */
 export const SETTINGS_KEYS = {
 	// General
-	THEME: 'theme',
 	API_KEY: 'apiKey',
 	SYSTEM_MESSAGE: 'systemMessage',
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',

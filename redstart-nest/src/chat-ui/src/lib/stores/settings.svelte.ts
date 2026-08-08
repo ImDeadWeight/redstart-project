@@ -32,9 +32,7 @@
  */
 
 import { browser } from '$app/environment';
-import { ColorMode } from '$lib/enums';
 import type { SettingsExportType } from '$lib/types';
-import { setMode } from 'mode-watcher';
 import {
 	CONFIG_LOCALSTORAGE_KEY,
 	SETTING_CONFIG_DEFAULT,
@@ -103,9 +101,6 @@ class SettingsStore {
 	initialize() {
 		try {
 			this.loadConfig();
-			this.migrateLegacyTheme();
-			// Apply the persisted theme from config on initial load
-			setMode(this.config[SETTINGS_KEYS.THEME] as ColorMode);
 			this.isInitialized = true;
 		} catch (error) {
 			console.error('Failed to initialize settings store:', error);
@@ -148,23 +143,6 @@ class SettingsStore {
 		}
 	}
 
-	/**
-	 * Migrate the legacy un-namespaced "theme" localStorage key into config.
-	 * Previously theme was stored separately in localStorage("theme") — now it lives
-	 * inside the config object alongside all other settings.
-	 * After migration the legacy key is removed.
-	 */
-	private migrateLegacyTheme() {
-		if (!browser) return;
-
-		const legacyTheme = localStorage.getItem('theme');
-		if (legacyTheme) {
-			this.config[SETTINGS_KEYS.THEME] = legacyTheme;
-			localStorage.removeItem('theme');
-			this.saveConfig();
-			setMode(legacyTheme as ColorMode);
-		}
-	}
 	/**
 	 *
 	 *
@@ -248,16 +226,6 @@ class SettingsStore {
 	}
 
 	/**
-	 * Update the theme setting.
-	 * @param newTheme - The new theme value
-	 */
-	updateTheme(newTheme: string) {
-		this.updateConfig(SETTINGS_KEYS.THEME, newTheme);
-
-		setMode(newTheme as ColorMode);
-	}
-
-	/**
 	 *
 	 *
 	 * Reset
@@ -275,22 +243,10 @@ class SettingsStore {
 	}
 
 	/**
-	 * Reset theme to default value.
-	 * Theme is now stored inside the config object.
-	 */
-	resetTheme() {
-		this.updateConfig(SETTINGS_KEYS.THEME, SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.THEME]);
-
-		setMode(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.THEME] as ColorMode);
-	}
-
-	/**
 	 * Reset all settings to defaults.
 	 */
 	resetAll() {
 		this.resetConfig();
-
-		this.resetTheme();
 	}
 
 	/**
@@ -355,11 +311,6 @@ class SettingsStore {
 			for (const [key, value] of Object.entries(uiSettings)) {
 				if (!this.userOverrides.has(key) && value !== undefined) {
 					setConfigValue(this.config, key, value);
-
-					// theme lives in mode-watcher, not just in config -> propagate
-					if (key === SETTINGS_KEYS.THEME) {
-						setMode(value as ColorMode);
-					}
 				}
 			}
 		}
@@ -532,9 +483,6 @@ class SettingsStore {
 		// Persist to localStorage
 		this.saveConfig();
 
-		// Apply theme for immediate visual feedback
-		setMode(this.config[SETTINGS_KEYS.THEME] as ColorMode);
-
 		console.log('Settings imported successfully');
 	}
 }
@@ -542,5 +490,4 @@ class SettingsStore {
 export const settingsStore = new SettingsStore();
 
 export const config = () => settingsStore.config;
-export const theme = () => settingsStore.config[SETTINGS_KEYS.THEME];
 export const isInitialized = () => settingsStore.isInitialized;

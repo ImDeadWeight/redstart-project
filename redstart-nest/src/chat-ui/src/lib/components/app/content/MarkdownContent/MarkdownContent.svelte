@@ -40,13 +40,12 @@
 		BOOL_TRUE_STRING,
 		SETTINGS_KEYS
 	} from '$lib/constants';
-	import { ColorMode, UrlProtocol } from '$lib/enums';
+	import { UrlProtocol } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files.enums';
 	import { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } from '$lib/utils';
 	import '$styles/katex-custom.scss';
+	// Dark-only app — the light highlight theme is no longer imported.
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
-	import githubLightCss from 'highlight.js/styles/github.css?inline';
-	import { mode } from 'mode-watcher';
 	import {
 		CodeBlockActions,
 		DialogCodePreview,
@@ -162,11 +161,9 @@
 	}
 
 	/**
-	 * Loads the appropriate highlight.js theme based on dark/light mode.
-	 * Injects a scoped style element into the document head.
-	 * @param isDark - Whether to load the dark theme (true) or light theme (false)
+	 * Injects the highlight.js dark theme as a scoped style element in the head.
 	 */
-	function loadHighlightTheme(isDark: boolean) {
+	function loadHighlightTheme() {
 		if (!browser) return;
 
 		const existingTheme = document.getElementById(themeStyleId);
@@ -174,7 +171,7 @@
 
 		const style = document.createElement('style');
 		style.id = themeStyleId;
-		style.textContent = isDark ? githubDarkCss : githubLightCss;
+		style.textContent = githubDarkCss;
 
 		document.head.appendChild(style);
 	}
@@ -522,7 +519,6 @@
 	 * Renders mermaid diagrams that haven't been rendered yet.
 	 * Called after each markdown content update.
 	 * Marks nodes immediately to prevent duplicate renders during streaming.
-	 * Reads mode.current before await to ensure reactive tracking.
 	 */
 	async function renderMermaidDiagrams() {
 		if (!containerRef) return;
@@ -534,15 +530,12 @@
 		// This avoids needing a guard that would block node discovery.
 		nodes.forEach((node) => node.setAttribute('data-mermaid-rendered', 'true'));
 
-		// Read mode before await so Svelte tracks it reactively.
-		const isDark = mode.current === ColorMode.DARK;
-
 		// lazy load the mermaid dependecy only when needed to reduce bundle size.
 		const { default: mermaid } = await import('mermaid');
 
 		mermaid.initialize({
 			startOnLoad: false,
-			theme: isDark ? 'dark' : 'default',
+			theme: 'dark',
 			securityLevel: 'strict',
 			flowchart: {
 				useMaxWidth: false,
@@ -629,10 +622,7 @@
 	}
 
 	$effect(() => {
-		const currentMode = mode.current;
-		const isDark = currentMode === ColorMode.DARK;
-
-		loadHighlightTheme(isDark);
+		loadHighlightTheme();
 	});
 
 	$effect(() => {

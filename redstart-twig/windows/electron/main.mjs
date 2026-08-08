@@ -19,13 +19,17 @@
 // the live API (this is the same pattern Redstart Nest's index.mjs uses). A
 // dynamic `await import('electron')` must NOT be used here — it sends the CJS
 // install shim through Node's ESM export-preparse and crashes at startup.
-import { app, BrowserWindow, Menu, ipcMain, nativeTheme, session, dialog } from 'electron'
+import { app, BrowserWindow, Menu, ipcMain, nativeTheme, session, dialog, shell } from 'electron'
 import { initMcpManager } from './mcp-manager.mjs'
+import * as fsTool from './fs/fs-tool.mjs'
+import { setTrashImpl, moveToTrash } from './fs/trash.mjs'
+import { resolveWithinRoot } from './fs/path-scope.mjs'
+import { toHexColor } from './color.mjs'
 import * as http from 'node:http'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -231,9 +235,14 @@ ipcMain.handle('network:scan', async (_, { subnet, timeout = 400 }) => {
 // ---------------------------------------------------------------------------
 // When the chat-ui runs inside Twig, fs_* tool calls execute HERE, against a
 // folder on THIS machine that the user explicitly grants — instead of running
-// on the remote Redstart Nest server. The tool logic is reused verbatim from
-// Redstart Nest (fs-tool.mjs + path-scope.mjs) so behaviour and the
-// path-containment security model stay identical on both.
+// on the remote Redstart Nest server. The tool logic lives in ./fs/, vendored
+// from Nest on 2026-08-07 when Nest deleted its copy; see fs/fs-tool.mjs.
+//
+// No folder is granted by default. The model gets zero local file tools until
+// the user picks one (Settings → Server, or the folder control under the chat
+// composer), which keeps "the model can touch my disk" an explicit act and
+// leaves Nest's own server-side file capability reachable for users who never
+// grant one.
 // ---------------------------------------------------------------------------
 
 const fsConfigPath = () => path.join(app.getPath('userData'), 'twig-fs-config.json')
@@ -261,20 +270,6 @@ function twigFsCfg() {
   return { fileSystem: { enabled: !!fsRootDir, rootDir: fsRootDir } }
 }
 
-// Lazily import the shared Nest fs-tool module. In dev it lives in the source
-// tree; in a packaged build it's copied next to the app via extraResources
-// (see electron-builder.json). Dynamic import — safe for this plain-ESM module,
-// unlike the electron shim — lets the path differ between the two layouts.
-let fsToolModule = null
-async function getFsTool() {
-  if (fsToolModule) return fsToolModule
-  const fsToolPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'fs-tool', 'fs-tool.mjs')
-    : path.join(__dirname, '..', '..', '..', 'redstart-nest', 'electron', 'main', 'fs-tool.mjs')
-  fsToolModule = await import(pathToFileURL(fsToolPath).href)
-  return fsToolModule
-}
-
 // fs-tool.mjs emits MCP-shaped defs; the chat-ui speaks OpenAI function-calling.
 function toOpenAiToolDefs(defs) {
   return defs.map((d) => ({
@@ -283,15 +278,22 @@ function toOpenAiToolDefs(defs) {
   }))
 }
 
+// Returns { tools, classes } rather than a bare array. `classes` tells the
+// chat-ui which of these are destructive, which is what keeps fs_delete_file out
+// of "always allow" — Nest's server-side policy gate has no reach over tools
+// that execute here, so this manifest is the only control. Older chat-ui builds
+// that expect an array still work: they read `.tools` off it as undefined and
+// fall back, and the shape check lives in tools.svelte.ts.
 ipcMain.handle('fs:get-tools', async () => {
-  if (!fsRootDir) return []
-  const t = await getFsTool()
-  return toOpenAiToolDefs(t.toolDefs(twigFsCfg()))
+  if (!fsRootDir) return { tools: [], classes: {} }
+  return {
+    tools: toOpenAiToolDefs(fsTool.toolDefs(twigFsCfg())),
+    classes: fsTool.TOOL_CLASSES,
+  }
 })
 
 ipcMain.handle('fs:execute', async (_e, { name, args }) => {
-  const t = await getFsTool()
-  return t.callTool(name, args, twigFsCfg())
+  return fsTool.callTool(name, args, twigFsCfg())
 })
 
 ipcMain.handle('fs:pick-root', async () => {
@@ -311,6 +313,135 @@ ipcMain.handle('fs:pick-root', async () => {
 ipcMain.handle('fs:get-root', () => ({ rootDir: fsRootDir }))
 
 // ---------------------------------------------------------------------------
+// Local file explorer API
+// ---------------------------------------------------------------------------
+// Structured counterparts to the model-facing fs_* tools, for the Files tab in
+// the chat-ui. Deliberately separate from fs:execute: those tools return MCP
+// text shaped for a model to read ("[DIR]  notes/"), and parsing that back out
+// in the UI would break the moment the wording changed. These return data.
+//
+// They are also NOT advertised to the model. Renaming and moving are user
+// operations here; the model's tool set is unchanged.
+//
+// Shapes mirror Redstart Nest's /files/* API so the explorer component can
+// treat "this computer" and "the server" as two instances of one thing.
+// ---------------------------------------------------------------------------
+
+const PREVIEWABLE_EXTENSIONS = new Set(['.txt', '.md', '.csv', '.json', '.log', '.py', '.js', '.ts', '.html', '.css', '.yml', '.yaml', '.xml', '.ini', '.cfg'])
+const MAX_LOCAL_PREVIEW_CHARS = 20000
+const MAX_LOCAL_ENTRIES = 1000
+
+/** Resolve a browser-supplied path inside the granted folder, or throw. */
+function resolveLocal(relPath) {
+  if (!fsRootDir) throw new Error('No folder has been granted yet.')
+  return resolveWithinRoot(fsRootDir, relPath && relPath !== '.' ? relPath : '.')
+}
+
+const toRelative = (full) => path.relative(fsRootDir, full).split(path.sep).join('/')
+
+ipcMain.handle('fs:browse', async (_e, { path: relPath } = {}) => {
+  try {
+    const full = resolveLocal(relPath)
+    const stat = fs.statSync(full)
+    if (!stat.isDirectory()) return { error: 'Not a folder' }
+
+    const entries = []
+    for (const entry of fs.readdirSync(full, { withFileTypes: true }).slice(0, MAX_LOCAL_ENTRIES)) {
+      const childFull = path.join(full, entry.name)
+      // The trash folder backs recoverable deletion; browsing it would invite
+      // deleting already-deleted things, the one path that could destroy data.
+      if (entry.isDirectory() && entry.name === '.trash') continue
+      let childStat
+      try {
+        childStat = fs.statSync(childFull)
+      } catch {
+        continue
+      }
+      entries.push({
+        name: entry.name,
+        path: toRelative(childFull),
+        type: childStat.isDirectory() ? 'folder' : 'file',
+        size: childStat.isDirectory() ? null : childStat.size,
+        modified: childStat.mtime.toISOString(),
+        previewable: !childStat.isDirectory() && PREVIEWABLE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()),
+      })
+    }
+    entries.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'folder' ? -1 : 1))
+    return { path: toRelative(full) || '.', entries }
+  } catch (err) {
+    return { error: err.message }
+  }
+})
+
+ipcMain.handle('fs:preview', async (_e, { path: relPath } = {}) => {
+  try {
+    const full = resolveLocal(relPath)
+    if (!PREVIEWABLE_EXTENSIONS.has(path.extname(full).toLowerCase())) {
+      return { error: 'No preview is available for this file type' }
+    }
+    const text = fs.readFileSync(full, 'utf8').replace(/\r\n/g, '\n')
+    return { text: text.slice(0, MAX_LOCAL_PREVIEW_CHARS), truncated: text.length > MAX_LOCAL_PREVIEW_CHARS }
+  } catch (err) {
+    return { error: err.message }
+  }
+})
+
+ipcMain.handle('fs:mkdir', async (_e, { path: relPath } = {}) => {
+  try {
+    const full = resolveLocal(relPath)
+    if (path.relative(fsRootDir, full) === '') return { error: 'A folder needs a name' }
+    if (fs.existsSync(full)) return { error: 'Something with that name already exists' }
+    fs.mkdirSync(full, { recursive: true })
+    return { path: toRelative(full) }
+  } catch (err) {
+    return { error: err.message }
+  }
+})
+
+ipcMain.handle('fs:move', async (_e, { from, to } = {}) => {
+  try {
+    // BOTH paths go through containment — checking only the source would let
+    // the destination write anywhere on the user's disk.
+    const fromFull = resolveLocal(from)
+    const toFull = resolveLocal(to)
+    if (path.relative(fsRootDir, fromFull) === '') return { error: 'Cannot move the granted folder itself' }
+    if (path.relative(fsRootDir, toFull) === '') return { error: 'The new name cannot be empty' }
+    if (!fs.existsSync(fromFull)) return { error: 'Not found' }
+    if (fs.existsSync(toFull)) return { error: 'Something with that name already exists' }
+    // A folder cannot be moved inside itself; fs.renameSync answers that with a
+    // bare EINVAL that would surface as an unexplained failure.
+    const inner = path.relative(fromFull, toFull)
+    if (inner !== '' && !inner.startsWith('..') && !path.isAbsolute(inner)) {
+      return { error: 'A folder cannot be moved inside itself' }
+    }
+    fs.mkdirSync(path.dirname(toFull), { recursive: true })
+    fs.renameSync(fromFull, toFull)
+    return { path: toRelative(toFull) }
+  } catch (err) {
+    return { error: err.message }
+  }
+})
+
+ipcMain.handle('fs:trash', async (_e, { path: relPath } = {}) => {
+  try {
+    const full = resolveLocal(relPath)
+    if (path.relative(fsRootDir, full) === '') return { error: 'Cannot delete the granted folder itself' }
+    if (!fs.existsSync(full)) return { error: 'Not found' }
+    const stat = fs.lstatSync(full)
+    if (stat.isDirectory() && !stat.isSymbolicLink() && fs.readdirSync(full).length > 0) {
+      return { error: 'That folder is not empty. Remove its contents first.' }
+    }
+    // Same recoverable deletion the model's fs_delete_file uses — a user-driven
+    // delete should be exactly as undoable as a model-driven one.
+    const outcome = await moveToTrash(fsRootDir, full)
+    if (!outcome.ok) return { error: outcome.error }
+    return { path: toRelative(full), recoverable: outcome.method, hint: outcome.hint }
+  } catch (err) {
+    return { error: err.message }
+  }
+})
+
+// ---------------------------------------------------------------------------
 // Shell chrome
 // ---------------------------------------------------------------------------
 // The window runs with a hidden title bar (no icon, no app name, no menu) and
@@ -320,18 +451,44 @@ ipcMain.handle('fs:get-root', () => ({ rootDir: fsRootDir }))
 // chat-ui CSS) so the window can still be moved, and reports its light/dark
 // theme here so both the overlay buttons and nativeTheme follow the app.
 
-// Overlay height must match the chat-ui's --twig-titlebar-height drag strip.
-const TITLEBAR_HEIGHT = 32
+// The chat-ui renders smaller in Twig than in a browser. At 100% the composer
+// and message text are oversized for a desktop window, so the whole web content
+// is zoomed — uniformly, rather than by overriding font sizes, so spacing and
+// hit targets scale with the text instead of drifting apart from it.
+const UI_ZOOM = 0.8
+
+// Two units are in play and they are NOT interchangeable:
+//   - the drag strip is web content, measured in CSS pixels, and is scaled by
+//     UI_ZOOM along with everything else
+//   - the window-controls overlay is drawn by Windows, in device pixels, and
+//     ignores zoom entirely
+// So the native height is derived from the CSS height rather than written
+// twice: leave them as independent constants and any zoom change silently
+// misaligns the drag strip with the buttons it is supposed to sit beside.
+// TITLEBAR_CSS_HEIGHT must equal --twig-titlebar-height in the chat-ui's app.css.
+const TITLEBAR_CSS_HEIGHT = 40
+const TITLEBAR_HEIGHT = Math.round(TITLEBAR_CSS_HEIGHT * UI_ZOOM)
+
+// Fallback colours only. The renderer reports the background it is ACTUALLY
+// painting (see below), because these two values drifted: the app renders
+// oklch(0.12 0 0) = #060606 while this said #09090b, which showed up as a
+// visibly lighter band behind the minimise/maximise/close buttons. Anything
+// that has to match a stylesheet by hand eventually stops matching it.
+// Dark only — the chat-ui has no light mode, so there is no light variant to
+// fall back to. A light entry here would only be reachable by a stale renderer.
 const TITLEBAR_COLORS = {
-  dark:  { color: '#09090b', symbolColor: '#e4e4e7', height: TITLEBAR_HEIGHT },
-  light: { color: '#ffffff', symbolColor: '#18181b', height: TITLEBAR_HEIGHT },
+  color: '#060606',
+  symbolColor: '#e4e4e7',
+  height: TITLEBAR_HEIGHT,
 }
 
-ipcMain.handle('shell:set-theme', (_e, { theme }) => {
-  const mode = theme === 'light' ? 'light' : 'dark'
-  nativeTheme.themeSource = mode
+// `theme` is still accepted for wire compatibility with older chat-ui builds
+// but is no longer read; the background the renderer reports is what matters.
+ipcMain.handle('shell:set-theme', (_e, { background }) => {
+  nativeTheme.themeSource = 'dark'
+  const color = toHexColor(background) ?? TITLEBAR_COLORS.color
   try {
-    mainWindow?.setTitleBarOverlay(TITLEBAR_COLORS[mode])
+    mainWindow?.setTitleBarOverlay({ ...TITLEBAR_COLORS, color })
   } catch {
     /* overlay not supported (non-Windows) */
   }
@@ -340,26 +497,29 @@ ipcMain.handle('shell:set-theme', (_e, { theme }) => {
 app.whenReady().then(async () => {
   fsRootDir = loadFsRoot()
 
-  // Default grant: <Documents>\Redstart-twig. Created on first launch so the
-  // local file tools work out of the box, scoped to a folder that is clearly
-  // the app's own. The user can point elsewhere via the picker at any time.
-  if (!fsRootDir) {
-    try {
-      const defaultRoot = path.join(app.getPath('documents'), 'Redstart-twig')
-      fs.mkdirSync(defaultRoot, { recursive: true })
-      fsRootDir = defaultRoot
-      saveFsRoot(fsRootDir)
-    } catch (err) {
-      console.warn('Could not create default fs root:', err.message)
-    }
-  }
+  // NO default folder grant. Twig used to create <Documents>\Redstart-twig on
+  // first launch so the local tools worked out of the box — but that meant a
+  // folder was ALWAYS granted, which in turn meant Twig's local file tools were
+  // always present and (once client-side precedence lands) Nest's server-side
+  // File System capability could never be reached from Twig by anyone. Granting
+  // the model access to a real folder on the user's disk should be something
+  // the user did on purpose, not a first-launch side effect.
+  //
+  // Existing installs keep whatever they already granted — loadFsRoot() above
+  // reads the persisted value, and nothing here clears it.
+
+  // Deletions go to the OS recycle bin. Injected rather than imported inside
+  // fs/trash.mjs so that module (and fs-tool.mjs with it) stays loadable under
+  // plain node for containment tests. Without this the tools still work — they
+  // fall back to a .trash/ folder inside the granted root.
+  setTrashImpl((fullPath) => shell.trashItem(fullPath))
 
   // No File/Edit/View menu — the chat-ui is the whole interface. F12 devtools
   // is re-bound below via before-input-event, so nothing of value is lost.
   Menu.setApplicationMenu(null)
 
-  // Default the window chrome to dark (matches backgroundColor #09090b) until
-  // the renderer reports its actual theme via shell:set-theme.
+  // Default the window chrome to dark (matches backgroundColor below) until the
+  // renderer reports its actual theme and background via shell:set-theme.
   nativeTheme.themeSource = 'dark'
 
   // Local stdio MCP servers (Claude Desktop model) — process supervision +
@@ -392,16 +552,27 @@ app.whenReady().then(async () => {
 
   const port = await startFileServer()
 
+  // Without an explicit icon the window (and so the taskbar button) falls back
+  // to Electron's default. electron-builder's `win.icon` only skins the
+  // installed .exe — it does not reach the running window, which is why the
+  // taskbar showed the generic icon in dev and after launch.
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'icon.ico')
+    : path.join(__dirname, '..', '..', '..', 'redstart-nest', 'build', 'icon.ico')
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
     title: 'Redstart Twig',
+    ...(fs.existsSync(iconPath) ? { icon: iconPath } : {}),
     show: false,
-    backgroundColor: '#09090b',
+    // Matches the chat-ui's --background so the frame does not flash a
+    // different shade before the first paint.
+    backgroundColor: TITLEBAR_COLORS.color,
     // Hidden title bar + Window Controls Overlay: no native bar, no app
     // icon/name — just themed min/max/close buttons over the web content.
     titleBarStyle: 'hidden',
-    titleBarOverlay: TITLEBAR_COLORS.dark,
+    titleBarOverlay: TITLEBAR_COLORS,
     webPreferences: {
       contextIsolation: true,
       sandbox: false,
@@ -412,6 +583,12 @@ app.whenReady().then(async () => {
   })
 
   mainWindow.once('ready-to-show', () => mainWindow.show())
+
+  // Applied after load rather than at construction: zoom is a property of the
+  // loaded document, so setting it earlier is discarded by the first navigation.
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow?.webContents.setZoomFactor(UI_ZOOM)
+  })
 
   mainWindow.webContents.on('before-input-event', (_, input) => {
     if (input.type === 'keyDown' && input.key === 'F12') mainWindow.webContents.toggleDevTools()

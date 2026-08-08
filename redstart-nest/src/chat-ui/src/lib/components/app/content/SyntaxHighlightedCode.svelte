@@ -1,11 +1,11 @@
 <script lang="ts">
 	import hljs from 'highlight.js';
 	import { browser } from '$app/environment';
-	import { mode } from 'mode-watcher';
 
+	// Dark-only app, so only the dark highlight theme is imported — the light
+	// one used to be selected whenever the OS reported a light preference,
+	// which painted a light code block onto the dark UI.
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
-	import githubLightCss from 'highlight.js/styles/github.css?inline';
-	import { ColorMode } from '$lib/enums';
 
 	interface Props {
 		code: string;
@@ -25,7 +25,7 @@
 
 	let highlightedHtml = $state('');
 
-	function loadHighlightTheme(isDark: boolean) {
+	function loadHighlightTheme() {
 		if (!browser) return;
 
 		const existingThemes = document.querySelectorAll('style[data-highlight-theme-preview]');
@@ -33,16 +33,13 @@
 
 		const style = document.createElement('style');
 		style.setAttribute('data-highlight-theme-preview', 'true');
-		style.textContent = isDark ? githubDarkCss : githubLightCss;
+		style.textContent = githubDarkCss;
 
 		document.head.appendChild(style);
 	}
 
 	$effect(() => {
-		const currentMode = mode.current;
-		const isDark = currentMode === ColorMode.DARK;
-
-		loadHighlightTheme(isDark);
+		loadHighlightTheme();
 	});
 
 	$effect(() => {

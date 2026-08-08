@@ -14,7 +14,9 @@
  * 1. localStorage prefix: Copy LlamaCppWebui.* → LlamaUi.* (both preserved)
  * 2. IndexedDB database: Copy LlamacppWebui → LlamaUi (both preserved)
  * 3. Legacy message format: Transform in-place (preserves structure, migrates markers)
- * 4. Theme key: Copy standalone `theme` → config object (both preserved)
+ *
+ * A fourth migration (copying a standalone `theme` key into config) was removed
+ * when the app became dark-only — nothing reads that key any more.
  */
 
 import Dexie from 'dexie';
@@ -433,41 +435,6 @@ const legacyMessageMigration: Migration = {
 	}
 };
 
-// Migration 4: Theme Key (Non-Destructive)
-
-const THEME_MIGRATION_ID = 'theme-key-v1';
-
-const themeMigration: Migration = {
-	id: THEME_MIGRATION_ID,
-	description: 'Copy standalone theme key to config object (non-destructive)',
-
-	async run(): Promise<void> {
-		const legacyTheme = localStorage.getItem('theme');
-		if (legacyTheme === null) {
-			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
-				console.log('[Migration] Theme: no legacy theme key found, skipping');
-			return;
-		}
-
-		// Check if config already has theme
-		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
-		const config = configRaw ? JSON.parse(configRaw) : {};
-
-		if (SETTINGS_KEYS.THEME in config) {
-			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
-				console.log('[Migration] Theme: config already has theme, skipping');
-			return;
-		}
-
-		config[SETTINGS_KEYS.THEME] = legacyTheme;
-		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
-
-		// Non-destructive: DO NOT delete legacy theme key - keep for downgrade compatibility
-		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
-			console.log(`[Migration] Theme: copied standalone theme to config (preserved old key)`);
-	}
-};
-
 // Migration Registry & Runner
 
 const CUSTOM_JSON_MIGRATION_ID = 'custom-json-key-v1';
@@ -498,7 +465,6 @@ const migrations: Migration[] = [
 	localStorageMigration,
 	idxdbMigration,
 	legacyMessageMigration,
-	themeMigration,
 	customJsonKeyMigration
 ];
 
