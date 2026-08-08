@@ -66,14 +66,32 @@ jobs:
       - name: "Security: conversation isolation"
         run: node scripts/test-conversation-isolation.mjs
 
+      - name: "Security: per-account file isolation"
+        run: node scripts/test-file-isolation.mjs
+
       - name: "Security: tool policy classification"
         run: node scripts/test-tool-policy.mjs
+
+      - name: "Security: tool namespacing (ban targetability)"
+        run: node scripts/test-tool-namespacing.mjs
+
+      - name: "Security: per-account storage scope (path traversal)"
+        run: node scripts/test-user-scope.mjs
+
+      - name: "Security: system prompt capability + privacy claims"
+        run: node scripts/test-system-prompt.mjs
 
       - name: "Security: llama-server localhost-only args"
         run: node scripts/test-llama-args.mjs
 
       - name: "Security: discovery robustness (beacon)"
         run: node scripts/test-discovery-robustness.mjs
+
+      - name: "Security: LAN interface selection (mDNS / advertised IP)"
+        run: node scripts/test-net-interfaces.mjs
+
+      - name: "Packaging: escaping imports + asar-unpacked assets"
+        run: node scripts/test-packaging.mjs
 
       - name: "Security: auth / sessions / roles"
         run: node scripts/test-auth.mjs
@@ -93,6 +111,9 @@ jobs:
       - name: "Security: boundary response contracts"
         run: node scripts/test-contracts.mjs
 
+      - name: "Security: connector contract conformance"
+        run: node scripts/test-connector-contract.mjs
+
       - name: "Security: containment / SSRF / beacon / download endpoint (vitest)"
         run: npm --prefix src/chat-ui run test:security
 
@@ -102,3 +123,24 @@ jobs:
       # runs here too rather than only on developer machines.
       - name: "Unit tests (vitest)"
         run: npm --prefix src/chat-ui run test:unit -- --run
+
+      # Real-browser mount coverage. The node suites prove the HTTP layer and
+      # svelte-check proves the types, but neither catches a component that
+      # throws on mount or binds to a prop the UI library does not expose —
+      # which is exactly how the settings tabs and the mode picker shipped
+      # (built, type-checked, never rendered). This is the step that stops
+      # that happening again.
+      # svelte-check has no "fail above N" mode and the repo is not at zero yet,
+      # so the count is pinned by a guard script. The previous baseline reached
+      # 513 because nothing ran this at all.
+      - name: "Types: svelte-check baseline"
+        run: npm --prefix src/chat-ui run check:baseline
+
+      # npm ci installs the playwright package but not its browser binaries,
+      # and the client project drives a real Chromium.
+      - name: Install Chromium for browser tests
+        run: npx playwright install --with-deps chromium
+        working-directory: redstart-nest/src/chat-ui
+
+      - name: "Client render tests (vitest browser)"
+        run: npm --prefix src/chat-ui run test:client -- --run
