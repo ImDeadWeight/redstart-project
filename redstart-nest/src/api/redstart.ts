@@ -9,7 +9,7 @@
 
 import type {
   HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup,
-  ExternalMcpServer, LlamaConfig,
+  ExternalMcpServer, LlamaConfig, ClientApp,
 } from '../types'
 
 export type RedstartAPI = {
@@ -34,7 +34,7 @@ export type RedstartAPI = {
     generateDefaults: (hardware: HardwareSpecs) => Promise<LlamaConfig[]>
   }
   tools: {
-    listAll: () => Promise<{ builtinTools: WebFetchTool[], builtinGroups: ToolGroup[], builtinCapabilities: WebFetchTool[], userTools: WebFetchTool[], userGroups: ToolGroup[] }>
+    listAll: () => Promise<{ builtinTools: WebFetchTool[], builtinGroups: ToolGroup[], builtinCapabilities: WebFetchTool[], clientApps: ClientApp[], userTools: WebFetchTool[], userGroups: ToolGroup[] }>
     addTool: (tool: Omit<WebFetchTool, 'builtIn'>) => Promise<boolean>
     deleteTool: (id: string) => Promise<boolean>
     addGroup: (group: Omit<ToolGroup, 'builtIn'>) => Promise<boolean>

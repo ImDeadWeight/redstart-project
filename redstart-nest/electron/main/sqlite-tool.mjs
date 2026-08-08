@@ -23,12 +23,95 @@
 // =============================================================================
 
 import * as fs from 'fs'
+import * as path from 'path'
 import initSqlJs from 'sql.js'
 import { resolveWithinRoot } from './path-scope.mjs'
 
-const TOOL_NAMES = ['sqlite_query', 'sqlite_list_tables', 'sqlite_describe_table']
+const TOOL_NAMES = ['sqlite_list_databases', 'sqlite_query', 'sqlite_list_tables', 'sqlite_describe_table']
 const MAX_OUTPUT_CHARS = 8000
 const DEFAULT_MAX_FILE_BYTES = 200 * 1024 * 1024 // 200 MB
+
+// ---------------------------------------------------------------------------
+// Database discovery.
+//
+// Every other tool here REQUIRES a database path, which meant the capability was
+// unusable unless the model already knew a filename — and nothing ever told it
+// one. Asked to look for databases, a model would fall back to the file-system
+// tools (scoped to a different root entirely), find nothing, and report that no
+// databases exist. That answer was true of everything it could see, which is
+// what made it so convincing.
+//
+// A capability the model cannot enumerate is a capability it cannot use.
+// ---------------------------------------------------------------------------
+const DATABASE_EXTENSIONS = new Set(['.db', '.sqlite', '.sqlite3'])
+const SKIP_DIRS = new Set(['.trash', '.git', 'node_modules'])
+const MAX_DATABASES = 200
+
+// SQLite files start with this exact 16-byte string. Checked so the listing
+// reports databases rather than "things named .db" — a stray file with the
+// right extension would otherwise show up and fail confusingly on first query.
+const SQLITE_MAGIC = 'SQLite format 3\0'
+
+function isSqliteFile(fullPath) {
+  let fd
+  try {
+    fd = fs.openSync(fullPath, 'r')
+    const header = Buffer.alloc(16)
+    const read = fs.readSync(fd, header, 0, 16, 0)
+    return read === 16 && header.toString('latin1') === SQLITE_MAGIC
+  } catch {
+    return false
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd) } catch { /* already gone */ }
+  }
+}
+
+function listDatabases(sqliteCfg) {
+  const root = path.resolve(sqliteCfg.rootDir)
+  const found = []
+  const stack = ['']
+
+  while (stack.length && found.length < MAX_DATABASES) {
+    const rel = stack.pop()
+    let entries
+    try {
+      entries = fs.readdirSync(path.join(root, rel), { withFileTypes: true })
+    } catch {
+      continue // unreadable folder — skip rather than fail the whole listing
+    }
+    for (const entry of entries) {
+      const childRel = rel ? `${rel}/${entry.name}` : entry.name
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) stack.push(childRel)
+        continue
+      }
+      if (!DATABASE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue
+      const full = path.join(root, childRel)
+      if (!isSqliteFile(full)) continue
+      let size = 0
+      try {
+        size = fs.statSync(full).size
+      } catch {
+        continue
+      }
+      found.push({ path: childRel, size })
+    }
+  }
+
+  if (found.length === 0) {
+    return { content: [{ type: 'text', text: 'No SQLite databases found in the configured folder.' }] }
+  }
+
+  found.sort((a, b) => a.path.localeCompare(b.path))
+  const lines = found.map((db) => {
+    const kb = db.size < 1024 ? `${db.size} B` : `${(db.size / 1024).toFixed(0)} KB`
+    return `${db.path}  (${kb})`
+  })
+  const text =
+    `${found.length} database${found.length === 1 ? '' : 's'} available. ` +
+    `Use these paths with sqlite_list_tables or sqlite_query:\n${lines.join('\n')}`
+  return { content: [{ type: 'text', text: text.slice(0, MAX_OUTPUT_CHARS) }] }
+}
 
 // The WASM runtime is stateless and ~a few MB — initialize once, share forever.
 let sqlJsPromise = null
@@ -152,8 +235,13 @@ export function toolDefs(cfg) {
   if (!cfg?.sqlite?.enabled) return []
   return [
     {
+      name: 'sqlite_list_databases',
+      description: 'List the SQLite database files available on the Redstart server, with their sizes. Start here — the other SQLite tools need a database path, and this is the only way to discover what exists.',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+    },
+    {
       name: 'sqlite_query',
-      description: 'Run a read-only SQL query against a local SQLite database file in the configured folder. The database is opened read-only — write/DDL statements are rejected by the engine.',
+      description: 'Run a read-only SQL query against a SQLite database file stored on the Redstart server, not on the machine the user is sitting at. The database is opened read-only — write/DDL statements are rejected by the engine.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -165,7 +253,7 @@ export function toolDefs(cfg) {
     },
     {
       name: 'sqlite_list_tables',
-      description: 'List all tables and views in a local SQLite database file in the configured folder.',
+      description: 'List all tables and views in a SQLite database file stored on the Redstart server.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -176,7 +264,7 @@ export function toolDefs(cfg) {
     },
     {
       name: 'sqlite_describe_table',
-      description: 'List the columns of a table (name, type, nullability, default, primary key) in a local SQLite database file.',
+      description: 'List the columns of a table (name, type, nullability, default, primary key) in a SQLite database file stored on the Redstart server.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -189,12 +277,26 @@ export function toolDefs(cfg) {
   ]
 }
 
-export async function callTool(name, args, cfg) {
+// Provider interface: callTool(name, args, cfg, ctx). `ctx.account` is the
+// authenticated caller (null when auth is off). Unused here — this capability
+// is shared reference material and is the same for every account.
+export async function callTool(name, args, cfg, _ctx) {
   if (!TOOL_NAMES.includes(name)) return null
 
   const sqliteCfg = cfg?.sqlite
   if (!sqliteCfg?.enabled || !sqliteCfg?.rootDir) {
     return { isError: true, content: [{ type: 'text', text: 'SQLite is not configured or enabled.' }] }
+  }
+
+  // Handled before openDatabase: discovery is the one tool that does NOT take a
+  // database path, and routing it through the opener would demand the very
+  // argument the model is calling this to find out.
+  if (name === 'sqlite_list_databases') {
+    try {
+      return listDatabases(sqliteCfg)
+    } catch (err) {
+      return { isError: true, content: [{ type: 'text', text: `SQLite error: ${err.message}` }] }
+    }
   }
 
   let db

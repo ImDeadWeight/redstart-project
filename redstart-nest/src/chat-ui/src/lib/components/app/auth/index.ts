@@ -14,11 +14,7 @@
  */
 export { default as LoginForm } from './LoginForm.svelte';
 
-/**
- * **UserMenu** - Top-level account menu (sidebar header)
- *
- * Shown when a user is logged in. Dropdown with username, role, account
- * timestamps, API key prefix + self-service regenerate (one-time key reveal),
- * and Log out. Renders nothing when not logged in (e.g. auth disabled).
- */
-export { default as UserMenu } from './UserMenu.svelte';
+// UserMenu removed — everything it held now lives on the full profile page
+// (components/app/profile), with Log out pinned at the bottom of the sidebar.
+// The dropdown could not grow, and its one-shot key dialog was the reason a
+// regenerated key was easy to lose.

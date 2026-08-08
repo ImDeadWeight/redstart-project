@@ -12,6 +12,19 @@ import { AUTH_TOKEN_LOCALSTORAGE_KEY } from '$lib/constants/storage';
  * /auth/me) and clears the stale token rather than looping.
  */
 
+/**
+ * A per-connector credential (system-prompt spec §8). The key itself is never
+ * stored client-side or returned again — only this metadata, plus a prefix so
+ * a user can tell one key from another.
+ */
+export type ConnectorKey = {
+	id: string;
+	surface: string;
+	label: string;
+	keyPrefix: string;
+	createdAt: string;
+};
+
 export type AuthUser = {
 	id: string;
 	username: string;
@@ -27,6 +40,15 @@ class AuthStore {
 	user = $state<AuthUser | null>(null);
 	authRequired = $state(false);
 	checked = $state(false);
+	/**
+	 * Whether the last init() actually got an answer from the server.
+	 *
+	 * Distinct from `authRequired`: a failed request leaves that false, which is
+	 * indistinguishable from a server that genuinely requires no login. The
+	 * startup retry loop needs to tell those apart to know whether waiting will
+	 * help.
+	 */
+	serverReachable = $state(false);
 
 	get token(): string | null {
 		return this.tokenState.value;
@@ -46,8 +68,15 @@ class AuthStore {
 		try {
 			const config = await apiFetch<{ authRequired: boolean }>('/auth/config');
 			this.authRequired = config.authRequired;
+			this.serverReachable = true;
 		} catch {
+			// A server that cannot be asked is NOT a server that said "no auth
+			// needed" — collapsing those two into `authRequired = false` is why an
+			// unreachable server looked, to the rest of the app, like an open one.
+			// The flag keeps them distinct so callers can retry rather than
+			// proceeding on an answer nobody gave.
 			this.authRequired = false;
+			this.serverReachable = false;
 		}
 
 		if (this.tokenState.value) {
@@ -87,6 +116,36 @@ class AuthStore {
 		);
 		this.user = result.account;
 		return result.apiKey;
+	}
+
+	/**
+	 * Per-connector credentials (system-prompt spec §8).
+	 *
+	 * Self-service by design — these act on the current account only. The
+	 * server derives which app is calling from the key itself, so a key issued
+	 * here is what makes a connector's surface trustworthy rather than a
+	 * header it could set freely.
+	 */
+	async listClientKeys(): Promise<{ clientKeys: ConnectorKey[]; surfaces: string[] }> {
+		return apiFetch<{ clientKeys: ConnectorKey[]; surfaces: string[] }>('/auth/me/client-keys', {
+			authOnly: true
+		});
+	}
+
+	/** Returns the raw key, which the server never stores and will not show again. */
+	async issueClientKey(
+		surface: string,
+		label?: string
+	): Promise<{ apiKey: string; clientKey: ConnectorKey }> {
+		return apiPost<{ apiKey: string; clientKey: ConnectorKey }>(
+			'/auth/me/client-keys',
+			{ surface, label },
+			{ authOnly: true }
+		);
+	}
+
+	async revokeClientKey(id: string): Promise<void> {
+		await apiFetch(`/auth/me/client-keys/${id}`, { method: 'DELETE', authOnly: true });
 	}
 
 	async logout(): Promise<void> {

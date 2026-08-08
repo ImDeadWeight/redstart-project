@@ -130,9 +130,9 @@ export const BUILTIN_CAPABILITIES = [
 export const CAPABILITY_TOOL_NAMES = {
   postgres: ['postgres_query', 'postgres_list_tables', 'postgres_describe_table'],
   documents: ['create_document', 'read_document', 'list_documents'],
-  sqlite: ['sqlite_query', 'sqlite_list_tables', 'sqlite_describe_table'],
+  sqlite: ['sqlite_list_databases', 'sqlite_query', 'sqlite_list_tables', 'sqlite_describe_table'],
   vault: ['vault_search', 'vault_get', 'vault_tags'],
-  git: ['git_status', 'git_log', 'git_diff'],
+  git: ['git_list_repos', 'git_status', 'git_log', 'git_diff'],
   // Served by @modelcontextprotocol/server-filesystem (see
   // filesystem-mcp-provider.mjs). Keep in sync with FILESYSTEM_TOOL_NAMES there.
   file_system: [
@@ -150,18 +150,76 @@ export const CAPABILITY_TOOL_NAMES = {
     'search_files',
     'get_file_info',
     'list_allowed_directories',
+    // Redstart-owned, NOT from the upstream server (which has no delete at all)
+    // — served by fs-delete-tool.mjs. Listed here so an admin ban on
+    // `file_system` strips it too, and so the permission gate's FS_TOOL_NAMES
+    // (derived from this array) governs it.
+    'delete_file',
   ],
   scholar: ['scholar_search', 'scholar_get', 'scholar_save_pdf'],
 }
 
-// Expand a list of banned capability/tool IDs into the concrete tool function
-// names the gateway should strip. Unknown IDs are ignored (defensive against
-// stale profiles referencing removed capabilities).
+// Tools contributed by Redstart CLIENT APPLICATIONS — Twig today; Blueprints,
+// Greenhouse and Yellowscript as they grow tools.
+//
+// These are the set tool bans actually exist for. A client app embeds its own
+// tools and hands them to the model already inside POST /v1/chat/completions,
+// so Nest has no provider-level control over them the way it does over its own
+// capabilities (where simply not activating the capability means the tools are
+// never served at all). The gateway's name-strip is the only lever Nest has.
+//
+// Registered here so an admin can ban an app's whole tool set by naming the app,
+// exactly as `file_system` expands to the capability's tools. Every name must
+// carry its app prefix and must not collide with a Nest tool name — see
+// docs/tool-namespacing.md, enforced by scripts/test-tool-namespacing.mjs.
+export const CLIENT_APPS = [
+  {
+    id: 'twig',
+    name: 'Redstart Twig — local file tools',
+    // Said plainly because this is the one tool set in the system that acts on
+    // a machine the server does not control and cannot police.
+    description: 'Read, write and delete files on the user\'s own PC, in a folder they granted inside Twig. These run on that machine, not on this server, so no server-side policy applies to them — banning is the only control.',
+    toolNames: [
+      'fs_read_file',
+      'fs_write_file',
+      'fs_edit_file',
+      'fs_list_directory',
+      'fs_search_files',
+      'fs_get_file_info',
+      'fs_create_directory',
+      'fs_delete_file',
+    ],
+  },
+]
+
+export const CLIENT_APP_TOOL_NAMES = Object.fromEntries(
+  CLIENT_APPS.map((app) => [app.id, app.toolNames]),
+)
+
+// Expand a list of banned IDs into the concrete tool function names the gateway
+// should strip. An ID resolves in three steps:
+//
+//   1. a Nest capability     ('file_system' -> its 14 tool names)
+//   2. a client app          ('twig'        -> its 8 fs_* names)
+//   3. otherwise, a LITERAL tool function name, passed straight through
+//
+// Step 3 matters: the gateway bans by function name, and the things most worth
+// banning are individual client-app tools that Nest has no other control over.
+// Dropping unknown IDs — the old behaviour — meant putting `fs_delete_file` in
+// disabledToolIds expanded to nothing at all, silently, so the mechanism built
+// to moderate client apps could not name a single client-app tool.
+//
+// The trade-off is that a typo'd capability id ('file_sistem') now becomes a
+// ban on a tool nobody has, instead of being ignored. That is inert — banning a
+// name no tool uses strips nothing — and it fails safe in the direction of
+// restriction rather than permission.
 export function expandDisabledToolIds(ids = []) {
   const names = new Set()
   for (const id of ids) {
-    const toolNames = CAPABILITY_TOOL_NAMES[id]
+    if (typeof id !== 'string' || !id) continue
+    const toolNames = CAPABILITY_TOOL_NAMES[id] ?? CLIENT_APP_TOOL_NAMES[id]
     if (toolNames) toolNames.forEach((n) => names.add(n))
+    else names.add(id)
   }
   return [...names]
 }
@@ -203,6 +261,7 @@ export const TOOL_CLASSES = {
   read_document: 'read',
   list_documents: 'read',
   // SQLite — read-only SQL
+  sqlite_list_databases: 'read',
   sqlite_query: 'read',
   sqlite_list_tables: 'read',
   sqlite_describe_table: 'read',
@@ -210,15 +269,17 @@ export const TOOL_CLASSES = {
   vault_search: 'read',
   vault_get: 'read',
   vault_tags: 'read',
+  git_list_repos: 'read',
   git_status: 'read',
   git_log: 'read',
   git_diff: 'read',
   // File System — @modelcontextprotocol/server-filesystem. Reads are read;
   // create/overwrite/edit/move are writes. The upstream server exposes no
-  // delete tool, so file_system currently has no 'destructive'-class tool (the
-  // allowDestructive policy has nothing to gate here until a delete tool is
-  // added). move_file removes its source but cannot overwrite an existing
-  // destination (upstream fails the op), so it's a write, not destructive.
+  // delete tool, so deletion is Redstart-owned (fs-delete-tool.mjs) and is the
+  // one 'destructive'-class tool in the system — which is what makes the
+  // allowDestructive policy load-bearing. move_file removes its source but
+  // cannot overwrite an existing destination (upstream fails the op), so it's a
+  // write, not destructive.
   read_file: 'read',
   read_text_file: 'read',
   read_media_file: 'read',
@@ -233,6 +294,12 @@ export const TOOL_CLASSES = {
   edit_file: 'write',
   create_directory: 'write',
   move_file: 'write',
+  // The only destructive-class tool in Redstart. THIS LINE is what activates
+  // the allowDestructive gate: evaluateToolPolicy refuses a destructive call
+  // unless the admin has explicitly enabled it, at both tools/list and
+  // tools/call. Deletion is recoverable (recycle bin / .trash) — see
+  // fs-delete-tool.mjs.
+  delete_file: 'destructive',
   // Scholar — searches are network; saving a PDF writes to the Documents folder
   scholar_search: 'network',
   scholar_get: 'network',
@@ -243,6 +310,47 @@ export const TOOL_CLASSES = {
 // the note above TOOL_CLASSES for why that is the safe default for the gate.
 export function classifyTool(name) {
   return TOOL_CLASSES[name] ?? 'read'
+}
+
+// ---------------------------------------------------------------------------
+// Tool provenance — which capability produced a given tool.
+//
+// The gateway is provenance-blind by construction: it sees a flat list of
+// function names in the completions payload with nothing saying which app or
+// server contributed each one. Every control built on it is therefore name-
+// based, and any safety property expressed as "these names win over those
+// names" survives exactly until someone renames a tool.
+//
+// That is not hypothetical. Nest's File System capability used to use fs_*
+// names, the same as Twig's local tools, and the chat-ui relied on the
+// resulting name collision to shadow the remote tools with the local ones. The
+// FS MCP migration renamed Nest's side to the upstream names; the collision
+// disappeared, the shadowing silently stopped happening, and the model was left
+// holding two complete filesystem APIs pointing at two different computers.
+//
+// So provenance travels as DATA on tools/list (see mcp-server.mjs), keyed on
+// capability identity rather than spelling, and this map is where identity is
+// resolved. Renaming a tool now breaks a lookup loudly instead of dissolving a
+// safety property quietly.
+// ---------------------------------------------------------------------------
+
+// Namespaced _meta keys on tools/list entries. MCP treats _meta as an
+// implementation-defined channel, so a prefix keeps these from colliding with
+// another server's fields.
+export const META_CAPABILITY_KEY = 'redstart/capability'
+export const META_CLASS_KEY = 'redstart/class'
+
+const CAPABILITY_BY_TOOL_NAME = new Map()
+for (const [capability, names] of Object.entries(CAPABILITY_TOOL_NAMES)) {
+  for (const name of names) CAPABILITY_BY_TOOL_NAME.set(name, capability)
+}
+
+/**
+ * The capability id that produced a tool, or null for tools that belong to no
+ * capability (the web tools, which the whitelist governs instead).
+ */
+export function capabilityForTool(name) {
+  return CAPABILITY_BY_TOOL_NAME.get(name) ?? null
 }
 
 export const BUILTIN_GROUPS = [

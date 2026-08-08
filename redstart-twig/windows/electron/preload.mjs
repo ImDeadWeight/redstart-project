@@ -26,11 +26,23 @@ contextBridge.exposeInMainWorld('redstartTwigAPI', {
     execute: (name, args) => ipcRenderer.invoke('fs:execute', { name, args }),
     pickRoot: () => ipcRenderer.invoke('fs:pick-root'),
     getRoot: () => ipcRenderer.invoke('fs:get-root'),
+
+    // Structured explorer API for the Files tab — data, not the model-shaped
+    // text fs:execute returns. Mirrors Redstart Nest's /files/* shapes so one
+    // component can browse either machine. Not exposed to the model.
+    browse: (path) => ipcRenderer.invoke('fs:browse', { path }),
+    preview: (path) => ipcRenderer.invoke('fs:preview', { path }),
+    mkdir: (path) => ipcRenderer.invoke('fs:mkdir', { path }),
+    move: (from, to) => ipcRenderer.invoke('fs:move', { from, to }),
+    trash: (path) => ipcRenderer.invoke('fs:trash', { path }),
   },
   // Shell chrome — lets the chat-ui keep the native window frame (Windows 11
   // title bar) in step with its own light/dark theme.
   shell: {
-    setTheme: (theme) => ipcRenderer.invoke('shell:set-theme', { theme }),
+    // `background` is the colour the app is actually painting, so the overlay
+    // behind the window buttons can match it exactly instead of relying on a
+    // hardcoded hex here agreeing with a CSS variable over there.
+    setTheme: (theme, background) => ipcRenderer.invoke('shell:set-theme', { theme, background }),
   },
   // Local stdio MCP servers (Claude Desktop model). The main process spawns
   // servers from <userData>/twig-mcp.json and pipes newline-framed JSON-RPC;

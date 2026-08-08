@@ -101,12 +101,21 @@ export function getApiOptions(): Record<string, unknown> {
 		if (modelName) apiOptions.model = modelName;
 	}
 
-	if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
+	// `systemMessage` is deliberately NOT forwarded here. It was assigned and
+	// never read — ChatService does not destructure it — because the same text
+	// already reaches the model as a system message inside `messages[]`, added
+	// at conversation creation and editable from the chat's add-menu. Assigning
+	// it again implied a second, competing path that never existed.
 
 	if (currentConfig.excludeReasoningFromContext) apiOptions.excludeReasoningFromContext = true;
 
 	apiOptions.enableThinking = conversationsStore.getThinkingEnabled();
 	apiOptions.reasoningEffort = conversationsStore.getReasoningEffort();
+
+	// Task mode (system-prompt spec §9). Only the ID is sent; the gateway
+	// resolves it and strips the field before llama-server ever sees it.
+	const promptMode = conversationsStore.getPromptMode();
+	if (promptMode) apiOptions.promptMode = promptMode;
 
 	if (hasValue(currentConfig.temperature))
 		apiOptions.temperature = Number(currentConfig.temperature);

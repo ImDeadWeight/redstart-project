@@ -252,6 +252,13 @@ export interface ApiChatCompletionRequest {
 	// Continuation control (vLLM compat)
 	add_generation_prompt?: boolean;
 	continue_final_message?: boolean;
+	/**
+	 * Redstart-only: a task mode **ID** from `GET /prompt-modes`, never mode
+	 * prose. The gateway resolves it to preset text, drops anything it does not
+	 * recognise, and deletes the field before forwarding — llama-server has no
+	 * such parameter. See docs/connector-contract.md §3.
+	 */
+	redstart_mode?: string;
 }
 
 export interface ApiChatCompletionToolCallFunctionDelta {

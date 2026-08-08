@@ -15,6 +15,12 @@
 	}
 
 	let { toolName, serverLabel, onDecision }: Props = $props();
+
+	// A destructive tool (currently only file deletion) prompts on every call and
+	// is never offered an "always" option. The agentic store enforces this too —
+	// this is the half that stops the user being invited to make a choice the
+	// system will then refuse to honour.
+	const destructive = $derived(toolsStore.isDestructiveTool(toolName));
 </script>
 
 <ChatMessageActionCard icon={ShieldQuestion}>
@@ -28,53 +34,64 @@
 		{/if}
 
 		?
+
+		{#if destructive}
+			<span class="mt-1 block text-xs text-muted-foreground">
+				This deletes data. It asks every time — there is no "always allow" for deletion. Deleted
+				items go to the recycle bin, so they can be recovered.
+			</span>
+		{/if}
 	{/snippet}
 
 	{#snippet actions()}
-		<DropdownMenu.Root>
-			<ButtonGroup.Root
-				class="overflow-hidden rounded-md bg-foreground text-white shadow-sm dark:bg-secondary dark:text-foreground"
-			>
-				<Button
-					class="rounded-none! shadow-none!"
-					size="sm"
-					onclick={() => onDecision(ToolPermissionDecision.ONCE)}
+		{#if destructive}
+			<Button size="sm" onclick={() => onDecision(ToolPermissionDecision.ONCE)}>Allow once</Button>
+		{:else}
+			<DropdownMenu.Root>
+				<ButtonGroup.Root
+					class="overflow-hidden rounded-md bg-foreground text-white shadow-sm dark:bg-secondary dark:text-foreground"
 				>
-					Allow once
-				</Button>
-
-				<ButtonGroup.Separator />
-
-				<DropdownMenu.Trigger>
-					<Button size="sm" class="rounded-none! ps-2! shadow-none!">
-						<ChevronDown class="h-3.5 w-3.5" />
+					<Button
+						class="rounded-none! shadow-none!"
+						size="sm"
+						onclick={() => onDecision(ToolPermissionDecision.ONCE)}
+					>
+						Allow once
 					</Button>
-				</DropdownMenu.Trigger>
-			</ButtonGroup.Root>
 
-			<DropdownMenu.Content align="start" class="min-w-[8rem]">
-				<DropdownMenu.Item onclick={() => onDecision(ToolPermissionDecision.ALWAYS)}>
-					Always allow <pre>{toolName}</pre>
-					tool
-				</DropdownMenu.Item>
-				{#if serverLabel}
-					<DropdownMenu.Item onclick={() => onDecision(ToolPermissionDecision.ALWAYS_SERVER)}>
-						Always allow all tools from {serverLabel}
+					<ButtonGroup.Separator />
+
+					<DropdownMenu.Trigger>
+						<Button size="sm" class="rounded-none! ps-2! shadow-none!">
+							<ChevronDown class="h-3.5 w-3.5" />
+						</Button>
+					</DropdownMenu.Trigger>
+				</ButtonGroup.Root>
+
+				<DropdownMenu.Content align="start" class="min-w-32">
+					<DropdownMenu.Item onclick={() => onDecision(ToolPermissionDecision.ALWAYS)}>
+						Always allow <pre>{toolName}</pre>
+						tool
 					</DropdownMenu.Item>
-				{:else}
-					{@const source = toolsStore.getToolSource(toolName)}
-					{@const providerName =
-						source === ToolSource.BUILTIN
-							? TOOL_SERVER_LABELS[ToolSource.BUILTIN]
-							: source === ToolSource.CUSTOM
-								? TOOL_SERVER_LABELS[ToolSource.CUSTOM]
-								: 'MCP Tools'}
-					<DropdownMenu.Item onclick={() => onDecision(ToolPermissionDecision.ALWAYS_SERVER)}>
-						Approve all tools from {providerName}
-					</DropdownMenu.Item>
-				{/if}
-			</DropdownMenu.Content>
-		</DropdownMenu.Root>
+					{#if serverLabel}
+						<DropdownMenu.Item onclick={() => onDecision(ToolPermissionDecision.ALWAYS_SERVER)}>
+							Always allow all tools from {serverLabel}
+						</DropdownMenu.Item>
+					{:else}
+						{@const source = toolsStore.getToolSource(toolName)}
+						{@const providerName =
+							source === ToolSource.BUILTIN
+								? TOOL_SERVER_LABELS[ToolSource.BUILTIN]
+								: source === ToolSource.CUSTOM
+									? TOOL_SERVER_LABELS[ToolSource.CUSTOM]
+									: 'MCP Tools'}
+						<DropdownMenu.Item onclick={() => onDecision(ToolPermissionDecision.ALWAYS_SERVER)}>
+							Approve all tools from {providerName}
+						</DropdownMenu.Item>
+					{/if}
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
+		{/if}
 
 		<Button
 			variant="destructive"

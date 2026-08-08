@@ -28,6 +28,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { resolveWithinRoot } from './path-scope.mjs'
+import { resolveUserRoot } from './user-scope.mjs'
 
 const TOOL_NAMES = ['scholar_search', 'scholar_get', 'scholar_save_pdf']
 const USER_AGENT = 'Redstart/1.0 (local AI assistant)'
@@ -309,7 +310,15 @@ export function toolDefs(cfg) {
   return defs
 }
 
-export async function callTool(name, args, cfg) {
+// Provider interface: callTool(name, args, cfg, ctx). `ctx.account` is the
+// authenticated caller (null when auth is off).
+//
+// Searches are shared (public literature is the same for everyone), but
+// scholar_save_pdf WRITES — into the Documents root — so the saved file lands
+// in the caller's own folder, matching where documents-tool.mjs puts everything
+// else. Without that, one user's saved PDF would be readable by every account
+// through read_document, which is the hole per-account storage closes.
+export async function callTool(name, args, cfg, ctx) {
   if (!TOOL_NAMES.includes(name)) return null
 
   const scholarCfg = cfg?.scholar
@@ -343,7 +352,8 @@ export async function callTool(name, args, cfg) {
     if (!scholarCfg.saveDir) {
       return { isError: true, content: [{ type: 'text', text: 'No documents folder is configured to save PDFs into.' }] }
     }
-    const saved = await savePdf(scholarCfg.saveDir, parsed, filter)
+    const saveDir = resolveUserRoot(scholarCfg.saveDir, ctx?.account, { create: true })
+    const saved = await savePdf(saveDir, parsed, filter)
     return { content: [{ type: 'text', text: `Saved: ${saved.filename} (${(saved.bytes / 1024).toFixed(0)} KB) in the documents folder. Use read_document with path "${saved.filename}" to read it.` }] }
   } catch (err) {
     return { isError: true, content: [{ type: 'text', text: `Scholar error: ${err.message}` }] }

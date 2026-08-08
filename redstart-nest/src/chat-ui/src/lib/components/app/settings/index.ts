@@ -83,3 +83,25 @@ export { default as SettingsChatToolsTab } from './SettingsChat/SettingsChatTool
  * of the sidebar for non-admins in SettingsChat.svelte.
  */
 export { default as SettingsChatAccountsTab } from './SettingsChat/SettingsChatAccountsTab.svelte';
+
+/**
+ * **SettingsChatSystemPromptTab** - Admin-owned system prompt blocks
+ *
+ * Edits the context / behavioral-guidelines / output-format blocks the
+ * gateway composes into every request, with a live token-budget indicator,
+ * the assembled preview, and the derived data-handling audit.
+ *
+ * Visible to everyone and read-only for non-admins: the policy block governs
+ * how the assistant treats them, and the server gates writes regardless of
+ * what this component renders.
+ */
+export { default as SettingsChatSystemPromptTab } from './SettingsChat/SettingsChatSystemPromptTab.svelte';
+
+/**
+ * **SettingsChatConnectorsTab** - Per-connector credentials (spec §8)
+ *
+ * Issues, lists, and revokes keys bound to a specific connector app, so the
+ * server derives the calling surface from the credential rather than a header.
+ * Self-service: acts on the current account only, for every role.
+ */
+export { default as SettingsChatConnectorsTab } from './SettingsChat/SettingsChatConnectorsTab.svelte';

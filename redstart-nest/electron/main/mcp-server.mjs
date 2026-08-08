@@ -6,7 +6,7 @@
 // Implements the Model Context Protocol SSE transport (MCP spec 2024-11-05)
 // on port config.port + 2 (default 19082). Tools are contributed by provider
 // modules (web-fetch-tool.mjs, postgres-tool.mjs, documents-tool.mjs) — each
-// exports toolDefs(cfg) and callTool(name, args, cfg); this file just merges
+// exports toolDefs(cfg) and callTool(name, args, cfg, ctx); this file just merges
 // tools/list across providers and routes tools/call to whichever provider
 // claims the tool name. Enforcement (URL whitelist, read-only SQL, output-dir
 // containment) lives in each provider, not here — a request that violates a
@@ -27,8 +27,15 @@ import * as sqliteTool from './sqlite-tool.mjs'
 import * as vaultTool from './vault-tool.mjs'
 import * as gitTool from './git-tool.mjs'
 import * as filesystemProvider from './filesystem-mcp-provider.mjs'
+import * as fsDeleteTool from './fs-delete-tool.mjs'
 import * as scholarTool from './scholar-tool.mjs'
-import { classifyTool, CAPABILITY_TOOL_NAMES } from './tools-definitions.mjs'
+import {
+  classifyTool,
+  capabilityForTool,
+  CAPABILITY_TOOL_NAMES,
+  META_CAPABILITY_KEY,
+  META_CLASS_KEY,
+} from './tools-definitions.mjs'
 import { logEvent } from './logger.mjs'
 
 // File System is served by the official @modelcontextprotocol/server-filesystem,
@@ -37,7 +44,7 @@ import { logEvent } from './logger.mjs'
 // than the old bespoke fs_* schema. Its child-process lifecycle is driven from
 // the server IPC handlers; here it's just another provider in the merge/route
 // loop below.
-const PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, scholarTool]
+const PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool]
 
 // Request headers a browser MCP client may send. Exported so the contract suite
 // can assert the preflight against the same list the server answers with.
@@ -56,6 +63,19 @@ const FS_TOOL_NAMES = new Set(CAPABILITY_TOOL_NAMES.file_system)
 
 function evaluateToolPolicy(toolName, config) {
   const cls = classifyTool(toolName)
+
+  // Admin tool bans (profile.tools.disabledToolIds, expanded to function names
+  // in buildGatewayConfig). This used to be enforced ONLY in the completions
+  // proxy (tools-gateway.mjs enforceToolAllowList) — which meant a banned tool
+  // was stripped from the model's vocabulary but this server still advertised
+  // it and still executed it for any client that called tools/call directly.
+  // Since talking to this server directly IS the MCP transport, the ban's own
+  // promise ("removed for every connected client") was false wherever it
+  // mattered most. Enforced here too, so both paths to the tool agree.
+  if (Array.isArray(config?.disabledTools) && config.disabledTools.includes(toolName)) {
+    return { allowed: false, cls, reason: `The "${toolName}" tool has been disabled by an administrator.` }
+  }
+
   if (FS_TOOL_NAMES.has(toolName)) {
     const fsPolicy = config?.fileSystem || {}
     if (cls === 'destructive' && fsPolicy.allowDestructive !== true) {
@@ -66,6 +86,47 @@ function evaluateToolPolicy(toolName, config) {
     }
   }
   return { allowed: true, cls }
+}
+
+// ---------------------------------------------------------------------------
+// Tool provenance annotation.
+//
+// Stamped centrally on every advertised tool rather than asked of each
+// provider, so no provider can forget and a new provider gets it for free.
+// Two channels, deliberately:
+//
+//   _meta['redstart/*'] — the authoritative one. MCP treats _meta as an
+//       implementation-defined passthrough, so this is where a Redstart client
+//       reads a tool's capability and class from. Consumed by the chat-ui to
+//       key filesystem precedence on capability IDENTITY rather than on tool
+//       names (which is what broke when the FS MCP migration renamed them), and
+//       later to keep destructive-class tools out of "Always allow".
+//
+//   annotations — the standard MCP hints, for any third-party MCP client that
+//       connects to us. Purely informational: the spec is explicit that clients
+//       must not make trust decisions from annotations, because on a normal
+//       connection they are attacker-controlled. Our own enforcement never
+//       reads them — evaluateToolPolicy classifies from the static TOOL_CLASSES
+//       map, server-side, and that remains the only thing standing between a
+//       call and the disk.
+// ---------------------------------------------------------------------------
+function annotateTool(tool) {
+  const cls = classifyTool(tool.name)
+  const readOnly = cls === 'read' || cls === 'network'
+  return {
+    ...tool,
+    annotations: {
+      ...(tool.annotations || {}),
+      readOnlyHint: readOnly,
+      destructiveHint: cls === 'destructive',
+      openWorldHint: cls === 'network',
+    },
+    _meta: {
+      ...(tool._meta || {}),
+      [META_CAPABILITY_KEY]: capabilityForTool(tool.name),
+      [META_CLASS_KEY]: cls,
+    },
+  }
 }
 
 let mcpServer = null
@@ -81,7 +142,28 @@ function sseEvent(res, event, data) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
 }
 
-async function handleRpc(msg, send) {
+// ---------------------------------------------------------------------------
+// Call context — who is calling.
+//
+// The SSE handshake has always captured the authenticated account onto the
+// session (`sessions.set(sessionId, { send, account })`) and then never read it
+// again: the POST handler pulled out only `send`, so every provider ran with no
+// idea whose request it was serving. That is why `documents.outputDir` and
+// `fileSystem.rootDir` are one shared folder for the entire server, and why
+// list_documents enumerates everyone's files to everyone.
+//
+// `ctx` is that missing half. It is threaded as an explicit parameter rather
+// than held in module state, mirroring conversations-storage.mjs — which takes
+// accountId as the first argument of every function and filters on it. Ambient
+// identity is how a request ends up served under the wrong account when calls
+// interleave, and MCP sessions interleave by design.
+//
+// Providers receive it as the 4th argument of callTool and may ignore it; today
+// all of them do. Phase 4 gives Documents, File System and Scholar per-account
+// roots derived from ctx.account via user-scope.mjs.
+// ---------------------------------------------------------------------------
+
+async function handleRpc(msg, send, ctx = { account: null }) {
   const { id, method, params } = msg
 
   if (method === 'initialize') {
@@ -120,7 +202,7 @@ async function handleRpc(msg, send) {
         // (and so won't attempt) a blocked destructive/write op. tools/call is
         // the actual enforcement backstop for a client that calls it anyway.
         if (!evaluateToolPolicy(tool.name, activeToolsConfig).allowed) continue
-        tools.push(tool)
+        tools.push(annotateTool(tool))
       }
     }
     send({ jsonrpc: '2.0', id, result: { tools } })
@@ -142,7 +224,7 @@ async function handleRpc(msg, send) {
 
     const startedAt = Date.now()
     for (const provider of PROVIDERS) {
-      const result = await provider.callTool(toolName, args, activeToolsConfig)
+      const result = await provider.callTool(toolName, args, activeToolsConfig, ctx)
       if (result !== null && result !== undefined) {
         // Log the shape only — name, class, error-or-not, duration. Never args
         // or results (see logger.mjs privacy contract).
@@ -209,6 +291,9 @@ export function startMcpServer(port, config) {
         'Access-Control-Allow-Origin': '*',
       })
       const send = (data) => sseEvent(res, 'message', data)
+      // `account` here is the identity at STREAM-OPEN time, kept for diagnostics.
+      // Tool calls use the account re-authenticated on each POST instead — see
+      // the ctx note in the /message handler.
       sessions.set(sessionId, { send, account: authResult.account })
       // The endpoint event carries the raw URI, NOT a JSON string (MCP
       // 2024-11-05 SSE transport). JSON.stringify here emitted
@@ -241,13 +326,19 @@ export function startMcpServer(port, config) {
       }
 
       const { send } = session
+      // Identity comes from THIS request's credential (re-validated just above),
+      // not from the account captured when the SSE stream opened. A session can
+      // outlive the credential that created it — a token revoked, auth switched
+      // on — and the freshly authenticated account is the one that should own
+      // whatever files this call touches.
+      const ctx = { account: authResult.account ?? null }
       let body = ''
       for await (const chunk of req) body += chunk
       res.writeHead(202, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' })
       res.end('Accepted')
       try {
         const msg = JSON.parse(body)
-        await handleRpc(msg, send)
+        await handleRpc(msg, send, ctx)
       } catch {
         send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' }})
       }
@@ -311,6 +402,11 @@ export function estimateActiveToolTokens(config) {
     for (const tool of provider.toolDefs(config)) {
       if (seen.has(tool.name)) continue
       seen.add(tool.name)
+      // Same policy filter tools/list applies, so the estimate counts what the
+      // model will actually be offered. Without it a gated tool (a banned one,
+      // or delete_file with allowDestructive off) inflated the figure with a
+      // schema that never leaves the server.
+      if (!evaluateToolPolicy(tool.name, config).allowed) continue
       tools.push(tool)
     }
   }

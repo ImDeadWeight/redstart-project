@@ -11,7 +11,10 @@ export const SETTINGS_SECTION_SLUGS = {
 	TOOLS: 'tools',
 	IMPORT_EXPORT: 'import-export',
 	SERVER: 'server',
-	ACCOUNTS: 'accounts'
+	ACCOUNTS: 'accounts',
+	SYSTEM_PROMPT: 'system-prompt',
+	CONNECTORS: 'connectors',
+	ADVANCED: 'advanced'
 } as const;
 
 export const ROUTES = {
@@ -22,5 +25,7 @@ export const ROUTES = {
 	/** Chat base — for dynamic chat URLs use RouterService. */
 	CHAT: '#/chat',
 	/** Settings base — for dynamic settings URLs use RouterService. */
-	SETTINGS: '#/settings'
+	SETTINGS: '#/settings',
+	/** Account profile — full page, not a dropdown. */
+	PROFILE: '#/profile'
 } as const;

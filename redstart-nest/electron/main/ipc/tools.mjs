@@ -5,7 +5,7 @@
 // else is imported directly from the storage/gateway/definition modules.
 import { ipcMain } from 'electron'
 import * as path from 'path'
-import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES } from '../tools-definitions.mjs'
+import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES, CLIENT_APPS } from '../tools-definitions.mjs'
 import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup } from '../tools-storage.mjs'
 import { updateGatewayConfig, getGatewayPort } from '../tools-gateway.mjs'
 import { updateMcpConfig, estimateActiveToolTokens } from '../mcp-server.mjs'
@@ -19,6 +19,9 @@ export function registerToolsHandlers({ buildGatewayConfig, userDataDir }) {
       builtinTools:        BUILTIN_TOOLS,
       builtinGroups:       BUILTIN_GROUPS,
       builtinCapabilities: BUILTIN_CAPABILITIES,
+      // Client applications that supply their own tools. Not capabilities this
+      // server provides — the set the Banned Tools control exists to moderate.
+      clientApps:          CLIENT_APPS,
       userTools:           getUserTools(),
       userGroups:          getUserGroups(),
     }

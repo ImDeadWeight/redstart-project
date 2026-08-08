@@ -1,4 +1,5 @@
 import type { ChatMessageTimings, ChatRole, ChatMessageType } from '$lib/types/chat';
+import type { PromptSnapshot } from '$lib/types/prompt';
 import { AttachmentType, ReasoningEffort } from '$lib/enums';
 
 export interface McpServerOverride {
@@ -14,6 +15,17 @@ export interface DatabaseConversation {
 	mcpServerOverrides?: McpServerOverride[];
 	thinkingEnabled?: boolean;
 	reasoningEffort?: ReasoningEffort;
+	/**
+	 * Task mode ID for this conversation (system-prompt spec §9), or null for
+	 * none. Stored per conversation because a mode is a property of the work
+	 * being done, not a global preference.
+	 */
+	promptMode?: string | null;
+	/**
+	 * Which admin policy and mode this conversation ran under (spec §5).
+	 * Additive — conversations created before this existed simply lack it.
+	 */
+	promptSnapshot?: PromptSnapshot;
 	forkedFromConversationId?: string;
 	pinned?: boolean;
 	contextSummary?: { text: string; upToMessageId: string };
@@ -124,7 +136,13 @@ export interface DatabaseMessage {
 	children: string[];
 	extra?: DatabaseMessageExtra[];
 	timings?: ChatMessageTimings;
-	model?: string;
+	/**
+	 * Model that produced this message. Explicitly `null` on messages no model
+	 * produced (user, tool) — that null is what gets persisted, so the type
+	 * admits it rather than pretending the field is merely absent. Every
+	 * consumer truthiness-checks it, so null and undefined behave alike.
+	 */
+	model?: string | null;
 }
 
 export type ExportedConversation = {

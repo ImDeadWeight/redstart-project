@@ -82,6 +82,14 @@ class ConversationsStore {
 	/** Global (non-conversation-specific) reasoning effort default */
 	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
 
+	/**
+	 * Task mode for a conversation that does not exist yet (system-prompt
+	 * spec §9). Not persisted: a mode describes the work in front of you, so
+	 * carrying the last one into an unrelated new chat is more surprising than
+	 * helpful. Unlike thinking/effort, this deliberately has no saved default.
+	 */
+	pendingPromptMode = $state<string | null>(null);
+
 	/** Load MCP default overrides from localStorage */
 	private static loadMcpDefaults(): McpServerOverride[] {
 		if (typeof globalThis.localStorage === 'undefined') return [];
@@ -866,6 +874,46 @@ class ConversationsStore {
 		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
 		if (convIndex !== -1) {
 			this.conversations[convIndex].reasoningEffort = effort;
+			this.conversations = [...this.conversations];
+		}
+	}
+
+	/**
+	 * Gets the task mode for the active conversation (system-prompt spec §9),
+	 * or null when none is selected.
+	 */
+	getPromptMode(): string | null {
+		if (this.activeConversation) {
+			return this.activeConversation.promptMode ?? null;
+		}
+		return this.pendingPromptMode;
+	}
+
+	/**
+	 * Sets the task mode for the active conversation. Only the ID travels — the
+	 * server resolves it to preset text and ignores anything it does not
+	 * recognise, so an unknown ID here is inert rather than dangerous.
+	 *
+	 * @param mode - A mode ID from `GET /prompt-modes`, or null for none
+	 */
+	async setPromptMode(mode: string | null): Promise<void> {
+		if (!this.activeConversation) {
+			this.pendingPromptMode = mode;
+			return;
+		}
+
+		this.activeConversation = {
+			...this.activeConversation,
+			promptMode: mode
+		};
+
+		await DatabaseService.updateConversation(this.activeConversation.id, {
+			promptMode: mode
+		});
+
+		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+		if (convIndex !== -1) {
+			this.conversations[convIndex].promptMode = mode;
 			this.conversations = [...this.conversations];
 		}
 	}

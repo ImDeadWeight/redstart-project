@@ -164,7 +164,8 @@ export class ChatService {
 			excludeReasoningFromContext,
 			enableThinking,
 			reasoningEffort,
-			continueFinalMessage
+			continueFinalMessage,
+			promptMode
 		} = options;
 
 		const normalizedMessages: ApiChatMessageData[] = (
@@ -261,6 +262,13 @@ export class ChatService {
 		if (continueFinalMessage) {
 			requestBody.continue_final_message = true;
 			requestBody.add_generation_prompt = false;
+		}
+
+		// Redstart-only field: the gateway resolves the mode ID into the system
+		// prompt and deletes it before forwarding, so llama-server never sees a
+		// parameter it has no concept of. See docs/connector-contract.md §3.
+		if (promptMode) {
+			requestBody.redstart_mode = promptMode;
 		}
 
 		if (temperature !== undefined) requestBody.temperature = temperature;

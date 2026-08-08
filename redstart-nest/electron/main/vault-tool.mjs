@@ -74,7 +74,14 @@ function extractTags(content) {
   }
   const fm = content.match(/^---\n([\s\S]*?)\n---/)
   if (fm) {
-    const tagLine = fm[1].match(/^tags:\s*(.*)$/m)
+    // [ \t]* NOT \s* — \s matches newlines, so on the dash-list form
+    //   tags:
+    //     - meeting
+    // the capture swallowed the line break and returned "- meeting" as if it
+    // were an inline value. That made the capture non-empty, which skipped the
+    // dash-list branch below entirely: every dash-list note yielded one bogus
+    // "- <first tag>" and silently dropped the rest.
+    const tagLine = fm[1].match(/^tags:[ \t]*(.*)$/m)
     if (tagLine) {
       const inline = tagLine[1].replace(/[[\]"']/g, '').split(',').map(t => t.trim()).filter(Boolean)
       inline.forEach(t => tags.add(t.toLowerCase()))
@@ -82,7 +89,7 @@ function extractTags(content) {
         // dash-list form on following lines
         const rest = fm[1].slice(fm[1].indexOf(tagLine[0]) + tagLine[0].length)
         for (const dm of rest.matchAll(/^\s*-\s*([^\s#][^\n]*)$/gm)) {
-          tags.add(dm[1].trim().replace(/[["']/g, '').toLowerCase())
+          tags.add(dm[1].trim().replace(/[[\]"']/g, '').toLowerCase())
           if (!/^\s*-/.test(dm.input.slice(dm.index + dm[0].length).split('\n', 2)[1] ?? '')) break
         }
       }
@@ -212,7 +219,7 @@ export function toolDefs(cfg) {
   return [
     {
       name: 'vault_search',
-      description: 'Full-text search across the user\'s local markdown notes (Obsidian vault or any markdown folder). Returns matching notes with snippets. All terms must match; filenames count as matches.',
+      description: 'Full-text search across the markdown notes vault stored on the Redstart server (Obsidian vault or any markdown folder) — not on the machine the user is sitting at. Returns matching notes with snippets. All terms must match; filenames count as matches.',
       inputSchema: {
         type: 'object',
         properties: { query: { type: 'string', description: 'Search terms' } },
@@ -242,7 +249,10 @@ export function toolDefs(cfg) {
   ]
 }
 
-export async function callTool(name, args, cfg) {
+// Provider interface: callTool(name, args, cfg, ctx). `ctx.account` is the
+// authenticated caller (null when auth is off). Unused here — this capability
+// is shared reference material and is the same for every account.
+export async function callTool(name, args, cfg, _ctx) {
   if (!TOOL_NAMES.includes(name)) return null
 
   const vaultCfg = cfg?.vault

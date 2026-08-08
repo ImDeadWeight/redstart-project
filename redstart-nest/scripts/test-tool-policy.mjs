@@ -20,7 +20,13 @@
 // Run:  node scripts/test-tool-policy.mjs
 // =============================================================================
 
-import { classifyTool, TOOL_CLASSES, CAPABILITY_TOOL_NAMES } from '../electron/main/tools-definitions.mjs'
+import {
+  classifyTool,
+  TOOL_CLASSES,
+  CAPABILITY_TOOL_NAMES,
+  CLIENT_APP_TOOL_NAMES,
+  expandDisabledToolIds,
+} from '../electron/main/tools-definitions.mjs'
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-path-scope.mjs)
@@ -53,13 +59,23 @@ const MUTATING = new Set(['write', 'destructive'])
 
 console.log('\n-- tool classification (permission-gate foundation) --')
 
-await test('the File System provider exposes no destructive tool (upstream server-filesystem has no delete)', async () => {
-  // @modelcontextprotocol/server-filesystem ships no delete tool, so file_system
-  // currently has no 'destructive'-class tool. allowDestructive is reserved for a
-  // future delete tool (see DEFAULT_CAPABILITIES.file_system). If a destructive fs
-  // tool is later added, classify it AND revisit this assertion.
+await test('🔍 the File System delete tool is classified destructive — this is what arms the gate', async () => {
+  // This assertion replaces its own opposite. It previously read "the File
+  // System provider exposes no destructive tool", which was true while
+  // allowDestructive gated nothing: @modelcontextprotocol/server-filesystem
+  // ships no delete, so the policy flag was reserved rather than load-bearing.
+  // Deletion is now Redstart-owned (fs-delete-tool.mjs), and THIS
+  // classification is the single line that makes evaluateToolPolicy refuse it
+  // unless an admin has opted in. Mis-classify it and the gate silently opens.
   const destructive = CAPABILITY_TOOL_NAMES.file_system.filter(t => classifyTool(t) === 'destructive')
-  assert(destructive.length === 0, `expected no destructive fs tool, got ${JSON.stringify(destructive)}`)
+  assert(destructive.length === 1, `expected exactly one destructive fs tool, got ${JSON.stringify(destructive)}`)
+  assert(destructive[0] === 'delete_file', `unexpected destructive tool: ${destructive[0]}`)
+})
+
+await test('destructive is the ONLY class the delete tool can have', async () => {
+  // Belt and braces: 'write' would put it behind allowWrite (on by default),
+  // and 'read' would let it past the gate entirely.
+  assert(classifyTool('delete_file') === 'destructive', `delete_file is classified ${classifyTool('delete_file')}`)
 })
 
 await test('the known write ops are classified write', async () => {
@@ -112,6 +128,62 @@ await test('every capability tool name across all capabilities has an explicit c
       assert(Object.prototype.hasOwnProperty.call(TOOL_CLASSES, t), `${cap} tool "${t}" missing from TOOL_CLASSES`)
     }
   }
+})
+
+// ---------------------------------------------------------------------------
+// Ban expansion — what an admin's disabledToolIds actually strips.
+//
+// The gateway bans by function name, so every entry has to resolve to concrete
+// names. Unknown ids used to be DROPPED, which meant the mechanism built to
+// moderate client apps could not name a single client-app tool: putting
+// 'fs_delete_file' in disabledToolIds expanded to nothing, silently, and the
+// ban simply did not exist.
+// ---------------------------------------------------------------------------
+
+console.log('\n-- ban expansion --')
+
+await test('a capability id expands to all of its tool names', async () => {
+  const names = expandDisabledToolIds(['file_system'])
+  for (const t of CAPABILITY_TOOL_NAMES.file_system) {
+    assert(names.includes(t), `expanding file_system did not yield ${t}`)
+  }
+  return `${names.length} names`
+})
+
+await test('a client-app id expands to all of that app\'s tool names', async () => {
+  const names = expandDisabledToolIds(['twig'])
+  for (const t of CLIENT_APP_TOOL_NAMES.twig) {
+    assert(names.includes(t), `expanding twig did not yield ${t}`)
+  }
+  return `${names.length} names`
+})
+
+await test('🔍 an unknown id passes through as a LITERAL tool name', async () => {
+  // The case the whole mechanism exists for: banning one client-app tool by
+  // name. Previously expanded to [] with no warning.
+  assert(
+    expandDisabledToolIds(['fs_delete_file']).includes('fs_delete_file'),
+    'banning an individual tool by name still expands to nothing — a ban on a client-app tool cannot be expressed',
+  )
+})
+
+await test('mixed ids expand together without losing any', async () => {
+  const names = expandDisabledToolIds(['file_system', 'fs_delete_file', 'web_fetch'])
+  assert(names.includes('write_file'), 'lost the capability expansion')
+  assert(names.includes('fs_delete_file'), 'lost the literal name')
+  assert(names.includes('web_fetch'), 'lost the second literal name')
+})
+
+await test('expansion is duplicate-free and ignores junk entries', async () => {
+  const names = expandDisabledToolIds(['file_system', 'file_system', '', null, undefined, 'write_file'])
+  assert(names.length === new Set(names).size, `duplicates present: ${names.join(', ')}`)
+  assert(!names.includes(''), 'an empty id became a ban entry')
+  assert(!names.some(n => n == null), 'a null id became a ban entry')
+})
+
+await test('an empty or missing ban list expands to nothing', async () => {
+  assert(expandDisabledToolIds([]).length === 0, 'empty list produced bans')
+  assert(expandDisabledToolIds().length === 0, 'missing list produced bans')
 })
 
 // ---------------------------------------------------------------------------

@@ -156,8 +156,12 @@ const PROVIDERS = [
     name: 'file-system',
     tools: CAPABILITY_TOOL_NAMES.file_system,
     enable: () => ({ fileSystem: { enabled: true, rootDir: dirs.fs } }),
-    // No delete tool upstream, so nothing is policy-gated out of the list.
-    advertised: CAPABILITY_TOOL_NAMES.file_system,
+    // delete_file belongs to the capability but is destructive-class, and this
+    // config leaves allowDestructive at its secure default (false) — so it is
+    // correctly absent from tools/list even with the capability fully enabled.
+    // That gap between "in the capability" and "advertised" is the permission
+    // gate doing its job; test-mcp-capabilities.mjs drives both sides of it.
+    advertised: CAPABILITY_TOOL_NAMES.file_system.filter((t) => t !== 'delete_file'),
     badCall: { name: 'read_text_file', arguments: { path: '../../../etc/passwd' } }, // traversal (containment gate)
     // Served by a spawned server-filesystem child — spawn + handshake before the
     // enabled-phase checks, tear the process down after.
@@ -190,6 +194,55 @@ async function main() {
   const client = await connectMcpClient(`http://127.0.0.1:${MCP_PORT}`)
 
   const listNames = async () => (await client.call('tools/list')).result.tools.map(t => t.name)
+
+  // -- Phase 0: the provider interface itself --------------------------------
+  //
+  // Every provider takes callTool(name, args, cfg, ctx) — ctx carries the
+  // authenticated account so a provider can scope what it touches to whoever
+  // asked. Most providers ignore it (shared read-only reference material is the
+  // same for everyone); the write capabilities use it for per-account roots.
+  //
+  // Asserted here because JS silently tolerates a missing parameter: a provider
+  // written against the old 3-argument signature would keep working, keep
+  // passing every other test, and quietly serve every account from one folder.
+  console.log('\n-- provider interface --')
+
+  const providerModules = {
+    'web-fetch': await import('../electron/main/web-fetch-tool.mjs'),
+    documents: await import('../electron/main/documents-tool.mjs'),
+    sqlite: await import('../electron/main/sqlite-tool.mjs'),
+    vault: await import('../electron/main/vault-tool.mjs'),
+    git: await import('../electron/main/git-tool.mjs'),
+    'file-system': await import('../electron/main/filesystem-mcp-provider.mjs'),
+    scholar: await import('../electron/main/scholar-tool.mjs'),
+    postgres: await import('../electron/main/postgres-tool.mjs'),
+  }
+
+  await test('🔍 every provider declares the 4-argument callTool(name, args, cfg, ctx)', async () => {
+    for (const [name, mod] of Object.entries(providerModules)) {
+      assert(typeof mod.callTool === 'function', `${name} exports no callTool`)
+      assert(
+        mod.callTool.length === 4,
+        `${name}.callTool takes ${mod.callTool.length} arguments — it would silently ignore the caller's identity`,
+      )
+      assert(typeof mod.toolDefs === 'function', `${name} exports no toolDefs`)
+    }
+    return `${Object.keys(providerModules).length} providers`
+  })
+
+  await test('a provider behaves identically with and without a ctx (identity is inert so far)', async () => {
+    // Phase 3 only threads identity through; nothing consumes it yet. This pins
+    // that, so the phase that starts consuming it has a clear before-picture.
+    const cfg = { ...disabledBase(), vault: { enabled: true, rootDir: dirs.vault } }
+    const withoutCtx = await providerModules.vault.callTool('vault_tags', {}, cfg)
+    const withCtx = await providerModules.vault.callTool('vault_tags', {}, cfg, {
+      account: { id: 'abc', username: 'someone' },
+    })
+    assert(
+      JSON.stringify(withoutCtx) === JSON.stringify(withCtx),
+      'a shared read-only capability changed behaviour based on who asked',
+    )
+  })
 
   // -- Phase 1: disabled-provider invariants (all providers, all off) --------
   console.log('\n-- disabled: not advertised, not directly callable --')

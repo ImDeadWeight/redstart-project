@@ -54,11 +54,14 @@
 	{#if editCtx.isEditing}
 		<ChatMessageEditForm />
 	{:else}
-		<ChatMessageUserBubble
-			content={message.content}
-			attachments={message.extra}
-			renderMarkdown={true}
-		/>
+		<!--
+			No renderMarkdown prop: the bubble renders content as plain text in a
+			whitespace-pre-wrap span and has no markdown path. A `renderMarkdown`
+			flag was being passed here and silently ignored. Plain text is the
+			right behaviour for user input anyway — their asterisks and hashes
+			should come back as they typed them.
+		-->
+		<ChatMessageUserBubble content={message.content} attachments={message.extra} />
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">

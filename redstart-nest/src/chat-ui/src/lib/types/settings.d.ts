@@ -25,7 +25,7 @@ export interface SettingsEntry {
 	defaultValue: SettingsConfigValue;
 	type: SettingsFieldType;
 	section?: string;
-	options?: Array<{ value: string; label: string; icon: Component }>;
+	options?: SettingsFieldOption[];
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
 	sync?: {
@@ -42,6 +42,21 @@ export interface SettingsSectionEntry {
 	settings: SettingsEntry[];
 }
 
+/**
+ * One choice in a SELECT setting.
+ *
+ * Shared by SettingsEntry and SettingsFieldConfig, which previously declared
+ * the same shape two different ways — icon required vs optional, and
+ * `Component` vs `typeof Icon`. That only stayed invisible because the field
+ * list was built by an inline literal receiving contextual typing; extracting
+ * it to a function surfaced the disagreement immediately.
+ */
+export interface SettingsFieldOption {
+	value: string;
+	label: string;
+	icon?: Component;
+}
+
 export interface SettingsFieldConfig {
 	key: string;
 	label: string;
@@ -49,7 +64,13 @@ export interface SettingsFieldConfig {
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
 	help?: string;
-	options?: Array<{ value: string; label: string; icon?: typeof Icon }>;
+	options?: SettingsFieldOption[];
+	/**
+	 * Subheading this field sits under within its section. Used by Advanced,
+	 * which merges several former sections and would otherwise be an
+	 * undifferentiated wall of twenty inference knobs.
+	 */
+	group?: string;
 }
 
 /** Re-exported for backward compatibility. */
@@ -102,6 +123,8 @@ export interface SettingsChatServiceOptions {
 	timings_per_token?: boolean;
 	// Continuation control (vLLM compat), opt in to the explicit continue final message flag
 	continueFinalMessage?: boolean;
+	// Task mode ID for this request (spec §9). Resolved server-side.
+	promptMode?: string | null;
 	// Callbacks
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;
