@@ -3,6 +3,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { app } from 'electron'
+import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
 
 function getPath() {
   return path.join(app.getPath('userData'), 'accounts.json')
@@ -32,7 +33,12 @@ export function read() {
   const p = getPath()
   if (!fs.existsSync(p)) return defaults()
   try {
-    const data = JSON.parse(fs.readFileSync(p, 'utf8'))
+    // readJsonOr rather than a bare parse: a torn or corrupt accounts.json
+    // would otherwise read as "no accounts", and since login is required by
+    // default and owner bootstrap is launcher-only, that silently locks every
+    // client out of the appliance. The .corrupt copy it leaves behind is the
+    // difference between a recoverable incident and a vanished Owner record.
+    const data = readJsonOr(p, defaults())
     if (!Array.isArray(data.accounts)) data.accounts = []
     if (typeof data.authRequired !== 'boolean') data.authRequired = true
 
@@ -55,7 +61,7 @@ export function read() {
 }
 
 export function write(data) {
-  fs.writeFileSync(getPath(), JSON.stringify(data, null, 2), 'utf8')
+  writeJsonAtomic(getPath(), data)
 }
 
 function stripSecrets(account) {

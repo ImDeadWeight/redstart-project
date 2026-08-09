@@ -3,19 +3,18 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { app } from 'electron'
+import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
 
 function getPath() {
   return path.join(app.getPath('userData'), 'tools.json')
 }
 
 function read() {
-  const p = getPath()
-  if (!fs.existsSync(p)) return { tools: [], groups: [] }
-  try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return { tools: [], groups: [] } }
+  return readJsonOr(getPath(), { tools: [], groups: [] })
 }
 
 function write(data) {
-  fs.writeFileSync(getPath(), JSON.stringify(data, null, 2), 'utf8')
+  writeJsonAtomic(getPath(), data)
 }
 
 export function getUserTools() { return read().tools }
