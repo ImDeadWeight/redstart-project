@@ -95,10 +95,24 @@ export function registerServerHandlers({
       // context into every completions request and proxies everything else
       // through to llama-server on config.port + 1 (localhost only).
       const gwConfig = buildGatewayConfig(config)
+      // LAN exposure is a bind decision, not a firewall decision. With network
+      // mode off both public listeners stay on loopback, so a LAN client gets
+      // connection-refused rather than a login screen — and that holds whatever
+      // the host's firewall is doing. Firewall rules are only added when we
+      // actually want the LAN in, matching how the port-80 proxy already works.
+      //
+      // Rules are deliberately NOT removed when network mode goes off: deleting
+      // one needs elevation, so a settings toggle would fire a UAC prompt, and a
+      // leftover rule is inert once nothing is listening on the wildcard.
+      //
+      // networkMode only reaches the main process here, at server start (it is
+      // launcher state folded into config), so this introduces no new restart
+      // semantics — mDNS and the port-80 proxy already worked this way.
+      const bindHost = config.networkMode ? '0.0.0.0' : '127.0.0.1'
       try {
-        await startGateway(config.port, gwConfig)
+        await startGateway(config.port, gwConfig, { bindHost })
         const gwPort = getGatewayPort(config.port)
-        if (gwPort) ensureFirewallRule(gwPort)
+        if (config.networkMode && gwPort) ensureFirewallRule(gwPort)
         startMdnsAdvertiser(config)
         // Serve the login/chat UI on plain port 80 too, so users can browse to
         // http://redstart.local without the :port suffix. Falls back silently
@@ -116,8 +130,8 @@ export function registerServerHandlers({
       // with actual whitelist enforcement (not just prompt-level advisory).
       try {
         const mcpPort = config.port + 2
-        await startMcpServer(mcpPort, gwConfig)
-        if (getMcpServerRunning()) ensureFirewallRule(mcpPort)
+        await startMcpServer(mcpPort, gwConfig, { bindHost })
+        if (config.networkMode && getMcpServerRunning()) ensureFirewallRule(mcpPort)
       } catch (err) {
         console.warn('MCP server failed to start:', err.message)
       }

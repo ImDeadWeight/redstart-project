@@ -89,8 +89,17 @@ async function main() {
   console.log(`userData dir: ${tmpDir}`)
   console.log(`LAN IP for this machine: ${lanIp ?? '(none found — LAN-exemption tests will be skipped)'}\n`)
 
-  await startGateway(GATEWAY_PORT, { allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 })
-  await startMcpServer(MCP_PORT, { allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 })
+  // Bound WIDE on purpose: this suite's whole point is that a client arriving
+  // over the LAN gets no auth exemption, and half its cases fetch `lanIp`
+  // directly. Both servers now default to loopback (see test-network-binding.mjs
+  // for that boundary), so LAN exposure has to be asked for — which is exactly
+  // the network-mode-ON posture these cases mean to model.
+  //
+  // The two suites are complements: that one proves exposure is controlled,
+  // this one proves that when exposure IS on, the auth gate still holds.
+  const lanBind = { bindHost: '0.0.0.0' }
+  await startGateway(GATEWAY_PORT, { allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 }, lanBind)
+  await startMcpServer(MCP_PORT, { allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 }, lanBind)
 
   const gw = (host) => `http://${host}:${GATEWAY_PORT}`
   const mcp = (host) => `http://${host}:${MCP_PORT}`
