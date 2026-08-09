@@ -49,12 +49,27 @@ export function generateApiKey() {
   return 'rst_' + crypto.randomBytes(24).toString('hex')
 }
 
-// Plain SHA-256, deliberately NOT scrypt: API keys are 24 CSPRNG bytes (192 bits of entropy), not human-chosen
-// passwords, so offline brute force of the hash is infeasible and a slow KDF
-// adds nothing. The hash must also stay deterministic and salt-free so
-// findByApiKeyHash() can do an O(1) lookup on every request; a salted KDF
-// would force an scrypt run per stored account per request. Passwords —
-// the low-entropy secret — go through scrypt above.
+// Plain SHA-256, deliberately NOT scrypt: API keys are 24 CSPRNG bytes (192 bits
+// of entropy), not human-chosen passwords, so offline brute force of the hash is
+// infeasible and a slow KDF adds nothing. The hash must also stay deterministic
+// and salt-free so findByApiKeyHash() can resolve a presented key with one hash
+// and a scan of string comparisons; a salted KDF would force an scrypt run per
+// stored account per request — a DoS vector, not a hardening. Passwords — the
+// low-entropy secret — go through scrypt with a per-record salt above.
+//
+// CodeQL: js/insufficient-password-hash — flagged here, dismissed as "won't fix".
+// The rule is correct about passwords and this is not one; it cannot distinguish
+// a 192-bit machine-generated token from a user-chosen secret. Storing
+// high-entropy API tokens under a fast hash is standard practice (GitHub,
+// Stripe, AWS). Do NOT "fix" this by switching to scrypt: it would satisfy the
+// scanner while making the system materially worse. See docs/security.md
+// (Static analysis) for the full triage note.
+//
+// The available real upgrade is HMAC-SHA256 under a DPAPI-protected pepper (the
+// secrets.mjs machinery already exists), which keeps determinism and lookup cost
+// but makes a stolen accounts.json useless on its own. It would not silence the
+// alert either — HMAC-SHA256 is still a fast hash — so it is worth doing on its
+// own merits or not at all.
 export function hashApiKey(rawKey) {
   return crypto.createHash('sha256').update(rawKey).digest('hex')
 }
