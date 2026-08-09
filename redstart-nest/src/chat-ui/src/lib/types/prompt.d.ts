@@ -1,6 +1,6 @@
 /**
  * Admin-owned system prompt blocks and the derived data-handling facts.
- * See redstart-system-prompt-spec.md §3 (block contract) and §7 (egress).
+ * See docs/system-prompt-spec.md §3 (block contract) and §7 (egress).
  */
 
 /** The three admin-authored blocks. Everything else is derived or code-owned. */

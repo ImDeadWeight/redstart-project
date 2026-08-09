@@ -3,7 +3,7 @@
 // =============================================================================
 // Redstart Nest — System Prompt Composer
 // =============================================================================
-// Implements redstart-system-prompt-spec.md §3 (block contract), §4
+// Implements docs/system-prompt-spec.md §3 (block contract), §4
 // (precedence), §7 (derived data handling) and §10 (token budget).
 //
 // Pure and synchronous by design (spec §11): every fact is resolved by the

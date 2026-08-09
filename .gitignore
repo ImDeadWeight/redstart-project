@@ -71,3 +71,15 @@ desktop.ini
 # README.md and CHANGELOG.md are tracked at the root, so this is safe.
 # Contracts that ship live in docs/ and are deliberately NOT covered here.
 /redstart-*.md
+
+# Working notes, wherever they sit. The rule is functional-vs-planning, not
+# location: anything the running system or its contracts depend on is tracked
+# in docs/ (system-prompt-spec.md, connector-contract.md, tool-namespacing.md);
+# plans, audits, backlogs and status notes are scratch and stay local.
+#
+# This directory exists so working notes have somewhere to live that is NOT the
+# repo root. Ignoring it wholesale means a new note never has to be classified
+# by filename pattern — which is how redstart-system-prompt-spec.md, a document
+# 95 code comments cite as authority, ended up matching /redstart-*.md and
+# absent from every clone.
+docs/notes/
