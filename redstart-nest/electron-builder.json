@@ -29,12 +29,16 @@
     {
       "from": "llama-cpp-turboquant/build/bin/Release",
       "to": "bin",
-      "filter": ["llama-server.exe", "*.dll"]
+      "filter": ["llama-server.exe", "*.dll", "*.DLL"]
     },
     {
       "from": "deps/windows",
       "to": "bin",
-      "filter": ["*.dll"]
+      "filter": ["*.dll", "*.DLL"]
+    },
+    {
+      "from": "deps/windows/elevate.exe",
+      "to": "elevate.exe"
     }
   ],
   "win": {

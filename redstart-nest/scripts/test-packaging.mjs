@@ -203,6 +203,43 @@ test('🔍 Nest unpacks the stdio MCP server it spawns as a child process', () =
   return 'unpacked'
 })
 
+console.log('\n-- extraResources the main process reaches for at runtime --')
+
+// Both of these shipped broken and neither failed anything: the app starts
+// fine without them and only degrades, so nothing surfaced the gap. These
+// assertions read the config statically, so they hold in CI where deps/ and
+// llama-cpp-turboquant/ do not exist.
+
+test('🔍 Nest packages elevate.exe, which firewall.mjs resolves from resourcesPath', () => {
+  const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
+  const resources = config.extraResources ?? []
+  assert(
+    resources.some((r) => typeof r === 'object' && `${r.from} ${r.to}`.includes('elevate.exe')),
+    'firewall.mjs does path.join(process.resourcesPath, "elevate.exe") to add inbound rules with UAC. ' +
+      'It fails SOFT when the file is absent — logs a warning and skips the rule — so a packaged build ' +
+      'silently stops configuring the firewall and LAN mode appears broken for no visible reason.'
+  )
+  return 'declared'
+})
+
+test('🔍 DLL filters are case-insensitive, or uppercase .DLL files are dropped', () => {
+  const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
+  const dllEntries = (config.extraResources ?? []).filter(
+    (r) => typeof r === 'object' && Array.isArray(r.filter) && r.filter.some((f) => /\.dll$/i.test(f))
+  )
+  assert(dllEntries.length > 0, 'no extraResources entry filters DLLs at all')
+  for (const entry of dllEntries) {
+    assert(
+      entry.filter.includes('*.dll') && entry.filter.includes('*.DLL'),
+      `"${entry.from}" filters DLLs with ${JSON.stringify(entry.filter)}. electron-builder matches ` +
+        'case-sensitively, and the VC++ redistributable ships VCOMP140.DLL in uppercase — it was silently ' +
+        'omitted from every installer built before this check existed. llama-server is built with ' +
+        'OPENMP=1 and links against it, so on a machine without the redistributable it will not load.'
+    )
+  }
+  return `${dllEntries.length} DLL filter(s) cover both cases`
+})
+
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
