@@ -65,6 +65,22 @@ contextBridge.exposeInMainWorld('redstartAPI', {
     setBinaryPath: (p) => ipcRenderer.invoke('settings:set-binary-path', p),
     selectBinary: () => ipcRenderer.invoke('settings:select-binary'),
     getResolvedBinary: () => ipcRenderer.invoke('settings:get-resolved-binary'),
+    getModelsDir: () => ipcRenderer.invoke('settings:get-models-dir'),
+    setModelsDir: (p) => ipcRenderer.invoke('settings:set-models-dir', p),
+    selectModelsDir: () => ipcRenderer.invoke('settings:select-models-dir'),
+  },
+
+  models: {
+    publishers: () => ipcRenderer.invoke('models:publishers'),
+    search: (opts) => ipcRenderer.invoke('models:search', opts),
+    detail: (repoId) => ipcRenderer.invoke('models:detail', repoId),
+    local: () => ipcRenderer.invoke('models:local'),
+    diskSpace: () => ipcRenderer.invoke('models:disk-space'),
+    revealFolder: () => ipcRenderer.invoke('models:reveal-folder'),
+    deleteLocal: (name) => ipcRenderer.invoke('models:delete-local', name),
+    download: (req) => ipcRenderer.invoke('models:download', req),
+    cancelDownload: () => ipcRenderer.invoke('models:cancel-download'),
+    downloadStatus: () => ipcRenderer.invoke('models:download-status'),
   },
 
   github: {
@@ -85,5 +101,7 @@ contextBridge.exposeInMainWorld('redstartAPI', {
     offServerLog: () => ipcRenderer.removeAllListeners('server:log'),
     onServerStopped: (cb) => ipcRenderer.on('server:stopped', () => cb()),
     offServerStopped: () => ipcRenderer.removeAllListeners('server:stopped'),
+    onModelDownloadProgress: (cb) => ipcRenderer.on('models:download-progress', (_, p) => cb(p)),
+    offModelDownloadProgress: () => ipcRenderer.removeAllListeners('models:download-progress'),
   },
 })
