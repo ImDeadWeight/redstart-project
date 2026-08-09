@@ -75,6 +75,13 @@ globalThis.fetch = async (url, init = {}) => {
 
 function reset() { requested.length = 0; routes = new Map() }
 
+// Parsed host of a recorded request. Assertions about "was this host
+// contacted" must compare the parsed hostname rather than substring-match the
+// URL — see the note at the off-allowlist redirect test.
+function hostOf(url) {
+  try { return new URL(url).hostname } catch { return null }
+}
+
 function bodyStream(chunks, { delayMs = 0, signal } = {}) {
   return new ReadableStream({
     async pull(controller) {
@@ -256,8 +263,13 @@ await test('🔍 a redirect to an unapproved host is refused BEFORE it is reques
     () => fetchFollowingRedirects('https://huggingface.co/a/b', { isUrlAllowed: isHuggingFaceUrl }),
     /not an approved address/, 'off-allowlist redirect',
   )
+  // Compare the PARSED hostname, not a substring of the URL. A substring test
+  // would also match a benign URL that merely mentions the host in its path or
+  // query (`https://huggingface.co/?x=evil.example.com`), so it can both miss
+  // the real case and fire on the wrong one. CodeQL flags the substring form
+  // for exactly that reason (js/incomplete-url-substring-sanitization).
   assert(
-    !requested.some(u => u.includes('evil.example.com')),
+    !requested.some(u => hostOf(u) === 'evil.example.com'),
     `the disallowed host WAS contacted: ${requested.join(', ')}`,
   )
   return 'no traffic to the disallowed host'
