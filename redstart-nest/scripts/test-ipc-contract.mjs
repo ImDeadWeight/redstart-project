@@ -99,6 +99,7 @@ const registrars = [
   ['mcp', 'registerMcpHandlers'],
   ['capabilities', 'registerCapabilitiesHandlers'],
   ['server', 'registerServerHandlers'],
+  ['models', 'registerModelsHandlers'],
 ]
 
 for (const [mod, fnName] of registrars) {

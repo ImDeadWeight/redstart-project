@@ -10,6 +10,7 @@
 import type {
   HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup,
   ExternalMcpServer, LlamaConfig, ClientApp,
+  CatalogModel, ModelDetail, ModelArtifact, LocalModelFile, DownloadProgress,
 } from '../types'
 
 export type RedstartAPI = {
@@ -46,6 +47,25 @@ export type RedstartAPI = {
     setBinaryPath: (p: string | null) => Promise<boolean>
     selectBinary: () => Promise<string | null>
     getResolvedBinary: () => Promise<string | null>
+    // Always resolves to a real path — the user's choice, or the provisioned
+    // <Documents>\Redstart\Models default. Never null.
+    getModelsDir: () => Promise<string>
+    setModelsDir: (p: string | null) => Promise<string>
+    selectModelsDir: () => Promise<string | null>
+  }
+  models: {
+    publishers: () => Promise<{ id: string; label: string; note: string }[]>
+    search: (opts: { query?: string; publisher?: string; limit?: number })
+      => Promise<{ ok: boolean; models?: CatalogModel[]; error?: string }>
+    detail: (repoId: string) => Promise<{ ok: boolean; detail?: ModelDetail; error?: string }>
+    local: () => Promise<{ ok: boolean; dir: string; files: LocalModelFile[]; error?: string }>
+    diskSpace: () => Promise<{ ok: boolean; dir: string; freeBytes?: number; totalBytes?: number; error?: string }>
+    revealFolder: () => Promise<string>
+    deleteLocal: (name: string) => Promise<{ ok: boolean; error?: string }>
+    download: (req: { repoId: string; revision: string | null; artifact: ModelArtifact })
+      => Promise<{ ok: boolean; cancelled?: boolean; error?: string; result?: { modelPath: string; totalBytes: number } }>
+    cancelDownload: () => Promise<{ ok: boolean; error?: string }>
+    downloadStatus: () => Promise<{ active: boolean; repoId?: string; artifactId?: string }>
   }
   github: { checkReleases: () => Promise<Record<string, string>> }
   auth: {
@@ -89,6 +109,8 @@ export type RedstartAPI = {
     offServerLog: () => void
     onServerStopped: (cb: () => void) => void
     offServerStopped: () => void
+    onModelDownloadProgress: (cb: (p: DownloadProgress) => void) => void
+    offModelDownloadProgress: () => void
   }
 }
 

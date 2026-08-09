@@ -41,6 +41,7 @@ import { registerToolsHandlers } from './ipc/tools.mjs'
 import { registerMcpHandlers } from './ipc/mcp.mjs'
 import { registerCapabilitiesHandlers } from './ipc/capabilities.mjs'
 import { registerServerHandlers } from './ipc/server.mjs'
+import { registerModelsHandlers } from './ipc/models.mjs'
 import { buildGatewayConfig, createRefreshLiveToolsConfig } from './gateway-config.mjs'
 import { buildArgs } from './llama-args.mjs'
 
@@ -340,6 +341,37 @@ function writeSettings(data) {
 }
 
 // ---------------------------------------------------------------------------
+// Models folder
+// ---------------------------------------------------------------------------
+// Where the Models tab downloads GGUF files and where the "Select .gguf File"
+// picker opens. Defaults to <Documents>\Redstart\Models to match the capability
+// folders provisioned above, but is user-changeable because model files are
+// tens of gigabytes and Documents usually lives on the system drive.
+//
+// Always resolves to a real path so no caller has to handle null — the picker's
+// defaultPath and the downloader's containment root must never disagree about
+// which folder is "the models folder".
+
+function defaultModelsDir() {
+  return path.join(app.getPath('documents'), 'Redstart', 'Models')
+}
+
+function resolveModelsDir() {
+  const configured = readSettings().modelsDir
+  return typeof configured === 'string' && configured.trim() ? configured : defaultModelsDir()
+}
+
+// Best-effort, same contract as ensureDefaultCapabilityFolders: a folder that
+// cannot be created is not fatal, the tab just reports it.
+function ensureModelsDir() {
+  try {
+    fs.mkdirSync(resolveModelsDir(), { recursive: true })
+  } catch (err) {
+    console.warn('Could not provision the models folder:', err.message)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // userData migration (Beaver -> Redstart rename)
 // ---------------------------------------------------------------------------
 // package.json's "name" changed from "beaver" to "redstart", which moves
@@ -515,6 +547,8 @@ app.whenReady().then(async () => {
   // only unset paths — a user-chosen folder is never overridden — and leaves
   // every capability disabled.
   ensureDefaultCapabilityFolders(path.join(app.getPath('documents'), 'Redstart'))
+  // Same idea for the models folder — see resolveModelsDir().
+  ensureModelsDir()
   applyCSP(session.defaultSession)
   killOrphanedServers()
   const cleanedConversations = cleanupOldConversations()
@@ -578,6 +612,7 @@ function registerIpcHandlers(deps) {
   registerMcpHandlers(deps)
   registerCapabilitiesHandlers(deps)
   registerServerHandlers(deps)
+  registerModelsHandlers(deps)
 }
 
 function setupIpcHandlers() {
@@ -589,6 +624,11 @@ function setupIpcHandlers() {
     writeSettings,
     resolveBinary,
     selectBinaryDefaultPath: path.join(__dirname, '..', '..', 'llama-cpp-turboquant', 'build', 'bin', 'Release'),
+    // Resolved lazily on every call — the user can repoint the models folder at
+    // runtime, so a value captured here would go stale.
+    resolveModelsDir,
+    getModelsDir: resolveModelsDir,
+    ensureModelsDir,
     readProfiles,
     writeProfiles,
     buildGatewayConfig,

@@ -84,6 +84,9 @@ jobs:
       - name: "Security: llama-server localhost-only args"
         run: node scripts/test-llama-args.mjs
 
+      - name: "Security: model downloads (host allowlist, containment, checksums)"
+        run: node scripts/test-model-download.mjs
+
       - name: "Security: LAN exposure is a socket bind, not a firewall rule"
         run: node scripts/test-network-binding.mjs
 

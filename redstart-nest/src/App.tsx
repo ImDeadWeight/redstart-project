@@ -21,6 +21,7 @@ import { useExternalMcp } from './hooks/useExternalMcp'
 import { useToolsCatalog } from './hooks/useToolsCatalog'
 import { useCapabilities } from './hooks/useCapabilities'
 import { useHardwareAndBinary } from './hooks/useHardwareAndBinary'
+import { useModelCatalog } from './hooks/useModelCatalog'
 import { useProfiles } from './hooks/useProfiles'
 import { useServerLifecycle } from './hooks/useServerLifecycle'
 import { HardwarePanel } from './panels/HardwarePanel'
@@ -30,6 +31,7 @@ import { ModelPanel } from './panels/ModelPanel'
 import { AccountsPanel } from './panels/AccountsPanel'
 import { ConfigTab } from './tabs/ConfigTab'
 import { ToolsTab } from './tabs/ToolsTab'
+import { ModelsTab } from './tabs/ModelsTab'
 import { ServerTab, healthDisplay } from './tabs/ServerTab'
 import { LaunchControls } from './components/LaunchControls'
 
@@ -39,7 +41,7 @@ export default function App() {
   const [networkMode, setNetworkMode] = useState(true)
   const [localIp, setLocalIp] = useState('')
   const [advertisedHost, setAdvertisedHost] = useState('redstart.local')
-  const [activeTab, setActiveTab] = useState<'config' | 'tools' | 'server'>('config')
+  const [activeTab, setActiveTab] = useState<'config' | 'models' | 'tools' | 'server'>('config')
 
   const { statusMsg, show: showStatus, clear: clearStatus } = useStatusMessage()
 
@@ -49,6 +51,7 @@ export default function App() {
   const toolsCatalog = useToolsCatalog(config, setConfig)
   const caps = useCapabilities(config)
   const hw = useHardwareAndBinary(setConfig)
+  const modelCatalog = useModelCatalog()
   const profilesHook = useProfiles(config, setConfig, setAdvertisedHost, showStatus)
   const server = useServerLifecycle({
     config, showStatus, clearStatus,
@@ -139,6 +142,7 @@ export default function App() {
           <div className="flex items-end gap-1 border-b border-zinc-800 -mx-5 px-5 -mt-2 pt-2 sticky top-0 bg-zinc-950 z-10">
             {([
               ['config', 'Configuration'],
+              ['models', 'Models'],
               ['tools', 'Tools'],
               ['server', 'Server'],
             ] as const).map(([id, label]) => (
@@ -170,6 +174,10 @@ export default function App() {
               generatedCommand={generatedCommand}
               onGenerateCommand={generateCommand}
             />
+          )}
+
+          {activeTab === 'models' && (
+            <ModelsTab catalog={modelCatalog} hardware={hw.hardware} />
           )}
 
           {activeTab === 'tools' && (

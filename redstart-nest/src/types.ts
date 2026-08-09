@@ -5,11 +5,80 @@
 // components. The IPC surface itself (RedstartAPI) lives in api/redstart.ts.
 // =============================================================================
 
+// vram/vramFree are MB; memory.total/available are GB (historical, kept so the
+// existing panels don't shift units).
+//
+// vramFree is 0 on non-NVIDIA GPUs — the WMI fallback has no free-VRAM source.
+// vram itself is also unreliable there: Win32_VideoController.AdapterRAM caps
+// at 4095 MB, so a 16 GB AMD card reports as 4 GB. The Models tab shows these
+// as context without drawing a conclusion from them; see the note in
+// electron/main/ipc/hardware.mjs before building anything that decides.
 export type HardwareSpecs = {
   cpu: { name: string; cores: number; threads: number; architecture: string; supportsAVX: boolean }
-  gpu: { name: string; vram: number; cudaAvailable: boolean }
+  gpu: { name: string; vram: number; vramFree: number; cudaAvailable: boolean }
   memory: { total: number; available: number }
   os: { platform: string; arch: string }
+}
+
+// --- Hugging Face model catalog ---------------------------------------------
+
+export type CatalogModel = {
+  repoId: string
+  author: string
+  downloads: number
+  likes: number
+  lastModified: string | null
+  gated: boolean
+  quants: string[]
+  ggufFileCount: number
+}
+
+export type ModelArtifact = {
+  id: string
+  quantLabel: string
+  quantRecognized: boolean
+  files: { rfilename: string; size: number | null; sha256: string | null; shardIndex: number | null }[]
+  shardTotal: number
+  totalBytes: number | null
+  complete: boolean
+  verifiable: boolean
+}
+
+export type ModelDetail = {
+  repoId: string
+  author: string
+  revision: string | null
+  gated: boolean
+  downloads: number
+  likes: number
+  license: string | null
+  lastModified: string | null
+  architecture: string | null
+  paramCount: number | null
+  contextLength: number | null
+  chatTemplate: string | null
+  experts: { total: number; active: number | null } | null
+  artifacts: ModelArtifact[]
+}
+
+export type LocalModelFile = {
+  name: string
+  path: string
+  size: number
+  modified: number
+  partial: boolean
+}
+
+export type DownloadProgress = {
+  repoId: string
+  artifactId?: string
+  state: 'downloading' | 'skipped' | 'complete' | 'cancelled' | 'error'
+  fileIndex?: number
+  fileCount?: number
+  receivedBytes?: number
+  totalBytes?: number
+  bytesPerSec?: number
+  error?: string | null
 }
 
 export type WebFetchTool = {

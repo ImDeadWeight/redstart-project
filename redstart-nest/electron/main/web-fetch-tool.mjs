@@ -26,6 +26,7 @@
 import * as dns from 'node:dns/promises'
 import { parseHTML } from 'linkedom'
 import { Readability } from '@mozilla/readability'
+import { fetchFollowingRedirects } from './http-redirects.mjs'
 
 const TOOL_NAMES = ['web_fetch', 'web_search']
 const FETCH_TIMEOUT_MS = 12000
@@ -141,37 +142,28 @@ function stripTags(html) {
   }
 }
 
-// Follows redirects MANUALLY so every hop is re-validated against the same
-// policy as the original URL. With redirect:'follow', a whitelisted page
-// could bounce the fetch to any domain (consent pages, shorteners — or, in
-// open mode, a public URL redirecting to a LAN address) without the
-// destination ever being checked. Each Location is validated BEFORE it is
-// requested, so a disallowed hop never generates network traffic.
-const MAX_REDIRECTS = 5
-
+// The manual redirect walk lives in ./http-redirects.mjs — every hop is
+// re-validated against the same policy as the original URL, because with
+// redirect:'follow' a whitelisted page could bounce the fetch to any domain
+// (consent pages, shorteners — or, in open mode, a public URL redirecting to a
+// LAN address) without the destination ever being checked.
+//
+// It was extracted there when the Hugging Face model downloader needed the same
+// guarantee for a streamed multi-gigabyte body. One policy, two callers; only
+// the body handling below is specific to web_fetch.
+//
+// checkInitial:false because callTool already validated `url` above and owns a
+// specific, user-facing denial message — and in whitelist-off mode the
+// predicate does a DNS lookup, so re-checking would be a second lookup for no
+// gain. Redirect hops are still awaited inside the helper, so a target is
+// judged by what it RESOLVES to, not just what it is named.
 async function fetchPage(url, maxTokens, isUrlAllowed) {
-  let current = url
-  let resp
-  for (let hop = 0; ; hop++) {
-    resp = await fetch(current, {
-      headers: { 'User-Agent': USER_AGENT },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      redirect: 'manual',
-    })
-    if (resp.status < 300 || resp.status >= 400) break
-    const location = resp.headers.get('location')
-    if (!location) break
-    if (hop >= MAX_REDIRECTS) throw new Error('Too many redirects')
-    const next = new URL(location, current).href
-    // Awaited: in whitelist-off mode this predicate does a DNS lookup, so the
-    // redirect target is checked against what it RESOLVES to, not just what it
-    // is named — otherwise a public page redirecting to an intranet name would
-    // be the exact hole the initial-URL guard closes.
-    if (!(await isUrlAllowed(next))) {
-      throw new Error(`The page redirects to "${next}", which is not an approved address`)
-    }
-    current = next
-  }
+  const { response: resp } = await fetchFollowingRedirects(url, {
+    isUrlAllowed,
+    headers: { 'User-Agent': USER_AGENT },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    checkInitial: false,
+  })
   if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`)
 
   const contentType = resp.headers.get('content-type') || ''
