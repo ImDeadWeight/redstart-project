@@ -5,17 +5,29 @@
 import { ipcMain } from 'electron'
 import * as crypto from 'crypto'
 import { getExternalServers, addExternalServer, deleteExternalServer } from '../tools-storage.mjs'
+import { validateExternalMcpUrl } from '../external-mcp-url.mjs'
 
-export function registerMcpHandlers() {
+export function registerMcpHandlers({ getConfiguredPort } = {}) {
   // --- MCP ---
 
   ipcMain.handle('mcp:list-external', () => getExternalServers())
 
+  // Validation lives here rather than in the renderer: this is the only entry
+  // point that can write to the registry, so a check anywhere else would be
+  // advisory. Refusals are limited to what is incoherent (bad scheme, no host)
+  // or self-defeating (Nest's own ports); everything else is returned as a
+  // warning for the UI to show, because an admin at the console is allowed to
+  // point Nest at a plaintext LAN appliance. See external-mcp-url.mjs.
+  ipcMain.handle('mcp:validate-external', (_, url) =>
+    validateExternalMcpUrl(url, getConfiguredPort?.()))
+
   ipcMain.handle('mcp:add-external', (_, server) => {
+    const verdict = validateExternalMcpUrl(server?.url, getConfiguredPort?.())
+    if (!verdict.ok) return { ok: false, error: verdict.error }
     const id = server.id || crypto.randomUUID()
     const s = { ...server, id, enabled: server.enabled ?? true }
     addExternalServer(s)
-    return s
+    return { ok: true, server: s, warnings: verdict.warnings }
   })
 
   ipcMain.handle('mcp:remove-external', (_, id) => deleteExternalServer(id))

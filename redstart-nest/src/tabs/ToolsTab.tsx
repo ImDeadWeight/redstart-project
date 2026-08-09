@@ -158,6 +158,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
   const {
     externalServers, showAddExternal, setShowAddExternal,
     newExtName, setNewExtName, newExtUrl, setNewExtUrl, mcpTestResults,
+    addExternalError, addExternalWarnings,
     addExternalMcpServer, removeExternalMcpServer, testExternalMcpServer,
   } = mcp
 
@@ -512,6 +513,16 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
           ))}
         </div>
 
+        {/* Cautions about the server that was just added — plaintext to a remote
+            host, egress, an endpoint that doesn't look like /sse. Non-blocking
+            by design: the main process accepted it, and an admin at the console
+            is allowed to make these choices. See external-mcp-url.mjs. */}
+        {addExternalWarnings.length > 0 && (
+          <div className="mt-2 text-xs text-amber-300/90 bg-amber-950/30 border border-amber-900/60 rounded p-2 space-y-1">
+            {addExternalWarnings.map((w, i) => <p key={i}>⚠ {w}</p>)}
+          </div>
+        )}
+
         {showAddExternal && (
           <div className="space-y-2 bg-zinc-800/60 p-3 rounded border border-zinc-700 mt-2">
             <input
@@ -522,6 +533,14 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
               value={newExtUrl} onChange={e => setNewExtUrl(e.target.value)}
               placeholder="SSE URL (e.g. http://10.0.0.5:9000/sse)"
               className={inputCls.dark} />
+            {/* A refusal from the main process. Without this the Add button
+                would simply do nothing on a rejected URL, which reads as a
+                broken button rather than a policy decision. */}
+            {addExternalError && (
+              <p className="text-xs text-red-400 bg-red-950/30 border border-red-900/60 rounded p-2">
+                {addExternalError}
+              </p>
+            )}
             <div className="flex gap-2 pt-1">
               <button onClick={addExternalMcpServer} className={btnCls.primary}>
                 Add server

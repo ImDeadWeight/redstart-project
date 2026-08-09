@@ -55,7 +55,13 @@ export type RedstartAPI = {
   }
   mcp: {
     listExternal: () => Promise<ExternalMcpServer[]>
-    addExternal: (server: Omit<ExternalMcpServer, 'id'>) => Promise<ExternalMcpServer>
+    // Registration is validated in the main process — an external MCP server is
+    // its own trust boundary, and this IPC channel is the only way into the
+    // registry. `warnings` are non-blocking cautions to surface in the UI.
+    addExternal: (server: Omit<ExternalMcpServer, 'id'>) => Promise<
+      { ok: true; server: ExternalMcpServer; warnings: string[] } | { ok: false; error: string }
+    >
+    validateExternal: (url: string) => Promise<{ ok: boolean; error?: string; warnings: string[]; isRemote?: boolean }>
     removeExternal: (id: string) => Promise<boolean>
     testExternal: (url: string) => Promise<{ ok: boolean; message: string }>
   }

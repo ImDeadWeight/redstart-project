@@ -575,7 +575,7 @@ function registerIpcHandlers(deps) {
   registerAuthHandlers()
   registerProfilesHandlers(deps)
   registerToolsHandlers(deps)
-  registerMcpHandlers()
+  registerMcpHandlers(deps)
   registerCapabilitiesHandlers(deps)
   registerServerHandlers(deps)
 }
@@ -599,6 +599,10 @@ function setupIpcHandlers() {
     parseEvalTokensPerSec,
     ensureFirewallRule,
     getLocalIp,
+    // So the external-MCP validator knows which ports are ours and can refuse a
+    // server pointed at Nest itself. Falls back to the documented default when
+    // no profile has been started yet, since the ports are derived from it.
+    getConfiguredPort: () => serverState.lastConfig?.port ?? 19080,
     userDataDir,
   })
 }
