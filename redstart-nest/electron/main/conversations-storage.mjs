@@ -1,8 +1,8 @@
 'use strict'
 
-import * as fs from 'fs'
 import * as path from 'path'
 import { app } from 'electron'
+import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
 
 const STORAGE_PATH = path.join(app.getPath('userData'), 'conversations.json')
 const CLEANUP_DAYS = 30
@@ -12,12 +12,11 @@ function getPath() {
 }
 
 function read() {
-  if (!fs.existsSync(STORAGE_PATH)) return { conversations: [] }
-  try { return JSON.parse(fs.readFileSync(STORAGE_PATH, 'utf8')) } catch { return { conversations: [] } }
+  return readJsonOr(STORAGE_PATH, { conversations: [] })
 }
 
 function write(data) {
-  fs.writeFileSync(STORAGE_PATH, JSON.stringify(data, null, 2), 'utf8')
+  writeJsonAtomic(STORAGE_PATH, data)
 }
 
 export function cleanupOldConversations() {

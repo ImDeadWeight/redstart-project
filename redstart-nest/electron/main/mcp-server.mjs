@@ -248,7 +248,13 @@ async function handleRpc(msg, send, ctx = { account: null }) {
 // HTTP server
 // ---------------------------------------------------------------------------
 
-export function startMcpServer(port, config) {
+// bindHost defaults to LOOPBACK, same fail-closed rule as the gateway (see the
+// note on startGateway in tools-gateway.mjs). It matters more here, not less:
+// this server is the MCP transport, so anything reachable on this port can call
+// tools/call directly. Authentication and the policy gate above still stand in
+// front of every call — but "the firewall happened to be on" is not where that
+// boundary should live, and LAN exposure is now something a caller asks for.
+export function startMcpServer(port, config, { bindHost = '127.0.0.1' } = {}) {
   stopMcpServer()
   activeToolsConfig = config
 
@@ -350,9 +356,9 @@ export function startMcpServer(port, config) {
   })
 
   return new Promise((resolve, reject) => {
-    server.listen(port, '0.0.0.0', () => {
+    server.listen(port, bindHost, () => {
       mcpServer = server
-      logEvent('mcp', 'started', { port })
+      logEvent('mcp', 'started', { port, bindHost })
       resolve(port)
     })
     server.on('error', (err) => {

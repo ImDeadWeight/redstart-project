@@ -15,9 +15,9 @@
 // existing user setting is rewritten or lost.
 // =============================================================================
 
-import * as fs from 'fs'
 import * as path from 'path'
 import { app } from 'electron'
+import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
 
 // The block contract. Order is spec §3's; composePrompt owns placement.
 export const PROMPT_BLOCK_KEYS = ['context', 'policy', 'style']
@@ -34,22 +34,17 @@ function getPath() {
 }
 
 function read() {
-  const p = getPath()
-  if (!fs.existsSync(p)) return { ...EMPTY }
-  try {
-    const parsed = JSON.parse(fs.readFileSync(p, 'utf8'))
-    return { ...EMPTY, ...parsed }
-  } catch {
-    // A corrupt file must not take the gateway down or, worse, silently
-    // drop admin policy while continuing to serve completions. Fall back to
-    // empty blocks — the derived blocks (identity, data_handling) still
-    // compose, so the model stays truthful even with no admin text.
-    return { ...EMPTY }
-  }
+  // A corrupt file must not take the gateway down or, worse, silently drop
+  // admin policy while continuing to serve completions. readJsonOr falls back
+  // to empty blocks — the derived blocks (identity, data_handling) still
+  // compose, so the model stays truthful even with no admin text — and
+  // preserves the unparseable original as .corrupt so the policy is recoverable
+  // rather than just gone.
+  return { ...EMPTY, ...readJsonOr(getPath(), EMPTY) }
 }
 
 function write(data) {
-  fs.writeFileSync(getPath(), JSON.stringify(data, null, 2), 'utf8')
+  writeJsonAtomic(getPath(), data)
 }
 
 /** The three admin blocks, as composePrompt's `admin` input. */

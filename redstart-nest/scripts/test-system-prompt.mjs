@@ -112,6 +112,14 @@ await test('tools in the request → the enabled capabilities are described', as
     now: NOW,
   })
   assert(prompt.includes('web_fetch'), 'web_fetch not described')
+  // CodeQL: js/incomplete-url-substring-sanitization — false positive, dismissed.
+  // This asserts that the composed PROMPT TEXT names an approved domain; it is a
+  // string search over prose, not a host check, and nothing is authorised by it.
+  // Host allow-listing lives in isAllowed() (electron/main/web-fetch-tool.mjs),
+  // which parses with `new URL()` and compares `hostname` exactly or as a
+  // dot-prefixed suffix — so `evil-docs.example.org` and
+  // `docs.example.org.attacker.com` are both rejected there. See
+  // docs/security.md (Static analysis) for the full triage note.
   assert(prompt.includes('docs.example.org'), 'approved domain not listed')
   assert(prompt.includes('postgres_query'), 'postgres not described')
   assert(prompt.includes('create_document'), 'documents not described')

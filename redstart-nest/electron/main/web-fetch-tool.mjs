@@ -23,6 +23,7 @@
 // the gateway itself, or a router admin page).
 // =============================================================================
 
+import * as dns from 'node:dns/promises'
 import { parseHTML } from 'linkedom'
 import { Readability } from '@mozilla/readability'
 
@@ -48,26 +49,78 @@ function isAllowed(url, allowedBaseUrls) {
   } catch { return false }
 }
 
+// Is this literal IP address inside a range the model must never reach?
+// Exported so the security suite can drive the range table directly, and shared
+// by BOTH the literal-hostname check and the DNS-resolution check below — one
+// table, so the two can never disagree about what "private" means.
+export function isPrivateAddress(address) {
+  const host = String(address).toLowerCase().replace(/^\[|\]$/g, '')
+  if (host === '::1') return true
+  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (ipv4) {
+    const [a, b] = [Number(ipv4[1]), Number(ipv4[2])]
+    if (a === 127 || a === 10 || a === 0) return true
+    if (a === 172 && b >= 16 && b <= 31) return true
+    if (a === 192 && b === 168) return true
+    if (a === 169 && b === 254) return true
+    return false
+  }
+  // IPv6: loopback handled above; link-local fe80::/10 and unique-local fc00::/7.
+  if (host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd')) return true
+  // IPv4-mapped IPv6 (::ffff:192.168.0.1) — recurse on the embedded literal so
+  // the v4 ranges above apply rather than being silently skipped.
+  const mapped = host.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/)
+  if (mapped) return isPrivateAddress(mapped[1])
+  return false
+}
+
 // SSRF guard for whitelist-off mode: public http(s) only. Blocks loopback,
 // RFC1918 ranges, link-local, and .local names so the model can't reach the
 // gateway, llama-server, or anything else on the user's network.
+//
+// LITERAL check only — this is what the hostname SAYS. A public name that
+// resolves into private space passes here; hostResolvesPublic() below is the
+// half that catches that.
 function isPublicHttpUrl(url) {
   let target
   try { target = new URL(url) } catch { return false }
   if (target.protocol !== 'http:' && target.protocol !== 'https:') return false
   const host = target.hostname.toLowerCase()
   if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.localhost')) return false
-  if (host === '::1' || host === '[::1]') return false
-  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
-  if (ipv4) {
-    const [a, b] = [Number(ipv4[1]), Number(ipv4[2])]
-    if (a === 127 || a === 10 || a === 0) return false
-    if (a === 172 && b >= 16 && b <= 31) return false
-    if (a === 192 && b === 168) return false
-    if (a === 169 && b === 254) return false
+  return !isPrivateAddress(host)
+}
+
+// The other half of the SSRF guard: what the hostname RESOLVES to.
+//
+// The literal check above inspects the string a URL carries, so
+// `http://intranet.example.com/` sails through it and then connects to
+// 192.168.1.1 anyway — a public name pointed at private space is the ordinary
+// way this guard gets walked around, and it needs no attacker-controlled DNS,
+// just a misconfigured or hostile record.
+//
+// Every resolved address must be public; one private answer rejects the fetch.
+// A hostname that does not resolve is also rejected — a fetch that cannot
+// succeed should fail as policy rather than as a network error, so the model
+// gets a clear reason.
+//
+// LIMIT, stated plainly: this is check-then-connect, so it does not stop true
+// DNS rebinding, where the record changes between our lookup and the socket's.
+// Closing that needs a custom dispatcher that validates the address actually
+// connected to. The whitelist — on by default — is the primary control here;
+// this raises the floor for deployments that turn it off. See docs/security.md.
+async function hostResolvesPublic(url) {
+  let hostname
+  try { hostname = new URL(url).hostname } catch { return false }
+  // An IP literal has nothing to resolve; isPublicHttpUrl already judged it.
+  if (isPrivateAddress(hostname)) return false
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.includes(':')) return true
+  try {
+    const records = await dns.lookup(hostname, { all: true, verbatim: true })
+    if (!records.length) return false
+    return records.every(r => !isPrivateAddress(r.address))
+  } catch {
+    return false // NXDOMAIN / no answer — refuse rather than let fetch try anyway
   }
-  if (host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd')) return false
-  return true
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +163,11 @@ async function fetchPage(url, maxTokens, isUrlAllowed) {
     if (!location) break
     if (hop >= MAX_REDIRECTS) throw new Error('Too many redirects')
     const next = new URL(location, current).href
-    if (!isUrlAllowed(next)) {
+    // Awaited: in whitelist-off mode this predicate does a DNS lookup, so the
+    // redirect target is checked against what it RESOLVES to, not just what it
+    // is named — otherwise a public page redirecting to an intranet name would
+    // be the exact hole the initial-URL guard closes.
+    if (!(await isUrlAllowed(next))) {
       throw new Error(`The page redirects to "${next}", which is not an approved address`)
     }
     current = next
@@ -309,11 +366,22 @@ export async function callTool(name, args, cfg, _ctx) {
   }
 
   // One policy function used for the initial URL AND every redirect hop.
+  //
+  // Async in both branches so the two paths stay interchangeable, even though
+  // only the whitelist-off branch actually awaits anything.
+  //
+  // The DNS-resolution guard is deliberately NOT applied when the whitelist is
+  // on. An approved base URL is an explicit administrator trust decision, and it
+  // may legitimately name an intranet host — a firm scoping the model to an
+  // internal document system is a stated use case. Resolving those to private
+  // space and refusing them would break exactly the deployment the whitelist
+  // exists to serve. Whitelist off means "any public URL", and that is the mode
+  // where "public" has to mean the address as well as the name.
   const isUrlAllowed = whitelistOn
-    ? (u) => isAllowed(u, webFetchCfg?.allowedBaseUrls)
-    : (u) => isPublicHttpUrl(u)
+    ? async (u) => isAllowed(u, webFetchCfg?.allowedBaseUrls)
+    : async (u) => isPublicHttpUrl(u) && await hostResolvesPublic(u)
 
-  if (!isUrlAllowed(url)) {
+  if (!(await isUrlAllowed(url))) {
     if (whitelistOn) {
       const approvedList = (webFetchCfg?.allowedBaseUrls || []).join(', ') || 'none configured'
       return {
@@ -323,7 +391,7 @@ export async function callTool(name, args, cfg, _ctx) {
     }
     return {
       isError: true,
-      content: [{ type: 'text', text: `Access denied: "${url}" is not a public http(s) address. Local and private network addresses cannot be fetched.` }],
+      content: [{ type: 'text', text: `Access denied: "${url}" is not a public http(s) address, or its hostname resolves to a private network address. Local and private network addresses cannot be fetched.` }],
     }
   }
 

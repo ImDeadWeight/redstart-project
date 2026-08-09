@@ -409,7 +409,18 @@ function isPublicAsset(urlPath) {
 // Public API
 // ---------------------------------------------------------------------------
 
-export function startGateway(publicPort, config) {
+// bindHost decides whether this server is reachable from the LAN at all, and
+// it defaults to LOOPBACK — fail closed. Callers that want LAN exposure ask for
+// it explicitly (ipc/server.mjs derives '0.0.0.0' from config.networkMode).
+//
+// This used to be a hardwired '0.0.0.0' with the Windows Firewall as the only
+// thing standing between the LAN and this port. That made the launcher's
+// "Local network" toggle a firewall-rule switch rather than an exposure
+// control: the socket was bound wide either way, so a host with the firewall
+// off, a third-party firewall, or a rule left behind by an earlier run was
+// reachable with the toggle off. The boundary belongs on the socket, where the
+// app actually owns it; the firewall rule is only permission on top of that.
+export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}) {
   stopGateway()
   activeConfig = config
   const internalPort = publicPort + 1
@@ -788,7 +799,7 @@ export function startGateway(publicPort, config) {
       passthrough(req, res, internalPort)
     })
 
-    server.listen(publicPort, '0.0.0.0', () => {
+    server.listen(publicPort, bindHost, () => {
       gatewayServer = server
       resolve(publicPort)
     })

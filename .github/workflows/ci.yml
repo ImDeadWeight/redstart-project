@@ -84,6 +84,18 @@ jobs:
       - name: "Security: llama-server localhost-only args"
         run: node scripts/test-llama-args.mjs
 
+      - name: "Security: LAN exposure is a socket bind, not a firewall rule"
+        run: node scripts/test-network-binding.mjs
+
+      - name: "Security: web_fetch SSRF guard (literal + DNS resolution)"
+        run: node scripts/test-web-fetch-ssrf.mjs
+
+      - name: "Security: external MCP endpoint validation"
+        run: node scripts/test-external-mcp-url.mjs
+
+      - name: "Durability: atomic JSON state writes"
+        run: node scripts/test-json-store.mjs
+
       - name: "Security: discovery robustness (beacon)"
         run: node scripts/test-discovery-robustness.mjs
 
