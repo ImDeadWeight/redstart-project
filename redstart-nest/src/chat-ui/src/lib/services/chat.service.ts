@@ -2,11 +2,8 @@ import { getJsonHeaders } from '$lib/utils/api-headers';
 import { resolveApiPath } from '$lib/utils/api-fetch';
 import { isAbortError } from '$lib/utils/abort';
 import {
-	ATTACHMENT_LABEL_PDF_FILE,
-	REASONING_EFFORT_TOKENS,
 	API_CHAT,
-	API_SLOTS,
-	CONTROL_ACTION
+	REASONING_EFFORT_TOKENS
 } from '$lib/constants';
 import {
 	AttachmentType,
@@ -28,6 +25,11 @@ import {
 	stripReasoningContent
 } from './chat/chat-message-convert';
 import { parseErrorResponse } from './chat/chat-errors';
+import {
+	areAllSlotsIdle,
+	stopReasoning,
+	preEncode
+} from './chat/chat-slots';
 
 export class ChatService {
 	/**
@@ -368,154 +370,6 @@ export class ChatService {
 			}
 
 			throw userFriendlyError;
-		}
-	}
-
-	/**
-	 * Checks whether all server slots are currently idle (not processing any requests).
-	 * Queries the /slots endpoint (requires --slots flag on the server).
-	 * Returns true if all slots are idle, false if any is processing.
-	 * If the endpoint is unavailable or errors out, returns true (best-effort fallback).
-	 *
-	 * @param signal - Optional AbortSignal to cancel the request if needed
-	 * @param model - Optional model name to check slots for (required in ROUTER mode)
-	 * @returns {Promise<boolean>} Promise that resolves to true if all slots are idle, false if any is processing
-	 */
-	static async areAllSlotsIdle(model?: string | null, signal?: AbortSignal): Promise<boolean> {
-		try {
-			const basePath = resolveApiPath(API_SLOTS.LIST);
-			const url = model ? `${basePath}?model=${encodeURIComponent(model)}` : basePath;
-			const res = await fetch(url, { signal });
-			if (!res.ok) return true;
-
-			const slots: { is_processing: boolean }[] = await res.json();
-			return slots.every((s) => !s.is_processing);
-		} catch {
-			return true;
-		}
-	}
-
-	/**
-	 * Ends the current reasoning block of a running completion, targeted by its
-	 * chat completion id (streamed back as `id`). Matching the completion rather
-	 * than a slot index avoids a TOCTOU: a finished completion simply matches
-	 * nothing server side. The model is carried so the router forwards to the
-	 * right child, single model ignores it. Returns true on success.
-	 */
-	static async stopReasoning(completionId: string, model?: string | null): Promise<boolean> {
-		if (!completionId) {
-			console.error(
-				'stopReasoning: no completion id for the active message, cannot target the running completion'
-			);
-			return false;
-		}
-
-		const body: Record<string, unknown> = {
-			id: completionId,
-			action: CONTROL_ACTION.END_REASONING
-		};
-		if (model) body.model = model;
-
-		try {
-			const res = await fetch(resolveApiPath(API_CHAT.CONTROL), {
-				method: 'POST',
-				headers: getJsonHeaders(),
-				body: JSON.stringify(body)
-			});
-
-			const data = await res.json().catch(() => null);
-			if (!res.ok || data?.success !== true) {
-				console.error('stopReasoning: control request failed', {
-					status: res.status,
-					completionId,
-					response: data
-				});
-				return false;
-			}
-			return true;
-		} catch (error) {
-			console.error('stopReasoning: control request threw', { completionId, error });
-			return false;
-		}
-	}
-
-	/**
-	 * Sends a fire-and-forget request to pre-encode the conversation in the server's KV cache.
-	 * After a response completes, this re-submits the full conversation
-	 * using n_predict=0 and stream=false so the server processes the prompt without generating tokens.
-	 * This warms the cache for the next turn, making it faster.
-	 *
-	 * When excludeReasoningFromContext is true, reasoning content is stripped from the messages
-	 * to match what sendMessage would send on the next turn (avoiding cache misses).
-	 * When false, reasoning_content is preserved so the cached prompt matches the next request.
-	 *
-	 * @param messages - The full conversation including the latest assistant response
-	 * @param model - Optional model name (required in ROUTER mode)
-	 * @param excludeReasoning - Whether to strip reasoning content (should match excludeReasoningFromContext setting)
-	 * @param signal - Optional AbortSignal to cancel the pre-encode request
-	 */
-	static async preEncode(
-		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
-		model?: string | null,
-		excludeReasoning?: boolean,
-		signal?: AbortSignal
-	): Promise<void> {
-		const normalizedMessages: ApiChatMessageData[] = (
-			await Promise.all(
-				messages.map((msg) => {
-					if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
-						return convertDbMessageToApiChatMessageData(
-							msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
-						);
-					}
-
-					return msg as ApiChatMessageData;
-				})
-			)
-		).filter((msg: { role: ChatRole; content: string | ApiChatMessageContentPart[] }) => {
-			if (msg.role === MessageRole.SYSTEM) {
-				const content = typeof msg.content === 'string' ? msg.content : '';
-
-				return content.trim().length > 0;
-			}
-
-			return true;
-		});
-
-		const requestBody: Record<string, unknown> = {
-			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
-				const mapped: Record<string, unknown> = {
-					role: msg.role,
-					content: excludeReasoning ? stripReasoningContent(msg.content) : msg.content,
-					tool_calls: msg.tool_calls,
-					tool_call_id: msg.tool_call_id
-				};
-
-				if (!excludeReasoning && msg.reasoning_content) {
-					mapped.reasoning_content = msg.reasoning_content;
-				}
-
-				return mapped;
-			}),
-			stream: false,
-			n_predict: 0
-		};
-
-		if (model) {
-			requestBody.model = model;
-		}
-
-		try {
-			await fetch(resolveApiPath(API_CHAT.COMPLETIONS), {
-				method: 'POST',
-				headers: getJsonHeaders(),
-				body: JSON.stringify(requestBody),
-				signal
-			});
-		} catch (error) {
-			if (!isAbortError(error)) {
-				console.warn('[ChatService] Pre-encode request failed:', error);
-			}
 		}
 	}
 }

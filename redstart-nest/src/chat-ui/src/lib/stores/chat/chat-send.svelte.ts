@@ -8,6 +8,7 @@
 
 import { DatabaseService } from '$lib/services/database.service';
 import { ChatService } from '$lib/services/chat.service';
+import { areAllSlotsIdle, preEncode } from '$lib/services/chat/chat-slots';
 import { ContextCompactionService } from '$lib/services/context-compaction.service';
 import { PromptService } from '$lib/services/prompt.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
@@ -575,7 +576,7 @@ export class ChatSendController {
 		const signal = this.preEncodeAbortController.signal;
 
 		try {
-			const allIdle = await ChatService.areAllSlotsIdle(model, signal);
+			const allIdle = await areAllSlotsIdle(model, signal);
 			if (!allIdle || signal.aborted) return;
 
 			const messagesWithAssistant: DatabaseMessage[] = [
@@ -583,7 +584,7 @@ export class ChatSendController {
 				{ ...assistantMessage, content: assistantContent }
 			];
 
-			await ChatService.preEncode(messagesWithAssistant, model, excludeReasoning, signal);
+			await preEncode(messagesWithAssistant, model, excludeReasoning, signal);
 		} catch (err) {
 			if (!isAbortError(err)) {
 				console.warn('[ChatStore] Pre-encode failed:', err);
