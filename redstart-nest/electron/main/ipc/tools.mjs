@@ -3,7 +3,7 @@
 //
 // buildGatewayConfig lives in index.mjs and is threaded via deps; everything
 // else is imported directly from the storage/gateway/definition modules.
-import { ipcMain } from 'electron'
+import { handle } from './guard.mjs'
 import * as path from 'path'
 import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES, CLIENT_APPS } from '../tools-definitions.mjs'
 import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup } from '../tools-storage.mjs'
@@ -14,7 +14,7 @@ import { syncFilesystemProvider } from '../filesystem-mcp-provider.mjs'
 export function registerToolsHandlers({ buildGatewayConfig, userDataDir }) {
   // --- Tools ---
 
-  ipcMain.handle('tools:list-all', () => {
+  handle('tools:list-all', () => {
     return {
       builtinTools:        BUILTIN_TOOLS,
       builtinGroups:       BUILTIN_GROUPS,
@@ -27,15 +27,15 @@ export function registerToolsHandlers({ buildGatewayConfig, userDataDir }) {
     }
   })
 
-  ipcMain.handle('tools:add-tool', (_, tool) => addUserTool(tool))
-  ipcMain.handle('tools:delete-tool', (_, id) => deleteUserTool(id))
-  ipcMain.handle('tools:add-group', (_, group) => addUserGroup(group))
-  ipcMain.handle('tools:delete-group', (_, id) => deleteUserGroup(id))
+  handle('tools:add-tool', (_, tool) => addUserTool(tool))
+  handle('tools:delete-tool', (_, id) => deleteUserTool(id))
+  handle('tools:add-group', (_, group) => addUserGroup(group))
+  handle('tools:delete-group', (_, id) => deleteUserGroup(id))
 
   // Apply a live tool config change without restarting the server.
   // Called when the user saves a profile that has tools configured while the
   // server is already running.
-  ipcMain.handle('tools:apply-config', (_, llamaConfig) => {
+  handle('tools:apply-config', (_, llamaConfig) => {
     if (!getGatewayPort(llamaConfig?.port ?? 19080)) return false
     const cfg = buildGatewayConfig(llamaConfig)
     updateGatewayConfig(cfg)
@@ -49,7 +49,7 @@ export function registerToolsHandlers({ buildGatewayConfig, userDataDir }) {
 
   // Estimates the per-request context cost of the tool set the given profile
   // config would activate — same resolution path as an actual launch.
-  ipcMain.handle('tools:estimate-context', (_, llamaConfig) => {
+  handle('tools:estimate-context', (_, llamaConfig) => {
     return estimateActiveToolTokens(buildGatewayConfig(llamaConfig))
   })
 }

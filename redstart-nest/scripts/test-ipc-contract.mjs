@@ -35,6 +35,19 @@ register('./auth-test-loader.mjs', import.meta.url)
 
 const { ipcMain } = await import('./electron-stub.mjs')
 
+// Handlers register through ipc/guard.mjs now, which rejects any call whose
+// sender is not the pinned launcher window — including, by design, a call with
+// no window pinned at all. So the suites that INVOKE a handler have to stand up
+// a trusted window first and pass a well-formed event. The adversarial cases
+// (forged sender, subframe, navigated frame, unpinned guard) live in
+// scripts/test-ipc-guard.mjs; here we only need to get through the door.
+const { setTrustedWindow } = await import('../electron/main/ipc/guard.mjs')
+const { makeFakeWindow, trustedEventFor } = await import('./lib/fake-ipc-event.mjs')
+
+const launcher = makeFakeWindow()
+setTrustedWindow(launcher.win)
+const senderEvent = trustedEventFor(launcher)
+
 // ---------------------------------------------------------------------------
 // Tiny test harness (same shape as the sibling suites)
 // ---------------------------------------------------------------------------
@@ -198,7 +211,7 @@ await test('🔍 capabilities:get reports hasConnectionString, never the connect
   const secret = 'postgresql://postgres:hunter2@127.0.0.1:5432/postgres'
   setCapabilityConfig('postgres', { enabled: true, connectionStringEnc: encryptSecret(secret) })
 
-  const caps = await ipcMain.handlers.get('capabilities:get')({})
+  const caps = await ipcMain.handlers.get('capabilities:get')(senderEvent)
   const serialized = JSON.stringify(caps)
 
   assert(caps.postgres.hasConnectionString === true, 'hasConnectionString should be true once configured')
@@ -211,7 +224,7 @@ await test('🔍 capabilities:get reports hasConnectionString, never the connect
 await test('capabilities:get exposes the file-system permission policy under the underscore key', async () => {
   // Storage key stays `file_system` while the channel is hyphenated — the
   // renderer reads this shape, so pin it.
-  const caps = await ipcMain.handlers.get('capabilities:get')({})
+  const caps = await ipcMain.handlers.get('capabilities:get')(senderEvent)
   assert(caps.file_system, 'file_system key missing from the projection')
   assert(typeof caps.file_system.allowWrite === 'boolean', 'allowWrite must be a boolean')
   assert(typeof caps.file_system.allowDestructive === 'boolean', 'allowDestructive must be a boolean')
@@ -220,8 +233,8 @@ await test('capabilities:get exposes the file-system permission policy under the
 
 await test('🔍 capabilities:set-file-system writes to the file_system storage key', async () => {
   const target = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-fs-root-'))
-  await ipcMain.handlers.get('capabilities:set-file-system')({}, { rootDir: target, enabled: true })
-  const caps = await ipcMain.handlers.get('capabilities:get')({})
+  await ipcMain.handlers.get('capabilities:set-file-system')(senderEvent, { rootDir: target, enabled: true })
+  const caps = await ipcMain.handlers.get('capabilities:get')(senderEvent)
   assert(caps.file_system.rootDir === target, 'rootDir did not round-trip through the hyphenated channel')
   assert(caps.file_system.enabled === true, 'enabled did not round-trip')
 })
@@ -229,7 +242,7 @@ await test('🔍 capabilities:set-file-system writes to the file_system storage 
 await test('🔍 capabilities:set-vault cannot smuggle a write policy onto a non-fs capability', async () => {
   const target = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-vault-root-'))
   await ipcMain.handlers.get('capabilities:set-vault')(
-    {},
+    senderEvent,
     { rootDir: target, enabled: true, allowWrite: true, allowDestructive: true }
   )
   const { getCapabilities } = await import('../electron/main/tools-storage.mjs')

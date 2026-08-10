@@ -117,6 +117,9 @@ jobs:
       - name: "Security: preload/main IPC contract"
         run: node scripts/test-ipc-contract.mjs
 
+      - name: "Security: IPC sender guard / trust boundary"
+        run: node scripts/test-ipc-guard.mjs
+
       - name: "Security: MCP capability gating"
         run: node scripts/test-mcp-capabilities.mjs
 
