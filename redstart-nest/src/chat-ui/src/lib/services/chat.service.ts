@@ -27,6 +27,7 @@ import {
 	convertDbMessageToApiChatMessageData,
 	stripReasoningContent
 } from './chat/chat-message-convert';
+import { parseErrorResponse } from './chat/chat-errors';
 
 export class ChatService {
 	/**
@@ -299,7 +300,7 @@ export class ChatService {
 			});
 
 			if (!response.ok) {
-				const error = await ChatService.parseErrorResponse(response);
+				const error = await parseErrorResponse(response);
 
 				if (onError) {
 					onError(error);
@@ -516,103 +517,5 @@ export class ChatService {
 				console.warn('[ChatService] Pre-encode request failed:', error);
 			}
 		}
-	}
-
-	/**
-	 *
-	 *
-	 * Conversion
-	 *
-	 *
-	 */
-
-	/**
-	 * Parses error response and creates appropriate error with context information
-	 * @param response - HTTP response object
-	 * @returns Promise<Error> - Parsed error with context info if available
-	 */
-	private static async parseErrorResponse(
-		response: Response
-	): Promise<Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }> {
-		try {
-			const errorText = await response.text();
-			const errorData: ApiErrorResponse = JSON.parse(errorText);
-
-			const message = errorData.error?.message || 'Unknown server error';
-			const error = new Error(message) as Error & {
-				contextInfo?: { n_prompt_tokens: number; n_ctx: number };
-			};
-			error.name = response.status === 400 ? 'ServerError' : 'HttpError';
-
-			if (errorData.error && 'n_prompt_tokens' in errorData.error && 'n_ctx' in errorData.error) {
-				error.contextInfo = {
-					n_prompt_tokens: errorData.error.n_prompt_tokens,
-					n_ctx: errorData.error.n_ctx
-				};
-			}
-
-			return error;
-		} catch {
-			const fallback = new Error(
-				`Server error (${response.status}): ${response.statusText}`
-			) as Error & {
-				contextInfo?: { n_prompt_tokens: number; n_ctx: number };
-			};
-			fallback.name = 'HttpError';
-
-			return fallback;
-		}
-	}
-
-	/**
-	 * Extracts model name from Chat Completions API response data.
-	 * Handles various response formats including streaming chunks and final responses.
-	 *
-	 * WORKAROUND: In single model mode, llama-server returns a default/incorrect model name
-	 * in the response. We override it with the actual model name from serverStore.
-	 *
-	 * @param data - Raw response data from the Chat Completions API
-	 * @returns Model name string if found, undefined otherwise
-	 * @private
-	 */
-	private static extractModelName(data: unknown): string | undefined {
-		const asRecord = (value: unknown): Record<string, unknown> | undefined => {
-			return typeof value === 'object' && value !== null
-				? (value as Record<string, unknown>)
-				: undefined;
-		};
-
-		const getTrimmedString = (value: unknown): string | undefined => {
-			return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-		};
-
-		const root = asRecord(data);
-		if (!root) return undefined;
-
-		// 1) root (some implementations provide `model` at the top level)
-		const rootModel = getTrimmedString(root.model);
-		if (rootModel) {
-			return rootModel;
-		}
-
-		// 2) streaming choice (delta) or final response (message)
-		const firstChoice = Array.isArray(root.choices) ? asRecord(root.choices[0]) : undefined;
-		if (!firstChoice) {
-			return undefined;
-		}
-
-		// priority: delta.model (first chunk) else message.model (final response)
-		const deltaModel = getTrimmedString(asRecord(firstChoice.delta)?.model);
-		if (deltaModel) {
-			return deltaModel;
-		}
-
-		const messageModel = getTrimmedString(asRecord(firstChoice.message)?.model);
-		if (messageModel) {
-			return messageModel;
-		}
-
-		// avoid guessing from non-standard locations (metadata, etc.)
-		return undefined;
 	}
 }
