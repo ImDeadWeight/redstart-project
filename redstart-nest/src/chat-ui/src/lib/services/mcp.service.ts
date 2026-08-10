@@ -50,15 +50,17 @@ import {
 	sanitizeHeaders,
 	throwIfAborted,
 	isAbortError,
-	createBase64DataUrl,
-	getRequestUrl,
-	getRequestMethod,
-	getRequestBody,
-	summarizeRequestBody,
-	formatDiagnosticErrorMessage,
-	extractJsonRpcMethods,
-	type RequestBodySummary
+	createBase64DataUrl
 } from '$lib/utils';
+import {
+	createLog,
+	createDiagnosticRequestDetails,
+	summarizeError,
+	getBrowserContext,
+	getConnectionHints,
+	createDiagnosticFetch
+} from './mcp/mcp-diagnostics';
+import { createTransport } from './mcp/mcp-transport';
 
 interface ToolResultContentItem {
 	type: string;
@@ -74,260 +76,7 @@ interface ToolCallResult {
 	_meta?: Record<string, unknown>;
 }
 
-interface DiagnosticRequestDetails {
-	url: string;
-	method: string;
-	credentials?: RequestCredentials;
-	mode?: RequestMode;
-	headers: Record<string, string>;
-	body: RequestBodySummary;
-	jsonRpcMethods?: string[];
-}
-
 export class MCPService {
-	/**
-	 * Create a connection log entry for phase tracking.
-	 *
-	 * @param phase - The connection phase this log belongs to
-	 * @param message - Human-readable log message
-	 * @param level - Log severity level (default: INFO)
-	 * @param details - Optional structured details for debugging
-	 * @returns Formatted connection log entry
-	 */
-	private static createLog(
-		phase: MCPConnectionPhase,
-		message: string,
-		level: MCPLogLevel = MCPLogLevel.INFO,
-		details?: unknown
-	): MCPConnectionLog {
-		return {
-			timestamp: new Date(),
-			phase,
-			message,
-			level,
-			details
-		};
-	}
-
-	private static createDiagnosticRequestDetails(
-		input: RequestInfo | URL,
-		init: RequestInit | undefined,
-		baseInit: RequestInit,
-		requestHeaders: Headers,
-		extraRedactedHeaders?: Iterable<string>
-	): DiagnosticRequestDetails {
-		const body = getRequestBody(input, init);
-		const details: DiagnosticRequestDetails = {
-			url: getRequestUrl(input),
-			method: getRequestMethod(input, init, baseInit).toUpperCase(),
-			credentials: init?.credentials ?? baseInit.credentials,
-			mode: init?.mode ?? baseInit.mode,
-			headers: sanitizeHeaders(requestHeaders, extraRedactedHeaders, MCP_PARTIAL_REDACT_HEADERS),
-			body: summarizeRequestBody(body)
-		};
-		const jsonRpcMethods = extractJsonRpcMethods(body);
-
-		if (jsonRpcMethods) {
-			details.jsonRpcMethods = jsonRpcMethods;
-		}
-
-		return details;
-	}
-
-	private static summarizeError(error: unknown): Record<string, unknown> {
-		if (error instanceof Error) {
-			return {
-				name: error.name,
-				message: error.message,
-				cause:
-					error.cause instanceof Error
-						? { name: error.cause.name, message: error.cause.message }
-						: error.cause,
-				stack: error.stack?.split('\n').slice(0, 6).join('\n')
-			};
-		}
-
-		return { value: String(error) };
-	}
-
-	private static getBrowserContext(
-		targetUrl: URL,
-		useProxy: boolean
-	): Record<string, unknown> | undefined {
-		if (typeof window === 'undefined') {
-			return undefined;
-		}
-
-		return {
-			location: window.location.href,
-			origin: window.location.origin,
-			protocol: window.location.protocol,
-			isSecureContext: window.isSecureContext,
-			targetOrigin: targetUrl.origin,
-			targetProtocol: targetUrl.protocol,
-			sameOrigin: window.location.origin === targetUrl.origin,
-			useProxy
-		};
-	}
-
-	private static getConnectionHints(
-		targetUrl: URL,
-		config: MCPServerConfig,
-		error: unknown
-	): string[] {
-		const hints: string[] = [];
-		const message = error instanceof Error ? error.message : String(error);
-		const headerNames = Object.keys(config.headers ?? {});
-
-		if (typeof window !== 'undefined') {
-			if (
-				window.location.protocol === 'https:' &&
-				targetUrl.protocol === 'http:' &&
-				!config.useProxy
-			) {
-				hints.push(
-					'The page is running over HTTPS but the MCP server is HTTP. Browsers often block this as mixed content; enable the proxy or use HTTPS/WSS for the MCP server.'
-				);
-			}
-
-			if (window.location.origin !== targetUrl.origin && !config.useProxy) {
-				hints.push(
-					'This is a cross-origin browser request. If the server is reachable from curl or Node but not from the browser, missing CORS headers are the most likely cause.'
-				);
-			}
-		}
-
-		if (headerNames.length > 0) {
-			hints.push(
-				`Custom request headers are configured (${headerNames.join(', ')}). That triggers a CORS preflight, so the server must allow OPTIONS and include the matching Access-Control-Allow-Headers response.`
-			);
-		}
-
-		if (config.credentials && config.credentials !== 'omit') {
-			hints.push(
-				'Credentials are enabled for this connection. Cross-origin credentialed requests need Access-Control-Allow-Credentials: true and cannot use a wildcard Access-Control-Allow-Origin.'
-			);
-		}
-
-		if (message.includes('Failed to fetch')) {
-			hints.push(
-				'"Failed to fetch" is a browser-level network failure. Common causes are CORS rejection, mixed-content blocking, certificate/TLS errors, DNS failures, or nothing listening on the target port.'
-			);
-		}
-
-		return hints;
-	}
-
-	private static createDiagnosticFetch(
-		serverName: string,
-		config: MCPServerConfig,
-		baseInit: RequestInit,
-		targetUrl: URL,
-		useProxy: boolean,
-		onLog?: (log: MCPConnectionLog) => void
-	): {
-		fetch: typeof fetch;
-		disable: () => void;
-	} {
-		let enabled = true;
-		const logIfEnabled = (log: MCPConnectionLog) => {
-			if (enabled) {
-				onLog?.(log);
-			}
-		};
-
-		return {
-			fetch: async (input, init) => {
-				const startedAt = performance.now();
-				const requestHeaders = new Headers(baseInit.headers);
-
-				if (typeof Request !== 'undefined' && input instanceof Request) {
-					for (const [key, value] of input.headers.entries()) {
-						requestHeaders.set(key, value);
-					}
-				}
-
-				if (init?.headers) {
-					for (const [key, value] of new Headers(init.headers).entries()) {
-						requestHeaders.set(key, value);
-					}
-				}
-
-				const request = this.createDiagnosticRequestDetails(
-					input,
-					init,
-					baseInit,
-					requestHeaders,
-					Object.keys(config.headers ?? {})
-				);
-				const { method, url } = request;
-
-				logIfEnabled(
-					this.createLog(
-						MCPConnectionPhase.INITIALIZING,
-						`HTTP ${method} ${url}`,
-						MCPLogLevel.INFO,
-						{
-							serverName,
-							request
-						}
-					)
-				);
-
-				try {
-					const response = await fetch(input, {
-						...baseInit,
-						...init,
-						headers: requestHeaders
-					});
-					const durationMs = Math.round(performance.now() - startedAt);
-
-					logIfEnabled(
-						this.createLog(
-							MCPConnectionPhase.INITIALIZING,
-							`HTTP ${response.status} ${method} ${url} (${durationMs}ms)`,
-							response.ok ? MCPLogLevel.INFO : MCPLogLevel.WARN,
-							{
-								response: {
-									url,
-									status: response.status,
-									statusText: response.statusText,
-									headers: sanitizeHeaders(response.headers, undefined, MCP_PARTIAL_REDACT_HEADERS),
-									durationMs
-								}
-							}
-						)
-					);
-
-					return response;
-				} catch (error) {
-					const durationMs = Math.round(performance.now() - startedAt);
-
-					logIfEnabled(
-						this.createLog(
-							MCPConnectionPhase.ERROR,
-							`HTTP ${method} ${url} failed: ${formatDiagnosticErrorMessage(error)}`,
-							MCPLogLevel.ERROR,
-							{
-								serverName,
-								request,
-								error: this.summarizeError(error),
-								browser: this.getBrowserContext(targetUrl, useProxy),
-								hints: this.getConnectionHints(targetUrl, config, error),
-								durationMs
-							}
-						)
-					);
-
-					throw error;
-				}
-			},
-			disable: () => {
-				enabled = false;
-			}
-		};
-	}
-
 	/**
 	 * Detect if an error indicates an expired/invalidated MCP session.
 	 * Per MCP spec 2025-11-25: HTTP 404 means session invalidated, client MUST
@@ -338,175 +87,6 @@ export class MCPService {
 	 */
 	static isSessionExpiredError(error: unknown): boolean {
 		return error instanceof StreamableHTTPError && error.code === 404;
-	}
-
-	/**
-	 * Create transport based on server configuration.
-	 * Supports WebSocket, StreamableHTTP (modern), and SSE (legacy) transports.
-	 * When `useProxy` is enabled, routes HTTP requests through llama-server's CORS proxy.
-	 *
-	 * **Fallback Order:**
-	 * 1. WebSocket — if explicitly configured (no CORS proxy support)
-	 * 2. StreamableHTTP — default for HTTP connections
-	 * 3. SSE — automatic fallback if StreamableHTTP fails
-	 *
-	 * @param config - Server configuration with url, transport type, proxy, and auth settings
-	 * @returns Object containing the created transport and the transport type used
-	 * @throws {Error} If url is missing, WebSocket + proxy combination, or all transports fail
-	 */
-	static createTransport(
-		serverName: string,
-		config: MCPServerConfig,
-		onLog?: (log: MCPConnectionLog) => void
-	): {
-		transport: Transport;
-		type: MCPTransportType;
-		stopPhaseLogging: () => void;
-	} {
-		if (config.transport === MCPTransportType.STDIO) {
-			// Defense in depth: the UI never offers stdio entries outside the Twig
-			// desktop shell, but if one reaches us anyway, fail with a clear error
-			// instead of a missing-url message. The diagnostic-fetch machinery is
-			// HTTP-only and does not apply here.
-			const api = twigMcpApi();
-			if (!api) {
-				throw new Error(
-					'Local stdio MCP servers are only available in the Redstart Twig desktop app'
-				);
-			}
-
-			const serverId = config.stdioId ?? serverName;
-
-			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
-				console.log(`[MCPService] Creating stdio transport for local server "${serverId}"`);
-			}
-
-			onLog?.(
-				this.createLog(
-					MCPConnectionPhase.TRANSPORT_CREATING,
-					`Starting local stdio server "${serverId}"`
-				)
-			);
-
-			return {
-				transport: new IpcStdioTransport(serverId, api),
-				type: MCPTransportType.STDIO,
-				stopPhaseLogging: () => {}
-			};
-		}
-
-		if (!config.url) {
-			throw new Error('MCP server configuration is missing url');
-		}
-
-		const useProxy = config.useProxy ?? false;
-		const requestInit: RequestInit = {};
-
-		if (config.headers) {
-			requestInit.headers = config.useProxy ? buildProxiedHeaders(config.headers) : config.headers;
-		}
-
-		// Always merge in the Redstart auth headers (session token or API key), not
-		// just for proxied connections — the built-in Redstart MCP server enforces
-		// the same auth gate as the gateway, and connects directly (no proxy) in
-		// the common case. Server-specific custom headers still take precedence.
-		requestInit.headers = {
-			...getAuthHeaders(),
-			...(requestInit.headers as Record<string, string>)
-		};
-
-		if (config.credentials) {
-			requestInit.credentials = config.credentials;
-		}
-
-		if (config.transport === MCPTransportType.WEBSOCKET) {
-			if (useProxy) {
-				throw new Error(
-					'WebSocket transport is not supported when using CORS proxy. Use HTTP transport instead.'
-				);
-			}
-
-			const url = new URL(config.url);
-
-			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
-				console.log(`[MCPService] Creating WebSocket transport for ${url.href}`);
-			}
-
-			return {
-				transport: new WebSocketClientTransport(url),
-				type: MCPTransportType.WEBSOCKET,
-				stopPhaseLogging: () => {}
-			};
-		}
-
-		const url = useProxy ? buildProxiedUrl(config.url) : new URL(config.url);
-		const { fetch: diagnosticFetch, disable: stopPhaseLogging } = this.createDiagnosticFetch(
-			serverName,
-			config,
-			requestInit,
-			url,
-			useProxy,
-			onLog
-		);
-
-		if (useProxy && import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
-			console.log(`[MCPService] Using CORS proxy for ${config.url} -> ${url.href}`);
-		}
-
-		// An explicitly detected SSE endpoint goes straight to the SSE transport.
-		// The StreamableHTTP attempt below is not a safe probe for it: the
-		// constructor succeeds for any URL, so the catch never runs, and the
-		// mismatch only surfaces as a POST 404 at connect time — which reads as
-		// "server unreachable" rather than "wrong transport".
-		if (config.transport === MCPTransportType.SSE) {
-			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
-				console.log(`[MCPService] Creating SSE transport for ${url.href}`);
-			}
-
-			return {
-				transport: new SSEClientTransport(url, {
-					requestInit,
-					fetch: diagnosticFetch,
-					eventSourceInit: { fetch: diagnosticFetch }
-				}),
-				type: MCPTransportType.SSE,
-				stopPhaseLogging
-			};
-		}
-
-		try {
-			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
-				console.log(`[MCPService] Creating StreamableHTTP transport for ${url.href}`);
-			}
-
-			return {
-				transport: new StreamableHTTPClientTransport(url, {
-					requestInit,
-					fetch: diagnosticFetch
-				}),
-				type: MCPTransportType.STREAMABLE_HTTP,
-				stopPhaseLogging
-			};
-		} catch (httpError) {
-			console.warn(`[MCPService] StreamableHTTP failed, trying SSE transport...`, httpError);
-
-			try {
-				return {
-					transport: new SSEClientTransport(url, {
-						requestInit,
-						fetch: diagnosticFetch,
-						eventSourceInit: { fetch: diagnosticFetch }
-					}),
-					type: MCPTransportType.SSE,
-					stopPhaseLogging
-				};
-			} catch (sseError) {
-				const httpMsg = httpError instanceof Error ? httpError.message : String(httpError);
-				const sseMsg = sseError instanceof Error ? sseError.message : String(sseError);
-
-				throw new Error(`Failed to create transport. StreamableHTTP: ${httpMsg}; SSE: ${sseMsg}`);
-			}
-		}
 	}
 
 	/**
@@ -571,7 +151,7 @@ export class MCPService {
 		// Phase: Creating transport
 		onPhase?.(
 			MCPConnectionPhase.TRANSPORT_CREATING,
-			this.createLog(
+			createLog(
 				MCPConnectionPhase.TRANSPORT_CREATING,
 				`Creating transport for ${serverConfig.url ?? `local stdio server "${serverName}"`}`
 			)
@@ -585,7 +165,7 @@ export class MCPService {
 			transport,
 			type: transportType,
 			stopPhaseLogging
-		} = this.createTransport(serverName, serverConfig, (log) => onPhase?.(log.phase, log));
+		} = createTransport(serverName, serverConfig, (log) => onPhase?.(log.phase, log));
 
 		// Setup reconnection handler for connection-oriented transports. For
 		// stdio, the manager restarts a crashed child but the fresh process has
@@ -599,7 +179,7 @@ export class MCPService {
 				console.log(`[MCPService][${serverName}] Connection closed, notifying for reconnection`);
 				onPhase?.(
 					MCPConnectionPhase.DISCONNECTED,
-					this.createLog(MCPConnectionPhase.DISCONNECTED, `Connection closed (${transportType})`)
+					createLog(MCPConnectionPhase.DISCONNECTED, `Connection closed (${transportType})`)
 				);
 			};
 		}
@@ -607,7 +187,7 @@ export class MCPService {
 		// Phase: Transport ready
 		onPhase?.(
 			MCPConnectionPhase.TRANSPORT_READY,
-			this.createLog(MCPConnectionPhase.TRANSPORT_READY, `Transport ready (${transportType})`),
+			createLog(MCPConnectionPhase.TRANSPORT_READY, `Transport ready (${transportType})`),
 			{ transportType }
 		);
 
@@ -645,12 +225,12 @@ export class MCPService {
 		client.onerror = (error) => {
 			onPhase?.(
 				MCPConnectionPhase.ERROR,
-				this.createLog(
+				createLog(
 					MCPConnectionPhase.ERROR,
 					`Protocol error: ${error.message}`,
 					MCPLogLevel.ERROR,
 					{
-						error: this.summarizeError(error)
+						error: summarizeError(error)
 					}
 				)
 			);
@@ -659,7 +239,7 @@ export class MCPService {
 		// Phase: Initializing
 		onPhase?.(
 			MCPConnectionPhase.INITIALIZING,
-			this.createLog(MCPConnectionPhase.INITIALIZING, 'Sending initialize request...')
+			createLog(MCPConnectionPhase.INITIALIZING, 'Sending initialize request...')
 		);
 
 		try {
@@ -679,14 +259,14 @@ export class MCPService {
 
 			onPhase?.(
 				MCPConnectionPhase.ERROR,
-				this.createLog(
+				createLog(
 					MCPConnectionPhase.ERROR,
 					`Connection failed during initialize: ${
 						error instanceof Error ? error.message : String(error)
 					}`,
 					MCPLogLevel.ERROR,
 					{
-						error: this.summarizeError(error),
+						error: summarizeError(error),
 						config: {
 							serverName,
 							configuredUrl: serverConfig.url,
@@ -700,8 +280,8 @@ export class MCPService {
 							),
 							credentials: serverConfig.credentials
 						},
-						browser: url ? this.getBrowserContext(url, serverConfig.useProxy ?? false) : undefined,
-						hints: url ? this.getConnectionHints(url, serverConfig, error) : []
+						browser: url ? getBrowserContext(url, serverConfig.useProxy ?? false) : undefined,
+						hints: url ? getConnectionHints(url, serverConfig, error) : []
 					}
 				)
 			);
@@ -717,7 +297,7 @@ export class MCPService {
 		// Phase: Capabilities exchanged
 		onPhase?.(
 			MCPConnectionPhase.CAPABILITIES_EXCHANGED,
-			this.createLog(
+			createLog(
 				MCPConnectionPhase.CAPABILITIES_EXCHANGED,
 				'Capabilities exchanged successfully',
 				MCPLogLevel.INFO,
@@ -737,7 +317,7 @@ export class MCPService {
 		// Phase: Listing tools
 		onPhase?.(
 			MCPConnectionPhase.LISTING_TOOLS,
-			this.createLog(MCPConnectionPhase.LISTING_TOOLS, 'Listing available tools...')
+			createLog(MCPConnectionPhase.LISTING_TOOLS, 'Listing available tools...')
 		);
 
 		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
@@ -760,7 +340,7 @@ export class MCPService {
 		// Phase: Connected
 		onPhase?.(
 			MCPConnectionPhase.CONNECTED,
-			this.createLog(
+			createLog(
 				MCPConnectionPhase.CONNECTED,
 				`Connection established with ${tools.length} tools (${connectionTimeMs}ms)`
 			)
