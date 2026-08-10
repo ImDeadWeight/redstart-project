@@ -21,6 +21,7 @@
  */
 
 import { ChatService } from '$lib/services';
+import { convertDbMessageToApiChatMessageData } from '$lib/services/chat/chat-message-convert';
 import { config } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
@@ -457,7 +458,7 @@ class AgenticStore {
 			await Promise.all(
 				messages.map((msg) => {
 					if ('id' in msg && 'convId' in msg && 'timestamp' in msg)
-						return ChatService.convertDbMessageToApiChatMessageData(
+						return convertDbMessageToApiChatMessageData(
 							msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
 						);
 					return msg as ApiChatMessageData;

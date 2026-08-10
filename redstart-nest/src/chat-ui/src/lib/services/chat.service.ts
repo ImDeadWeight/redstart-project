@@ -3,11 +3,7 @@ import { resolveApiPath } from '$lib/utils/api-fetch';
 import { isAbortError } from '$lib/utils/abort';
 import {
 	ATTACHMENT_LABEL_PDF_FILE,
-	ATTACHMENT_LABEL_MCP_PROMPT,
-	ATTACHMENT_LABEL_MCP_RESOURCE,
-	LEGACY_AGENTIC_REGEX,
 	REASONING_EFFORT_TOKENS,
-	SETTINGS_KEYS,
 	API_CHAT,
 	API_SLOTS,
 	CONTROL_ACTION
@@ -15,25 +11,22 @@ import {
 import {
 	AttachmentType,
 	ContentPartType,
-	FileTypeAudio,
 	MessageRole,
-	MimeTypeAudio,
 	ReasoningFormat
 } from '$lib/enums';
 import type {
 	ApiChatMessageContentPart,
-	ApiChatMessageData,
-	ApiChatCompletionToolCall
+	ApiChatMessageData
 } from '$lib/types/api';
-import type {
-	DatabaseMessageExtraMcpPrompt,
-	DatabaseMessageExtraMcpResource
-} from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
 import {
 	handleStreamResponse,
 	handleNonStreamResponse
 } from './chat/chat-stream';
+import {
+	convertDbMessageToApiChatMessageData,
+	stripReasoningContent
+} from './chat/chat-message-convert';
 
 export class ChatService {
 	/**
@@ -156,7 +149,7 @@ export class ChatService {
 					if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
 						const dbMsg = msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
 
-						return ChatService.convertDbMessageToApiChatMessageData(dbMsg);
+						return convertDbMessageToApiChatMessageData(dbMsg);
 					} else {
 						return msg as ApiChatMessageData;
 					}
@@ -470,7 +463,7 @@ export class ChatService {
 			await Promise.all(
 				messages.map((msg) => {
 					if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
-						return ChatService.convertDbMessageToApiChatMessageData(
+						return convertDbMessageToApiChatMessageData(
 							msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
 						);
 					}
@@ -492,7 +485,7 @@ export class ChatService {
 			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
 				const mapped: Record<string, unknown> = {
 					role: msg.role,
-					content: excludeReasoning ? ChatService.stripReasoningContent(msg.content) : msg.content,
+					content: excludeReasoning ? stripReasoningContent(msg.content) : msg.content,
 					tool_calls: msg.tool_calls,
 					tool_call_id: msg.tool_call_id
 				};
@@ -532,241 +525,6 @@ export class ChatService {
 	 *
 	 *
 	 */
-
-	/**
-	 * Converts a database message with attachments to API chat message format.
-	 * Processes various attachment types (images, text files, PDFs) and formats them
-	 * as content parts suitable for the chat completion API.
-	 *
-	 * @param message - Database message object with optional extra attachments
-	 * @param message.content - The text content of the message
-	 * @param message.role - The role of the message sender (user, assistant, system)
-	 * @param message.extra - Optional array of message attachments (images, files, etc.)
-	 * @returns {ApiChatMessageData} object formatted for the chat completion API
-	 * @static
-	 */
-	static async convertDbMessageToApiChatMessageData(
-		message: DatabaseMessage & { extra?: DatabaseMessageExtra[] }
-	): Promise<ApiChatMessageData> {
-		// Handle tool result messages (role: 'tool')
-		if (message.role === MessageRole.TOOL && message.toolCallId) {
-			return {
-				role: MessageRole.TOOL,
-				content: message.content,
-				tool_call_id: message.toolCallId
-			};
-		}
-
-		// Parse tool calls for assistant messages
-		let toolCalls: ApiChatCompletionToolCall[] | undefined;
-		if (message.toolCalls) {
-			try {
-				toolCalls = JSON.parse(message.toolCalls);
-			} catch {
-				// Ignore parse errors for malformed tool calls
-			}
-		}
-
-		if (!message.extra || message.extra.length === 0) {
-			const result: ApiChatMessageData = {
-				role: message.role as MessageRole,
-				content: message.content
-			};
-
-			if (message.reasoningContent) {
-				result.reasoning_content = message.reasoningContent;
-			}
-
-			if (toolCalls && toolCalls.length > 0) {
-				result.tool_calls = toolCalls;
-			}
-
-			return result;
-		}
-
-		const contentParts: ApiChatMessageContentPart[] = [];
-
-		const textFiles = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraTextFile =>
-				extra.type === AttachmentType.TEXT
-		);
-
-		for (const textFile of textFiles) {
-			contentParts.push({
-				type: ContentPartType.TEXT,
-				text: formatAttachmentText('File', textFile.name, textFile.content)
-			});
-		}
-
-		// Handle legacy 'context' type from the old UI (pasted content)
-		const legacyContextFiles = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraLegacyContext =>
-				extra.type === AttachmentType.LEGACY_CONTEXT
-		);
-
-		for (const legacyContextFile of legacyContextFiles) {
-			contentParts.push({
-				type: ContentPartType.TEXT,
-				text: formatAttachmentText('File', legacyContextFile.name, legacyContextFile.content)
-			});
-		}
-
-		const imageFiles = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile =>
-				extra.type === AttachmentType.IMAGE
-		);
-
-		for (const image of imageFiles) {
-			const maxImageResolution = settingsStore.getConfig(SETTINGS_KEYS.MAX_IMAGE_RESOLUTION);
-
-			// Caps the resolution and bakes the jpeg exif orientation in one pass,
-			// untouched images pass through as is
-			const base64Url = await capImageDataURLSize(image.base64Url, maxImageResolution);
-
-			contentParts.push({
-				type: ContentPartType.IMAGE_URL,
-				image_url: { url: base64Url }
-			});
-		}
-
-		const audioFiles = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraAudioFile =>
-				extra.type === AttachmentType.AUDIO
-		);
-
-		for (const audio of audioFiles) {
-			contentParts.push({
-				type: ContentPartType.INPUT_AUDIO,
-				input_audio: {
-					data: audio.base64Data,
-					format: getAudioInputFormat(audio.mimeType)
-				}
-			});
-		}
-
-		if (message.content) {
-			contentParts.push({
-				type: ContentPartType.TEXT,
-				text: message.content
-			});
-		}
-
-		const videoFiles = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraVideoFile =>
-				extra.type === AttachmentType.VIDEO
-		);
-
-		for (const video of videoFiles) {
-			contentParts.push({
-				type: ContentPartType.INPUT_VIDEO,
-				input_video: {
-					data: video.base64Data,
-					format: video.mimeType.includes('mp4')
-						? 'mp4'
-						: video.mimeType.includes('ogg')
-							? 'ogg'
-							: 'auto'
-				}
-			});
-		}
-
-		const pdfFiles = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraPdfFile =>
-				extra.type === AttachmentType.PDF
-		);
-
-		for (const pdfFile of pdfFiles) {
-			if (pdfFile.processedAsImages && pdfFile.images) {
-				for (let i = 0; i < pdfFile.images.length; i++) {
-					contentParts.push({
-						type: ContentPartType.IMAGE_URL,
-						image_url: { url: pdfFile.images[i] }
-					});
-				}
-			} else {
-				contentParts.push({
-					type: ContentPartType.TEXT,
-					text: formatAttachmentText(ATTACHMENT_LABEL_PDF_FILE, pdfFile.name, pdfFile.content)
-				});
-			}
-		}
-
-		const mcpPrompts = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraMcpPrompt =>
-				extra.type === AttachmentType.MCP_PROMPT
-		);
-
-		for (const mcpPrompt of mcpPrompts) {
-			contentParts.push({
-				type: ContentPartType.TEXT,
-				text: formatAttachmentText(
-					ATTACHMENT_LABEL_MCP_PROMPT,
-					mcpPrompt.name,
-					mcpPrompt.content,
-					mcpPrompt.serverName
-				)
-			});
-		}
-
-		const mcpResources = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraMcpResource =>
-				extra.type === AttachmentType.MCP_RESOURCE
-		);
-
-		for (const mcpResource of mcpResources) {
-			contentParts.push({
-				type: ContentPartType.TEXT,
-				text: formatAttachmentText(
-					ATTACHMENT_LABEL_MCP_RESOURCE,
-					mcpResource.name,
-					mcpResource.content,
-					mcpResource.serverName
-				)
-			});
-		}
-
-		const result: ApiChatMessageData = {
-			role: message.role as MessageRole,
-			content: contentParts
-		};
-		if (message.reasoningContent) {
-			result.reasoning_content = message.reasoningContent;
-		}
-		if (toolCalls && toolCalls.length > 0) {
-			result.tool_calls = toolCalls;
-		}
-		return result;
-	}
-
-	/**
-	 *
-	 *
-	 * Utilities
-	 *
-	 *
-	 */
-
-	/**
-	 * Strips legacy inline reasoning content tags from message content.
-	 * Handles both plain string content and multipart content arrays.
-	 */
-	private static stripReasoningContent(
-		content: string | ApiChatMessageContentPart[]
-	): string | ApiChatMessageContentPart[] {
-		const stripFromString = (text: string): string =>
-			text.replace(LEGACY_AGENTIC_REGEX.REASONING_BLOCK, '').trim();
-
-		if (typeof content === 'string') {
-			return stripFromString(content);
-		}
-
-		return content.map((part) => {
-			if (part.type === ContentPartType.TEXT && part.text) {
-				return { ...part, text: stripFromString(part.text) };
-			}
-			return part;
-		});
-	}
 
 	/**
 	 * Parses error response and creates appropriate error with context information
