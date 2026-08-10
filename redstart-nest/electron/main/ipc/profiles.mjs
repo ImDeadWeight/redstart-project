@@ -2,36 +2,36 @@
 // delete) plus hardware-derived default generation.
 //
 // readProfiles/writeProfiles still live in index.mjs and are threaded via deps.
-import { ipcMain } from 'electron'
+import { handle } from './guard.mjs'
 
 export function registerProfilesHandlers({ readProfiles, writeProfiles }) {
   // --- Profiles ---
 
-  ipcMain.handle('profiles:list', () => {
+  handle('profiles:list', () => {
     const data = readProfiles()
     return Object.keys(data.profiles)
   })
 
-  ipcMain.handle('profiles:save', (_, name, config) => {
+  handle('profiles:save', (_, name, config) => {
     const data = readProfiles()
     data.profiles[name] = config
     writeProfiles(data)
     return true
   })
 
-  ipcMain.handle('profiles:load', (_, name) => {
+  handle('profiles:load', (_, name) => {
     const data = readProfiles()
     return data.profiles[name] || null
   })
 
-  ipcMain.handle('profiles:delete', (_, name) => {
+  handle('profiles:delete', (_, name) => {
     const data = readProfiles()
     delete data.profiles[name]
     writeProfiles(data)
     return true
   })
 
-  ipcMain.handle('profiles:generate-defaults', (_, hardware) => {
+  handle('profiles:generate-defaults', (_, hardware) => {
     const { cpu } = hardware
 
     // Physical cores give better LLM throughput than logical (hyperthreads

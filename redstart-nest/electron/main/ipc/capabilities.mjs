@@ -5,15 +5,37 @@
 // Global config, per-profile activation via tools.activeToolIds (see
 // buildGatewayConfig). Secrets never round-trip to the renderer in plaintext.
 // refreshLiveToolsConfig lives in index.mjs and is threaded via deps.
-import { ipcMain, dialog } from 'electron'
+import { dialog } from 'electron'
+import { handle } from './guard.mjs'
 import { getCapabilities, setCapabilityConfig } from '../tools-storage.mjs'
 import { encryptSecret, decryptSecret } from '../secrets.mjs'
 import { testConnection as testPostgresConnection } from '../postgres-tool.mjs'
+import { isPlainObject, isAbsolutePath, optional } from './validate.mjs'
+import { logEvent } from '../logger.mjs'
+
+// Every setter below takes one config object and destructures it directly.
+// Destructuring a non-object throws a bare TypeError out through the IPC
+// channel; this says what actually happened and leaves the stored config
+// untouched. A capability root is a containment boundary for a model-facing
+// tool, so a relative one — which would resolve against whatever cwd the main
+// process happens to have — is refused rather than normalized.
+function checkConfig(channel, config, rootField) {
+  if (!isPlainObject(config)) return `${channel} expects a config object.`
+  if (rootField && !optional(config[rootField], isAbsolutePath)) {
+    return `${rootField} must be an absolute path.`
+  }
+  return null
+}
+
+function refuse(channel, reason) {
+  logEvent('security', 'ipc_argument_rejected', { channel, reason })
+  return { ok: false, error: reason }
+}
 
 export function registerCapabilitiesHandlers({ refreshLiveToolsConfig }) {
   // --- Capabilities ---
 
-  ipcMain.handle('capabilities:get', () => {
+  handle('capabilities:get', () => {
     const caps = getCapabilities()
     return {
       postgres: {
@@ -53,7 +75,10 @@ export function registerCapabilitiesHandlers({ refreshLiveToolsConfig }) {
     }
   })
 
-  ipcMain.handle('capabilities:set-postgres', (_, { connectionString, maxRows, enabled }) => {
+  handle('capabilities:set-postgres', (_, config) => {
+    const bad = checkConfig('capabilities:set-postgres', config)
+    if (bad) return refuse('capabilities:set-postgres', bad)
+    const { connectionString, maxRows, enabled } = config
     const patch = {}
     if (typeof enabled === 'boolean') patch.enabled = enabled
     if (typeof maxRows === 'number') patch.maxRows = maxRows
@@ -69,7 +94,7 @@ export function registerCapabilitiesHandlers({ refreshLiveToolsConfig }) {
     return { ok: true }
   })
 
-  ipcMain.handle('capabilities:test-postgres', async (_, connectionString) => {
+  handle('capabilities:test-postgres', async (_, connectionString) => {
     let target = connectionString
     if (!target) {
       const caps = getCapabilities()
@@ -83,12 +108,15 @@ export function registerCapabilitiesHandlers({ refreshLiveToolsConfig }) {
     return await testPostgresConnection(target)
   })
 
-  ipcMain.handle('capabilities:select-documents-folder', async () => {
+  handle('capabilities:select-documents-folder', async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
     return result.canceled ? null : result.filePaths[0]
   })
 
-  ipcMain.handle('capabilities:set-documents-folder', (_, { outputDir, enabled }) => {
+  handle('capabilities:set-documents-folder', (_, config) => {
+    const bad = checkConfig('capabilities:set-documents-folder', config, 'outputDir')
+    if (bad) return refuse('capabilities:set-documents-folder', bad)
+    const { outputDir, enabled } = config
     const patch = {}
     if (typeof enabled === 'boolean') patch.enabled = enabled
     if (outputDir) patch.outputDir = outputDir
@@ -97,12 +125,15 @@ export function registerCapabilitiesHandlers({ refreshLiveToolsConfig }) {
     return { ok: true }
   })
 
-  ipcMain.handle('capabilities:select-sqlite-folder', async () => {
+  handle('capabilities:select-sqlite-folder', async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
     return result.canceled ? null : result.filePaths[0]
   })
 
-  ipcMain.handle('capabilities:set-sqlite', (_, { rootDir, maxRows, enabled }) => {
+  handle('capabilities:set-sqlite', (_, config) => {
+    const bad = checkConfig('capabilities:set-sqlite', config, 'rootDir')
+    if (bad) return refuse('capabilities:set-sqlite', bad)
+    const { rootDir, maxRows, enabled } = config
     const patch = {}
     if (typeof enabled === 'boolean') patch.enabled = enabled
     if (typeof maxRows === 'number') patch.maxRows = maxRows
@@ -112,7 +143,10 @@ export function registerCapabilitiesHandlers({ refreshLiveToolsConfig }) {
     return { ok: true }
   })
 
-  ipcMain.handle('capabilities:set-scholar', (_, { venueFilter, enabled }) => {
+  handle('capabilities:set-scholar', (_, config) => {
+    const bad = checkConfig('capabilities:set-scholar', config)
+    if (bad) return refuse('capabilities:set-scholar', bad)
+    const { venueFilter, enabled } = config
     const patch = {}
     if (typeof enabled === 'boolean') patch.enabled = enabled
     if (venueFilter !== undefined) patch.venueFilter = String(venueFilter || '').trim() || null
@@ -127,11 +161,15 @@ export function registerCapabilitiesHandlers({ refreshLiveToolsConfig }) {
   // the storage key stays the underscore form.
   for (const cap of ['vault', 'git', 'file_system']) {
     const slug = cap.replace(/_/g, '-')   // file_system -> file-system; vault/git unchanged
-    ipcMain.handle(`capabilities:select-${slug}-folder`, async () => {
+    handle(`capabilities:select-${slug}-folder`, async () => {
       const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
       return result.canceled ? null : result.filePaths[0]
     })
-    ipcMain.handle(`capabilities:set-${slug}`, (_, { rootDir, enabled, allowWrite, allowDestructive }) => {
+    handle(`capabilities:set-${slug}`, (_, config) => {
+      const channel = `capabilities:set-${slug}`
+      const bad = checkConfig(channel, config, 'rootDir')
+      if (bad) return refuse(channel, bad)
+      const { rootDir, enabled, allowWrite, allowDestructive } = config
       const patch = {}
       if (typeof enabled === 'boolean') patch.enabled = enabled
       if (rootDir) patch.rootDir = rootDir

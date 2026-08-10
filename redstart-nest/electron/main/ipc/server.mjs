@@ -7,7 +7,7 @@
 // as module globals here — both sides mutate the same object. mainWindow is
 // reassigned in index.mjs after this module registers, so it is read through a
 // getMainWindow() getter, never captured by value.
-import { ipcMain } from 'electron'
+import { handle } from './guard.mjs'
 import { spawn } from 'child_process'
 import * as path from 'path'
 import { startGateway, stopGateway, getGatewayPort } from '../tools-gateway.mjs'
@@ -34,14 +34,14 @@ export function registerServerHandlers({
 }) {
   // --- Llama command preview ---
 
-  ipcMain.handle('llama:generate-command', (_, config) => {
+  handle('llama:generate-command', (_, config) => {
     const args = buildArgs(config)
     return `llama-server.exe ${args.join(' ')}`
   })
 
   // --- Server launch ---
 
-  ipcMain.handle('llama:launch', async (_, config) => {
+  handle('llama:launch', async (_, config) => {
     if (serverState.process) return { success: false, error: 'Server is already running' }
 
     const binaryPath = resolveBinary()
@@ -152,7 +152,7 @@ export function registerServerHandlers({
 
   // --- Server stop (graceful) ---
 
-  ipcMain.handle('server:stop', async () => {
+  handle('server:stop', async () => {
     stopGateway()
     stopMcpServer()
     stopFilesystemProvider()
@@ -169,7 +169,7 @@ export function registerServerHandlers({
 
   // --- Server status ---
 
-  ipcMain.handle('server:status', async (_, config) => {
+  handle('server:status', async (_, config) => {
     if (!serverState.process) return { running: false, health: null }
     try {
       const res = await fetch(`http://127.0.0.1:${config?.port || 19080}/health`, {
@@ -184,5 +184,5 @@ export function registerServerHandlers({
 
   // --- Network info ---
 
-  ipcMain.handle('server:get-ip', () => getLocalIp())
+  handle('server:get-ip', () => getLocalIp())
 }

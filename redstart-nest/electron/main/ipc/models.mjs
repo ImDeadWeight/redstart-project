@@ -11,12 +11,14 @@
 // That is the reason it needs no account or permission model. If model
 // management ever moves to the clients (see the roadmap's headless work), that
 // assumption is the first thing that stops being true.
-import { ipcMain, shell } from 'electron'
+import { shell } from 'electron'
+import { handle } from './guard.mjs'
 import * as fsp from 'fs/promises'
 import * as path from 'path'
 
 import { searchModels, getModelDetail, TRUSTED_PUBLISHERS } from '../hf-catalog.mjs'
 import { downloadArtifact, diskSpaceFor, discardPartials, PART_SUFFIX } from '../model-download.mjs'
+import { isPlainObject, isNonEmptyString, optional } from './validate.mjs'
 
 // Progress fires per chunk, which is thousands of times a second on a fast
 // link. The renderer only needs enough to animate a bar.
@@ -38,9 +40,9 @@ export function registerModelsHandlers({ resolveModelsDir, ensureModelsDir, getM
 
   // --- Catalog ---
 
-  ipcMain.handle('models:publishers', () => TRUSTED_PUBLISHERS)
+  handle('models:publishers', () => TRUSTED_PUBLISHERS)
 
-  ipcMain.handle('models:search', async (_, opts) => {
+  handle('models:search', async (_, opts) => {
     try {
       return { ok: true, models: await searchModels(opts || {}) }
     } catch (err) {
@@ -48,7 +50,7 @@ export function registerModelsHandlers({ resolveModelsDir, ensureModelsDir, getM
     }
   })
 
-  ipcMain.handle('models:detail', async (_, repoId) => {
+  handle('models:detail', async (_, repoId) => {
     try {
       return { ok: true, detail: await getModelDetail(repoId) }
     } catch (err) {
@@ -58,7 +60,7 @@ export function registerModelsHandlers({ resolveModelsDir, ensureModelsDir, getM
 
   // --- Local storage ---
 
-  ipcMain.handle('models:local', async () => {
+  handle('models:local', async () => {
     const dir = resolveModelsDir()
     try {
       ensureModelsDir?.()
@@ -86,7 +88,7 @@ export function registerModelsHandlers({ resolveModelsDir, ensureModelsDir, getM
     }
   })
 
-  ipcMain.handle('models:disk-space', async () => {
+  handle('models:disk-space', async () => {
     const dir = resolveModelsDir()
     try {
       ensureModelsDir?.()
@@ -96,14 +98,14 @@ export function registerModelsHandlers({ resolveModelsDir, ensureModelsDir, getM
     }
   })
 
-  ipcMain.handle('models:reveal-folder', async () => {
+  handle('models:reveal-folder', async () => {
     const dir = resolveModelsDir()
     ensureModelsDir?.()
     await shell.openPath(dir)
     return dir
   })
 
-  ipcMain.handle('models:delete-local', async (_, name) => {
+  handle('models:delete-local', async (_, name) => {
     // Only ever a bare name from our own listing, resolved against the models
     // folder — never a path from the renderer.
     if (typeof name !== 'string' || !name || name !== path.basename(name)) {
@@ -128,7 +130,23 @@ export function registerModelsHandlers({ resolveModelsDir, ensureModelsDir, getM
 
   // --- Download ---
 
-  ipcMain.handle('models:download', async (_, { repoId, revision, artifact } = {}) => {
+  // Shape only. The values themselves are already checked where they are used
+  // and that stays authoritative: assertValidRepoId/isValidRevision in
+  // hf-catalog.mjs build the URL, destinationFor() in model-download.mjs
+  // contains the filename. What was missing was the edge check — a malformed
+  // request got as far as `active` before failing, and a request with no
+  // `files` array died on a bare property read several modules deep.
+  handle('models:download', async (_, req) => {
+    if (!isPlainObject(req)) return { ok: false, error: 'A download request must be an object.' }
+    const { repoId, revision, artifact } = req
+    if (!isNonEmptyString(repoId)) return { ok: false, error: 'A download needs a repository id.' }
+    if (!optional(revision, isNonEmptyString)) return { ok: false, error: 'Revision must be a string.' }
+    if (!isPlainObject(artifact) || !Array.isArray(artifact.files) || artifact.files.length === 0) {
+      return { ok: false, error: 'A download needs an artifact with at least one file.' }
+    }
+    if (!artifact.files.every(isPlainObject)) {
+      return { ok: false, error: 'Every artifact file must be an object.' }
+    }
     if (active) {
       return { ok: false, error: 'A download is already in progress.' }
     }
@@ -175,13 +193,13 @@ export function registerModelsHandlers({ resolveModelsDir, ensureModelsDir, getM
     }
   })
 
-  ipcMain.handle('models:cancel-download', () => {
+  handle('models:cancel-download', () => {
     if (!active) return { ok: false, error: 'No download in progress.' }
     active.controller.abort()
     return { ok: true }
   })
 
-  ipcMain.handle('models:download-status', () => (
+  handle('models:download-status', () => (
     active ? { active: true, repoId: active.repoId, artifactId: active.artifactId } : { active: false }
   ))
 }

@@ -6,12 +6,13 @@
 // this number as context next to artifact sizes without drawing a conclusion
 // from it, which is survivable. It must be fixed (registry qwMemorySize) before
 // anything *decides* anything from gpu.vram. See docs/notes/model-browser-plan.md.
-import { ipcMain, dialog } from 'electron'
+import { dialog } from 'electron'
+import { handle } from './guard.mjs'
 
 export function registerHardwareHandlers({ execFileAsync, getModelsDir }) {
   // --- Hardware ---
 
-  ipcMain.handle('hardware:scan', async () => {
+  handle('hardware:scan', async () => {
     const specs = {
       cpu: { name: '', cores: 0, threads: 0, architecture: process.arch, supportsAVX: false },
       gpu: { name: '', vram: 0, vramFree: 0, cudaAvailable: false },
@@ -83,7 +84,7 @@ $r | ConvertTo-Json -Compress
     return specs
   })
 
-  ipcMain.handle('hardware:select-model', async () => {
+  handle('hardware:select-model', async () => {
     // Open in the Redstart models folder so a model downloaded in the Models
     // tab is the first thing the user sees here — the two halves of "download
     // then select" are otherwise unconnected.
