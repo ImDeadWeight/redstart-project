@@ -1,6 +1,5 @@
 import { getJsonHeaders } from '$lib/utils/api-headers';
 import { resolveApiPath } from '$lib/utils/api-fetch';
-import { formatAttachmentText } from '$lib/utils/formatters';
 import { isAbortError } from '$lib/utils/abort';
 import {
 	ATTACHMENT_LABEL_PDF_FILE,
@@ -19,8 +18,7 @@ import {
 	FileTypeAudio,
 	MessageRole,
 	MimeTypeAudio,
-	ReasoningFormat,
-	UrlProtocol
+	ReasoningFormat
 } from '$lib/enums';
 import type {
 	ApiChatMessageContentPart,
@@ -28,30 +26,14 @@ import type {
 	ApiChatCompletionToolCall
 } from '$lib/types/api';
 import type {
-	AudioInputFormat,
 	DatabaseMessageExtraMcpPrompt,
 	DatabaseMessageExtraMcpResource
 } from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
-import { settingsStore } from '../stores/settings.svelte';
-import { capImageDataURLSize } from '../utils/cap-img-size';
-
-function getAudioInputFormat(mimeType: string): AudioInputFormat {
-	const normalizedMimeType = mimeType.trim().toLowerCase();
-
-	if (
-		normalizedMimeType === MimeTypeAudio.WAV ||
-		normalizedMimeType === MimeTypeAudio.WAVE ||
-		normalizedMimeType === MimeTypeAudio.X_WAV ||
-		normalizedMimeType === MimeTypeAudio.X_WAVE ||
-		normalizedMimeType === MimeTypeAudio.VND_WAVE ||
-		normalizedMimeType === MimeTypeAudio.X_PN_WAV
-	) {
-		return FileTypeAudio.WAV;
-	}
-
-	return FileTypeAudio.MP3;
-}
+import {
+	handleStreamResponse,
+	handleNonStreamResponse
+} from './chat/chat-stream';
 
 export class ChatService {
 	/**
@@ -334,7 +316,7 @@ export class ChatService {
 			}
 
 			if (stream) {
-				await ChatService.handleStreamResponse(
+				await handleStreamResponse(
 					response,
 					onChunk,
 					onComplete,
@@ -350,7 +332,7 @@ export class ChatService {
 
 				return;
 			} else {
-				return ChatService.handleNonStreamResponse(
+				return handleNonStreamResponse(
 					response,
 					onComplete,
 					onError,
@@ -541,337 +523,6 @@ export class ChatService {
 				console.warn('[ChatService] Pre-encode request failed:', error);
 			}
 		}
-	}
-
-	/**
-	 *
-	 *
-	 * Streaming
-	 *
-	 *
-	 */
-
-	/**
-	 * Handles streaming response from the chat completion API
-	 * @param response - The Response object from the fetch request
-	 * @param onChunk - Optional callback invoked for each content chunk received
-	 * @param onComplete - Optional callback invoked when the stream is complete with full response
-	 * @param onError - Optional callback invoked if an error occurs during streaming
-	 * @param onReasoningChunk - Optional callback invoked for each reasoning content chunk
-	 * @param conversationId - Optional conversation ID for per-conversation state tracking
-	 * @returns {Promise<void>} Promise that resolves when streaming is complete
-	 * @throws {Error} if the stream cannot be read or parsed
-	 */
-	private static async handleStreamResponse(
-		response: Response,
-		onChunk?: (chunk: string) => void,
-		onComplete?: (
-			response: string,
-			reasoningContent?: string,
-			timings?: ChatMessageTimings,
-			toolCalls?: string
-		) => void,
-		onError?: (error: Error) => void,
-		onReasoningChunk?: (chunk: string) => void,
-		onToolCallChunk?: (chunk: string) => void,
-		onModel?: (model: string) => void,
-		onCompletionId?: (id: string) => void,
-		onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
-		conversationId?: string,
-		abortSignal?: AbortSignal
-	): Promise<void> {
-		const reader = response.body?.getReader();
-
-		if (!reader) {
-			throw new Error('No response body');
-		}
-
-		const decoder = new TextDecoder();
-		let aggregatedContent = '';
-		let fullReasoningContent = '';
-		let aggregatedToolCalls: ApiChatCompletionToolCall[] = [];
-		let lastTimings: ChatMessageTimings | undefined;
-		let streamFinished = false;
-		let modelEmitted = false;
-		let idEmitted = false;
-		let toolCallIndexOffset = 0;
-		let hasOpenToolCallBatch = false;
-
-		const finalizeOpenToolCallBatch = () => {
-			if (!hasOpenToolCallBatch) {
-				return;
-			}
-
-			toolCallIndexOffset = aggregatedToolCalls.length;
-			hasOpenToolCallBatch = false;
-		};
-
-		const processToolCallDelta = (toolCalls?: ApiChatCompletionToolCallDelta[]) => {
-			if (!toolCalls || toolCalls.length === 0) {
-				return;
-			}
-
-			aggregatedToolCalls = ChatService.mergeToolCallDeltas(
-				aggregatedToolCalls,
-				toolCalls,
-				toolCallIndexOffset
-			);
-
-			if (aggregatedToolCalls.length === 0) {
-				return;
-			}
-
-			hasOpenToolCallBatch = true;
-
-			const serializedToolCalls = JSON.stringify(aggregatedToolCalls);
-
-			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
-				console.log('[ChatService] Aggregated tool calls:', serializedToolCalls);
-			}
-
-			if (!serializedToolCalls) {
-				return;
-			}
-
-			if (!abortSignal?.aborted) {
-				onToolCallChunk?.(serializedToolCalls);
-			}
-		};
-
-		try {
-			let chunk = '';
-			while (true) {
-				if (abortSignal?.aborted) break;
-
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				if (abortSignal?.aborted) break;
-
-				chunk += decoder.decode(value, { stream: true });
-				const lines = chunk.split('\n');
-				chunk = lines.pop() || '';
-
-				for (const line of lines) {
-					if (abortSignal?.aborted) break;
-
-					if (line.startsWith(UrlProtocol.DATA)) {
-						const data = line.slice(6);
-						if (data === '[DONE]') {
-							streamFinished = true;
-
-							continue;
-						}
-
-						try {
-							const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
-							const choice = parsed.choices?.[0];
-							const content = choice?.delta?.content;
-							const reasoningContent = choice?.delta?.reasoning_content;
-							const toolCalls = choice?.delta?.tool_calls;
-							const timings = parsed.timings;
-							const promptProgress = parsed.prompt_progress;
-
-							const chunkModel = ChatService.extractModelName(parsed);
-							if (chunkModel && !modelEmitted) {
-								modelEmitted = true;
-								onModel?.(chunkModel);
-							}
-
-							if (parsed.id && !idEmitted) {
-								idEmitted = true;
-								onCompletionId?.(parsed.id);
-							}
-
-							if (promptProgress) {
-								ChatService.notifyTimings(undefined, promptProgress, onTimings);
-							}
-
-							if (timings) {
-								ChatService.notifyTimings(timings, promptProgress, onTimings);
-								lastTimings = timings;
-							}
-
-							if (content) {
-								finalizeOpenToolCallBatch();
-								aggregatedContent += content;
-								if (!abortSignal?.aborted) {
-									onChunk?.(content);
-								}
-							}
-
-							if (reasoningContent) {
-								finalizeOpenToolCallBatch();
-								fullReasoningContent += reasoningContent;
-								if (!abortSignal?.aborted) {
-									onReasoningChunk?.(reasoningContent);
-								}
-							}
-
-							processToolCallDelta(toolCalls);
-						} catch (e) {
-							console.error('Error parsing JSON chunk:', e);
-						}
-					}
-				}
-
-				if (abortSignal?.aborted) break;
-			}
-
-			if (abortSignal?.aborted) return;
-
-			if (streamFinished) {
-				finalizeOpenToolCallBatch();
-
-				const finalToolCalls =
-					aggregatedToolCalls.length > 0 ? JSON.stringify(aggregatedToolCalls) : undefined;
-
-				onComplete?.(
-					aggregatedContent,
-					fullReasoningContent || undefined,
-					lastTimings,
-					finalToolCalls
-				);
-			}
-		} catch (error) {
-			const err = error instanceof Error ? error : new Error('Stream error');
-
-			onError?.(err);
-
-			throw err;
-		} finally {
-			reader.releaseLock();
-		}
-	}
-
-	/**
-	 * Handles non-streaming response from the chat completion API.
-	 * Parses the JSON response and extracts the generated content.
-	 *
-	 * @param response - The fetch Response object containing the JSON data
-	 * @param onComplete - Optional callback invoked when response is successfully parsed
-	 * @param onError - Optional callback invoked if an error occurs during parsing
-	 * @returns {Promise<string>} Promise that resolves to the generated content string
-	 * @throws {Error} if the response cannot be parsed or is malformed
-	 */
-	private static async handleNonStreamResponse(
-		response: Response,
-		onComplete?: (
-			response: string,
-			reasoningContent?: string,
-			timings?: ChatMessageTimings,
-			toolCalls?: string
-		) => void,
-		onError?: (error: Error) => void,
-		onToolCallChunk?: (chunk: string) => void,
-		onModel?: (model: string) => void
-	): Promise<string> {
-		try {
-			const responseText = await response.text();
-
-			if (!responseText.trim()) {
-				const noResponseError = new Error('No response received from server. Please try again.');
-
-				throw noResponseError;
-			}
-
-			const data: ApiChatCompletionResponse = JSON.parse(responseText);
-
-			const responseModel = ChatService.extractModelName(data);
-			if (responseModel) {
-				onModel?.(responseModel);
-			}
-
-			const content = data.choices[0]?.message?.content || '';
-			const reasoningContent = data.choices[0]?.message?.reasoning_content;
-			const toolCalls = data.choices[0]?.message?.tool_calls;
-
-			let serializedToolCalls: string | undefined;
-
-			if (toolCalls && toolCalls.length > 0) {
-				const mergedToolCalls = ChatService.mergeToolCallDeltas([], toolCalls);
-
-				if (mergedToolCalls.length > 0) {
-					serializedToolCalls = JSON.stringify(mergedToolCalls);
-					if (serializedToolCalls) {
-						onToolCallChunk?.(serializedToolCalls);
-					}
-				}
-			}
-
-			if (!content.trim() && !serializedToolCalls) {
-				const noResponseError = new Error('No response received from server. Please try again.');
-
-				throw noResponseError;
-			}
-
-			onComplete?.(content, reasoningContent, undefined, serializedToolCalls);
-
-			return content;
-		} catch (error) {
-			const err = error instanceof Error ? error : new Error('Parse error');
-
-			onError?.(err);
-
-			throw err;
-		}
-	}
-
-	/**
-	 * Merges tool call deltas into an existing array of tool calls.
-	 * Handles both existing and new tool calls, updating existing ones and adding new ones.
-	 *
-	 * @param existing - The existing array of tool calls to merge into
-	 * @param deltas - The array of tool call deltas to merge
-	 * @param indexOffset - Optional offset to apply to the index of new tool calls
-	 * @returns {ApiChatCompletionToolCall[]} The merged array of tool calls
-	 */
-	private static mergeToolCallDeltas(
-		existing: ApiChatCompletionToolCall[],
-		deltas: ApiChatCompletionToolCallDelta[],
-		indexOffset = 0
-	): ApiChatCompletionToolCall[] {
-		const result = existing.map((call) => ({
-			...call,
-			function: call.function ? { ...call.function } : undefined
-		}));
-
-		for (const delta of deltas) {
-			const index =
-				typeof delta.index === 'number' && delta.index >= 0
-					? delta.index + indexOffset
-					: result.length;
-
-			while (result.length <= index) {
-				result.push({ function: undefined });
-			}
-
-			const target = result[index]!;
-
-			if (delta.id) {
-				target.id = delta.id;
-			}
-
-			if (delta.type) {
-				target.type = delta.type;
-			}
-
-			if (delta.function) {
-				const fn = target.function ? { ...target.function } : {};
-
-				if (delta.function.name) {
-					fn.name = delta.function.name;
-				}
-
-				if (delta.function.arguments) {
-					fn.arguments = (fn.arguments ?? '') + delta.function.arguments;
-				}
-
-				target.function = fn;
-			}
-		}
-
-		return result;
 	}
 
 	/**
@@ -1205,25 +856,5 @@ export class ChatService {
 
 		// avoid guessing from non-standard locations (metadata, etc.)
 		return undefined;
-	}
-
-	/**
-	 * Calls the onTimings callback with timing data from streaming response.
-	 *
-	 * @param timings - Timing information from the Chat Completions API response
-	 * @param promptProgress - Prompt processing progress data
-	 * @param onTimingsCallback - Callback function to invoke with timing data
-	 * @private
-	 */
-	private static notifyTimings(
-		timings: ChatMessageTimings | undefined,
-		promptProgress: ChatMessagePromptProgress | undefined,
-		onTimingsCallback:
-			| ((timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void)
-			| undefined
-	): void {
-		if (!onTimingsCallback || (!timings && !promptProgress)) return;
-
-		onTimingsCallback(timings, promptProgress);
 	}
 }
