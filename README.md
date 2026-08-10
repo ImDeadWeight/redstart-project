@@ -85,8 +85,12 @@ Accounts are **on by default** with no localhost exemption, and each account's f
 
 ## Installation
 
+> **Alpha software.** Releases are published as prereleases and versioned
+> `1.0.0-alpha.N`. Expect rough edges, and do not run this where losing data or
+> exposing a service would matter.
+
 ### Redstart Nest
-1. Download `Redstart Nest Setup 1.0.0.exe` from [Releases](../../releases)
+1. Download the latest `Redstart Nest Setup 1.0.0-alpha.N.exe` from [Releases](../../releases)
 2. Run the installer — Windows Defender may warn about an unsigned binary, click **More info → Run anyway**
 3. Open Redstart Nest and **create the Owner account** in the sidebar's Accounts section. Login is required by default, so until an Owner exists no device — including a browser on this PC — can sign in to the chat UI. (Home users who don't want accounts can flip **Require login** off instead.)
 4. Point it at a `.gguf` model file and click **Start Server**
@@ -99,7 +103,7 @@ Accounts are **on by default** with no localhost exemption, and each account's f
 4. Open the app — it finds the server automatically by scanning the LAN for the beacon on port 8765; no hostname or QR code needed
 
 ### Redstart Twig (Windows)
-1. Download `Redstart Twig Setup 1.0.0.exe` from [Releases](../../releases)
+1. Download the latest `Redstart Twig Setup 1.0.0-alpha.N.exe` from [Releases](../../releases)
 2. Install and open — it scans your network automatically
 
 ---

@@ -181,7 +181,12 @@ cd redstart-nest
 npm run build
 ```
 
-Output: `redstart-nest/release/1.0.0/Redstart Nest Setup 1.0.0.exe`
+Output: `redstart-nest/release/<version>/Redstart Nest Setup <version>.exe`
+
+The version comes from `package.json`, and `electron-builder` puts the output in
+`release/${version}`. Currently `1.0.0-alpha.1` — the project ships as alpha
+prereleases, so bump the `-alpha.N` suffix in `redstart-nest/package.json` and
+`redstart-twig/windows/package.json` (kept in lockstep) before cutting a build.
 
 ### Redstart Twig Windows
 
@@ -190,7 +195,7 @@ cd redstart-twig/windows
 npm run build
 ```
 
-Output: `redstart-twig/windows/release/1.0.0/Redstart Twig Setup 1.0.0.exe`
+Output: `redstart-twig/windows/release/<version>/Redstart Twig Setup <version>.exe`
 
 The Windows build script builds the chat-ui first, then packages the Electron app. Both installers are NSIS-based and self-contained.
 
