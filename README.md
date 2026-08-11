@@ -4,7 +4,7 @@
 
 # Redstart
 
-**A local LLM ecosystem for home/office use.** Run a model on your own PC, then reach it from every tool you work in — chat from your phone or laptop, query your data, or drive a coding agent in your IDE — with no cloud, no subscriptions, and no per-seat bill.
+**A self-hosted AI ecosystem for home and small-office use.** Redstart Nest runs local models on hardware you own and exposes them to the applications you work in — chat from your phone or laptop, query your data, or drive a coding agent in your IDE. You choose the models, decide which applications and users can connect, and control what those tools can reach.
 
 **The apps:** [Nest](#the-apps) (the server) · [Twig](#the-apps) (chat client) · [Blueprints](https://github.com/ImDeadWeight/redstart-blueprints) (SQL data workbench - in progress) · [Yellowscript](https://github.com/ImDeadWeight/redstart-yellowscript) (VS Code Extension - in progress) · [Greenhouse](https://github.com/ImDeadWeight/redstart-greenhouse) (project management, planned)
 
@@ -27,7 +27,7 @@
 
 ## The apps
 
-Redstart is an ecosystem around one idea: a model you own, running on hardware you own, reachable from every tool you work in. **Redstart Nest hosts the model. Everything else is a client** that finds it on the network, signs in with a Redstart account, and gets the same tools and policy the admin configured once.
+Redstart is an ecosystem around one idea: a model you own, running on hardware you own, reachable from every tool you work in. **Redstart Nest hosts the model, the tools, and the policy. Everything else is a client** that finds it on the network, signs in with a Redstart account, and gets the same capabilities the admin configured once.
 
 | App | Platform | Role | Status |
 |---|---|---|---|
@@ -60,7 +60,7 @@ Details: [Architecture](docs/architecture.md) · [Capabilities](docs/capabilitie
 
 ---
 
-## Privacy model
+## Control, not isolation
 
 Inference is local and architecturally so — llama-server runs on your machine, bound to loopback, and nothing about a conversation is transmitted anywhere by default. What *can* leave is exactly what an administrator turns on: approved web domains, academic search, or an external tool server on another host. Each is an explicit, auditable choice.
 
