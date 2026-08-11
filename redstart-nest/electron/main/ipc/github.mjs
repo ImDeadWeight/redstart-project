@@ -5,12 +5,12 @@
 // the matching handlers out of index.mjs's setupIpcHandlers(), with shared
 // collaborators passed in via `deps` rather than reached for as module globals.
 // This namespace has no shared state, so its deps object is empty.
-import { ipcMain } from 'electron'
+import { handle } from './guard.mjs'
 
 export function registerGithubHandlers() {
   // --- GitHub releases (unchanged) ---
 
-  ipcMain.handle('github:check-releases', async () => {
+  handle('github:check-releases', async () => {
     const releases = {}
     const repos = [
       { owner: 'ggerganov', repo: 'llama.cpp' },

@@ -44,6 +44,9 @@ import { registerServerHandlers } from './ipc/server.mjs'
 import { registerModelsHandlers } from './ipc/models.mjs'
 import { buildGatewayConfig, createRefreshLiveToolsConfig } from './gateway-config.mjs'
 import { buildArgs } from './llama-args.mjs'
+import { DEV_RENDERER_ORIGIN, rendererIndexFile, isTrustedRendererUrl } from './renderer-location.mjs'
+import { setTrustedWindow } from './ipc/guard.mjs'
+import { binaryPathRejection } from './ipc/validate.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -402,10 +405,25 @@ function migrateUserDataFromBeaver() {
 // Binary resolution
 // ---------------------------------------------------------------------------
 
+// The value this returns becomes spawn()'s first argument in ipc/server.mjs, so
+// it is checked HERE as well as at the settings:set-binary-path write. That is
+// not belt-and-braces for its own sake: settings.json is an ordinary file on
+// disk, and any value written by a build that predates the write-side check —
+// which is every install shipped so far — is read by this function and launched.
+// Validating only on the way in would leave the stored value trusted forever.
+//
+// A rejected override falls through to the bundled binary rather than failing
+// the launch, which is the same thing that happens when the path simply does
+// not exist.
 function resolveBinary() {
   const settings = readSettings()
-  if (settings.serverBinPath && fs.existsSync(settings.serverBinPath)) {
-    return settings.serverBinPath
+  if (settings.serverBinPath) {
+    const rejection = binaryPathRejection(settings.serverBinPath)
+    if (rejection) {
+      logEvent('security', 'binary_override_rejected', { reason: rejection })
+    } else {
+      return settings.serverBinPath
+    }
   }
 
   const candidates = []
@@ -513,6 +531,47 @@ function applyCSP(session) {
   })
 }
 
+// ---------------------------------------------------------------------------
+// Navigation containment
+// ---------------------------------------------------------------------------
+// A preload script re-runs on EVERY navigation within a webContents. So if this
+// window is ever taken somewhere else — a `window.open()`, a stray
+// `location =`, an injected link — the destination page inherits the whole
+// `window.redstartAPI` surface and every IPC channel behind it. CSP does not
+// stop this: `default-src` does not constrain top-level navigation, and the
+// `navigate-to` directive was never shipped by anyone.
+//
+// Hung off `web-contents-created` rather than off `mainWindow` so it also covers
+// webContents that do not exist yet — a popup, a <webview> — which is precisely
+// the set a per-window handler would miss.
+//
+// Nothing in the launcher legitimately opens a window or attaches a <webview>,
+// so both are flat denials; navigation is allowed only back to where the
+// launcher already is (see renderer-location.mjs).
+function installNavigationContainment() {
+  app.on('web-contents-created', (_event, contents) => {
+    contents.setWindowOpenHandler(() => {
+      logEvent('security', 'window_open_denied', {})
+      return { action: 'deny' }
+    })
+
+    contents.on('will-attach-webview', (event) => {
+      logEvent('security', 'webview_attach_denied', {})
+      event.preventDefault()
+    })
+
+    contents.on('will-navigate', (event, url) => {
+      if (isTrustedRendererUrl(url)) return
+      // The DevTools frontend is a Chromium-internal page opened below in dev
+      // only. It is never reachable in a packaged build, so exempting it costs
+      // nothing there — and the IPC guard rejects a devtools:// frame anyway.
+      if (!app.isPackaged && url.startsWith('devtools://')) return
+      logEvent('security', 'navigation_denied', { scheme: url.split(':')[0] })
+      event.preventDefault()
+    })
+  })
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1100,
@@ -523,11 +582,15 @@ function createWindow() {
     },
   })
 
+  // Register BEFORE the first load so no handler can see a window it does not
+  // yet consider trusted. See ipc/guard.mjs.
+  setTrustedWindow(mainWindow)
+
   if (!app.isPackaged) {
-    mainWindow.loadURL('http://localhost:5173')
+    mainWindow.loadURL(DEV_RENDERER_ORIGIN)
     mainWindow.webContents.openDevTools()
   } else {
-    mainWindow.loadFile(path.join(__dirname, '..', '..', 'dist', 'index.html'))
+    mainWindow.loadFile(rendererIndexFile())
   }
 }
 
@@ -550,6 +613,7 @@ app.whenReady().then(async () => {
   // Same idea for the models folder — see resolveModelsDir().
   ensureModelsDir()
   applyCSP(session.defaultSession)
+  installNavigationContainment()
   killOrphanedServers()
   const cleanedConversations = cleanupOldConversations()
   if (cleanedConversations > 0) console.log(`Cleaned ${cleanedConversations} conversations older than 30 days`)
