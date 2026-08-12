@@ -566,7 +566,7 @@ describe('mcpStore round-trips the state seam 5 will move', () => {
 	});
 });
 
-describe('mcpStore forwards mcp-health state', () => {
+describe('mcpStore forwards mcp-health state, and mcp-servers reads it', () => {
 	afterEach(() => {
 		mcpStore.health.clearAllHealthChecks();
 	});
@@ -606,6 +606,31 @@ describe('mcpStore forwards mcp-health state', () => {
 		mcpStore.clearHealthCheck('srv-clear');
 
 		expect(mcpStore.health.hasHealthCheck('srv-clear')).toBe(false);
+	});
+
+	// The seam-5a injection contract: `mcp-servers` derives a server's display
+	// name from the *same* health record the facade writes. Given its own copy it
+	// would keep returning the URL fallback forever, which is also what a
+	// perfectly healthy server looks like before its first check — the reason
+	// this is asserted rather than left to the dev-app pass.
+	it('labels a server from the health check the facade recorded', () => {
+		const server = {
+			id: 'srv-label',
+			enabled: true,
+			url: 'https://example.test/mcp',
+			requestTimeoutSeconds: 30
+		};
+
+		expect(mcpStore.getServerLabel(server)).toBe('https://example.test/mcp');
+
+		mcpStore.updateHealthCheck('srv-label', {
+			status: HealthCheckStatus.SUCCESS,
+			tools: [],
+			serverInfo: { name: 'Example Server', version: '1.0.0' },
+			logs: []
+		});
+
+		expect(mcpStore.getServerLabel(server)).toBe('Example Server');
 	});
 
 	// Read by the settings UI. It iterates the same record, so it is the one
