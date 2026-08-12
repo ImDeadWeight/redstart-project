@@ -30,7 +30,7 @@ import { composePrompt, deriveEgressFacts, DEFAULT_TOKEN_BUDGET, listModes } fro
 import { getPromptBlocks, getPromptBlocksMeta, setPromptBlocks, MAX_BLOCK_CHARS } from './prompt-storage.mjs'
 import { sendJson, readJsonBody } from './gateway/http-json.mjs'
 import { handleAuthRoute } from './gateway/auth-routes.mjs'
-import { getConversations, getConversation as getConv, createConversation, updateConversation, deleteConversation, deleteConversationsWithForks } from './conversations-storage.mjs'
+import { isConversationRoute, handleConversationRoute } from './gateway/conversation-routes.mjs'
 import * as fs from 'fs'
 
 let gatewayServer = null
@@ -327,8 +327,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       // unauthenticated — acceptable only for the deliberate auth-off
       // posture; with auth on, every request already carries a real account.
       const accountId = authResult.account?.id || req.headers['x-redstart-device-id']
-      const isConversationRoute = urlPath === '/conversations' || /^\/conversations\/[^/]+$/.test(urlPath)
-      if (isConversationRoute && !accountId) {
+      if (isConversationRoute(urlPath) && !accountId) {
         res.writeHead(401, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
         res.end(JSON.stringify({ error: { message: 'Unauthorized — no account or device ID', type: 'auth_error' } }))
         return
@@ -410,61 +409,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         return sendJson(res, 200, { blocks: result.blocks })
       }
 
-      if (req.method === 'GET' && urlPath === '/conversations') {
-        const convs = getConversations(accountId)
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
-        return res.end(JSON.stringify(convs))
-      }
-
-      const convMatch = /^\/conversations\/([^/]+)$/.exec(urlPath)
-      if (convMatch) {
-        const [, convId] = convMatch
-
-        if (req.method === 'GET') {
-          const conv = getConv(accountId, convId)
-          if (!conv) return sendJson(res, 404, { error: { message: 'Not found', type: 'not_found' } })
-          res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
-          return res.end(JSON.stringify(conv))
-        }
-
-        if (req.method === 'PUT') {
-          const body = await readJsonBody(req)
-          if (!body) return sendJson(res, 400, { error: { message: 'Bad request', type: 'invalid_request_error' } })
-          const updated = updateConversation(accountId, convId, body)
-          if (!updated) return sendJson(res, 404, { error: { message: 'Not found', type: 'not_found' } })
-          return sendJson(res, 200, updated)
-        }
-
-        if (req.method === 'DELETE') {
-          const url = new URL(req.url, 'http://x')
-          const deleteWithForks = url.searchParams.get('deleteWithForks') === 'true'
-          if (deleteWithForks) {
-            deleteConversationsWithForks(accountId, convId)
-          } else {
-            deleteConversation(accountId, convId)
-          }
-          return sendJson(res, 204)
-        }
-      }
-
-      if (req.method === 'POST' && urlPath === '/conversations') {
-        const body = await readJsonBody(req)
-        if (!body?.name) return sendJson(res, 400, { error: { message: 'Name required', type: 'invalid_request_error' } })
-        const conv = createConversation(accountId, {
-          id: body.id || crypto.randomUUID(),
-          name: body.name,
-          currNode: body.currNode || '',
-          lastModified: Date.now(),
-          mcpServerOverrides: body.mcpServerOverrides,
-          thinkingEnabled: body.thinkingEnabled,
-          reasoningEffort: body.reasoningEffort,
-          forkedFromConversationId: body.forkedFromConversationId,
-          pinned: body.pinned,
-          contextSummary: body.contextSummary,
-          messages: body.messages || []
-        })
-        return sendJson(res, 201, conv)
-      }
+      if (await handleConversationRoute(req, res, urlPath, accountId)) return
 
       // MCP server discovery — the chat-ui fetches this at startup to
       // auto-configure its MCP connections, so servers are managed centrally
