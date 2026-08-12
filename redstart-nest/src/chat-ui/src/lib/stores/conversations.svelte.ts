@@ -45,6 +45,7 @@ import {
 
 import { ROUTES } from '$lib/constants/routes';
 import { RouterService } from '$lib/services/router.service';
+import { ConversationCoreState } from '$lib/stores/conversations/conversation-core.svelte';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 export interface ConversationTreeItem {
@@ -61,17 +62,44 @@ class ConversationsStore {
 	 *
 	 */
 
+	/**
+	 * Shared conversation state, owned by a sub-store so the other conversation
+	 * concerns can be injected with it rather than reaching back into this
+	 * facade. Forwarded below with getters and setters, never copied.
+	 */
+	readonly core = new ConversationCoreState();
+
 	/** List of all conversations */
-	conversations = $state<DatabaseConversation[]>([]);
+	get conversations(): DatabaseConversation[] {
+		return this.core.conversations;
+	}
+	set conversations(value: DatabaseConversation[]) {
+		this.core.conversations = value;
+	}
 
 	/** Currently active conversation */
-	activeConversation = $state<DatabaseConversation | null>(null);
+	get activeConversation(): DatabaseConversation | null {
+		return this.core.activeConversation;
+	}
+	set activeConversation(value: DatabaseConversation | null) {
+		this.core.activeConversation = value;
+	}
 
 	/** Messages in the active conversation (filtered by currNode path) */
-	activeMessages = $state<DatabaseMessage[]>([]);
+	get activeMessages(): DatabaseMessage[] {
+		return this.core.activeMessages;
+	}
+	set activeMessages(value: DatabaseMessage[]) {
+		this.core.activeMessages = value;
+	}
 
 	/** Whether the store has been initialized */
-	isInitialized = $state(false);
+	get isInitialized(): boolean {
+		return this.core.isInitialized;
+	}
+	set isInitialized(value: boolean) {
+		this.core.isInitialized = value;
+	}
 
 	/** Pending MCP server overrides for new conversations (before first message) */
 	pendingMcpServerOverrides = $state<McpServerOverride[]>(ConversationsStore.loadMcpDefaults());
