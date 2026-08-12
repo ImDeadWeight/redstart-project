@@ -25,11 +25,6 @@ import {
 	stripReasoningContent
 } from './chat/chat-message-convert';
 import { parseErrorResponse } from './chat/chat-errors';
-import {
-	areAllSlotsIdle,
-	stopReasoning,
-	preEncode
-} from './chat/chat-slots';
 
 export class ChatService {
 	/**

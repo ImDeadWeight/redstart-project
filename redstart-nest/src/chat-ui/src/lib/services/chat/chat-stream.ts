@@ -10,9 +10,7 @@ import { UrlProtocol } from '$lib/enums';
 import type {
 	ApiChatCompletionStreamChunk,
 	ApiChatCompletionToolCall,
-	ApiChatCompletionToolCallDelta,
-	ChatMessageTimings,
-	ChatMessagePromptProgress
+	ApiChatCompletionToolCallDelta
 } from '$lib/types/api';
 import { extractModelName } from './chat-errors';
 

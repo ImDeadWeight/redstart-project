@@ -8,6 +8,7 @@
 import { getJsonHeaders } from '$lib/utils/api-headers';
 import { resolveApiPath } from '$lib/utils/api-fetch';
 import { isAbortError } from '$lib/utils/abort';
+import { MessageRole } from '$lib/enums';
 import {
 	API_CHAT,
 	API_SLOTS,
