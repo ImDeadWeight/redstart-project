@@ -18,19 +18,18 @@
 
 import * as http from 'http'
 import * as path from 'path'
-import { authenticate, hasAdminAccess } from './auth.mjs'
-import { logEvent } from './logger.mjs'
+import { authenticate } from './auth.mjs'
 import { getMcpServerRunning } from './mcp-server.mjs'
 import { getExternalServers } from './tools-storage.mjs'
 import { CLIENT_APP_TOOL_NAMES } from './tools-definitions.mjs'
 import { resolveWithinRoot } from './path-scope.mjs'
 import { resolveUserRoot } from './user-scope.mjs'
 import { handleFilesRequest } from './files-api.mjs'
-import { composePrompt, deriveEgressFacts, DEFAULT_TOKEN_BUDGET, listModes } from './system-prompt.mjs'
-import { getPromptBlocks, getPromptBlocksMeta, setPromptBlocks, MAX_BLOCK_CHARS } from './prompt-storage.mjs'
-import { sendJson, readJsonBody } from './gateway/http-json.mjs'
+import { composePrompt } from './system-prompt.mjs'
+import { getPromptBlocks } from './prompt-storage.mjs'
 import { handleAuthRoute } from './gateway/auth-routes.mjs'
 import { isConversationRoute, handleConversationRoute } from './gateway/conversation-routes.mjs'
+import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import * as fs from 'fs'
 
 let gatewayServer = null
@@ -333,81 +332,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         return
       }
 
-      // Egress audit (spec §7). The same facts the data_handling block is
-      // built from, served as data so "where does my data go?" is a question
-      // with a checkable answer rather than a sentence the model paraphrases.
-      //
-      // hasTools is TRUE here on purpose: the prompt describes only egress the
-      // current request can actually reach, but an audit must report every
-      // path the deployment is CONFIGURED for, whether or not this particular
-      // client sent tool definitions. Understating configured egress to an
-      // auditor is the same failure as overstating privacy to a user.
-      if (req.method === 'GET' && urlPath === '/egress') {
-        const facts = deriveEgressFacts(activeConfig, getExternalServers(), true)
-        return sendJson(res, 200, {
-          inference: facts.inference,
-          webDomains: facts.webDomains,
-          remoteToolServers: facts.remoteToolServers,
-          localStores: facts.localStores,
-          hasEgress: facts.hasEgress,
-          // Redstart records no retention/training terms for third parties.
-          // Reporting the absence is the point — see spec §7.
-          externalTermsKnown: false,
-        })
-      }
-
-      // Available task modes (spec §9). Clients send the ID, so they need to
-      // know which IDs exist; the preset text is returned for display only —
-      // sending it back has no effect, since the composer resolves IDs.
-      if (req.method === 'GET' && urlPath === '/prompt-modes') {
-        return sendJson(res, 200, { modes: listModes() })
-      }
-
-      // Admin-owned prompt blocks (spec §3).
-      //
-      // READ is open to any authenticated user, deliberately: the policy block
-      // governs how the assistant treats them, and a rule you are subject to
-      // but cannot read is not a policy the user can hold the deployment to.
-      // WRITE is admin-tier, which is what makes it a floor rather than a
-      // preference (spec §4).
-      if (req.method === 'GET' && urlPath === '/prompt-blocks') {
-        const meta = getPromptBlocksMeta()
-        const preview = composePrompt({
-          config: activeConfig,
-          hasTools: true,
-          externalServers: getExternalServers(),
-          account: authResult.account,
-          admin: getPromptBlocks(),
-        })
-        return sendJson(res, 200, {
-          blocks: meta,
-          limits: { maxBlockChars: MAX_BLOCK_CHARS, tokenBudget: DEFAULT_TOKEN_BUDGET },
-          // Live budget feedback for the Settings UI (spec §10). Advisory:
-          // overBudget is surfaced to the admin, never enforced on the request.
-          composed: {
-            tokens: preview.tokens,
-            overBudget: preview.overBudget,
-            blocks: preview.blocks,
-            prompt: preview.prompt,
-          },
-          canEdit: hasAdminAccess(authResult.account),
-        })
-      }
-
-      if (req.method === 'PUT' && urlPath === '/prompt-blocks') {
-        if (!hasAdminAccess(authResult.account)) {
-          return sendJson(res, 403, { error: 'Admin role required' })
-        }
-        const body = await readJsonBody(req)
-        if (!body) return sendJson(res, 400, { error: 'Invalid JSON' })
-        const result = setPromptBlocks(body, authResult.account?.username)
-        if (!result.ok) return sendJson(res, 400, { error: result.error })
-        logEvent('prompt', 'blocks_updated', {
-          username: authResult.account?.username,
-          keys: Object.keys(body).filter(k => typeof body[k] === 'string'),
-        })
-        return sendJson(res, 200, { blocks: result.blocks })
-      }
+      if (await handlePromptRoute(req, res, urlPath, activeConfig, authResult.account)) return
 
       if (await handleConversationRoute(req, res, urlPath, accountId)) return
 
