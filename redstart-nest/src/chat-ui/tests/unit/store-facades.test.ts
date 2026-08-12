@@ -490,11 +490,11 @@ describe('conversationsStore forwards conversation-mcp-overrides state', () => {
 });
 
 /**
- * `mcpStore` has no sub-stores yet — seam 5 creates them. Until it does, the
- * best available characterization is that its public read/write pairs round-trip
- * through the private `$state` they will be moving out of: health checks
- * (`_healthChecks`, seam 5d) and the connection flow counter (`activeFlowCount`,
- * seam 5b). Each seam should extend this block with the state it moved.
+ * Seam 5a0 moved the health-check record into `mcp/mcp-health.svelte.ts`; the
+ * connection flow counter (`activeFlowCount`, seam 5b) is still facade-private.
+ * These round-trips are the public-API view of both and predate the seam, so
+ * they are the regression net for it. Each seam should extend this block with
+ * the state it moved, and add the sub-store cross-check below.
  */
 describe('mcpStore round-trips the state seam 5 will move', () => {
 	afterEach(() => {
@@ -563,6 +563,65 @@ describe('mcpStore round-trips the state seam 5 will move', () => {
 		mcpStore.clearError();
 
 		expect(mcpStore.error).toBeNull();
+	});
+});
+
+describe('mcpStore forwards mcp-health state', () => {
+	afterEach(() => {
+		mcpStore.health.clearAllHealthChecks();
+	});
+
+	// The round-trips above all write *and* read through the facade, so a facade
+	// that kept its own `_healthChecks` would satisfy every one of them. These
+	// cross the boundary in one direction only, which is what distinguishes
+	// forwarding from a second copy of the state.
+	it('reads a health check the sub-store recorded', () => {
+		mcpStore.health.updateHealthCheck('srv-sub', {
+			status: HealthCheckStatus.ERROR,
+			message: 'from the sub-store',
+			logs: []
+		});
+
+		expect(mcpStore.hasHealthCheck('srv-sub')).toBe(true);
+		expect(mcpStore.getHealthCheckState('srv-sub')).toBe(mcpStore.health.healthChecks['srv-sub']);
+	});
+
+	it('writes a health check through to the sub-store', () => {
+		mcpStore.updateHealthCheck('srv-facade', {
+			status: HealthCheckStatus.ERROR,
+			message: 'from the facade',
+			logs: []
+		});
+
+		expect(mcpStore.health.hasHealthCheck('srv-facade')).toBe(true);
+	});
+
+	it('clears through to the sub-store', () => {
+		mcpStore.health.updateHealthCheck('srv-clear', {
+			status: HealthCheckStatus.ERROR,
+			message: 'boom',
+			logs: []
+		});
+
+		mcpStore.clearHealthCheck('srv-clear');
+
+		expect(mcpStore.health.hasHealthCheck('srv-clear')).toBe(false);
+	});
+
+	// Read by the settings UI. It iterates the same record, so it is the one
+	// health accessor that would keep working against a stale copy — for exactly
+	// as long as nothing wrote to the other one.
+	it('reports instructions the sub-store holds', () => {
+		mcpStore.health.updateHealthCheck('srv-instructions', {
+			status: HealthCheckStatus.SUCCESS,
+			tools: [],
+			instructions: 'be brief',
+			logs: []
+		});
+
+		expect(mcpStore.getHealthCheckInstructions()).toEqual([
+			{ serverId: 'srv-instructions', serverTitle: undefined, instructions: 'be brief' }
+		]);
 	});
 });
 

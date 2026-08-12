@@ -176,9 +176,9 @@ describe('mcpStore stays wired to the owning $state', () => {
 		mcpStore.clearAllHealthChecks();
 	});
 
-	// Health check state is `_healthChecks` on the facade today and moves into
-	// `mcp/mcp-health.svelte.ts` in seam 5d. This assertion should keep passing
-	// across that move; if it stops, the sub-store's state is not reaching the UI.
+	// Health check state moved into `mcp/mcp-health.svelte.ts` in seam 5a0. These
+	// two assertions predate the move and kept passing across it; if either stops,
+	// the sub-store's state is not reaching the UI.
 	it('re-runs an effect when a health check is recorded', () => {
 		const { values, stop } = observeReads(() => mcpStore.hasHealthCheck('reactive-health'));
 
@@ -207,5 +207,24 @@ describe('mcpStore stays wired to the owning $state', () => {
 		stop();
 
 		expect(values).toEqual([true, false]);
+	});
+
+	// The seam-5a0 injection contract, from the other direction: the write goes
+	// straight to the sub-store, bypassing the facade entirely. A facade holding
+	// its own `_healthChecks` would satisfy the two tests above — both write
+	// through it — and fail this one.
+	it('re-runs an effect when the sub-store is written directly', () => {
+		const { values, stop } = observeReads(() =>
+			mcpStore.getHealthCheckState('reactive-health').status
+		);
+
+		mcpStore.health.healthChecks = {
+			...mcpStore.health.healthChecks,
+			'reactive-health': { status: HealthCheckStatus.SUCCESS, tools: [], logs: [] }
+		};
+		flushSync();
+		stop();
+
+		expect(values).toEqual([HealthCheckStatus.IDLE, HealthCheckStatus.SUCCESS]);
 	});
 });

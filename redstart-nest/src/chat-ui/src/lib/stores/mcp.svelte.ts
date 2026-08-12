@@ -80,13 +80,30 @@ import {
 import { twigMcpApi } from '$lib/utils/twig';
 import { normalizeSchemaProperties, parseToolArguments } from '$lib/stores/mcp/mcp-schema';
 import { getMcpIconUrl, getServerFaviconFallback } from '$lib/stores/mcp/mcp-icons';
+import { MCPHealth } from '$lib/stores/mcp/mcp-health.svelte';
 
 class MCPStore {
+	/**
+	 * Health-check state, owned by a sub-store so the concerns that read it
+	 * (the server registry, prompts, resources) can be injected with it rather
+	 * than reaching back into this facade. Forwarded below, never copied.
+	 */
+	readonly health = new MCPHealth();
+
 	private _isInitializing = $state(false);
 	private _error = $state<string | null>(null);
 	private _toolCount = $state(0);
 	private _connectedServers = $state<string[]>([]);
-	private _healthChecks = $state<Record<string, HealthCheckState>>({});
+
+	/**
+	 * Reads the sub-store's `$state` so the methods still on this facade that
+	 * iterate the record (hasPromptsCapability, hasResourcesCapability,
+	 * getServersWithResources) keep working unchanged. Goes away when seams 5e
+	 * and 5f move them.
+	 */
+	private get _healthChecks(): Record<string, HealthCheckState> {
+		return this.health.healthChecks;
+	}
 
 	private connections = new Map<string, MCPConnection>();
 	private toolsIndex = new Map<string, string>();
@@ -159,28 +176,23 @@ class MCPStore {
 	}
 
 	updateHealthCheck(serverId: string, state: HealthCheckState): void {
-		this._healthChecks = { ...this._healthChecks, [serverId]: state };
+		this.health.updateHealthCheck(serverId, state);
 	}
 
 	getHealthCheckState(serverId: string): HealthCheckState {
-		return this._healthChecks[serverId] ?? { status: HealthCheckStatus.IDLE };
+		return this.health.getHealthCheckState(serverId);
 	}
 
 	hasHealthCheck(serverId: string): boolean {
-		return (
-			serverId in this._healthChecks &&
-			this._healthChecks[serverId].status !== HealthCheckStatus.IDLE
-		);
+		return this.health.hasHealthCheck(serverId);
 	}
 
 	clearHealthCheck(serverId: string): void {
-		// eslint-disable-next-line @typescript-eslint/no-unused-vars
-		const { [serverId]: _removed, ...rest } = this._healthChecks;
-		this._healthChecks = rest;
+		this.health.clearHealthCheck(serverId);
 	}
 
 	clearAllHealthChecks(): void {
-		this._healthChecks = {};
+		this.health.clearAllHealthChecks();
 	}
 
 	clearError(): void {
@@ -1416,28 +1428,12 @@ class MCPStore {
 		return results;
 	}
 
-	/**
-	 * Get server instructions from health check results (for display before active connection).
-	 * Useful for showing instructions in settings UI.
-	 */
 	getHealthCheckInstructions(): Array<{
 		serverId: string;
 		serverTitle?: string;
 		instructions: string;
 	}> {
-		const results: Array<{ serverId: string; serverTitle?: string; instructions: string }> = [];
-
-		for (const [serverId, state] of Object.entries(this._healthChecks)) {
-			if (state.status === HealthCheckStatus.SUCCESS && state.instructions) {
-				results.push({
-					serverId,
-					serverTitle: state.serverInfo?.title || state.serverInfo?.name,
-					instructions: state.instructions
-				});
-			}
-		}
-
-		return results;
+		return this.health.getHealthCheckInstructions();
 	}
 
 	/**
