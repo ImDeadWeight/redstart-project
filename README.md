@@ -32,7 +32,7 @@ Redstart is an ecosystem around one idea: a model you own, running on hardware y
 | App | Platform | Role | Status |
 |---|---|---|---|
 | **Redstart Nest** | Windows (Electron) | Server manager — runs the model, hosts the tools, accounts and policy, and broadcasts itself on the LAN | In this repo |
-| **Redstart Twig** | Android & Windows | Lightweight chat client; finds Nest automatically, no configuration | In this repo |
+| **Redstart Twig** | Android & Windows | Lightweight chat client; finds Nest automatically, no configuration | In this repo — Windows working; **Android build out of date, [see note](#redstart-twig-android)** |
 | **[Redstart Blueprints](https://github.com/ImDeadWeight/redstart-blueprints)** | Windows (Electron) | Local-first SQL data workbench with optional AI assistance | Separate repo |
 | **[Redstart Yellowscript](https://github.com/ImDeadWeight/redstart-yellowscript)** | VS Code extension | A coding agent that talks to a local Nest instead of a cloud | Separate repo |
 | **[Redstart Greenhouse](https://github.com/ImDeadWeight/redstart-greenhouse)** | Windows (Electron), planned | Project management, built the way Blueprints is built | Not yet started |
@@ -77,7 +77,7 @@ Accounts are **on by default** with no localhost exemption, and each account's f
 - A GPU with at least 6 GB VRAM (NVIDIA recommended; llama.cpp supports CUDA and Vulkan)
 - A GGUF model file
 
-**Redstart Twig (Android)** — Android 10 or later, on the same Wi-Fi network as the Nest PC.
+**Redstart Twig (Android)** — Android 10 or later, on the same Wi-Fi network as the Nest PC. **Not currently working** — [see note](#redstart-twig-android).
 
 **Redstart Twig (Windows)** — Windows 10/11, on the same network as the Nest PC (or on the same machine).
 
@@ -97,6 +97,17 @@ Accounts are **on by default** with no localhost exemption, and each account's f
 5. In **Configuration → Network**, turn on **Local network** mode to make the server reachable from other devices — each person signs in with an account the Owner/Admins create. The same panel shows the addresses to browse to, including a QR code to scan from a phone
 
 ### Redstart Twig (Android)
+
+> **Currently out of date and not working.** The Android client has fallen behind
+> the server and has not been rebuilt against recent Nest changes; the published
+> APK should not be relied on. This is paused, not abandoned — returning to it is
+> planned, but it is not being worked on right now.
+>
+> **In the meantime, use a phone browser instead.** The chat UI is served directly
+> by Nest, so browsing to `http://<nest-ip>:19080` — or scanning the QR code in
+> **Configuration → Network** — gives you the same interface on Android with no app
+> installed. Redstart Twig for Windows is unaffected and works normally.
+
 1. Download `redstart-twig.apk` from [Releases](../../releases)
 2. On your phone, allow installation from unknown sources (Settings → Apps → Special app access → Install unknown apps)
 3. Install the APK
@@ -147,6 +158,7 @@ This is the hardware and model used during development. Results will vary by GPU
 
 The short list; the [full set is in the roadmap](docs/roadmap.md#known-limitations).
 
+- **Twig for Android is out of date and not working** — the Android client hasn't been rebuilt against recent server changes. Use a phone browser against the chat UI instead. Paused, not abandoned; see [the note above](#redstart-twig-android).
 - **Unsigned installers** — both will trigger Windows Defender SmartScreen.
 - **Windows only for the server** — the clients run anywhere, but Nest shells out to a Windows llama.cpp binary.
 - **Sessions don't survive a restart** — tokens are held in memory, so restarting Nest signs everyone out.

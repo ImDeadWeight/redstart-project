@@ -9,6 +9,7 @@ This is an honest work-in-progress. The project started as a personal home tool 
 ## Known limitations
 
 - **Unsigned installers** — both installers will trigger Windows Defender SmartScreen. This is expected for unsigned binaries distributed outside the Microsoft Store. A code signing certificate would resolve this.
+- **Twig for Android is currently out of date and not working** — the Android client has not been rebuilt against recent server and client changes, and the published APK should not be relied on. This is paused rather than abandoned: bringing it back into line is planned work, but it is not in progress right now. The practical substitute is a phone browser pointed at the chat UI (`http://<nest-ip>:19080`, or the QR code in **Configuration → Network**), which needs no app installed. Redstart Twig for Windows is unaffected.
 - **Android sideload required** — the app is not on the Play Store. Installation requires enabling "unknown sources."
 - **Accounts are on by default** — Redstart Nest supports a three-tier account model (Owner → Admin → User), session tokens, and `rst_` API keys behind a global "Require login" toggle, with a login gate, an account/profile menu, and self-service key regeneration (see [Accounts & login](security.md#accounts--login)). The account/role logic has an automated HTTP-level test suite and remote-browser login has been verified. With login on (the default), every client on the LAN must authenticate. Do not expose the gateway port to the public internet.
 - **Sessions do not survive a server restart** — login sessions are held in memory, so restarting Redstart Nest invalidates every client's token. Clients keep showing a logged-in UI until their next request fails, then prompt for login again. Harmless but confusing on a LAN; persisting sessions is a deliberate open decision, since it means writing credentials to disk.
@@ -32,7 +33,7 @@ This is an honest work-in-progress. The project started as a personal home tool 
 - [x] Start/stop llama.cpp model from a GUI
 - [x] LAN network mode with automatic port binding
 - [x] Beacon-based zero-configuration device discovery
-- [x] Android app with automatic LAN scan on launch
+- [x] Android app with automatic LAN scan on launch — *built, but the Android client is currently out of date and not working; see [Known limitations](#known-limitations)*
 - [x] QR code in the Network panel — encodes the direct-IP chat URL, so any phone camera opens the chat UI with no name resolution and no app install
 - [x] Windows desktop client (Redstart Twig)
 - [x] Shared SvelteKit chat UI across all clients
