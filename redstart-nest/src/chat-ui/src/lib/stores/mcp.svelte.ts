@@ -71,6 +71,7 @@ import {
 import { normalizeSchemaProperties, parseToolArguments } from '$lib/stores/mcp/mcp-schema';
 import { MCPHealth } from '$lib/stores/mcp/mcp-health.svelte';
 import { MCPServers } from '$lib/stores/mcp/mcp-servers.svelte';
+import { MCPTools } from '$lib/stores/mcp/mcp-tools.svelte';
 
 class MCPStore {
 	/**
@@ -87,9 +88,15 @@ class MCPStore {
 	 */
 	readonly servers = new MCPServers(this.health);
 
+	/**
+	 * The tool-name index and its count. Owned by a sub-store so seam 5b can
+	 * inject it into the connection layer, which is what writes it, rather than
+	 * having two owners of one index.
+	 */
+	readonly tools = new MCPTools();
+
 	private _isInitializing = $state(false);
 	private _error = $state<string | null>(null);
-	private _toolCount = $state(0);
 	private _connectedServers = $state<string[]>([]);
 
 	/**
@@ -103,7 +110,6 @@ class MCPStore {
 	}
 
 	private connections = new Map<string, MCPConnection>();
-	private toolsIndex = new Map<string, string>();
 	private serverConfigs = new Map<string, MCPServerConfig>(); // Store configs for reconnection
 	private reconnectingServers = new Set<string>(); // Guard against concurrent reconnections
 	private configSignature: string | null = null;
@@ -127,7 +133,7 @@ class MCPStore {
 	}
 
 	get toolCount(): number {
-		return this._toolCount;
+		return this.tools.toolCount;
 	}
 
 	get connectedServerCount(): number {
@@ -146,7 +152,7 @@ class MCPStore {
 	}
 
 	get availableTools(): string[] {
-		return Array.from(this.toolsIndex.keys());
+		return Array.from(this.tools.toolsIndex.keys());
 	}
 
 	private updateState(state: {
@@ -164,7 +170,7 @@ class MCPStore {
 		}
 
 		if (state.toolCount !== undefined) {
-			this._toolCount = state.toolCount;
+			this.tools.toolCount = state.toolCount;
 		}
 
 		if (state.connectedServers !== undefined) {
@@ -354,11 +360,11 @@ class MCPStore {
 				this.connections.set(name, connection);
 
 				for (const tool of connection.tools) {
-					if (this.toolsIndex.has(tool.name))
+					if (this.tools.toolsIndex.has(tool.name))
 						console.warn(
-							`[MCPStore] Tool name conflict: "${tool.name}" exists in "${this.toolsIndex.get(tool.name)}" and "${name}". Using tool from "${name}".`
+							`[MCPStore] Tool name conflict: "${tool.name}" exists in "${this.tools.toolsIndex.get(tool.name)}" and "${name}". Using tool from "${name}".`
 						);
-					this.toolsIndex.set(tool.name, name);
+					this.tools.toolsIndex.set(tool.name, name);
 				}
 			} else {
 				console.error(`[MCPStore] Failed to connect:`, result.reason);
@@ -381,7 +387,7 @@ class MCPStore {
 		this.updateState({
 			isInitializing: false,
 			error: null,
-			toolCount: this.toolsIndex.size,
+			toolCount: this.tools.toolsIndex.size,
 			connectedServers: Array.from(this.connections.keys())
 		});
 		this.initPromise = null;
@@ -417,20 +423,20 @@ class MCPStore {
 			return;
 		}
 
-		for (const [toolName, ownerServer] of this.toolsIndex.entries()) {
-			if (ownerServer === serverName) this.toolsIndex.delete(toolName);
+		for (const [toolName, ownerServer] of this.tools.toolsIndex.entries()) {
+			if (ownerServer === serverName) this.tools.toolsIndex.delete(toolName);
 		}
 
 		connection.tools = tools;
 
 		for (const tool of tools) {
-			if (this.toolsIndex.has(tool.name))
+			if (this.tools.toolsIndex.has(tool.name))
 				console.warn(
-					`[MCPStore] Tool name conflict after list change: "${tool.name}" exists in "${this.toolsIndex.get(tool.name)}" and "${serverName}". Using tool from "${serverName}".`
+					`[MCPStore] Tool name conflict after list change: "${tool.name}" exists in "${this.tools.toolsIndex.get(tool.name)}" and "${serverName}". Using tool from "${serverName}".`
 				);
-			this.toolsIndex.set(tool.name, serverName);
+			this.tools.toolsIndex.set(tool.name, serverName);
 		}
-		this.updateState({ toolCount: this.toolsIndex.size });
+		this.updateState({ toolCount: this.tools.toolsIndex.size });
 	}
 
 	acquireConnection(): void {
@@ -472,7 +478,7 @@ class MCPStore {
 		);
 
 		this.connections.clear();
-		this.toolsIndex.clear();
+		this.tools.toolsIndex.clear();
 		this.serverConfigs.clear();
 		this.configSignature = null;
 		this.updateState({
@@ -525,7 +531,7 @@ class MCPStore {
 		// Replace connection and rebuild tool index for this server
 		this.connections.set(serverName, connection);
 		for (const tool of connection.tools) {
-			this.toolsIndex.set(tool.name, serverName);
+			this.tools.toolsIndex.set(tool.name, serverName);
 		}
 
 		console.log(`[MCPStore][${serverName}] Session recovered successfully`);
@@ -616,7 +622,7 @@ class MCPStore {
 
 					// Rebuild tool index for this server
 					for (const tool of connection.tools) {
-						this.toolsIndex.set(tool.name, serverName);
+						this.tools.toolsIndex.set(tool.name, serverName);
 					}
 
 					console.log(`[MCPStore][${serverName}] Reconnected successfully`);
@@ -722,15 +728,15 @@ class MCPStore {
 	}
 
 	getToolNames(): string[] {
-		return Array.from(this.toolsIndex.keys());
+		return this.tools.getToolNames();
 	}
 
 	hasTool(toolName: string): boolean {
-		return this.toolsIndex.has(toolName);
+		return this.tools.hasTool(toolName);
 	}
 
 	getToolServer(toolName: string): string | undefined {
-		return this.toolsIndex.get(toolName);
+		return this.tools.getToolServer(toolName);
 	}
 
 	hasPromptsSupport(): boolean {
@@ -844,7 +850,7 @@ class MCPStore {
 	async executeTool(toolCall: MCPToolCall, signal?: AbortSignal): Promise<ToolExecutionResult> {
 		const toolName = toolCall.function.name;
 
-		const serverName = this.toolsIndex.get(toolName);
+		const serverName = this.tools.toolsIndex.get(toolName);
 		if (!serverName) throw new Error(`Unknown tool: ${toolName}`);
 
 		const connection = this.connections.get(serverName);
@@ -874,7 +880,7 @@ class MCPStore {
 		args: Record<string, unknown>,
 		signal?: AbortSignal
 	): Promise<ToolExecutionResult> {
-		const serverName = this.toolsIndex.get(toolName);
+		const serverName = this.tools.toolsIndex.get(toolName);
 		if (!serverName) throw new Error(`Unknown tool: ${toolName}`);
 		const connection = this.connections.get(serverName);
 		if (!connection) throw new Error(`Server "${serverName}" is not connected`);
@@ -1176,12 +1182,12 @@ class MCPStore {
 	private promoteHealthCheckToConnection(serverId: string, connection: MCPConnection): void {
 		// Register tools from the connection
 		for (const tool of connection.tools) {
-			if (this.toolsIndex.has(tool.name)) {
+			if (this.tools.toolsIndex.has(tool.name)) {
 				console.warn(
-					`[MCPStore] Tool name conflict during promotion: "${tool.name}" exists in "${this.toolsIndex.get(tool.name)}" and "${serverId}". Using tool from "${serverId}".`
+					`[MCPStore] Tool name conflict during promotion: "${tool.name}" exists in "${this.tools.toolsIndex.get(tool.name)}" and "${serverId}". Using tool from "${serverId}".`
 				);
 			}
-			this.toolsIndex.set(tool.name, serverId);
+			this.tools.toolsIndex.set(tool.name, serverId);
 		}
 
 		// Add to active connections
@@ -1189,7 +1195,7 @@ class MCPStore {
 
 		// Update state
 		this.updateState({
-			toolCount: this.toolsIndex.size,
+			toolCount: this.tools.toolsIndex.size,
 			connectedServers: Array.from(this.connections.keys())
 		});
 	}

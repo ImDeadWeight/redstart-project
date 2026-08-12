@@ -650,6 +650,44 @@ describe('mcpStore forwards mcp-health state, and mcp-servers reads it', () => {
 	});
 });
 
+describe('mcpStore forwards mcp-tools state', () => {
+	afterEach(() => {
+		mcpStore.tools.toolsIndex.clear();
+		mcpStore.tools.toolCount = 0;
+	});
+
+	// The index is a plain Map that the connection and health layers mutate in
+	// place from a dozen private call sites. A facade-local copy — its own Map,
+	// or a getter returning `new Map(...)` — reads back value-identical through
+	// every public accessor below, so nothing else here can see it. What it
+	// breaks is the writes, in code no unit test can reach without a live
+	// connection. So the absence of a second index is asserted structurally.
+	it('keeps no index of its own', () => {
+		expect(descriptorOf(mcpStore, 'toolsIndex'), 'the facade grew a second tool index').toBeNull();
+	});
+
+	it('reads the tool index the sub-store holds', () => {
+		mcpStore.tools.toolsIndex.set('search', 'srv-search');
+
+		expect(mcpStore.hasTool('search')).toBe(true);
+		expect(mcpStore.getToolServer('search')).toBe('srv-search');
+		expect(mcpStore.getToolNames()).toEqual(['search']);
+		expect(mcpStore.availableTools).toEqual(['search']);
+	});
+
+	it('reports an unknown tool as absent', () => {
+		expect(mcpStore.hasTool('nothing-here')).toBe(false);
+		expect(mcpStore.getToolServer('nothing-here')).toBeUndefined();
+	});
+
+	it('reads the tool count from the sub-store', () => {
+		mcpStore.tools.toolCount = 7;
+
+		expect(mcpStore.toolCount).toBe(7);
+		expect(mcpToolCount()).toBe(7);
+	});
+});
+
 describe('conversationsStore callback registration contracts', () => {
 	// Wired from +layout.svelte and called from chat-message-ops; seam 6c moves
 	// the title concern out and must keep this contract.

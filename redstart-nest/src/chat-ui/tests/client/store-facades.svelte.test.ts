@@ -227,4 +227,19 @@ describe('mcpStore stays wired to the owning $state', () => {
 
 		expect(values).toEqual([HealthCheckStatus.IDLE, HealthCheckStatus.SUCCESS]);
 	});
+
+	// Seam 5b0. `toolCount` is the only reactive signal the tool index publishes —
+	// the index itself is a plain Map — so this is the whole of what the toolbar
+	// and the tools picker depend on to re-render after a connect.
+	it('re-runs an effect when the tool count changes in the sub-store', () => {
+		mcpStore.tools.toolCount = 0;
+
+		const { values, stop } = observeReads(() => mcpStore.toolCount);
+
+		mcpStore.tools.toolCount = 3;
+		flushSync();
+		stop();
+
+		expect(values).toEqual([0, 3]);
+	});
 });
