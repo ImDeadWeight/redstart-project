@@ -242,4 +242,43 @@ describe('mcpStore stays wired to the owning $state', () => {
 
 		expect(values).toEqual([0, 3]);
 	});
+
+	// Seam 5b moved all three of these out of the facade in one commit. They are
+	// what the connection indicator, the error banner and the server avatars
+	// re-render on, and `updateState` — now on the sub-store — is the only writer.
+	it('re-runs an effect when the connected servers change in the sub-store', () => {
+		mcpStore.conn.connectedServers = [];
+
+		const { values, stop } = observeReads(() => mcpStore.connectedServerCount);
+
+		mcpStore.conn.connectedServers = ['srv-a', 'srv-b'];
+		flushSync();
+		stop();
+
+		expect(values).toEqual([0, 2]);
+	});
+
+	it('re-runs an effect when the error changes in the sub-store', () => {
+		mcpStore.conn.error = null;
+
+		const { values, stop } = observeReads(() => mcpStore.error);
+
+		mcpStore.conn.error = 'All MCP server connections failed';
+		flushSync();
+		stop();
+
+		expect(values).toEqual([null, 'All MCP server connections failed']);
+	});
+
+	it('re-runs an effect when the init flag changes in the sub-store', () => {
+		mcpStore.conn.isInitializing = false;
+
+		const { values, stop } = observeReads(() => mcpStore.isInitializing);
+
+		mcpStore.conn.isInitializing = true;
+		flushSync();
+		stop();
+
+		expect(values).toEqual([false, true]);
+	});
 });

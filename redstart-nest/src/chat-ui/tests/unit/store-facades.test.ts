@@ -688,6 +688,64 @@ describe('mcpStore forwards mcp-tools state', () => {
 	});
 });
 
+describe('mcpStore forwards mcp-connections state', () => {
+	afterEach(() => {
+		mcpStore.conn.connections.clear();
+		mcpStore.conn.connectedServers = [];
+		mcpStore.conn.error = null;
+		mcpStore.conn.isInitializing = false;
+	});
+
+	// Same hazard as the tool index, and worse: `runHealthCheck` deletes from this
+	// map and `promoteHealthCheckToConnection` sets into it, both from the facade,
+	// both private. A facade-local map or a copying getter reads back identical
+	// through every accessor below while dropping those writes on the floor.
+	it('keeps no connection map of its own', () => {
+		expect(descriptorOf(mcpStore, 'connections'), 'the facade grew a second pool').toBeNull();
+		expect(descriptorOf(mcpStore, 'serverConfigs'), 'the facade grew a second config map').toBeNull();
+	});
+
+	it('hands back the sub-store pool itself, not a copy', () => {
+		expect(mcpStore.getConnections()).toBe(mcpStore.conn.connections);
+	});
+
+	it('derives isInitialized from the sub-store pool', () => {
+		expect(mcpStore.isInitialized).toBe(false);
+
+		mcpStore.conn.connections.set('srv-1', {} as never);
+
+		expect(mcpStore.isInitialized).toBe(true);
+	});
+
+	it('reads the connected server list from the sub-store by reference', () => {
+		const names = ['srv-a', 'srv-b'];
+		mcpStore.conn.connectedServers = names;
+
+		expect(mcpStore.connectedServerNames).toBe(names);
+		expect(mcpStore.connectedServerCount).toBe(2);
+		expect(mcpConnectedServerNames()).toBe(names);
+		expect(mcpConnectedServerCount()).toBe(2);
+	});
+
+	it('reads the init flag and the error from the sub-store', () => {
+		mcpStore.conn.isInitializing = true;
+		mcpStore.conn.error = 'All MCP server connections failed';
+
+		expect(mcpStore.isInitializing).toBe(true);
+		expect(mcpStore.error).toBe('All MCP server connections failed');
+		expect(mcpIsInitializing()).toBe(true);
+		expect(mcpError()).toBe('All MCP server connections failed');
+	});
+
+	it('clears the error through to the sub-store', () => {
+		mcpStore.conn.error = 'boom';
+
+		mcpStore.clearError();
+
+		expect(mcpStore.conn.error).toBeNull();
+	});
+});
+
 describe('conversationsStore callback registration contracts', () => {
 	// Wired from +layout.svelte and called from chat-message-ops; seam 6c moves
 	// the title concern out and must keep this contract.
