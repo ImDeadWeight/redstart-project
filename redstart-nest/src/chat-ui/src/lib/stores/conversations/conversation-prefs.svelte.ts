@@ -10,9 +10,11 @@
  * inherits; the facade forwards them with getters and setters, since consumers
  * assign to them.
  *
- * §4.2 step 5 notes the three pairs are near-identical and suggests sharing the
- * shape rather than repeating it. That is a behaviour-adjacent change and is
- * deliberately NOT done here — this seam is a pure move. See the plan.
+ * The three pairs now share one write path (`setConversationPref`). They are
+ * near-identical but NOT identical, and both differences are deliberate:
+ * `promptMode` reports null rather than the pending default when a conversation
+ * is open, and it persists no default. Those are parameters and an explicit
+ * branch rather than something the shared shape smooths over.
  */
 
 import { DatabaseService } from '$lib/services/database.service';
@@ -84,14 +86,43 @@ export class ConversationPrefs {
 	}
 
 	/**
+	 * The write half the three setters share: update the active conversation, the
+	 * database row and the list entry, in that order, replacing the array so
+	 * readers re-run.
+	 *
+	 * `whenNoConversation` is the only part that differs between the three, which
+	 * is why it is a parameter rather than a flag — thinking and effort persist a
+	 * default there, prompt mode deliberately does not.
+	 */
+	private async setConversationPref<K extends 'thinkingEnabled' | 'reasoningEffort' | 'promptMode'>(
+		field: K,
+		value: DatabaseConversation[K],
+		whenNoConversation: () => void
+	): Promise<void> {
+		if (!this.core.activeConversation) {
+			whenNoConversation();
+			return;
+		}
+
+		this.core.activeConversation = { ...this.core.activeConversation, [field]: value };
+
+		await DatabaseService.updateConversation(this.core.activeConversation.id, { [field]: value });
+
+		const convIndex = this.core.conversations.findIndex(
+			(c) => c.id === this.core.activeConversation!.id
+		);
+		if (convIndex !== -1) {
+			this.core.conversations[convIndex][field] = value;
+			this.core.conversations = [...this.core.conversations];
+		}
+	}
+
+	/**
 	 * Gets the effective thinking-enabled state for the active conversation.
 	 * Returns the conversation override if set, otherwise the global default.
 	 */
 	getThinkingEnabled(): boolean {
-		if (this.core.activeConversation) {
-			return this.core.activeConversation.thinkingEnabled ?? this.pendingThinkingEnabled;
-		}
-		return this.pendingThinkingEnabled;
+		return this.core.activeConversation?.thinkingEnabled ?? this.pendingThinkingEnabled;
 	}
 
 	/**
@@ -100,26 +131,10 @@ export class ConversationPrefs {
 	 * @param enabled - The enabled state
 	 */
 	async setThinkingEnabled(enabled: boolean): Promise<void> {
-		if (!this.core.activeConversation) {
+		return this.setConversationPref('thinkingEnabled', enabled, () => {
 			this.pendingThinkingEnabled = enabled;
 			this.saveThinkingDefaults();
-			return;
-		}
-
-		this.core.activeConversation = {
-			...this.core.activeConversation,
-			thinkingEnabled: enabled
-		};
-
-		await DatabaseService.updateConversation(this.core.activeConversation.id, {
-			thinkingEnabled: enabled
 		});
-
-		const convIndex = this.core.conversations.findIndex((c) => c.id === this.core.activeConversation!.id);
-		if (convIndex !== -1) {
-			this.core.conversations[convIndex].thinkingEnabled = enabled;
-			this.core.conversations = [...this.core.conversations];
-		}
 	}
 
 	/**
@@ -127,10 +142,7 @@ export class ConversationPrefs {
 	 * Returns the conversation override if set, otherwise the global default.
 	 */
 	getReasoningEffort(): ReasoningEffort {
-		if (this.core.activeConversation) {
-			return this.core.activeConversation.reasoningEffort ?? this.pendingReasoningEffort;
-		}
-		return this.pendingReasoningEffort;
+		return this.core.activeConversation?.reasoningEffort ?? this.pendingReasoningEffort;
 	}
 
 	/**
@@ -139,26 +151,10 @@ export class ConversationPrefs {
 	 * @param effort - The effort level ('low' | 'medium' | 'high' | 'max')
 	 */
 	async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
-		if (!this.core.activeConversation) {
+		return this.setConversationPref('reasoningEffort', effort, () => {
 			this.pendingReasoningEffort = effort;
 			this.saveReasoningEffortDefaults();
-			return;
-		}
-
-		this.core.activeConversation = {
-			...this.core.activeConversation,
-			reasoningEffort: effort
-		};
-
-		await DatabaseService.updateConversation(this.core.activeConversation.id, {
-			reasoningEffort: effort
 		});
-
-		const convIndex = this.core.conversations.findIndex((c) => c.id === this.core.activeConversation!.id);
-		if (convIndex !== -1) {
-			this.core.conversations[convIndex].reasoningEffort = effort;
-			this.core.conversations = [...this.core.conversations];
-		}
 	}
 
 	/**
@@ -166,6 +162,10 @@ export class ConversationPrefs {
 	 * or null when none is selected.
 	 */
 	getPromptMode(): string | null {
+		// NOT `?? this.pendingPromptMode`, unlike the two above. With a conversation
+		// open an unset mode reports null, so a mode picked for a new chat cannot
+		// leak into an existing one that never selected it. Pinned by
+		// tests/unit/conversation-prefs.test.ts.
 		if (this.core.activeConversation) {
 			return this.core.activeConversation.promptMode ?? null;
 		}
@@ -180,24 +180,9 @@ export class ConversationPrefs {
 	 * @param mode - A mode ID from `GET /prompt-modes`, or null for none
 	 */
 	async setPromptMode(mode: string | null): Promise<void> {
-		if (!this.core.activeConversation) {
+		// No saved default here — see pendingPromptMode above.
+		return this.setConversationPref('promptMode', mode, () => {
 			this.pendingPromptMode = mode;
-			return;
-		}
-
-		this.core.activeConversation = {
-			...this.core.activeConversation,
-			promptMode: mode
-		};
-
-		await DatabaseService.updateConversation(this.core.activeConversation.id, {
-			promptMode: mode
 		});
-
-		const convIndex = this.core.conversations.findIndex((c) => c.id === this.core.activeConversation!.id);
-		if (convIndex !== -1) {
-			this.core.conversations[convIndex].promptMode = mode;
-			this.core.conversations = [...this.core.conversations];
-		}
 	}
 }

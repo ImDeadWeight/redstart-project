@@ -26,6 +26,13 @@ import type { DatabaseMessage } from '$lib/types/database';
  * regenerate), the stored summary is only reused when that message id is
  * present in the branch being sent; otherwise it is discarded and rebuilt.
  *
+ * Summarizing old turns cannot, on its own, bound the payload: the newest
+ * turns are always kept verbatim, so one huge tool result among them would
+ * still overflow n_ctx no matter how much history was folded away. Two
+ * guarantees close that gap — every returned payload has each message capped
+ * at MAX_SINGLE_MESSAGE_TOKENS_RATIO of the budget, and a failed summarizer
+ * falls back to hard truncation rather than resending the oversized original.
+ *
  * Costs to be aware of: each compaction is one extra (non-streamed) model
  * call, and rewriting the front of the prompt invalidates llama-server's KV
  * prefix cache, forcing a full reprocess on the next turn. Both are why
@@ -47,8 +54,16 @@ const SUMMARY_MAX_TOKENS = 400;
 // Per-message chat-template overhead (role headers, separators) that
 // /tokenize on raw text does not see.
 const PER_MESSAGE_OVERHEAD_TOKENS = 6;
+// Hard per-message ceiling for the payload, as a fraction of `usable` —
+// independent of history length. Compaction only ever removes or summarizes
+// OLD turns, so it has no way to shrink an oversized RECENT one: the
+// tail-selection loop below never breaks below the last two messages, and a
+// single huge tool result (a full file read, a large diff) inside that floor
+// would otherwise go out verbatim even when it alone overflows n_ctx.
+const MAX_SINGLE_MESSAGE_TOKENS_RATIO = 0.4;
 
 const SUMMARY_PREFIX = '[Conversation summary — earlier messages were compacted to fit the context window]\n';
+const ELISION_MARKER = '\n…[truncated — message exceeded the per-turn context budget]…\n';
 
 // Progressive summarizer prompt (ported from LangChain's SUMMARY_PROMPT):
 // folds new lines into the existing summary instead of re-summarizing from
@@ -102,6 +117,103 @@ export class ContextCompactionService {
 			toolCalls: '',
 			extra: undefined
 		} as DatabaseMessage;
+	}
+
+	/**
+	 * Trims each tool call's `arguments` while keeping the call list
+	 * structurally intact. The calls themselves are load-bearing — a following
+	 * tool result's `tool_call_id` has to resolve against them — so only the
+	 * argument payload (which is where a `write_file` call's bulk lives) is cut.
+	 */
+	private static capToolCallArguments(
+		toolCalls: string | undefined,
+		keepChars: number
+	): string | undefined {
+		if (!toolCalls || toolCalls.length <= keepChars) return toolCalls;
+		try {
+			const parsed: unknown = JSON.parse(toolCalls);
+			if (!Array.isArray(parsed) || parsed.length === 0) return toolCalls;
+			const perCall = Math.max(120, Math.floor(keepChars / parsed.length));
+			return JSON.stringify(
+				parsed.map((call) => {
+					const args = (call as { function?: { arguments?: unknown } })?.function?.arguments;
+					if (typeof args !== 'string' || args.length <= perCall) return call;
+					const fn = (call as { function: Record<string, unknown> }).function;
+					return {
+						...call,
+						function: { ...fn, arguments: args.slice(0, perCall) + ELISION_MARKER }
+					};
+				})
+			);
+		} catch {
+			// Malformed tool-call JSON: leave it alone rather than risk breaking
+			// linkage. The converter already tolerates unparseable values.
+			return toolCalls;
+		}
+	}
+
+	/**
+	 * Payload-only elision of a single oversized message. Clones the record the
+	 * same way makeSummaryMessage does — the stored message is never mutated,
+	 * so the visible conversation stays complete.
+	 */
+	private static capOversizedMessage(
+		message: DatabaseMessage,
+		tokenCount: number,
+		limitTokens: number
+	): DatabaseMessage {
+		if (limitTokens <= 0 || tokenCount <= limitTokens) return message;
+
+		// messageText() is exactly what countTokensPerMessage measured, so
+		// eliding against it is what actually brings the count under the limit.
+		// Its `role: ` prefix gets re-added by the next measurement — strip it
+		// here so it is not baked into the content twice.
+		const measured = this.messageText(message);
+		const text = measured.slice(`${message.role}: `.length);
+		// Budget the surviving text against this message's own observed token
+		// density rather than a global chars-per-token guess.
+		const approxCharsPerToken = Math.max(1, measured.length / Math.max(1, tokenCount));
+		// Keep head + tail and elide the middle: the head usually carries the
+		// instruction or file path, the tail the result or conclusion. 0.45 each
+		// leaves room for the marker and the per-message template overhead.
+		const keepChars = Math.max(200, Math.floor(limitTokens * approxCharsPerToken * 0.45));
+
+		return {
+			...message,
+			id: `elided-${message.id}`,
+			content:
+				text.length <= keepChars * 2
+					? text
+					: text.slice(0, keepChars) + ELISION_MARKER + text.slice(-keepChars),
+			reasoningContent: undefined,
+			// Tool RESULT messages link back via toolCallId, which the spread
+			// preserves untouched.
+			toolCalls: this.capToolCallArguments(message.toolCalls, keepChars),
+			extra: undefined
+		} as DatabaseMessage;
+	}
+
+	/**
+	 * Applies the per-message cap across a payload. Returns the SAME array
+	 * reference when nothing needed eliding — callers use identity to tell an
+	 * untouched payload from a rewritten one. Counts are looked up by message
+	 * id, not position, because a payload may already have had a span collapsed
+	 * into a summary message, which shifts every index after it.
+	 */
+	private static capPayload(
+		messages: DatabaseMessage[],
+		countById: Map<string, number>,
+		limitTokens: number
+	): DatabaseMessage[] {
+		let capped = false;
+		const out = messages.map((message) => {
+			const count = countById.get(message.id);
+			if (count === undefined) return message;
+			const next = this.capOversizedMessage(message, count, limitTokens);
+			if (next !== message) capped = true;
+			return next;
+		});
+		return capped ? out : messages;
 	}
 
 	private static leadingSystemCount(messages: DatabaseMessage[]): number {
@@ -217,9 +329,13 @@ export class ContextCompactionService {
 	/**
 	 * Token-counts `messages` against the server's context window and, when
 	 * over threshold, returns a rewritten list with the oldest turns replaced
-	 * by a running summary. Returns the input untouched when compaction is
-	 * disabled, not needed, or not possible (no n_ctx, tiny history, or any
-	 * error — this must never block a send).
+	 * by a running summary. Individually oversized messages are elided on every
+	 * path that returns a payload, including the under-threshold one. Returns
+	 * the input untouched (same reference) when compaction is disabled, not
+	 * needed, or not possible — no n_ctx, tiny history, or an error outside the
+	 * summarizer, since this must never block a send. A failing summarizer is
+	 * the one exception: it hard-truncates rather than passing the oversized
+	 * original through to a certain 400.
 	 */
 	static async maybeCompact(
 		convId: string,
@@ -236,11 +352,18 @@ export class ContextCompactionService {
 			const counts = await this.countTokensPerMessage(messages);
 			if (!counts) return passthrough;
 			const total = counts.reduce((a, b) => a + b, 0);
+			const countById = new Map(messages.map((m, i) => [m.id, counts[i]]));
+			const perMessageLimit = usable * MAX_SINGLE_MESSAGE_TOKENS_RATIO;
+
 			if (total <= usable * TRIGGER_RATIO) {
 				// Under threshold, but a stored summary (e.g. from a manual
 				// compaction) still shrinks the payload — apply it at zero cost.
 				const effective = await this.applyStoredSummary(convId, messages);
-				return { messages: effective.messages, compacted: effective.applied };
+				// The per-message cap still applies here: on a short history a
+				// single giant tool result can sit under the overall trigger
+				// while individually overflowing what one turn may occupy.
+				const capped = this.capPayload(effective.messages, countById, perMessageLimit);
+				return { messages: capped, compacted: effective.applied || capped !== effective.messages };
 			}
 
 			// Leading system messages are never summarized away.
@@ -259,7 +382,15 @@ export class ContextCompactionService {
 			}
 
 			const pruned = messages.slice(firstChat, tailStart);
-			if (pruned.length === 0) return passthrough;
+			if (pruned.length === 0) {
+				// Nothing old enough to summarize — the tail loop swallowed the
+				// whole history to honour its keep-the-last-two floor. Capping is
+				// the only lever left, and this is precisely the case that needs
+				// it: a short conversation whose bulk is one oversized recent
+				// message, which no amount of summarizing could have shrunk.
+				const capped = this.capPayload(messages, countById, perMessageLimit);
+				return { messages: capped, compacted: capped !== messages };
+			}
 
 			// Reuse the stored running summary when its coverage boundary is part
 			// of the pruned span of THIS branch; otherwise rebuild from scratch.
@@ -275,10 +406,33 @@ export class ContextCompactionService {
 				}
 			}
 
-			const summary = toSummarize.length
-				? await this.summarize(existingSummary, toSummarize)
-				: existingSummary;
-			if (!summary) return passthrough;
+			// The kept tail is capped whichever way the summarization goes: no
+			// path out of here may return a payload holding an oversized message.
+			const cappedTail = this.capPayload(messages.slice(tailStart), countById, perMessageLimit);
+
+			let summary: string | null;
+			try {
+				summary = toSummarize.length
+					? await this.summarize(existingSummary, toSummarize)
+					: existingSummary;
+			} catch (error) {
+				// summarize() rejects on a busy server or when its own prompt
+				// does not fit; that is the same outcome as an empty summary.
+				console.warn('[ContextCompaction] Summarizer call failed:', error);
+				summary = null;
+			}
+
+			if (!summary) {
+				// Resending the oversized original here would be a guaranteed 400
+				// — the dead end this service exists to prevent. Degrade instead:
+				// drop the old turns outright and send the capped tail. That
+				// loses context, but it sends.
+				console.warn('[ContextCompaction] Summarizer failed — falling back to hard truncation');
+				return {
+					messages: [...messages.slice(0, firstChat), ...cappedTail],
+					compacted: true
+				};
+			}
 
 			await DatabaseService.updateConversation(convId, {
 				contextSummary: { text: summary, upToMessageId: pruned[pruned.length - 1].id }
@@ -293,7 +447,7 @@ export class ContextCompactionService {
 				`[ContextCompaction] Compacted ${pruned.length} message(s) (~${total} tokens > ${Math.round(usable * TRIGGER_RATIO)} threshold, n_ctx ${nCtx})`
 			);
 			return {
-				messages: [...messages.slice(0, firstChat), summaryMessage, ...messages.slice(tailStart)],
+				messages: [...messages.slice(0, firstChat), summaryMessage, ...cappedTail],
 				compacted: true
 			};
 		} catch (error) {
