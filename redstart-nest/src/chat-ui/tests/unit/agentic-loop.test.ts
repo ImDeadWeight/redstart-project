@@ -185,7 +185,8 @@ describe('executeAgenticLoop callback ordering', () => {
 	// indication anything failed.
 	it('saves partial output, completes, and rethrows when the stream errors', async () => {
 		sendMessage.mockImplementation(
-			async (_messages: unknown, opts: Record<string, (c: string) => void>) => {
+			async (_messages: unknown, opts: Record<string, (...a: unknown[]) => void>) => {
+				opts.onTimings?.({ predicted_n: 7, predicted_ms: 70 });
 				opts.onChunk?.('partial ');
 				throw new Error('stream exploded');
 			}
@@ -200,8 +201,15 @@ describe('executeAgenticLoop callback ordering', () => {
 			rec.calls.indexOf('onFlowComplete')
 		);
 
-		const [content] = rec.callbacks.onAssistantTurnComplete.mock.calls[0] as string[];
+		const [content, , timings] = rec.callbacks.onAssistantTurnComplete.mock.calls[0] as [
+			string,
+			unknown,
+			{ predicted_n?: number } | undefined
+		];
 		expect(content).toBe('partial ');
+		// timings captured during the turn that then failed must not be lost — the
+		// catch has to read the accumulator, not the pre-turn value.
+		expect(timings?.predicted_n).toBe(7);
 	});
 
 	// The same catch block, the other branch: when the failure is an abort the
@@ -210,7 +218,8 @@ describe('executeAgenticLoop callback ordering', () => {
 	it('saves and returns without rethrowing when the stream aborts', async () => {
 		const controller = new AbortController();
 		sendMessage.mockImplementation(
-			async (_messages: unknown, opts: Record<string, (c: string) => void>) => {
+			async (_messages: unknown, opts: Record<string, (...a: unknown[]) => void>) => {
+				opts.onTimings?.({ predicted_n: 5, predicted_ms: 50 });
 				opts.onChunk?.('half an answer');
 				controller.abort();
 				throw new Error('aborted');
@@ -224,8 +233,15 @@ describe('executeAgenticLoop callback ordering', () => {
 		expect(rec.calls.indexOf('onAssistantTurnComplete')).toBeLessThan(
 			rec.calls.indexOf('onFlowComplete')
 		);
-		const [content] = rec.callbacks.onAssistantTurnComplete.mock.calls[0] as string[];
+		const [content, , timings] = rec.callbacks.onAssistantTurnComplete.mock.calls[0] as [
+			string,
+			unknown,
+			{ predicted_n?: number } | undefined
+		];
 		expect(content).toBe('half an answer');
+		// same requirement as the error branch: read the accumulator, not the
+		// pre-turn value, or timings measured during the aborted turn vanish
+		expect(timings?.predicted_n).toBe(5);
 	});
 
 	// A user typed while the model was answering. The flow exits so chatStore can
@@ -321,5 +337,39 @@ describe('executeAgenticLoop callback ordering', () => {
 		expect(parked).toBe(true);
 		expect(sendMessage).toHaveBeenCalledTimes(1);
 		expect(rec.callbacks.onFlowComplete).toHaveBeenCalledTimes(1);
+	});
+
+	// Seam 7e moved timings capture into the turn module, where it lands in the
+	// caller's accumulator. The caller has to carry that back across turns, or a
+	// flow whose *later* turn reports nothing loses what the earlier one measured.
+	// (Mutation-tested: dropping that one line is invisible without this test.)
+	it('carries timings captured in an earlier turn through to the end', async () => {
+		let turn = 0;
+		sendMessage.mockImplementation(
+			async (_messages: unknown, opts: Record<string, (...a: unknown[]) => void>) => {
+				turn += 1;
+				if (turn === 1) {
+					opts.onTimings?.({ predicted_n: 42, predicted_ms: 100 });
+					opts.onToolCallChunk?.(
+						JSON.stringify([
+							{ id: 'call_1', type: 'function', function: { name: 't', arguments: '{}' } }
+						])
+					);
+					return undefined;
+				}
+				// second turn reports no timings at all
+				opts.onChunk?.('done');
+				return undefined;
+			}
+		);
+
+		const { rec, done } = runLoop();
+		await answerPermission('once');
+		await done;
+
+		const [finalTimings] = rec.callbacks.onFlowComplete.mock.calls.at(-1) as [
+			{ predicted_n?: number } | undefined
+		];
+		expect(finalTimings?.predicted_n).toBe(42);
 	});
 });

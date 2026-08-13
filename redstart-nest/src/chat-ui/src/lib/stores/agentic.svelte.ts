@@ -20,14 +20,12 @@
  * @see mcpStore in stores/mcp.svelte.ts for MCP operations
  */
 
-import { ChatService } from '$lib/services';
 import { convertDbMessageToApiChatMessageData } from '$lib/services/chat/chat-message-convert';
 import { config } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import { ToolPermissionDecision } from '$lib/enums';
-import { parseToolCallsFromTurn, createApiToolCalls } from '$lib/utils/tool-call-parser';
 import { DEFAULT_AGENTIC_CONFIG } from '$lib/constants';
 import {
 	MessageRole,
@@ -52,7 +50,6 @@ import type {
 	ApiChatMessageContentPart
 } from '$lib/types/api';
 import type {
-	ChatMessagePromptProgress,
 	ChatMessageTimings,
 	ChatMessageAgenticTimings,
 	ChatMessageAgenticTurnStats
@@ -107,6 +104,7 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 
 import { AgenticSessionState } from '$lib/stores/agentic/agentic-session.svelte';
 import { AgenticToolExec } from '$lib/stores/agentic/agentic-tool-exec';
+import { AgenticTurn, createTurnAccumulator } from '$lib/stores/agentic/agentic-turn';
 import { buildFinalTimings } from '$lib/stores/agentic/agentic-timings';
 
 class AgenticStore {
@@ -124,6 +122,9 @@ class AgenticStore {
 	 * flow and the loop must return immediately — see the header there.
 	 */
 	private readonly toolExec = new AgenticToolExec(this.session);
+
+	/** One streaming LLM turn. Fills the caller's accumulator; never ends the flow. */
+	private readonly turnRunner = new AgenticTurn(this.session);
 
 	get isReady(): boolean {
 		return true;
@@ -346,12 +347,10 @@ class AgenticStore {
 				await createAssistantMessage();
 			}
 
-			let turnContent = '';
-			let turnReasoningContent = '';
-			let turnToolCalls: ApiChatCompletionToolCall[] = [];
-			let lastStreamingToolCallName = '';
-			let lastStreamingToolCallArgsLength = 0;
-			let turnTimings: ChatMessageTimings | undefined;
+			// One mutable object rather than six `let`s: runTurn fills it as chunks
+			// arrive, so the catch below still sees the partial answer if the stream
+			// throws. Copies read out afterwards would be stale on exactly that path.
+			const acc = createTurnAccumulator(capturedTimings);
 
 			const turnStats: ChatMessageAgenticTurnStats = {
 				turn: turn + 1,
@@ -361,141 +360,68 @@ class AgenticStore {
 			};
 
 			try {
-				await ChatService.sendMessage(
-					sessionMessages as ApiChatMessageData[],
-					{
-						...options,
-						stream: true,
-						tools: tools.length > 0 ? tools : undefined,
-						onChunk: (chunk: string) => {
-							turnContent += chunk;
-							onChunk?.(chunk);
-						},
-						onReasoningChunk: (chunk: string) => {
-							turnReasoningContent += chunk;
-							onReasoningChunk?.(chunk);
-						},
-						onToolCallChunk: (serialized: string) => {
-							try {
-								turnToolCalls = JSON.parse(serialized) as ApiChatCompletionToolCall[];
-								onToolCallsStreaming?.(turnToolCalls);
-
-								if (turnToolCalls.length > 0 && turnToolCalls[0]?.function) {
-									const name = turnToolCalls[0].function.name || '';
-									const args = turnToolCalls[0].function.arguments || '';
-									const argsLengthBucket = Math.floor(args.length / 100);
-									if (
-										name !== lastStreamingToolCallName ||
-										argsLengthBucket !== lastStreamingToolCallArgsLength
-									) {
-										lastStreamingToolCallName = name;
-										lastStreamingToolCallArgsLength = argsLengthBucket;
-										this.session.updateSession(conversationId, {
-											streamingToolCall: { name, arguments: args }
-										});
-									}
-								}
-							} catch {
-								/* Ignore parse errors during streaming */
-							}
-						},
-						onModel,
-						onCompletionId,
-						onTimings: (timings?: ChatMessageTimings, progress?: ChatMessagePromptProgress) => {
-							onTimings?.(timings, progress);
-							if (timings) {
-								capturedTimings = timings;
-								turnTimings = timings;
-							}
-						},
-						onComplete: () => {
-							/* Completion handled after sendMessage resolves */
-						},
-						onError: (error: Error) => {
-							throw error;
-						}
-					},
-					undefined,
+				await this.turnRunner.runTurn({
+					acc,
+					conversationId,
+					sessionMessages: sessionMessages as ApiChatMessageData[],
+					options,
+					tools,
+					agenticTimings,
+					turnStats,
+					callbacks,
 					signal
-				);
-
-				this.session.updateSession(conversationId, { streamingToolCall: null });
-
-				if (turnTimings) {
-					agenticTimings.llm.predicted_n += turnTimings.predicted_n || 0;
-					agenticTimings.llm.predicted_ms += turnTimings.predicted_ms || 0;
-					agenticTimings.llm.prompt_n += turnTimings.prompt_n || 0;
-					agenticTimings.llm.prompt_ms += turnTimings.prompt_ms || 0;
-					turnStats.llm.predicted_n = turnTimings.predicted_n || 0;
-					turnStats.llm.predicted_ms = turnTimings.predicted_ms || 0;
-					turnStats.llm.prompt_n = turnTimings.prompt_n || 0;
-					turnStats.llm.prompt_ms = turnTimings.prompt_ms || 0;
-				}
-
-				if (turnToolCalls.length === 0 && config().toolCallFallbackParserEnabled) {
-					const patternList: string[] = (config().toolCallFallbackParserPatterns || '')
-						.split(',')
-						.map((p: string) => p.trim())
-						.filter(Boolean);
-					// Scans the visible answer, then the reasoning stream — a reasoning
-					// model often writes the call in its thinking block and only
-					// narrates it in the answer, which would otherwise drop it silently.
-					const parsed = parseToolCallsFromTurn(turnContent, turnReasoningContent, {
-						patterns: patternList,
-						availableTools: toolsStore.allTools.map((t) => ({ name: t.definition.function.name }))
-					});
-
-					if (parsed.length > 0) {
-						turnToolCalls = createApiToolCalls(parsed);
-					}
-				}
+				});
 			} catch (error) {
 				if (signal?.aborted) {
 					// Save whatever we have for this turn before exiting
 					await onAssistantTurnComplete?.(
-						turnContent,
-						turnReasoningContent || undefined,
-						buildFinalTimings(capturedTimings, agenticTimings),
+						acc.content,
+						acc.reasoning || undefined,
+						buildFinalTimings(acc.captured, agenticTimings),
 						undefined
 					);
-					onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
+					onFlowComplete?.(buildFinalTimings(acc.captured, agenticTimings));
 					return;
 				}
 				const normalizedError = error instanceof Error ? error : new Error('LLM stream error');
 				// preserve partial output as is, the outer error dialog informs the user separately
 				await onAssistantTurnComplete?.(
-					turnContent,
-					turnReasoningContent || undefined,
-					buildFinalTimings(capturedTimings, agenticTimings),
+					acc.content,
+					acc.reasoning || undefined,
+					buildFinalTimings(acc.captured, agenticTimings),
 					undefined
 				);
-				onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
+				onFlowComplete?.(buildFinalTimings(acc.captured, agenticTimings));
 				throw normalizedError;
 			}
+
+			// runTurn writes captured timings into the accumulator; carry them to the
+			// next turn, which seeds a fresh accumulator from this variable.
+			capturedTimings = acc.captured;
 
 			// === Steering check: if a user message was queued during this turn, exit the flow.
 			// The caller (chatStore) will consume the pending message and re-send it normally.
 			if (this.session.steeringMessages.has(conversationId)) {
 				console.log('[AgenticStore] Steering message detected after turn, exiting agentic flow');
 				await onAssistantTurnComplete?.(
-					turnContent,
-					turnReasoningContent || undefined,
+					acc.content,
+					acc.reasoning || undefined,
 					buildFinalTimings(capturedTimings, agenticTimings),
-					turnToolCalls.length > 0 ? this.normalizeToolCalls(turnToolCalls) : undefined
+					acc.toolCalls.length > 0 ? this.normalizeToolCalls(acc.toolCalls) : undefined
 				);
 				onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 				return;
 			}
 
 			// No tool calls = final turn, save and complete
-			if (turnToolCalls.length === 0) {
+			if (acc.toolCalls.length === 0) {
 				agenticTimings.perTurn!.push(turnStats);
 
 				const finalTimings = buildFinalTimings(capturedTimings, agenticTimings);
 
 				await onAssistantTurnComplete?.(
-					turnContent,
-					turnReasoningContent || undefined,
+					acc.content,
+					acc.reasoning || undefined,
 					finalTimings,
 					undefined
 				);
@@ -508,11 +434,11 @@ class AgenticStore {
 			}
 
 			// Normalize and save assistant turn with tool calls
-			const normalizedCalls = this.normalizeToolCalls(turnToolCalls);
+			const normalizedCalls = this.normalizeToolCalls(acc.toolCalls);
 			if (normalizedCalls.length === 0) {
 				await onAssistantTurnComplete?.(
-					turnContent,
-					turnReasoningContent || undefined,
+					acc.content,
+					acc.reasoning || undefined,
 					buildFinalTimings(capturedTimings, agenticTimings),
 					undefined
 				);
@@ -525,17 +451,17 @@ class AgenticStore {
 
 			// Save the assistant message with its tool calls
 			await onAssistantTurnComplete?.(
-				turnContent,
-				turnReasoningContent || undefined,
-				turnTimings,
+				acc.content,
+				acc.reasoning || undefined,
+				acc.timings,
 				normalizedCalls
 			);
 
 			// Add assistant message to session history
 			sessionMessages.push({
 				role: MessageRole.ASSISTANT,
-				content: turnContent || undefined,
-				reasoning_content: turnReasoningContent || undefined,
+				content: acc.content || undefined,
+				reasoning_content: acc.reasoning || undefined,
 				tool_calls: normalizedCalls
 			});
 
