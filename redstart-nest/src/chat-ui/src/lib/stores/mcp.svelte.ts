@@ -23,15 +23,8 @@ import { MCPService } from '$lib/services/mcp.service';
 import { config } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
-import { detectMcpTransportFromUrl } from '$lib/utils';
-import {
-	MCPConnectionPhase,
-	MCPLogLevel,
-	MCPTransportType,
-	HealthCheckStatus,
-	MCPRefType
-} from '$lib/enums';
-import { DEFAULT_CACHE_TTL_MS, DEFAULT_MCP_CONFIG } from '$lib/constants';
+import { HealthCheckStatus, MCPRefType } from '$lib/enums';
+import { DEFAULT_CACHE_TTL_MS } from '$lib/constants';
 import type {
 	MCPToolCall,
 	OpenAIToolDefinition,
@@ -39,22 +32,16 @@ import type {
 	ToolExecutionResult,
 	MCPConnection,
 	HealthCheckParams,
-	MCPConnectionLog,
 	MCPPromptInfo,
 	GetPromptResult,
 	Tool,
 	HealthCheckState,
 	MCPServerSettingsEntry,
-	MCPServerConfig,
 	MCPResourceAttachment,
 	MCPResourceContent
 } from '$lib/types';
 import type { DatabaseMessageExtraMcpResource, McpServerOverride } from '$lib/types/database';
-import {
-	buildMcpClientConfig,
-	buildCapabilitiesInfo,
-	parseHeaders
-} from '$lib/stores/mcp/mcp-config';
+import { buildMcpClientConfig } from '$lib/stores/mcp/mcp-config';
 import { MCPHealth } from '$lib/stores/mcp/mcp-health.svelte';
 import { MCPServers } from '$lib/stores/mcp/mcp-servers.svelte';
 import { MCPTools } from '$lib/stores/mcp/mcp-tools.svelte';
@@ -63,33 +50,38 @@ import { MCPToolOps } from '$lib/stores/mcp/mcp-tool-ops';
 
 class MCPStore {
 	/**
-	 * Health-check state, owned by a sub-store so the concerns that read it
-	 * (the server registry, prompts, resources) can be injected with it rather
-	 * than reaching back into this facade. Forwarded below, never copied.
+	 * Sub-stores, declared in dependency order — these are field initialisers, so
+	 * each one may only reference sub-stores declared above it. The graph is a
+	 * DAG and this is its topological sort.
+	 *
+	 *     tools ← conn ← health ← servers
+	 *       ↖______↖ toolOps
+	 *
+	 * Reordering these lines is caught (`ts(2729)`, "used before its
+	 * initialization"). Passing a *fresh* collaborator instead of the field above
+	 * — `new MCPHealth(this.conn, new MCPTools())` — is not: it typechecks, and
+	 * the store then quietly maintains a second tool index nothing else reads.
+	 * That one is pinned by a test; see "wires its sub-stores into one object
+	 * graph" in tests/unit/store-facades.test.ts.
 	 */
-	readonly health = new MCPHealth();
+
+	/** The tool-name index and its reactive count. Leaf: depends on nothing. */
+	readonly tools = new MCPTools();
+
+	/** The connection pool and its lifecycle. Writes the tool index. */
+	readonly conn = new MCPConnections(this.tools);
+
+	/**
+	 * Health-check state and the probe that fills it. Reaches forward into the
+	 * pool and the index to promote a healthy probe to an active connection.
+	 */
+	readonly health = new MCPHealth(this.conn, this.tools);
 
 	/**
 	 * The settings-backed server registry and everything derived from it for
-	 * display. Takes the health checks by injection rather than reaching back
-	 * into this facade.
+	 * display. Reads the health checks for labels, favicons and sort order.
 	 */
 	readonly servers = new MCPServers(this.health);
-
-	/**
-	 * The tool-name index and its count. Owned by a sub-store so seam 5b can
-	 * inject it into the connection layer, which is what writes it, rather than
-	 * having two owners of one index.
-	 */
-	readonly tools = new MCPTools();
-
-	/**
-	 * The connection pool and its lifecycle. Injected with the tool index it
-	 * populates. The concerns still on this facade — tool execution, prompts,
-	 * health checks, resources — read the pool through `this.conn`; seams 5c
-	 * through 5f move them out and take that reference with them.
-	 */
-	readonly conn = new MCPConnections(this.tools);
 
 	/**
 	 * Tool discovery, Nest provenance and execution. Needs the index to route a
@@ -214,6 +206,25 @@ class MCPStore {
 
 	clearAllHealthChecks(): void {
 		this.health.clearAllHealthChecks();
+	}
+
+	async runHealthChecksForServers(
+		servers: {
+			id: string;
+			enabled: boolean;
+			url: string;
+			requestTimeoutSeconds: number;
+			headers?: string;
+			transport?: 'stdio';
+		}[],
+		skipIfChecked = true,
+		promoteToActive = false
+	): Promise<void> {
+		return this.health.runHealthChecksForServers(servers, skipIfChecked, promoteToActive);
+	}
+
+	async runHealthCheck(server: HealthCheckParams, promoteToActive = false): Promise<void> {
+		return this.health.runHealthCheck(server, promoteToActive);
 	}
 
 	clearError(): void {
@@ -501,223 +512,6 @@ class MCPStore {
 
 			return null;
 		}
-	}
-
-	async runHealthChecksForServers(
-		servers: {
-			id: string;
-			enabled: boolean;
-			url: string;
-			requestTimeoutSeconds: number;
-			headers?: string;
-			transport?: 'stdio';
-		}[],
-		skipIfChecked = true,
-		promoteToActive = false
-	): Promise<void> {
-		// stdio entries have no URL — they are checkable whenever they exist.
-		const isCheckable = (s: { url: string; transport?: 'stdio' }) =>
-			Boolean(s.url.trim()) || s.transport === 'stdio';
-		const serversToCheck = skipIfChecked
-			? servers.filter((s) => !this.hasHealthCheck(s.id) && isCheckable(s))
-			: servers.filter(isCheckable);
-
-		if (serversToCheck.length === 0) {
-			return;
-		}
-
-		const BATCH_SIZE = 5;
-		for (let i = 0; i < serversToCheck.length; i += BATCH_SIZE) {
-			const batch = serversToCheck.slice(i, i + BATCH_SIZE);
-			await Promise.allSettled(batch.map((server) => this.runHealthCheck(server, promoteToActive)));
-		}
-	}
-
-	/**
-	 * Run a health check for a server.
-	 * If the server already has an active connection, reuses it instead of creating a new one.
-	 * If promoteToActive is true and server is enabled, the connection will be kept
-	 * and promoted to an active connection instead of being disconnected.
-	 */
-	async runHealthCheck(server: HealthCheckParams, promoteToActive = false): Promise<void> {
-		// Check if we already have an active connection for this server
-		const existingConnection = this.conn.connections.get(server.id);
-		if (existingConnection) {
-			// Reuse existing connection - just refresh tools list
-			try {
-				const tools = await MCPService.listTools(existingConnection);
-				const capabilities = buildCapabilitiesInfo(
-					existingConnection.serverCapabilities,
-					existingConnection.clientCapabilities
-				);
-				this.updateHealthCheck(server.id, {
-					status: HealthCheckStatus.SUCCESS,
-					tools: tools.map((tool) => ({
-						name: tool.name,
-						description: tool.description,
-						title: tool.title
-					})),
-					serverInfo: existingConnection.serverInfo,
-					capabilities,
-					transportType: existingConnection.transportType,
-					protocolVersion: existingConnection.protocolVersion,
-					instructions: existingConnection.instructions,
-					connectionTimeMs: existingConnection.connectionTimeMs,
-					logs: []
-				});
-				return;
-			} catch (error) {
-				console.warn(
-					`[MCPStore] Failed to reuse connection for ${server.id}, creating new one:`,
-					error
-				);
-				// Connection may be stale, remove it and create new one
-				this.conn.connections.delete(server.id);
-			}
-		}
-
-		const trimmedUrl = server.url.trim();
-		const logs: MCPConnectionLog[] = [];
-		let currentPhase: MCPConnectionPhase = MCPConnectionPhase.IDLE;
-
-		if (!trimmedUrl && server.transport !== 'stdio') {
-			this.updateHealthCheck(server.id, {
-				status: HealthCheckStatus.ERROR,
-				message: 'Please enter a server URL first.',
-				logs: []
-			});
-			return;
-		}
-
-		this.updateHealthCheck(server.id, {
-			status: HealthCheckStatus.CONNECTING,
-			phase: MCPConnectionPhase.TRANSPORT_CREATING,
-			logs: []
-		});
-
-		const timeoutMs = Math.round(server.requestTimeoutSeconds * 1000);
-		const headers = parseHeaders(server.headers);
-
-		try {
-			// A stdio health check spawns (or reuses) the local child through the
-			// same connect path as any other transport.
-			const serverConfig: MCPServerConfig =
-				server.transport === 'stdio'
-					? {
-							transport: MCPTransportType.STDIO,
-							stdioId: server.id,
-							handshakeTimeoutMs: DEFAULT_MCP_CONFIG.connectionTimeoutMs,
-							requestTimeoutMs: timeoutMs
-						}
-					: {
-							url: trimmedUrl,
-							transport: detectMcpTransportFromUrl(trimmedUrl),
-							handshakeTimeoutMs: DEFAULT_MCP_CONFIG.connectionTimeoutMs,
-							requestTimeoutMs: timeoutMs,
-							headers,
-							useProxy: server.useProxy
-						};
-
-			// Store config for reconnection
-			this.conn.serverConfigs.set(server.id, serverConfig);
-
-			const connection = await MCPService.connect(
-				server.id,
-				serverConfig,
-				DEFAULT_MCP_CONFIG.clientInfo,
-				DEFAULT_MCP_CONFIG.capabilities,
-				(phase, log) => {
-					currentPhase = phase;
-					logs.push(log);
-					this.updateHealthCheck(server.id, {
-						status: HealthCheckStatus.CONNECTING,
-						phase,
-						logs: [...logs]
-					});
-
-					// Handle WebSocket disconnection
-					if (phase === MCPConnectionPhase.DISCONNECTED && promoteToActive) {
-						console.log(
-							`[MCPStore][${server.id}] Connection lost during health check, starting auto-reconnect`
-						);
-						this.conn.autoReconnect(server.id);
-					}
-				}
-			);
-
-			const tools = connection.tools.map((tool) => ({
-				name: tool.name,
-				description: tool.description,
-				title: tool.title
-			}));
-
-			const capabilities = buildCapabilitiesInfo(
-				connection.serverCapabilities,
-				connection.clientCapabilities
-			);
-
-			this.updateHealthCheck(server.id, {
-				status: HealthCheckStatus.SUCCESS,
-				tools,
-				serverInfo: connection.serverInfo,
-				capabilities,
-				transportType: connection.transportType,
-				protocolVersion: connection.protocolVersion,
-				instructions: connection.instructions,
-				connectionTimeMs: connection.connectionTimeMs,
-				logs
-			});
-
-			// Promote to active connection or disconnect
-			if (promoteToActive && server.enabled) {
-				this.promoteHealthCheckToConnection(server.id, connection);
-			} else {
-				await MCPService.disconnect(connection);
-			}
-		} catch (error) {
-			const message = error instanceof Error ? error.message : 'Unknown error occurred';
-
-			if (logs.at(-1)?.phase !== MCPConnectionPhase.ERROR) {
-				logs.push({
-					timestamp: new Date(),
-					phase: MCPConnectionPhase.ERROR,
-					message: `Connection failed: ${message}`,
-					level: MCPLogLevel.ERROR
-				});
-			}
-
-			this.updateHealthCheck(server.id, {
-				status: HealthCheckStatus.ERROR,
-				message,
-				phase: currentPhase,
-				logs
-			});
-		}
-	}
-
-	/**
-	 * Promote a health check connection to an active connection.
-	 * This avoids the need to reconnect when the server is needed for agentic flows.
-	 */
-	private promoteHealthCheckToConnection(serverId: string, connection: MCPConnection): void {
-		// Register tools from the connection
-		for (const tool of connection.tools) {
-			if (this.tools.toolsIndex.has(tool.name)) {
-				console.warn(
-					`[MCPStore] Tool name conflict during promotion: "${tool.name}" exists in "${this.tools.toolsIndex.get(tool.name)}" and "${serverId}". Using tool from "${serverId}".`
-				);
-			}
-			this.tools.toolsIndex.set(tool.name, serverId);
-		}
-
-		// Add to active connections
-		this.conn.connections.set(serverId, connection);
-
-		// Update state
-		this.conn.updateState({
-			toolCount: this.tools.toolsIndex.size,
-			connectedServers: Array.from(this.conn.connections.keys())
-		});
 	}
 
 	getHealthCheckInstructions(): Array<{

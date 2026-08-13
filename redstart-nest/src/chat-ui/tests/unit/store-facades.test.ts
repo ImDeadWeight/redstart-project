@@ -808,6 +808,74 @@ describe('mcpStore routes tool operations through the injected index and pool', 
 	});
 });
 
+describe('mcpStore wires its sub-stores into one object graph', () => {
+	/** Collaborators are `private readonly` fields; reading them is the point. */
+	function injected(store: object, name: string): unknown {
+		return (store as unknown as Record<string, unknown>)[name];
+	}
+
+	// Seam 5d made the graph deep enough to break by reordering: sub-stores are
+	// field initialisers, so each may only reference one declared above it. Get
+	// the order wrong and the collaborator is `undefined` at construction — a
+	// runtime failure inside a lazily-called method, which no gate reports and
+	// which the surface tests above would not notice. Each assertion here is one
+	// edge of the DAG:  tools ← conn ← health ← servers,  toolOps ← {tools, conn}
+	it('gives every sub-store the same instance the facade exposes', () => {
+		expect(injected(mcpStore.conn, 'tools')).toBe(mcpStore.tools);
+		expect(injected(mcpStore.health, 'conn')).toBe(mcpStore.conn);
+		expect(injected(mcpStore.health, 'tools')).toBe(mcpStore.tools);
+		expect(injected(mcpStore.servers, 'health')).toBe(mcpStore.health);
+		expect(injected(mcpStore.toolOps, 'tools')).toBe(mcpStore.tools);
+		expect(injected(mcpStore.toolOps, 'conn')).toBe(mcpStore.conn);
+	});
+});
+
+describe('mcpStore runs health checks through mcp-health', () => {
+	afterEach(() => {
+		mcpStore.health.clearAllHealthChecks();
+	});
+
+	// The one runHealthCheck path that needs no network: a non-stdio entry with
+	// no URL is rejected before any transport is created. It still proves the
+	// facade reaches the sub-store and the sub-store writes the record the facade
+	// reads back.
+	it('records an error for a URL-less server without touching the network', async () => {
+		await mcpStore.runHealthCheck({
+			id: 'srv-nourl',
+			enabled: true,
+			url: '   ',
+			requestTimeoutSeconds: 30
+		});
+
+		const state = mcpStore.getHealthCheckState('srv-nourl');
+
+		expect(state.status).toBe(HealthCheckStatus.ERROR);
+		expect(state).toMatchObject({ message: 'Please enter a server URL first.' });
+	});
+
+	it('skips servers that are not checkable', async () => {
+		await mcpStore.runHealthChecksForServers([
+			{ id: 'srv-blank', enabled: true, url: '', requestTimeoutSeconds: 30 }
+		]);
+
+		expect(mcpStore.hasHealthCheck('srv-blank')).toBe(false);
+	});
+
+	it('skips servers already checked unless asked not to', async () => {
+		mcpStore.health.updateHealthCheck('srv-done', {
+			status: HealthCheckStatus.ERROR,
+			message: 'previous run',
+			logs: []
+		});
+
+		await mcpStore.runHealthChecksForServers([
+			{ id: 'srv-done', enabled: true, url: '   ', requestTimeoutSeconds: 30 }
+		]);
+
+		expect(mcpStore.getHealthCheckState('srv-done')).toMatchObject({ message: 'previous run' });
+	});
+});
+
 describe('conversationsStore callback registration contracts', () => {
 	// Wired from +layout.svelte and called from chat-message-ops; seam 6c moves
 	// the title concern out and must keep this contract.
