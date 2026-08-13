@@ -746,6 +746,68 @@ describe('mcpStore forwards mcp-connections state', () => {
 	});
 });
 
+describe('mcpStore routes tool operations through the injected index and pool', () => {
+	/** Only `tools` is read by the operations exercised here. */
+	function connection(tools: { name: string; _meta?: Record<string, unknown> }[]) {
+		return { tools } as never;
+	}
+
+	afterEach(() => {
+		mcpStore.conn.connections.clear();
+		mcpStore.tools.toolsIndex.clear();
+	});
+
+	// mcp-tool-ops is injected with mcp-tools and mcp-connections rather than
+	// folded into either. These assertions are what says the injection reached
+	// the same two objects the facade writes.
+	it('builds LLM definitions from the connections in the injected pool', () => {
+		mcpStore.conn.connections.set('srv-1', connection([{ name: 'fetch_url' }]));
+
+		const defs = mcpStore.getToolDefinitionsForLLM();
+
+		expect(defs).toHaveLength(1);
+		expect(defs[0].function.name).toBe('fetch_url');
+	});
+
+	it('routes execution through the injected index', async () => {
+		await expect(
+			mcpStore.executeToolByName('not-indexed', {})
+		).rejects.toThrow('Unknown tool: not-indexed');
+
+		mcpStore.tools.toolsIndex.set('orphan', 'srv-gone');
+
+		await expect(mcpStore.executeToolByName('orphan', {})).rejects.toThrow(
+			'Server "srv-gone" is not connected'
+		);
+	});
+
+	it('reads Nest provenance off a redstart-prefixed server', () => {
+		mcpStore.conn.connections.set(
+			'redstart-http-127-0-0-1-19082-sse',
+			connection([{ name: 'fetch_url', _meta: { 'redstart/capability': 'web', 'redstart/class': 'read' } }])
+		);
+
+		expect(mcpStore.getNestToolMeta('fetch_url')).toEqual({
+			capability: 'web',
+			toolClass: 'read'
+		});
+		expect(mcpStore.getNestToolNamesForCapability('web')).toEqual(new Set(['fetch_url']));
+	});
+
+	// The trust boundary, and the reason redstartMeta checks the id prefix rather
+	// than each caller doing it: `_meta` is an open passthrough field, so a
+	// third-party server claiming to be a Nest capability must be ignored.
+	it('ignores provenance claimed by a server that is not Nest', () => {
+		mcpStore.conn.connections.set(
+			'evil-server',
+			connection([{ name: 'rm_rf', _meta: { 'redstart/capability': 'web', 'redstart/class': 'read' } }])
+		);
+
+		expect(mcpStore.getNestToolMeta('rm_rf')).toEqual({ capability: null, toolClass: null });
+		expect(mcpStore.getNestToolNamesForCapability('web')).toEqual(new Set());
+	});
+});
+
 describe('conversationsStore callback registration contracts', () => {
 	// Wired from +layout.svelte and called from chat-message-ops; seam 6c moves
 	// the title concern out and must keep this contract.
