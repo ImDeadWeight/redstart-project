@@ -46,6 +46,7 @@ import { ROUTES } from '$lib/constants/routes';
 import { RouterService } from '$lib/services/router.service';
 import { ConversationCoreState } from '$lib/stores/conversations/conversation-core.svelte';
 import { ConversationMcpOverrides } from '$lib/stores/conversations/conversation-mcp-overrides.svelte';
+import { ConversationTitle } from '$lib/stores/conversations/conversation-title.svelte';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 export interface ConversationTreeItem {
@@ -106,6 +107,45 @@ class ConversationsStore {
 	 * conversation inherits.
 	 */
 	readonly mcpOverrides = new ConversationMcpOverrides(this.core);
+
+	/** Naming, the confirmation around it, and the timestamp bump. */
+	readonly title = new ConversationTitle(this.core);
+
+	/**
+	 * Registered from +layout.svelte, read from chat-message-ops. Forwarded with
+	 * a getter *and* a setter — consumers assign to it directly.
+	 */
+	get titleUpdateConfirmationCallback():
+		| ((currentTitle: string, newTitle: string) => Promise<boolean>)
+		| undefined {
+		return this.title.titleUpdateConfirmationCallback;
+	}
+	set titleUpdateConfirmationCallback(
+		value: ((currentTitle: string, newTitle: string) => Promise<boolean>) | undefined
+	) {
+		this.title.titleUpdateConfirmationCallback = value;
+	}
+
+	setTitleUpdateConfirmationCallback(
+		callback: (currentTitle: string, newTitle: string) => Promise<boolean>
+	): void {
+		this.title.setTitleUpdateConfirmationCallback(callback);
+	}
+
+	async updateConversationName(convId: string, name: string): Promise<void> {
+		return this.title.updateConversationName(convId, name);
+	}
+
+	async updateConversationTitleWithConfirmation(
+		convId: string,
+		newTitle: string
+	): Promise<boolean> {
+		return this.title.updateConversationTitleWithConfirmation(convId, newTitle);
+	}
+
+	updateConversationTimestamp(): void {
+		this.title.updateConversationTimestamp();
+	}
 
 	/** Pending MCP server overrides for new conversations (before first message) */
 	get pendingMcpServerOverrides(): McpServerOverride[] {
@@ -168,8 +208,6 @@ class ConversationsStore {
 	}
 
 	/** Callback for title update confirmation dialog */
-	titleUpdateConfirmationCallback?: (currentTitle: string, newTitle: string) => Promise<boolean>;
-
 	/**
 	 * Callback for updating message content in chatStore.
 	 * Registered by chatStore to enable cross-store updates without circular dependency.
@@ -267,15 +305,6 @@ class ConversationsStore {
 			return this.activeMessages.splice(index, 1)[0];
 		}
 		return undefined;
-	}
-
-	/**
-	 * Sets the callback function for title update confirmations
-	 */
-	setTitleUpdateConfirmationCallback(
-		callback: (currentTitle: string, newTitle: string) => Promise<boolean>
-	): void {
-		this.titleUpdateConfirmationCallback = callback;
 	}
 
 	/**
@@ -499,30 +528,6 @@ class ConversationsStore {
 	 */
 
 	/**
-	 * Updates the name of a conversation.
-	 * @param convId - The conversation ID to update
-	 * @param name - The new name for the conversation
-	 */
-	async updateConversationName(convId: string, name: string): Promise<void> {
-		try {
-			await DatabaseService.updateConversation(convId, { name });
-
-			const convIndex = this.conversations.findIndex((c) => c.id === convId);
-
-			if (convIndex !== -1) {
-				this.conversations[convIndex].name = name;
-				this.conversations = [...this.conversations];
-			}
-
-			if (this.activeConversation?.id === convId) {
-				this.activeConversation = { ...this.activeConversation, name };
-			}
-		} catch (error) {
-			console.error('Failed to update conversation name:', error);
-		}
-	}
-
-	/**
 	 * Toggles the pinned status of a conversation.
 	 * @param convId - The conversation ID to toggle
 	 * @returns The new pinned status
@@ -546,40 +551,6 @@ class ConversationsStore {
 		} catch (error) {
 			console.error('Failed to toggle conversation pin:', error);
 			return false;
-		}
-	}
-
-	/**
-	 * Updates conversation title with optional confirmation dialog based on settings
-	 * @param convId - The conversation ID to update
-	 * @param newTitle - The new title content
-	 * @returns True if title was updated, false if cancelled
-	 */
-	async updateConversationTitleWithConfirmation(
-		convId: string,
-		newTitle: string
-	): Promise<boolean> {
-		try {
-			await this.updateConversationName(convId, newTitle);
-			return true;
-		} catch (error) {
-			console.error('Failed to update conversation title with confirmation:', error);
-			return false;
-		}
-	}
-
-	/**
-	 * Updates conversation lastModified timestamp and moves it to top of list
-	 */
-	updateConversationTimestamp(): void {
-		if (!this.activeConversation) return;
-
-		const chatIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
-
-		if (chatIndex !== -1) {
-			this.conversations[chatIndex].lastModified = Date.now();
-			const updatedConv = this.conversations.splice(chatIndex, 1)[0];
-			this.conversations = [updatedConv, ...this.conversations];
 		}
 	}
 
