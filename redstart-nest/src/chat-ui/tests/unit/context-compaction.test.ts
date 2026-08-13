@@ -68,6 +68,18 @@ function msg(role: MessageRole, content: string): DatabaseMessage {
 	} as unknown as DatabaseMessage;
 }
 
+// Re-measure a payload through the service's own counting path, so budget
+// assertions can't drift from how the code actually counts.
+async function tokensOf(messages: DatabaseMessage[]): Promise<number> {
+	const usage = await ContextCompactionService.estimateUsage('conv-1', messages);
+	return usage!.usedTokens;
+}
+
+// n_ctx minus DEFAULT_RESERVE_TOKENS — the budget a send has to fit into.
+function usableTokens(): number {
+	return (mocks.contextSize ?? 0) - 1024;
+}
+
 describe('ContextCompactionService.maybeCompact', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -172,12 +184,60 @@ describe('ContextCompactionService.maybeCompact', () => {
 		expect(prompt).toContain('(none)');
 	});
 
-	it('never blocks a send on failure — falls back to the original messages', async () => {
+	it('never blocks a send on summarizer failure — falls back to truncation, not the raw original', async () => {
 		mocks.sendMessage.mockRejectedValue(new Error('model busy'));
 		const messages = Array.from({ length: 20 }, () => msg(MessageRole.USER, 'z'.repeat(2000)));
 		const result = await ContextCompactionService.maybeCompact('conv-1', messages);
-		expect(result.compacted).toBe(false);
-		expect(result.messages).toBe(messages);
+
+		// Deliberately NOT the original array: resending an oversized payload is
+		// the guaranteed-400 dead end this service exists to prevent.
+		expect(result.messages).not.toBe(messages);
+		expect(result.messages.length).toBeLessThan(messages.length);
+		expect(result.compacted).toBe(true);
+		// No summary was produced, so none may be persisted.
+		expect(mocks.updateConversation).not.toHaveBeenCalled();
+		// The truncated payload fits the budget it failed to summarize into.
+		expect(await tokensOf(result.messages)).toBeLessThan(usableTokens());
+	});
+
+	it('elides a single oversized recent message instead of sending it whole', async () => {
+		// One message that alone exceeds the whole usable budget, sitting in the
+		// always-keep tail where compaction has nothing older to trade away.
+		const messages = [
+			msg(MessageRole.USER, 'read the file'),
+			msg(MessageRole.TOOL, 'FILE HEAD ' + 'q'.repeat(60000) + ' FILE TAIL')
+		];
+		const result = await ContextCompactionService.maybeCompact('conv-1', messages);
+
+		// Message count is unchanged — the turn is elided, not dropped.
+		expect(result.messages).toHaveLength(2);
+		const elided = String(result.messages[1].content);
+		expect(elided).toContain('truncated');
+		// Head and tail both survive; the middle is what goes.
+		expect(elided).toContain('FILE HEAD');
+		expect(elided).toContain('FILE TAIL');
+		expect(await tokensOf(result.messages)).toBeLessThan(usableTokens());
+	});
+
+	it('caps an oversized message even under the automatic trigger threshold', async () => {
+		// Total sits under the 85% trigger, so no summarization happens at all —
+		// but the single tool result still exceeds what one turn may occupy.
+		mocks.contextSize = 100000;
+		const messages = [
+			msg(MessageRole.USER, 'tiny'),
+			msg(MessageRole.TOOL, 'x'.repeat(220000)),
+			msg(MessageRole.USER, 'tiny')
+		];
+		const total = await tokensOf(messages);
+		expect(total).toBeLessThan(usableTokens() * 0.85); // under the trigger
+
+		const result = await ContextCompactionService.maybeCompact('conv-1', messages);
+		expect(mocks.sendMessage).not.toHaveBeenCalled();
+		expect(result.messages).toHaveLength(3);
+		expect(String(result.messages[1].content)).toContain('truncated');
+		// 0.4 is MAX_SINGLE_MESSAGE_TOKENS_RATIO; allow slack for the marker
+		// and per-message template overhead the cap budgets around.
+		expect(await tokensOf([result.messages[1]])).toBeLessThan(usableTokens() * 0.45);
 	});
 
 	it('under threshold, a stored summary is still applied to shrink the payload (no model call)', async () => {
