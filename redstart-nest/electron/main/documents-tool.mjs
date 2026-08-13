@@ -4,12 +4,19 @@
 // Redstart Nest — MCP Provider: Documents (create + read)
 // =============================================================================
 // One admin-configured folder (cfg.documents.outputDir), two directions:
-//   - create_document writes a deliverable (case notes, summaries, reports)
-//     as .docx / .pdf / .md; the model supplies a title, never a path — the
+//   - create_document writes a deliverable: rendered prose (.docx / .pdf /
+//     .md) or a verbatim source or data file (.txt / .csv / .json / .html /
+//     .py / .js / .ps1). The model supplies a title, never a path — the
 //     filename is derived server-side.
 //   - read_document / list_documents let the model read source material the
-//     user drops into the same folder (.pdf / .docx / .txt / .md), extracted
-//     on-device with pure-JS parsers (pdf-parse, mammoth) — no network egress.
+//     user drops into the same folder, extracted on-device with pure-JS
+//     parsers (pdf-parse, mammoth, exceljs) — no network egress.
+// Nothing here executes what it writes; a script is a downloadable file like
+// any other deliverable. Note that the script formats include .ps1 and .js,
+// which files-api.mjs refuses on UPLOAD to this same folder — see the comment
+// on BLOCKED_UPLOAD_EXTENSIONS. The asymmetry is intentional: content created
+// here was authored in the conversation and is visible before download, where
+// an upload is opaque bytes.
 // All paths are confined to the configured folder via the shared path-scope
 // containment (symlink-aware).
 // =============================================================================
@@ -24,19 +31,55 @@ import ExcelJS from 'exceljs'
 import { resolveWithinRoot } from './path-scope.mjs'
 import { resolveUserRoot } from './user-scope.mjs'
 
-const FORMATS = ['markdown', 'docx', 'pdf', 'python']
+const FORMATS = [
+  'markdown', 'docx', 'pdf',
+  'text', 'csv', 'json', 'html',
+  'python', 'javascript', 'powershell',
+]
 const TOOL_NAMES = ['create_document', 'read_document', 'list_documents']
-const READABLE_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.xlsx', '.csv', '.py']
+const READABLE_EXTENSIONS = [
+  '.pdf', '.docx', '.xlsx',
+  '.txt', '.md', '.csv', '.json', '.html',
+  '.py', '.js', '.ps1',
+]
 
-// Format -> file extension. 'python' is the one non-prose format: the content
-// is written verbatim (no title heading, no block parsing) so the result is a
-// runnable script, and the [FILE:] marker makes it downloadable from the chat
-// UI like any other deliverable.
-const FORMAT_EXTENSIONS = { markdown: 'md', docx: 'docx', pdf: 'pdf', python: 'py' }
+// Format -> file extension.
+const FORMAT_EXTENSIONS = {
+  markdown: 'md', docx: 'docx', pdf: 'pdf',
+  text: 'txt', csv: 'csv', json: 'json', html: 'html',
+  python: 'py', javascript: 'js', powershell: 'ps1',
+}
 
-// Reverse lookup for the filename-inference path below — a model that passes
-// filename "cleanup.py" and no format means format: 'python'.
-const EXTENSION_FORMATS = { md: 'markdown', markdown: 'markdown', docx: 'docx', pdf: 'pdf', py: 'python' }
+// Formats written exactly as supplied — no title heading, no markdown block
+// parsing. Everything that is source or data rather than prose: a "# Title"
+// line prepended to a script is a comment at best, and to JSON or CSV it is
+// corruption. The block model would also mangle indentation, which in Python
+// is syntax. The [FILE:] marker still makes the result downloadable from the
+// chat UI like any other deliverable.
+const VERBATIM_FORMATS = new Set(['text', 'csv', 'json', 'html', 'python', 'javascript', 'powershell'])
+
+// Reverse lookup, used for two things: inferring the format from a filename a
+// model supplied instead of a title ("cleanup.py" means format 'python'), and
+// normalizing a format passed as an extension or alias ('txt' means 'text').
+// Deliberately no mjs/cjs entry — mapping those onto the 'js' extension could
+// silently change how the file is parsed, so they get an explicit error that
+// names the real format instead.
+const EXTENSION_FORMATS = {
+  md: 'markdown', markdown: 'markdown', docx: 'docx', pdf: 'pdf',
+  txt: 'text', text: 'text', plaintext: 'text', csv: 'csv', json: 'json',
+  html: 'html', htm: 'html',
+  py: 'python', python: 'python',
+  js: 'javascript', javascript: 'javascript',
+  ps1: 'powershell', powershell: 'powershell', pwsh: 'powershell',
+}
+
+// Files extractText can return by reading straight off disk. A superset of the
+// text formats above: .log is not something the model writes, but the file
+// explorer offers previews for it. Keep this in sync with PREVIEWABLE in
+// files-api.mjs — an extension listed there but missing here fails the preview.
+const PLAIN_TEXT_EXTENSIONS = new Set([
+  '.txt', '.md', '.csv', '.json', '.html', '.py', '.js', '.ps1', '.log',
+])
 
 // Models routinely wrap code in a markdown fence even when asked for a raw
 // file. Written verbatim that produces a .py whose first line is ```python — a
@@ -329,7 +372,7 @@ function sheetToText(worksheet) {
 export async function extractText(filePath) {
   const extension = path.extname(filePath).toLowerCase()
 
-  if (extension === '.txt' || extension === '.md' || extension === '.csv' || extension === '.py') {
+  if (PLAIN_TEXT_EXTENSIONS.has(extension)) {
     return fs.readFileSync(filePath, 'utf8')
   }
   if (extension === '.xlsx') {
@@ -422,16 +465,17 @@ export function toolDefs(cfg) {
     {
       name: 'create_document',
       description:
-        'Create a new document or script and save it to the local documents folder, where the user can download it. ' +
+        'Create a new document, data file, or script and save it to the local documents folder, where the user can download it. ' +
         'Takes exactly three arguments: title, content, format. There is NO file_path or filename argument — the file name is derived from title, and the folder is fixed by the server. ' +
-        'Use format "python" to write a runnable .py script: put the raw source in content, with no markdown fences and no explanation around it. ' +
         'For the prose formats (markdown, docx, pdf) format content with simple markdown: "# Heading", "## Subheading", "- bullet", blank lines between paragraphs, ' +
-        'and markdown pipe tables ("| A | B |" then "| --- | --- |" then one line per row) which are rendered as real tables in .docx and .pdf.',
+        'and markdown pipe tables ("| A | B |" then "| --- | --- |" then one line per row) which are rendered as real tables in .docx and .pdf. ' +
+        `For every other format (${[...VERBATIM_FORMATS].join(', ')}) content is written to the file exactly as supplied: put the raw source or data in content, ` +
+        'with no markdown fences, no title heading, and no explanation around it — the result has to be a valid file of that type on its own.',
       inputSchema: {
         type: 'object',
         properties: {
           title: { type: 'string', description: 'Document title — also used to name the file. Do not include a path or extension.' },
-          content: { type: 'string', description: 'Full body of the file. For prose formats, markdown text — include every row of any table here. For format "python", the raw script source, written to the .py file verbatim.' },
+          content: { type: 'string', description: 'Full body of the file. For the prose formats, markdown text — include every row of any table here. For the source and data formats, the raw file contents, written out verbatim.' },
           format: { type: 'string', enum: FORMATS, description: `Output file format — one of: ${FORMATS.join(', ')}` },
         },
         required: ['title', 'content', 'format'],
@@ -439,7 +483,7 @@ export function toolDefs(cfg) {
     },
     {
       name: 'read_document',
-      description: 'Read the text content of a document or script (.pdf, .docx, .txt, .md, .xlsx, .csv, .py) in your documents folder on the Redstart server. Spreadsheets are rendered as one text table per sheet. Long documents are returned in chunks — follow the offset instructions at the end of a truncated result to read more.',
+      description: `Read the text content of a document, data file, or script (${READABLE_EXTENSIONS.join(', ')}) in your documents folder on the Redstart server. Spreadsheets are rendered as one text table per sheet. Long documents are returned in chunks — follow the offset instructions at the end of a truncated result to read more.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -451,7 +495,7 @@ export function toolDefs(cfg) {
     },
     {
       name: 'list_documents',
-      description: 'List the readable documents and scripts (.pdf, .docx, .txt, .md, .xlsx, .csv, .py) in your documents folder on the Redstart server, with sizes.',
+      description: `List the readable documents, data files, and scripts (${READABLE_EXTENSIONS.join(', ')}) in your documents folder on the Redstart server, with sizes.`,
       inputSchema: { type: 'object', properties: {} },
     },
   ]
@@ -533,6 +577,16 @@ export async function callTool(name, args, cfg, ctx) {
       if (!format && ext) format = EXTENSION_FORMATS[ext] ?? ext
     }
   }
+  // Models reach for the extension or the language name where the schema wants
+  // a format — 'txt' for text, 'js' for javascript, 'PDF' for pdf. Normalize
+  // before validating rather than bouncing an otherwise complete call, same
+  // reasoning as the filename handling above. An unknown value is left alone so
+  // it still fails below with the message that names the real formats.
+  if (typeof format === 'string') {
+    const normalized = format.trim().toLowerCase()
+    format = FORMATS.includes(normalized) ? normalized : (EXTENSION_FORMATS[normalized] ?? normalized)
+  }
+
   // Models frequently invent a file_path/filename argument for this tool. The
   // error a retry sees has to name the real arguments, or the model just
   // repeats the same malformed call.
@@ -553,10 +607,7 @@ export async function callTool(name, args, cfg, ctx) {
     const extension = FORMAT_EXTENSIONS[format]
     const outputPath = resolveOutputPath(docCfg.outputDir, title, extension)
 
-    if (format === 'python') {
-      // Verbatim — no title heading and no block parsing. A "# Title" line
-      // prepended to a script is a comment at best; the markdown block model
-      // would mangle indentation, which in Python is syntax.
+    if (VERBATIM_FORMATS.has(format)) {
       fs.writeFileSync(outputPath, stripCodeFence(content), 'utf8')
     } else if (format === 'markdown') {
       fs.writeFileSync(outputPath, `# ${title}\n\n${content}`, 'utf8')

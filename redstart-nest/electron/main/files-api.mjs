@@ -66,6 +66,13 @@ const MAX_PREVIEW_CHARS = 20000
 // allowlist would be wrong for someone within a week. What must not land is
 // anything a double-click or a stray shell would EXECUTE — including the script
 // formats Windows runs without ceremony.
+//
+// DELIBERATELY NOT THE SAME LIST as documents-tool's create_document formats,
+// which can write .ps1 and .js that this refuses. The two paths carry different
+// evidence: an upload is opaque bytes arriving over HTTP, while a created file's
+// entire contents were authored in the conversation and are visible to the user
+// before they download it. Neither path executes anything. Do not "fix" the
+// difference by loosening this set — tighten the other one if the call changes.
 const BLOCKED_UPLOAD_EXTENSIONS = new Set([
   '.exe', '.dll', '.so', '.dylib', '.com', '.scr', '.msi', '.msp', '.cpl', '.jar',
   '.bat', '.cmd', '.ps1', '.psm1', '.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh',
@@ -73,8 +80,14 @@ const BLOCKED_UPLOAD_EXTENSIONS = new Set([
 ])
 
 // Extractable preview formats — reuses documents-tool's on-device extraction,
-// so nothing about a preview leaves the machine.
-const PREVIEWABLE = new Set(['.pdf', '.docx', '.txt', '.md', '.csv', '.xlsx', '.json', '.log'])
+// so nothing about a preview leaves the machine. Every entry must be one
+// extractText can actually handle (PLAIN_TEXT_EXTENSIONS or one of the parsed
+// binary formats), or the preview 500s instead of rendering.
+const PREVIEWABLE = new Set([
+  '.pdf', '.docx', '.xlsx',
+  '.txt', '.md', '.csv', '.json', '.html', '.log',
+  '.py', '.js', '.ps1',
+])
 
 function sendJson(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
