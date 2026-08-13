@@ -46,8 +46,8 @@ export class ChatSendController {
 		const activeConv = conversationsStore.activeConversation;
 
 		// If agentic loop is running, inject as a steering message instead of starting a new flow
-		if (activeConv && agenticStore.isRunning(activeConv.id)) {
-			agenticStore.injectSteeringMessage(activeConv.id, content, extras);
+		if (activeConv && agenticStore.session.isRunning(activeConv.id)) {
+			agenticStore.session.injectSteeringMessage(activeConv.id, content, extras);
 			return;
 		}
 
@@ -427,7 +427,7 @@ export class ChatSendController {
 			});
 			if (agenticResult.handled) {
 				// Check if there's a pending steering message to re-send
-				const pending = agenticStore.consumePendingSteeringMessage(convId);
+				const pending = agenticStore.session.consumePendingSteeringMessage(convId);
 				if (pending) {
 					await this.sendMessage(pending.content, pending.extras);
 				}
