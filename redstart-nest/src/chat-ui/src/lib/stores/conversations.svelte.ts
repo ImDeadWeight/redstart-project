@@ -25,21 +25,7 @@ import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
 import { filterByLeafNodeId } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
-import { HtmlInputType, FileExtensionText, ReasoningEffort } from '$lib/enums';
-import {
-	ISO_DATE_TIME_SEPARATOR,
-	ISO_DATE_TIME_SEPARATOR_REPLACEMENT,
-	ISO_TIMESTAMP_SLICE_LENGTH,
-	EXPORT_CONV_ID_TRIM_LENGTH,
-	EXPORT_CONV_NONALNUM_REPLACEMENT,
-	EXPORT_CONV_NAME_SUFFIX_MAX_LENGTH,
-	ISO_TIME_SEPARATOR,
-	ISO_TIME_SEPARATOR_REPLACEMENT,
-	NON_ALPHANUMERIC_REGEX,
-	MULTIPLE_UNDERSCORE_REGEX,
-	THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY,
-	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY
-} from '$lib/constants';
+import { ReasoningEffort } from '$lib/enums';
 
 import { ROUTES } from '$lib/constants/routes';
 import { RouterService } from '$lib/services/router.service';
@@ -47,6 +33,8 @@ import { ConversationCoreState } from '$lib/stores/conversations/conversation-co
 import { ConversationMcpOverrides } from '$lib/stores/conversations/conversation-mcp-overrides.svelte';
 import { ConversationTitle } from '$lib/stores/conversations/conversation-title.svelte';
 import { ConversationMessages } from '$lib/stores/conversations/conversation-messages.svelte';
+import { ConversationIO } from '$lib/stores/conversations/conversation-io';
+import { ConversationPrefs } from '$lib/stores/conversations/conversation-prefs.svelte';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 export interface ConversationTreeItem {
@@ -117,6 +105,58 @@ class ConversationsStore {
 	 */
 	readonly messages = new ConversationMessages(this.core, this.title);
 
+	/** Export and import. The import delegations below re-run the reload it no longer does. */
+	readonly io = new ConversationIO(this.core);
+
+	/** Thinking, reasoning effort and prompt mode, per conversation. */
+	readonly prefs = new ConversationPrefs(this.core);
+
+	/** Defaults a not-yet-created conversation inherits. Consumers assign to these. */
+	get pendingThinkingEnabled(): boolean {
+		return this.prefs.pendingThinkingEnabled;
+	}
+	set pendingThinkingEnabled(value: boolean) {
+		this.prefs.pendingThinkingEnabled = value;
+	}
+
+	get pendingReasoningEffort(): ReasoningEffort {
+		return this.prefs.pendingReasoningEffort;
+	}
+	set pendingReasoningEffort(value: ReasoningEffort) {
+		this.prefs.pendingReasoningEffort = value;
+	}
+
+	get pendingPromptMode(): string | null {
+		return this.prefs.pendingPromptMode;
+	}
+	set pendingPromptMode(value: string | null) {
+		this.prefs.pendingPromptMode = value;
+	}
+
+	getThinkingEnabled(): boolean {
+		return this.prefs.getThinkingEnabled();
+	}
+
+	async setThinkingEnabled(enabled: boolean): Promise<void> {
+		return this.prefs.setThinkingEnabled(enabled);
+	}
+
+	getReasoningEffort(): ReasoningEffort {
+		return this.prefs.getReasoningEffort();
+	}
+
+	async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
+		return this.prefs.setReasoningEffort(effort);
+	}
+
+	getPromptMode(): string | null {
+		return this.prefs.getPromptMode();
+	}
+
+	async setPromptMode(mode: string | null): Promise<void> {
+		return this.prefs.setPromptMode(mode);
+	}
+
 	/**
 	 * Registered from +layout.svelte, read from chat-message-ops. Forwarded with
 	 * a getter *and* a setter — consumers assign to it directly.
@@ -159,58 +199,6 @@ class ConversationsStore {
 	}
 	set pendingMcpServerOverrides(value: McpServerOverride[]) {
 		this.mcpOverrides.pendingMcpServerOverrides = value;
-	}
-
-	/** Global (non-conversation-specific) thinking toggle default */
-	pendingThinkingEnabled = $state(ConversationsStore.loadThinkingDefaults());
-
-	/** Global (non-conversation-specific) reasoning effort default */
-	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
-
-	/**
-	 * Task mode for a conversation that does not exist yet (system-prompt
-	 * spec §9). Not persisted: a mode describes the work in front of you, so
-	 * carrying the last one into an unrelated new chat is more surprising than
-	 * helpful. Unlike thinking/effort, this deliberately has no saved default.
-	 */
-	pendingPromptMode = $state<string | null>(null);
-
-	/** Load thinking-enabled default from localStorage */
-	private static loadThinkingDefaults(): boolean {
-		if (typeof globalThis.localStorage === 'undefined') return true;
-		try {
-			const raw = localStorage.getItem(THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY);
-			if (!raw) return true;
-			return raw === 'true';
-		} catch {
-			return true;
-		}
-	}
-
-	/** Persist thinking-enabled default to localStorage */
-	private saveThinkingDefaults(): void {
-		if (typeof globalThis.localStorage === 'undefined') return;
-		localStorage.setItem(
-			THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY,
-			this.pendingThinkingEnabled ? 'true' : 'false'
-		);
-	}
-
-	/** Load reasoning effort default from localStorage */
-	private static loadReasoningEffortDefault(): ReasoningEffort {
-		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.MEDIUM;
-		try {
-			const raw = localStorage.getItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY);
-			return (raw as ReasoningEffort) || ReasoningEffort.MEDIUM;
-		} catch {
-			return ReasoningEffort.MEDIUM;
-		}
-	}
-
-	/** Persist reasoning effort default to localStorage */
-	private saveReasoningEffortDefaults(): void {
-		if (typeof globalThis.localStorage === 'undefined') return;
-		localStorage.setItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY, this.pendingReasoningEffort);
 	}
 
 	/** Callback for title update confirmation dialog */
@@ -399,7 +387,7 @@ class ConversationsStore {
 		this.activeMessages = [];
 		// reload defaults so new chats inherit persisted state
 		this.pendingMcpServerOverrides = ConversationMcpOverrides.loadMcpDefaults();
-		this.pendingThinkingEnabled = ConversationsStore.loadThinkingDefaults();
+		this.pendingThinkingEnabled = ConversationPrefs.loadThinkingDefaults();
 	}
 
 	/**
@@ -605,124 +593,6 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Gets the effective thinking-enabled state for the active conversation.
-	 * Returns the conversation override if set, otherwise the global default.
-	 */
-	getThinkingEnabled(): boolean {
-		if (this.activeConversation) {
-			return this.activeConversation.thinkingEnabled ?? this.pendingThinkingEnabled;
-		}
-		return this.pendingThinkingEnabled;
-	}
-
-	/**
-	 * Sets the thinking-enabled state for the active conversation.
-	 * If no conversation exists, stores the global default.
-	 * @param enabled - The enabled state
-	 */
-	async setThinkingEnabled(enabled: boolean): Promise<void> {
-		if (!this.activeConversation) {
-			this.pendingThinkingEnabled = enabled;
-			this.saveThinkingDefaults();
-			return;
-		}
-
-		this.activeConversation = {
-			...this.activeConversation,
-			thinkingEnabled: enabled
-		};
-
-		await DatabaseService.updateConversation(this.activeConversation.id, {
-			thinkingEnabled: enabled
-		});
-
-		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
-		if (convIndex !== -1) {
-			this.conversations[convIndex].thinkingEnabled = enabled;
-			this.conversations = [...this.conversations];
-		}
-	}
-
-	/**
-	 * Gets the effective reasoning effort for the active conversation.
-	 * Returns the conversation override if set, otherwise the global default.
-	 */
-	getReasoningEffort(): ReasoningEffort {
-		if (this.activeConversation) {
-			return this.activeConversation.reasoningEffort ?? this.pendingReasoningEffort;
-		}
-		return this.pendingReasoningEffort;
-	}
-
-	/**
-	 * Sets the reasoning effort for the active conversation.
-	 * If no conversation exists, stores the global default.
-	 * @param effort - The effort level ('low' | 'medium' | 'high' | 'max')
-	 */
-	async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
-		if (!this.activeConversation) {
-			this.pendingReasoningEffort = effort;
-			this.saveReasoningEffortDefaults();
-			return;
-		}
-
-		this.activeConversation = {
-			...this.activeConversation,
-			reasoningEffort: effort
-		};
-
-		await DatabaseService.updateConversation(this.activeConversation.id, {
-			reasoningEffort: effort
-		});
-
-		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
-		if (convIndex !== -1) {
-			this.conversations[convIndex].reasoningEffort = effort;
-			this.conversations = [...this.conversations];
-		}
-	}
-
-	/**
-	 * Gets the task mode for the active conversation (system-prompt spec §9),
-	 * or null when none is selected.
-	 */
-	getPromptMode(): string | null {
-		if (this.activeConversation) {
-			return this.activeConversation.promptMode ?? null;
-		}
-		return this.pendingPromptMode;
-	}
-
-	/**
-	 * Sets the task mode for the active conversation. Only the ID travels — the
-	 * server resolves it to preset text and ignores anything it does not
-	 * recognise, so an unknown ID here is inert rather than dangerous.
-	 *
-	 * @param mode - A mode ID from `GET /prompt-modes`, or null for none
-	 */
-	async setPromptMode(mode: string | null): Promise<void> {
-		if (!this.activeConversation) {
-			this.pendingPromptMode = mode;
-			return;
-		}
-
-		this.activeConversation = {
-			...this.activeConversation,
-			promptMode: mode
-		};
-
-		await DatabaseService.updateConversation(this.activeConversation.id, {
-			promptMode: mode
-		});
-
-		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
-		if (convIndex !== -1) {
-			this.conversations[convIndex].promptMode = mode;
-			this.conversations = [...this.conversations];
-		}
-	}
-
-	/**
 	 * Forks a conversation at a specific message, creating a new conversation
 	 * containing messages from root up to the target message, then navigates to it.
 	 *
@@ -766,162 +636,33 @@ class ConversationsStore {
 	 *
 	 */
 
-	/**
-	 * Generates a sanitized filename for a conversation export
-	 * @param conversation - The conversation metadata
-	 * @param msgs - Optional array of messages belonging to the conversation
-	 * @returns The generated filename string
-	 */
-	generateConversationFilename(
-		conversation: { id?: string; name?: string },
-		msgs?: DatabaseMessage[]
-	): string {
-		const conversationName = (conversation.name ?? '').trim().toLowerCase();
-
-		const sanitizedName = conversationName
-			.replace(NON_ALPHANUMERIC_REGEX, EXPORT_CONV_NONALNUM_REPLACEMENT)
-			.replace(MULTIPLE_UNDERSCORE_REGEX, '_')
-			.substring(0, EXPORT_CONV_NAME_SUFFIX_MAX_LENGTH);
-
-		// If we have messages, use the timestamp of the newest message
-		const referenceDate = msgs?.length
-			? new Date(Math.max(...msgs.map((m) => m.timestamp)))
-			: new Date();
-
-		const iso = referenceDate.toISOString().slice(0, ISO_TIMESTAMP_SLICE_LENGTH);
-		const formattedDate = iso
-			.replace(ISO_DATE_TIME_SEPARATOR, ISO_DATE_TIME_SEPARATOR_REPLACEMENT)
-			.replaceAll(ISO_TIME_SEPARATOR, ISO_TIME_SEPARATOR_REPLACEMENT);
-		const trimmedConvId = conversation.id?.slice(0, EXPORT_CONV_ID_TRIM_LENGTH) ?? '';
-		return `${formattedDate}_conv_${trimmedConvId}_${sanitizedName}.json`;
+	generateConversationFilename(conversation: { id?: string; name?: string }): string {
+		return this.io.generateConversationFilename(conversation);
 	}
 
-	/**
-	 * Triggers a browser download of the provided exported conversation data
-	 * @param data - The exported conversation payload (either a single conversation or array of them)
-	 * @param filename - Filename; if omitted, a deterministic name is generated
-	 */
 	downloadConversationFile(data: ExportedConversations, filename?: string): void {
-		// Choose the first conversation or message
-		const conversation =
-			'conv' in data ? data.conv : Array.isArray(data) ? data[0]?.conv : undefined;
-		const msgs =
-			'messages' in data ? data.messages : Array.isArray(data) ? data[0]?.messages : undefined;
-
-		if (!conversation) {
-			console.error('Invalid data: missing conversation');
-			return;
-		}
-
-		let downloadFilename: string;
-
-		if (filename) {
-			downloadFilename = filename;
-		} else if (Array.isArray(data) && data.length > 1) {
-			downloadFilename = `${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations.json`;
-		} else {
-			downloadFilename = this.generateConversationFilename(conversation, msgs);
-		}
-
-		const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = downloadFilename;
-		document.body.appendChild(a);
-		a.click();
-		document.body.removeChild(a);
-		URL.revokeObjectURL(url);
+		this.io.downloadConversationFile(data, filename);
 	}
 
-	/**
-	 * Downloads a conversation as JSON file.
-	 * @param convId - The conversation ID to download
-	 */
 	async downloadConversation(convId: string): Promise<void> {
-		let conversation: DatabaseConversation | null;
-		let messages: DatabaseMessage[];
-
-		if (this.activeConversation?.id === convId) {
-			conversation = this.activeConversation;
-			messages = this.activeMessages;
-		} else {
-			conversation = await DatabaseService.getConversation(convId);
-			if (!conversation) return;
-			messages = await DatabaseService.getConversationMessages(convId);
-		}
-
-		this.downloadConversationFile({ conv: conversation, messages });
+		return this.io.downloadConversation(convId);
 	}
 
 	/**
-	 * Imports conversations from a JSON file
-	 * Opens file picker and processes the selected file
-	 * @returns The list of imported conversations
+	 * The reload lives here rather than in conversation-io: a sub-store may not
+	 * call back into this facade. Callers still see the store refreshed by the
+	 * time the promise they awaited settles.
 	 */
 	async importConversations(): Promise<DatabaseConversation[]> {
-		return new Promise((resolve, reject) => {
-			const input = document.createElement('input');
-			input.type = HtmlInputType.FILE;
-			input.accept = FileExtensionText.JSON;
-
-			input.onchange = async (e) => {
-				const file = (e.target as HTMLInputElement)?.files?.[0];
-
-				if (!file) {
-					reject(new Error('No file selected'));
-					return;
-				}
-
-				try {
-					const text = await file.text();
-					const parsedData = JSON.parse(text);
-					let importedData: ExportedConversations;
-
-					if (Array.isArray(parsedData)) {
-						importedData = parsedData;
-					} else if (
-						parsedData &&
-						typeof parsedData === 'object' &&
-						'conv' in parsedData &&
-						'messages' in parsedData
-					) {
-						importedData = [parsedData];
-					} else {
-						throw new Error('Invalid file format');
-					}
-
-					const result = await DatabaseService.importConversations(importedData);
-					toast.success(`Imported ${result.imported} conversation(s), skipped ${result.skipped}`);
-
-					await this.loadConversations();
-
-					const importedConversations = (
-						Array.isArray(importedData) ? importedData : [importedData]
-					).map((item) => item.conv);
-
-					resolve(importedConversations);
-				} catch (err: unknown) {
-					const message = err instanceof Error ? err.message : 'Unknown error';
-					console.error('Failed to import conversations:', err);
-					toast.error('Import failed', { description: message });
-					reject(new Error(`Import failed: ${message}`));
-				}
-			};
-
-			input.click();
-		});
+		const imported = await this.io.importConversations();
+		await this.loadConversations();
+		return imported;
 	}
 
-	/**
-	 * Imports conversations from provided data (without file picker)
-	 * @param data - Array of conversation data with messages
-	 * @returns Import result with counts
-	 */
 	async importConversationsData(
 		data: ExportedConversations
 	): Promise<{ imported: number; skipped: number }> {
-		const result = await DatabaseService.importConversations(data);
+		const result = await this.io.importConversationsData(data);
 		await this.loadConversations();
 		return result;
 	}
