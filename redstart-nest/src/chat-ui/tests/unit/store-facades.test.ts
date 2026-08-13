@@ -490,11 +490,11 @@ describe('conversationsStore forwards conversation-mcp-overrides state', () => {
 });
 
 /**
- * `mcpStore` has no sub-stores yet — seam 5 creates them. Until it does, the
- * best available characterization is that its public read/write pairs round-trip
- * through the private `$state` they will be moving out of: health checks
- * (`_healthChecks`, seam 5d) and the connection flow counter (`activeFlowCount`,
- * seam 5b). Each seam should extend this block with the state it moved.
+ * Seam 5a0 moved the health-check record into `mcp/mcp-health.svelte.ts`; the
+ * connection flow counter (`activeFlowCount`, seam 5b) is still facade-private.
+ * These round-trips are the public-API view of both and predate the seam, so
+ * they are the regression net for it. Each seam should extend this block with
+ * the state it moved, and add the sub-store cross-check below.
  */
 describe('mcpStore round-trips the state seam 5 will move', () => {
 	afterEach(() => {
@@ -563,6 +563,408 @@ describe('mcpStore round-trips the state seam 5 will move', () => {
 		mcpStore.clearError();
 
 		expect(mcpStore.error).toBeNull();
+	});
+});
+
+describe('mcpStore forwards mcp-health state, and mcp-servers reads it', () => {
+	afterEach(() => {
+		mcpStore.health.clearAllHealthChecks();
+	});
+
+	// The round-trips above all write *and* read through the facade, so a facade
+	// that kept its own `_healthChecks` would satisfy every one of them. These
+	// cross the boundary in one direction only, which is what distinguishes
+	// forwarding from a second copy of the state.
+	it('reads a health check the sub-store recorded', () => {
+		mcpStore.health.updateHealthCheck('srv-sub', {
+			status: HealthCheckStatus.ERROR,
+			message: 'from the sub-store',
+			logs: []
+		});
+
+		expect(mcpStore.hasHealthCheck('srv-sub')).toBe(true);
+		expect(mcpStore.getHealthCheckState('srv-sub')).toBe(mcpStore.health.healthChecks['srv-sub']);
+	});
+
+	it('writes a health check through to the sub-store', () => {
+		mcpStore.updateHealthCheck('srv-facade', {
+			status: HealthCheckStatus.ERROR,
+			message: 'from the facade',
+			logs: []
+		});
+
+		expect(mcpStore.health.hasHealthCheck('srv-facade')).toBe(true);
+	});
+
+	it('clears through to the sub-store', () => {
+		mcpStore.health.updateHealthCheck('srv-clear', {
+			status: HealthCheckStatus.ERROR,
+			message: 'boom',
+			logs: []
+		});
+
+		mcpStore.clearHealthCheck('srv-clear');
+
+		expect(mcpStore.health.hasHealthCheck('srv-clear')).toBe(false);
+	});
+
+	// The seam-5a injection contract: `mcp-servers` derives a server's display
+	// name from the *same* health record the facade writes. Given its own copy it
+	// would keep returning the URL fallback forever, which is also what a
+	// perfectly healthy server looks like before its first check — the reason
+	// this is asserted rather than left to the dev-app pass.
+	it('labels a server from the health check the facade recorded', () => {
+		const server = {
+			id: 'srv-label',
+			enabled: true,
+			url: 'https://example.test/mcp',
+			requestTimeoutSeconds: 30
+		};
+
+		expect(mcpStore.getServerLabel(server)).toBe('https://example.test/mcp');
+
+		mcpStore.updateHealthCheck('srv-label', {
+			status: HealthCheckStatus.SUCCESS,
+			tools: [],
+			serverInfo: { name: 'Example Server', version: '1.0.0' },
+			logs: []
+		});
+
+		expect(mcpStore.getServerLabel(server)).toBe('Example Server');
+	});
+
+	// Read by the settings UI. It iterates the same record, so it is the one
+	// health accessor that would keep working against a stale copy — for exactly
+	// as long as nothing wrote to the other one.
+	it('reports instructions the sub-store holds', () => {
+		mcpStore.health.updateHealthCheck('srv-instructions', {
+			status: HealthCheckStatus.SUCCESS,
+			tools: [],
+			instructions: 'be brief',
+			logs: []
+		});
+
+		expect(mcpStore.getHealthCheckInstructions()).toEqual([
+			{ serverId: 'srv-instructions', serverTitle: undefined, instructions: 'be brief' }
+		]);
+	});
+});
+
+describe('mcpStore forwards mcp-tools state', () => {
+	afterEach(() => {
+		mcpStore.tools.toolsIndex.clear();
+		mcpStore.tools.toolCount = 0;
+	});
+
+	// The index is a plain Map that the connection and health layers mutate in
+	// place from a dozen private call sites. A facade-local copy — its own Map,
+	// or a getter returning `new Map(...)` — reads back value-identical through
+	// every public accessor below, so nothing else here can see it. What it
+	// breaks is the writes, in code no unit test can reach without a live
+	// connection. So the absence of a second index is asserted structurally.
+	it('keeps no index of its own', () => {
+		expect(descriptorOf(mcpStore, 'toolsIndex'), 'the facade grew a second tool index').toBeNull();
+	});
+
+	it('reads the tool index the sub-store holds', () => {
+		mcpStore.tools.toolsIndex.set('search', 'srv-search');
+
+		expect(mcpStore.hasTool('search')).toBe(true);
+		expect(mcpStore.getToolServer('search')).toBe('srv-search');
+		expect(mcpStore.getToolNames()).toEqual(['search']);
+		expect(mcpStore.availableTools).toEqual(['search']);
+	});
+
+	it('reports an unknown tool as absent', () => {
+		expect(mcpStore.hasTool('nothing-here')).toBe(false);
+		expect(mcpStore.getToolServer('nothing-here')).toBeUndefined();
+	});
+
+	it('reads the tool count from the sub-store', () => {
+		mcpStore.tools.toolCount = 7;
+
+		expect(mcpStore.toolCount).toBe(7);
+		expect(mcpToolCount()).toBe(7);
+	});
+});
+
+describe('mcpStore forwards mcp-connections state', () => {
+	afterEach(() => {
+		mcpStore.conn.connections.clear();
+		mcpStore.conn.connectedServers = [];
+		mcpStore.conn.error = null;
+		mcpStore.conn.isInitializing = false;
+	});
+
+	// Same hazard as the tool index, and worse: `runHealthCheck` deletes from this
+	// map and `promoteHealthCheckToConnection` sets into it, both from the facade,
+	// both private. A facade-local map or a copying getter reads back identical
+	// through every accessor below while dropping those writes on the floor.
+	it('keeps no connection map of its own', () => {
+		expect(descriptorOf(mcpStore, 'connections'), 'the facade grew a second pool').toBeNull();
+		expect(descriptorOf(mcpStore, 'serverConfigs'), 'the facade grew a second config map').toBeNull();
+	});
+
+	it('hands back the sub-store pool itself, not a copy', () => {
+		expect(mcpStore.getConnections()).toBe(mcpStore.conn.connections);
+	});
+
+	it('derives isInitialized from the sub-store pool', () => {
+		expect(mcpStore.isInitialized).toBe(false);
+
+		mcpStore.conn.connections.set('srv-1', {} as never);
+
+		expect(mcpStore.isInitialized).toBe(true);
+	});
+
+	it('reads the connected server list from the sub-store by reference', () => {
+		const names = ['srv-a', 'srv-b'];
+		mcpStore.conn.connectedServers = names;
+
+		expect(mcpStore.connectedServerNames).toBe(names);
+		expect(mcpStore.connectedServerCount).toBe(2);
+		expect(mcpConnectedServerNames()).toBe(names);
+		expect(mcpConnectedServerCount()).toBe(2);
+	});
+
+	it('reads the init flag and the error from the sub-store', () => {
+		mcpStore.conn.isInitializing = true;
+		mcpStore.conn.error = 'All MCP server connections failed';
+
+		expect(mcpStore.isInitializing).toBe(true);
+		expect(mcpStore.error).toBe('All MCP server connections failed');
+		expect(mcpIsInitializing()).toBe(true);
+		expect(mcpError()).toBe('All MCP server connections failed');
+	});
+
+	it('clears the error through to the sub-store', () => {
+		mcpStore.conn.error = 'boom';
+
+		mcpStore.clearError();
+
+		expect(mcpStore.conn.error).toBeNull();
+	});
+});
+
+describe('mcpStore routes tool operations through the injected index and pool', () => {
+	/** Only `tools` is read by the operations exercised here. */
+	function connection(tools: { name: string; _meta?: Record<string, unknown> }[]) {
+		return { tools } as never;
+	}
+
+	afterEach(() => {
+		mcpStore.conn.connections.clear();
+		mcpStore.tools.toolsIndex.clear();
+	});
+
+	// mcp-tool-ops is injected with mcp-tools and mcp-connections rather than
+	// folded into either. These assertions are what says the injection reached
+	// the same two objects the facade writes.
+	it('builds LLM definitions from the connections in the injected pool', () => {
+		mcpStore.conn.connections.set('srv-1', connection([{ name: 'fetch_url' }]));
+
+		const defs = mcpStore.getToolDefinitionsForLLM();
+
+		expect(defs).toHaveLength(1);
+		expect(defs[0].function.name).toBe('fetch_url');
+	});
+
+	it('routes execution through the injected index', async () => {
+		await expect(
+			mcpStore.executeToolByName('not-indexed', {})
+		).rejects.toThrow('Unknown tool: not-indexed');
+
+		mcpStore.tools.toolsIndex.set('orphan', 'srv-gone');
+
+		await expect(mcpStore.executeToolByName('orphan', {})).rejects.toThrow(
+			'Server "srv-gone" is not connected'
+		);
+	});
+
+	it('reads Nest provenance off a redstart-prefixed server', () => {
+		mcpStore.conn.connections.set(
+			'redstart-http-127-0-0-1-19082-sse',
+			connection([{ name: 'fetch_url', _meta: { 'redstart/capability': 'web', 'redstart/class': 'read' } }])
+		);
+
+		expect(mcpStore.getNestToolMeta('fetch_url')).toEqual({
+			capability: 'web',
+			toolClass: 'read'
+		});
+		expect(mcpStore.getNestToolNamesForCapability('web')).toEqual(new Set(['fetch_url']));
+	});
+
+	// The trust boundary, and the reason redstartMeta checks the id prefix rather
+	// than each caller doing it: `_meta` is an open passthrough field, so a
+	// third-party server claiming to be a Nest capability must be ignored.
+	it('ignores provenance claimed by a server that is not Nest', () => {
+		mcpStore.conn.connections.set(
+			'evil-server',
+			connection([{ name: 'rm_rf', _meta: { 'redstart/capability': 'web', 'redstart/class': 'read' } }])
+		);
+
+		expect(mcpStore.getNestToolMeta('rm_rf')).toEqual({ capability: null, toolClass: null });
+		expect(mcpStore.getNestToolNamesForCapability('web')).toEqual(new Set());
+	});
+});
+
+describe('mcpStore wires its sub-stores into one object graph', () => {
+	/** Collaborators are `private readonly` fields; reading them is the point. */
+	function injected(store: object, name: string): unknown {
+		return (store as unknown as Record<string, unknown>)[name];
+	}
+
+	// Seam 5d made the graph deep enough to break by reordering: sub-stores are
+	// field initialisers, so each may only reference one declared above it. Get
+	// the order wrong and the collaborator is `undefined` at construction — a
+	// runtime failure inside a lazily-called method, which no gate reports and
+	// which the surface tests above would not notice. Each assertion here is one
+	// edge of the DAG:  tools ← conn ← health ← servers,  toolOps ← {tools, conn}
+	it('gives every sub-store the same instance the facade exposes', () => {
+		expect(injected(mcpStore.conn, 'tools')).toBe(mcpStore.tools);
+		expect(injected(mcpStore.health, 'conn')).toBe(mcpStore.conn);
+		expect(injected(mcpStore.health, 'tools')).toBe(mcpStore.tools);
+		expect(injected(mcpStore.servers, 'health')).toBe(mcpStore.health);
+		expect(injected(mcpStore.toolOps, 'tools')).toBe(mcpStore.tools);
+		expect(injected(mcpStore.toolOps, 'conn')).toBe(mcpStore.conn);
+		expect(injected(mcpStore.prompts, 'conn')).toBe(mcpStore.conn);
+		expect(injected(mcpStore.prompts, 'health')).toBe(mcpStore.health);
+		expect(injected(mcpStore.resources, 'conn')).toBe(mcpStore.conn);
+		expect(injected(mcpStore.resources, 'health')).toBe(mcpStore.health);
+	});
+
+	// Item 5 is done when the facade holds no state of its own. Every `$state`
+	// now lives in a sub-store, so an own data property here is either a copy
+	// (recipe rule 4) or state that was never extracted.
+	it('holds no state of its own', () => {
+		const own = Object.getOwnPropertyNames(mcpStore).filter(
+			(n) => !['tools', 'conn', 'health', 'servers', 'toolOps', 'prompts', 'resources'].includes(n)
+		);
+
+		expect(own, `facade owns ${own.join(', ')}`).toEqual([]);
+	});
+});
+
+describe('mcpStore answers resource capability from mcp-resource-ops', () => {
+	afterEach(() => {
+		mcpStore.health.clearAllHealthChecks();
+		mcpStore.conn.connections.clear();
+	});
+
+	it('reports capability from a health check with no connection open', () => {
+		expect(mcpStore.hasResourcesCapability([{ serverId: 'srv-r', enabled: true }])).toBe(false);
+
+		mcpStore.health.updateHealthCheck('srv-r', {
+			status: HealthCheckStatus.SUCCESS,
+			tools: [],
+			capabilities: { server: { resources: {} }, client: {} },
+			logs: []
+		});
+
+		expect(mcpStore.hasResourcesCapability([{ serverId: 'srv-r', enabled: true }])).toBe(true);
+		expect(mcpStore.getServersWithResources()).toEqual(['srv-r']);
+		expect(mcpHasResourcesCapability()).toBe(true);
+		expect(mcpServersWithResources()).toEqual(['srv-r']);
+	});
+
+	it('ignores a healthy server that this chat has not enabled', () => {
+		mcpStore.health.updateHealthCheck('srv-r', {
+			status: HealthCheckStatus.SUCCESS,
+			tools: [],
+			capabilities: { server: { resources: {} }, client: {} },
+			logs: []
+		});
+
+		expect(mcpStore.hasResourcesCapability([])).toBe(false);
+	});
+});
+
+describe('mcpStore answers prompt capability from mcp-prompts', () => {
+	afterEach(() => {
+		mcpStore.health.clearAllHealthChecks();
+		mcpStore.conn.connections.clear();
+	});
+
+	// Capability is read from the health record *before* the pool, because a
+	// probed server advertises what it supports before anything connects to it.
+	// That ordering is the whole reason mcp-prompts takes both collaborators.
+	it('reports capability from a health check with no connection open', () => {
+		expect(mcpStore.hasPromptsCapability([{ serverId: 'srv-p', enabled: true }])).toBe(false);
+
+		mcpStore.health.updateHealthCheck('srv-p', {
+			status: HealthCheckStatus.SUCCESS,
+			tools: [],
+			capabilities: { server: { prompts: {} }, client: {} },
+			logs: []
+		});
+
+		expect(mcpStore.hasPromptsCapability([{ serverId: 'srv-p', enabled: true }])).toBe(true);
+	});
+
+	it('ignores a healthy server that this chat has not enabled', () => {
+		mcpStore.health.updateHealthCheck('srv-p', {
+			status: HealthCheckStatus.SUCCESS,
+			tools: [],
+			capabilities: { server: { prompts: {} }, client: {} },
+			logs: []
+		});
+
+		expect(mcpStore.hasPromptsCapability([])).toBe(false);
+		expect(mcpStore.hasPromptsCapability([{ serverId: 'srv-other', enabled: true }])).toBe(false);
+	});
+
+	it('falls back to the live pool', () => {
+		mcpStore.conn.connections.set('srv-live', {
+			serverCapabilities: { prompts: {} }
+		} as never);
+
+		expect(mcpStore.hasPromptsSupport()).toBe(true);
+	});
+});
+
+describe('mcpStore runs health checks through mcp-health', () => {
+	afterEach(() => {
+		mcpStore.health.clearAllHealthChecks();
+	});
+
+	// The one runHealthCheck path that needs no network: a non-stdio entry with
+	// no URL is rejected before any transport is created. It still proves the
+	// facade reaches the sub-store and the sub-store writes the record the facade
+	// reads back.
+	it('records an error for a URL-less server without touching the network', async () => {
+		await mcpStore.runHealthCheck({
+			id: 'srv-nourl',
+			enabled: true,
+			url: '   ',
+			requestTimeoutSeconds: 30
+		});
+
+		const state = mcpStore.getHealthCheckState('srv-nourl');
+
+		expect(state.status).toBe(HealthCheckStatus.ERROR);
+		expect(state).toMatchObject({ message: 'Please enter a server URL first.' });
+	});
+
+	it('skips servers that are not checkable', async () => {
+		await mcpStore.runHealthChecksForServers([
+			{ id: 'srv-blank', enabled: true, url: '', requestTimeoutSeconds: 30 }
+		]);
+
+		expect(mcpStore.hasHealthCheck('srv-blank')).toBe(false);
+	});
+
+	it('skips servers already checked unless asked not to', async () => {
+		mcpStore.health.updateHealthCheck('srv-done', {
+			status: HealthCheckStatus.ERROR,
+			message: 'previous run',
+			logs: []
+		});
+
+		await mcpStore.runHealthChecksForServers([
+			{ id: 'srv-done', enabled: true, url: '   ', requestTimeoutSeconds: 30 }
+		]);
+
+		expect(mcpStore.getHealthCheckState('srv-done')).toMatchObject({ message: 'previous run' });
 	});
 });
 

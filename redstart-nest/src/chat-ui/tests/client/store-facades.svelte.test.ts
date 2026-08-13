@@ -176,9 +176,9 @@ describe('mcpStore stays wired to the owning $state', () => {
 		mcpStore.clearAllHealthChecks();
 	});
 
-	// Health check state is `_healthChecks` on the facade today and moves into
-	// `mcp/mcp-health.svelte.ts` in seam 5d. This assertion should keep passing
-	// across that move; if it stops, the sub-store's state is not reaching the UI.
+	// Health check state moved into `mcp/mcp-health.svelte.ts` in seam 5a0. These
+	// two assertions predate the move and kept passing across it; if either stops,
+	// the sub-store's state is not reaching the UI.
 	it('re-runs an effect when a health check is recorded', () => {
 		const { values, stop } = observeReads(() => mcpStore.hasHealthCheck('reactive-health'));
 
@@ -207,5 +207,78 @@ describe('mcpStore stays wired to the owning $state', () => {
 		stop();
 
 		expect(values).toEqual([true, false]);
+	});
+
+	// The seam-5a0 injection contract, from the other direction: the write goes
+	// straight to the sub-store, bypassing the facade entirely. A facade holding
+	// its own `_healthChecks` would satisfy the two tests above — both write
+	// through it — and fail this one.
+	it('re-runs an effect when the sub-store is written directly', () => {
+		const { values, stop } = observeReads(() =>
+			mcpStore.getHealthCheckState('reactive-health').status
+		);
+
+		mcpStore.health.healthChecks = {
+			...mcpStore.health.healthChecks,
+			'reactive-health': { status: HealthCheckStatus.SUCCESS, tools: [], logs: [] }
+		};
+		flushSync();
+		stop();
+
+		expect(values).toEqual([HealthCheckStatus.IDLE, HealthCheckStatus.SUCCESS]);
+	});
+
+	// Seam 5b0. `toolCount` is the only reactive signal the tool index publishes —
+	// the index itself is a plain Map — so this is the whole of what the toolbar
+	// and the tools picker depend on to re-render after a connect.
+	it('re-runs an effect when the tool count changes in the sub-store', () => {
+		mcpStore.tools.toolCount = 0;
+
+		const { values, stop } = observeReads(() => mcpStore.toolCount);
+
+		mcpStore.tools.toolCount = 3;
+		flushSync();
+		stop();
+
+		expect(values).toEqual([0, 3]);
+	});
+
+	// Seam 5b moved all three of these out of the facade in one commit. They are
+	// what the connection indicator, the error banner and the server avatars
+	// re-render on, and `updateState` — now on the sub-store — is the only writer.
+	it('re-runs an effect when the connected servers change in the sub-store', () => {
+		mcpStore.conn.connectedServers = [];
+
+		const { values, stop } = observeReads(() => mcpStore.connectedServerCount);
+
+		mcpStore.conn.connectedServers = ['srv-a', 'srv-b'];
+		flushSync();
+		stop();
+
+		expect(values).toEqual([0, 2]);
+	});
+
+	it('re-runs an effect when the error changes in the sub-store', () => {
+		mcpStore.conn.error = null;
+
+		const { values, stop } = observeReads(() => mcpStore.error);
+
+		mcpStore.conn.error = 'All MCP server connections failed';
+		flushSync();
+		stop();
+
+		expect(values).toEqual([null, 'All MCP server connections failed']);
+	});
+
+	it('re-runs an effect when the init flag changes in the sub-store', () => {
+		mcpStore.conn.isInitializing = false;
+
+		const { values, stop } = observeReads(() => mcpStore.isInitializing);
+
+		mcpStore.conn.isInitializing = true;
+		flushSync();
+		stop();
+
+		expect(values).toEqual([false, true]);
 	});
 });
