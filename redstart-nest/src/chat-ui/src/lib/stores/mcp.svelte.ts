@@ -19,12 +19,9 @@
  * @see MCPService in services/mcp.service.ts for protocol operations
  */
 
-import { MCPService } from '$lib/services/mcp.service';
 import { config } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
-import { HealthCheckStatus, MCPRefType } from '$lib/enums';
-import { DEFAULT_CACHE_TTL_MS } from '$lib/constants';
 import type {
 	MCPToolCall,
 	OpenAIToolDefinition,
@@ -48,6 +45,7 @@ import { MCPTools } from '$lib/stores/mcp/mcp-tools.svelte';
 import { MCPConnections } from '$lib/stores/mcp/mcp-connections.svelte';
 import { MCPToolOps } from '$lib/stores/mcp/mcp-tool-ops';
 import { MCPPrompts } from '$lib/stores/mcp/mcp-prompts';
+import { MCPResourceOps } from '$lib/stores/mcp/mcp-resource-ops';
 
 class MCPStore {
 	/**
@@ -99,14 +97,10 @@ class MCPStore {
 	readonly prompts = new MCPPrompts(this.conn, this.health);
 
 	/**
-	 * Reads the sub-store's `$state` so the methods still on this facade that
-	 * iterate the record (hasPromptsCapability, hasResourcesCapability,
-	 * getServersWithResources) keep working unchanged. Goes away when seams 5e
-	 * and 5f move them.
+	 * The resource surface that needs a connection. Pairs with mcpResourceStore,
+	 * which owns the caches and attachments; see the header there.
 	 */
-	private get _healthChecks(): Record<string, HealthCheckState> {
-		return this.health.healthChecks;
-	}
+	readonly resources = new MCPResourceOps(this.conn, this.health);
 
 	get isProxyAvailable(): boolean {
 		return serverStore.props?.cors_proxy_enabled ?? false;
@@ -368,58 +362,6 @@ class MCPStore {
 		return this.toolOps.executeToolByName(toolName, args, signal);
 	}
 
-	/**
-	 * Get completions for a resource template argument.
-	 * Uses the MCP Completion API with ref/resource.
-	 */
-	async getResourceCompletions(
-		serverName: string,
-		uriTemplate: string,
-		argumentName: string,
-		argumentValue: string
-	): Promise<{ values: string[]; total?: number; hasMore?: boolean } | null> {
-		const connection = this.conn.connections.get(serverName);
-
-		if (!connection) {
-			console.warn(`[MCPStore] Server "${serverName}" is not connected`);
-			return null;
-		}
-
-		if (!connection.serverCapabilities?.completions) {
-			return null;
-		}
-
-		return MCPService.complete(
-			connection,
-			{ type: MCPRefType.RESOURCE, uri: uriTemplate },
-			{ name: argumentName, value: argumentValue }
-		);
-	}
-
-	/**
-	 * Read a resource by an arbitrary URI (e.g., one expanded from a template).
-	 * Unlike readResource(), this does not require the URI to be in the resources list.
-	 */
-	async readResourceByUri(serverName: string, uri: string): Promise<MCPResourceContent[] | null> {
-		const connection = this.conn.connections.get(serverName);
-
-		if (!connection) {
-			console.error(`[MCPStore] No connection found for server: ${serverName}`);
-
-			return null;
-		}
-
-		try {
-			const result = await MCPService.readResource(connection, uri);
-
-			return result.contents;
-		} catch (error) {
-			console.error(`[MCPStore] Failed to read resource ${uri}:`, error);
-
-			return null;
-		}
-	}
-
 	getHealthCheckInstructions(): Array<{
 		serverId: string;
 		serverTitle?: string;
@@ -436,342 +378,66 @@ class MCPStore {
 	 *
 	 */
 
-	/**
-	 * Check if any enabled server with successful health check supports resources.
-	 * Uses health check state since servers may not have active connections until
-	 * the user actually sends a message or uses prompts.
-	 * @param perChatOverrides - Per-chat server overrides to filter by enabled servers.
-	 *                          If provided (even empty array), only checks enabled servers.
-	 *                          If undefined, checks all servers with successful health checks.
-	 */
+
+	async getResourceCompletions(
+		serverName: string,
+		uriTemplate: string,
+		argumentName: string,
+		argumentValue: string
+	): Promise<{ values: string[]; total?: number; hasMore?: boolean } | null> {
+		return this.resources.getResourceCompletions(serverName, uriTemplate, argumentName, argumentValue);
+	}
+
+	async readResourceByUri(serverName: string, uri: string): Promise<MCPResourceContent[] | null> {
+		return this.resources.readResourceByUri(serverName, uri);
+	}
+
 	hasResourcesCapability(perChatOverrides?: McpServerOverride[]): boolean {
-		// If perChatOverrides is provided (even empty array), filter by enabled servers
-		if (perChatOverrides !== undefined) {
-			const enabledServerIds = new Set(
-				perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId)
-			);
-			// No enabled servers = no capability
-			if (enabledServerIds.size === 0) {
-				return false;
-			}
-
-			// Check health check states for enabled servers with resources capability
-			for (const [serverId, state] of Object.entries(this._healthChecks)) {
-				if (!enabledServerIds.has(serverId)) continue;
-				if (
-					state.status === HealthCheckStatus.SUCCESS &&
-					state.capabilities?.server?.resources !== undefined
-				) {
-					return true;
-				}
-			}
-
-			// Also check active connections as fallback
-			for (const [serverName, connection] of this.conn.connections) {
-				if (!enabledServerIds.has(serverName)) continue;
-				if (MCPService.supportsResources(connection)) {
-					return true;
-				}
-			}
-
-			return false;
-		}
-
-		// No overrides provided - check all servers (global mode)
-		for (const state of Object.values(this._healthChecks)) {
-			if (
-				state.status === HealthCheckStatus.SUCCESS &&
-				state.capabilities?.server?.resources !== undefined
-			) {
-				return true;
-			}
-		}
-
-		for (const connection of this.conn.connections.values()) {
-			if (MCPService.supportsResources(connection)) {
-				return true;
-			}
-		}
-
-		return false;
+		return this.resources.hasResourcesCapability(perChatOverrides);
 	}
 
-	/**
-	 * Get list of servers that support resources.
-	 * Checks active connections first, then health check state as fallback.
-	 */
 	getServersWithResources(): string[] {
-		const servers: string[] = [];
-
-		// Check active connections
-		for (const [name, connection] of this.conn.connections) {
-			if (MCPService.supportsResources(connection) && !servers.includes(name)) {
-				servers.push(name);
-			}
-		}
-
-		// Also check health check states for servers not yet connected
-		for (const [serverId, state] of Object.entries(this._healthChecks)) {
-			if (
-				!servers.includes(serverId) &&
-				state.status === HealthCheckStatus.SUCCESS &&
-				state.capabilities?.server?.resources !== undefined
-			) {
-				servers.push(serverId);
-			}
-		}
-
-		return servers;
+		return this.resources.getServersWithResources();
 	}
 
-	/**
-	 * Fetch resources from all connected servers that support them.
-	 * Updates mcpResourceStore with the results.
-	 * @param forceRefresh - If true, bypass cache and fetch fresh data
-	 */
 	async fetchAllResources(forceRefresh: boolean = false): Promise<void> {
-		const serversWithResources = this.getServersWithResources();
-		if (serversWithResources.length === 0) {
-			return;
-		}
-
-		// Check if we have cached resources and they're recent (unless force refresh)
-		if (!forceRefresh) {
-			const allServersCached = serversWithResources.every((serverName) => {
-				const serverRes = mcpResourceStore.getServerResources(serverName);
-				if (!serverRes || !serverRes.lastFetched) {
-					return false;
-				}
-
-				// Cache is valid for 5 minutes
-				const age = Date.now() - serverRes.lastFetched.getTime();
-
-				return age < DEFAULT_CACHE_TTL_MS;
-			});
-
-			if (allServersCached) {
-				console.log('[MCPStore] Using cached resources');
-
-				return;
-			}
-		}
-
-		mcpResourceStore.setLoading(true);
-
-		try {
-			await Promise.all(
-				serversWithResources.map((serverName) => this.fetchServerResources(serverName))
-			);
-		} finally {
-			mcpResourceStore.setLoading(false);
-		}
+		return this.resources.fetchAllResources(forceRefresh);
 	}
 
-	/**
-	 * Fetch resources from a specific server.
-	 * Updates mcpResourceStore with the results.
-	 */
 	async fetchServerResources(serverName: string): Promise<void> {
-		const connection = this.conn.connections.get(serverName);
-		if (!connection) {
-			console.warn(`[MCPStore] No connection found for server: ${serverName}`);
-			return;
-		}
-
-		if (!MCPService.supportsResources(connection)) {
-			return;
-		}
-
-		mcpResourceStore.setServerLoading(serverName, true);
-
-		try {
-			const [resources, templates] = await Promise.all([
-				MCPService.listAllResources(connection),
-				MCPService.listAllResourceTemplates(connection)
-			]);
-
-			mcpResourceStore.setServerResources(serverName, resources, templates);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			mcpResourceStore.setServerError(serverName, message);
-			console.error(`[MCPStore][${serverName}] Failed to fetch resources:`, error);
-		}
+		return this.resources.fetchServerResources(serverName);
 	}
 
-	/**
-	 * Read resource content from a server.
-	 * Caches the result in mcpResourceStore.
-	 */
 	async readResource(uri: string): Promise<MCPResourceContent[] | null> {
-		// Check cache first
-		const cached = mcpResourceStore.getCachedContent(uri);
-		if (cached) {
-			return cached.content;
-		}
-
-		// Find which server has this resource
-		const serverName = mcpResourceStore.findServerForUri(uri);
-		if (!serverName) {
-			console.error(`[MCPStore] No server found for resource URI: ${uri}`);
-
-			return null;
-		}
-
-		const connection = this.conn.connections.get(serverName);
-		if (!connection) {
-			console.error(`[MCPStore] No connection found for server: ${serverName}`);
-
-			return null;
-		}
-
-		try {
-			const result = await MCPService.readResource(connection, uri);
-			const resourceInfo = mcpResourceStore.findResourceByUri(uri);
-
-			if (resourceInfo) {
-				mcpResourceStore.cacheResourceContent(resourceInfo, result.contents);
-			}
-
-			return result.contents;
-		} catch (error) {
-			console.error(`[MCPStore] Failed to read resource ${uri}:`, error);
-
-			return null;
-		}
+		return this.resources.readResource(uri);
 	}
 
-	/**
-	 * Subscribe to resource updates.
-	 */
 	async subscribeToResource(uri: string): Promise<boolean> {
-		const serverName = mcpResourceStore.findServerForUri(uri);
-		if (!serverName) {
-			console.error(`[MCPStore] No server found for resource URI: ${uri}`);
-
-			return false;
-		}
-
-		const connection = this.conn.connections.get(serverName);
-		if (!connection) {
-			console.error(`[MCPStore] No connection found for server: ${serverName}`);
-
-			return false;
-		}
-
-		if (!MCPService.supportsResourceSubscriptions(connection)) {
-			return false;
-		}
-
-		try {
-			await MCPService.subscribeResource(connection, uri);
-			mcpResourceStore.addSubscription(uri, serverName);
-
-			return true;
-		} catch (error) {
-			console.error(`[MCPStore] Failed to subscribe to resource ${uri}:`, error);
-
-			return false;
-		}
+		return this.resources.subscribeToResource(uri);
 	}
 
-	/**
-	 * Unsubscribe from resource updates.
-	 */
 	async unsubscribeFromResource(uri: string): Promise<boolean> {
-		const serverName = mcpResourceStore.findServerForUri(uri);
-		if (!serverName) {
-			console.error(`[MCPStore] No server found for resource URI: ${uri}`);
-
-			return false;
-		}
-
-		const connection = this.conn.connections.get(serverName);
-		if (!connection) {
-			console.error(`[MCPStore] No connection found for server: ${serverName}`);
-
-			return false;
-		}
-
-		try {
-			await MCPService.unsubscribeResource(connection, uri);
-			mcpResourceStore.removeSubscription(uri);
-
-			return true;
-		} catch (error) {
-			console.error(`[MCPStore] Failed to unsubscribe from resource ${uri}:`, error);
-
-			return false;
-		}
+		return this.resources.unsubscribeFromResource(uri);
 	}
 
-	/**
-	 * Add a resource as attachment to chat context.
-	 * Automatically fetches content if not cached.
-	 */
 	async attachResource(uri: string): Promise<MCPResourceAttachment | null> {
-		const resourceInfo = mcpResourceStore.findResourceByUri(uri);
-		if (!resourceInfo) {
-			console.error(`[MCPStore] Resource not found: ${uri}`);
-
-			return null;
-		}
-
-		// Check if already attached
-		if (mcpResourceStore.isAttached(uri)) {
-			return null;
-		}
-
-		// Add attachment (initially loading)
-		const attachment = mcpResourceStore.addAttachment(resourceInfo);
-
-		// Fetch content
-		try {
-			const content = await this.readResource(uri);
-
-			if (content) {
-				mcpResourceStore.updateAttachmentContent(attachment.id, content);
-			} else {
-				mcpResourceStore.updateAttachmentError(attachment.id, 'Failed to read resource');
-			}
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			mcpResourceStore.updateAttachmentError(attachment.id, message);
-		}
-
-		return mcpResourceStore.getAttachment(attachment.id) ?? null;
+		return this.resources.attachResource(uri);
 	}
 
-	/**
-	 * Remove a resource attachment from chat context.
-	 */
 	removeResourceAttachment(attachmentId: string): void {
-		mcpResourceStore.removeAttachment(attachmentId);
+		this.resources.removeResourceAttachment(attachmentId);
 	}
 
-	/**
-	 * Clear all resource attachments.
-	 */
 	clearResourceAttachments(): void {
-		mcpResourceStore.clearAttachments();
+		this.resources.clearResourceAttachments();
 	}
 
-	/**
-	 * Get formatted resource context for chat.
-	 */
 	getResourceContextForChat(): string {
-		return mcpResourceStore.formatAttachmentsForContext();
+		return this.resources.getResourceContextForChat();
 	}
 
-	/**
-	 * Convert current resource attachments to DatabaseMessageExtra[] and clear them.
-	 * Called during message send to persist resources with the user message.
-	 */
 	consumeResourceAttachmentsAsExtras(): DatabaseMessageExtraMcpResource[] {
-		const extras = mcpResourceStore.toMessageExtras();
-		if (extras.length > 0) {
-			mcpResourceStore.clearAttachments();
-		}
-		return extras;
+		return this.resources.consumeResourceAttachmentsAsExtras();
 	}
 }
 

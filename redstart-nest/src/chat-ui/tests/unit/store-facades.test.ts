@@ -829,6 +829,53 @@ describe('mcpStore wires its sub-stores into one object graph', () => {
 		expect(injected(mcpStore.toolOps, 'conn')).toBe(mcpStore.conn);
 		expect(injected(mcpStore.prompts, 'conn')).toBe(mcpStore.conn);
 		expect(injected(mcpStore.prompts, 'health')).toBe(mcpStore.health);
+		expect(injected(mcpStore.resources, 'conn')).toBe(mcpStore.conn);
+		expect(injected(mcpStore.resources, 'health')).toBe(mcpStore.health);
+	});
+
+	// Item 5 is done when the facade holds no state of its own. Every `$state`
+	// now lives in a sub-store, so an own data property here is either a copy
+	// (recipe rule 4) or state that was never extracted.
+	it('holds no state of its own', () => {
+		const own = Object.getOwnPropertyNames(mcpStore).filter(
+			(n) => !['tools', 'conn', 'health', 'servers', 'toolOps', 'prompts', 'resources'].includes(n)
+		);
+
+		expect(own, `facade owns ${own.join(', ')}`).toEqual([]);
+	});
+});
+
+describe('mcpStore answers resource capability from mcp-resource-ops', () => {
+	afterEach(() => {
+		mcpStore.health.clearAllHealthChecks();
+		mcpStore.conn.connections.clear();
+	});
+
+	it('reports capability from a health check with no connection open', () => {
+		expect(mcpStore.hasResourcesCapability([{ serverId: 'srv-r', enabled: true }])).toBe(false);
+
+		mcpStore.health.updateHealthCheck('srv-r', {
+			status: HealthCheckStatus.SUCCESS,
+			tools: [],
+			capabilities: { server: { resources: {} }, client: {} },
+			logs: []
+		});
+
+		expect(mcpStore.hasResourcesCapability([{ serverId: 'srv-r', enabled: true }])).toBe(true);
+		expect(mcpStore.getServersWithResources()).toEqual(['srv-r']);
+		expect(mcpHasResourcesCapability()).toBe(true);
+		expect(mcpServersWithResources()).toEqual(['srv-r']);
+	});
+
+	it('ignores a healthy server that this chat has not enabled', () => {
+		mcpStore.health.updateHealthCheck('srv-r', {
+			status: HealthCheckStatus.SUCCESS,
+			tools: [],
+			capabilities: { server: { resources: {} }, client: {} },
+			logs: []
+		});
+
+		expect(mcpStore.hasResourcesCapability([])).toBe(false);
 	});
 });
 
