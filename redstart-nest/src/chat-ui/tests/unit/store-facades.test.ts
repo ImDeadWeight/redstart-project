@@ -827,6 +827,51 @@ describe('mcpStore wires its sub-stores into one object graph', () => {
 		expect(injected(mcpStore.servers, 'health')).toBe(mcpStore.health);
 		expect(injected(mcpStore.toolOps, 'tools')).toBe(mcpStore.tools);
 		expect(injected(mcpStore.toolOps, 'conn')).toBe(mcpStore.conn);
+		expect(injected(mcpStore.prompts, 'conn')).toBe(mcpStore.conn);
+		expect(injected(mcpStore.prompts, 'health')).toBe(mcpStore.health);
+	});
+});
+
+describe('mcpStore answers prompt capability from mcp-prompts', () => {
+	afterEach(() => {
+		mcpStore.health.clearAllHealthChecks();
+		mcpStore.conn.connections.clear();
+	});
+
+	// Capability is read from the health record *before* the pool, because a
+	// probed server advertises what it supports before anything connects to it.
+	// That ordering is the whole reason mcp-prompts takes both collaborators.
+	it('reports capability from a health check with no connection open', () => {
+		expect(mcpStore.hasPromptsCapability([{ serverId: 'srv-p', enabled: true }])).toBe(false);
+
+		mcpStore.health.updateHealthCheck('srv-p', {
+			status: HealthCheckStatus.SUCCESS,
+			tools: [],
+			capabilities: { server: { prompts: {} }, client: {} },
+			logs: []
+		});
+
+		expect(mcpStore.hasPromptsCapability([{ serverId: 'srv-p', enabled: true }])).toBe(true);
+	});
+
+	it('ignores a healthy server that this chat has not enabled', () => {
+		mcpStore.health.updateHealthCheck('srv-p', {
+			status: HealthCheckStatus.SUCCESS,
+			tools: [],
+			capabilities: { server: { prompts: {} }, client: {} },
+			logs: []
+		});
+
+		expect(mcpStore.hasPromptsCapability([])).toBe(false);
+		expect(mcpStore.hasPromptsCapability([{ serverId: 'srv-other', enabled: true }])).toBe(false);
+	});
+
+	it('falls back to the live pool', () => {
+		mcpStore.conn.connections.set('srv-live', {
+			serverCapabilities: { prompts: {} }
+		} as never);
+
+		expect(mcpStore.hasPromptsSupport()).toBe(true);
 	});
 });
 
