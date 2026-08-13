@@ -34,18 +34,11 @@ import { SandboxService } from '$lib/services/sandbox.service';
 import { isAbortError } from '$lib/utils';
 import { twigFsApi } from '$lib/utils/twig';
 import { parseToolCallsFromTurn, createApiToolCalls } from '$lib/utils/tool-call-parser';
-import { DEFAULT_AGENTIC_CONFIG, NEWLINE_SEPARATOR } from '$lib/constants';
-import {
-	IMAGE_MIME_TO_EXTENSION,
-	DATA_URI_BASE64_REGEX,
-	MCP_ATTACHMENT_NAME_PREFIX,
-	DEFAULT_IMAGE_EXTENSION
-} from '$lib/constants';
+import { DEFAULT_AGENTIC_CONFIG } from '$lib/constants';
 import {
 	AttachmentType,
 	ContentPartType,
 	MessageRole,
-	MimeTypePrefix,
 	ToolCallType
 } from '$lib/enums';
 import type {
@@ -141,6 +134,9 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 		} satisfies AgenticMessage;
 	});
 }
+
+import { buildFinalTimings } from '$lib/stores/agentic/agentic-timings';
+import { extractBase64Attachments } from '$lib/stores/agentic/agentic-attachments';
 
 class AgenticStore {
 	private _sessions = new SvelteMap<string, AgenticSession>();
@@ -561,7 +557,7 @@ class AgenticStore {
 				await new Promise((r) => setTimeout(r, 0));
 
 				if (!shouldContinue || signal?.aborted) {
-					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+					onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 					return;
 				}
 
@@ -573,7 +569,7 @@ class AgenticStore {
 			agenticTimings.turns = turn + 1;
 
 			if (signal?.aborted) {
-				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+				onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 				return;
 			}
 
@@ -691,10 +687,10 @@ class AgenticStore {
 					await onAssistantTurnComplete?.(
 						turnContent,
 						turnReasoningContent || undefined,
-						this.buildFinalTimings(capturedTimings, agenticTimings),
+						buildFinalTimings(capturedTimings, agenticTimings),
 						undefined
 					);
-					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+					onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 					return;
 				}
 				const normalizedError = error instanceof Error ? error : new Error('LLM stream error');
@@ -702,10 +698,10 @@ class AgenticStore {
 				await onAssistantTurnComplete?.(
 					turnContent,
 					turnReasoningContent || undefined,
-					this.buildFinalTimings(capturedTimings, agenticTimings),
+					buildFinalTimings(capturedTimings, agenticTimings),
 					undefined
 				);
-				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+				onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 				throw normalizedError;
 			}
 
@@ -716,10 +712,10 @@ class AgenticStore {
 				await onAssistantTurnComplete?.(
 					turnContent,
 					turnReasoningContent || undefined,
-					this.buildFinalTimings(capturedTimings, agenticTimings),
+					buildFinalTimings(capturedTimings, agenticTimings),
 					turnToolCalls.length > 0 ? this.normalizeToolCalls(turnToolCalls) : undefined
 				);
-				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+				onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 				return;
 			}
 
@@ -727,7 +723,7 @@ class AgenticStore {
 			if (turnToolCalls.length === 0) {
 				agenticTimings.perTurn!.push(turnStats);
 
-				const finalTimings = this.buildFinalTimings(capturedTimings, agenticTimings);
+				const finalTimings = buildFinalTimings(capturedTimings, agenticTimings);
 
 				await onAssistantTurnComplete?.(
 					turnContent,
@@ -749,10 +745,10 @@ class AgenticStore {
 				await onAssistantTurnComplete?.(
 					turnContent,
 					turnReasoningContent || undefined,
-					this.buildFinalTimings(capturedTimings, agenticTimings),
+					buildFinalTimings(capturedTimings, agenticTimings),
 					undefined
 				);
-				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+				onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 				return;
 			}
 
@@ -780,7 +776,7 @@ class AgenticStore {
 				const toolCall = normalizedCalls[i];
 
 				if (signal?.aborted) {
-					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+					onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 					return;
 				}
 
@@ -819,7 +815,7 @@ class AgenticStore {
 				await new Promise((r) => setTimeout(r, 0));
 
 				if (signal?.aborted) {
-					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+					onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 					return;
 				}
 
@@ -873,7 +869,7 @@ class AgenticStore {
 						}
 					} catch (error) {
 						if (isAbortError(error)) {
-							onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+							onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 							return;
 						}
 						result = `Error: ${error instanceof Error ? error.message : String(error)}`;
@@ -895,11 +891,11 @@ class AgenticStore {
 				turnStats.toolsMs += Math.round(toolDurationMs);
 
 				if (signal?.aborted) {
-					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+					onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 					return;
 				}
 
-				const { cleanedResult, attachments } = this.extractBase64Attachments(result);
+				const { cleanedResult, attachments } = extractBase64Attachments(result);
 
 				// Create the tool result message in the DB
 				let toolResultMessage: DatabaseMessage | undefined;
@@ -946,7 +942,7 @@ class AgenticStore {
 			if (turnStats.toolCalls.length > 0) {
 				agenticTimings.perTurn!.push(turnStats);
 
-				const intermediateTimings = this.buildFinalTimings(capturedTimings, agenticTimings);
+				const intermediateTimings = buildFinalTimings(capturedTimings, agenticTimings);
 				if (intermediateTimings) onTurnComplete?.(intermediateTimings);
 			}
 
@@ -955,27 +951,12 @@ class AgenticStore {
 				console.log(
 					'[AgenticStore] Steering message detected after tool execution, exiting agentic flow'
 				);
-				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+				onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 				return;
 			}
 
 			turn++;
 		}
-	}
-
-	private buildFinalTimings(
-		capturedTimings: ChatMessageTimings | undefined,
-		agenticTimings: ChatMessageAgenticTimings
-	): ChatMessageTimings | undefined {
-		if (agenticTimings.toolCallsCount === 0) return capturedTimings;
-		return {
-			predicted_n: capturedTimings?.predicted_n,
-			predicted_ms: capturedTimings?.predicted_ms,
-			prompt_n: capturedTimings?.prompt_n,
-			prompt_ms: capturedTimings?.prompt_ms,
-			cache_n: capturedTimings?.cache_n,
-			agentic: agenticTimings
-		};
 	}
 
 	private normalizeToolCalls(toolCalls: ApiChatCompletionToolCall[]): AgenticToolCallList {
@@ -990,53 +971,6 @@ class AgenticStore {
 		}));
 	}
 
-	private extractBase64Attachments(result: string): {
-		cleanedResult: string;
-		attachments: DatabaseMessageExtra[];
-	} {
-		if (!result.trim()) {
-			return { cleanedResult: result, attachments: [] };
-		}
-
-		const lines = result.split(NEWLINE_SEPARATOR);
-		const attachments: DatabaseMessageExtra[] = [];
-		let attachmentIndex = 0;
-
-		const cleanedLines = lines.map((line) => {
-			const trimmedLine = line.trim();
-
-			const match = trimmedLine.match(DATA_URI_BASE64_REGEX);
-			if (!match) {
-				return line;
-			}
-
-			const mimeType = match[1].toLowerCase();
-			const base64Data = match[2];
-
-			if (!base64Data) {
-				return line;
-			}
-
-			attachmentIndex += 1;
-			const name = this.buildAttachmentName(mimeType, attachmentIndex);
-
-			if (mimeType.startsWith(MimeTypePrefix.IMAGE)) {
-				attachments.push({ type: AttachmentType.IMAGE, name, base64Url: trimmedLine });
-
-				return `[Attachment saved: ${name}]`;
-			}
-
-			return line;
-		});
-
-		return { cleanedResult: cleanedLines.join(NEWLINE_SEPARATOR), attachments };
-	}
-
-	private buildAttachmentName(mimeType: string, index: number): string {
-		const extension = IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION;
-
-		return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
-	}
 }
 
 export const agenticStore = new AgenticStore();
