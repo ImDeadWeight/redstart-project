@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client';
 import { MCPService } from '$lib/services/mcp.service';
+import { createDiagnosticFetch } from '$lib/services/mcp/mcp-diagnostics';
+import * as mcpTransport from '$lib/services/mcp/mcp-transport';
 import { MCPConnectionPhase, MCPTransportType } from '$lib/enums';
 import type { MCPConnectionLog, MCPServerConfig } from '$lib/types';
 
@@ -13,14 +15,12 @@ type DiagnosticFetchFactory = (
 	onLog?: (log: MCPConnectionLog) => void
 ) => { fetch: typeof fetch; disable: () => void };
 
-const createDiagnosticFetch = (
+const buildDiagnosticFetch = (
 	config: MCPServerConfig,
 	onLog?: (log: MCPConnectionLog) => void,
 	baseInit: RequestInit = {}
 ) =>
-	(
-		MCPService as unknown as { createDiagnosticFetch: DiagnosticFetchFactory }
-	).createDiagnosticFetch('test-server', config, baseInit, new URL(config.url!), false, onLog);
+	createDiagnosticFetch('test-server', config, baseInit, new URL(config.url!), false, onLog);
 
 describe('MCPService', () => {
 	afterEach(() => {
@@ -42,7 +42,7 @@ describe('MCPService', () => {
 			transport: MCPTransportType.STREAMABLE_HTTP
 		};
 
-		const controller = createDiagnosticFetch(config, (log) => logs.push(log));
+		const controller = buildDiagnosticFetch(config, (log) => logs.push(log));
 
 		await controller.fetch(config.url!, { method: 'POST', body: '{}' });
 		expect(logs).toHaveLength(2);
@@ -72,7 +72,7 @@ describe('MCPService', () => {
 			}
 		};
 
-		const controller = createDiagnosticFetch(config, (log) => logs.push(log), {
+		const controller = buildDiagnosticFetch(config, (log) => logs.push(log), {
 			headers: config.headers
 		});
 
@@ -111,7 +111,7 @@ describe('MCPService', () => {
 			transport: MCPTransportType.STREAMABLE_HTTP
 		};
 
-		const controller = createDiagnosticFetch(config, (log) => logs.push(log));
+		const controller = buildDiagnosticFetch(config, (log) => logs.push(log));
 
 		await controller.fetch(config.url!, {
 			method: 'POST',
@@ -155,7 +155,7 @@ describe('MCPService', () => {
 			transport: MCPTransportType.STREAMABLE_HTTP
 		};
 
-		const controller = createDiagnosticFetch(config, (log) => logs.push(log));
+		const controller = buildDiagnosticFetch(config, (log) => logs.push(log));
 
 		await controller.fetch(config.url!, {
 			method: 'POST',
@@ -188,7 +188,7 @@ describe('MCPService', () => {
 			transport: MCPTransportType.STREAMABLE_HTTP
 		};
 
-		const controller = createDiagnosticFetch(config, (log) => logs.push(log));
+		const controller = buildDiagnosticFetch(config, (log) => logs.push(log));
 
 		await expect(controller.fetch(config.url!, { method: 'POST', body: '{}' })).rejects.toThrow(
 			'Failed to fetch'
@@ -205,7 +205,7 @@ describe('MCPService', () => {
 		const stopPhaseLogging = vi.fn();
 		let emitClientError: ((error: Error) => void) | undefined;
 
-		vi.spyOn(MCPService, 'createTransport').mockReturnValue({
+		vi.spyOn(mcpTransport, 'createTransport').mockReturnValue({
 			transport: {} as never,
 			type: MCPTransportType.WEBSOCKET,
 			stopPhaseLogging

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Square, SkipForward } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { ChatService } from '$lib/services';
+	import { stopReasoning } from '$lib/services/chat/chat-slots';
 	import {
 		ChatFormActionsAdd,
 		ChatFormActionContext,
@@ -138,8 +138,7 @@
 		<Button
 			type="button"
 			variant="secondary"
-			onclick={() =>
-				ChatService.stopReasoning(activeMessage?.completionId ?? '', activeMessage?.model)}
+			onclick={() => stopReasoning(activeMessage?.completionId ?? '', activeMessage?.model)}
 			class="group h-8 w-8 rounded-full p-0"
 			title="Skip reasoning"
 		>
