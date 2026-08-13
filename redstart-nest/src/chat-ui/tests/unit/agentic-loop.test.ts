@@ -121,6 +121,38 @@ afterEach(() => {
 	agenticStore.session.clearSteeringMessage('conv-loop');
 });
 
+/** Waits for the loop to park on a permission prompt, then answers it. */
+async function answerPermission(decision: string, tries = 200) {
+	for (let i = 0; i < tries; i++) {
+		if (agenticStore.session.pendingPermissionRequest('conv-loop')) {
+			agenticStore.session.resolvePermission('conv-loop', decision as never);
+			return true;
+		}
+		await new Promise((r) => setTimeout(r, 0));
+	}
+	return false;
+}
+
+/** Turn 1 asks for a tool; every later turn answers with prose. */
+function respondsWithToolCallThenText() {
+	let turn = 0;
+	sendMessage.mockImplementation(
+		async (_messages: unknown, opts: Record<string, (s: string) => void>) => {
+			turn += 1;
+			if (turn === 1) {
+				opts.onToolCallChunk?.(
+					JSON.stringify([
+						{ id: 'call_1', type: 'function', function: { name: 't', arguments: '{}' } }
+					])
+				);
+				return undefined;
+			}
+			opts.onChunk?.('done with tools');
+			return undefined;
+		}
+	);
+}
+
 describe('executeAgenticLoop callback ordering', () => {
 	// The terminal path: the model answered without calling a tool. This is the
 	// ordinary end of almost every flow.
@@ -253,5 +285,41 @@ describe('executeAgenticLoop callback ordering', () => {
 		// No tool ran, so buildFinalTimings passes the captured timings through
 		// untouched — including `undefined` when the stub reported none.
 		expect(rec.callbacks.onFlowComplete).toHaveBeenCalledWith(undefined);
+	});
+
+	// Phase 9 — seam 7d's territory, and the reason these two exist: the first
+	// version of this file never reached tool execution at all (the steering
+	// check exits earlier), so both sentinel mutants for 7d survived it.
+
+	// 'done': tools ran, so the loop must start another LLM turn rather than
+	// treating tool execution as the end of the flow.
+	it('continues to another turn after running tool calls', async () => {
+		respondsWithToolCallThenText();
+
+		const { rec, done } = runLoop();
+		await answerPermission('once');
+		await done;
+
+		expect(sendMessage).toHaveBeenCalledTimes(2);
+		expect(rec.callbacks.onFlowComplete).toHaveBeenCalledTimes(1);
+		expect(rec.calls.indexOf('onAssistantTurnComplete')).toBeLessThan(
+			rec.calls.lastIndexOf('onFlowComplete')
+		);
+	});
+
+	// 'stopped': aborting during tool execution ends the flow there. If the
+	// caller ignored the sentinel it would run on and start a second turn.
+	it('stops without another turn when aborted during tool execution', async () => {
+		const controller = new AbortController();
+		respondsWithToolCallThenText();
+
+		const { rec, done } = runLoop({ signal: controller.signal });
+		const parked = await answerPermission('once');
+		controller.abort();
+		await done;
+
+		expect(parked).toBe(true);
+		expect(sendMessage).toHaveBeenCalledTimes(1);
+		expect(rec.callbacks.onFlowComplete).toHaveBeenCalledTimes(1);
 	});
 });
