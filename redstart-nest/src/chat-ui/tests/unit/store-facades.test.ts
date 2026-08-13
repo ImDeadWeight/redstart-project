@@ -161,6 +161,8 @@ const CONVERSATIONS_ACCESSORS = [
 const CONVERSATIONS_FIELDS = [
 	'core',
 	'mcpOverrides',
+	'title',
+	'messages',
 	'pendingThinkingEnabled',
 	'pendingReasoningEffort',
 	'pendingPromptMode',
@@ -831,6 +833,16 @@ describe('mcpStore wires its sub-stores into one object graph', () => {
 		expect(injected(mcpStore.prompts, 'health')).toBe(mcpStore.health);
 		expect(injected(mcpStore.resources, 'conn')).toBe(mcpStore.conn);
 		expect(injected(mcpStore.resources, 'health')).toBe(mcpStore.health);
+	});
+
+	// Item 6's edges. `messages` takes `title` as well as `core` because
+	// navigateToSibling re-titles on a branch switch — the edge that forced 6c
+	// to land before 6a.
+	it('gives every conversations sub-store the same core the facade exposes', () => {
+		expect(injected(conversationsStore.mcpOverrides, 'core')).toBe(conversationsStore.core);
+		expect(injected(conversationsStore.title, 'core')).toBe(conversationsStore.core);
+		expect(injected(conversationsStore.messages, 'core')).toBe(conversationsStore.core);
+		expect(injected(conversationsStore.messages, 'title')).toBe(conversationsStore.title);
 	});
 
 	// Item 5 is done when the facade holds no state of its own. Every `$state`

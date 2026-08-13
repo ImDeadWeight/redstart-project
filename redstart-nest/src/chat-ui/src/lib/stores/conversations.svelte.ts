@@ -23,10 +23,9 @@ import { browser } from '$app/environment';
 import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
-import { config } from '$lib/stores/settings.svelte';
-import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
+import { filterByLeafNodeId } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
-import { MessageRole, HtmlInputType, FileExtensionText, ReasoningEffort } from '$lib/enums';
+import { HtmlInputType, FileExtensionText, ReasoningEffort } from '$lib/enums';
 import {
 	ISO_DATE_TIME_SEPARATOR,
 	ISO_DATE_TIME_SEPARATOR_REPLACEMENT,
@@ -47,6 +46,7 @@ import { RouterService } from '$lib/services/router.service';
 import { ConversationCoreState } from '$lib/stores/conversations/conversation-core.svelte';
 import { ConversationMcpOverrides } from '$lib/stores/conversations/conversation-mcp-overrides.svelte';
 import { ConversationTitle } from '$lib/stores/conversations/conversation-title.svelte';
+import { ConversationMessages } from '$lib/stores/conversations/conversation-messages.svelte';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 export interface ConversationTreeItem {
@@ -110,6 +110,12 @@ class ConversationsStore {
 
 	/** Naming, the confirmation around it, and the timestamp bump. */
 	readonly title = new ConversationTitle(this.core);
+
+	/**
+	 * The active conversation's visible message path. Declared after `title`
+	 * because navigateToSibling re-titles on a branch switch.
+	 */
+	readonly messages = new ConversationMessages(this.core, this.title);
 
 	/**
 	 * Registered from +layout.svelte, read from chat-message-ops. Forwarded with
@@ -212,10 +218,6 @@ class ConversationsStore {
 	 * Callback for updating message content in chatStore.
 	 * Registered by chatStore to enable cross-store updates without circular dependency.
 	 */
-	private messageUpdateCallback:
-		| ((messageId: string, updates: Partial<DatabaseMessage>) => void)
-		| null = null;
-
 	/**
 	 *
 	 *
@@ -250,62 +252,12 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Register a callback for message updates from other stores.
-	 * Called by chatStore during initialization.
-	 */
-	registerMessageUpdateCallback(
-		callback: (messageId: string, updates: Partial<DatabaseMessage>) => void
-	): void {
-		this.messageUpdateCallback = callback;
-	}
-
-	/**
 	 *
 	 *
 	 * Message Array Operations
 	 *
 	 *
 	 */
-
-	/**
-	 * Adds a message to the active messages array
-	 */
-	addMessageToActive(message: DatabaseMessage): void {
-		this.activeMessages.push(message);
-	}
-
-	/**
-	 * Updates a message at a specific index in active messages
-	 */
-	updateMessageAtIndex(index: number, updates: Partial<DatabaseMessage>): void {
-		if (index !== -1 && this.activeMessages[index]) {
-			this.activeMessages[index] = { ...this.activeMessages[index], ...updates };
-		}
-	}
-
-	/**
-	 * Finds the index of a message in active messages
-	 */
-	findMessageIndex(messageId: string): number {
-		return this.activeMessages.findIndex((m) => m.id === messageId);
-	}
-
-	/**
-	 * Removes messages from active messages starting at an index
-	 */
-	sliceActiveMessages(startIndex: number): void {
-		this.activeMessages = this.activeMessages.slice(0, startIndex);
-	}
-
-	/**
-	 * Removes a message from active messages by index
-	 */
-	removeMessageAtIndex(index: number): DatabaseMessage | undefined {
-		if (index !== -1) {
-			return this.activeMessages.splice(index, 1)[0];
-		}
-		return undefined;
-	}
 
 	/**
 	 *
@@ -318,6 +270,48 @@ class ConversationsStore {
 	/**
 	 * Loads all conversations from the database
 	 */
+	registerMessageUpdateCallback(
+		callback: (messageId: string, updates: Partial<DatabaseMessage>) => void
+	): void {
+		this.messages.registerMessageUpdateCallback(callback);
+	}
+
+	addMessageToActive(message: DatabaseMessage): void {
+		this.messages.addMessageToActive(message);
+	}
+
+	updateMessageAtIndex(index: number, updates: Partial<DatabaseMessage>): void {
+		this.messages.updateMessageAtIndex(index, updates);
+	}
+
+	findMessageIndex(messageId: string): number {
+		return this.messages.findMessageIndex(messageId);
+	}
+
+	sliceActiveMessages(startIndex: number): void {
+		this.messages.sliceActiveMessages(startIndex);
+	}
+
+	removeMessageAtIndex(index: number): DatabaseMessage | undefined {
+		return this.messages.removeMessageAtIndex(index);
+	}
+
+	async refreshActiveMessages(): Promise<void> {
+		return this.messages.refreshActiveMessages();
+	}
+
+	async getConversationMessages(convId: string): Promise<DatabaseMessage[]> {
+		return this.messages.getConversationMessages(convId);
+	}
+
+	async updateCurrentNode(nodeId: string): Promise<void> {
+		return this.messages.updateCurrentNode(nodeId);
+	}
+
+	async navigateToSibling(siblingId: string): Promise<void> {
+		return this.messages.navigateToSibling(siblingId);
+	}
+
 	async loadConversations(): Promise<void> {
 		const conversations = await DatabaseService.getAllConversations();
 		this.conversations = conversations;
@@ -489,37 +483,6 @@ class ConversationsStore {
 	 */
 
 	/**
-	 * Refreshes active messages based on currNode after branch navigation.
-	 */
-	async refreshActiveMessages(): Promise<void> {
-		if (!this.activeConversation) return;
-
-		const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
-
-		if (allMessages.length === 0) {
-			this.activeMessages = [];
-			return;
-		}
-
-		const leafNodeId =
-			this.activeConversation.currNode ||
-			allMessages.reduce((latest, msg) => (msg.timestamp > latest.timestamp ? msg : latest)).id;
-
-		const currentPath = filterByLeafNodeId(allMessages, leafNodeId, false) as DatabaseMessage[];
-
-		this.activeMessages = currentPath;
-	}
-
-	/**
-	 * Gets all messages for a specific conversation
-	 * @param convId - The conversation ID
-	 * @returns Array of messages
-	 */
-	async getConversationMessages(convId: string): Promise<DatabaseMessage[]> {
-		return await DatabaseService.getConversationMessages(convId);
-	}
-
-	/**
 	 *
 	 *
 	 * Title Management
@@ -555,65 +518,12 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Updates the current node of the active conversation
-	 * @param nodeId - The new current node ID
-	 */
-	async updateCurrentNode(nodeId: string): Promise<void> {
-		if (!this.activeConversation) return;
-
-		await DatabaseService.updateCurrentNode(this.activeConversation.id, nodeId);
-		this.activeConversation = { ...this.activeConversation, currNode: nodeId };
-	}
-
-	/**
 	 *
 	 *
 	 * Branch Navigation
 	 *
 	 *
 	 */
-
-	/**
-	 * Navigates to a specific sibling branch by updating currNode and refreshing messages.
-	 * @param siblingId - The sibling message ID to navigate to
-	 */
-	async navigateToSibling(siblingId: string): Promise<void> {
-		if (!this.activeConversation) return;
-
-		const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
-		const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
-		const currentFirstUserMessage = this.activeMessages.find(
-			(m) => m.role === MessageRole.USER && m.parent === rootMessage?.id
-		);
-
-		const currentLeafNodeId = findLeafNode(allMessages, siblingId);
-
-		await DatabaseService.updateCurrentNode(this.activeConversation.id, currentLeafNodeId);
-		this.activeConversation = { ...this.activeConversation, currNode: currentLeafNodeId };
-		await this.refreshActiveMessages();
-
-		if (rootMessage && this.activeMessages.length > 0) {
-			const newFirstUserMessage = this.activeMessages.find(
-				(m) => m.role === MessageRole.USER && m.parent === rootMessage.id
-			);
-
-			if (
-				newFirstUserMessage &&
-				newFirstUserMessage.content.trim() &&
-				(!currentFirstUserMessage ||
-					newFirstUserMessage.id !== currentFirstUserMessage.id ||
-					newFirstUserMessage.content.trim() !== currentFirstUserMessage.content.trim())
-			) {
-				await this.updateConversationTitleWithConfirmation(
-					this.activeConversation.id,
-					generateConversationTitle(
-						newFirstUserMessage.content,
-						Boolean(config().titleGenerationUseFirstLine)
-					)
-				);
-			}
-		}
-	}
 
 	/**
 	 *
