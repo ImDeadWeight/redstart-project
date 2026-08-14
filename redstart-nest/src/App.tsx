@@ -136,10 +136,15 @@ export default function App() {
         </aside>
 
         {/* ── Main content ── */}
-        <main className="flex-1 flex flex-col overflow-y-auto p-5 gap-5">
+        <main className="flex-1 flex flex-col overflow-y-auto px-5 pb-5 gap-5">
 
-          {/* ── Tab bar (browser-style) ── */}
-          <div className="flex items-end gap-1 border-b border-zinc-800 -mx-5 px-5 -mt-2 pt-2 sticky top-0 bg-zinc-950 z-10">
+          {/* ── Tab bar (browser-style) ──
+              No top padding on <main> above — the tab bar is the first child
+              and owns its own pt-5, so it sits flush at the scrollport's true
+              top edge. Combining `sticky top-0` with a negative top margin
+              (the previous approach) shifts the stuck offset itself, which is
+              why lower content bled through above it when scrolled. */}
+          <div className="flex items-end gap-1 border-b border-zinc-800 -mx-5 px-5 pt-5 sticky top-0 bg-zinc-950 z-20">
             {([
               ['config', 'Configuration'],
               ['models', 'Models'],
