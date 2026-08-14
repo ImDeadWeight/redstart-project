@@ -976,6 +976,34 @@ async function main() {
       assert(cfg.file_system === undefined, 'must not emit snake_case file_system — the provider reads cfg.fileSystem')
     })
 
+    // A profile saved before webAccessEnabled existed has no such key, and must
+    // still get web access — otherwise the upgrade silently disables it.
+    await test('🔍 a legacy profile (no webAccessEnabled key) still gets web access', async () => {
+      const legacyProfile = { tools: { enabled: true, activeToolIds: [] } }
+      const cfg = buildGatewayConfig(legacyProfile)
+      assert(cfg.webFetch.enabled === true, 'legacy profile lost web access')
+
+      const offProfile = { tools: { enabled: true, webAccessEnabled: false, activeToolIds: [] } }
+      assert(buildGatewayConfig(offProfile).webFetch.enabled === false, 'webAccessEnabled:false not honoured')
+    })
+
+    await test('🔍 disabling Web Access serves no web tool even with whitelist ON and sources selected', async () => {
+      // Web Access off + whitelist on + sources selected: the combination where
+      // the pre-Step-2b gate consulted allowedBaseUrls and never looked at
+      // `enabled`, so the card's Disable silently served the tools anyway.
+      const webFetchTool = await import('../electron/main/web-fetch-tool.mjs')
+      const webOff = webFetchTool.toolDefs({
+        webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: ['https://example.com/'], activeTools: [], maxFetchTokens: 2000 },
+      })
+      assert(webOff.length === 0, `disabling Web Access still served ${webOff.map(t => t.name).join(', ')}`)
+
+      // And the execution backstop, for a client that calls it regardless.
+      const refused = await webFetchTool.callTool('web_fetch', { url: 'https://example.com/' }, {
+        webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: ['https://example.com/'] },
+      })
+      assert(refused?.isError, 'web_fetch ran with Web Access disabled')
+    })
+
     // Spawn + handshake the child, then push the same config to the MCP server.
     await fsProvider.syncFilesystemProvider(buildGatewayConfig(fsProfile).fileSystem)
     updateMcpConfig(buildGatewayConfig(fsProfile))

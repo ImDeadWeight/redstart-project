@@ -285,7 +285,12 @@ function availableSearchSources(webFetchCfg) {
 export function toolDefs(cfg) {
   const webFetchCfg = cfg?.webFetch
   const whitelistOn = webFetchCfg?.whitelistEnabled !== false
-  const fetchEnabled = whitelistOn ? !!webFetchCfg?.allowedBaseUrls?.length : !!webFetchCfg?.enabled
+  // `enabled` gates BOTH branches. It used to be consulted only when the
+  // whitelist was off, which carried no information while buildGatewayConfig
+  // hardcoded it true — but the Web Access card makes it a real per-profile
+  // switch, and with the whitelist ON (the default) the old form ignored it:
+  // disabling the card while sources were selected still served the web tools.
+  const fetchEnabled = !!webFetchCfg?.enabled && (whitelistOn ? !!webFetchCfg?.allowedBaseUrls?.length : true)
   if (!fetchEnabled) return []
 
   const defs = [{
@@ -328,7 +333,9 @@ export async function callTool(name, args, cfg, _ctx) {
 
   const webFetchCfg = cfg?.webFetch
   const whitelistOn = webFetchCfg?.whitelistEnabled !== false
-  const fetchEnabled = whitelistOn ? !!webFetchCfg?.allowedBaseUrls?.length : !!webFetchCfg?.enabled
+  // Same precondition as toolDefs above — the execution backstop for a client
+  // that calls a tool it was never advertised.
+  const fetchEnabled = !!webFetchCfg?.enabled && (whitelistOn ? !!webFetchCfg?.allowedBaseUrls?.length : true)
   if (!fetchEnabled) {
     return { isError: true, content: [{ type: 'text', text: 'Web access is not enabled.' }] }
   }

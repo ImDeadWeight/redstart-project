@@ -618,9 +618,25 @@ app.whenReady().then(async () => {
   const cleanedConversations = cleanupOldConversations()
   if (cleanedConversations > 0) console.log(`Cleaned ${cleanedConversations} conversations older than 30 days`)
   startDiscoveryBeacon()
+  if (!app.isPackaged) await installReactDevTools()
   createWindow()
   setupIpcHandlers()
 })
+
+// Dev-only: adds the Components/Profiler panels to Chromium DevTools so the
+// React tree is inspectable. Never runs in a packaged build — an extension
+// downloaded from the Chrome Web Store has no place in a shipped binary, and
+// the install is a network call that would just fail offline anyway, hence
+// the try/catch rather than letting a flaky download block startup.
+async function installReactDevTools() {
+  try {
+    const { default: installExtension, REACT_DEVELOPER_TOOLS } = await import('electron-devtools-installer')
+    const name = await installExtension(REACT_DEVELOPER_TOOLS)
+    console.log(`[devtools] installed ${name}`)
+  } catch (err) {
+    console.warn('[devtools] React DevTools install failed (dev-only, non-fatal):', err.message)
+  }
+}
 
 function killOrphanedServers() {
   // I call this both at startup and before the app quits. The startup call

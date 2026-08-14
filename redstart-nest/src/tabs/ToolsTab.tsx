@@ -39,42 +39,59 @@ function capDir(caps: ReturnType<typeof useCapabilities>, cap: FolderCap): strin
   return cap === 'documents' ? cc.documents.outputDir : cc[cap].rootDir
 }
 
-// Mirrors the *Wanted checks in buildGatewayConfig: a capability only produces
-// tools when it is enabled AND has whatever it needs to run (a folder, or a
-// connection string). Selecting one for a profile without that setup is the
-// silent-no-op case this warns about.
+// Mirrors the *Wanted checks in buildGatewayConfig: a capability produces tools
+// when its card is enabled for this profile AND it has whatever it needs to run
+// (a folder, or a connection string). This function answers only the second
+// half — "is it configured" — because the card's own toggle is the first half.
+// A card that is enabled but not configured is the silent-no-op case each card
+// warns about inline.
 type CapabilityConfig = ReturnType<typeof useCapabilities>['capabilityConfig']
 function isCapabilityReady(cc: CapabilityConfig, id: string): boolean {
   if (!cc) return false
   switch (id) {
-    case 'postgres': return cc.postgres.enabled && cc.postgres.hasConnectionString
-    case 'documents': return cc.documents.enabled && !!cc.documents.outputDir
-    case 'scholar': return cc.scholar.enabled
+    case 'postgres': return cc.postgres.hasConnectionString
+    case 'documents': return !!cc.documents.outputDir
+    case 'scholar': return true   // no setup required
     case 'sqlite':
     case 'vault':
     case 'git':
-    case 'file_system': return cc[id].enabled && !!cc[id].rootDir
+    case 'file_system': return !!cc[id].rootDir
     default: return true
   }
 }
 
-function FolderCapabilityCard({ caps, cap, title, emptyText, description }: {
+// `active` is this profile's activeToolIds membership; `onToggle` flips it.
+// The card no longer touches the global capability `enabled` flag — see
+// buildGatewayConfig. "Configured" (a folder is chosen) is now purely a
+// readout, not a second gate.
+function FolderCapabilityCard({ caps, cap, title, emptyText, description, active, onToggle }: {
   caps: ReturnType<typeof useCapabilities>
   cap: FolderCap
   title: string
   emptyText: string
   description: string
+  active: boolean
+  onToggle: () => void
 }) {
   const dir = capDir(caps, cap)
-  const enabled = !!caps.capabilityConfig?.[cap].enabled
   return (
     <div className="bg-zinc-800/40 rounded px-3 py-2.5">
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm text-zinc-200">{title}</span>
-        <span className={`text-xs ${dir ? (enabled ? 'text-green-400' : 'text-zinc-500') : 'text-zinc-600'}`}>
-          {dir ? (enabled ? 'Enabled' : 'Disabled') : 'Not configured'}
-        </span>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <span className={`text-xs ${!dir ? 'text-zinc-600' : active ? 'text-green-400' : 'text-zinc-500'}`}>
+            {!dir ? 'Not configured' : active ? 'Configured · Enabled' : 'Configured · Disabled'}
+          </span>
+          <button onClick={onToggle} className={btnCls.chip}>
+            {active ? 'Disable' : 'Enable'}
+          </button>
+        </div>
       </div>
+      {active && !dir && (
+        <p className="text-xs text-yellow-500/90 mb-1.5">
+          Enabled for this profile, but no folder chosen — the model will not see its tools.
+        </p>
+      )}
       <div className="flex items-center gap-2">
         <span className="flex-1 min-w-0 text-xs text-zinc-400 truncate">
           {dir || emptyText}
@@ -83,11 +100,6 @@ function FolderCapabilityCard({ caps, cap, title, emptyText, description }: {
           className="px-2.5 py-1 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 rounded text-xs transition-colors flex-shrink-0">
           Choose folder…
         </button>
-        {dir && (
-          <button onClick={() => caps.toggleCapEnabled(cap)} className={btnCls.chip}>
-            {enabled ? 'Disable' : 'Enable'}
-          </button>
-        )}
       </div>
 
       {/* File System is the one read/write capability, so it carries a
@@ -144,6 +156,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
     allTools, allGroups, clientApps,
     showAddTool, setShowAddTool, newToolName, setNewToolName,
     newToolUrl, setNewToolUrl, newToolDesc, setNewToolDesc,
+    editingToolId, startEditTool, cancelToolForm,
     showAddGroup, setShowAddGroup, newGroupName, setNewGroupName,
     newGroupDesc, setNewGroupDesc, newGroupToolIds, setNewGroupToolIds,
     setToolsField, toggleGroup, toggleTool, toggleDisabledTool,
@@ -151,16 +164,24 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
   } = toolsCatalog
   const {
     capabilityConfig, pgConnectionString, setPgConnectionString, pgMaxRows, setPgMaxRows,
-    pgTestResult, pgSaving, savePostgresConfig, togglePostgresEnabled, testPostgresConnection,
-    scholarVenueFilter, setScholarVenueFilter, toggleScholarEnabled, saveScholarVenueFilter,
+    pgTestResult, pgSaving, savePostgresConfig, testPostgresConnection,
+    scholarVenueFilter, setScholarVenueFilter, saveScholarVenueFilter,
     toolContextEstimate,
   } = caps
   const {
     externalServers, showAddExternal, setShowAddExternal,
     newExtName, setNewExtName, newExtUrl, setNewExtUrl, mcpTestResults,
+    newExtApiKey, setNewExtApiKey, editingServerId, startEditServer, cancelServerForm,
     addExternalError, addExternalWarnings,
     addExternalMcpServer, removeExternalMcpServer, testExternalMcpServer,
   } = mcp
+
+  // Every card's Enable/Disable is this profile's activeToolIds membership.
+  // Web Access is the one exception — it predates activeToolIds and defaults to
+  // on, so it uses its own `!== false` boolean (see ProfileTools in types.ts).
+  const isActive = (id: string) => config.tools?.activeToolIds?.includes(id) ?? false
+  const webAccessOn = config.tools?.webAccessEnabled !== false
+  const restrictOn = config.tools?.whitelistEnabled !== false
 
   return (
     <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
@@ -173,30 +194,8 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
       </div>
 
       {config.tools?.enabled ? (<>
-        {/* Whitelist toggle — restriction is the default posture */}
-        <div className="mb-4 flex items-center justify-between px-3 py-2 bg-zinc-800/60 rounded">
-          <div>
-            <p className="text-sm text-zinc-200">Restrict to approved sources</p>
-            <p className="text-xs text-zinc-500">
-              {config.tools?.whitelistEnabled !== false
-                ? 'The model can only fetch from the sources selected below.'
-                : 'Whitelist off — the model can fetch any public website. Local network addresses are always blocked.'}
-            </p>
-          </div>
-          <TogglePill
-            checked={config.tools?.whitelistEnabled !== false}
-            onToggle={() => setToolsField('whitelistEnabled', config.tools?.whitelistEnabled === false)}
-            className="flex-shrink-0"
-          />
-        </div>
-
-        {config.tools?.whitelistEnabled === false && (
-          <div className="mb-4 px-3 py-2 rounded text-xs border bg-yellow-900/30 border-yellow-700 text-yellow-300">
-            ⚠ Open web access: the model can reach any public site, including ones you haven't reviewed. Fetched pages can contain wrong or manipulative content. Sources selected below still power web_search and the model's source hints.
-          </div>
-        )}
-
-        {/* Performance warning */}
+        {/* Performance warning — context cost applies to every tool, so it sits
+            above the cards rather than inside any one of them. */}
         <div className={`mb-4 px-3 py-2 rounded text-xs border ${
           config.ctxSize < 4096
             ? 'bg-red-900/30 border-red-700 text-red-300'
@@ -212,256 +211,285 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
           }
         </div>
 
-        <div className="grid grid-cols-2 gap-6">
-          {/* Left column: Groups */}
-          <div>
-            <p className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Source Groups</p>
-
-            <div className="space-y-2 mb-4">
-              {allGroups.filter(g => g.builtIn).map(group => {
-                const active = config.tools?.activeGroupIds?.includes(group.id) ?? false
-                return (
-                  <label key={group.id} className="flex items-start gap-2 cursor-pointer select-none">
-                    <input
-                      type="checkbox" checked={active}
-                      onChange={() => toggleGroup(group.id)}
-                      className="mt-0.5 accent-orange-500"
-                    />
-                    <div>
-                      <span className="text-sm text-zinc-200">{group.name}</span>
-                      <span className="text-xs text-zinc-500 ml-2">{group.description}</span>
-                    </div>
-                  </label>
-                )
-              })}
+        <div className="space-y-4">
+          {/* ---- Web Access (web_fetch + web_search) ----
+              Same card shape as the capability cards below: one Enable/Disable
+              for this profile, with its setup nested inside. Its on/off lives in
+              webAccessEnabled rather than activeToolIds — see types.ts. */}
+          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-zinc-200">Web Access</span>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`text-xs ${webAccessOn ? 'text-green-400' : 'text-zinc-500'}`}>
+                  {webAccessOn ? 'Enabled' : 'Disabled'}
+                </span>
+                <button
+                  onClick={() => setToolsField('webAccessEnabled', !webAccessOn)}
+                  className={btnCls.chip}>
+                  {webAccessOn ? 'Disable' : 'Enable'}
+                </button>
+              </div>
             </div>
 
-            {allGroups.filter(g => !g.builtIn).length > 0 && (<>
-              <p className="text-xs text-zinc-500 mb-2">Custom groups</p>
-              <div className="space-y-1 mb-3">
-                {allGroups.filter(g => !g.builtIn).map(group => {
-                  const active = config.tools?.activeGroupIds?.includes(group.id) ?? false
-                  return (
-                    <div key={group.id} className="flex items-center gap-2">
-                      <label className="flex items-center gap-2 cursor-pointer select-none flex-1">
-                        <input type="checkbox" checked={active} onChange={() => toggleGroup(group.id)} className="accent-orange-500" />
-                        <span className="text-sm text-zinc-200">{group.name}</span>
-                      </label>
-                      <button onClick={() => deleteCustomGroup(group.id)} className="text-xs text-zinc-600 hover:text-red-400 transition-colors px-1">✕</button>
+            {webAccessOn && (<>
+              <div className="flex items-center justify-between gap-2 py-2 border-t border-zinc-700/50">
+                <span className="min-w-0">
+                  <span className="text-xs text-zinc-300">Restrict to approved sources</span>
+                  <span className="block text-xs text-zinc-600">
+                    {restrictOn
+                      ? 'The model can only fetch from the sources selected below.'
+                      : 'The model can fetch any public website. Local network addresses are always blocked.'}
+                  </span>
+                </span>
+                <TogglePill
+                  checked={restrictOn}
+                  onToggle={() => setToolsField('whitelistEnabled', !restrictOn)}
+                  className="flex-shrink-0"
+                />
+              </div>
+
+              {!restrictOn && (
+                <div className="mb-3 px-3 py-2 rounded text-xs border bg-yellow-900/30 border-yellow-700 text-yellow-300">
+                  ⚠ Open web access: the model can reach any public site, including ones you haven't reviewed. Fetched pages can contain wrong or manipulative content.
+                </div>
+              )}
+
+              {restrictOn && (
+                <div className="grid grid-cols-2 gap-6 mb-3">
+                  {/* Left column: Groups */}
+                  <div>
+                    <p className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Source Groups</p>
+
+                    <div className="space-y-2 mb-4">
+                      {allGroups.filter(g => g.builtIn).map(group => {
+                        const active = config.tools?.activeGroupIds?.includes(group.id) ?? false
+                        return (
+                          <label key={group.id} className="flex items-start gap-2 cursor-pointer select-none">
+                            <input
+                              type="checkbox" checked={active}
+                              onChange={() => toggleGroup(group.id)}
+                              className="mt-0.5 accent-orange-500"
+                            />
+                            <div>
+                              <span className="text-sm text-zinc-200">{group.name}</span>
+                              <span className="text-xs text-zinc-500 ml-2">{group.description}</span>
+                            </div>
+                          </label>
+                        )
+                      })}
                     </div>
-                  )
-                })}
+
+                    {allGroups.filter(g => !g.builtIn).length > 0 && (<>
+                      <p className="text-xs text-zinc-500 mb-2">Custom groups</p>
+                      <div className="space-y-1 mb-3">
+                        {allGroups.filter(g => !g.builtIn).map(group => {
+                          const active = config.tools?.activeGroupIds?.includes(group.id) ?? false
+                          return (
+                            <div key={group.id} className="flex items-center gap-2">
+                              <label className="flex items-center gap-2 cursor-pointer select-none flex-1">
+                                <input type="checkbox" checked={active} onChange={() => toggleGroup(group.id)} className="accent-orange-500" />
+                                <span className="text-sm text-zinc-200">{group.name}</span>
+                              </label>
+                              <button onClick={() => deleteCustomGroup(group.id)} className="text-xs text-zinc-600 hover:text-red-400 transition-colors px-1">✕</button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </>)}
+
+                    {!showAddGroup ? (
+                      <button onClick={() => setShowAddGroup(true)} className={btnCls.subtle}>
+                        + Create custom group
+                      </button>
+                    ) : (
+                      <div className="space-y-2 bg-zinc-800/60 p-3 rounded border border-zinc-700">
+                        <input value={newGroupName} onChange={e => setNewGroupName(e.target.value)}
+                          placeholder="Group name" className={inputCls.dark} />
+                        <input value={newGroupDesc} onChange={e => setNewGroupDesc(e.target.value)}
+                          placeholder="Description (optional)" className={inputCls.dark} />
+                        <p className="text-xs text-zinc-500">Select sources for this group:</p>
+                        <div className="space-y-1 max-h-40 overflow-y-auto">
+                           {allTools.filter(t => t.kind === 'web').map(tool => (
+                             <label key={tool.id} className="flex items-center gap-2 cursor-pointer select-none">
+                               <input type="checkbox" checked={newGroupToolIds.includes(tool.id)}
+                                 onChange={() => setNewGroupToolIds(prev => prev.includes(tool.id) ? prev.filter(id => id !== tool.id) : [...prev, tool.id])}
+                                 className="accent-orange-500" />
+                               <span className="text-sm text-zinc-300">{tool.name}</span>
+                             </label>
+                           ))}
+                        </div>
+                        <div className="flex gap-2 pt-1">
+                          <button onClick={addCustomGroup} className={btnCls.primary}>Save group</button>
+                          <button onClick={() => { setShowAddGroup(false); setNewGroupName(''); setNewGroupToolIds([]) }} className={btnCls.secondary}>Cancel</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right column: Individual sources */}
+                  <div>
+                    <p className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Individual Sources</p>
+                    <div className="space-y-1.5 mb-4">
+                      {allTools.filter(t => t.kind === 'web').map(tool => {
+                        const inActiveGroup = (config.tools?.activeGroupIds ?? []).some(gid => {
+                          const grp = allGroups.find(g => g.id === gid)
+                          return grp?.toolIds.includes(tool.id)
+                        })
+                        const active = (config.tools?.activeToolIds?.includes(tool.id) ?? false) || inActiveGroup
+                        return (
+                          <div key={tool.id} className="flex items-center gap-2">
+                            <label className={`flex items-center gap-2 cursor-pointer select-none flex-1 ${inActiveGroup ? 'opacity-50' : ''}`}>
+                              <input type="checkbox" checked={active} disabled={inActiveGroup}
+                                onChange={() => toggleTool(tool.id)} className="accent-orange-500" />
+                              <div className="min-w-0">
+                                <span className="text-sm text-zinc-200">{tool.name}</span>
+                                {inActiveGroup && <span className="text-xs text-zinc-600 ml-2">(via group)</span>}
+                                {tool.builtIn && !inActiveGroup && <span className="text-xs text-zinc-600 ml-2">{tool.baseUrl}</span>}
+                              </div>
+                            </label>
+                            {!tool.builtIn && (
+                              <span className="flex items-center gap-1 flex-shrink-0">
+                                <button onClick={() => startEditTool(tool)} className="text-xs text-zinc-600 hover:text-zinc-300 transition-colors px-1">Edit</button>
+                                <button onClick={() => deleteCustomTool(tool.id)} className="text-xs text-zinc-600 hover:text-red-400 transition-colors px-1">✕</button>
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+
+                    {!showAddTool ? (
+                      <button onClick={() => setShowAddTool(true)} className={`${btnCls.subtle} mb-4 block`}>
+                        + Add custom source
+                      </button>
+                    ) : (
+                      <div className="space-y-2 bg-zinc-800/60 p-3 rounded border border-zinc-700 mb-4">
+                        <input value={newToolName} onChange={e => setNewToolName(e.target.value)}
+                          placeholder="Source name" className={inputCls.dark} />
+                        <input value={newToolUrl} onChange={e => setNewToolUrl(e.target.value)}
+                          placeholder="Base URL (e.g. https://example.com)" className={inputCls.dark} />
+                        <input value={newToolDesc} onChange={e => setNewToolDesc(e.target.value)}
+                          placeholder="Description (optional)" className={inputCls.dark} />
+                        <div className="flex gap-2 pt-1">
+                          <button onClick={addCustomTool} className={btnCls.primary}>{editingToolId ? 'Save changes' : 'Save source'}</button>
+                          <button onClick={cancelToolForm} className={btnCls.secondary}>Cancel</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center gap-3 pt-2 border-t border-zinc-700/50">
+                <label className="text-xs text-zinc-400 whitespace-nowrap">Max tokens per fetch</label>
+                <input
+                  type="number" min={500} max={8000} step={500}
+                  value={config.tools?.maxFetchTokens ?? 2000}
+                  onChange={e => setToolsField('maxFetchTokens', Math.max(500, Math.min(8000, parseInt(e.target.value) || 2000)))}
+                  className="w-24 bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500"
+                />
+                <span className="text-xs text-zinc-600">of {config.ctxSize} ctx tokens</span>
               </div>
             </>)}
 
-            {!showAddGroup ? (
-              <button onClick={() => setShowAddGroup(true)} className={btnCls.subtle}>
-                + Create custom group
-              </button>
-            ) : (
-              <div className="space-y-2 bg-zinc-800/60 p-3 rounded border border-zinc-700">
-                <input value={newGroupName} onChange={e => setNewGroupName(e.target.value)}
-                  placeholder="Group name" className={inputCls.dark} />
-                <input value={newGroupDesc} onChange={e => setNewGroupDesc(e.target.value)}
-                  placeholder="Description (optional)" className={inputCls.dark} />
-                <p className="text-xs text-zinc-500">Select sources for this group:</p>
-                <div className="space-y-1 max-h-40 overflow-y-auto">
-                   {allTools.filter(t => t.kind === 'web').map(tool => (
-                     <label key={tool.id} className="flex items-center gap-2 cursor-pointer select-none">
-                       <input type="checkbox" checked={newGroupToolIds.includes(tool.id)}
-                         onChange={() => setNewGroupToolIds(prev => prev.includes(tool.id) ? prev.filter(id => id !== tool.id) : [...prev, tool.id])}
-                         className="accent-orange-500" />
-                       <span className="text-sm text-zinc-300">{tool.name}</span>
-                     </label>
-                   ))}
-                </div>
-                <div className="flex gap-2 pt-1">
-                  <button onClick={addCustomGroup} className={btnCls.primary}>Save group</button>
-                  <button onClick={() => { setShowAddGroup(false); setNewGroupName(''); setNewGroupToolIds([]) }} className={btnCls.secondary}>Cancel</button>
-                </div>
-              </div>
-            )}
+            <p className="text-xs text-zinc-600 mt-1.5">
+              Look things up on the web: <span className="text-zinc-500">web_fetch</span> reads a page, <span className="text-zinc-500">web_search</span> searches a source's own search endpoint. Private and local network addresses are always blocked.
+            </p>
           </div>
 
-          {/* Right column: Individual sources */}
-          <div>
-            <p className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Individual Sources</p>
-            <div className="space-y-1.5 mb-4">
-              {allTools.filter(t => t.kind === 'web').map(tool => {
-                const inActiveGroup = (config.tools?.activeGroupIds ?? []).some(gid => {
-                  const grp = allGroups.find(g => g.id === gid)
-                  return grp?.toolIds.includes(tool.id)
-                })
-                const active = (config.tools?.activeToolIds?.includes(tool.id) ?? false) || inActiveGroup
-                return (
-                  <div key={tool.id} className="flex items-center gap-2">
-                    <label className={`flex items-center gap-2 cursor-pointer select-none flex-1 ${inActiveGroup ? 'opacity-50' : ''}`}>
-                      <input type="checkbox" checked={active} disabled={inActiveGroup}
-                        onChange={() => toggleTool(tool.id)} className="accent-orange-500" />
-                      <div className="min-w-0">
-                        <span className="text-sm text-zinc-200">{tool.name}</span>
-                        {inActiveGroup && <span className="text-xs text-zinc-600 ml-2">(via group)</span>}
-                        {tool.builtIn && !inActiveGroup && tool.kind === 'capability' &&
-                          <span className="text-xs text-zinc-600 ml-2">{tool.id === 'postgres' ? 'Local database' : 'Local file output'}</span>}
-                        {tool.builtIn && !inActiveGroup && tool.kind !== 'capability' && <span className="text-xs text-zinc-600 ml-2">{tool.baseUrl}</span>}
-                      </div>
-                    </label>
-                    {!tool.builtIn && (
-                      <button onClick={() => deleteCustomTool(tool.id)} className="text-xs text-zinc-600 hover:text-red-400 transition-colors flex-shrink-0 px-1">✕</button>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* Local capabilities are per-profile just like web sources: the
-                gateway only activates one when this profile's activeToolIds
-                contains it AND it is configured+enabled in the cards below
-                (see buildGatewayConfig). Without this list there was no way to
-                satisfy the first half, so a configured capability stayed dark. */}
-            <p className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Local Capabilities</p>
-            <div className="space-y-1.5 mb-4">
-              {allTools.filter(t => t.kind === 'capability').map(tool => {
-                const active = config.tools?.activeToolIds?.includes(tool.id) ?? false
-                const ready = isCapabilityReady(capabilityConfig, tool.id)
-                return (
-                  <div key={tool.id}>
-                    <label className="flex items-center gap-2 cursor-pointer select-none">
-                      <input type="checkbox" checked={active}
-                        onChange={() => toggleTool(tool.id)} className="accent-orange-500" />
-                      <span className="text-sm text-zinc-200">{tool.name}</span>
-                      {active && !ready && (
-                        <span className="text-xs text-yellow-500/90">needs setup below</span>
-                      )}
-                    </label>
-                    {active && !ready && (
-                      <p className="text-xs text-zinc-600 ml-6">
-                        Selected for this profile, but not yet enabled with a folder/connection below — the model will not see its tools.
-                      </p>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-
-            {!showAddTool ? (
-              <button onClick={() => setShowAddTool(true)} className={`${btnCls.subtle} mb-4 block`}>
-                + Add custom source
-              </button>
-            ) : (
-              <div className="space-y-2 bg-zinc-800/60 p-3 rounded border border-zinc-700 mb-4">
-                <input value={newToolName} onChange={e => setNewToolName(e.target.value)}
-                  placeholder="Source name" className={inputCls.dark} />
-                <input value={newToolUrl} onChange={e => setNewToolUrl(e.target.value)}
-                  placeholder="Base URL (e.g. https://example.com)" className={inputCls.dark} />
-                <input value={newToolDesc} onChange={e => setNewToolDesc(e.target.value)}
-                  placeholder="Description (optional)" className={inputCls.dark} />
-                <div className="flex gap-2 pt-1">
-                  <button onClick={addCustomTool} className={btnCls.primary}>Save source</button>
-                  <button onClick={() => { setShowAddTool(false); setNewToolName(''); setNewToolUrl(''); setNewToolDesc('') }} className={btnCls.secondary}>Cancel</button>
-                </div>
+          {/* ---- Postgres ---- */}
+          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-zinc-200">Postgres</span>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`text-xs ${
+                  !capabilityConfig?.postgres.hasConnectionString
+                    ? 'text-zinc-600'
+                    : isActive('postgres') ? 'text-green-400' : 'text-zinc-500'
+                }`}>
+                  {!capabilityConfig?.postgres.hasConnectionString
+                    ? 'Not configured'
+                    : isActive('postgres') ? 'Configured · Enabled' : 'Configured · Disabled'}
+                </span>
+                <button onClick={() => toggleTool('postgres')} className={btnCls.chip}>
+                  {isActive('postgres') ? 'Disable' : 'Enable'}
+                </button>
               </div>
-            )}
-
-            <div className="flex items-center gap-3">
-              <label className="text-xs text-zinc-400 whitespace-nowrap">Max tokens per fetch</label>
-              <input
-                type="number" min={500} max={8000} step={500}
-                value={config.tools?.maxFetchTokens ?? 2000}
-                onChange={e => setToolsField('maxFetchTokens', Math.max(500, Math.min(8000, parseInt(e.target.value) || 2000)))}
-                className="w-24 bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500"
-              />
-              <span className="text-xs text-zinc-600">of {config.ctxSize} ctx tokens</span>
             </div>
-
-            {toolContextEstimate && toolContextEstimate.toolCount > 0 && (
-              <p className={`text-xs mt-2 ${
-                toolContextEstimate.approxTokens > config.ctxSize * 0.25 ? 'text-amber-400' : 'text-zinc-500'
-              }`}>
-                {toolContextEstimate.toolCount} active tool{toolContextEstimate.toolCount === 1 ? '' : 's'} ≈ {toolContextEstimate.approxTokens.toLocaleString()} tokens of context on every request
-                {toolContextEstimate.approxTokens > config.ctxSize * 0.25
-                  ? ` — over a quarter of your ${config.ctxSize.toLocaleString()}-token window. Consider activating fewer tools per profile.`
-                  : ''}
+            {isActive('postgres') && !isCapabilityReady(capabilityConfig, 'postgres') && (
+              <p className="text-xs text-yellow-500/90 mb-1.5">
+                Enabled for this profile, but no connection string saved — the model will not see its tools.
               </p>
             )}
+            <div className="flex gap-2 mb-1.5">
+              <input
+                type="password" value={pgConnectionString} onChange={e => setPgConnectionString(e.target.value)}
+                placeholder={capabilityConfig?.postgres.hasConnectionString ? 'postgresql://... (leave blank to keep current)' : 'postgresql://user:pass@host:5432/db'}
+                className="flex-1 min-w-0 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500" />
+              <input
+                type="number" min={10} max={5000} step={10} value={pgMaxRows}
+                onChange={e => setPgMaxRows(Math.max(10, Math.min(5000, parseInt(e.target.value) || 200)))}
+                title="Max rows returned per query"
+                className="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500" />
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={testPostgresConnection} className={btnCls.chip}>Test connection</button>
+              <button onClick={savePostgresConfig} disabled={pgSaving} className="px-2.5 py-1 bg-orange-500 hover:bg-orange-400 disabled:opacity-50 rounded text-xs font-medium transition-colors">
+                {pgSaving ? 'Saving…' : 'Save'}
+              </button>
+              {pgTestResult && (
+                <span className={`text-xs ${pgTestResult.ok ? 'text-green-400' : 'text-red-400'}`}>{pgTestResult.message}</span>
+              )}
+            </div>
+            <p className="text-xs text-zinc-600 mt-1.5">Queries run read-only. Use a database role with read-only grants for defense in depth.</p>
+          </div>
+
+          {FOLDER_CARDS.map(card => (
+            <FolderCapabilityCard
+              key={card.cap}
+              caps={caps}
+              active={isActive(card.cap)}
+              onToggle={() => toggleTool(card.cap)}
+              {...card}
+            />
+          ))}
+
+          {/* ---- Scholar ---- */}
+          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-zinc-200">Scholar</span>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`text-xs ${isActive('scholar') ? 'text-green-400' : 'text-zinc-500'}`}>
+                  {isActive('scholar') ? 'Enabled' : 'Disabled'}
+                </span>
+                <button onClick={() => toggleTool('scholar')} className={btnCls.chip}>
+                  {isActive('scholar') ? 'Disable' : 'Enable'}
+                </button>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 mb-1.5">
+              <input
+                type="text" value={scholarVenueFilter} onChange={e => setScholarVenueFilter(e.target.value)}
+                placeholder="Optional venue whitelist: journal ISSNs and/or arXiv categories (e.g. 1932-6203, cs.CL)"
+                className="flex-1 min-w-0 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500 placeholder:text-zinc-600" />
+              <button onClick={saveScholarVenueFilter} className={btnCls.chip}>Save filter</button>
+            </div>
+            <p className="text-xs text-zinc-600 mt-1.5">Search open academic literature (OpenAlex, arXiv, PubMed) and save open-access PDFs into the Documents folder. Leave the whitelist empty for all venues; when set, searches and downloads are restricted to those journals/categories at the API level.</p>
           </div>
         </div>
 
-        {/* Capability configuration — global setup, activated per-profile above */}
-        <div className="mt-6 pt-4 border-t border-zinc-700">
-          <p className="text-xs uppercase tracking-widest text-zinc-500 mb-3">Local Capabilities</p>
-
-          <div className="space-y-4">
-            {/* Postgres */}
-            <div className="bg-zinc-800/40 rounded px-3 py-2.5">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm text-zinc-200">Postgres</span>
-                <span className={`text-xs ${
-                  capabilityConfig?.postgres.hasConnectionString
-                    ? (capabilityConfig.postgres.enabled ? 'text-green-400' : 'text-zinc-500')
-                    : 'text-zinc-600'
-                }`}>
-                  {capabilityConfig?.postgres.hasConnectionString
-                    ? (capabilityConfig.postgres.enabled ? 'Configured · Enabled' : 'Configured · Disabled')
-                    : 'Not configured'}
-                </span>
-              </div>
-              <div className="flex gap-2 mb-1.5">
-                <input
-                  type="password" value={pgConnectionString} onChange={e => setPgConnectionString(e.target.value)}
-                  placeholder={capabilityConfig?.postgres.hasConnectionString ? 'postgresql://... (leave blank to keep current)' : 'postgresql://user:pass@host:5432/db'}
-                  className="flex-1 min-w-0 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500" />
-                <input
-                  type="number" min={10} max={5000} step={10} value={pgMaxRows}
-                  onChange={e => setPgMaxRows(Math.max(10, Math.min(5000, parseInt(e.target.value) || 200)))}
-                  title="Max rows returned per query"
-                  className="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500" />
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={testPostgresConnection} className={btnCls.chip}>Test connection</button>
-                <button onClick={savePostgresConfig} disabled={pgSaving} className="px-2.5 py-1 bg-orange-500 hover:bg-orange-400 disabled:opacity-50 rounded text-xs font-medium transition-colors">
-                  {pgSaving ? 'Saving…' : 'Save'}
-                </button>
-                {capabilityConfig?.postgres.hasConnectionString && (
-                  <button onClick={togglePostgresEnabled} className={btnCls.chip}>
-                    {capabilityConfig.postgres.enabled ? 'Disable' : 'Enable'}
-                  </button>
-                )}
-                {pgTestResult && (
-                  <span className={`text-xs ${pgTestResult.ok ? 'text-green-400' : 'text-red-400'}`}>{pgTestResult.message}</span>
-                )}
-              </div>
-              <p className="text-xs text-zinc-600 mt-1.5">Queries run read-only. Use a database role with read-only grants for defense in depth.</p>
-            </div>
-
-            {FOLDER_CARDS.map(card => (
-              <FolderCapabilityCard key={card.cap} caps={caps} {...card} />
-            ))}
-
-            {/* Scholar */}
-            <div className="bg-zinc-800/40 rounded px-3 py-2.5">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm text-zinc-200">Scholar</span>
-                <span className={`text-xs ${capabilityConfig?.scholar.enabled ? 'text-green-400' : 'text-zinc-500'}`}>
-                  {capabilityConfig?.scholar.enabled ? 'Enabled' : 'Disabled'}
-                </span>
-              </div>
-              <div className="flex items-center gap-2 mb-1.5">
-                <input
-                  type="text" value={scholarVenueFilter} onChange={e => setScholarVenueFilter(e.target.value)}
-                  placeholder="Optional venue whitelist: journal ISSNs and/or arXiv categories (e.g. 1932-6203, cs.CL)"
-                  className="flex-1 min-w-0 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500 placeholder:text-zinc-600" />
-                <button onClick={saveScholarVenueFilter} className={btnCls.chip}>Save filter</button>
-                <button onClick={toggleScholarEnabled} className={btnCls.chip}>
-                  {capabilityConfig?.scholar.enabled ? 'Disable' : 'Enable'}
-                </button>
-              </div>
-              <p className="text-xs text-zinc-600 mt-1.5">Search open academic literature (OpenAlex, arXiv, PubMed) and save open-access PDFs into the Documents folder. Leave the whitelist empty for all venues; when set, searches and downloads are restricted to those journals/categories at the API level.</p>
-            </div>
-          </div>
-        </div>
+        {toolContextEstimate && toolContextEstimate.toolCount > 0 && (
+          <p className={`text-xs mt-4 ${
+            toolContextEstimate.approxTokens > config.ctxSize * 0.25 ? 'text-amber-400' : 'text-zinc-500'
+          }`}>
+            {toolContextEstimate.toolCount} active tool{toolContextEstimate.toolCount === 1 ? '' : 's'} ≈ {toolContextEstimate.approxTokens.toLocaleString()} tokens of context on every request
+            {toolContextEstimate.approxTokens > config.ctxSize * 0.25
+              ? ` — over a quarter of your ${config.ctxSize.toLocaleString()}-token window. Consider enabling fewer tools per profile.`
+              : ''}
+          </p>
+        )}
       </>) : (
-        <p className="text-xs text-zinc-600">Enable web sources to allow the model to fetch live content from approved sites via the built-in MCP server. Settings are saved with the active profile.</p>
+        <p className="text-xs text-zinc-600">Enable tools to let the model use web access and local capabilities via the built-in MCP server. Settings are saved with the active profile.</p>
       )}
 
       {/* External MCP Servers */}
@@ -479,7 +507,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
           <span className="text-zinc-300 font-medium">Built-in Redstart MCP:</span>{' '}
           {config.tools?.enabled
             ? <span className="text-green-400">http://localhost:{(config.port ?? 19080) + 2}/mcp</span>
-            : <span className="text-zinc-600">Starts with server (enable web sources above)</span>
+            : <span className="text-zinc-600">Starts with server (enable tools above)</span>
           }
         </div>
 
@@ -493,6 +521,9 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
               <div className="flex-1 min-w-0">
                 <span className="text-sm text-zinc-200">{server.name}</span>
                 <span className="text-xs text-zinc-500 ml-2 break-all">{server.url}</span>
+                {server.hasApiKey && (
+                  <span className="text-xs text-zinc-600 ml-2" title="An API key is stored for this server">🔑</span>
+                )}
                 {mcpTestResults[server.id] && (
                   <span className={`block text-xs mt-0.5 ${mcpTestResults[server.id].ok ? 'text-green-400' : 'text-red-400'}`}>
                     {mcpTestResults[server.id].message}
@@ -503,6 +534,11 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
                 onClick={() => testExternalMcpServer(server.id, server.url)}
                 className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-1 flex-shrink-0">
                 Test
+              </button>
+              <button
+                onClick={() => startEditServer(server)}
+                className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-1 flex-shrink-0">
+                Edit
               </button>
               <button
                 onClick={() => removeExternalMcpServer(server.id)}
@@ -533,6 +569,15 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
               value={newExtUrl} onChange={e => setNewExtUrl(e.target.value)}
               placeholder="SSE URL (e.g. http://10.0.0.5:9000/sse)"
               className={inputCls.dark} />
+            <input
+              type="password"
+              value={newExtApiKey} onChange={e => setNewExtApiKey(e.target.value)}
+              placeholder={
+                editingServerId && externalServers.find(s => s.id === editingServerId)?.hasApiKey
+                  ? 'API key (leave blank to keep the current one)'
+                  : 'API key (optional — sent as Authorization: Bearer …)'
+              }
+              className={inputCls.dark} />
             {/* A refusal from the main process. Without this the Add button
                 would simply do nothing on a rejected URL, which reads as a
                 broken button rather than a policy decision. */}
@@ -543,9 +588,9 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
             )}
             <div className="flex gap-2 pt-1">
               <button onClick={addExternalMcpServer} className={btnCls.primary}>
-                Add server
+                {editingServerId ? 'Save changes' : 'Add server'}
               </button>
-              <button onClick={() => { setShowAddExternal(false); setNewExtName(''); setNewExtUrl('') }} className={btnCls.secondary}>
+              <button onClick={cancelServerForm} className={btnCls.secondary}>
                 Cancel
               </button>
             </div>
@@ -554,11 +599,11 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
       </div>
 
       {/* Banned tools — the only control that reaches tools this server does
-          not provide. Deliberately NOT a second list of the capabilities above:
-          for a capability, unticking it in Local Capabilities already stops the
-          tools being served at all, so listing capabilities here was two
-          checkbox lists over the same names meaning opposite things — while the
-          set that genuinely needs banning could not be named at all. */}
+          not provide. Deliberately NOT a second list of the cards above: for a
+          capability, disabling its card already stops the tools being served at
+          all, so listing capabilities here would be two controls over the same
+          names meaning opposite things — while the set that genuinely needs
+          banning could not be named at all. */}
       <div className="mt-6 pt-4 border-t border-zinc-700">
         <p className="text-xs uppercase tracking-widest text-zinc-500 mb-1">Banned Tools</p>
         <p className="text-xs text-zinc-600 mb-3">
@@ -584,7 +629,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
           })}
         </div>
         <p className="text-xs text-zinc-600 mt-3">
-          To turn off one of this server's own capabilities, untick it under Local Capabilities above — that stops it being served at all. To make the File System capability read-only, use its "Allow writes" toggle rather than banning the whole thing.
+          To turn off one of this server's own capabilities, disable its card above — that stops it being served at all. To make the File System capability read-only, use its "Allow writes" toggle rather than banning the whole thing.
         </p>
       </div>
     </section>

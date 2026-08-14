@@ -16,7 +16,7 @@
 // Run:  node scripts/test-external-mcp-url.mjs
 // =============================================================================
 
-import { validateExternalMcpUrl } from '../electron/main/external-mcp-url.mjs'
+import { validateExternalMcpUrl, parseMcpResponseBody } from '../electron/main/external-mcp-url.mjs'
 
 const GATEWAY_PORT = 19080
 
@@ -130,6 +130,51 @@ test('a loopback endpoint on a NON-Nest port is allowed', () => {
   assert(v.ok, `refused a legitimate local MCP server: ${v.error}`)
   assert(v.isRemote === false, 'loopback should not count as remote egress')
   return 'local tool servers still work'
+})
+
+// ---------------------------------------------------------------------------
+
+console.log('\n-- parseMcpResponseBody: the connection-test response parser --')
+
+const initResult = { jsonrpc: '2.0', id: 1, result: { protocolVersion: '2024-11-05', serverInfo: { name: 'x' } } }
+
+test('plain JSON is parsed normally', () => {
+  const data = parseMcpResponseBody('application/json', JSON.stringify(initResult))
+  assert(data?.result?.serverInfo?.name === 'x', 'did not round-trip plain JSON')
+  return 'ok'
+})
+
+test('🔍 an SSE-framed body (DeepWiki-style: 200, text/event-stream) is parsed, not rejected as "not JSON"', () => {
+  const sse = `event: message\r\ndata: ${JSON.stringify(initResult)}\r\n\r\n`
+  const data = parseMcpResponseBody('text/event-stream', sse)
+  assert(data?.result?.serverInfo?.name === 'x', 'failed to extract the JSON-RPC payload from an SSE event')
+  return 'SSE event parsed'
+})
+
+test('an SSE body with a multi-line data field is joined per the SSE spec', () => {
+  const payload = JSON.stringify(initResult)
+  // Split right after a comma, the one place a raw newline can be inserted
+  // into compact JSON and still leave it valid (JSON permits insignificant
+  // whitespace there) — an arbitrary mid-string split would land inside a
+  // token and make even a correct \n-join produce unparseable JSON.
+  const splitAt = payload.indexOf(',') + 1
+  const sse = `data: ${payload.slice(0, splitAt)}\ndata: ${payload.slice(splitAt)}\n\n`
+  const data = parseMcpResponseBody('text/event-stream', sse)
+  assert(data?.result?.serverInfo?.name === 'x', 'did not join multi-line SSE data')
+  return 'joined'
+})
+
+test('an SSE body with multiple events returns the first one that parses as JSON', () => {
+  const sse = `event: ping\ndata: not json\n\nevent: message\ndata: ${JSON.stringify(initResult)}\n\n`
+  const data = parseMcpResponseBody('text/event-stream', sse)
+  assert(data?.result?.serverInfo?.name === 'x', 'did not fall through a non-JSON event to find the real one')
+  return 'skipped the bad event'
+})
+
+test('unparseable content returns null rather than throwing', () => {
+  assert(parseMcpResponseBody('application/json', 'not json at all') === null, 'should be null on bad JSON')
+  assert(parseMcpResponseBody('text/event-stream', 'no data lines here') === null, 'should be null on an SSE body with no data')
+  return 'null, not thrown'
 })
 
 // ---------------------------------------------------------------------------

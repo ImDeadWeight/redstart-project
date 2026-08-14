@@ -72,13 +72,14 @@ export function buildGatewayConfig(llamaConfig) {
     }
   }
 
-  // Capability providers (Postgres, Documents) are only active for this
-  // profile when BOTH the admin has configured+enabled them globally AND
-  // this profile's activeToolIds includes them — same relationship
-  // externalServers already have to profiles, extended with a per-profile flag.
+  // A capability is active for this profile when its card is enabled for the
+  // profile (activeToolIds) AND it has whatever it needs to run (a folder or a
+  // connection string). The stored per-capability `enabled` flag is vestigial —
+  // it still exists in tools.json for back-compat but no longer gates anything;
+  // the card's Enable/Disable button writes to activeToolIds instead.
   const capabilities = getCapabilities()
 
-  const postgresWanted = toolIdSet.has('postgres') && capabilities.postgres.enabled && !!capabilities.postgres.connectionStringEnc
+  const postgresWanted = toolIdSet.has('postgres') && !!capabilities.postgres.connectionStringEnc
   let postgresConnectionString = null
   if (postgresWanted) {
     try {
@@ -88,17 +89,19 @@ export function buildGatewayConfig(llamaConfig) {
     }
   }
 
-  const documentsWanted = toolIdSet.has('documents') && capabilities.documents.enabled && !!capabilities.documents.outputDir
-  const sqliteWanted = toolIdSet.has('sqlite') && capabilities.sqlite.enabled && !!capabilities.sqlite.rootDir
-  const vaultWanted = toolIdSet.has('vault') && capabilities.vault.enabled && !!capabilities.vault.rootDir
-  const gitWanted = toolIdSet.has('git') && capabilities.git.enabled && !!capabilities.git.rootDir
-  const fileSystemWanted = toolIdSet.has('file_system') && capabilities.file_system.enabled && !!capabilities.file_system.rootDir
-  const scholarWanted = toolIdSet.has('scholar') && capabilities.scholar.enabled
+  const documentsWanted = toolIdSet.has('documents') && !!capabilities.documents.outputDir
+  const sqliteWanted = toolIdSet.has('sqlite') && !!capabilities.sqlite.rootDir
+  const vaultWanted = toolIdSet.has('vault') && !!capabilities.vault.rootDir
+  const gitWanted = toolIdSet.has('git') && !!capabilities.git.rootDir
+  const fileSystemWanted = toolIdSet.has('file_system') && !!capabilities.file_system.rootDir
+  const scholarWanted = toolIdSet.has('scholar')
 
   return {
     disabledTools,
     webFetch: {
-      enabled: true,
+      // Absent webAccessEnabled means enabled — see ProfileTools.webAccessEnabled
+      // in src/types.ts for why this is `!== false` and not an activeToolIds check.
+      enabled: toolSettings.webAccessEnabled !== false,
       // Per-profile toggle: with the whitelist OFF the model may fetch any
       // public http(s) URL (private/LAN addresses always blocked in the
       // provider). Defaults to ON — restriction is the out-of-box posture.
