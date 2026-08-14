@@ -43,18 +43,38 @@ export function registerMcpHandlers({ getConfiguredPort } = {}) {
     const verdict = validateExternalMcpUrl(url, getConfiguredPort?.())
     if (!verdict.ok) return { ok: false, message: verdict.error }
     const trimmed = url.trim()
-    const sseUrl = trimmed.endsWith('/sse') ? trimmed : trimmed.replace(/\/$/, '') + '/sse'
+    const endpoint = trimmed.replace(/\/$/, '')
     try {
-      const res = await fetch(sseUrl, {
+      const res = await fetch(endpoint, {
         signal: AbortSignal.timeout(5000),
-        method: 'GET',
-        headers: { Accept: 'text/event-stream' },
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 'redstart-test', version: '1.0.0' },
+          },
+        }),
       })
       const ct = res.headers.get('content-type') || ''
-      if (res.ok && ct.includes('text/event-stream')) {
-        return { ok: true, message: 'Connected' }
+      let data
+      try {
+        data = await res.json()
+      } catch {
+        return { ok: false, message: `Unexpected response: ${res.status} (${ct || 'no content-type'}, not JSON)` }
       }
-      return { ok: false, message: `Unexpected response: ${res.status} (${ct || 'no content-type'})` }
+      if (res.ok && data?.jsonrpc === '2.0' && data?.result?.protocolVersion && data?.result?.serverInfo) {
+        return { ok: true, message: `Connected to ${data.result.serverInfo.name || 'unknown'} (${data.result.protocolVersion})` }
+      }
+      const errMsg = data?.error?.message || data?.message || 'unexpected response shape'
+      return { ok: false, message: `Unexpected response: ${res.status} — ${errMsg}` }
     } catch (err) {
       return { ok: false, message: err.message }
     }

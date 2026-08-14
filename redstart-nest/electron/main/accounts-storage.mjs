@@ -17,8 +17,21 @@ export function defaults() {
 // existed — in-memory only, not persisted, so this doesn't add a write to
 // the hot read path (accounts.json is read on every gateway/MCP request).
 function normalizeAccount(a) {
+  // `role` was the management tier and is now called `tier`, because a second,
+  // admin-defined notion of "role" arrived alongside it (roles-storage.mjs).
+  // Records on disk predate the rename, so tier is derived from whichever is
+  // present, and `role` is kept as a mirror: the login response shape is public
+  // API for Twig/Blueprints/Yellowscript, which each hold their own copy of it,
+  // and an undefined `role` there reads as "not an admin" — a failure in the
+  // confusing direction. Drop the mirror once those clients read `tier`.
+  const tier = a.tier ?? a.role ?? 'user'
   return {
     ...a,
+    tier,
+    role: tier,
+    // The admin-defined capability role. null → Full Access, which narrows
+    // nothing, which is why adding this field changes no behaviour on upgrade.
+    roleId: a.roleId ?? null,
     status: a.status === 'disabled' ? 'disabled' : 'active',
     createdBy: a.createdBy ?? null,
     lastLoginAt: a.lastLoginAt ?? null,
@@ -48,10 +61,13 @@ export function read() {
     // role: 'admin' | 'user'. Promote the existing admin(s) to 'owner' so
     // nobody loses access they already had — only runs while no owner
     // exists yet, and is idempotent (never touches a file that already has one).
-    if (!data.accounts.some(a => a.role === 'owner')) {
+    // Reads `tier` because normalizeAccount has already run above and derives it
+    // from a legacy `role`; writes both so the persisted record carries the new
+    // field name too.
+    if (!data.accounts.some(a => a.tier === 'owner')) {
       let migrated = false
       for (const a of data.accounts) {
-        if (a.role === 'admin') { a.role = 'owner'; migrated = true }
+        if (a.tier === 'admin') { a.tier = 'owner'; a.role = 'owner'; migrated = true }
       }
       if (migrated) write(data)
     }
@@ -119,7 +135,21 @@ export function findByClientKeyHash(keyHash) {
 }
 
 export function hasOwner() {
-  return read().accounts.some(a => a.role === 'owner')
+  return read().accounts.some(a => a.tier === 'owner')
+}
+
+/**
+ * Point every account on `roleId` at `nextRoleId`. Used when a role is deleted,
+ * so a member can never be left holding a dangling id.
+ */
+export function reassignRole(roleId, nextRoleId) {
+  const data = read()
+  let changed = 0
+  for (const a of data.accounts) {
+    if (a.roleId === roleId) { a.roleId = nextRoleId; changed++ }
+  }
+  if (changed) write(data)
+  return changed
 }
 
 export function insertAccount(account) {

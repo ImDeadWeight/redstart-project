@@ -137,6 +137,30 @@
 		}))
 	);
 
+	// Every file this message produced, de-duplicated, in the order created.
+	//
+	// Collected across ALL sections because the per-call button lives inside the
+	// tool block, which is collapsible and scrolls away the moment the model
+	// writes its closing prose — so for a message whose entire point was
+	// producing a file, the one control the user wants is the one they have to
+	// go hunting for. This surfaces the same downloads at the end of the turn,
+	// where the deliverable actually is.
+	const createdFiles = $derived.by(() => {
+		const seen = new Set<string>();
+		const files: string[] = [];
+
+		for (const section of sectionsParsed) {
+			for (const line of section.parsedLines) {
+				if (line.filePath && !seen.has(line.filePath)) {
+					seen.add(line.filePath);
+					files.push(line.filePath);
+				}
+			}
+		}
+
+		return files;
+	});
+
 	// Group flat sections into agentic turns
 	// A new turn starts when a non-tool section follows a tool section
 	const turnGroups = $derived.by(() => {
@@ -409,6 +433,26 @@
 		{#each sectionsParsed as section, index (index)}
 			{@render renderSection(section, index)}
 		{/each}
+	{/if}
+
+	<!-- Deliverables produced by this message, repeated here at the end of the
+	     turn. The same buttons still appear inside each tool block; this is the
+	     copy that is still on screen once the model has finished writing. -->
+	{#if createdFiles.length > 0}
+		<div class="mt-1 flex flex-wrap items-center gap-2">
+			<span class="text-xs text-muted-foreground">
+				{createdFiles.length === 1 ? 'File created:' : 'Files created:'}
+			</span>
+			{#each createdFiles as fp (fp)}
+				<button
+					onclick={() => handleDownload(fp)}
+					class="inline-flex items-center gap-1.5 rounded bg-orange-500/10 px-2.5 py-1.5 text-xs font-medium text-orange-400 transition-colors hover:bg-orange-500/20"
+				>
+					<Download class="h-3.5 w-3.5" />
+					Download {fp.split('/').pop() || fp}
+				</button>
+			{/each}
+		</div>
 	{/if}
 
 	{#if pendingPermission && !permissionDismissed}

@@ -410,6 +410,45 @@ async function main() {
     assert(fs.readFileSync(filePath, 'utf8').trim() === 'print("renamed")', 'script body was altered')
   })
 
+  // slugify() maps every non-alphanumeric run to '-', so an extension left on
+  // the title used to survive as part of the NAME — 'sum_of_odds.py' landed as
+  // 'sum-of-odds-py.py'. Models write titles that way constantly despite the
+  // schema saying not to, so a recognised extension is stripped instead.
+  await test('a title that carries its extension does not have it mangled into the name', async () => {
+    const res = await client.call('tools/call', {
+      name: 'create_document',
+      arguments: { title: 'sum_of_odds.py', content: 'print(sum(range(1, 100, 2)))', format: 'python' },
+    })
+    assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
+    const filePath = res.result.content[0].text.match(/Document created: (.+)$/)[1]
+    const name = path.basename(filePath)
+    assert(name === 'sum-of-odds.py', `expected 'sum-of-odds.py', got '${name}'`)
+  })
+
+  // The guard on the above: only KNOWN format extensions are stripped, so a
+  // version number at the end of a real title is not mistaken for one.
+  await test('a version-numbered title keeps its trailing segment', async () => {
+    const res = await client.call('tools/call', {
+      name: 'create_document',
+      arguments: { title: 'Q3 Report v1.2', content: 'body', format: 'markdown' },
+    })
+    const name = path.basename(res.result.content[0].text.match(/Document created: (.+)$/)[1])
+    assert(name === 'q3-report-v1-2.md', `expected the '.2' to survive as part of the title, got '${name}'`)
+  })
+
+  // A created document is not reachable through the File System tools — they
+  // are a different root. The result says so at the point of creation, because
+  // a model that guesses wrong here burns several calls discovering it.
+  await test('create_document names read_document as the way to read it back', async () => {
+    const res = await client.call('tools/call', {
+      name: 'create_document',
+      arguments: { title: 'Pointer Check', content: 'body', format: 'markdown' },
+    })
+    const text = res.result.content[0].text
+    assert(text.includes('read_document'), `result does not name read_document: ${text}`)
+    assert(/read_text_file/.test(text), `result does not warn off the File System tools: ${text}`)
+  })
+
   await test('round trip: create_document (python) then read_document returns the source', async () => {
     const created = await client.call('tools/call', {
       name: 'create_document',

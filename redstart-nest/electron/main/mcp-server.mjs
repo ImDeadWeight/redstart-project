@@ -3,7 +3,7 @@
 // =============================================================================
 // Redstart Nest — Built-in MCP Server
 // =============================================================================
-// Implements the Model Context Protocol SSE transport (MCP spec 2024-11-05)
+// Implements the Model Context Protocol Streamable HTTP transport
 // on port config.port + 2 (default 19082). Tools are contributed by provider
 // modules (web-fetch-tool.mjs, postgres-tool.mjs, documents-tool.mjs) — each
 // exports toolDefs(cfg) and callTool(name, args, cfg, ctx); this file just merges
@@ -12,14 +12,16 @@
 // containment) lives in each provider, not here — a request that violates a
 // provider's rules never leaves the machine.
 //
-// Transport: HTTP SSE (two-endpoint pattern)
-//   GET  /sse              — SSE connection; server sends endpoint URL immediately
-//   POST /message?sessionId — JSON-RPC 2.0 request from client
+// Transport: HTTP Streamable HTTP (single-endpoint pattern)
+//   POST /mcp  — JSON-RPC 2.0 request/response
+//   GET  /mcp  — SSE stream for server-initiated notifications
+//   DELETE /mcp — session termination
 // =============================================================================
 
 import * as http from 'http'
 import * as crypto from 'crypto'
-import { authenticate } from './auth.mjs'
+import { authenticate, getAuthRequired, surfacePermitted, roleFor } from './auth.mjs'
+import { resolveEffectiveConfig, narrowConfig, DENY_ALL } from './permissions.mjs'
 import * as webFetchTool from './web-fetch-tool.mjs'
 import * as postgresTool from './postgres-tool.mjs'
 import * as documentsTool from './documents-tool.mjs'
@@ -37,19 +39,35 @@ import {
   META_CLASS_KEY,
 } from './tools-definitions.mjs'
 import { logEvent } from './logger.mjs'
+import {
+  StreamableHTTPServerTransport
+} from '@modelcontextprotocol/sdk/server/streamableHttp.js'
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 
-// File System is served by the official @modelcontextprotocol/server-filesystem,
-// spawned as a stdio child (filesystem-mcp-provider.mjs) — standard tool names
-// (write_file, read_text_file, ...) that local models call far more reliably
-// than the old bespoke fs_* schema. Its child-process lifecycle is driven from
-// the server IPC handlers; here it's just another provider in the merge/route
-// loop below.
 const PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool]
 
-// Request headers a browser MCP client may send. Exported so the contract suite
-// can assert the preflight against the same list the server answers with.
 export const ALLOWED_CORS_HEADERS =
   'Content-Type, Authorization, mcp-protocol-version, mcp-session-id, last-event-id'
+
+// Response headers a browser MCP client must be able to READ. This is the
+// whole session mechanism under Streamable HTTP: the server assigns the id on
+// the initialize RESPONSE, and the client echoes it back on every subsequent
+// request. `mcp-session-id` is not a CORS-safelisted response header, so
+// without this the browser hides it from JS — the client's _sessionId stays
+// undefined, the next POST carries no session, and the server rejects it.
+//
+// This MUST be sent on the actual responses, not only on the OPTIONS
+// preflight. Preflight negotiates which headers a request may SEND
+// (Access-Control-Allow-Headers); Access-Control-Expose-Headers governs what
+// a response permits the caller to read and is meaningless on the preflight
+// itself. Setting it only there is exactly the bug this constant now prevents:
+// every Node client worked (no CORS at all) while every browser failed on the
+// request immediately after initialize.
+//
+// The legacy SSE transport had no equivalent exposure requirement — it carried
+// the session in the URL (/message?sessionId=...) — so this became load-bearing
+// only with the Streamable HTTP migration.
+export const EXPOSED_CORS_HEADERS = 'mcp-session-id'
 
 // ---------------------------------------------------------------------------
 // Permission gate — server-side, non-bypassable enforcement of the per-class
@@ -64,14 +82,6 @@ const FS_TOOL_NAMES = new Set(CAPABILITY_TOOL_NAMES.file_system)
 function evaluateToolPolicy(toolName, config) {
   const cls = classifyTool(toolName)
 
-  // Admin tool bans (profile.tools.disabledToolIds, expanded to function names
-  // in buildGatewayConfig). This used to be enforced ONLY in the completions
-  // proxy (tools-gateway.mjs enforceToolAllowList) — which meant a banned tool
-  // was stripped from the model's vocabulary but this server still advertised
-  // it and still executed it for any client that called tools/call directly.
-  // Since talking to this server directly IS the MCP transport, the ban's own
-  // promise ("removed for every connected client") was false wherever it
-  // mattered most. Enforced here too, so both paths to the tool agree.
   if (Array.isArray(config?.disabledTools) && config.disabledTools.includes(toolName)) {
     return { allowed: false, cls, reason: `The "${toolName}" tool has been disabled by an administrator.` }
   }
@@ -133,38 +143,28 @@ let mcpServer = null
 let activeToolsConfig = null   // { webFetch: {...}, postgres: {...}, documents: {...} }
 
 // ---------------------------------------------------------------------------
-// MCP SSE transport — JSON-RPC 2.0 handler
+// MCP dispatch — JSON-RPC 2.0 handler
 // ---------------------------------------------------------------------------
 
-const sessions = new Map()
-
-function sseEvent(res, event, data) {
-  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-}
-
-// ---------------------------------------------------------------------------
-// Call context — who is calling.
-//
-// The SSE handshake has always captured the authenticated account onto the
-// session (`sessions.set(sessionId, { send, account })`) and then never read it
-// again: the POST handler pulled out only `send`, so every provider ran with no
-// idea whose request it was serving. That is why `documents.outputDir` and
-// `fileSystem.rootDir` are one shared folder for the entire server, and why
-// list_documents enumerates everyone's files to everyone.
-//
-// `ctx` is that missing half. It is threaded as an explicit parameter rather
-// than held in module state, mirroring conversations-storage.mjs — which takes
-// accountId as the first argument of every function and filters on it. Ambient
-// identity is how a request ends up served under the wrong account when calls
-// interleave, and MCP sessions interleave by design.
-//
-// Providers receive it as the 4th argument of callTool and may ignore it; today
-// all of them do. Phase 4 gives Documents, File System and Scholar per-account
-// roots derived from ctx.account via user-scope.mjs.
-// ---------------------------------------------------------------------------
+// Session store: one SDK transport per session, keyed by the session ID the
+// transport generates during initialize.
+const transports = new Map()
 
 async function handleRpc(msg, send, ctx = { account: null }) {
   const { id, method, params } = msg
+
+  //
+  // The null-account branch is split deliberately. A null account means "auth is
+  // off" — the documented, unnarrowed posture — but ONLY when auth is actually
+  // off. With auth on, a null account here means identity failed to reach this
+  // function, and treating that as the auth-off posture would hand a broken
+  // plumbing path the full tool set. That is not hypothetical: it is exactly
+  // what the missing `req.auth` assignment in the transport above produced.
+  const cfg = ctx.account
+    ? resolveEffectiveConfig(ctx.account, activeToolsConfig, roleFor(ctx.account))
+    : getAuthRequired()
+      ? narrowConfig(activeToolsConfig, DENY_ALL)
+      : activeToolsConfig
 
   if (method === 'initialize') {
     send({ jsonrpc: '2.0', id, result: {
@@ -184,24 +184,16 @@ async function handleRpc(msg, send, ctx = { account: null }) {
   }
 
   if (method === 'tools/list') {
-    // Merge across providers, guarding against duplicate tool names: tools/call
-    // routes to the FIRST provider that claims a name, so a duplicate would be
-    // silently unreachable. Keep first + warn, so the advertised list always
-    // matches actual routing. Convention: providers namespace their tool names
-    // (postgres_query, create_document, sqlite_query, ...) so this never fires.
     const tools = []
     const seen = new Set()
     for (const provider of PROVIDERS) {
-      for (const tool of provider.toolDefs(activeToolsConfig)) {
+      for (const tool of provider.toolDefs(cfg)) {
         if (seen.has(tool.name)) {
           console.warn(`MCP: duplicate tool name "${tool.name}" — keeping the first provider's definition. Namespace your tool names.`)
           continue
         }
         seen.add(tool.name)
-        // Don't advertise a tool the policy would refuse — the model never sees
-        // (and so won't attempt) a blocked destructive/write op. tools/call is
-        // the actual enforcement backstop for a client that calls it anyway.
-        if (!evaluateToolPolicy(tool.name, activeToolsConfig).allowed) continue
+        if (!evaluateToolPolicy(tool.name, cfg).allowed) continue
         tools.push(annotateTool(tool))
       }
     }
@@ -213,9 +205,7 @@ async function handleRpc(msg, send, ctx = { account: null }) {
     const toolName = params?.name
     const args = params?.arguments ?? {}
 
-    // Permission gate — the non-bypassable enforcement point. A blocked call is
-    // refused here even if a client bypasses the filtered tools/list.
-    const policy = evaluateToolPolicy(toolName, activeToolsConfig)
+    const policy = evaluateToolPolicy(toolName, cfg)
     if (!policy.allowed) {
       logEvent('tool', 'denied', { tool: toolName, class: policy.cls })
       send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: policy.reason }] } })
@@ -224,10 +214,8 @@ async function handleRpc(msg, send, ctx = { account: null }) {
 
     const startedAt = Date.now()
     for (const provider of PROVIDERS) {
-      const result = await provider.callTool(toolName, args, activeToolsConfig, ctx)
+      const result = await provider.callTool(toolName, args, cfg, ctx)
       if (result !== null && result !== undefined) {
-        // Log the shape only — name, class, error-or-not, duration. Never args
-        // or results (see logger.mjs privacy contract).
         logEvent('tool', 'called', { tool: toolName, class: policy.cls, isError: !!result.isError, durationMs: Date.now() - startedAt })
         send({ jsonrpc: '2.0', id, result })
         return
@@ -245,15 +233,22 @@ async function handleRpc(msg, send, ctx = { account: null }) {
 }
 
 // ---------------------------------------------------------------------------
+// CORS helper — applied to every response the SDK transport writes.
+//
+// Both headers matter. Allow-Origin decides whether the browser hands the
+// response to JS at all; Expose-Headers decides whether JS may read the
+// session id out of it (see EXPOSED_CORS_HEADERS). Set via setHeader before
+// the transport writes, so they survive the SDK's own writeHead() — Node
+// merges previously-set headers rather than discarding them.
+// ---------------------------------------------------------------------------
+function addCorsHeaders(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Expose-Headers', EXPOSED_CORS_HEADERS)
+}
+
+// ---------------------------------------------------------------------------
 // HTTP server
 // ---------------------------------------------------------------------------
-
-// bindHost defaults to LOOPBACK, same fail-closed rule as the gateway (see the
-// note on startGateway in tools-gateway.mjs). It matters more here, not less:
-// this server is the MCP transport, so anything reachable on this port can call
-// tools/call directly. Authentication and the policy gate above still stand in
-// front of every call — but "the firewall happened to be on" is not where that
-// boundary should live, and LAN exposure is now something a caller asks for.
 export function startMcpServer(port, config, { bindHost = '127.0.0.1' } = {}) {
   stopMcpServer()
   activeToolsConfig = config
@@ -262,17 +257,9 @@ export function startMcpServer(port, config, { bindHost = '127.0.0.1' } = {}) {
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        // MCP clients send protocol headers alongside Content-Type/Authorization
-        // (the SDK's SSE transport sets mcp-protocol-version on every POST;
-        // Streamable HTTP adds mcp-session-id and last-event-id). A browser
-        // preflight fails the whole request if any requested header is missing
-        // here, so omitting them made the server unreachable from any browser
-        // client while node-based callers — which do no preflight — worked fine.
+        'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
         'Access-Control-Allow-Headers': ALLOWED_CORS_HEADERS,
-        // Streamable HTTP assigns the session id via a response header; a
-        // cross-origin client cannot read it unless it is exposed.
-        'Access-Control-Expose-Headers': 'mcp-session-id',
+        'Access-Control-Expose-Headers': EXPOSED_CORS_HEADERS,
         'Access-Control-Max-Age': '86400',
       })
       res.end()
@@ -281,78 +268,112 @@ export function startMcpServer(port, config, { bindHost = '127.0.0.1' } = {}) {
 
     const urlPath = req.url.split('?')[0]
 
-    if (req.method === 'GET' && urlPath === '/sse') {
-      const authResult = authenticate(req)
-      if (!authResult.ok) {
-        res.writeHead(401, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' })
-        res.end('Unauthorized')
-        return
-      }
+    if (urlPath !== '/mcp') {
+      res.writeHead(404, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' })
+      res.end('Not found')
+      return
+    }
 
-      const sessionId = crypto.randomUUID()
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
+    const authResult = authenticate(req)
+    if (!authResult.ok) {
+      res.writeHead(401, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' })
+      res.end('Unauthorized')
+      return
+    }
+
+    // The second chokepoint. tools-gateway.mjs refuses a credential whose app is
+    // outside the account's role, and this server has to agree — otherwise a
+    // surface-restricted account reaches every tool it is otherwise allowed by
+    // pointing a client straight at port+2 instead of at the proxy. Surface comes
+    // from the credential (authResult), never from a header.
+    if (!surfacePermitted(authResult.account, authResult.surface)) {
+      res.writeHead(403, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32000, message: 'This account is not permitted to connect from this application' } }))
+      return
+    }
+
+    addCorsHeaders(res)
+
+    let body = ''
+    for await (const chunk of req) body += chunk
+
+    let parsed
+    try {
+      parsed = body ? JSON.parse(body) : {}
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }))
+      return
+    }
+
+    const sessionId = req.headers['mcp-session-id']
+    let transport
+
+    if (sessionId && transports.has(sessionId)) {
+      transport = transports.get(sessionId)
+    } else if (!sessionId && isInitializeRequest(parsed)) {
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => crypto.randomUUID(),
+        onsessioninitialized: (sid) => {
+          transports.set(sid, transport)
+        },
       })
-      const send = (data) => sseEvent(res, 'message', data)
-      // `account` here is the identity at STREAM-OPEN time, kept for diagnostics.
-      // Tool calls use the account re-authenticated on each POST instead — see
-      // the ctx note in the /message handler.
-      sessions.set(sessionId, { send, account: authResult.account })
-      // The endpoint event carries the raw URI, NOT a JSON string (MCP
-      // 2024-11-05 SSE transport). JSON.stringify here emitted
-      // data: "/message?sessionId=..." — quotes included — and a spec-compliant
-      // client (the MCP SDK) uses that verbatim, producing a POST to
-      // /"/message?sessionId=..." that 404s. Every real connection failed while
-      // our own test client, which JSON.parsed the value back, saw nothing wrong.
-      res.write(`event: endpoint\ndata: /message?sessionId=${sessionId}\n\n`)
-      req.on('close', () => sessions.delete(sessionId))
+
+      transport.onclose = () => {
+        const sid = transport.sessionId
+        if (sid) transports.delete(sid)
+      }
+
+      transport.onerror = (err) => {
+        console.error('MCP transport error:', err)
+      }
+
+      transport.onmessage = async (message, extra) => {
+        const ctx = { account: extra.authInfo?.account ?? null }
+        await handleRpc(message, (response) => {
+          transport.send(response).catch((err) => {
+            console.error('MCP response send error:', err)
+          })
+        }, ctx)
+      }
+    } else if (req.method === 'GET' || req.method === 'DELETE') {
+      // A session-less GET is the SDK client's OPTIONAL opening probe — it
+      // always issues one before the POST /initialize, to see if this server
+      // offers a standalone SSE stream for server-initiated messages (we
+      // don't). The client's own contract for that probe (streamableHttp.js
+      // _startOrAuthSse) is explicit: 405 means "not supported, expected,
+      // keep going silently"; anything else — including 400 — is thrown as a
+      // fatal StreamableHTTPError and aborts connect() before it ever sends
+      // the initialize POST. A session-less DELETE gets the same answer for
+      // the same reason (nothing to tear down that this server offers over
+      // GET/DELETE outside a session). Only a POST that is neither a known
+      // session nor a valid initialize request is an actual bad request.
+      res.writeHead(405, { 'Content-Type': 'application/json', 'Allow': 'POST' })
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32000, message: 'Method Not Allowed: no active session' } }))
+      return
+    } else {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32000, message: 'Bad Request: No valid session ID provided' } }))
       return
     }
 
-    if (req.method === 'POST' && urlPath === '/message') {
-      const sessionId = new URL(req.url, 'http://x').searchParams.get('sessionId')
-      const session = sessions.get(sessionId)
-      if (!session) {
-        res.writeHead(404, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' })
-        res.end('Session not found')
-        return
-      }
+    // The SDK sources per-request identity from `req.auth` and hands it to
+    // onmessage as `extra.authInfo` (see streamableHttp.js: `const authInfo =
+    // req.auth`). Without this assignment that read yields undefined, so every
+    // tool call runs with ctx.account === null: per-account storage collapses to
+    // the anonymous scope, and role narrowing takes the auth-off path and
+    // applies nothing. Both fail silently and look completely normal.
+    req.auth = { account: authResult.account ?? null, surface: authResult.surface ?? null }
 
-      // Defense in depth: re-check on every message, not just at SSE-open —
-      // covers a session whose token was revoked, or auth toggled on, since.
-      const authResult = authenticate(req)
-      if (!authResult.ok) {
-        sessions.delete(sessionId)
-        res.writeHead(401, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' })
-        res.end('Unauthorized')
-        return
+    try {
+      await transport.handleRequest(req, res, parsed)
+    } catch (err) {
+      console.error('MCP request error:', err)
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32603, message: 'Internal server error' } }))
       }
-
-      const { send } = session
-      // Identity comes from THIS request's credential (re-validated just above),
-      // not from the account captured when the SSE stream opened. A session can
-      // outlive the credential that created it — a token revoked, auth switched
-      // on — and the freshly authenticated account is the one that should own
-      // whatever files this call touches.
-      const ctx = { account: authResult.account ?? null }
-      let body = ''
-      for await (const chunk of req) body += chunk
-      res.writeHead(202, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' })
-      res.end('Accepted')
-      try {
-        const msg = JSON.parse(body)
-        await handleRpc(msg, send, ctx)
-      } catch {
-        send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' }})
-      }
-      return
     }
-
-    res.writeHead(404, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' })
-    res.end('Not found')
   })
 
   return new Promise((resolve, reject) => {
@@ -370,9 +391,13 @@ export function startMcpServer(port, config, { bindHost = '127.0.0.1' } = {}) {
 }
 
 export function stopMcpServer() {
-  sessions.clear()
+  const allTransports = [...transports.values()]
+  for (const transport of allTransports) {
+    transport.close().catch(() => {})
+  }
+  transports.clear()
   if (mcpServer) {
-    mcpServer.closeAllConnections()  // force-close open SSE sockets so port is freed immediately
+    mcpServer.closeAllConnections()
     mcpServer.close()
     mcpServer = null
   }
@@ -384,11 +409,15 @@ export function updateMcpConfig(config) {
   activeToolsConfig = config
 }
 
-// Force-closes open SSE sessions without stopping the server — used when
+// Force-closes open sessions without stopping the server — used when
 // "Require login" is switched on, since sessions opened while auth was off
 // have no account attached to them.
 export function closeAllMcpSessions() {
-  sessions.clear()
+  const allTransports = [...transports.values()]
+  for (const transport of allTransports) {
+    transport.close().catch(() => {})
+  }
+  transports.clear()
   if (mcpServer) mcpServer.closeAllConnections()
 }
 
@@ -408,10 +437,6 @@ export function estimateActiveToolTokens(config) {
     for (const tool of provider.toolDefs(config)) {
       if (seen.has(tool.name)) continue
       seen.add(tool.name)
-      // Same policy filter tools/list applies, so the estimate counts what the
-      // model will actually be offered. Without it a gated tool (a banned one,
-      // or delete_file with allowDestructive off) inflated the figure with a
-      // schema that never leaves the server.
       if (!evaluateToolPolicy(tool.name, config).allowed) continue
       tools.push(tool)
     }

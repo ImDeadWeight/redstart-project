@@ -785,7 +785,7 @@ describe('mcpStore routes tool operations through the injected index and pool', 
 
 	it('reads Nest provenance off a redstart-prefixed server', () => {
 		mcpStore.conn.connections.set(
-			'redstart-http-127-0-0-1-19082-sse',
+			'redstart-http-127-0-0-1-19082-mcp',
 			connection([{ name: 'fetch_url', _meta: { 'redstart/capability': 'web', 'redstart/class': 'read' } }])
 		);
 

@@ -23,9 +23,9 @@ import type { McpServerOverride } from '$lib/types/database';
  */
 
 const NEST_SERVER: MCPServerSettingsEntry = {
-	id: 'redstart-http-127-0-0-1-19082-sse',
+	id: 'redstart-http-127-0-0-1-19082-mcp',
 	enabled: true,
-	url: 'http://127.0.0.1:19082/sse',
+	url: 'http://127.0.0.1:19082/mcp',
 	name: 'Redstart Built-in',
 	requestTimeoutSeconds: 30
 };

@@ -458,24 +458,48 @@
 		}
 	});
 
-	// Background MCP server health checks on app load
-	// Fetch enabled servers from settings and run health checks in background
+	// Background MCP server health checks.
+	//
+	// Gated on auth being RESOLVED, and re-run when the identity or the server
+	// set changes — the same rule, for the same reason, as the server-props
+	// effect above.
+	//
+	// The server list comes from persisted settings, so it is populated on the
+	// very first paint, long before authStore.init() has exchanged a token.
+	// Running then sent every check with whatever token localStorage still held
+	// — and sessions live in memory server-side, so an app restart invalidates
+	// exactly that token. Every cold start therefore failed its health checks
+	// with a 401. Nothing retried once the real session arrived a few seconds
+	// later, so the server sat in a permanent error state: the MCP toggle showed
+	// an error and its tools never appeared, until a manual reload that happened
+	// to reuse a still-valid token.
+	//
+	// Keyed by identity + the enabled server ids, so a login and a host re-sync
+	// that provisions new servers both re-check, while a steady state does not
+	// re-check on every unrelated settings change.
+	let healthCheckKey: string | null = null;
 	$effect(() => {
 		if (!browser) return;
 
-		const mcpServers = mcpStore.getServers();
+		// Auth unresolved: a check now would be sent with a stale token or none.
+		if (!authStore.checked) return;
+		// Login required but not yet done — the gate is up; nothing to authenticate with.
+		if (authStore.authRequired && !authStore.user) return;
 
-		// Only run health checks if we have enabled servers with URLs
-		const enabledServers = mcpServers.filter((s) => s.enabled && s.url.trim());
+		const enabledServers = mcpStore.getServers().filter((s) => s.enabled && s.url.trim());
+		if (enabledServers.length === 0) return;
 
-		if (enabledServers.length > 0) {
-			untrack(() => {
-				// Run health checks in background (don't await)
-				mcpStore.runHealthChecksForServers(enabledServers, false).catch((error) => {
-					console.warn('[layout] MCP health checks failed:', error);
-				});
+		const identity = authStore.user?.id ?? 'anonymous';
+		const key = `${identity}|${enabledServers.map((s) => s.id).sort().join(',')}`;
+		if (healthCheckKey === key) return;
+		healthCheckKey = key;
+
+		untrack(() => {
+			// Run health checks in background (don't await)
+			mcpStore.runHealthChecksForServers(enabledServers, false).catch((error) => {
+				console.warn('[layout] MCP health checks failed:', error);
 			});
-		}
+		});
 	});
 
 	// Monitor API key changes and redirect to error page if removed or changed when required

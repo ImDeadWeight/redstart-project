@@ -118,10 +118,10 @@ test('a remote HTTPS endpoint warns about egress but not encryption', () => {
   return 'egress only'
 })
 
-test('a path that is not /sse draws a hint, not a refusal', () => {
-  const v = check('http://10.0.0.5:9000/mcp')
+test('a non-standard path draws a hint, not a refusal', () => {
+  const v = check('http://10.0.0.5:9000/odd-path')
   assert(v.ok, 'refused on path alone')
-  assert(v.warnings.some(w => /\/sse/.test(w)), 'no hint about the SSE path')
+  assert(v.warnings.some(w => /does not look like a typical MCP endpoint/.test(w)), 'no hint about the path')
   return 'hint offered'
 })
 

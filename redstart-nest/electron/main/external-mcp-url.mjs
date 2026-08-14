@@ -65,7 +65,7 @@ export function validateExternalMcpUrl(url, gatewayPort) {
   try {
     parsed = new URL(url.trim())
   } catch {
-    return { ok: false, error: 'That is not a valid URL. Expected something like http://10.0.0.5:9000/sse', warnings: [] }
+    return { ok: false, error: 'That is not a valid URL. Expected something like http://10.0.0.5:9000/path', warnings: [] }
   }
 
   // Scheme: anything else is either meaningless for an SSE endpoint or an
@@ -106,8 +106,8 @@ export function validateExternalMcpUrl(url, gatewayPort) {
   if (isRemote) {
     warnings.push('This server is outside your local network. Its tools become network egress and will be reported as such in the system prompt and at /egress.')
   }
-  if (!/\/sse\/?$/.test(parsed.pathname) && parsed.pathname !== '/') {
-    warnings.push(`The MCP SSE transport usually ends in /sse — "${parsed.pathname}" may not be the endpoint you want.`)
+  if (!/\/mcp\/?$/.test(parsed.pathname) && parsed.pathname !== '/') {
+    warnings.push(`The path "${parsed.pathname}" does not look like a typical MCP endpoint.`)
   }
 
   return { ok: true, warnings, isRemote }

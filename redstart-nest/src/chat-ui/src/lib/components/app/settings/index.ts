@@ -98,6 +98,17 @@ export { default as SettingsChatAccountsTab } from './SettingsChat/SettingsChatA
 export { default as SettingsChatSystemPromptTab } from './SettingsChat/SettingsChatSystemPromptTab.svelte';
 
 /**
+ * **SettingsChatRolesTab** - Admin-defined capability roles
+ *
+ * Creates, edits and deletes the roles an admin assigns to accounts, and is
+ * where the restrict-only model is made visible: every control subtracts from
+ * what the running profile has enabled, and an untouched list means "inherit"
+ * rather than "allow nothing". Admin-only, same sidebar filter as Accounts;
+ * the server gates every write regardless of what this renders.
+ */
+export { default as SettingsChatRolesTab } from './SettingsChat/SettingsChatRolesTab.svelte';
+
+/**
  * **SettingsChatConnectorsTab** - Per-connector credentials (spec §8)
  *
  * Issues, lists, and revokes keys bound to a specific connector app, so the

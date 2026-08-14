@@ -5,15 +5,30 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Loader, Trash2, KeyRound, RotateCw, Copy, Check } from '@lucide/svelte';
 
-	type Account = { id: string; username: string; role: 'owner' | 'admin' | 'user'; createdAt: string; apiKeyPrefix: string };
+	// `tier` is the management tier (owner/admin/user); `roleId` points at an
+	// admin-defined capability role. The server still emits `role` as a mirror of
+	// `tier` for older clients — prefer `tier` here.
+	type Account = {
+		id: string;
+		username: string;
+		tier: 'owner' | 'admin' | 'user';
+		role: 'owner' | 'admin' | 'user';
+		roleId: string | null;
+		createdAt: string;
+		apiKeyPrefix: string;
+	};
+	type Role = { id: string; name: string; builtIn?: boolean };
 
 	let accounts = $state<Account[]>([]);
+	let roles = $state<Role[]>([]);
 	let loading = $state(true);
 	let error = $state('');
+	let canEdit = $state(false);
 
 	let newUsername = $state('');
 	let newPassword = $state('');
 	let newRole = $state<'admin' | 'user'>('user');
+	let newRoleId = $state<string>('');
 	// Only the Owner can create Admin accounts — an Admin viewer only ever
 	// creates Users, matching the backend's canManage() enforcement.
 	let creating = $state(false);
@@ -28,8 +43,16 @@
 		loading = true;
 		error = '';
 		try {
-			const result = await apiFetch<{ accounts: Account[] }>('/auth/accounts', { authOnly: true });
-			accounts = result.accounts;
+			// Roles are fetched alongside so the picker can render a name rather
+			// than an opaque id. A failure here must not blank the account list,
+			// so it degrades to "no roles offered" instead of throwing.
+		const [result, roleResult] = await Promise.all([
+			apiFetch<{ accounts: Account[]; canEdit: boolean }>('/auth/accounts', { authOnly: true }),
+			apiFetch<{ roles: Role[] }>('/auth/roles', { authOnly: true }).catch(() => ({ roles: [] }))
+		]);
+		accounts = result.accounts;
+		roles = roleResult.roles;
+		canEdit = result.canEdit;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load accounts';
 		} finally {
@@ -38,6 +61,29 @@
 	}
 
 	void loadAccounts();
+
+	async function assignRole(account: Account, roleId: string) {
+		busyId = account.id;
+		error = '';
+		try {
+			// No authOnly: this carries a JSON body, so it needs the JSON headers
+			// (which include the token) rather than the auth-only set.
+			await apiFetch(`/auth/accounts/${account.id}/role`, {
+				method: 'PUT',
+				body: JSON.stringify({ roleId: roleId || null })
+			});
+			await loadAccounts();
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to assign role';
+		} finally {
+			busyId = null;
+		}
+	}
+
+	function roleName(roleId: string | null) {
+		if (!roleId) return 'Full Access';
+		return roles.find((r) => r.id === roleId)?.name ?? 'Unknown role';
+	}
 
 	async function createAccount() {
 		const username = newUsername.trim();
@@ -49,12 +95,14 @@
 			const result = await apiPost<{ account: Account; apiKey: string }>('/auth/accounts', {
 				username,
 				password: newPassword,
-				role: newRole
+				tier: newRole,
+				roleId: newRoleId || null
 			});
 			revealed = { username: result.account.username, apiKey: result.apiKey };
 			newUsername = '';
 			newPassword = '';
 			newRole = 'user';
+			newRoleId = '';
 			await loadAccounts();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to create account';
@@ -139,6 +187,7 @@
 		<p class="text-sm text-destructive">{error}</p>
 	{/if}
 
+	{#if canEdit}
 	<!-- Create account -->
 	<div class="space-y-3 border-b border-border/40 pb-6">
 		<h4 class="text-sm font-medium">Create Account</h4>
@@ -154,11 +203,22 @@
 					<option value="admin">Admin</option>
 				{/if}
 			</select>
+			<select
+				bind:value={newRoleId}
+				title="Capability role"
+				class="h-9 rounded-md border border-input bg-background px-2 text-sm"
+			>
+				<option value="">Full Access</option>
+				{#each roles.filter((r) => r.id !== 'full-access') as role (role.id)}
+					<option value={role.id}>{role.name}</option>
+				{/each}
+			</select>
 			<Button onclick={createAccount} disabled={creating || !newUsername.trim() || !newPassword}>
 				{#if creating}<Loader class="h-3.5 w-3.5 animate-spin" />{/if} Create
 			</Button>
 		</div>
 	</div>
+	{/if}
 
 	<!-- Account list -->
 	<div class="space-y-2">
@@ -177,7 +237,7 @@
 							<div>
 								<p class="text-sm font-medium">
 									{account.username}
-									<span class="ml-1 text-xs text-muted-foreground">({account.role})</span>
+									<span class="ml-1 text-xs text-muted-foreground">({account.tier})</span>
 									{#if account.username === authStore.user?.username}
 										<span class="ml-1 text-xs text-muted-foreground">— you</span>
 									{/if}
@@ -185,14 +245,39 @@
 								<p class="text-xs text-muted-foreground">
 									API key: {account.apiKeyPrefix}… · created {new Date(account.createdAt).toLocaleDateString()}
 								</p>
-							</div>
-							<!-- The Owner account has no destructive actions here — no
-							     self-service reset/delete through the admin panel, and
-							     nobody else can manage it (canManage() rejects it server-side
-							     regardless, but there's no reason to show controls that
-							     would only ever come back 403). -->
-							{#if account.role !== 'owner'}
-								<div class="flex shrink-0 items-center gap-1">
+							<!-- The owner is never narrowed by a role, so it gets a statement
+							     rather than a picker that cannot do anything. -->
+							{#if account.tier === 'owner'}
+								<p class="mt-1 text-xs text-muted-foreground">
+									Role: unrestricted (owner)
+								</p>
+							{:else if canEdit}
+								<div class="mt-1 flex items-center gap-1.5">
+									<span class="text-xs text-muted-foreground">Role:</span>
+									<select
+										value={account.roleId ?? ''}
+										disabled={busyId === account.id}
+										onchange={(e) => assignRole(account, e.currentTarget.value)}
+										class="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
+									>
+										<option value="">Full Access</option>
+										{#each roles.filter((r) => r.id !== 'full-access') as role (role.id)}
+											<option value={role.id}>{role.name}</option>
+										{/each}
+									</select>
+									{#if account.roleId && !roles.some((r) => r.id === account.roleId)}
+										<span class="text-xs text-destructive">({roleName(account.roleId)})</span>
+									{/if}
+								</div>
+							{/if}
+						</div>
+						<!-- The Owner account has no destructive actions here — no
+						     self-service reset/delete through the admin panel, and
+						     nobody else can manage it (canManage() rejects it server-side
+						     regardless, but there's no reason to show controls that
+						     would only ever come back 403). -->
+						{#if account.tier !== 'owner' && canEdit}
+							<div class="flex shrink-0 items-center gap-1">
 									<Button
 										size="sm"
 										variant="ghost"

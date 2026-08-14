@@ -1,64 +1,18 @@
 // =============================================================================
-// Shared MCP SSE/JSON-RPC test client.
+// Shared MCP Streamable HTTP test client.
 // =============================================================================
 // A minimal client — enough to drive tools/list + tools/call against a real
-// running mcp-server.mjs over the actual SSE transport, the same way the
-// chat-ui's MCP client does. Shared by every suite that exercises the MCP
-// boundary (test-mcp-capabilities.mjs, test-provider-conformance.mjs, ...) so
-// there is ONE implementation to keep correct as the transport evolves.
+// running mcp-server.mjs over the MCP Streamable HTTP transport. Shared by
+// every suite that exercises the MCP boundary (test-mcp-capabilities.mjs,
+// test-provider-conformance.mjs, ...) so there is ONE implementation to keep
+// correct as the transport evolves.
 // =============================================================================
 
 export async function connectMcpClient(baseUrl) {
-  const sseRes = await fetch(`${baseUrl}/sse`)
-  if (!sseRes.ok || !sseRes.body) throw new Error(`SSE connect failed: ${sseRes.status}`)
-
-  const reader = sseRes.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let endpointPath = null
-  const pending = new Map()
+  const base = baseUrl.replace(/\/$/, '')
+  let sessionId = null
   let nextId = 0
-
-  ;(async function pump() {
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        let idx
-        while ((idx = buffer.indexOf('\n\n')) !== -1) {
-          const rawEvent = buffer.slice(0, idx)
-          buffer = buffer.slice(idx + 2)
-          const lines = rawEvent.split('\n')
-          const eventLine = lines.find(l => l.startsWith('event: '))
-          const dataLine = lines.find(l => l.startsWith('data: '))
-          if (!dataLine) continue
-          const raw = dataLine.slice(6)
-          const eventType = eventLine ? eventLine.slice(7) : 'message'
-          if (eventType === 'endpoint') {
-            // Taken VERBATIM, exactly as the MCP SDK does. This used to
-            // JSON.parse the value, which silently repaired a server that
-            // JSON-encoded the URI — so the suite stayed green while no real
-            // client could connect. Parsing here would re-hide that bug.
-            endpointPath = raw.trim()
-          } else {
-            let data
-            try { data = JSON.parse(raw) } catch { continue }
-            if (data?.id !== undefined && pending.has(data.id)) {
-              pending.get(data.id).resolve(data)
-              pending.delete(data.id)
-            }
-          }
-        }
-      }
-    } catch { /* stream closed */ }
-  })()
-
-  const start = Date.now()
-  while (!endpointPath) {
-    if (Date.now() - start > 5000) throw new Error('Timed out waiting for SSE endpoint event')
-    await new Promise(r => setTimeout(r, 20))
-  }
+  const pending = new Map()
 
   async function call(method, params) {
     const id = ++nextId
@@ -68,13 +22,92 @@ export async function connectMcpClient(baseUrl) {
         if (pending.has(id)) { pending.delete(id); reject(new Error(`Timed out waiting for response to ${method}`)) }
       }, 8000)
     })
-    await fetch(`${baseUrl}${endpointPath}`, {
+
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+    }
+    if (sessionId) {
+      headers['Mcp-Session-Id'] = sessionId
+    }
+
+    const res = await fetch(`${base}/mcp`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
     })
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      const entry = pending.get(id)
+      if (entry) {
+        entry.reject(new Error(`HTTP ${res.status}: ${text || res.statusText}`))
+        pending.delete(id)
+      }
+      return promise
+    }
+
+    const newSessionId = res.headers.get('mcp-session-id')
+    if (newSessionId) sessionId = newSessionId
+
+    const ct = res.headers.get('content-type') || ''
+    if (ct.includes('application/json')) {
+      try {
+        const data = await res.json()
+        if (data?.id !== undefined && pending.has(data.id)) {
+          pending.get(data.id).resolve(data)
+          pending.delete(data.id)
+        }
+      } catch (err) {
+        const entry = pending.get(id)
+        if (entry) {
+          entry.reject(err)
+          pending.delete(id)
+        }
+      }
+      return promise
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    ;(async function pump() {
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          let idx
+          while ((idx = buffer.indexOf('\n\n')) !== -1) {
+            const rawEvent = buffer.slice(0, idx)
+            buffer = buffer.slice(idx + 2)
+            const dataLine = rawEvent.split('\n').find(l => l.startsWith('data: '))
+            if (!dataLine) continue
+            const raw = dataLine.slice(6)
+            let data
+            try { data = JSON.parse(raw) } catch { continue }
+            if (data?.id !== undefined && pending.has(data.id)) {
+              pending.get(data.id).resolve(data)
+              pending.delete(data.id)
+            }
+          }
+        }
+      } catch { /* stream closed */ }
+    })()
+
     return promise
   }
 
-  return { call, close: () => reader.cancel().catch(() => {}) }
+  // The Streamable HTTP transport rejects a second `initialize` on an
+  // already-initialized session (the old SSE transport did not enforce this),
+  // so the handshake result is captured here and exposed rather than left for
+  // a caller to unknowingly re-trigger.
+  const initResponse = await call('initialize', {
+    protocolVersion: '2024-11-05',
+    capabilities: {},
+    clientInfo: { name: 'redstart-test', version: '1.0.0' },
+  })
+
+  return { call, initResult: initResponse.result, close: () => {} }
 }

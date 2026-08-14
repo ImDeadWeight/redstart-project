@@ -2,15 +2,16 @@
 	import {
 		SettingsChatAccountsTab,
 		SettingsChatDesktopSidebar,
-		SettingsChatFields,
 		SettingsChatImportExportTab,
 		SettingsChatMobileHeader,
+		SettingsChatRolesTab,
 		SettingsChatConnectorsTab,
 		SettingsChatServerTab,
 		SettingsChatSystemPromptTab,
 		SettingsChatToolsTab,
 		SettingsFooter
 	} from '$lib/components/app/settings';
+	import SettingsChatFields from '$lib/components/app/settings/SettingsChat/SettingsChatFields.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import {
@@ -44,9 +45,14 @@
 	// Accounts is a static registry entry (see settings-registry.ts) but should
 	// only be visible to logged-in admins, so it's filtered out here at render
 	// time rather than in the registry, which has no access to auth state.
+	const ADMIN_ONLY_SECTIONS: string[] = [
+		SETTINGS_SECTION_TITLES.ACCOUNTS,
+		SETTINGS_SECTION_TITLES.ROLES
+	];
+
 	let visibleSections = $derived(
 		SETTINGS_CHAT_SECTIONS.filter(
-			(section) => section.title !== SETTINGS_SECTION_TITLES.ACCOUNTS || authStore.isAdmin
+			(section) => !ADMIN_ONLY_SECTIONS.includes(section.title) || authStore.isAdmin
 		)
 	);
 
@@ -166,6 +172,8 @@
 						<SettingsChatServerTab />
 					{:else if currentSection.title === SETTINGS_SECTION_TITLES.ACCOUNTS}
 						<SettingsChatAccountsTab />
+					{:else if currentSection.title === SETTINGS_SECTION_TITLES.ROLES}
+						<SettingsChatRolesTab />
 					{:else if currentSection.title === SETTINGS_SECTION_TITLES.SYSTEM_PROMPT}
 						<SettingsChatSystemPromptTab />
 					{:else if currentSection.title === SETTINGS_SECTION_TITLES.CONNECTORS}

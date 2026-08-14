@@ -21,6 +21,7 @@
 		? {
 				id: 'acc-test',
 				username: 'alice',
+				tier: 'user',
 				role: 'user',
 				apiKeyPrefix: 'rst_abcd',
 				createdAt: '2026-01-02T03:04:05.000Z',

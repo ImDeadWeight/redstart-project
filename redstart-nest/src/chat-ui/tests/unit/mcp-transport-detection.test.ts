@@ -7,10 +7,10 @@ import type { MCPServerSettingsEntry } from '$lib/types';
 /**
  * The two HTTP MCP transports are not interchangeable:
  *
+ *  - Streamable HTTP: the same URL is POSTed to directly. This is what the
+ *    Redstart built-in server implements.
  *  - two-endpoint SSE (MCP 2024-11-05): GET /sse opens the stream, POST
- *    /message?sessionId=… sends. This is what the Redstart built-in server
- *    implements.
- *  - Streamable HTTP: the same URL is POSTed to directly.
+ *    /message?sessionId=… sends. Supported for external legacy servers only.
  *
  * Choosing the wrong one produces a bare 404 on connect and nothing else, so
  * the choice is pinned here.
@@ -53,14 +53,14 @@ describe('detectMcpTransportFromUrl', () => {
 
 describe('buildServerConfig transport selection', () => {
 	// The exact entry syncServersFromHost builds for the built-in server.
-	it('marks the Redstart built-in server as SSE', () => {
+	it('marks the Redstart built-in server as Streamable HTTP', () => {
 		const entry: MCPServerSettingsEntry = {
-			id: 'redstart-http-127-0-0-1-19082-sse',
+			id: 'redstart-http-127-0-0-1-19082-mcp',
 			enabled: true,
-			url: 'http://127.0.0.1:19082/sse',
+			url: 'http://127.0.0.1:19082/mcp',
 			name: 'Redstart Built-in',
 			requestTimeoutSeconds: 30
 		};
-		expect(buildServerConfig(entry)?.transport).toBe(MCPTransportType.SSE);
+		expect(buildServerConfig(entry)?.transport).toBe(MCPTransportType.STREAMABLE_HTTP);
 	});
 });
