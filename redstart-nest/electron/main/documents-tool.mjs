@@ -467,6 +467,7 @@ export function toolDefs(cfg) {
       description:
         'Create a new document, data file, or script and save it to the local documents folder, where the user can download it. ' +
         'Takes exactly three arguments: title, content, format. There is NO file_path or filename argument — the file name is derived from title, and the folder is fixed by the server. ' +
+        'The documents folder is a SEPARATE store from the File System capability: read it back with read_document, not read_text_file, and do not expect list_directory to show it. ' +
         'For the prose formats (markdown, docx, pdf) format content with simple markdown: "# Heading", "## Subheading", "- bullet", blank lines between paragraphs, ' +
         'and markdown pipe tables ("| A | B |" then "| --- | --- |" then one line per row) which are rendered as real tables in .docx and .pdf. ' +
         `For every other format (${[...VERBATIM_FORMATS].join(', ')}) content is written to the file exactly as supplied: put the raw source or data in content, ` +
@@ -483,7 +484,7 @@ export function toolDefs(cfg) {
     },
     {
       name: 'read_document',
-      description: `Read the text content of a document, data file, or script (${READABLE_EXTENSIONS.join(', ')}) in your documents folder on the Redstart server. Spreadsheets are rendered as one text table per sheet. Long documents are returned in chunks — follow the offset instructions at the end of a truncated result to read more.`,
+      description: `Read the text content of a document, data file, or script (${READABLE_EXTENSIONS.join(', ')}) in your documents folder on the Redstart server — including anything create_document just wrote. This is a SEPARATE store from the File System capability, so use this rather than read_text_file for documents. Spreadsheets are rendered as one text table per sheet. Long documents are returned in chunks — follow the offset instructions at the end of a truncated result to read more.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -577,6 +578,23 @@ export async function callTool(name, args, cfg, ctx) {
       if (!format && ext) format = EXTENSION_FORMATS[ext] ?? ext
     }
   }
+  // A title that already carries an extension — 'sum_of_odds.py' — is common
+  // despite the schema saying not to, and slugify() maps every non-alphanumeric
+  // to '-', so it would land as 'sum-of-odds-py.py'. Strip the extension so the
+  // name comes out as the model meant it, and let it supply the format when
+  // none was given (same rule as the filename branch above).
+  //
+  // Only extensions we RECOGNISE are stripped, which is what keeps this from
+  // eating real title text: 'Q3 Report v1.2' has extname '.2', which is not a
+  // known format, so it survives intact.
+  if (typeof title === 'string') {
+    const titleExt = path.extname(title).slice(1).toLowerCase()
+    if (titleExt && EXTENSION_FORMATS[titleExt]) {
+      title = title.slice(0, -(titleExt.length + 1))
+      if (!format) format = EXTENSION_FORMATS[titleExt]
+    }
+  }
+
   // Models reach for the extension or the language name where the schema wants
   // a format — 'txt' for text, 'js' for javascript, 'PDF' for pdf. Normalize
   // before validating rather than bouncing an otherwise complete call, same
@@ -624,7 +642,24 @@ export async function callTool(name, args, cfg, ctx) {
     // resolves it against the documents folder. Without this line a created
     // document is unreachable from a browser client.
     const relativePath = path.relative(docCfg.outputDir, outputPath).split(path.sep).join('/')
-    return { content: [{ type: 'text', text: `[FILE: ${relativePath}]\nDocument created: ${outputPath}` }] }
+    // The middle line exists because the documents folder and the File System
+    // capability are SEPARATE STORES with different roots, and nothing else in
+    // the tool surface says so. A model that creates a document and then
+    // reaches for read_text_file to check its work gets ENOENT, then burns
+    // several calls listing both roots trying to work out where the file went.
+    // Naming the right tool at the moment the file is created is what stops
+    // that, so it is stated here rather than only in the tool descriptions.
+    return {
+      content: [{
+        type: 'text',
+        text:
+          `[FILE: ${relativePath}]\n` +
+          `Created "${relativePath}" in the documents folder. To read it back, use read_document ` +
+          `with path "${relativePath}" — the File System tools (read_text_file, list_directory) ` +
+          `use a different root and cannot see documents.\n` +
+          `Document created: ${outputPath}`,
+      }],
+    }
   } catch (err) {
     return { isError: true, content: [{ type: 'text', text: `Failed to create document: ${err.message}` }] }
   }
