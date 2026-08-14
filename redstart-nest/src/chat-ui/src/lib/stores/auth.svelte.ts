@@ -28,7 +28,15 @@ export type ConnectorKey = {
 export type AuthUser = {
 	id: string;
 	username: string;
+	/** Management tier — governs account administration. */
+	tier: 'owner' | 'admin' | 'user';
+	/**
+	 * Mirror of `tier` under its old name. The server emits both so connector
+	 * apps holding their own copy of this shape keep working; prefer `tier`.
+	 */
 	role: 'owner' | 'admin' | 'user';
+	/** Admin-defined capability role, or null for Full Access. */
+	roleId?: string | null;
 	apiKeyPrefix?: string;
 	createdAt?: string;
 	lastLoginAt?: string | null;
@@ -54,14 +62,20 @@ class AuthStore {
 		return this.tokenState.value;
 	}
 
-	/** Admin-tier or above — gates visibility of the Accounts settings section. */
+	/**
+	 * Admin-tier or above — gates visibility of the Accounts and Roles sections.
+	 *
+	 * Falls back to `role` so a session restored from an older server (which
+	 * emits only the old field) does not silently read as "not an admin".
+	 */
 	get isAdmin(): boolean {
-		return this.user?.role === 'admin' || this.user?.role === 'owner';
+		const tier = this.user?.tier ?? this.user?.role;
+		return tier === 'admin' || tier === 'owner';
 	}
 
 	/** The single sys-admin account — gates Admin-account management inside the Accounts tab. */
 	get isOwner(): boolean {
-		return this.user?.role === 'owner';
+		return (this.user?.tier ?? this.user?.role) === 'owner';
 	}
 
 	async init(): Promise<void> {

@@ -11,7 +11,7 @@
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { modelsStore, selectedModelName, propsCacheVersion } from '$lib/stores/models.svelte';
 	import { normalizeFloatingPoint } from '$lib/utils/precision';
-	import { SettingsChatParameterSourceIndicator } from '$lib/components/app/settings';
+	import SettingsChatParameterSourceIndicator from '$lib/components/app/settings/SettingsChat/SettingsChatParameterSourceIndicator.svelte';
 	import type { Component } from 'svelte';
 
 	interface Props {

@@ -19,7 +19,7 @@
 // config it is given and asks system-prompt.mjs to compose.
 // =============================================================================
 
-import { hasAdminAccess } from '../auth.mjs'
+import { canDo } from '../auth.mjs'
 import { logEvent } from '../logger.mjs'
 import { getExternalServers } from '../tools-storage.mjs'
 import { composePrompt, deriveEgressFacts, DEFAULT_TOKEN_BUDGET, listModes } from '../system-prompt.mjs'
@@ -88,13 +88,16 @@ export async function handlePromptRoute(req, res, urlPath, config, account) {
         blocks: preview.blocks,
         prompt: preview.prompt,
       },
-      canEdit: hasAdminAccess(account),
+      canEdit: canDo(account, 'managePromptBlocks'),
     })
     return true
   }
 
   if (req.method === 'PUT' && urlPath === '/prompt-blocks') {
-    if (!hasAdminAccess(account)) {
+    // Admin tier is the ceiling, the account's role can withhold it — an admin
+    // who manages accounts but must not rewrite the assistant's policy floor is
+    // a real configuration. See permissions.mjs ADMIN_PERMISSIONS.
+    if (!canDo(account, 'managePromptBlocks')) {
       sendJson(res, 403, { error: 'Admin role required' })
       return true
     }

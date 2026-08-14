@@ -375,13 +375,13 @@ describe('auth.mjs — sessions and roles', () => {
 		const ownerLogin = login('owner', 'testpass');
 
 		const adminResult = createAccount(
-			{ id: ownerLogin.user!.id, role: 'owner' },
+			{ id: ownerLogin.user!.id, tier: 'owner' },
 			{ username: 'admin1', password: 'adminpass', role: 'admin' }
 		);
 		expect(adminResult.ok).toBe(true);
 
 		const userResult = createAccount(
-			{ id: ownerLogin.user!.id, role: 'owner' },
+			{ id: ownerLogin.user!.id, tier: 'owner' },
 			{ username: 'user1', password: 'userpass', role: 'user' }
 		);
 		expect(userResult.ok).toBe(true);
@@ -395,13 +395,13 @@ describe('auth.mjs — sessions and roles', () => {
 		const adminLogin = login('admin', 'testpass');
 
 		const userResult = createAccount(
-			{ id: adminLogin.user!.id, role: 'admin' },
+			{ id: adminLogin.user!.id, tier: 'admin' },
 			{ username: 'user1', password: 'userpass', role: 'user' }
 		);
 		expect(userResult.ok).toBe(true);
 
 		const adminResult = createAccount(
-			{ id: adminLogin.user!.id, role: 'admin' },
+			{ id: adminLogin.user!.id, tier: 'admin' },
 			{ username: 'admin2', password: 'adminpass', role: 'admin' }
 		);
 		expect(adminResult.ok).toBe(false);
@@ -413,7 +413,7 @@ describe('auth.mjs — sessions and roles', () => {
 		const userLogin = login('regular', 'testpass');
 
 		const result = createAccount(
-			{ id: userLogin.user!.id, role: 'user' },
+			{ id: userLogin.user!.id, tier: 'user' },
 			{ username: 'newuser', password: 'pass', role: 'user' }
 		);
 		expect(result.ok).toBe(false);

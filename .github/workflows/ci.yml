@@ -72,6 +72,9 @@ jobs:
       - name: "Security: tool policy classification"
         run: node scripts/test-tool-policy.mjs
 
+      - name: "Security: role narrowing (restrict-only law)"
+        run: node scripts/test-roles.mjs
+
       - name: "Security: tool namespacing (ban targetability)"
         run: node scripts/test-tool-namespacing.mjs
 

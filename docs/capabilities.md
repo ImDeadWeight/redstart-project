@@ -32,7 +32,7 @@ Seven local capabilities ship with the built-in MCP server. All are local I/O wi
 
 The upstream filesystem server ships no delete tool, so `delete_file` is Redstart-owned and is the system's only **destructive-class** tool — off by default, refused at both `tools/list` and `tools/call`. See [Destructive operations](security.md#destructive-operations).
 
-Each capability is configured once globally, then activated per profile — both halves are required.
+Each capability is configured once globally, then activated per profile — both halves are required. An account's [role](security.md#roles) can then withhold any of them from that account specifically; a role only ever narrows what the profile has already enabled.
 
 Files the model and users create live under the configured capability roots, one folder per account — see [Per-account file storage](security.md#per-account-file-storage).
 

@@ -65,7 +65,10 @@ export function buildGatewayConfig(llamaConfig) {
     const tool = allTools.find(t => t.id === id)
     if (tool?.baseUrl) {
       allowedBaseUrls.push(tool.baseUrl)
-      activeTools.push({ name: tool.name, baseUrl: tool.baseUrl, description: tool.description || '' })
+      // `id` rides along so a role can narrow the web sources it permits by id
+      // (permissions.mjs). Without it the only handle on a source here is its
+      // display name or base URL, neither of which is a stable identifier.
+      activeTools.push({ id: tool.id, name: tool.name, baseUrl: tool.baseUrl, description: tool.description || '' })
     }
   }
 

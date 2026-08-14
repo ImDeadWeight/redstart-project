@@ -17,7 +17,8 @@
 // =============================================================================
 
 import * as http from 'http'
-import { authenticate } from './auth.mjs'
+import { authenticate, roleFor, surfacePermitted } from './auth.mjs'
+import { resolveEffectiveConfig } from './permissions.mjs'
 import { getMcpServerRunning } from './mcp-server.mjs'
 import { getExternalServers } from './tools-storage.mjs'
 import { CLIENT_APP_TOOL_NAMES } from './tools-definitions.mjs'
@@ -105,6 +106,22 @@ function injectSystemContext(messages, config, hasTools, account, mode, surface,
 // list the model receives AND from any pre-baked tool_calls in the request
 // body (defense in depth against a client that hands the model a banned
 // call). The model never learns a banned tool exists, so it cannot invoke it.
+//
+// TWO KINDS OF ENTRY ARRIVE IN disabledTools, and the difference is deliberate:
+//
+//   org-wide bans  — an admin's profile.tools.disabledToolIds, which CAN name a
+//                    client app ('twig' -> its 8 fs_* names, see CLIENT_APPS).
+//   role narrowing — the per-account layer, which expands only over Redstart's
+//                    OWN capabilities and so never names a client-app tool.
+//
+// That asymmetry is the design, not an omission. Twig's tools act on the user's
+// own PC, and writing files there is the entire point of Twig; an admin
+// restricting what an account may do to the SERVER must not reach across and
+// disable the user's local editor. A role withholding file_system therefore
+// strips Redstart's read_text_file/write_file and leaves Twig's fs_read_file
+// and fs_write_file untouched — they are unknown to CAPABILITY_TOOL_NAMES and
+// fall through this filter by construction. Banning a client app stays an
+// org-wide decision.
 // ---------------------------------------------------------------------------
 
 function getDisabledToolNames(config) {
@@ -329,7 +346,29 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         return
       }
 
-      if (await handlePromptRoute(req, res, urlPath, activeConfig, authResult.account)) return
+      // May this credential's app reach the server at all? Checked immediately
+      // after authentication and before any route, because it is a property of
+      // the caller rather than of what they asked for. Surface is taken from
+      // authResult — i.e. from the credential — never from a header.
+      if (!surfacePermitted(authResult.account, authResult.surface)) {
+        res.writeHead(403, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+        res.end(JSON.stringify({ error: { message: 'This account is not permitted to connect from this application', type: 'permission_error' } }))
+        return
+      }
+
+      // The caller's own view of the server's tool config — activeConfig
+      // narrowed by their role (permissions.mjs). Every route below takes THIS,
+      // not activeConfig, so a restricted account gets a consistent answer
+      // wherever it asks: the tools offered to the model, the system prompt
+      // describing them, the ban list the UI renders, and the file explorer all
+      // agree. Resolved per request so a role edit lands on the next call.
+      const effectiveConfig = resolveEffectiveConfig(
+        authResult.account,
+        activeConfig,
+        roleFor(authResult.account),
+      )
+
+      if (await handlePromptRoute(req, res, urlPath, effectiveConfig, authResult.account)) return
 
       if (await handleConversationRoute(req, res, urlPath, accountId)) return
 
@@ -342,7 +381,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         const host = (req.headers.host || `127.0.0.1:${publicPort}`).split(':')[0]
         const servers = []
         if (getMcpServerRunning()) {
-          servers.push({ name: 'Redstart Built-in', url: `http://${host}:${publicPort + 2}/sse` })
+          servers.push({ name: 'Redstart Built-in', url: `http://${host}:${publicPort + 2}/mcp` })
         }
         for (const s of getExternalServers()) {
           if (s.enabled) servers.push({ name: s.name, url: s.url })
@@ -350,7 +389,9 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         // Server-enforced tool bans — the chat-ui intersects these with the
         // user's own enable/disable toggles so a banned tool can't be locally
         // re-enabled. The gateway is the real enforcement point; this is UX.
-        const disabledTools = getDisabledToolNames(activeConfig)
+        // Per-account, so a restricted user's toggle list matches what the MCP
+        // server will actually serve them rather than the server-wide set.
+        const disabledTools = getDisabledToolNames(effectiveConfig)
         res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
         res.end(JSON.stringify({ servers, disabledTools }))
         return
@@ -369,7 +410,10 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
           return
         }
         const handled = await handleFilesRequest(req, res, urlPath, {
-          config: activeConfig,
+          // Narrowed, so the web file explorer obeys the same role policy the
+          // model does. A role that withholds File System does not hand the
+          // account a browsable view of the server's files by another door.
+          config: effectiveConfig,
           account: authResult.account ?? null,
         })
         if (handled) return
@@ -379,7 +423,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       // Auth + path containment enforced — the resolved path must stay within the
       // configured fileSystem.rootDir, same as the MCP provider.
       if (req.method === 'GET' && urlPath === '/files/download') {
-        return handleDownloadRoute(req, res, activeConfig)
+        return handleDownloadRoute(req, res, effectiveConfig)
       }
 
       // Intercept completions to inject Redstart identity + tool context
@@ -408,8 +452,8 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         // Surface comes from authResult — i.e. from the credential the caller
         // presented (spec §8) — never from a header. X-Redstart-Surface stays
         // accepted and inert; the connector-contract suite asserts that.
-        parsed.messages = injectSystemContext([...(parsed.messages || [])], activeConfig, requestHasTools, authResult.account, requestedMode, authResult.surface, clientToolNamesIn(parsed))
-        parsed = enforceToolAllowList(parsed, activeConfig)
+        parsed.messages = injectSystemContext([...(parsed.messages || [])], effectiveConfig, requestHasTools, authResult.account, requestedMode, authResult.surface, clientToolNamesIn(parsed))
+        parsed = enforceToolAllowList(parsed, effectiveConfig)
 
         try {
           forwardModified(res, internalPort, parsed)

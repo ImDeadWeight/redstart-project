@@ -14,7 +14,8 @@ Everything lives in `C:\Users\<you>\AppData\Roaming\redstart\`:
 |---|---|
 | `profiles.json` | Per profile: model path, context/batch/threads, GPU layers, port, network mode, and web source config. Also the per-profile `tools` block — whether tools are on, the whitelist and active sources/groups, activated capabilities (`activeToolIds`) and banned tools (`disabledToolIds`). |
 | `tools.json` | User-defined tools, groups, external MCP servers, and global capability config (schema below). |
-| `accounts.json` | Accounts, when login is enabled. Passwords and API keys are stored only as hashes. |
+| `accounts.json` | Accounts, when login is enabled. Passwords and API keys are stored only as hashes. Each account carries a `tier` (`owner`/`admin`/`user`) and a `roleId` (`null` = Full Access). |
+| `roles.json` | Admin-defined capability roles. Built-in roles live in code and are merged in at read time, so this file holds only the ones you create. Absent until you create one. |
 | `conversations.json` | Server-side conversation history, scoped per account. |
 
 Conversations are stored per account (per device ID when login is off) and auto-delete after 30 days of inactivity.

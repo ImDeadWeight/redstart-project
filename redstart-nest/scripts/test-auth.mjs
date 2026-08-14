@@ -435,30 +435,49 @@ async function main() {
     assert(res.status === 200 && body.ok === true, `expected 200/{ok:true}, got ${res.status} ${JSON.stringify(body)}`)
   })
 
-  console.log('\n-- MCP server (built-in web_fetch, port+2) --')
+  console.log('\n-- MCP server (built-in web_fetch, port+2, Streamable HTTP) --')
+
+  const mcpInitBody = JSON.stringify({
+    jsonrpc: '2.0', id: 1, method: 'initialize',
+    params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'auth-test', version: '1.0.0' } },
+  })
+  const mcpInitHeaders = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' }
 
   if (lanIp) {
-    await test('LAN client, no token: GET /sse -> 401', async () => {
-      const res = await fetch(`${mcp(lanIp)}/sse`)
+    await test('LAN client, no token: POST /mcp (initialize) -> 401', async () => {
+      const res = await fetch(`${mcp(lanIp)}/mcp`, { method: 'POST', headers: mcpInitHeaders, body: mcpInitBody })
       assert(res.status === 401, `expected 401, got ${res.status}`)
     })
   }
 
-  await test('LAN/local client with valid token: GET /sse -> 200 text/event-stream', async () => {
-    const controller = new AbortController()
-    const res = await fetch(`${mcp(lanIp ?? '127.0.0.1')}/sse`, {
-      headers: { Authorization: `Bearer ${ownerToken ?? ownerApiKey}` },
-      signal: controller.signal,
+  await test('LAN/local client with valid token: POST /mcp (initialize) -> 200 + Mcp-Session-Id', async () => {
+    const res = await fetch(`${mcp(lanIp ?? '127.0.0.1')}/mcp`, {
+      method: 'POST',
+      headers: { ...mcpInitHeaders, Authorization: `Bearer ${ownerToken ?? ownerApiKey}` },
+      body: mcpInitBody,
     })
     assert(res.status === 200, `expected 200, got ${res.status}`)
-    assert((res.headers.get('content-type') || '').includes('text/event-stream'),
-      `expected text/event-stream, got ${res.headers.get('content-type')}`)
-    controller.abort()
+    assert(res.headers.get('mcp-session-id'), 'expected an Mcp-Session-Id header on a successful initialize')
+    const bodyText = await res.text()
+    const contentType = res.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      const data = JSON.parse(bodyText)
+      assert(data.result?.serverInfo, `expected initialize result, got ${bodyText}`)
+    }
   })
 
-  await test('localhost client, no token, auth required: GET /sse -> 401 (no bypass at MCP layer either)', async () => {
-    const res = await fetch(`${mcp('127.0.0.1')}/sse`)
+  await test('localhost client, no token, auth required: POST /mcp (initialize) -> 401 (no bypass at MCP layer either)', async () => {
+    const res = await fetch(`${mcp('127.0.0.1')}/mcp`, { method: 'POST', headers: mcpInitHeaders, body: mcpInitBody })
     assert(res.status === 401, `expected 401, got ${res.status}`)
+  })
+
+  await test('valid token, unknown Mcp-Session-Id on a follow-up call -> rejected, not silently re-authenticated into a new session', async () => {
+    const res = await fetch(`${mcp('127.0.0.1')}/mcp`, {
+      method: 'POST',
+      headers: { ...mcpInitHeaders, Authorization: `Bearer ${ownerToken ?? ownerApiKey}`, 'Mcp-Session-Id': 'not-a-real-session' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+    })
+    assert(res.status === 400, `expected 400 for an unrecognised session, got ${res.status}`)
   })
 
   console.log('\n-- toggling auth back off --')

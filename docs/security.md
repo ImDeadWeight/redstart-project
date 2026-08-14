@@ -12,6 +12,7 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 
 - [Accounts & login](#accounts--login)
 - [The identity model](#the-identity-model)
+- [Roles](#roles)
 - [The llama-server boundary](#the-llama-server-boundary)
 - [Network exposure](#network-exposure)
 - [Per-account file storage](#per-account-file-storage)
@@ -63,6 +64,42 @@ There is exactly one resolution path from an incoming request to an account: `au
 **Session revocation is centralized.** Deleting an account or resetting its password calls `revokeSessionsForAccount()`, so there is no path that removes an account while leaving a live token behind. Sessions are in-memory only, so a server restart signs everyone out — see [Known limitations](roadmap.md#known-limitations).
 
 **Owner bootstrap has no HTTP route at all.** `createOwner()` is reachable only over Electron IPC from the launcher window, which requires physical access to the host. It is deliberately a separate function from `createAccount()` rather than an "allow owner" branch inside it, so the owner-creation path cannot be reached any other way.
+
+---
+
+## Roles
+
+A **tier** (Owner / Admin / User) decides who may *administer* whom. A **role** decides what an account may *reach*. They are separate axes on purpose: the moment an admin can invent a tier called "Legal Team", every management check in the system needs an opinion about where it sits in a hierarchy that no longer exists.
+
+Roles are created and assigned under **Settings → Roles**, beside Accounts. Each account holds exactly one; an account with none gets **Full Access**.
+
+**A role can only restrict.** Effective access is
+
+```
+(configured globally AND activated by the running profile)  ∩  role
+```
+
+so a role can never switch on a capability the server has turned off, widen the URL whitelist, or raise a fetch budget. This is a property of the code rather than of review: every rule in `permissions.mjs` narrows, and `scripts/test-roles.mjs` asserts over 2000 randomised config × role pairs that nothing coming out is more permissive than what went in, on any field. Adding a rule that widens fails the build with a reproducible counterexample.
+
+A role can withhold:
+
+| | |
+|---|---|
+| **Local capabilities** | Which of Postgres, Documents, SQLite, Vault, Git, File System, Scholar the account may use. A withheld capability is disabled *and* its tool names are banned — two independent mechanisms, so neither is a single point of failure. |
+| **Web sources** | Which approved sources the account may fetch, its per-fetch token budget, and whether it may fetch off-whitelist. Naming sources also forces the whitelist on, since otherwise `web_fetch` still takes any URL and the narrowed list would govern nothing. |
+| **File-system policy** | `Allow writes` / `Allow destructive` withdrawn per account. Applies to Redstart's own file tools *and* the web file explorer. |
+| **Client surfaces** | Which apps the account may connect from. |
+| **Administration** | For admin-tier accounts: `manageAccounts`, `manageRoles`, `managePromptBlocks` individually. Tier remains the ceiling — no role can make a User an admin. |
+
+Enforcement is per request at both chokepoints (the completions proxy and the MCP server's `tools/list` + `tools/call`), so a role edit takes effect on the next call rather than at next login.
+
+**Two things a role deliberately does not do.**
+
+*It does not reach client-app tools.* Roles govern what Redstart Nest itself serves. Twig's `fs_*` tools act on the user's own PC, and writing files there is the entire point of Twig — restricting what an account may do to the *server* must not disable the user's local editor. Banning a client app stays an org-wide decision (see [Tool bans](#tool-bans)).
+
+*It does not restrict the Owner, and it does not apply when login is off.* Both are unrestricted by design: the Owner exemption is the anti-lockout guarantee, and the auth-off case keeps the **Require login** toggle meaning exactly what it says. Note the third null case is treated as a bug rather than a posture — if login is on but a request reaches the tool dispatcher with no identity attached, it is narrowed to nothing rather than served the full set.
+
+**Surfaces are a hard control only for connector keys.** A per-connector key binds its surface at issue time, so the server derives the calling app from the credential. A session obtained with a username and password is tagged `nest-chat` because the chat UI is what logs in that way — but any client that posts credentials gets one too. An account-wide API key names no app at all, so an account whose role restricts surfaces cannot hold one: issuing is refused in both the admin and self-service paths rather than left as a documented caveat.
 
 ---
 
@@ -156,7 +193,7 @@ Because the strip is a flat name match across every source, tool naming is a wri
 
 To make a capability read-only, use **Allow writes** on its card rather than banning it — a ban removes the whole capability, reads included.
 
-**A note on scope:** a profile is *global server policy*, not a per-account setting. A ban applies to every account the running profile serves. Per-account grants are [planned work](roadmap.md), not a current capability.
+**A note on scope:** a profile is *global server policy*, not a per-account setting. A ban applies to every account the running profile serves. To restrict a single account rather than the whole server, assign it a [role](#roles).
 
 ---
 

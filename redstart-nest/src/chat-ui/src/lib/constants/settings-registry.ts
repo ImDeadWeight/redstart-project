@@ -11,6 +11,7 @@ import {
 	Database,
 	Server,
 	Users,
+	ShieldCheck,
 	ScrollText,
 	KeyRound,
 	SlidersHorizontal
@@ -40,6 +41,7 @@ export const SETTINGS_SECTION_TITLES = {
 	DEVELOPER: 'Developer',
 	SERVER: 'Server',
 	ACCOUNTS: 'Accounts',
+	ROLES: 'Roles',
 	SYSTEM_PROMPT: 'System Prompt',
 	CONNECTORS: 'Connectors',
 	ADVANCED: 'Advanced'
@@ -56,6 +58,9 @@ const STANDALONE_SECTIONS: { title: SettingsSectionTitle; slug: string; icon: Co
 	// Filtered to admins only at render time in SettingsChat.svelte (authStore.isAdmin) —
 	// this static array can't see auth state.
 	{ title: SETTINGS_SECTION_TITLES.ACCOUNTS, slug: SETTINGS_SECTION_SLUGS.ACCOUNTS, icon: Users },
+	// Admin-only, same render-time filter as Accounts. Sits next to it because
+	// assigning a role and defining one are the same job a few minutes apart.
+	{ title: SETTINGS_SECTION_TITLES.ROLES, slug: SETTINGS_SECTION_SLUGS.ROLES, icon: ShieldCheck },
 	// Visible to everyone: a user may READ the policy that governs them, and
 	// the tab itself renders read-only for non-admins (canEdit from the server).
 	// The server enforces the write gate regardless of what the UI shows.

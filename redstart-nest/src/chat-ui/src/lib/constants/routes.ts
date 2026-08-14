@@ -12,6 +12,7 @@ export const SETTINGS_SECTION_SLUGS = {
 	IMPORT_EXPORT: 'import-export',
 	SERVER: 'server',
 	ACCOUNTS: 'accounts',
+	ROLES: 'roles',
 	SYSTEM_PROMPT: 'system-prompt',
 	CONNECTORS: 'connectors',
 	ADVANCED: 'advanced'
