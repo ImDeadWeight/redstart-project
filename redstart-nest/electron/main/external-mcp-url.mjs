@@ -112,3 +112,37 @@ export function validateExternalMcpUrl(url, gatewayPort) {
 
   return { ok: true, warnings, isRemote }
 }
+
+/**
+ * Parse the body of an MCP `initialize` response for the connection test.
+ *
+ * A server on the streamable-HTTP transport is allowed to answer a JSON-RPC
+ * POST with `Content-Type: text/event-stream` instead of plain JSON — several
+ * real servers (e.g. DeepWiki's) do this unconditionally, regardless of which
+ * of the two the client's Accept header offered first. A caller that only
+ * tries `JSON.parse`/`res.json()` on the raw body sees SSE framing
+ * ("event: message\ndata: {...}\n\n") and fails with a misleading "not JSON"
+ * error even though the server answered correctly.
+ *
+ * @param {string} contentType
+ * @param {string} bodyText
+ * @returns {any | null} the parsed JSON-RPC message, or null if none was found
+ */
+export function parseMcpResponseBody(contentType, bodyText) {
+  const ct = contentType || ''
+  if (!ct.includes('text/event-stream')) {
+    try { return JSON.parse(bodyText) } catch { return null }
+  }
+  // SSE framing: events are separated by a blank line; a payload is carried on
+  // one or more `data:` lines, joined with "\n" if there are several. Take the
+  // first event whose data parses as JSON.
+  for (const block of bodyText.split(/\r?\n\r?\n/)) {
+    const dataLines = block
+      .split(/\r?\n/)
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).replace(/^ /, ''))
+    if (!dataLines.length) continue
+    try { return JSON.parse(dataLines.join('\n')) } catch { /* try the next event */ }
+  }
+  return null
+}

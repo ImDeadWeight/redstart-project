@@ -52,6 +52,11 @@ export function useCapabilities(config: LlamaConfig) {
 
   // --- Folder-scoped capabilities (generic) ---
 
+  // NOTE: the per-capability Enable/Disable used to live here
+  // (toggleCapEnabled / togglePostgresEnabled / toggleScholarEnabled). Each
+  // card's button now calls toggleTool(id) from useToolsCatalog instead, so the
+  // toggle is per-profile. The `enabled: true` written below is the vestigial
+  // storage flag — see tools-storage.mjs.
   async function chooseFolder(cap: FolderCap) {
     const { select, set } = folderCapApi(cap)
     const dir = await select()
@@ -63,12 +68,6 @@ export function useCapabilities(config: LlamaConfig) {
     } finally {
       setSavingCap(null)
     }
-  }
-
-  async function toggleCapEnabled(cap: FolderCap) {
-    if (!capabilityConfig) return
-    await folderCapApi(cap).set({ enabled: !capabilityConfig[cap].enabled })
-    await loadCapabilities()
   }
 
   // File System permission policy (writes / destructive). Server-enforced at the
@@ -101,12 +100,6 @@ export function useCapabilities(config: LlamaConfig) {
     }
   }
 
-  async function togglePostgresEnabled() {
-    if (!capabilityConfig) return
-    await api().capabilities.setPostgres({ enabled: !capabilityConfig.postgres.enabled })
-    await loadCapabilities()
-  }
-
   async function testPostgresConnection() {
     setPgTestResult(null)
     const result = await api().capabilities.testPostgres(pgConnectionString || undefined)
@@ -114,12 +107,6 @@ export function useCapabilities(config: LlamaConfig) {
   }
 
   // --- Scholar (venue filter, no folder) ---
-
-  async function toggleScholarEnabled() {
-    if (!capabilityConfig) return
-    await api().capabilities.setScholar({ enabled: !capabilityConfig.scholar.enabled })
-    await loadCapabilities()
-  }
 
   async function saveScholarVenueFilter() {
     await api().capabilities.setScholar({ venueFilter: scholarVenueFilter })
@@ -148,9 +135,9 @@ export function useCapabilities(config: LlamaConfig) {
   return {
     capabilityConfig, loadCapabilities,
     pgConnectionString, setPgConnectionString, pgMaxRows, setPgMaxRows,
-    pgTestResult, pgSaving, savePostgresConfig, togglePostgresEnabled, testPostgresConnection,
-    savingCap, chooseFolder, toggleCapEnabled, toggleFsPolicy,
-    scholarVenueFilter, setScholarVenueFilter, toggleScholarEnabled, saveScholarVenueFilter,
+    pgTestResult, pgSaving, savePostgresConfig, testPostgresConnection,
+    savingCap, chooseFolder, toggleFsPolicy,
+    scholarVenueFilter, setScholarVenueFilter, saveScholarVenueFilter,
     toolContextEstimate,
   }
 }

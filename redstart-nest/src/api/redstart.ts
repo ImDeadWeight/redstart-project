@@ -78,12 +78,20 @@ export type RedstartAPI = {
     // Registration is validated in the main process — an external MCP server is
     // its own trust boundary, and this IPC channel is the only way into the
     // registry. `warnings` are non-blocking cautions to surface in the UI.
-    addExternal: (server: Omit<ExternalMcpServer, 'id'>) => Promise<
+    // Passing an existing `id` upserts that entry instead of creating a new
+    // one — this is also how editing a server works, there is no separate
+    // update channel. `apiKey` is plaintext on the wire in (like Postgres's
+    // connectionString) but never comes back out — see hasApiKey on
+    // ExternalMcpServer. Blank/absent on an edit keeps the existing key.
+    addExternal: (server: Omit<ExternalMcpServer, 'id' | 'hasApiKey'> & { id?: string; apiKey?: string | null }) => Promise<
       { ok: true; server: ExternalMcpServer; warnings: string[] } | { ok: false; error: string }
     >
     validateExternal: (url: string) => Promise<{ ok: boolean; error?: string; warnings: string[]; isRemote?: boolean }>
     removeExternal: (id: string) => Promise<boolean>
-    testExternal: (url: string) => Promise<{ ok: boolean; message: string }>
+    // `id` resolves and decrypts a saved server's key server-side — the
+    // renderer never holds it. `apiKey` inline is for testing a not-yet-saved
+    // value from the add/edit form.
+    testExternal: (server: { id?: string; url: string; apiKey?: string | null }) => Promise<{ ok: boolean; message: string }>
   }
   capabilities: {
     get: () => Promise<CapabilityConfig>

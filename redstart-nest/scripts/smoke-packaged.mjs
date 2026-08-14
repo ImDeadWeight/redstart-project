@@ -165,6 +165,36 @@ async function evaluateAllowingError(cdp, expression) {
   }
 }
 
+/**
+ * Call a HARDCODED function in the page, passing a runtime value in as a real
+ * CDP argument instead of splicing it into a JS-source string. The two
+ * navigation-containment tests below need to hand `evilUrl` to the page, and
+ * building `` `location.href = ${JSON.stringify(evilUrl)}` `` — even though
+ * `evilUrl` is just a `file://` URL this script builds from its own temp
+ * file, never attacker input — is exactly the string-concatenation-into-code
+ * shape CodeQL's js/bad-code-sanitization flags, because JSON.stringify only
+ * guards against breaking out of a *string literal*, not out of the
+ * surrounding expression. Runtime.callFunctionOn takes a static function
+ * declaration plus an `arguments` array that CDP serializes itself, so
+ * there's no source text to construct at all — the fix removes the pattern
+ * rather than arguing this instance of it is safe.
+ */
+async function callWithArg(cdp, functionDeclaration, arg) {
+  const target = await cdp.send('Runtime.evaluate', { expression: 'globalThis' })
+  const res = await cdp.send('Runtime.callFunctionOn', {
+    functionDeclaration,
+    objectId: target.result.objectId,
+    arguments: [{ value: arg }],
+    awaitPromise: true,
+    returnByValue: true,
+  })
+  if (res.exceptionDetails) {
+    const e = res.exceptionDetails
+    throw new Error(e.exception?.description || e.text || 'evaluation threw')
+  }
+  return res.result.value
+}
+
 // ---------------------------------------------------------------------------
 
 function cleanup() {
@@ -271,7 +301,7 @@ console.log('\n-- §3 navigation containment --')
 
 await test('🔍 window.open is denied', async () => {
   const before = (await cdpTargets()).filter(t => t.type === 'page').length
-  const opened = await evaluate(cdp, `String(window.open(${JSON.stringify(evilUrl)}))`)
+  const opened = await callWithArg(cdp, 'function(url) { return String(window.open(url)) }', evilUrl)
   await sleep(500)
   const after = (await cdpTargets()).filter(t => t.type === 'page').length
   assert(opened === 'null', `window.open returned ${opened} instead of null`)
@@ -283,7 +313,7 @@ await test('🔍 top-level navigation to a foreign local file is cancelled', asy
   // file an attacker dropped on disk. Deliberately a local file rather than a
   // remote URL so the result does not depend on network reachability — an
   // offline machine would make a remote target pass vacuously.
-  await evaluate(cdp, `(() => { location.href = ${JSON.stringify(evilUrl)}; return 1 })()`)
+  await callWithArg(cdp, 'function(url) { location.href = url; return 1 }', evilUrl)
   await sleep(1500)
   const url = await evaluate(cdp, 'location.href')
   assert(

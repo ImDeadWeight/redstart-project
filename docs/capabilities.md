@@ -32,7 +32,7 @@ Seven local capabilities ship with the built-in MCP server. All are local I/O wi
 
 The upstream filesystem server ships no delete tool, so `delete_file` is Redstart-owned and is the system's only **destructive-class** tool — off by default, refused at both `tools/list` and `tools/call`. See [Destructive operations](security.md#destructive-operations).
 
-Each capability is configured once globally, then activated per profile — both halves are required. An account's [role](security.md#roles) can then withhold any of them from that account specifically; a role only ever narrows what the profile has already enabled.
+Each capability is configured once globally (a folder, or a connection string) and then enabled per profile with its card's Enable/Disable button — a capability produces tools only once both are true. An account's [role](security.md#roles) can then withhold any of them from that account specifically; a role only ever narrows what the profile has already enabled.
 
 Files the model and users create live under the configured capability roots, one folder per account — see [Per-account file storage](security.md#per-account-file-storage).
 
@@ -58,11 +58,21 @@ These are proof-of-concept defaults — organizations define their own from sour
 
 ## External MCP servers
 
-Redstart Nest can also treat an MCP SSE endpoint on **another device** (e.g. `http://10.0.0.5:9000/sse`) as an additional tool source — useful for a dedicated MCP appliance with different network policies, one shared tool server across several Nest installations, or a specialized set like a legal practice's document management system.
+Redstart Nest can also treat an MCP endpoint on **another device** (e.g. `http://10.0.0.5:9000/mcp`) as an additional tool source — useful for a dedicated MCP appliance with different network policies, one shared tool server across several Nest installations, or a specialized set like a legal practice's document management system.
 
 Clients fetch the full list from Redstart Nest directly, so every device on the LAN discovers built-in and external tools alike.
 
 An external server is a distinct trust boundary — read [External MCP servers](security.md#external-mcp-servers) before registering one.
+
+**Editing.** An existing entry can be edited in place (name, URL, API key) rather than deleted and re-added — the Edit button reopens the same form pre-filled.
+
+**Authentication.** Two of the three common cases are supported today:
+
+- **No auth** — the default; most self-hosted and many public MCP servers need nothing extra. Verified against [DeepWiki's](https://mcp.deepwiki.com/mcp) public endpoint.
+- **API key** — an optional key field sends `Authorization: Bearer <key>` on every request Nest makes to that server (currently just the connection test). Verified against [Context7's](https://mcp.context7.com/mcp) endpoint. The key is encrypted at rest the same way as the Postgres connection string (see [Configuring](#configuring-in-redstart-nest)) and is never sent back to the renderer once saved — editing a server whose key you don't want to change just means leaving the field blank.
+- **OAuth — not supported.** A server that requires an OAuth 2.1 authorization-code flow (GitHub's official remote MCP server, for example) cannot be registered today; there is no browser-based consent flow and no token refresh. This is an open gap, not a deliberate exclusion — see `docs/notes/mcp-streamable-http-migration.md` for the shape a fix would take (the official MCP SDK's `OAuthClientProvider`, not a hand-rolled implementation).
+
+The connection test accepts either transport framing an MCP server may use for a JSON-RPC response — plain JSON or an SSE-framed body (`Content-Type: text/event-stream`), which some streamable-HTTP servers send unconditionally regardless of what the client's `Accept` header offered first.
 
 **Why no hosted "tool" MCP servers?** Third-party services that package docs or code search behind a hosted MCP endpoint were considered and passed over. They are proprietary indexes with no self-hosted option, so a "built-in" tool would phone out on every use — a different risk category from the whitelisted web sources, which are an explicit, admin-controlled exception. That conflicts with the premise this project is built on, so it stays off the table unless a local alternative appears.
 
@@ -70,11 +80,11 @@ An external server is a distinct trust boundary — read [External MCP servers](
 
 ## Configuring in Redstart Nest
 
-The **Tools** card in the main configuration panel has four sections: **Web Sources** (source groups, individual sources, custom sources, and the per-fetch token budget — default 2000), **Local Capabilities**, **Banned Tools** (see [Tool bans](security.md#tool-bans)), and **External MCP Servers**.
+The **Tools** card in the main configuration panel presents one card per tool with a single Enable/Disable button that toggles it for the profile being edited: **Web Access** (web_fetch/web_search — its own card, with source groups, individual sources, custom sources, the approved-sources whitelist toggle, and the per-fetch token budget nested inside when enabled), **Postgres**, **Documents**, **SQLite**, **Vault**, **Git**, **File System**, and **Scholar**, followed by **External MCP Servers** and **Banned Tools** (see [Tool bans](security.md#tool-bans)).
 
 Capabilities are configured with a native folder picker, except Postgres, which takes a connection string — encrypted at rest via the OS secret store (DPAPI on Windows) and never re-displayed. File System carries two policy toggles: **Allow writes** (on) and **Allow destructive operations** (off).
 
-A capability produces tools only when it is configured and enabled globally **and** activated for the running profile. Selecting one for a profile without configuring it is flagged inline, since that combination otherwise yields no tools and no error. All settings save with the active profile.
+A capability's card produces tools only once it is both configured (a folder or connection string is set) and enabled for the running profile. Enabling a card without configuring it — or vice versa — is flagged inline on that card, since that combination otherwise yields no tools and no error. All settings save with the active profile.
 
 Tool and capability configuration lives in `tools.json`; built-in sources, groups and capabilities are hardcoded and can be toggled off per profile but not deleted. See [Configuration](configuration.md) for the files and schema.
 
