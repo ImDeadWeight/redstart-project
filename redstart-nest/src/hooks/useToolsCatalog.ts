@@ -18,6 +18,12 @@ export function useToolsCatalog(
   const [newToolName, setNewToolName] = useState('')
   const [newToolUrl, setNewToolUrl] = useState('')
   const [newToolDesc, setNewToolDesc] = useState('')
+  // Set while the add-source form is editing an existing custom source rather
+  // than creating a new one. Holds that source's id so the save keeps writing
+  // to it — the id must NOT be re-derived from the (possibly edited) name, or
+  // a rename would silently fork into a second tool and orphan every
+  // activeToolIds/group/role reference still pointing at the old id.
+  const [editingToolId, setEditingToolId] = useState<string | null>(null)
   const [showAddGroup, setShowAddGroup] = useState(false)
   const [newGroupName, setNewGroupName] = useState('')
   const [newGroupDesc, setNewGroupDesc] = useState('')
@@ -85,19 +91,36 @@ export function useToolsCatalog(
     setToolsField('activeToolIds', next)
   }
 
+  function startEditTool(tool: WebFetchTool) {
+    setEditingToolId(tool.id)
+    setNewToolName(tool.name)
+    setNewToolUrl(tool.baseUrl ?? '')
+    setNewToolDesc(tool.description ?? '')
+    setShowAddTool(true)
+  }
+
+  function cancelToolForm() {
+    setShowAddTool(false); setEditingToolId(null)
+    setNewToolName(''); setNewToolUrl(''); setNewToolDesc('')
+  }
+
   async function addCustomTool() {
     const name = newToolName.trim()
     const url  = newToolUrl.trim()
     if (!name || !url) return
-    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_')
+    // Editing keeps the existing id; adding derives a fresh one from the name
+    // (addUserTool upserts by id either way).
+    const id = editingToolId ?? name.toLowerCase().replace(/[^a-z0-9]+/g, '_')
     await api().tools.addTool({ id, name, baseUrl: url, description: newToolDesc.trim() })
-    setNewToolName(''); setNewToolUrl(''); setNewToolDesc(''); setShowAddTool(false)
+    cancelToolForm()
     await loadToolDefs()
   }
 
   async function deleteCustomTool(id: string) {
     await api().tools.deleteTool(id)
     setToolsField('activeToolIds', (config.tools?.activeToolIds ?? []).filter(t => t !== id))
+    // The form was mid-edit on the tool that just got deleted out from under it.
+    if (editingToolId === id) cancelToolForm()
     await loadToolDefs()
   }
 
@@ -120,6 +143,7 @@ export function useToolsCatalog(
     allTools, allGroups, clientApps,
     showAddTool, setShowAddTool, newToolName, setNewToolName,
     newToolUrl, setNewToolUrl, newToolDesc, setNewToolDesc,
+    editingToolId, startEditTool, cancelToolForm,
     showAddGroup, setShowAddGroup, newGroupName, setNewGroupName,
     newGroupDesc, setNewGroupDesc, newGroupToolIds, setNewGroupToolIds,
     setToolsField, toggleGroup, toggleTool, toggleDisabledTool,

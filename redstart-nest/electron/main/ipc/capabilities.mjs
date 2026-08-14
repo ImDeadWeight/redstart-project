@@ -4,6 +4,10 @@
 //
 // Global config, per-profile activation via tools.activeToolIds (see
 // buildGatewayConfig). Secrets never round-trip to the renderer in plaintext.
+// NOTE: every setter below still accepts an `enabled` boolean and still stores
+// it, but nothing gates on it any more — the UI's Enable/Disable writes to the
+// profile's activeToolIds instead. The parameter is kept because stored
+// tools.json files and test fixtures still carry it. Do not remove it.
 // refreshLiveToolsConfig lives in index.mjs and is threaded via deps.
 import { dialog } from 'electron'
 import { handle } from './guard.mjs'

@@ -124,6 +124,12 @@ export type ExternalMcpServer = {
   name: string
   url: string
   enabled: boolean
+  // Whether an API key is stored for this server — never the key itself. The
+  // key is encrypted at rest (electron/main/secrets.mjs, OS-level) and the
+  // main process never sends the ciphertext or plaintext back to the
+  // renderer, same as Postgres's hasConnectionString. Sent as
+  // `Authorization: Bearer <apiKey>` on the connection test.
+  hasApiKey: boolean
 }
 
 export type ProfileTools = {
@@ -132,6 +138,13 @@ export type ProfileTools = {
   activeToolIds: string[]
   maxFetchTokens: number
   whitelistEnabled?: boolean  // default true; false = model may fetch any public http(s) URL (LAN/private always blocked)
+  // Web Access (web_fetch + web_search) on/off for this profile. Absent means
+  // enabled: web access predates this flag and was unconditionally on, so every
+  // profile saved before it must keep working. That is why this is a boolean
+  // read as `!== false` rather than membership in activeToolIds like the
+  // capabilities — an absent array entry would read as "off" and silently
+  // disable web access for every existing profile.
+  webAccessEnabled?: boolean
   // Server-enforced tool bans. Tool names listed here are removed from the
   // model's vocabulary for every client (gateway strips them from the
   // completions request), regardless of a user's local enable/disable toggle.

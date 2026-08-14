@@ -39,7 +39,7 @@ contextBridge.exposeInMainWorld('redstartAPI', {
     addExternal: (server) => ipcRenderer.invoke('mcp:add-external', server),
     validateExternal: (url) => ipcRenderer.invoke('mcp:validate-external', url),
     removeExternal: (id) => ipcRenderer.invoke('mcp:remove-external', id),
-    testExternal: (url) => ipcRenderer.invoke('mcp:test-external', url),
+    testExternal: (server) => ipcRenderer.invoke('mcp:test-external', server),
   },
 
   capabilities: {

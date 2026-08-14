@@ -85,8 +85,12 @@ export function deleteExternalServer(id) {
 // tools-definitions.mjs BUILTIN_CAPABILITIES — getCapabilities/
 // setCapabilityConfig below are registry-driven and need no edits.
 //
-// Convention: every capability has `enabled` (global on/off, distinct from
-// per-profile activation) plus whatever config it needs. Directory-scoped
+// Convention: every capability has `enabled` plus whatever config it needs.
+// NOTE: `enabled` is vestigial as of the single-toggle Tools tab — it is still
+// written and read here so existing tools.json files keep parsing and
+// capabilities:get keeps a stable shape, but it no longer gates anything.
+// A capability is on for a profile when that profile's activeToolIds contains
+// it and it is configured (see buildGatewayConfig). Directory-scoped
 // capabilities name their root `rootDir` (Documents predates this and keeps
 // `outputDir` for back-compat with existing tools.json files).
 const DEFAULT_CAPABILITIES = {

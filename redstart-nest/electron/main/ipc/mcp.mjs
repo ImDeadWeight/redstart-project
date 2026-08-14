@@ -5,13 +5,22 @@
 import { handle } from './guard.mjs'
 import * as crypto from 'crypto'
 import { getExternalServers, addExternalServer, deleteExternalServer } from '../tools-storage.mjs'
-import { validateExternalMcpUrl } from '../external-mcp-url.mjs'
+import { validateExternalMcpUrl, parseMcpResponseBody } from '../external-mcp-url.mjs'
+import { encryptSecret, decryptSecret } from '../secrets.mjs'
 import { isPlainObject } from './validate.mjs'
+
+// Never send apiKeyEnc (ciphertext) or a plaintext apiKey to the renderer —
+// only whether one is set. Same shape rule capabilities:get follows for the
+// Postgres connection string (hasConnectionString, never the string itself).
+function projectExternalServer(s) {
+  const { apiKeyEnc, ...rest } = s
+  return { ...rest, hasApiKey: !!apiKeyEnc }
+}
 
 export function registerMcpHandlers({ getConfiguredPort } = {}) {
   // --- MCP ---
 
-  handle('mcp:list-external', () => getExternalServers())
+  handle('mcp:list-external', () => getExternalServers().map(projectExternalServer))
 
   // Validation lives here rather than in the renderer: this is the only entry
   // point that can write to the registry, so a check anywhere else would be
@@ -22,14 +31,35 @@ export function registerMcpHandlers({ getConfiguredPort } = {}) {
   handle('mcp:validate-external', (_, url) =>
     validateExternalMcpUrl(url, getConfiguredPort?.()))
 
+  // Doubles as edit: passing an existing id upserts (addExternalServer filters
+  // out any row with that id before pushing), same pattern as the tool/group
+  // registries. The renderer's Edit flow relies on this — it is not a
+  // separate code path.
+  //
+  // apiKey travels in on the wire as plaintext (same as Postgres's
+  // connectionString) but is encrypted before it touches disk and stripped
+  // before the response goes back out. A blank/absent apiKey on an edit KEEPS
+  // the existing key rather than clearing it — same "leave blank to keep
+  // current" convention as capabilities:set-postgres, so re-saving a server's
+  // name without retyping its key doesn't silently drop the key.
   handle('mcp:add-external', (_, server) => {
     if (!isPlainObject(server)) return { ok: false, error: 'An external server must be an object.' }
     const verdict = validateExternalMcpUrl(server.url, getConfiguredPort?.())
     if (!verdict.ok) return { ok: false, error: verdict.error }
     const id = server.id || crypto.randomUUID()
-    const s = { ...server, id, enabled: server.enabled ?? true }
+    const existing = id ? getExternalServers().find(s => s.id === id) : null
+    const { apiKey, ...rest } = server
+    let apiKeyEnc = existing?.apiKeyEnc ?? null
+    if (apiKey) {
+      try {
+        apiKeyEnc = encryptSecret(apiKey)
+      } catch (err) {
+        return { ok: false, error: err.message }
+      }
+    }
+    const s = { ...rest, id, enabled: server.enabled ?? true, apiKeyEnc }
     addExternalServer(s)
-    return { ok: true, server: s, warnings: verdict.warnings }
+    return { ok: true, server: projectExternalServer(s), warnings: verdict.warnings }
   })
 
   handle('mcp:remove-external', (_, id) => deleteExternalServer(id))
@@ -39,7 +69,26 @@ export function registerMcpHandlers({ getConfiguredPort } = {}) {
   // it was the one entry point that skipped validateExternalMcpUrl entirely,
   // so it bypassed the external-mcp-url.mjs control outright. It also called
   // .endsWith() on an unchecked value, so a non-string argument threw.
-  handle('mcp:test-external', async (_, url) => {
+  handle('mcp:test-external', async (_, arg) => {
+    // `arg` may be null (not just the default-triggering undefined) or any
+    // other junk a caller passes — destructuring null throws, so this must be
+    // ?? rather than a default parameter, which only catches undefined.
+    const { url, id } = arg ?? {}
+    let { apiKey } = arg ?? {}
+    // The renderer never holds a saved server's plaintext key (see
+    // projectExternalServer), so testing an existing entry passes its id and
+    // the key is decrypted here instead. `apiKey` inline is still honoured —
+    // it is how the add/edit form could test a not-yet-saved key in future.
+    if (!apiKey && id) {
+      const existing = getExternalServers().find(s => s.id === id)
+      if (existing?.apiKeyEnc) {
+        try {
+          apiKey = decryptSecret(existing.apiKeyEnc)
+        } catch (err) {
+          return { ok: false, message: `Could not decrypt the stored API key: ${err.message}` }
+        }
+      }
+    }
     const verdict = validateExternalMcpUrl(url, getConfiguredPort?.())
     if (!verdict.ok) return { ok: false, message: verdict.error }
     const trimmed = url.trim()
@@ -51,6 +100,9 @@ export function registerMcpHandlers({ getConfiguredPort } = {}) {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json, text/event-stream',
+          // Opt-in only — most external MCP servers need no auth at all, and a
+          // blank/absent key must never send a literal "Bearer " header.
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         },
         body: JSON.stringify({
           jsonrpc: '2.0',
@@ -64,14 +116,21 @@ export function registerMcpHandlers({ getConfiguredPort } = {}) {
         }),
       })
       const ct = res.headers.get('content-type') || ''
-      let data
-      try {
-        data = await res.json()
-      } catch {
-        return { ok: false, message: `Unexpected response: ${res.status} (${ct || 'no content-type'}, not JSON)` }
+      const bodyText = await res.text()
+      // The streamable-HTTP transport permits an SSE-framed response to a
+      // JSON-RPC POST (DeepWiki's server always answers this way) — a plain
+      // JSON.parse/res.json() on that body fails and misreports it as "not
+      // JSON", so both framings go through one parser. See
+      // external-mcp-url.mjs for why.
+      const data = parseMcpResponseBody(ct, bodyText)
+      if (data === null) {
+        return { ok: false, message: `Unexpected response: ${res.status} (${ct || 'no content-type'}, not parseable)` }
       }
       if (res.ok && data?.jsonrpc === '2.0' && data?.result?.protocolVersion && data?.result?.serverInfo) {
         return { ok: true, message: `Connected to ${data.result.serverInfo.name || 'unknown'} (${data.result.protocolVersion})` }
+      }
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, message: `Unexpected response: ${res.status} — authentication required or rejected${apiKey ? ' (check the API key)' : ' (this server may need an API key)'}` }
       }
       const errMsg = data?.error?.message || data?.message || 'unexpected response shape'
       return { ok: false, message: `Unexpected response: ${res.status} — ${errMsg}` }

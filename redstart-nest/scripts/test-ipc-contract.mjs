@@ -221,6 +221,30 @@ await test('🔍 capabilities:get reports hasConnectionString, never the connect
   assert(!serialized.includes('connectionStringEnc'), 'ciphertext field name leaked into the projection')
 })
 
+await test('🔍 mcp:add-external and mcp:list-external report hasApiKey, never the API key', async () => {
+  const secret = 'sk-test-hunter2'
+  const added = await ipcMain.handlers.get('mcp:add-external')(
+    senderEvent,
+    { name: 'Secret Server', url: 'http://10.0.0.9:9000/mcp', apiKey: secret }
+  )
+  assert(added.ok, `add-external failed: ${added.error}`)
+  const addedSerialized = JSON.stringify(added)
+  assert(added.server.hasApiKey === true, 'hasApiKey should be true once an apiKey is given')
+  assert(!('apiKey' in added.server), 'plaintext apiKey must not be in the add-external response')
+  assert(!('apiKeyEnc' in added.server), 'the ciphertext must not cross the bridge either')
+  assert(!addedSerialized.includes(secret), 'the API key appears somewhere in the add-external response')
+
+  const list = await ipcMain.handlers.get('mcp:list-external')(senderEvent)
+  const listSerialized = JSON.stringify(list)
+  const found = list.find(s => s.id === added.server.id)
+  assert(found?.hasApiKey === true, 'hasApiKey should survive a re-list')
+  assert(!('apiKey' in found), 'plaintext apiKey must not be in the list projection')
+  assert(!('apiKeyEnc' in found), 'the ciphertext must not cross the bridge either')
+  assert(!listSerialized.includes(secret), 'the API key appears somewhere in the list projection')
+
+  await ipcMain.handlers.get('mcp:remove-external')(senderEvent, added.server.id)
+})
+
 await test('capabilities:get exposes the file-system permission policy under the underscore key', async () => {
   // Storage key stays `file_system` while the channel is hyphenated — the
   // renderer reads this shape, so pin it.
