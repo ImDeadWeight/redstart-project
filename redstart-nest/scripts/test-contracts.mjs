@@ -67,7 +67,14 @@ const gw = (p = '') => `http://127.0.0.1:${GATEWAY_PORT}${p}`
 
 // The public account projection (auth.mjs toPublicAccount). Consumers rely on
 // exactly these fields; none of the secret fields may ever appear.
-const PUBLIC_USER_KEYS = ['id', 'username', 'role', 'apiKeyPrefix', 'createdAt', 'lastLoginAt']
+//
+// `tier` is the management tier and `role` is its mirror under the old name —
+// both are emitted deliberately, because connector apps (Twig, Blueprints,
+// Yellowscript) hold their own copy of this shape and an undefined `role` there
+// reads as "not an admin". `roleId` is the admin-defined capability role, null
+// for Full Access. Drop `role` from this list only when every connector reads
+// `tier`.
+const PUBLIC_USER_KEYS = ['id', 'username', 'tier', 'role', 'roleId', 'apiKeyPrefix', 'createdAt', 'lastLoginAt']
 const SECRET_KEYS = ['passwordHash', 'passwordSalt', 'apiKeyHash', 'password', 'apiKey']
 
 function assertPublicUser(user, where) {
@@ -131,7 +138,7 @@ async function main() {
   // Node's fetch performs no preflight, which is why every suite here passed
   // while no browser client could POST a single message.
   await test('CORS preflight allows the MCP protocol headers', async () => {
-    const res = await fetch(`http://127.0.0.1:${MCP_PORT}/message?sessionId=x`, {
+    const res = await fetch(`http://127.0.0.1:${MCP_PORT}/mcp`, {
       method: 'OPTIONS',
       headers: {
         Origin: 'http://127.0.0.1:19080',
@@ -146,40 +153,100 @@ async function main() {
     }
   })
 
-  // The SSE handshake itself is a contract. The endpoint event must carry a
-  // BARE URI: a JSON-encoded one ("/message?...") is taken verbatim by a
-  // spec-compliant client and produces a POST to /"/message?..." that 404s, so
-  // no real client can connect. Asserted on the raw stream rather than through
-  // the test client, because a client that parses the value would repair the
-  // defect and hide it — which is exactly what happened before.
-  await test('SSE endpoint event carries a bare URI, not a JSON string', async () => {
-    const res = await fetch(`http://127.0.0.1:${MCP_PORT}/sse`)
-    assert(res.ok && res.body, `SSE connect failed: ${res.status}`)
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let dataLine = null
-    const deadline = Date.now() + 5000
-    while (!dataLine && Date.now() < deadline) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const frame = buffer.split('\n\n')[0]
-      if (frame.includes('event: endpoint')) {
-        dataLine = frame.split('\n').find((l) => l.startsWith('data: '))?.slice(6) ?? null
-      }
-    }
-    reader.cancel().catch(() => {})
-    assert(dataLine !== null, 'no endpoint event received')
-    assert(!dataLine.startsWith('"'), `endpoint URI is JSON-encoded: ${dataLine}`)
-    assert(dataLine.startsWith('/message?sessionId='), `unexpected endpoint URI: ${dataLine}`)
+  await test('the MCP server emits exactly one Access-Control-Allow-Origin on a real response', async () => {
+    // fetch() joins duplicate header values with ', ', so an exact '*' proves there
+    // is exactly one — the failure mode a browser rejects outright.
+    const res = await fetch(`http://127.0.0.1:${MCP_PORT}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'cors-test', version: '1.0.0' } } }),
+    })
+    assert(res.headers.get('access-control-allow-origin') === '*', `expected a single '*', got ${JSON.stringify(res.headers.get('access-control-allow-origin'))}`)
+    await res.text()
   })
 
+  // The session id is delivered as a RESPONSE header, and `mcp-session-id` is
+  // not CORS-safelisted — so a cross-origin browser client cannot read it
+  // unless the ACTUAL response exposes it. The chat-ui is always cross-origin
+  // here (served from the gateway on port+0, this server is on port+2).
+  //
+  // Asserting it on the preflight is not enough and is precisely how this
+  // regressed: Access-Control-Expose-Headers was set only on the OPTIONS
+  // response, where it does nothing. Every Node suite passed (no CORS at all)
+  // while every browser silently lost the session and got a 400 on the request
+  // straight after initialize.
+  await test('a browser can READ the session id off the initialize response (cross-origin)', async () => {
+    const res = await fetch(`http://127.0.0.1:${MCP_PORT}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', Origin: 'http://127.0.0.1:19080' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'cors-expose-test', version: '1.0.0' } } }),
+    })
+    assert(res.headers.get('mcp-session-id'), 'no Mcp-Session-Id header on the initialize response')
+    const exposed = (res.headers.get('access-control-expose-headers') || '').toLowerCase()
+    assert(
+      exposed.includes('mcp-session-id'),
+      `the initialize response does not expose mcp-session-id, so a browser client cannot read it: ${JSON.stringify(exposed)}`,
+    )
+    await res.text()
+  })
+
+  // The SDK client opens EVERY connection with an optional GET probe, before
+  // it sends initialize, to discover whether a standalone SSE stream exists.
+  // Its contract is explicit (client/streamableHttp.js _startOrAuthSse): 405
+  // means "not offered, expected, continue silently", while any other error
+  // status is thrown as a fatal StreamableHTTPError that aborts connect()
+  // before initialize is ever sent. Answering that probe with 400 made the
+  // whole transport unreachable from a browser.
+  await test('a session-less GET is answered 405 (the SDK probe the client must survive)', async () => {
+    const res = await fetch(`http://127.0.0.1:${MCP_PORT}/mcp`, {
+      method: 'GET',
+      headers: { Accept: 'text/event-stream', Origin: 'http://127.0.0.1:19080' },
+    })
+    assert(res.status === 405, `expected 405 for the session-less GET probe, got ${res.status} (anything but 405 aborts the client's connect())`)
+    await res.text()
+  })
+
+  // The Streamable HTTP handshake is a contract. `initialize` must return an
+  // `Mcp-Session-Id` response header, and every subsequent call is required to
+  // echo it back — that header, not the JSON-RPC body, is what session
+  // continuity rides on. Asserted on the raw fetch rather than through the test
+  // client, because the client already treats the header as load-bearing and
+  // would hide a regression here.
+  await test('initialize response carries an Mcp-Session-Id header usable on the next request', async () => {
+    const initRes = await fetch(`http://127.0.0.1:${MCP_PORT}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'contract-test', version: '1.0.0' } } }),
+    })
+    assert(initRes.ok, `initialize failed: ${initRes.status}`)
+    const sessionId = initRes.headers.get('mcp-session-id')
+    assert(sessionId, 'no Mcp-Session-Id header on initialize response')
+
+    const listRes = await fetch(`http://127.0.0.1:${MCP_PORT}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'Mcp-Session-Id': sessionId },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+    })
+    assert(listRes.ok, `tools/list with the session id failed: ${listRes.status}`)
+  })
+
+  await test('a request with an unrecognised Mcp-Session-Id is rejected, not silently accepted', async () => {
+    const res = await fetch(`http://127.0.0.1:${MCP_PORT}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'Mcp-Session-Id': 'not-a-real-session' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }),
+    })
+    assert(res.status === 400, `expected 400 for an unrecognised session, got ${res.status}`)
+  })
+
+  // connectMcpClient performs the initialize handshake itself as part of
+  // connecting (Streamable HTTP rejects a second initialize on the same
+  // session, unlike the old SSE transport), so the shape is asserted on the
+  // result it captured rather than by re-initializing.
   const client = await connectMcpClient(`http://127.0.0.1:${MCP_PORT}`)
 
   await test('initialize returns protocolVersion + capabilities + serverInfo{name,version}', async () => {
-    const res = await client.call('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'contract-test', version: '1.0.0' } })
-    const r = res.result
+    const r = client.initResult
     assert(r && typeof r.protocolVersion === 'string', `protocolVersion missing: ${JSON.stringify(r)}`)
     assert(r.capabilities && typeof r.capabilities === 'object', 'capabilities missing')
     assert(r.serverInfo && typeof r.serverInfo.name === 'string' && typeof r.serverInfo.version === 'string', `serverInfo drifted: ${JSON.stringify(r.serverInfo)}`)

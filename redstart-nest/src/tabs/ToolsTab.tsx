@@ -478,7 +478,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
         <div className="mb-3 px-3 py-2 bg-zinc-800/60 rounded text-xs text-zinc-400">
           <span className="text-zinc-300 font-medium">Built-in Redstart MCP:</span>{' '}
           {config.tools?.enabled
-            ? <span className="text-green-400">http://localhost:{(config.port ?? 19080) + 2}/sse</span>
+            ? <span className="text-green-400">http://localhost:{(config.port ?? 19080) + 2}/mcp</span>
             : <span className="text-zinc-600">Starts with server (enable web sources above)</span>
           }
         </div>
