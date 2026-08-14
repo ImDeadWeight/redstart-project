@@ -227,6 +227,7 @@ Redstart Nest can treat an MCP SSE endpoint on another device as an additional t
 - **Their tools are executed by clients, not by Nest's MCP server.** So the completions-proxy ban applies to them, but the MCP-side chokepoint does not. "Enforced at both chokepoints" is a statement about built-in tools.
 - **An external server is trusted to describe its own tools.** Redstart does not validate the tool definitions it returns, and their descriptions reach the model.
 - **A remote external server is network egress** and is reported as such at `GET /egress` and in the system prompt's data-handling block.
+- **An optional API key is encrypted at rest**, the same OS-level secret store (`electron/main/secrets.mjs`, DPAPI on Windows) used for the Postgres connection string. It never round-trips back to the renderer once saved — the registry only reports whether a key is set, never the key — and it is sent as `Authorization: Bearer <key>` to that server alone. **OAuth-protected servers are not supported** — there is no authorization-code flow, so a server that requires one cannot be registered.
 
 Point one at a host you control, on a network you trust.
 
