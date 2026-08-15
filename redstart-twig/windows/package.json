@@ -1,6 +1,6 @@
 {
   "name": "redstart-twig-windows",
-  "version": "1.0.0-alpha.1",
+  "version": "1.0.0-alpha.2",
   "description": "Lightweight Windows chat client for connecting to a Redstart Nest or llama.cpp-compatible server on your local network.",
   "author": "Patrick Carswell",
   "private": true,
