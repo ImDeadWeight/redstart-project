@@ -8,13 +8,14 @@
   "main": "electron/main/index.mjs",
   "scripts": {
     "dev": "concurrently \"vite\" \"npm --prefix src/chat-ui run dev:redstart\" \"wait-on http://localhost:5173 && electron .\"",
-    "build": "npm run build:chat && node scripts/make-icon.mjs && vite build && electron-builder",
+    "build": "npm run build:chat && node scripts/make-icon.mjs && vite build && npm run license:gen && electron-builder",
     "build:chat": "npm --prefix src/chat-ui run build",
+    "license:gen": "license-checker-rseidelsohn --production --relativeLicensePath --json --files licenses/npm --out licenses/npm-licenses.json",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "check:mjs": "node scripts/check-mjs.mjs",
     "smoke:packaged": "node scripts/smoke-packaged.mjs",
-    "test:security": "node scripts/test-ci-parity.mjs && node scripts/test-path-scope.mjs && node scripts/test-conversation-isolation.mjs && node scripts/test-file-isolation.mjs && node scripts/test-tool-policy.mjs && node scripts/test-roles.mjs && node scripts/test-tool-namespacing.mjs && node scripts/test-user-scope.mjs && node scripts/test-system-prompt.mjs && node scripts/test-llama-args.mjs && node scripts/test-model-download.mjs && node scripts/test-network-binding.mjs && node scripts/test-web-fetch-ssrf.mjs && node scripts/test-external-mcp-url.mjs && node scripts/test-json-store.mjs && node scripts/test-discovery-robustness.mjs && node scripts/test-net-interfaces.mjs && node scripts/test-packaging.mjs && node scripts/test-auth.mjs && node scripts/test-gateway-routes.mjs && node scripts/test-ipc-contract.mjs && node scripts/test-ipc-guard.mjs && node scripts/test-mcp-capabilities.mjs && node scripts/test-provider-conformance.mjs && node scripts/test-contracts.mjs && node scripts/test-connector-contract.mjs && npm --prefix src/chat-ui run test:security"
+    "test:security": "node scripts/test-ci-parity.mjs && node scripts/test-path-scope.mjs && node scripts/test-conversation-isolation.mjs && node scripts/test-file-isolation.mjs && node scripts/test-tool-policy.mjs && node scripts/test-roles.mjs && node scripts/test-tool-namespacing.mjs && node scripts/test-user-scope.mjs && node scripts/test-system-prompt.mjs && node scripts/test-llama-args.mjs && node scripts/test-model-download.mjs && node scripts/test-network-binding.mjs && node scripts/test-web-fetch-ssrf.mjs && node scripts/test-external-mcp-url.mjs && node scripts/test-json-store.mjs && node scripts/test-logging.mjs && node scripts/test-discovery-robustness.mjs && node scripts/test-net-interfaces.mjs && node scripts/test-packaging.mjs && node scripts/test-auth.mjs && node scripts/test-gateway-routes.mjs && node scripts/test-ipc-contract.mjs && node scripts/test-ipc-guard.mjs && node scripts/test-mcp-capabilities.mjs && node scripts/test-provider-conformance.mjs && node scripts/test-contracts.mjs && node scripts/test-connector-contract.mjs && npm --prefix src/chat-ui run test:security"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
@@ -45,6 +46,7 @@
     "electron": "^33.4.11",
     "electron-builder": "^24.13.3",
     "electron-devtools-installer": "^4.0.0",
+    "license-checker-rseidelsohn": "^5.0.1",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.7.0",
     "vite": "^5.0.0",

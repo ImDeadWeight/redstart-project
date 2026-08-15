@@ -18,6 +18,7 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 - [Per-account file storage](#per-account-file-storage)
 - [Your files (web UI)](#your-files-web-ui)
 - [Destructive operations](#destructive-operations)
+- [Logging](#logging)
 - [Tool bans](#tool-bans)
 - [Whitelist & SSRF enforcement](#whitelist--ssrf-enforcement)
 - [External MCP servers](#external-mcp-servers)
@@ -181,6 +182,19 @@ Deletions go to the OS recycle bin, falling back to a `.trash/` folder in the ca
 
 ---
 
+## Logging
+
+`electron/main/logger.mjs` writes one JSON object per line to `redstart.log` in userData: the operationally interesting events (auth, tool execution, server lifecycle, discovery, MCP registration) plus a concise console line. The contract is to log the *shape* of what happened, never the content.
+
+Two mechanisms enforce that, at different strengths:
+
+- **`logEvent()` — blocklist plus scalars-only.** Callers are expected to pass only safe scalar fields (tool name, class, decision, duration, port, username, role). As defense in depth, the logger also drops any field whose key names sensitive data — tool args/results, message/conversation content, SQL, file paths, URLs, secrets — case-insensitively, and drops any object or array value outright regardless of its key. The second rule is the one that matters most: it protects against a future field name nobody thought to blocklist, not just the known list.
+- **`logAudit()` — a closed allowlist, the one documented exception.** Destructive-class tool calls (currently only `delete_file`) record what was deleted, because a deletion nobody can name is a deletion nobody can undo. Only `AUDIT_FIELDS` (`tool`, `path`, `scope`, `kind`, `recoverable`) survive; string values are truncated at 512 characters; file contents are never logged by anything. Nothing else in the codebase may call it, and its two call sites (`files-api.mjs`, `fs-delete-tool.mjs`) are checked by name.
+
+Both halves — the blocklist/scalars-only rule and the allowlist — are proven against the actual bytes written to disk by `test-logging`, not against mocked internals. See [The test suite](#the-test-suite).
+
+---
+
 ## Tool bans
 
 A profile can ban tools by name, which is the only lever the server has over tools it does not itself provide. Client applications across the ecosystem (Twig today; Blueprints, Yellowscript and Greenhouse as they grow tools) embed their own and hand them to the model already inside the completions request — the server never offered them, so it cannot withhold them either. Banning strips them by name from every request the profile serves, and clients cannot re-enable them.
@@ -285,6 +299,7 @@ The accurate one-line summary of the privacy model is **local inference with adm
 | `test-web-fetch-ssrf` | both halves of the SSRF guard: literal hostnames, and public names resolving into private space |
 | `test-external-mcp-url` | external endpoints — what is refused, what is merely warned about, and why the split |
 | `test-json-store` | state survives an interrupted write; a torn file never reads as empty state |
+| `test-logging` | `logEvent`'s blocklist and scalars-only defense-in-depth; `logAudit`'s closed allowlist and truncation; both against the bytes actually written to `redstart.log` |
 | `test-llama-args` | the localhost-only invariant survives spoofed config and injected `--host` |
 | `test-tool-policy` / `test-tool-namespacing` | classification, ban expansion, prefix collisions fail the build |
 | `test-mcp-capabilities` / `test-provider-conformance` | every provider refuses direct calls when disabled and errors rather than crashing on malformed input |

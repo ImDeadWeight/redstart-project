@@ -39,6 +39,19 @@
     {
       "from": "deps/windows/elevate.exe",
       "to": "elevate.exe"
+    },
+    {
+      "from": "../THIRD-PARTY-NOTICES.md",
+      "to": "THIRD-PARTY-NOTICES.md"
+    },
+    {
+      "from": "LICENSE.txt",
+      "to": "LICENSE.txt"
+    },
+    {
+      "from": "licenses",
+      "to": "licenses",
+      "filter": ["**/*"]
     }
   ],
   "win": {
