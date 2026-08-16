@@ -24,48 +24,18 @@ SOFTWARE.
 THIRD-PARTY OPEN SOURCE COMPONENTS
 ------------------------------------------------------------------------
 
-This software includes the following open source components. Each is
-distributed under its own license as noted below.
+This software includes third-party open source components, each distributed
+under its own license. The complete, verified enumeration — bundled native
+binaries and the full npm dependency tree alike — is maintained in
+THIRD-PARTY-NOTICES.md at the root of this repository, not duplicated here,
+so there is exactly one place this list can drift out of date.
 
-llama.cpp
-  License : MIT
-  Copyright (c) 2023 Georgi Gerganov
-  Source  : https://github.com/ggerganov/llama.cpp
+Two entries here previously misattributed a bundled component and have been
+corrected: llama.cpp's copyright line is "The ggml authors," not one
+individual, and the bundled TurboQuant fork is built from
+https://github.com/TheTom/llama-cpp-turboquant — not turboderp/llama.cpp,
+an unrelated real developer's unrelated project that was named here and in
+electron/main/ipc/github.mjs by mistake.
 
-TurboQuant (llama.cpp fork)
-  License : MIT
-  Copyright (c) turboderp
-  Source  : https://github.com/turboderp/llama.cpp
-
-Electron
-  License : MIT
-  Copyright (c) OpenJS Foundation and Electron contributors
-  Source  : https://github.com/electron/electron
-
-React
-  License : MIT
-  Copyright (c) Meta Platforms, Inc. and affiliates
-  Source  : https://github.com/facebook/react
-
-Svelte / SvelteKit
-  License : MIT
-  Copyright (c) 2016-2023 Svelte contributors
-  Source  : https://github.com/sveltejs/svelte
-
-Vite
-  License : MIT
-  Copyright (c) 2019-present, VoidZero Inc. and Vite contributors
-  Source  : https://github.com/vitejs/vite
-
-Tailwind CSS
-  License : MIT
-  Copyright (c) Tailwind Labs, Inc.
-  Source  : https://github.com/tailwindlabs/tailwindcss
-
-selfsigned
-  License : MIT
-  Copyright (c) Jacob Beard
-  Source  : https://github.com/jfromaniello/selfsigned
-
-Full license texts for all third-party components are available in
-their respective source repositories.
+See THIRD-PARTY-NOTICES.md for the full list, license texts, and copyright
+holders.

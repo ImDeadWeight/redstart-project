@@ -14,6 +14,11 @@ redstart-nest/llama-cpp-turboquant/
 redstart-nest/llama-server.exe
 redstart-nest/deps/
 
+# Generated npm license attribution appendix (THIRD-PARTY-NOTICES.md ->
+# "Full attribution appendix"). Regenerated fresh at build time so it can
+# never drift from the current lockfile; not meaningful to diff in review.
+redstart-nest/licenses/
+
 # Android build artifacts
 redstart-nest/src/chat-ui/android/.gradle/
 redstart-nest/src/chat-ui/android/app/build/

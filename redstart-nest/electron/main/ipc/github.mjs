@@ -14,8 +14,7 @@ export function registerGithubHandlers() {
     const releases = {}
     const repos = [
       { owner: 'ggerganov', repo: 'llama.cpp' },
-      { owner: 'turboderp', repo: 'llama.cpp' },
-      { owner: 'tiannml', repo: 'TurboQuant' },
+      { owner: 'TheTom', repo: 'llama-cpp-turboquant' },
     ]
     for (const { owner, repo } of repos) {
       try {
