@@ -19,9 +19,21 @@
 
 ## Screenshots
 
-| Redstart Nest — server launcher | Login screen | Chat UI | Settings panel | Tools panel | Accounts tab |
-|---|---|---|---|---|---|
-| ![Redstart Nest launcher](docs/screenshot-redstart-nest.png) | ![Login screen](docs/screenshot-login.png) | ![Chat UI](docs/screenshot-chat-ui.png) | ![Settings panel](docs/screenshot-settings.png) | ![Tools panel](docs/screenshot-tools.png) | ![Accounts tab](docs/screenshot-accounts.png) |
+**Redstart Nest — server launcher**
+
+| Configuration | Models | Tools | Server |
+|---|---|---|---|
+| ![Nest configuration tab](docs/screenshot-redstart-nest.png) | ![Nest models tab — local storage and Hugging Face browser](docs/screenshot-nest-models.png) | ![Nest tools tab — capabilities like web access, Postgres, Documents, SQLite, Vault](docs/screenshot-nest-tools.png) | ![Nest server tab — live server terminal](docs/screenshot-nest-server.png) |
+
+**Redstart Twig / chat UI**
+
+| Login | Chat | Settings — General | Settings — Tools | Settings — Accounts |
+|---|---|---|---|---|
+| ![Login screen](docs/screenshot-login.png) | ![Chat UI](docs/screenshot-chat-ui.png) | ![Settings — General](docs/screenshot-chat-settings-general.png) | ![Settings — Tools, per-tool enable and always-allow](docs/screenshot-chat-settings-tools.png) | ![Settings — Accounts, with per-account roles](docs/screenshot-chat-settings-accounts.png) |
+
+| Settings — Roles | Settings — System Prompt | Settings — Connectors | Your account | Your files |
+|---|---|---|---|---|
+| ![Settings — Roles](docs/screenshot-chat-settings-roles.png) | ![Settings — System Prompt](docs/screenshot-chat-settings-system-prompt.png) | ![Settings — Connectors, per-app API keys](docs/screenshot-chat-settings-connectors.png) | ![Your account page](docs/screenshot-chat-account.png) | ![Your files on the server](docs/screenshot-chat-files.png) |
 
 ---
 
