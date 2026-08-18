@@ -79,6 +79,8 @@ export interface EgressFacts {
 	inference: { local: boolean; detail: string };
 	webDomains: string[];
 	remoteToolServers: EgressDestination[];
+	/** Installed plugins that hold a credential for an external service (plan decision D-f). */
+	credentialPlugins: { name: string; id: string }[];
 	localStores: string[];
 	hasEgress: boolean;
 	/**

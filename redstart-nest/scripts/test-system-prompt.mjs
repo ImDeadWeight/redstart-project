@@ -16,12 +16,26 @@
 //      against external domains or a remote MCP server. A privacy claim that
 //      drifts makes the model lie to users in the deployment's own voice.
 //
-// Pure module (system-prompt.mjs imports nothing), no server.
+// Formerly a pure module importing nothing; since task T13 it reads the
+// plugin registry (electron/main/plugin-registry.mjs, which calls
+// app.getPath('userData')) to compute credentialPlugins. So this suite now
+// needs the same electron-stub resolve hook scripts/test-conversation-isolation.mjs
+// uses, with the temp userData dir set BEFORE the first import.
 //
 // Run:  node scripts/test-system-prompt.mjs
 // =============================================================================
 
-import {
+import { register } from 'node:module'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-system-prompt-test-'))
+process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
+
+register('./auth-test-loader.mjs', import.meta.url)
+
+const {
   composePrompt,
   deriveEgressFacts,
   estimateTokens,
@@ -34,7 +48,8 @@ import {
   MODES,
   MODE_IDS,
   DEFAULT_TOKEN_BUDGET,
-} from '../electron/main/system-prompt.mjs'
+} = await import('../electron/main/system-prompt.mjs')
+const { addPlugin, removePlugin } = await import('../electron/main/plugin-registry.mjs')
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-tool-policy.mjs)
@@ -196,6 +211,49 @@ await test('egress facts follow the same substantiation gate as capabilities', a
   assert(facts.webDomains.length === 0, 'reported web egress for a request carrying no tools')
   assert(facts.hasEgress === false, 'hasEgress true with no reachable tools')
   return 'configured-but-unreachable is not reported as a data path'
+})
+
+await test('🔍 an enabled plugin with a credential is disclosed as egress (D-f)', async () => {
+  const add = addPlugin({
+    id: 'credplugin',
+    displayName: 'Cred Plugin',
+    resolvedCommand: process.execPath,
+    resolvedArgs: [],
+    enabled: true,
+    envEnc: { API_KEY: 'ZmFrZS1jaXBoZXJ0ZXh0' },
+    tools: [{ name: 'do_thing', description: '', inputSchema: {}, class: 'network' }],
+  })
+  assert(add.ok, `addPlugin failed: ${add.error}`)
+  try {
+    const facts = deriveEgressFacts(LOCAL_ONLY_CONFIG, [], true)
+    assert(facts.credentialPlugins.some((p) => p.id === 'credplugin'), 'credential-holding plugin missing from deriveEgressFacts')
+    assert(facts.hasEgress === true, 'a credential-holding plugin did not count as egress')
+
+    const { prompt } = composePrompt({ config: LOCAL_ONLY_CONFIG, hasTools: true, now: NOW })
+    assert(prompt.includes('Cred Plugin'), 'credential-holding plugin not named in the composed prompt')
+    return 'declared in deriveEgressFacts and in the composed prompt'
+  } finally {
+    removePlugin('credplugin')
+  }
+})
+
+await test('a plugin with NO credential is not reported as egress', async () => {
+  const add = addPlugin({
+    id: 'nocredplugin',
+    displayName: 'No Cred Plugin',
+    resolvedCommand: process.execPath,
+    resolvedArgs: [],
+    enabled: true,
+    tools: [{ name: 'do_thing', description: '', inputSchema: {}, class: 'read' }],
+  })
+  assert(add.ok, `addPlugin failed: ${add.error}`)
+  try {
+    const facts = deriveEgressFacts(LOCAL_ONLY_CONFIG, [], true)
+    assert(!facts.credentialPlugins.some((p) => p.id === 'nocredplugin'), 'a plugin with no credential was reported as a data path')
+    return 'not reported — no credential configured'
+  } finally {
+    removePlugin('nocredplugin')
+  }
 })
 
 await test('isLocalUrl classifies loopback, IPv6 loopback and hostnames', async () => {
@@ -492,6 +550,8 @@ await test('over-budget input is reported but never truncated', async () => {
 })
 
 // ---------------------------------------------------------------------------
+
+fs.rmSync(tmpDir, { recursive: true, force: true })
 
 const passed = results.filter(r => r.pass).length
 console.log(`\n${passed}/${results.length} passed\n`)

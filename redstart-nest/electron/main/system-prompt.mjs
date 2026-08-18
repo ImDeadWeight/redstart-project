@@ -1,5 +1,7 @@
 'use strict'
 
+import { listPlugins } from './plugin-registry.mjs'
+
 // =============================================================================
 // Redstart Nest — System Prompt Composer
 // =============================================================================
@@ -237,6 +239,18 @@ export function deriveEgressFacts(config, externalServers, hasTools) {
       )]
     : []
 
+  // Plugins that hold a credential for a third-party service are an egress
+  // path by definition — the credential exists precisely so the plugin can
+  // call out. Undeclared, this block would keep asserting "everything stays
+  // local" while a plugin ships data to a SaaS: not a leak, but the product
+  // saying something untrue in its own voice. See
+  // docs/notes/mcp-plugin-system-plan.md D-f.
+  const credentialPlugins = hasTools
+    ? listPlugins()
+        .filter((p) => p.enabled && p.envEnc && Object.keys(p.envEnc).length > 0)
+        .map((p) => ({ name: p.displayName || p.id, id: p.id }))
+    : []
+
   const remoteToolServers = hasTools
     ? (externalServers || [])
         .filter(s => s?.url && !isLocalUrl(s.url))
@@ -260,9 +274,10 @@ export function deriveEgressFacts(config, externalServers, hasTools) {
     inference,
     webDomains,
     remoteToolServers,
+    credentialPlugins,
     localStores,
     get hasEgress() {
-      return this.webDomains.length > 0 || this.remoteToolServers.length > 0
+      return this.webDomains.length > 0 || this.remoteToolServers.length > 0 || this.credentialPlugins.length > 0
     },
   }
 }
@@ -317,6 +332,15 @@ function buildDataHandling(egress) {
   if (egress.remoteToolServers.length) {
     const list = egress.remoteToolServers.map(s => `${s.name} (${s.host})`).join(', ')
     parts.push(`These tool servers run outside the Redstart server and receive whatever arguments a tool call passes to them: ${list}.`)
+  }
+
+  // No hostname to name — the registry does not tell us which host a plugin
+  // calls, and a guessed one in a privacy claim is worse than an unnamed
+  // service (plan decision D-f). The plugin's own name is the only honest
+  // handle available.
+  if (egress.credentialPlugins.length) {
+    const list = egress.credentialPlugins.map(p => p.name).join(', ')
+    parts.push(`These installed plugins hold a credential for an external service and can send data there when called: ${list}.`)
   }
 
   // Spec §7: unsubstantiated terms are STATED, never omitted. Silence about a
