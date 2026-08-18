@@ -9,7 +9,7 @@ import { useState } from 'react'
 import { api } from '../api/redstart'
 import type { PluginToolInfo, RegistrySearchResult } from '../api/redstart'
 import type { usePlugins } from '../hooks/usePlugins'
-import { btnCls, inputCls } from './ui'
+import { btnCls, inputCls, TruncatedText } from './ui'
 
 /** One generated input. Registry metadata maps onto this directly:
  *  name -> label, description -> helper text, format -> widget,
@@ -427,9 +427,13 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
                   <div key={t.name} className="flex items-start justify-between gap-3 px-3 py-2">
                     <div className="min-w-0">
                       <p className="text-sm text-zinc-200">{t.name}</p>
-                      {/* Not truncated — a clipped description is exactly what
-                          makes "destructive" meaningless on a 40-tool plugin. */}
-                      <p className="text-xs text-zinc-500 mt-0.5">{t.description || '(no description provided by the plugin)'}</p>
+                      {/* Collapsed past a line or two with a Read more toggle —
+                          nothing hidden outright, just folded. A bare-truncated
+                          description is exactly what makes "destructive"
+                          meaningless on a 40-tool plugin; a multi-paragraph one
+                          (a comfy-cli-style tool documenting a dozen `action`
+                          values) is exactly what makes an unfolded list unusable. */}
+                      <TruncatedText text={t.description || '(no description provided by the plugin)'} className="text-xs text-zinc-500 mt-0.5" />
                     </div>
                     <select className={inputCls.xs + ' w-32 flex-shrink-0'} value={t.class}
                       onChange={(e) => setToolClass(t.name, e.target.value as PluginToolInfo['class'])}>

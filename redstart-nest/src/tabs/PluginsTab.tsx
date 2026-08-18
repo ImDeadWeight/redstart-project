@@ -25,7 +25,7 @@ import { useState } from 'react'
 import { api } from '../api/redstart'
 import type { PluginSummary, PluginToolInfo } from '../api/redstart'
 import type { usePlugins } from '../hooks/usePlugins'
-import { SectionTitle, TogglePill, btnCls } from '../components/ui'
+import { SectionTitle, TogglePill, TruncatedText, btnCls } from '../components/ui'
 import { AddToolDialog } from '../components/AddToolDialog'
 
 type Props = {
@@ -184,10 +184,11 @@ function ToolClassificationEditor({ pluginId, plugins }: { pluginId: string; plu
                   not just its class label. The MCP server's own description is
                   the only source we have for that (see joenorton/shawnrushefsky-
                   style servers, where "delete_note"/"run_workflow" only read as
-                  destructive vs. read once you see the sentence). Wrapped, not
-                  truncated — a clipped description is the exact failure this
-                  fixes. */}
-              <p className="text-xs text-zinc-500 mt-0.5">{t.description || '(no description provided by the plugin)'}</p>
+                  destructive vs. read once you see the sentence). Collapsed past
+                  a line or two rather than hidden — some multi-action tools
+                  (e.g. a comfy-cli driver documenting a dozen `action` values in
+                  one string) run to thousands of characters. */}
+              <TruncatedText text={t.description || '(no description provided by the plugin)'} className="text-xs text-zinc-500 mt-0.5" />
             </div>
             <select
               className="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-1 text-xs text-white flex-shrink-0"
