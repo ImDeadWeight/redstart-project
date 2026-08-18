@@ -151,8 +151,8 @@ export default function App() {
             {([
               ['config', 'Configuration'],
               ['models', 'Models'],
-              ['tools', 'Tools'],
               ['plugins', 'Plugins'],
+              ['tools', 'Tools'],
               ['server', 'Server'],
             ] as const).map(([id, label]) => (
               <button
@@ -189,12 +189,12 @@ export default function App() {
             <ModelsTab catalog={modelCatalog} hardware={hw.hardware} />
           )}
 
-          {activeTab === 'tools' && (
-            <ToolsTab config={config} toolsCatalog={toolsCatalog} caps={caps} mcp={mcp} plugins={plugins} />
-          )}
-
           {activeTab === 'plugins' && (
             <PluginsTab plugins={plugins} />
+          )}
+
+          {activeTab === 'tools' && (
+            <ToolsTab config={config} toolsCatalog={toolsCatalog} caps={caps} mcp={mcp} plugins={plugins} />
           )}
 
           {/* Status message */}
