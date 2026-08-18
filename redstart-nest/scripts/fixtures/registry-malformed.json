@@ -1,0 +1,7 @@
+{
+  "server": {
+    "$schema": "https://static.modelcontextprotocol.io/schemas/2099-01-01/server.schema.json",
+    "name": "io.github.example/from-the-future",
+    "packages": "not-an-array"
+  }
+}

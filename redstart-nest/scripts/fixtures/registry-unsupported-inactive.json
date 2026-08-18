@@ -1,0 +1,22 @@
+{
+  "server": {
+    "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    "name": "io.github.example/retired-server",
+    "description": "Deprecated entry — must not be offered for install.",
+    "version": "0.9.0",
+    "packages": [
+      {
+        "registryType": "npm",
+        "identifier": "@example/retired-mcp",
+        "version": "0.9.0",
+        "transport": { "type": "stdio" }
+      }
+    ]
+  },
+  "_meta": {
+    "io.modelcontextprotocol.registry/official": {
+      "status": "deprecated",
+      "isLatest": false
+    }
+  }
+}

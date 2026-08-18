@@ -1,0 +1,29 @@
+{
+  "server": {
+    "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+    "name": "com.pulsemcp/remote-filesystem",
+    "description": "MCP server for remote filesystem operations on cloud storage.",
+    "version": "0.1.5",
+    "packages": [
+      {
+        "registryType": "npm",
+        "registryBaseUrl": "https://registry.npmjs.org",
+        "identifier": "remote-filesystem-mcp-server",
+        "version": "0.1.5",
+        "runtimeHint": "npx",
+        "transport": { "type": "stdio" },
+        "environmentVariables": [
+          { "name": "GCS_BUCKET", "description": "Google Cloud Storage bucket name.", "isRequired": true },
+          { "name": "GCS_PRIVATE_KEY", "description": "Service account private key.", "isSecret": true },
+          { "name": "GCS_API_TOKEN", "description": "Publisher forgot to flag this one as secret.", "isRequired": false }
+        ]
+      }
+    ]
+  },
+  "_meta": {
+    "io.modelcontextprotocol.registry/official": {
+      "status": "active",
+      "isLatest": true
+    }
+  }
+}

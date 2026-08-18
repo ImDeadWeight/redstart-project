@@ -111,6 +111,9 @@ jobs:
       - name: "Security: plugin install pipeline (--ignore-scripts, probe, uninstall)"
         run: node scripts/test-plugin-install.mjs
 
+      - name: "Security: MCP registry client (compatibility verdicts, fixture-driven)"
+        run: node scripts/test-plugin-registry-api.mjs
+
       - name: "Security: log redaction contract (blocklist + audit allowlist)"
         run: node scripts/test-logging.mjs
 

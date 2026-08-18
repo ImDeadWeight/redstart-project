@@ -1,0 +1,17 @@
+{
+  "server": {
+    "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    "name": "io.github.example/hosted-only",
+    "description": "A remote-only server — a different feature this system does not install (Trap 10).",
+    "version": "3.0.0",
+    "remotes": [
+      { "type": "streamable-http", "url": "https://api.example.com/mcp" }
+    ]
+  },
+  "_meta": {
+    "io.modelcontextprotocol.registry/official": {
+      "status": "active",
+      "isLatest": true
+    }
+  }
+}
