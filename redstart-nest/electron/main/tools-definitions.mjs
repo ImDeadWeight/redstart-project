@@ -348,6 +348,18 @@ export const TOOL_CLASSES = {
 // Classify a tool by its function name. Unknown names default to 'read' — see
 // the note above TOOL_CLASSES for why that is the safe default for the gate.
 export function classifyTool(name) {
+  const builtin = TOOL_CLASSES[name]
+  if (builtin) return builtin
+  // Plugin tools carry an admin-assigned class from the registry. Looked up
+  // BEFORE the fallback below, which stays exactly as it was: 'read' is the
+  // correct default for a BUILT-IN whose entry someone forgot, because the gate
+  // only ever restricts. Plugins fail closed at install time instead — every
+  // discovered tool is written as 'destructive' until an admin promotes it.
+  const capability = capabilityForTool(name)
+  if (capability) {
+    const cls = readPluginCapabilities()[capability]?.classes?.[name]
+    if (cls) return cls
+  }
   return TOOL_CLASSES[name] ?? 'read'
 }
 

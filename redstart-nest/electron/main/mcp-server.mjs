@@ -242,7 +242,18 @@ async function handleRpc(msg, send, ctx = { account: null }) {
     for (const provider of resolveProviders()) {
       const result = await provider.callTool(toolName, args, cfg, ctx)
       if (result !== null && result !== undefined) {
-        logEvent('tool', 'called', { tool: toolName, class: policy.cls, isError: !!result.isError, durationMs: Date.now() - startedAt })
+        // `plugin` and `account` are recorded now so the deferred per-account
+        // permission work reads an existing field instead of re-plumbing this
+        // call path. Pass the USERNAME, not ctx.account — logger.mjs redact()
+        // drops objects entirely and the field would vanish silently.
+        logEvent('tool', 'called', {
+          tool: toolName,
+          class: policy.cls,
+          plugin: capabilityForTool(toolName) ?? undefined,
+          account: ctx?.account?.username ?? undefined,
+          isError: !!result.isError,
+          durationMs: Date.now() - startedAt,
+        })
         send({ jsonrpc: '2.0', id, result })
         return
       }
