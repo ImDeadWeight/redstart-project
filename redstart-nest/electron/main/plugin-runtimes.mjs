@@ -45,7 +45,25 @@ export const RUNTIME_REASON = {
  * @param {string} bin @returns {Promise<string|null>}
  */
 function whichBinary(bin) {
-  throw new Error('TODO(T14): whichBinary not implemented')
+  return new Promise((resolve) => {
+    const finder = process.platform === 'win32' ? 'where' : 'which'
+    execFile(finder, [bin], { windowsHide: true }, (err, stdout) => {
+      if (err) return resolve(null)
+      // `where` can print multiple matches, one per line — the first is the
+      // one PATH resolution would actually use.
+      const first = stdout.split(/\r?\n/).map((l) => l.trim()).find(Boolean)
+      resolve(first ?? null)
+    })
+  })
+}
+
+function execFileText(execPath, args) {
+  return new Promise((resolve, reject) => {
+    execFile(execPath, args, { windowsHide: true }, (err, stdout) => {
+      if (err) return reject(err)
+      resolve(stdout.trim())
+    })
+  })
 }
 
 /**
@@ -57,7 +75,16 @@ function whichBinary(bin) {
  *                  | { ok: false, reason: string }>}
  */
 export async function detectNode() {
-  throw new Error('TODO(T14): detectNode not implemented')
+  const execPath = await whichBinary('node')
+  if (!execPath) return { ok: false, reason: RUNTIME_REASON.nodeNotFound }
+  let version
+  try {
+    version = await execFileText(execPath, ['--version'])
+  } catch {
+    // Found on PATH but refused to run — same practical outcome as absent.
+    return { ok: false, reason: RUNTIME_REASON.nodeNotFound }
+  }
+  return { ok: true, execPath, version }
 }
 
 /**
@@ -73,5 +100,21 @@ export async function detectNode() {
  *                  | { ok: false, reason: string }>}
  */
 export async function detectNpm() {
-  throw new Error('TODO(T14): detectNpm not implemented')
+  const node = await detectNode()
+  if (!node.ok) return node // propagate the reason unchanged (node-not-found)
+
+  const cliPath = path.join(path.dirname(node.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  if (!fs.existsSync(cliPath)) return { ok: false, reason: RUNTIME_REASON.npmNotFound }
+
+  // npm's own package.json sits two directories up from npm-cli.js
+  // (node_modules/npm/bin/npm-cli.js -> node_modules/npm/package.json).
+  let version = 'unknown'
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(path.dirname(cliPath), '..', 'package.json'), 'utf8'))
+    if (typeof pkg.version === 'string') version = pkg.version
+  } catch {
+    // Non-fatal — the cli file existing is what matters for installability.
+  }
+
+  return { ok: true, cliPath, version }
 }
