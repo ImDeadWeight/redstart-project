@@ -1,5 +1,25 @@
 'use strict'
 
+// ---------------------------------------------------------------------------
+// Plugin capability injection.
+//
+// Installed MCP plugins are capabilities too (see docs/notes/mcp-plugin-system-plan.md
+// decision D1), but they are discovered at runtime from plugins.json, not
+// declared here. plugin-registry.mjs calls setPluginCapabilityProvider() once at
+// startup to hand this module a live read of that registry.
+//
+// A FUNCTION, not a snapshot: installs and removals must take effect without
+// restarting Nest, and several consumers of the tables below used to capture
+// them at import time.
+// ---------------------------------------------------------------------------
+
+// Returns { [pluginId]: { toolNames: string[], classes: { [toolName]: string } } }
+let readPluginCapabilities = () => ({})
+
+export function setPluginCapabilityProvider(fn) {
+  readPluginCapabilities = typeof fn === 'function' ? fn : () => ({})
+}
+
 // Built-in tools and groups that ship with Redstart Nest.
 // These are hardcoded — users add their own via the UI on top of these.
 
@@ -127,7 +147,7 @@ export const BUILTIN_CAPABILITIES = [
 // function name it produces (read_text_file, write_file, ...). Built-in web
 // sources (web_fetch/web_search) are gated by the whitelist, not by name, so
 // they're intentionally absent here.
-export const CAPABILITY_TOOL_NAMES = {
+export const BUILTIN_CAPABILITY_TOOL_NAMES = {
   postgres: ['postgres_query', 'postgres_list_tables', 'postgres_describe_table'],
   documents: ['create_document', 'read_document', 'list_documents'],
   sqlite: ['sqlite_list_databases', 'sqlite_query', 'sqlite_list_tables', 'sqlite_describe_table'],
@@ -158,6 +178,25 @@ export const CAPABILITY_TOOL_NAMES = {
   ],
   scholar: ['scholar_search', 'scholar_get', 'scholar_save_pdf'],
 }
+
+/**
+ * Every capability's tool names — built-ins plus installed plugins.
+ *
+ * Call this; do not destructure it into a module-scope const. A const goes
+ * stale the moment a plugin is installed, and the failure is silent: the
+ * capability simply never gets narrowed or banned.
+ */
+export function capabilityToolNames() {
+  const out = { ...BUILTIN_CAPABILITY_TOOL_NAMES }
+  for (const [id, entry] of Object.entries(readPluginCapabilities())) {
+    out[id] = entry.toolNames
+  }
+  return out
+}
+
+// Back-compat alias for call sites that only need the built-ins (the file-system
+// policy set in mcp-server.mjs). Plugins are deliberately absent here.
+export const CAPABILITY_TOOL_NAMES = BUILTIN_CAPABILITY_TOOL_NAMES
 
 // Tools contributed by Redstart CLIENT APPLICATIONS — Twig today; Blueprints,
 // Greenhouse and Yellowscript as they grow tools.
@@ -217,7 +256,7 @@ export function expandDisabledToolIds(ids = []) {
   const names = new Set()
   for (const id of ids) {
     if (typeof id !== 'string' || !id) continue
-    const toolNames = CAPABILITY_TOOL_NAMES[id] ?? CLIENT_APP_TOOL_NAMES[id]
+    const toolNames = capabilityToolNames()[id] ?? CLIENT_APP_TOOL_NAMES[id]
     if (toolNames) toolNames.forEach((n) => names.add(n))
     else names.add(id)
   }
@@ -340,9 +379,9 @@ export function classifyTool(name) {
 export const META_CAPABILITY_KEY = 'redstart/capability'
 export const META_CLASS_KEY = 'redstart/class'
 
-const CAPABILITY_BY_TOOL_NAME = new Map()
-for (const [capability, names] of Object.entries(CAPABILITY_TOOL_NAMES)) {
-  for (const name of names) CAPABILITY_BY_TOOL_NAME.set(name, capability)
+const BUILTIN_CAPABILITY_BY_TOOL_NAME = new Map()
+for (const [capability, names] of Object.entries(BUILTIN_CAPABILITY_TOOL_NAMES)) {
+  for (const name of names) BUILTIN_CAPABILITY_BY_TOOL_NAME.set(name, capability)
 }
 
 /**
@@ -350,7 +389,19 @@ for (const [capability, names] of Object.entries(CAPABILITY_TOOL_NAMES)) {
  * capability (the web tools, which the whitelist governs instead).
  */
 export function capabilityForTool(name) {
-  return CAPABILITY_BY_TOOL_NAME.get(name) ?? null
+  const builtin = BUILTIN_CAPABILITY_BY_TOOL_NAME.get(name)
+  if (builtin) return builtin
+  // Plugin tools are namespaced "<pluginId>__<toolName>" (see T5). Resolving by
+  // prefix rather than by a rebuilt Map means an install takes effect
+  // immediately and there is no cache to invalidate.
+  if (typeof name === 'string') {
+    const sep = name.indexOf('__')
+    if (sep > 0) {
+      const id = name.slice(0, sep)
+      if (readPluginCapabilities()[id]) return id
+    }
+  }
+  return null
 }
 
 export const BUILTIN_GROUPS = [
