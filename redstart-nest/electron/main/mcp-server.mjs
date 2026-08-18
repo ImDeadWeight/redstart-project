@@ -31,6 +31,7 @@ import * as gitTool from './git-tool.mjs'
 import * as filesystemProvider from './filesystem-mcp-provider.mjs'
 import * as fsDeleteTool from './fs-delete-tool.mjs'
 import * as scholarTool from './scholar-tool.mjs'
+import { pluginProviders, stopAllPlugins } from './plugin-provider.mjs'
 import {
   classifyTool,
   capabilityForTool,
@@ -44,7 +45,15 @@ import {
 } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 
-const PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool]
+const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool]
+
+// Resolved per call, never captured in a const: a plugin installed or removed
+// while Nest is running must take effect without a restart. Built-ins come
+// first so a plugin can never be dispatched ahead of one — though namespacing
+// already makes a collision impossible.
+function resolveProviders() {
+  return [...BUILTIN_PROVIDERS, ...pluginProviders()]
+}
 
 export const ALLOWED_CORS_HEADERS =
   'Content-Type, Authorization, mcp-protocol-version, mcp-session-id, last-event-id'
@@ -186,7 +195,7 @@ async function handleRpc(msg, send, ctx = { account: null }) {
   if (method === 'tools/list') {
     const tools = []
     const seen = new Set()
-    for (const provider of PROVIDERS) {
+    for (const provider of resolveProviders()) {
       for (const tool of provider.toolDefs(cfg)) {
         if (seen.has(tool.name)) {
           console.warn(`MCP: duplicate tool name "${tool.name}" — keeping the first provider's definition. Namespace your tool names.`)
@@ -213,7 +222,7 @@ async function handleRpc(msg, send, ctx = { account: null }) {
     }
 
     const startedAt = Date.now()
-    for (const provider of PROVIDERS) {
+    for (const provider of resolveProviders()) {
       const result = await provider.callTool(toolName, args, cfg, ctx)
       if (result !== null && result !== undefined) {
         logEvent('tool', 'called', { tool: toolName, class: policy.cls, isError: !!result.isError, durationMs: Date.now() - startedAt })
@@ -403,6 +412,9 @@ export function stopMcpServer() {
   }
   activeToolsConfig = null
   postgresTool.closePool()
+  // Plugin children are separate OS processes; without this they outlive the
+  // server that spawned them.
+  stopAllPlugins()
 }
 
 export function updateMcpConfig(config) {
@@ -433,7 +445,7 @@ export function getMcpServerRunning() {
 export function estimateActiveToolTokens(config) {
   const seen = new Set()
   const tools = []
-  for (const provider of PROVIDERS) {
+  for (const provider of resolveProviders()) {
     for (const tool of provider.toolDefs(config)) {
       if (seen.has(tool.name)) continue
       seen.add(tool.name)
