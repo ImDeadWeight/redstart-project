@@ -26,6 +26,8 @@ import {
   CAPABILITY_TOOL_NAMES,
   CLIENT_APP_TOOL_NAMES,
   expandDisabledToolIds,
+  capabilityForTool,
+  setPluginCapabilityProvider,
 } from '../electron/main/tools-definitions.mjs'
 
 // ---------------------------------------------------------------------------
@@ -131,6 +133,64 @@ await test('every capability tool name across all capabilities has an explicit c
 })
 
 // ---------------------------------------------------------------------------
+// Plugin classification (plan decisions D3/D-b) — the admin-assigned class
+// from the registry, looked up BEFORE the built-in fallback, and the child's
+// own opinion about itself never enters this at all.
+// ---------------------------------------------------------------------------
+
+console.log('\n-- plugin classification (D3/D-b) --')
+
+await test('🔍 a plugin tool takes its class from the registry, not the read default', async () => {
+  setPluginCapabilityProvider(() => ({
+    memoryplugin: {
+      toolNames: ['memoryplugin__create_entities', 'memoryplugin__read_graph'],
+      classes: { memoryplugin__create_entities: 'destructive' },
+    },
+  }))
+  try {
+    assert(capabilityForTool('memoryplugin__create_entities') === 'memoryplugin', 'provenance lookup did not resolve the injected plugin')
+    assert(
+      classifyTool('memoryplugin__create_entities') === 'destructive',
+      `expected the registry-assigned class "destructive", got "${classifyTool('memoryplugin__create_entities')}"`,
+    )
+  } finally {
+    setPluginCapabilityProvider(null)
+  }
+})
+
+await test('an unclassified plugin tool (belongs to a capability, but the registry names no class) falls back to read, the most restrictive default for the gate', async () => {
+  // "most restrictive default" per §7 means the gate can never treat it as
+  // write/destructive by ACCIDENT — 'read' is that floor (see the note above
+  // TOOL_CLASSES). A real install can't actually produce this shape (every
+  // discovered tool is written 'destructive' at install time, D-b), so this
+  // pins the fallback path itself, independent of what the install pipeline
+  // happens to do today.
+  setPluginCapabilityProvider(() => ({
+    bareplugin: { toolNames: ['bareplugin__mystery_tool'], classes: {} },
+  }))
+  try {
+    assert(classifyTool('bareplugin__mystery_tool') === 'read', `expected fallback "read", got "${classifyTool('bareplugin__mystery_tool')}"`)
+  } finally {
+    setPluginCapabilityProvider(null)
+  }
+})
+
+await test('a plugin tool name that happens to match a BUILT-IN tool name still gets the built-in\'s classification, not the plugin\'s', async () => {
+  // classifyTool() checks TOOL_CLASSES[name] first. This is defence in depth —
+  // plugin-registry.mjs's own validator already refuses an id that collides
+  // with a built-in tool name, so this shape shouldn't reach classifyTool at
+  // all — but pin the lookup ORDER itself in case that guarantee ever moves.
+  setPluginCapabilityProvider(() => ({
+    imposter: { toolNames: ['delete_file'], classes: { delete_file: 'read' } },
+  }))
+  try {
+    assert(classifyTool('delete_file') === 'destructive', 'a plugin\'s classification for a built-in tool name overrode the built-in\'s own — privilege escalation')
+  } finally {
+    setPluginCapabilityProvider(null)
+  }
+})
+
+// ---------------------------------------------------------------------------
 // Ban expansion — what an admin's disabledToolIds actually strips.
 //
 // The gateway bans by function name, so every entry has to resolve to concrete
@@ -179,6 +239,18 @@ await test('expansion is duplicate-free and ignores junk entries', async () => {
   assert(names.length === new Set(names).size, `duplicates present: ${names.join(', ')}`)
   assert(!names.includes(''), 'an empty id became a ban entry')
   assert(!names.some(n => n == null), 'a null id became a ban entry')
+})
+
+await test('🔍 a plugin id expands to all of its namespaced tool names (ban propagation)', async () => {
+  setPluginCapabilityProvider(() => ({
+    banme: { toolNames: ['banme__do_a', 'banme__do_b'], classes: {} },
+  }))
+  try {
+    const names = expandDisabledToolIds(['banme'])
+    assert(names.includes('banme__do_a') && names.includes('banme__do_b'), `expanding "banme" did not yield both of its tools: ${names.join(', ')}`)
+  } finally {
+    setPluginCapabilityProvider(null)
+  }
 })
 
 await test('an empty or missing ban list expands to nothing', async () => {

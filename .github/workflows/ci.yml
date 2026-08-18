@@ -114,6 +114,9 @@ jobs:
       - name: "Security: MCP registry client (compatibility verdicts, fixture-driven)"
         run: node scripts/test-plugin-registry-api.mjs
 
+      - name: "Security: plugin provider adapter (dual-switch activation, namespacing, health)"
+        run: node scripts/test-plugin-provider.mjs
+
       - name: "Security: log redaction contract (blocklist + audit allowlist)"
         run: node scripts/test-logging.mjs
 

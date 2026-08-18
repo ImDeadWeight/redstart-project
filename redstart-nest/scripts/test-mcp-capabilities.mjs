@@ -20,7 +20,11 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import * as http from 'node:http'
+import { fileURLToPath } from 'node:url'
 import pg from 'pg'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const PLUGIN_FIXTURE = path.join(__dirname, 'fixtures', 'fake-mcp-server.mjs')
 
 const tmpUserDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-userdata-'))
 const tmpDocsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-docs-'))
@@ -45,7 +49,15 @@ register('./auth-test-loader.mjs', import.meta.url)
 
 const { startMcpServer, stopMcpServer } = await import('../electron/main/mcp-server.mjs')
 const { setAuthRequired } = await import('../electron/main/auth.mjs')
-const { capabilityForTool, classifyTool } = await import('../electron/main/tools-definitions.mjs')
+const { capabilityForTool, classifyTool, expandDisabledToolIds, setPluginCapabilityProvider } = await import('../electron/main/tools-definitions.mjs')
+const { addPlugin, removePlugin, pluginCapabilities } = await import('../electron/main/plugin-registry.mjs')
+
+// Real app startup wires this in electron/main/index.mjs; this suite imports
+// mcp-server.mjs and plugin-registry.mjs independently of that bootstrap, so
+// it has to do the same wiring itself or every plugin-ban test below would
+// pass for the wrong reason (capabilityToolNames() would simply never see the
+// plugin at all, rather than genuinely proving the ban).
+setPluginCapabilityProvider(pluginCapabilities)
 
 // Auth is ON by default (secure default, no localhost bypass) and this suite's
 // MCP client connects token-less. Auth behavior has its own suite
@@ -1371,6 +1383,64 @@ async function main() {
     })
 
     updateMcpConfig(baseConfig)
+  }
+
+  console.log('\n-- installed plugin: ban propagation (Trap 3 / T21) --')
+
+  {
+    const add = addPlugin({
+      id: 'banproptest',
+      displayName: 'Ban Propagation Fixture',
+      source: { kind: 'command', command: process.execPath, args: [PLUGIN_FIXTURE, 'normal'] },
+      resolvedCommand: process.execPath,
+      resolvedArgs: [PLUGIN_FIXTURE, 'normal'],
+      env: {},
+      timeoutMs: 15000,
+      enabled: true, // install-level switch on
+      allowWrite: false,
+      allowDestructive: false,
+      tools: [
+        { name: 'echo', description: 'Echo the supplied text back.', inputSchema: {}, class: 'read' },
+        { name: 'write_thing', description: 'Pretends to write something.', inputSchema: {}, class: 'write' },
+      ],
+    })
+    assert(add.ok, `addPlugin failed: ${add.error}`)
+
+    try {
+      // Per-profile switch on too (plan decision D-a — both required).
+      const pluginActiveConfig = { ...baseConfig, banproptest: { enabled: true } }
+      updateMcpConfig(pluginActiveConfig)
+
+      await test('an active plugin advertises its namespaced tools', async () => {
+        const res = await client.call('tools/list')
+        const names = res.result.tools.map(t => t.name)
+        assert(names.includes('banproptest__echo'), `plugin tool missing from tools/list: ${JSON.stringify(names)}`)
+        assert(names.includes('banproptest__write_thing'), 'second plugin tool missing')
+      })
+
+      await test('🔍 banning the plugin id removes ALL of its tools from tools/list', async () => {
+        updateMcpConfig({ ...pluginActiveConfig, disabledTools: expandDisabledToolIds(['banproptest']) })
+        const res = await client.call('tools/list')
+        const names = res.result.tools.map(t => t.name)
+        assert(!names.includes('banproptest__echo'), 'banned plugin tool still advertised')
+        assert(!names.includes('banproptest__write_thing'), 'banned plugin tool still advertised')
+      })
+
+      await test('🔍 a banned plugin tool is refused on a DIRECT call, bypassing the filtered list', async () => {
+        const res = await client.call('tools/call', { name: 'banproptest__echo', arguments: { text: 'x' } })
+        assert(res.result?.isError === true, `banned plugin tool executed: ${JSON.stringify(res.result)}`)
+      })
+
+      await test('lifting the ban restores the plugin\'s tools', async () => {
+        updateMcpConfig(pluginActiveConfig)
+        const res = await client.call('tools/list')
+        const names = res.result.tools.map(t => t.name)
+        assert(names.includes('banproptest__echo'), 'plugin tool did not come back after the ban was lifted')
+      })
+    } finally {
+      updateMcpConfig(baseConfig)
+      removePlugin('banproptest')
+    }
   }
 
   console.log('\n-- postgres provider --')

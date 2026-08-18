@@ -34,7 +34,7 @@ import {
   ADMIN_PERMISSIONS,
   DENY_ALL,
 } from '../electron/main/permissions.mjs'
-import { CAPABILITY_TOOL_NAMES } from '../electron/main/tools-definitions.mjs'
+import { CAPABILITY_TOOL_NAMES, setPluginCapabilityProvider } from '../electron/main/tools-definitions.mjs'
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-tool-policy.mjs)
@@ -453,6 +453,52 @@ await test('restrictsSurfaces detects exactly the roles that name a surface list
   assert(restrictsSurfaces({ permissions: { surfaces: [] } }), 'an empty list is still a restriction')
   assert(!restrictsSurfaces({ permissions: {} }), 'an unrestricted role was reported as restricting')
   assert(!restrictsSurfaces(null), 'a null role was reported as restricting')
+})
+
+// ---------------------------------------------------------------------------
+// Plugins (Trap 3) — CAPABILITY_IDS staleness. A registered plugin must be a
+// first-class capability to narrowConfig, not merely present somewhere.
+// ---------------------------------------------------------------------------
+
+console.log('\n-- installed plugins are narrowable capabilities (Trap 3) --')
+
+await test('🔍 a plugin registered via setPluginCapabilityProvider appears in capabilityIds()', async () => {
+  setPluginCapabilityProvider(() => ({
+    trapthree: { toolNames: ['trapthree__do_thing'], classes: {} },
+  }))
+  try {
+    assert(capabilityIds().includes('trapthree'), 'a registered plugin is missing from capabilityIds() — narrowConfig would never see it')
+  } finally {
+    setPluginCapabilityProvider(null)
+  }
+})
+
+await test('🔍 a role that names only OTHER capabilities withholds a plugin capability, provider flag AND its tools banned', async () => {
+  setPluginCapabilityProvider(() => ({
+    trapthree: { toolNames: ['trapthree__do_thing', 'trapthree__do_other'], classes: {} },
+  }))
+  try {
+    const config = { fileSystem: { enabled: false }, trapthree: { enabled: true } }
+    const narrowed = narrowConfig(config, { capabilities: ['file_system'] }) // trapthree not named
+    assert(narrowed.trapthree.enabled === false, 'a plugin capability outside the allowed list stayed enabled — CAPABILITY_CONFIG_KEY fallback (id as its own key) is not wired')
+    assert(narrowed.disabledTools.includes('trapthree__do_thing'), 'the withheld plugin\'s tool did not join disabledTools — a provider that ignores its own enabled flag would still serve it')
+    assert(narrowed.disabledTools.includes('trapthree__do_other'), 'second tool missing from disabledTools')
+  } finally {
+    setPluginCapabilityProvider(null)
+  }
+})
+
+await test('a role that names the plugin capability keeps it enabled', async () => {
+  setPluginCapabilityProvider(() => ({
+    trapthree: { toolNames: ['trapthree__do_thing'], classes: {} },
+  }))
+  try {
+    const config = { trapthree: { enabled: true } }
+    const narrowed = narrowConfig(config, { capabilities: ['trapthree'] })
+    assert(narrowed.trapthree.enabled === true, 'a plugin capability explicitly permitted by the role was withheld anyway')
+  } finally {
+    setPluginCapabilityProvider(null)
+  }
 })
 
 // ---------------------------------------------------------------------------

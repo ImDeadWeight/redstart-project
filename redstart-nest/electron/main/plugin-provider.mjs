@@ -150,10 +150,20 @@ function makeProvider(plugin) {
         const client = clientFor(plugin)
         await client.ensureReady()
         const result = await client.callTool(bare, args ?? {})
-        // A successful call clears any previously recorded health fault —
-        // see "Verifying an install": most credential faults only surface on
-        // first real use, so a later success is the honest all-clear.
-        if (plugin.lastError) updatePlugin(plugin.id, { lastError: null, lastErrorAt: null })
+        // An in-band isError result (e.g. the server's own "401 Unauthorized")
+        // is exactly the wrong-API-key scenario "Verifying an install" layer 4
+        // exists for — a thrown exception is not the only way a real call
+        // fails, and treating only the transport-level case as unhealthy would
+        // leave the single most common credential fault unrecorded.
+        if (result?.isError) {
+          const detail = result.content?.find((c) => typeof c?.text === 'string')?.text || 'the plugin reported an error'
+          updatePlugin(plugin.id, { lastError: detail, lastErrorAt: new Date().toISOString() })
+        } else if (plugin.lastError) {
+          // A successful call clears any previously recorded health fault —
+          // most credential faults only surface on first real use, so a later
+          // success is the honest all-clear.
+          updatePlugin(plugin.id, { lastError: null, lastErrorAt: null })
+        }
         return result
       } catch (err) {
         updatePlugin(plugin.id, { lastError: err.message, lastErrorAt: new Date().toISOString() })
