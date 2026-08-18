@@ -3,9 +3,8 @@
 // =============================================================================
 // Redstart Nest — Per-plugin stdio MCP client
 // =============================================================================
-// SKELETON. Every function below throws until implemented — see
-// docs/notes/mcp-plugin-system-tasks.md task T6. Nothing imports this module
-// until T7, so an unfinished file here cannot affect a running app.
+// Implemented per docs/notes/mcp-plugin-system-tasks.md task T6. Nothing
+// imports this module until T7, so it cannot affect a running app yet.
 //
 // JSON-RPC 2.0 plumbing over one plugin child process's stdin/stdout: spawn,
 // initialize handshake, tools/list, tools/call, timeouts, teardown.
@@ -60,86 +59,196 @@ const RESTART_MAX_ATTEMPTS = 5
  */
 export function createPluginClient({ id, command, args, env, timeoutMs, logDir }) {
   // ---- per-instance state (NEVER module scope — see the header) -----------
-  // let manager = null
-  // const pending = new Map()   // request id -> { resolve, reject, timer }
-  // let nextRequestId = 1
-  // let ready = false
-  // let starting = false        // guards overlapping ensureReady() calls
-  // let restartAttempts = 0
-  // let restartDelay = RESTART_INITIAL_MS
-  // let restartTimer = null
+  let manager = null
+  const pending = new Map()   // request id -> { resolve, reject, timer }
+  let nextRequestId = 1
+  let ready = false
+  let starting = false        // guards overlapping ensureReady() calls
+  let startPromise = null
+  let stopping = false        // true while a deliberate stop() is settling the child
+  let restartAttempts = 0
+  let restartDelay = RESTART_INITIAL_MS
+  let restartTimer = null
+
+  function ensureManager() {
+    if (manager) return manager
+    manager = createStdioProcessManager({
+      logDir,
+      onMessage: handleMessage,
+      onExit: handleExit,
+      // We drive our own restart (so every restart gets a fresh handshake)
+      // rather than the shared module's built-in backoff restart.
+      shouldRestart: () => false,
+    })
+    return manager
+  }
 
   /**
-   * TODO(T6): route one framed JSON-RPC line to its waiter.
-   * Ignore non-JSON lines and notifications (no `id`). Clear the timer, delete
-   * the pending entry, reject on msg.error, resolve on msg.result.
+   * Route one framed JSON-RPC line to its waiter. Ignores non-JSON lines and
+   * notifications (no `id`) — nothing is waiting on those.
    */
-  // function handleMessage(_id, line) {}
+  function handleMessage(_procId, line) {
+    let msg
+    try {
+      msg = JSON.parse(line)
+    } catch {
+      return
+    }
+    if (msg.id === undefined || msg.id === null) return
+    const waiter = pending.get(msg.id)
+    if (!waiter) return
+    pending.delete(msg.id)
+    clearTimeout(waiter.timer)
+    if (msg.error) waiter.reject(new Error(msg.error.message || 'MCP error'))
+    else waiter.resolve(msg.result)
+  }
 
   /**
-   * TODO(T6): the child died.
-   * Reject EVERY pending request with `Plugin "${id}" exited` and clear the
-   * map — never leave a promise unsettled, or a tools/call hangs forever and
-   * takes an MCP session with it. Then restart with backoff, giving up after
-   * RESTART_MAX_ATTEMPTS.
+   * The child died. Reject EVERY pending request so nothing hangs, then
+   * restart with backoff — unless this was a deliberate stop() or we have
+   * already given up after RESTART_MAX_ATTEMPTS.
    */
-  // function handleExit(_id, info) {}
+  function handleExit(_procId, _info) {
+    ready = false
+    for (const [reqId, waiter] of pending) {
+      clearTimeout(waiter.timer)
+      waiter.reject(new Error(`Plugin "${id}" exited`))
+      pending.delete(reqId)
+    }
+    clearTimeout(restartTimer)
+
+    if (stopping) {
+      stopping = false
+      return
+    }
+    if (restartAttempts >= RESTART_MAX_ATTEMPTS) return
+    restartAttempts++
+    restartTimer = setTimeout(() => {
+      spawnAndHandshake().catch(() => { /* next callTool()/ensureReady() surfaces the failure */ })
+    }, restartDelay)
+    restartDelay = Math.min(restartDelay * 2, RESTART_MAX_MS)
+    restartTimer.unref?.()
+  }
 
   /**
-   * TODO(T6): send a JSON-RPC request, resolve/reject its promise.
-   * Timeout uses THIS client's timeoutMs, not a shared constant. On timeout:
-   * delete the pending entry and reject with
-   * `Plugin "${id}" did not respond within ${timeoutMs}ms`. The child stays up
-   * and other clients are unaffected — a hung plugin must not block the
-   * providers that come after it in the tools/call dispatch loop.
+   * Send a JSON-RPC request, resolve/reject its promise. Timeout uses THIS
+   * client's timeoutMs — a hung plugin must not block the providers that come
+   * after it in the tools/call dispatch loop, and other clients are
+   * unaffected either way since each owns its own pending map.
    */
-  // function request(method, params) {}
+  function request(method, params) {
+    const reqId = nextRequestId++
+    const payload = JSON.stringify({ jsonrpc: '2.0', id: reqId, method, params })
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(reqId)
+        reject(new Error(`Plugin "${id}" did not respond within ${timeoutMs}ms`))
+      }, timeoutMs)
+      pending.set(reqId, { resolve, reject, timer })
+      const res = manager.send(id, payload)
+      if (!res.ok) {
+        clearTimeout(timer)
+        pending.delete(reqId)
+        reject(new Error(res.error))
+      }
+    })
+  }
+
+  function notify(method, params) {
+    manager.send(id, JSON.stringify({ jsonrpc: '2.0', method, params }))
+  }
+
+  async function spawnAndHandshake() {
+    ensureManager()
+    // A fresh spawn attempt — deliberate (ensureReady) or automatic
+    // (crash-restart) — means any earlier stop() is no longer "in progress".
+    // Without this reset, a stop() called before a child ever finished
+    // spawning (manager null / no exit event to consume the flag) would leave
+    // `stopping` stuck true and permanently suppress crash-restart on every
+    // later respawn of this same client.
+    stopping = false
+    manager.stop(id)
+    const res = manager.start(id, {
+      command,
+      args: args ?? [],
+      env: env ?? {},
+      // SECURITY-relevant, not just tidy: with shell:true on win32 the child
+      // is cmd.exe, and the plugin's credentials would transit that
+      // environment first (plan decision D-f). inheritEnv:false keeps Nest's
+      // own environment away from third-party code (spec R8, T5).
+      inheritEnv: false,
+      shell: false,
+    })
+    if (!res.ok) throw new Error(res.error)
+
+    await request('initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'redstart-nest', version: '1.0.0' },
+    })
+    notify('notifications/initialized', {})
+    ready = true
+    restartDelay = RESTART_INITIAL_MS
+    restartAttempts = 0
+  }
+
+  async function ensureReadyImpl() {
+    if (ready && manager?.isRunning(id)) return
+    if (starting) return startPromise
+    starting = true
+    startPromise = spawnAndHandshake()
+      .catch((err) => {
+        ready = false
+        throw err
+      })
+      .finally(() => {
+        starting = false
+      })
+    return startPromise
+  }
 
   return {
     /**
-     * TODO(T6): spawn + initialize + notifications/initialized.
-     *
-     * Use createStdioProcessManager with `shouldRestart: () => false` — we
-     * drive restarts ourselves so every restart gets a fresh handshake, exactly
-     * as filesystem-mcp-provider does.
-     *
-     * Spawn config MUST include:
-     *   shell: false        — real executable, no cmd.exe layer. This is
-     *                         SECURITY-relevant, not just tidy: with shell:true
-     *                         the plugin's credentials would transit a cmd.exe
-     *                         environment first (plan decision D-f).
-     *   inheritEnv: false   — third-party code does not receive Nest's own
-     *                         environment (spec R8, added to the shared
-     *                         supervisor in T5).
-     *
-     * Idempotent and concurrency-safe: use the `starting` guard.
+     * Spawn + initialize + notifications/initialized. Idempotent and safe to
+     * call concurrently — overlapping callers share the same in-flight
+     * handshake promise rather than racing two spawns.
      */
     ensureReady() {
-      throw new Error('TODO(T6): ensureReady not implemented')
+      return ensureReadyImpl()
     },
 
     /**
-     * TODO(T6): forward tools/call and return the child's result verbatim.
-     * `name` is the BARE tool name — plugin-provider.mjs strips the namespace
-     * prefix before calling. The child has never seen a prefixed name.
+     * Forward tools/call and return the child's result verbatim. `name` is
+     * the BARE tool name — plugin-provider.mjs strips the namespace prefix
+     * before calling. The child has never seen a prefixed name.
      */
-    callTool(name, args) {
-      throw new Error('TODO(T6): callTool not implemented')
+    async callTool(name, callArgs) {
+      await ensureReadyImpl()
+      return request('tools/call', { name, arguments: callArgs ?? {} })
     },
 
-    /** TODO(T6): tools/list. Used by the install probe, not by tools/list dispatch. */
-    listTools() {
-      throw new Error('TODO(T6): listTools not implemented')
+    /** tools/list. Used by the install probe, not by tools/list dispatch. */
+    async listTools() {
+      await ensureReadyImpl()
+      const result = await request('tools/list', {})
+      return Array.isArray(result?.tools) ? result.tools : []
     },
 
-    /** TODO(T6): deliberate stop — cancel restarts, kill the child, reject in flight. */
+    /** Deliberate stop — cancel restarts, kill the child, reject in flight. */
     stop() {
-      throw new Error('TODO(T6): stop not implemented')
+      clearTimeout(restartTimer)
+      stopping = true
+      ready = false
+      manager?.stop(id)
+      for (const [reqId, waiter] of pending) {
+        clearTimeout(waiter.timer)
+        waiter.reject(new Error(`Plugin "${id}" exited`))
+        pending.delete(reqId)
+      }
     },
 
-    /** TODO(T6) */
     isRunning() {
-      throw new Error('TODO(T6): isRunning not implemented')
+      return ready && !!manager?.isRunning(id)
     },
   }
 }
