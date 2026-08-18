@@ -35,10 +35,18 @@
 //   no role assigned   → Full Access, whose permission set is {} → no narrowing.
 // =============================================================================
 
-import { CAPABILITY_TOOL_NAMES, expandDisabledToolIds } from './tools-definitions.mjs'
+import { capabilityToolNames, expandDisabledToolIds } from './tools-definitions.mjs'
 
-/** Capability ids a role can grant or withhold — the keys of CAPABILITY_TOOL_NAMES. */
-export const CAPABILITY_IDS = Object.keys(CAPABILITY_TOOL_NAMES)
+/**
+ * Capability ids a role can grant or withhold — built-ins plus installed plugins.
+ *
+ * A FUNCTION. This was `Object.keys(CAPABILITY_TOOL_NAMES)` evaluated at import,
+ * which silently excluded every plugin from narrowConfig — meaning roles could
+ * not withhold a plugin at all. See docs/notes/mcp-plugin-system-plan.md Trap 3.
+ */
+export function capabilityIds() {
+  return Object.keys(capabilityToolNames())
+}
 
 /**
  * The permission set that permits nothing. Used for the BROKEN-INVARIANT case,
@@ -113,12 +121,15 @@ export function narrowConfig(config, permissions) {
   // no tool is produced, AND the capability's tool names join disabledTools so
   // the policy gate refuses them even if a provider ignores its own flag.
   const allowedCaps = inherits(p.capabilities) ? null : new Set(p.capabilities)
-  const withheldCaps = allowedCaps === null ? [] : CAPABILITY_IDS.filter(id => !allowedCaps.has(id))
+  const withheldCaps = allowedCaps === null ? [] : capabilityIds().filter(id => !allowedCaps.has(id))
 
   const out = { ...config }
 
-  for (const id of CAPABILITY_IDS) {
-    const key = CAPABILITY_CONFIG_KEY[id]
+  for (const id of capabilityIds()) {
+    // Plugins have no hand-written config-key entry; their capability id IS
+    // their config key. Falling back to the id keeps narrowing working for them
+    // without a table edit per install.
+    const key = CAPABILITY_CONFIG_KEY[id] ?? id
     const current = config[key]
     if (!current) continue
     const permitted = allowedCaps === null || allowedCaps.has(id)
