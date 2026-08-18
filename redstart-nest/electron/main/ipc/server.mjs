@@ -31,6 +31,7 @@ export function registerServerHandlers({
   ensureFirewallRule,
   getLocalIp,
   userDataDir,
+  refreshLiveToolsConfig,
 }) {
   // --- Llama command preview ---
 
@@ -180,6 +181,31 @@ export function registerServerHandlers({
     } catch {
       return { running: true, health: 'unreachable' }
     }
+  })
+
+  // --- Live tools sync ---
+  //
+  // Capability config and the plugin registry's `enabled` switch already take
+  // effect on a running server without a restart, via refreshLiveToolsConfig()
+  // — getCapabilities()/listPlugins() re-read their own files fresh on every
+  // call. A profile's OWN tools settings (activeToolIds/disabledToolIds/
+  // activeGroupIds/tools.enabled) did NOT: buildGatewayConfig() reads those
+  // straight off `llamaConfig.tools`, i.e. off serverState.lastConfig — a
+  // snapshot frozen at `llama:launch` and never re-read from disk afterward.
+  // So toggling a plugin's Tools-tab activation card had no live effect at
+  // all until the server was stopped and restarted, unlike every other
+  // toggle on that same tab. This closes the gap the same way: merge the new
+  // tools settings into the live snapshot, then refresh.
+  //
+  // A no-op when nothing is running (serverState.process null) or nothing has
+  // been launched yet this session (lastConfig null) — there is no live
+  // server to push to, and the next launch will read the saved profile fresh
+  // regardless.
+  handle('server:sync-tools', (_, tools) => {
+    if (!serverState.process || !serverState.lastConfig) return { live: false }
+    serverState.lastConfig = { ...serverState.lastConfig, tools }
+    refreshLiveToolsConfig()
+    return { live: true }
   })
 
   // --- Network info ---

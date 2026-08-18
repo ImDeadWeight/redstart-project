@@ -50,16 +50,22 @@ export default function App() {
   // Domain hooks — each owns one slice of state and its IPC calls.
   const auth = useAuthSetup(showStatus)
   const mcp = useExternalMcp()
-  const toolsCatalog = useToolsCatalog(config, setConfig)
   const caps = useCapabilities(config)
   const plugins = usePlugins()
   const hw = useHardwareAndBinary(setConfig)
   const modelCatalog = useModelCatalog()
+  // profilesHook and server are constructed BEFORE toolsCatalog so the latter
+  // can close over them: every Tools-tab toggle needs to know whether the
+  // profile it's editing is the one actually running, to decide whether to
+  // push the change live (see syncToolsIfLive's own comment for why that
+  // check exists — nothing stops the admin switching profiles mid-session).
   const profilesHook = useProfiles(config, setConfig, setAdvertisedHost, showStatus)
   const server = useServerLifecycle({
     config, showStatus, clearStatus,
     onLaunchStarted: () => setActiveTab('server'),
+    selectedProfile: profilesHook.selectedProfile,
   })
+  const toolsCatalog = useToolsCatalog(config, setConfig, server.syncToolsIfLive)
 
   // --- Bootstrap ---
 

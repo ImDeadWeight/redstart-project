@@ -103,6 +103,21 @@ export function PluginsTab({ plugins }: Props) {
               </p>
             )}
 
+            {/* "Healthy, 40 tools" only means the probe discovered 40 tools —
+                it says nothing about how many actually reach the model. This
+                is the exact gap that produced a real, hard-to-diagnose
+                confusion: a plugin can be enabled, activated, and healthy
+                while every one of its tools is silently filtered out by
+                classification + policy (a fresh install starts destructive,
+                D-b). Only shown when it's actually true — a plugin that's
+                fully advertised needs no extra line. */}
+            {p.toolCount > 0 && p.advertisedCount < p.toolCount && (
+              <p className="text-xs text-yellow-500/90 mt-1.5">
+                ⚠ {p.advertisedCount} of {p.toolCount} tool{p.toolCount === 1 ? '' : 's'} currently reach{p.advertisedCount === 1 ? 'es' : ''} the model
+                {p.advertisedCount === 0 ? ' — none yet' : ''}. The rest are classified write/destructive with that policy off below — classify tools to promote the safe ones.
+              </p>
+            )}
+
             {testResults[p.id] && (
               <p className={`text-xs mt-1.5 ${testResults[p.id].ok ? 'text-green-400' : 'text-red-400'}`}>{testResults[p.id].message}</p>
             )}

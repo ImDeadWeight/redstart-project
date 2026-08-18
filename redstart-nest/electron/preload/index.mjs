@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('redstartAPI', {
     stop: (config) => ipcRenderer.invoke('server:stop', config),
     status: (config) => ipcRenderer.invoke('server:status', config),
     getIp: () => ipcRenderer.invoke('server:get-ip'),
+    syncTools: (tools) => ipcRenderer.invoke('server:sync-tools', tools),
   },
 
   profiles: {

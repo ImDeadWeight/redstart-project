@@ -26,6 +26,11 @@ export type RedstartAPI = {
     stop: (config: LlamaConfig) => Promise<{ success: boolean }>
     status: (config: LlamaConfig) => Promise<{ running: boolean; health: string | null; pid?: number }>
     getIp: () => Promise<string>
+    // Pushes updated tools settings (activeToolIds/disabledToolIds/
+    // activeGroupIds/enabled) to an already-running server without a
+    // restart. { live: false } when nothing is running to push to — not an
+    // error, the next launch reads the saved profile fresh regardless.
+    syncTools: (tools: LlamaConfig['tools']) => Promise<{ live: boolean }>
   }
   profiles: {
     list: () => Promise<string[]>
@@ -184,6 +189,11 @@ export type PluginSummary = {
   allowWrite: boolean
   allowDestructive: boolean
   toolCount: number
+  // Of toolCount, how many actually reach tools/list right now — purely a
+  // function of classification + this plugin's write/destructive policy, NOT
+  // of whether any profile has activated it. A fresh install is 0 until
+  // classified (every discovered tool starts 'destructive', D-b).
+  advertisedCount: number
   hasSecret: boolean
   lastError: string | null
   lastErrorAt: string | null

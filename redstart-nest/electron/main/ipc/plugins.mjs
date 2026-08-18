@@ -56,6 +56,16 @@ function pluginLogDir() {
   return path.join(app.getPath('userData'), 'mcp-plugin-logs')
 }
 
+// Mirrors evaluateToolPolicy's plugin branch in mcp-server.mjs exactly: only
+// destructive/write are class-gated for a plugin (read/network always pass).
+// Kept in sync by test-mcp-capabilities.mjs's ban-propagation suite, which
+// drives the real gate end to end against a live plugin.
+function isAdvertised(tool, plugin) {
+  if (tool.class === 'destructive') return plugin.allowDestructive === true
+  if (tool.class === 'write') return plugin.allowWrite === true
+  return true
+}
+
 /** Never a credential, never envEnc — the projection every list/get shares. */
 function projectPlugin(p) {
   return {
@@ -67,6 +77,16 @@ function projectPlugin(p) {
     allowWrite: p.allowWrite === true,
     allowDestructive: p.allowDestructive === true,
     toolCount: p.tools.length,
+    // How many of the discovered tools actually reach tools/list right now,
+    // independent of whether any profile has this plugin activated at all —
+    // purely a function of classification + this plugin's own write/
+    // destructive policy. A fresh install starts every tool 'destructive'
+    // (D-b) with both policy flags off, so advertisedCount starts at 0 even
+    // though toolCount is honest about what was discovered. Surfaced on the
+    // card so "healthy, 40 tools" can no longer read as "40 tools reach the
+    // model" when the true number is zero — that gap is what actually
+    // happened in production and had no visible signal anywhere.
+    advertisedCount: p.tools.filter((t) => isAdvertised(t, p)).length,
     hasSecret: !!(p.envEnc && Object.keys(p.envEnc).length > 0),
     lastError: p.lastError ?? null,
     lastErrorAt: p.lastErrorAt ?? null,

@@ -10,14 +10,23 @@ export function useServerLifecycle(opts: {
   showStatus: (msg: string, ttlMs?: number) => void
   clearStatus: () => void
   onLaunchStarted?: () => void
+  selectedProfile?: string
 }) {
-  const { config, showStatus, clearStatus, onLaunchStarted } = opts
+  const { config, showStatus, clearStatus, onLaunchStarted, selectedProfile } = opts
 
   const [serverState, setServerState] = useState<ServerState>('stopped')
   const [health, setHealth] = useState<string | null>(null)
   const [tokensPerMin, setTokensPerMin] = useState<number>(0)
   const [logLines, setLogLines] = useState<string[]>([])
   const [confirmStop, setConfirmStop] = useState(false)
+  // Which profile NAME actually launched the running server — captured once
+  // at launch, deliberately NOT kept in sync with selectedProfile afterward.
+  // The admin can switch the profile selector to a different profile while
+  // this one keeps running (nothing in the UI stops them); comparing this
+  // against the live selectedProfile is what tells syncToolsIfLive() whether
+  // config.tools still describes the server that's actually up, or describes
+  // some other profile the admin has since switched to editing.
+  const [runningProfileName, setRunningProfileName] = useState<string | null>(null)
 
   const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const configRef = useRef(config)
@@ -52,6 +61,7 @@ export function useServerLifecycle(opts: {
       setHealth(null)
       setTokensPerMin(0)
       setConfirmStop(false)
+      setRunningProfileName(null)
       stopStatusPoll()
       a.events.offServerLog()
       if (isUserStopRef.current) {
@@ -83,12 +93,27 @@ export function useServerLifecycle(opts: {
     if (result.success) {
       setServerState('running')
       setHealth('starting')
+      setRunningProfileName(selectedProfile || null)
       startStatusPoll()
     } else {
       setServerState('stopped')
       showStatus(`Launch error: ${result.error}`, 0)
       getAPI()?.events.offServerLog()
     }
+  }
+
+  // Pushes updated tools settings to the already-running server WITHOUT a
+  // restart — mirrors how capability/plugin toggles already take effect live
+  // (see server:sync-tools in ipc/server.mjs for why activeToolIds etc. did
+  // NOT already work this way). Silently skipped, not merely inert, when
+  // config.tools no longer describes the profile that's actually running: the
+  // admin can switch the profile selector to a DIFFERENT profile without
+  // stopping this one, and pushing that other profile's tools into this
+  // server would silently reconfigure the wrong thing.
+  function syncToolsIfLive(tools: LlamaConfig['tools']) {
+    if (serverState !== 'running') return
+    if (!runningProfileName || runningProfileName !== selectedProfile) return
+    api().server.syncTools(tools)
   }
 
   // Two-step confirmation for stopping: clicking stop mid-generation kills
@@ -115,5 +140,6 @@ export function useServerLifecycle(opts: {
     serverState, health, tokensPerMin, logLines, clearLog,
     confirmStop, setConfirmStop,
     launchServer, requestStopServer, confirmStopServer,
+    runningProfileName, syncToolsIfLive,
   }
 }
