@@ -56,6 +56,20 @@ export function pluginsRoot() {
   return path.join(app.getPath('userData'), 'plugins')
 }
 
+// Pulled out of installNpmPackage so `--ignore-scripts` — the one flag in
+// this whole module that must never silently go missing — can be asserted on
+// directly, against the built argv, without spawning a real npm process.
+export function buildNpmInstallArgs({ cliPath, spec, dir }) {
+  return [
+    cliPath, 'install', spec,
+    '--prefix', dir,
+    '--ignore-scripts',
+    '--no-audit',
+    '--no-fund',
+    '--loglevel=error',
+  ]
+}
+
 // ---------------------------------------------------------------------------
 // T15 — install
 // ---------------------------------------------------------------------------
@@ -116,7 +130,162 @@ export function pluginsRoot() {
  *                 | {ok: false, reason: string, detail?: string}>}
  */
 export async function installNpmPackage({ id, packageName, version, onProgress, signal }) {
-  throw new Error('TODO(T15): installNpmPackage not implemented')
+  if (typeof id !== 'string' || !PLUGIN_ID_PATTERN.test(id)) {
+    return { ok: false, reason: INSTALL_REASON.badId, detail: `invalid plugin id "${id}"` }
+  }
+  if (signal?.aborted) return { ok: false, reason: INSTALL_REASON.cancelled }
+
+  const npm = await detectNpm()
+  if (!npm.ok) return { ok: false, reason: INSTALL_REASON.npmMissing, detail: npm.reason }
+
+  const dir = path.join(pluginsRoot(), id)
+
+  // A project root of its own — so npm resolves dependencies against THIS
+  // directory rather than walking up into Redstart's own package.json.
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({ name: `redstart-plugin-${id}`, private: true }, null, 2) + '\n',
+    'utf8',
+  )
+
+  const spec = `${packageName}@${version}`
+  const args = buildNpmInstallArgs({ cliPath: npm.cliPath, spec, dir })
+
+  onProgress?.({ state: 'installing', message: `Installing ${spec}...` })
+
+  let aborted = false
+  const onAbort = () => { aborted = true }
+  signal?.addEventListener('abort', onAbort)
+
+  let stderrTail = ''
+  const captureStderr = (chunk) => {
+    stderrTail = (stderrTail + chunk.toString('utf8')).slice(-4000) // bounded — npm can be chatty even at loglevel=error
+  }
+
+  const spawnResult = await new Promise((resolve) => {
+    let child
+    try {
+      child = spawn(process.execPath, args, {
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        windowsHide: true,
+        shell: false, // real executable under our own binary — no cmd.exe layer (P4-1)
+        signal,
+      })
+    } catch (err) {
+      resolve({ ok: false, reason: INSTALL_REASON.installFailed, detail: err.message })
+      return
+    }
+
+    child.stdout?.on('data', (chunk) => onProgress?.({ state: 'installing', message: chunk.toString('utf8').trim() }))
+    child.stderr?.on('data', captureStderr)
+
+    child.on('error', (err) => {
+      if (aborted || err.name === 'AbortError' || err.code === 'ABORT_ERR') {
+        resolve({ ok: false, reason: INSTALL_REASON.cancelled })
+        return
+      }
+      resolve({ ok: false, reason: INSTALL_REASON.installFailed, detail: err.message })
+    })
+
+    child.on('exit', (code) => {
+      if (aborted) {
+        resolve({ ok: false, reason: INSTALL_REASON.cancelled })
+        return
+      }
+      if (code === 0) {
+        resolve({ ok: true })
+        return
+      }
+      resolve({ ok: false, reason: classifyNpmFailure(stderrTail), detail: stderrTail.trim() || `npm exited with code ${code}` })
+    })
+  })
+
+  signal?.removeEventListener('abort', onAbort)
+
+  if (!spawnResult.ok) {
+    // A half-installed tree must not be left behind, on failure or cancel alike.
+    fs.rmSync(dir, { recursive: true, force: true })
+    logEvent('plugin', 'install_failed', { plugin: id, reason: spawnResult.reason })
+    return spawnResult
+  }
+
+  onProgress?.({ state: 'resolving', message: 'Resolving entry point...' })
+
+  let entryPoint
+  try {
+    entryPoint = resolveEntryPoint(dir, packageName)
+  } catch (err) {
+    fs.rmSync(dir, { recursive: true, force: true })
+    logEvent('plugin', 'install_failed', { plugin: id, reason: INSTALL_REASON.noEntryPoint })
+    return { ok: false, reason: INSTALL_REASON.noEntryPoint, detail: err.message }
+  }
+
+  const { resolvedVersion, integrity } = readLockfileInfo(dir, packageName)
+  logEvent('plugin', 'installed', { plugin: id, version: resolvedVersion })
+
+  return {
+    ok: true,
+    dir,
+    resolvedVersion,
+    integrity,
+    command: process.execPath,
+    args: [entryPoint],
+  }
+}
+
+// Distinguishes the taxonomy in INSTALL_REASON from npm's own stderr. A
+// single generic "install failed" would make the admin guess, which is
+// exactly what spec R2 forbids.
+function classifyNpmFailure(stderr) {
+  if (/\bE404\b/.test(stderr) || /\bnot found\b/i.test(stderr)) return INSTALL_REASON.packageNotFound
+  if (/\bETARGET\b/.test(stderr) || /no matching version/i.test(stderr)) return INSTALL_REASON.versionNotFound
+  if (/\bENOTFOUND\b|\bECONNREFUSED\b|\bECONNRESET\b|\bETIMEDOUT\b|\bEAI_AGAIN\b/.test(stderr)) return INSTALL_REASON.network
+  return INSTALL_REASON.installFailed
+}
+
+// `bin` (string, or the first value of the object form) is preferred over
+// `main` — an MCP stdio server is normally published as an executable script,
+// and `main` alone would resolve to a library entry point that never speaks
+// the protocol on its own stdio.
+function resolveEntryPoint(dir, packageName) {
+  const pkgPath = path.join(dir, 'node_modules', ...packageName.split('/'), 'package.json')
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+
+  let relative = null
+  if (typeof pkg.bin === 'string') {
+    relative = pkg.bin
+  } else if (pkg.bin && typeof pkg.bin === 'object') {
+    relative = Object.values(pkg.bin)[0]
+  }
+  if (!relative && typeof pkg.main === 'string') relative = pkg.main
+  if (!relative) throw new Error(`"${packageName}" declares neither "bin" nor "main"`)
+
+  const absolute = path.join(path.dirname(pkgPath), relative)
+  if (!fs.existsSync(absolute)) throw new Error(`resolved entry point does not exist: ${absolute}`)
+  return absolute
+}
+
+// npm writes both the resolved version and its integrity hash into
+// package-lock.json (P4-6) — read them from there rather than trusting the
+// version string the admin typed, which may have been a range.
+function readLockfileInfo(dir, packageName) {
+  try {
+    const lock = JSON.parse(fs.readFileSync(path.join(dir, 'package-lock.json'), 'utf8'))
+    // npm v7+ ("packages" form) is the modern shape; v6 ("dependencies") is a
+    // fallback for anything that still writes the old lockfile format.
+    const packagesEntry = lock.packages?.[`node_modules/${packageName}`]
+    if (packagesEntry) {
+      return { resolvedVersion: packagesEntry.version ?? null, integrity: packagesEntry.integrity ?? null }
+    }
+    const depEntry = lock.dependencies?.[packageName]
+    if (depEntry) {
+      return { resolvedVersion: depEntry.version ?? null, integrity: depEntry.integrity ?? null }
+    }
+  } catch {
+    // No lockfile, or a shape we don't recognise — not fatal, just less metadata.
+  }
+  return { resolvedVersion: null, integrity: null }
 }
 
 // ---------------------------------------------------------------------------

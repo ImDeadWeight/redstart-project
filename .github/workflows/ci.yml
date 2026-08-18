@@ -108,6 +108,9 @@ jobs:
       - name: "Security: per-plugin stdio MCP client (timeout, crash, env isolation)"
         run: node scripts/test-plugin-client.mjs
 
+      - name: "Security: plugin install pipeline (--ignore-scripts, probe, uninstall)"
+        run: node scripts/test-plugin-install.mjs
+
       - name: "Security: log redaction contract (blocklist + audit allowlist)"
         run: node scripts/test-logging.mjs
 
