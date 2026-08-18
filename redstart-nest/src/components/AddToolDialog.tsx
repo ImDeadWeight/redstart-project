@@ -418,13 +418,18 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
           {/* Step 4 — Classify */}
           {s.step === 4 && (
             <div className="space-y-3">
-              <p className="text-xs text-zinc-500">Every tool starts at the most restrictive class. Promote only what this plugin actually needs.</p>
-              <div className="divide-y divide-zinc-800 border border-zinc-800 rounded">
+              <p className="text-xs text-zinc-500">
+                Every tool starts at the most restrictive class — read the description before promoting any of them.
+                A server with dozens of tools ("list X", "get Y") is usually mostly reads with a handful of real writes; don't leave all {s.tools.length} at destructive by default, but don't promote past what you've actually read either.
+              </p>
+              <div className="divide-y divide-zinc-800 border border-zinc-800 rounded max-h-80 overflow-y-auto">
                 {s.tools.map((t) => (
-                  <div key={t.name} className="flex items-center justify-between gap-3 px-3 py-2">
+                  <div key={t.name} className="flex items-start justify-between gap-3 px-3 py-2">
                     <div className="min-w-0">
-                      <p className="text-sm text-zinc-200 truncate">{t.name}</p>
-                      {t.description && <p className="text-xs text-zinc-600 truncate">{t.description}</p>}
+                      <p className="text-sm text-zinc-200">{t.name}</p>
+                      {/* Not truncated — a clipped description is exactly what
+                          makes "destructive" meaningless on a 40-tool plugin. */}
+                      <p className="text-xs text-zinc-500 mt-0.5">{t.description || '(no description provided by the plugin)'}</p>
                     </div>
                     <select className={inputCls.xs + ' w-32 flex-shrink-0'} value={t.class}
                       onChange={(e) => setToolClass(t.name, e.target.value as PluginToolInfo['class'])}>

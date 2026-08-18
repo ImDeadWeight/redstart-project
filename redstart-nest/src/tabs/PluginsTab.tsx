@@ -141,6 +141,17 @@ export function PluginsTab({ plugins }: Props) {
   )
 }
 
+// Class -> the color that marks a row's risk at a glance, so a 40-tool list
+// reads as a shape (mostly read, a few destructive) rather than a wall of
+// identical rows. destructive server-defaults (D3/D-b) are supposed to jump
+// out until an admin reviews and demotes them individually.
+const CLASS_COLOR: Record<PluginToolInfo['class'], string> = {
+  read: 'border-l-zinc-600 text-zinc-500',
+  network: 'border-l-blue-500 text-blue-400',
+  write: 'border-l-amber-500 text-amber-400',
+  destructive: 'border-l-red-500 text-red-400',
+}
+
 function ToolClassificationEditor({ pluginId, plugins }: { pluginId: string; plugins: ReturnType<typeof usePlugins> }) {
   const [tools, setTools] = useState<PluginToolInfo[] | null>(null)
 
@@ -149,26 +160,51 @@ function ToolClassificationEditor({ pluginId, plugins }: { pluginId: string; plu
     return <p className="text-xs text-zinc-600 mt-2">Loading…</p>
   }
 
+  const counts = tools.reduce(
+    (acc, t) => ({ ...acc, [t.class]: (acc[t.class] ?? 0) + 1 }),
+    {} as Partial<Record<PluginToolInfo['class'], number>>
+  )
+
   return (
-    <div className="mt-2 pt-2 border-t border-zinc-700/50 divide-y divide-zinc-800">
-      {tools.map((t) => (
-        <div key={t.name} className="flex items-center justify-between gap-2 py-1.5">
-          <span className="text-xs text-zinc-300 truncate">{t.name}</span>
-          <select
-            className="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-1 text-xs text-white flex-shrink-0"
-            value={t.class}
-            onChange={async (e) => {
-              const cls = e.target.value as PluginToolInfo['class']
-              await plugins.setToolClass(pluginId, t.name, cls)
-              setTools((prev) => prev!.map((x) => (x.name === t.name ? { ...x, class: cls } : x)))
-            }}>
-            <option value="read">read</option>
-            <option value="network">network</option>
-            <option value="write">write</option>
-            <option value="destructive">destructive</option>
-          </select>
-        </div>
-      ))}
+    <div className="mt-2 pt-2 border-t border-zinc-700/50">
+      <p className="text-xs mb-2">
+        <span className="text-zinc-500">{tools.length} tools — </span>
+        {(['destructive', 'write', 'network', 'read'] as const)
+          .filter((c) => counts[c])
+          .map((c) => (
+            <span key={c} className={`${CLASS_COLOR[c].split(' ')[1]} mr-2`}>{counts[c]} {c}</span>
+          ))}
+      </p>
+      <div className="divide-y divide-zinc-800">
+        {tools.map((t) => (
+          <div key={t.name} className={`flex items-center justify-between gap-3 py-2 pl-2 border-l-2 ${CLASS_COLOR[t.class].split(' ')[0]}`}>
+            <div className="min-w-0">
+              <span className="text-xs text-zinc-200">{t.name}</span>
+              {/* The whole point of this screen: what power a tool actually has,
+                  not just its class label. The MCP server's own description is
+                  the only source we have for that (see joenorton/shawnrushefsky-
+                  style servers, where "delete_note"/"run_workflow" only read as
+                  destructive vs. read once you see the sentence). Wrapped, not
+                  truncated — a clipped description is the exact failure this
+                  fixes. */}
+              <p className="text-xs text-zinc-500 mt-0.5">{t.description || '(no description provided by the plugin)'}</p>
+            </div>
+            <select
+              className="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-1 text-xs text-white flex-shrink-0"
+              value={t.class}
+              onChange={async (e) => {
+                const cls = e.target.value as PluginToolInfo['class']
+                await plugins.setToolClass(pluginId, t.name, cls)
+                setTools((prev) => prev!.map((x) => (x.name === t.name ? { ...x, class: cls } : x)))
+              }}>
+              <option value="read">read</option>
+              <option value="network">network</option>
+              <option value="write">write</option>
+              <option value="destructive">destructive</option>
+            </select>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
