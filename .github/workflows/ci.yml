@@ -102,6 +102,9 @@ jobs:
       - name: "Durability: atomic JSON state writes"
         run: node scripts/test-json-store.mjs
 
+      - name: "Security: MCP plugin registry validation"
+        run: node scripts/test-plugin-registry.mjs
+
       - name: "Security: log redaction contract (blocklist + audit allowlist)"
         run: node scripts/test-logging.mjs
 
