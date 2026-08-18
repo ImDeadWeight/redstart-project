@@ -3,9 +3,8 @@
 // =============================================================================
 // Redstart Nest — Plugin provider adapters
 // =============================================================================
-// SKELETON. Every function below throws until implemented — see
-// docs/notes/mcp-plugin-system-tasks.md task T7. Nothing imports this module
-// until T8, so an unfinished file here cannot affect a running app.
+// Implemented per docs/notes/mcp-plugin-system-tasks.md task T7. Nothing
+// imports this module until T8, so it cannot affect a running app yet.
 //
 // Turns registry entries into objects mcp-server.mjs can put in its provider
 // list, alongside the nine built-in providers. The contract is the same one
@@ -32,7 +31,7 @@
 
 import * as path from 'path'
 import { app } from 'electron'
-import { listPlugins, getPlugin, NAMESPACE_SEPARATOR } from './plugin-registry.mjs'
+import { listPlugins, getPlugin, updatePlugin, NAMESPACE_SEPARATOR } from './plugin-registry.mjs'
 import { createPluginClient } from './mcp-plugin-client.mjs'
 import { decryptSecret } from './secrets.mjs'
 
@@ -53,7 +52,29 @@ function logDir() {
  * @param {object} plugin registry entry
  */
 function clientFor(plugin) {
-  throw new Error('TODO(T7): clientFor not implemented')
+  const existing = clients.get(plugin.id)
+  if (existing) return existing
+
+  // Decrypt here, once, at spawn time — this merged env object is the ONLY
+  // place a plugin credential exists in plaintext. It goes straight into the
+  // client's spawn config and nowhere else (never logged, never returned).
+  const env = { ...(plugin.env ?? {}) }
+  if (plugin.envEnc) {
+    for (const [key, ciphertext] of Object.entries(plugin.envEnc)) {
+      env[key] = decryptSecret(ciphertext)
+    }
+  }
+
+  const client = createPluginClient({
+    id: plugin.id,
+    command: plugin.resolvedCommand,
+    args: plugin.resolvedArgs ?? [],
+    env,
+    timeoutMs: plugin.timeoutMs,
+    logDir: logDir(),
+  })
+  clients.set(plugin.id, client)
+  return client
 }
 
 /**
@@ -67,7 +88,7 @@ function clientFor(plugin) {
  * Checking only one is the likeliest bug in this file, and it fails OPEN.
  */
 function isActive(plugin, cfg) {
-  throw new Error('TODO(T7): isActive not implemented')
+  return plugin.enabled === true && cfg?.[plugin.id]?.enabled === true
 }
 
 /**
@@ -99,7 +120,53 @@ function isActive(plugin, cfg) {
  * @param {object} plugin registry entry
  */
 function makeProvider(plugin) {
-  throw new Error('TODO(T7): makeProvider not implemented')
+  const prefix = `${plugin.id}${NAMESPACE_SEPARATOR}`
+
+  return {
+    toolDefs(cfg) {
+      if (!isActive(plugin, cfg)) return []
+      // Tool list comes from the REGISTRY, never the child — toolDefs is
+      // synchronous and must answer before any child exists (spec R1/R5).
+      // The child's own `annotations` (e.g. a self-declared readOnlyHint) are
+      // deliberately dropped: mcp-server.mjs stamps Redstart's own
+      // classification via annotateTool(), and a plugin's opinion about
+      // itself must never masquerade as that verdict (plan decision D3).
+      return plugin.tools.map((t) => ({
+        name: `${prefix}${t.name}`,
+        description: t.description,
+        inputSchema: t.inputSchema,
+      }))
+    },
+
+    async callTool(name, args, cfg, _ctx) {
+      if (typeof name !== 'string' || !name.startsWith(prefix)) return null // not mine — let the next provider try
+
+      if (!isActive(plugin, cfg)) {
+        return { isError: true, content: [{ type: 'text', text: `The "${plugin.displayName || plugin.id}" plugin is disabled.` }] }
+      }
+
+      const bare = name.slice(prefix.length)
+      try {
+        const client = clientFor(plugin)
+        await client.ensureReady()
+        const result = await client.callTool(bare, args ?? {})
+        // A successful call clears any previously recorded health fault —
+        // see "Verifying an install": most credential faults only surface on
+        // first real use, so a later success is the honest all-clear.
+        if (plugin.lastError) updatePlugin(plugin.id, { lastError: null, lastErrorAt: null })
+        return result
+      } catch (err) {
+        updatePlugin(plugin.id, { lastError: err.message, lastErrorAt: new Date().toISOString() })
+        // mcp-server.mjs does not catch here — an escaping exception would
+        // take out the whole request, not just this tool call.
+        return { isError: true, content: [{ type: 'text', text: `Plugin error: ${err.message}` }] }
+      }
+    },
+
+    shutdown() {
+      clients.get(plugin.id)?.stop()
+    },
+  }
 }
 
 /**
@@ -117,7 +184,7 @@ function makeProvider(plugin) {
  * @returns {object[]}
  */
 export function pluginProviders() {
-  throw new Error('TODO(T7): pluginProviders not implemented')
+  return listPlugins().map(makeProvider)
 }
 
 /**
@@ -126,7 +193,8 @@ export function pluginProviders() {
  * processes that outlive the server that spawned them.
  */
 export function stopAllPlugins() {
-  throw new Error('TODO(T7): stopAllPlugins not implemented')
+  for (const client of clients.values()) client.stop()
+  clients.clear()
 }
 
 /**
@@ -143,5 +211,14 @@ export function stopAllPlugins() {
  * @param {object} cfg from buildGatewayConfig
  */
 export function syncPluginProviders(cfg) {
-  throw new Error('TODO(T7): syncPluginProviders not implemented')
+  for (const [id, client] of clients) {
+    const plugin = getPlugin(id)
+    // Uninstalled, registry-disabled, or deactivated for this profile — any
+    // of the three means this client has no business staying up. Spawning
+    // stays lazy (spec R5); this function only ever stops, never starts.
+    if (!plugin || !isActive(plugin, cfg)) {
+      client.stop()
+      clients.delete(id)
+    }
+  }
 }
