@@ -125,7 +125,13 @@ export type RedstartAPI = {
     }) => Promise<
       { ok: true; tools: PluginToolInfo[]; resolvedCommand: string; resolvedArgs: string[]
         resolvedVersion: string | null; integrity: string | null; installDir: string | null; runAsNode: boolean }
+      // Two distinct failure shapes, both real: the npm/probe pipeline
+      // (electron/main/plugin-install.mjs) reports { reason, detail }; the
+      // handler's own up-front validation (bad id, id already installed,
+      // malformed source, ...) goes through ipc/plugins.mjs's shared
+      // refuse() helper and reports { error } instead.
       | { ok: false; reason: string; detail?: string }
+      | { ok: false; error: string }
     >
     cancelInstall: () => Promise<{ ok: boolean; error?: string }>
     installStatus: () => Promise<{ active: boolean; id?: string }>
@@ -142,6 +148,7 @@ export type RedstartAPI = {
     }) => Promise<{ ok: boolean; error?: string }>
     setEnabled: (id: string, enabled: boolean) => Promise<{ ok: boolean; error?: string }>
     setClass: (id: string, toolName: string, cls: PluginToolInfo['class']) => Promise<{ ok: boolean; error?: string }>
+    setClasses: (id: string, toolNames: string[], cls: PluginToolInfo['class']) => Promise<{ ok: boolean; updated?: number; error?: string }>
     uninstall: (id: string) => Promise<{ ok: boolean; folderRemoved?: boolean; error?: string }>
     test: (id: string) => Promise<{ ok: boolean; message: string }>
     search: (opts: { query?: string; cursor?: string }) => Promise<

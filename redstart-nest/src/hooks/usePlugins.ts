@@ -66,6 +66,15 @@ export function usePlugins() {
     await loadPlugins()
   }
 
+  /** Bulk classify — one write, one reload, instead of N of each. Still
+   *  requires the admin to name which tools and which class explicitly;
+   *  nothing here changes what a fresh install starts at (D-b). */
+  async function setToolClasses(id: string, toolNames: string[], cls: PluginToolInfo['class']): Promise<{ ok: boolean; error?: string }> {
+    const result = await api().plugins.setClasses(id, toolNames, cls)
+    await loadPlugins()
+    return result
+  }
+
   /** Search the MCP registry. Keeps EVERY result, including unsupported ones —
    *  the verdict is shown, never used to filter. */
   async function search(query: string): Promise<void> {
@@ -83,6 +92,6 @@ export function usePlugins() {
     plugins, setPlugins, loading,
     installProgress, setInstallProgress,
     searchResults, setSearchResults, searchError,
-    loadPlugins, setEnabled, uninstall, testPlugin, setToolClass, search,
+    loadPlugins, setEnabled, uninstall, testPlugin, setToolClass, setToolClasses, search,
   }
 }

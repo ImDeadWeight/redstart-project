@@ -11,6 +11,14 @@ import type { PluginToolInfo, RegistrySearchResult } from '../api/redstart'
 import type { usePlugins } from '../hooks/usePlugins'
 import { btnCls, inputCls, TruncatedText } from './ui'
 
+// A fixed-width sibling of inputCls.xs for the per-tool class picker. Deliberately
+// NOT built from inputCls.xs + ' w-32' — that variant's own w-full and a
+// tacked-on w-32 are the same Tailwind specificity tier, and w-full wins in
+// this build's generated stylesheet order regardless of source order in the
+// className string.
+const selectClsCompact =
+  'w-32 flex-shrink-0 bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-orange-500'
+
 /** One generated input. Registry metadata maps onto this directly:
  *  name -> label, description -> helper text, format -> widget,
  *  isRequired -> asterisk + submit block, default -> value, placeholder -> hint. */
@@ -127,7 +135,17 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
   function goToStep2() {
     if (s.sourceKind === 'registry' && !s.registrySelected) return
     if (!s.pluginIdTouched) {
-      const seed = s.sourceKind === 'npm' ? s.npmPackage : s.sourceKind === 'command' ? s.command : s.localPath
+      // BUG (found via a real install): this ternary had no 'registry' case,
+      // so it fell through to the 'path' branch's s.localPath — empty for a
+      // registry pick — and silently OVERWROTE the good id pickRegistryResult
+      // had just derived from entry.name with the literal fallback "plugin".
+      // Every registry-sourced install got the same meaningless id unless the
+      // admin happened to hand-edit the id field first.
+      const seed =
+        s.sourceKind === 'registry' ? s.displayName
+        : s.sourceKind === 'npm' ? s.npmPackage
+        : s.sourceKind === 'command' ? s.command
+        : s.localPath
       set('pluginId', slugify(seed || 'plugin'))
     }
     set('step', 2)
@@ -168,7 +186,16 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
     const result = await api().plugins.install({ id: s.pluginId, source, env: buildEnvPayload() })
     setState((prev) => ({ ...prev, installing: false }))
     if (!result.ok) {
-      set('installError', `${result.reason}${result.detail ? `: ${result.detail}` : ''}`)
+      // plugins:install returns two different failure shapes: the npm/probe
+      // pipeline reports { reason, detail }, but the up-front validation
+      // checks (bad id, id already installed, malformed source, ...) go
+      // through ipc/plugins.mjs's shared refuse() helper and report { error }
+      // instead — same shape confirmInstall() below already handles. Reading
+      // only `reason`/`detail` left every one of those early refusals
+      // rendering as the literal string "undefined".
+      set('installError', 'reason' in result
+        ? `${result.reason}${result.detail ? `: ${result.detail}` : ''}`
+        : result.error || 'Install failed.')
       return
     }
     setState((prev) => ({
@@ -219,7 +246,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-zinc-900 border border-zinc-700 rounded-lg w-full max-w-2xl max-h-[85vh] overflow-y-auto">
+      <div className="bg-zinc-900 border border-zinc-700 rounded-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-800 sticky top-0 bg-zinc-900">
           <p className="font-medium text-zinc-200">Add tool</p>
           <button onClick={close} className={btnCls.subtle}>Cancel</button>
@@ -422,7 +449,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
                 Every tool starts at the most restrictive class — read the description before promoting any of them.
                 A server with dozens of tools ("list X", "get Y") is usually mostly reads with a handful of real writes; don't leave all {s.tools.length} at destructive by default, but don't promote past what you've actually read either.
               </p>
-              <div className="divide-y divide-zinc-800 border border-zinc-800 rounded max-h-80 overflow-y-auto">
+              <div className="divide-y divide-zinc-800 border border-zinc-800 rounded max-h-[28rem] overflow-y-auto">
                 {s.tools.map((t) => (
                   <div key={t.name} className="flex items-start justify-between gap-3 px-3 py-2">
                     <div className="min-w-0">
@@ -435,7 +462,12 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
                           values) is exactly what makes an unfolded list unusable. */}
                       <TruncatedText text={t.description || '(no description provided by the plugin)'} className="text-xs text-zinc-500 mt-0.5" />
                     </div>
-                    <select className={inputCls.xs + ' w-32 flex-shrink-0'} value={t.class}
+                    {/* NOT inputCls.xs — that variant bakes in w-full, which is
+                        the same Tailwind specificity tier as w-32 below and, in
+                        this build's generated stylesheet order, wins regardless
+                        of appearing first in the className string. That's what
+                        stretched the class picker across the whole card. */}
+                    <select className={selectClsCompact} value={t.class}
                       onChange={(e) => setToolClass(t.name, e.target.value as PluginToolInfo['class'])}>
                       <option value="read">read</option>
                       <option value="network">network</option>

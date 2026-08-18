@@ -345,6 +345,30 @@ export function registerPluginsHandlers({ refreshLiveToolsConfig, getWindow }) {
     return { ok: true }
   })
 
+  // Bulk classify — an admin reviewing a 40-tool plugin one dropdown at a
+  // time is exactly the kind of friction that makes people give up and flip
+  // allowDestructive instead (which promotes nothing, it just waves every
+  // tool through regardless of class — see D-c). This still requires a
+  // deliberate admin action naming every affected tool explicitly; it is
+  // not a default and does not change what a fresh install starts at (D-b).
+  handle('plugins:set-classes', (_, id, toolNames, cls) => {
+    if (typeof id !== 'string') return refuse('plugins:set-classes', 'id must be a string.')
+    if (!Array.isArray(toolNames) || toolNames.length === 0 || !toolNames.every(isNonEmptyString)) {
+      return refuse('plugins:set-classes', 'toolNames must be a non-empty array of strings.')
+    }
+    if (!VALID_TOOL_CLASSES.has(cls)) return refuse('plugins:set-classes', `Invalid class "${cls}".`)
+    const plugin = getPlugin(id)
+    if (!plugin) return { ok: false, error: `no plugin with id "${id}"` }
+    const known = new Set(plugin.tools.map((t) => t.name))
+    const unknown = toolNames.filter((n) => !known.has(n))
+    if (unknown.length > 0) return { ok: false, error: `plugin "${id}" has no tool(s): ${unknown.join(', ')}` }
+    const targets = new Set(toolNames)
+    const tools = plugin.tools.map((t) => (targets.has(t.name) ? { ...t, class: cls } : t))
+    const result = updatePlugin(id, { tools })
+    if (!result.ok) return { ok: false, error: result.error }
+    return { ok: true, updated: toolNames.length }
+  })
+
   handle('plugins:uninstall', async (_, id) => {
     if (typeof id !== 'string') return refuse('plugins:uninstall', 'id must be a string.')
     const result = await uninstallPlugin(id)

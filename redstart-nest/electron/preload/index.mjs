@@ -92,6 +92,7 @@ contextBridge.exposeInMainWorld('redstartAPI', {
     confirmInstall: (entry) => ipcRenderer.invoke('plugins:confirm-install', entry),
     setEnabled: (id, enabled) => ipcRenderer.invoke('plugins:set-enabled', id, enabled),
     setClass: (id, toolName, cls) => ipcRenderer.invoke('plugins:set-class', id, toolName, cls),
+    setClasses: (id, toolNames, cls) => ipcRenderer.invoke('plugins:set-classes', id, toolNames, cls),
     uninstall: (id) => ipcRenderer.invoke('plugins:uninstall', id),
     test: (id) => ipcRenderer.invoke('plugins:test', id),
     search: (opts) => ipcRenderer.invoke('plugins:search', opts),

@@ -154,6 +154,8 @@ const CLASS_COLOR: Record<PluginToolInfo['class'], string> = {
 
 function ToolClassificationEditor({ pluginId, plugins }: { pluginId: string; plugins: ReturnType<typeof usePlugins> }) {
   const [tools, setTools] = useState<PluginToolInfo[] | null>(null)
+  const [bulkClass, setBulkClass] = useState<PluginToolInfo['class']>('read')
+  const [bulkApplying, setBulkApplying] = useState(false)
 
   if (tools === null) {
     api().plugins.get(pluginId).then((p) => setTools(p?.tools ?? []))
@@ -165,6 +167,16 @@ function ToolClassificationEditor({ pluginId, plugins }: { pluginId: string; plu
     {} as Partial<Record<PluginToolInfo['class'], number>>
   )
 
+  async function applyBulk() {
+    setBulkApplying(true)
+    try {
+      const result = await plugins.setToolClasses(pluginId, tools!.map((t) => t.name), bulkClass)
+      if (result.ok) setTools((prev) => prev!.map((t) => ({ ...t, class: bulkClass })))
+    } finally {
+      setBulkApplying(false)
+    }
+  }
+
   return (
     <div className="mt-2 pt-2 border-t border-zinc-700/50">
       <p className="text-xs mb-2">
@@ -175,6 +187,29 @@ function ToolClassificationEditor({ pluginId, plugins }: { pluginId: string; plu
             <span key={c} className={`${CLASS_COLOR[c].split(' ')[1]} mr-2`}>{counts[c]} {c}</span>
           ))}
       </p>
+      {/* Bulk classify — reviewing dozens of tools one dropdown at a time is
+          the friction that makes an admin reach for allowDestructive instead
+          (which promotes nothing, it just waves every class through). Applies
+          to every tool currently in the list; use the per-row selects below
+          to hand-adjust the exceptions afterward — read the descriptions
+          first, this still overwrites classification you may have already
+          set individually. */}
+      <div className="flex items-center gap-2 mb-2 bg-zinc-900/60 rounded px-2 py-1.5">
+        <span className="text-xs text-zinc-500">Set all {tools.length} to</span>
+        <select
+          className="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-1 text-xs text-white"
+          value={bulkClass}
+          onChange={(e) => setBulkClass(e.target.value as PluginToolInfo['class'])}>
+          <option value="read">read</option>
+          <option value="network">network</option>
+          <option value="write">write</option>
+          <option value="destructive">destructive</option>
+        </select>
+        <button onClick={applyBulk} disabled={bulkApplying} className={btnCls.chip + ' disabled:opacity-50'}>
+          {bulkApplying ? 'Applying…' : 'Apply to all'}
+        </button>
+        <span className="text-xs text-zinc-600">then adjust individual rows below as needed</span>
+      </div>
       <div className="divide-y divide-zinc-800">
         {tools.map((t) => (
           <div key={t.name} className={`flex items-center justify-between gap-3 py-2 pl-2 border-l-2 ${CLASS_COLOR[t.class].split(' ')[0]}`}>
