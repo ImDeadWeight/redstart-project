@@ -104,6 +104,23 @@ function evaluateToolPolicy(toolName, config) {
       return { allowed: false, cls, reason: 'File-system writes are disabled by policy. An administrator must enable them for the File System capability.' }
     }
   }
+
+  // Plugin tools carry the same class-based policy, keyed on the plugin's own
+  // capability config. Polarity deliberately differs from File System's:
+  // a plugin's allowWrite defaults to OFF (`!== true`), because File System is a
+  // capability an admin configured deliberately and a plugin is third-party code.
+  const capability = capabilityForTool(toolName)
+  if (capability && !FS_TOOL_NAMES.has(toolName)) {
+    const pluginPolicy = config?.[capability]
+    if (pluginPolicy && pluginPolicy.isPlugin) {
+      if (cls === 'destructive' && pluginPolicy.allowDestructive !== true) {
+        return { allowed: false, cls, reason: `Destructive operations are disabled for the "${capability}" plugin. An administrator must enable them.` }
+      }
+      if (cls === 'write' && pluginPolicy.allowWrite !== true) {
+        return { allowed: false, cls, reason: `Write operations are disabled for the "${capability}" plugin. An administrator must enable them.` }
+      }
+    }
+  }
   return { allowed: true, cls }
 }
 
