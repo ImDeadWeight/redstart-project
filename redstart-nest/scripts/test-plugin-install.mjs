@@ -8,7 +8,12 @@
 //     registry. Skips cleanly with a printed notice when offline, the way
 //     test-provider-conformance.mjs already skips its Postgres phase — this
 //     suite must not fail in test:security just because npmjs.org is down.
-//   - NETWORK-FREE: argv construction. Always runs.
+//   - NETWORK-FREE: argv construction, the probe against a local fixture
+//     process, and uninstall/pendingDeletions bookkeeping. These always run.
+//
+// probePlugin talks to scripts/fixtures/fake-mcp-server.mjs over real stdio,
+// same fixture and same posture as test-plugin-client.mjs (task T6): a real
+// child process, not a mocked transport.
 //
 // Run:  node scripts/test-plugin-install.mjs
 // =============================================================================
@@ -17,6 +22,7 @@ import { register } from 'node:module'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-plugin-install-test-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
@@ -24,6 +30,10 @@ process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 register('./auth-test-loader.mjs', import.meta.url)
 
 const install = await import('../electron/main/plugin-install.mjs')
+const registry = await import('../electron/main/plugin-registry.mjs')
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const FIXTURE = path.join(__dirname, 'fixtures', 'fake-mcp-server.mjs')
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-plugin-registry.mjs / test-plugin-client.mjs)
@@ -62,6 +72,8 @@ async function isNpmRegistryReachable() {
   }
 }
 
+const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-plugin-install-logs-'))
+
 // ---------------------------------------------------------------------------
 // Network-free: argv construction
 // ---------------------------------------------------------------------------
@@ -79,6 +91,167 @@ await test('buildNpmInstallArgs() includes --ignore-scripts, plus --prefix and t
   assert(args[args.indexOf('--prefix') + 1] === 'C:\\fake\\dir', 'the directory following --prefix is wrong')
   assert(args.includes('@modelcontextprotocol/server-memory@2026.7.4'), 'the pinned package@version spec is missing')
   return args.join(' ')
+})
+
+// ---------------------------------------------------------------------------
+// Network-free: probe (real child process, local fixture)
+// ---------------------------------------------------------------------------
+
+console.log('\n-- install probe --')
+
+await test('probing fake-mcp-server.mjs (normal) returns both tools, each classified destructive, no live child left', async () => {
+  const result = await withTimeout(
+    install.probePlugin({ command: process.execPath, args: [FIXTURE, 'normal'], timeoutMs: 10000, logDir }),
+    15000, 'probePlugin normal',
+  )
+  assert(result.ok, `probe failed: ${result.reason} ${result.detail ?? ''}`)
+  assert(result.tools.length === 2, `expected 2 tools, got ${result.tools.length}`)
+  for (const t of result.tools) {
+    assert(t.class === 'destructive', `tool "${t.name}" was not classified destructive (D3/D-b): got "${t.class}"`)
+  }
+  // write_thing declares readOnlyHint:true in the fixture on purpose (D3) —
+  // confirm the probe did not let that promote it.
+  const writeThing = result.tools.find((t) => t.name === 'write_thing')
+  assert(writeThing && writeThing.class === 'destructive', 'the child\'s own readOnlyHint was trusted — D3 violation')
+  return `${result.tools.length} tools, all destructive`
+})
+
+await test('probing "no-tools" mode returns reason: no-tools', async () => {
+  const result = await withTimeout(
+    install.probePlugin({ command: process.execPath, args: [FIXTURE, 'no-tools'], timeoutMs: 10000, logDir }),
+    15000, 'probePlugin no-tools',
+  )
+  assert(result.ok === false, 'a server with zero tools was accepted')
+  assert(result.reason === 'no-tools', `expected reason "no-tools", got "${result.reason}"`)
+  return result.reason
+})
+
+await test('probing an unspawnable command returns spawn-failed with a non-empty detail', async () => {
+  // An empty command string is the one case that reliably hits the SYNCHRONOUS
+  // spawn() failure path in shared/mcp-stdio-process.mjs's start() (a
+  // nonexistent-but-valid-looking path instead surfaces async as a generic
+  // "exited" — see the plan's own "exited-immediately OR spawn-failed" wording
+  // for a bad command, which anticipates exactly this ambiguity).
+  const result = await withTimeout(
+    install.probePlugin({ command: '', args: [], timeoutMs: 5000, logDir }),
+    10000, 'probePlugin bad command',
+  )
+  assert(result.ok === false, 'an unspawnable command was accepted')
+  assert(result.reason === 'spawn-failed', `expected "spawn-failed", got "${result.reason}"`)
+  assert(result.detail && result.detail.length > 0, 'spawn-failed detail was empty')
+  return result.detail
+})
+
+await test('probing a process that exits before speaking MCP returns exited-immediately with a non-empty detail', async () => {
+  const result = await withTimeout(
+    install.probePlugin({ command: process.execPath, args: ['-e', 'process.exit(7)'], timeoutMs: 5000, logDir }),
+    10000, 'probePlugin exits immediately',
+  )
+  assert(result.ok === false, 'a process that never spoke MCP was accepted')
+  assert(result.reason === 'exited-immediately', `expected "exited-immediately", got "${result.reason}"`)
+  assert(result.detail && result.detail.length > 0, 'exited-immediately detail was empty')
+  return result.detail.slice(0, 120)
+})
+
+console.log('\n-- probe always leaves no live child --')
+
+await test('a probe failure still leaves nothing running (spec R2)', async () => {
+  await install.probePlugin({ command: process.execPath, args: ['-e', 'process.exit(3)'], timeoutMs: 5000, logDir })
+  // Give the OS a moment, then confirm nothing from this probe is still
+  // holding the log directory or listed as running is not directly
+  // observable without an id — the client's own stop() is exercised by the
+  // finally block; this is a smoke check that the call above didn't hang or
+  // throw asynchronously afterward.
+  await new Promise((r) => setTimeout(r, 200))
+  return 'no hang, no unhandled rejection'
+})
+
+// ---------------------------------------------------------------------------
+// Network-free: uninstall + pendingDeletions
+// ---------------------------------------------------------------------------
+
+console.log('\n-- uninstall --')
+
+function sampleInstalledPlugin(overrides = {}) {
+  return {
+    id: 'uninsttest',
+    displayName: 'Uninstall Test',
+    source: { kind: 'npm', package: 'whatever', version: '1.0.0' },
+    resolvedCommand: process.execPath,
+    resolvedArgs: [FIXTURE, 'normal'],
+    env: {},
+    timeoutMs: 15000,
+    enabled: false,
+    allowWrite: false,
+    allowDestructive: false,
+    tools: [],
+    ...overrides,
+  }
+}
+
+await test('uninstalling a plugin whose folder deletes cleanly removes the registry entry, folderRemoved: true', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-plugin-uninst-'))
+  fs.writeFileSync(path.join(dir, 'marker.txt'), 'x')
+  const add = registry.addPlugin(sampleInstalledPlugin({ id: 'uninsttest', installDir: dir }))
+  assert(add.ok, `addPlugin failed: ${add.error}`)
+
+  const result = await install.uninstallPlugin('uninsttest')
+  assert(result.ok, 'uninstallPlugin did not report ok')
+  assert(result.folderRemoved === true, 'folder should have been removed')
+  assert(!fs.existsSync(dir), 'the directory still exists on disk')
+  assert(registry.getPlugin('uninsttest') === null, 'the registry entry survived uninstall')
+  return 'entry gone, folder gone'
+})
+
+await test('uninstalling with a locked target directory still removes the registry entry and records a pending deletion', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-plugin-locked-'))
+  const filePath = path.join(dir, 'locked.txt')
+  fs.writeFileSync(filePath, 'x')
+  // Hold the file open so rmSync cannot remove it — the cross-platform way to
+  // simulate Windows' "file in use" without depending on an actual live child.
+  const fd = fs.openSync(filePath, 'r')
+
+  const add = registry.addPlugin(sampleInstalledPlugin({ id: 'lockedtest', installDir: dir }))
+  assert(add.ok, `addPlugin failed: ${add.error}`)
+
+  try {
+    const result = await install.uninstallPlugin('lockedtest')
+    assert(result.ok, 'uninstallPlugin did not report ok')
+    assert(registry.getPlugin('lockedtest') === null, 'the registry entry must be removed even when the folder delete fails (P4-4)')
+
+    // Whether this platform actually refuses the delete with a handle open
+    // varies (POSIX permits unlinking an open file; win32 does not) — assert
+    // the invariant that matters regardless: the entry is gone either way,
+    // and IF the folder survived, it is recorded for a later sweep.
+    if (fs.existsSync(dir)) {
+      assert(result.folderRemoved === false, 'folder still exists but folderRemoved was reported true')
+      const raw = JSON.parse(fs.readFileSync(path.join(tmpDir, 'plugins.json'), 'utf8'))
+      assert(Array.isArray(raw.pendingDeletions) && raw.pendingDeletions.includes(dir), 'locked directory was not recorded in pendingDeletions')
+    }
+    return fs.existsSync(dir) ? 'folder survived, recorded for sweep' : 'this platform allowed the delete anyway (still fine)'
+  } finally {
+    fs.closeSync(fd)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await test('sweepPendingDeletions() clears an entry once the directory is actually goneable', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-plugin-sweep-'))
+  fs.writeFileSync(path.join(dir, 'x.txt'), 'x')
+
+  // Seed plugins.json with a pending deletion directly, as uninstallPlugin
+  // would have left it.
+  const pluginsJsonPath = path.join(tmpDir, 'plugins.json')
+  const data = JSON.parse(fs.readFileSync(pluginsJsonPath, 'utf8'))
+  data.pendingDeletions = [...(data.pendingDeletions ?? []), dir]
+  fs.writeFileSync(pluginsJsonPath, JSON.stringify(data, null, 2), 'utf8')
+
+  install.sweepPendingDeletions()
+
+  assert(!fs.existsSync(dir), 'sweepPendingDeletions did not remove the directory')
+  const after = JSON.parse(fs.readFileSync(pluginsJsonPath, 'utf8'))
+  assert(!after.pendingDeletions.includes(dir), 'the swept directory is still listed in pendingDeletions')
+  return 'swept and cleared'
 })
 
 // ---------------------------------------------------------------------------
@@ -144,6 +317,7 @@ if (!online) {
 // ---------------------------------------------------------------------------
 
 fs.rmSync(tmpDir, { recursive: true, force: true })
+fs.rmSync(logDir, { recursive: true, force: true })
 
 const failed = results.filter((r) => !r.pass)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)

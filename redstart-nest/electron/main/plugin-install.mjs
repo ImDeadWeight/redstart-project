@@ -29,6 +29,8 @@ import { app } from 'electron'
 import { detectNpm } from './plugin-runtimes.mjs'
 import { createPluginClient } from './mcp-plugin-client.mjs'
 import { PLUGIN_ID_PATTERN, getPlugin, removePlugin } from './plugin-registry.mjs'
+import { stopAllPlugins } from './plugin-provider.mjs'
+import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
 import { logEvent } from './logger.mjs'
 
 /** Distinct failure reasons. The UI maps them; never merge two into one. */
@@ -315,8 +317,86 @@ function readLockfileInfo(dir, packageName) {
  * @returns {Promise<{ok: true, tools: object[], serverInfo: object}
  *                 | {ok: false, reason: string, detail?: string}>}
  */
+// Same filename convention shared/mcp-stdio-process.mjs's logStream() uses —
+// duplicated rather than imported so this stays a plain file read, never a
+// second change to that shared module (Trap 8).
+function tailLogFile(logDir, id, maxChars = 2000) {
+  if (!logDir) return ''
+  try {
+    const logPath = path.join(logDir, `${id.replace(/[^a-zA-Z0-9._-]/g, '_')}.log`)
+    const text = fs.readFileSync(logPath, 'utf8')
+    return text.length > maxChars ? text.slice(-maxChars) : text
+  } catch {
+    return '' // no log yet, or nothing written — not an error
+  }
+}
+
+// mcp-plugin-client.mjs's own error messages are the only signal available
+// here (it deliberately exposes no exit code / raw transport detail — see its
+// header on why it stays a thin transport). Classify by the shape of the
+// message; anything unrecognised falls back to 'not-mcp', the catch-all for
+// "spawned, didn't crash, never spoke intelligible MCP".
+function classifyProbeFailure(err) {
+  const msg = err?.message || ''
+  if (/^Failed to spawn/.test(msg)) return PROBE_REASON.spawnFailed
+  if (/exited$/.test(msg)) return PROBE_REASON.exitedImmediately
+  if (/did not respond within/.test(msg)) return PROBE_REASON.handshakeTimeout
+  return PROBE_REASON.notMcp
+}
+
 export async function probePlugin({ command, args, env, timeoutMs, logDir }) {
-  throw new Error('TODO(T16): probePlugin not implemented')
+  // A synthetic id, local to this one probe — never persisted, never reused
+  // as a capability id. Random suffix so two probes run back to back (or
+  // concurrently) don't share a log file or a process-manager key.
+  const probeId = `probe_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  const client = createPluginClient({
+    id: probeId,
+    command,
+    args: args ?? [],
+    env: env ?? {},
+    timeoutMs: timeoutMs ?? 15000,
+    logDir,
+  })
+
+  try {
+    try {
+      await client.ensureReady()
+    } catch (err) {
+      const detail = [err.message, tailLogFile(logDir, probeId)].filter(Boolean).join('\n')
+      return { ok: false, reason: classifyProbeFailure(err), detail }
+    }
+
+    let tools
+    try {
+      tools = await client.listTools()
+    } catch (err) {
+      const detail = [err.message, tailLogFile(logDir, probeId)].filter(Boolean).join('\n')
+      return { ok: false, reason: classifyProbeFailure(err), detail }
+    }
+
+    if (!Array.isArray(tools) || tools.length === 0) {
+      return { ok: false, reason: PROBE_REASON.noTools }
+    }
+
+    // Fail closed (D3/D-b): every discovered tool is classified 'destructive'
+    // no matter what the child claims about itself. The admin promotes from
+    // here, individually, in the Classify step.
+    const classified = tools.map((t) => ({
+      name: t.name,
+      description: typeof t.description === 'string' ? t.description : '',
+      inputSchema: t.inputSchema && typeof t.inputSchema === 'object' ? t.inputSchema : {},
+      class: 'destructive',
+    }))
+
+    // The client is pure transport and does not surface the initialize
+    // response's serverInfo (see mcp-plugin-client.mjs) — nothing downstream
+    // of the probe currently depends on its contents.
+    return { ok: true, tools: classified, serverInfo: {} }
+  } finally {
+    // Installation must never leave a process running (spec R2) — on every
+    // path, success or failure.
+    client.stop()
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -344,8 +424,53 @@ export async function probePlugin({ command, args, env, timeoutMs, logDir }) {
  * @param {string} id
  * @returns {Promise<{ok: true, folderRemoved: boolean}>}
  */
+function pluginsJsonPath() {
+  return path.join(app.getPath('userData'), 'plugins.json')
+}
+
+// Record a directory whose delete failed, for sweepPendingDeletions() to
+// retry at next startup. Reads and writes plugins.json's top-level
+// `pendingDeletions` field directly (json-store, same primitives
+// plugin-registry.mjs itself uses) rather than through that module — it has
+// no accessor for a field that lives beside `plugins`, not inside an entry.
+function appendPendingDeletion(dir) {
+  const data = readJsonOr(pluginsJsonPath(), { plugins: [], pendingDeletions: [] })
+  if (!Array.isArray(data.pendingDeletions)) data.pendingDeletions = []
+  if (!data.pendingDeletions.includes(dir)) data.pendingDeletions.push(dir)
+  writeJsonAtomic(pluginsJsonPath(), data)
+}
+
 export async function uninstallPlugin(id) {
-  throw new Error('TODO(T16): uninstallPlugin not implemented')
+  // stopAllPlugins() rather than a per-id stop: plugin-provider.mjs keeps its
+  // client map private and exposes no targeted stop, and this task's file
+  // list is plugin-install.mjs alone — see docs/notes/mcp-plugin-system-tasks.md
+  // T16, which names this as the accepted option. Every plugin's client is
+  // lazily recreated on its own next call, so this costs a respawn, not
+  // correctness.
+  stopAllPlugins()
+
+  const plugin = getPlugin(id)
+  const dir = plugin?.installDir ?? path.join(pluginsRoot(), id)
+
+  let folderRemoved = true
+  if (fs.existsSync(dir)) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch {
+      // Windows will not delete files a still-open handle holds — expected,
+      // not exceptional. Checked below via existsSync, not this catch.
+    }
+    folderRemoved = !fs.existsSync(dir)
+  }
+
+  // ORDER MATTERS (P4-4): the registry entry goes regardless of whether the
+  // folder delete succeeded. A plugin that still reads as installed because a
+  // file was locked is a bug the admin has no way to clear; an orphaned
+  // folder is merely untidy, and pendingDeletions exists to clean it up later.
+  removePlugin(id)
+  if (!folderRemoved) appendPendingDeletion(dir)
+
+  return { ok: true, folderRemoved }
 }
 
 /**
@@ -354,5 +479,27 @@ export async function uninstallPlugin(id) {
  * must never block startup.
  */
 export function sweepPendingDeletions() {
-  throw new Error('TODO(T16): sweepPendingDeletions not implemented')
+  try {
+    const data = readJsonOr(pluginsJsonPath(), { plugins: [], pendingDeletions: [] })
+    const pending = Array.isArray(data.pendingDeletions) ? data.pendingDeletions : []
+    if (pending.length === 0) return
+
+    const stillPending = []
+    for (const dir of pending) {
+      try {
+        if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true })
+        if (fs.existsSync(dir)) stillPending.push(dir)
+      } catch {
+        stillPending.push(dir) // still locked — try again next startup
+      }
+    }
+
+    if (stillPending.length !== pending.length) {
+      data.pendingDeletions = stillPending
+      writeJsonAtomic(pluginsJsonPath(), data)
+    }
+  } catch (err) {
+    // Best-effort by design — a sweep failure must never block startup.
+    console.warn('[plugin-install] sweepPendingDeletions failed:', err.message)
+  }
 }
