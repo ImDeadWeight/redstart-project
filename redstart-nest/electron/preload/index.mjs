@@ -83,6 +83,21 @@ contextBridge.exposeInMainWorld('redstartAPI', {
     downloadStatus: () => ipcRenderer.invoke('models:download-status'),
   },
 
+  plugins: {
+    list: () => ipcRenderer.invoke('plugins:list'),
+    get: (id) => ipcRenderer.invoke('plugins:get', id),
+    install: (req) => ipcRenderer.invoke('plugins:install', req),
+    cancelInstall: () => ipcRenderer.invoke('plugins:cancel-install'),
+    installStatus: () => ipcRenderer.invoke('plugins:install-status'),
+    confirmInstall: (entry) => ipcRenderer.invoke('plugins:confirm-install', entry),
+    setEnabled: (id, enabled) => ipcRenderer.invoke('plugins:set-enabled', id, enabled),
+    setClass: (id, toolName, cls) => ipcRenderer.invoke('plugins:set-class', id, toolName, cls),
+    uninstall: (id) => ipcRenderer.invoke('plugins:uninstall', id),
+    test: (id) => ipcRenderer.invoke('plugins:test', id),
+    search: (opts) => ipcRenderer.invoke('plugins:search', opts),
+    pickFolder: () => ipcRenderer.invoke('plugins:pick-folder'),
+  },
+
   github: {
     checkReleases: () => ipcRenderer.invoke('github:check-releases'),
   },
@@ -103,5 +118,7 @@ contextBridge.exposeInMainWorld('redstartAPI', {
     offServerStopped: () => ipcRenderer.removeAllListeners('server:stopped'),
     onModelDownloadProgress: (cb) => ipcRenderer.on('models:download-progress', (_, p) => cb(p)),
     offModelDownloadProgress: () => ipcRenderer.removeAllListeners('models:download-progress'),
+    onPluginInstallProgress: (cb) => ipcRenderer.on('plugins:install-progress', (_, p) => cb(p)),
+    offPluginInstallProgress: () => ipcRenderer.removeAllListeners('plugins:install-progress'),
   },
 })

@@ -42,6 +42,7 @@ import { registerMcpHandlers } from './ipc/mcp.mjs'
 import { registerCapabilitiesHandlers } from './ipc/capabilities.mjs'
 import { registerServerHandlers } from './ipc/server.mjs'
 import { registerModelsHandlers } from './ipc/models.mjs'
+import { registerPluginsHandlers } from './ipc/plugins.mjs'
 import { buildGatewayConfig, createRefreshLiveToolsConfig } from './gateway-config.mjs'
 import { buildArgs } from './llama-args.mjs'
 import { DEV_RENDERER_ORIGIN, rendererIndexFile, isTrustedRendererUrl } from './renderer-location.mjs'
@@ -49,6 +50,7 @@ import { setTrustedWindow } from './ipc/guard.mjs'
 import { binaryPathRejection } from './ipc/validate.mjs'
 import { setPluginCapabilityProvider } from './tools-definitions.mjs'
 import { pluginCapabilities } from './plugin-registry.mjs'
+import { sweepPendingDeletions } from './plugin-install.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -619,6 +621,9 @@ app.whenReady().then(async () => {
   killOrphanedServers()
   const cleanedConversations = cleanupOldConversations()
   if (cleanedConversations > 0) console.log(`Cleaned ${cleanedConversations} conversations older than 30 days`)
+  // Retries any plugin folder an uninstall couldn't delete last session (a
+  // Windows file lock, most likely) — best-effort, never blocks startup (P4-4).
+  sweepPendingDeletions()
   startDiscoveryBeacon()
   if (!app.isPackaged) await installReactDevTools()
   createWindow()
@@ -695,6 +700,9 @@ function registerIpcHandlers(deps) {
   registerCapabilitiesHandlers(deps)
   registerServerHandlers(deps)
   registerModelsHandlers(deps)
+  // Named getWindow, not getMainWindow — plugins.mjs mirrors models.mjs's own
+  // progress-event dependency name.
+  registerPluginsHandlers({ refreshLiveToolsConfig: deps.refreshLiveToolsConfig, getWindow: deps.getMainWindow })
 }
 
 function setupIpcHandlers() {

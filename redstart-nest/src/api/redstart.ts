@@ -110,6 +110,45 @@ export type RedstartAPI = {
     setFileSystem: (config: { rootDir?: string; enabled?: boolean; allowWrite?: boolean; allowDestructive?: boolean }) => Promise<{ ok: boolean }>
     setScholar: (config: { venueFilter?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
   }
+  plugins: {
+    list: () => Promise<PluginSummary[]>
+    get: (id: string) => Promise<(PluginSummary & { tools: PluginToolInfo[] }) | null>
+    // Fetches/resolves the source and probes it. Nothing is persisted — see
+    // confirmInstall. `env` values are plaintext for this one round trip only.
+    install: (req: {
+      id: string
+      source: { kind: 'npm'; packageName: string; version: string }
+        | { kind: 'command'; command: string; args?: string[] }
+        | { kind: 'path'; path: string }
+      env?: Record<string, { value: string; isSecret: boolean }>
+      timeoutMs?: number
+    }) => Promise<
+      { ok: true; tools: PluginToolInfo[]; resolvedCommand: string; resolvedArgs: string[]
+        resolvedVersion: string | null; integrity: string | null; installDir: string | null; runAsNode: boolean }
+      | { ok: false; reason: string; detail?: string }
+    >
+    cancelInstall: () => Promise<{ ok: boolean; error?: string }>
+    installStatus: () => Promise<{ active: boolean; id?: string }>
+    // Persists the reviewed entry. Always saved enabled:false regardless of
+    // what is sent — enabling is a separate, deliberate act.
+    confirmInstall: (entry: {
+      id: string; displayName?: string
+      source: { kind: 'npm' | 'path' | 'command' } & Record<string, unknown>
+      resolvedCommand: string; resolvedArgs: string[]
+      resolvedVersion: string | null; integrity: string | null; installDir: string | null; runAsNode: boolean
+      timeoutMs?: number
+      tools: PluginToolInfo[]
+      env?: Record<string, { value: string; isSecret: boolean }>
+    }) => Promise<{ ok: boolean; error?: string }>
+    setEnabled: (id: string, enabled: boolean) => Promise<{ ok: boolean; error?: string }>
+    setClass: (id: string, toolName: string, cls: PluginToolInfo['class']) => Promise<{ ok: boolean; error?: string }>
+    uninstall: (id: string) => Promise<{ ok: boolean; folderRemoved?: boolean; error?: string }>
+    test: (id: string) => Promise<{ ok: boolean; message: string }>
+    search: (opts: { query?: string; cursor?: string }) => Promise<
+      { ok: true; entries: RegistrySearchResult[]; nextCursor: string | null } | { ok: false; error: string }
+    >
+    pickFolder: () => Promise<string | null>
+  }
   events: {
     onTokensPerMinute: (cb: (tpm: number) => void) => void
     offTokensPerMinute: () => void
@@ -119,7 +158,52 @@ export type RedstartAPI = {
     offServerStopped: () => void
     onModelDownloadProgress: (cb: (p: DownloadProgress) => void) => void
     offModelDownloadProgress: () => void
+    onPluginInstallProgress: (cb: (p: PluginInstallProgress) => void) => void
+    offPluginInstallProgress: () => void
   }
+}
+
+// --- Plugin types -------------------------------------------------------
+// Kept here (not usePlugins.ts) so the IPC surface and its payload shapes live
+// in one place, the same way every other namespace above does. usePlugins.ts
+// re-exports these under its own names for tab/component call sites.
+
+export type PluginSummary = {
+  id: string
+  displayName: string
+  source: { kind: 'npm' | 'path' | 'command'; packageName?: string; version?: string; path?: string; command?: string } | null
+  resolvedVersion: string | null
+  enabled: boolean            // registry master switch (Plugins tab), NOT activeToolIds
+  allowWrite: boolean
+  allowDestructive: boolean
+  toolCount: number
+  hasSecret: boolean
+  lastError: string | null
+  lastErrorAt: string | null
+  installedAt: string | null
+  lastHandshakeAt: string | null
+}
+
+export type PluginToolInfo = {
+  name: string
+  description: string
+  class: 'read' | 'write' | 'destructive' | 'network'
+  inputSchema?: Record<string, unknown>
+}
+
+export type PluginInstallProgress = {
+  id: string
+  state: 'resolving' | 'installing' | 'probing' | 'done' | 'error'
+  message?: string
+}
+
+export type RegistrySearchResult = {
+  name: string
+  description: string
+  packageName?: string
+  version?: string
+  verdict: { state: 'installable' | 'needs-setup' | 'needs-runtime' | 'unsupported'; reason?: string }
+  fields: { name: string; description: string; format: string; isRequired: boolean; isSecret: boolean; default?: unknown; placeholder?: string }[]
 }
 
 export const getAPI = (): RedstartAPI | undefined => (window as unknown as { redstartAPI?: RedstartAPI }).redstartAPI
