@@ -47,6 +47,8 @@ import { buildArgs } from './llama-args.mjs'
 import { DEV_RENDERER_ORIGIN, rendererIndexFile, isTrustedRendererUrl } from './renderer-location.mjs'
 import { setTrustedWindow } from './ipc/guard.mjs'
 import { binaryPathRejection } from './ipc/validate.mjs'
+import { setPluginCapabilityProvider } from './tools-definitions.mjs'
+import { pluginCapabilities } from './plugin-registry.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -698,6 +700,10 @@ function registerIpcHandlers(deps) {
 function setupIpcHandlers() {
   const userDataDir = app.getPath('userData')
   refreshLiveToolsConfig = createRefreshLiveToolsConfig(serverState, userDataDir)
+  // Hands tools-definitions.mjs a live read of the plugin registry. Must run
+  // before any tools/list or config build, or plugin tools resolve to no
+  // capability and are neither classified nor bannable.
+  setPluginCapabilityProvider(pluginCapabilities)
   registerIpcHandlers({
     execFileAsync,
     readSettings,
