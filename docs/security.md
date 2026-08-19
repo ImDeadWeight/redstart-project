@@ -22,6 +22,7 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 - [Tool bans](#tool-bans)
 - [Whitelist & SSRF enforcement](#whitelist--ssrf-enforcement)
 - [External MCP servers](#external-mcp-servers)
+- [Plugins](#plugins)
 - [The server-composed system prompt](#the-server-composed-system-prompt)
 - [What actually leaves the machine](#what-actually-leaves-the-machine)
 - [The test suite](#the-test-suite)
@@ -186,12 +187,16 @@ Deletions go to the OS recycle bin, falling back to a `.trash/` folder in the ca
 
 `electron/main/logger.mjs` writes one JSON object per line to `redstart.log` in userData: the operationally interesting events (auth, tool execution, server lifecycle, discovery, MCP registration) plus a concise console line. The contract is to log the *shape* of what happened, never the content.
 
-Two mechanisms enforce that, at different strengths:
+There are two mechanisms, and they answer different questions — this is the distinction to reach for when the question is specifically "what does Redstart audit?":
 
-- **`logEvent()` — blocklist plus scalars-only.** Callers are expected to pass only safe scalar fields (tool name, class, decision, duration, port, username, role). As defense in depth, the logger also drops any field whose key names sensitive data — tool args/results, message/conversation content, SQL, file paths, URLs, secrets — case-insensitively, and drops any object or array value outright regardless of its key. The second rule is the one that matters most: it protects against a future field name nobody thought to blocklist, not just the known list.
-- **`logAudit()` — a closed allowlist, the one documented exception.** Destructive-class tool calls (currently only `delete_file`) record what was deleted, because a deletion nobody can name is a deletion nobody can undo. Only `AUDIT_FIELDS` (`tool`, `path`, `scope`, `kind`, `recoverable`) survive; string values are truncated at 512 characters; file contents are never logged by anything. Nothing else in the codebase may call it, and its two call sites (`files-api.mjs`, `fs-delete-tool.mjs`) are checked by name.
+- **`logEvent()` — the operational trail, blocklist plus scalars-only.** This is where account-affecting actions show up: `login_ok` / `login_failed` (username + role, never the password), `client_key_issued` / `client_key_revoked`, and `role_saved` / `role_deleted` / `role_assigned`, alongside tool calls (`tool.called` / `tool.denied`), server lifecycle, and IPC rejections. Callers are expected to pass only safe scalar fields (tool name, class, decision, duration, port, username, role). As defense in depth, the logger also drops any field whose key names sensitive data — tool args/results, message/conversation content, SQL, file paths, URLs, secrets — case-insensitively, and drops any object or array value outright regardless of its key. The second rule is the one that matters most: it protects against a future field name nobody thought to blocklist, not just the known list.
+- **`logAudit()` — a closed allowlist, the one documented exception to "never the content".** Destructive-class tool calls (currently only `delete_file`) record what was deleted, because a deletion nobody can name is a deletion nobody can undo. Only `AUDIT_FIELDS` (`tool`, `path`, `scope`, `kind`, `recoverable`) survive; string values are truncated at 512 characters; file contents are never logged by anything. Nothing else in the codebase may call it, and its two call sites (`files-api.mjs`, `fs-delete-tool.mjs`) are checked by name.
 
 Both halves — the blocklist/scalars-only rule and the allowlist — are proven against the actual bytes written to disk by `test-logging`, not against mocked internals. See [The test suite](#the-test-suite).
+
+**Access and retention.** `redstart.log` is a plain file in userData; there is no in-app log viewer and no HTTP route that serves it, so reading it means reading it off the host disk. It rotates at 5MB, keeping exactly one previous generation (`redstart.log.1`) — there is no long-term archive, so an incident older than roughly two rotations' worth of activity is gone unless something outside Redstart copied the file first.
+
+**What this is not.** `logEvent()` gives an operational trail, not a durable per-account audit log: entries are one-line JSON, not queryable per-account history, and — see the gap below — account lifecycle changes aren't in it at all. Anyone asking "does Redstart have audit logging" should get that qualified answer, not a flat yes.
 
 ---
 
@@ -247,6 +252,22 @@ Point one at a host you control, on a network you trust.
 
 ---
 
+## Plugins
+
+Redstart Nest can install a **third-party stdio MCP server** — a real child process, spawned and supervised on this machine, its tools folded into Nest's own MCP server alongside the built-ins. This is a **different trust boundary from [External MCP servers](#external-mcp-servers)** above: an external server runs on someone else's host and Nest only talks to it over the network; a plugin runs *here*, with the same OS permissions Nest itself has. There is no sandbox. **The trust boundary is the admin's decision to install a given package — install what you would run yourself.**
+
+**Two independent switches, both required.** A plugin's registry entry carries an `enabled` flag — the install-level, server-wide master switch, set on the **Plugins** tab — and it is also subject to the same per-profile `activeToolIds` activation every built-in capability uses, set on the **Tools** tab. Both must be true or the plugin's tools do not reach `tools/list` at all, for any client, on either side of the check: `tools/list` and a direct `tools/call` are both gated, matching every other capability's defense-in-depth posture.
+
+**Fail-closed classification.** A built-in capability's tools were written and classified by Redstart. A plugin's were not — they are third-party code nobody here has read. So every tool a fresh install discovers is classified `destructive` — refused everywhere, exactly like [`delete_file`](#destructive-operations) — until an admin has actually read its description and promoted it individually (or in bulk, for a plugin with dozens of tools). This is deliberately **not** inferred from what the plugin claims about itself: an MCP server can self-report a tool as read-only (`readOnlyHint: true`) and that claim is never trusted for policy, since a third party can misdeclare a tool by accident or design. Per-plugin `allowWrite`/`allowDestructive` policy flags — both off by default — then gate `write`/`destructive`-classified tools exactly the way File System's own flags do, generalizing the same policy gate rather than adding a second one.
+
+**Credentials.** A plugin may hold an API key for a third-party service (a search or image-generation API, for example) — a stdio server is just a local process, and nothing stops it opening outbound HTTPS, so "runs locally" and "sends nothing off this machine" are not the same claim. Any configured key is encrypted at rest the same way as the Postgres connection string and External MCP's API key (`electron/main/secrets.mjs`), decrypted only at the moment the plugin's child is spawned, and never returned over IPC — the Plugins tab reports whether a key is set, never its value. **A plugin holding a credential is reported as network egress**, at `GET /egress` and in the system prompt's data-handling block, in the same shape an external MCP server already is — this was shipped together with credential support in the same change, specifically so it could not ship separately: a plugin with a key and no corresponding disclosure would leave Nest telling users their data stays local while their queries left for a third party.
+
+**Installing does not execute.** Fetching an npm or pypi package never runs its code — `npm install` runs with `--ignore-scripts` (no lifecycle hooks), and a pypi package's own build backend only runs when installing from a source distribution, which is inherent to Python packaging rather than something Redstart can suppress the way it suppresses npm's hooks. Either way, nothing from the package runs until the admin has reviewed its discovered tools and confirmed the install — probing what a server can do and enabling it are separate, deliberate steps.
+
+Point a plugin source at a package you trust, from a publisher you trust — a "verified" badge in the registry proves namespace ownership, not that the code is safe.
+
+---
+
 ## The server-composed system prompt
 
 Every completions request gets a server-composed system prompt prepended to whatever the client sends. It states who the model is, what it can actually reach, and the admin's policy — and it is assembled server-side precisely so a client cannot talk its way out of it.
@@ -274,6 +295,7 @@ Inference is local and architecturally so — llama-server runs on this machine,
 | Approved web domains (`web_fetch`, `web_search`) | a source group or custom source is enabled for the profile |
 | Scholar (OpenAlex, arXiv, PubMed) | the Scholar capability is enabled |
 | An external MCP server on another host | one is registered and enabled, and its URL is not local |
+| A plugin holding a credential | it is enabled and configured with a key — see [Plugins](#plugins) |
 
 Nothing else transmits. There is no telemetry, no update check, and no third-party search engine.
 
@@ -338,4 +360,7 @@ Stated plainly, because a security document that lists only strengths is not one
 - **The filesystem containment check is not atomic with the operation.** The File System capability re-validates every path argument through `resolveWithinRoot()` before handing the call to the upstream stdio child, but the child is a separate process, so a check-then-operate window exists in principle. The upstream server re-validates independently, which makes this degraded defense-in-depth rather than a hole.
 - **`path-scope.mjs` is duplicated** between Nest and Twig, kept in sync by hand. The two copies are byte-identical in logic and both say so in their headers; the apps have separate build boundaries and grant folders on different machines under different trust models.
 - **DNS rebinding is not closed.** The SSRF guard resolves a hostname and checks the answers, but the record can change between that lookup and the socket. See [Whitelist & SSRF enforcement](#whitelist--ssrf-enforcement) for why the whitelist is the primary control.
+- **Plugin data and any credential are shared server-wide**, like every other capability — there is no per-account plugin access and no per-plugin, per-account credential. See [Plugins](#plugins).
 - **State files carry no schema version.** Writes are atomic (`json-store.mjs`), and an unparseable file is preserved as `.corrupt` rather than silently replaced — but there is no versioning to branch a future migration on.
+- **Account lifecycle isn't in the audit trail.** `logEvent()` records login attempts, key issuance/revocation, and role changes (see [Logging](#logging)), but `createAccount()`, `createOwner()`, `deleteAccount()`, and `resetPassword()` in `auth.mjs` don't call it — creating, deleting, or resetting the password on an account leaves no line in `redstart.log`. An admin/owner who did it and `accounts.json`'s current state are the only record. Closing this means adding `logEvent()` calls at those four call sites, which is a small, well-scoped fix rather than an open design question — it just hasn't been done yet.
+- **The log has no viewer, no export, and thin retention.** `redstart.log` is read by opening the file on the host; there's no in-app viewer and nothing serves it over HTTP. It rotates at 5MB keeping one previous generation, so there's no long-term archive — see [Logging](#logging).

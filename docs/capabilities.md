@@ -78,9 +78,27 @@ The connection test accepts either transport framing an MCP server may use for a
 
 ---
 
+## Plugins
+
+Redstart Nest can also install a **third-party stdio MCP server** — an admin picks a package from the [official MCP registry](https://registry.modelcontextprotocol.io) or names one directly, and its tools appear namespaced alongside the built-ins (`<plugin-id>__<tool-name>`), governed by the same classification and policy machinery every capability above already uses.
+
+This is a different mechanism from [External MCP servers](#external-mcp-servers) above — a plugin **runs on this machine**, spawned and supervised by Nest, where an external server runs somewhere else entirely. Read [Plugins](security.md#plugins) before installing one; it runs with the same OS permissions as Nest itself.
+
+**Sources.** A pinned npm package by name, a pinned pypi package (installed via [`uv`](https://docs.astral.sh/uv/)), a local folder already on the machine, or a raw command for anything else — the admin never has to hand-write JSON. Browsing the official registry pre-fills the form, including which environment variables a server needs, when that metadata is available.
+
+**Two switches, not one.** A plugin obeys the exact same two-key model as every built-in capability above: the **Plugins tab**'s `enabled` toggle is the install-level, server-wide master switch; the **Tools tab**'s card activates it per profile. Both must be on for its tools to reach the model. This is deliberate, not an oversight — installing a plugin and deciding whether *this profile* gets it are different acts of judgment, made at different times.
+
+**Every discovered tool starts at the most restrictive class.** Unlike a built-in capability, whose tools were written and classified by Redstart, a plugin's tools are third-party code the admin has not read yet. So every tool a fresh install discovers starts `destructive` — refused everywhere — until the admin reviews its actual description and promotes it. A **bulk-classify** action ("Set all N to: read") makes this practical on a plugin with dozens of tools; per-tool overrides stay available for the exceptions. A plugin's card shows how many of its discovered tools are currently reaching the model versus how many are still sitting at the fail-closed default — a plugin can be installed, enabled, and "healthy" while advertising zero tools, and the card says so rather than leaving that silent.
+
+**Credentials.** A plugin may hold an API key for a third-party service it talks to (a search or image-generation API, for instance) — encrypted at rest the same way as the Postgres connection string and External MCP's API key, never re-displayed. A plugin holding a credential is reported as network egress at `GET /egress`, in the same shape as an external MCP server.
+
+**No sandboxing.** A plugin is a real child process on this machine with the same OS permissions Nest itself has — the trust boundary is the admin's decision to install it, not a technical containment. Install what you'd run yourself.
+
+---
+
 ## Configuring in Redstart Nest
 
-The **Tools** card in the main configuration panel presents one card per tool with a single Enable/Disable button that toggles it for the profile being edited: **Web Access** (web_fetch/web_search — its own card, with source groups, individual sources, custom sources, the approved-sources whitelist toggle, and the per-fetch token budget nested inside when enabled), **Postgres**, **Documents**, **SQLite**, **Vault**, **Git**, **File System**, and **Scholar**, followed by **External MCP Servers** and **Banned Tools** (see [Tool bans](security.md#tool-bans)).
+The **Tools** card in the main configuration panel presents one card per tool with a single Enable/Disable button that toggles it for the profile being edited: **Web Access** (web_fetch/web_search — its own card, with source groups, individual sources, custom sources, the approved-sources whitelist toggle, and the per-fetch token budget nested inside when enabled), **Postgres**, **Documents**, **SQLite**, **Vault**, **Git**, **File System**, and **Scholar**, plus one card per installed-and-enabled [plugin](#plugins), followed by **External MCP Servers** and **Banned Tools** (see [Tool bans](security.md#tool-bans)). Installing, uninstalling, and classifying a plugin's tools all happen on the separate **Plugins** tab — see [Plugins](#plugins) above for why that split is deliberate.
 
 Capabilities are configured with a native folder picker, except Postgres, which takes a connection string — encrypted at rest via the OS secret store (DPAPI on Windows) and never re-displayed. File System carries two policy toggles: **Allow writes** (on) and **Allow destructive operations** (off).
 
