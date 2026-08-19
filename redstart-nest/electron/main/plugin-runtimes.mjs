@@ -118,3 +118,28 @@ export async function detectNpm() {
 
   return { ok: true, cliPath, version }
 }
+
+/**
+ * Is uv installed on this machine, and where? (Phase 7 — Python/pypi plugins.)
+ *
+ * Unlike npm, uv ships as a real standalone executable, not a shell shim
+ * (`uv.exe` on win32, not a `.cmd`) — so detection is a direct PATH lookup,
+ * no derivation through a Node install first. This is also why plugin spawns
+ * for a pypi-sourced install can stay shell:false with no cmd.exe layer,
+ * same reasoning P4-1 already established for npm.
+ *
+ * @returns {Promise<{ ok: true, execPath: string, version: string }
+ *                  | { ok: false, reason: string }>}
+ */
+export async function detectUv() {
+  const execPath = await whichBinary('uv')
+  if (!execPath) return { ok: false, reason: RUNTIME_REASON.uvNotFound }
+  let version
+  try {
+    version = await execFileText(execPath, ['--version'])
+  } catch {
+    // Found on PATH but refused to run — same practical outcome as absent.
+    return { ok: false, reason: RUNTIME_REASON.uvNotFound }
+  }
+  return { ok: true, execPath, version }
+}

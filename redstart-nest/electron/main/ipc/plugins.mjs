@@ -36,7 +36,7 @@ import {
   listPlugins, getPlugin, addPlugin, updatePlugin,
   PLUGIN_ID_PATTERN, VALID_TOOL_CLASSES,
 } from '../plugin-registry.mjs'
-import { installNpmPackage, probePlugin, uninstallPlugin } from '../plugin-install.mjs'
+import { installNpmPackage, installPypiPackage, probePlugin, uninstallPlugin } from '../plugin-install.mjs'
 import { encryptSecret, decryptSecret } from '../secrets.mjs'
 import { searchRegistry, verdictFor, formFieldsFor } from '../plugin-registry-api.mjs'
 
@@ -166,8 +166,8 @@ export function registerPluginsHandlers({ refreshLiveToolsConfig, getWindow }) {
       return refuse('plugins:install', 'Invalid plugin id.')
     }
     if (getPlugin(id)) return refuse('plugins:install', `A plugin with id "${id}" is already installed.`)
-    if (!isPlainObject(source) || !['npm', 'command', 'path'].includes(source.kind)) {
-      return refuse('plugins:install', 'A valid source (npm, command, or path) is required.')
+    if (!isPlainObject(source) || !['npm', 'pypi', 'command', 'path'].includes(source.kind)) {
+      return refuse('plugins:install', 'A valid source (npm, pypi, command, or path) is required.')
     }
     if (!optional(timeoutMs, (v) => typeof v === 'number')) {
       return refuse('plugins:install', 'timeoutMs must be a number.')
@@ -213,6 +213,29 @@ export function registerPluginsHandlers({ refreshLiveToolsConfig, getWindow }) {
         integrity = result.integrity
         installDir = result.dir
         runAsNode = true // installNpmPackage always returns process.execPath + an entry .js
+      } else if (source.kind === 'pypi') {
+        // Phase 7. identifier/version, not packageName — pypi's own
+        // terminology (matches the registry API's package entries), kept
+        // distinct from npm's field name so a source object's shape alone
+        // says which resolver it needs.
+        if (!isNonEmptyString(source.identifier) || !isNonEmptyString(source.version)) {
+          return refuse('plugins:install', 'A pypi source needs a package identifier and a pinned version.')
+        }
+        sendProgress({ state: 'resolving', message: 'Checking uv...' })
+        const result = await installPypiPackage({
+          id, identifier: source.identifier, version: source.version,
+          onProgress: sendProgress, signal: controller.signal,
+        })
+        if (!result.ok) {
+          sendProgress({ state: 'error', message: result.detail || result.reason })
+          return { ok: false, reason: result.reason, detail: result.detail }
+        }
+        resolvedCommand = result.command
+        resolvedArgs = result.args
+        resolvedVersion = result.resolvedVersion
+        integrity = result.integrity
+        installDir = result.dir
+        runAsNode = false // uv's own console-script shim IS the executable — no ELECTRON_RUN_AS_NODE wrapping
       } else if (source.kind === 'command') {
         if (!isNonEmptyString(source.command)) return refuse('plugins:install', 'A command source needs a command.')
         resolvedCommand = source.command
@@ -452,6 +475,10 @@ export function registerPluginsHandlers({ refreshLiveToolsConfig, getWindow }) {
         description: entry?.server?.description ?? '',
         packageName: verdict.packageRef?.identifier,
         version: verdict.packageRef?.version,
+        // Phase 7: the renderer needs this to know which install source kind
+        // ('npm' vs 'pypi') to submit when the admin clicks Install on a
+        // registry result — the two resolvers are not interchangeable.
+        registryType: verdict.packageRef?.registryType,
         verdict: { state: verdict.state, reason: verdict.reason },
         fields,
       }

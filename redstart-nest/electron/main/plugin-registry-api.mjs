@@ -84,15 +84,19 @@ export async function searchRegistry({ query, cursor, signal } = {}) {
  * manufactures its own support burden.
  *
  * Order of checks, first match wins:
- *   no stdio package        -> unsupported, reason 'remote'
- *   registryType 'oci'      -> unsupported, reason 'docker'
- *   registryType 'mcpb'     -> unsupported, reason 'bundle'
- *   registryType 'pypi'     -> needsRuntime, reason 'python'   (Phase 7)
- *   registryType not 'npm'  -> unsupported, reason 'unknown-runtime'
- *   no version pin          -> unsupported, reason 'unpinned'  (D5)
- *   status not 'active'     -> unsupported, reason 'inactive'
- *   any isRequired env/arg  -> needsSetup
- *   otherwise               -> installable
+ *   no stdio package                -> unsupported, reason 'remote'
+ *   registryType 'oci'              -> unsupported, reason 'docker'
+ *   registryType 'mcpb'             -> unsupported, reason 'bundle'
+ *   registryType not 'npm'/'pypi'   -> unsupported, reason 'unknown-runtime'
+ *   no version pin                  -> unsupported, reason 'unpinned'  (D5)
+ *   status not 'active'             -> unsupported, reason 'inactive'
+ *   any isRequired env/arg          -> needsSetup
+ *   otherwise                       -> installable
+ *
+ * npm and pypi (Phase 7) share every check below "registryType not npm/pypi"
+ * — runtime PRESENCE is a separate, live, per-machine check that happens at
+ * actual install time (detectNpm()/detectUv() in plugin-install.mjs), not
+ * here. This function only ever answers "installable in principle".
  *
  * Distribution in an 800-entry sample: 81% of entries are remote-only; of 150
  * stdio packages, npm 121 / pypi 21 / oci 6 / mcpb 2. So `unsupported` is the
@@ -140,10 +144,21 @@ export function verdictFor(serverEntry) {
 
     if (chosen.registryType === 'oci') return { state: VERDICT.unsupported, reason: 'docker', packageRef: chosen }
     if (chosen.registryType === 'mcpb') return { state: VERDICT.unsupported, reason: 'bundle', packageRef: chosen }
-    if (chosen.registryType === 'pypi') return { state: VERDICT.needsRuntime, reason: 'python', packageRef: chosen }
-    if (chosen.registryType !== 'npm') return { state: VERDICT.unsupported, reason: 'unknown-runtime', packageRef: chosen }
+    if (chosen.registryType !== 'npm' && chosen.registryType !== 'pypi') {
+      return { state: VERDICT.unsupported, reason: 'unknown-runtime', packageRef: chosen }
+    }
 
-    // registryType npm from here on.
+    // npm and pypi (Phase 7) share every check from here — both resolve to
+    // "pin a version at install time, run one detected runtime". Runtime
+    // PRESENCE is deliberately NOT checked here, for either one: this
+    // mirrors how npm has always worked in this function — verdictFor()
+    // answers "would this be installable in principle", and the live
+    // per-machine check happens where it actually matters, inside
+    // installNpmPackage()/installPypiPackage() itself (detectNpm()/
+    // detectUv()), which is where a "runtime not found" error surfaces
+    // naming the specific missing thing (AC7). Before Phase 7 landed, pypi
+    // short-circuited to needsRuntime unconditionally here; it no longer
+    // does.
     const version = chosen.version
     if (!version || String(version).toLowerCase() === 'latest') {
       return { state: VERDICT.unsupported, reason: 'unpinned', packageRef: chosen }

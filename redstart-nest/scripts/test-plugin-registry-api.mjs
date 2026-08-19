@@ -60,10 +60,21 @@ await test('a pinned npm package with an isRequired env var is needs-setup', asy
   return v.state
 })
 
-await test('a pypi-only package is needs-runtime, reason python', async () => {
+await test('🔍 a pinned pypi-only package is installable (Phase 7 — was needs-runtime before this resolver landed)', async () => {
   const v = verdictFor(loadFixture('registry-needs-runtime-python.json'))
-  assert(v.state === VERDICT.needsRuntime, `expected needs-runtime, got ${JSON.stringify(v)}`)
-  assert(v.reason === 'python', `expected reason "python", got "${v.reason}"`)
+  assert(v.state === VERDICT.installable, `expected installable, got ${JSON.stringify(v)}`)
+  assert(v.packageRef?.registryType === 'pypi', `expected the pypi package chosen, got ${v.packageRef?.registryType}`)
+  return v.state
+})
+
+await test('🔍 a pypi package with no version pin is unsupported, reason unpinned (D5 applies identically to pypi)', async () => {
+  const v = verdictFor({
+    server: {
+      packages: [{ registryType: 'pypi', identifier: 'some-pypi-mcp-server', version: 'latest', transport: { type: 'stdio' } }],
+    },
+  })
+  assert(v.state === VERDICT.unsupported, `expected unsupported, got ${JSON.stringify(v)}`)
+  assert(v.reason === 'unpinned', `expected reason "unpinned", got "${v.reason}"`)
   return `${v.state}/${v.reason}`
 })
 
@@ -118,9 +129,9 @@ await test('npm beats oci even when listed second', async () => {
   return 'npm chosen over oci'
 })
 
-await test('pypi beats oci and mcpb when no npm package is offered', async () => {
+await test('pypi beats oci and mcpb when no npm package is offered, and is now installable itself (Phase 7)', async () => {
   const v = verdictFor(loadFixture('registry-multi-package-picks-best.json'))
-  assert(v.state === VERDICT.needsRuntime, `expected needs-runtime, got ${JSON.stringify(v)}`)
+  assert(v.state === VERDICT.installable, `expected installable, got ${JSON.stringify(v)}`)
   assert(v.packageRef?.registryType === 'pypi', `expected the pypi package chosen, got ${v.packageRef?.registryType}`)
   return 'pypi chosen over oci/mcpb'
 })

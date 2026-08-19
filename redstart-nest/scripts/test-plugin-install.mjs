@@ -72,6 +72,15 @@ async function isNpmRegistryReachable() {
   }
 }
 
+async function isPypiReachable() {
+  try {
+    const res = await fetch('https://pypi.org/simple/', { signal: AbortSignal.timeout(3000) })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
 const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-plugin-install-logs-'))
 
 // ---------------------------------------------------------------------------
@@ -90,6 +99,17 @@ await test('buildNpmInstallArgs() includes --ignore-scripts, plus --prefix and t
   assert(args.includes('--prefix'), `--prefix missing from argv: ${JSON.stringify(args)}`)
   assert(args[args.indexOf('--prefix') + 1] === 'C:\\fake\\dir', 'the directory following --prefix is wrong')
   assert(args.includes('@modelcontextprotocol/server-memory@2026.7.4'), 'the pinned package@version spec is missing')
+  return args.join(' ')
+})
+
+console.log('\n-- Phase 7: buildUvInstallArgs() (network-free) --')
+
+await test('buildUvInstallArgs() includes tool install, --python-preference only-managed, and the pinned spec', async () => {
+  const args = install.buildUvInstallArgs({ spec: 'armor-mcp==0.6.1' })
+  assert(args[0] === 'tool' && args[1] === 'install', `expected "tool install" first, got ${JSON.stringify(args)}`)
+  assert(args.includes('--python-preference'), `--python-preference missing from argv: ${JSON.stringify(args)}`)
+  assert(args.includes('only-managed'), `"only-managed" missing from argv: ${JSON.stringify(args)}`)
+  assert(args.includes('armor-mcp==0.6.1'), 'the pinned package==version spec is missing')
   return args.join(' ')
 })
 
@@ -312,6 +332,75 @@ if (!online) {
     assert(!fs.existsSync(path.join(install.pluginsRoot(), 'aborttest')), 'the partial install directory was left behind')
     return 'no directory left behind'
   })
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7, network-dependent: real pypi installs via uv
+// ---------------------------------------------------------------------------
+//
+// Skips cleanly, same posture as the npm section above, on EITHER of two
+// absences: uv not on this machine, or pypi.org unreachable. This is also
+// the closest thing to an automated AC7 check — a genuinely missing runtime
+// must produce install.INSTALL_REASON.uvMissing, not a generic failure.
+
+const { detectUv } = await import('../electron/main/plugin-runtimes.mjs')
+const uv = await detectUv()
+
+if (!uv.ok) {
+  console.log(`\n-- Phase 7 pypi install tests SKIPPED: uv not found on this machine (${uv.reason}) --`)
+} else {
+  const pypiOnline = await isPypiReachable()
+  if (!pypiOnline) {
+    console.log('\n-- Phase 7 pypi install tests SKIPPED: pypi.org unreachable --')
+  } else {
+    console.log(`\n-- real pypi installs via uv ${uv.version} (network) --`)
+
+    await test('installing cowsay==6.1 succeeds with a real, directly-executable entry point', async () => {
+      const result = await withTimeout(
+        install.installPypiPackage({ id: 'realpypiinstall', identifier: 'cowsay', version: '6.1' }),
+        120000, 'installPypiPackage cowsay',
+      )
+      assert(result.ok, `install failed: ${result.reason} ${result.detail ?? ''}`)
+      assert(fs.existsSync(result.command), `resolved entry point does not exist: ${result.command}`)
+      assert(result.args.length === 0, 'a uv-installed console-script shim needs no args — the shim itself is the entry point')
+      assert(result.resolvedVersion === '6.1', `expected resolvedVersion "6.1" (parsed from uv's own "+ cowsay==6.1" line), got "${result.resolvedVersion}"`)
+      fs.rmSync(result.dir, { recursive: true, force: true })
+      return `entry: ${result.command}`
+    })
+
+    await test('a nonexistent pypi package returns reason: package-not-found', async () => {
+      const result = await withTimeout(
+        install.installPypiPackage({ id: 'nopypitest', identifier: 'redstart-definitely-does-not-exist-xyz-123', version: '1.0.0' }),
+        60000, 'installPypiPackage nonexistent package',
+      )
+      assert(result.ok === false, 'a nonexistent package was accepted')
+      assert(result.reason === 'package-not-found', `expected "package-not-found", got "${result.reason}": ${result.detail ?? ''}`)
+      return result.reason
+    })
+
+    await test('a real pypi package at a nonexistent version returns reason: version-not-found', async () => {
+      const result = await withTimeout(
+        install.installPypiPackage({ id: 'noverpypitest', identifier: 'cowsay', version: '999.999.999' }),
+        60000, 'installPypiPackage nonexistent version',
+      )
+      assert(result.ok === false, 'a nonexistent version was accepted')
+      assert(result.reason === 'version-not-found', `expected "version-not-found", got "${result.reason}": ${result.detail ?? ''}`)
+      return result.reason
+    })
+
+    await test('aborting a pypi install mid-flight leaves no directory behind', async () => {
+      const controller = new AbortController()
+      const promise = install.installPypiPackage({
+        id: 'abortpypitest', identifier: 'cowsay', version: '6.1', signal: controller.signal,
+      })
+      setTimeout(() => controller.abort(), 50)
+      const result = await withTimeout(promise, 60000, 'installPypiPackage aborted')
+      assert(result.ok === false, 'an aborted install reported success')
+      assert(result.reason === 'cancelled', `expected "cancelled", got "${result.reason}"`)
+      assert(!fs.existsSync(path.join(install.pluginsRoot(), 'abortpypitest')), 'the partial install directory was left behind')
+      return 'no directory left behind'
+    })
+  }
 }
 
 // ---------------------------------------------------------------------------

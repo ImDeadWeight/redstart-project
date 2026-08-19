@@ -62,7 +62,7 @@ function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32) || 'plugin'
 }
 
-type SourceKind = 'registry' | 'npm' | 'path' | 'command'
+type SourceKind = 'registry' | 'npm' | 'pypi' | 'path' | 'command'
 type EnvEntry = { value: string; isSecret: boolean }
 type InstallOk = Extract<Awaited<ReturnType<ReturnType<typeof api>['plugins']['install']>>, { ok: true }>
 
@@ -72,6 +72,14 @@ const initialState = {
   registryQuery: '',
   registrySearched: false,
   registrySelected: null as RegistrySearchResult | null,
+  // Phase 7: which resolver a REGISTRY pick needs — npm or pypi (uv) are not
+  // interchangeable. Irrelevant for the manual 'npm'/'pypi' tabs, where
+  // sourceKind alone already says which resolver to use.
+  registryType: null as string | null,
+  // Reused for BOTH npm and pypi package-based sources (manual tabs AND a
+  // registry pick) — "package identifier + pinned version" is the same shape
+  // either way, and sourceKind/registryType is what decides which resolver
+  // actually consumes them.
   npmPackage: '',
   npmVersion: '',
   localPath: '',
@@ -116,6 +124,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
     setState((prev) => ({
       ...prev,
       registrySelected: entry,
+      registryType: entry.registryType ?? null,
       npmPackage: entry.packageName || '',
       npmVersion: entry.version || '',
       displayName: entry.name,
@@ -143,12 +152,28 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
       // admin happened to hand-edit the id field first.
       const seed =
         s.sourceKind === 'registry' ? s.displayName
-        : s.sourceKind === 'npm' ? s.npmPackage
+        : s.sourceKind === 'npm' || s.sourceKind === 'pypi' ? s.npmPackage
         : s.sourceKind === 'command' ? s.command
         : s.localPath
       set('pluginId', slugify(seed || 'plugin'))
     }
     set('step', 2)
+  }
+
+  // Single source of truth for the {kind, ...} object both runInstall() and
+  // confirmInstall() send — they used to build this independently, which is
+  // exactly how a future third divergence would go unnoticed. For a
+  // 'registry' pick, s.registryType (Phase 7) decides npm vs pypi; the two
+  // manual tabs already know which they are from sourceKind itself.
+  function buildSource() {
+    if (s.sourceKind === 'path') return { kind: 'path' as const, path: s.localPath }
+    if (s.sourceKind === 'command') {
+      return { kind: 'command' as const, command: s.command, args: s.commandArgs.split(/\s+/).filter(Boolean) }
+    }
+    const isPypi = s.sourceKind === 'pypi' || (s.sourceKind === 'registry' && s.registryType === 'pypi')
+    return isPypi
+      ? { kind: 'pypi' as const, identifier: s.npmPackage, version: s.npmVersion }
+      : { kind: 'npm' as const, packageName: s.npmPackage, version: s.npmVersion }
   }
 
   async function pickFolder(fieldName: string) {
@@ -176,14 +201,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
     set('installError', null)
     set('step', 3)
 
-    const source =
-      s.sourceKind === 'path'
-        ? ({ kind: 'path', path: s.localPath } as const)
-        : s.sourceKind === 'command'
-        ? ({ kind: 'command', command: s.command, args: s.commandArgs.split(/\s+/).filter(Boolean) } as const)
-        : ({ kind: 'npm', packageName: s.npmPackage, version: s.npmVersion } as const)
-
-    const result = await api().plugins.install({ id: s.pluginId, source, env: buildEnvPayload() })
+    const result = await api().plugins.install({ id: s.pluginId, source: buildSource(), env: buildEnvPayload() })
     setState((prev) => ({ ...prev, installing: false }))
     if (!result.ok) {
       // plugins:install returns two different failure shapes: the npm/probe
@@ -218,12 +236,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
     const result = await api().plugins.confirmInstall({
       id: s.pluginId,
       displayName: s.displayName || s.pluginId,
-      source:
-        s.sourceKind === 'path'
-          ? { kind: 'path', path: s.localPath }
-          : s.sourceKind === 'command'
-          ? { kind: 'command', command: s.command, args: s.commandArgs.split(/\s+/).filter(Boolean) }
-          : { kind: 'npm', packageName: s.npmPackage, version: s.npmVersion },
+      source: buildSource(),
       resolvedCommand: s.installResult.resolvedCommand,
       resolvedArgs: s.installResult.resolvedArgs,
       resolvedVersion: s.installResult.resolvedVersion,
@@ -259,11 +272,11 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
           {s.step === 1 && (
             <div className="space-y-4">
               <div className="flex gap-2 text-xs">
-                {(['registry', 'npm', 'path', 'command'] as SourceKind[]).map((kind) => (
+                {(['registry', 'npm', 'pypi', 'path', 'command'] as SourceKind[]).map((kind) => (
                   <button key={kind}
                     onClick={() => set('sourceKind', kind)}
                     className={`px-2.5 py-1 rounded ${s.sourceKind === kind ? 'bg-orange-500 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'}`}>
-                    {kind === 'registry' ? 'Browse registry' : kind === 'npm' ? 'npm package' : kind === 'path' ? 'Local folder' : 'Advanced'}
+                    {kind === 'registry' ? 'Browse registry' : kind === 'npm' ? 'npm package' : kind === 'pypi' ? 'pypi package (uv)' : kind === 'path' ? 'Local folder' : 'Advanced'}
                   </button>
                 ))}
               </div>
@@ -293,6 +306,18 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
                     onChange={(e) => set('npmPackage', e.target.value)} />
                   <label className="block text-xs text-zinc-400">Version (pinned — no ranges, no "latest")</label>
                   <input className={inputCls.sm} placeholder="2026.7.4" value={s.npmVersion}
+                    onChange={(e) => set('npmVersion', e.target.value)} />
+                </div>
+              )}
+
+              {s.sourceKind === 'pypi' && (
+                <div className="space-y-2">
+                  <p className="text-xs text-zinc-600">Installed as an isolated uv tool — needs uv on this machine (uv.exe, not pip).</p>
+                  <label className="block text-xs text-zinc-400">Package identifier</label>
+                  <input className={inputCls.sm} placeholder="armor-mcp" value={s.npmPackage}
+                    onChange={(e) => set('npmPackage', e.target.value)} />
+                  <label className="block text-xs text-zinc-400">Version (pinned — no ranges, no "latest")</label>
+                  <input className={inputCls.sm} placeholder="0.6.1" value={s.npmVersion}
                     onChange={(e) => set('npmVersion', e.target.value)} />
                 </div>
               )}
@@ -336,7 +361,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
                   disabled={
                     !PLUGIN_ID_PATTERN.test(s.pluginId || slugify(s.displayName || s.npmPackage || s.command || s.localPath || '')) ||
                     (s.sourceKind === 'registry' && !s.registrySelected) ||
-                    (s.sourceKind === 'npm' && (!s.npmPackage || !s.npmVersion)) ||
+                    ((s.sourceKind === 'npm' || s.sourceKind === 'pypi') && (!s.npmPackage || !s.npmVersion)) ||
                     (s.sourceKind === 'path' && !s.localPath) ||
                     (s.sourceKind === 'command' && !s.command)
                   }

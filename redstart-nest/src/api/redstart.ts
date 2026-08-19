@@ -123,6 +123,11 @@ export type RedstartAPI = {
     install: (req: {
       id: string
       source: { kind: 'npm'; packageName: string; version: string }
+        // Phase 7 — installed via uv, not npm. Field is `identifier` (pypi's
+        // own term, matches the registry API's package entries) rather than
+        // `packageName`, so the source object's own shape says which
+        // resolver it needs.
+        | { kind: 'pypi'; identifier: string; version: string }
         | { kind: 'command'; command: string; args?: string[] }
         | { kind: 'path'; path: string }
       env?: Record<string, { value: string; isSecret: boolean }>
@@ -144,7 +149,7 @@ export type RedstartAPI = {
     // what is sent — enabling is a separate, deliberate act.
     confirmInstall: (entry: {
       id: string; displayName?: string
-      source: { kind: 'npm' | 'path' | 'command' } & Record<string, unknown>
+      source: { kind: 'npm' | 'pypi' | 'path' | 'command' } & Record<string, unknown>
       resolvedCommand: string; resolvedArgs: string[]
       resolvedVersion: string | null; integrity: string | null; installDir: string | null; runAsNode: boolean
       timeoutMs?: number
@@ -183,7 +188,7 @@ export type RedstartAPI = {
 export type PluginSummary = {
   id: string
   displayName: string
-  source: { kind: 'npm' | 'path' | 'command'; packageName?: string; version?: string; path?: string; command?: string } | null
+  source: { kind: 'npm' | 'pypi' | 'path' | 'command'; packageName?: string; identifier?: string; version?: string; path?: string; command?: string } | null
   resolvedVersion: string | null
   enabled: boolean            // registry master switch (Plugins tab), NOT activeToolIds
   allowWrite: boolean
@@ -219,6 +224,11 @@ export type RegistrySearchResult = {
   description: string
   packageName?: string
   version?: string
+  // Phase 7: which install source kind this result needs ('npm' vs 'pypi') —
+  // the two resolvers are not interchangeable, so picking a result has to
+  // route to the right one. Absent/other values (oci, mcpb, ...) never reach
+  // an installable verdict, so the renderer never needs to branch on them.
+  registryType?: string
   verdict: { state: 'installable' | 'needs-setup' | 'needs-runtime' | 'unsupported'; reason?: string }
   fields: { name: string; description: string; format: string; isRequired: boolean; isSecret: boolean; default?: unknown; placeholder?: string }[]
 }
