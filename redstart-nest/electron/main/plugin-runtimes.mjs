@@ -99,12 +99,29 @@ export async function detectNode() {
  * @returns {Promise<{ ok: true, cliPath: string, version: string }
  *                  | { ok: false, reason: string }>}
  */
+// Two real layouts, not one — this shipped Windows-only and was never
+// exercised on Linux/macOS until this branch's first CI run surfaced it.
+// Windows' ZIP distribution puts node_modules/npm beside node.exe itself
+// (nodeDir/node_modules/npm/...). The POSIX layout every other install
+// method uses (Linux distro packages, Homebrew, nvm, GitHub Actions'
+// setup-node) puts node in <prefix>/bin/ and npm in the SIBLING
+// <prefix>/lib/node_modules/npm/... — one directory up from node's own dir,
+// not beside it. Exported so a test can assert both candidates without
+// depending on which layout happens to be true on the machine running it.
+export function npmCliPathCandidates(nodeExecPath) {
+  const nodeDir = path.dirname(nodeExecPath)
+  return [
+    path.join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),              // win32 ZIP layout
+    path.join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'), // POSIX layout
+  ]
+}
+
 export async function detectNpm() {
   const node = await detectNode()
   if (!node.ok) return node // propagate the reason unchanged (node-not-found)
 
-  const cliPath = path.join(path.dirname(node.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
-  if (!fs.existsSync(cliPath)) return { ok: false, reason: RUNTIME_REASON.npmNotFound }
+  const cliPath = npmCliPathCandidates(node.execPath).find((p) => fs.existsSync(p))
+  if (!cliPath) return { ok: false, reason: RUNTIME_REASON.npmNotFound }
 
   // npm's own package.json sits two directories up from npm-cli.js
   // (node_modules/npm/bin/npm-cli.js -> node_modules/npm/package.json).
