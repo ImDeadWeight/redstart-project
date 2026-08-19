@@ -1,0 +1,22 @@
+{
+  "server": {
+    "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    "name": "io.github.example/floating-version",
+    "description": "Declares no concrete version — D5 refuses to install unpinned.",
+    "version": "latest",
+    "packages": [
+      {
+        "registryType": "npm",
+        "identifier": "@example/floating-mcp",
+        "runtimeHint": "npx",
+        "transport": { "type": "stdio" }
+      }
+    ]
+  },
+  "_meta": {
+    "io.modelcontextprotocol.registry/official": {
+      "status": "active",
+      "isLatest": true
+    }
+  }
+}

@@ -28,8 +28,12 @@ import { register } from 'node:module'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import pg from 'pg'
 import { connectMcpClient } from './lib/mcp-test-client.mjs'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const PLUGIN_FIXTURE = path.join(__dirname, 'fixtures', 'fake-mcp-server.mjs')
 
 const dirs = {
   userData: fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-conformance-userdata-')),
@@ -47,6 +51,7 @@ const { startMcpServer, stopMcpServer, updateMcpConfig } = await import('../elec
 const { setAuthRequired } = await import('../electron/main/auth.mjs')
 const { CAPABILITY_TOOL_NAMES } = await import('../electron/main/tools-definitions.mjs')
 const fsProvider = await import('../electron/main/filesystem-mcp-provider.mjs')
+const { addPlugin, updatePlugin, removePlugin } = await import('../electron/main/plugin-registry.mjs')
 
 // This suite exercises providers, not the auth gate (which has its own suite).
 setAuthRequired(false)
@@ -116,6 +121,33 @@ function disabledBase() {
 // don't require.
 // ---------------------------------------------------------------------------
 
+const PLUGIN_ID = 'conformanceplugin'
+
+// Registered once, up front, always as `enabled: false` — an INSTALLED plugin
+// is present in every phase of this suite (including the disabled-phase
+// invariants below), exactly as a real admin install would leave it until
+// switched on. The install-level flag alone is not enough to activate it
+// (plan decision D-a); each provider's own `setup`/`teardown` hooks flip it.
+{
+  const add = addPlugin({
+    id: PLUGIN_ID,
+    displayName: 'Conformance Fixture Plugin',
+    source: { kind: 'command', command: process.execPath, args: [PLUGIN_FIXTURE, 'normal'] },
+    resolvedCommand: process.execPath,
+    resolvedArgs: [PLUGIN_FIXTURE, 'normal'],
+    env: {},
+    timeoutMs: 15000,
+    enabled: false,
+    allowWrite: false,
+    allowDestructive: false,
+    tools: [
+      { name: 'echo', description: 'Echo the supplied text back.', inputSchema: {}, class: 'read' },
+      { name: 'write_thing', description: 'Pretends to write something.', inputSchema: {}, class: 'write' },
+    ],
+  })
+  if (!add.ok) throw new Error(`could not register the conformance fixture plugin: ${add.error}`)
+}
+
 const PROVIDERS = [
   {
     name: 'web-fetch',
@@ -182,6 +214,23 @@ const PROVIDERS = [
     advertised: CAPABILITY_TOOL_NAMES.postgres,
     badCall: { name: 'postgres_query', arguments: {} }, // missing sql
     needsDb: true,
+  },
+  {
+    // A third-party stdio MCP plugin — the one provider whose child is a
+    // real, separately-installed process rather than a Redstart module. Both
+    // switches (registry `enabled` + this cfg entry, plan decision D-a) must
+    // be on for the provider to answer at all; `setup` flips the registry
+    // half, `enable()` (folded into the shared enabledConfig) flips the other.
+    name: 'plugin',
+    tools: [`${PLUGIN_ID}__echo`, `${PLUGIN_ID}__write_thing`],
+    enable: () => ({ [PLUGIN_ID]: { enabled: true } }),
+    advertised: [`${PLUGIN_ID}__echo`, `${PLUGIN_ID}__write_thing`],
+    // "sabotage" is not among the fixture's two tools — the client's
+    // tools/call rejects with -32601, plugin-provider.mjs catches it and
+    // returns an isError result rather than letting the exception escape.
+    badCall: { name: `${PLUGIN_ID}__sabotage`, arguments: {} },
+    setup: async () => { updatePlugin(PLUGIN_ID, { enabled: true }) },
+    teardown: () => { updatePlugin(PLUGIN_ID, { enabled: false }) },
   },
 ]
 
@@ -304,6 +353,7 @@ async function main() {
   // ---------------------------------------------------------------------------
   // Cleanup + summary
   // ---------------------------------------------------------------------------
+  removePlugin(PLUGIN_ID)
   for (const d of Object.values(dirs)) fs.rmSync(d, { recursive: true, force: true })
 
   const failed = results.filter(r => !r.pass)

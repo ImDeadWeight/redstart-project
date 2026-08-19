@@ -1,0 +1,22 @@
+{
+  "server": {
+    "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    "name": "io.github.example/vs-filesystem",
+    "description": "Secure filesystem access, published to PyPI only.",
+    "version": "0.1.3",
+    "packages": [
+      {
+        "registryType": "pypi",
+        "identifier": "vs-filesystem-mcp-server",
+        "version": "0.1.3",
+        "transport": { "type": "stdio" }
+      }
+    ]
+  },
+  "_meta": {
+    "io.modelcontextprotocol.registry/official": {
+      "status": "active",
+      "isLatest": true
+    }
+  }
+}

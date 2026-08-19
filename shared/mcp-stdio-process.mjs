@@ -52,6 +52,10 @@ function quoteWindowsArg(a) {
  * @property {string} command
  * @property {string[]} [args]
  * @property {Record<string, string>} [env]
+ * @property {boolean} [inheritEnv] Set false to spawn with a minimal baseline
+ *   environment plus `env`, instead of the parent's full environment. For
+ *   third-party plugin children, which must not receive Nest's own environment.
+ *   Default: true (inherit) — redstart-twig's servers depend on it.
  * @property {boolean} [shell] Set false to spawn the command directly even on
  *   Windows — for real executables (node.exe, *.exe). Default: shell on win32,
  *   which is required for .cmd shims like npx/npm.
@@ -67,6 +71,23 @@ function quoteWindowsArg(a) {
  *   before a crash-restart, so config edits made while a server was up take effect on its next
  *   restart. Falling back to the config captured at spawn when absent/undefined.
  */
+// The minimum a child needs to start at all. Trimming below this does not make
+// a plugin safer, it makes it fail to spawn: on win32 with shell:true the child
+// is cmd.exe, which needs COMSPEC/SystemRoot/PATH before it can run anything.
+// Everything outside this list is withheld from plugin children.
+const BASELINE_ENV_KEYS = process.platform === 'win32'
+  ? ['SystemRoot', 'SystemDrive', 'windir', 'COMSPEC', 'PATH', 'PATHEXT', 'TEMP', 'TMP', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE']
+  : ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'SHELL']
+
+function buildChildEnv(cfg) {
+  if (cfg.inheritEnv !== false) return { ...process.env, ...(cfg.env ?? {}) }
+  const base = {}
+  for (const key of BASELINE_ENV_KEYS) {
+    if (process.env[key] !== undefined) base[key] = process.env[key]
+  }
+  return { ...base, ...(cfg.env ?? {}) }
+}
+
 export function createStdioProcessManager({ logDir, onMessage, onExit, shouldRestart, resolveConfig } = {}) {
   /**
    * @typedef {object} ManagedServer
@@ -104,19 +125,19 @@ export function createStdioProcessManager({ logDir, onMessage, onExit, shouldRes
 
     const useShell = process.platform === 'win32' && cfg.shell !== false
     const args = cfg.args ?? []
-    const env = cfg.env ?? {}
+    const childEnv = buildChildEnv(cfg)
 
     let child
     try {
       child = useShell
         ? spawn([cfg.command, ...args].map(quoteWindowsArg).join(' '), {
-            env: { ...process.env, ...env },
+            env: childEnv,
             windowsHide: true,
             shell: true,
             stdio: ['pipe', 'pipe', 'pipe'],
           })
         : spawn(cfg.command, args, {
-            env: { ...process.env, ...env },
+            env: childEnv,
             windowsHide: true,
             stdio: ['pipe', 'pipe', 'pipe'],
           })

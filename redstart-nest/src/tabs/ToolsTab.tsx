@@ -2,6 +2,7 @@ import type { LlamaConfig } from '../types'
 import type { useToolsCatalog } from '../hooks/useToolsCatalog'
 import type { useCapabilities, FolderCap } from '../hooks/useCapabilities'
 import type { useExternalMcp } from '../hooks/useExternalMcp'
+import type { usePlugins } from '../hooks/usePlugins'
 import { SectionTitle, TogglePill, btnCls, inputCls } from '../components/ui'
 
 // ---------------------------------------------------------------------------
@@ -146,11 +147,12 @@ function FolderCapabilityCard({ caps, cap, title, emptyText, description, active
 // Tools tab
 // ---------------------------------------------------------------------------
 
-export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
+export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
   config: LlamaConfig
   toolsCatalog: ReturnType<typeof useToolsCatalog>
   caps: ReturnType<typeof useCapabilities>
   mcp: ReturnType<typeof useExternalMcp>
+  plugins: ReturnType<typeof usePlugins>
 }) {
   const {
     allTools, allGroups, clientApps,
@@ -476,6 +478,35 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp }: {
             </div>
             <p className="text-xs text-zinc-600 mt-1.5">Search open academic literature (OpenAlex, arXiv, PubMed) and save open-access PDFs into the Documents folder. Leave the whitelist empty for all venues; when set, searches and downloads are restricted to those journals/categories at the API level.</p>
           </div>
+
+          {/* ---- Installed plugins ----
+              One card per installed+enabled plugin (decision D1 — a plugin is a
+              capability, not a special case). A plugin installed but not yet
+              registry-enabled shows no card at all: it isn't available on this
+              server, so a per-profile toggle for it would imply otherwise. The
+              registry `enabled` switch itself lives on the Plugins tab, not here —
+              see [Two tabs, not one section] in the plan. */}
+          {plugins.plugins.filter((p) => p.enabled).map((p) => (
+            <div key={p.id} className="bg-zinc-800/40 rounded px-3 py-2.5">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm text-zinc-200">{p.displayName}</span>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <span className={`text-xs ${isActive(p.id) ? 'text-green-400' : 'text-zinc-500'}`}>
+                    {isActive(p.id) ? 'Enabled' : 'Disabled'}
+                  </span>
+                  <button onClick={() => toggleTool(p.id)} className={btnCls.chip}>
+                    {isActive(p.id) ? 'Disable' : 'Enable'}
+                  </button>
+                </div>
+              </div>
+              <p className="text-xs text-zinc-600">
+                {p.toolCount} tool{p.toolCount === 1 ? '' : 's'} · third-party plugin — manage installation, health and classification on the Plugins tab.
+              </p>
+              {p.lastError && (
+                <p className="text-xs text-red-400 mt-1">⚠ Unhealthy: {p.lastError}</p>
+              )}
+            </div>
+          ))}
         </div>
 
         {toolContextEstimate && toolContextEstimate.toolCount > 0 && (

@@ -56,3 +56,30 @@ export function TogglePill({ checked, onToggle, className = '' }: {
     </div>
   )
 }
+
+// --- Truncated text with a Read more toggle ---------------------------------
+// A plugin tool's description is the publisher's, not ours — some are one
+// clause, some (a multi-action MCP tool documenting every `action` value in
+// one string) run to a couple thousand characters. Collapsed by default so a
+// 40-tool list stays scannable; nothing is ever hidden outright, only folded.
+import { useState } from 'react'
+
+export function TruncatedText({ text, limit = 160, className = '' }: {
+  text: string
+  limit?: number
+  className?: string
+}) {
+  const [expanded, setExpanded] = useState(false)
+  if (text.length <= limit) return <p className={className}>{text}</p>
+
+  return (
+    <p className={className}>
+      {expanded ? text : text.slice(0, limit).trimEnd() + '…'}{' '}
+      <button
+        onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v) }}
+        className="text-zinc-400 hover:text-zinc-200 underline underline-offset-2 whitespace-nowrap">
+        {expanded ? 'Show less' : 'Read more'}
+      </button>
+    </p>
+  )
+}

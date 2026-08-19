@@ -113,6 +113,7 @@ const registrars = [
   ['capabilities', 'registerCapabilitiesHandlers'],
   ['server', 'registerServerHandlers'],
   ['models', 'registerModelsHandlers'],
+  ['plugins', 'registerPluginsHandlers'],
 ]
 
 for (const [mod, fnName] of registrars) {

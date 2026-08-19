@@ -27,6 +27,8 @@ import {
   CLIENT_APP_TOOL_NAMES,
   TOOL_CLASSES,
   capabilityForTool,
+  capabilityToolNames,
+  setPluginCapabilityProvider,
 } from '../electron/main/tools-definitions.mjs'
 
 // ---------------------------------------------------------------------------
@@ -116,6 +118,58 @@ await test('a client-app id does not shadow a capability id', async () => {
       !CAPABILITY_TOOL_NAMES[app.id],
       `client app id "${app.id}" is also a capability id — expandDisabledToolIds resolves capabilities first, so the app could never be banned`,
     )
+  }
+})
+
+console.log('\n-- installed plugins (T21 / plan Test plan: "namespace collision does not displace a built-in") --')
+
+// plugin-registry.mjs owns this constant (it imports `app` from electron, so
+// this pure suite cannot import it directly) — mirrored here as a literal.
+// If the two ever drift, test-plugin-registry.mjs's namespacing assertions
+// would catch it independently.
+const NAMESPACE_SEPARATOR = '__'
+
+await test('🔍 a plugin capability injected via setPluginCapabilityProvider is namespaced and collides with nothing', async () => {
+  // Mirrors what plugin-registry.mjs's pluginCapabilities() hands to this
+  // module at runtime: { [pluginId]: { toolNames, classes } }. Exercising the
+  // injection point directly (rather than going through the registry) keeps
+  // this suite electron-free while still proving the real collision surface —
+  // capabilityToolNames() merging plugin names in beside the built-ins.
+  setPluginCapabilityProvider(() => ({
+    memory: {
+      toolNames: [`memory${NAMESPACE_SEPARATOR}create_entities`, `memory${NAMESPACE_SEPARATOR}read_graph`],
+      classes: { [`memory${NAMESPACE_SEPARATOR}create_entities`]: 'write' },
+    },
+  }))
+  try {
+    const merged = capabilityToolNames()
+    assert(Array.isArray(merged.memory), 'the injected plugin is missing from capabilityToolNames()')
+    for (const name of merged.memory) {
+      assert(!nestToolNames.has(name), `plugin tool "${name}" collides with a built-in Nest tool name`)
+      assert(!clientToolNames.includes(name), `plugin tool "${name}" collides with a client-app tool name`)
+      assert(capabilityForTool(name) === 'memory', `capabilityForTool("${name}") did not resolve back to "memory"`)
+    }
+    return `${merged.memory.length} namespaced tool(s), no collision`
+  } finally {
+    setPluginCapabilityProvider(null) // restore the no-plugins default
+  }
+})
+
+await test('a plugin id equal to a reserved client-app prefix stem still produces tool names outside that prefix\'s literal set', async () => {
+  // "fs" is not itself a reserved id anywhere in the registry validator, but
+  // "fs__read_file" *starts with* the reserved "fs_" prefix (single
+  // underscore) — because "fs__" begins with "fs_". Ban targetability is only
+  // actually at risk if that produces a NAME COLLISION with a real fs_* tool,
+  // which double-underscore namespacing prevents: no fs_* client tool contains
+  // "__", so no plugin tool can ever equal one exactly.
+  setPluginCapabilityProvider(() => ({
+    fs: { toolNames: [`fs${NAMESPACE_SEPARATOR}read_file`], classes: {} },
+  }))
+  try {
+    const merged = capabilityToolNames()
+    assert(!clientToolNames.includes(merged.fs[0]), `"${merged.fs[0]}" exactly collided with a client-app tool name`)
+  } finally {
+    setPluginCapabilityProvider(null)
   }
 })
 

@@ -19,6 +19,8 @@ import { updateGatewayConfig, getGatewayPort } from './tools-gateway.mjs'
 import { updateMcpConfig } from './mcp-server.mjs'
 import { syncFilesystemProvider } from './filesystem-mcp-provider.mjs'
 import { decryptSecret } from './secrets.mjs'
+import { listPlugins } from './plugin-registry.mjs'
+import { syncPluginProviders, stopAllPlugins } from './plugin-provider.mjs'
 
 export function buildGatewayConfig(llamaConfig) {
   const toolSettings = llamaConfig?.tools
@@ -48,6 +50,7 @@ export function buildGatewayConfig(llamaConfig) {
       fileSystem: { enabled: false },
       git:       { enabled: false },
       scholar: { enabled: false },
+      ...Object.fromEntries(listPlugins().map((p) => [p.id, { enabled: false, isPlugin: true }])),
     }
   }
 
@@ -151,6 +154,17 @@ export function buildGatewayConfig(llamaConfig) {
       // PDFs land in the Documents folder so read_document can pick them up.
       saveDir: capabilities.documents.outputDir,
     },
+    // Plugins are capabilities (decision D1), so they obey the same two-key
+    // model as every built-in: enabled in the registry by an admin AND
+    // activated for this profile via activeToolIds. `isPlugin` is what tells
+    // the policy gate in mcp-server.mjs to apply per-plugin write/destructive
+    // policy rather than the File System rules.
+    ...Object.fromEntries(listPlugins().map((p) => [p.id, {
+      enabled: p.enabled === true && toolIdSet.has(p.id),
+      isPlugin: true,
+      allowWrite: p.allowWrite === true,
+      allowDestructive: p.allowDestructive === true,
+    }])),
   }
 }
 
@@ -169,5 +183,8 @@ export function createRefreshLiveToolsConfig(serverState, userDataDir) {
     // and handshake, and this refresh path isn't awaited by its callers.
     syncFilesystemProvider(cfg.fileSystem, path.join(userDataDir, 'mcp-fs-logs'))
       .catch((err) => console.warn('[filesystem-mcp-provider] sync failed:', err.message))
+    // Terminates the child of any plugin that has just been disabled. Registry
+    // state alone does not kill a process.
+    syncPluginProviders(cfg)
   }
 }

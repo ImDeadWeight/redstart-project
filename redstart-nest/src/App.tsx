@@ -20,6 +20,7 @@ import { useAuthSetup } from './hooks/useAuthSetup'
 import { useExternalMcp } from './hooks/useExternalMcp'
 import { useToolsCatalog } from './hooks/useToolsCatalog'
 import { useCapabilities } from './hooks/useCapabilities'
+import { usePlugins } from './hooks/usePlugins'
 import { useHardwareAndBinary } from './hooks/useHardwareAndBinary'
 import { useModelCatalog } from './hooks/useModelCatalog'
 import { useProfiles } from './hooks/useProfiles'
@@ -31,6 +32,7 @@ import { ModelPanel } from './panels/ModelPanel'
 import { AccountsPanel } from './panels/AccountsPanel'
 import { ConfigTab } from './tabs/ConfigTab'
 import { ToolsTab } from './tabs/ToolsTab'
+import { PluginsTab } from './tabs/PluginsTab'
 import { ModelsTab } from './tabs/ModelsTab'
 import { ServerTab, healthDisplay } from './tabs/ServerTab'
 import { LaunchControls } from './components/LaunchControls'
@@ -41,22 +43,29 @@ export default function App() {
   const [networkMode, setNetworkMode] = useState(true)
   const [localIp, setLocalIp] = useState('')
   const [advertisedHost, setAdvertisedHost] = useState('redstart.local')
-  const [activeTab, setActiveTab] = useState<'config' | 'models' | 'tools' | 'server'>('config')
+  const [activeTab, setActiveTab] = useState<'config' | 'models' | 'tools' | 'plugins' | 'server'>('config')
 
   const { statusMsg, show: showStatus, clear: clearStatus } = useStatusMessage()
 
   // Domain hooks — each owns one slice of state and its IPC calls.
   const auth = useAuthSetup(showStatus)
   const mcp = useExternalMcp()
-  const toolsCatalog = useToolsCatalog(config, setConfig)
   const caps = useCapabilities(config)
+  const plugins = usePlugins()
   const hw = useHardwareAndBinary(setConfig)
   const modelCatalog = useModelCatalog()
+  // profilesHook and server are constructed BEFORE toolsCatalog so the latter
+  // can close over them: every Tools-tab toggle needs to know whether the
+  // profile it's editing is the one actually running, to decide whether to
+  // push the change live (see syncToolsIfLive's own comment for why that
+  // check exists — nothing stops the admin switching profiles mid-session).
   const profilesHook = useProfiles(config, setConfig, setAdvertisedHost, showStatus)
   const server = useServerLifecycle({
     config, showStatus, clearStatus,
     onLaunchStarted: () => setActiveTab('server'),
+    selectedProfile: profilesHook.selectedProfile,
   })
+  const toolsCatalog = useToolsCatalog(config, setConfig, server.syncToolsIfLive)
 
   // --- Bootstrap ---
 
@@ -148,6 +157,7 @@ export default function App() {
             {([
               ['config', 'Configuration'],
               ['models', 'Models'],
+              ['plugins', 'Plugins'],
               ['tools', 'Tools'],
               ['server', 'Server'],
             ] as const).map(([id, label]) => (
@@ -185,8 +195,12 @@ export default function App() {
             <ModelsTab catalog={modelCatalog} hardware={hw.hardware} />
           )}
 
+          {activeTab === 'plugins' && (
+            <PluginsTab plugins={plugins} />
+          )}
+
           {activeTab === 'tools' && (
-            <ToolsTab config={config} toolsCatalog={toolsCatalog} caps={caps} mcp={mcp} />
+            <ToolsTab config={config} toolsCatalog={toolsCatalog} caps={caps} mcp={mcp} plugins={plugins} />
           )}
 
           {/* Status message */}

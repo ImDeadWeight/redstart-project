@@ -31,6 +31,7 @@ import * as gitTool from './git-tool.mjs'
 import * as filesystemProvider from './filesystem-mcp-provider.mjs'
 import * as fsDeleteTool from './fs-delete-tool.mjs'
 import * as scholarTool from './scholar-tool.mjs'
+import { pluginProviders, stopAllPlugins } from './plugin-provider.mjs'
 import {
   classifyTool,
   capabilityForTool,
@@ -44,7 +45,15 @@ import {
 } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 
-const PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool]
+const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool]
+
+// Resolved per call, never captured in a const: a plugin installed or removed
+// while Nest is running must take effect without a restart. Built-ins come
+// first so a plugin can never be dispatched ahead of one — though namespacing
+// already makes a collision impossible.
+function resolveProviders() {
+  return [...BUILTIN_PROVIDERS, ...pluginProviders()]
+}
 
 export const ALLOWED_CORS_HEADERS =
   'Content-Type, Authorization, mcp-protocol-version, mcp-session-id, last-event-id'
@@ -93,6 +102,23 @@ function evaluateToolPolicy(toolName, config) {
     }
     if (cls === 'write' && fsPolicy.allowWrite === false) {
       return { allowed: false, cls, reason: 'File-system writes are disabled by policy. An administrator must enable them for the File System capability.' }
+    }
+  }
+
+  // Plugin tools carry the same class-based policy, keyed on the plugin's own
+  // capability config. Polarity deliberately differs from File System's:
+  // a plugin's allowWrite defaults to OFF (`!== true`), because File System is a
+  // capability an admin configured deliberately and a plugin is third-party code.
+  const capability = capabilityForTool(toolName)
+  if (capability && !FS_TOOL_NAMES.has(toolName)) {
+    const pluginPolicy = config?.[capability]
+    if (pluginPolicy && pluginPolicy.isPlugin) {
+      if (cls === 'destructive' && pluginPolicy.allowDestructive !== true) {
+        return { allowed: false, cls, reason: `Destructive operations are disabled for the "${capability}" plugin. An administrator must enable them.` }
+      }
+      if (cls === 'write' && pluginPolicy.allowWrite !== true) {
+        return { allowed: false, cls, reason: `Write operations are disabled for the "${capability}" plugin. An administrator must enable them.` }
+      }
     }
   }
   return { allowed: true, cls }
@@ -186,7 +212,7 @@ async function handleRpc(msg, send, ctx = { account: null }) {
   if (method === 'tools/list') {
     const tools = []
     const seen = new Set()
-    for (const provider of PROVIDERS) {
+    for (const provider of resolveProviders()) {
       for (const tool of provider.toolDefs(cfg)) {
         if (seen.has(tool.name)) {
           console.warn(`MCP: duplicate tool name "${tool.name}" — keeping the first provider's definition. Namespace your tool names.`)
@@ -213,10 +239,21 @@ async function handleRpc(msg, send, ctx = { account: null }) {
     }
 
     const startedAt = Date.now()
-    for (const provider of PROVIDERS) {
+    for (const provider of resolveProviders()) {
       const result = await provider.callTool(toolName, args, cfg, ctx)
       if (result !== null && result !== undefined) {
-        logEvent('tool', 'called', { tool: toolName, class: policy.cls, isError: !!result.isError, durationMs: Date.now() - startedAt })
+        // `plugin` and `account` are recorded now so the deferred per-account
+        // permission work reads an existing field instead of re-plumbing this
+        // call path. Pass the USERNAME, not ctx.account — logger.mjs redact()
+        // drops objects entirely and the field would vanish silently.
+        logEvent('tool', 'called', {
+          tool: toolName,
+          class: policy.cls,
+          plugin: capabilityForTool(toolName) ?? undefined,
+          account: ctx?.account?.username ?? undefined,
+          isError: !!result.isError,
+          durationMs: Date.now() - startedAt,
+        })
         send({ jsonrpc: '2.0', id, result })
         return
       }
@@ -403,6 +440,9 @@ export function stopMcpServer() {
   }
   activeToolsConfig = null
   postgresTool.closePool()
+  // Plugin children are separate OS processes; without this they outlive the
+  // server that spawned them.
+  stopAllPlugins()
 }
 
 export function updateMcpConfig(config) {
@@ -433,7 +473,7 @@ export function getMcpServerRunning() {
 export function estimateActiveToolTokens(config) {
   const seen = new Set()
   const tools = []
-  for (const provider of PROVIDERS) {
+  for (const provider of resolveProviders()) {
     for (const tool of provider.toolDefs(config)) {
       if (seen.has(tool.name)) continue
       seen.add(tool.name)

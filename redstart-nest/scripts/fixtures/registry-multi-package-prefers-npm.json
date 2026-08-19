@@ -1,0 +1,18 @@
+{
+  "server": {
+    "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    "name": "io.github.example/multi-runtime-server",
+    "description": "Offers oci AND npm — npm must win even though it is listed second.",
+    "version": "1.0.0",
+    "packages": [
+      { "registryType": "oci", "identifier": "ghcr.io/example/multi-runtime:1.0.0", "transport": { "type": "stdio" } },
+      { "registryType": "npm", "identifier": "@example/multi-runtime-mcp", "version": "1.0.0", "transport": { "type": "stdio" } }
+    ]
+  },
+  "_meta": {
+    "io.modelcontextprotocol.registry/official": {
+      "status": "active",
+      "isLatest": true
+    }
+  }
+}

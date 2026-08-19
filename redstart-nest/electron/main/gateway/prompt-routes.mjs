@@ -44,6 +44,7 @@ export async function handlePromptRoute(req, res, urlPath, config, account) {
       inference: facts.inference,
       webDomains: facts.webDomains,
       remoteToolServers: facts.remoteToolServers,
+      credentialPlugins: facts.credentialPlugins,
       localStores: facts.localStores,
       hasEgress: facts.hasEgress,
       // Redstart records no retention/training terms for third parties.

@@ -1,0 +1,19 @@
+{
+  "server": {
+    "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    "name": "io.github.example/docker-mcp-server-multi",
+    "description": "Offers pypi, oci and mcpb, like the real docker-mcp-server entries — none of them npm, so the best available (pypi) should win.",
+    "version": "2.2.4",
+    "packages": [
+      { "registryType": "pypi", "identifier": "docker-mcp-server", "version": "2.2.4", "transport": { "type": "stdio" } },
+      { "registryType": "oci", "identifier": "ghcr.io/example/docker-mcp-server:2.2.4", "transport": { "type": "stdio" } },
+      { "registryType": "mcpb", "identifier": "https://github.com/example/docker-mcp/releases/download/v2.2.4/docker-mcp-server-2.2.4.mcpb", "transport": { "type": "stdio" } }
+    ]
+  },
+  "_meta": {
+    "io.modelcontextprotocol.registry/official": {
+      "status": "active",
+      "isLatest": true
+    }
+  }
+}

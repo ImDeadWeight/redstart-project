@@ -9,6 +9,10 @@ import type { ClientApp, LlamaConfig, ProfileTools, ToolGroup, WebFetchTool } fr
 export function useToolsCatalog(
   config: LlamaConfig,
   setConfig: React.Dispatch<React.SetStateAction<LlamaConfig>>,
+  // Fired with the new tools settings after every mutation, so the caller can
+  // push them to an already-running server (see useServerLifecycle.syncToolsIfLive).
+  // Optional: tests and any future non-App caller work fine without it.
+  onToolsChanged?: (tools: ProfileTools) => void,
 ) {
   const [allTools, setAllTools] = useState<WebFetchTool[]>([])
   const [allGroups, setAllGroups] = useState<ToolGroup[]>([])
@@ -50,18 +54,23 @@ export function useToolsCatalog(
   }, [])
 
   function setToolsField<K extends keyof ProfileTools>(key: K, value: ProfileTools[K]) {
-    setConfig(prev => ({
-      ...prev,
-      tools: {
-        enabled: false,
-        activeGroupIds: [],
-        activeToolIds: [],
-        maxFetchTokens: 2000,
-        disabledToolIds: [],
-        ...(prev.tools || {}),
-        [key]: value,
-      },
-    }))
+    // Read config.tools directly rather than through setConfig's functional
+    // updater — every call site here is a single discrete user action, never
+    // a tight loop, so there's no stale-closure risk, and this way the SAME
+    // computed value goes to both setConfig and onToolsChanged instead of
+    // recomputing it a second time (or worse, having onToolsChanged read
+    // config.tools before React has applied the update).
+    const nextTools: ProfileTools = {
+      enabled: false,
+      activeGroupIds: [],
+      activeToolIds: [],
+      maxFetchTokens: 2000,
+      disabledToolIds: [],
+      ...(config.tools || {}),
+      [key]: value,
+    }
+    setConfig(prev => ({ ...prev, tools: nextTools }))
+    onToolsChanged?.(nextTools)
   }
 
   // Server-enforced tool bans. Banning a capability/tool ID removes every tool

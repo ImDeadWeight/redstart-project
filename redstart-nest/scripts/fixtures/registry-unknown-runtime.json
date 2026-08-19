@@ -1,0 +1,22 @@
+{
+  "server": {
+    "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    "name": "io.github.example/exotic-runtime",
+    "description": "A registryType this system has never heard of.",
+    "version": "1.0.0",
+    "packages": [
+      {
+        "registryType": "cargo",
+        "identifier": "exotic-mcp",
+        "version": "1.0.0",
+        "transport": { "type": "stdio" }
+      }
+    ]
+  },
+  "_meta": {
+    "io.modelcontextprotocol.registry/official": {
+      "status": "active",
+      "isLatest": true
+    }
+  }
+}

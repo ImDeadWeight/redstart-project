@@ -17,7 +17,7 @@
 // =============================================================================
 
 import { authenticate, login, logout, listAccounts, getAuthRequired, createAccount, deleteAccount, resetPassword, regenerateApiKey, regenerateOwnApiKey, hasAdminAccess, canDo, issueClientKey, revokeClientKey, getOwnClientKeys, listRoles, saveRole, deleteRole, assignRole } from '../auth.mjs'
-import { CAPABILITY_IDS, ADMIN_PERMISSIONS } from '../permissions.mjs'
+import { capabilityIds, ADMIN_PERMISSIONS } from '../permissions.mjs'
 import { BUILTIN_TOOLS } from '../tools-definitions.mjs'
 import { logEvent } from '../logger.mjs'
 import { closeAllMcpSessions } from '../mcp-server.mjs'
@@ -150,7 +150,7 @@ export async function handleAuthRoute(req, res, urlPath) {
     // client change.
     return sendJson(res, 200, {
       roles: listRoles(),
-      capabilityIds: CAPABILITY_IDS,
+      capabilityIds: capabilityIds(),
       adminPermissions: ADMIN_PERMISSIONS,
       webSources: BUILTIN_TOOLS.map(({ id, name }) => ({ id, name })),
       surfaces: SURFACE_IDS,

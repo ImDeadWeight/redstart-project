@@ -29,12 +29,12 @@ import {
   can,
   allowsSurface,
   restrictsSurfaces,
-  CAPABILITY_IDS,
+  capabilityIds,
   CAPABILITY_CONFIG_KEY,
   ADMIN_PERMISSIONS,
   DENY_ALL,
 } from '../electron/main/permissions.mjs'
-import { CAPABILITY_TOOL_NAMES } from '../electron/main/tools-definitions.mjs'
+import { CAPABILITY_TOOL_NAMES, setPluginCapabilityProvider } from '../electron/main/tools-definitions.mjs'
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-tool-policy.mjs)
@@ -104,7 +104,7 @@ function randomConfig() {
 
 function randomPermissions() {
   const p = {}
-  if (chance(0.6)) p.capabilities = subset(CAPABILITY_IDS)
+  if (chance(0.6)) p.capabilities = subset(capabilityIds())
   if (chance(0.5)) p.webSourceIds = subset(WEB_SOURCES)
   if (chance(0.4)) p.allowWhitelistBypass = chance(0.5)
   if (chance(0.4)) p.maxFetchTokens = pick([100, 1000, 99999])
@@ -245,7 +245,7 @@ await test('🔍 DENY_ALL permits nothing — the broken-invariant fallback', as
   // Streamable HTTP transport stopped setting req.auth.
   const config = randomConfig()
   const out = narrowConfig(config, DENY_ALL)
-  for (const id of CAPABILITY_IDS) {
+  for (const id of capabilityIds()) {
     const key = id === 'file_system' ? 'fileSystem' : id
     assert(out[key].enabled === false, `${id} survived DENY_ALL`)
   }
@@ -267,7 +267,7 @@ await test('DENY_ALL withholds every admin permission and every surface', async 
 await test('a user-tier account IS narrowed by its role', async () => {
   const config = randomConfig()
   const out = resolveEffectiveConfig({ id: 'u', tier: 'user' }, config, RESTRICTIVE)
-  for (const id of CAPABILITY_IDS) {
+  for (const id of capabilityIds()) {
     const key = id === 'file_system' ? 'fileSystem' : id
     assert(out[key].enabled === false, `${id} survived a role that permits no capabilities`)
   }
@@ -295,7 +295,7 @@ await test('🔍 a withheld capability is disabled AND its tool names are banned
 await test('a permitted capability keeps whatever the server gave it — never more', async () => {
   const config = randomConfig()
   config.documents.enabled = false
-  const out = narrowConfig(config, { capabilities: CAPABILITY_IDS })
+  const out = narrowConfig(config, { capabilities: capabilityIds() })
   assert(out.documents.enabled === false, 'permitting a capability the server disabled turned it ON')
 })
 
@@ -456,17 +456,62 @@ await test('restrictsSurfaces detects exactly the roles that name a surface list
 })
 
 // ---------------------------------------------------------------------------
+// Plugins (Trap 3) — CAPABILITY_IDS staleness. A registered plugin must be a
+// first-class capability to narrowConfig, not merely present somewhere.
+// ---------------------------------------------------------------------------
+
+console.log('\n-- installed plugins are narrowable capabilities (Trap 3) --')
+
+await test('🔍 a plugin registered via setPluginCapabilityProvider appears in capabilityIds()', async () => {
+  setPluginCapabilityProvider(() => ({
+    trapthree: { toolNames: ['trapthree__do_thing'], classes: {} },
+  }))
+  try {
+    assert(capabilityIds().includes('trapthree'), 'a registered plugin is missing from capabilityIds() — narrowConfig would never see it')
+  } finally {
+    setPluginCapabilityProvider(null)
+  }
+})
+
+await test('🔍 a role that names only OTHER capabilities withholds a plugin capability, provider flag AND its tools banned', async () => {
+  setPluginCapabilityProvider(() => ({
+    trapthree: { toolNames: ['trapthree__do_thing', 'trapthree__do_other'], classes: {} },
+  }))
+  try {
+    const config = { fileSystem: { enabled: false }, trapthree: { enabled: true } }
+    const narrowed = narrowConfig(config, { capabilities: ['file_system'] }) // trapthree not named
+    assert(narrowed.trapthree.enabled === false, 'a plugin capability outside the allowed list stayed enabled — CAPABILITY_CONFIG_KEY fallback (id as its own key) is not wired')
+    assert(narrowed.disabledTools.includes('trapthree__do_thing'), 'the withheld plugin\'s tool did not join disabledTools — a provider that ignores its own enabled flag would still serve it')
+    assert(narrowed.disabledTools.includes('trapthree__do_other'), 'second tool missing from disabledTools')
+  } finally {
+    setPluginCapabilityProvider(null)
+  }
+})
+
+await test('a role that names the plugin capability keeps it enabled', async () => {
+  setPluginCapabilityProvider(() => ({
+    trapthree: { toolNames: ['trapthree__do_thing'], classes: {} },
+  }))
+  try {
+    const config = { trapthree: { enabled: true } }
+    const narrowed = narrowConfig(config, { capabilities: ['trapthree'] })
+    assert(narrowed.trapthree.enabled === true, 'a plugin capability explicitly permitted by the role was withheld anyway')
+  } finally {
+    setPluginCapabilityProvider(null)
+  }
+})
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 
 await test('🔍 every capability id has a config key — a new capability cannot silently skip narrowing', async () => {
-  // CAPABILITY_IDS comes from tools-definitions.mjs automatically; this table is
-  // hand-written. A capability missing here is not an error at runtime — it just
-  // never gets withheld, which is the one direction that matters.
-  for (const id of CAPABILITY_IDS) {
+  // Built-in capabilities must be in the hand-written table. Plugin ids are
+  // exempt: they fall back to the id as their own config key (see narrowConfig).
+  for (const id of capabilityIds()) {
     assert(id in CAPABILITY_CONFIG_KEY, `capability "${id}" has no entry in CAPABILITY_CONFIG_KEY`)
   }
-  return `${CAPABILITY_IDS.length} capabilities`
+  return `${capabilityIds().length} capabilities`
 })
 
 const failed = results.filter(r => !r.pass)

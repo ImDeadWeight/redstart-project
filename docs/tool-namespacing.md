@@ -13,6 +13,9 @@ Every tool name the model can see comes from one of two places, and the name has
 |---|---|---|
 | A **Redstart Nest capability** | the provider's own names, unprefixed | `read_text_file`, `vault_search`, `postgres_query` |
 | A **client application** | prefixed with the app's namespace | `fs_read_file` (Twig), `ys_*`, `bp_*`, `gh_*` |
+| An installed **plugin** | `<plugin-id>__<tool-name>` — double underscore | `comfyui_mcp__enqueue_workflow` |
+
+**Plugins use a third naming scheme, not the client-app one.** A single underscore is a client-app prefix; a plugin's namespace is a **double** underscore, deliberately — many built-in tool names already contain a single underscore (`read_text_file`, `postgres_query`), so a single-underscore plugin prefix would be ambiguous the moment `capabilityForTool()` tried to parse it back out. The registry also refuses a plugin id containing `__` at install time, and refuses one that collides with a built-in capability id, a client-app id, or a built-in tool name outright — so a plugin can never produce a name that reads as belonging to either of the other two sources.
 
 Reserved app prefixes:
 
