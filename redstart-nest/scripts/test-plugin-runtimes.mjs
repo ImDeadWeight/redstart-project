@@ -42,11 +42,26 @@ function assert(cond, message) {
 
 console.log('\n-- npmCliPathCandidates(): both real layouts, not just one --')
 
-await test('🔍 a Windows-style node execPath yields the ZIP-distribution candidate (node_modules beside node.exe)', async () => {
-  const candidates = npmCliPathCandidates('C:\\Program Files\\nodejs\\node.exe')
-  const expected = path.join('C:\\Program Files\\nodejs', 'node_modules', 'npm', 'bin', 'npm-cli.js')
-  assert(candidates.includes(expected), `expected ${expected} among ${JSON.stringify(candidates)}`)
-})
+// npmCliPathCandidates() deliberately uses the PLATFORM-NATIVE path module
+// (matching plugin-runtimes.mjs's own import), not path.win32/path.posix
+// explicitly — correct for production, since Redstart Nest ships Windows-only
+// and this is the exact code that runs there. But it makes the Windows-style
+// candidate genuinely unverifiable from a POSIX CI runner: node:path's
+// dirname()/join() only treat backslash as a separator on win32, so on Linux
+// a backslash-joined input string has no directory part at all and the
+// "Windows" candidate collapses to a relative path with nothing useful
+// asserted. Skip on non-win32 rather than assert something this platform
+// cannot actually check — the POSIX-layout test below still runs everywhere,
+// since a forward-slash input parses identically on both.
+if (process.platform !== 'win32') {
+  console.log('  skip - Windows-layout candidate (only verifiable on win32; this machine is ' + process.platform + ')')
+} else {
+  await test('🔍 a Windows-style node execPath yields the ZIP-distribution candidate (node_modules beside node.exe)', async () => {
+    const candidates = npmCliPathCandidates('C:\\Program Files\\nodejs\\node.exe')
+    const expected = path.join('C:\\Program Files\\nodejs', 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    assert(candidates.includes(expected), `expected ${expected} among ${JSON.stringify(candidates)}`)
+  })
+}
 
 await test('🔍 a POSIX-style node execPath (<prefix>/bin/node) yields the sibling <prefix>/lib/node_modules candidate — this is the exact layout that was missing before, and the reason every real-npm-install test failed on CI', async () => {
   const candidates = npmCliPathCandidates('/opt/hostedtoolcache/node/22.23.2/x64/bin/node')
