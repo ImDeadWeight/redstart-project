@@ -49,21 +49,34 @@ export function writeJsonAtomic(filePath, data) {
   const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`)
   const payload = JSON.stringify(data, null, 2)
 
-  let fd
+  // The temp file must not outlive a failure. Disk-full is precisely the case
+  // this function exists for, and without this cleanup every failed write left
+  // an orphaned .tmp beside the real file — one per attempt, accumulating in
+  // %APPDATA% forever. Note the ordering: the inner `finally` closes the fd
+  // before the outer `catch` unlinks, because win32 refuses to unlink a file
+  // that is still open.
   try {
-    fd = fs.openSync(tmpPath, 'w')
-    fs.writeFileSync(fd, payload, 'utf8')
-    // Push the bytes to the device before the rename. Without this the rename
-    // can land while the content is still only in the page cache, which on a
-    // hard power loss yields an atomically-renamed EMPTY file — a tidier
-    // version of the same data loss.
-    try { fs.fsyncSync(fd) } catch { /* not all filesystems support it; the rename is still ordered */ }
-  } finally {
-    if (fd !== undefined) fs.closeSync(fd)
-  }
+    let fd
+    try {
+      fd = fs.openSync(tmpPath, 'w')
+      fs.writeFileSync(fd, payload, 'utf8')
+      // Push the bytes to the device before the rename. Without this the rename
+      // can land while the content is still only in the page cache, which on a
+      // hard power loss yields an atomically-renamed EMPTY file — a tidier
+      // version of the same data loss.
+      try { fs.fsyncSync(fd) } catch { /* not all filesystems support it; the rename is still ordered */ }
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd)
+    }
 
-  // Atomic within the volume, and overwrites on win32 as well as POSIX.
-  fs.renameSync(tmpPath, filePath)
+    // Atomic within the volume, and overwrites on win32 as well as POSIX.
+    fs.renameSync(tmpPath, filePath)
+  } catch (err) {
+    // Best effort: if openSync itself failed there is nothing to remove, and a
+    // cleanup failure must not mask the real error.
+    try { fs.unlinkSync(tmpPath) } catch { /* nothing to clean up */ }
+    throw err
+  }
 }
 
 /**
