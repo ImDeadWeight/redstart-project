@@ -52,7 +52,14 @@ export function TogglePill({ checked, onToggle, className = '' }: {
     <div
       onClick={onToggle}
       className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer ${checked ? 'bg-orange-500' : 'bg-zinc-700'} ${className}`}>
-      <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${checked ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
+      {/* translate-x-[1.375rem] (not `22px`): every other measurement here —
+          track, knob, both margins — is a rem-based Tailwind spacing class,
+          so they all scale together with the root font size (browser zoom,
+          OS text-size accessibility settings). A hardcoded px offset does
+          not scale with them, and at any root size other than the default
+          16px the ratio breaks — this is what made the knob visibly
+          overshoot the track's right edge. */}
+      <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${checked ? 'translate-x-[1.375rem]' : 'translate-x-0.5'}`} />
     </div>
   )
 }
@@ -89,10 +96,10 @@ export function TruncatedText({ text, limit = 160, className = '' }: {
 // forwarding the control plane through a router, at which point the box joins
 // the population the internet scans continuously. That is a bigger real-world
 // risk than any certificate decision, and a visible warning costs almost
-// nothing (headless-admin-plane-plan.md decision 19). Shared between
-// NetworkPanel.tsx (the Configuration tab) and AccountsPanel.tsx (the
-// exposure toggle itself lives there) rather than defined twice — both show
-// the same fact from the same state shape.
+// nothing (headless-admin-plane-plan.md decision 19). Lives in NetworkPanel.tsx
+// (the Configuration tab), alongside the exposure toggle itself — the old
+// sidebar's separate Accounts panel merged in here (2026-09-02) since both
+// showed the same fact from the same state shape and were on screen together.
 import type { ControlPlaneState } from '../types'
 
 export function ControlPlaneNotice({ state }: { state: ControlPlaneState | null }) {
@@ -101,14 +108,11 @@ export function ControlPlaneNotice({ state }: { state: ControlPlaneState | null 
   return (
     <div className="mt-3 rounded border border-red-800 bg-red-950/40 p-3">
       <p className="text-xs font-semibold text-red-300">
-        The admin interface is reachable from the network
+        Admin panel is open to the network
       </p>
       <p className="text-[11px] text-red-200/80 mt-1 leading-relaxed">
-        It is bound to <span className="font-mono">{state.bindHost}:{state.port}</span> rather than to this
-        machine only. Anything that can reach that address can attempt to sign in as the owner, and the
-        owner can start and stop processes on this box. Do not forward this port through a router — put a
-        reverse proxy in front of it, or keep it on a VPN or management network. Redstart Nest speaks plain
-        HTTP and does not encrypt this traffic itself.
+        Anyone who can reach <span className="font-mono">{state.bindHost}:{state.port}</span> can try to sign
+        in as the owner. Never forward this port through a router.
       </p>
     </div>
   )

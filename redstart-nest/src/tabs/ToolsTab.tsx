@@ -265,7 +265,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
               )}
 
               {restrictOn && (
-                <div className="grid grid-cols-2 gap-6 mb-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-3">
                   {/* Left column: Groups */}
                   <div>
                     <p className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Source Groups</p>

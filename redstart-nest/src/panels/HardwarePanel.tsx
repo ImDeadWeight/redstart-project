@@ -7,8 +7,8 @@ export function HardwarePanel({ hw, onGenerateDefaults }: {
 }) {
   const { hardware, scanHardware } = hw
   return (
-    <section>
-      <SectionTitle>Hardware</SectionTitle>
+    <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+      <SectionTitle className="mb-2">Hardware</SectionTitle>
       <button onClick={scanHardware} className={btnCls.primaryBlock}>
         Scan Hardware
       </button>

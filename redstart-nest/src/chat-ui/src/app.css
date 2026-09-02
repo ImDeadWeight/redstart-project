@@ -115,6 +115,16 @@
 	html {
 		height: 100%;
 		overflow: hidden;
+		/* Without this, only <body> paints the dark theme — <html> (and the
+		   browser's canvas behind it) stays whatever the UA default is
+		   (white). Any area that isn't literally inside body's own box —
+		   elastic overscroll bounce, a reserved scrollbar-gutter strip,
+		   window-resize repaint lag — shows the canvas underneath instead of
+		   body's background, which is what read as a white border while
+		   scrolling/resizing. Explicitly painting html the same color closes
+		   that gap regardless of which element's box the browser considers
+		   responsible for a given sliver of the viewport. */
+		background-color: var(--background);
 	}
 
 	body {

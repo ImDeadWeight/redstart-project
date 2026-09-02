@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
-import type { ControlPlaneState } from '../types'
-import { getAPI } from '../api/redstart'
+import type { useAuthSetup } from '../hooks/useAuthSetup'
+import type { useControlPlaneExposure } from '../hooks/useControlPlaneExposure'
 import { SectionTitle, TogglePill, inputCls, btnCls, ControlPlaneNotice } from '../components/ui'
 import { buildAddresses } from './addresses'
 
@@ -43,40 +43,30 @@ function AddressRow({ url, label, note, primary }: {
   )
 }
 
-// The exposure warning itself (ControlPlaneNotice) is shared with
-// AccountsPanel.tsx — the toggle that changes this state lives there now
-// (see decision 19); this panel only reads and displays it, polled
-// independently since the two panels can be open without each other.
-//
 // Deliberately not the same warning as the DATA plane's own network mode.
 // Two planes, two risks, and they are not the same size: the gateway serves
 // inference to devices on the LAN, which is what people install this for,
 // while the control plane spawns processes and edits accounts. A warning
 // that fires on the ordinary case is a warning people learn to dismiss.
-function useControlPlaneState() {
-  const [state, setState] = useState<ControlPlaneState | null>(null)
-  useEffect(() => {
-    let stale = false
-    getAPI()?.admin.getControlPlane()
-      .then(s => { if (!stale) setState(s) })
-      .catch(() => { if (!stale) setState(null) })
-    return () => { stale = true }
-  }, [])
-  return state
-}
 
-export function NetworkPanel({ networkMode, onToggleNetworkMode, advertisedHost, setAdvertisedHost, localIp, port }: {
+export function NetworkPanel({
+  networkMode, onToggleNetworkMode, advertisedHost, setAdvertisedHost, localIp, port,
+  auth, controlPlaneExposure,
+}: {
   networkMode: boolean
   onToggleNetworkMode: () => void
   advertisedHost: string
   setAdvertisedHost: (host: string) => void
   localIp: string
   port: number
+  auth: ReturnType<typeof useAuthSetup>
+  controlPlaneExposure: ReturnType<typeof useControlPlaneExposure>
 }) {
   const addresses = buildAddresses(localIp, advertisedHost, port)
   const primary = addresses[0]
   const [qr, setQr] = useState('')
-  const controlPlane = useControlPlaneState()
+  const { authRequired, toggleAuthRequired } = auth
+  const { controlPlane, toggleExposure } = controlPlaneExposure
 
   // The QR encodes the direct-IP URL — pointing a phone camera at it needs no
   // name resolution at all, which is the only approach that works on every
@@ -106,10 +96,8 @@ export function NetworkPanel({ networkMode, onToggleNetworkMode, advertisedHost,
         <span className="text-xs text-zinc-300">{networkMode ? 'Local network (HTTP)' : 'Localhost only'}</span>
       </label>
 
-      <ControlPlaneNotice state={controlPlane} />
-
       {networkMode && (
-        <div className="mt-4 grid grid-cols-3 gap-4">
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <label className="block text-xs text-zinc-500 mb-1">Advertised hostname <span className="text-zinc-600">(blank = auto-detect IP)</span></label>
             <input
@@ -125,7 +113,7 @@ export function NetworkPanel({ networkMode, onToggleNetworkMode, advertisedHost,
           </div>
 
           {addresses.length > 0 && (
-            <div className="col-span-2 flex gap-4">
+            <div className="sm:col-span-2 flex gap-4">
               {qr && (
                 <div className="shrink-0">
                   <img src={qr} alt={`QR code for ${primary.url}`} className="w-[104px] h-[104px] rounded bg-white" />
@@ -141,6 +129,45 @@ export function NetworkPanel({ networkMode, onToggleNetworkMode, advertisedHost,
           )}
         </div>
       )}
+
+      {/* Access control — merged in from the old sidebar's Accounts panel.
+          Belongs here, not off on its own: both toggles govern who can reach
+          this box, which is exactly what the addresses above describe. */}
+      <div className="mt-5 pt-4 border-t border-zinc-800 space-y-4">
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <TogglePill checked={authRequired} onToggle={toggleAuthRequired} />
+            <span className="text-xs text-zinc-300">{authRequired ? 'Require login' : 'Login not required'}</span>
+          </label>
+          <p className="mt-1 text-xs text-zinc-600">
+            Applies to every client on the network. This launcher signs in the same way
+            (Settings → sign-in screen); it is not exempt.
+          </p>
+        </div>
+
+        {/* The control plane's OWN exposure — a separate switch from the data
+            plane's login requirement above. See headless-admin-plane-plan.md
+            decision 4: availability is always on, this only decides whether
+            it's reachable off this machine. Also settable per-profile via
+            LlamaConfig.exposeControlPlane (docs/notes/admingate-access-ui-plan.md
+            §3) — this toggle is still the source of truth; selecting a
+            profile that saved a different value changes it the same way this
+            click does. */}
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <TogglePill checked={!!controlPlane?.exposed} onToggle={toggleExposure} />
+            <span className="text-xs text-zinc-300">
+              {controlPlane?.exposed ? 'Admin panel reachable on the network' : 'Admin panel: this machine only'}
+            </span>
+          </label>
+          <p className="mt-1 text-xs text-zinc-600">
+            Lets another device sign in here with the credentials above, at port{' '}
+            {controlPlane?.port ?? 19083} on the same address(es) listed above. Saved with
+            whichever profile is active when you save it, so switching profiles can restore it.
+          </p>
+          <ControlPlaneNotice state={controlPlane} />
+        </div>
+      </div>
     </section>
   )
 }

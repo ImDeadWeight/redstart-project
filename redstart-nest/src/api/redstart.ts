@@ -54,7 +54,7 @@ export type RedstartAPI = {
     // Rebinds the control plane immediately (plan decision 4) — an admin
     // flipping this may be doing it to recover access, so it never waits for
     // a restart. `host` is a bind address, not a boolean (plan §3.3);
-    // AccountsPanel.tsx's toggle only ever sends '127.0.0.1' or '0.0.0.0'.
+    // NetworkPanel.tsx's exposure toggle only ever sends '127.0.0.1' or '0.0.0.0'.
     // Rejected addresses (and a failed bind) restore the previous one and
     // report why in `error`; `state` is always the listener's state after
     // the call, success or not, so the caller never has to re-fetch.
@@ -200,6 +200,14 @@ export type RedstartAPI = {
     offServerLog: () => void
     onServerStopped: (cb: () => void) => void
     offServerStopped: () => void
+    // Broadcast to every SSE subscriber on a successful launch, from
+    // whichever client launched it — see useServerLifecycle.ts, which is
+    // the only thing this is for: a client that did NOT launch the server
+    // (a second tab, or the Electron window while admingate launches from a
+    // phone) has no other way to learn a launch just happened. Mirrors
+    // server:stopped, which already covered the reverse direction.
+    onServerStarted: (cb: () => void) => void
+    offServerStarted: () => void
     onModelDownloadProgress: (cb: (p: DownloadProgress) => void) => void
     offModelDownloadProgress: () => void
     onPluginInstallProgress: (cb: (p: PluginInstallProgress) => void) => void

@@ -8,8 +8,8 @@ export function ProfilesPanel({ profilesHook }: { profilesHook: ReturnType<typeo
   } = profilesHook
 
   return (
-    <section>
-      <SectionTitle>Profiles</SectionTitle>
+    <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
+      <SectionTitle className="mb-4">Profile</SectionTitle>
       {profiles.length > 0 ? (
         <select
           value={selectedProfile}

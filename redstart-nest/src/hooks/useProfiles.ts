@@ -4,11 +4,16 @@ import type { HardwareSpecs, LlamaConfig } from '../types'
 
 // Saved launch profiles: list/load/save + hardware-derived defaults.
 // advertisedHost is owned by the network section in App, but a loaded profile
-// carries one — onAdvertisedHostLoaded pushes it back up.
+// carries one — onAdvertisedHostLoaded pushes it back up. onExposeControlPlaneLoaded
+// does the same for the control plane's own exposure (LlamaConfig.exposeControlPlane)
+// — a separate callback rather than folding into setConfig because applying it
+// means an actual rebind (useControlPlaneExposure.setExposure), not just a
+// state update.
 export function useProfiles(
   config: LlamaConfig,
   setConfig: React.Dispatch<React.SetStateAction<LlamaConfig>>,
   onAdvertisedHostLoaded: (host: string) => void,
+  onExposeControlPlaneLoaded: (expose: boolean) => void,
   showStatus: (msg: string, ttlMs?: number) => void,
 ) {
   const [profiles, setProfiles] = useState<string[]>([])
@@ -39,6 +44,10 @@ export function useProfiles(
       // network mode so mDNS keeps advertising a resolvable .local name.
       const safeNetworkMode = loaded.networkMode ?? true
       onAdvertisedHostLoaded(loaded.advertisedHost || (safeNetworkMode ? 'redstart.local' : ''))
+      // Undefined means this profile never recorded an opinion (saved before
+      // the field existed, or saved without ever touching the toggle) —
+      // leave the control plane's current exposure exactly as it is.
+      if (loaded.exposeControlPlane !== undefined) onExposeControlPlaneLoaded(loaded.exposeControlPlane)
       setSelectedProfile(name)
     }
   }

@@ -213,6 +213,12 @@ export async function launchServer(config, deps) {
 
     // Log the port only — never the model path or other config (privacy).
     logEvent('server', 'model_started', { port: config.port, networkMode: !!config.networkMode })
+    // Broadcast so every OTHER connected client (a second tab, the Electron
+    // window while admingate launched it, or vice versa) learns the server
+    // is up — this handler's own return value only reaches the caller that
+    // launched it. Mirrors publish('server:stopped') below/in stopServer(),
+    // which already covered the reverse direction; this was the missing half.
+    publish('server:started')
     return { success: true, pid: child.pid }
   } catch (e) {
     return { success: false, error: e.message }

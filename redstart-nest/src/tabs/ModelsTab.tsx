@@ -9,15 +9,21 @@
 // figure itself is capped at 4 GB by a Windows API quirk).
 //
 // Downloading does not change the running configuration. The model is selected
-// the way it always was — the sidebar's "Select .gguf File" button, which now
-// opens in this folder.
+// via the "Select .gguf File" button in the Selected Model section below,
+// which opens in this folder. Hardware scan and profile generation moved in
+// here too (from the old sidebar) — this is where "will it fit" questions
+// actually get asked, ahead of a future revamp that puts a real fit estimate
+// next to each artifact using the scanned specs.
 // =============================================================================
 
 import { useEffect } from 'react'
 import { SectionTitle, btnCls, inputCls } from '../components/ui'
 import { FolderPicker } from '../components/FolderPicker'
+import { HardwarePanel } from '../panels/HardwarePanel'
+import { ModelPanel } from '../panels/ModelPanel'
+import type { useHardwareAndBinary } from '../hooks/useHardwareAndBinary'
 import type { ModelCatalogHook } from '../hooks/useModelCatalog'
-import type { HardwareSpecs, ModelArtifact } from '../types'
+import type { ModelArtifact } from '../types'
 
 function gb(bytes: number | null | undefined) {
   if (typeof bytes !== 'number') return '—'
@@ -35,10 +41,13 @@ function params(n: number | null) {
   return n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : `${(n / 1e6).toFixed(0)}M`
 }
 
-export function ModelsTab({ catalog, hardware }: {
+export function ModelsTab({ catalog, hw, modelPath, onGenerateDefaultProfiles }: {
   catalog: ModelCatalogHook
-  hardware: HardwareSpecs | null
+  hw: ReturnType<typeof useHardwareAndBinary>
+  modelPath: string
+  onGenerateDefaultProfiles: () => void
 }) {
+  const { hardware, applyModelPath } = hw
   const {
     catalogEnabled, connectCatalog, openTab,
     publishers, publisher, setPublisher, query, setQuery,
@@ -64,6 +73,10 @@ export function ModelsTab({ catalog, hardware }: {
 
   return (
     <div className="flex flex-col gap-5">
+
+      {/* ── Hardware + selected model (moved in from the old sidebar) ── */}
+      <HardwarePanel hw={hw} onGenerateDefaults={onGenerateDefaultProfiles} />
+      <ModelPanel modelPath={modelPath} onSelectModel={applyModelPath} />
 
       {/* ── Storage ── */}
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
@@ -93,7 +106,7 @@ export function ModelsTab({ catalog, hardware }: {
           {disk.freeBytes !== undefined
             ? <>{gb(disk.freeBytes)} free of {gb(disk.totalBytes)} on this drive.</>
             : 'Checking free space…'}
-          {' '}Downloaded models are selected with <span className="text-zinc-400">Select .gguf File</span> in the sidebar.
+          {' '}Downloaded models are selected with <span className="text-zinc-400">Select .gguf File</span> above.
         </p>
 
         {localFiles.length > 0 && (

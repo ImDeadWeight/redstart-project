@@ -169,6 +169,18 @@ export type LlamaConfig = {
   additionalArgs?: string
   tools?: ProfileTools
   advertisedHost?: string
+  // Whether THIS profile wants the control plane (admin listener) reachable
+  // on the network when it's selected — separate from networkMode (the data
+  // plane) for the same reason ControlPlaneState is its own type: a control
+  // plane on the LAN by default is a real security decision (see
+  // headless-admin-plane-plan.md decision 4/19), not one to make silently
+  // for every install. Tying it to profiles instead of a bare global default
+  // means "my home profile opens the admin panel to the LAN, my laptop-only
+  // profile doesn't" without a first-run prompt. Undefined (older saved
+  // profiles, or one never touched this session) means "leave the current
+  // exposure alone" — only a profile that explicitly saved a value ever
+  // changes it on load.
+  exposeControlPlane?: boolean
 }
 
 export type ServerState = 'stopped' | 'starting' | 'running' | 'stopping'

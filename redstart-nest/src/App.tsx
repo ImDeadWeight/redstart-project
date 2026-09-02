@@ -28,11 +28,6 @@ import { useHardwareAndBinary } from './hooks/useHardwareAndBinary'
 import { useModelCatalog } from './hooks/useModelCatalog'
 import { useProfiles } from './hooks/useProfiles'
 import { useServerLifecycle } from './hooks/useServerLifecycle'
-import { HardwarePanel } from './panels/HardwarePanel'
-import { ProfilesPanel } from './panels/ProfilesPanel'
-import { BinaryPanel } from './panels/BinaryPanel'
-import { ModelPanel } from './panels/ModelPanel'
-import { AccountsPanel } from './panels/AccountsPanel'
 import { ConfigTab } from './tabs/ConfigTab'
 import { ToolsTab } from './tabs/ToolsTab'
 import { PluginsTab } from './tabs/PluginsTab'
@@ -63,7 +58,7 @@ export default function App() {
   // profile it's editing is the one actually running, to decide whether to
   // push the change live (see syncToolsIfLive's own comment for why that
   // check exists — nothing stops the admin switching profiles mid-session).
-  const profilesHook = useProfiles(config, setConfig, setAdvertisedHost, showStatus)
+  const profilesHook = useProfiles(config, setConfig, setAdvertisedHost, controlPlaneExposure.setExposure, showStatus)
   const server = useServerLifecycle({
     config, showStatus, clearStatus,
     onLaunchStarted: () => setActiveTab('server'),
@@ -94,6 +89,15 @@ export default function App() {
   useEffect(() => {
     setConfig(prev => ({ ...prev, networkMode }))
   }, [networkMode])
+
+  // Folds the control plane's live exposure into config so "Save Current as
+  // Profile" captures whatever it's currently set to — the write path back
+  // out (loading a profile that saved a different value) is
+  // useProfiles.selectProfile calling controlPlaneExposure.setExposure
+  // directly, not this effect, since applying it is a rebind, not a state set.
+  useEffect(() => {
+    setConfig(prev => ({ ...prev, exposeControlPlane: !!controlPlaneExposure.controlPlane?.exposed }))
+  }, [controlPlaneExposure.controlPlane?.exposed])
 
   // --- Command preview ---
 
@@ -139,16 +143,15 @@ export default function App() {
 
       <div className="flex flex-1 overflow-hidden">
 
-        {/* ── Sidebar ── */}
-        <aside className="w-64 bg-zinc-900 border-r border-zinc-800 flex flex-col gap-5 p-4 overflow-y-auto shrink-0">
-          <HardwarePanel hw={hw} onGenerateDefaults={() => profilesHook.generateDefaultProfiles(hw.hardware)} />
-          <ProfilesPanel profilesHook={profilesHook} />
-          <BinaryPanel hw={hw} />
-          <ModelPanel modelPath={config.modelPath} onSelectModel={hw.applyModelPath} />
-          <AccountsPanel auth={auth} controlPlaneExposure={controlPlaneExposure} />
-        </aside>
-
-        {/* ── Main content ── */}
+        {/* ── Main content ──
+            No sidebar (retired 2026-09-02): with only Profiles, Server
+            Binary, Model, and Accounts living there, a fixed 256px rail was
+            more chrome than content. Each moved to the tab that already
+            governs the setting: Profiles + Server Binary into Configuration
+            (profile at the top, since it's what everything below describes),
+            Model selection + hardware scan into Models, and the two Accounts
+            toggles into Configuration's Network card, which already showed
+            the control-plane exposure warning they govern. */}
         <main className="flex-1 flex flex-col overflow-y-auto px-5 pb-5 gap-5">
 
           {/* ── Tab bar (browser-style) ──
@@ -192,11 +195,20 @@ export default function App() {
               localIp={localIp}
               generatedCommand={generatedCommand}
               onGenerateCommand={generateCommand}
+              profilesHook={profilesHook}
+              hw={hw}
+              auth={auth}
+              controlPlaneExposure={controlPlaneExposure}
             />
           )}
 
           {activeTab === 'models' && (
-            <ModelsTab catalog={modelCatalog} hardware={hw.hardware} />
+            <ModelsTab
+              catalog={modelCatalog}
+              hw={hw}
+              modelPath={config.modelPath}
+              onGenerateDefaultProfiles={() => profilesHook.generateDefaultProfiles(hw.hardware)}
+            />
           )}
 
           {activeTab === 'plugins' && (

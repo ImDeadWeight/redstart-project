@@ -20,9 +20,15 @@ export function useControlPlaneExposure(showStatus: (msg: string, ttlMs?: number
   // Boolean in the UI; a bind address underneath (loopback vs the wildcard
   // that answers on every interface) — the same two values the data plane's
   // own toggle picks between in ipc/server.mjs.
-  async function toggle() {
-    const next = state?.exposed ? '127.0.0.1' : '0.0.0.0'
-    const result = await api().admin.setBindHost(next)
+  //
+  // Exposed separately from toggle() so a profile load (useProfiles'
+  // selectProfile, via exposeControlPlane) can request a specific value
+  // rather than flip whatever is currently set — and so it can no-op when
+  // the profile's saved value already matches, instead of firing a status
+  // message and a rebind for a change that isn't one.
+  async function setExposure(next: boolean) {
+    if (state?.exposed === next) return
+    const result = await api().admin.setBindHost(next ? '0.0.0.0' : '127.0.0.1')
     setState(result.state)
     if (!result.ok) {
       showStatus(result.error || 'Could not change the admin panel’s network exposure.')
@@ -33,5 +39,9 @@ export function useControlPlaneExposure(showStatus: (msg: string, ttlMs?: number
       : 'Admin panel back to this machine only.')
   }
 
-  return { controlPlane: state, toggleExposure: toggle }
+  async function toggle() {
+    await setExposure(!state?.exposed)
+  }
+
+  return { controlPlane: state, toggleExposure: toggle, setExposure }
 }

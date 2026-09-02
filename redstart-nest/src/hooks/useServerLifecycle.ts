@@ -55,6 +55,22 @@ export function useServerLifecycle(opts: {
     const a = getAPI()
     if (!a) return
 
+    // Seed real state on mount instead of assuming 'stopped' — covers a
+    // client that opens AFTER another client already launched the server.
+    // onServerStarted (below) covers the other half: a client that was
+    // already open when a DIFFERENT client launches it live. Without both,
+    // only the client that actually clicked Launch ever learns the server
+    // is running — everyone else's Stop button never appears and the
+    // top-bar status sits on "Stopped" over a live log replay that says
+    // otherwise.
+    let cancelled = false
+    api().admin.getStatus().then(s => {
+      if (cancelled || !s.running) return
+      setServerState('running')
+      setHealth('starting')
+      startStatusPoll()
+    }).catch(() => { /* daemon unreachable — leave as 'stopped', the poll will surface it once running */ })
+
     a.events.onTokensPerMinute(setTokensPerMin)
     // Subscribed for the component's whole lifetime, not just from
     // launchServer() onward (Phase 5 §5.2-5.3) — a reconnecting SSE client
@@ -64,6 +80,16 @@ export function useServerLifecycle(opts: {
     // starts filling in from the next line they personally launch.
     a.events.onServerLog(line => {
       if (line.trim()) setLogLines(prev => [...prev.slice(-1000), line])
+    })
+    // Fires for every client on a successful launch, including the one that
+    // triggered it (launchServer() below sets this state locally too, so
+    // this is a harmless redundant set in that case) — this is what lets an
+    // already-open second client pick up a launch triggered elsewhere
+    // without waiting for a remount.
+    a.events.onServerStarted(() => {
+      setServerState('running')
+      setHealth('starting')
+      startStatusPoll()
     })
     a.events.onServerStopped(() => {
       setServerState('stopped')
@@ -79,7 +105,9 @@ export function useServerLifecycle(opts: {
     })
 
     return () => {
+      cancelled = true
       a.events.offTokensPerMinute()
+      a.events.offServerStarted()
       a.events.offServerStopped()
       a.events.offServerLog()
       stopStatusPoll()

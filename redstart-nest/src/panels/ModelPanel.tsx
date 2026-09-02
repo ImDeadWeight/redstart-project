@@ -6,8 +6,8 @@ export function ModelPanel({ modelPath, onSelectModel }: {
   onSelectModel: (path: string) => void
 }) {
   return (
-    <section>
-      <SectionTitle>Model</SectionTitle>
+    <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+      <SectionTitle className="mb-2">Selected model</SectionTitle>
       <FolderPicker
         mode="file"
         extensions={['gguf']}

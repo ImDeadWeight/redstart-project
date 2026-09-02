@@ -89,6 +89,7 @@ const EVENT_CHANNELS: Record<string, string> = {
   onTokensPerMinute: 'server:tpm',
   onServerLog: 'server:log',
   onServerStopped: 'server:stopped',
+  onServerStarted: 'server:started',
   onModelDownloadProgress: 'models:download-progress',
   onPluginInstallProgress: 'plugins:install-progress',
 }

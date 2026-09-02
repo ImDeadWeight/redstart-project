@@ -5,8 +5,8 @@ import { FolderPicker } from '../components/FolderPicker'
 export function BinaryPanel({ hw }: { hw: ReturnType<typeof useHardwareAndBinary> }) {
   const { binaryPath, applyBinaryPath, clearBinaryOverride } = hw
   return (
-    <section>
-      <SectionTitle>Server Binary</SectionTitle>
+    <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
+      <SectionTitle className="mb-4">Server Binary</SectionTitle>
       <FolderPicker
         mode="file"
         extensions={['exe']}
