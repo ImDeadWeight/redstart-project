@@ -2,16 +2,16 @@ import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
 import type { useAuthSetup } from '../hooks/useAuthSetup'
 import type { useControlPlaneExposure } from '../hooks/useControlPlaneExposure'
-import { SectionTitle, TogglePill, inputCls, btnCls, ControlPlaneNotice } from '../components/ui'
+import { SectionTitle, TogglePill, btnCls, ControlPlaneNotice } from '../components/ui'
 import { buildAddresses } from './addresses'
 
 // Lives in the Configuration tab rather than the sidebar: it sits next to the
-// Host/Port fields it depends on, and the QR code plus three-address list needs
-// more width than the 256px sidebar allowed.
+// Host/Port fields it depends on, and the QR code plus address list needs more
+// width than the 256px sidebar allowed.
 
 // One row per reachable URL. The IP row leads because it is the only address
-// that resolves on every client; the hostname rows are conveniences that each
-// fail on some platform (see addresses.ts for which and why).
+// that resolves on every client; the sslip row is a hostname convenience that
+// costs an internet DNS lookup (see addresses.ts for which and why).
 function AddressRow({ url, label, note, primary }: {
   url: string
   label: string
@@ -50,19 +50,17 @@ function AddressRow({ url, label, note, primary }: {
 // that fires on the ordinary case is a warning people learn to dismiss.
 
 export function NetworkPanel({
-  networkMode, onToggleNetworkMode, advertisedHost, setAdvertisedHost, localIp, port,
+  networkMode, onToggleNetworkMode, localIp, port,
   auth, controlPlaneExposure,
 }: {
   networkMode: boolean
   onToggleNetworkMode: () => void
-  advertisedHost: string
-  setAdvertisedHost: (host: string) => void
   localIp: string
   port: number
   auth: ReturnType<typeof useAuthSetup>
   controlPlaneExposure: ReturnType<typeof useControlPlaneExposure>
 }) {
-  const addresses = buildAddresses(localIp, advertisedHost, port)
+  const addresses = buildAddresses(localIp, port)
   const primary = addresses[0]
   const [qr, setQr] = useState('')
   const { authRequired, toggleAuthRequired } = auth
@@ -96,37 +94,19 @@ export function NetworkPanel({
         <span className="text-xs text-zinc-300">{networkMode ? 'Local network (HTTP)' : 'Localhost only'}</span>
       </label>
 
-      {networkMode && (
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-xs text-zinc-500 mb-1">Advertised hostname <span className="text-zinc-600">(blank = auto-detect IP)</span></label>
-            <input
-              type="text"
-              value={advertisedHost}
-              onChange={e => setAdvertisedHost(e.target.value)}
-              placeholder="e.g. redstart.local"
-              className={inputCls.sm}
-            />
-            <p className="text-[10px] text-zinc-600 mt-1 leading-relaxed">
-              Advertised over mDNS. Convenience only — the direct IP is the address that reaches every device.
-            </p>
-          </div>
-
-          {addresses.length > 0 && (
-            <div className="sm:col-span-2 flex gap-4">
-              {qr && (
-                <div className="shrink-0">
-                  <img src={qr} alt={`QR code for ${primary.url}`} className="w-[104px] h-[104px] rounded bg-white" />
-                  <p className="text-[9px] text-zinc-600 text-center mt-1">scan to open</p>
-                </div>
-              )}
-              <div className="min-w-0 flex-1 space-y-2.5">
-                {addresses.map(({ key, ...a }, i) => (
-                  <AddressRow key={key} {...a} primary={i === 0} />
-                ))}
-              </div>
+      {networkMode && addresses.length > 0 && (
+        <div className="mt-4 flex gap-4">
+          {qr && (
+            <div className="shrink-0">
+              <img src={qr} alt={`QR code for ${primary.url}`} className="w-[104px] h-[104px] rounded bg-white" />
+              <p className="text-[9px] text-zinc-600 text-center mt-1">scan to open</p>
             </div>
           )}
+          <div className="min-w-0 flex-1 space-y-2.5">
+            {addresses.map(({ key, ...a }, i) => (
+              <AddressRow key={key} {...a} primary={i === 0} />
+            ))}
+          </div>
         </div>
       )}
 

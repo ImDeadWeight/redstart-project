@@ -260,62 +260,44 @@ await test('🔍 a hostname is refused — exposure must be stated, not resolved
 // ---------------------------------------------------------------------------
 // 5. Discovery exposure
 // ---------------------------------------------------------------------------
-// mDNS and the port-80 clean URL now start with the DAEMON, not with
-// llama:launch — a box that has never launched a model used to advertise
-// nothing, which is the cold-start case an appliance ships in. What decides
-// whether it announces itself is the union of the two planes' exposure, and
-// these are the cases that union has to get right.
+// The port-80 clean URL starts with the DAEMON, not with llama:launch — a box
+// that has never launched a model used to advertise nothing, which is the
+// cold-start case an appliance ships in. Phase 6.5 retired mDNS and with it
+// the union-of-two-planes rule (design decision 17 is now half-void — see
+// docs/notes/headless-admin-plane-implementation.md §6.5.3): what decides
+// whether it runs is networkMode alone.
 
 console.log('\n-- discovery exposure --')
 
-await test('🔍 an exposed control plane advertises on its own', () => {
-  const plan = discoveryPlan({ adminBindHost: '0.0.0.0', networkMode: false })
-  assert(plan.advertise === true, 'a LAN-bound control plane did not advertise')
-  assert(plan.reason === 'control-plane', `reason was ${plan.reason}`)
-  return 'findable before it is configured — the point of decision 17'
-})
-
-await test('🔍 a loopback control plane still advertises for the data plane', () => {
-  const plan = discoveryPlan({ adminBindHost: '127.0.0.1', networkMode: true })
+await test('🔍 network mode on runs the clean-URL proxy', () => {
+  const plan = discoveryPlan({ networkMode: true })
   assert(plan.advertise === true, "today's desktop install stopped advertising")
   assert(plan.reason === 'data-plane', `reason was ${plan.reason}`)
-  return 'the half that keeps redstart.local working'
 })
 
-await test('🔍 both planes on loopback advertises nothing', () => {
-  const plan = discoveryPlan({ adminBindHost: '127.0.0.1', networkMode: false })
-  assert(plan.advertise === false, 'a fully-loopback box announced itself on the LAN')
+await test('🔍 network mode off runs nothing', () => {
+  const plan = discoveryPlan({ networkMode: false })
+  assert(plan.advertise === false, 'a loopback-only box ran the clean-URL proxy')
 })
 
-await test('🔍 an UNKNOWN bind address counts as loopback, not as exposure', () => {
-  // getAdminListenerState() reports null when the listener failed to bind, and
-  // a naive `!isLoopbackBind(null)` reads as exposed. Fail closed.
-  for (const adminBindHost of [null, undefined, 42, {}]) {
-    const plan = discoveryPlan({ adminBindHost, networkMode: false })
-    assert(plan.advertise === false, `${JSON.stringify(adminBindHost)} was treated as an exposed control plane`)
-  }
-  return 'a box with no control plane does not advertise on its behalf'
-})
-
-await test('🔍 a machine that has never launched has no data-plane reason to advertise', () => {
+await test('🔍 a machine that has never launched has no reason to advertise', () => {
   const fresh = lastKnownDiscovery({})
   assert(fresh.networkMode === false, 'an unlaunched box inherited networkMode: true from a default nobody chose')
-  assert(discoveryPlan({ adminBindHost: '127.0.0.1', ...fresh }).advertise === false, 'a fresh install advertised itself')
+  assert(discoveryPlan(fresh).advertise === false, 'a fresh install advertised itself')
   return 'additive for existing installs'
 })
 
 await test('a launch record round-trips through settings.json', () => {
-  const record = discoveryRecordFor({ networkMode: true, advertisedHost: 'nest.local', port: 19080 })
+  const record = discoveryRecordFor({ networkMode: true, port: 19080 })
   const read = lastKnownDiscovery({ discovery: record })
   assert(JSON.stringify(read) === JSON.stringify(record), `${JSON.stringify(read)} != ${JSON.stringify(record)}`)
 })
 
 await test('a malformed stored record falls back to defaults rather than throwing', () => {
-  for (const discovery of [null, 'yes', { networkMode: 'true', gatewayPort: '19080', advertisedHost: '   ' }]) {
+  for (const discovery of [null, 'yes', { networkMode: 'true', gatewayPort: '19080' }]) {
     const read = lastKnownDiscovery({ discovery })
     assert(read.networkMode === false, `${JSON.stringify(discovery)} read as networkMode true`)
     assert(read.gatewayPort === DEFAULT_GATEWAY_PORT, `port read as ${read.gatewayPort}`)
-    assert(read.advertisedHost === 'redstart.local', `host read as ${read.advertisedHost}`)
   }
 })
 
@@ -558,12 +540,13 @@ await test('moving back to loopback clears the exposure', async () => {
   assert(result.state.exposed === false, 'loopback still reported as exposed')
 })
 
-// Changing the bind address re-evaluates discovery on purpose — an exposed
-// control plane is a reason to advertise that did not exist a moment ago. Which
-// means the wildcard rebind above really did publish over mDNS and bind :80 on
-// this machine. The final loopback rebind already tears that down; this is the
-// belt to its braces, because a suite that leaves the host advertising itself
-// on the LAN is a suite nobody should have to think about before running.
+// Changing the bind address no longer touches discovery at all (Phase 6.5 —
+// setControlPlaneBindHost() used to re-run it because an exposed control
+// plane was a reason for mDNS to advertise; with mDNS gone there is nothing
+// left for a bind change to trigger). Nothing above this line started
+// discovery, so this is belt-and-braces against a stray networkMode:true left
+// over from another test in the same process, not a teardown of anything the
+// rebinds above actually did.
 stopDiscovery()
 
 stopAdminListener()

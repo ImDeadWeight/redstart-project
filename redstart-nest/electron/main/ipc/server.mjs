@@ -22,7 +22,6 @@ import * as path from 'path'
 import { startGateway, stopGateway, getGatewayPort } from '../tools-gateway.mjs'
 import { startMcpServer, stopMcpServer, getMcpServerRunning } from '../mcp-server.mjs'
 import { startDiscovery, discoveryRecordFor } from '../discovery.mjs'
-import { getAdminListenerState } from '../admin-listener.mjs'
 import { syncFilesystemProvider, stopFilesystemProvider } from '../filesystem-mcp-provider.mjs'
 import { logEvent } from '../logger.mjs'
 import { serverPortRejection } from './validate.mjs'
@@ -34,13 +33,13 @@ import { startRun, appendLine, endRun } from '../process-log.mjs'
 // consumer, the launch handler's stdout parser).
 const EMA_ALPHA = 0.2
 
-// networkMode, advertisedHost and config.port are launcher state folded into
-// the llama config — they arrive here and are persisted nowhere else, so a
-// daemon starting before any launch has no way to know whether this box is
-// meant to be on the network. Recording them at launch is what lets discovery
-// start at boot from the last configuration a human actually chose, rather than
-// from a default nobody picked. Best-effort: a settings file that cannot be
-// written must not fail a launch.
+// networkMode and config.port are launcher state folded into the llama
+// config — they arrive here and are persisted nowhere else, so a daemon
+// starting before any launch has no way to know whether this box is meant to
+// be on the network. Recording them at launch is what lets discovery start at
+// boot from the last configuration a human actually chose, rather than from a
+// default nobody picked. Best-effort: a settings file that cannot be written
+// must not fail a launch.
 function rememberDiscovery(config, { readSettings, writeSettings }) {
   try {
     const settings = readSettings()
@@ -195,15 +194,12 @@ export async function launchServer(config, deps) {
 
     // Discovery is NOT started here any more — it starts with the daemon (see
     // discovery.mjs and index.mjs). What a launch still does is push the values
-    // it just used, so a changed port or advertised name takes effect now
-    // rather than at next boot, and so the next boot has something to read: the
-    // three fields discovery needs are launcher state folded into the llama
-    // config and live nowhere else on disk.
+    // it just used, so a changed port takes effect now rather than at next
+    // boot, and so the next boot has something to read: the two fields
+    // discovery needs are launcher state folded into the llama config and live
+    // nowhere else on disk.
     rememberDiscovery(config, deps)
-    startDiscovery({
-      adminBindHost: getAdminListenerState().bindHost,
-      ...discoveryRecordFor(config),
-    })
+    startDiscovery(discoveryRecordFor(config))
 
     // File System capability's child process — fire-and-forget, since spawn
     // + MCP handshake takes a moment and this handler already returned

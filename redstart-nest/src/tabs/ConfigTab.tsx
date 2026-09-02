@@ -10,7 +10,7 @@ import { BinaryPanel } from '../panels/BinaryPanel'
 
 export function ConfigTab({
   config, setConfig, networkMode, onToggleNetworkMode,
-  advertisedHost, setAdvertisedHost, localIp,
+  localIp,
   generatedCommand, onGenerateCommand,
   profilesHook, hw, auth, controlPlaneExposure,
 }: {
@@ -18,8 +18,6 @@ export function ConfigTab({
   setConfig: React.Dispatch<React.SetStateAction<LlamaConfig>>
   networkMode: boolean
   onToggleNetworkMode: () => void
-  advertisedHost: string
-  setAdvertisedHost: (host: string) => void
   localIp: string
   generatedCommand: string
   onGenerateCommand: () => void
@@ -165,8 +163,6 @@ export function ConfigTab({
       <NetworkPanel
         networkMode={networkMode}
         onToggleNetworkMode={onToggleNetworkMode}
-        advertisedHost={advertisedHost}
-        setAdvertisedHost={setAdvertisedHost}
         localIp={localIp}
         port={config.port}
         auth={auth}

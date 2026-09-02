@@ -40,7 +40,6 @@ export default function App() {
   const [generatedCommand, setGeneratedCommand] = useState('')
   const [networkMode, setNetworkMode] = useState(true)
   const [localIp, setLocalIp] = useState('')
-  const [advertisedHost, setAdvertisedHost] = useState('redstart.local')
   const [activeTab, setActiveTab] = useState<'config' | 'models' | 'tools' | 'plugins' | 'server'>('config')
 
   const { statusMsg, show: showStatus, clear: clearStatus } = useStatusMessage()
@@ -58,7 +57,7 @@ export default function App() {
   // profile it's editing is the one actually running, to decide whether to
   // push the change live (see syncToolsIfLive's own comment for why that
   // check exists — nothing stops the admin switching profiles mid-session).
-  const profilesHook = useProfiles(config, setConfig, setAdvertisedHost, controlPlaneExposure.setExposure, showStatus)
+  const profilesHook = useProfiles(config, setConfig, controlPlaneExposure.setExposure, showStatus)
   const server = useServerLifecycle({
     config, showStatus, clearStatus,
     onLaunchStarted: () => setActiveTab('server'),
@@ -77,14 +76,6 @@ export default function App() {
     a.server.getIp().then(setLocalIp)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  // Sync advertisedHost to config whenever it changes. In network mode a blank
-  // host defaults to redstart.local so mDNS always advertises a resolvable
-  // .local name; localhost-only mode keeps whatever was typed (usually blank).
-  useEffect(() => {
-    const host = networkMode ? (advertisedHost.trim() || 'redstart.local') : advertisedHost
-    setConfig(prev => ({ ...prev, advertisedHost: host }))
-  }, [advertisedHost, networkMode])
 
   useEffect(() => {
     setConfig(prev => ({ ...prev, networkMode }))
@@ -190,8 +181,6 @@ export default function App() {
               setConfig={setConfig}
               networkMode={networkMode}
               onToggleNetworkMode={() => setNetworkMode(v => !v)}
-              advertisedHost={advertisedHost}
-              setAdvertisedHost={setAdvertisedHost}
               localIp={localIp}
               generatedCommand={generatedCommand}
               onGenerateCommand={generateCommand}

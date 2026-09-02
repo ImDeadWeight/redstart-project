@@ -56,7 +56,6 @@ export function generateDefaultProfiles(hardware, { readProfiles, writeProfiles 
     host: '127.0.0.1',
     kvCache: 'balanced',
     additionalArgs: '',
-    advertisedHost: 'redstart.local',
   }
 
   const productivity = {
@@ -69,7 +68,6 @@ export function generateDefaultProfiles(hardware, { readProfiles, writeProfiles 
     host: '127.0.0.1',
     kvCache: 'balanced',
     additionalArgs: '',
-    advertisedHost: 'redstart.local',
   }
 
   const data = readProfiles()

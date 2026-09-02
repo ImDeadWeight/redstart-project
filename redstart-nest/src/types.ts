@@ -168,7 +168,6 @@ export type LlamaConfig = {
   kvCache?: 'off' | 'conservative' | 'balanced' | 'aggressive'
   additionalArgs?: string
   tools?: ProfileTools
-  advertisedHost?: string
   // Whether THIS profile wants the control plane (admin listener) reachable
   // on the network when it's selected — separate from networkMode (the data
   // plane) for the same reason ControlPlaneState is its own type: a control
@@ -202,6 +201,5 @@ export type ControlPlaneState = {
 export const DEFAULT_CONFIG: LlamaConfig = {
   modelPath: '', ctxSize: 4096, batchSize: 256, threads: 4,
   gpuLayers: undefined, port: 19080, host: '0.0.0.0', networkMode: true,
-  advertisedHost: 'redstart.local',
   nCpuMoe: undefined, kvCache: 'balanced', additionalArgs: '',
 }

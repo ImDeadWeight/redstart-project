@@ -35,29 +35,27 @@ Nest, Twig and Blueprints share the same [SvelteKit](https://kit.svelte.dev/) fr
   │   └─ Injects Redstart context      ├─ Finds Redstart Nest automatically
   ├─ llama-server :19081 (localhost)   └─ Connects to http://IP:19080
   ├─ MCP server   :19082 (web_fetch, web_search, Postgres, Documents, SQLite, Vault, Git, File System, Scholar)
-  ├─ Beacon      :8765
-  └─ mDNS        redstart.local (advertises the server on the local network)
+  └─ Beacon      :8765
 ```
 
 Starting the server launches three services alongside the model — the gateway (`:19080`), llama-server (`:19081`, localhost-only) and the MCP server (`:19082`). See [Ports used](#ports-used).
 
 **The gateway is the only thing clients talk to.** It intercepts every `POST /v1/chat/completions`, prepends the server-composed system prompt, strips banned tools, and pipes the request and response straight through — streaming included. Everything else is a transparent passthrough to llama-server. llama-server itself never accepts a LAN connection; see [Security](security.md#the-llama-server-boundary).
 
-**Discovery:** Redstart Nest broadcasts a JSON beacon on port 8765 and advertises itself via mDNS as `redstart.local` by default (configurable). Redstart Twig (both Android and Windows) scans the local subnet on startup and connects automatically if a running server is found — the beacon scan needs no hostname, so Twig never depends on mDNS.
+**Discovery:** Redstart Nest broadcasts a JSON beacon on port 8765. Redstart Twig (both Android and Windows) scans the local subnet on startup and connects automatically if a running server is found — the beacon scan needs no hostname. (mDNS/`redstart.local` was retired: Android's resolver never answered `.local` lookups for browser navigation, and Twig never depended on it either — see [Known limitations](roadmap.md#known-limitations).)
 
-Both mDNS and the port-80 clean URL start with the **app**, not with a model launch. A box that has never started a model still answers to its name, which is the state an unconfigured machine is in and the one where being findable matters most. Whether it announces itself at all is the union of the two planes' exposure: network mode on (the data plane), or a control plane bound somewhere other than loopback. A machine that has never launched and keeps its control plane on loopback announces nothing, which is the pre-existing behaviour.
+The port-80 clean URL starts with the **app**, not with a model launch — a box that has never started a model still gets it once put in network mode, which is the state an unconfigured machine is in and the one where being findable matters most. Whether it runs is `networkMode` alone (the data plane); it no longer follows the control plane's own exposure.
 
-**Reaching the server from a browser:** no single address reaches every client, so the launcher's **Configuration → Network** panel lists three and lets you pick whichever works, with the direct IP as a QR code:
+**Reaching the server from a browser:** no single address reaches every client, so the launcher's **Configuration → Network** panel lists both and lets you pick whichever works, with the direct IP as a QR code:
 
 | Address | Reaches | Cost |
 |---|---|---|
 | `http://<LAN-IP>:19080` | **everything, including Android** | none — no name resolution at all |
-| `http://redstart.local:19080` | iOS, macOS, Windows 10 1703+, Linux with avahi + `nss-mdns` | **not Android** |
 | `http://<dashed-ip>.sslip.io:19080` | everything, including Android | needs internet DNS; blocked by routers with DNS-rebind protection |
 
 The QR code encodes the **direct IP URL** — pointing a phone camera at it opens the chat UI in the browser with no resolver involved, which is the only approach that works universally. It is not the old `redstart://connect` deep link (removed in the 2026-07-20 launcher cleanup); it does not require Redstart Twig to be installed.
 
-Prefer the IP and give the host a DHCP reservation on your router. The hostnames are conveniences layered on top, and each one fails somewhere — see [Known limitations](roadmap.md#known-limitations).
+Prefer the IP and give the host a DHCP reservation on your router. The sslip name is a convenience layered on top, and it fails on routers with DNS-rebind protection — see [Known limitations](roadmap.md#known-limitations).
 
 **OpenAI-compatible API:** llama-server exposes `/v1/chat/completions` and related endpoints, so any tool that accepts a custom OpenAI base URL can use Redstart Nest as its backend — including coding agents, scripts, and API clients.
 
@@ -105,7 +103,7 @@ configured port would put the MCP server on the control plane's socket. A launch
 with a colliding port is refused with a message naming the collision rather than
 failing somewhere downstream (`serverPortRejection()` in `ipc/validate.mjs`).
 
-**Network mode is a bind, not a firewall rule.** With it off, the gateway and the MCP server listen on `127.0.0.1` only — a device on the LAN gets connection-refused, not a login screen, and that holds regardless of what the host's firewall is or isn't doing. Turning it on binds both to `0.0.0.0` and adds the Windows Firewall inbound rules (plus UDP 5353 for mDNS, and TCP 80 when the clean-URL proxy starts). Rules go in via the bundled `elevate.exe`, so UAC prompts at most once per rule and never again; in an unpackaged dev checkout `elevate.exe` is absent and rule creation is skipped with a warning. Rules are not removed when you turn network mode back off — deleting one needs elevation again, and a leftover rule is inert once nothing is listening on the wildcard.
+**Network mode is a bind, not a firewall rule.** With it off, the gateway and the MCP server listen on `127.0.0.1` only — a device on the LAN gets connection-refused, not a login screen, and that holds regardless of what the host's firewall is or isn't doing. Turning it on binds both to `0.0.0.0` and adds the Windows Firewall inbound rules (plus TCP 80 when the clean-URL proxy starts). Rules go in via the bundled `elevate.exe`, so UAC prompts at most once per rule and never again; in an unpackaged dev checkout `elevate.exe` is absent and rule creation is skipped with a warning. Rules are not removed when you turn network mode back off — deleting one needs elevation again, and a leftover rule is inert once nothing is listening on the wildcard.
 
 Port 19081 is localhost-only in both modes, enforced at the socket *and* at the launch arguments (`--host` is hardwired and stripped from the advanced-args field). The gateway and its two internal services shift together if you change the configured port — llama-server is always `configured-port + 1`, and the MCP server is always `configured-port + 2`. `scripts/test-network-binding.mjs` proves the boundary by binding each server and attempting a real TCP connection from this host's own LAN address.
 

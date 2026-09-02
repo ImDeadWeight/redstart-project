@@ -55,7 +55,7 @@ Configuring Redstart Nest and using it are two different things, and from the
 
 | | Data plane | Control plane |
 |---|---|---|
-| What | Gateway `19080`, MCP `19082`, mDNS, port-80 proxy | Admin listener `19083` |
+| What | Gateway `19080`, MCP `19082`, port-80 proxy | Admin listener `19083` |
 | Serves | Inference and tools to chat clients, Twig, coding agents | Configuration and process lifecycle to administrators |
 | Up when | A model is running | Redstart Nest is running |
 | Login | Optional — the **Require login** toggle | **Always required.** The toggle does not reach it |
@@ -239,7 +239,7 @@ mode does not move it; `adminBindHost` does. See [The control plane](#the-contro
 
 Full detail, including why firewall rules are not removed on toggle-off, is in [Architecture → Ports used](architecture.md#ports-used).
 
-**Discovery is not authentication.** The beacon and mDNS answer "where might a Redstart server be?" — never "this server is trustworthy". The beacon payload is minimal by design (`{ app, running, port }`) and discloses no version, auth state, configuration or URLs. A discovered server still has to authenticate the client.
+**Discovery is not authentication.** The beacon answers "where might a Redstart server be?" — never "this server is trustworthy". The beacon payload is minimal by design (`{ app, running, port }`) and discloses no version, auth state, configuration or URLs. A discovered server still has to authenticate the client. (mDNS was retired — see [Known limitations](roadmap.md#known-limitations) — the beacon was always the mechanism that mattered; Twig never depended on the `.local` name.)
 
 ---
 

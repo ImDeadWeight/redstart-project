@@ -7,7 +7,6 @@
 import {
   startAdminListener, getAdminListenerState, bindHostRejection, isLoopbackBind,
 } from '../admin-listener.mjs'
-import { startDiscovery, lastKnownDiscovery } from '../discovery.mjs'
 import { logEvent } from '../logger.mjs'
 import { getGatewayPort } from '../tools-gateway.mjs'
 import { getMcpServerRunning } from '../mcp-server.mjs'
@@ -93,10 +92,9 @@ export async function setControlPlaneBindHost(host, { readSettings, writeSetting
   settings.adminBindHost = bindHost
   writeSettings(settings)
 
-  // Exposure just changed, and discovery's rule reads it — a control plane that
-  // has moved onto the LAN is a reason to advertise that did not exist a moment
-  // ago (and moving back to loopback may remove the only one there was).
-  startDiscovery({ adminBindHost: bindHost, ...lastKnownDiscovery(settings) })
+  // Discovery no longer reads the control plane's bind address (Phase 6.5 —
+  // mDNS, the only mechanism that used to key on it, is retired). Nothing to
+  // re-run here any more.
 
   logEvent('admin', 'bind_changed', { loopback: isLoopbackBind(bindHost) })
   return { ok: true, state: getAdminListenerState() }

@@ -538,15 +538,13 @@ async function startAdminPlane() {
     console.warn('Admin listener failed to start:', err.message)
     logEvent('admin', 'listener_start_failed', { reason: err.code || 'error' })
   }
-  // Discovery follows the control plane (plan decision 17) and so starts here,
-  // AFTER the listener has bound — its own exposure decision reads that bind
-  // address, and an unknown one is treated as loopback. Nothing else about it
-  // depends on the listener; if the listener failed to bind, discovery simply
-  // falls back to the data-plane half of the rule. See discovery.mjs.
-  startDiscovery({
-    adminBindHost: getAdminListenerState().bindHost,
-    ...lastKnownDiscovery(readSettings()),
-  })
+  // Discovery (the port-80 clean URL, since Phase 6.5 retired mDNS) is a
+  // data-plane convenience keyed on networkMode alone — it no longer reads
+  // the listener's bind state at all. Still started here rather than only
+  // from `llama:launch`, so a box that was previously put in network mode
+  // gets the clean URL back at boot even before the next launch. See
+  // discovery.mjs.
+  startDiscovery(lastKnownDiscovery(readSettings()))
 }
 
 // ---------------------------------------------------------------------------
