@@ -34,6 +34,8 @@ import { ensureFirewallRule } from './firewall.mjs'
 import { getPrimaryLanIp } from './net-interfaces.mjs'
 import { cleanupOldConversations } from './conversations-storage.mjs'
 import { initLogger, closeLogger, logEvent } from './logger.mjs'
+import { initProcessLog } from './process-log.mjs'
+import { subscribeToEvents } from './event-broker.mjs'
 import { reapStaleProcess, deletePidFile } from './process-supervision.mjs'
 import { initPaths, configDir, capabilityBaseDir } from './platform-paths.mjs'
 import { fileURLToPath } from 'url'
@@ -638,6 +640,16 @@ function createWindow() {
   // yet consider trusted. See ipc/guard.mjs.
   setTrustedWindow(mainWindow)
 
+  // The window is one event-broker subscriber among others now (Phase 5
+  // §5.1), not the hard-coded destination server.mjs/models.mjs/plugins.mjs
+  // used to push to directly. Subscribed once, here, rather than re-derived
+  // per publish() — a destroyed window is checked at delivery time, same as
+  // the getMainWindow()?.webContents.send(...) guard this replaces.
+  const win = mainWindow
+  subscribeToEvents((channel, payload) => {
+    if (!win.isDestroyed()) win.webContents.send(channel, payload)
+  })
+
   if (!app.isPackaged) {
     mainWindow.loadURL(DEV_RENDERER_ORIGIN)
     mainWindow.webContents.openDevTools()
@@ -666,6 +678,9 @@ app.whenReady().then(async () => {
   // userData migration so subsequent startup steps are captured.
   initLogger(configDir())
   logEvent('app', 'ready', { platform: process.platform })
+  // llama-server's own output (Phase 5 §5.2) — a separate stream from the
+  // structured event log above, see process-log.mjs's header for why.
+  initProcessLog(configDir())
   // Pre-provision default capability folders (<Documents>\Redstart\...) so
   // Documents/SQLite/Vault/Git are one-click enable out of the box. Fills
   // only unset paths — a user-chosen folder is never overridden — and leaves
@@ -763,9 +778,9 @@ function registerIpcHandlers(deps) {
   registerCapabilitiesHandlers(deps)
   registerServerHandlers(deps)
   registerModelsHandlers(deps)
-  // Named getWindow, not getMainWindow — plugins.mjs mirrors models.mjs's own
-  // progress-event dependency name.
-  registerPluginsHandlers({ refreshLiveToolsConfig: deps.refreshLiveToolsConfig, getWindow: deps.getMainWindow })
+  // No window dependency any more (Phase 5 §5.1) — see the matching comment
+  // in admin/api-table.mjs.
+  registerPluginsHandlers({ refreshLiveToolsConfig: deps.refreshLiveToolsConfig })
   registerBrowseHandlers()
 }
 

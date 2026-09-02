@@ -56,16 +56,17 @@ export function buildAdminApi(deps) {
     ...hardwareHandlers(deps),
     ...settingsHandlers(deps),
     ...authHandlers(),
-    ...adminHandlers(),
+    ...adminHandlers(deps),
     ...profilesHandlers(deps),
     ...toolsHandlers(deps),
     ...mcpHandlers(deps),
     ...capabilitiesHandlers(deps),
     ...serverHandlers(deps),
     ...modelsHandlers(deps),
-    // Named getWindow, not getMainWindow — plugins.mjs mirrors models.mjs's own
-    // progress-event dependency name.
-    ...pluginsHandlers({ refreshLiveToolsConfig: deps.refreshLiveToolsConfig, getWindow: deps.getMainWindow }),
+    // No window dependency any more (Phase 5 §5.1) — plugins.mjs publishes
+    // install progress to the shared event broker instead of pushing to a
+    // window handle it used to be given.
+    ...pluginsHandlers({ refreshLiveToolsConfig: deps.refreshLiveToolsConfig }),
     ...browseRouteHandlers(),
     ...browseHandlers(deps),
   }

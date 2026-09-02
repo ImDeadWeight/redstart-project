@@ -127,16 +127,25 @@ for (const [mod, fnName] of registrars) {
 const mainHandlers = new Set(ipcMain.handlers.keys())
 
 // Channels the main process pushes at the renderer, scanned from source.
+// Two shapes since Phase 5: a literal `.send('channel'` (rare now — mostly
+// index.mjs's own window subscriber, which uses a variable and so is
+// invisible to this scan on purpose, see below) and `publish('channel'`
+// into event-broker.mjs, which is how server.mjs/models.mjs/plugins.mjs emit
+// now. index.mjs's `win.webContents.send(channel, payload)` deliberately
+// does NOT appear here — it forwards whatever the broker publishes, so the
+// invariant this test pins ("every literal channel emitted is subscribed to
+// by the preload") is carried entirely by the publish() call sites instead.
+const EMIT_PATTERN = /(?:\.send|\bpublish)\(\s*'([^']+)'/g
 const mainEmits = new Set()
 for (const file of fs.readdirSync(path.join(repoRoot, 'electron', 'main'))) {
   if (!file.endsWith('.mjs')) continue
   const src = fs.readFileSync(path.join(repoRoot, 'electron', 'main', file), 'utf8')
-  for (const c of scan(src, /\.send\(\s*'([^']+)'/g)) mainEmits.add(c)
+  for (const c of scan(src, EMIT_PATTERN)) mainEmits.add(c)
 }
 for (const file of fs.readdirSync(path.join(repoRoot, 'electron', 'main', 'ipc'))) {
   if (!file.endsWith('.mjs')) continue
   const src = fs.readFileSync(path.join(repoRoot, 'electron', 'main', 'ipc', file), 'utf8')
-  for (const c of scan(src, /\.send\(\s*'([^']+)'/g)) mainEmits.add(c)
+  for (const c of scan(src, EMIT_PATTERN)) mainEmits.add(c)
 }
 
 // ---------------------------------------------------------------------------

@@ -3,18 +3,20 @@
 //
 // This namespace owns the live server process. That state is shared with the
 // app lifecycle and gateway-refresh code in index.mjs, so it is threaded in as
-// a mutable `serverState` object ({ process, ema, lastConfig }) rather than kept
-// as module globals here — both sides mutate the same object. mainWindow is
-// reassigned in index.mjs after this module registers, so it is read through a
-// getMainWindow() getter, never captured by value.
+// a mutable `serverState` object ({ process, ema, lastConfig, startedAt,
+// lastError }) rather than kept as module globals here — both sides mutate
+// the same object. startedAt/lastError exist for ipc/admin.mjs's full status
+// endpoint (Phase 5 §5.4) and are set/cleared alongside process/lastConfig at
+// every launch, exit and error.
 //
 // Handler bodies are exported as plain functions (Phase 1, §1.3 of the
 // headless-admin-plane implementation plan) so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
-// registers anything; only registerServerHandlers() does that. The
-// getMainWindow()?.webContents.send(...) calls inside launchServer are left
-// exactly as they are: replacing them with the shared event broker is Phase 5's
-// job, not this one.
+// registers anything; only registerServerHandlers() does that. The six
+// getMainWindow()?.webContents.send(...) calls that used to live in
+// launchServer are now publish() calls into event-broker.mjs (Phase 5 §5.1) —
+// the window is one subscriber among others now, registered once from
+// index.mjs, rather than the only possible reader hard-coded at each site.
 import { registerAll } from './guard.mjs'
 import { spawn } from 'child_process'
 import * as path from 'path'
@@ -26,6 +28,8 @@ import { syncFilesystemProvider, stopFilesystemProvider } from '../filesystem-mc
 import { logEvent } from '../logger.mjs'
 import { serverPortRejection } from './validate.mjs'
 import { writePidFile, deletePidFile } from '../process-supervision.mjs'
+import { publish } from '../event-broker.mjs'
+import { startRun, appendLine, endRun } from '../process-log.mjs'
 
 // EMA smoothing factor for the tokens/sec readout (moved here with its sole
 // consumer, the launch handler's stdout parser).
@@ -56,7 +60,6 @@ export function generateLlamaCommand(config, { buildArgs }) {
 export async function launchServer(config, deps) {
   const {
     serverState,
-    getMainWindow,
     resolveBinary,
     buildArgs,
     parseEvalTokensPerSec,
@@ -87,6 +90,7 @@ export async function launchServer(config, deps) {
   try {
     // --- Piped mode (in-app log + token tracking) ---
     serverState.ema = 0
+    serverState.lastError = null
     // cwd = binary dir so Windows DLL search finds companion DLLs.
     // detached (POSIX only) puts the child in its own process group, so
     // killByPid's negative-pid signal in process-supervision.mjs reaches
@@ -98,14 +102,19 @@ export async function launchServer(config, deps) {
       detached: process.platform !== 'win32',
     })
 
+    // One file per launch (§5.2) — started here so even a launch that fails
+    // before the first stdout line still leaves a file behind to look at.
+    startRun()
+
     const forwardLines = (chunk) => {
       for (const line of chunk.toString().split('\n')) {
         const tps = parseEvalTokensPerSec(line)
         if (tps !== null) {
           serverState.ema = serverState.ema === 0 ? tps : EMA_ALPHA * tps + (1 - EMA_ALPHA) * serverState.ema
-          getMainWindow()?.webContents.send('server:tpm', Math.round(serverState.ema * 60))
+          publish('server:tpm', Math.round(serverState.ema * 60))
         }
-        getMainWindow()?.webContents.send('server:log', line)
+        appendLine(line)
+        publish('server:log', line)
       }
     }
 
@@ -113,29 +122,39 @@ export async function launchServer(config, deps) {
     child.stderr.on('data', forwardLines)
 
     child.on('error', err => {
-      getMainWindow()?.webContents.send('server:log', `SPAWN ERROR: ${err.message}`)
-      getMainWindow()?.webContents.send('server:stopped')
+      serverState.lastError = err.message
+      appendLine(`SPAWN ERROR: ${err.message}`)
+      publish('server:log', `SPAWN ERROR: ${err.message}`)
+      publish('server:stopped')
       serverState.process = null
+      serverState.startedAt = null
+      endRun()
       deletePidFile(userDataDir)
     })
 
     child.on('exit', (code, signal) => {
       if (code !== 0) {
-        getMainWindow()?.webContents.send('server:log', `Process exited with code ${code} (signal: ${signal})`)
+        const line = `Process exited with code ${code} (signal: ${signal})`
+        serverState.lastError = line
+        appendLine(line)
+        publish('server:log', line)
       }
       serverState.process = null
       serverState.ema = 0
       serverState.lastConfig = null
+      serverState.startedAt = null
+      endRun()
       deletePidFile(userDataDir)
-      getMainWindow()?.webContents.send('server:stopped')
+      publish('server:stopped')
     })
 
     serverState.process = child
     serverState.lastConfig = config
+    serverState.startedAt = Date.now()
     // Recorded so a hard-killed Nest (Task Manager, power loss — anything
     // that skips the exit handler above) can be reaped by PID, not by name,
     // the next time Nest starts. See process-supervision.mjs.
-    writePidFile(userDataDir, { pid: child.pid, binaryPath, startedAt: Date.now() })
+    writePidFile(userDataDir, { pid: child.pid, binaryPath, startedAt: serverState.startedAt })
 
     // Start the gateway on the public port. It injects the Redstart system
     // context into every completions request and proxies everything else

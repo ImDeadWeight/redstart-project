@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('redstartAPI', {
   // not on the bridge. Retires with the rest of this bridge in Phase 3.
   admin: {
     getControlPlane: () => ipcRenderer.invoke('admin:get-control-plane'),
+    getStatus: () => ipcRenderer.invoke('admin:get-status'),
   },
 
   // FolderPicker.tsx's local branch — the one native dialog left, generic over

@@ -50,6 +50,7 @@ import { mayAccessControlPlane } from './permissions.mjs'
 import { ADMIN_PORT } from './ports.mjs'
 import { isAdminAuthRoute, handleAdminAuthRoute } from './admin/auth-routes.mjs'
 import { isAdminApiRoute, handleAdminApiRoute } from './admin/api-routes.mjs'
+import { isAdminEventsRoute, handleAdminEventsRoute } from './admin/events-routes.mjs'
 import { sendJson } from './admin/http.mjs'
 import { logEvent } from './logger.mjs'
 
@@ -271,6 +272,13 @@ async function handleAdminRequest(req, res) {
   // default instead of by whoever remembers.
   if (isAdminApiRoute(urlPath)) {
     return await handleAdminApiRoute(req, res, urlPath)
+  }
+
+  // The live feed (Phase 5 §5.3) — a GET, not a POST/JSON route, so it lives
+  // beside the API dispatch rather than in its table: an SSE response is
+  // opened and held, not returned once.
+  if (isAdminEventsRoute(urlPath)) {
+    return handleAdminEventsRoute(req, res)
   }
 
   // Kept from Phase 2, and still earning its place: the cheapest possible probe

@@ -56,6 +56,15 @@ export function useServerLifecycle(opts: {
     if (!a) return
 
     a.events.onTokensPerMinute(setTokensPerMin)
+    // Subscribed for the component's whole lifetime, not just from
+    // launchServer() onward (Phase 5 §5.2-5.3) — a reconnecting SSE client
+    // replays the daemon's ring buffer on connect, so an admin who opens
+    // this tab while the server is already running (or just crashed) sees
+    // that history immediately rather than an empty terminal that only
+    // starts filling in from the next line they personally launch.
+    a.events.onServerLog(line => {
+      if (line.trim()) setLogLines(prev => [...prev.slice(-1000), line])
+    })
     a.events.onServerStopped(() => {
       setServerState('stopped')
       setHealth(null)
@@ -63,7 +72,6 @@ export function useServerLifecycle(opts: {
       setConfirmStop(false)
       setRunningProfileName(null)
       stopStatusPoll()
-      a.events.offServerLog()
       if (isUserStopRef.current) {
         isUserStopRef.current = false
         showStatus('Server stopped.')
@@ -85,10 +93,6 @@ export function useServerLifecycle(opts: {
     setLogLines([])
     onLaunchStarted?.()
 
-    getAPI()?.events.onServerLog(line => {
-      if (line.trim()) setLogLines(prev => [...prev.slice(-1000), line])
-    })
-
     const result = await api().llama.launch(config)
     if (result.success) {
       setServerState('running')
@@ -98,7 +102,6 @@ export function useServerLifecycle(opts: {
     } else {
       setServerState('stopped')
       showStatus(`Launch error: ${result.error}`, 0)
-      getAPI()?.events.offServerLog()
     }
   }
 

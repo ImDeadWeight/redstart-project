@@ -35,6 +35,22 @@ export type RedstartAPI = {
   // with this bridge when Phase 3 puts it on HTTP against the listener itself.
   admin: {
     getControlPlane: () => Promise<ControlPlaneState>
+    // The full status endpoint (Phase 5 §5.4) — active profile is
+    // deliberately absent, see the comment above getFullStatus() in
+    // ipc/admin.mjs for why; the model path is absent on the same privacy
+    // stance server.mjs already takes for the event log.
+    getStatus: () => Promise<{
+      running: boolean
+      pid: number | null
+      startedAt: number | null
+      uptimeMs: number | null
+      lastError: string | null
+      port: number | null
+      networkMode: boolean | null
+      gateway: { port: number | null }
+      mcp: { running: boolean }
+      adminListener: ControlPlaneState
+    }>
   }
   // The FolderPicker.tsx mechanism (Phase 4 §4.2-4.3) — one component behind
   // all nine former per-site pickers, dispatching on isDaemonLocal(). roots/

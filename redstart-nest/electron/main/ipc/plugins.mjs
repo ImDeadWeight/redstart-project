@@ -35,6 +35,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { configDir } from '../platform-paths.mjs'
 import { registerAll } from './guard.mjs'
+import { publish } from '../event-broker.mjs'
 import { isPlainObject, isNonEmptyString, optional } from './validate.mjs'
 import { logEvent } from '../logger.mjs'
 import {
@@ -163,7 +164,7 @@ export function getPluginDetail(id) {
 // or command) and the discovery probe, and returns the result for the admin
 // to review. Nothing is written to plugins.json here — see the file header.
 
-export async function installPlugin(req, { getWindow }) {
+export async function installPlugin(req) {
   if (activeInstall) return refuse('plugins:install', 'An install is already in progress.')
   if (!isPlainObject(req)) return refuse('plugins:install', 'plugins:install expects a request object.')
 
@@ -192,10 +193,9 @@ export async function installPlugin(req, { getWindow }) {
   const controller = new AbortController()
   activeInstall = { id, controller }
 
-  const sendProgress = (payload) => {
-    const win = getWindow?.()
-    if (win && !win.isDestroyed()) win.webContents.send('plugins:install-progress', { id, ...payload })
-  }
+  // Published to the shared broker (Phase 5 §5.1) rather than pushed to the
+  // window directly — see event-broker.mjs.
+  const sendProgress = (payload) => publish('plugins:install-progress', { id, ...payload })
 
   try {
     let resolvedCommand, resolvedArgs, resolvedVersion = null, integrity = null, installDir = null, runAsNode = false
@@ -502,7 +502,7 @@ export function pluginsHandlers(deps) {
     'plugins:get': (id) => getPluginDetail(id),
 
     // --- install ---
-    'plugins:install': async (req) => installPlugin(req, deps),
+    'plugins:install': async (req) => installPlugin(req),
     'plugins:cancel-install': () => cancelPluginInstall(),
     'plugins:install-status': () => getPluginInstallStatus(),
     'plugins:confirm-install': (entry) => confirmPluginInstall(entry, deps),

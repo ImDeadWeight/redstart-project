@@ -3,14 +3,10 @@
 // Thin: catalog logic lives in ../hf-catalog.mjs and transfer logic in
 // ../model-download.mjs, both free of Electron so the security suite can drive
 // them directly. This module owns only the parts that need the app — the
-// window handle for progress events, the models folder, and the single-flight
-// rule that keeps two multi-gigabyte downloads from fighting over one disk.
-//
-// This is a LAUNCHER surface, on the host machine, so it is admin-by-
-// construction: there is no HTTP route here and no LAN client can reach it.
-// That is the reason it needs no account or permission model. If model
-// management ever moves to the clients (see the roadmap's headless work), that
-// assumption is the first thing that stops being true.
+// models folder and the single-flight rule that keeps two multi-gigabyte
+// downloads from fighting over one disk. reveal-folder is the one genuinely
+// local-only action left (§4.4); everything else here is owner-gated over
+// the control plane like any other admin/api-table.mjs namespace.
 //
 // Handler bodies are exported as plain functions (Phase 1, §1.3 of the
 // headless-admin-plane implementation plan) so an HTTP route can call them
@@ -23,6 +19,7 @@
 import { shell } from 'electron'
 import { registerAll } from './guard.mjs'
 import { localOnly } from './transport.mjs'
+import { publish } from '../event-broker.mjs'
 import * as fsp from 'fs/promises'
 import * as path from 'path'
 
@@ -200,22 +197,16 @@ export function getModelDownloadStatus() {
 }
 
 export function modelsHandlers(deps) {
-  const { getMainWindow } = deps
-
   // One event channel for this namespace, named exactly once so the literal is
   // greppable — scripts/test-ipc-contract.mjs pairs emitted events against
-  // preload subscriptions by scanning main-process source for send() calls with
-  // a literal channel, and an event hidden behind a variable would silently
-  // drop out of that check.
+  // preload subscriptions by scanning main-process source for a literal
+  // channel, and an event hidden behind a variable would silently drop out
+  // of that check.
   //
-  // A window-only push, so an HTTP caller of models:download gets no progress at
-  // all — it still downloads, it just reports nothing until it finishes. Phase 5
-  // is what replaces this with a broker both the window and an SSE subscriber
-  // read; until then the gap is here rather than pretended away.
-  const sendProgress = (payload) => {
-    const win = getMainWindow?.()
-    if (win && !win.isDestroyed()) win.webContents.send('models:download-progress', payload)
-  }
+  // Published to the shared broker (Phase 5 §5.1), not pushed to the window
+  // directly — an HTTP caller subscribed to /admin/events now sees the same
+  // progress the window does, closing the gap this comment used to describe.
+  const sendProgress = (payload) => publish('models:download-progress', payload)
 
   return {
     // --- Catalog ---

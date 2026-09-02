@@ -17,9 +17,47 @@ import {
 } from '../admin-listener.mjs'
 import { startDiscovery, lastKnownDiscovery } from '../discovery.mjs'
 import { logEvent } from '../logger.mjs'
+import { getGatewayPort } from '../tools-gateway.mjs'
+import { getMcpServerRunning } from '../mcp-server.mjs'
 
 export function getControlPlane() {
   return getAdminListenerState()
+}
+
+/**
+ * The full status endpoint (Phase 5 §5.4) — "running: true" was the whole of
+ * server:status before this; a remote admin watching a box they cannot see
+ * the tray icon or the window title of needs more than a boolean.
+ *
+ * Deliberately NOT included: the model path or any other value logger.mjs's
+ * BLOCKED_KEYS would strip from the event log. Status is owner-only, same as
+ * every control-plane route, but the privacy stance server.mjs already takes
+ * ("log the port only — never the model path") is worth keeping consistent
+ * here rather than reopening it because this is a different code path.
+ *
+ * activeProfile is likewise absent — serverState carries the resolved llama
+ * CONFIG a launch used, not the profile NAME the launcher's profile selector
+ * showed at the time (that pairing lives only in the renderer, per-tab, and
+ * is not persisted). Reporting the config's non-secret shape (port,
+ * networkMode) is what is actually available server-side; a named "active
+ * profile" would need the launcher to start telling the daemon the name at
+ * launch, which it does not do today.
+ */
+export function getFullStatus({ serverState }) {
+  const running = !!serverState.process
+  const config = serverState.lastConfig
+  return {
+    running,
+    pid: serverState.process?.pid ?? null,
+    startedAt: serverState.startedAt ?? null,
+    uptimeMs: running && serverState.startedAt ? Date.now() - serverState.startedAt : null,
+    lastError: serverState.lastError ?? null,
+    port: config?.port ?? null,
+    networkMode: config ? !!config.networkMode : null,
+    gateway: { port: config ? getGatewayPort(config.port) : null },
+    mcp: { running: getMcpServerRunning() },
+    adminListener: getAdminListenerState(),
+  }
 }
 
 /**
@@ -81,12 +119,15 @@ export async function setControlPlaneBindHost(host, { readSettings, writeSetting
 // invented later, and Phase 3's route is what will call it. Editing
 // adminBindHost in settings.json still works, and takes effect at next start —
 // which is what the warning below the read is for.
-export function adminHandlers() {
+export function adminHandlers(deps) {
   return {
     'admin:get-control-plane': () => getControlPlane(),
+    // §5.4 — a remote admin's full-status readout. deps is the same big
+    // collaborator bag every other namespace gets; only serverState is used.
+    'admin:get-status': () => getFullStatus(deps ?? {}),
   }
 }
 
-export function registerAdminHandlers(_deps) {
-  registerAll(adminHandlers())
+export function registerAdminHandlers(deps) {
+  registerAll(adminHandlers(deps))
 }

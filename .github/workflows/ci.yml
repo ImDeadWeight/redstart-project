@@ -156,6 +156,15 @@ jobs:
       - name: "Security: server-side directory browser (Phase 4)"
         run: node scripts/test-browse-routes.mjs
 
+      - name: "Security: shared event broker (Phase 5)"
+        run: node scripts/test-event-broker.mjs
+
+      - name: "Security: llama-server process log (Phase 5)"
+        run: node scripts/test-process-log.mjs
+
+      - name: "Security: control-plane live feed / SSE (Phase 5)"
+        run: node scripts/test-admin-events.mjs
+
       - name: "Security: preload/main IPC contract"
         run: node scripts/test-ipc-contract.mjs
 

@@ -17,13 +17,15 @@
 // test by name rather than 404ing in a browser six months later — which is how
 // the one exception below was found.
 //
-// EVENTS ARE NO-OPS, DELIBERATELY AND VISIBLY. The four event streams are a
-// window push (`webContents.send`) with no HTTP equivalent until Phase 5 builds
-// the broker. A remote admin therefore sees no live log lines, no tokens/minute
-// and no download progress — the operations still work, they just report only
-// when they finish. Subscribing throws nothing and silently does nothing, which
-// is the only shape that keeps the components transport-blind; the gap is named
-// here and in the plan rather than papered over with a fake stream.
+// EVENTS, OVER ONE SHARED SSE CONNECTION (Phase 5 §5.3-5.5). Not the browser's
+// native EventSource — it cannot attach an Authorization header, and this
+// listener sends no cookie for it to ride on instead. `fetch()` plus a
+// ReadableStream reader gets the same server-sent-events framing back while
+// still carrying the bearer token every other call uses. One connection is
+// opened lazily on the first `on*` subscription and demultiplexed by channel,
+// mirroring what `ipcRenderer.on`/`off` already were: a single event firehose
+// per channel with one live callback at a time. See admin/events-routes.mjs
+// for the wire format.
 // =============================================================================
 
 import type { RedstartAPI } from './redstart'
@@ -79,6 +81,109 @@ const NAMESPACES = [
   'browse',
 ] as const
 
+// preload/index.mjs's `on<Event>` method name -> the broker channel it
+// subscribes to (event-broker.mjs / ipc/server.mjs, models.mjs, plugins.mjs).
+// Not the namespace.method -> channel RULE above — these never went through
+// a channel-per-method IPC binding, they were always ipcRenderer.on(literal).
+const EVENT_CHANNELS: Record<string, string> = {
+  onTokensPerMinute: 'server:tpm',
+  onServerLog: 'server:log',
+  onServerStopped: 'server:stopped',
+  onModelDownloadProgress: 'models:download-progress',
+  onPluginInstallProgress: 'plugins:install-progress',
+}
+
+type SseMessage =
+  | { type: 'replay'; channel: string; lines: string[] }
+  | { type: 'event'; channel: string; payload: unknown }
+
+/**
+ * One shared SSE connection, demultiplexed by channel. `on(method, cb)`
+ * registers the single live callback for that method's channel (replacing
+ * any previous one, matching ipcRenderer.on's own replace-not-stack
+ * semantics) and opens the connection if it is not already open; `off`
+ * clears the callback. The connection itself is never torn down once opened
+ * — cheap to hold for the page's lifetime, and simpler than reference-
+ * counting subscribers across every hook that might (un)mount.
+ */
+function createEventStream(options: HttpApiOptions, base: string) {
+  const callbacks = new Map<string, (payload: unknown) => void>()
+  let connecting = false
+
+  function dispatch(channel: string, payload: unknown) {
+    callbacks.get(channel)?.(payload)
+  }
+
+  async function connectOnce(): Promise<'stop' | 'retry'> {
+    const token = options.getToken()
+    const res = await fetch(`${base}/admin/events`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (res.status === 401) {
+      options.onUnauthorized?.()
+      return 'stop'
+    }
+    if (!res.ok || !res.body) return 'retry'
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      let sep: number
+      while ((sep = buf.indexOf('\n\n')) !== -1) {
+        const frame = buf.slice(0, sep)
+        buf = buf.slice(sep + 2)
+        const dataLine = frame.split('\n').find(l => l.startsWith('data: '))
+        if (!dataLine) continue // a keep-alive comment (": ...") or blank frame
+        let msg: SseMessage
+        try { msg = JSON.parse(dataLine.slice('data: '.length)) } catch { continue }
+        if (msg.type === 'replay') {
+          for (const line of msg.lines) dispatch(msg.channel, line)
+        } else if (msg.type === 'event') {
+          dispatch(msg.channel, msg.payload)
+        }
+      }
+    }
+    return 'retry' // the daemon closed the stream (restart, network blip) — reconnect
+  }
+
+  async function run() {
+    for (;;) {
+      let outcome: 'stop' | 'retry' = 'retry'
+      try {
+        outcome = await connectOnce()
+      } catch {
+        // network error / aborted fetch — fall through to the retry delay
+      }
+      if (outcome === 'stop') return
+      await new Promise(resolve => setTimeout(resolve, 2000))
+    }
+  }
+
+  function ensureConnected() {
+    if (connecting) return
+    connecting = true
+    run() // never resolves under normal operation; errors are swallowed above
+  }
+
+  return {
+    on(method: string, cb: (payload: unknown) => void) {
+      const channel = EVENT_CHANNELS[method]
+      if (!channel) return
+      callbacks.set(channel, cb)
+      ensureConnected()
+    },
+    off(offMethod: string) {
+      const onMethod = `on${offMethod.slice('off'.length)}`
+      const channel = EVENT_CHANNELS[onMethod]
+      if (channel) callbacks.delete(channel)
+    },
+  }
+}
+
 export function createHttpAPI(options: HttpApiOptions): RedstartAPI {
   const base = options.baseUrl ?? window.location.origin
 
@@ -123,11 +228,13 @@ export function createHttpAPI(options: HttpApiOptions): RedstartAPI {
     })
   }
 
-  // See the module header: nothing to subscribe to until Phase 5's broker.
+  const eventStream = createEventStream(options, base)
   namespaces[EVENT_NAMESPACE] = new Proxy({}, {
     get(_target, method) {
       if (typeof method !== 'string') return undefined
-      return () => undefined
+      if (method.startsWith('on')) return (cb: (payload: unknown) => void) => eventStream.on(method, cb)
+      if (method.startsWith('off')) return () => eventStream.off(method)
+      return undefined
     },
   })
 
