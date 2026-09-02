@@ -20,8 +20,8 @@ import { spawn } from 'child_process'
 import * as path from 'path'
 import { startGateway, stopGateway, getGatewayPort } from '../tools-gateway.mjs'
 import { startMcpServer, stopMcpServer, getMcpServerRunning } from '../mcp-server.mjs'
-import { startMdnsAdvertiser, stopMdnsAdvertiser } from '../mdns-advertiser.mjs'
-import { startPort80Proxy, stopPort80Proxy } from '../port80-proxy.mjs'
+import { startDiscovery, discoveryRecordFor } from '../discovery.mjs'
+import { getAdminListenerState } from '../admin-listener.mjs'
 import { syncFilesystemProvider, stopFilesystemProvider } from '../filesystem-mcp-provider.mjs'
 import { logEvent } from '../logger.mjs'
 import { serverPortRejection } from './validate.mjs'
@@ -30,6 +30,23 @@ import { writePidFile, deletePidFile } from '../process-supervision.mjs'
 // EMA smoothing factor for the tokens/sec readout (moved here with its sole
 // consumer, the launch handler's stdout parser).
 const EMA_ALPHA = 0.2
+
+// networkMode, advertisedHost and config.port are launcher state folded into
+// the llama config — they arrive here and are persisted nowhere else, so a
+// daemon starting before any launch has no way to know whether this box is
+// meant to be on the network. Recording them at launch is what lets discovery
+// start at boot from the last configuration a human actually chose, rather than
+// from a default nobody picked. Best-effort: a settings file that cannot be
+// written must not fail a launch.
+function rememberDiscovery(config, { readSettings, writeSettings }) {
+  try {
+    const settings = readSettings()
+    settings.discovery = discoveryRecordFor(config)
+    writeSettings(settings)
+  } catch (err) {
+    console.warn('Could not record the discovery settings:', err.message)
+  }
+}
 
 export function generateLlamaCommand(config, { buildArgs }) {
   const args = buildArgs(config)
@@ -135,21 +152,14 @@ export async function launchServer(config, deps) {
     // leftover rule is inert once nothing is listening on the wildcard.
     //
     // networkMode only reaches the main process here, at server start (it is
-    // launcher state folded into config), so this introduces no new restart
-    // semantics — mDNS and the port-80 proxy already worked this way.
+    // launcher state folded into config), so a change to it takes effect at the
+    // next launch. Discovery used to share that restart semantics and no longer
+    // does — it is refreshed below and otherwise lives with the daemon.
     const bindHost = config.networkMode ? '0.0.0.0' : '127.0.0.1'
     try {
       await startGateway(config.port, gwConfig, { bindHost })
       const gwPort = getGatewayPort(config.port)
       if (config.networkMode && gwPort) ensureFirewallRule(gwPort)
-      startMdnsAdvertiser(config)
-      // Serve the login/chat UI on plain port 80 too, so users can browse to
-      // http://redstart.local without the :port suffix. Falls back silently
-      // to the gateway port if 80 is unavailable.
-      if (config.networkMode && config.port !== 80) {
-        ensureFirewallRule(80)
-        startPort80Proxy(config)
-      }
     } catch (err) {
       console.warn('Tool gateway failed to start:', err.message)
       // Non-fatal — server still works, just without tool interception
@@ -165,6 +175,18 @@ export async function launchServer(config, deps) {
       console.warn('MCP server failed to start:', err.message)
     }
 
+    // Discovery is NOT started here any more — it starts with the daemon (see
+    // discovery.mjs and index.mjs). What a launch still does is push the values
+    // it just used, so a changed port or advertised name takes effect now
+    // rather than at next boot, and so the next boot has something to read: the
+    // three fields discovery needs are launcher state folded into the llama
+    // config and live nowhere else on disk.
+    rememberDiscovery(config, deps)
+    startDiscovery({
+      adminBindHost: getAdminListenerState().bindHost,
+      ...discoveryRecordFor(config),
+    })
+
     // File System capability's child process — fire-and-forget, since spawn
     // + MCP handshake takes a moment and this handler already returned
     // success for the llama-server launch itself.
@@ -179,12 +201,14 @@ export async function launchServer(config, deps) {
   }
 }
 
+// Discovery is deliberately absent here. Stopping the model used to unpublish
+// the `.local` name and drop the clean URL, which is the lifecycle bug from the
+// other side: an admin who stops the server to reconfigure it would lose the
+// ability to find the box while doing so. Discovery stops with the daemon.
 export async function stopServer({ serverState }) {
   stopGateway()
   stopMcpServer()
   stopFilesystemProvider()
-  stopMdnsAdvertiser()
-  stopPort80Proxy()
   if (!serverState.process) return { success: true }
   serverState.process.kill()
   serverState.process = null

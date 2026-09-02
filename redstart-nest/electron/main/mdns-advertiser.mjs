@@ -29,7 +29,6 @@
 // ---------------------------------------------------------------------------
 
 import { Bonjour } from 'bonjour-service'
-import { getGatewayPort } from './tools-gateway.mjs'
 import { ensureMdnsFirewallRule } from './firewall.mjs'
 import { interfaceSignature, describeInterfaces } from './net-interfaces.mjs'
 
@@ -42,7 +41,7 @@ let bonjour = null
 let advertised = null
 let watchTimer = null
 let watchedSignature = ''
-let activeConfig = null
+let activeOptions = null
 
 // Tear down the published service without touching the watcher, so a network
 // change can rebuild cleanly and keep watching.
@@ -63,14 +62,13 @@ function unpublish() {
   }
 }
 
-function publish(config) {
+function publish({ advertisedHost, port }) {
   // bonjour-service uses `host` verbatim as the A-record name (no suffix is
   // appended), and mDNS resolvers only ever query names ending in `.local`.
   // So the advertised host MUST carry the `.local` suffix — normalize to it
   // rather than stripping it.
-  const rawHost = (config.advertisedHost || '').trim().replace(/\.local$/i, '')
+  const rawHost = (advertisedHost || '').trim().replace(/\.local$/i, '')
   const host = rawHost ? `${rawHost}.local` : null
-  const port = getGatewayPort(config.port) || config.port
   if (!port) return
 
   watchedSignature = interfaceSignature()
@@ -98,13 +96,13 @@ function publish(config) {
 function startWatching() {
   if (watchTimer) return
   watchTimer = setInterval(() => {
-    if (!activeConfig) return
+    if (!activeOptions) return
     const current = interfaceSignature()
     if (current === watchedSignature) return
     console.log('mDNS: network change detected, re-announcing')
     unpublish()
     try {
-      publish(activeConfig)
+      publish(activeOptions)
     } catch (err) {
       console.warn('mDNS re-announce failed:', err.message)
     }
@@ -113,24 +111,37 @@ function startWatching() {
   if (typeof watchTimer.unref === 'function') watchTimer.unref()
 }
 
-export function startMdnsAdvertiser(config) {
+/**
+ * Publish the `.local` name.
+ *
+ * WHETHER to advertise is the caller's decision, not this module's — it used to
+ * read `config.networkMode` itself, which made it impossible to advertise for
+ * any other reason (an exposed control plane, say). discovery.mjs owns that
+ * policy now; this module is the mechanism. Same split the gateway's `bindHost`
+ * already uses.
+ *
+ * @param {object} options
+ * @param {string} options.advertisedHost the name to publish, with or without `.local`
+ * @param {number} options.port           the port the service record points at
+ */
+export function startMdnsAdvertiser(options) {
   stopMdnsAdvertiser()
 
-  if (!config?.networkMode) return
+  if (!options?.port) return
 
-  activeConfig = config
+  activeOptions = options
 
   // Inbound UDP 5353 must be open or queries never reach us. Fire-and-forget:
   // it prompts at most once ever, and a blocked port degrades the name only.
   ensureMdnsFirewallRule()
 
   try {
-    publish(config)
+    publish(options)
     startWatching()
   } catch (err) {
     console.warn('mDNS advertiser failed to start:', err.message)
     unpublish()
-    activeConfig = null
+    activeOptions = null
   }
 }
 
@@ -139,7 +150,7 @@ export function stopMdnsAdvertiser() {
     clearInterval(watchTimer)
     watchTimer = null
   }
-  activeConfig = null
+  activeOptions = null
   watchedSignature = ''
   unpublish()
 }

@@ -24,8 +24,10 @@
 //      whole reason it exists as a separate listener; if it ever regresses to
 //      the gateway's lifecycle, everything above becomes moot.
 //
-// Plus the port-reservation rule that keeps a user-settable config.port from
-// taking the control plane's socket.
+// Plus two rules that hang off the same plane: the port reservation that keeps
+// a user-settable config.port from taking the control plane's socket, and the
+// exposure rule that decides whether this box announces itself on the network
+// at all now that discovery starts with the daemon rather than with a launch.
 //
 // Run:  node scripts/test-admin-listener.mjs
 // =============================================================================
@@ -59,7 +61,8 @@ const {
 } = await import('../electron/main/admin-listener.mjs')
 const { mayAccessControlPlane } = await import('../electron/main/permissions.mjs')
 const { serverPortRejection } = await import('../electron/main/ipc/validate.mjs')
-const { ADMIN_PORT, BEACON_PORT } = await import('../electron/main/ports.mjs')
+const { ADMIN_PORT, BEACON_PORT, DEFAULT_GATEWAY_PORT } = await import('../electron/main/ports.mjs')
+const { discoveryPlan, lastKnownDiscovery, discoveryRecordFor } = await import('../electron/main/discovery.mjs')
 const {
   authenticateControlPlane, login, createOwner, createAccount, setAuthRequired,
 } = await import('../electron/main/auth.mjs')
@@ -240,7 +243,69 @@ await test('🔍 a hostname is refused — exposure must be stated, not resolved
 })
 
 // ---------------------------------------------------------------------------
-// 5. The static allowlist
+// 5. Discovery exposure
+// ---------------------------------------------------------------------------
+// mDNS and the port-80 clean URL now start with the DAEMON, not with
+// llama:launch — a box that has never launched a model used to advertise
+// nothing, which is the cold-start case an appliance ships in. What decides
+// whether it announces itself is the union of the two planes' exposure, and
+// these are the cases that union has to get right.
+
+console.log('\n-- discovery exposure --')
+
+await test('🔍 an exposed control plane advertises on its own', () => {
+  const plan = discoveryPlan({ adminBindHost: '0.0.0.0', networkMode: false })
+  assert(plan.advertise === true, 'a LAN-bound control plane did not advertise')
+  assert(plan.reason === 'control-plane', `reason was ${plan.reason}`)
+  return 'findable before it is configured — the point of decision 17'
+})
+
+await test('🔍 a loopback control plane still advertises for the data plane', () => {
+  const plan = discoveryPlan({ adminBindHost: '127.0.0.1', networkMode: true })
+  assert(plan.advertise === true, "today's desktop install stopped advertising")
+  assert(plan.reason === 'data-plane', `reason was ${plan.reason}`)
+  return 'the half that keeps redstart.local working'
+})
+
+await test('🔍 both planes on loopback advertises nothing', () => {
+  const plan = discoveryPlan({ adminBindHost: '127.0.0.1', networkMode: false })
+  assert(plan.advertise === false, 'a fully-loopback box announced itself on the LAN')
+})
+
+await test('🔍 an UNKNOWN bind address counts as loopback, not as exposure', () => {
+  // getAdminListenerState() reports null when the listener failed to bind, and
+  // a naive `!isLoopbackBind(null)` reads as exposed. Fail closed.
+  for (const adminBindHost of [null, undefined, 42, {}]) {
+    const plan = discoveryPlan({ adminBindHost, networkMode: false })
+    assert(plan.advertise === false, `${JSON.stringify(adminBindHost)} was treated as an exposed control plane`)
+  }
+  return 'a box with no control plane does not advertise on its behalf'
+})
+
+await test('🔍 a machine that has never launched has no data-plane reason to advertise', () => {
+  const fresh = lastKnownDiscovery({})
+  assert(fresh.networkMode === false, 'an unlaunched box inherited networkMode: true from a default nobody chose')
+  assert(discoveryPlan({ adminBindHost: '127.0.0.1', ...fresh }).advertise === false, 'a fresh install advertised itself')
+  return 'additive for existing installs'
+})
+
+await test('a launch record round-trips through settings.json', () => {
+  const record = discoveryRecordFor({ networkMode: true, advertisedHost: 'nest.local', port: 19080 })
+  const read = lastKnownDiscovery({ discovery: record })
+  assert(JSON.stringify(read) === JSON.stringify(record), `${JSON.stringify(read)} != ${JSON.stringify(record)}`)
+})
+
+await test('a malformed stored record falls back to defaults rather than throwing', () => {
+  for (const discovery of [null, 'yes', { networkMode: 'true', gatewayPort: '19080', advertisedHost: '   ' }]) {
+    const read = lastKnownDiscovery({ discovery })
+    assert(read.networkMode === false, `${JSON.stringify(discovery)} read as networkMode true`)
+    assert(read.gatewayPort === DEFAULT_GATEWAY_PORT, `port read as ${read.gatewayPort}`)
+    assert(read.advertisedHost === 'redstart.local', `host read as ${read.advertisedHost}`)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 6. The static allowlist
 // ---------------------------------------------------------------------------
 
 console.log('\n-- static allowlist --')
@@ -298,7 +363,7 @@ await test('an unbuilt tree yields an empty allowlist rather than an error', () 
 })
 
 // ---------------------------------------------------------------------------
-// 6. The listener, over real sockets
+// 7. The listener, over real sockets
 // ---------------------------------------------------------------------------
 
 console.log('\n-- the listener --')

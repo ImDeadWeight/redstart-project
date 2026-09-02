@@ -19,12 +19,21 @@ function buildForwardHeaders(req, targetPort) {
   return { ...req.headers, host: `127.0.0.1:${targetPort}` }
 }
 
-export function startPort80Proxy(config) {
+/**
+ * Start the :80 -> gateway proxy.
+ *
+ * WHETHER to expose the clean URL is the caller's decision. This used to read
+ * `config.networkMode` itself and take the whole llama config to get at one
+ * number; discovery.mjs owns that policy now, and this module takes only the
+ * port it forwards to.
+ *
+ * @param {object} options
+ * @param {number} options.targetPort the gateway port to forward to
+ */
+export function startPort80Proxy({ targetPort } = {}) {
   stopPort80Proxy()
 
-  if (!config?.networkMode) return
-
-  const targetPort = config.port || 19080
+  if (!targetPort) return
   // If the gateway itself is already on 80 there is nothing to proxy.
   if (targetPort === 80) return
 

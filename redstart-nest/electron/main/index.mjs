@@ -25,9 +25,8 @@ import * as os from 'os'
 import * as zlib from 'zlib'
 import * as http from 'http'
 import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
-import { startAdminListener, stopAdminListener, DEFAULT_ADMIN_BIND_HOST } from './admin-listener.mjs'
-import { stopMdnsAdvertiser } from './mdns-advertiser.mjs'
-import { stopPort80Proxy } from './port80-proxy.mjs'
+import { startAdminListener, stopAdminListener, getAdminListenerState, DEFAULT_ADMIN_BIND_HOST } from './admin-listener.mjs'
+import { startDiscovery, stopDiscovery, lastKnownDiscovery } from './discovery.mjs'
 import { ensureFirewallRule } from './firewall.mjs'
 import { getPrimaryLanIp } from './net-interfaces.mjs'
 import { cleanupOldConversations } from './conversations-storage.mjs'
@@ -535,6 +534,15 @@ async function startAdminPlane() {
     console.warn('Admin listener failed to start:', err.message)
     logEvent('admin', 'listener_start_failed', { reason: err.code || 'error' })
   }
+  // Discovery follows the control plane (plan decision 17) and so starts here,
+  // AFTER the listener has bound — its own exposure decision reads that bind
+  // address, and an unknown one is treated as loopback. Nothing else about it
+  // depends on the listener; if the listener failed to bind, discovery simply
+  // falls back to the data-plane half of the rule. See discovery.mjs.
+  startDiscovery({
+    adminBindHost: getAdminListenerState().bindHost,
+    ...lastKnownDiscovery(readSettings()),
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -698,8 +706,7 @@ app.on('before-quit', () => {
   logEvent('app', 'quit', {})
   stopGateway()
   stopMcpServer()
-  stopMdnsAdvertiser()
-  stopPort80Proxy()
+  stopDiscovery()
   if (serverState.process) {
     // killOrphanedServers() used to do this job as a side effect of its
     // by-name sweep — this line never actually killed the child itself, only
