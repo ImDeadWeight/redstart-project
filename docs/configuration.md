@@ -17,6 +17,9 @@ Everything lives in `C:\Users\<you>\AppData\Roaming\redstart\`:
 | `accounts.json` | Accounts, when login is enabled. Passwords and API keys are stored only as hashes. Each account carries a `tier` (`owner`/`admin`/`user`) and a `roleId` (`null` = Full Access). |
 | `roles.json` | Admin-defined capability roles. Built-in roles live in code and are merged in at read time, so this file holds only the ones you create. Absent until you create one. |
 | `conversations.json` | Server-side conversation history, scoped per account. |
+| `sessions.json` | Live login sessions, stored as SHA-256 hashes of the token — the file cannot be replayed as a credential. Written on sign-in, sign-out and revocation; sliding-expiry updates are batched rather than written per request. |
+| `bootstrap-token.txt` | The setup code for this machine, in plain text. Generated once, on first run. It is the only thing that can create or reset the Owner account over the network — see [Security → The control plane](security.md#the-control-plane). Anyone who can read this directory can read it, which is the same access that could rewrite `accounts.json` directly. |
+| `settings.json` | Launcher-level settings that are not per profile: the llama-server binary override, the models folder, `adminBindHost` (where the control plane listens, default `127.0.0.1`), and `discovery` (the network settings of the last launch, so the app can announce itself at start-up before anything is running). |
 
 Conversations are stored per account (per device ID when login is off) and auto-delete after 30 days of inactivity.
 

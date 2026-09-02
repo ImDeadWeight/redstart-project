@@ -45,6 +45,8 @@ Starting the server launches three services alongside the model — the gateway 
 
 **Discovery:** Redstart Nest broadcasts a JSON beacon on port 8765 and advertises itself via mDNS as `redstart.local` by default (configurable). Redstart Twig (both Android and Windows) scans the local subnet on startup and connects automatically if a running server is found — the beacon scan needs no hostname, so Twig never depends on mDNS.
 
+Both mDNS and the port-80 clean URL start with the **app**, not with a model launch. A box that has never started a model still answers to its name, which is the state an unconfigured machine is in and the one where being findable matters most. Whether it announces itself at all is the union of the two planes' exposure: network mode on (the data plane), or a control plane bound somewhere other than loopback. A machine that has never launched and keeps its control plane on loopback announces nothing, which is the pre-existing behaviour.
+
 **Reaching the server from a browser:** no single address reaches every client, so the launcher's **Configuration → Network** panel lists three and lets you pick whichever works, with the direct IP as a QR code:
 
 | Address | Reaches | Cost |
@@ -88,7 +90,20 @@ MCP servers are managed in **one place — Redstart Nest** — not per device. C
 | 19080 | Gateway — all clients connect here (default, configurable in Redstart Nest). Bound to `127.0.0.1` unless network mode is on |
 | 19081 | llama-server — internal only, bound to `127.0.0.1` in both modes; never reachable from LAN |
 | 19082 | MCP server — built-in tool endpoint (web_fetch, web_search, Postgres, Documents, SQLite, Vault, Git, File System, Scholar) plus any installed [plugins](capabilities.md#plugins). Bound to `127.0.0.1` unless network mode is on |
+| 19083 | Admin listener — the control plane. Fixed, not configurable, and up whenever Redstart Nest is, whether or not a model is running. Bound to `127.0.0.1` unless `adminBindHost` says otherwise. See [The control plane](security.md#the-control-plane) |
 | 8765 | Beacon — Redstart Nest identity broadcast, always bound to `0.0.0.0` for LAN discovery |
+
+**Two planes, two lifecycles.** 19080/19081/19082 are the *data* plane: they exist
+because a model is running and go away when it stops. 19083 is the *control*
+plane, and it binds at app start regardless — a plane whose lifetime is tied to
+the thing it controls cannot be used to start that thing. The beacon has always
+worked this way and is the precedent.
+
+**19080 is configurable and 19083 is not**, which is why `config.port` is
+validated: the data plane claims three consecutive ports, so 19081 as a
+configured port would put the MCP server on the control plane's socket. A launch
+with a colliding port is refused with a message naming the collision rather than
+failing somewhere downstream (`serverPortRejection()` in `ipc/validate.mjs`).
 
 **Network mode is a bind, not a firewall rule.** With it off, the gateway and the MCP server listen on `127.0.0.1` only — a device on the LAN gets connection-refused, not a login screen, and that holds regardless of what the host's firewall is or isn't doing. Turning it on binds both to `0.0.0.0` and adds the Windows Firewall inbound rules (plus UDP 5353 for mDNS, and TCP 80 when the clean-URL proxy starts). Rules go in via the bundled `elevate.exe`, so UAC prompts at most once per rule and never again; in an unpackaged dev checkout `elevate.exe` is absent and rule creation is skipped with a warning. Rules are not removed when you turn network mode back off — deleting one needs elevation again, and a leftover rule is inert once nothing is listening on the wildcard.
 

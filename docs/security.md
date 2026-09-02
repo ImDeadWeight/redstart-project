@@ -11,6 +11,7 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 ## Contents
 
 - [Accounts & login](#accounts--login)
+- [The control plane](#the-control-plane)
 - [The identity model](#the-identity-model)
 - [Roles](#roles)
 - [The llama-server boundary](#the-llama-server-boundary)
@@ -36,13 +37,119 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 Redstart Nest has an optional account system, gated behind a global **Require login** toggle in the server settings. It's **on by default** — every client on the network, including the host machine's own browser, must authenticate before accessing the chat UI or API. With it off, anyone on your network can use the server with no login and no API key, exactly like a plain llama.cpp setup. Turn it on and the picture changes:
 
 - **Login gate.** When accounts are required, the chat UI is not reachable until you sign in — a device that isn't logged in gets the login screen, not the chat. This holds for browsers on other devices too, not just the app.
-- **Three-tier roles.** A single **Owner** creates and removes **Admin** accounts; Admins manage regular **Users** day-to-day; Users just log in and chat. Sessions are token-based and persist across app launches (they're held in memory server-side, so restarting Redstart Nest signs everyone out — clients handle that by returning to the login screen rather than erroring).
+- **Three-tier roles.** A single **Owner** creates and removes **Admin** accounts; Admins manage regular **Users** day-to-day; Users just log in and chat.
+- **Sessions survive a restart.** They are stored in `sessions.json` as SHA-256 hashes of the token, so the file cannot be replayed as a credential by anyone who reads it. Chat sessions slide on a 30-day expiry; control-plane sessions get 12 hours (see [The control plane](#the-control-plane)). Signing out, resetting a password and deleting an account each revoke on disk, not just in memory.
 - **Profile page.** A **Profile** entry in the sidebar (and in the collapsed icon rail) opens a full-page account view rather than a dropdown. Its **Account** tab shows role, account-created / last-login timestamps and API key management; its **Files** tab browses your own storage on the server (see [Your files](#your-files-web-ui)). A regenerated key is shown once and stays on the page until dismissed — the previous dropdown put it in a modal that a stray click could dismiss, and the server keeps only a hash, so a key lost that way is gone for good.
 - **API keys.** Each account has a long-lived API key (prefixed `rst_`) for OpenAI-compatible clients like Kilo Code. Only a hash is stored server-side, so an existing key is only ever shown as its prefix — regenerate to get a fresh full key. Admins can also manage keys for the accounts they oversee.
 - **Per-connector keys.** An account can also issue keys bound to a specific *surface* (`nest-chat`, `twig`, `blueprints`, `yellowscript`, `greenhouse`), managed under Settings → Connectors. The surface travels with the credential, so the server derives which app is calling from the key itself rather than believing a header.
-- **First run.** The Owner account is created in the Redstart Nest launcher itself — deliberately, there is no HTTP route for bootstrap, so creating the first account requires physical access to the host machine. Since login is on by default, do this before expecting any device (including a browser on the host PC) to sign in.
+- **First run.** On Windows the Owner account is created in the Redstart Nest launcher itself, exactly as before. From a browser it is created through the control plane's setup screen, which asks for the machine's **setup code** first — there is no anonymous route to ownership on either path. Since login is on by default, do this before expecting any device (including a browser on the host PC) to sign in.
 
 This is a newer subsystem — treat the account-management surface as still stabilizing.
+
+---
+
+## The control plane
+
+Configuring Redstart Nest and using it are two different things, and from the
+2026-09 pass they are two different listeners with different rules.
+
+| | Data plane | Control plane |
+|---|---|---|
+| What | Gateway `19080`, MCP `19082`, mDNS, port-80 proxy | Admin listener `19083` |
+| Serves | Inference and tools to chat clients, Twig, coding agents | Configuration and process lifecycle to administrators |
+| Up when | A model is running | Redstart Nest is running |
+| Login | Optional — the **Require login** toggle | **Always required.** The toggle does not reach it |
+| Who | Any account, narrowed by role | **The Owner, and nobody else** |
+
+**The toggle governs the data plane only.** Turning **Require login** off opens
+the chat API to your LAN, exactly as documented above — it does not open the
+control plane. Two switches for two planes, rather than one switch whose "off"
+position hands out the ability to start processes. Note the other half of that:
+with login off the Owner can still sign in to the control plane, because it
+never consults the toggle in either direction.
+
+**Owner only, behind one check.** Every control-plane route calls a single
+function — `mayAccessControlPlane()` in `permissions.mjs`, whose whole body is
+`account?.tier === 'owner'`. Admin-tier accounts are refused. It is deliberately
+not a role permission: roles in Redstart may only ever *narrow* a tier, and the
+Owner ignores narrowing, so a control-plane permission would be permanently true
+and never consulted. It becomes meaningful the day a non-Owner can hold it, and
+widening it is then one edit rather than an audit of every route.
+
+**A session opens one plane.** Sessions are bound to their plane when they are
+issued: the gateway issues chat sessions, the admin listener issues
+control-plane ones, and each accepts only its own. So signing in to the chat UI
+as the Owner does *not* give you a credential that can start and stop processes.
+API keys are refused outright here — those are pasted into third-party tool
+clients, and one of them should not also be an administrative credential. A
+password, exchanged for a session at the control plane's own login, is the only
+way in.
+
+**The setup code (`bootstrap-token.txt`).** One CSPRNG code per machine,
+generated on first run and stored in plain text in the data directory. It is the
+only thing that opens `POST /admin/bootstrap`, which both creates the first Owner
+and re-keys an existing one — one door, no separate recovery path, and no
+anonymous route to ownership. This is the router model: a unique password on a
+label, plus a reset that does not wipe the box.
+
+- Why it must exist: creating the first Owner is safe over IPC because IPC means
+  physical access. Over HTTP it is not, and "no Owner exists" is reachable by a
+  corrupt `accounts.json` as well as by a new install — so without a code, the
+  first stranger to find the port would own the machine.
+- Why it is plain text: the launcher reads it and submits it for you, so Windows
+  setup is unchanged and you never see it. Hashing it would cost that and buy
+  nothing — anyone who can read the file can rewrite `accounts.json`, which is
+  ownership by a shorter route.
+- A reset preserves everything but the Owner's credential: accounts, roles,
+  connector keys and tool configuration all survive, and the Owner's sessions are
+  revoked. That is the whole gain over the last-resort wipe (stop Redstart Nest,
+  delete `accounts.json`, start again), which remains the answer when the goal is
+  to invalidate everything rather than to get back in.
+- It can be rotated, for a machine that moved or a label that was photographed.
+- Both anonymous routes — login and bootstrap — are rate limited and log every
+  attempt. That is a brake on automated guessing, not an access control; what
+  makes the secrets unguessable is their entropy.
+
+**Exposure is a bind address, and it defaults to loopback.** `adminBindHost` in
+`settings.json` holds an address rather than an on/off flag, so one setting
+covers loopback, a VPN interface, a management VLAN or the whole LAN. It is
+*not* network mode — that is data-plane state read at launch, and the control
+plane must not depend on it. A change rebinds immediately rather than at next
+start, because an administrator changing it may be doing so to recover access.
+
+> **If you move it off loopback, do not forward the port through a router.** That
+> single act is what turns a low-risk deployment into one being scanned
+> continuously, and it is a larger real-world risk than any certificate decision.
+> Put a reverse proxy in front of it, or keep it on a VPN or management network.
+> Redstart Nest speaks plain HTTP and does not encrypt this traffic itself (see
+> [Network exposure](#network-exposure)). The launcher shows a warning whenever
+> the bind address is not loopback.
+
+**What the browser gets served.** The admin listener serves the launcher's own
+built bundle, from a list of the files Redstart Nest shipped, enumerated off
+disk at start-up and matched exactly — a request path that is not in that list is
+not a file, so directory traversal is not filtered here, it is impossible. This
+is deliberately *not* the mechanism the gateway uses for the chat UI's assets:
+that one is a URL-pattern rule deciding what to forward unauthenticated to
+llama-server, which is someone else's namespace. The two must not be confused.
+The document is served with a Content-Security-Policy stricter than the Electron
+window's — no inline script at all, and `connect-src 'self'`.
+
+**No CORS, and therefore no CSRF machinery.** The listener sends no
+`Access-Control-Allow-Origin` header and answers no preflight; it serves its own
+origin. The credential is a bearer token the page attaches itself rather than a
+cookie, so a cross-site request carries no authority in the first place.
+
+**Every method, one route, one gate.** The administrative API is one route per
+method (`POST /admin/api/<namespace>/<method>`), and authentication and the
+Owner check run in the listener *before* dispatch — so a route added later is
+gated by default rather than by whoever remembers.
+`scripts/test-admin-api.mjs` asserts that every method the launcher can call has
+a route, and that every one of them refuses both an anonymous caller and an
+admin-tier session. Ten are deliberately excluded and answer `501` even for the
+Owner: the native file pickers and "reveal in Explorer", which act on the machine
+you are sitting at rather than on the server. A server-side folder browser is the
+planned replacement.
 
 ---
 
@@ -121,6 +228,9 @@ The gateway is the only way in, and it authenticates first. `scripts/test-llama-
 **Network mode is a socket bind, not a firewall rule.** With it off, the gateway and MCP server listen on `127.0.0.1` only, so a LAN device gets connection-refused rather than a login screen — and that holds whatever the host's firewall is doing. Turning it on binds both to `0.0.0.0` and adds Windows Firewall inbound rules.
 
 Both servers default to loopback in code: LAN exposure is something a caller must explicitly ask for, so the failure mode of a missed configuration is *closed*. `scripts/test-network-binding.mjs` proves this by binding each server and attempting a real TCP connection from the host's own LAN address — a test that read a config variable would prove only that a variable holds a string.
+
+**The control plane binds separately, and also defaults to loopback.** Network
+mode does not move it; `adminBindHost` does. See [The control plane](#the-control-plane).
 
 Full detail, including why firewall rules are not removed on toggle-off, is in [Architecture → Ports used](architecture.md#ports-used).
 
@@ -327,6 +437,10 @@ The accurate one-line summary of the privacy model is **local inference with adm
 | `test-mcp-capabilities` / `test-provider-conformance` | every provider refuses direct calls when disabled and errors rather than crashing on malformed input |
 | `test-system-prompt` | capability claims gated on the request; privacy claims derived; admin policy outranks client prose; unknown mode IDs dropped |
 | `test-discovery-robustness` / `test-net-interfaces` | beacon payload minimalism; virtual adapters excluded from advertised addresses |
+| `test-sessions` | sessions survive a restart, are hashed on disk, open one plane only, and every revocation path outlives it |
+| `test-admin-listener` | the control plane refuses anonymous and non-owner callers, serves only shipped files, and answers before any model has been launched |
+| `test-admin-bootstrap` | the setup code is checked before anything else; create and reset are one door; login gives a non-owner the same answer as a wrong password |
+| `test-admin-api` | every launcher method has a route, every route refuses an anonymous caller and an admin-tier session, and the local-only exclusions stay exactly the client-machine actions |
 | `test-ci-parity` | every local suite also gates pull requests |
 | chat-ui `security.test.ts` | containment, SSRF, beacon and download-endpoint behaviour in the client |
 
@@ -353,8 +467,12 @@ The available real upgrade there is HMAC-SHA256 under a DPAPI-protected pepper, 
 
 Stated plainly, because a security document that lists only strengths is not one.
 
-- **Sessions are in-memory**, so a server restart invalidates every token. Persisting them means writing credentials to disk; that decision is deliberately open.
-- **HTTP only on the LAN.** Self-signed TLS was tried and abandoned — Android WebView rejects it without manual cert trust. Transport security is on the roadmap and matters more as the project moves toward office use.
+- **HTTP only, including the control plane, and this is a settled decision rather than an omission.** Redstart Nest does not do TLS at any layer: it binds loopback by default and speaks plain HTTP, and a reverse proxy in front (Caddy, nginx, Traefik) is the documented way to expose it — the same answer Home Assistant, Jellyfin, Grafana and Proxmox give. Self-signed TLS inside Nest was tried and abandoned (Android WebView rejects it without manual cert trust), and building certificate handling here would be a worse version of what a proxy already does properly. The consequence to be clear about: on an unproxied LAN, passwords, session tokens, the setup code, and every secret on its way to be encrypted at rest all travel in the clear.
+- **The control plane has no audit trail of *what* an administrator did.** Sign-in, sign-out, bootstrap and setup-code rotation are logged; the individual administrative calls behind them are not. With Owner-only access there is also only one account to attribute anything to, so two people sharing a box share one identity in the log.
+- **Rate limiting is keyed on the remote address**, which is weak in both directions: an attacker on the LAN can change source address, and behind the reverse proxy that is the documented deployment, every request arrives from loopback and all callers share one bucket. `X-Forwarded-For` is deliberately not trusted — a header the client controls is not an identity, and with no proxy in front it would be a way to get a fresh bucket per request. Treat the limit as a brake on automated guessing rather than as an access control.
+- **A remote administrator sees no live output.** Server log lines, tokens/minute and model-download progress are pushed to the Electron window and have no HTTP equivalent yet, so over a browser those operations run but report only when they finish. A shared event broker is the planned fix.
+- **Native file pickers do not work remotely.** Ten methods answer `501` over HTTP because they act on the client's machine; a server-side folder browser is not built yet, so a remote administrator cannot change a capability's folder, the models folder, or the llama-server binary path.
+- **Closing the launcher still stops the model.** The control plane is separated, but the daemon is not: quitting Redstart Nest quits everything. Running it as a background service is a later phase.
 - **Shared capabilities are all-or-nothing.** Vault, Git, SQLite and Postgres are shared across every account with no per-account grants yet.
 - **Twig's local MCP servers are unmoderated.** Twig can run local stdio MCP servers from a file on the user's own machine — arbitrary command execution by design, with the local disk as the trust boundary. Tool bans can strip their tools by name, but the server never sees them registered.
 - **The filesystem containment check is not atomic with the operation.** The File System capability re-validates every path argument through `resolveWithinRoot()` before handing the call to the upstream stdio child, but the child is a separate process, so a check-then-operate window exists in principle. The upstream server re-validates independently, which makes this degraded defense-in-depth rather than a hole.
@@ -362,5 +480,6 @@ Stated plainly, because a security document that lists only strengths is not one
 - **DNS rebinding is not closed.** The SSRF guard resolves a hostname and checks the answers, but the record can change between that lookup and the socket. See [Whitelist & SSRF enforcement](#whitelist--ssrf-enforcement) for why the whitelist is the primary control.
 - **Plugin data and any credential are shared server-wide**, like every other capability — there is no per-account plugin access and no per-plugin, per-account credential. See [Plugins](#plugins).
 - **State files carry no schema version.** Writes are atomic (`json-store.mjs`), and an unparseable file is preserved as `.corrupt` rather than silently replaced — but there is no versioning to branch a future migration on.
+- **A sliding session expiry can lose up to an hour on a hard kill.** Expiry updates are batched rather than written on every request, so a power loss can roll a session's clock back by at most that much. It shortens a session and never extends one, which is the safe direction, but it means "12 hours since last use" is a ceiling rather than a guarantee.
 - **Account lifecycle isn't in the audit trail.** `logEvent()` records login attempts, key issuance/revocation, and role changes (see [Logging](#logging)), but `createAccount()`, `createOwner()`, `deleteAccount()`, and `resetPassword()` in `auth.mjs` don't call it — creating, deleting, or resetting the password on an account leaves no line in `redstart.log`. An admin/owner who did it and `accounts.json`'s current state are the only record. Closing this means adding `logEvent()` calls at those four call sites, which is a small, well-scoped fix rather than an open design question — it just hasn't been done yet.
 - **The log has no viewer, no export, and thin retention.** `redstart.log` is read by opening the file on the host; there's no in-app viewer and nothing serves it over HTTP. It rotates at 5MB keeping one previous generation, so there's no long-term archive — see [Logging](#logging).
