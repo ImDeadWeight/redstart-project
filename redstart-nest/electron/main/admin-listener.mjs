@@ -172,6 +172,29 @@ export function buildStaticAllowlist(root = bundleRoot()) {
 
 let staticFiles = new Map()
 
+// Applied to the HTML this listener serves, which from Phase 3 is a page that
+// actually loads in a browser rather than in an Electron window with a session
+// CSP already on it. Stricter than the Electron one (index.mjs), because the
+// built bundle needs less: the entry point is an external module script, so
+// script-src needs no 'unsafe-inline' at all. Styles do — React writes style
+// attributes, which style-src blocks without it.
+//
+// `connect-src 'self'` is the load-bearing one here. Every call this page makes
+// goes to the admin listener it was served by; a script that got onto this
+// origin could still act as the admin, but it could not quietly ship what it
+// found anywhere else.
+const ADMIN_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "connect-src 'self'",
+  "font-src 'self' data:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'",
+].join('; ')
+
 function serveStatic(req, res, absPath) {
   const type = SERVABLE.get(path.extname(absPath).toLowerCase()) || 'application/octet-stream'
   let body
@@ -191,6 +214,9 @@ function serveStatic(req, res, absPath) {
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'no-referrer',
+    // On the document only. A CSP on a .js response governs nothing — the
+    // policy that matters is the one on the page that loaded it.
+    ...(type.startsWith('text/html') ? { 'Content-Security-Policy': ADMIN_CSP } : {}),
   })
   if (req.method === 'HEAD') return res.end()
   res.end(body)

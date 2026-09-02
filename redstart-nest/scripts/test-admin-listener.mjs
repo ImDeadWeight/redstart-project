@@ -443,6 +443,22 @@ await test('🔍 authRequired: false does not open the listener', async () => {
   }
 })
 
+await test('\u{1F50D} the served document carries a CSP, and the assets do not need one', async () => {
+  const doc = await fetch(`${admin}/`)
+  const csp = doc.headers.get('content-security-policy')
+  assert(csp, 'the admin page was served with no Content-Security-Policy')
+  for (const directive of ["default-src 'self'", "script-src 'self'", "connect-src 'self'", "frame-ancestors 'none'"]) {
+    assert(csp.includes(directive), `the policy is missing ${directive}: ${csp}`)
+  }
+  assert(!/script-src[^;]*unsafe-inline/.test(csp), "script-src allows 'unsafe-inline'")
+
+  // Not on the assets: a policy on a .js response governs nothing, and putting
+  // one there invites the two to drift into disagreeing.
+  const asset = await fetch(`${admin}/assets/index-abc123.js`)
+  assert(asset.headers.get('content-security-policy') === null, 'an asset carried its own policy')
+  return 'stricter than the Electron window: no inline script at all'
+})
+
 await test('no CORS headers — this listener serves its own origin only', async () => {
   const res = await get('/admin/whoami', bearer(ownerToken))
   const allow = res.headers.get('access-control-allow-origin')
