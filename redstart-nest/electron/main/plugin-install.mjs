@@ -25,7 +25,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { spawn } from 'child_process'
-import { app } from 'electron'
+import { configDir } from './platform-paths.mjs'
 import { detectNpm, detectUv } from './plugin-runtimes.mjs'
 import { createPluginClient } from './mcp-plugin-client.mjs'
 import { PLUGIN_ID_PATTERN, getPlugin, removePlugin } from './plugin-registry.mjs'
@@ -56,7 +56,7 @@ export const PROBE_REASON = {
 }
 
 export function pluginsRoot() {
-  return path.join(app.getPath('userData'), 'plugins')
+  return path.join(configDir(), 'plugins')
 }
 
 // Pulled out of installNpmPackage so `--ignore-scripts` — the one flag in
@@ -612,7 +612,7 @@ export async function probePlugin({ command, args, env, timeoutMs, logDir }) {
  * @returns {Promise<{ok: true, folderRemoved: boolean}>}
  */
 function pluginsJsonPath() {
-  return path.join(app.getPath('userData'), 'plugins.json')
+  return path.join(configDir(), 'plugins.json')
 }
 
 // Record a directory whose delete failed, for sweepPendingDeletions() to

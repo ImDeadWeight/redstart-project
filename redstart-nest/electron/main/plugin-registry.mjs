@@ -27,7 +27,7 @@
 // =============================================================================
 
 import * as path from 'path'
-import { app } from 'electron'
+import { configDir } from './platform-paths.mjs'
 import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
 import { logEvent } from './logger.mjs'
 import { BUILTIN_CAPABILITY_TOOL_NAMES, CLIENT_APPS, CLIENT_APP_TOOL_NAMES } from './tools-definitions.mjs'
@@ -65,7 +65,7 @@ export const MIN_TIMEOUT_MS = 1_000
 export const MAX_TIMEOUT_MS = 120_000
 
 function getPath() {
-  return path.join(app.getPath('userData'), 'plugins.json')
+  return path.join(configDir(), 'plugins.json')
 }
 
 function read() {

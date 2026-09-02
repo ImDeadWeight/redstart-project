@@ -29,6 +29,20 @@ vi.mock('electron', () => ({
 	}
 }));
 
+// Most of the electron/main modules this file exercises no longer import
+// 'electron' at all -- they go through platform-paths.mjs's configDir() /
+// capabilityBaseDir() instead (see electron/main/platform-paths.mjs). The
+// vi.mock above is kept for anything still importing 'electron' directly
+// (e.g. secrets.mjs's safeStorage), but it can no longer be the thing that
+// makes storage paths resolve. initPaths() has to be called explicitly, once,
+// with the same values app.getPath used to hand back above.
+const { initPaths } = await import('$lib/../../../../electron/main/platform-paths.mjs');
+initPaths({
+	config: TEST_DIR,
+	capabilityBase: join(TEST_DIR, 'documents', 'Redstart'),
+	isPackaged: false
+});
+
 const ACCOUNTS_PATH = join(TEST_DIR, 'accounts.json');
 
 function writeAccounts(data: unknown) {

@@ -32,6 +32,7 @@ import { getPrimaryLanIp } from './net-interfaces.mjs'
 import { cleanupOldConversations } from './conversations-storage.mjs'
 import { initLogger, closeLogger, logEvent } from './logger.mjs'
 import { reapStaleProcess, deletePidFile } from './process-supervision.mjs'
+import { initPaths, configDir, capabilityBaseDir } from './platform-paths.mjs'
 import { fileURLToPath } from 'url'
 import { registerGithubHandlers } from './ipc/github.mjs'
 import { registerHardwareHandlers } from './ipc/hardware.mjs'
@@ -335,7 +336,7 @@ let refreshLiveToolsConfig
 // ---------------------------------------------------------------------------
 
 function getSettingsPath() {
-  return path.join(app.getPath('userData'), 'settings.json')
+  return path.join(configDir(), 'settings.json')
 }
 
 function readSettings() {
@@ -361,7 +362,7 @@ function writeSettings(data) {
 // which folder is "the models folder".
 
 function defaultModelsDir() {
-  return path.join(app.getPath('documents'), 'Redstart', 'Models')
+  return path.join(capabilityBaseDir(), 'Models')
 }
 
 function resolveModelsDir() {
@@ -454,7 +455,7 @@ function resolveBinary() {
 // ---------------------------------------------------------------------------
 
 function getProfilesPath() {
-  return path.join(app.getPath('userData'), 'profiles.json')
+  return path.join(configDir(), 'profiles.json')
 }
 
 function readProfiles() {
@@ -605,16 +606,25 @@ function createWindow() {
 app.disableHardwareAcceleration()
 
 app.whenReady().then(async () => {
+  // Before anything else touches a path. migrateUserDataFromBeaver() below is
+  // exempt — it is one-time glue tied specifically to Electron's app-name
+  // userData scheme, not a "where does data live" question the daemon will
+  // ever need to answer, so it keeps using app.getPath directly.
+  initPaths({
+    config: app.getPath('userData'),
+    capabilityBase: path.join(app.getPath('documents'), 'Redstart'),
+    isPackaged: app.isPackaged,
+  })
   migrateUserDataFromBeaver()
   // Structured logging to <userData>\redstart.log. First thing after the
   // userData migration so subsequent startup steps are captured.
-  initLogger(app.getPath('userData'))
+  initLogger(configDir())
   logEvent('app', 'ready', { platform: process.platform })
   // Pre-provision default capability folders (<Documents>\Redstart\...) so
   // Documents/SQLite/Vault/Git are one-click enable out of the box. Fills
   // only unset paths — a user-chosen folder is never overridden — and leaves
   // every capability disabled.
-  ensureDefaultCapabilityFolders(path.join(app.getPath('documents'), 'Redstart'))
+  ensureDefaultCapabilityFolders(capabilityBaseDir())
   // Same idea for the models folder — see resolveModelsDir().
   ensureModelsDir()
   applyCSP(session.defaultSession)
@@ -624,7 +634,7 @@ app.whenReady().then(async () => {
   // recorded pid is still that same binary before touching it — never a
   // by-name sweep. See process-supervision.mjs for why this replaced
   // killOrphanedServers().
-  await reapStaleProcess(app.getPath('userData'))
+  await reapStaleProcess(configDir())
   const cleanedConversations = cleanupOldConversations()
   if (cleanedConversations > 0) console.log(`Cleaned ${cleanedConversations} conversations older than 30 days`)
   // Retries any plugin folder an uninstall couldn't delete last session (a
@@ -668,7 +678,7 @@ app.on('before-quit', () => {
     // gone, or Nest's own llama-server would leak past quit.
     serverState.process.kill()
     serverState.process = null
-    deletePidFile(app.getPath('userData'))
+    deletePidFile(configDir())
   }
   if (beaconServerInstance) {
     stopBeaconServer(beaconServerInstance)
@@ -706,7 +716,7 @@ function registerIpcHandlers(deps) {
 }
 
 function setupIpcHandlers() {
-  const userDataDir = app.getPath('userData')
+  const userDataDir = configDir()
   refreshLiveToolsConfig = createRefreshLiveToolsConfig(serverState, userDataDir)
   // Hands tools-definitions.mjs a live read of the plugin registry. Must run
   // before any tools/list or config build, or plugin tools resolve to no

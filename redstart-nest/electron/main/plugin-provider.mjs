@@ -30,7 +30,7 @@
 // =============================================================================
 
 import * as path from 'path'
-import { app } from 'electron'
+import { configDir } from './platform-paths.mjs'
 import { listPlugins, getPlugin, updatePlugin, NAMESPACE_SEPARATOR } from './plugin-registry.mjs'
 import { createPluginClient } from './mcp-plugin-client.mjs'
 import { decryptSecret } from './secrets.mjs'
@@ -39,7 +39,7 @@ import { decryptSecret } from './secrets.mjs'
 const clients = new Map()
 
 function logDir() {
-  return path.join(app.getPath('userData'), 'mcp-plugin-logs')
+  return path.join(configDir(), 'mcp-plugin-logs')
 }
 
 /**

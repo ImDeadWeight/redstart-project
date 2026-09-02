@@ -38,6 +38,15 @@ process.env.REDSTART_TEST_USERDATA_DIR = dirs.userData
 
 register('./auth-test-loader.mjs', import.meta.url)
 
+// Explicit, main-thread trigger for the stub's platform-paths.mjs initialization.
+// module.register() hooks run in a separate worker thread, so a side effect
+// inside auth-test-loader.mjs itself can't reach this thread's copy of
+// platform-paths.mjs -- only an ordinary import, resolved here in the main
+// thread, can. Needed because production code no longer imports 'electron'
+// at all in several modules this suite exercises, so nothing else would
+// trigger the stub's initPaths() call.
+await import('./electron-stub.mjs')
+
 const documentsTool = await import('../electron/main/documents-tool.mjs')
 const { resolveUserRoot, resolveUserScope, userScopePath } = await import('../electron/main/user-scope.mjs')
 

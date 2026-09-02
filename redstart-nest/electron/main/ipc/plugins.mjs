@@ -28,7 +28,8 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { app, dialog } from 'electron'
+import { dialog } from 'electron'
+import { configDir } from '../platform-paths.mjs'
 import { handle } from './guard.mjs'
 import { isPlainObject, isNonEmptyString, optional } from './validate.mjs'
 import { logEvent } from '../logger.mjs'
@@ -53,7 +54,7 @@ function pluginLogDir() {
   // probe and a running plugin's child share one log per id, which is exactly
   // what lets the probe read a stderr tail without a second change to
   // shared/mcp-stdio-process.mjs (Trap 8).
-  return path.join(app.getPath('userData'), 'mcp-plugin-logs')
+  return path.join(configDir(), 'mcp-plugin-logs')
 }
 
 // Mirrors evaluateToolPolicy's plugin branch in mcp-server.mjs exactly: only

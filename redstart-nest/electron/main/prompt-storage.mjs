@@ -16,7 +16,7 @@
 // =============================================================================
 
 import * as path from 'path'
-import { app } from 'electron'
+import { configDir } from './platform-paths.mjs'
 import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
 
 // The block contract. Order is spec §3's; composePrompt owns placement.
@@ -30,7 +30,7 @@ export const MAX_BLOCK_CHARS = 8000
 const EMPTY = { context: '', policy: '', style: '', updatedAt: null, updatedBy: null }
 
 function getPath() {
-  return path.join(app.getPath('userData'), 'prompt-blocks.json')
+  return path.join(configDir(), 'prompt-blocks.json')
 }
 
 function read() {

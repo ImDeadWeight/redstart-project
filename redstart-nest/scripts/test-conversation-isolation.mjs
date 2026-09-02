@@ -13,10 +13,11 @@
 // against account A's data on every path: read, list, update, delete, and
 // fork-aware delete.
 //
-// Pure Node — the only Electron touch is app.getPath('userData'), stubbed by
-// auth-test-loader.mjs the same way test-auth.mjs does it. STORAGE_PATH is
-// computed at import time, so the temp userData dir must be set BEFORE the
-// module is imported.
+// Pure Node — the only Electron touch is platform-paths.mjs's configDir(),
+// initialized by electron-stub.mjs from REDSTART_TEST_USERDATA_DIR the same
+// way test-auth.mjs does it. The temp userData dir must be set BEFORE the
+// module is imported, so the stub's initPaths() call runs before this
+// module's own top-level code does.
 //
 // Run:  node scripts/test-conversation-isolation.mjs
 // =============================================================================
@@ -30,6 +31,15 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-convo-iso-test-')
 process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 
 register('./auth-test-loader.mjs', import.meta.url)
+
+// Explicit, main-thread trigger for the stub's platform-paths.mjs initialization.
+// module.register() hooks run in a separate worker thread, so a side effect
+// inside auth-test-loader.mjs itself can't reach this thread's copy of
+// platform-paths.mjs -- only an ordinary import, resolved here in the main
+// thread, can. Needed because production code no longer imports 'electron'
+// at all in several modules this suite exercises, so nothing else would
+// trigger the stub's initPaths() call.
+await import('./electron-stub.mjs')
 
 const store = await import('../electron/main/conversations-storage.mjs')
 
