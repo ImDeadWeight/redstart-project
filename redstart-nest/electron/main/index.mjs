@@ -310,6 +310,15 @@ try {
 
 let mainWindow = null
 
+// Phase 7 §7.2: set only by a deliberate quit path — 7.3's tray "Quit
+// Redstart" and 7.5's admin:shutdown route, neither of which exists yet in
+// this commit. Not read anywhere yet either; it exists so those two later
+// steps have one flag to set rather than inventing their own, and so that
+// window-all-closed's comment below has something concrete to point at.
+// Closing the window is deliberately NOT one of these paths — see
+// window-all-closed.
+let isQuitting = false
+
 // Live server process state, shared by reference between the server IPC handlers
 // (ipc/server.mjs, which owns launch/stop/status) and the lifecycle +
 // gateway-refresh code in this file that reads it. process: the spawned
@@ -605,9 +614,21 @@ function createWindow() {
   // used to push to directly. Subscribed once, here, rather than re-derived
   // per publish() — a destroyed window is checked at delivery time, same as
   // the getMainWindow()?.webContents.send(...) guard this replaces.
+  //
+  // Phase 7 §7.2: the window can now close without the process quitting
+  // (window-all-closed is a no-op below), so a closed-and-reopened window
+  // is routine, not a one-time app-shutdown event. subscribeToEvents()
+  // returns an unsubscribe handle specifically so this registration does not
+  // stack a second, permanently-dead listener (still checking
+  // win.isDestroyed() forever, still holding `win` alive) every time the
+  // window reopens.
   const win = mainWindow
-  subscribeToEvents((channel, payload) => {
+  const unsubscribeFromEvents = subscribeToEvents((channel, payload) => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
+  })
+  win.on('closed', () => {
+    unsubscribeFromEvents()
+    if (mainWindow === win) mainWindow = null
   })
 
   // Always the admin listener's own loopback address — Electron shares the
@@ -770,8 +791,20 @@ app.on('before-quit', () => {
   closeLogger()
 })
 
+// Phase 7 §7.2: closing the window closes a VIEW, not the daemon — the
+// admin listener, the beacon, and a loaded model all keep running with no
+// window open. This is the single line that used to make that untrue
+// (`app.quit()` on every platform but darwin, which is Electron's own
+// default there too). An explicit empty handler is required, not merely
+// "delete the listener": Electron's baked-in default behavior for
+// window-all-closed IS to quit, so doing nothing means registering a
+// no-op, not omitting the registration.
+//
+// The daemon still stops on a deliberate quit — the tray's "Quit Redstart"
+// (§7.3) and the admin UI's shutdown route (§7.5) call app.quit() directly,
+// which fires before-quit below regardless of any window state.
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  logEvent('app', 'window_closed', {})
 })
 
 // ---------------------------------------------------------------------------
@@ -806,7 +839,6 @@ function setupAdminApi() {
     buildGatewayConfig,
     refreshLiveToolsConfig,
     serverState,
-    getMainWindow: () => mainWindow,
     buildArgs,
     parseEvalTokensPerSec,
     ensureFirewallRule,
