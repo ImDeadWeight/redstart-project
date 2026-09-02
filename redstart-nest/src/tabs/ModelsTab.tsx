@@ -16,7 +16,6 @@
 import { useEffect } from 'react'
 import { SectionTitle, btnCls, inputCls } from '../components/ui'
 import { FolderPicker } from '../components/FolderPicker'
-import { isDaemonLocal } from '../api/redstart'
 import type { ModelCatalogHook } from '../hooks/useModelCatalog'
 import type { HardwareSpecs, ModelArtifact } from '../types'
 
@@ -46,7 +45,7 @@ export function ModelsTab({ catalog, hardware }: {
     models, searching, searchError, runSearch,
     detail, detailLoading, detailError, openModel, closeModel,
     modelsDir, localFiles, disk, localNames,
-    changeFolder, deleteLocal, revealFolder,
+    changeFolder, deleteLocal,
     progress, downloading, downloadError, download, cancelDownload,
   } = catalog
 
@@ -82,15 +81,13 @@ export function ModelsTab({ catalog, hardware }: {
             className={btnCls.secondary}>
             Change…
           </FolderPicker>
-          {/* models:reveal-folder opens a file-explorer window — it cannot be
-              done on someone else's machine and is not faked (§4.4). A
-              browser admin gets a copy button for the path shown above
-              instead of a button that would silently 501. */}
-          {isDaemonLocal() ? (
-            <button onClick={revealFolder} className={btnCls.secondary}>Open</button>
-          ) : (
-            <button onClick={() => navigator.clipboard?.writeText(modelsDir || '')} className={btnCls.secondary}>Copy path</button>
-          )}
+          {/* Reveal-in-explorer retired in Phase 6 §6.1 — opening a
+              file-explorer window is inherently local to whichever machine
+              runs it, and there is no longer a channel that can tell "the
+              caller is sitting at this machine" from "the caller is a
+              browser anywhere on the network" to gate it on. A copy button
+              for the path shown above, for every caller alike. */}
+          <button onClick={() => navigator.clipboard?.writeText(modelsDir || '')} className={btnCls.secondary}>Copy path</button>
         </div>
         <p className="text-xs text-zinc-500">
           {disk.freeBytes !== undefined

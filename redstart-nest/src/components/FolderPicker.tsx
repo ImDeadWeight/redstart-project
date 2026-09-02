@@ -2,35 +2,31 @@
 // FolderPicker — the one component behind all nine former per-site pickers
 // (headless-admin-plane-plan.md Phase 4 §4.3).
 // =============================================================================
-// Renders a native dialog when isDaemonLocal() and a server-side directory
-// browser otherwise, so no call site branches on transport (trap 5.2: a
-// native dialog browses the CLIENT's disk, wrong the moment a browser or a
-// remote launcher is the caller).
+// A small modal driven by browse:roots / browse:list / browse:mkdir
+// (admin/browse-routes.mjs) — pick a root, click into directories,
+// optionally create one, confirm. Used identically whether the caller is a
+// browser or the Electron launcher itself: Phase 6 retired the native-dialog
+// branch this component used to have (isDaemonLocal()) along with IPC
+// entirely — trap 5.2's "a native dialog browses the CLIENT's disk, wrong
+// the moment a browser or remote launcher is the caller" stopped being a
+// branch to gate and became simply true of every caller, always.
 //
-// Local branch: one round trip to browse:pick-native (ipc/browse.mjs), a real
-// dialog.showOpenDialog on whichever machine the daemon runs on.
-//
-// Remote branch: a small modal driven by browse:roots / browse:list /
-// browse:mkdir (admin/browse-routes.mjs) — pick a root, click into
-// directories, optionally create one, confirm.
-//
-// FILE MODE, REMOTELY: browse:list is directories-only by design (§4.2 — it
-// never returns file contents, and a filename is not a directory to click
-// into). So picking a FILE remotely is "navigate to the folder, then type the
-// filename" rather than a clickable file list. Still strictly better than the
-// 501 it replaces.
+// FILE MODE: browse:list is directories-only by design (§4.2 — it never
+// returns file contents, and a filename is not a directory to click into).
+// So picking a FILE is "navigate to the folder, then type the filename"
+// rather than a clickable file list.
 // =============================================================================
 
 import { useEffect, useState } from 'react'
-import { api, isDaemonLocal } from '../api/redstart'
+import { api } from '../api/redstart'
 import { btnCls, inputCls } from './ui'
 
 export type FolderPickerProps = {
   mode: 'file' | 'directory'
-  /** File mode only, e.g. ['gguf']. */
+  /** File mode only, e.g. ['gguf']. Unused now that there is no native filter to apply — kept on the props so call sites don't need to change if a filtered remote listing is ever added. */
   extensions?: string[]
   extensionLabel?: string
-  /** Directory mode only — offers *New Folder* in the native dialog / a Remote "New folder" affordance. */
+  /** Directory mode only — offers a "New folder" affordance. */
   allowCreate?: boolean
   title?: string
   /** Where to start browsing — the current value, or a sensible default. */
@@ -43,47 +39,39 @@ export type FolderPickerProps = {
 }
 
 export function FolderPicker({
-  mode, extensions, extensionLabel, allowCreate, title, startPath, onPick, children, className, disabled,
+  mode, allowCreate, title, startPath, onPick, children, className, disabled,
 }: FolderPickerProps) {
-  const [browserOpen, setBrowserOpen] = useState(false)
-
-  async function openNative() {
-    const picked = await api().browse.pickNative({
-      mode, extensions, extensionLabel, allowCreate, title,
-      defaultPath: startPath,
-    })
-    if (picked) onPick(picked)
-  }
+  const [open, setOpen] = useState(false)
 
   return (
     <>
       <button
         type="button"
         disabled={disabled}
-        onClick={() => (isDaemonLocal() ? openNative() : setBrowserOpen(true))}
+        onClick={() => setOpen(true)}
         className={className ?? btnCls.secondary}>
         {children ?? 'Browse…'}
       </button>
-      {browserOpen && (
-        <RemoteBrowserModal
+      {open && (
+        <BrowserModal
           mode={mode}
           allowCreate={allowCreate}
           title={title}
           startPath={startPath}
-          onCancel={() => setBrowserOpen(false)}
-          onConfirm={(path) => { setBrowserOpen(false); onPick(path) }}
+          onCancel={() => setOpen(false)}
+          onConfirm={(path) => { setOpen(false); onPick(path) }}
         />
       )}
     </>
   )
 }
 
-// --- the remote browser modal -----------------------------------------------
+// --- the browser modal -------------------------------------------------
 
 type Entry = { name: string; kind: 'directory' }
 type Root = { path: string; label: string }
 
-function RemoteBrowserModal({
+function BrowserModal({
   mode, allowCreate, title, startPath, onCancel, onConfirm,
 }: {
   mode: 'file' | 'directory'

@@ -492,8 +492,9 @@ export async function searchPluginRegistry(opts) {
   return { ok: true, entries, nextCursor: result.nextCursor }
 }
 
-// pickPluginFolder() retired — Phase 4 §4.3. FolderPicker.tsx calls
-// ipc/browse.mjs's generic browse:pick-native instead.
+// pickPluginFolder() retired — Phase 4 §4.3 replaced it with a native
+// picker, itself retired in Phase 6 §6.1. FolderPicker.tsx now only ever
+// uses admin/browse-routes.mjs.
 
 export function pluginsHandlers(deps) {
   return {

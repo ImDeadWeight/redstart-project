@@ -117,19 +117,19 @@ await test('🔍 every table entry is routable or explicitly local-only', () => 
   return `${routable.length} routable, ${localOnlyChannels.length} local-only`
 })
 
-await test('🔍 the local-only set is exactly the client-machine actions', () => {
-  // Phase 4 §4.3 consolidated the nine per-site pickers into one generic
-  // browse:pick-native (ipc/browse.mjs). models:reveal-folder stays alone —
-  // §4.4: "show me this folder" opens a window on someone else's machine and
-  // is not a picker, so it does not get one; it stays a 501 forever.
-  const expected = [
-    'browse:pick-native',
-    'models:reveal-folder',
-  ]
+await test('🔍 the local-only set is empty — Phase 6 retired the last two members', () => {
+  // browse:pick-native (the native picker) and models:reveal-folder
+  // (reveal-in-explorer) were the whole set, and both retired in Phase 6
+  // §6.1 along with IPC: once nothing can tell "the caller is sitting at
+  // this machine" from "the caller is a browser anywhere on the network",
+  // there is no safe caller left for either. isLocalOnly()/localOnly() and
+  // this 501 branch stay in the code (ipc/transport.mjs,
+  // admin/api-routes.mjs) as machinery for the day a channel genuinely
+  // needs it again — pinned at zero here rather than deleted, so the
+  // pattern reappearing is a deliberate, visible choice and not a quiet
+  // regrowth of the set this test used to bound.
   const actual = [...localOnlyChannels].sort()
-  assert(JSON.stringify(actual) === JSON.stringify(expected),
-    `the local-only set has drifted:\n        expected ${expected.join(', ')}\n        actual   ${actual.join(', ')}`)
-  return 'the native picker and reveal-in-explorer, nothing else'
+  assert(actual.length === 0, `expected no local-only channels, found: ${actual.join(', ')}`)
 })
 
 await test('🔍 nothing that changes server state is local-only', () => {

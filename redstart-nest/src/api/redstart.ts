@@ -53,23 +53,13 @@ export type RedstartAPI = {
     }>
   }
   // The FolderPicker.tsx mechanism (Phase 4 §4.2-4.3) — one component behind
-  // all nine former per-site pickers, dispatching on isDaemonLocal(). roots/
-  // list/mkdir are the remote stand-in and are HTTP-only (the IPC bridge never
-  // binds them); pickNative is the opposite — it opens a real dialog on
-  // whichever machine the daemon runs on, so it is reachable only over IPC
-  // (marked local-only, 501s over HTTP).
+  // all nine former per-site pickers. Native picking (pickNative) retired in
+  // Phase 6 §6.1 along with IPC — roots/list/mkdir is the only picker there
+  // is now, used identically by every caller.
   browse: {
     roots: () => Promise<{ path: string; label: string }[]>
     list: (opts: { path: string }) => Promise<{ path: string; parent: string | null; entries: { name: string; kind: 'directory' }[]; reason?: string }>
     mkdir: (opts: { path: string; name: string }) => Promise<{ ok: boolean; path?: string; error?: string }>
-    pickNative: (opts: {
-      mode: 'file' | 'directory'
-      title?: string
-      extensions?: string[]
-      extensionLabel?: string
-      defaultPath?: string
-      allowCreate?: boolean
-    }) => Promise<string | null>
   }
   profiles: {
     list: () => Promise<string[]>
@@ -102,7 +92,6 @@ export type RedstartAPI = {
     detail: (repoId: string) => Promise<{ ok: boolean; detail?: ModelDetail; error?: string }>
     local: () => Promise<{ ok: boolean; dir: string; files: LocalModelFile[]; error?: string }>
     diskSpace: () => Promise<{ ok: boolean; dir: string; freeBytes?: number; totalBytes?: number; error?: string }>
-    revealFolder: () => Promise<string>
     deleteLocal: (name: string) => Promise<{ ok: boolean; error?: string }>
     download: (req: { repoId: string; revision: string | null; artifact: ModelArtifact })
       => Promise<{ ok: boolean; cancelled?: boolean; error?: string; result?: { modelPath: string; totalBytes: number } }>
@@ -292,20 +281,10 @@ export const activeTransport = (): Transport => (bridge() ? 'ipc' : 'http')
 /** True when this launcher is driving a daemon it does not share a process with. */
 export const isRemote = (): boolean => activeTransport() === 'http'
 
-/**
- * True when a native file/folder dialog would browse the SAME disk the daemon
- * reads from — the question trap 5.2 (headless-admin-plane-plan.md §5) turns
- * on. Today this is exactly `!isRemote()`: IPC only ever exists when Electron
- * and the daemon are the same process. Modelled as its own predicate anyway,
- * the same way mayAccessControlPlane() is one named function rather than an
- * inlined check, because transport and locality are different questions that
- * happen to coincide now and stop coinciding the day the Electron launcher can
- * point at a REMOTE daemon over HTTP — at which point `activeTransport()` says
- * 'http' while the picker question is unchanged in shape, just answered 'no'.
- * Callers ask this, never `activeTransport()` or `isRemote()` directly, so the
- * day the two diverge there is exactly one place to update.
- */
-export const isDaemonLocal = (): boolean => activeTransport() === 'ipc'
+// isDaemonLocal() — the trap 5.2 predicate FolderPicker.tsx used to branch a
+// native dialog on — retired in Phase 6 §6.1 along with the native picker
+// itself. Nothing asks "is the daemon local" any more; every caller uses the
+// same server-side browser.
 
 let httpApi: RedstartAPI | undefined
 

@@ -11,8 +11,8 @@
 // headless-admin-plane implementation plan) so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerSettingsHandlers() does that. The two
-// dialog.showOpenDialog handlers that used to live here moved to
-// ipc/browse.mjs's generic native picker (Phase 4 §4.3).
+// dialog.showOpenDialog handlers that used to live here moved to a native
+// picker (Phase 4 §4.3), itself retired in Phase 6 §6.1.
 import { registerAll } from './guard.mjs'
 import { binaryPathRejection, isAbsolutePath } from './validate.mjs'
 import { logEvent } from '../logger.mjs'
@@ -44,11 +44,13 @@ export function setBinaryPath(p, { readSettings, writeSettings }) {
   return true
 }
 
-// selectBinary() retired — Phase 4 §4.3. FolderPicker.tsx calls
-// ipc/browse.mjs's generic browse:pick-native instead. The one thing lost is
-// the dev-build default path (selectBinaryDefaultPath, computed from
-// __dirname in index.mjs) — the renderer has no equivalent to hand back, so
-// the picker now opens with no default rather than pointing at
+// selectBinary() retired — Phase 4 §4.3 replaced it with a native picker,
+// itself retired in Phase 6 §6.1. FolderPicker.tsx now calls
+// admin/browse-routes.mjs's browse:list, the same as every other folder/file
+// prompt in the launcher. The one thing lost along the way was the dev-build
+// default path (selectBinaryDefaultPath, computed from __dirname in
+// index.mjs) — the renderer has no equivalent to hand back, so the picker
+// opens with no default rather than pointing at
 // llama-cpp-turboquant/build/bin/Release. Documented as a deliberate,
 // accepted regression rather than silently dropped.
 

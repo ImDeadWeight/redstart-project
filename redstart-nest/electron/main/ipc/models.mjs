@@ -4,9 +4,10 @@
 // ../model-download.mjs, both free of Electron so the security suite can drive
 // them directly. This module owns only the parts that need the app — the
 // models folder and the single-flight rule that keeps two multi-gigabyte
-// downloads from fighting over one disk. reveal-folder is the one genuinely
-// local-only action left (§4.4); everything else here is owner-gated over
-// the control plane like any other admin/api-table.mjs namespace.
+// downloads from fighting over one disk. Every method here is owner-gated
+// over the control plane like any other admin/api-table.mjs namespace —
+// reveal-folder used to be the one exception (§4.4) and retired in Phase 6
+// §6.1 along with the rest of the local/remote distinction.
 //
 // Handler bodies are exported as plain functions (Phase 1, §1.3 of the
 // headless-admin-plane implementation plan) so an HTTP route can call them
@@ -18,7 +19,6 @@
 // wraps it see the exact same live download, not two independent trackers.
 import { shell } from 'electron'
 import { registerAll } from './guard.mjs'
-import { localOnly } from './transport.mjs'
 import { publish } from '../event-broker.mjs'
 import * as fsp from 'fs/promises'
 import * as path from 'path'
@@ -93,12 +93,14 @@ export async function getModelsDiskSpace({ resolveModelsDir, ensureModelsDir }) 
   }
 }
 
-export async function revealModelsFolder({ resolveModelsDir, ensureModelsDir }) {
-  const dir = resolveModelsDir()
-  ensureModelsDir?.()
-  await shell.openPath(dir)
-  return dir
-}
+// revealModelsFolder() retired — Phase 6 §6.1. Opening a file-explorer
+// window is inherently an action on whichever machine runs it, and once IPC
+// no longer distinguishes "the caller is sitting at this machine" from
+// "the caller is a browser anywhere on the network", there is no safe
+// caller left for it: firing on an anonymous-looking HTTP request would pop
+// a window on the daemon's own desktop for whoever is physically there,
+// triggered by someone who is not. The UI shows the path as text with a
+// copy button instead, for every caller alike.
 
 export async function deleteLocalModel(name, { resolveModelsDir }) {
   // Only ever a bare name from our own listing, resolved against the models
@@ -217,9 +219,6 @@ export function modelsHandlers(deps) {
     // --- Local storage ---
     'models:local': async () => listLocalModels(deps),
     'models:disk-space': async () => getModelsDiskSpace(deps),
-    // Opens a file-explorer window on whichever machine runs this. Meaningless
-    // to a remote admin, and misleading if it silently opened one on the server.
-    'models:reveal-folder': localOnly(async () => revealModelsFolder(deps)),
     'models:delete-local': async (name) => deleteLocalModel(name, deps),
 
     // --- Download ---

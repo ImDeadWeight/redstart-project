@@ -104,8 +104,6 @@ export function useModelCatalog() {
     await refreshLocal()
   }, [refreshLocal])
 
-  const revealFolder = useCallback(async () => { await api().models.revealFolder() }, [])
-
   // --- Bootstrap ---
   //
   // Nothing here reaches the network, and nothing runs until the user asks.
@@ -153,7 +151,7 @@ export function useModelCatalog() {
     models, searching, searchError, runSearch,
     detail, detailLoading, detailError, openModel, closeModel,
     modelsDir, localFiles, disk, localNames,
-    refreshLocal, changeFolder, deleteLocal, revealFolder,
+    refreshLocal, changeFolder, deleteLocal,
     progress, downloading, downloadError, download, cancelDownload,
   }
 }

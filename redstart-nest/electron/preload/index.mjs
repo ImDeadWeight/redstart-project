@@ -25,14 +25,6 @@ contextBridge.exposeInMainWorld('redstartAPI', {
     getStatus: () => ipcRenderer.invoke('admin:get-status'),
   },
 
-  // FolderPicker.tsx's local branch — the one native dialog left, generic over
-  // the nine former per-site pickers (Phase 4 §4.3). roots/list/mkdir are the
-  // remote stand-in (admin/browse-routes.mjs) and are HTTP-only, so they have
-  // no binding here.
-  browse: {
-    pickNative: (opts) => ipcRenderer.invoke('browse:pick-native', opts),
-  },
-
   profiles: {
     list: () => ipcRenderer.invoke('profiles:list'),
     save: (name, config) => ipcRenderer.invoke('profiles:save', name, config),
@@ -85,7 +77,6 @@ contextBridge.exposeInMainWorld('redstartAPI', {
     detail: (repoId) => ipcRenderer.invoke('models:detail', repoId),
     local: () => ipcRenderer.invoke('models:local'),
     diskSpace: () => ipcRenderer.invoke('models:disk-space'),
-    revealFolder: () => ipcRenderer.invoke('models:reveal-folder'),
     deleteLocal: (name) => ipcRenderer.invoke('models:delete-local', name),
     download: (req) => ipcRenderer.invoke('models:download', req),
     cancelDownload: () => ipcRenderer.invoke('models:cancel-download'),

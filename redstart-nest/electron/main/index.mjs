@@ -51,7 +51,6 @@ import { registerCapabilitiesHandlers } from './ipc/capabilities.mjs'
 import { registerServerHandlers } from './ipc/server.mjs'
 import { registerModelsHandlers } from './ipc/models.mjs'
 import { registerPluginsHandlers } from './ipc/plugins.mjs'
-import { registerBrowseHandlers } from './ipc/browse.mjs'
 import { buildGatewayConfig, createRefreshLiveToolsConfig } from './gateway-config.mjs'
 import { buildArgs } from './llama-args.mjs'
 import { DEV_RENDERER_ORIGIN, rendererIndexFile, isTrustedRendererUrl } from './renderer-location.mjs'
@@ -781,7 +780,6 @@ function registerIpcHandlers(deps) {
   // No window dependency any more (Phase 5 §5.1) — see the matching comment
   // in admin/api-table.mjs.
   registerPluginsHandlers({ refreshLiveToolsConfig: deps.refreshLiveToolsConfig })
-  registerBrowseHandlers()
 }
 
 function setupIpcHandlers() {

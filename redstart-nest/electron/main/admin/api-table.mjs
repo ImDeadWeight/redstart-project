@@ -15,18 +15,13 @@
 // set of methods reachable over one transport and silently absent from the
 // other, which is exactly the drift this pass exists to remove.
 //
-// EXCEPTION: the `browse` namespace is split across two files, on purpose.
-// admin/browse-routes.mjs (browse:roots/list/mkdir) is HTTP-only, deliberately
-// NOT registered over IPC — it is the server-side stand-in for a native
-// picker, so the only client that would ever call it is one for which
-// `isDaemonLocal()` is false, and IPC only exists when it is true. It is kept
-// free of the `electron` import so it (and its test) run under plain Node.
-// ipc/browse.mjs (browse:pick-native) is the opposite: it IS the native
-// picker, registered over IPC like everything else here and marked
-// localOnly() in this table, because it opens a dialog.showOpenDialog on
-// whichever machine the daemon happens to be running on. The parity check
-// above only runs registered-over-IPC -> tabled, not the reverse, so
-// browse-routes.mjs having no IPC counterpart is not drift; it is the reason
+// `browse` (admin/browse-routes.mjs — browse:roots/list/mkdir) was never
+// registered over IPC even before Phase 6 retired IPC entirely: it existed
+// specifically as the server-side stand-in for the native picker Electron
+// used to have, so the only caller it was ever for was one without IPC
+// access. Kept free of the `electron` import so it (and its test) run under
+// plain Node. The parity check above only runs registered-over-IPC -> tabled,
+// not the reverse, so a table-only namespace is not drift; it is the reason
 // the check has a direction.
 // =============================================================================
 
@@ -43,7 +38,6 @@ import { serverHandlers } from '../ipc/server.mjs'
 import { modelsHandlers } from '../ipc/models.mjs'
 import { pluginsHandlers } from '../ipc/plugins.mjs'
 import { browseRouteHandlers } from './browse-routes.mjs'
-import { browseHandlers } from '../ipc/browse.mjs'
 
 /**
  * Every control-plane method, keyed by channel.
@@ -68,6 +62,5 @@ export function buildAdminApi(deps) {
     // window handle it used to be given.
     ...pluginsHandlers({ refreshLiveToolsConfig: deps.refreshLiveToolsConfig }),
     ...browseRouteHandlers(),
-    ...browseHandlers(deps),
   }
 }

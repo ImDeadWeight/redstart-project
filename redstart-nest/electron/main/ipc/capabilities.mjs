@@ -17,7 +17,9 @@
 // folder-scoped trio's (vault/git/file_system) computed-channel-name
 // registration loop is unchanged for the setters — scripts/test-ipc-contract.mjs
 // specifically exercises that shape. The matching selectXFolder() dialogs
-// retired in Phase 4 §4.3 — moved to ipc/browse.mjs's generic native picker.
+// retired in Phase 4 §4.3, replaced by a native picker that itself retired
+// in Phase 6 §6.1 — FolderPicker.tsx now only ever uses
+// admin/browse-routes.mjs.
 import { registerAll } from './guard.mjs'
 import { getCapabilities, setCapabilityConfig } from '../tools-storage.mjs'
 import { encryptSecret, decryptSecret } from '../secrets.mjs'
@@ -118,8 +120,9 @@ export async function testPostgresConfig(connectionString) {
 }
 
 // selectDocumentsFolder() / selectSqliteFolder() / selectFolderScopedFolder()
-// retired — Phase 4 §4.3. FolderPicker.tsx calls ipc/browse.mjs's generic
-// browse:pick-native instead of a dedicated dialog per capability.
+// retired — Phase 4 §4.3, and the native picker they were replaced by itself
+// retired in Phase 6 §6.1. FolderPicker.tsx calls admin/browse-routes.mjs's
+// browse:list instead of a dedicated dialog per capability.
 
 export function setDocumentsFolder(config, { refreshLiveToolsConfig }) {
   const bad = checkConfig('capabilities:set-documents-folder', config, 'outputDir')

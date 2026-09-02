@@ -1,5 +1,5 @@
 // Hardware IPC namespace — machine spec scan. (The GGUF model picker moved to
-// ipc/browse.mjs's generic native picker, Phase 4 §4.3.)
+// a native picker, Phase 4 §4.3 — itself retired in Phase 6 §6.1.)
 //
 // KNOWN BUG (non-NVIDIA VRAM): the fallback below reads
 // Win32_VideoController.AdapterRAM, a 32-bit signed field that saturates at
@@ -87,11 +87,11 @@ $r | ConvertTo-Json -Compress
 }
 
 // selectModelFile() retired — Phase 4 §4.3 moved model-file picking onto
-// FolderPicker.tsx, which calls the generic ipc/browse.mjs:pickNative over
-// IPC (or admin/browse-routes.mjs's browse:list remotely) instead of a
-// dedicated dialog here. The renderer already knows the models dir
-// (settings.getModelsDir()) and passes it through as FolderPicker's
-// `defaultPath`, so nothing is lost.
+// FolderPicker.tsx, which calls admin/browse-routes.mjs's browse:list
+// instead of a dedicated dialog here (Phase 6 §6.1 later retired the native
+// dialog it briefly grew as a middle step). The renderer already knows the
+// models dir (settings.getModelsDir()) and passes it through as
+// FolderPicker's `defaultPath`, so nothing is lost.
 
 export function hardwareHandlers(deps) {
   return {
