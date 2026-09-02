@@ -645,7 +645,44 @@ function createWindow() {
 // llama-server's own inference workload for the same GPU.
 app.disableHardwareAcceleration()
 
-app.whenReady().then(async () => {
+// ---------------------------------------------------------------------------
+// Single-instance guard (Phase 7 §7.1)
+// ---------------------------------------------------------------------------
+// Every later Phase 7 step assumes exactly one process owns the daemon —
+// the admin listener's port, the pid file, the tray icon. Before this guard,
+// a second launch raced the 19083 bind and lost into
+// `console.warn('Admin listener failed to start')`, leaving a window with no
+// working daemon behind it: the worst outcome available, and silent. Must be
+// requested before `whenReady` — the lock itself is what decides whether this
+// process gets to proceed to path/listener setup at all.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+
+if (!gotSingleInstanceLock) {
+  // Do not touch paths, the logger, or any listener — another process
+  // already owns them. Quit immediately and let that process's
+  // 'second-instance' handler bring its window forward.
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    // A user clicked the Start-menu shortcut, or double-clicked the exe,
+    // while the daemon (with or without a window) is already running.
+    // logEvent runs safely here even before initLogger() has necessarily
+    // been called on a very fast second launch — logEvent no-ops until the
+    // logger is initialized rather than throwing (see logger.mjs).
+    logEvent('app', 'second_instance', {})
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    } else {
+      createWindow()
+    }
+  })
+
+  app.whenReady().then(main)
+}
+
+async function main() {
   // Before anything else touches a path. migrateUserDataFromBeaver() below is
   // exempt — it is one-time glue tied specifically to Electron's app-name
   // userData scheme, not a "where does data live" question the daemon will
@@ -690,7 +727,7 @@ app.whenReady().then(async () => {
   startAdminPlane()
   if (!app.isPackaged) await installReactDevTools()
   createWindow()
-})
+}
 
 // Dev-only: adds the Components/Profiler panels to Chromium DevTools so the
 // React tree is inspectable. Never runs in a packaged build — an extension
