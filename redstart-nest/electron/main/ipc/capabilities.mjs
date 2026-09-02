@@ -20,7 +20,6 @@
 // retired in Phase 4 §4.3, replaced by a native picker that itself retired
 // in Phase 6 §6.1 — FolderPicker.tsx now only ever uses
 // admin/browse-routes.mjs.
-import { registerAll } from './guard.mjs'
 import { getCapabilities, setCapabilityConfig } from '../tools-storage.mjs'
 import { encryptSecret, decryptSecret } from '../secrets.mjs'
 import { testConnection as testPostgresConnection } from '../postgres-tool.mjs'
@@ -205,8 +204,4 @@ export function capabilitiesHandlers(deps) {
   }
 
   return handlers
-}
-
-export function registerCapabilitiesHandlers(deps) {
-  registerAll(capabilitiesHandlers(deps))
 }

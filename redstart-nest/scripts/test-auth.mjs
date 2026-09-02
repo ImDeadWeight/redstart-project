@@ -144,10 +144,10 @@ async function main() {
     assert(res.status === 400, `expected 400, got ${res.status}`)
   })
 
-  // Fixture setup: seed the Owner account the same way the App.tsx "Create
-  // Owner Account" button does under the hood (auth:create-first-admin IPC
-  // -> auth.mjs createOwner). There's no HTTP route for this by design
-  // (bootstrap is meant to happen locally/trusted, not remotely).
+  // Fixture setup: seed the Owner account directly via auth.mjs's own
+  // createOwner() — what POST /admin/bootstrap calls in production
+  // (gateway/auth-routes.mjs), token-gated there but not needed for this
+  // fixture.
   const owner = createOwner({ username: 'owner', password: 'OwnerPass123!' })
   assert(owner.ok, `fixture setup failed: ${owner.error}`)
   const ownerApiKey = owner.apiKey

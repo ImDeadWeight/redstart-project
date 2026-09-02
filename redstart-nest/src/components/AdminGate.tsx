@@ -1,10 +1,10 @@
 // =============================================================================
 // Redstart Nest — the control plane's front door
 // =============================================================================
-// Wraps the launcher when it is running in a BROWSER rather than inside
-// Electron. In Electron this renders nothing of its own and hands straight
-// through: the bridge is the credential there, and setup looks exactly as it
-// always has.
+// Wraps the launcher for EVERY caller alike — a browser tab, and the
+// Electron window itself (Phase 6 §6.2 retired the IPC bridge that used to
+// let Electron skip this; see decision 6, "the Electron UI is a client of
+// the daemon, like Twig"). Nobody gets to App.tsx without a real session.
 //
 // Two screens, and which one appears is the daemon's answer to
 // GET /admin/auth/config, never a guess:
@@ -20,6 +20,14 @@
 // route: an admin who has lost the owner password reads the token off the box
 // and re-keys it. Nothing else here needs to know that.
 //
+// THE ELECTRON TOKEN HANDOFF. index.mjs's createWindow() reads the box's
+// token itself (it already has filesystem access) and appends it to the URL
+// it loads — `?setupToken=...` — when no owner exists yet. Read once below,
+// on mount, and immediately stripped from the address bar via
+// history.replaceState so it does not linger in the location bar, a
+// screenshot, or navigation history. A browser admin typing the setup
+// screen's token field by hand gets exactly the same form either way.
+//
 // A NOTE ON WHAT THIS IS NOT. There is no "remember me" checkbox: the session
 // is remembered, for twelve sliding hours, and a longer-lived persistent token
 // is its own feature with its own storage decisions (plan decision 11).
@@ -27,10 +35,23 @@
 
 import { useEffect, useState } from 'react'
 import type { RedstartAPI } from '../api/redstart'
-import { isRemote, setHttpAPI } from '../api/redstart'
+import { setHttpAPI } from '../api/redstart'
 import { createHttpAPI } from '../api/http'
 import { getSessionToken, setSessionToken, clearSessionToken } from '../api/session'
 import { btnCls, inputCls } from './ui'
+
+/** The setupToken query param, read once — see "THE ELECTRON TOKEN HANDOFF" above. */
+function consumeSetupToken(): string {
+  const params = new URLSearchParams(window.location.search)
+  const token = params.get('setupToken') ?? ''
+  if (token) {
+    params.delete('setupToken')
+    const rest = params.toString()
+    const clean = window.location.pathname + (rest ? `?${rest}` : '') + window.location.hash
+    window.history.replaceState(null, '', clean)
+  }
+  return token
+}
 
 type Phase = 'checking' | 'signin' | 'setup' | 'ready'
 
@@ -64,23 +85,19 @@ function Shell({ title, subtitle, children }: {
 }
 
 export function AdminGate({ children }: { children: React.ReactNode }) {
-  // Inside Electron there is nothing to gate. Read once: the bridge cannot
-  // appear or vanish while the page is up.
-  const [remote] = useState(isRemote)
-  const [phase, setPhase] = useState<Phase>(remote ? 'checking' : 'ready')
+  const [phase, setPhase] = useState<Phase>('checking')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [token, setToken] = useState('')
+  const [token, setToken] = useState(consumeSetupToken)
 
   // Install the HTTP transport before anything else can call api(). Done here
   // rather than at module load so the unauthorized callback can reach this
   // component's state — a 401 from any later call drops the whole app back to
   // the sign-in screen instead of leaving a dead UI behind.
   useEffect(() => {
-    if (!remote) return
     const impl: RedstartAPI = createHttpAPI({
       getToken: getSessionToken,
       onUnauthorized: () => {
@@ -90,13 +107,12 @@ export function AdminGate({ children }: { children: React.ReactNode }) {
       },
     })
     setHttpAPI(impl)
-  }, [remote])
+  }, [])
 
   // Ask the daemon which screen this is, then whether the stored session is
   // still good. Both answers come from the daemon; neither is inferred from
   // what happens to be in localStorage.
   useEffect(() => {
-    if (!remote) return
     let stale = false
 
     void (async () => {
@@ -122,7 +138,7 @@ export function AdminGate({ children }: { children: React.ReactNode }) {
     })()
 
     return () => { stale = true }
-  }, [remote])
+  }, [])
 
   if (phase === 'ready') return <>{children}</>
 

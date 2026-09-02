@@ -18,7 +18,6 @@
 // as auth.mjs's `sessions` map) so a plain function and the IPC handler that
 // wraps it see the exact same live download, not two independent trackers.
 import { shell } from 'electron'
-import { registerAll } from './guard.mjs'
 import { publish } from '../event-broker.mjs'
 import * as fsp from 'fs/promises'
 import * as path from 'path'
@@ -226,8 +225,4 @@ export function modelsHandlers(deps) {
     'models:cancel-download': () => cancelModelDownload(),
     'models:download-status': () => getModelDownloadStatus(),
   }
-}
-
-export function registerModelsHandlers(deps) {
-  registerAll(modelsHandlers(deps))
 }

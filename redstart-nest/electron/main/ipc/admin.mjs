@@ -11,7 +11,6 @@
 //
 // Handler bodies are exported as plain functions (Phase 1, §1.3) so the Phase 3
 // route can call them directly; importing this module never registers anything.
-import { registerAll } from './guard.mjs'
 import {
   startAdminListener, getAdminListenerState, bindHostRejection, isLoopbackBind,
 } from '../admin-listener.mjs'
@@ -126,8 +125,4 @@ export function adminHandlers(deps) {
     // collaborator bag every other namespace gets; only serverState is used.
     'admin:get-status': () => getFullStatus(deps ?? {}),
   }
-}
-
-export function registerAdminHandlers(deps) {
-  registerAll(adminHandlers(deps))
 }

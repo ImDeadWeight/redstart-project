@@ -12,7 +12,6 @@
 // headless-admin-plane implementation plan) so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerHardwareHandlers() does that.
-import { registerAll } from './guard.mjs'
 
 export async function scanHardware({ execFileAsync }) {
   const specs = {
@@ -97,8 +96,4 @@ export function hardwareHandlers(deps) {
   return {
     'hardware:scan': async () => scanHardware(deps),
   }
-}
-
-export function registerHardwareHandlers(deps) {
-  registerAll(hardwareHandlers(deps))
 }

@@ -7,7 +7,6 @@
 // headless-admin-plane implementation plan) so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerProfilesHandlers() does that.
-import { registerAll } from './guard.mjs'
 
 export function listProfiles({ readProfiles }) {
   const data = readProfiles()
@@ -91,8 +90,4 @@ export function profilesHandlers(deps) {
     'profiles:delete': (name) => deleteProfile(name, deps),
     'profiles:generate-defaults': (hardware) => generateDefaultProfiles(hardware, deps),
   }
-}
-
-export function registerProfilesHandlers(deps) {
-  registerAll(profilesHandlers(deps))
 }

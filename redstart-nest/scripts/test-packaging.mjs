@@ -59,7 +59,8 @@ const APPS = [
     name: 'Redstart Nest',
     appRoot: path.join(REPO, 'redstart-nest'),
     config: path.join(REPO, 'redstart-nest', 'electron-builder.json'),
-    sourceDirs: ['electron/main', 'electron/preload'],
+    // electron/preload retired in Phase 6 §6.2 (IPC/the preload bridge).
+    sourceDirs: ['electron/main'],
   },
   {
     name: 'Redstart Twig',

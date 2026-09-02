@@ -13,7 +13,6 @@
 // registers anything; only registerSettingsHandlers() does that. The two
 // dialog.showOpenDialog handlers that used to live here moved to a native
 // picker (Phase 4 §4.3), itself retired in Phase 6 §6.1.
-import { registerAll } from './guard.mjs'
 import { binaryPathRejection, isAbsolutePath } from './validate.mjs'
 import { logEvent } from '../logger.mjs'
 
@@ -105,8 +104,4 @@ export function settingsHandlers(deps) {
     'settings:get-models-dir': () => getModelsDir(deps),
     'settings:set-models-dir': (p) => setModelsDir(p, deps),
   }
-}
-
-export function registerSettingsHandlers(deps) {
-  registerAll(settingsHandlers(deps))
 }

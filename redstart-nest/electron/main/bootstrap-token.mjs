@@ -10,18 +10,20 @@
 // POST /admin/bootstrap — which both CREATES the first owner and RESETS an
 // existing one, because they are the same question.
 //
-// WHY IT IS NOT OPTIONAL. `auth:create-first-admin` grants ownership to any
-// caller when no owner exists, and is safe today only because IPC is its sole
-// door. Two things make that unsafe the moment bootstrap moves to HTTP: the
-// route becomes LAN-reachable, and "no owner exists" is reachable by CORRUPTION
-// as well as by newness — accounts-storage reads a torn accounts.json as no
-// accounts. Without a token, first-to-arrive owns the box. Recovery comes along
-// for free because it is the same door.
+// WHY IT IS NOT OPTIONAL. The IPC-only `auth:create-first-admin` this
+// replaced (deleted in Phase 6 §6.2) granted ownership to any caller when no
+// owner existed, and was safe only because IPC was its sole door. That is
+// unsafe on a LAN-reachable route: "no owner exists" is reachable by
+// CORRUPTION as well as by newness — accounts-storage reads a torn
+// accounts.json as no accounts. Without a token, first-to-arrive owns the
+// box. Recovery comes along for free because it is the same door.
 //
 // STORED IN PLAINTEXT, deliberately, and this is the one place in the tree where
-// that is the right answer. The Electron client must read the file and submit it
-// so Windows setup looks exactly as it does today — the user sees the same
-// create-owner form and never sees a token. Hashing would cost that flow and buy
+// that is the right answer. index.mjs's createWindow() reads the file and
+// hands it to the setup screen as a URL query param (Phase 6 §6.2, since IPC
+// no longer exists to carry it) so Windows setup looks exactly as it did
+// before — the user sees the same setup form pre-filled, and never has to
+// find or type the token themselves. Hashing would cost that flow and buy
 // nothing against the only threat that reaches the file: anyone who can read
 // this directory can rewrite accounts.json anyway, which is ownership by a
 // shorter route. Compare secrets.mjs, where the threat is a stolen file and

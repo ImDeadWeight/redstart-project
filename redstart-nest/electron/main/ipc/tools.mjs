@@ -10,7 +10,6 @@
 // registers anything; only registerToolsHandlers() does that. Two of these
 // need `deps` (buildGatewayConfig, userDataDir), so it is threaded through as
 // a plain parameter, same shape as the IPC deps object.
-import { registerAll } from './guard.mjs'
 import * as path from 'path'
 import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES, CLIENT_APPS } from '../tools-definitions.mjs'
 import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup } from '../tools-storage.mjs'
@@ -78,8 +77,4 @@ export function toolsHandlers(deps) {
     'tools:apply-config': (llamaConfig) => applyToolsConfig(llamaConfig, deps),
     'tools:estimate-context': (llamaConfig) => estimateToolsContext(llamaConfig, deps),
   }
-}
-
-export function registerToolsHandlers(deps) {
-  registerAll(toolsHandlers(deps))
 }

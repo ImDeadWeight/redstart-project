@@ -1,9 +1,11 @@
 // =============================================================================
 // Redstart Nest — renderer UI shell
 // =============================================================================
-// The React app running inside Electron's renderer. It talks to the main
-// process exclusively through the redstartAPI bridge (see api/redstart.ts) —
-// renderer code can't directly call Node.js APIs for security reasons.
+// The launcher UI — a browser tab's worth of React, whether it is actually
+// running in a browser or inside Electron's window (Phase 6 §6.2: both are
+// plain HTTP clients of the admin listener now, gated by AdminGate.tsx
+// before this ever renders). All calls go through the RedstartAPI
+// implementation installed by AdminGate (see api/redstart.ts).
 //
 // App itself is just the shell: layout, tab switching, and wiring the domain
 // hooks (src/hooks/) into the panel/tab components (src/panels/, src/tabs/).
@@ -72,7 +74,7 @@ export default function App() {
   useEffect(() => {
     const a = getAPI()
     if (!a) {
-      showStatus('ERROR: redstartAPI not found — preload script may have failed to load.', 0)
+      showStatus('ERROR: no session installed — AdminGate should have set one up before this rendered.', 0)
       return
     }
     a.server.getIp().then(setLocalIp)

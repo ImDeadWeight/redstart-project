@@ -1,10 +1,11 @@
 // =============================================================================
 // One door: POST /admin/bootstrap, and the control-plane login behind it.
 // =============================================================================
-// `auth:create-first-admin` grants ownership to ANY caller when no owner exists,
-// and is safe today only because IPC is its sole door. Two things make that
-// unsafe the moment bootstrap speaks HTTP: the route becomes LAN-reachable, and
-// "no owner exists" is reachable by CORRUPTION as well as by newness —
+// The IPC-only `auth:create-first-admin` this route replaced (Phase 3, and
+// finally deleted in Phase 6 §6.2) granted ownership to ANY caller when no
+// owner existed, and was safe only because IPC was its sole door. That is
+// unsafe the moment bootstrap speaks HTTP: the route becomes LAN-reachable,
+// and "no owner exists" is reachable by CORRUPTION as well as by newness —
 // accounts-storage reads a torn accounts.json as no accounts. Without a token,
 // first-to-arrive owns the box (headless-admin-plane-plan.md §3.2).
 //

@@ -1,14 +1,15 @@
-// Auth IPC namespace — auth-required flag and first-owner creation.
+// Auth IPC namespace — the auth-required flag.
 //
-// Collaborators come straight from auth.mjs / mcp-server.mjs, so this namespace
-// needs no deps from index.mjs.
+// createFirstAdmin() / auth:create-first-admin retired in Phase 6 §6.2. Its
+// own comment named its own retirement condition: "safe today only because
+// IPC is its sole door" — once IPC is gone the route has no safe caller.
+// POST /admin/bootstrap (gateway/auth-routes.mjs, token-gated) is the one
+// door onto owner creation now, for every caller including the Electron
+// launcher — see index.mjs's bootstrap-token query-param handoff.
 //
-// Handler bodies are exported as plain functions (Phase 1, §1.3 of the
-// headless-admin-plane implementation plan) so an HTTP route can call them
-// directly without dragging IPC registration in — importing this module never
-// registers anything; only registerAuthHandlers() does that.
-import { registerAll } from './guard.mjs'
-import { getAuthRequired, setAuthRequired, hasOwner, createOwner } from '../auth.mjs'
+// Collaborators come straight from auth.mjs / mcp-server.mjs, so this
+// namespace needs no deps from index.mjs.
+import { getAuthRequired, setAuthRequired, hasOwner } from '../auth.mjs'
 import { closeAllMcpSessions } from '../mcp-server.mjs'
 import { logEvent } from '../logger.mjs'
 
@@ -35,25 +36,9 @@ export function setAuthRequiredFlag(required) {
   return true
 }
 
-export function createFirstAdmin(username, password) {
-  if (hasOwner()) return { success: false, error: 'An owner account already exists' }
-  const result = createOwner({ username, password })
-  if (!result.ok) return { success: false, error: result.error }
-  return { success: true, apiKey: result.apiKey, id: result.account.id }
-}
-
 export function authHandlers() {
   return {
     'auth:get-config': () => getAuthConfig(),
     'auth:set-required': (required) => setAuthRequiredFlag(required),
-    // Still reachable, and still the launcher's create-owner form on Windows.
-    // A remote client uses POST /admin/bootstrap instead, which is token-gated;
-    // this channel is safe without one because IPC is its only door and that
-    // door means physical access to the machine.
-    'auth:create-first-admin': (username, password) => createFirstAdmin(username, password),
   }
-}
-
-export function registerAuthHandlers() {
-  registerAll(authHandlers())
 }

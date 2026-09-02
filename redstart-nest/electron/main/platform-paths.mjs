@@ -30,7 +30,7 @@
 // documents, and a backup has to be able to treat "my settings" and "my
 // files" as different questions. See headless-admin-plane-plan.md §3.5.
 //
-// Fail-closed like ipc/guard.mjs: reading before initPaths() has run is a
+// Fail-closed: reading before initPaths() has run is a
 // startup-ordering bug, not a condition to paper over with a default —
 // silently falling back to somewhere plausible is exactly how state quietly
 // ends up split across two directories.

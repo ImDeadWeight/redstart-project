@@ -17,7 +17,6 @@
 // launchServer are now publish() calls into event-broker.mjs (Phase 5 §5.1) —
 // the window is one subscriber among others now, registered once from
 // index.mjs, rather than the only possible reader hard-coded at each site.
-import { registerAll } from './guard.mjs'
 import { spawn } from 'child_process'
 import * as path from 'path'
 import { startGateway, stopGateway, getGatewayPort } from '../tools-gateway.mjs'
@@ -283,8 +282,4 @@ export function serverHandlers(deps) {
     'server:sync-tools': (tools) => syncServerTools(tools, deps),
     'server:get-ip': () => getLocalIp(),
   }
-}
-
-export function registerServerHandlers(deps) {
-  registerAll(serverHandlers(deps))
 }

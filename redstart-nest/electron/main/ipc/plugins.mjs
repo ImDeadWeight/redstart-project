@@ -34,7 +34,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { configDir } from '../platform-paths.mjs'
-import { registerAll } from './guard.mjs'
 import { publish } from '../event-broker.mjs'
 import { isPlainObject, isNonEmptyString, optional } from './validate.mjs'
 import { logEvent } from '../logger.mjs'
@@ -518,8 +517,4 @@ export function pluginsHandlers(deps) {
     // --- registry browsing ---
     'plugins:search': async (opts) => searchPluginRegistry(opts),
   }
-}
-
-export function registerPluginsHandlers(deps) {
-  registerAll(pluginsHandlers(deps))
 }

@@ -26,8 +26,8 @@ export const app = {
 
 // Production code no longer calls app.getPath directly — it goes through
 // platform-paths.mjs's configDir()/capabilityBaseDir(), which need initPaths()
-// to have run before anything reads them (fail-closed by design, same as
-// ipc/guard.mjs). Every suite that needs storage already sets
+// to have run before anything reads them (fail-closed by design). Every
+// suite that needs storage already sets
 // REDSTART_TEST_USERDATA_DIR before its `register()` call resolves this stub,
 // so this mirrors that ordering rather than adding a new one. A handful of
 // suites (test-llama-args.mjs, test-web-fetch-ssrf.mjs) load this stub without
@@ -59,36 +59,10 @@ export const safeStorage = {
   },
 }
 
-// Recording ipcMain — lets scripts/test-ipc-contract.mjs run the REAL
-// registerXHandlers() functions and observe every channel they actually
-// register, including the ones built dynamically in a loop (which a static
-// grep of the source cannot see). Handlers are kept callable so a test can
-// invoke one directly.
-export const ipcMain = {
-  handlers: new Map(),
-  listeners: new Map(),
-  handle(channel, fn) {
-    if (this.handlers.has(channel)) {
-      throw new Error(`ipcMain.handle called twice for the same channel: ${channel}`)
-    }
-    this.handlers.set(channel, fn)
-  },
-  on(channel, fn) {
-    if (!this.listeners.has(channel)) this.listeners.set(channel, [])
-    this.listeners.get(channel).push(fn)
-  },
-  removeHandler(channel) {
-    this.handlers.delete(channel)
-  },
-}
-
-// Registration-time only — no handler under test opens a dialog or a window
-// unless invoked, and the contract test never invokes those.
-export const dialog = {
-  showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
-  showSaveDialog: async () => ({ canceled: true, filePath: undefined }),
-  showMessageBox: async () => ({ response: 0 }),
-}
+// ipcMain / dialog / session retired from this stub in Phase 6 §6.2 —
+// production code stopped importing them from 'electron' (IPC retired,
+// dialog.showOpenDialog retired in §6.1) and the two suites that exercised
+// them (test-ipc-contract.mjs, test-ipc-guard.mjs) retired with IPC itself.
 
 export const BrowserWindow = {
   getAllWindows: () => [],
@@ -108,8 +82,4 @@ export const shell = {
 
 export const nativeImage = {
   createFromPath: () => ({ isEmpty: () => true }),
-}
-
-export const session = {
-  defaultSession: { webRequest: { onHeadersReceived() {} } },
 }

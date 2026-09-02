@@ -1,26 +1,31 @@
 // =============================================================================
 // The control-plane API surface — coverage, and the gate in front of it.
 // =============================================================================
-// scripts/test-ipc-contract.mjs pins preload-to-handler parity: every channel
-// the renderer can invoke has something on the other end. HTTP-only makes that
-// test moot in the long run, and design trap 5.8 says the equivalent invariant
-// has to be pinned the same way rather than left as a convention. This is it,
-// and it has two halves:
+// Design trap 5.8 says "every RedstartAPI method has a route, every route is
+// tier/surface-gated" needs to be pinned by a test, not left a convention.
+// This is it, and it has two halves:
 //
-//   COVERAGE — every method the preload bridge exposes is reachable over HTTP,
-//   or is explicitly marked local-only. Not "most of them", and not a list
-//   maintained by hand: the same function objects back both transports
-//   (ipc/transport.mjs), so a namespace that grows a method grows a route, and
-//   the only way to end up with a hole is to mark one deliberately.
+//   COVERAGE — every method declared on RedstartAPI (src/api/redstart.ts) is
+//   reachable over HTTP, or is explicitly marked local-only. Not "most of
+//   them", and not a list maintained by hand: the same function objects back
+//   the table (ipc/transport.mjs), so a namespace that grows a method grows a
+//   route, and the only way to end up with a hole is to mark one deliberately.
 //
 //   THE GATE — no route on this surface answers an anonymous caller or a
 //   non-owner. Checked against EVERY route rather than a sample, because "every
 //   route is gated" is the claim and a sample proves something weaker.
 //
+// Until Phase 6 §6.2 this suite's ground truth for "every method the renderer
+// can reach" was the preload bridge's literal `ipcRenderer.invoke('channel')`
+// calls — an exact, mechanically-scannable list. Retiring the preload
+// (test-ipc-contract.mjs's whole job) removed that ground truth along with
+// it; RedstartAPI's TypeScript type is what is left, so the method list below
+// is parsed out of it directly rather than assumed. A parser bug here is a
+// real risk this shortcut carries — see apiMethods()'s own comment.
+//
 // The local-only exclusions are the handlers that act on the CLIENT's machine —
-// native pickers and "reveal in explorer". Those are trap 5.2, and Phase 4 is
-// what replaces them with a server-side browser. This suite's job is to make
-// sure that set stays deliberate and small rather than becoming a drawer.
+// native pickers and "reveal in explorer". Both retired in Phase 6 §6.1; the
+// set is pinned at empty rather than the check being deleted.
 //
 // Run:  node scripts/test-admin-api.mjs
 // =============================================================================
@@ -89,11 +94,64 @@ const channels = Object.keys(table)
 const routable = channels.filter(c => !isLocalOnly(table[c]))
 const localOnlyChannels = channels.filter(c => isLocalOnly(table[c]))
 
-// Channels the preload bridge actually invokes — the renderer's whole reach.
-const preloadSource = fs.readFileSync(path.join(repoRoot, 'electron', 'preload', 'index.mjs'), 'utf8')
-const preloadChannels = new Set(
-  [...preloadSource.matchAll(/ipcRenderer\.invoke\(\s*'([^']+)'/g)].map(m => m[1])
-)
+// The methods RedstartAPI declares — the renderer's whole reach — parsed out
+// of src/api/redstart.ts's type declaration. `events` is excluded: it is not
+// a request/response namespace (no channel, no route — see
+// src/api/http.ts's separate EVENT_NAMESPACE handling), the same way the old
+// preload-based version only ever looked at ipcRenderer.invoke() and left
+// ipcRenderer.on()/removeAllListeners() to a separate check.
+const redstartSource = fs.readFileSync(path.join(repoRoot, 'src', 'api', 'redstart.ts'), 'utf8')
+
+/**
+ * Extract { namespace, method } pairs from RedstartAPI's type body.
+ *
+ * A depth-aware line walker, the same shape scripts/test-ipc-contract.mjs
+ * used for the preload (a nested-object literal), applied here to a nested
+ * TYPE literal instead: depth 0 is namespace names, depth 1 (inside a
+ * namespace's braces) is method names, depth 2+ is a method's own
+ * parameter/return type and is deliberately never inspected — a field name
+ * inside a returned object (e.g. admin.getStatus()'s `port`) must never be
+ * mistaken for a sibling method. `github: { checkReleases: ... }` is the one
+ * single-line namespace in the file and is handled as its own case.
+ */
+function apiMethods(source) {
+  const marker = 'export type RedstartAPI = {'
+  const start = source.indexOf(marker)
+  if (start === -1) throw new Error('RedstartAPI type not found in redstart.ts')
+  const bodyStart = start + marker.length
+  let depth = 1 // already inside the outer { at bodyStart
+  let end = bodyStart
+  for (; end < source.length && depth > 0; end++) {
+    if (source[end] === '{') depth++
+    else if (source[end] === '}') depth--
+  }
+  const body = source.slice(bodyStart, end - 1)
+
+  const methods = []
+  let currentNamespace = null
+  let lineDepth = 0
+  for (const line of body.split('\n')) {
+    if (lineDepth === 0) {
+      const single = line.match(/^\s*(\w+): \{\s*(\w+):/)
+      if (single && /\}\s*$/.test(line)) {
+        methods.push({ namespace: single[1], method: single[2] })
+        continue // self-contained and brace-balanced — depth unchanged
+      }
+      const open = line.match(/^\s*(\w+): \{\s*$/)
+      if (open) currentNamespace = open[1]
+    } else if (lineDepth === 1 && currentNamespace) {
+      const m = line.match(/^\s*(\w+)\??:/)
+      if (m) methods.push({ namespace: currentNamespace, method: m[1] })
+    }
+    for (const ch of line) {
+      if (ch === '{') lineDepth++
+      else if (ch === '}') lineDepth--
+    }
+  }
+  return methods.filter(m => m.namespace !== 'events')
+}
+
+const apiMembers = apiMethods(redstartSource)
 
 // ---------------------------------------------------------------------------
 // Coverage
@@ -101,11 +159,32 @@ const preloadChannels = new Set(
 
 console.log('\n-- every method the renderer can reach has a route --')
 
-await test('🔍 every preload channel is in the control-plane table', () => {
-  const missing = [...preloadChannels].filter(c => !(c in table)).sort()
+const kebab = (method) => method.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`)
+
+const httpSource = fs.readFileSync(path.join(repoRoot, 'src', 'api', 'http.ts'), 'utf8')
+
+// The exceptions the client declares. Parsed from source rather than imported,
+// because this suite runs under plain node and the client is TypeScript — and
+// because reading the declaration is the point: the check is that the rule PLUS
+// the written-down exceptions reproduce every declared method.
+const overrides = new Map(
+  [...(httpSource.match(/const CHANNEL_OVERRIDES[^}]*\}/)?.[0] ?? '')
+    .matchAll(/'([^']+)':\s*'([^']+)'/g)].map(m => [m[1], m[2]])
+)
+
+const clientChannelFor = (namespace, method) => {
+  const derived = `${namespace}:${kebab(method)}`
+  return overrides.get(derived) ?? derived
+}
+
+await test('🔍 every RedstartAPI method is in the control-plane table', () => {
+  const missing = apiMembers
+    .map(m => clientChannelFor(m.namespace, m.method))
+    .filter(c => !(c in table))
+    .sort()
   assert(missing.length === 0,
-    `reachable over IPC but absent from the control plane: ${missing.join(', ')}`)
-  return `${preloadChannels.size} channels`
+    `declared on RedstartAPI but absent from the control plane: ${missing.join(', ')}`)
+  return `${apiMembers.length} methods`
 })
 
 await test('🔍 every table entry is routable or explicitly local-only', () => {
@@ -141,97 +220,38 @@ await test('🔍 nothing that changes server state is local-only', () => {
   assert(suspicious.length === 0, `these are excluded but are not pickers: ${suspicious.join(', ')}`)
 })
 
-await test('the namespaces in the table match the ones index.mjs registers', () => {
-  const indexSource = fs.readFileSync(path.join(repoRoot, 'electron', 'main', 'index.mjs'), 'utf8')
-  const registered = [...indexSource.matchAll(/register(\w+)Handlers\(/g)]
-    .map(m => m[1].toLowerCase())
-    .filter(n => n !== 'ipc')
+await test('the table assembles a real number of namespaces', () => {
+  // Used to also check this set against what index.mjs registered over IPC —
+  // meaningful when the table was ONE of two consumers of each handler
+  // table. Phase 6 §6.2 retired IPC (and registerXHandlers() with it), so
+  // admin/api-table.mjs's buildAdminApi() is now the only consumer there is;
+  // the parity check collapsed to a tautology (nothing is ever "registered
+  // over IPC" any more) rather than being deleted outright, in case a
+  // second transport is ever added again. What is still worth pinning: the
+  // table actually assembles something, so a namespace import throwing
+  // silently at build time does not quietly shrink the whole admin API.
   const tableSource = fs.readFileSync(path.join(repoRoot, 'electron', 'main', 'admin', 'api-table.mjs'), 'utf8')
   const tabled = [...tableSource.matchAll(/\.\.\.(\w+)Handlers\(/g)].map(m => m[1].toLowerCase())
-  const missing = [...new Set(registered)].filter(n => !tabled.includes(n)).sort()
-  assert(missing.length === 0, `registered over IPC but not in the control-plane table: ${missing.join(', ')}`)
+  assert(tabled.length >= 10, `expected at least 10 namespaces, found ${tabled.length}`)
   return `${tabled.length} namespaces`
 })
 
-// ---------------------------------------------------------------------------
-// The rule the HTTP client derives its URLs from
-// ---------------------------------------------------------------------------
-// src/api/http.ts does not list 74 methods — it builds each channel as
-// `namespace:kebab-case(method)` and lets a Proxy do the rest, because 74
-// hand-written entries is 74 places for a typo typecheck cannot see. That
-// shortcut is only sound while the rule actually holds for every channel, so it
-// is checked here rather than assumed. A future channel that breaks it is not a
-// disaster — it just has to be spelled out — but it must not go unnoticed, since
-// the symptom would be one method 404ing in a browser and nowhere else.
-
 console.log('\n-- namespace.method -> channel --')
 
-// The same one-liner src/api/http.ts uses. Duplicated on purpose: the point of
-// this check is that two independent statements of the rule agree, and importing
-// the TypeScript one would make it a tautology.
-const kebab = (method) => method.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`)
-
-// The preload as a nested literal: `namespace: {` opens a block, and each
-// `method: (...) => ipcRenderer.invoke('channel')` inside it is one binding.
-function preloadBindings() {
-  const bindings = []
-  let namespace = null
-  for (const line of preloadSource.split('\n')) {
-    const open = line.match(/^  (\w+): \{/)
-    if (open) { namespace = open[1]; continue }
-    if (line === '  },') { namespace = null; continue }
-    const invoke = line.match(/^\s*(\w+):.*ipcRenderer\.invoke\(\s*'([^']+)'/)
-    if (invoke && namespace) bindings.push({ namespace, method: invoke[1], channel: invoke[2] })
-  }
-  return bindings
-}
-
-const bindings = preloadBindings()
-
-await test('the preload parses into namespace/method/channel triples', () => {
-  assert(bindings.length === preloadChannels.size,
-    `parsed ${bindings.length} bindings but found ${preloadChannels.size} channels — the preload's shape changed`)
-  return `${bindings.length} bindings`
-})
-
-const httpSource = fs.readFileSync(path.join(repoRoot, 'src', 'api', 'http.ts'), 'utf8')
-
-// The exceptions the client declares. Parsed from source rather than imported,
-// because this suite runs under plain node and the client is TypeScript — and
-// because reading the declaration is the point: the check is that the rule PLUS
-// the written-down exceptions reproduce the bridge exactly.
-const overrides = new Map(
-  [...(httpSource.match(/const CHANNEL_OVERRIDES[^}]*\}/)?.[0] ?? '')
-    .matchAll(/'([^']+)':\s*'([^']+)'/g)].map(m => [m[1], m[2]])
-)
-
-const clientChannelFor = (namespace, method) => {
-  const derived = `${namespace}:${kebab(method)}`
-  return overrides.get(derived) ?? derived
-}
-
-await test('\u{1F50D} the HTTP client derives every channel the bridge invokes', () => {
-  const broken = bindings
-    .filter(b => clientChannelFor(b.namespace, b.method) !== b.channel)
-    .map(b => `${b.namespace}.${b.method} wants ${b.channel}, client builds ${clientChannelFor(b.namespace, b.method)}`)
-  assert(broken.length === 0, `a browser would 404 on: ${broken.join('; ')}`)
-  return `${bindings.length} bindings, ${overrides.size} declared exception(s)`
-})
-
-await test('every declared exception is one the bridge actually needs', () => {
-  // Stops the override map becoming a graveyard: an entry for a binding that no
-  // longer exists is a rule nobody is applying and nobody will remove.
-  const wanted = new Set(bindings.map(b => `${b.namespace}:${kebab(b.method)}`))
+await test('every declared exception is one RedstartAPI actually needs', () => {
+  // Stops the override map becoming a graveyard: an entry for a method that
+  // no longer exists is a rule nobody is applying and nobody will remove.
+  const wanted = new Set(apiMembers.map(m => `${m.namespace}:${kebab(m.method)}`))
   const stale = [...overrides.keys()].filter(k => !wanted.has(k))
-  assert(stale.length === 0, `these overrides match no bridge method: ${stale.join(', ')}`)
+  assert(stale.length === 0, `these overrides match no RedstartAPI method: ${stale.join(', ')}`)
 })
 
-await test('\u{1F50D} the HTTP client knows every namespace the preload exposes', () => {
+await test('\u{1F50D} the HTTP client knows every namespace RedstartAPI declares', () => {
   const listed = new Set(
     (httpSource.match(/const NAMESPACES = \[([\s\S]*?)\] as const/)?.[1] ?? '')
       .split(',').map(part => part.trim().replace(/^'|'$/g, '')).filter(Boolean)
   )
-  const missing = [...new Set(bindings.map(b => b.namespace))].filter(n => !listed.has(n)).sort()
+  const missing = [...new Set(apiMembers.map(m => m.namespace))].filter(n => !listed.has(n)).sort()
   assert(missing.length === 0, `a browser cannot reach these namespaces at all: ${missing.join(', ')}`)
   return `${listed.size} namespaces`
 })

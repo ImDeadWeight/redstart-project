@@ -20,9 +20,11 @@
 //   NO CORS. The gateway sends `Access-Control-Allow-Origin: *` because its
 //   clients are other origins by design. This listener serves its own UI from
 //   its own origin and has no business being called cross-origin at all, so it
-//   sends no CORS headers and answers no preflight. Phase 3 puts the Electron
-//   launcher on this listener over HTTP; when it does, the answer is an
-//   explicit origin allowlist, not a `*` copied from next door.
+//   sends no CORS headers and answers no preflight — including for the
+//   Electron launcher (Phase 6 §6.2), which reaches it same-origin, either
+//   directly (packaged) or through Vite's dev-server proxy (dev; see
+//   vite.config.ts) rather than by this listener granting a foreign origin
+//   anything.
 //
 //   THE STATIC LAYER IS AN ALLOWLIST, NOT A PATTERN. isPublicAsset() in
 //   tools-gateway.mjs decides what gets forwarded UNAUTHENTICATED to
@@ -104,7 +106,7 @@ export function bindHostRejection(host) {
 // Static bundle — the files Nest shipped, and nothing else
 // ---------------------------------------------------------------------------
 
-/** The built launcher bundle. Same directory renderer-location.mjs loads from. */
+/** The built launcher bundle. Same directory index.mjs's packaged-build window load points at. */
 function bundleRoot() {
   return path.join(__dirname, '..', '..', 'dist')
 }

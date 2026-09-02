@@ -42,7 +42,7 @@ Redstart Nest has an optional account system, gated behind a global **Require lo
 - **Profile page.** A **Profile** entry in the sidebar (and in the collapsed icon rail) opens a full-page account view rather than a dropdown. Its **Account** tab shows role, account-created / last-login timestamps and API key management; its **Files** tab browses your own storage on the server (see [Your files](#your-files-web-ui)). A regenerated key is shown once and stays on the page until dismissed — the previous dropdown put it in a modal that a stray click could dismiss, and the server keeps only a hash, so a key lost that way is gone for good.
 - **API keys.** Each account has a long-lived API key (prefixed `rst_`) for OpenAI-compatible clients like Kilo Code. Only a hash is stored server-side, so an existing key is only ever shown as its prefix — regenerate to get a fresh full key. Admins can also manage keys for the accounts they oversee.
 - **Per-connector keys.** An account can also issue keys bound to a specific *surface* (`nest-chat`, `twig`, `blueprints`, `yellowscript`, `greenhouse`), managed under Settings → Connectors. The surface travels with the credential, so the server derives which app is calling from the key itself rather than believing a header.
-- **First run.** On Windows the Owner account is created in the Redstart Nest launcher itself, exactly as before. From a browser it is created through the control plane's setup screen, which asks for the machine's **setup code** first — there is no anonymous route to ownership on either path. Since login is on by default, do this before expecting any device (including a browser on the host PC) to sign in.
+- **First run.** The Owner account is created through the control plane's setup screen, which asks for the machine's **setup code** first — there is no anonymous route to ownership. On Windows the launcher shows that same screen with the code already filled in (it reads the code off the machine itself, the same way it always visually appeared to), so setup looks the same as before even though the launcher is now just another client of the daemon, same as a browser tab. Since login is on by default, do this before expecting any device (including the launcher, or a browser on the host PC) to sign in.
 
 This is a newer subsystem — treat the account-management surface as still stabilizing.
 
@@ -92,14 +92,14 @@ and re-keys an existing one — one door, no separate recovery path, and no
 anonymous route to ownership. This is the router model: a unique password on a
 label, plus a reset that does not wipe the box.
 
-- Why it must exist: creating the first Owner is safe over IPC because IPC means
-  physical access. Over HTTP it is not, and "no Owner exists" is reachable by a
-  corrupt `accounts.json` as well as by a new install — so without a code, the
-  first stranger to find the port would own the machine.
-- Why it is plain text: the launcher reads it and submits it for you, so Windows
-  setup is unchanged and you never see it. Hashing it would cost that and buy
-  nothing — anyone who can read the file can rewrite `accounts.json`, which is
-  ownership by a shorter route.
+- Why it must exist: creating the first Owner over a LAN-reachable route is not
+  physical access, and "no Owner exists" is reachable by a corrupt
+  `accounts.json` as well as by a new install — so without a code, the first
+  stranger to find the port would own the machine.
+- Why it is plain text: the launcher reads it off the machine itself and
+  submits it for you, so Windows setup is unchanged and you never see it.
+  Hashing it would cost that and buy nothing — anyone who can read the file
+  can rewrite `accounts.json`, which is ownership by a shorter route.
 - A reset preserves everything but the Owner's credential: accounts, roles,
   connector keys and tool configuration all survive, and the Owner's sessions are
   revoked. That is the whole gain over the last-resort wipe (stop Redstart Nest,
@@ -132,8 +132,10 @@ not a file, so directory traversal is not filtered here, it is impossible. This
 is deliberately *not* the mechanism the gateway uses for the chat UI's assets:
 that one is a URL-pattern rule deciding what to forward unauthenticated to
 llama-server, which is someone else's namespace. The two must not be confused.
-The document is served with a Content-Security-Policy stricter than the Electron
-window's — no inline script at all, and `connect-src 'self'`.
+The document is served with its own Content-Security-Policy — no inline script
+at all, and `connect-src 'self'` — the same one every caller gets, Electron's
+own window included: it loads this listener's page too rather than carrying a
+separate, looser policy of its own.
 
 **No CORS, and therefore no CSRF machinery.** The listener sends no
 `Access-Control-Allow-Origin` header and answers no preflight; it serves its own
@@ -172,7 +174,7 @@ There is exactly one resolution path from an incoming request to an account: `au
 
 **Session revocation is centralized.** Deleting an account or resetting its password calls `revokeSessionsForAccount()`, so there is no path that removes an account while leaving a live token behind. Sessions are in-memory only, so a server restart signs everyone out — see [Known limitations](roadmap.md#known-limitations).
 
-**Owner bootstrap has no HTTP route at all.** `createOwner()` is reachable only over Electron IPC from the launcher window, which requires physical access to the host. It is deliberately a separate function from `createAccount()` rather than an "allow owner" branch inside it, so the owner-creation path cannot be reached any other way.
+**Owner bootstrap has exactly one door.** `createOwner()` is reachable only through `POST /admin/bootstrap`, gated on the machine's setup code (above) — there is no second, anonymous or IPC path onto it. It is deliberately a separate function from `createAccount()` rather than an "allow owner" branch inside it, so the owner-creation path cannot be reached any other way.
 
 ---
 
@@ -351,8 +353,8 @@ Because enforcement is at the MCP layer, a prompt-level jailbreak cannot overrid
 
 Redstart Nest can treat an MCP SSE endpoint on another device as an additional tool source. This is a **separate trust boundary** from the built-in providers and is worth stating precisely:
 
-- **Registration requires physical access to the host.** External servers are added over Electron IPC from the launcher window. There is no HTTP route, so no LAN client — authenticated or not, admin or not — can register one.
-- **The URL is validated where it is written.** The IPC handler is the only path into the registry, so validation lives there rather than in the renderer, where it would be advisory. Refused outright: non-http(s) schemes, malformed input, and any URL aimed at Nest's own gateway, llama-server or MCP port — that last one would make Nest its own tool source, with an auth boundary in the middle of the loop. Everything else is accepted with warnings surfaced in the UI: plaintext to a remote host, egress implications, and a path that does not look like an SSE endpoint. The refuse/warn split is deliberate — an admin at the console is *allowed* to point Nest at a plaintext LAN appliance, and a validator that blocked it would block the documented use case.
+- **Registration requires the Owner.** External servers are added over the control plane, gated the same way every admin route is — owner-tier session, nothing else (see [The control plane](#the-control-plane)). Not physical access: the launcher is a control-plane client like any other since the headless-admin-plane work, so this is an authorization boundary rather than a network-topology one.
+- **The URL is validated where it is written.** The handler behind `mcp:add-external` is the only path into the registry, so validation lives there rather than in the renderer, where it would be advisory. Refused outright: non-http(s) schemes, malformed input, and any URL aimed at Nest's own gateway, llama-server or MCP port — that last one would make Nest its own tool source, with an auth boundary in the middle of the loop. Everything else is accepted with warnings surfaced in the UI: plaintext to a remote host, egress implications, and a path that does not look like an SSE endpoint. The refuse/warn split is deliberate — an admin is *allowed* to point Nest at a plaintext LAN appliance, and a validator that blocked it would block the documented use case.
 - **Their tools are executed by clients, not by Nest's MCP server.** So the completions-proxy ban applies to them, but the MCP-side chokepoint does not. "Enforced at both chokepoints" is a statement about built-in tools.
 - **An external server is trusted to describe its own tools.** Redstart does not validate the tool definitions it returns, and their descriptions reach the model.
 - **A remote external server is network egress** and is reported as such at `GET /egress` and in the system prompt's data-handling block.
@@ -370,7 +372,7 @@ Redstart Nest can install a **third-party stdio MCP server** — a real child pr
 
 **Fail-closed classification.** A built-in capability's tools were written and classified by Redstart. A plugin's were not — they are third-party code nobody here has read. So every tool a fresh install discovers is classified `destructive` — refused everywhere, exactly like [`delete_file`](#destructive-operations) — until an admin has actually read its description and promoted it individually (or in bulk, for a plugin with dozens of tools). This is deliberately **not** inferred from what the plugin claims about itself: an MCP server can self-report a tool as read-only (`readOnlyHint: true`) and that claim is never trusted for policy, since a third party can misdeclare a tool by accident or design. Per-plugin `allowWrite`/`allowDestructive` policy flags — both off by default — then gate `write`/`destructive`-classified tools exactly the way File System's own flags do, generalizing the same policy gate rather than adding a second one.
 
-**Credentials.** A plugin may hold an API key for a third-party service (a search or image-generation API, for example) — a stdio server is just a local process, and nothing stops it opening outbound HTTPS, so "runs locally" and "sends nothing off this machine" are not the same claim. Any configured key is encrypted at rest the same way as the Postgres connection string and External MCP's API key (`electron/main/secrets.mjs`), decrypted only at the moment the plugin's child is spawned, and never returned over IPC — the Plugins tab reports whether a key is set, never its value. **A plugin holding a credential is reported as network egress**, at `GET /egress` and in the system prompt's data-handling block, in the same shape an external MCP server already is — this was shipped together with credential support in the same change, specifically so it could not ship separately: a plugin with a key and no corresponding disclosure would leave Nest telling users their data stays local while their queries left for a third party.
+**Credentials.** A plugin may hold an API key for a third-party service (a search or image-generation API, for example) — a stdio server is just a local process, and nothing stops it opening outbound HTTPS, so "runs locally" and "sends nothing off this machine" are not the same claim. Any configured key is encrypted at rest the same way as the Postgres connection string and External MCP's API key (`electron/main/secrets.mjs`), decrypted only at the moment the plugin's child is spawned, and never returned to the caller — the Plugins tab reports whether a key is set, never its value. **A plugin holding a credential is reported as network egress**, at `GET /egress` and in the system prompt's data-handling block, in the same shape an external MCP server already is — this was shipped together with credential support in the same change, specifically so it could not ship separately: a plugin with a key and no corresponding disclosure would leave Nest telling users their data stays local while their queries left for a third party.
 
 **Installing does not execute.** Fetching an npm or pypi package never runs its code — `npm install` runs with `--ignore-scripts` (no lifecycle hooks), and a pypi package's own build backend only runs when installing from a source distribution, which is inherent to Python packaging rather than something Redstart can suppress the way it suppresses npm's hooks. Either way, nothing from the package runs until the admin has reviewed its discovered tools and confirmed the install — probing what a server can do and enabling it are separate, deliberate steps.
 
@@ -471,7 +473,7 @@ Stated plainly, because a security document that lists only strengths is not one
 - **The control plane has no audit trail of *what* an administrator did.** Sign-in, sign-out, bootstrap and setup-code rotation are logged; the individual administrative calls behind them are not. With Owner-only access there is also only one account to attribute anything to, so two people sharing a box share one identity in the log.
 - **Rate limiting is keyed on the remote address**, which is weak in both directions: an attacker on the LAN can change source address, and behind the reverse proxy that is the documented deployment, every request arrives from loopback and all callers share one bucket. `X-Forwarded-For` is deliberately not trusted — a header the client controls is not an identity, and with no proxy in front it would be a way to get a fresh bucket per request. Treat the limit as a brake on automated guessing rather than as an access control.
 - **`GET /admin/events` (the live feed) has no explicit disconnect.** A browser session's single SSE connection stays open for the tab's lifetime rather than being closed on logout or token change; a 401 on its own reconnect attempt does stop it and clears the session client-side, so a revoked session cannot keep a live connection authenticated, but nothing proactively closes an inactive one early. Tidiness rather than exposure.
-- **A remote administrator can browse folders, but not files, on the server.** A server-side directory browser (`browse:roots`/`browse:list`/`browse:mkdir`) replaced the native pickers for capability folders, the models folder and the llama-server binary, but the listing is directories-only by design — it never returns file contents. Picking a *file* (the model, the binary) remotely means navigating to the right folder and typing the filename, not clicking it from a list. "Reveal in Explorer" is the one action that stays a `501`: it opens a window on whichever machine is asked, which cannot be done on someone else's, so the UI shows a copy-path button there instead.
+- **Every admin browses folders, but not files, on the server — Windows included.** A server-side directory browser (`browse:roots`/`browse:list`/`browse:mkdir`) is the only picker there is now (native OS dialogs retired with IPC, Phase 6 §6.1), and the listing is directories-only by design — it never returns file contents. Picking a *file* (the model, the binary) means navigating to the right folder and typing the filename, not clicking it from a list. "Reveal in Explorer" retired the same way and is not coming back in this shape: nothing can tell "the caller is sitting at this machine" from "the caller is a browser anywhere on the network" any more, so there is no safe caller left for a window that opens on the *server's* desktop — every client gets a copy-path button instead.
 - **Closing the launcher still stops the model.** The control plane is separated, but the daemon is not: quitting Redstart Nest quits everything. Running it as a background service is a later phase.
 - **Shared capabilities are all-or-nothing.** Vault, Git, SQLite and Postgres are shared across every account with no per-account grants yet.
 - **Twig's local MCP servers are unmoderated.** Twig can run local stdio MCP servers from a file on the user's own machine — arbitrary command execution by design, with the local disk as the trust boundary. Tool bans can strip their tools by name, but the server never sees them registered.

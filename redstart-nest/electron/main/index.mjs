@@ -13,7 +13,7 @@
 // Key architectural decisions documented inline below.
 // =============================================================================
 
-import { app, BrowserWindow, nativeImage, session } from 'electron'
+import { app, BrowserWindow, nativeImage } from 'electron'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import * as path from 'path'
@@ -39,26 +39,14 @@ import { subscribeToEvents } from './event-broker.mjs'
 import { reapStaleProcess, deletePidFile } from './process-supervision.mjs'
 import { initPaths, configDir, capabilityBaseDir } from './platform-paths.mjs'
 import { fileURLToPath } from 'url'
-import { registerGithubHandlers } from './ipc/github.mjs'
-import { registerHardwareHandlers } from './ipc/hardware.mjs'
-import { registerSettingsHandlers } from './ipc/settings.mjs'
-import { registerAuthHandlers } from './ipc/auth.mjs'
-import { registerAdminHandlers } from './ipc/admin.mjs'
-import { registerProfilesHandlers } from './ipc/profiles.mjs'
-import { registerToolsHandlers } from './ipc/tools.mjs'
-import { registerMcpHandlers } from './ipc/mcp.mjs'
-import { registerCapabilitiesHandlers } from './ipc/capabilities.mjs'
-import { registerServerHandlers } from './ipc/server.mjs'
-import { registerModelsHandlers } from './ipc/models.mjs'
-import { registerPluginsHandlers } from './ipc/plugins.mjs'
 import { buildGatewayConfig, createRefreshLiveToolsConfig } from './gateway-config.mjs'
 import { buildArgs } from './llama-args.mjs'
-import { DEV_RENDERER_ORIGIN, rendererIndexFile, isTrustedRendererUrl } from './renderer-location.mjs'
-import { setTrustedWindow } from './ipc/guard.mjs'
 import { binaryPathRejection } from './ipc/validate.mjs'
 import { setPluginCapabilityProvider } from './tools-definitions.mjs'
 import { pluginCapabilities } from './plugin-registry.mjs'
 import { sweepPendingDeletions } from './plugin-install.mjs'
+import { hasOwner } from './auth.mjs'
+import { readBootstrapToken } from './bootstrap-token.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -333,7 +321,7 @@ let beaconServerInstance = null
 // Live tool-config refresh, bound to serverState. buildGatewayConfig +
 // createRefreshLiveToolsConfig live in gateway-config.mjs; index.mjs only owns
 // the serverState the refresh closes over.
-// Bound inside setupIpcHandlers() (after app.whenReady, when app.getPath is
+// Bound inside setupAdminApi() (after app.whenReady, when app.getPath is
 // safe to call) rather than here at module scope — see below.
 let refreshLiveToolsConfig
 
@@ -528,10 +516,15 @@ async function startDiscoveryBeacon() {
 // decision 4). Deliberately not `networkMode`, which is data-plane state read
 // only at launch.
 //
-// A failure to bind is logged and swallowed rather than fatal. The port could
-// be held by something else on the machine, and a Nest that refuses to start at
-// all because its admin plane could not bind is worse than one whose launcher
-// still works over IPC — especially on the desktop, where IPC is the client.
+// A failure to bind is logged and swallowed rather than fatal — the daemon
+// itself (gateway, MCP, discovery) still comes up. Since Phase 6 §6.2,
+// though, the LAUNCHER window specifically has no fallback if this fails:
+// createWindow() loads this listener's own page, so a bind failure here
+// means the window loads nothing rather than a working-but-disconnected UI.
+// That is the accepted shape of "the Electron UI is a client of the daemon,
+// like Twig" (plan decision 6) — the alternative would be keeping a second,
+// privileged way for the window to render regardless, which is the exact
+// thing this phase retires.
 async function startAdminPlane() {
   // Minted here, not on first use. A token that only appears at the moment
   // someone is locked out is a token they cannot get to — and an install that
@@ -563,45 +556,32 @@ async function startAdminPlane() {
 // the gateway in any browser. No captive BrowserWindow or local proxy needed.
 // ---------------------------------------------------------------------------
 
-const CSP = [
-  "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "connect-src 'self' http://127.0.0.1:* https://127.0.0.1:* ws://127.0.0.1:* wss://127.0.0.1:* https://api.github.com",
-  "font-src 'self' data:",
-  "worker-src 'self' blob:",
-].join('; ')
-
-function applyCSP(session) {
-  session.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': [CSP],
-      },
-    })
-  })
-}
+// applyCSP()/CSP retired in Phase 6 §6.2. The window now loads the admin
+// listener's own served page over HTTP (see createWindow() below), and that
+// response already carries its own precise, purpose-built policy —
+// admin-listener.mjs's ADMIN_CSP, sent as a real header on the document
+// response the way a server is supposed to send one. Stamping a second,
+// broader CSP over every response in the session (what this did, for the
+// old file://-loaded page which had no natural way to send one) would now
+// either duplicate or fight that header instead of complementing it.
 
 // ---------------------------------------------------------------------------
-// Navigation containment
+// Popup / webview containment
 // ---------------------------------------------------------------------------
-// A preload script re-runs on EVERY navigation within a webContents. So if this
-// window is ever taken somewhere else — a `window.open()`, a stray
-// `location =`, an injected link — the destination page inherits the whole
-// `window.redstartAPI` surface and every IPC channel behind it. CSP does not
-// stop this: `default-src` does not constrain top-level navigation, and the
-// `navigate-to` directive was never shipped by anyone.
-//
-// Hung off `web-contents-created` rather than off `mainWindow` so it also covers
-// webContents that do not exist yet — a popup, a <webview> — which is precisely
-// the set a per-window handler would miss.
-//
-// Nothing in the launcher legitimately opens a window or attaches a <webview>,
-// so both are flat denials; navigation is allowed only back to where the
-// launcher already is (see renderer-location.mjs).
-function installNavigationContainment() {
+// Nothing in the launcher legitimately opens a second window or attaches a
+// <webview> — both are flat denials. This used to be paired with strict
+// same-origin navigation pinning (renderer-location.mjs) to protect the
+// preload bridge a navigated-to page would otherwise inherit; Phase 6 §6.2
+// deleted the bridge itself; without it there is no elevated surface a
+// navigation could inherit, so the narrower containment left is exactly
+// what a plain browser tab already gets from the web platform (a page can
+// navigate itself, but gains no extra privilege by doing so — Electron's
+// window is meaningfully no different, since it now holds nothing a browser
+// tab wouldn't). Hung off `web-contents-created` rather than off
+// `mainWindow` so it also covers webContents that do not exist yet — a
+// popup, a <webview> — which is precisely the set a per-window handler
+// would miss.
+function installPopupContainment() {
   app.on('web-contents-created', (_event, contents) => {
     contents.setWindowOpenHandler(() => {
       logEvent('security', 'window_open_denied', {})
@@ -612,16 +592,6 @@ function installNavigationContainment() {
       logEvent('security', 'webview_attach_denied', {})
       event.preventDefault()
     })
-
-    contents.on('will-navigate', (event, url) => {
-      if (isTrustedRendererUrl(url)) return
-      // The DevTools frontend is a Chromium-internal page opened below in dev
-      // only. It is never reachable in a packaged build, so exempting it costs
-      // nothing there — and the IPC guard rejects a devtools:// frame anyway.
-      if (!app.isPackaged && url.startsWith('devtools://')) return
-      logEvent('security', 'navigation_denied', { scheme: url.split(':')[0] })
-      event.preventDefault()
-    })
   })
 }
 
@@ -630,14 +600,7 @@ function createWindow() {
     width: 1100,
     height: 800,
     icon: redstartIcon,
-    webPreferences: {
-      preload: path.join(__dirname, '..', 'preload', 'index.mjs'),
-    },
   })
-
-  // Register BEFORE the first load so no handler can see a window it does not
-  // yet consider trusted. See ipc/guard.mjs.
-  setTrustedWindow(mainWindow)
 
   // The window is one event-broker subscriber among others now (Phase 5
   // §5.1), not the hard-coded destination server.mjs/models.mjs/plugins.mjs
@@ -649,12 +612,34 @@ function createWindow() {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
   })
 
-  if (!app.isPackaged) {
-    mainWindow.loadURL(DEV_RENDERER_ORIGIN)
-    mainWindow.webContents.openDevTools()
-  } else {
-    mainWindow.loadFile(rendererIndexFile())
+  // Always the admin listener's own loopback address — Electron shares the
+  // daemon's machine (level 2, plan §1), so it connects to it exactly like
+  // any other local HTTP client, never via whatever bind address is
+  // configured for LAN exposure (which could be a wildcard Electron cannot
+  // usefully "connect to" from the same box). AdminGate.tsx gates this page
+  // exactly like a browser tab — sign-in, or first-run setup — see decision
+  // 6: the Electron UI is a client of the daemon, like Twig.
+  //
+  // DEV EXCEPTION: Vite's dev server (localhost:5173) is loaded instead of
+  // the admin listener directly, so UI work keeps hot-reload. It proxies
+  // everything under /admin to the real listener (vite.config.ts) — this is
+  // a dev-tooling convenience, not a security boundary; the packaged build
+  // has no dev server to reach and always loads the listener's own page.
+  const { port } = getAdminListenerState()
+  let url = app.isPackaged ? `http://127.0.0.1:${port}/` : 'http://localhost:5173/'
+  // The bootstrap-token handoff (plan decision 16), without IPC: no owner
+  // exists yet, so this is a first-run (or post-wipe) box. Read the token
+  // here, where filesystem access already lives, and hand it to the page
+  // the same way any other "where should this window start" decision is
+  // made — a URL. AdminGate.tsx reads it once on mount and clears it from
+  // the address bar immediately after, so it does not linger anywhere a
+  // screenshot or a browser history entry would catch it.
+  if (!hasOwner()) {
+    const token = readBootstrapToken()
+    if (token) url += `?setupToken=${encodeURIComponent(token)}`
   }
+  mainWindow.loadURL(url)
+  if (!app.isPackaged) mainWindow.webContents.openDevTools()
 }
 
 // The launcher and chat windows are plain UI (no WebGL/canvas-heavy work) —
@@ -687,8 +672,7 @@ app.whenReady().then(async () => {
   ensureDefaultCapabilityFolders(capabilityBaseDir())
   // Same idea for the models folder — see resolveModelsDir().
   ensureModelsDir()
-  applyCSP(session.defaultSession)
-  installNavigationContainment()
+  installPopupContainment()
   // Reaps a llama-server left running by a previous session that never got
   // to run its own exit handler (Task Manager kill, power loss). Verifies the
   // recorded pid is still that same binary before touching it — never a
@@ -700,12 +684,10 @@ app.whenReady().then(async () => {
   // Retries any plugin folder an uninstall couldn't delete last session (a
   // Windows file lock, most likely) — best-effort, never blocks startup (P4-4).
   sweepPendingDeletions()
-  // Before the admin listener binds, not after: the same handler table backs
-  // both transports, and a control-plane request that arrives before it is
-  // assembled gets a 503 rather than the method it asked for. Registering IPC
-  // this early is safe because guard.mjs fails closed until createWindow()
-  // pins the trusted window below.
-  setupIpcHandlers()
+  // Before the admin listener binds, not after: a control-plane request that
+  // arrives before this table is assembled gets a 503 rather than the
+  // method it asked for.
+  setupAdminApi()
   startDiscoveryBeacon()
   startAdminPlane()
   if (!app.isPackaged) await installReactDevTools()
@@ -758,31 +740,16 @@ app.on('window-all-closed', () => {
 })
 
 // ---------------------------------------------------------------------------
-// IPC handlers
+// The control-plane API table
 // ---------------------------------------------------------------------------
-
-// Per-namespace IPC registrars extracted from setupIpcHandlers(). Shared
-// collaborators are threaded through `deps` so the modules never reach for
-// index.mjs globals. Namespaces still living inline below are migrated one
-// seam per commit; this dispatcher is where each lands as it moves out.
-function registerIpcHandlers(deps) {
-  registerGithubHandlers()
-  registerHardwareHandlers(deps)
-  registerSettingsHandlers(deps)
-  registerAuthHandlers()
-  registerAdminHandlers(deps)
-  registerProfilesHandlers(deps)
-  registerToolsHandlers(deps)
-  registerMcpHandlers(deps)
-  registerCapabilitiesHandlers(deps)
-  registerServerHandlers(deps)
-  registerModelsHandlers(deps)
-  // No window dependency any more (Phase 5 §5.1) — see the matching comment
-  // in admin/api-table.mjs.
-  registerPluginsHandlers({ refreshLiveToolsConfig: deps.refreshLiveToolsConfig })
-}
-
-function setupIpcHandlers() {
+// Phase 6 §6.2 retired IPC — this used to also register every namespace's
+// handlers with ipcMain (registerIpcHandlers(), deleted along with
+// ipc/guard.mjs). buildAdminApi(deps) below is the only consumer of the
+// handler tables left, and it was always the design's real source of truth
+// (ipc/transport.mjs's header explains why: a route table derived from IPC
+// registration would be empty on a platform with no Electron, which is the
+// platform HTTP-only exists for).
+function setupAdminApi() {
   const userDataDir = configDir()
   refreshLiveToolsConfig = createRefreshLiveToolsConfig(serverState, userDataDir)
   // Hands tools-definitions.mjs a live read of the plugin registry. Must run
@@ -816,10 +783,6 @@ function setupIpcHandlers() {
     userDataDir,
   }
 
-  registerIpcHandlers(deps)
-  // The same collaborators, the same handler functions, a second transport.
-  // See electron/main/ipc/transport.mjs for why the table is the source and
-  // both transports read it, rather than one being derived from the other.
   setAdminApi(buildAdminApi(deps))
 }
 
