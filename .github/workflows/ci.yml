@@ -153,6 +153,9 @@ jobs:
       - name: "Security: control-plane API coverage + gating"
         run: node scripts/test-admin-api.mjs
 
+      - name: "Security: server-side directory browser (Phase 4)"
+        run: node scripts/test-browse-routes.mjs
+
       - name: "Security: preload/main IPC contract"
         run: node scripts/test-ipc-contract.mjs
 

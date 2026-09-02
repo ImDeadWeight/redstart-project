@@ -37,6 +37,14 @@ export type RedstartAPI = {
   admin: {
     getControlPlane: () => Promise<ControlPlaneState>
   }
+  // Server-side directory listing (Phase 4 §4.2) — the remote stand-in for a
+  // native file/folder dialog. HTTP-only: `isDaemonLocal()` is what decides
+  // whether FolderPicker calls this at all, so the IPC bridge never binds it.
+  browse: {
+    roots: () => Promise<{ path: string; label: string }[]>
+    list: (opts: { path: string }) => Promise<{ path: string; parent: string | null; entries: { name: string; kind: 'directory' }[]; reason?: string }>
+    mkdir: (opts: { path: string; name: string }) => Promise<{ ok: boolean; path?: string; error?: string }>
+  }
   profiles: {
     list: () => Promise<string[]>
     save: (name: string, config: LlamaConfig) => Promise<boolean>
@@ -265,6 +273,21 @@ export const activeTransport = (): Transport => (bridge() ? 'ipc' : 'http')
 
 /** True when this launcher is driving a daemon it does not share a process with. */
 export const isRemote = (): boolean => activeTransport() === 'http'
+
+/**
+ * True when a native file/folder dialog would browse the SAME disk the daemon
+ * reads from — the question trap 5.2 (headless-admin-plane-plan.md §5) turns
+ * on. Today this is exactly `!isRemote()`: IPC only ever exists when Electron
+ * and the daemon are the same process. Modelled as its own predicate anyway,
+ * the same way mayAccessControlPlane() is one named function rather than an
+ * inlined check, because transport and locality are different questions that
+ * happen to coincide now and stop coinciding the day the Electron launcher can
+ * point at a REMOTE daemon over HTTP — at which point `activeTransport()` says
+ * 'http' while the picker question is unchanged in shape, just answered 'no'.
+ * Callers ask this, never `activeTransport()` or `isRemote()` directly, so the
+ * day the two diverge there is exactly one place to update.
+ */
+export const isDaemonLocal = (): boolean => activeTransport() === 'ipc'
 
 let httpApi: RedstartAPI | undefined
 

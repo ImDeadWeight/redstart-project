@@ -76,6 +76,7 @@ const EVENT_NAMESPACE = 'events'
 const NAMESPACES = [
   'hardware', 'llama', 'server', 'profiles', 'tools', 'mcp',
   'capabilities', 'settings', 'models', 'github', 'auth', 'admin', 'plugins',
+  'browse',
 ] as const
 
 export function createHttpAPI(options: HttpApiOptions): RedstartAPI {

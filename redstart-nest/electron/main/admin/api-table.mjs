@@ -14,6 +14,14 @@
 // scripts/test-admin-api.mjs: a namespace added to one and not the other is a
 // set of methods reachable over one transport and silently absent from the
 // other, which is exactly the drift this pass exists to remove.
+//
+// EXCEPTION: `browse` (browse-routes.mjs, Phase 4 §4.2) is HTTP-only,
+// deliberately not registered over IPC — it is the server-side stand-in for a
+// native picker, so the only client that would ever call it is one for which
+// `isDaemonLocal()` is false, and IPC only exists when it is true. The parity
+// check above only runs registered-over-IPC -> tabled, not the reverse, so a
+// table-only namespace is not drift; it is the reason the check has a
+// direction.
 // =============================================================================
 
 import { githubHandlers } from '../ipc/github.mjs'
@@ -28,6 +36,7 @@ import { capabilitiesHandlers } from '../ipc/capabilities.mjs'
 import { serverHandlers } from '../ipc/server.mjs'
 import { modelsHandlers } from '../ipc/models.mjs'
 import { pluginsHandlers } from '../ipc/plugins.mjs'
+import { browseHandlers } from './browse-routes.mjs'
 
 /**
  * Every control-plane method, keyed by channel.
@@ -50,5 +59,6 @@ export function buildAdminApi(deps) {
     // Named getWindow, not getMainWindow — plugins.mjs mirrors models.mjs's own
     // progress-event dependency name.
     ...pluginsHandlers({ refreshLiveToolsConfig: deps.refreshLiveToolsConfig, getWindow: deps.getMainWindow }),
+    ...browseHandlers(),
   }
 }
