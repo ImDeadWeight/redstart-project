@@ -21,7 +21,8 @@
 // as auth.mjs's `sessions` map) so a plain function and the IPC handler that
 // wraps it see the exact same live download, not two independent trackers.
 import { shell } from 'electron'
-import { handle } from './guard.mjs'
+import { registerAll } from './guard.mjs'
+import { localOnly } from './transport.mjs'
 import * as fsp from 'fs/promises'
 import * as path from 'path'
 
@@ -198,7 +199,7 @@ export function getModelDownloadStatus() {
   return active ? { active: true, repoId: active.repoId, artifactId: active.artifactId } : { active: false }
 }
 
-export function registerModelsHandlers(deps) {
+export function modelsHandlers(deps) {
   const { getMainWindow } = deps
 
   // One event channel for this namespace, named exactly once so the literal is
@@ -206,27 +207,37 @@ export function registerModelsHandlers(deps) {
   // preload subscriptions by scanning main-process source for send() calls with
   // a literal channel, and an event hidden behind a variable would silently
   // drop out of that check.
+  //
+  // A window-only push, so an HTTP caller of models:download gets no progress at
+  // all — it still downloads, it just reports nothing until it finishes. Phase 5
+  // is what replaces this with a broker both the window and an SSE subscriber
+  // read; until then the gap is here rather than pretended away.
   const sendProgress = (payload) => {
     const win = getMainWindow?.()
     if (win && !win.isDestroyed()) win.webContents.send('models:download-progress', payload)
   }
 
-  // --- Catalog ---
+  return {
+    // --- Catalog ---
+    'models:publishers': () => listTrustedPublishers(),
+    'models:search': async (opts) => searchModelCatalog(opts),
+    'models:detail': async (repoId) => getModelDetailById(repoId),
 
-  handle('models:publishers', () => listTrustedPublishers())
-  handle('models:search', async (_, opts) => searchModelCatalog(opts))
-  handle('models:detail', async (_, repoId) => getModelDetailById(repoId))
+    // --- Local storage ---
+    'models:local': async () => listLocalModels(deps),
+    'models:disk-space': async () => getModelsDiskSpace(deps),
+    // Opens a file-explorer window on whichever machine runs this. Meaningless
+    // to a remote admin, and misleading if it silently opened one on the server.
+    'models:reveal-folder': localOnly(async () => revealModelsFolder(deps)),
+    'models:delete-local': async (name) => deleteLocalModel(name, deps),
 
-  // --- Local storage ---
+    // --- Download ---
+    'models:download': async (req) => startModelDownload(req, { ...deps, sendProgress }),
+    'models:cancel-download': () => cancelModelDownload(),
+    'models:download-status': () => getModelDownloadStatus(),
+  }
+}
 
-  handle('models:local', async () => listLocalModels(deps))
-  handle('models:disk-space', async () => getModelsDiskSpace(deps))
-  handle('models:reveal-folder', async () => revealModelsFolder(deps))
-  handle('models:delete-local', async (_, name) => deleteLocalModel(name, deps))
-
-  // --- Download ---
-
-  handle('models:download', async (_, req) => startModelDownload(req, { ...deps, sendProgress }))
-  handle('models:cancel-download', () => cancelModelDownload())
-  handle('models:download-status', () => getModelDownloadStatus())
+export function registerModelsHandlers(deps) {
+  registerAll(modelsHandlers(deps))
 }

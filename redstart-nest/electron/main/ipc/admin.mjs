@@ -11,7 +11,7 @@
 //
 // Handler bodies are exported as plain functions (Phase 1, §1.3) so the Phase 3
 // route can call them directly; importing this module never registers anything.
-import { handle } from './guard.mjs'
+import { registerAll } from './guard.mjs'
 import {
   startAdminListener, getAdminListenerState, bindHostRejection, isLoopbackBind,
 } from '../admin-listener.mjs'
@@ -81,6 +81,12 @@ export async function setControlPlaneBindHost(host, { readSettings, writeSetting
 // invented later, and Phase 3's route is what will call it. Editing
 // adminBindHost in settings.json still works, and takes effect at next start —
 // which is what the warning below the read is for.
+export function adminHandlers() {
+  return {
+    'admin:get-control-plane': () => getControlPlane(),
+  }
+}
+
 export function registerAdminHandlers(_deps) {
-  handle('admin:get-control-plane', () => getControlPlane())
+  registerAll(adminHandlers())
 }

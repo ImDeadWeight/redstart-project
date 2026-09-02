@@ -15,7 +15,7 @@
 // getMainWindow()?.webContents.send(...) calls inside launchServer are left
 // exactly as they are: replacing them with the shared event broker is Phase 5's
 // job, not this one.
-import { handle } from './guard.mjs'
+import { registerAll } from './guard.mjs'
 import { spawn } from 'child_process'
 import * as path from 'path'
 import { startGateway, stopGateway, getGatewayPort } from '../tools-gateway.mjs'
@@ -254,30 +254,18 @@ export function syncServerTools(tools, { serverState, refreshLiveToolsConfig }) 
   return { live: true }
 }
 
-export function registerServerHandlers(deps) {
+export function serverHandlers(deps) {
   const { getLocalIp } = deps
+  return {
+    'llama:generate-command': (config) => generateLlamaCommand(config, deps),
+    'llama:launch': async (config) => launchServer(config, deps),
+    'server:stop': async () => stopServer(deps),
+    'server:status': async (config) => getServerStatus(config, deps),
+    'server:sync-tools': (tools) => syncServerTools(tools, deps),
+    'server:get-ip': () => getLocalIp(),
+  }
+}
 
-  // --- Llama command preview ---
-
-  handle('llama:generate-command', (_, config) => generateLlamaCommand(config, deps))
-
-  // --- Server launch ---
-
-  handle('llama:launch', async (_, config) => launchServer(config, deps))
-
-  // --- Server stop (graceful) ---
-
-  handle('server:stop', async () => stopServer(deps))
-
-  // --- Server status ---
-
-  handle('server:status', async (_, config) => getServerStatus(config, deps))
-
-  // --- Live tools sync ---
-
-  handle('server:sync-tools', (_, tools) => syncServerTools(tools, deps))
-
-  // --- Network info ---
-
-  handle('server:get-ip', () => getLocalIp())
+export function registerServerHandlers(deps) {
+  registerAll(serverHandlers(deps))
 }

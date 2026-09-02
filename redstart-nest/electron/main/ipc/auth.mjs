@@ -7,7 +7,7 @@
 // headless-admin-plane implementation plan) so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerAuthHandlers() does that.
-import { handle } from './guard.mjs'
+import { registerAll } from './guard.mjs'
 import { getAuthRequired, setAuthRequired, hasOwner, createOwner } from '../auth.mjs'
 import { closeAllMcpSessions } from '../mcp-server.mjs'
 import { logEvent } from '../logger.mjs'
@@ -42,10 +42,18 @@ export function createFirstAdmin(username, password) {
   return { success: true, apiKey: result.apiKey, id: result.account.id }
 }
 
-export function registerAuthHandlers() {
-  // --- Auth ---
+export function authHandlers() {
+  return {
+    'auth:get-config': () => getAuthConfig(),
+    'auth:set-required': (required) => setAuthRequiredFlag(required),
+    // Still reachable, and still the launcher's create-owner form on Windows.
+    // A remote client uses POST /admin/bootstrap instead, which is token-gated;
+    // this channel is safe without one because IPC is its only door and that
+    // door means physical access to the machine.
+    'auth:create-first-admin': (username, password) => createFirstAdmin(username, password),
+  }
+}
 
-  handle('auth:get-config', () => getAuthConfig())
-  handle('auth:set-required', (_, required) => setAuthRequiredFlag(required))
-  handle('auth:create-first-admin', (_, username, password) => createFirstAdmin(username, password))
+export function registerAuthHandlers() {
+  registerAll(authHandlers())
 }

@@ -35,7 +35,8 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { dialog } from 'electron'
 import { configDir } from '../platform-paths.mjs'
-import { handle } from './guard.mjs'
+import { registerAll } from './guard.mjs'
+import { localOnly } from './transport.mjs'
 import { isPlainObject, isNonEmptyString, optional } from './validate.mjs'
 import { logEvent } from '../logger.mjs'
 import {
@@ -498,29 +499,33 @@ export async function pickPluginFolder() {
   return result.canceled ? null : result.filePaths[0]
 }
 
+export function pluginsHandlers(deps) {
+  return {
+    // --- inventory ---
+    'plugins:list': () => listAllPlugins(),
+    'plugins:get': (id) => getPluginDetail(id),
+
+    // --- install ---
+    'plugins:install': async (req) => installPlugin(req, deps),
+    'plugins:cancel-install': () => cancelPluginInstall(),
+    'plugins:install-status': () => getPluginInstallStatus(),
+    'plugins:confirm-install': (entry) => confirmPluginInstall(entry, deps),
+
+    // --- lifecycle ---
+    'plugins:set-enabled': (id, enabled) => setPluginEnabled(id, enabled, deps),
+    'plugins:set-class': (id, toolName, cls) => setPluginToolClass(id, toolName, cls),
+    'plugins:set-classes': (id, toolNames, cls) => setPluginToolClasses(id, toolNames, cls),
+    'plugins:uninstall': async (id) => uninstallPluginById(id, deps),
+    'plugins:test': async (id) => testPlugin(id),
+
+    // --- registry browsing ---
+    'plugins:search': async (opts) => searchPluginRegistry(opts),
+    // Browses the CLIENT's disk. A path picked on a laptop and saved as a path
+    // on the server is trap 5.2 exactly; Phase 4 replaces it.
+    'plugins:pick-folder': localOnly(async () => pickPluginFolder()),
+  }
+}
+
 export function registerPluginsHandlers(deps) {
-  // --- inventory ----------------------------------------------------------
-
-  handle('plugins:list', () => listAllPlugins())
-  handle('plugins:get', (_, id) => getPluginDetail(id))
-
-  // --- install --------------------------------------------------------------
-
-  handle('plugins:install', async (_, req) => installPlugin(req, deps))
-  handle('plugins:cancel-install', () => cancelPluginInstall())
-  handle('plugins:install-status', () => getPluginInstallStatus())
-  handle('plugins:confirm-install', (_, entry) => confirmPluginInstall(entry, deps))
-
-  // --- lifecycle ------------------------------------------------------------
-
-  handle('plugins:set-enabled', (_, id, enabled) => setPluginEnabled(id, enabled, deps))
-  handle('plugins:set-class', (_, id, toolName, cls) => setPluginToolClass(id, toolName, cls))
-  handle('plugins:set-classes', (_, id, toolNames, cls) => setPluginToolClasses(id, toolNames, cls))
-  handle('plugins:uninstall', async (_, id) => uninstallPluginById(id, deps))
-  handle('plugins:test', async (_, id) => testPlugin(id))
-
-  // --- registry browsing ------------------------------------------------------
-
-  handle('plugins:search', async (_, opts) => searchPluginRegistry(opts))
-  handle('plugins:pick-folder', async () => pickPluginFolder())
+  registerAll(pluginsHandlers(deps))
 }

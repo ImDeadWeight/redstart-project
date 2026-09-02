@@ -19,7 +19,8 @@
 // exercises that shape — but the loop body now just calls one shared function
 // per capability rather than defining the logic inline three times.
 import { dialog } from 'electron'
-import { handle } from './guard.mjs'
+import { registerAll } from './guard.mjs'
+import { localOnly } from './transport.mjs'
 import { getCapabilities, setCapabilityConfig } from '../tools-storage.mjs'
 import { encryptSecret, decryptSecret } from '../secrets.mjs'
 import { testConnection as testPostgresConnection } from '../postgres-tool.mjs'
@@ -194,21 +195,30 @@ export function setFolderScopedCapability(cap, config, { refreshLiveToolsConfig 
   return { ok: true }
 }
 
-export function registerCapabilitiesHandlers(deps) {
-  // --- Capabilities ---
+export function capabilitiesHandlers(deps) {
+  const handlers = {
+    'capabilities:get': () => getCapabilitiesConfig(),
+    'capabilities:set-postgres': (config) => setPostgresConfig(config, deps),
+    'capabilities:test-postgres': async (connectionString) => testPostgresConfig(connectionString),
+    'capabilities:select-documents-folder': localOnly(async () => selectDocumentsFolder()),
+    'capabilities:set-documents-folder': (config) => setDocumentsFolder(config, deps),
+    'capabilities:select-sqlite-folder': localOnly(async () => selectSqliteFolder()),
+    'capabilities:set-sqlite': (config) => setSqliteConfig(config, deps),
+    'capabilities:set-scholar': (config) => setScholarConfig(config, deps),
+  }
 
-  handle('capabilities:get', () => getCapabilitiesConfig())
-  handle('capabilities:set-postgres', (_, config) => setPostgresConfig(config, deps))
-  handle('capabilities:test-postgres', async (_, connectionString) => testPostgresConfig(connectionString))
-  handle('capabilities:select-documents-folder', async () => selectDocumentsFolder())
-  handle('capabilities:set-documents-folder', (_, config) => setDocumentsFolder(config, deps))
-  handle('capabilities:select-sqlite-folder', async () => selectSqliteFolder())
-  handle('capabilities:set-sqlite', (_, config) => setSqliteConfig(config, deps))
-  handle('capabilities:set-scholar', (_, config) => setScholarConfig(config, deps))
-
+  // Built in a loop, and that is exactly why the contract tests scan the real
+  // table rather than the source: a computed channel name is invisible to a grep
+  // and this trio has broken that way once already.
   for (const cap of ['vault', 'git', 'file_system']) {
     const slug = cap.replace(/_/g, '-')   // file_system -> file-system; vault/git unchanged
-    handle(`capabilities:select-${slug}-folder`, async () => selectFolderScopedFolder())
-    handle(`capabilities:set-${slug}`, (_, config) => setFolderScopedCapability(cap, config, deps))
+    handlers[`capabilities:select-${slug}-folder`] = localOnly(async () => selectFolderScopedFolder())
+    handlers[`capabilities:set-${slug}`] = (config) => setFolderScopedCapability(cap, config, deps)
   }
+
+  return handlers
+}
+
+export function registerCapabilitiesHandlers(deps) {
+  registerAll(capabilitiesHandlers(deps))
 }

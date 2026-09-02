@@ -10,7 +10,7 @@
 // headless-admin-plane implementation plan) so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerGithubHandlers() does that.
-import { handle } from './guard.mjs'
+import { registerAll } from './guard.mjs'
 
 export async function checkGithubReleases() {
   const releases = {}
@@ -32,8 +32,12 @@ export async function checkGithubReleases() {
   return releases
 }
 
-export function registerGithubHandlers() {
-  // --- GitHub releases (unchanged) ---
+export function githubHandlers() {
+  return {
+    'github:check-releases': () => checkGithubReleases(),
+  }
+}
 
-  handle('github:check-releases', () => checkGithubReleases())
+export function registerGithubHandlers() {
+  registerAll(githubHandlers())
 }

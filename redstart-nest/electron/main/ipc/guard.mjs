@@ -101,3 +101,20 @@ export function handle(channel, fn) {
     return fn(event, ...args)
   })
 }
+
+/**
+ * Bind a whole handler table to ipcMain.
+ *
+ * The table's functions take their arguments directly — no leading `event` —
+ * because the other consumer of the same table is an HTTP route, which has no
+ * event to pass. The `(event, ...args)` shape stops at this line, which is where
+ * it belongs: `event` exists to be checked, and it is checked here.
+ *
+ * See ipc/transport.mjs for why the table is the source and both transports are
+ * readers, rather than the HTTP surface being derived from what IPC registered.
+ */
+export function registerAll(handlers) {
+  for (const [channel, fn] of Object.entries(handlers)) {
+    handle(channel, (_event, ...args) => fn(...args))
+  }
+}

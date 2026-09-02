@@ -16,7 +16,8 @@
 // gates the native picker on "the daemon is local" and adds the server-side
 // alternative; this phase only extracts bodies unchanged.
 import { dialog } from 'electron'
-import { handle } from './guard.mjs'
+import { registerAll } from './guard.mjs'
+import { localOnly } from './transport.mjs'
 import { binaryPathRejection, isAbsolutePath } from './validate.mjs'
 import { logEvent } from '../logger.mjs'
 
@@ -103,17 +104,19 @@ export async function selectModelsDir({ resolveModelsDir }) {
   return result.canceled ? null : result.filePaths[0]
 }
 
+export function settingsHandlers(deps) {
+  return {
+    'settings:get-binary-path': () => getBinaryPath(deps),
+    'settings:set-binary-path': (p) => setBinaryPath(p, deps),
+    'settings:select-binary': localOnly(async () => selectBinary(deps)),
+    'settings:get-resolved-binary': () => getResolvedBinary(deps),
+
+    'settings:get-models-dir': () => getModelsDir(deps),
+    'settings:set-models-dir': (p) => setModelsDir(p, deps),
+    'settings:select-models-dir': localOnly(async () => selectModelsDir(deps)),
+  }
+}
+
 export function registerSettingsHandlers(deps) {
-  // --- Settings ---
-
-  handle('settings:get-binary-path', () => getBinaryPath(deps))
-  handle('settings:set-binary-path', (_, p) => setBinaryPath(p, deps))
-  handle('settings:select-binary', async () => selectBinary(deps))
-  handle('settings:get-resolved-binary', () => getResolvedBinary(deps))
-
-  // --- Models folder ---
-
-  handle('settings:get-models-dir', () => getModelsDir(deps))
-  handle('settings:set-models-dir', (_, p) => setModelsDir(p, deps))
-  handle('settings:select-models-dir', async () => selectModelsDir(deps))
+  registerAll(settingsHandlers(deps))
 }

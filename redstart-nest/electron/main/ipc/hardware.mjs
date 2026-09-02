@@ -12,7 +12,8 @@
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerHardwareHandlers() does that.
 import { dialog } from 'electron'
-import { handle } from './guard.mjs'
+import { registerAll } from './guard.mjs'
+import { localOnly } from './transport.mjs'
 
 export async function scanHardware({ execFileAsync }) {
   const specs = {
@@ -99,9 +100,13 @@ export async function selectModelFile({ getModelsDir }) {
   return result.canceled ? null : result.filePaths[0]
 }
 
-export function registerHardwareHandlers(deps) {
-  // --- Hardware ---
+export function hardwareHandlers(deps) {
+  return {
+    'hardware:scan': async () => scanHardware(deps),
+    'hardware:select-model': localOnly(async () => selectModelFile(deps)),
+  }
+}
 
-  handle('hardware:scan', async () => scanHardware(deps))
-  handle('hardware:select-model', async () => selectModelFile(deps))
+export function registerHardwareHandlers(deps) {
+  registerAll(hardwareHandlers(deps))
 }

@@ -28,6 +28,8 @@ import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
 import { startAdminListener, stopAdminListener, getAdminListenerState, DEFAULT_ADMIN_BIND_HOST } from './admin-listener.mjs'
 import { startDiscovery, stopDiscovery, lastKnownDiscovery } from './discovery.mjs'
 import { ensureBootstrapToken } from './bootstrap-token.mjs'
+import { buildAdminApi } from './admin/api-table.mjs'
+import { setAdminApi } from './admin/api-routes.mjs'
 import { ensureFirewallRule } from './firewall.mjs'
 import { getPrimaryLanIp } from './net-interfaces.mjs'
 import { cleanupOldConversations } from './conversations-storage.mjs'
@@ -683,11 +685,16 @@ app.whenReady().then(async () => {
   // Retries any plugin folder an uninstall couldn't delete last session (a
   // Windows file lock, most likely) — best-effort, never blocks startup (P4-4).
   sweepPendingDeletions()
+  // Before the admin listener binds, not after: the same handler table backs
+  // both transports, and a control-plane request that arrives before it is
+  // assembled gets a 503 rather than the method it asked for. Registering IPC
+  // this early is safe because guard.mjs fails closed until createWindow()
+  // pins the trusted window below.
+  setupIpcHandlers()
   startDiscoveryBeacon()
   startAdminPlane()
   if (!app.isPackaged) await installReactDevTools()
   createWindow()
-  setupIpcHandlers()
 })
 
 // Dev-only: adds the Components/Profiler panels to Chromium DevTools so the
@@ -767,7 +774,7 @@ function setupIpcHandlers() {
   // before any tools/list or config build, or plugin tools resolve to no
   // capability and are neither classified nor bannable.
   setPluginCapabilityProvider(pluginCapabilities)
-  registerIpcHandlers({
+  const deps = {
     execFileAsync,
     readSettings,
     writeSettings,
@@ -793,7 +800,13 @@ function setupIpcHandlers() {
     // no profile has been started yet, since the ports are derived from it.
     getConfiguredPort: () => serverState.lastConfig?.port ?? 19080,
     userDataDir,
-  })
+  }
+
+  registerIpcHandlers(deps)
+  // The same collaborators, the same handler functions, a second transport.
+  // See electron/main/ipc/transport.mjs for why the table is the source and
+  // both transports read it, rather than one being derived from the other.
+  setAdminApi(buildAdminApi(deps))
 }
 
 // ---------------------------------------------------------------------------

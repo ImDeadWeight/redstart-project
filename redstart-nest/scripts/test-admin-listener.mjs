@@ -391,7 +391,7 @@ async function get(urlPath, headers = {}) {
 }
 
 await test('🔍 it answers before any llama:launch has happened', async () => {
-  const res = await get('/admin/api/whoami', bearer(ownerToken))
+  const res = await get('/admin/whoami', bearer(ownerToken))
   assert(res.status === 200, `expected 200, got ${res.status}`)
   const body = await res.json()
   assert(body.user?.tier === 'owner', `unexpected body: ${JSON.stringify(body)}`)
@@ -399,22 +399,22 @@ await test('🔍 it answers before any llama:launch has happened', async () => {
 })
 
 await test('🔍 an anonymous caller is refused', async () => {
-  const res = await get('/admin/api/whoami')
+  const res = await get('/admin/whoami')
   assert(res.status === 401, `expected 401, got ${res.status}`)
 })
 
 await test('🔍 an admin-tier session is refused (403, authenticated but not owner)', async () => {
-  const res = await get('/admin/api/whoami', bearer(adminToken))
+  const res = await get('/admin/whoami', bearer(adminToken))
   assert(res.status === 403, `expected 403, got ${res.status}`)
 })
 
 await test('🔍 a user-tier session is refused', async () => {
-  const res = await get('/admin/api/whoami', bearer(userToken))
+  const res = await get('/admin/whoami', bearer(userToken))
   assert(res.status === 403, `expected 403, got ${res.status}`)
 })
 
 await test("🔍 the owner's API key does not work over HTTP either", async () => {
-  const res = await get('/admin/api/whoami', bearer(ownerApiKey))
+  const res = await get('/admin/whoami', bearer(ownerApiKey))
   assert(res.status === 401, `expected 401, got ${res.status}`)
 })
 
@@ -425,7 +425,7 @@ await test('🔍 routes that do not exist are gated too — 401 before 404', asy
   }
   // And an authenticated owner gets the honest 404, so the 401 above is the
   // gate talking and not a missing route by accident.
-  const owner = await get('/admin/api/nope', bearer(ownerToken))
+  const owner = await get('/admin/nope', bearer(ownerToken))
   assert(owner.status === 404, `expected 404 for the owner, got ${owner.status}`)
   return 'the route table is not public information'
 })
@@ -433,9 +433,9 @@ await test('🔍 routes that do not exist are gated too — 401 before 404', asy
 await test('🔍 authRequired: false does not open the listener', async () => {
   setAuthRequired(false)
   try {
-    const anon = await get('/admin/api/whoami')
+    const anon = await get('/admin/whoami')
     assert(anon.status === 401, `auth-off let an anonymous caller in with ${anon.status}`)
-    const owner = await get('/admin/api/whoami', bearer(ownerToken))
+    const owner = await get('/admin/whoami', bearer(ownerToken))
     assert(owner.status === 200, `auth-off locked the owner out with ${owner.status}`)
     return 'the data plane toggle does not reach here'
   } finally {
@@ -444,7 +444,7 @@ await test('🔍 authRequired: false does not open the listener', async () => {
 })
 
 await test('no CORS headers — this listener serves its own origin only', async () => {
-  const res = await get('/admin/api/whoami', bearer(ownerToken))
+  const res = await get('/admin/whoami', bearer(ownerToken))
   const allow = res.headers.get('access-control-allow-origin')
   assert(allow === null, `the control plane sent Access-Control-Allow-Origin: ${allow}`)
 })

@@ -49,6 +49,7 @@ import { authenticateControlPlane } from './auth.mjs'
 import { mayAccessControlPlane } from './permissions.mjs'
 import { ADMIN_PORT } from './ports.mjs'
 import { isAdminAuthRoute, handleAdminAuthRoute } from './admin/auth-routes.mjs'
+import { isAdminApiRoute, handleAdminApiRoute } from './admin/api-routes.mjs'
 import { sendJson } from './admin/http.mjs'
 import { logEvent } from './logger.mjs'
 
@@ -238,10 +239,18 @@ async function handleAdminRequest(req, res) {
   if (!authResult.ok) return sendJson(res, 401, { error: 'Unauthorized' })
   if (!mayAccessControlPlane(authResult.account)) return sendJson(res, 403, { error: 'Forbidden' })
 
-  // Phase 2 ships the plane, not yet its routes: login, bootstrap and the
-  // RedstartAPI surface are Phase 3. This one exists so the gate above is
-  // exercised end to end by something real rather than only by refusals.
-  if (req.method === 'GET' && urlPath === '/admin/api/whoami') {
+  // Everything past this line has an owner. The API surface is one route per
+  // RedstartAPI method (admin/api-routes.mjs); the gate stays HERE rather than
+  // being repeated per route, which is what makes a route added later gated by
+  // default instead of by whoever remembers.
+  if (isAdminApiRoute(urlPath)) {
+    return await handleAdminApiRoute(req, res, urlPath)
+  }
+
+  // Kept from Phase 2, and still earning its place: the cheapest possible probe
+  // that the gate above lets the right caller through, with no side effects to
+  // reason about when it fails.
+  if (req.method === 'GET' && urlPath === '/admin/whoami') {
     return sendJson(res, 200, { user: authResult.account })
   }
 

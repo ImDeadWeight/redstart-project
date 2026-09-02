@@ -10,7 +10,7 @@
 // registers anything; only registerToolsHandlers() does that. Two of these
 // need `deps` (buildGatewayConfig, userDataDir), so it is threaded through as
 // a plain parameter, same shape as the IPC deps object.
-import { handle } from './guard.mjs'
+import { registerAll } from './guard.mjs'
 import * as path from 'path'
 import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES, CLIENT_APPS } from '../tools-definitions.mjs'
 import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup } from '../tools-storage.mjs'
@@ -68,14 +68,18 @@ export function estimateToolsContext(llamaConfig, { buildGatewayConfig }) {
   return estimateActiveToolTokens(buildGatewayConfig(llamaConfig))
 }
 
-export function registerToolsHandlers(deps) {
-  // --- Tools ---
+export function toolsHandlers(deps) {
+  return {
+    'tools:list-all': () => listAllTools(),
+    'tools:add-tool': (tool) => addTool(tool),
+    'tools:delete-tool': (id) => deleteTool(id),
+    'tools:add-group': (group) => addGroup(group),
+    'tools:delete-group': (id) => deleteGroup(id),
+    'tools:apply-config': (llamaConfig) => applyToolsConfig(llamaConfig, deps),
+    'tools:estimate-context': (llamaConfig) => estimateToolsContext(llamaConfig, deps),
+  }
+}
 
-  handle('tools:list-all', () => listAllTools())
-  handle('tools:add-tool', (_, tool) => addTool(tool))
-  handle('tools:delete-tool', (_, id) => deleteTool(id))
-  handle('tools:add-group', (_, group) => addGroup(group))
-  handle('tools:delete-group', (_, id) => deleteGroup(id))
-  handle('tools:apply-config', (_, llamaConfig) => applyToolsConfig(llamaConfig, deps))
-  handle('tools:estimate-context', (_, llamaConfig) => estimateToolsContext(llamaConfig, deps))
+export function registerToolsHandlers(deps) {
+  registerAll(toolsHandlers(deps))
 }

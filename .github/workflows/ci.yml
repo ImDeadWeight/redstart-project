@@ -150,6 +150,9 @@ jobs:
       - name: "Security: bootstrap token / control-plane login"
         run: node scripts/test-admin-bootstrap.mjs
 
+      - name: "Security: control-plane API coverage + gating"
+        run: node scripts/test-admin-api.mjs
+
       - name: "Security: preload/main IPC contract"
         run: node scripts/test-ipc-contract.mjs
 

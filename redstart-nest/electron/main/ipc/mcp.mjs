@@ -7,7 +7,7 @@
 // headless-admin-plane implementation plan) so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerMcpHandlers() does that.
-import { handle } from './guard.mjs'
+import { registerAll } from './guard.mjs'
 import * as crypto from 'crypto'
 import { getExternalServers, addExternalServer, deleteExternalServer } from '../tools-storage.mjs'
 import { validateExternalMcpUrl, parseMcpResponseBody } from '../external-mcp-url.mjs'
@@ -146,12 +146,16 @@ export async function testExternalMcp(arg, { getConfiguredPort } = {}) {
   }
 }
 
-export function registerMcpHandlers(deps = {}) {
-  // --- MCP ---
+export function mcpHandlers(deps = {}) {
+  return {
+    'mcp:list-external': () => listExternalMcpServers(),
+    'mcp:validate-external': (url) => validateExternalMcp(url, deps),
+    'mcp:add-external': (server) => addExternalMcp(server, deps),
+    'mcp:remove-external': (id) => removeExternalMcp(id),
+    'mcp:test-external': async (arg) => testExternalMcp(arg, deps),
+  }
+}
 
-  handle('mcp:list-external', () => listExternalMcpServers())
-  handle('mcp:validate-external', (_, url) => validateExternalMcp(url, deps))
-  handle('mcp:add-external', (_, server) => addExternalMcp(server, deps))
-  handle('mcp:remove-external', (_, id) => removeExternalMcp(id))
-  handle('mcp:test-external', async (_, arg) => testExternalMcp(arg, deps))
+export function registerMcpHandlers(deps = {}) {
+  registerAll(mcpHandlers(deps))
 }
