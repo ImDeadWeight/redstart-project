@@ -107,6 +107,7 @@ const registrars = [
   ['hardware', 'registerHardwareHandlers'],
   ['settings', 'registerSettingsHandlers'],
   ['auth', 'registerAuthHandlers'],
+  ['admin', 'registerAdminHandlers'],
   ['profiles', 'registerProfilesHandlers'],
   ['tools', 'registerToolsHandlers'],
   ['mcp', 'registerMcpHandlers'],

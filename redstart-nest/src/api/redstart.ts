@@ -9,7 +9,7 @@
 
 import type {
   HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup,
-  ExternalMcpServer, LlamaConfig, ClientApp,
+  ExternalMcpServer, LlamaConfig, ClientApp, ControlPlaneState,
   CatalogModel, ModelDetail, ModelArtifact, LocalModelFile, DownloadProgress,
 } from '../types'
 
@@ -31,6 +31,11 @@ export type RedstartAPI = {
     // restart. { live: false } when nothing is running to push to — not an
     // error, the next launch reads the saved profile fresh regardless.
     syncTools: (tools: LlamaConfig['tools']) => Promise<{ live: boolean }>
+  }
+  // The control plane's own exposure — read-only from the launcher. Retires
+  // with this bridge when Phase 3 puts it on HTTP against the listener itself.
+  admin: {
+    getControlPlane: () => Promise<ControlPlaneState>
   }
   profiles: {
     list: () => Promise<string[]>

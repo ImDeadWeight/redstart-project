@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
+import type { ControlPlaneState } from '../types'
+import { getAPI } from '../api/redstart'
 import { SectionTitle, TogglePill, inputCls, btnCls } from '../components/ui'
 import { buildAddresses } from './addresses'
 
@@ -37,6 +39,50 @@ function AddressRow({ url, label, note, primary }: {
       <button onClick={copy} className={`${btnCls.subtle} shrink-0`} title="Copy to clipboard">
         {copied ? 'copied' : 'copy'}
       </button>
+    </div>
+  )
+}
+
+// The single act that turns a low-risk deployment into a high-risk one is
+// forwarding the control plane through a router, at which point the box joins
+// the population the internet scans continuously. That is a bigger real-world
+// risk than any certificate decision, and a visible warning costs almost
+// nothing (headless-admin-plane-plan.md decision 19).
+//
+// Deliberately NOT shown for the DATA plane's network mode. Two planes, two
+// risks, and they are not the same size: the gateway serves inference to
+// devices on the LAN, which is what people install this for, while the control
+// plane spawns processes and edits accounts. A warning that fires on the
+// ordinary case is a warning people learn to dismiss.
+function ControlPlaneNotice() {
+  const [state, setState] = useState<ControlPlaneState | null>(null)
+
+  useEffect(() => {
+    let stale = false
+    getAPI()?.admin.getControlPlane()
+      .then(s => { if (!stale) setState(s) })
+      .catch(() => { if (!stale) setState(null) })
+    return () => { stale = true }
+  }, [])
+
+  if (!state?.exposed) return null
+
+  return (
+    <div className="mt-4 rounded border border-red-800 bg-red-950/40 p-3">
+      <p className="text-xs font-semibold text-red-300">
+        The admin interface is reachable from the network
+      </p>
+      <p className="text-[11px] text-red-200/80 mt-1 leading-relaxed">
+        It is bound to <span className="font-mono">{state.bindHost}:{state.port}</span> rather than to this
+        machine only. Anything that can reach that address can attempt to sign in as the owner, and the
+        owner can start and stop processes on this box. Do not forward this port through a router — put a
+        reverse proxy in front of it, or keep it on a VPN or management network. Redstart Nest speaks plain
+        HTTP and does not encrypt this traffic itself.
+      </p>
+      <p className="text-[11px] text-red-200/60 mt-1.5">
+        Set <span className="font-mono">adminBindHost</span> to <span className="font-mono">127.0.0.1</span> in
+        settings.json to put it back on this machine only.
+      </p>
     </div>
   )
 }
@@ -80,6 +126,8 @@ export function NetworkPanel({ networkMode, onToggleNetworkMode, advertisedHost,
         <TogglePill checked={networkMode} onToggle={onToggleNetworkMode} />
         <span className="text-xs text-zinc-300">{networkMode ? 'Local network (HTTP)' : 'Localhost only'}</span>
       </label>
+
+      <ControlPlaneNotice />
 
       {networkMode && (
         <div className="mt-4 grid grid-cols-3 gap-4">

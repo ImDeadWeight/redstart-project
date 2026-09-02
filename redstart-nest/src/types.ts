@@ -173,6 +173,17 @@ export type LlamaConfig = {
 
 export type ServerState = 'stopped' | 'starting' | 'running' | 'stopping'
 
+// Where the admin listener (the control plane) is bound. Separate from
+// networkMode on purpose: that is the DATA plane's exposure, read only at
+// server launch, while this is the control plane's and takes effect the moment
+// it changes. `exposed` is the one fact the UI warns on.
+export type ControlPlaneState = {
+  running: boolean
+  bindHost: string | null
+  port: number
+  exposed: boolean
+}
+
 // networkMode defaults to true because the main use case is serving other
 // devices on the home network. A toggle exists to switch to localhost-only
 // (useful if the user only wants to use the chat from the same PC).

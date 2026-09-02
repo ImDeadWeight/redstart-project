@@ -38,6 +38,7 @@ import { registerGithubHandlers } from './ipc/github.mjs'
 import { registerHardwareHandlers } from './ipc/hardware.mjs'
 import { registerSettingsHandlers } from './ipc/settings.mjs'
 import { registerAuthHandlers } from './ipc/auth.mjs'
+import { registerAdminHandlers } from './ipc/admin.mjs'
 import { registerProfilesHandlers } from './ipc/profiles.mjs'
 import { registerToolsHandlers } from './ipc/tools.mjs'
 import { registerMcpHandlers } from './ipc/mcp.mjs'
@@ -741,6 +742,7 @@ function registerIpcHandlers(deps) {
   registerHardwareHandlers(deps)
   registerSettingsHandlers(deps)
   registerAuthHandlers()
+  registerAdminHandlers(deps)
   registerProfilesHandlers(deps)
   registerToolsHandlers(deps)
   registerMcpHandlers(deps)

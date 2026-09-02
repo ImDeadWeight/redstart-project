@@ -62,7 +62,8 @@ const {
 const { mayAccessControlPlane } = await import('../electron/main/permissions.mjs')
 const { serverPortRejection } = await import('../electron/main/ipc/validate.mjs')
 const { ADMIN_PORT, BEACON_PORT, DEFAULT_GATEWAY_PORT } = await import('../electron/main/ports.mjs')
-const { discoveryPlan, lastKnownDiscovery, discoveryRecordFor } = await import('../electron/main/discovery.mjs')
+const { discoveryPlan, lastKnownDiscovery, discoveryRecordFor, stopDiscovery } = await import('../electron/main/discovery.mjs')
+const { getControlPlane, setControlPlaneBindHost } = await import('../electron/main/ipc/admin.mjs')
 const {
   authenticateControlPlane, login, createOwner, createAccount, setAuthRequired,
 } = await import('../electron/main/auth.mjs')
@@ -442,6 +443,65 @@ await test('the exposure state the UI warns from is reported', () => {
   assert(state.exposed === false, 'a loopback bind reported itself as exposed')
   assert(state.port === ADMIN_TEST_PORT, `reported port ${state.port}`)
 })
+
+// ---------------------------------------------------------------------------
+// 8. Changing where the control plane is bound
+// ---------------------------------------------------------------------------
+// An admin changing this may be doing it to recover access, so it rebinds
+// immediately rather than at next start. The ordering is the part worth
+// pinning: bind first, persist second, and restore the previous address if the
+// new one cannot be bound — a setting saved for an unbindable address would be
+// read back at every boot and fail every time, leaving the box with no control
+// plane and a log line to explain it.
+
+console.log('\n-- rebinding the control plane --')
+
+let storedSettings = {}
+const settingsDeps = {
+  readSettings: () => JSON.parse(JSON.stringify(storedSettings)),
+  writeSettings: (data) => { storedSettings = JSON.parse(JSON.stringify(data)) },
+}
+
+await test('an invalid address is refused and nothing is persisted', async () => {
+  const result = await setControlPlaneBindHost('redstart.local', settingsDeps)
+  assert(result.ok === false, 'a hostname was accepted as a bind address')
+  assert(storedSettings.adminBindHost === undefined, 'a rejected address was written to settings')
+  assert(getControlPlane().bindHost === '127.0.0.1', `the listener moved to ${getControlPlane().bindHost}`)
+})
+
+await test('🔍 a valid address rebinds immediately and is persisted', async () => {
+  const result = await setControlPlaneBindHost('0.0.0.0', settingsDeps)
+  assert(result.ok === true, `rebind failed: ${result.error}`)
+  assert(storedSettings.adminBindHost === '0.0.0.0', `settings hold ${storedSettings.adminBindHost}`)
+  assert(result.state.exposed === true, 'a wildcard bind did not report itself as exposed')
+  assert(result.state.port === ADMIN_TEST_PORT, `the rebind moved the port to ${result.state.port}`)
+  return 'the port travels with the address'
+})
+
+await test('🔍 an address this host cannot bind restores the previous one', async () => {
+  // TEST-NET-3 (RFC 5737). Not assigned to any interface here, so listen()
+  // fails — which is the case that must not leave the box unreachable.
+  const result = await setControlPlaneBindHost('203.0.113.1', settingsDeps)
+  assert(result.ok === false, 'binding an address this host does not have reported success')
+  assert(getControlPlane().running === true, 'a failed rebind left the control plane down')
+  assert(getControlPlane().bindHost === '0.0.0.0', `restored to ${getControlPlane().bindHost}, expected the previous 0.0.0.0`)
+  assert(storedSettings.adminBindHost === '0.0.0.0', `a failed rebind persisted ${storedSettings.adminBindHost}`)
+  return 'bind first, persist second'
+})
+
+await test('moving back to loopback clears the exposure', async () => {
+  const result = await setControlPlaneBindHost('127.0.0.1', settingsDeps)
+  assert(result.ok === true, `rebind failed: ${result.error}`)
+  assert(result.state.exposed === false, 'loopback still reported as exposed')
+})
+
+// Changing the bind address re-evaluates discovery on purpose — an exposed
+// control plane is a reason to advertise that did not exist a moment ago. Which
+// means the wildcard rebind above really did publish over mDNS and bind :80 on
+// this machine. The final loopback rebind already tears that down; this is the
+// belt to its braces, because a suite that leaves the host advertising itself
+// on the LAN is a suite nobody should have to think about before running.
+stopDiscovery()
 
 stopAdminListener()
 

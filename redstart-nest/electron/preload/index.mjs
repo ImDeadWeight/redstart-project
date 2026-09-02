@@ -18,6 +18,13 @@ contextBridge.exposeInMainWorld('redstartAPI', {
     syncTools: (tools) => ipcRenderer.invoke('server:sync-tools', tools),
   },
 
+  // Control plane — where the admin listener is bound. Read-only for now; see
+  // registerAdminHandlers in electron/main/ipc/admin.mjs for why the setter is
+  // not on the bridge. Retires with the rest of this bridge in Phase 3.
+  admin: {
+    getControlPlane: () => ipcRenderer.invoke('admin:get-control-plane'),
+  },
+
   profiles: {
     list: () => ipcRenderer.invoke('profiles:list'),
     save: (name, config) => ipcRenderer.invoke('profiles:save', name, config),
