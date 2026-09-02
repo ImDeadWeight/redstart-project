@@ -64,6 +64,8 @@ const { serverPortRejection } = await import('../electron/main/ipc/validate.mjs'
 const { ADMIN_PORT, BEACON_PORT, DEFAULT_GATEWAY_PORT } = await import('../electron/main/ports.mjs')
 const { discoveryPlan, lastKnownDiscovery, discoveryRecordFor, stopDiscovery } = await import('../electron/main/discovery.mjs')
 const { getControlPlane, setControlPlaneBindHost } = await import('../electron/main/ipc/admin.mjs')
+const { buildAdminApi } = await import('../electron/main/admin/api-table.mjs')
+const { setAdminApi, pathForChannel } = await import('../electron/main/admin/api-routes.mjs')
 const {
   authenticateControlPlane, login, createOwner, createAccount, setAuthRequired,
   CONTROL_PLANE, DATA_PLANE,
@@ -390,6 +392,14 @@ async function get(urlPath, headers = {}) {
   return fetch(`${admin}${urlPath}`, { headers })
 }
 
+async function post(urlPath, args, headers = {}) {
+  return fetch(`${admin}${urlPath}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify({ args }),
+  })
+}
+
 await test('🔍 it answers before any llama:launch has happened', async () => {
   const res = await get('/admin/whoami', bearer(ownerToken))
   assert(res.status === 200, `expected 200, got ${res.status}`)
@@ -489,6 +499,31 @@ const settingsDeps = {
   readSettings: () => JSON.parse(JSON.stringify(storedSettings)),
   writeSettings: (data) => { storedSettings = JSON.parse(JSON.stringify(data)) },
 }
+
+// admin:set-bind-host is a one-line wrapper around setControlPlaneBindHost()
+// (ipc/admin.mjs), so the function-level tests below cover its real behaviour
+// (success, failure-restore, persistence, exposure). What they don't reach is
+// the dispatcher in front of it — the same table AccountsPanel.tsx's exposure
+// toggle actually calls through. Wired up once, here, rather than in
+// scripts/test-admin-api.mjs, which deliberately never invokes a mutating
+// handler against the shared listener its own gate tests depend on.
+setAdminApi(buildAdminApi(settingsDeps))
+
+await test('🔍 the exposure toggle works end to end, through the real dispatcher', async () => {
+  const res = await post(pathForChannel('admin:set-bind-host'), ['0.0.0.0'], bearer(ownerToken))
+  assert(res.status === 200, `expected 200, got ${res.status}`)
+  const body = await res.json()
+  assert(body.result?.ok === true, `rebind via HTTP failed: ${JSON.stringify(body)}`)
+  assert(body.result.state.exposed === true, 'rebinding via HTTP did not report itself as exposed')
+  assert(getControlPlane().bindHost === '0.0.0.0', `the listener is bound to ${getControlPlane().bindHost}`)
+  // Restore before the function-level tests below assume their own starting
+  // state — including storedSettings itself, which "an invalid address is
+  // refused" (next) asserts starts undefined.
+  const restore = await setControlPlaneBindHost('127.0.0.1', settingsDeps)
+  assert(restore.ok === true, `could not restore loopback: ${restore.error}`)
+  storedSettings = {}
+  return 'AccountsPanel.tsx\'s toggle calls exactly this path'
+})
 
 await test('an invalid address is refused and nothing is persisted', async () => {
   const result = await setControlPlaneBindHost('redstart.local', settingsDeps)

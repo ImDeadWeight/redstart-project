@@ -116,6 +116,9 @@ covers loopback, a VPN interface, a management VLAN or the whole LAN. It is
 *not* network mode — that is data-plane state read at launch, and the control
 plane must not depend on it. A change rebinds immediately rather than at next
 start, because an administrator changing it may be doing so to recover access.
+The Accounts panel has a toggle for the common case (loopback vs. every
+interface); it writes the same `adminBindHost` setting a specific VPN or
+management-VLAN address would need to be set by hand.
 
 > **If you move it off loopback, do not forward the port through a router.** That
 > single act is what turns a low-risk deployment into one being scanned

@@ -19,6 +19,7 @@ import { DEFAULT_CONFIG } from './types'
 import { api, getAPI } from './api/redstart'
 import { useStatusMessage } from './hooks/useStatusMessage'
 import { useAuthSetup } from './hooks/useAuthSetup'
+import { useControlPlaneExposure } from './hooks/useControlPlaneExposure'
 import { useExternalMcp } from './hooks/useExternalMcp'
 import { useToolsCatalog } from './hooks/useToolsCatalog'
 import { useCapabilities } from './hooks/useCapabilities'
@@ -51,6 +52,7 @@ export default function App() {
 
   // Domain hooks — each owns one slice of state and its IPC calls.
   const auth = useAuthSetup(showStatus)
+  const controlPlaneExposure = useControlPlaneExposure(showStatus)
   const mcp = useExternalMcp()
   const caps = useCapabilities(config)
   const plugins = usePlugins()
@@ -143,7 +145,7 @@ export default function App() {
           <ProfilesPanel profilesHook={profilesHook} />
           <BinaryPanel hw={hw} />
           <ModelPanel modelPath={config.modelPath} onSelectModel={hw.applyModelPath} />
-          <AccountsPanel auth={auth} />
+          <AccountsPanel auth={auth} controlPlaneExposure={controlPlaneExposure} />
         </aside>
 
         {/* ── Main content ── */}

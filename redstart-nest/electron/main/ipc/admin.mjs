@@ -1,16 +1,9 @@
-// Admin / control-plane IPC namespace — where the control plane is bound, and
-// changing it.
+// Admin / control-plane IPC namespace — where the control plane is bound,
+// and changing it.
 //
-// A SHORT-LIVED NAMESPACE, and worth saying so at the top. Phase 3 moves the
-// launcher onto HTTP against the admin listener itself, at which point these two
-// channels become two routes and this file goes away with the rest of the
-// preload bridge (plan decision 5). It exists now because the exposure warning
-// (decision 19) is worth having before the transport lands: someone who edits
-// adminBindHost in settings.json today should see the warning in the launcher
-// they already have, not in a UI that does not exist yet.
-//
-// Handler bodies are exported as plain functions (Phase 1, §1.3) so the Phase 3
-// route can call them directly; importing this module never registers anything.
+// Handler bodies are exported as plain functions (Phase 1, §1.3); importing
+// this module never registers anything, only adminHandlers()/buildAdminApi()
+// wiring it into the table does.
 import {
   startAdminListener, getAdminListenerState, bindHostRejection, isLoopbackBind,
 } from '../admin-listener.mjs'
@@ -109,20 +102,18 @@ export async function setControlPlaneBindHost(host, { readSettings, writeSetting
   return { ok: true, state: getAdminListenerState() }
 }
 
-// Only the READ is on the bridge. setControlPlaneBindHost() above is exported
-// and deliberately not registered: moving the control plane onto the LAN is of
-// no use until Phase 3 ships a login screen and an admin UI a browser can
-// actually load, so offering the button now would let someone expose a
-// process-spawning plane in exchange for nothing. The function exists because
-// the rebind-and-restore semantics belong beside the listener rather than being
-// invented later, and Phase 3's route is what will call it. Editing
-// adminBindHost in settings.json still works, and takes effect at next start —
-// which is what the warning below the read is for.
+// `set-bind-host` is now wired to the UI (AccountsPanel.tsx's exposure
+// toggle) — it sat unregistered from Phase 2 until then because offering the
+// button before there was a login screen a browser could reach would have let
+// someone expose a process-spawning plane in exchange for nothing (plan
+// decision 19's warning exists for exactly this act). Owner-gated like every
+// other route on this table, same as the read.
 export function adminHandlers(deps) {
   return {
     'admin:get-control-plane': () => getControlPlane(),
     // §5.4 — a remote admin's full-status readout. deps is the same big
     // collaborator bag every other namespace gets; only serverState is used.
     'admin:get-status': () => getFullStatus(deps ?? {}),
+    'admin:set-bind-host': (host) => setControlPlaneBindHost(host, deps ?? {}),
   }
 }

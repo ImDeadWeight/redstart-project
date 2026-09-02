@@ -83,3 +83,33 @@ export function TruncatedText({ text, limit = 160, className = '' }: {
     </p>
   )
 }
+
+// --- Control-plane exposure warning -----------------------------------------
+// The single act that turns a low-risk deployment into a high-risk one is
+// forwarding the control plane through a router, at which point the box joins
+// the population the internet scans continuously. That is a bigger real-world
+// risk than any certificate decision, and a visible warning costs almost
+// nothing (headless-admin-plane-plan.md decision 19). Shared between
+// NetworkPanel.tsx (the Configuration tab) and AccountsPanel.tsx (the
+// exposure toggle itself lives there) rather than defined twice — both show
+// the same fact from the same state shape.
+import type { ControlPlaneState } from '../types'
+
+export function ControlPlaneNotice({ state }: { state: ControlPlaneState | null }) {
+  if (!state?.exposed) return null
+
+  return (
+    <div className="mt-3 rounded border border-red-800 bg-red-950/40 p-3">
+      <p className="text-xs font-semibold text-red-300">
+        The admin interface is reachable from the network
+      </p>
+      <p className="text-[11px] text-red-200/80 mt-1 leading-relaxed">
+        It is bound to <span className="font-mono">{state.bindHost}:{state.port}</span> rather than to this
+        machine only. Anything that can reach that address can attempt to sign in as the owner, and the
+        owner can start and stop processes on this box. Do not forward this port through a router — put a
+        reverse proxy in front of it, or keep it on a VPN or management network. Redstart Nest speaks plain
+        HTTP and does not encrypt this traffic itself.
+      </p>
+    </div>
+  )
+}

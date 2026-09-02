@@ -51,6 +51,14 @@ export type RedstartAPI = {
       mcp: { running: boolean }
       adminListener: ControlPlaneState
     }>
+    // Rebinds the control plane immediately (plan decision 4) — an admin
+    // flipping this may be doing it to recover access, so it never waits for
+    // a restart. `host` is a bind address, not a boolean (plan §3.3);
+    // AccountsPanel.tsx's toggle only ever sends '127.0.0.1' or '0.0.0.0'.
+    // Rejected addresses (and a failed bind) restore the previous one and
+    // report why in `error`; `state` is always the listener's state after
+    // the call, success or not, so the caller never has to re-fetch.
+    setBindHost: (host: string) => Promise<{ ok: boolean; error?: string; state: ControlPlaneState }>
   }
   // The FolderPicker.tsx mechanism (Phase 4 §4.2-4.3) — one component behind
   // all nine former per-site pickers. Native picking (pickNative) retired in
