@@ -1,8 +1,10 @@
 // =============================================================================
-// Redstart Nest — the browser's control-plane session
+// Redstart Nest — the control-plane session
 // =============================================================================
-// Only used by the HTTP transport. Inside Electron the launcher talks over IPC
-// and holds no token at all, which is why none of this is in redstart.ts.
+// Used by every caller — a browser tab, and Electron's window, which is just
+// another HTTP client of the admin listener since Phase 6 §6.2 retired IPC.
+// Not in redstart.ts because it's a detail of the one transport there is, not
+// part of the RedstartAPI surface itself.
 //
 // localStorage, not a cookie, and the choice does real work: a bearer token the
 // page attaches itself is never sent by a cross-site request, so the control
