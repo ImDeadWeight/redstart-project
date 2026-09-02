@@ -48,6 +48,8 @@ import { fileURLToPath } from 'url'
 import { authenticateControlPlane } from './auth.mjs'
 import { mayAccessControlPlane } from './permissions.mjs'
 import { ADMIN_PORT } from './ports.mjs'
+import { isAdminAuthRoute, handleAdminAuthRoute } from './admin/auth-routes.mjs'
+import { sendJson } from './admin/http.mjs'
 import { logEvent } from './logger.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -193,17 +195,6 @@ function serveStatic(req, res, absPath) {
   res.end(body)
 }
 
-function sendJson(res, status, body) {
-  const payload = JSON.stringify(body)
-  res.writeHead(status, {
-    'Content-Type': 'application/json',
-    'Content-Length': Buffer.byteLength(payload),
-    'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-  })
-  res.end(payload)
-}
-
 // ---------------------------------------------------------------------------
 // Routing
 // ---------------------------------------------------------------------------
@@ -219,7 +210,7 @@ function sendJson(res, status, body) {
 // having — a login, a bootstrap attempt — arrive with Phase 3's routes, which
 // are rate-limited and logged there.
 
-function handleAdminRequest(req, res) {
+async function handleAdminRequest(req, res) {
   let urlPath
   try {
     urlPath = decodeURIComponent((req.url || '/').split('?')[0])
@@ -233,6 +224,14 @@ function handleAdminRequest(req, res) {
   if (req.method === 'GET' || req.method === 'HEAD') {
     const file = staticFiles.get(urlPath)
     if (file) return serveStatic(req, res, file)
+  }
+
+  // Login and bootstrap have to be reachable before anyone holds a credential,
+  // so they run before the gate and do their own authentication — the same shape
+  // the gateway uses for /auth/*. They are also the only two routes here that
+  // take a secret from a stranger, which is why they carry the rate limits.
+  if (isAdminAuthRoute(urlPath)) {
+    return await handleAdminAuthRoute(req, res, urlPath)
   }
 
   const authResult = authenticateControlPlane(req)
@@ -273,13 +272,16 @@ export function startAdminListener({ bindHost = DEFAULT_ADMIN_BIND_HOST, port = 
 
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
-      try {
-        handleAdminRequest(req, res)
-      } catch (err) {
-        if (!res.headersSent) sendJson(res, 500, { error: 'Internal error' })
-        else res.end()
-        console.warn('[admin-listener] request failed:', err.message)
-      }
+      // A rejected promise from an async route must not become an unhandled
+      // rejection that takes the daemon down — the control plane is the thing
+      // an admin uses to fix a box, so it is the last listener that may crash.
+      Promise.resolve()
+        .then(() => handleAdminRequest(req, res))
+        .catch((err) => {
+          if (!res.headersSent) sendJson(res, 500, { error: 'Internal error' })
+          else res.end()
+          console.warn('[admin-listener] request failed:', err.message)
+        })
     })
 
     server.on('error', (err) => {

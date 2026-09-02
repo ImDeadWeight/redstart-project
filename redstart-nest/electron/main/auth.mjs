@@ -434,6 +434,42 @@ export function createOwner({ username, password }) {
   return { ok: true, account, apiKey }
 }
 
+/**
+ * Re-key the owner: set its username and password to a new pair.
+ *
+ * The other half of ONE DOOR. POST /admin/bootstrap creates the first owner if
+ * there is none and lands here if there is one, because "nobody can get in" and
+ * "nobody has been created yet" are the same question asked at different times,
+ * and giving them two routes means one of them is a recovery path that has to be
+ * argued about separately (plan §3.2).
+ *
+ * PRESERVES EVERYTHING BUT THE CREDENTIAL — accounts, roles, per-connector keys
+ * and tools config all survive. That is the entire gain over the last-resort
+ * wipe (stop the daemon, delete accounts.json, start again), which is still the
+ * documented answer when the goal is to invalidate everything rather than to get
+ * back in. Note that the owner's account-wide API key survives too, so a reset
+ * performed because the box changed hands is not by itself a revocation.
+ *
+ * No `actor`: the authority here is the bootstrap token, checked at the route.
+ * Taking an actor would imply someone is logged in, and the case this exists for
+ * is precisely that nobody can be.
+ */
+export function resetOwner({ username, password }) {
+  const owner = accounts.listAccounts().find(a => a.tier === 'owner')
+  if (!owner) return { ok: false, error: 'No owner account exists' }
+
+  const clash = accounts.findByUsername(username)
+  if (clash && clash.id !== owner.id) return { ok: false, error: 'Username already exists' }
+
+  const account = accounts.updateAccount(owner.id, { username, ...hashPassword(password) })
+  if (!account) return { ok: false, error: 'Account not found' }
+
+  // Whoever held a session under the old password does not keep one under the
+  // new. This is the point of the reset, not a side effect of it.
+  revokeSessionsForAccount(owner.id)
+  return { ok: true, account }
+}
+
 export function deleteAccount(actor, id) {
   const target = accounts.findById(id)
   if (!target) return { ok: false, error: 'Account not found' }

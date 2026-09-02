@@ -12,7 +12,7 @@ import * as path from 'node:path'
 const base = 'electron/main'
 // ../shared holds repo-level modules (stdio MCP supervisor) imported by both
 // nest's main process and twig's — checked here since nest's CI runs this.
-const dirs = [base, path.join(base, 'ipc'), path.join(base, 'gateway'), '../shared']
+const dirs = [base, path.join(base, 'ipc'), path.join(base, 'gateway'), path.join(base, 'admin'), '../shared']
 
 let count = 0
 for (const dir of dirs) {

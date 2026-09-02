@@ -147,6 +147,9 @@ jobs:
       - name: "Security: control plane (admin listener authz + static allowlist)"
         run: node scripts/test-admin-listener.mjs
 
+      - name: "Security: bootstrap token / control-plane login"
+        run: node scripts/test-admin-bootstrap.mjs
+
       - name: "Security: preload/main IPC contract"
         run: node scripts/test-ipc-contract.mjs
 
