@@ -25,6 +25,7 @@ import * as os from 'os'
 import * as zlib from 'zlib'
 import * as http from 'http'
 import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
+import { startAdminListener, stopAdminListener, DEFAULT_ADMIN_BIND_HOST } from './admin-listener.mjs'
 import { stopMdnsAdvertiser } from './mdns-advertiser.mjs'
 import { stopPort80Proxy } from './port80-proxy.mjs'
 import { ensureFirewallRule } from './firewall.mjs'
@@ -510,6 +511,33 @@ async function startDiscoveryBeacon() {
 }
 
 // ---------------------------------------------------------------------------
+// Admin listener (the control plane)
+// ---------------------------------------------------------------------------
+// Started HERE, beside the beacon, and not from the llama:launch handler. That
+// placement is the whole argument: the control plane must be up before, and
+// independently of, the thing it controls (headless-admin-plane-plan.md
+// decision 3). See admin-listener.mjs for what it serves.
+//
+// Where it binds is a persisted setting holding an ADDRESS, not a boolean, and
+// it defaults to loopback — availability is always on, exposure is opt-in (plan
+// decision 4). Deliberately not `networkMode`, which is data-plane state read
+// only at launch.
+//
+// A failure to bind is logged and swallowed rather than fatal. The port could
+// be held by something else on the machine, and a Nest that refuses to start at
+// all because its admin plane could not bind is worse than one whose launcher
+// still works over IPC — especially on the desktop, where IPC is the client.
+async function startAdminPlane() {
+  const bindHost = readSettings().adminBindHost || DEFAULT_ADMIN_BIND_HOST
+  try {
+    await startAdminListener({ bindHost })
+  } catch (err) {
+    console.warn('Admin listener failed to start:', err.message)
+    logEvent('admin', 'listener_start_failed', { reason: err.code || 'error' })
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Redstart proxy server
 // ---------------------------------------------------------------------------
 // Chat UI is served directly by llama-server via --path and accessed through
@@ -641,6 +669,7 @@ app.whenReady().then(async () => {
   // Windows file lock, most likely) — best-effort, never blocks startup (P4-4).
   sweepPendingDeletions()
   startDiscoveryBeacon()
+  startAdminPlane()
   if (!app.isPackaged) await installReactDevTools()
   createWindow()
   setupIpcHandlers()
@@ -684,6 +713,7 @@ app.on('before-quit', () => {
     stopBeaconServer(beaconServerInstance)
     beaconServerInstance = null
   }
+  stopAdminListener()
   closeLogger()
 })
 

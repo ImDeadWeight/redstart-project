@@ -24,6 +24,7 @@ import { startMdnsAdvertiser, stopMdnsAdvertiser } from '../mdns-advertiser.mjs'
 import { startPort80Proxy, stopPort80Proxy } from '../port80-proxy.mjs'
 import { syncFilesystemProvider, stopFilesystemProvider } from '../filesystem-mcp-provider.mjs'
 import { logEvent } from '../logger.mjs'
+import { serverPortRejection } from './validate.mjs'
 import { writePidFile, deletePidFile } from '../process-supervision.mjs'
 
 // EMA smoothing factor for the tokens/sec readout (moved here with its sole
@@ -48,6 +49,15 @@ export async function launchServer(config, deps) {
   } = deps
 
   if (serverState.process) return { success: false, error: 'Server is already running' }
+
+  // Before the binary is even resolved: config.port claims three ports, and one
+  // of them colliding with the always-on beacon or admin listener produces a
+  // failure a long way from its cause. See serverPortRejection() in validate.mjs.
+  const portRejection = serverPortRejection(config?.port)
+  if (portRejection) {
+    logEvent('security', 'launch_rejected', { reason: 'port_reserved', port: config?.port })
+    return { success: false, error: portRejection }
+  }
 
   const binaryPath = resolveBinary()
   if (!binaryPath) {

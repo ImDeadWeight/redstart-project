@@ -20,6 +20,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
+import { FIXED_PORTS, serverPortFamily } from '../ports.mjs'
 
 /** Objects only — arrays and null are the two things `typeof x === 'object'` lies about. */
 export function isPlainObject(value) {
@@ -57,5 +58,45 @@ export function binaryPathRejection(value) {
   } catch {
     return 'That file does not exist.'
   }
+  return null
+}
+
+/**
+ * Refuse a config.port whose port family would take a port Nest already owns.
+ *
+ * config.port is user-settable and claims THREE ports — itself, +1 for
+ * llama-server and +2 for the built-in MCP server (see ports.mjs). The fixed
+ * ports are not settable and are bound for the daemon's whole life. So 19081
+ * is a perfectly reasonable-looking choice that puts the MCP server on 19083
+ * and takes the control plane's socket away from it, and 8763 does the same to
+ * the beacon.
+ *
+ * The failure this prevents is worse than a port clash. The admin listener
+ * binds at app start, long before any launch, so the collision does not show up
+ * as "the control plane failed to start" — it shows up as the LAUNCH failing,
+ * or worse, succeeding while one of its three servers silently did not, with
+ * the visible symptom miles from the setting that caused it. Checked at launch
+ * for the same reason binaryPathRejection() is checked at resolveBinary(): a
+ * value already sitting in a saved profile from a build that predates this
+ * check has never been through it.
+ *
+ * @returns {string|null} the reason to refuse, or null if acceptable.
+ */
+export function serverPortRejection(port) {
+  if (!Number.isInteger(port)) return 'A port must be a whole number.'
+  if (port < 1 || port > 65535) return 'A port must be between 1 and 65535.'
+
+  for (const { port: claimed, what } of serverPortFamily(port)) {
+    if (claimed > 65535) {
+      return `Port ${port} leaves no room for ${what} on ${claimed} — the highest usable port is 65533.`
+    }
+    const owner = FIXED_PORTS[claimed]
+    if (owner) {
+      return claimed === port
+        ? `Port ${port} is reserved for ${owner}.`
+        : `Port ${port} puts ${what} on ${claimed}, which is reserved for ${owner}.`
+    }
+  }
+
   return null
 }

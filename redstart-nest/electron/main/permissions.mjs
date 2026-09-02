@@ -251,3 +251,33 @@ export function allowsSurface(account, role, surface) {
 export function restrictsSurfaces(role) {
   return !inherits(role?.permissions?.surfaces)
 }
+
+// ---------------------------------------------------------------------------
+// The control plane
+// ---------------------------------------------------------------------------
+
+/**
+ * May this account reach the CONTROL plane at all?
+ *
+ * One function, called by every admin route, so widening the rule later — a
+ * second owner, a delegated admin — is one edit rather than an audit of every
+ * route (headless-admin-plane-plan.md decision 18).
+ *
+ * NOT a role permission, deliberately. Permissions in this file may only ever
+ * TIGHTEN a tier, and the owner ignores narrowing entirely (see can() above and
+ * the FAIL POSTURE note at the top). A control-plane permission held by the
+ * owner would therefore be permanently true and never consulted — machinery
+ * that does nothing and can be got wrong. It earns its place the day a
+ * non-owner can hold it, and not before.
+ *
+ * NOTE THE POLARITY AGAINST `authRequired`. Everywhere else in this codebase,
+ * `account === null` means "auth is off, do not narrow" — the fail-OPEN branch,
+ * and correctly so for the data plane, where the toggle means what it says.
+ * Here the same null is a refusal, because control-plane auth is mandatory
+ * regardless of that toggle (decision 12): two switches for two planes, rather
+ * than one switch whose "off" position hands out process spawning. `?.` is what
+ * makes that fall out rather than being remembered.
+ */
+export function mayAccessControlPlane(account) {
+  return account?.tier === 'owner'
+}

@@ -233,6 +233,52 @@ export function authenticate(req) {
 }
 
 // ---------------------------------------------------------------------------
+// Control-plane authentication
+// ---------------------------------------------------------------------------
+// A SECOND, deliberately narrower door. Not a variant of authenticate() with a
+// flag, because the two differ on both of the things authenticate() decides,
+// and each difference is load-bearing:
+//
+//   1. It never reads getAuthRequired(). `authRequired` governs the data plane
+//      only (plan decision 12); control-plane auth is mandatory regardless.
+//      Note this is not merely "auth off must not let anyone in" — routing the
+//      control plane through authenticate() would ALSO lock the owner OUT with
+//      auth off, since that function short-circuits to account: null before it
+//      ever looks at the token. Both halves are wrong, and one function that
+//      ignores the toggle entirely fixes both.
+//
+//   2. SESSIONS ONLY. An account-wide API key resolves to the same account and
+//      the same tier, but it is a credential users paste into third-party tool
+//      clients (Kilo Code, Continue, a Twig install on someone's laptop). If it
+//      also opened the control plane, every one of those config files would be
+//      holding a process-spawning admin credential. Per-connector keys are
+//      refused for the same reason. The owner's password, exchanged for a
+//      session, is the only way in (plan decision 18) — and Phase 3 is what
+//      gives that session a shorter TTL than the data plane's 30 days.
+//
+// Authorization is NOT decided here: the caller pairs this with
+// mayAccessControlPlane(). Authentication answers "who is this", the
+// permissions module answers "may they" — same split as the gateway.
+//
+// No `surface` is returned. Surfaces exist so a role can narrow which apps an
+// account may connect from, and the control plane never narrows (plan §1). A
+// 'nest-admin' entry in SURFACE_IDS would be assignable in a role's surface
+// list like any other, which is precisely the quiet collapse of plane
+// separation decision 7 warns about.
+export function authenticateControlPlane(req) {
+  const token = bearerToken(req)
+  if (!token) return { ok: false, reason: 'unauthorized' }
+
+  const session = validateSession(token)
+  if (!session) return { ok: false, reason: 'unauthorized' }
+
+  const record = accounts.findById(session.accountId)
+  if (!record || record.status === 'disabled') return { ok: false, reason: 'unauthorized' }
+
+  return { ok: true, account: toPublicAccount(record) }
+}
+
+// ---------------------------------------------------------------------------
 // Account actions — one place both gateway routes and IPC handlers call
 // through, so nothing bypasses session revocation on delete/reset.
 // ---------------------------------------------------------------------------
