@@ -49,6 +49,7 @@ import { registerCapabilitiesHandlers } from './ipc/capabilities.mjs'
 import { registerServerHandlers } from './ipc/server.mjs'
 import { registerModelsHandlers } from './ipc/models.mjs'
 import { registerPluginsHandlers } from './ipc/plugins.mjs'
+import { registerBrowseHandlers } from './ipc/browse.mjs'
 import { buildGatewayConfig, createRefreshLiveToolsConfig } from './gateway-config.mjs'
 import { buildArgs } from './llama-args.mjs'
 import { DEV_RENDERER_ORIGIN, rendererIndexFile, isTrustedRendererUrl } from './renderer-location.mjs'
@@ -765,6 +766,7 @@ function registerIpcHandlers(deps) {
   // Named getWindow, not getMainWindow — plugins.mjs mirrors models.mjs's own
   // progress-event dependency name.
   registerPluginsHandlers({ refreshLiveToolsConfig: deps.refreshLiveToolsConfig, getWindow: deps.getMainWindow })
+  registerBrowseHandlers()
 }
 
 function setupIpcHandlers() {
@@ -779,7 +781,6 @@ function setupIpcHandlers() {
     readSettings,
     writeSettings,
     resolveBinary,
-    selectBinaryDefaultPath: path.join(__dirname, '..', '..', 'llama-cpp-turboquant', 'build', 'bin', 'Release'),
     // Resolved lazily on every call — the user can repoint the models folder at
     // runtime, so a value captured here would go stale.
     resolveModelsDir,

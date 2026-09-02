@@ -14,13 +14,11 @@
 // headless-admin-plane implementation plan) so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerCapabilitiesHandlers() does that. The
-// folder-scoped trio (vault/git/file_system) keeps its computed-channel-name
-// registration loop unchanged — scripts/test-ipc-contract.mjs specifically
-// exercises that shape — but the loop body now just calls one shared function
-// per capability rather than defining the logic inline three times.
-import { dialog } from 'electron'
+// folder-scoped trio's (vault/git/file_system) computed-channel-name
+// registration loop is unchanged for the setters — scripts/test-ipc-contract.mjs
+// specifically exercises that shape. The matching selectXFolder() dialogs
+// retired in Phase 4 §4.3 — moved to ipc/browse.mjs's generic native picker.
 import { registerAll } from './guard.mjs'
-import { localOnly } from './transport.mjs'
 import { getCapabilities, setCapabilityConfig } from '../tools-storage.mjs'
 import { encryptSecret, decryptSecret } from '../secrets.mjs'
 import { testConnection as testPostgresConnection } from '../postgres-tool.mjs'
@@ -119,10 +117,9 @@ export async function testPostgresConfig(connectionString) {
   return await testPostgresConnection(target)
 }
 
-export async function selectDocumentsFolder() {
-  const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
-  return result.canceled ? null : result.filePaths[0]
-}
+// selectDocumentsFolder() / selectSqliteFolder() / selectFolderScopedFolder()
+// retired — Phase 4 §4.3. FolderPicker.tsx calls ipc/browse.mjs's generic
+// browse:pick-native instead of a dedicated dialog per capability.
 
 export function setDocumentsFolder(config, { refreshLiveToolsConfig }) {
   const bad = checkConfig('capabilities:set-documents-folder', config, 'outputDir')
@@ -134,11 +131,6 @@ export function setDocumentsFolder(config, { refreshLiveToolsConfig }) {
   setCapabilityConfig('documents', patch)
   refreshLiveToolsConfig()
   return { ok: true }
-}
-
-export async function selectSqliteFolder() {
-  const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
-  return result.canceled ? null : result.filePaths[0]
 }
 
 export function setSqliteConfig(config, { refreshLiveToolsConfig }) {
@@ -167,14 +159,10 @@ export function setScholarConfig(config, { refreshLiveToolsConfig }) {
 }
 
 // Vault, Git, and File System share the folder-scoped capability shape: pick a
-// folder, toggle enabled. One pair of shared functions keeps them uniform. The
-// channel slug is hyphenated (file_system -> file-system) to match the preload;
-// the storage key stays the underscore form.
-export async function selectFolderScopedFolder() {
-  const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
-  return result.canceled ? null : result.filePaths[0]
-}
-
+// folder, toggle enabled. The channel slug is hyphenated (file_system ->
+// file-system) to match the preload; the storage key stays the underscore
+// form. The shared picker (selectFolderScopedFolder) retired with the rest —
+// see the note above setDocumentsFolder().
 export function setFolderScopedCapability(cap, config, { refreshLiveToolsConfig }) {
   const slug = cap.replace(/_/g, '-')
   const channel = `capabilities:set-${slug}`
@@ -200,9 +188,7 @@ export function capabilitiesHandlers(deps) {
     'capabilities:get': () => getCapabilitiesConfig(),
     'capabilities:set-postgres': (config) => setPostgresConfig(config, deps),
     'capabilities:test-postgres': async (connectionString) => testPostgresConfig(connectionString),
-    'capabilities:select-documents-folder': localOnly(async () => selectDocumentsFolder()),
     'capabilities:set-documents-folder': (config) => setDocumentsFolder(config, deps),
-    'capabilities:select-sqlite-folder': localOnly(async () => selectSqliteFolder()),
     'capabilities:set-sqlite': (config) => setSqliteConfig(config, deps),
     'capabilities:set-scholar': (config) => setScholarConfig(config, deps),
   }
@@ -212,7 +198,6 @@ export function capabilitiesHandlers(deps) {
   // and this trio has broken that way once already.
   for (const cap of ['vault', 'git', 'file_system']) {
     const slug = cap.replace(/_/g, '-')   // file_system -> file-system; vault/git unchanged
-    handlers[`capabilities:select-${slug}-folder`] = localOnly(async () => selectFolderScopedFolder())
     handlers[`capabilities:set-${slug}`] = (config) => setFolderScopedCapability(cap, config, deps)
   }
 

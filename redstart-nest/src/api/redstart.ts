@@ -16,7 +16,6 @@ import type {
 export type RedstartAPI = {
   hardware: {
     scan: () => Promise<HardwareSpecs>
-    selectModel: () => Promise<string | null>
   }
   llama: {
     generateCommand: (config: LlamaConfig) => Promise<string>
@@ -37,13 +36,24 @@ export type RedstartAPI = {
   admin: {
     getControlPlane: () => Promise<ControlPlaneState>
   }
-  // Server-side directory listing (Phase 4 §4.2) — the remote stand-in for a
-  // native file/folder dialog. HTTP-only: `isDaemonLocal()` is what decides
-  // whether FolderPicker calls this at all, so the IPC bridge never binds it.
+  // The FolderPicker.tsx mechanism (Phase 4 §4.2-4.3) — one component behind
+  // all nine former per-site pickers, dispatching on isDaemonLocal(). roots/
+  // list/mkdir are the remote stand-in and are HTTP-only (the IPC bridge never
+  // binds them); pickNative is the opposite — it opens a real dialog on
+  // whichever machine the daemon runs on, so it is reachable only over IPC
+  // (marked local-only, 501s over HTTP).
   browse: {
     roots: () => Promise<{ path: string; label: string }[]>
     list: (opts: { path: string }) => Promise<{ path: string; parent: string | null; entries: { name: string; kind: 'directory' }[]; reason?: string }>
     mkdir: (opts: { path: string; name: string }) => Promise<{ ok: boolean; path?: string; error?: string }>
+    pickNative: (opts: {
+      mode: 'file' | 'directory'
+      title?: string
+      extensions?: string[]
+      extensionLabel?: string
+      defaultPath?: string
+      allowCreate?: boolean
+    }) => Promise<string | null>
   }
   profiles: {
     list: () => Promise<string[]>
@@ -63,13 +73,11 @@ export type RedstartAPI = {
   settings: {
     getBinaryPath: () => Promise<string | null>
     setBinaryPath: (p: string | null) => Promise<boolean>
-    selectBinary: () => Promise<string | null>
     getResolvedBinary: () => Promise<string | null>
     // Always resolves to a real path — the user's choice, or the provisioned
     // <Documents>\Redstart\Models default. Never null.
     getModelsDir: () => Promise<string>
     setModelsDir: (p: string | null) => Promise<string>
-    selectModelsDir: () => Promise<string | null>
   }
   models: {
     publishers: () => Promise<{ id: string; label: string; note: string }[]>
@@ -115,16 +123,11 @@ export type RedstartAPI = {
     get: () => Promise<CapabilityConfig>
     setPostgres: (config: { connectionString?: string; maxRows?: number; enabled?: boolean }) => Promise<{ ok: boolean; error?: string }>
     testPostgres: (connectionString?: string) => Promise<{ ok: boolean; message: string }>
-    selectDocumentsFolder: () => Promise<string | null>
     setDocumentsFolder: (config: { outputDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
-    selectSqliteFolder: () => Promise<string | null>
     setSqlite: (config: { rootDir?: string; maxRows?: number; enabled?: boolean }) => Promise<{ ok: boolean }>
     estimateToolContext: (config: LlamaConfig) => Promise<{ toolCount: number; approxTokens: number }>
-    selectVaultFolder: () => Promise<string | null>
     setVault: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
-    selectGitFolder: () => Promise<string | null>
     setGit: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
-    selectFileSystemFolder: () => Promise<string | null>
     setFileSystem: (config: { rootDir?: string; enabled?: boolean; allowWrite?: boolean; allowDestructive?: boolean }) => Promise<{ ok: boolean }>
     setScholar: (config: { venueFilter?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
   }
@@ -177,7 +180,6 @@ export type RedstartAPI = {
     search: (opts: { query?: string; cursor?: string }) => Promise<
       { ok: true; entries: RegistrySearchResult[]; nextCursor: string | null } | { ok: false; error: string }
     >
-    pickFolder: () => Promise<string | null>
   }
   events: {
     onTokensPerMinute: (cb: (tpm: number) => void) => void

@@ -3,7 +3,6 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('redstartAPI', {
   hardware: {
     scan: () => ipcRenderer.invoke('hardware:scan'),
-    selectModel: () => ipcRenderer.invoke('hardware:select-model'),
   },
 
   llama: {
@@ -23,6 +22,14 @@ contextBridge.exposeInMainWorld('redstartAPI', {
   // not on the bridge. Retires with the rest of this bridge in Phase 3.
   admin: {
     getControlPlane: () => ipcRenderer.invoke('admin:get-control-plane'),
+  },
+
+  // FolderPicker.tsx's local branch — the one native dialog left, generic over
+  // the nine former per-site pickers (Phase 4 §4.3). roots/list/mkdir are the
+  // remote stand-in (admin/browse-routes.mjs) and are HTTP-only, so they have
+  // no binding here.
+  browse: {
+    pickNative: (opts) => ipcRenderer.invoke('browse:pick-native', opts),
   },
 
   profiles: {
@@ -54,16 +61,11 @@ contextBridge.exposeInMainWorld('redstartAPI', {
     get: () => ipcRenderer.invoke('capabilities:get'),
     setPostgres: (config) => ipcRenderer.invoke('capabilities:set-postgres', config),
     testPostgres: (connectionString) => ipcRenderer.invoke('capabilities:test-postgres', connectionString),
-    selectDocumentsFolder: () => ipcRenderer.invoke('capabilities:select-documents-folder'),
     setDocumentsFolder: (config) => ipcRenderer.invoke('capabilities:set-documents-folder', config),
-    selectSqliteFolder: () => ipcRenderer.invoke('capabilities:select-sqlite-folder'),
     setSqlite: (config) => ipcRenderer.invoke('capabilities:set-sqlite', config),
     estimateToolContext: (config) => ipcRenderer.invoke('tools:estimate-context', config),
-    selectVaultFolder: () => ipcRenderer.invoke('capabilities:select-vault-folder'),
     setVault: (config) => ipcRenderer.invoke('capabilities:set-vault', config),
-    selectGitFolder: () => ipcRenderer.invoke('capabilities:select-git-folder'),
     setGit: (config) => ipcRenderer.invoke('capabilities:set-git', config),
-    selectFileSystemFolder: () => ipcRenderer.invoke('capabilities:select-file-system-folder'),
     setFileSystem: (config) => ipcRenderer.invoke('capabilities:set-file-system', config),
     setScholar: (config) => ipcRenderer.invoke('capabilities:set-scholar', config),
   },
@@ -71,11 +73,9 @@ contextBridge.exposeInMainWorld('redstartAPI', {
   settings: {
     getBinaryPath: () => ipcRenderer.invoke('settings:get-binary-path'),
     setBinaryPath: (p) => ipcRenderer.invoke('settings:set-binary-path', p),
-    selectBinary: () => ipcRenderer.invoke('settings:select-binary'),
     getResolvedBinary: () => ipcRenderer.invoke('settings:get-resolved-binary'),
     getModelsDir: () => ipcRenderer.invoke('settings:get-models-dir'),
     setModelsDir: (p) => ipcRenderer.invoke('settings:set-models-dir', p),
-    selectModelsDir: () => ipcRenderer.invoke('settings:select-models-dir'),
   },
 
   models: {
@@ -104,7 +104,6 @@ contextBridge.exposeInMainWorld('redstartAPI', {
     uninstall: (id) => ipcRenderer.invoke('plugins:uninstall', id),
     test: (id) => ipcRenderer.invoke('plugins:test', id),
     search: (opts) => ipcRenderer.invoke('plugins:search', opts),
-    pickFolder: () => ipcRenderer.invoke('plugins:pick-folder'),
   },
 
   github: {

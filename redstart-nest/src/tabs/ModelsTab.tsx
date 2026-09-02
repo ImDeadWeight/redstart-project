@@ -15,6 +15,8 @@
 
 import { useEffect } from 'react'
 import { SectionTitle, btnCls, inputCls } from '../components/ui'
+import { FolderPicker } from '../components/FolderPicker'
+import { isDaemonLocal } from '../api/redstart'
 import type { ModelCatalogHook } from '../hooks/useModelCatalog'
 import type { HardwareSpecs, ModelArtifact } from '../types'
 
@@ -71,8 +73,24 @@ export function ModelsTab({ catalog, hardware }: {
           <code className="flex-1 text-xs text-zinc-400 break-all bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5">
             {modelsDir || '—'}
           </code>
-          <button onClick={changeFolder} className={btnCls.secondary}>Change…</button>
-          <button onClick={revealFolder} className={btnCls.secondary}>Open</button>
+          <FolderPicker
+            mode="directory"
+            allowCreate
+            title="Select the models folder"
+            startPath={modelsDir || undefined}
+            onPick={changeFolder}
+            className={btnCls.secondary}>
+            Change…
+          </FolderPicker>
+          {/* models:reveal-folder opens a file-explorer window — it cannot be
+              done on someone else's machine and is not faked (§4.4). A
+              browser admin gets a copy button for the path shown above
+              instead of a button that would silently 501. */}
+          {isDaemonLocal() ? (
+            <button onClick={revealFolder} className={btnCls.secondary}>Open</button>
+          ) : (
+            <button onClick={() => navigator.clipboard?.writeText(modelsDir || '')} className={btnCls.secondary}>Copy path</button>
+          )}
         </div>
         <p className="text-xs text-zinc-500">
           {disk.freeBytes !== undefined

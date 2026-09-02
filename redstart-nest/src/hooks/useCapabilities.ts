@@ -8,20 +8,29 @@ import type { CapabilityConfig, LlamaConfig } from '../types'
 // (mirroring the generic handler loop in electron/main/index.mjs).
 export type FolderCap = 'documents' | 'sqlite' | 'vault' | 'git' | 'file_system'
 
+// The picking itself (native dialog or the remote browser) lives in
+// FolderPicker.tsx now (Phase 4 §4.3) — this only knows how to APPLY a chosen
+// path to the right config setter. `allowCreate` mirrors what each capability
+// used to pass to dialog.showOpenDialog: Documents and SQLite offered *New
+// Folder*, Vault/Git/File System could only select something that exists.
 function folderCapApi(cap: FolderCap) {
   const c = api().capabilities
   switch (cap) {
     case 'documents':
-      return { select: c.selectDocumentsFolder, set: (p: { dir?: string; enabled?: boolean }) => c.setDocumentsFolder({ outputDir: p.dir, enabled: p.enabled }) }
+      return { allowCreate: true, set: (p: { dir?: string; enabled?: boolean }) => c.setDocumentsFolder({ outputDir: p.dir, enabled: p.enabled }) }
     case 'sqlite':
-      return { select: c.selectSqliteFolder, set: (p: { dir?: string; enabled?: boolean }) => c.setSqlite({ rootDir: p.dir, enabled: p.enabled }) }
+      return { allowCreate: true, set: (p: { dir?: string; enabled?: boolean }) => c.setSqlite({ rootDir: p.dir, enabled: p.enabled }) }
     case 'vault':
-      return { select: c.selectVaultFolder, set: (p: { dir?: string; enabled?: boolean }) => c.setVault({ rootDir: p.dir, enabled: p.enabled }) }
+      return { allowCreate: false, set: (p: { dir?: string; enabled?: boolean }) => c.setVault({ rootDir: p.dir, enabled: p.enabled }) }
     case 'git':
-      return { select: c.selectGitFolder, set: (p: { dir?: string; enabled?: boolean }) => c.setGit({ rootDir: p.dir, enabled: p.enabled }) }
+      return { allowCreate: false, set: (p: { dir?: string; enabled?: boolean }) => c.setGit({ rootDir: p.dir, enabled: p.enabled }) }
     case 'file_system':
-      return { select: c.selectFileSystemFolder, set: (p: { dir?: string; enabled?: boolean }) => c.setFileSystem({ rootDir: p.dir, enabled: p.enabled }) }
+      return { allowCreate: false, set: (p: { dir?: string; enabled?: boolean }) => c.setFileSystem({ rootDir: p.dir, enabled: p.enabled }) }
   }
+}
+
+export function folderCapAllowCreate(cap: FolderCap): boolean {
+  return folderCapApi(cap).allowCreate
 }
 
 // Global capability configuration (Postgres, Documents, SQLite, Vault, Git,
@@ -57,10 +66,8 @@ export function useCapabilities(config: LlamaConfig) {
   // card's button now calls toggleTool(id) from useToolsCatalog instead, so the
   // toggle is per-profile. The `enabled: true` written below is the vestigial
   // storage flag — see tools-storage.mjs.
-  async function chooseFolder(cap: FolderCap) {
-    const { select, set } = folderCapApi(cap)
-    const dir = await select()
-    if (!dir) return
+  async function applyFolder(cap: FolderCap, dir: string) {
+    const { set } = folderCapApi(cap)
     setSavingCap(cap)
     try {
       await set({ dir, enabled: true })
@@ -136,7 +143,7 @@ export function useCapabilities(config: LlamaConfig) {
     capabilityConfig, loadCapabilities,
     pgConnectionString, setPgConnectionString, pgMaxRows, setPgMaxRows,
     pgTestResult, pgSaving, savePostgresConfig, testPostgresConnection,
-    savingCap, chooseFolder, toggleFsPolicy,
+    savingCap, applyFolder, toggleFsPolicy,
     scholarVenueFilter, setScholarVenueFilter, saveScholarVenueFilter,
     toolContextEstimate,
   }

@@ -140,7 +140,7 @@ export default function App() {
           <HardwarePanel hw={hw} onGenerateDefaults={() => profilesHook.generateDefaultProfiles(hw.hardware)} />
           <ProfilesPanel profilesHook={profilesHook} />
           <BinaryPanel hw={hw} />
-          <ModelPanel modelPath={config.modelPath} onSelectModel={hw.selectModel} />
+          <ModelPanel modelPath={config.modelPath} onSelectModel={hw.applyModelPath} />
           <AccountsPanel auth={auth} />
         </aside>
 

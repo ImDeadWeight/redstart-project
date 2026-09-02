@@ -12,7 +12,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
-  browseRoots, listDirectory, browseMkdir, browseHandlers,
+  browseRoots, listDirectory, browseMkdir, browseRouteHandlers,
 } from '../electron/main/admin/browse-routes.mjs'
 import { isLocalOnly } from '../electron/main/ipc/transport.mjs'
 
@@ -181,7 +181,7 @@ await test('every browse method is routable, never local-only', () => {
   // This is the property the design leans on: browse:* has no gate of its
   // own because it never opts out of the listener's — asserted here rather
   // than only trusted, per the plan's "assert it anyway".
-  const table = browseHandlers()
+  const table = browseRouteHandlers()
   const names = Object.keys(table)
   assert(JSON.stringify(names.sort()) === JSON.stringify(['browse:list', 'browse:mkdir', 'browse:roots']),
     `unexpected method set: ${names.join(', ')}`)
@@ -191,12 +191,12 @@ await test('every browse method is routable, never local-only', () => {
 })
 
 await test('scoping: (a) no scope — the table takes no root/deps argument', () => {
-  // Pins the §4.2 decision itself: browseHandlers() is a bare function with no
+  // Pins the §4.2 decision itself: browseRouteHandlers() is a bare function with no
   // configured-root dependency threaded in, unlike every capability provider
   // that DOES have one (path-scope.mjs). If this ever grows a required dep,
   // that is the scoping decision being revisited — which is fine, but should
   // be a deliberate edit here, not a silent signature change.
-  assert(browseHandlers.length === 0, 'browseHandlers() started taking arguments')
+  assert(browseRouteHandlers.length === 0, 'browseRouteHandlers() started taking arguments')
 })
 
 // ---------------------------------------------------------------------------

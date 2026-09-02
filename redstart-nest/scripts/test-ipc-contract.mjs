@@ -115,6 +115,7 @@ const registrars = [
   ['server', 'registerServerHandlers'],
   ['models', 'registerModelsHandlers'],
   ['plugins', 'registerPluginsHandlers'],
+  ['browse', 'registerBrowseHandlers'],
 ]
 
 for (const [mod, fnName] of registrars) {
@@ -155,16 +156,14 @@ await test('🔍 every channel the preload invokes has a main-process handler', 
   )
 })
 
-await test('🔍 the folder-scoped trio registers both channels under the hyphenated slug', () => {
+await test('🔍 the folder-scoped trio registers its channel under the hyphenated slug', () => {
   // The one place the channel name is computed, and the one that has broken
   // before. Pinned explicitly so a change to the slug rule fails loudly here
-  // rather than silently in the UI.
+  // rather than silently in the UI. (The matching select-*-folder pickers
+  // retired in Phase 4 §4.3 — see ipc/browse.mjs's generic browse:pick-native.)
   const expected = [
-    'capabilities:select-vault-folder',
     'capabilities:set-vault',
-    'capabilities:select-git-folder',
     'capabilities:set-git',
-    'capabilities:select-file-system-folder',
     'capabilities:set-file-system',
   ]
   const missing = expected.filter(c => !mainHandlers.has(c))

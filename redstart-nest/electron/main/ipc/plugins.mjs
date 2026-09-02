@@ -33,10 +33,8 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { dialog } from 'electron'
 import { configDir } from '../platform-paths.mjs'
 import { registerAll } from './guard.mjs'
-import { localOnly } from './transport.mjs'
 import { isPlainObject, isNonEmptyString, optional } from './validate.mjs'
 import { logEvent } from '../logger.mjs'
 import {
@@ -494,10 +492,8 @@ export async function searchPluginRegistry(opts) {
   return { ok: true, entries, nextCursor: result.nextCursor }
 }
 
-export async function pickPluginFolder() {
-  const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
-  return result.canceled ? null : result.filePaths[0]
-}
+// pickPluginFolder() retired — Phase 4 §4.3. FolderPicker.tsx calls
+// ipc/browse.mjs's generic browse:pick-native instead.
 
 export function pluginsHandlers(deps) {
   return {
@@ -520,9 +516,6 @@ export function pluginsHandlers(deps) {
 
     // --- registry browsing ---
     'plugins:search': async (opts) => searchPluginRegistry(opts),
-    // Browses the CLIENT's disk. A path picked on a laptop and saved as a path
-    // on the server is trap 5.2 exactly; Phase 4 replaces it.
-    'plugins:pick-folder': localOnly(async () => pickPluginFolder()),
   }
 }
 

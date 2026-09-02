@@ -135,7 +135,7 @@ export function browseMkdir({ path: parentPath, name }) {
 
 // --- table -----------------------------------------------------------------
 
-export function browseHandlers() {
+export function browseRouteHandlers() {
   return {
     'browse:roots': () => browseRoots(),
     'browse:list': (opts) => listDirectory(opts?.path),

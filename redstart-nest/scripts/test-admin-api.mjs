@@ -118,22 +118,18 @@ await test('🔍 every table entry is routable or explicitly local-only', () => 
 })
 
 await test('🔍 the local-only set is exactly the client-machine actions', () => {
+  // Phase 4 §4.3 consolidated the nine per-site pickers into one generic
+  // browse:pick-native (ipc/browse.mjs). models:reveal-folder stays alone —
+  // §4.4: "show me this folder" opens a window on someone else's machine and
+  // is not a picker, so it does not get one; it stays a 501 forever.
   const expected = [
-    'capabilities:select-documents-folder',
-    'capabilities:select-file-system-folder',
-    'capabilities:select-git-folder',
-    'capabilities:select-sqlite-folder',
-    'capabilities:select-vault-folder',
-    'hardware:select-model',
+    'browse:pick-native',
     'models:reveal-folder',
-    'plugins:pick-folder',
-    'settings:select-binary',
-    'settings:select-models-dir',
   ]
   const actual = [...localOnlyChannels].sort()
   assert(JSON.stringify(actual) === JSON.stringify(expected),
     `the local-only set has drifted:\n        expected ${expected.join(', ')}\n        actual   ${actual.join(', ')}`)
-  return 'native pickers and reveal-in-explorer, nothing else'
+  return 'the native picker and reveal-in-explorer, nothing else'
 })
 
 await test('🔍 nothing that changes server state is local-only', () => {

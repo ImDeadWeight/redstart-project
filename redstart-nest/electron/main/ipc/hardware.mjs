@@ -1,4 +1,5 @@
-// Hardware IPC namespace — machine spec scan and GGUF model picker.
+// Hardware IPC namespace — machine spec scan. (The GGUF model picker moved to
+// ipc/browse.mjs's generic native picker, Phase 4 §4.3.)
 //
 // KNOWN BUG (non-NVIDIA VRAM): the fallback below reads
 // Win32_VideoController.AdapterRAM, a 32-bit signed field that saturates at
@@ -11,9 +12,7 @@
 // headless-admin-plane implementation plan) so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerHardwareHandlers() does that.
-import { dialog } from 'electron'
 import { registerAll } from './guard.mjs'
-import { localOnly } from './transport.mjs'
 
 export async function scanHardware({ execFileAsync }) {
   const specs = {
@@ -87,23 +86,16 @@ $r | ConvertTo-Json -Compress
   return specs
 }
 
-export async function selectModelFile({ getModelsDir }) {
-  // Open in the Redstart models folder so a model downloaded in the Models
-  // tab is the first thing the user sees here — the two halves of "download
-  // then select" are otherwise unconnected.
-  const defaultPath = getModelsDir?.() || undefined
-  const result = await dialog.showOpenDialog({
-    properties: ['openFile'],
-    defaultPath,
-    filters: [{ name: 'GGUF Models', extensions: ['gguf'] }, { name: 'All Files', extensions: ['*'] }],
-  })
-  return result.canceled ? null : result.filePaths[0]
-}
+// selectModelFile() retired — Phase 4 §4.3 moved model-file picking onto
+// FolderPicker.tsx, which calls the generic ipc/browse.mjs:pickNative over
+// IPC (or admin/browse-routes.mjs's browse:list remotely) instead of a
+// dedicated dialog here. The renderer already knows the models dir
+// (settings.getModelsDir()) and passes it through as FolderPicker's
+// `defaultPath`, so nothing is lost.
 
 export function hardwareHandlers(deps) {
   return {
     'hardware:scan': async () => scanHardware(deps),
-    'hardware:select-model': localOnly(async () => selectModelFile(deps)),
   }
 }
 

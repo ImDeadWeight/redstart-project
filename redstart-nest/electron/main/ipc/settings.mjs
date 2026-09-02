@@ -1,8 +1,7 @@
 // Settings IPC namespace — server binary path and models folder.
 //
 // readSettings/writeSettings/resolveBinary still live in index.mjs and are
-// threaded in via deps; selectBinaryDefaultPath is precomputed there so the
-// picker's default folder is unaffected by this module's own __dirname.
+// threaded in via deps.
 //
 // The models folder is a launcher-level path like serverBinPath — it belongs in
 // settings.json, NOT in tools.json's capabilities block, because it is not a
@@ -12,12 +11,9 @@
 // headless-admin-plane implementation plan) so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerSettingsHandlers() does that. The two
-// dialog.showOpenDialog handlers stay as they are for now — Phase 4 is what
-// gates the native picker on "the daemon is local" and adds the server-side
-// alternative; this phase only extracts bodies unchanged.
-import { dialog } from 'electron'
+// dialog.showOpenDialog handlers that used to live here moved to
+// ipc/browse.mjs's generic native picker (Phase 4 §4.3).
 import { registerAll } from './guard.mjs'
-import { localOnly } from './transport.mjs'
 import { binaryPathRejection, isAbsolutePath } from './validate.mjs'
 import { logEvent } from '../logger.mjs'
 
@@ -48,15 +44,13 @@ export function setBinaryPath(p, { readSettings, writeSettings }) {
   return true
 }
 
-export async function selectBinary({ selectBinaryDefaultPath }) {
-  const result = await dialog.showOpenDialog({
-    title: 'Select llama-server.exe',
-    properties: ['openFile'],
-    filters: [{ name: 'Executable', extensions: ['exe'] }, { name: 'All Files', extensions: ['*'] }],
-    defaultPath: selectBinaryDefaultPath,
-  })
-  return result.canceled ? null : result.filePaths[0]
-}
+// selectBinary() retired — Phase 4 §4.3. FolderPicker.tsx calls
+// ipc/browse.mjs's generic browse:pick-native instead. The one thing lost is
+// the dev-build default path (selectBinaryDefaultPath, computed from
+// __dirname in index.mjs) — the renderer has no equivalent to hand back, so
+// the picker now opens with no default rather than pointing at
+// llama-cpp-turboquant/build/bin/Release. Documented as a deliberate,
+// accepted regression rather than silently dropped.
 
 export function getResolvedBinary({ resolveBinary }) {
   return resolveBinary()
@@ -95,25 +89,19 @@ export function setModelsDir(p, { readSettings, writeSettings, resolveModelsDir 
   return resolveModelsDir()
 }
 
-export async function selectModelsDir({ resolveModelsDir }) {
-  const result = await dialog.showOpenDialog({
-    title: 'Select the folder to store models in',
-    properties: ['openDirectory', 'createDirectory'],
-    defaultPath: resolveModelsDir(),
-  })
-  return result.canceled ? null : result.filePaths[0]
-}
+// selectModelsDir() retired the same way — see the note above selectBinary().
+// Its default (resolveModelsDir()) is not lost: the renderer already has it
+// via settings:get-models-dir and passes it through as FolderPicker's
+// `defaultPath`.
 
 export function settingsHandlers(deps) {
   return {
     'settings:get-binary-path': () => getBinaryPath(deps),
     'settings:set-binary-path': (p) => setBinaryPath(p, deps),
-    'settings:select-binary': localOnly(async () => selectBinary(deps)),
     'settings:get-resolved-binary': () => getResolvedBinary(deps),
 
     'settings:get-models-dir': () => getModelsDir(deps),
     'settings:set-models-dir': (p) => setModelsDir(p, deps),
-    'settings:select-models-dir': localOnly(async () => selectModelsDir(deps)),
   }
 }
 

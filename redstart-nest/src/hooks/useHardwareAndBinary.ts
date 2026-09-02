@@ -3,6 +3,11 @@ import { api, getAPI } from '../api/redstart'
 import type { HardwareSpecs, LlamaConfig } from '../types'
 
 // Hardware scan, llama-server binary resolution/override, and model picking.
+//
+// applyBinaryPath / applyModelPath are the onPick callbacks for
+// FolderPicker.tsx (Phase 4 §4.3) — the picking itself (native dialog or the
+// remote browser) lives in the component now, not here. This hook only
+// applies whatever path comes back.
 export function useHardwareAndBinary(
   setConfig: React.Dispatch<React.SetStateAction<LlamaConfig>>,
 ) {
@@ -26,12 +31,9 @@ export function useHardwareAndBinary(
     }))
   }
 
-  async function selectBinary() {
-    const p = await api().settings.selectBinary()
-    if (p) {
-      await api().settings.setBinaryPath(p)
-      setBinaryPath(p)
-    }
+  async function applyBinaryPath(p: string) {
+    await api().settings.setBinaryPath(p)
+    setBinaryPath(p)
   }
 
   async function clearBinaryOverride() {
@@ -40,10 +42,9 @@ export function useHardwareAndBinary(
     setBinaryPath(resolved)
   }
 
-  async function selectModel() {
-    const p = await api().hardware.selectModel()
-    if (p) setConfig(prev => ({ ...prev, modelPath: p }))
+  function applyModelPath(p: string) {
+    setConfig(prev => ({ ...prev, modelPath: p }))
   }
 
-  return { hardware, binaryPath, scanHardware, selectBinary, clearBinaryOverride, selectModel }
+  return { hardware, binaryPath, scanHardware, applyBinaryPath, clearBinaryOverride, applyModelPath }
 }
