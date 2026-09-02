@@ -138,6 +138,9 @@ jobs:
       - name: "Security: auth / sessions / roles"
         run: node scripts/test-auth.mjs
 
+      - name: "Security: session persistence / plane binding"
+        run: node scripts/test-sessions.mjs
+
       - name: "Security: gateway routes / request rewriting"
         run: node scripts/test-gateway-routes.mjs
 

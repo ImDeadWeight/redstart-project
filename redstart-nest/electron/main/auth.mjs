@@ -21,8 +21,23 @@ import * as accounts from './accounts-storage.mjs'
 import * as roles from './roles-storage.mjs'
 import { can, allowsSurface, restrictsSurfaces, ADMIN_PERMISSIONS } from './permissions.mjs'
 import { isKnownSurface } from './system-prompt.mjs'
+import * as sessionStore from './sessions-storage.mjs'
 
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days, sliding
+// TWO PLANES, TWO SESSION LIFETIMES. 30 days was chosen for a chat client and
+// is right for one. Thirty days of standing access to something that starts and
+// stops processes is not, and it is exactly the kind of number nobody revisits
+// once shipped, so the control plane gets its own from the start
+// (headless-admin-plane-plan.md §3.7). Both slide, so an admin who works on the
+// box daily is never logged out mid-task; what the shorter one bounds is a
+// FORGOTTEN session — a browser tab left open on a laptop that then leaves the
+// building.
+const SESSION_TTL_MS = {
+  data: 30 * 24 * 60 * 60 * 1000, // 30 days, sliding — unchanged
+  control: 12 * 60 * 60 * 1000,   // 12 hours, sliding
+}
+
+export const DATA_PLANE = 'data'
+export const CONTROL_PLANE = 'control'
 
 // ---------------------------------------------------------------------------
 // Password hashing (scrypt — no native deps, no Electron ABI rebuild)
@@ -77,45 +92,65 @@ export function hashApiKey(rawKey) {
 }
 
 // ---------------------------------------------------------------------------
-// Sessions — in-memory only. Does not survive an Electron restart; clients
-// must handle a 401 from /auth/me by clearing their stored token and
-// re-showing the login form, not by looping.
+// Sessions — persisted and hashed. See sessions-storage.mjs for the storage
+// contract; what lives here is the policy.
 // ---------------------------------------------------------------------------
-
-const sessions = new Map() // token -> { accountId, username, expiresAt }
-
+// A session is BOUND TO ITS PLANE at creation, and each plane accepts only its
+// own. This is what makes plane separation structural rather than remembered
+// (plan §3.6): the gateway issues data-plane sessions, the admin listener issues
+// control-plane ones, and an owner who logs into the chat UI therefore does NOT
+// thereby hold a credential that can start and stop processes. Only the
+// control-plane listener can mint control-plane access.
+//
+// The token is stored only as a hash. Clients must handle a 401 from /auth/me by
+// clearing their stored token and re-showing the login form, not by looping.
+//
 // NOTE: the session deliberately stores NO authority — no tier, no roleId.
 // It used to cache `role`, which nothing authorised off (authenticate() re-reads
-// the record by id), but a stale authority field sitting in a session map is
+// the record by id), but a stale authority field sitting in a session record is
 // exactly the thing a later change reaches for. Every permission decision reads
 // the account and its role fresh, which is also what makes a role edit take
-// effect on the very next request instead of at next login.
-function createSession(account) {
+// effect on the very next request instead of at next login. Persisting sessions
+// makes that rule matter MORE, not less: a stale authority field would now
+// outlive a restart.
+function hashSessionToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex')
+}
+
+function createSession(account, plane) {
   const token = crypto.randomBytes(32).toString('hex')
-  sessions.set(token, {
+  sessionStore.insertSession({
+    tokenHash: hashSessionToken(token),
     accountId: account.id,
     username: account.username,
-    expiresAt: Date.now() + SESSION_TTL_MS,
+    plane,
+    expiresAt: Date.now() + SESSION_TTL_MS[plane],
   })
   return token
 }
 
-function validateSession(token) {
-  const session = sessions.get(token)
+/**
+ * Resolve a token to its session, if it is live AND belongs to this plane.
+ *
+ * The plane check is not a second gate bolted on: a token for the other plane is
+ * not a valid credential HERE at all, and reporting it as invalid is both true
+ * and the only answer that does not leak which planes a token opens.
+ */
+function validateSession(token, plane) {
+  const tokenHash = hashSessionToken(token)
+  const session = sessionStore.findByTokenHash(tokenHash)
   if (!session) return null
-  if (session.expiresAt < Date.now()) { sessions.delete(token); return null }
-  session.expiresAt = Date.now() + SESSION_TTL_MS // sliding expiry
+  if (session.plane !== plane) return null
+  sessionStore.touchSession(tokenHash, Date.now() + SESSION_TTL_MS[plane]) // sliding
   return session
 }
 
 export function revokeSession(token) {
-  sessions.delete(token)
+  sessionStore.deleteByTokenHash(hashSessionToken(token))
 }
 
 export function revokeSessionsForAccount(accountId) {
-  for (const [token, session] of sessions) {
-    if (session.accountId === accountId) sessions.delete(token)
-  }
+  sessionStore.deleteForAccount(accountId)
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +230,7 @@ export function authenticate(req) {
 
   const token = bearerToken(req)
   if (token) {
-    const session = validateSession(token)
+    const session = validateSession(token, DATA_PLANE)
     if (session) {
       const record = accounts.findById(session.accountId)
       // A session is tagged 'nest-chat' because the chat UI is what logs in
@@ -247,14 +282,16 @@ export function authenticate(req) {
 //      ever looks at the token. Both halves are wrong, and one function that
 //      ignores the toggle entirely fixes both.
 //
-//   2. SESSIONS ONLY. An account-wide API key resolves to the same account and
-//      the same tier, but it is a credential users paste into third-party tool
-//      clients (Kilo Code, Continue, a Twig install on someone's laptop). If it
-//      also opened the control plane, every one of those config files would be
-//      holding a process-spawning admin credential. Per-connector keys are
-//      refused for the same reason. The owner's password, exchanged for a
-//      session, is the only way in (plan decision 18) — and Phase 3 is what
-//      gives that session a shorter TTL than the data plane's 30 days.
+//   2. CONTROL-PLANE SESSIONS ONLY, which is two refusals in one. An
+//      account-wide API key resolves to the same account and the same tier, but
+//      it is a credential users paste into third-party tool clients (Kilo Code,
+//      Continue, a Twig install on someone's laptop); if it opened the control
+//      plane, every one of those config files would hold a process-spawning
+//      admin credential. Per-connector keys are refused for the same reason. And
+//      a session minted by the GATEWAY is refused too — the owner logging into
+//      the chat UI must not thereby hold process control. Only a session issued
+//      by this listener's own login route gets in (plan decision 18, §3.6), and
+//      it carries a 12-hour life rather than the data plane's 30 days.
 //
 // Authorization is NOT decided here: the caller pairs this with
 // mayAccessControlPlane(). Authentication answers "who is this", the
@@ -269,7 +306,7 @@ export function authenticateControlPlane(req) {
   const token = bearerToken(req)
   if (!token) return { ok: false, reason: 'unauthorized' }
 
-  const session = validateSession(token)
+  const session = validateSession(token, CONTROL_PLANE)
   if (!session) return { ok: false, reason: 'unauthorized' }
 
   const record = accounts.findById(session.accountId)
@@ -283,7 +320,15 @@ export function authenticateControlPlane(req) {
 // through, so nothing bypasses session revocation on delete/reset.
 // ---------------------------------------------------------------------------
 
-export function login(username, password) {
+/**
+ * Exchange a username and password for a session on ONE plane.
+ *
+ * `plane` defaults to the data plane so every existing caller (the gateway's
+ * /auth/login) keeps its exact behaviour. The control plane asks for its own
+ * explicitly, which is the point: a credential minted here for the chat UI must
+ * never open process control.
+ */
+export function login(username, password, plane = DATA_PLANE) {
   const record = accounts.findByUsername(username)
   if (!record || !verifyPassword(password, record.passwordHash, record.passwordSalt)) {
     return { ok: false, error: 'Invalid username or password' }
@@ -292,7 +337,7 @@ export function login(username, password) {
     return { ok: false, error: 'This account has been disabled' }
   }
   accounts.updateAccount(record.id, { lastLoginAt: new Date().toISOString() })
-  const token = createSession(record)
+  const token = createSession(record, plane)
   return { ok: true, token, user: toPublicAccount(record) }
 }
 

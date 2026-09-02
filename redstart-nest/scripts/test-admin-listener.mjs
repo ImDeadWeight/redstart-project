@@ -66,6 +66,7 @@ const { discoveryPlan, lastKnownDiscovery, discoveryRecordFor, stopDiscovery } =
 const { getControlPlane, setControlPlaneBindHost } = await import('../electron/main/ipc/admin.mjs')
 const {
   authenticateControlPlane, login, createOwner, createAccount, setAuthRequired,
+  CONTROL_PLANE, DATA_PLANE,
 } = await import('../electron/main/auth.mjs')
 
 const ADMIN_TEST_PORT = 48383 // well clear of the real 19083
@@ -110,8 +111,12 @@ if (!adminResult.ok) throw new Error(`could not create the admin: ${adminResult.
 const userResult = createAccount(ownerAccount, { username: 'user', password: 'user-pw-1234', tier: 'user' })
 if (!userResult.ok) throw new Error(`could not create the user: ${userResult.error}`)
 
-function sessionFor(username, password) {
-  const result = login(username, password)
+// Sessions are bound to a plane at creation, so a control-plane test needs
+// control-plane sessions. The data-plane one below is not a stray: an owner who
+// logs into the chat UI must NOT thereby hold process control, and that is a
+// property with its own check further down.
+function sessionFor(username, password, plane = CONTROL_PLANE) {
+  const result = login(username, password, plane)
   if (!result.ok) throw new Error(`login failed for ${username}: ${result.error}`)
   return result.token
 }
@@ -119,6 +124,7 @@ function sessionFor(username, password) {
 const ownerToken = sessionFor('owner', 'owner-pw-1234')
 const adminToken = sessionFor('admin', 'admin-pw-1234')
 const userToken = sessionFor('user', 'user-pw-1234')
+const ownerChatToken = sessionFor('owner', 'owner-pw-1234', DATA_PLANE)
 
 // ---------------------------------------------------------------------------
 // 1. The authorization rule itself
@@ -157,6 +163,12 @@ const reqWith = (headers = {}) => ({
 await test('🔍 an owner SESSION is accepted', () => {
   const result = authenticateControlPlane(reqWith(bearer(ownerToken)))
   assert(result.ok && result.account?.tier === 'owner', `refused the owner's session: ${JSON.stringify(result)}`)
+})
+
+await test("🔍 the owner's CHAT session is refused — the gateway cannot mint admin access", () => {
+  const result = authenticateControlPlane(reqWith(bearer(ownerChatToken)))
+  assert(!result.ok, 'a data-plane session opened the control plane')
+  return 'only this listener mints control-plane sessions (plan §3.6)'
 })
 
 await test("🔍 the owner's API KEY is refused — it lives in tool-client config files", () => {
