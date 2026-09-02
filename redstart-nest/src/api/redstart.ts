@@ -238,10 +238,49 @@ export type RegistrySearchResult = {
   fields: { name: string; description: string; format: string; isRequired: boolean; isSecret: boolean; default?: unknown; placeholder?: string }[]
 }
 
-export const getAPI = (): RedstartAPI | undefined => (window as unknown as { redstartAPI?: RedstartAPI }).redstartAPI
+// ---------------------------------------------------------------------------
+// Transport selection
+// ---------------------------------------------------------------------------
+// TWO IMPLEMENTATIONS OF THE TYPE ABOVE, chosen at runtime, and every component
+// holds whichever it is given without knowing which:
+//
+//   ipc    the preload bridge — the launcher running inside Electron
+//   http   api/http.ts — the same launcher bundle served by the admin listener
+//          to a browser, anywhere on the network
+//
+// The presence of the bridge IS the test. Not a build flag, not an env var:
+// `window.redstartAPI` exists exactly when a preload put it there, which is
+// exactly when IPC is available. A browser tab has no bridge and gets HTTP.
+//
+// IPC survives this phase deliberately (plan decision 5's staging): keeping it
+// is what lets Windows go on using real OS file dialogs while a browser admin
+// gets the server-side picker Phase 4 builds. It retires when that lands.
+
+const bridge = (): RedstartAPI | undefined =>
+  (window as unknown as { redstartAPI?: RedstartAPI }).redstartAPI
+
+export type Transport = 'ipc' | 'http'
+
+export const activeTransport = (): Transport => (bridge() ? 'ipc' : 'http')
+
+/** True when this launcher is driving a daemon it does not share a process with. */
+export const isRemote = (): boolean => activeTransport() === 'http'
+
+let httpApi: RedstartAPI | undefined
+
+/**
+ * Install the HTTP implementation.
+ *
+ * Called once by the shell after it has a session. Kept as an injection rather
+ * than constructed here so this module stays free of session handling — a
+ * detail that only exists for one of the two transports.
+ */
+export const setHttpAPI = (impl: RedstartAPI | undefined): void => { httpApi = impl }
+
+export const getAPI = (): RedstartAPI | undefined => bridge() ?? httpApi
 
 export const api = (): RedstartAPI => {
   const a = getAPI()
-  if (!a) throw new Error('redstartAPI not available — preload may have failed')
+  if (!a) throw new Error('No transport available — the preload failed, or no session has been established')
   return a
 }

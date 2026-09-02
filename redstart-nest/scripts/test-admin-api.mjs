@@ -158,6 +158,89 @@ await test('the namespaces in the table match the ones index.mjs registers', () 
 })
 
 // ---------------------------------------------------------------------------
+// The rule the HTTP client derives its URLs from
+// ---------------------------------------------------------------------------
+// src/api/http.ts does not list 74 methods — it builds each channel as
+// `namespace:kebab-case(method)` and lets a Proxy do the rest, because 74
+// hand-written entries is 74 places for a typo typecheck cannot see. That
+// shortcut is only sound while the rule actually holds for every channel, so it
+// is checked here rather than assumed. A future channel that breaks it is not a
+// disaster — it just has to be spelled out — but it must not go unnoticed, since
+// the symptom would be one method 404ing in a browser and nowhere else.
+
+console.log('\n-- namespace.method -> channel --')
+
+// The same one-liner src/api/http.ts uses. Duplicated on purpose: the point of
+// this check is that two independent statements of the rule agree, and importing
+// the TypeScript one would make it a tautology.
+const kebab = (method) => method.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`)
+
+// The preload as a nested literal: `namespace: {` opens a block, and each
+// `method: (...) => ipcRenderer.invoke('channel')` inside it is one binding.
+function preloadBindings() {
+  const bindings = []
+  let namespace = null
+  for (const line of preloadSource.split('\n')) {
+    const open = line.match(/^  (\w+): \{/)
+    if (open) { namespace = open[1]; continue }
+    if (line === '  },') { namespace = null; continue }
+    const invoke = line.match(/^\s*(\w+):.*ipcRenderer\.invoke\(\s*'([^']+)'/)
+    if (invoke && namespace) bindings.push({ namespace, method: invoke[1], channel: invoke[2] })
+  }
+  return bindings
+}
+
+const bindings = preloadBindings()
+
+await test('the preload parses into namespace/method/channel triples', () => {
+  assert(bindings.length === preloadChannels.size,
+    `parsed ${bindings.length} bindings but found ${preloadChannels.size} channels — the preload's shape changed`)
+  return `${bindings.length} bindings`
+})
+
+const httpSource = fs.readFileSync(path.join(repoRoot, 'src', 'api', 'http.ts'), 'utf8')
+
+// The exceptions the client declares. Parsed from source rather than imported,
+// because this suite runs under plain node and the client is TypeScript — and
+// because reading the declaration is the point: the check is that the rule PLUS
+// the written-down exceptions reproduce the bridge exactly.
+const overrides = new Map(
+  [...(httpSource.match(/const CHANNEL_OVERRIDES[^}]*\}/)?.[0] ?? '')
+    .matchAll(/'([^']+)':\s*'([^']+)'/g)].map(m => [m[1], m[2]])
+)
+
+const clientChannelFor = (namespace, method) => {
+  const derived = `${namespace}:${kebab(method)}`
+  return overrides.get(derived) ?? derived
+}
+
+await test('\u{1F50D} the HTTP client derives every channel the bridge invokes', () => {
+  const broken = bindings
+    .filter(b => clientChannelFor(b.namespace, b.method) !== b.channel)
+    .map(b => `${b.namespace}.${b.method} wants ${b.channel}, client builds ${clientChannelFor(b.namespace, b.method)}`)
+  assert(broken.length === 0, `a browser would 404 on: ${broken.join('; ')}`)
+  return `${bindings.length} bindings, ${overrides.size} declared exception(s)`
+})
+
+await test('every declared exception is one the bridge actually needs', () => {
+  // Stops the override map becoming a graveyard: an entry for a binding that no
+  // longer exists is a rule nobody is applying and nobody will remove.
+  const wanted = new Set(bindings.map(b => `${b.namespace}:${kebab(b.method)}`))
+  const stale = [...overrides.keys()].filter(k => !wanted.has(k))
+  assert(stale.length === 0, `these overrides match no bridge method: ${stale.join(', ')}`)
+})
+
+await test('\u{1F50D} the HTTP client knows every namespace the preload exposes', () => {
+  const listed = new Set(
+    (httpSource.match(/const NAMESPACES = \[([\s\S]*?)\] as const/)?.[1] ?? '')
+      .split(',').map(part => part.trim().replace(/^'|'$/g, '')).filter(Boolean)
+  )
+  const missing = [...new Set(bindings.map(b => b.namespace))].filter(n => !listed.has(n)).sort()
+  assert(missing.length === 0, `a browser cannot reach these namespaces at all: ${missing.join(', ')}`)
+  return `${listed.size} namespaces`
+})
+
+// ---------------------------------------------------------------------------
 // Path shape
 // ---------------------------------------------------------------------------
 
