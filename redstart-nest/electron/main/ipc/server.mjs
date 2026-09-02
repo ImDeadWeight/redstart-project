@@ -16,6 +16,7 @@ import { startMdnsAdvertiser, stopMdnsAdvertiser } from '../mdns-advertiser.mjs'
 import { startPort80Proxy, stopPort80Proxy } from '../port80-proxy.mjs'
 import { syncFilesystemProvider, stopFilesystemProvider } from '../filesystem-mcp-provider.mjs'
 import { logEvent } from '../logger.mjs'
+import { writePidFile, deletePidFile } from '../process-supervision.mjs'
 
 // EMA smoothing factor for the tokens/sec readout (moved here with its sole
 // consumer, the launch handler's stdout parser).
@@ -56,8 +57,16 @@ export function registerServerHandlers({
     try {
       // --- Piped mode (in-app log + token tracking) ---
       serverState.ema = 0
-      // cwd = binary dir so Windows DLL search finds companion DLLs
-      const child = spawn(binaryPath, spawnArgs, { stdio: ['ignore', 'pipe', 'pipe'], cwd: binaryDir })
+      // cwd = binary dir so Windows DLL search finds companion DLLs.
+      // detached (POSIX only) puts the child in its own process group, so
+      // killByPid's negative-pid signal in process-supervision.mjs reaches
+      // any grandchildren too, not just this one process. Windows tree-kill
+      // goes through `taskkill /T` instead and does not need this.
+      const child = spawn(binaryPath, spawnArgs, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: binaryDir,
+        detached: process.platform !== 'win32',
+      })
 
       const forwardLines = (chunk) => {
         for (const line of chunk.toString().split('\n')) {
@@ -77,6 +86,7 @@ export function registerServerHandlers({
         getMainWindow()?.webContents.send('server:log', `SPAWN ERROR: ${err.message}`)
         getMainWindow()?.webContents.send('server:stopped')
         serverState.process = null
+        deletePidFile(userDataDir)
       })
 
       child.on('exit', (code, signal) => {
@@ -86,11 +96,16 @@ export function registerServerHandlers({
         serverState.process = null
         serverState.ema = 0
         serverState.lastConfig = null
+        deletePidFile(userDataDir)
         getMainWindow()?.webContents.send('server:stopped')
       })
 
       serverState.process = child
       serverState.lastConfig = config
+      // Recorded so a hard-killed Nest (Task Manager, power loss — anything
+      // that skips the exit handler above) can be reaped by PID, not by name,
+      // the next time Nest starts. See process-supervision.mjs.
+      writePidFile(userDataDir, { pid: child.pid, binaryPath, startedAt: Date.now() })
 
       // Start the gateway on the public port. It injects the Redstart system
       // context into every completions request and proxies everything else

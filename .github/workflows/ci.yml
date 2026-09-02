@@ -102,6 +102,9 @@ jobs:
       - name: "Durability: atomic JSON state writes"
         run: node scripts/test-json-store.mjs
 
+      - name: "Process supervision: reap by PID, never by name"
+        run: node scripts/test-process-supervision.mjs
+
       - name: "Security: MCP plugin registry validation"
         run: node scripts/test-plugin-registry.mjs
 

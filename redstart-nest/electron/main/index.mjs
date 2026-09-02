@@ -31,6 +31,7 @@ import { ensureFirewallRule } from './firewall.mjs'
 import { getPrimaryLanIp } from './net-interfaces.mjs'
 import { cleanupOldConversations } from './conversations-storage.mjs'
 import { initLogger, closeLogger, logEvent } from './logger.mjs'
+import { reapStaleProcess, deletePidFile } from './process-supervision.mjs'
 import { fileURLToPath } from 'url'
 import { registerGithubHandlers } from './ipc/github.mjs'
 import { registerHardwareHandlers } from './ipc/hardware.mjs'
@@ -618,7 +619,12 @@ app.whenReady().then(async () => {
   ensureModelsDir()
   applyCSP(session.defaultSession)
   installNavigationContainment()
-  killOrphanedServers()
+  // Reaps a llama-server left running by a previous session that never got
+  // to run its own exit handler (Task Manager kill, power loss). Verifies the
+  // recorded pid is still that same binary before touching it — never a
+  // by-name sweep. See process-supervision.mjs for why this replaced
+  // killOrphanedServers().
+  await reapStaleProcess(app.getPath('userData'))
   const cleanedConversations = cleanupOldConversations()
   if (cleanedConversations > 0) console.log(`Cleaned ${cleanedConversations} conversations older than 30 days`)
   // Retries any plugin folder an uninstall couldn't delete last session (a
@@ -645,30 +651,24 @@ async function installReactDevTools() {
   }
 }
 
-function killOrphanedServers() {
-  // I call this both at startup and before the app quits. The startup call
-  // handles the case where a previous session crashed without cleaning up —
-  // if a stale llama-server.exe is still running, it holds port 19080 and the
-  // next launch silently fails. The quit call is a best-effort safety net for
-  // the normal exit path, though the child process should exit on its own too.
-  try {
-    execFile('taskkill', ['/F', '/IM', 'llama-server.exe'], () => {})
-  } catch { /* no orphans, fine */ }
-}
-
 // Inbound firewall rules now live in firewall.mjs so the mDNS advertiser can
 // reuse the same elevate.exe path for its UDP 5353 rule. `ensureFirewallRule`
 // is imported above and re-exported through the deps object below unchanged.
 
 app.on('before-quit', () => {
   logEvent('app', 'quit', {})
-  killOrphanedServers()
   stopGateway()
   stopMcpServer()
   stopMdnsAdvertiser()
   stopPort80Proxy()
   if (serverState.process) {
+    // killOrphanedServers() used to do this job as a side effect of its
+    // by-name sweep — this line never actually killed the child itself, only
+    // dropped the reference. Kill by pid explicitly now that the sweep is
+    // gone, or Nest's own llama-server would leak past quit.
+    serverState.process.kill()
     serverState.process = null
+    deletePidFile(app.getPath('userData'))
   }
   if (beaconServerInstance) {
     stopBeaconServer(beaconServerInstance)
