@@ -199,6 +199,19 @@ export function NetworkPanel({
               <span className="flex-1 text-xs text-amber-400">
                 Shut down now? This stops the model and takes this box off the network for
                 every client — including this one. Nobody can restart it remotely.
+                {/* Phase 8B.3. On a desktop install the login item brings
+                    Redstart back at the next sign-in, so "shut down" is closer
+                    to "until later". With no login item there is nothing to do
+                    that — a service supervisor deliberately leaves a clean exit
+                    stopped (that is what exit code 0 means to it), so somebody
+                    has to start it AT the machine. Keyed on the login item
+                    being unavailable, which is a proxy for a service install
+                    rather than proof of one; it is right either way, because
+                    what it says is exactly what the missing login item means. */}
+                {startupState?.supported === false && (
+                  <> Nothing will start it again on its own — not a reboot, not the service
+                  manager. Someone will need access to this machine.</>
+                )}
               </span>
               <button
                 onClick={confirmShutdownNow}

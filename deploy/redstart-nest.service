@@ -1,0 +1,85 @@
+# Redstart Nest — systemd unit for a level-3 (appliance) install.
+#
+# Install to /etc/systemd/system/redstart-nest.service, then:
+#   systemctl daemon-reload
+#   systemctl enable --now redstart-nest
+#
+# See deploy/README.md for the full procedure, including the storage layout
+# this assumes and the reverse proxy that belongs in front of it.
+#
+# UNVERIFIED. Written from the design's requirements; nobody has run it on a
+# real box yet. Read it before trusting it.
+
+[Unit]
+Description=Redstart Nest — local LLM host and control plane
+Documentation=https://github.com/redstart/nest
+# The control plane is useful before the network is fully up (it is how an
+# admin finds out why the network is not fully up), so this wants the network
+# rather than requiring it.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+
+# NEVER root. Decision 9's reasoning is not about tidiness: Nest spawns a
+# user-configurable binary (ipc/validate.mjs calls that path "the head of the
+# escalation chain") and runs third-party npm/pypi plugin code. Under a
+# privileged account, a plugin escape or a path-scope bug becomes full machine
+# compromise instead of a contained one. Create this account with no login
+# shell and no home directory beyond the state directory below.
+User=redstart
+Group=redstart
+
+# --dir names the NEST directory. Nest derives two subtrees from it and refuses
+# to start if they overlap (platform-paths.mjs, Phase 8B.1):
+#   /var/lib/redstart/config   Nest's own state, including the secret key
+#   /var/lib/redstart/data     the folder-scoped capabilities' content
+# Backups want those treated differently, and the config reset documented in
+# deploy/README.md must never be adjacent to a user's files.
+ExecStart=/usr/bin/node /usr/lib/redstart/bin/nestd.mjs --dir /var/lib/redstart
+
+# THE RESTART POLICY IS THE POINT, and `on-failure` rather than `always` is
+# deliberate — design §4 is explicit about it.
+#
+# Nest's exit codes are the interface (electron/main/daemon.mjs):
+#   0  a human meant it — the admin UI's Shut Down, or SIGTERM. Stay down.
+#   1  it crashed, or could not bind the control plane. Bring it back.
+#
+# `always` would resurrect a daemon somebody deliberately stopped, which turns
+# the Shut Down button into a button that does nothing and leaves no way to
+# stop the box short of disabling the unit.
+Restart=on-failure
+RestartSec=5s
+
+# The give-up threshold, and it is not optional either: a service that
+# crash-loops forever is its own outage, and one that gives up leaves a clear
+# `systemctl status` for whoever comes to look. Five failures inside five
+# minutes and systemd stops trying.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Hardening that costs nothing here. Nest binds ports, reads its own state
+# directory and spawns llama-server; none of these get in the way, and each
+# narrows what a plugin escape reaches.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# The one tree it may write. Anything a capability is pointed at OUTSIDE this
+# path needs adding here as well as being readable by the account — which is
+# the out-of-band grant design §3.5 describes, and the case the picker now
+# refuses at selection time rather than failing inside a tool call (8B.6).
+ReadWritePaths=/var/lib/redstart
+
+# Deliberately NOT set: CAP_NET_BIND_SERVICE. Nest does not bind a privileged
+# port and must not learn to — the clean-URL proxy on port 80 is Windows-only
+# for exactly this reason (Phase 8A.4), and TLS on 443 belongs to the reverse
+# proxy in front (design §3.3), not to this process.
+
+[Install]
+WantedBy=multi-user.target

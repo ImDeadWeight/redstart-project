@@ -1,0 +1,64 @@
+# Redstart Nest — reverse proxy for a level-3 install.
+#
+# Nest does not do TLS, at any phase, and that is a settled decision rather
+# than an omission (design §3.3). It binds loopback by default and speaks plain
+# HTTP; encryption belongs to a proxy in front that handles certificates and
+# renewal properly. Caddy, nginx and Traefik all do — this is the Caddy one
+# because it needs the least configuration to be correct.
+#
+# On an appliance this ships IN THE IMAGE, preconfigured, so the box arrives
+# with working HTTPS and nobody had to know anything.
+#
+# UNVERIFIED. Written from the design's requirements; nobody has run it against
+# a real deployment yet.
+#
+# ---------------------------------------------------------------------------
+# Pick ONE of the two blocks below.
+# ---------------------------------------------------------------------------
+
+# (1) A REAL DOMAIN. Caddy obtains and renews a publicly trusted certificate
+# automatically, and browsers show no warning. Requires the name to resolve to
+# this box and ports 80/443 reachable for the challenge.
+#
+# nest.example.com {
+#     reverse_proxy 127.0.0.1:19083
+# }
+
+# (2) NO DOMAIN — the small-operator case, and the one that looks worst while
+# actually being served well. Caddy issues its own certificate; each device
+# gets a click-through warning once. Traffic is encrypted either way: the
+# warning is about VERIFICATION, not encryption. It fully defeats passive
+# capture on the LAN, which is the realistic opportunistic threat; it does not
+# defeat an active attacker already able to redirect traffic, who in that
+# environment has easier targets.
+:443 {
+	tls internal
+	reverse_proxy 127.0.0.1:19083
+}
+
+# ---------------------------------------------------------------------------
+# What Nest expects of whatever sits here
+# ---------------------------------------------------------------------------
+#
+# THE CONTROL PLANE STAYS ON LOOPBACK. Leave Nest's bind address at 127.0.0.1
+# and let the proxy be the only thing on the network. If the control plane is
+# bound to a LAN address as well, the proxy is decoration — anyone can reach
+# :19083 directly, in the clear.
+#
+# NEST SEES PROXIED REQUESTS AS ARRIVING FROM LOOPBACK, and that is harmless
+# here ONLY because of two properties that must not be quietly changed:
+# there is no localhost exemption anywhere in authentication (auth.mjs), and
+# control-plane access is owner-password-only (decision 18). Do not add
+# IP-based rules later without revisiting that — "requests from this machine
+# are trusted" would, behind this proxy, mean "requests from anywhere are
+# trusted", and Nest also runs third-party plugin code locally.
+#
+# X-Forwarded-For IS DELIBERATELY NOT TRUSTED by Nest. A consequence worth
+# knowing rather than working around: rate limiting is keyed on the remote
+# address, so behind this proxy every caller shares one bucket. Treat that
+# limit as a brake on automated guessing, not as an access control. Caddy can
+# apply its own per-client limits if that matters for a deployment.
+#
+# THE DATA PLANE IS SEPARATE. The gateway (19080) serves inference and the chat
+# UI and has its own auth setting; it is not proxied here. Add a block for it
+# deliberately if it should be reachable, rather than by widening this one.
