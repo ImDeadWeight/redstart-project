@@ -111,6 +111,13 @@ jobs:
       - name: "Security: secrets provider seam + legacy ciphertext"
         run: node scripts/test-secrets.mjs
 
+      # Trap 5.3 — the one step in the headless-admin-plane pass that can
+      # destroy stored credentials silently. Nearly every case here asserts a
+      # FAILURE path: what survives when a secret cannot be read, what is left
+      # behind when the write fails, what happens to a populated target.
+      - name: "Security: secrets re-key migration (trap 5.3)"
+        run: node scripts/test-secrets-migration.mjs
+
       - name: "Process supervision: reap by PID, never by name"
         run: node scripts/test-process-supervision.mjs
 
