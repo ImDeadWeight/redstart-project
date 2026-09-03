@@ -13,7 +13,7 @@
 // Key architectural decisions documented inline below.
 // =============================================================================
 
-import { app, BrowserWindow, nativeImage, Notification } from 'electron'
+import { app, BrowserWindow, nativeImage, Notification, dialog } from 'electron'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import * as path from 'path'
@@ -647,6 +647,51 @@ function installPopupContainment() {
   })
 }
 
+// Phase 7 §7.7 (trap 5.6) — "closing the window will stop stopping the
+// server" is a real reversal of user expectation from before this phase,
+// and the design doc asks for it to be said plainly, not left to be
+// discovered by someone wondering why the model is still resident.
+//
+// Intercepts the window's own 'close' (the X button / Alt+F4), shown once
+// ever — persisted in settings.json, not merely for this session, since
+// the point is a single plain explanation the first time behavior changes,
+// not a recurring nag every time the app is reopened. Skipped entirely on
+// a deliberate quit (isQuitting true — the tray's Quit or admin:shutdown):
+// the window is closing because the whole daemon is, so there is nothing
+// misleading to correct.
+//
+// dialog.showMessageBox is NOT the native-picker mechanism Phase 6 §6.1
+// retired (trap 5.2 was about a dialog browsing the CLIENT's disk on
+// someone else's behalf, an act with no safe caller once nothing can tell
+// "local" from "remote"). This shows an informational box on THIS
+// process's own window, which by construction is always local to whoever
+// is running this Electron process — no remote-vs-local ambiguity exists
+// for it the way it did for a file picker.
+function installCloseNotice(win) {
+  win.on('close', (event) => {
+    if (isQuitting) return
+    const settings = readSettings()
+    if (settings.closeNoticeShown) return
+    event.preventDefault()
+    dialog.showMessageBox(win, {
+      type: 'info',
+      title: 'Redstart keeps running',
+      message: 'Redstart keeps running in the notification area.',
+      detail: 'The model stays loaded. Quit from the tray icon to stop it.',
+      buttons: ['Got it'],
+    }).then(() => {
+      const latest = readSettings()
+      latest.closeNoticeShown = true
+      writeSettings(latest)
+      // win.close() rather than destroy() — re-fires 'close', but the
+      // settings write above just made this handler's early-return above
+      // fire this time, so it proceeds to the OS's normal close behavior
+      // instead of looping.
+      win.close()
+    })
+  })
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1100,
@@ -675,6 +720,7 @@ function createWindow() {
     unsubscribeFromEvents()
     if (mainWindow === win) mainWindow = null
   })
+  installCloseNotice(win)
 
   // Always the admin listener's own loopback address — Electron shares the
   // daemon's machine (level 2, plan §1), so it connects to it exactly like
