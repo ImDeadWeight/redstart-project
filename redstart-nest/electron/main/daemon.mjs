@@ -55,7 +55,7 @@ import { reapStaleProcess, deletePidFile } from './process-supervision.mjs'
 import { configDir, capabilityBaseDir, isPackaged } from './platform-paths.mjs'
 import { buildGatewayConfig, createRefreshLiveToolsConfig } from './gateway-config.mjs'
 import { buildArgs } from './llama-args.mjs'
-import { binaryPathRejection } from './ipc/validate.mjs'
+import { binaryPathRejection, serverBinaryName } from './ipc/validate.mjs'
 import { setPluginCapabilityProvider } from './tools-definitions.mjs'
 import { pluginCapabilities } from './plugin-registry.mjs'
 import { sweepPendingDeletions } from './plugin-install.mjs'
@@ -184,17 +184,36 @@ function resolveBinary() {
   }
 
   const candidates = []
+  const name = serverBinaryName()
 
   if (isPackaged()) {
     // Packaged: binary is placed at resources/bin/ via extraResources in electron-builder.json
-    candidates.push(path.join(process.resourcesPath, 'bin', 'llama-server.exe'))
+    candidates.push(path.join(process.resourcesPath, 'bin', name))
   } else {
     // Dev: look in the project tree
     const projectRoot = path.join(__dirname, '..', '..')
     candidates.push(
-      path.join(projectRoot, 'llama-cpp-turboquant', 'build', 'bin', 'Release', 'llama-server.exe'),
-      path.join(projectRoot, 'llama-server.exe'),
-      path.join(process.cwd(), 'llama-server.exe'),
+      path.join(projectRoot, 'llama-cpp-turboquant', 'build', 'bin', 'Release', name),
+      path.join(projectRoot, name),
+      path.join(process.cwd(), name),
+    )
+    if (process.platform !== 'win32') {
+      // A POSIX build tree puts it here instead of under a Release/ config
+      // directory, which is an MSVC convention rather than a CMake one.
+      candidates.push(path.join(projectRoot, 'llama-cpp-turboquant', 'build', 'bin', name))
+    }
+  }
+
+  if (process.platform !== 'win32') {
+    // Where a package install would put it. Checked after the project tree so
+    // a developer's own build still wins in a checkout, and deliberately NOT
+    // extended to a PATH lookup: this value is the head of the escalation
+    // chain (ipc/validate.mjs), and resolving it from PATH would hand that
+    // decision to whatever the daemon's environment happens to say.
+    candidates.push(
+      path.join(configDir(), 'bin', name),
+      path.join('/usr/lib/redstart/bin', name),
+      path.join('/usr/local/lib/redstart/bin', name),
     )
   }
 

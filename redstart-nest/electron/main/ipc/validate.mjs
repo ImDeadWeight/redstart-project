@@ -41,22 +41,57 @@ export function optional(value, check) {
 }
 
 /**
- * The head of the escalation chain: this string becomes `spawn()`'s first
- * argument by way of resolveBinary(). Three independent conditions, because
- * each blocks a different thing — a non-string breaks the settings file, a
- * non-.exe is not a thing Windows would launch as a server, and a path that
- * does not exist is one an attacker could create later.
+ * What the server binary is called on this platform.
  *
+ * Phase 8A.3 — it was `llama-server.exe`, hardcoded at four sites. It lives
+ * beside binaryPathRejection() because they are the same concern from two
+ * directions: this says what Nest looks for, that says what Nest will accept,
+ * and the two must not drift into disagreeing about what a server binary is.
+ */
+export function serverBinaryName(platform = process.platform) {
+  return platform === 'win32' ? 'llama-server.exe' : 'llama-server'
+}
+
+/**
+ * The head of the escalation chain: this string becomes `spawn()`'s first
+ * argument by way of resolveBinary(). Independent conditions, because each
+ * blocks a different thing — a non-string breaks the settings file, a path
+ * that does not exist is one an attacker could create later, and the
+ * executability check below is per-platform because "what could this OS launch
+ * as a server" has two different answers.
+ *
+ * Phase 8A.3 — `platform` is an ARGUMENT, not a read of process.platform.
+ * Both branches then run in CI on either OS; reading the ambient platform
+ * inside the function would leave half of a security check permanently
+ * untestable. The Windows branch is unchanged and stays exactly as strict:
+ * .exe is what Windows would launch, and relaxing it here would widen the
+ * escalation chain for every existing install.
+ *
+ * @param {string} value
+ * @param {NodeJS.Platform} [platform] defaults to the running platform.
  * @returns {string|null} the reason to refuse, or null if acceptable.
  */
-export function binaryPathRejection(value) {
+export function binaryPathRejection(value, platform = process.platform) {
   if (!isNonEmptyString(value)) return 'A binary path must be a non-empty string.'
   if (!path.isAbsolute(value)) return 'A binary path must be absolute.'
-  if (path.extname(value).toLowerCase() !== '.exe') return 'A server binary must be an .exe.'
+  if (platform === 'win32' && path.extname(value).toLowerCase() !== '.exe') {
+    return 'A server binary must be an .exe.'
+  }
+  let stat
   try {
-    if (!fs.statSync(value).isFile()) return 'That path is not a file.'
+    stat = fs.statSync(value)
   } catch {
     return 'That file does not exist.'
+  }
+  if (!stat.isFile()) return 'That path is not a file.'
+  if (platform !== 'win32') {
+    // The POSIX equivalent of the .exe rule. There is no extension to check,
+    // so the honest question is whether the OS would execute it at all: a
+    // path with no execute bit is not a server binary, it is a data file
+    // someone pointed at the wrong setting. Any execute bit counts — which
+    // one applies depends on the daemon's uid and the file's owner, and
+    // guessing at that here would reject binaries that run perfectly well.
+    if ((stat.mode & 0o111) === 0) return 'That file is not executable.'
   }
   return null
 }

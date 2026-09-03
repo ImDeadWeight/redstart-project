@@ -87,6 +87,12 @@ jobs:
       - name: "Security: llama-server localhost-only args"
         run: node scripts/test-llama-args.mjs
 
+      # binaryPathRejection() guards spawn()'s first argument and had no
+      # coverage at all before 8A.3 made it per-platform. The POSIX branch's
+      # positive cases only run for real here — chmod is inert on win32.
+      - name: "Security: server binary name + path validation"
+        run: node scripts/test-server-binary.mjs
+
       - name: "Security: model downloads (host allowlist, containment, checksums)"
         run: node scripts/test-model-download.mjs
 

@@ -24,7 +24,7 @@ import { startMcpServer, stopMcpServer, getMcpServerRunning } from '../mcp-serve
 import { startDiscovery, discoveryRecordFor } from '../discovery.mjs'
 import { syncFilesystemProvider, stopFilesystemProvider } from '../filesystem-mcp-provider.mjs'
 import { logEvent } from '../logger.mjs'
-import { serverPortRejection } from './validate.mjs'
+import { serverPortRejection, serverBinaryName } from './validate.mjs'
 import { writePidFile, deletePidFile } from '../process-supervision.mjs'
 import { publish } from '../event-broker.mjs'
 import { startRun, appendLine, endRun } from '../process-log.mjs'
@@ -52,7 +52,7 @@ function rememberDiscovery(config, { readSettings, writeSettings }) {
 
 export function generateLlamaCommand(config, { buildArgs }) {
   const args = buildArgs(config)
-  return `llama-server.exe ${args.join(' ')}`
+  return `${serverBinaryName()} ${args.join(' ')}`
 }
 
 // Phase 7 §7.6 (trap 5.5, real since Phase 3): an always-on daemon reachable
@@ -109,7 +109,8 @@ async function doLaunchServer(config, deps) {
 
   const binaryPath = resolveBinary()
   if (!binaryPath) {
-    return { success: false, error: `llama-server.exe not found.\nPlace it in llama-cpp-turboquant/build/bin/Release/, the project root, or set a custom path via Settings.` }
+    return { success: false, error: `${serverBinaryName()} not found.
+Place it in the build output directory or the project root, or set a custom path via Settings.` }
   }
   const binaryDir = path.dirname(binaryPath)
 
