@@ -68,7 +68,10 @@ export function FolderPicker({
 
 // --- the browser modal -------------------------------------------------
 
-type Entry = { name: string; kind: 'directory' }
+// Phase 8B.6 - readable/writable come from the daemon's own access() probe,
+// not from anything the browser can work out. They are what makes "the picker
+// refuses a folder it cannot use" possible at all (design section 3.5).
+type Entry = { name: string; kind: 'directory'; readable?: boolean; writable?: boolean }
 type Root = { path: string; label: string }
 
 function BrowserModal({
@@ -86,6 +89,7 @@ function BrowserModal({
   const [parent, setParent] = useState<string | null>(null)
   const [entries, setEntries] = useState<Entry[]>([])
   const [reason, setReason] = useState<string | null>(null)
+  const [access, setAccess] = useState<{ readable?: boolean; writable?: boolean }>({})
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
@@ -103,12 +107,14 @@ function BrowserModal({
         setEntries([])
         setParent(null)
         setReason(null)
+        setAccess({})
       } else {
         const result = await api().browse.list({ path: target })
         setPath(result.path)
         setParent(result.parent)
         setEntries(result.entries)
         setReason(result.reason ?? null)
+        setAccess({ readable: result.readable, writable: result.writable })
       }
     } catch {
       setError('Could not reach the daemon.')
@@ -179,6 +185,24 @@ function BrowserModal({
           ))}
         </div>
 
+        {/* Phase 8B.6, design section 3.5's one hard requirement: say it HERE,
+            while the admin is still looking at the picker, rather than letting
+            the path be saved and fail later inside a tool call - where the
+            error reaches the user as a confused model instead of as a
+            permissions problem. Only fires at level 3, where the daemon runs
+            as a service account that was never granted this folder. */}
+        {!loading && path !== null && access.readable === false && (
+          <p className="text-xs text-red-400 px-4 pb-2">
+            Redstart cannot read this folder. Grant its account access, or choose another one.
+          </p>
+        )}
+        {!loading && path !== null && access.readable !== false && access.writable === false && (
+          <p className="text-xs text-amber-500 px-4 pb-2">
+            Redstart can read this folder but not write to it. Fine for read-only use; anything
+            that saves a file here will fail.
+          </p>
+        )}
+
         {error && <p className="text-xs text-red-400 px-4 pb-2">{error}</p>}
 
         {mode === 'file' && path !== null && (
@@ -202,7 +226,7 @@ function BrowserModal({
           )}
           <div className="flex-1" />
           <button
-            disabled={!path || (mode === 'file' && !fileName.trim())}
+            disabled={!path || access.readable === false || (mode === 'file' && !fileName.trim())}
             onClick={() => {
               if (!path) return
               const sep = path.endsWith('\\') || path.endsWith('/') ? '' : (path.includes('\\') ? '\\' : '/')

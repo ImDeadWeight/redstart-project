@@ -98,10 +98,51 @@ export function listDirectory(targetPath) {
 
   const entries = dirents
     .filter(d => d.isDirectory() && !d.name.startsWith('.')) // hidden entries excluded
-    .map(d => ({ name: d.name, kind: 'directory' }))
+    .map(d => ({ name: d.name, kind: 'directory', ...accessOf(path.join(targetPath, d.name)) }))
     .sort((a, b) => a.name.localeCompare(b.name))
 
-  return { path: targetPath, parent: parentOf(targetPath), entries }
+  return { path: targetPath, parent: parentOf(targetPath), entries, ...accessOf(targetPath) }
+}
+
+/**
+ * Phase 8B.6 - can this daemon actually USE this folder?
+ *
+ * Design section 3.5's one hard requirement about tool folders: the picker
+ * must report an unreadable folder as unreadable AT SELECTION TIME, rather
+ * than accepting the path and failing later inside a tool call - where the
+ * error reaches the user as a confused model rather than as a permissions
+ * problem. That is the failure this exists to prevent; it is not about
+ * hiding folders.
+ *
+ * Only bites at level 3, where an unprivileged service account is pointed at
+ * a mounted share or an existing repository it was never granted. At level 2
+ * the daemon is the logged-in user and this is true of everything they can
+ * see, so it simply never fires - which is why it costs nothing to have now.
+ *
+ * BEST-EFFORT, AND SAYING SO MATTERS. access() answers for the calling
+ * process at this instant; a share can drop, a grant can change, and on
+ * Windows W_OK reflects the read-only attribute rather than the ACL that
+ * actually decides. So a `true` here is not a promise - the operation itself
+ * stays authoritative. What it reliably catches is the case that matters: a
+ * definite NO, surfaced while the admin is still looking at the picker.
+ *
+ * Read and write are reported separately rather than collapsed. Most
+ * capability roots are written to (Documents, SQLite, Vault, the models
+ * folder), but a read-only mount is a legitimate thing to point the File
+ * System or Git capability at, so "not writable" is information for the UI
+ * to warn with, not grounds for the daemon to refuse.
+ */
+function accessOf(target) {
+  return { readable: canAccess(target, fs.constants.R_OK), writable: canAccess(target, fs.constants.W_OK) }
+}
+
+function canAccess(target, mode) {
+  try {
+    fs.accessSync(target, mode)
+    return true
+  } catch {
+    return false
+  }
 }
 
 // --- mkdir -----------------------------------------------------------------

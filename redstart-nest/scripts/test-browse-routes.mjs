@@ -90,9 +90,19 @@ await test('lists directories only, sorted, never file contents', () => {
   assert(!names.includes('a-file.txt'), 'a plain file was listed as browsable')
   assert(names.includes('Alpha') && names.includes('beta'), `expected Alpha and beta, got ${names.join(', ')}`)
   assert(result.entries.every(e => e.kind === 'directory'), 'a non-directory entry leaked through')
-  // No key anywhere in the shape carries file content — the type itself is
-  // { name, kind }, so this also documents the contract for future readers.
-  assert(result.entries.every(e => Object.keys(e).sort().join(',') === 'kind,name'), 'an entry carried extra fields')
+  // No key anywhere in the shape carries file content. Kept as an exact-set
+  // check rather than loosened to a subset: the point is that a future field
+  // has to come and change this line deliberately, which is what would make
+  // someone notice they were about to add `size` or a symlink `target`.
+  //
+  // Phase 8B.6 added `readable`/`writable`, and this is that deliberate
+  // change. They are booleans about ACCESS, not about content — the
+  // invariant this line guards (never file contents, never a symlink's
+  // target) is untouched.
+  assert(
+    result.entries.every(e => Object.keys(e).sort().join(',') === 'kind,name,readable,writable'),
+    'an entry carried unexpected fields',
+  )
   const sorted = [...names].sort((a, b) => a.localeCompare(b))
   assert(JSON.stringify(names) === JSON.stringify(sorted), `not sorted: ${names.join(', ')}`)
 })
@@ -202,6 +212,76 @@ await test('scoping: (a) no scope — the table takes no root/deps argument', ()
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
+
+console.log('\n--- access reporting (Phase 8B.6) ---')
+
+await test('the listing reports whether the daemon can read and write the target', () => {
+  // Design §3.5's one hard requirement about tool folders: an unreadable
+  // folder must be reported as unreadable AT SELECTION TIME, rather than
+  // accepted and then failing later inside a tool call — where the error
+  // reaches the user as a confused model rather than as a permissions problem.
+  const result = listDirectory(root)
+  assert(result.readable === true, `a readable directory reported ${result.readable}`)
+  assert(typeof result.writable === 'boolean', `writable was ${typeof result.writable}`)
+})
+
+await test('every entry carries its own access flags', () => {
+  // Per-entry, not just per-target: the admin selects a folder from this list,
+  // so "can I use that one" has to be answerable before they click into it.
+  const result = listDirectory(root)
+  assert(result.entries.length > 0, 'no entries to check')
+  for (const e of result.entries) {
+    assert(typeof e.readable === 'boolean', `${e.name} has no readable flag`)
+    assert(typeof e.writable === 'boolean', `${e.name} has no writable flag`)
+  }
+})
+
+await test('🔒 an unreadable directory is reported as unreadable, not as an error', () => {
+  // The distinguishing case. A directory that cannot be read is a completely
+  // ordinary thing for an admin to be looking at — it must produce a listing
+  // that says so, not a throw and not an empty success that reads as "this
+  // folder is fine and happens to be empty".
+  const denied = path.join(base, 'denied')
+  fs.mkdirSync(denied, { recursive: true })
+  if (process.platform === 'win32') {
+    // chmod cannot remove read access on win32 (it maps to the read-only
+    // attribute, which does not gate reading at all), so the deny case is
+    // staged on POSIX only and runs for real on the Linux CI runner. The
+    // REPORTING shape above is checked on both.
+    return 'not stageable on win32; runs on CI'
+  }
+  fs.chmodSync(denied, 0o000)
+  try {
+    const result = listDirectory(denied)
+    assert(result.readable === false, 'an unreadable directory reported readable')
+    assert(Array.isArray(result.entries), 'no entries array on an unreadable listing')
+    assert(result.entries.length === 0, 'an unreadable directory returned entries')
+    assert(result.reason, 'an unreadable directory gave no reason')
+  } finally {
+    // Restore, or the temp-tree cleanup at the foot of this file cannot
+    // remove it and the suite leaks a directory per run.
+    fs.chmodSync(denied, 0o700)
+  }
+})
+
+await test('an unreadable CHILD is listed and flagged, never hidden', () => {
+  // Shown rather than filtered out: a folder the daemon cannot read is still a
+  // real folder, and the admin may be about to go and grant access to it.
+  // Hiding it would leave them hunting for something their own file manager
+  // shows them.
+  if (process.platform === 'win32') return 'not stageable on win32; runs on CI'
+  const parent = path.join(base, 'with-denied-child')
+  const child = path.join(parent, 'locked')
+  fs.mkdirSync(child, { recursive: true })
+  fs.chmodSync(child, 0o000)
+  try {
+    const entry = listDirectory(parent).entries.find(e => e.name === 'locked')
+    assert(entry, 'the unreadable child was hidden from the listing')
+    assert(entry.readable === false, `the unreadable child reported readable: ${JSON.stringify(entry)}`)
+  } finally {
+    fs.chmodSync(child, 0o700)
+  }
+})
 
 fs.rmSync(base, { recursive: true, force: true })
 

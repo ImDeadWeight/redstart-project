@@ -80,7 +80,12 @@ export type RedstartAPI = {
   // is now, used identically by every caller.
   browse: {
     roots: () => Promise<{ path: string; label: string }[]>
-    list: (opts: { path: string }) => Promise<{ path: string; parent: string | null; entries: { name: string; kind: 'directory' }[]; reason?: string }>
+    // readable/writable (Phase 8B.6) are the daemon's own access() probe on
+    // each path - best-effort and not a promise (a share can drop, and on
+    // Windows W_OK reflects the read-only attribute rather than the ACL), but
+    // a definite `false` is what lets the picker refuse a folder the daemon
+    // cannot use while the admin is still looking at it. Design section 3.5.
+    list: (opts: { path: string }) => Promise<{ path: string; parent: string | null; entries: { name: string; kind: 'directory'; readable?: boolean; writable?: boolean }[]; reason?: string; readable?: boolean; writable?: boolean }>
     mkdir: (opts: { path: string; name: string }) => Promise<{ ok: boolean; path?: string; error?: string }>
   }
   profiles: {
