@@ -13,7 +13,7 @@
 // Key architectural decisions documented inline below.
 // =============================================================================
 
-import { app, BrowserWindow, nativeImage } from 'electron'
+import { app, BrowserWindow, nativeImage, Notification } from 'electron'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import * as path from 'path'
@@ -50,6 +50,7 @@ import { readBootstrapToken } from './bootstrap-token.mjs'
 import { startTray } from './tray.mjs'
 import { stopServer } from './ipc/server.mjs'
 import { reconcileStartupSetting } from './ipc/admin.mjs'
+import { describeCrash } from './crash-handler.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -584,6 +585,39 @@ async function startAdminPlane() {
 // either duplicate or fight that header instead of complementing it.
 
 // ---------------------------------------------------------------------------
+// Crash detection and warning (Phase 7 §7.4a)
+// ---------------------------------------------------------------------------
+// describeCrash()'s own module header (crash-handler.mjs) has the full
+// reasoning for warn-not-restart and for what this can and cannot catch.
+// This function is only the wiring: register the two handlers, and on
+// either firing, log, notify (best-effort), then exit directly.
+function installCrashHandlers() {
+  const onFatal = (err) => {
+    const { logFields, notification } = describeCrash(err)
+    // logEvent no-ops safely even if this fires before initLogger() has run
+    // (a crash during path/logger init itself) — see logger.mjs.
+    logEvent('app', 'crash', logFields)
+    try {
+      if (Notification.isSupported()) {
+        new Notification({ title: notification.title, body: notification.body }).show()
+      }
+    } catch (notifyErr) {
+      // A crash handler must not itself throw — the notification is
+      // best-effort, the log line and the exit below are not.
+      console.warn('Crash notification failed:', notifyErr.message)
+    }
+    // app.exit(1), not app.quit(): process state is suspect here, so this
+    // deliberately skips before-quit's ordinary teardown and exits
+    // directly. Leaves a running llama-server orphaned — accepted, not
+    // solved here: reapStaleProcess() already runs at the next startup
+    // (manual or login-triggered alike) and exists precisely for this case.
+    app.exit(1)
+  }
+  process.on('uncaughtException', onFatal)
+  process.on('unhandledRejection', onFatal)
+}
+
+// ---------------------------------------------------------------------------
 // Popup / webview containment
 // ---------------------------------------------------------------------------
 // Nothing in the launcher legitimately opens a second window or attaches a
@@ -731,6 +765,9 @@ if (!gotSingleInstanceLock) {
 }
 
 async function main() {
+  // Phase 7 §7.4a — installed before anything else, including initPaths(),
+  // so a crash during startup itself is caught too.
+  installCrashHandlers()
   // Before anything else touches a path. migrateUserDataFromBeaver() below is
   // exempt — it is one-time glue tied specifically to Electron's app-name
   // userData scheme, not a "where does data live" question the daemon will
