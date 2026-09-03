@@ -21,6 +21,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { register } from 'node:module'
 import {
   writePidFile,
   readPidFile,
@@ -115,6 +116,137 @@ await test('a pid file for a process that no longer exists is cleared without er
   await reapStaleProcess(tmpDir)
   assert(readPidFile(tmpDir) === null, 'pid file should be cleared')
 })
+
+// =============================================================================
+// Phase 7 §7.6 — concurrent launch/stop serialisation (trap 5.5)
+// =============================================================================
+// An always-on daemon reachable from the tray, a browser and the Electron
+// window at once makes concurrent llama:launch/server:stop calls routine, not
+// a race someone has to contrive. ipc/server.mjs guards both with an
+// in-flight-promise pattern; these tests exercise that guard end to end with
+// a real spawned process (node itself standing in for llama-server.exe —
+// what matters is that exactly one gets spawned, not what the binary is) —
+// no Electron import is needed to reach it, per the module notes above
+// launchServer/stopServer in ipc/server.mjs.
+
+console.log('\n-- 🔍 Phase 7 §7.6: concurrent launch/stop serialisation --')
+
+const concurrencyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-server-concurrency-'))
+
+// ipc/server.mjs pulls in filesystem-mcp-provider.mjs -> trash.mjs, which
+// (unlike the rest of server.mjs's dependency graph) does import 'electron'
+// for its Recycle Bin support — unreachable here since fileSystem stays
+// disabled throughout, but still resolved at import time. Same stub-loader
+// dance as test-network-binding.mjs: register() must run before the module
+// graph is resolved, so these become dynamic imports rather than static
+// ones at the top of the file. REDSTART_TEST_USERDATA_DIR set first because
+// electron-stub.mjs's initPaths() call reads it as soon as it is imported.
+process.env.REDSTART_TEST_USERDATA_DIR = concurrencyDir
+register('./auth-test-loader.mjs', import.meta.url)
+await import('./electron-stub.mjs')
+const { launchServer, stopServer } = await import('../electron/main/ipc/server.mjs')
+const { initProcessLog } = await import('../electron/main/process-log.mjs')
+initProcessLog(concurrencyDir)
+
+// A minimal but valid buildGatewayConfig() result — every capability
+// disabled, so startGateway/startMcpServer/syncFilesystemProvider have
+// nothing to do beyond binding their own sockets. Same shape
+// gateway-config.mjs's own "tools not enabled" branch returns.
+const STUB_GATEWAY_CONFIG = {
+  disabledTools: [],
+  webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 },
+  postgres: { enabled: false },
+  documents: { enabled: false },
+  sqlite: { enabled: false },
+  vault: { enabled: false },
+  fileSystem: { enabled: false },
+  git: { enabled: false },
+  scholar: { enabled: false },
+}
+
+// Well clear of Nest's own fixed ports (19080-19083, 8765, see ports.mjs) —
+// this is the gateway's public port; port+2 is claimed for the MCP server.
+// networkMode: false throughout, so neither the gateway/MCP binds nor
+// discovery.mjs's startDiscovery() ever touch anything beyond loopback —
+// startDiscovery() with networkMode false just calls stopDiscovery(), a
+// no-op here.
+const CONCURRENCY_PORT = 48380
+
+function makeConcurrencyDeps() {
+  return {
+    serverState: { process: null, ema: 0, lastConfig: null },
+    // node itself stands in for llama-server.exe — a real, long-lived child
+    // process is what the guard actually has to serialize against.
+    resolveBinary: () => process.execPath,
+    buildArgs: () => ['-e', 'setInterval(() => {}, 60000)'],
+    parseEvalTokensPerSec: () => null,
+    buildGatewayConfig: () => STUB_GATEWAY_CONFIG,
+    ensureFirewallRule: () => {},
+    userDataDir: concurrencyDir,
+    readSettings: () => ({}),
+    writeSettings: () => {},
+  }
+}
+
+const CONCURRENCY_CONFIG = { port: CONCURRENCY_PORT, networkMode: false, tools: { enabled: false } }
+
+// stopServer() (like production) kills the child and returns without waiting
+// for it to actually exit — fine for the daemon, but this test directory gets
+// rm'd once the suite finishes, and the killed node process's own trailing
+// stdout/stderr data can otherwise arrive after that, tripping process-log.mjs's
+// appendLine() against an already-deleted directory. Waiting out the real
+// 'exit' event here is test hygiene, not a behavior this suite is asserting.
+async function stopAndWaitForExit(deps) {
+  const child = deps.serverState.process
+  const result = await stopServer(deps)
+  if (child && child.exitCode === null) {
+    await new Promise((resolve) => child.once('exit', resolve))
+  }
+  return result
+}
+
+await test('🔍 two concurrent launchServer() calls spawn exactly one child process', async () => {
+  const deps = makeConcurrencyDeps()
+  try {
+    const [first, second] = await Promise.all([
+      launchServer(CONCURRENCY_CONFIG, deps),
+      launchServer(CONCURRENCY_CONFIG, deps),
+    ])
+    assert(first.success, `first launch failed: ${first.error}`)
+    assert(second.success, `second launch failed: ${second.error}`)
+    assert(first.pid === second.pid, `expected both callers to get the SAME pid, got ${first.pid} and ${second.pid}`)
+    assert(deps.serverState.process?.pid === first.pid, 'serverState should hold exactly the one spawned process')
+    return `pid ${first.pid}, shared by both callers`
+  } finally {
+    await stopAndWaitForExit(deps)
+  }
+})
+
+await test('a launch requested while one is already running is refused, not queued', async () => {
+  const deps = makeConcurrencyDeps()
+  try {
+    const first = await launchServer(CONCURRENCY_CONFIG, deps)
+    assert(first.success, `first launch failed: ${first.error}`)
+    const second = await launchServer(CONCURRENCY_CONFIG, deps)
+    assert(second.success === false, 'a second, sequential launch while one is running should be refused')
+    assert(/already running/i.test(second.error || ''), `expected an "already running" refusal, got ${JSON.stringify(second.error)}`)
+  } finally {
+    await stopAndWaitForExit(deps)
+  }
+})
+
+await test('🔍 two concurrent stopServer() calls share one in-flight stop', async () => {
+  const deps = makeConcurrencyDeps()
+  const launch = await launchServer(CONCURRENCY_CONFIG, deps)
+  assert(launch.success, `launch failed: ${launch.error}`)
+  const child = deps.serverState.process
+  const [a, b] = await Promise.all([stopServer(deps), stopServer(deps)])
+  assert(a.success && b.success, 'both stop calls should report success')
+  assert(deps.serverState.process === null, 'serverState.process should be cleared after stop')
+  if (child && child.exitCode === null) await new Promise((resolve) => child.once('exit', resolve))
+})
+
+fs.rmSync(concurrencyDir, { recursive: true, force: true })
 
 console.log('\n' + '='.repeat(60))
 const passed = results.filter(r => r.pass).length

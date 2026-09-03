@@ -55,7 +55,34 @@ export function generateLlamaCommand(config, { buildArgs }) {
   return `llama-server.exe ${args.join(' ')}`
 }
 
+// Phase 7 §7.6 (trap 5.5, real since Phase 3): an always-on daemon reachable
+// from the tray, a browser and the Electron window at once makes concurrent
+// `llama:launch`/`server:stop` calls routine rather than a race someone has
+// to contrive. Module-level, not per-call — the whole point is one guard
+// shared across every caller of this module, regardless of which transport
+// (HTTP route, tray click) reached it.
+//
+// A second caller arriving while the first is still in flight is handed the
+// FIRST call's own promise and therefore its own result — it does not
+// re-enter launchServer()/stopServer(), so it can never reach spawn() a
+// second time. That is a different (and better) outcome than the pre-Phase-7
+// shape would have raced toward: not a second caller told "already running"
+// after a wasted spawn, but a second caller told exactly what the first one
+// achieved, including its pid on success.
+let launchInFlight = null
+let stopInFlight = null
+
 export async function launchServer(config, deps) {
+  if (launchInFlight) return launchInFlight
+  launchInFlight = doLaunchServer(config, deps)
+  try {
+    return await launchInFlight
+  } finally {
+    launchInFlight = null
+  }
+}
+
+async function doLaunchServer(config, deps) {
   const {
     serverState,
     resolveBinary,
@@ -66,6 +93,9 @@ export async function launchServer(config, deps) {
     userDataDir,
   } = deps
 
+  // Not the concurrency guard above (that already prevented re-entry while a
+  // launch is in flight) — this is the ordinary case of a launch requested
+  // while a PRIOR, already-completed launch is still running.
   if (serverState.process) return { success: false, error: 'Server is already running' }
 
   // Before the binary is even resolved: config.port claims three ports, and one
@@ -225,7 +255,17 @@ export async function launchServer(config, deps) {
 // the `.local` name and drop the clean URL, which is the lifecycle bug from the
 // other side: an admin who stops the server to reconfigure it would lose the
 // ability to find the box while doing so. Discovery stops with the daemon.
-export async function stopServer({ serverState }) {
+export async function stopServer(deps) {
+  if (stopInFlight) return stopInFlight
+  stopInFlight = doStopServer(deps)
+  try {
+    return await stopInFlight
+  } finally {
+    stopInFlight = null
+  }
+}
+
+async function doStopServer({ serverState }) {
   stopGateway()
   stopMcpServer()
   stopFilesystemProvider()
