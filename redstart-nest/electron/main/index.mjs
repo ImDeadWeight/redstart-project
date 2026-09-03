@@ -1,63 +1,52 @@
 // =============================================================================
-// Redstart Nest — Electron main process
+// Redstart Nest — the Electron entrypoint
 // =============================================================================
-// This is the heart of the application. I chose Electron because it lets me
-// ship a native Windows desktop app that can manage OS-level processes (like
-// launching llama-server.exe) while still using web technologies for the UI.
-//
 // The overall design: Redstart Nest is a launcher and monitor for llama.cpp. It
 // doesn't do any AI inference itself — it just starts the llama-server binary
 // with the right arguments and then gets out of the way. The actual model
 // runs in llama-server, which also serves the chat UI directly via --path.
 //
+// This file used to be all of it. Since Phase 8A.2 the service itself lives in
+// daemon.mjs and this is one of two entrypoints onto it — the desktop one.
+// What is left here is everything that needs Electron and nothing that does
+// not: the window, the tray, the single-instance lock, the close notice, popup
+// containment, the login item, and the one-time Beaver userData migration.
+// bin/nestd.mjs is the other entrypoint and has no UI at all.
+//
+// The division is not cosmetic. Electron is what makes a Windows desktop app
+// possible and what makes a headless appliance impossible (it needs a display
+// connection on Linux), so everything that is genuinely Nest had to stop being
+// reachable only from here. See docs/notes/headless-admin-plane-implementation.md
+// §8A.2, and design decision 6 — the Electron UI is a client of the daemon,
+// like Twig.
+//
+// What THIS entrypoint answers that the daemon cannot answer for itself:
+//   - where state lives (initPaths, from Electron's app.getPath)
+//   - how secrets are encrypted (safeStorage — DPAPI on Windows)
+//   - what a crash does (a shell notification, then app.exit(1))
+//   - what a deliberate shutdown does (quitApp — app.quit(), deferred)
+//
 // Key architectural decisions documented inline below.
 // =============================================================================
 
 import { app, BrowserWindow, nativeImage, Notification, dialog, safeStorage } from 'electron'
-import { execFile } from 'child_process'
-import { promisify } from 'util'
 import * as path from 'path'
 import * as fs from 'fs'
-import { ensureDefaultCapabilityFolders } from './tools-storage.mjs'
-import { stopGateway } from './tools-gateway.mjs'
-import { stopMcpServer } from './mcp-server.mjs'
-import * as os from 'os'
 import * as zlib from 'zlib'
-import * as http from 'http'
-import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
-import { startAdminListener, stopAdminListener, getAdminListenerState, DEFAULT_ADMIN_BIND_HOST } from './admin-listener.mjs'
-import { startDiscovery, stopDiscovery, lastKnownDiscovery } from './discovery.mjs'
-import { ensureBootstrapToken } from './bootstrap-token.mjs'
-import { buildAdminApi } from './admin/api-table.mjs'
-import { setAdminApi } from './admin/api-routes.mjs'
-import { ensureFirewallRule } from './firewall.mjs'
-import { getPrimaryLanIp } from './net-interfaces.mjs'
-import { cleanupOldConversations } from './conversations-storage.mjs'
-import { initLogger, closeLogger, logEvent } from './logger.mjs'
-import { initProcessLog } from './process-log.mjs'
+import { getAdminListenerState } from './admin-listener.mjs'
+import { logEvent } from './logger.mjs'
 import { subscribeToEvents } from './event-broker.mjs'
-import { reapStaleProcess, deletePidFile } from './process-supervision.mjs'
-import { initPaths, configDir, capabilityBaseDir } from './platform-paths.mjs'
+import { initPaths } from './platform-paths.mjs'
+import {
+  startDaemon, stopDaemon, installCrashHandlers, serverState, readSettings, writeSettings,
+} from './daemon.mjs'
 import { initSecrets } from './secrets.mjs'
 import { safeStorageProvider } from './secrets-safe-storage.mjs'
-import { fileURLToPath } from 'url'
-import { buildGatewayConfig, createRefreshLiveToolsConfig } from './gateway-config.mjs'
-import { buildArgs } from './llama-args.mjs'
-import { binaryPathRejection } from './ipc/validate.mjs'
-import { setPluginCapabilityProvider } from './tools-definitions.mjs'
-import { pluginCapabilities } from './plugin-registry.mjs'
-import { sweepPendingDeletions } from './plugin-install.mjs'
 import { hasOwner } from './auth.mjs'
 import { readBootstrapToken } from './bootstrap-token.mjs'
 import { startTray } from './tray.mjs'
 import { stopServer } from './ipc/server.mjs'
 import { reconcileStartupSetting } from './ipc/admin.mjs'
-import { describeCrash } from './crash-handler.mjs'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-
-const execFileAsync = promisify(execFile)
 
 // ---------------------------------------------------------------------------
 // Redstart pixel-art icon — minimal PNG encoder + 32×32 American Redstart bust
@@ -333,69 +322,6 @@ let isQuitting = false
 // tray means "no tray affordance", not "no daemon".
 let stopTray = null
 
-// Live server process state, shared by reference between the server IPC handlers
-// (ipc/server.mjs, which owns launch/stop/status) and the lifecycle +
-// gateway-refresh code in this file that reads it. process: the spawned
-// llama-server child; ema: smoothed tokens/sec; lastConfig: set on launch,
-// cleared on stop/exit.
-const serverState = { process: null, ema: 0, lastConfig: null }
-let beaconServerInstance = null
-
-// Live tool-config refresh, bound to serverState. buildGatewayConfig +
-// createRefreshLiveToolsConfig live in gateway-config.mjs; index.mjs only owns
-// the serverState the refresh closes over.
-// Bound inside setupAdminApi() (after app.whenReady, when app.getPath is
-// safe to call) rather than here at module scope — see below.
-let refreshLiveToolsConfig
-
-// ---------------------------------------------------------------------------
-// Settings helpers
-// ---------------------------------------------------------------------------
-
-function getSettingsPath() {
-  return path.join(configDir(), 'settings.json')
-}
-
-function readSettings() {
-  const p = getSettingsPath()
-  if (!fs.existsSync(p)) return {}
-  try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return {} }
-}
-
-function writeSettings(data) {
-  fs.writeFileSync(getSettingsPath(), JSON.stringify(data, null, 2), 'utf8')
-}
-
-// ---------------------------------------------------------------------------
-// Models folder
-// ---------------------------------------------------------------------------
-// Where the Models tab downloads GGUF files and where the "Select .gguf File"
-// picker opens. Defaults to <Documents>\Redstart\Models to match the capability
-// folders provisioned above, but is user-changeable because model files are
-// tens of gigabytes and Documents usually lives on the system drive.
-//
-// Always resolves to a real path so no caller has to handle null — the picker's
-// defaultPath and the downloader's containment root must never disagree about
-// which folder is "the models folder".
-
-function defaultModelsDir() {
-  return path.join(capabilityBaseDir(), 'Models')
-}
-
-function resolveModelsDir() {
-  const configured = readSettings().modelsDir
-  return typeof configured === 'string' && configured.trim() ? configured : defaultModelsDir()
-}
-
-// Best-effort, same contract as ensureDefaultCapabilityFolders: a folder that
-// cannot be created is not fatal, the tab just reports it.
-function ensureModelsDir() {
-  try {
-    fs.mkdirSync(resolveModelsDir(), { recursive: true })
-  } catch (err) {
-    console.warn('Could not provision the models folder:', err.message)
-  }
-}
 
 // ---------------------------------------------------------------------------
 // userData migration (Beaver -> Redstart rename)
@@ -425,152 +351,6 @@ function migrateUserDataFromBeaver() {
 }
 
 // ---------------------------------------------------------------------------
-// Binary resolution
-// ---------------------------------------------------------------------------
-
-// The value this returns becomes spawn()'s first argument in ipc/server.mjs, so
-// it is checked HERE as well as at the settings:set-binary-path write. That is
-// not belt-and-braces for its own sake: settings.json is an ordinary file on
-// disk, and any value written by a build that predates the write-side check —
-// which is every install shipped so far — is read by this function and launched.
-// Validating only on the way in would leave the stored value trusted forever.
-//
-// A rejected override falls through to the bundled binary rather than failing
-// the launch, which is the same thing that happens when the path simply does
-// not exist.
-function resolveBinary() {
-  const settings = readSettings()
-  if (settings.serverBinPath) {
-    const rejection = binaryPathRejection(settings.serverBinPath)
-    if (rejection) {
-      logEvent('security', 'binary_override_rejected', { reason: rejection })
-    } else {
-      return settings.serverBinPath
-    }
-  }
-
-  const candidates = []
-
-  if (app.isPackaged) {
-    // Packaged: binary is placed at resources/bin/ via extraResources in electron-builder.json
-    candidates.push(path.join(process.resourcesPath, 'bin', 'llama-server.exe'))
-  } else {
-    // Dev: look in the project tree
-    const projectRoot = path.join(__dirname, '..', '..')
-    candidates.push(
-      path.join(projectRoot, 'llama-cpp-turboquant', 'build', 'bin', 'Release', 'llama-server.exe'),
-      path.join(projectRoot, 'llama-server.exe'),
-      path.join(process.cwd(), 'llama-server.exe'),
-    )
-  }
-
-  return candidates.find(p => fs.existsSync(p)) || null
-}
-
-// ---------------------------------------------------------------------------
-// Profile helpers
-// ---------------------------------------------------------------------------
-
-function getProfilesPath() {
-  return path.join(configDir(), 'profiles.json')
-}
-
-function readProfiles() {
-  const p = getProfilesPath()
-  if (!fs.existsSync(p)) return { profiles: {} }
-  try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return { profiles: {} } }
-}
-
-function writeProfiles(data) {
-  fs.writeFileSync(getProfilesPath(), JSON.stringify(data, null, 2), 'utf8')
-}
-
-// ---------------------------------------------------------------------------
-// Network helpers
-// ---------------------------------------------------------------------------
-
-// Delegates to net-interfaces.mjs, which skips Hyper-V/WSL/VirtualBox/VPN
-// adapters. Taking the first non-internal IPv4 (as this did) routinely handed
-// back a virtual-switch address that nothing else on the LAN can reach — and
-// that address is what the UI shows and what the QR code encodes.
-function getLocalIp() {
-  return getPrimaryLanIp()
-}
-
-// ---------------------------------------------------------------------------
-// Token EMA parser
-// ---------------------------------------------------------------------------
-
-function parseEvalTokensPerSec(line) {
-  // llama_print_timings:        eval time = ... X tokens per second)
-  const match = line.match(/eval time\s+=.+?(\d+\.?\d*)\s+tokens per second/)
-  return match ? parseFloat(match[1]) : null
-}
-
-// ---------------------------------------------------------------------------
-// Server health poll
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Discovery beacon server
-// Runs on a fixed port (8765) as long as Redstart Nest is open, regardless of
-// whether a llama-server is running. Redstart Twig scans for this beacon to
-// confirm it found a real Redstart Nest instance and to get the actual server URL.
-// ---------------------------------------------------------------------------
-
-async function startDiscoveryBeacon() {
-  beaconServerInstance = await startBeaconServer(
-    () => !!serverState.process,
-    () => serverState.lastConfig?.port ?? 19080,
-  )
-  console.log(`Redstart Nest beacon listening on port 8765`)
-}
-
-// ---------------------------------------------------------------------------
-// Admin listener (the control plane)
-// ---------------------------------------------------------------------------
-// Started HERE, beside the beacon, and not from the llama:launch handler. That
-// placement is the whole argument: the control plane must be up before, and
-// independently of, the thing it controls (headless-admin-plane-plan.md
-// decision 3). See admin-listener.mjs for what it serves.
-//
-// Where it binds is a persisted setting holding an ADDRESS, not a boolean, and
-// it defaults to loopback — availability is always on, exposure is opt-in (plan
-// decision 4). Deliberately not `networkMode`, which is data-plane state read
-// only at launch.
-//
-// A failure to bind is logged and swallowed rather than fatal — the daemon
-// itself (gateway, MCP, discovery) still comes up. Since Phase 6 §6.2,
-// though, the LAUNCHER window specifically has no fallback if this fails:
-// createWindow() loads this listener's own page, so a bind failure here
-// means the window loads nothing rather than a working-but-disconnected UI.
-// That is the accepted shape of "the Electron UI is a client of the daemon,
-// like Twig" (plan decision 6) — the alternative would be keeping a second,
-// privileged way for the window to render regardless, which is the exact
-// thing this phase retires.
-async function startAdminPlane() {
-  // Minted here, not on first use. A token that only appears at the moment
-  // someone is locked out is a token they cannot get to — and an install that
-  // predates this feature needs one waiting for it, not one generated by the
-  // request that needed it. See bootstrap-token.mjs.
-  ensureBootstrapToken()
-  const bindHost = readSettings().adminBindHost || DEFAULT_ADMIN_BIND_HOST
-  try {
-    await startAdminListener({ bindHost })
-  } catch (err) {
-    console.warn('Admin listener failed to start:', err.message)
-    logEvent('admin', 'listener_start_failed', { reason: err.code || 'error' })
-  }
-  // Discovery (the port-80 clean URL, since Phase 6.5 retired mDNS) is a
-  // data-plane convenience keyed on networkMode alone — it no longer reads
-  // the listener's bind state at all. Still started here rather than only
-  // from `llama:launch`, so a box that was previously put in network mode
-  // gets the clean URL back at boot even before the next launch. See
-  // discovery.mjs.
-  startDiscovery(lastKnownDiscovery(readSettings()))
-}
-
-// ---------------------------------------------------------------------------
 // Redstart proxy server
 // ---------------------------------------------------------------------------
 // Chat UI is served directly by llama-server via --path and accessed through
@@ -586,38 +366,6 @@ async function startAdminPlane() {
 // old file://-loaded page which had no natural way to send one) would now
 // either duplicate or fight that header instead of complementing it.
 
-// ---------------------------------------------------------------------------
-// Crash detection and warning (Phase 7 §7.4a)
-// ---------------------------------------------------------------------------
-// describeCrash()'s own module header (crash-handler.mjs) has the full
-// reasoning for warn-not-restart and for what this can and cannot catch.
-// This function is only the wiring: register the two handlers, and on
-// either firing, log, notify (best-effort), then exit directly.
-function installCrashHandlers() {
-  const onFatal = (err) => {
-    const { logFields, notification } = describeCrash(err)
-    // logEvent no-ops safely even if this fires before initLogger() has run
-    // (a crash during path/logger init itself) — see logger.mjs.
-    logEvent('app', 'crash', logFields)
-    try {
-      if (Notification.isSupported()) {
-        new Notification({ title: notification.title, body: notification.body }).show()
-      }
-    } catch (notifyErr) {
-      // A crash handler must not itself throw — the notification is
-      // best-effort, the log line and the exit below are not.
-      console.warn('Crash notification failed:', notifyErr.message)
-    }
-    // app.exit(1), not app.quit(): process state is suspect here, so this
-    // deliberately skips before-quit's ordinary teardown and exits
-    // directly. Leaves a running llama-server orphaned — accepted, not
-    // solved here: reapStaleProcess() already runs at the next startup
-    // (manual or login-triggered alike) and exists precisely for this case.
-    app.exit(1)
-  }
-  process.on('uncaughtException', onFatal)
-  process.on('unhandledRejection', onFatal)
-}
 
 // ---------------------------------------------------------------------------
 // Popup / webview containment
@@ -825,9 +573,22 @@ if (!gotSingleInstanceLock) {
 }
 
 async function main() {
-  // Phase 7 §7.4a — installed before anything else, including initPaths(),
-  // so a crash during startup itself is caught too.
-  installCrashHandlers()
+  // Phase 7 §7.4a — installed before anything else, including initPaths(), so
+  // a crash during startup itself is caught too. Phase 8A.2 moved the wiring
+  // into daemon.mjs; what a DESKTOP does about a crash — raise a shell
+  // notification, leave through Electron's own app.exit() — is this
+  // entrypoint's half of the answer, and is passed in.
+  installCrashHandlers({
+    notifyCrash: (notification) => {
+      if (Notification.isSupported()) {
+        new Notification({ title: notification.title, body: notification.body }).show()
+      }
+    },
+    // app.exit(1), not app.quit(): process state is suspect here, so this
+    // deliberately skips before-quit's ordinary teardown and exits directly.
+    // The 1 is also what a supervisor reads as "restart me" (§8B.3).
+    exitCrashed: () => app.exit(1),
+  })
   // Before anything else touches a path. migrateUserDataFromBeaver() below is
   // exempt — it is one-time glue tied specifically to Electron's app-name
   // userData scheme, not a "where does data live" question the daemon will
@@ -845,38 +606,16 @@ async function main() {
   // daemon wires the key file provider instead, and that difference is the
   // whole reason this seam exists (design §3.1).
   initSecrets(safeStorageProvider(safeStorage))
-  // Structured logging to <userData>\redstart.log. First thing after the
-  // userData migration so subsequent startup steps are captured.
-  initLogger(configDir())
-  logEvent('app', 'ready', { platform: process.platform })
-  // llama-server's own output (Phase 5 §5.2) — a separate stream from the
-  // structured event log above, see process-log.mjs's header for why.
-  initProcessLog(configDir())
-  // Pre-provision default capability folders (<Documents>\Redstart\...) so
-  // Documents/SQLite/Vault/Git are one-click enable out of the box. Fills
-  // only unset paths — a user-chosen folder is never overridden — and leaves
-  // every capability disabled.
-  ensureDefaultCapabilityFolders(capabilityBaseDir())
-  // Same idea for the models folder — see resolveModelsDir().
-  ensureModelsDir()
   installPopupContainment()
-  // Reaps a llama-server left running by a previous session that never got
-  // to run its own exit handler (Task Manager kill, power loss). Verifies the
-  // recorded pid is still that same binary before touching it — never a
-  // by-name sweep. See process-supervision.mjs for why this replaced
-  // killOrphanedServers().
-  await reapStaleProcess(configDir())
-  const cleanedConversations = cleanupOldConversations()
-  if (cleanedConversations > 0) console.log(`Cleaned ${cleanedConversations} conversations older than 30 days`)
-  // Retries any plugin folder an uninstall couldn't delete last session (a
-  // Windows file lock, most likely) — best-effort, never blocks startup (P4-4).
-  sweepPendingDeletions()
-  // Before the admin listener binds, not after: a control-plane request that
-  // arrives before this table is assembled gets a 503 rather than the
-  // method it asked for.
-  setupAdminApi()
-  startDiscoveryBeacon()
-  startAdminPlane()
+  // Everything that is Nest-the-service: the logger, the process log, the
+  // capability folders, stale-process reaping, the control-plane API table,
+  // the beacon and the admin listener. One call now (Phase 8A.2) — the same
+  // one bin/nestd.mjs makes, in the same order, because the daemon is not
+  // supposed to be able to tell which entrypoint started it.
+  //
+  // quitApp is the one thing it cannot answer for itself: admin:shutdown
+  // (§7.5) has to leave the way this platform leaves.
+  await startDaemon({ quitApp })
   // §7.4 — pure decision logic lives in ipc/admin.mjs (resolveStartupReconciliation),
   // testable without Electron; this is just the one untestable line
   // (app.setLoginItemSettings) plus the settings read/write it needs.
@@ -936,34 +675,22 @@ async function installReactDevTools() {
   }
 }
 
-// Inbound firewall rules now live in firewall.mjs so the mDNS advertiser can
-// reuse the same elevate.exe path for its UDP 5353 rule. `ensureFirewallRule`
-// is imported above and re-exported through the deps object below unchanged.
-
+// The client's teardown, then the daemon's. Phase 8A.2 moved the daemon half
+// into stopDaemon() — design §4's Phase 7 paragraph asked for exactly that
+// ("move the before-quit teardown out of the client and into the daemon"),
+// and Phase 7 could not do it, because with a single process there was only
+// ever one caller. There are two now, and a second copy that drifts is how a
+// llama-server child gets left running past quit.
+//
+// The tray goes first, where it used to sit mid-teardown: a client affordance
+// should stop before the thing it is an affordance for, so a broker event
+// published during the daemon's own teardown cannot reach a destroyed icon.
 app.on('before-quit', () => {
-  logEvent('app', 'quit', {})
-  stopGateway()
-  stopMcpServer()
-  stopDiscovery()
-  if (serverState.process) {
-    // killOrphanedServers() used to do this job as a side effect of its
-    // by-name sweep — this line never actually killed the child itself, only
-    // dropped the reference. Kill by pid explicitly now that the sweep is
-    // gone, or Nest's own llama-server would leak past quit.
-    serverState.process.kill()
-    serverState.process = null
-    deletePidFile(configDir())
-  }
-  if (beaconServerInstance) {
-    stopBeaconServer(beaconServerInstance)
-    beaconServerInstance = null
-  }
   if (stopTray) {
     stopTray()
     stopTray = null
   }
-  stopAdminListener()
-  closeLogger()
+  stopDaemon()
 })
 
 // Phase 7 §7.2: closing the window closes a VIEW, not the daemon — the
@@ -982,59 +709,3 @@ app.on('window-all-closed', () => {
   logEvent('app', 'window_closed', {})
 })
 
-// ---------------------------------------------------------------------------
-// The control-plane API table
-// ---------------------------------------------------------------------------
-// Phase 6 §6.2 retired IPC — this used to also register every namespace's
-// handlers with ipcMain (registerIpcHandlers(), deleted along with
-// ipc/guard.mjs). buildAdminApi(deps) below is the only consumer of the
-// handler tables left, and it was always the design's real source of truth
-// (ipc/transport.mjs's header explains why: a route table derived from IPC
-// registration would be empty on a platform with no Electron, which is the
-// platform HTTP-only exists for).
-function setupAdminApi() {
-  const userDataDir = configDir()
-  refreshLiveToolsConfig = createRefreshLiveToolsConfig(serverState, userDataDir)
-  // Hands tools-definitions.mjs a live read of the plugin registry. Must run
-  // before any tools/list or config build, or plugin tools resolve to no
-  // capability and are neither classified nor bannable.
-  setPluginCapabilityProvider(pluginCapabilities)
-  const deps = {
-    execFileAsync,
-    readSettings,
-    writeSettings,
-    resolveBinary,
-    // Resolved lazily on every call — the user can repoint the models folder at
-    // runtime, so a value captured here would go stale.
-    resolveModelsDir,
-    getModelsDir: resolveModelsDir,
-    ensureModelsDir,
-    readProfiles,
-    writeProfiles,
-    buildGatewayConfig,
-    refreshLiveToolsConfig,
-    serverState,
-    buildArgs,
-    parseEvalTokensPerSec,
-    ensureFirewallRule,
-    getLocalIp,
-    // So the external-MCP validator knows which ports are ours and can refuse a
-    // server pointed at Nest itself. Falls back to the documented default when
-    // no profile has been started yet, since the ports are derived from it.
-    getConfiguredPort: () => serverState.lastConfig?.port ?? 19080,
-    userDataDir,
-    // Phase 7 §7.5 — the ONE deliberate-quit path admin:shutdown gets. Sets
-    // isQuitting, then defers app.quit() to the next tick so the HTTP
-    // response this call is answering actually leaves the socket first —
-    // see ipc/admin.mjs's shutdown() for why that ordering matters.
-    quitApp,
-  }
-
-  setAdminApi(buildAdminApi(deps))
-}
-
-// ---------------------------------------------------------------------------
-// buildArgs + KV_CACHE_PRESETS live in ./llama-args.mjs (imported above) so the
-// llama-server localhost-only invariant can be unit-tested in isolation without
-// booting Electron. See scripts/test-llama-args.mjs.
-// ---------------------------------------------------------------------------
