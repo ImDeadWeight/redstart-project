@@ -8,6 +8,8 @@
 // import is the real, unmodified production module.
 
 import { initPaths } from '../electron/main/platform-paths.mjs'
+import { initSecrets } from '../electron/main/secrets.mjs'
+import { safeStorageProvider } from '../electron/main/secrets-safe-storage.mjs'
 import * as path from 'node:path'
 
 // Phase 7 §7.4's login-item state — a plain in-memory stand-in for what
@@ -54,10 +56,14 @@ if (process.env.REDSTART_TEST_USERDATA_DIR) {
   })
 }
 
-// secrets.mjs imports safeStorage at module load (transitively, via
-// gateway-config.mjs -> secrets.mjs). A functional round-trip stub — no real OS
-// encryption, just a reversible encoding — so any encrypt/decrypt path a test
-// happens to hit still works, not merely the import.
+// A functional round-trip stub — no real OS encryption, just a reversible
+// encoding — so any encrypt/decrypt path a test happens to hit still works.
+//
+// Phase 8A.1 moved secrets.mjs behind a provider seam, so this is no longer
+// needed merely to satisfy an import: production code takes safeStorage as an
+// argument now (secrets-safe-storage.mjs) and this stub stands in for the real
+// Electron object at the one place an entrypoint passes it. It is still
+// exported in case a suite wants it directly.
 export const safeStorage = {
   isEncryptionAvailable() {
     return true
@@ -69,6 +75,16 @@ export const safeStorage = {
     return Buffer.from(buffer).toString('utf8')
   },
 }
+
+// Phase 8A.1 — secrets.mjs is fail-closed: an entrypoint must wire a provider
+// before anything reads or writes a credential. index.mjs does this in main();
+// for suites, this stub is the equivalent seam, so it does the same thing with
+// the same provider factory the desktop entrypoint uses. Unconditional (unlike
+// initPaths above), because the safeStorage provider needs no directory.
+//
+// The dedicated round-trip coverage is scripts/test-secrets.mjs, which drives
+// the real key file provider against real crypto rather than this encoding.
+initSecrets(safeStorageProvider(safeStorage))
 
 // ipcMain / dialog / session retired from this stub in Phase 6 §6.2 —
 // production code stopped importing them from 'electron' (IPC retired,

@@ -13,7 +13,7 @@
 // Key architectural decisions documented inline below.
 // =============================================================================
 
-import { app, BrowserWindow, nativeImage, Notification, dialog } from 'electron'
+import { app, BrowserWindow, nativeImage, Notification, dialog, safeStorage } from 'electron'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import * as path from 'path'
@@ -38,6 +38,8 @@ import { initProcessLog } from './process-log.mjs'
 import { subscribeToEvents } from './event-broker.mjs'
 import { reapStaleProcess, deletePidFile } from './process-supervision.mjs'
 import { initPaths, configDir, capabilityBaseDir } from './platform-paths.mjs'
+import { initSecrets } from './secrets.mjs'
+import { safeStorageProvider } from './secrets-safe-storage.mjs'
 import { fileURLToPath } from 'url'
 import { buildGatewayConfig, createRefreshLiveToolsConfig } from './gateway-config.mjs'
 import { buildArgs } from './llama-args.mjs'
@@ -836,6 +838,13 @@ async function main() {
     isPackaged: app.isPackaged,
   })
   migrateUserDataFromBeaver()
+  // Phase 8A.1 — secrets.mjs is fail-closed and holds no crypto of its own;
+  // wire the provider before anything can read or write a credential. This is
+  // the desktop (level 2) entrypoint, so it gets safeStorage — the same DPAPI
+  // that wrote every secret on every install shipped so far. The headless
+  // daemon wires the key file provider instead, and that difference is the
+  // whole reason this seam exists (design §3.1).
+  initSecrets(safeStorageProvider(safeStorage))
   // Structured logging to <userData>\redstart.log. First thing after the
   // userData migration so subsequent startup steps are captured.
   initLogger(configDir())
