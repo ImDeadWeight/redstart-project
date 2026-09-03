@@ -176,6 +176,15 @@ export function buildStaticAllowlist(root = bundleRoot()) {
 
 let staticFiles = new Map()
 
+// Overridable for tests only, exactly like `port` below. A suite needs a bundle
+// whose contents it controls rather than whatever `npm run build` last left in
+// dist/ — which on a CI runner that never built one is nothing at all, and the
+// difference between "the document carries a CSP" passing and failing was
+// therefore whether the developer happened to have a stale build lying around.
+// Remembered across restarts so a rebind (setControlPlaneBindHost) does not
+// swap the bundle out from under a running suite.
+let staticRoot = null
+
 // Phase 8A.6 — the validated CORS allowlist. Empty means no CORS headers at
 // all, which is today's behaviour and the default.
 let corsOrigins = []
@@ -332,9 +341,11 @@ async function handleAdminRequest(req, res) {
  *   for exposure, the same fail-closed contract startGateway() has.
  * @param {number} [options.port] overridable for tests only; fixed in
  *   production so a client can find it without being told.
+ * @param {string} [options.bundleRoot] overridable for tests only; production
+ *   always serves the bundle Nest shipped.
  * @returns {Promise<{ bindHost: string, port: number }>}
  */
-export function startAdminListener({ bindHost = DEFAULT_ADMIN_BIND_HOST, port = ADMIN_PORT, allowedOrigins } = {}) {
+export function startAdminListener({ bindHost = DEFAULT_ADMIN_BIND_HOST, port = ADMIN_PORT, allowedOrigins, bundleRoot: root } = {}) {
   stopAdminListener()
 
   const rejection = bindHostRejection(bindHost)
@@ -351,7 +362,8 @@ export function startAdminListener({ bindHost = DEFAULT_ADMIN_BIND_HOST, port = 
   }
   corsOrigins = parsed.origins
 
-  staticFiles = buildStaticAllowlist()
+  if (root !== undefined) staticRoot = root
+  staticFiles = buildStaticAllowlist(staticRoot ?? bundleRoot())
 
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {

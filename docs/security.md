@@ -466,16 +466,20 @@ The distinction worth drawing: these are mostly **adversarial and integration** 
 
 ## Static analysis
 
-GitHub code scanning (CodeQL, default setup) runs on this repository. Two alerts are dismissed deliberately; both are recorded here because a dismissal without a written reason is indistinguishable from an ignored finding.
+GitHub code scanning (CodeQL, default setup) runs on this repository. The alerts below are dismissed deliberately; each is recorded here because a dismissal without a written reason is indistinguishable from an ignored finding.
 
 | Rule | Location | Status | Why |
 |---|---|---|---|
 | `js/incomplete-url-substring-sanitization` | `scripts/test-system-prompt.mjs` | **False positive** | The flagged line asserts that the composed *prompt text* names an approved domain. It is a string search over prose, and nothing is authorised by it. Host allow-listing lives in `isAllowed()` (`web-fetch-tool.mjs`), which parses with `new URL()` and compares hostname exactly or as a dot-prefixed suffix. |
+| `js/biased-cryptographic-random` | `bootstrap-token.mjs` — `generateBootstrapToken()` | **False positive** | The modulo is unbiased here, and provably so: the alphabet is exactly 32 symbols and `randomBytes` yields 0-255, so `256 % 32 === 0` and every symbol is the image of exactly eight byte values. The rule is right that `% n` biases in general and cannot see that this `n` divides the range. Changing the alphabet to a size that is *not* a power of two would make the alert correct, which is why the constraint is stated in the function's own comment. |
+| `js/tainted-format-string` | `admin/api-routes.mjs` — the dispatch catch | **Fixed** | Not by silencing it: `channel` was interpolated into `console.warn`'s first argument, which is a format string. Nothing hostile could reach it — `channelFromPath()` admits no `%` and the channel must already be an own key of the handler table — but a log call whose safety rests on a regex two functions away is one a later edit can break silently. It now passes the channel as structured data. |
+| `js/incomplete-url-substring-sanitization` | `scripts/test-admin-listener.mjs` — the CORS allowlist test | **False positive** | `origins` is an **array**, so `origins.includes('https://panel.example')` is exact membership, not a substring search over a URL. The rule matched the method name. The thing that actually authorises an origin is `parseAllowedOrigins()`, which parses with `new URL()` and compares normalised origins exactly — and that is what this test asserts. |
+| `js/clear-text-logging` (×2) | `scripts/test-sessions.mjs`, `scripts/test-admin-listener.mjs` — the test harness's pass line | **False positive** | The tainted value is `apiKeyPrefix`, which is `apiKey.slice(0, 8)` — a display prefix that exists *in order to* be shown, so an admin can tell two keys apart in a list. It is stored in the account record, returned by `toPublicAccount()`, and rendered in the UI. Eight characters of a key is not the key; the rule matched the field name. |
 | `js/insufficient-password-hash` | `auth.mjs` — `hashApiKey()` | **Won't fix** | API keys are 24 CSPRNG bytes (192 bits), not passwords. Brute-forcing SHA-256 over that space is infeasible, so a slow KDF adds nothing; and the hash must stay deterministic and salt-free to resolve a presented key without running scrypt against every stored account on every request. Passwords — the actual low-entropy secret — *do* use scrypt with a per-record salt. Storing high-entropy tokens under a fast hash is standard practice. |
 
-The second one carries a trap worth naming: "fixing" it by switching to scrypt would satisfy the scanner while introducing a denial-of-service vector, to protect a secret that has no brute-force exposure. A cleaner dashboard is not worth a worse system.
+The last one carries a trap worth naming: "fixing" it by switching to scrypt would satisfy the scanner while introducing a denial-of-service vector, to protect a secret that has no brute-force exposure. A cleaner dashboard is not worth a worse system.
 
-The available real upgrade there is HMAC-SHA256 under a DPAPI-protected pepper, which keeps determinism and lookup cost but makes a stolen `accounts.json` useless on its own. It would not silence the alert either, since HMAC-SHA256 is still a fast hash — so it is worth doing on its own merits or not at all.
+The available real upgrade for it is HMAC-SHA256 under a DPAPI-protected pepper, which keeps determinism and lookup cost but makes a stolen `accounts.json` useless on its own. It would not silence the alert either, since HMAC-SHA256 is still a fast hash — so it is worth doing on its own merits or not at all.
 
 ---
 

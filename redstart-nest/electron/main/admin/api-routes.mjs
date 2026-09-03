@@ -145,7 +145,13 @@ export async function handleAdminApiRoute(req, res, urlPath) {
     // The message may name a path on the server, a binary, or a database. Logged
     // for the operator, generic for the wire — the caller is the owner, but the
     // owner is also the account an attacker is trying to become.
-    console.warn(`[admin-api] ${channel} failed:`, err?.message)
+    // Structured rather than interpolated: console.warn treats its first
+    // argument as a format string, and `channel` comes off the request path.
+    // Nothing hostile can reach here — channelFromPath()'s character class
+    // admits no `%`, and the channel must already be an own key of the table —
+    // but a log call whose safety depends on a regex two functions away is one
+    // a later edit can quietly break. Passing it as data removes the question.
+    console.warn('[admin-api] handler failed', { channel, error: err?.message })
     return sendJson(res, 500, { error: 'The operation failed' })
   }
 }

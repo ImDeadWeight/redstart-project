@@ -394,7 +394,11 @@ console.log('\n-- the listener --')
 // Nothing has called llama:launch in this process, and nothing will. Every
 // check below therefore also asserts property 4: the control plane answers with
 // no llama-server, no gateway and no profile in existence.
-await startAdminListener({ bindHost: '127.0.0.1', port: ADMIN_TEST_PORT })
+// The fixture bundle above, not the real dist/. Without this the listener
+// serves whatever the last `npm run build` left on the developer's disk, and
+// serves NOTHING on a CI runner that has never built one — which is exactly how
+// the CSP check below passed locally and failed on the first push.
+await startAdminListener({ bindHost: '127.0.0.1', port: ADMIN_TEST_PORT, bundleRoot: bundleDir })
 
 async function get(urlPath, headers = {}) {
   return fetch(`${admin}${urlPath}`, { headers })
