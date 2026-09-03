@@ -47,6 +47,8 @@ import { pluginCapabilities } from './plugin-registry.mjs'
 import { sweepPendingDeletions } from './plugin-install.mjs'
 import { hasOwner } from './auth.mjs'
 import { readBootstrapToken } from './bootstrap-token.mjs'
+import { startTray } from './tray.mjs'
+import { stopServer } from './ipc/server.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -318,6 +320,14 @@ let mainWindow = null
 // Closing the window is deliberately NOT one of these paths — see
 // window-all-closed.
 let isQuitting = false
+
+// Phase 7 §7.3 — set once startTray() succeeds; before-quit calls it to
+// unsubscribe from the broker and destroy the icon. Tray creation can fail
+// (no shell notification area, unlikely but not impossible on a stripped-down
+// Windows install) and is treated the same way the admin listener's own bind
+// failure already is: logged and swallowed rather than fatal — a missing
+// tray means "no tray affordance", not "no daemon".
+let stopTray = null
 
 // Live server process state, shared by reference between the server IPC handlers
 // (ipc/server.mjs, which owns launch/stop/status) and the lifecycle +
@@ -661,6 +671,21 @@ function createWindow() {
   if (!app.isPackaged) mainWindow.webContents.openDevTools()
 }
 
+// Shared by the single-instance guard's 'second-instance' handler (§7.1) and
+// the tray's "Open Redstart" / left-click (§7.3) — both answer the same
+// question, "bring the UI in front of the user right now," and mainWindow
+// may legitimately be null in either case now that closing it no longer
+// quits the process (§7.2).
+function openOrFocusWindow() {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  } else {
+    createWindow()
+  }
+}
+
 // The launcher and chat windows are plain UI (no WebGL/canvas-heavy work) —
 // disabling GPU compositing frees the CUDA device from competing with
 // llama-server's own inference workload for the same GPU.
@@ -691,13 +716,7 @@ if (!gotSingleInstanceLock) {
     // been called on a very fast second launch — logEvent no-ops until the
     // logger is initialized rather than throwing (see logger.mjs).
     logEvent('app', 'second_instance', {})
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.show()
-      mainWindow.focus()
-    } else {
-      createWindow()
-    }
+    openOrFocusWindow()
   })
 
   app.whenReady().then(main)
@@ -746,8 +765,40 @@ async function main() {
   setupAdminApi()
   startDiscoveryBeacon()
   startAdminPlane()
+  startTrayIcon()
   if (!app.isPackaged) await installReactDevTools()
   createWindow()
+}
+
+// Phase 7 §7.3. A missing icon (redstartIcon failed to generate, logged at
+// module load above) or a Tray constructor failure (no shell notification
+// area) is swallowed the same way a admin-listener bind failure already is —
+// logged, non-fatal, daemon still comes up. No tray means no tray
+// affordance, not no daemon.
+function startTrayIcon() {
+  if (!redstartIcon) {
+    console.warn('Tray not started: icon generation failed at startup')
+    return
+  }
+  try {
+    stopTray = startTray({
+      icon: redstartIcon.resize({ width: 16, height: 16 }),
+      onOpen: openOrFocusWindow,
+      onStopModel: () => {
+        logEvent('app', 'tray_stop_model', {})
+        stopServer({ serverState }).catch((err) => console.warn('Tray stop-model failed:', err.message))
+      },
+      onQuit: () => {
+        logEvent('app', 'tray_quit', {})
+        isQuitting = true
+        app.quit()
+      },
+      initiallyRunning: !!serverState.process,
+    })
+  } catch (err) {
+    console.warn('Tray failed to start:', err.message)
+    logEvent('app', 'tray_start_failed', { reason: err.message })
+  }
 }
 
 // Dev-only: adds the Components/Profiler panels to Chromium DevTools so the
@@ -786,6 +837,10 @@ app.on('before-quit', () => {
   if (beaconServerInstance) {
     stopBeaconServer(beaconServerInstance)
     beaconServerInstance = null
+  }
+  if (stopTray) {
+    stopTray()
+    stopTray = null
   }
   stopAdminListener()
   closeLogger()
