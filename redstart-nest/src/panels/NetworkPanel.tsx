@@ -135,8 +135,9 @@ export function NetworkPanel({
             plane's login requirement above. See headless-admin-plane-plan.md
             decision 4: availability is always on, this only decides whether
             it's reachable off this machine. Also settable per-profile via
-            LlamaConfig.exposeControlPlane (docs/notes/admingate-access-ui-plan.md
-            §3) — this toggle is still the source of truth; selecting a
+            LlamaConfig.exposeControlPlane (headless-admin-plane-implementation.md,
+            "Deviations from the design" §6) — this toggle is still the source of
+            truth; selecting a
             profile that saved a different value changes it the same way this
             click does. */}
         <div>
