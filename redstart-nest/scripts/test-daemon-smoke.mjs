@@ -276,6 +276,28 @@ try {
     assert(res.json?.result?.supported === false, `expected supported:false, got ${res.text}`)
   })
 
+  await test('🔍 the headless daemon can find a server binary to launch', async () => {
+    // Not "can it load a model" — that needs gigabytes and a GPU. This is the
+    // step before: does resolveBinary() find llama-server from a plain-Node
+    // daemon, given the POSIX/Windows candidate list 8A.3 rewrote? If it
+    // cannot, every launch from a headless install fails at the first hurdle,
+    // and nothing else in this suite would notice.
+    const res = await read(await callMethod('settings:get-resolved-binary', [], ownerToken))
+    assert(res.status === 200, `expected 200, got ${res.status}: ${res.text}`)
+    const resolved = res.json?.result
+    // A checkout without a built llama-server is a legitimate state (CI is
+    // one), so absence is reported rather than failed — what must hold is that
+    // the daemon ANSWERS the question rather than throwing, and that when it
+    // does find one it is a real path.
+    if (!resolved || (typeof resolved === 'object' && !resolved.path)) {
+      return 'no llama-server built in this tree'
+    }
+    const binaryPath = typeof resolved === 'string' ? resolved : resolved.path
+    assert(path.isAbsolute(binaryPath), `not an absolute path: ${binaryPath}`)
+    assert(fs.existsSync(binaryPath), `resolved a binary that does not exist: ${binaryPath}`)
+    return path.basename(binaryPath)
+  })
+
   await test('🔍 the SSE feed opens and replays', async () => {
     // Phase 5's live feed, over a real socket. The first event is always the
     // ring-buffer replay, so a reconnecting client sees history rather than an

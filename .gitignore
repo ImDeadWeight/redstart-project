@@ -88,3 +88,6 @@ desktop.ini
 # 95 code comments cite as authority, ended up matching /redstart-*.md and
 # absent from every clone.
 docs/notes/
+
+# Local nest directory for `npm run daemon` — a throwaway headless install.
+.redstart-daemon/
