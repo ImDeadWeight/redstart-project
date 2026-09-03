@@ -68,6 +68,7 @@ Things worth poking at while you are in there:
 - **The folder picker** greys out anything the daemon cannot read and refuses
   to let you choose it. On Windows as yourself that will rarely fire — it is
   there for a service account.
+
 **Starting and stopping it:**
 
 ```
@@ -88,6 +89,8 @@ its graceful teardown does not run, and a loaded model is orphaned rather than
 stopped — the next start reaps it, which is what `reapStaleProcess()` is for.
 If a model is loaded, the script says so and points at the tidier options:
 Shut Down in the admin UI, or Ctrl-C in the daemon's own terminal.
+
+---
 
 ## 3. From your phone (2 min)
 
