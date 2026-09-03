@@ -13,6 +13,7 @@ import { tmpdir } from 'os';
 import { AttachmentType } from '$lib/enums';
 
 const TEST_DIR = join(tmpdir(), 'redstart-security-tests');
+const CAPABILITY_DIR = join(tmpdir(), 'redstart-security-tests-capabilities');
 
 beforeEach(() => {
 	rmSync(TEST_DIR, { recursive: true, force: true });
@@ -36,10 +37,18 @@ vi.mock('electron', () => ({
 // (e.g. secrets.mjs's safeStorage), but it can no longer be the thing that
 // makes storage paths resolve. initPaths() has to be called explicitly, once,
 // with the same values app.getPath used to hand back above.
+//
+// The capability base is a SIBLING of the config directory, not the
+// `documents/Redstart` folder inside it that app.getPath('documents') used to
+// imply. Phase 8B.1 made initPaths() refuse a capability base sitting inside
+// config (design 3.5), so the nested value threw at import time and took the
+// whole file down with it. Nothing in this suite reads capabilityBase — the
+// paths it exercises are passed explicitly (rootDir, outputDir) — so a
+// separate directory satisfies the invariant without changing what is tested.
 const { initPaths } = await import('$lib/../../../../electron/main/platform-paths.mjs');
 initPaths({
 	config: TEST_DIR,
-	capabilityBase: join(TEST_DIR, 'documents', 'Redstart'),
+	capabilityBase: CAPABILITY_DIR,
 	isPackaged: false
 });
 

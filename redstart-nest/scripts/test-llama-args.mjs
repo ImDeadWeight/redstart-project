@@ -26,7 +26,13 @@
 
 import { initPaths } from '../electron/main/platform-paths.mjs'
 
-initPaths({ config: 'unused-by-buildArgs', capabilityBase: 'unused-by-buildArgs', isPackaged: false })
+// Two DISTINCT placeholders, not one string twice: Phase 8B.1 made initPaths()
+// refuse a config directory that overlaps the capability base, and passing the
+// same value for both turned that refusal into a hard throw at import time here
+// — which halted the whole `npm run test:security` run at this file. Nothing in
+// this suite reads either path; only the isPackaged flag travelling alongside
+// them is wanted.
+initPaths({ config: 'unused-by-buildArgs/config', capabilityBase: 'unused-by-buildArgs/data', isPackaged: false })
 
 const { buildArgs } = await import('../electron/main/llama-args.mjs')
 
