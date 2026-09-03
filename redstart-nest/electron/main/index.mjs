@@ -315,12 +315,12 @@ try {
 let mainWindow = null
 
 // Phase 7 §7.2: set only by a deliberate quit path — 7.3's tray "Quit
-// Redstart" and 7.5's admin:shutdown route, neither of which exists yet in
-// this commit. Not read anywhere yet either; it exists so those two later
-// steps have one flag to set rather than inventing their own, and so that
-// window-all-closed's comment below has something concrete to point at.
-// Closing the window is deliberately NOT one of these paths — see
-// window-all-closed.
+// Redstart" (§7.3, below) and admin:shutdown (§7.5's quitApp(), below) are
+// the only two things that set it. Not read anywhere yet — it exists so
+// those two paths have one flag to set rather than inventing their own,
+// and so that window-all-closed's comment below has something concrete to
+// point at. Closing the window is deliberately NOT one of these paths —
+// see window-all-closed.
 let isQuitting = false
 
 // Phase 7 §7.3 — set once startTray() succeeds; before-quit calls it to
@@ -721,6 +721,18 @@ function openOrFocusWindow() {
   }
 }
 
+// Phase 7 §7.5 — the ONE deliberate-quit path admin:shutdown gets (the
+// tray's "Quit Redstart", §7.3, sets isQuitting inline itself since it
+// already has app in scope there too — this is the other caller). Deferred
+// with setImmediate rather than calling app.quit() synchronously: the
+// caller is admin:shutdown's HTTP handler, and its 200 response must
+// actually leave the socket before before-quit's teardown begins, or the
+// caller sees a connection reset and cannot tell success from crash.
+function quitApp() {
+  isQuitting = true
+  setImmediate(() => app.quit())
+}
+
 // The launcher and chat windows are plain UI (no WebGL/canvas-heavy work) —
 // disabling GPU compositing frees the CUDA device from competing with
 // llama-server's own inference workload for the same GPU.
@@ -956,6 +968,11 @@ function setupAdminApi() {
     // no profile has been started yet, since the ports are derived from it.
     getConfiguredPort: () => serverState.lastConfig?.port ?? 19080,
     userDataDir,
+    // Phase 7 §7.5 — the ONE deliberate-quit path admin:shutdown gets. Sets
+    // isQuitting, then defers app.quit() to the next tick so the HTTP
+    // response this call is answering actually leaves the socket first —
+    // see ipc/admin.mjs's shutdown() for why that ordering matters.
+    quitApp,
   }
 
   setAdminApi(buildAdminApi(deps))

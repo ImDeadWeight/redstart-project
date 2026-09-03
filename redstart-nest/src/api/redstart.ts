@@ -67,6 +67,12 @@ export type RedstartAPI = {
     // not) and the Startup toggle here never disagree with Windows' own
     // Task Manager view of it.
     setStartup: (startAtLogin: boolean) => Promise<StartupState>
+    // Phase 7 §7.5 — the only way to stop the daemon now that the window no
+    // longer means anything (§7.2). Owner-gated. The daemon answers 200 and
+    // THEN quits on the next tick, so this always resolves before the
+    // connection drops — a caller does not need to treat a network error
+    // here as ambiguous between "it worked" and "it crashed".
+    shutdown: () => Promise<{ ok: boolean }>
   }
   // The FolderPicker.tsx mechanism (Phase 4 §4.2-4.3) — one component behind
   // all nine former per-site pickers. Native picking (pickNative) retired in

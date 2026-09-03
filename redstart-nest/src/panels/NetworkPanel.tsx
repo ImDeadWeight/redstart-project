@@ -3,6 +3,7 @@ import QRCode from 'qrcode'
 import type { useAuthSetup } from '../hooks/useAuthSetup'
 import type { useControlPlaneExposure } from '../hooks/useControlPlaneExposure'
 import type { useStartupSettings } from '../hooks/useStartupSettings'
+import type { useShutdown } from '../hooks/useShutdown'
 import { SectionTitle, TogglePill, btnCls, ControlPlaneNotice } from '../components/ui'
 import { buildAddresses } from './addresses'
 
@@ -52,7 +53,7 @@ function AddressRow({ url, label, note, primary }: {
 
 export function NetworkPanel({
   networkMode, onToggleNetworkMode, localIp, port,
-  auth, controlPlaneExposure, startup,
+  auth, controlPlaneExposure, startup, shutdown,
 }: {
   networkMode: boolean
   onToggleNetworkMode: () => void
@@ -61,6 +62,7 @@ export function NetworkPanel({
   auth: ReturnType<typeof useAuthSetup>
   controlPlaneExposure: ReturnType<typeof useControlPlaneExposure>
   startup: ReturnType<typeof useStartupSettings>
+  shutdown: ReturnType<typeof useShutdown>
 }) {
   const addresses = buildAddresses(localIp, port)
   const primary = addresses[0]
@@ -68,6 +70,7 @@ export function NetworkPanel({
   const { authRequired, toggleAuthRequired } = auth
   const { controlPlane, toggleExposure } = controlPlaneExposure
   const { startup: startupState, toggleStartup } = startup
+  const { confirmShutdown, setConfirmShutdown, shuttingDown, requestShutdown, confirmShutdownNow } = shutdown
 
   // The QR encodes the direct-IP URL — pointing a phone camera at it needs no
   // name resolution at all, which is the only approach that works on every
@@ -168,6 +171,44 @@ export function NetworkPanel({
           <p className="mt-1 text-xs text-zinc-600">
             Starts in the tray only, with no window and no model loaded — open it from the tray
             icon or the Start menu when you want it.
+          </p>
+        </div>
+
+        {/* Phase 7 §7.5 — the ONE deliberate way left to stop the daemon,
+            now that closing the window no longer does (§7.2). Two-step
+            confirm: this stops the model AND takes the box off the network
+            for every other client, and a remote admin cannot walk over and
+            restart it. */}
+        <div>
+          {!confirmShutdown && (
+            <button
+              onClick={requestShutdown}
+              disabled={shuttingDown}
+              className={`${btnCls.subtle} disabled:opacity-50 disabled:cursor-not-allowed`}>
+              {shuttingDown ? 'Shutting down…' : 'Shut down Redstart'}
+            </button>
+          )}
+          {confirmShutdown && (
+            <div className="flex items-center gap-3 rounded-lg border border-amber-800 bg-zinc-900 px-4 py-2">
+              <span className="flex-1 text-xs text-amber-400">
+                Shut down now? This stops the model and takes this box off the network for
+                every client — including this one. Nobody can restart it remotely.
+              </span>
+              <button
+                onClick={confirmShutdownNow}
+                className="px-3 py-1.5 bg-red-700 hover:bg-red-600 text-white rounded text-xs font-semibold transition-colors shrink-0">
+                Shut Down Now
+              </button>
+              <button
+                onClick={() => setConfirmShutdown(false)}
+                className="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded text-xs transition-colors shrink-0">
+                Cancel
+              </button>
+            </div>
+          )}
+          <p className="mt-1 text-xs text-zinc-600">
+            Stops Redstart entirely — the model, the tray, and the admin panel on every device.
+            Start it again from the Start menu or the desktop shortcut.
           </p>
         </div>
       </div>

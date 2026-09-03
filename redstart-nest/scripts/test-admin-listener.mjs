@@ -63,7 +63,7 @@ const { mayAccessControlPlane } = await import('../electron/main/permissions.mjs
 const { serverPortRejection } = await import('../electron/main/ipc/validate.mjs')
 const { ADMIN_PORT, BEACON_PORT, DEFAULT_GATEWAY_PORT } = await import('../electron/main/ports.mjs')
 const { discoveryPlan, lastKnownDiscovery, discoveryRecordFor, stopDiscovery } = await import('../electron/main/discovery.mjs')
-const { getControlPlane, setControlPlaneBindHost, resolveStartupReconciliation, getStartupSettings, setStartupSettings } = await import('../electron/main/ipc/admin.mjs')
+const { getControlPlane, setControlPlaneBindHost, resolveStartupReconciliation, getStartupSettings, setStartupSettings, shutdown } = await import('../electron/main/ipc/admin.mjs')
 const { app: electronAppStub } = await import('electron')
 const { buildAdminApi } = await import('../electron/main/admin/api-table.mjs')
 const { setAdminApi, pathForChannel } = await import('../electron/main/admin/api-routes.mjs')
@@ -571,6 +571,38 @@ await test('setStartupSettings(false) turns both halves off', async () => {
   assert(electronAppStub.getLoginItemSettings().openAtLogin === false, 'the OS login item was not turned off')
   assert(storedSettings.startAtLogin === false, 'settings.json was not turned off')
   assert(getStartupSettings().startAtLogin === false, 'getStartupSettings disagrees with what was just set')
+})
+
+console.log('\n-- 🔍 Phase 7 §7.5: deliberate shutdown --')
+
+await test('🔍 admin:shutdown responds ok and calls the deliberate-quit path exactly once', async () => {
+  // A dedicated table for this one test — quitApp is index.mjs's own
+  // closure in production (isQuitting + a deferred app.quit()), stubbed
+  // here as a counter so this suite never actually tries to quit a
+  // process. Restored to the shared settingsDeps table afterward so the
+  // tests below it see the same deps every other test in this section does.
+  let quitCalls = 0
+  const shutdownDeps = { ...settingsDeps, quitApp: () => { quitCalls++ } }
+  setAdminApi(buildAdminApi(shutdownDeps))
+  try {
+    const res = await post(pathForChannel('admin:shutdown'), [], bearer(ownerToken))
+    assert(res.status === 200, `expected 200, got ${res.status}`)
+    const body = await res.json()
+    assert(body.result?.ok === true, `unexpected result: ${JSON.stringify(body)}`)
+    assert(quitCalls === 1, `expected quitApp() called exactly once, got ${quitCalls}`)
+  } finally {
+    setAdminApi(buildAdminApi(settingsDeps))
+  }
+})
+
+await test('admin:shutdown is owner-gated like every other route', async () => {
+  const res = await post(pathForChannel('admin:shutdown'), [], {})
+  assert(res.status === 401, `expected 401 for an anonymous caller, got ${res.status}`)
+})
+
+await test('shutdown() does not throw when deps carries no quitApp', async () => {
+  const result = await shutdown({})
+  assert(result.ok === true, `expected ok:true even with no quitApp, got ${JSON.stringify(result)}`)
 })
 
 // Changing the bind address no longer touches discovery at all (Phase 6.5 —

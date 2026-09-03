@@ -178,6 +178,26 @@ export function reconcileStartupSetting({ readSettings, writeSettings }) {
   return { startAtLogin }
 }
 
+/**
+ * Deliberate shutdown from the admin UI (Phase 7 §7.5). There was no
+ * shutdown route before this — with the window no longer meaning anything
+ * (§7.2), Task Manager would otherwise be the only exit, which is worse
+ * than what existed before this phase.
+ *
+ * `deps.quitApp` is index.mjs's own closure — the one place that holds
+ * `isQuitting` and `app.quit()`. It defers the actual quit to the next
+ * tick, so the HTTP response this function returns actually leaves the
+ * socket before before-quit's teardown begins; the caller must see 200,
+ * not a connection reset, or it cannot tell success from crash. That
+ * deferral lives in index.mjs, not here — this function only decides
+ * WHETHER to quit and logs that the decision was made.
+ */
+export function shutdown({ quitApp }) {
+  logEvent('app', 'shutdown_requested', {})
+  quitApp?.()
+  return { ok: true }
+}
+
 // `set-bind-host` is now wired to the UI (AccountsPanel.tsx's exposure
 // toggle) — it sat unregistered from Phase 2 until then because offering the
 // button before there was a login screen a browser could reach would have let
@@ -194,5 +214,7 @@ export function adminHandlers(deps) {
     // Phase 7 §7.4 — start-at-login.
     'admin:get-startup': () => getStartupSettings(),
     'admin:set-startup': (startAtLogin) => setStartupSettings(startAtLogin, deps ?? {}),
+    // Phase 7 §7.5 — deliberate shutdown.
+    'admin:shutdown': () => shutdown(deps ?? {}),
   }
 }

@@ -21,6 +21,7 @@ import { useStatusMessage } from './hooks/useStatusMessage'
 import { useAuthSetup } from './hooks/useAuthSetup'
 import { useControlPlaneExposure } from './hooks/useControlPlaneExposure'
 import { useStartupSettings } from './hooks/useStartupSettings'
+import { useShutdown } from './hooks/useShutdown'
 import { useExternalMcp } from './hooks/useExternalMcp'
 import { useToolsCatalog } from './hooks/useToolsCatalog'
 import { useCapabilities } from './hooks/useCapabilities'
@@ -49,6 +50,7 @@ export default function App() {
   const auth = useAuthSetup(showStatus)
   const controlPlaneExposure = useControlPlaneExposure(showStatus)
   const startup = useStartupSettings(showStatus)
+  const shutdown = useShutdown(showStatus)
   const mcp = useExternalMcp()
   const caps = useCapabilities(config)
   const plugins = usePlugins()
@@ -191,6 +193,7 @@ export default function App() {
               auth={auth}
               controlPlaneExposure={controlPlaneExposure}
               startup={startup}
+              shutdown={shutdown}
             />
           )}
 
