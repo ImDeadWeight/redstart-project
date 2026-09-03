@@ -271,21 +271,42 @@ await test('🔍 a hostname is refused — exposure must be stated, not resolved
 
 console.log('\n-- discovery exposure --')
 
-await test('🔍 network mode on runs the clean-URL proxy', () => {
-  const plan = discoveryPlan({ networkMode: true })
+// Phase 8A.4 made the plan platform-dependent, so these pass `platform`
+// explicitly. Without it they would assert today's Windows behaviour while
+// running on the Linux CI runner and fail there for a correct reason — the
+// exact shape of platform-dependent test that gets "fixed" by weakening the
+// assertion.
+
+await test('🔍 network mode on runs the clean-URL proxy (Windows desktop)', () => {
+  const plan = discoveryPlan({ networkMode: true, platform: 'win32' })
   assert(plan.advertise === true, "today's desktop install stopped advertising")
   assert(plan.reason === 'data-plane', `reason was ${plan.reason}`)
 })
 
 await test('🔍 network mode off runs nothing', () => {
-  const plan = discoveryPlan({ networkMode: false })
-  assert(plan.advertise === false, 'a loopback-only box ran the clean-URL proxy')
+  for (const platform of ['win32', 'linux']) {
+    const plan = discoveryPlan({ networkMode: false, platform })
+    assert(plan.advertise === false, `a loopback-only box ran the clean-URL proxy on ${platform}`)
+  }
+})
+
+await test('🔒 the clean-URL proxy never runs off Windows, even in network mode', () => {
+  // Port 80 is privileged on POSIX and an unprivileged daemon cannot bind it.
+  // The fix is NOT to grant CAP_NET_BIND_SERVICE: decision 9 exists to shed
+  // privileges from a process that spawns a user-configurable binary and runs
+  // third-party plugin code. Design §3.3's reverse proxy owns 80 at level 3
+  // anyway, so Nest binding it would be a collision as well as an escalation.
+  for (const platform of ['linux', 'darwin']) {
+    const plan = discoveryPlan({ networkMode: true, platform })
+    assert(plan.advertise === false, `${platform} tried to bind port 80`)
+    assert(plan.reason === 'no-privileged-port', `${platform} reason was ${plan.reason}`)
+  }
 })
 
 await test('🔍 a machine that has never launched has no reason to advertise', () => {
   const fresh = lastKnownDiscovery({})
   assert(fresh.networkMode === false, 'an unlaunched box inherited networkMode: true from a default nobody chose')
-  assert(discoveryPlan(fresh).advertise === false, 'a fresh install advertised itself')
+  assert(discoveryPlan({ ...fresh, platform: 'win32' }).advertise === false, 'a fresh install advertised itself')
   return 'additive for existing installs'
 })
 

@@ -68,9 +68,28 @@ export function discoveryRecordFor(config) {
  *
  * @returns {{ advertise: boolean, reason: string }}
  */
-export function discoveryPlan({ networkMode } = {}) {
-  if (networkMode === true) return { advertise: true, reason: 'data-plane' }
-  return { advertise: false, reason: 'loopback-only' }
+export function discoveryPlan({ networkMode, platform = process.platform } = {}) {
+  if (networkMode !== true) return { advertise: false, reason: 'loopback-only' }
+  if (platform !== 'win32') {
+    // Phase 8A.4 — the clean URL is a Windows-desktop convenience and it
+    // cannot work headless, for two independent reasons:
+    //
+    //   1. Port 80 is privileged on POSIX. An unprivileged daemon simply
+    //      cannot bind it, and the answer is emphatically NOT to give Nest
+    //      the capability to do so — decision 9 exists to SHED privileges,
+    //      and CAP_NET_BIND_SERVICE on a process that spawns a
+    //      user-configurable binary and runs third-party plugin code undoes
+    //      the point of the service account.
+    //   2. Design §3.3 puts a reverse proxy in front at level 3, and it owns
+    //      80 and 443. Nest also binding 80 would be a collision with the
+    //      thing that is supposed to be terminating TLS.
+    //
+    // Reported rather than attempted-and-swallowed: an EADDRINUSE or EACCES
+    // logged as a warning on every boot is how an operator learns to ignore
+    // warnings.
+    return { advertise: false, reason: 'no-privileged-port' }
+  }
+  return { advertise: true, reason: 'data-plane' }
 }
 
 let advertising = false
