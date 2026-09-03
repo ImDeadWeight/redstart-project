@@ -29,7 +29,7 @@
 // Key architectural decisions documented inline below.
 // =============================================================================
 
-import { app, BrowserWindow, nativeImage, Notification, dialog, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, Menu, nativeImage, Notification, dialog, safeStorage, shell } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs'
 import * as zlib from 'zlib'
@@ -465,10 +465,40 @@ function installCloseNotice(win) {
 }
 
 function createWindow() {
+  // No File/Edit/View/Help. Nothing in them applies to this app — there are no
+  // documents to open and no preferences that are not in the UI already — and
+  // with the title bar hidden the menu would have nowhere sensible to live.
+  // Chromium still handles the editing shortcuts (Ctrl+C/V/X/A, undo) inside
+  // inputs natively on Windows, which is where the Edit menu's roles would
+  // otherwise have earned their place.
+  Menu.setApplicationMenu(null)
+
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 800,
     icon: redstartIcon,
+    // No OS title bar. The app draws its own top bar (App.tsx's header, and a
+    // drag strip on the sign-in screen) and Electron paints ONLY the
+    // minimise/maximise/close buttons over it, in the app's colours.
+    //
+    // Why the overlay rather than `frame: false` plus three HTML buttons:
+    // buttons in the page would need a way to call win.minimize(), and the
+    // only channel for that was the preload bridge Phase 6 §6.2 deleted. The
+    // alternatives are both wrong — reintroducing a privileged channel for
+    // window chrome, or putting window control on the admin HTTP API, where a
+    // browser on another device could minimise someone else's window. The
+    // overlay needs neither: the buttons are native, the theming is
+    // declarative, and the page stays an ordinary page.
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#18181b',       // zinc-900, matching App.tsx's header
+      symbolColor: '#a1a1aa', // zinc-400, matching its secondary text
+      height: 48,             // must equal the header's h-12
+    },
+    // Paint the window zinc-950 from the first frame. Without it the window
+    // shows white until the page loads, which against this theme reads as a
+    // flash of broken.
+    backgroundColor: '#09090b',
   })
 
   // The window is one event-broker subscriber among others now (Phase 5
@@ -521,7 +551,21 @@ function createWindow() {
     if (token) url += `?setupToken=${encodeURIComponent(token)}`
   }
   mainWindow.loadURL(url)
-  if (!app.isPackaged) mainWindow.webContents.openDevTools()
+  if (!app.isPackaged) {
+    mainWindow.webContents.openDevTools()
+    // Setting the application menu to null (above) also removes the
+    // accelerators it carried, and the only one that mattered was
+    // toggle-devtools. Rebinding it here rather than keeping a menu bar just
+    // to hold it: dev-only, so a packaged build gains no shortcut into the
+    // renderer's internals.
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+      const toggle = input.control && input.shift && input.key.toLowerCase() === 'i'
+      if (input.type === 'keyDown' && (toggle || input.key === 'F12')) {
+        mainWindow.webContents.toggleDevTools()
+        event.preventDefault()
+      }
+    })
+  }
 }
 
 // Shared by the single-instance guard's 'second-instance' handler (§7.1) and

@@ -34,6 +34,7 @@
 // =============================================================================
 
 import { useEffect, useState } from 'react'
+import { useWindowControlsOverlay, DRAG_REGION } from '../hooks/useWindowControlsOverlay'
 import type { RedstartAPI } from '../api/redstart'
 import { setHttpAPI } from '../api/redstart'
 import { createHttpAPI } from '../api/http'
@@ -70,8 +71,20 @@ function Shell({ title, subtitle, children }: {
   subtitle: string
   children: React.ReactNode
 }) {
+  const overlay = useWindowControlsOverlay()
+
   return (
     <div className="flex items-center justify-center h-screen bg-zinc-950 text-white font-mono text-sm px-4">
+      {/* The sign-in and first-run screens are a different tree from App.tsx
+          and have no header, so without this the Electron window could not be
+          MOVED until after signing in — the native title bar is hidden and
+          nothing else here is draggable. Fixed rather than in the flow so it
+          costs no layout: the card below is vertically centred and never
+          reaches the top edge. Inert in a browser, where the hook is
+          inactive. */}
+      {overlay.active && (
+        <div className="fixed top-0 left-0 right-0 h-12 z-50" style={DRAG_REGION} />
+      )}
       <div className="w-full max-w-sm">
         <h1 className="text-lg font-bold tracking-wide mb-1">
           <span className="text-orange-500">Redstart Nest</span>

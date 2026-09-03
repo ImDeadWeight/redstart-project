@@ -22,6 +22,7 @@ import { useAuthSetup } from './hooks/useAuthSetup'
 import { useControlPlaneExposure } from './hooks/useControlPlaneExposure'
 import { useStartupSettings } from './hooks/useStartupSettings'
 import { useShutdown } from './hooks/useShutdown'
+import { useWindowControlsOverlay, DRAG_REGION } from './hooks/useWindowControlsOverlay'
 import { useExternalMcp } from './hooks/useExternalMcp'
 import { useToolsCatalog } from './hooks/useToolsCatalog'
 import { useCapabilities } from './hooks/useCapabilities'
@@ -51,6 +52,9 @@ export default function App() {
   const controlPlaneExposure = useControlPlaneExposure(showStatus)
   const startup = useStartupSettings(showStatus)
   const shutdown = useShutdown(showStatus)
+  // Electron hides the OS title bar, so the header above doubles as it. See
+  // the hook for why this is feature-detected rather than an "is Electron" check.
+  const overlay = useWindowControlsOverlay()
   const mcp = useExternalMcp()
   const caps = useCapabilities(config)
   const plugins = usePlugins()
@@ -116,8 +120,18 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-white font-mono text-sm overflow-hidden">
 
-      {/* ── Top bar ── */}
-      <header className="flex items-center justify-between px-5 py-3 bg-zinc-900 border-b border-zinc-800 shrink-0">
+      {/* ── Top bar ──
+          Also the window's title bar in Electron: the native one is hidden, so
+          this is the region that drags the window, and h-12 must stay equal to
+          the titleBarOverlay height in index.mjs or the buttons will not line
+          up with it. In a browser the hook reports inactive and this is an
+          ordinary header, unchanged. */}
+      <header
+        className="flex items-center justify-between px-5 h-12 bg-zinc-900 border-b border-zinc-800 shrink-0"
+        style={overlay.active
+          ? { ...DRAG_REGION, paddingRight: overlay.rightInset + 20 }
+          : undefined}
+      >
         <h1 className="text-lg font-bold tracking-wide">
           <span className="text-orange-500">Redstart Nest</span>
         </h1>
