@@ -140,10 +140,19 @@ at all, and `connect-src 'self'` — the same one every caller gets, Electron's
 own window included: it loads this listener's page too rather than carrying a
 separate, looser policy of its own.
 
-**No CORS, and therefore no CSRF machinery.** The listener sends no
-`Access-Control-Allow-Origin` header and answers no preflight; it serves its own
-origin. The credential is a bearer token the page attaches itself rather than a
-cookie, so a cross-site request carries no authority in the first place.
+**No CORS by default, and therefore no CSRF machinery.** Out of the box the
+listener sends no `Access-Control-Allow-Origin` header and answers no preflight;
+it serves its own origin. The credential is a bearer token the page attaches
+itself rather than a cookie, so a cross-site request carries no authority in the
+first place.
+
+A deployment whose admin client is served from somewhere else can set
+`adminAllowedOrigins` in `settings.json` to an explicit list of origins. It is
+an allowlist and only an allowlist: a wildcard is refused outright, an origin
+that is not on the list is never reflected back, and a request from an
+unlisted origin is handled exactly as it always was — authenticated on its own
+merits, with no CORS headers. There is no UI for this because the only thing
+that needs it is a client pointed at a remote daemon.
 
 **Every method, one route, one gate.** The administrative API is one route per
 method (`POST /admin/api/<namespace>/<method>`), and authentication and the
@@ -361,7 +370,7 @@ Redstart Nest can treat an MCP SSE endpoint on another device as an additional t
 - **Their tools are executed by clients, not by Nest's MCP server.** So the completions-proxy ban applies to them, but the MCP-side chokepoint does not. "Enforced at both chokepoints" is a statement about built-in tools.
 - **An external server is trusted to describe its own tools.** Redstart does not validate the tool definitions it returns, and their descriptions reach the model.
 - **A remote external server is network egress** and is reported as such at `GET /egress` and in the system prompt's data-handling block.
-- **An optional API key is encrypted at rest**, the same OS-level secret store (`electron/main/secrets.mjs`, DPAPI on Windows) used for the Postgres connection string. It never round-trips back to the renderer once saved — the registry only reports whether a key is set, never the key — and it is sent as `Authorization: Bearer <key>` to that server alone. **OAuth-protected servers are not supported** — there is no authorization-code flow, so a server that requires one cannot be registered.
+- **An optional API key is encrypted at rest**, the same secret store (`electron/main/secrets.mjs` — DPAPI on Windows via the OS keychain; an AES-256-GCM key file when Redstart runs as a headless daemon with no keychain to use) used for the Postgres connection string. It never round-trips back to the renderer once saved — the registry only reports whether a key is set, never the key — and it is sent as `Authorization: Bearer <key>` to that server alone. **OAuth-protected servers are not supported** — there is no authorization-code flow, so a server that requires one cannot be registered.
 
 Point one at a host you control, on a network you trust.
 
@@ -479,6 +488,9 @@ Stated plainly, because a security document that lists only strengths is not one
 - **Every admin browses folders, but not files, on the server — Windows included.** A server-side directory browser (`browse:roots`/`browse:list`/`browse:mkdir`) is the only picker there is now (native OS dialogs retired with IPC, Phase 6 §6.1), and the listing is directories-only by design — it never returns file contents. Picking a *file* (the model, the binary) means navigating to the right folder and typing the filename, not clicking it from a list. "Reveal in Explorer" retired the same way and is not coming back in this shape: nothing can tell "the caller is sitting at this machine" from "the caller is a browser anywhere on the network" any more, so there is no safe caller left for a window that opens on the *server's* desktop — every client gets a copy-path button instead.
 - **The daemon outlives its window (Phase 7), but crash recovery is a human, not a supervisor.** Closing the launcher window no longer stops the model — Redstart Nest keeps running in the notification area, with a tray icon showing whether one is loaded and a "Stop model" / "Quit Redstart" menu; it can also start at login, windowless. What this does NOT add is process supervision: on a crash (an uncaught exception, unhandled rejection), Redstart logs the failure and shows a notification, but does not auto-restart. A hard kill (Task Manager), an OOM kill, or a native-code crash get no chance to log or notify at all — those stay silent until someone notices the tray icon is gone. Auto-restart-with-backoff is the appliance daemon's (Phase 8) job, running under real process supervision (systemd); a hand-rolled equivalent on Windows was considered and rejected as its own outage risk.
 - **The tray, autostart, and first-close notice are not covered by any automated test.** Each needs a real window manager and a human driving a packaged build to verify — the pure decision logic behind autostart and crash-notification text is unit-tested, but the actual OS-level behavior (does the icon appear, does Windows actually launch it at login, does the notice show exactly once) is not.
+- **Running headless, secrets are protected by a key file beside them, not by an OS keychain.** Redstart Nest can now run as a daemon with no window at all (`bin/nestd.mjs`), which is what a monitor-less box needs — and such a box has no keychain, no login session, and nobody to type an unlock passphrase at boot. In that mode the stored credentials (the Postgres connection string, external MCP keys, plugin environment values) are encrypted with AES-256-GCM under a 32-byte key file in Redstart's own config directory, mode 0600. Be clear about what that is worth: anyone who can read that directory can read the secrets, because the key is sitting next to them. It is meaningful only with full-disk encryption underneath it, which is the correct tool for the job it is actually doing — protecting a drive that leaves the box. **If you run Redstart headless on hardware you do not physically control, use encrypted storage.** On Windows, where Redstart runs as the logged-in user, nothing changes: secrets are still protected by DPAPI through the OS keychain exactly as before, and existing installs are read back unchanged.
+- **Deleting a model on a headless daemon deletes it, rather than sending it to a recycle bin.** There is no desktop recycle bin on such a machine. This is a deliberate exception to the never-destroy rule that governs *your* files — a model is a re-downloadable multi-gigabyte file, and parking one in a `.trash/` folder that nothing ever empties is the outcome you pressed delete to avoid. Your own storage is unaffected and still follows the recycle-bin-then-`.trash/` path described above.
+- **The clean-URL (port 80) proxy is Windows-only.** On any other platform Redstart does not attempt it: port 80 is privileged, and the alternative — granting the daemon the capability to bind it — would hand back privileges the unprivileged service account exists to shed, on a process that spawns a configurable binary and runs third-party plugin code. A reverse proxy in front is the answer there, and it is the same reverse proxy that terminates TLS.
 - **Shared capabilities are all-or-nothing.** Vault, Git, SQLite and Postgres are shared across every account with no per-account grants yet.
 - **Twig's local MCP servers are unmoderated.** Twig can run local stdio MCP servers from a file on the user's own machine — arbitrary command execution by design, with the local disk as the trust boundary. Tool bans can strip their tools by name, but the server never sees them registered.
 - **The filesystem containment check is not atomic with the operation.** The File System capability re-validates every path argument through `resolveWithinRoot()` before handing the call to the upstream stdio child, but the child is a separate process, so a check-then-operate window exists in principle. The upstream server re-validates independently, which makes this degraded defense-in-depth rather than a hole.
