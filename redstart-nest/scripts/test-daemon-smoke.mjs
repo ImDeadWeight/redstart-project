@@ -232,6 +232,21 @@ try {
     return `${provisioned.length} capability folders under data/`
   })
 
+  await test('🔍 the daemon records its own pid, so it can be stopped without Task Manager', async () => {
+    // The tray's "Quit Redstart" is the desktop's answer; headless there is no
+    // tray, so this file is what `npm run daemon:stop` signals and what
+    // `daemon:status` reads. Written LAST, after the control-plane bind, so a
+    // second daemon that fails to bind cannot overwrite a live one's entry.
+    const pidPath = path.join(nestDir, 'config', 'nestd.pid')
+    assert(fs.existsSync(pidPath), `no daemon pid file at ${pidPath}`)
+    const record = JSON.parse(fs.readFileSync(pidPath, 'utf8'))
+    assert(record.pid === daemon.child.pid,
+      `pid file says ${record.pid}, the daemon is ${daemon.child.pid}`)
+    assert(typeof record.execPath === 'string' && record.execPath,
+      'no execPath recorded — nothing could tell this pid from a recycled one')
+    return `pid ${record.pid}`
+  })
+
   await test('the bootstrap token was minted on disk at first run', async () => {
     const tokenPath = path.join(nestDir, 'config', 'bootstrap-token.txt')
     assert(fs.existsSync(tokenPath), `no bootstrap token at ${tokenPath}`)
@@ -381,6 +396,10 @@ ${second.text()}`)
     assert(!(await portInUse(ADMIN_PORT)), `${ADMIN_PORT} is still bound after shutdown`)
     assert(!fs.existsSync(path.join(nestDir, 'config', 'llama-server.pid')),
       'a llama-server pid file survived shutdown')
+    // The daemon's OWN pid file goes too, on a clean exit. A stale one left
+    // behind would make `daemon:status` report a daemon that is not there.
+    assert(!fs.existsSync(path.join(nestDir, 'config', 'nestd.pid')),
+      'the daemon pid file survived a clean shutdown')
   })
 
 } finally {

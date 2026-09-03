@@ -40,33 +40,13 @@
 // undone a second later by systemd.
 // =============================================================================
 
-import * as os from 'node:os'
 import * as path from 'node:path'
 import { initPaths, configDir } from '../electron/main/platform-paths.mjs'
 import { initSecrets } from '../electron/main/secrets.mjs'
 import { keyfileProvider } from '../electron/main/secrets-keyfile.mjs'
 import { startDaemon, stopDaemon, installCrashHandlers } from '../electron/main/daemon.mjs'
 import { logEvent } from '../electron/main/logger.mjs'
-
-// ---------------------------------------------------------------------------
-// Where the nest lives
-// ---------------------------------------------------------------------------
-// A flag, then the environment, then a home-directory default. No platform
-// magic and no /var/lib guess: a service install passes the directory it
-// wants explicitly (8B's packaging does exactly that), and a developer or a
-// single-user box gets something predictable without arguments.
-function resolveNestDir(argv) {
-  const flagIndex = argv.indexOf('--dir')
-  if (flagIndex !== -1) {
-    const value = argv[flagIndex + 1]
-    if (!value || value.startsWith('--')) {
-      throw new Error('--dir needs a directory path')
-    }
-    return path.resolve(value)
-  }
-  if (process.env.REDSTART_DIR) return path.resolve(process.env.REDSTART_DIR)
-  return path.join(os.homedir(), '.redstart')
-}
+import { resolveNestDir } from './nest-dir.mjs'
 
 // ---------------------------------------------------------------------------
 // Stopping

@@ -52,6 +52,7 @@ import { cleanupOldConversations } from './conversations-storage.mjs'
 import { initLogger, closeLogger, logEvent } from './logger.mjs'
 import { initProcessLog } from './process-log.mjs'
 import { reapStaleProcess, deletePidFile } from './process-supervision.mjs'
+import { writeDaemonPid, clearDaemonPid } from './daemon-pidfile.mjs'
 import { configDir, capabilityBaseDir, isPackaged } from './platform-paths.mjs'
 import { buildGatewayConfig, createRefreshLiveToolsConfig } from './gateway-config.mjs'
 import { buildArgs } from './llama-args.mjs'
@@ -472,6 +473,12 @@ export async function startDaemon(entrypoint = {}) {
   setupAdminApi()
   await startDiscoveryBeacon()
   await startAdminPlane()
+  // LAST, and only once the control plane is actually bound. A second daemon
+  // started while one is already running fails at that bind; had it recorded
+  // its pid on the way in, it would have overwritten the live daemon's entry
+  // and then exited, leaving a file pointing at a dead process. See
+  // daemon-pidfile.mjs.
+  writeDaemonPid(configDir())
 }
 
 /**
@@ -505,6 +512,8 @@ export function stopDaemon() {
     beaconServerInstance = null
   }
   stopAdminListener()
+  // Before the logger closes, so a failure here still gets a line.
+  clearDaemonPid(configDir())
   closeLogger()
 }
 

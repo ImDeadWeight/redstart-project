@@ -121,6 +121,12 @@ jobs:
       - name: "Process supervision: reap by PID, never by name"
         run: node scripts/test-process-supervision.mjs
 
+      # The daemon's own pid file — what `npm run daemon:stop` signals. Every
+      # interesting case is one where the file is lying: stale after a hard
+      # kill, or a pid that has been recycled by an unrelated process.
+      - name: "Supervision: daemon pid file (stale + pid reuse)"
+        run: node scripts/test-daemon-pidfile.mjs
+
       - name: "Security: MCP plugin registry validation"
         run: node scripts/test-plugin-registry.mjs
 

@@ -68,7 +68,26 @@ Things worth poking at while you are in there:
 - **The folder picker** greys out anything the daemon cannot read and refuses
   to let you choose it. On Windows as yourself that will rarely fire — it is
   there for a service account.
-- **Ctrl-C stops it**, and so does Shut Down in the admin UI.
+**Starting and stopping it:**
+
+```
+npm run daemon          # start (foreground — Ctrl-C stops it)
+npm run daemon:status   # is it running, which pid, how long
+npm run daemon:stop     # stop it without Task Manager
+```
+
+`daemon:stop` reads `config/nestd.pid`, confirms the process is actually
+Redstart (a recorded pid can be recycled by something unrelated — it refuses
+rather than signalling a stranger), stops it, and waits for the port to be
+released. A stale file left by a hard kill is reported and cleared rather than
+treated as an error.
+
+**On Windows that stop is a hard termination**, because Node's signals are
+emulated there: `SIGTERM` does not deliver anything the daemon can handle. So
+its graceful teardown does not run, and a loaded model is orphaned rather than
+stopped — the next start reaps it, which is what `reapStaleProcess()` is for.
+If a model is loaded, the script says so and points at the tidier options:
+Shut Down in the admin UI, or Ctrl-C in the daemon's own terminal.
 
 ## 3. From your phone (2 min)
 
