@@ -172,7 +172,9 @@ planned replacement.
 ```
 Account  (id, username, role, password hash)
 ├── role                      owner | admin | user
-├── session token(s)          in-memory, 30-day sliding, revoked on delete/reset
+├── session token(s)          sessions.json, SHA-256 hashed; 30-day sliding on the
+│                             data plane, 12-hour on the control plane; revoked on
+│                             delete/reset
 ├── general API key           rst_… — one per account, hash stored
 └── connector key(s)          rst_… — each bound to ONE surface
     └── surface               nest-chat | twig | blueprints | yellowscript | greenhouse
@@ -184,7 +186,7 @@ There is exactly one resolution path from an incoming request to an account: `au
 
 **The surface comes from the credential, never from a header.** A connector key resolves to `{ account, surface, clientKeyId }`, and the gateway passes that surface into the prompt composer. An `X-Redstart-Surface` header is accepted and inert; the connector contract suite asserts that a header cannot forge a surface the credential did not grant. Connector keys are independently revocable, and revocation takes effect on the next request.
 
-**Session revocation is centralized.** Deleting an account or resetting its password calls `revokeSessionsForAccount()`, so there is no path that removes an account while leaving a live token behind. Sessions are in-memory only, so a server restart signs everyone out — see [Known limitations](roadmap.md#known-limitations).
+**Session revocation is centralized.** Deleting an account or resetting its password calls `revokeSessionsForAccount()`, so there is no path that removes an account while leaving a live token behind. Revocation reaches disk, not just memory: sessions are persisted (see [Sessions survive a restart](#accounts--login) above), so a signed-out token stays signed out across a restart rather than being cleared by one.
 
 **Owner bootstrap has exactly one door.** `createOwner()` is reachable only through `POST /admin/bootstrap`, gated on the machine's setup code (above) — there is no second, anonymous or IPC path onto it. It is deliberately a separate function from `createAccount()` rather than an "allow owner" branch inside it, so the owner-creation path cannot be reached any other way.
 

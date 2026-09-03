@@ -6,9 +6,30 @@ Where Redstart Nest keeps its state, and what each file holds.
 
 ---
 
-## Files
+## Two directories, never one
 
-Everything lives in `C:\Users\<you>\AppData\Roaming\redstart\`:
+Redstart keeps its own state and your content in **separate subtrees**, and refuses
+to start if they overlap:
+
+| Directory | Holds | Desktop (Windows) | Headless daemon |
+|---|---|---|---|
+| **config** | Nest's own state — accounts, roles, tools, plugins, profiles, settings, logs, the secret key | `%APPDATA%\redstart\` | `<nest dir>/config` |
+| **capability base** | User content for the five folder-scoped capabilities (Documents, SQLite, Vault, Git, File System) | `Documents\Redstart\` | `<nest dir>/data` |
+
+The split is not tidiness. A last-resort reset — stop the daemon, delete
+`accounts.json`, re-bootstrap — operates on the config tree, and it must never be
+able to wander into someone's documents. A backup also has to be able to treat
+"my settings" (small, always wanted) and "my files" (potentially enormous,
+optional) as different questions. `platform-paths.mjs` rejects an overlapping pair
+at startup rather than letting it collapse quietly later.
+
+For the headless daemon, `<nest dir>` is `--dir`, else `$REDSTART_DIR`, else
+`~/.redstart`. Nothing is guessed per-platform: a service install passes the
+directory it wants explicitly.
+
+---
+
+## Files in the config directory
 
 | File | Holds |
 |---|---|
@@ -19,7 +40,13 @@ Everything lives in `C:\Users\<you>\AppData\Roaming\redstart\`:
 | `conversations.json` | Server-side conversation history, scoped per account. |
 | `sessions.json` | Live login sessions, stored as SHA-256 hashes of the token — the file cannot be replayed as a credential. Written on sign-in, sign-out and revocation; sliding-expiry updates are batched rather than written per request. |
 | `bootstrap-token.txt` | The setup code for this machine, in plain text. Generated once, on first run. It is the only thing that can create or reset the Owner account over the network — see [Security → The control plane](security.md#the-control-plane). Anyone who can read this directory can read it, which is the same access that could rewrite `accounts.json` directly. |
-| `settings.json` | Launcher-level settings that are not per profile: the llama-server binary override, the models folder, `adminBindHost` (where the control plane listens, default `127.0.0.1`), and `discovery` (the network settings of the last launch, so the app can announce itself at start-up before anything is running). |
+| `settings.json` | Launcher-level settings that are not per profile: the llama-server binary override, the models folder, `adminBindHost` (where the control plane listens, default `127.0.0.1`), `startAtLogin`, and `discovery` (the network settings of the last launch, so the app can announce itself at start-up before anything is running). |
+| `mcp.json` | External MCP servers, with any API key stored as ciphertext (`apiKeyEnc`) and never returned to a client in plaintext. |
+| `plugins.json` | Installed MCP plugins — the registry snapshot taken at install-review time, each tool's permission class, and the per-plugin enable switch. |
+| `prompt-blocks.json` | Admin-authored system-prompt blocks. Absent until you edit one. |
+| `secret.key` | The daemon-owned AES-256-GCM key, **headless deployments only**. The desktop build encrypts through Electron's `safeStorage` (DPAPI) and writes no key file. Whoever can read this file can read every stored credential. |
+| `nestd.pid` | The running daemon's own pid, so `npm run daemon:stop` and a service manager can find it without probing a port. Written *after* the control plane binds, so a second daemon that loses the port race cannot overwrite a live entry. |
+| `llama-server.pid` | The pid of the model process Nest launched, so a hard-killed Nest can reap exactly its own child at the next start — never by image name. |
 
 Conversations are stored per account (per device ID when login is off) and auto-delete after 30 days of inactivity.
 
@@ -59,7 +86,7 @@ Two consequences worth being explicit about:
 }
 ```
 
-`allowDestructive` is the switch that permits `delete_file` — off by default, meaning the tool is neither advertised nor executable. The Postgres connection string is the one secret in the file, encrypted with Electron's `safeStorage`. Profiles are managed (save, load, delete) in the Redstart Nest UI.
+`allowDestructive` is the switch that permits `delete_file` — off by default, meaning the tool is neither advertised nor executable. The Postgres connection string is the one secret in the file, and it is encrypted through whichever provider the entrypoint wired up: Electron's `safeStorage` (DPAPI) on the desktop, an AES-256-GCM key file on a headless box. Stored values are tagged `v1.<provider>.<payload>` so a file records what wrote it, and a re-key driver re-encrypts an existing tree when the provider changes. Encryption being unavailable is a refusal to store, never a silent fallback to plaintext. Profiles are managed (save, load, delete) in the Redstart Nest UI.
 
 ---
 

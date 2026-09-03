@@ -7,12 +7,14 @@ The [project README](../README.md) covers what Redstart is, how to install it, a
 | Document | What's in it |
 |---|---|
 | [Mission & Origin](mission.md) | Why the project exists, who it is for, where the name came from |
-| [Architecture](architecture.md) | The apps, the gateway/llama-server/MCP topology, the provider model, discovery, ports |
+| [Architecture](architecture.md) | The apps, the gateway/llama-server/MCP topology, the control plane, the provider model, discovery, ports |
 | [Security & Trust Boundaries](security.md) | Accounts, keys and surfaces, path containment, tool bans, destructive operations, SSRF, the system prompt, egress, the test suite |
 | [Tools & Capabilities](capabilities.md) | The seven local capabilities, source groups, external MCP servers, configuring it all |
 | [Configuration](configuration.md) | State files, what a profile is, `tools.json` schema |
 | [Development](development.md) | Repo layout, dev loops, tests, building the binary and installers |
 | [Roadmap & Known Limitations](roadmap.md) | What works, what doesn't, and what's planned |
+| [Testing](../TESTING.md) | The manual checklists — what the automated suites cannot reach: real windows, service installs, a second device |
+| [Deployment](../deploy/README.md) | Running Nest as an appliance: systemd, the Windows SCM, TLS in front. Written from the design, **not yet run on real hardware** |
 
 ## Contracts
 

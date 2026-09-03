@@ -12,9 +12,8 @@ This is an honest work-in-progress. The project started as a personal home tool 
 - **Twig for Android is currently out of date and not working** — the Android client has not been rebuilt against recent server and client changes, and the published APK should not be relied on. This is paused rather than abandoned: bringing it back into line is planned work, but it is not in progress right now. The practical substitute is a phone browser pointed at the chat UI (`http://<nest-ip>:19080`, or the QR code in **Configuration → Network**), which needs no app installed. Redstart Twig for Windows is unaffected.
 - **Android sideload required** — the app is not on the Play Store. Installation requires enabling "unknown sources."
 - **Accounts are on by default** — Redstart Nest supports a three-tier account model (Owner → Admin → User), session tokens, and `rst_` API keys behind a global "Require login" toggle, with a login gate, an account/profile menu, and self-service key regeneration (see [Accounts & login](security.md#accounts--login)). The account/role logic has an automated HTTP-level test suite and remote-browser login has been verified. With login on (the default), every client on the LAN must authenticate. Do not expose the gateway port to the public internet.
-- **Sessions do not survive a server restart** — login sessions are held in memory, so restarting Redstart Nest invalidates every client's token. Clients keep showing a logged-in UI until their next request fails, then prompt for login again. Harmless but confusing on a LAN; persisting sessions is a deliberate open decision, since it means writing credentials to disk.
 - **Single profile active at a time** — Redstart Nest manages one running model at a time, and the active profile is global server state that applies to every account.
-- **Windows only for server** — Redstart Nest is Windows-only. The client apps (Redstart Twig) can run anywhere, but the server manager requires Windows because it shells out to a Windows llama.cpp binary.
+- **Windows is the only supported server platform** — and the qualifier matters more than it used to. The *daemon* no longer needs Electron (`bin/nestd.mjs` boots it under plain Node), binary resolution and the paths seam are both cross-platform, and `deploy/` carries a systemd unit. What is still Windows-only: the packaged desktop installer, the bundled llama.cpp binary, and the port-80 clean-URL proxy. So a Linux appliance is *reachable* rather than *supported* — none of the deployment artifacts has been run on real hardware, and they say so at the top of `deploy/README.md`.
 - **Tokens/min display is unreliable** — the tok/min counter shown in the Redstart Nest header is a known bug. The number it displays is not accurate. This is a known issue and will be fixed in a future update.
 - **mDNS discovery (`redstart.local`) has been retired** — Android's resolver never answered `.local` lookups for browser navigation, so the name failed on the one platform most clients are, and mDNS is multicast, which also dies against Wi-Fi client isolation and IGMP snooping on the platforms where it did work. The direct IP (and its QR code) is the universal route, and Redstart Twig's beacon scan never depended on the name either. Anyone who wants a memorable name sets one up their own way — a hosts file, a router DNS entry, or the `sslip.io` URL the Network panel offers.
 - **Shared capabilities are all-or-nothing** — Vault, Git, SQLite and Postgres are shared across every account by design, but there is no way to grant one account access and withhold it from another. "This analyst gets the databases folder but not the repositories" is not expressible today; a capability is either active for a profile or not. Per-account grants over shared folders are the next planned piece of work.
@@ -54,6 +53,11 @@ This is an honest work-in-progress. The project started as a personal home tool 
 - [x] Security hardening — minimal beacon payload, SSRF guard, hop-by-hop redirect validation, shared path containment
 - [x] LAN exposure as a socket boundary — network mode binds the gateway and MCP server rather than relying on firewall rules
 - [x] Dark-only UI — the light and system themes are gone; see the changelog for why they were broken
+- [x] **A control plane that outlives the window** — the admin listener (`:19083`) binds when the daemon starts and stays up whether or not a model is running. Closing the launcher window no longer stops anything; the tray keeps it alive and there is one deliberate **Shut down** action
+- [x] **Browser-based administration** — the launcher UI is served by the control plane and reachable from another device, owner-only, over a session the chat UI cannot mint. Exposure is a bind address (default loopback), not a boolean
+- [x] **Headless daemon** — `bin/nestd.mjs` boots the whole server under plain Node with no Electron, behind seams for paths and secrets; `npm run daemon` / `daemon:stop` / `daemon:status`
+- [x] **Per-box setup code** — a printed-on-the-chassis recovery credential is the only door onto owner creation *and* owner reset, replacing the anonymous first-admin path that was safe only while IPC was its sole caller
+- [x] **Config and user content are separate subtrees**, refused at startup if they overlap, so a config reset cannot wander into someone's documents and a backup can treat the two as different questions
 
 ---
 
@@ -66,7 +70,7 @@ Making Redstart usable in a small workplace rather than just on one person's hom
 - [x] Universal browser access — the Configuration tab offers the direct IP (as a QR code) and an `sslip.io` DNS name, so every client has at least one address that works
 - [ ] **Folder access grants** — per-account access to the shared "company" folders (Vault, Git, SQLite), so an admin can give a data analyst the databases folder without also handing over the code repositories. Personal `user_files` stay private; admins reach everything by role. Read-only by default, since two accounts writing one folder re-creates exactly what per-account storage removed. Must surface in both the file explorer and the system prompt — a granted folder the model cannot enumerate is, from the model's side, indistinguishable from one it was never given
 - [ ] Guided onboarding & in-app instruction — first-run walkthrough (create the Owner account, pick a model, launch), contextual help on the tools/capabilities panels, and plain-language explanations aimed at non-technical staff in a small office
-- [ ] Admin interface accessible from any device on the network — manage the server without touching the host PC
+- [x] Admin interface accessible from any device on the network — **shipped.** The control plane serves the launcher UI over HTTP on `:19083`, owner-only and authenticated independently of the chat UI. Off-machine access is opt-in per bind address; see [The control plane](security.md#the-control-plane)
 - [ ] Auto-restart on crash — if the model dies at 9am Monday, it recovers without manual intervention
 - [ ] Signed installers — removes the Windows Defender SmartScreen warning, looks professional in a workplace setting
 - [ ] macOS support — many non-profits and small agencies run Macs
@@ -77,10 +81,10 @@ Making Redstart usable in a small workplace rather than just on one person's hom
 
 The long-term goal: a purpose-built machine that sits in the office and runs the model headlessly. No monitor, no babysitting — staff connect to it the way they'd connect to a printer, from any device on the network.
 
-- [ ] Headless / service mode — Redstart Nest runs as a background service with no launcher window required
-- [ ] Web-based admin UI — manage everything from a browser on any device on the network
-- [ ] Linux support — run on a dedicated mini PC, NAS, or low-power server
-- [ ] Auto-start on boot
+- [x] Headless / service mode — **shipped.** `bin/nestd.mjs` runs the daemon under plain Node with no Electron and no window. `deploy/` carries a systemd unit, the Windows SCM procedure, and a Caddyfile that terminates TLS in front of it — **none of which has been run on real hardware yet**, and they say so
+- [x] Web-based admin UI — **shipped**, as the same React launcher served over the control plane rather than a second UI written twice
+- [~] Linux support — the daemon, the paths seam, the secret store and binary resolution are all cross-platform now; what is not is the packaged installer, the bundled llama.cpp binary and the port-80 proxy. Reachable, not yet supported
+- [x] Auto-start on boot — start-at-login on the desktop, and the service units in `deploy/` for a box nobody logs into
 - [ ] Document querying (RAG) — staff can upload policy manuals, templates, and reference documents and query against them
 - [ ] iOS client (Redstart Twig for iPhone)
 - [ ] Model library management — browse, download, and switch models from any client device
