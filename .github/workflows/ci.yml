@@ -180,6 +180,13 @@ jobs:
       - name: "Security: connector contract conformance"
         run: node scripts/test-connector-contract.mjs
 
+      # The only suite that runs the actual daemon rather than importing its
+      # modules — and the only place the headless entrypoint is exercised at
+      # all. Linux, no display, no Electron, which is exactly the platform
+      # Phase 8A exists for.
+      - name: "Daemon: nestd boots, serves, and stops (smoke)"
+        run: node scripts/test-daemon-smoke.mjs
+
       - name: "Security: containment / SSRF / beacon / download endpoint (vitest)"
         run: npm --prefix src/chat-ui run test:security
 
