@@ -95,7 +95,7 @@ function pngEncode(width, height, getPixel) {
   ])
 }
 
-function makeRedstartIconPng() {
+function makeRedstartIconPng(size = 32) {
   // Color palette (RGBA)
   const _ = [0,0,0,0], K = [28,25,23,255], O = [249,115,22,255]
   const R = [194,65,12,255], W = [250,250,249,255], Y = [217,119,6,255]
@@ -137,7 +137,28 @@ function makeRedstartIconPng() {
     [_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_],
     [_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_],
   ]
-  return pngEncode(32, 32, (x, y) => g[y][x])
+  // Nearest-neighbour from the 32x32 grid, the same way scripts/make-icon.mjs
+  // rasterizes each size in the .ico. Rendering AT the target size keeps the
+  // art crisp; asking nativeImage to resize a 32px raster down to 16 would
+  // interpolate it, and interpolated pixel art is mush — the eyes and beak are
+  // one or two pixels wide.
+  const scale = 32 / size
+  return pngEncode(size, size, (x, y) => g[Math.floor(y * scale)][Math.floor(x * scale)])
+}
+
+// The notification-area icon. Built at native size rather than downscaled, and
+// carrying a 2x representation so Windows has a crisp source at 125%/150%/200%
+// DPI instead of upscaling a 16px bitmap.
+function makeTrayIcon() {
+  const image = nativeImage.createFromBuffer(makeRedstartIconPng(16))
+  try {
+    image.addRepresentation({ scaleFactor: 2, buffer: makeRedstartIconPng(32) })
+  } catch (err) {
+    // A missing HiDPI representation is a slightly soft icon on a scaled
+    // display, not a missing tray. Never worth failing the tray over.
+    console.warn('Tray icon: no 2x representation:', err.message)
+  }
+  return image
 }
 
 // SVG version of the same icon — injected as favicon into the chat window
@@ -651,7 +672,7 @@ function startTrayIcon() {
   }
   try {
     stopTray = startTray({
-      icon: redstartIcon.resize({ width: 16, height: 16 }),
+      icon: makeTrayIcon(),
       onOpen: openOrFocusWindow,
       onStopModel: () => {
         logEvent('app', 'tray_stop_model', {})
