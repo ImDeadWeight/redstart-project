@@ -67,6 +67,7 @@ const { getControlPlane, setControlPlaneBindHost, resolveStartupReconciliation, 
 const { setLoginItems, getLoginItems } = await import('../electron/main/desktop-integration.mjs')
 const { parseAllowedOrigins, corsHeaders, isPreflight } = await import('../electron/main/admin/cors.mjs')
 const { apiRevisionOf } = await import('../electron/main/build-info.mjs')
+const { subtreeRejection } = await import('../electron/main/platform-paths.mjs')
 const { app: electronAppStub } = await import('electron')
 const { buildAdminApi } = await import('../electron/main/admin/api-table.mjs')
 const { setAdminApi, pathForChannel, apiRevision, getAdminApi } = await import('../electron/main/admin/api-routes.mjs')
@@ -788,6 +789,70 @@ await test('the full status readout carries both version fields', () => {
     `no app version: ${JSON.stringify(status.version)}`)
   assert(status.version.apiRevision === apiRevision(),
     `status revision disagrees with the live one: ${JSON.stringify(status.version)}`)
+})
+
+// ---------------------------------------------------------------------------
+// Phase 8B.1 — config/ and data/ are two subtrees, and the paths module
+// refuses to be told otherwise. Design §3.5 gives two reasons and BOTH fail
+// silently if the trees merge, which is why this is a startup error rather
+// than a warning:
+//
+//   Backups. Config is small and always wanted; capability folders hold user
+//   content that may be enormous and restores differently. One tree makes
+//   that distinction impossible to express.
+//
+//   The reset path. §3.2's last resort is "stop the daemon, delete
+//   accounts.json, start over" — and that must never be adjacent to a user's
+//   documents, because it is used by someone moving fast during an incident.
+// ---------------------------------------------------------------------------
+
+console.log('\n-- storage layout (Phase 8B.1) --')
+
+await test('🔒 the same directory for both is refused', () => {
+  assert(subtreeRejection('/nest/state', '/nest/state'), 'accepted one directory for both purposes')
+})
+
+await test('🔒 nesting is refused in BOTH directions', () => {
+  // capabilityBase inside config puts accounts.json somewhere a capability can
+  // enumerate; config inside capabilityBase puts a user's documents inside the
+  // tree the reset deletes. Neither is survivable.
+  assert(subtreeRejection('/nest', '/nest/data'), 'accepted capabilityBase inside config')
+  assert(subtreeRejection('/nest/config', '/nest'), 'accepted config inside capabilityBase')
+})
+
+await test('the appliance layout is accepted', () => {
+  // What bin/nestd.mjs actually passes: <nest dir>/config and <nest dir>/data.
+  assert(subtreeRejection('/nest/config', '/nest/data') === null,
+    `the shipped headless layout was refused: ${subtreeRejection('/nest/config', '/nest/data')}`)
+})
+
+await test('the Windows desktop layout is accepted', () => {
+  // %APPDATA%/redstart and <Documents>/Redstart — unrelated trees.
+  const rejection = subtreeRejection('C:/Users/a/AppData/Roaming/redstart', 'C:/Users/a/Documents/Redstart')
+  assert(rejection === null, `the shipped desktop layout was refused: ${rejection}`)
+})
+
+await test('a sibling whose name is a PREFIX of the other is not nesting', () => {
+  // The string-comparison trap: "/nest/data-old" starts with "/nest/data" but
+  // is not inside it. path.relative is what makes this correct rather than a
+  // startsWith() check that would refuse a legitimate layout.
+  assert(subtreeRejection('/nest/data', '/nest/data-old') === null, 'treated a sibling as nested')
+})
+
+await test('🔒 initPaths refuses an overlapping pair outright', async () => {
+  // Fail-closed at the seam, not merely reported: this module's whole job is
+  // keeping the two purposes apart, so accepting a pair it knows is wrong
+  // would be the module declining to do the one thing it exists for.
+  // A FRESH module instance: platform-paths keeps its state at module scope,
+  // and calling initPaths() on the live one would repoint every other suite
+  // case at a directory that does not exist.
+  const fresh = await import('../electron/main/platform-paths.mjs?case=8b1')
+  let threw = null
+  try {
+    fresh.initPaths({ config: '/nest', capabilityBase: '/nest/data', isPackaged: false })
+  } catch (err) { threw = err }
+  assert(threw, 'initPaths accepted an overlapping pair')
+  assert(/must not sit inside/.test(threw.message), `unexpected message: ${threw.message}`)
 })
 
 console.log('\n-- 🔍 Phase 7 §7.5: deliberate shutdown --')

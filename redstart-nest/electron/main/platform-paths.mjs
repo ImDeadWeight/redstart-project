@@ -36,6 +36,8 @@
 // ends up split across two directories.
 // =============================================================================
 
+import * as path from 'path'
+
 let paths = null
 
 /**
@@ -50,7 +52,49 @@ let paths = null
 export function initPaths({ config, capabilityBase, isPackaged }) {
   if (typeof config !== 'string' || !config) throw new Error('initPaths: config must be a non-empty string')
   if (typeof capabilityBase !== 'string' || !capabilityBase) throw new Error('initPaths: capabilityBase must be a non-empty string')
+  const overlap = subtreeRejection(config, capabilityBase)
+  if (overlap) throw new Error(`initPaths: ${overlap}`)
   paths = { config, capabilityBase, isPackaged: !!isPackaged }
+}
+
+/**
+ * Phase 8B.1 - the two directories must be separate subtrees, and this refuses
+ * at startup rather than letting them quietly collapse.
+ *
+ * Design section 3.5 gives two reasons and both fail SILENTLY if they merge,
+ * which is why this is a hard error rather than a warning:
+ *
+ *   Backups. Config is small and always wanted; capability folders hold user
+ *   content that may be enormous and has different restore semantics. One tree
+ *   makes that distinction impossible to express.
+ *
+ *   The reset path. Section 3.2's last resort is "stop the daemon, delete
+ *   accounts.json, start over". A config reset must never be adjacent to a
+ *   user's documents in the filesystem - that is a foot-gun for someone moving
+ *   fast during an incident, which is exactly when that path gets used.
+ *
+ * Nesting counts, not just equality: a config directory inside the capability
+ * base puts accounts.json somewhere a capability can enumerate, and a
+ * capability base inside config puts a user's documents inside the tree the
+ * reset deletes. Both directions are refused.
+ *
+ * @returns {string|null} the reason to refuse, or null
+ */
+export function subtreeRejection(config, capabilityBase) {
+  const a = path.resolve(config)
+  const b = path.resolve(capabilityBase)
+  // Case-insensitive on win32, matching path-scope.mjs's own normalisation.
+  const norm = (p) => (process.platform === 'win32' ? p.toLowerCase() : p)
+  if (norm(a) === norm(b)) {
+    return 'config and capabilityBase must not be the same directory (design 3.5)'
+  }
+  const contains = (parent, child) => {
+    const rel = path.relative(norm(parent), norm(child))
+    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)
+  }
+  if (contains(a, b)) return 'capabilityBase must not sit inside config (design 3.5)'
+  if (contains(b, a)) return 'config must not sit inside capabilityBase (design 3.5)'
+  return null
 }
 
 function requirePaths() {

@@ -205,6 +205,33 @@ try {
     assert(!fs.existsSync(pidFile), 'a llama-server pid file exists — the boot started a model')
   })
 
+  await test('🔒 config and capability data land in two separate subtrees', async () => {
+    // Phase 8B.1, and the reason this is checked against a REAL daemon rather
+    // than only against the pure rule: the layout is whatever the entrypoint
+    // passes to initPaths(), so a suite that only tests the rule would not
+    // notice bin/nestd.mjs handing it a different one.
+    //
+    // Design 3.5: config is small and always wanted in a backup, capability
+    // folders hold user content and restore differently; and 3.2's last-resort
+    // reset ("delete accounts.json") must never sit next to a user's
+    // documents. Both fail silently if the trees merge.
+    const configDir = path.join(nestDir, 'config')
+    const dataDir = path.join(nestDir, 'data')
+    assert(fs.existsSync(configDir), `no config subtree at ${configDir}`)
+    // Nest's own state is in config/, and nowhere else.
+    assert(fs.existsSync(path.join(configDir, 'tools.json')), 'tools.json is not in config/')
+    assert(!fs.existsSync(path.join(nestDir, 'tools.json')), 'tools.json leaked into the nest root')
+    // The five folder-scoped capabilities are provisioned under data/, which
+    // at level 3 is a tree the service account already owns - so the default
+    // case needs no ACL grant anywhere (design 3.5's conclusion).
+    assert(fs.existsSync(dataDir), `no data subtree at ${dataDir} - were capability folders provisioned?`)
+    const provisioned = fs.readdirSync(dataDir, { withFileTypes: true }).filter(e => e.isDirectory())
+    assert(provisioned.length > 0, 'data/ exists but no capability folders were provisioned into it')
+    // And they really are separate trees, not one inside the other.
+    assert(!fs.existsSync(path.join(configDir, 'data')), 'data/ ended up inside config/')
+    return `${provisioned.length} capability folders under data/`
+  })
+
   await test('the bootstrap token was minted on disk at first run', async () => {
     const tokenPath = path.join(nestDir, 'config', 'bootstrap-token.txt')
     assert(fs.existsSync(tokenPath), `no bootstrap token at ${tokenPath}`)

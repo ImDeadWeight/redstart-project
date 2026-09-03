@@ -56,7 +56,14 @@ if (process.env.REDSTART_TEST_USERDATA_DIR) {
   const dir = process.env.REDSTART_TEST_USERDATA_DIR
   initPaths({
     config: dir,
-    capabilityBase: path.join(dir, 'Redstart'),
+    // A SIBLING of the config dir, not a child. Phase 8B.1 made overlapping
+    // trees a startup error, and this fixture was the first thing it caught:
+    // it had capabilityBase nested inside config, which is precisely the
+    // collapse design 3.5 forbids (a config reset able to wander into a
+    // user's documents; a backup unable to tell settings from files). A test
+    // fixture modelling the shape the production rule refuses is how that
+    // rule quietly stops being true.
+    capabilityBase: path.join(dir + '-capabilities'),
     isPackaged: false,
   })
 }
