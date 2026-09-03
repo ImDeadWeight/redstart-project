@@ -27,6 +27,7 @@ import * as path from 'node:path'
 import { findSecrets, planRekey, applyRekey } from '../electron/main/secrets-migration.mjs'
 import { safeStorageProvider } from '../electron/main/secrets-safe-storage.mjs'
 import { keyfileProvider } from '../electron/main/secrets-keyfile.mjs'
+import { parseRekeyArgs, providerAvailability, formatPlan } from './rekey-secrets.mjs'
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-rekey-'))
 
@@ -310,6 +311,122 @@ test('🔍 a real keyfile daemon can read what a safeStorage install wrote', () 
   assert(daemonProvider.decrypt(stored.slice('v1.keyfile.'.length)) === 'plugin-token',
     'the daemon could not read a migrated plugin secret')
   return 'pre-Phase-8 ciphertext survives the conversion'
+})
+
+console.log('\n-- keyfile to keyfile, verified the way a daemon reads --')
+
+test('🔒 the source key file is never copied into the target', () => {
+  // This bug shipped in the first version of this module. fs.cpSync copied the
+  // source's secret.key ON TOP of the key the target provider had just
+  // created, so every value re-encrypted moments earlier became unreadable.
+  const source = newDir('keysrc')
+  const sourceProvider = keyfileProvider(source)
+  fs.writeFileSync(path.join(source, 'tools.json'), JSON.stringify({
+    capabilities: { postgres: { connectionStringEnc: `v1.keyfile.${sourceProvider.encrypt('postgres://old')}` } },
+  }, null, 2))
+
+  const target = path.join(newDir('keydst'), 'config')
+  const result = applyRekey({ sourceDir: source, targetDir: target, from: sourceProvider, to: keyfileProvider(target) })
+  assert(result.ok, `migration failed: ${result.error}`)
+
+  const sourceKey = fs.readFileSync(path.join(source, 'secret.key'))
+  const targetKey = fs.readFileSync(path.join(target, 'secret.key'))
+  assert(Buffer.compare(sourceKey, targetKey) !== 0,
+    'the target is using the SOURCE key file — the copy clobbered the new one')
+})
+
+test('🔒 a FRESH provider over the target can read what was written', () => {
+  // The assertion that would have caught the bug above, and the reason it is
+  // phrased this way: applyRekey's own verification uses the provider it was
+  // handed, which had the new key CACHED IN MEMORY. It read through the cache
+  // and never touched the key file that had just been overwritten — so it
+  // reported "verified" over a tree the daemon could not open.
+  //
+  // A daemon starting up has no cache. It constructs a provider from whatever
+  // is on disk, which is what this does.
+  const source = newDir('freshsrc')
+  const sourceProvider = keyfileProvider(source)
+  fs.writeFileSync(path.join(source, 'tools.json'), JSON.stringify({
+    capabilities: { postgres: { connectionStringEnc: `v1.keyfile.${sourceProvider.encrypt('postgres://value')}` } },
+  }, null, 2))
+  fs.writeFileSync(path.join(source, 'plugins.json'), JSON.stringify({
+    plugins: [{ id: 'p1', envEnc: { TOKEN: `v1.keyfile.${sourceProvider.encrypt('tok')}` } }],
+  }, null, 2))
+
+  const target = path.join(newDir('freshdst'), 'config')
+  const result = applyRekey({ sourceDir: source, targetDir: target, from: sourceProvider, to: keyfileProvider(target) })
+  assert(result.ok, `migration failed: ${result.error}`)
+
+  const asDaemonWould = keyfileProvider(target)
+  const tools = JSON.parse(fs.readFileSync(path.join(target, 'tools.json'), 'utf8'))
+  const stored = tools.capabilities.postgres.connectionStringEnc
+  assert(asDaemonWould.decrypt(stored.slice('v1.keyfile.'.length)) === 'postgres://value',
+    'a daemon reading the migrated tree from disk could not decrypt it')
+
+  const plugins = JSON.parse(fs.readFileSync(path.join(target, 'plugins.json'), 'utf8'))
+  assert(asDaemonWould.decrypt(plugins.plugins[0].envEnc.TOKEN.slice('v1.keyfile.'.length)) === 'tok',
+    'a daemon could not decrypt a migrated plugin secret')
+  return 'the case the in-memory key cache hid'
+})
+
+console.log('\n-- the operator CLI (scripts/rekey-secrets.mjs) --')
+
+test('🔒 refuses to run under plain node against a safeStorage tree', () => {
+  // The refusal that matters most. Reporting "0 of 12 secrets readable" from a
+  // plain-node process is technically accurate and completely misleading: it
+  // looks exactly like a corrupted install, and the reasonable conclusion from
+  // it — "the credentials are gone, start over" — is wrong and destructive.
+  const denied = providerAvailability('safestorage', false)
+  assert(denied.ok === false, 'plain node claimed it could read DPAPI ciphertext')
+  assert(/electron/i.test(denied.error), `the refusal does not say what to do: ${denied.error}`)
+
+  assert(providerAvailability('safestorage', true).ok, 'refused under Electron')
+  // keyfile ciphertext needs no keychain, so plain node is fine there.
+  assert(providerAvailability('keyfile', false).ok, 'refused a keyfile source under plain node')
+})
+
+test('🔒 refuses source and target being the same directory', () => {
+  const args = parseRekeyArgs(['--source', '/nest/config', '--target', '/nest/config'])
+  assert(args.error, 'accepted a migration onto itself')
+})
+
+test('both directories are required, and named', () => {
+  assert(parseRekeyArgs([]).error, 'accepted no arguments')
+  assert(/source/.test(parseRekeyArgs(['--target', '/b']).error), 'did not name the missing --source')
+  assert(/target/.test(parseRekeyArgs(['--source', '/a']).error), 'did not name the missing --target')
+})
+
+test('a flag with no value is refused rather than swallowing the next flag', () => {
+  // `--source --apply` must not resolve a directory called "--apply".
+  const args = parseRekeyArgs(['--source', '--apply', '--target', '/b'])
+  assert(args.error, `swallowed the next flag as a value: ${JSON.stringify(args)}`)
+})
+
+test('unknown arguments are refused, never ignored', () => {
+  // Ignoring a typo'd flag on a tool that writes a directory is how somebody
+  // runs the apply step believing they ran the dry run.
+  assert(parseRekeyArgs(['--source', '/a', '--target', '/b', '--aply']).error, 'ignored a misspelled flag')
+})
+
+test('🔒 the dry run is the default; --apply is explicit', () => {
+  assert(parseRekeyArgs(['--source', '/a', '--target', '/b']).apply === false,
+    'defaulted to writing')
+  assert(parseRekeyArgs(['--source', '/a', '--target', '/b', '--apply']).apply === true,
+    '--apply did not take effect')
+})
+
+test('--from accepts only the two real providers', () => {
+  assert(parseRekeyArgs(['--source', '/a', '--target', '/b', '--from', 'dpapi']).error,
+    'accepted a provider name that does not exist')
+  assert(!parseRekeyArgs(['--source', '/a', '--target', '/b', '--from', 'keyfile']).error, 'refused keyfile')
+})
+
+test('the plan summary never contains a decrypted value', () => {
+  const dir = stageSource()
+  const rendered = formatPlan(planRekey({ dir, from: oldProvider() }))
+  assert(!rendered.includes('postgres://'), 'the printed summary leaked a connection string')
+  assert(!rendered.includes('key-aaa'), 'the printed summary leaked an API key')
+  assert(/secrets found:\s+5/.test(rendered), `unexpected summary:\n${rendered}`)
 })
 
 // ---------------------------------------------------------------------------

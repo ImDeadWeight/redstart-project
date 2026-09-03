@@ -52,6 +52,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { parseSecret } from './secrets.mjs'
+import { KEY_FILE_NAME } from './secrets-keyfile.mjs'
 
 // Nest's own state files. Only these are parsed as JSON looking for secrets;
 // everything else in the tree is copied byte-for-byte.
@@ -270,7 +271,24 @@ export function applyRekey({ sourceDir, targetDir, from, to }) {
   // install that has credentials and nothing else.
   try {
     fs.mkdirSync(targetDir, { recursive: true })
-    fs.cpSync(sourceDir, targetDir, { recursive: true })
+    fs.cpSync(sourceDir, targetDir, {
+      recursive: true,
+      // NEVER copy the source's key file. It is the source's crypto identity,
+      // not state — and copying it lands ON TOP of the key `to` just created,
+      // so every value re-encrypted a moment ago becomes unreadable.
+      //
+      // This bug shipped in the first version of this module and the unit
+      // tests did not catch it, because they migrate FROM safeStorage (a tree
+      // with no key file, so nothing clobbers anything). It showed up the
+      // first time the operator CLI was run keyfile -> keyfile. Worse, the
+      // migration still reported "verified": the provider had the new key
+      // cached in memory, so verification read through the cache and never
+      // touched the file that had just been overwritten. That combination —
+      // a verified success over a tree the daemon cannot read — is precisely
+      // the disaster this module exists to prevent, and it got within one
+      // manual run of shipping.
+      filter: (src) => path.basename(src) !== KEY_FILE_NAME,
+    })
     for (const [file, contents] of rewritten) {
       fs.writeFileSync(path.join(targetDir, file), contents, 'utf8')
     }
