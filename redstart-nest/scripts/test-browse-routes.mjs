@@ -236,6 +236,22 @@ await test('every entry carries its own access flags', () => {
   }
 })
 
+// EVERY PLATFORM, and that is the point of it. The chmod-staged test below is
+// the realistic case, but it can only be staged on POSIX — so the error branch
+// of listDirectory() went unexercised on the machine this is developed on, and
+// shipped returning no access flags at all. A path that does not exist takes
+// exactly the same branch and needs no permissions to stage, which makes the
+// contract "the error branch answers the access question too" checkable
+// wherever the suite runs, rather than only on the Linux CI runner.
+await test('🔍 the error branch reports access too, not just the success branch', () => {
+  const missing = path.join(base, 'no-such-directory-anywhere')
+  const result = listDirectory(missing)
+  assert(result.reason, 'a missing directory gave no reason')
+  assert(result.readable === false, `readable was ${result.readable} — undefined means the UI never warns`)
+  assert(result.writable === false, `writable was ${result.writable}`)
+  return 'a listing that failed still answers "can I use this?"'
+})
+
 await test('🔒 an unreadable directory is reported as unreadable, not as an error', () => {
   // The distinguishing case. A directory that cannot be read is a completely
   // ordinary thing for an admin to be looking at — it must produce a listing

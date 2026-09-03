@@ -93,7 +93,22 @@ export function listDirectory(targetPath) {
   try {
     dirents = fs.readdirSync(targetPath, { withFileTypes: true })
   } catch (err) {
-    return { path: targetPath, parent: parentOf(targetPath), entries: [], reason: err.code || err.message }
+    // The access flags belong on THIS path too, and leaving them off was a real
+    // bug: an unreadable directory is the exact case Phase 8B.6 exists to
+    // report, and it is the one branch that was answering `undefined` instead
+    // of `false`. FolderPicker only warns on `readable === false` and only
+    // blocks selection on the same test, so an admin on a box where this fires
+    // — a level-3 service account pointed at a share it was never granted — got
+    // no warning and could select the folder anyway, which is precisely the
+    // "accepted at selection, fails later inside a tool call" outcome the
+    // feature was built to prevent.
+    return {
+      path: targetPath,
+      parent: parentOf(targetPath),
+      entries: [],
+      reason: err.code || err.message,
+      ...accessOf(targetPath),
+    }
   }
 
   const entries = dirents
