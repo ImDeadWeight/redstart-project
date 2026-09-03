@@ -4,7 +4,7 @@
 // Handler bodies are exported as plain functions (Phase 1, §1.3); importing
 // this module never registers anything, only adminHandlers()/buildAdminApi()
 // wiring it into the table does.
-import { app } from 'electron'
+import { getLoginItems } from '../desktop-integration.mjs'
 import {
   startAdminListener, getAdminListenerState, bindHostRejection, isLoopbackBind,
 } from '../admin-listener.mjs'
@@ -104,16 +104,24 @@ export async function setControlPlaneBindHost(host, { readSettings, writeSetting
 /**
  * Whether Redstart is set to start at login (Phase 7 §7.4).
  *
- * Reads the OS's own record (`app.getLoginItemSettings()`), not
- * settings.json — a user can turn this off from Task Manager's Startup tab
- * behind Nest's back, and the UI must show what is actually true, not what
- * was last written. index.mjs reconciles the reverse direction (a fresh
- * install, or settings.json disagreeing with the OS) once at startup; this
- * function only ever reports the OS's current answer.
+ * Reads the OS's own record (the login-item capability an entrypoint
+ * registered), not settings.json — a user can turn this off from Task
+ * Manager's Startup tab behind Nest's back, and the UI must show what is
+ * actually true, not what was last written. index.mjs reconciles the reverse
+ * direction (a fresh install, or settings.json disagreeing with the OS) once
+ * at startup; this function only ever reports the OS's current answer.
+ *
+ * Phase 8A.5 — `supported` is false on a headless daemon, where "start at
+ * login" has no meaning at all: nobody logs in, and a service's boot start is
+ * the supervisor's business (§8B.3), not a setting Nest owns. Reported rather
+ * than answered `false` on its own, so the UI can hide a control that does not
+ * apply instead of showing an off switch that can never be turned on.
  */
 export function getStartupSettings() {
-  const { openAtLogin } = app.getLoginItemSettings()
-  return { startAtLogin: openAtLogin }
+  const loginItems = getLoginItems()
+  if (!loginItems) return { supported: false, startAtLogin: false }
+  const { openAtLogin } = loginItems.get()
+  return { supported: true, startAtLogin: openAtLogin }
 }
 
 /**
@@ -126,8 +134,15 @@ export function getStartupSettings() {
  * tray-only" requirement.
  */
 export function setStartupSettings(startAtLogin, { readSettings, writeSettings }) {
+  const loginItems = getLoginItems()
+  if (!loginItems) {
+    // Refuse visibly rather than write a settings.json key that nothing will
+    // ever act on. Same rule §4's picker work followed: a control that cannot
+    // do what it says must say so, not fail quietly somewhere downstream.
+    return { supported: false, startAtLogin: false, error: 'Start at login is not available on this platform' }
+  }
   const value = !!startAtLogin
-  app.setLoginItemSettings({ openAtLogin: value, args: ['--background'] })
+  loginItems.set({ openAtLogin: value, args: ['--background'] })
 
   const settings = readSettings()
   settings.startAtLogin = value
@@ -143,7 +158,7 @@ export function setStartupSettings(startAtLogin, { readSettings, writeSettings }
  * be right now, and does settings.json need writing to remember it? No
  * Electron call in here — that is what makes it testable without a stub,
  * unlike reconcileStartupSetting() below, whose one untestable line is the
- * app.setLoginItemSettings() call itself.
+ * login item's own set() call.
  *
  * A fresh install (`settings.startAtLogin` is undefined — nobody has ever
  * touched the toggle) seeds ON: flagged as an open question in the
@@ -168,9 +183,15 @@ export function resolveStartupReconciliation(settings) {
  * requirement).
  */
 export function reconcileStartupSetting({ readSettings, writeSettings }) {
+  const loginItems = getLoginItems()
+  // Nothing to reconcile against where there are no login items, and nothing
+  // to persist either: seeding settings.startAtLogin on a headless box would
+  // record an admin decision nobody made, which the NEXT desktop start would
+  // then treat as an explicit choice and never re-seed.
+  if (!loginItems) return { supported: false, startAtLogin: false }
   const settings = readSettings()
   const { startAtLogin, needsPersist } = resolveStartupReconciliation(settings)
-  app.setLoginItemSettings({ openAtLogin: startAtLogin, args: ['--background'] })
+  loginItems.set({ openAtLogin: startAtLogin, args: ['--background'] })
   if (needsPersist) {
     settings.startAtLogin = startAtLogin
     writeSettings(settings)

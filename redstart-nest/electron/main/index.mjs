@@ -29,7 +29,7 @@
 // Key architectural decisions documented inline below.
 // =============================================================================
 
-import { app, BrowserWindow, nativeImage, Notification, dialog, safeStorage } from 'electron'
+import { app, BrowserWindow, nativeImage, Notification, dialog, safeStorage, shell } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs'
 import * as zlib from 'zlib'
@@ -40,6 +40,7 @@ import { initPaths } from './platform-paths.mjs'
 import {
   startDaemon, stopDaemon, installCrashHandlers, serverState, readSettings, writeSettings,
 } from './daemon.mjs'
+import { setRecycleBin, setLoginItems } from './desktop-integration.mjs'
 import { initSecrets } from './secrets.mjs'
 import { safeStorageProvider } from './secrets-safe-storage.mjs'
 import { hasOwner } from './auth.mjs'
@@ -606,6 +607,15 @@ async function main() {
   // daemon wires the key file provider instead, and that difference is the
   // whole reason this seam exists (design §3.1).
   initSecrets(safeStorageProvider(safeStorage))
+  // Phase 8A.5 — the two things a desktop can do that a headless daemon
+  // cannot. Registered rather than imported, because a module that imports
+  // these from 'electron' cannot be loaded under plain Node at all; see
+  // desktop-integration.mjs.
+  setRecycleBin((fullPath) => shell.trashItem(fullPath))
+  setLoginItems({
+    get: () => app.getLoginItemSettings(),
+    set: (settings) => app.setLoginItemSettings(settings),
+  })
   installPopupContainment()
   // Everything that is Nest-the-service: the logger, the process log, the
   // capability folders, stale-process reaping, the control-plane API table,

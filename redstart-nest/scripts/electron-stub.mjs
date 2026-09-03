@@ -9,6 +9,7 @@
 
 import { initPaths } from '../electron/main/platform-paths.mjs'
 import { initSecrets } from '../electron/main/secrets.mjs'
+import { setLoginItems } from '../electron/main/desktop-integration.mjs'
 import { safeStorageProvider } from '../electron/main/secrets-safe-storage.mjs'
 import * as path from 'node:path'
 
@@ -18,8 +19,10 @@ import * as path from 'node:path'
 let loginItemSettings = { openAtLogin: false, args: [] }
 
 export const app = {
-  // llama-args.mjs reads app.isPackaged to pick the chat-ui static path; tests
-  // run the unpackaged (dev) branch.
+  // Nothing in production reads this any more (Phase 8A.5 moved llama-args.mjs
+  // onto platform-paths' isPackaged()); kept because index.mjs, which no suite
+  // loads, still branches on it and a stub that lies about its shape is worse
+  // than one carrying a field nobody reads.
   isPackaged: false,
   getPath(name) {
     if (name === 'userData') {
@@ -42,11 +45,13 @@ export const app = {
 // to have run before anything reads them (fail-closed by design). Every
 // suite that needs storage already sets
 // REDSTART_TEST_USERDATA_DIR before its `register()` call resolves this stub,
-// so this mirrors that ordering rather than adding a new one. A handful of
-// suites (test-llama-args.mjs, test-web-fetch-ssrf.mjs) load this stub without
-// ever touching storage and never set the var — for those, initPaths() is
-// deliberately left uncalled here, matching the getPath('userData') lazy-throw
-// above rather than failing eagerly for a path nothing in that suite needs.
+// so this mirrors that ordering rather than adding a new one. A suite that
+// loads this stub without ever touching storage and never sets the var gets
+// initPaths() left deliberately uncalled, matching the getPath('userData')
+// lazy-throw above rather than failing eagerly for a path nothing in it needs.
+// (test-llama-args.mjs used to be such a suite and no longer is: Phase 8A.5
+// moved buildArgs() off app.isPackaged and onto the paths module's
+// isPackaged(), so it now sets the var like everyone else.)
 if (process.env.REDSTART_TEST_USERDATA_DIR) {
   const dir = process.env.REDSTART_TEST_USERDATA_DIR
   initPaths({
@@ -85,6 +90,20 @@ export const safeStorage = {
 // The dedicated round-trip coverage is scripts/test-secrets.mjs, which drives
 // the real key file provider against real crypto rather than this encoding.
 initSecrets(safeStorageProvider(safeStorage))
+
+// Phase 8A.5 — the login-item capability, wired the same way index.mjs wires
+// it, so suites that exercise the §7.4 startup toggle keep observing this
+// stub's in-memory login-item state through app.getLoginItemSettings().
+//
+// The RECYCLE BIN is deliberately NOT registered: plain node has no recycle
+// bin, so leaving it absent is the honest stand-in and it exercises the
+// fallback path (trash.mjs's .trash/ folder) that the boundary suites can
+// actually observe. That was already true of the old stub, whose
+// shell.trashItem returned false for the same reason.
+setLoginItems({
+  get: () => app.getLoginItemSettings(),
+  set: (settings) => app.setLoginItemSettings(settings),
+})
 
 // ipcMain / dialog / session retired from this stub in Phase 6 §6.2 —
 // production code stopped importing them from 'electron' (IPC retired,

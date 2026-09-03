@@ -161,18 +161,24 @@ export function NetworkPanel({
             OS's own record on every load (useStartupSettings), so this
             reflects reality even if it was changed from Task Manager's
             Startup tab. */}
-        <div>
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <TogglePill checked={!!startupState?.startAtLogin} onToggle={toggleStartup} />
-            <span className="text-xs text-zinc-300">
-              {startupState?.startAtLogin ? 'Start Redstart at login' : 'Do not start at login'}
-            </span>
-          </label>
-          <p className="mt-1 text-xs text-zinc-600">
-            Starts in the tray only, with no window and no model loaded — open it from the tray
-            icon or the Start menu when you want it.
-          </p>
-        </div>
+        {/* Hidden entirely, not disabled, when the daemon has no login item to
+            offer (Phase 8A.5 — a headless install). A greyed-out switch would
+            invite someone to work out why it will not move; the honest answer
+            is that this setting does not exist on that platform. */}
+        {startupState?.supported && (
+          <div>
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <TogglePill checked={!!startupState?.startAtLogin} onToggle={toggleStartup} />
+              <span className="text-xs text-zinc-300">
+                {startupState?.startAtLogin ? 'Start Redstart at login' : 'Do not start at login'}
+              </span>
+            </label>
+            <p className="mt-1 text-xs text-zinc-600">
+              Starts in the tray only, with no window and no model loaded — open it from the tray
+              icon or the Start menu when you want it.
+            </p>
+          </div>
+        )}
 
         {/* Phase 7 §7.5 — the ONE deliberate way left to stop the daemon,
             now that closing the window no longer does (§7.2). Two-step

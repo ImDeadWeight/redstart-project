@@ -10,16 +10,23 @@
 // toggle), these tests fail loudly.
 //
 // buildArgs() was extracted out of electron/main/index.mjs specifically so this
-// invariant can be exercised without booting Electron. The only Electron touch
-// is app.isPackaged (read to pick the chat-ui path), stubbed by
-// auth-test-loader.mjs the same way the other suites stub 'electron'.
+// invariant can be exercised without booting Electron. Phase 8A.5 finished that
+// job: the packaged-build check that picks the chat-ui path reads
+// platform-paths.mjs's isPackaged() now instead of app.isPackaged, so there is
+// no 'electron' anywhere in this module's graph and the auth-test-loader stub
+// this suite used to register is no longer reached — or needed.
+//
+// What replaced it is initPaths(), called directly below. The paths module is
+// fail-closed (reading before init throws, deliberately), and buildArgs() only
+// wants the isPackaged flag that travels alongside the two directories; nothing
+// here reads or writes either one.
 //
 // Run:  node scripts/test-llama-args.mjs
 // =============================================================================
 
-import { register } from 'node:module'
+import { initPaths } from '../electron/main/platform-paths.mjs'
 
-register('./auth-test-loader.mjs', import.meta.url)
+initPaths({ config: 'unused-by-buildArgs', capabilityBase: 'unused-by-buildArgs', isPackaged: false })
 
 const { buildArgs } = await import('../electron/main/llama-args.mjs')
 

@@ -20,6 +20,10 @@ export function useStartupSettings(showStatus: (msg: string, ttlMs?: number) => 
     const next = !state?.startAtLogin
     const result = await api().admin.setStartup(next)
     setState(result)
+    if (!result.supported) {
+      showStatus(result.error ?? 'Start at login is not available on this platform.')
+      return
+    }
     showStatus(result.startAtLogin
       ? 'Redstart will start at login (in the tray, no window).'
       : 'Redstart will no longer start at login.')

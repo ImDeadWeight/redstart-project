@@ -63,7 +63,8 @@ const { mayAccessControlPlane } = await import('../electron/main/permissions.mjs
 const { serverPortRejection } = await import('../electron/main/ipc/validate.mjs')
 const { ADMIN_PORT, BEACON_PORT, DEFAULT_GATEWAY_PORT } = await import('../electron/main/ports.mjs')
 const { discoveryPlan, lastKnownDiscovery, discoveryRecordFor, stopDiscovery } = await import('../electron/main/discovery.mjs')
-const { getControlPlane, setControlPlaneBindHost, resolveStartupReconciliation, getStartupSettings, setStartupSettings, shutdown } = await import('../electron/main/ipc/admin.mjs')
+const { getControlPlane, setControlPlaneBindHost, resolveStartupReconciliation, getStartupSettings, setStartupSettings, reconcileStartupSetting, shutdown } = await import('../electron/main/ipc/admin.mjs')
+const { setLoginItems, getLoginItems } = await import('../electron/main/desktop-integration.mjs')
 const { app: electronAppStub } = await import('electron')
 const { buildAdminApi } = await import('../electron/main/admin/api-table.mjs')
 const { setAdminApi, pathForChannel } = await import('../electron/main/admin/api-routes.mjs')
@@ -571,6 +572,63 @@ await test('setStartupSettings(false) turns both halves off', async () => {
   assert(electronAppStub.getLoginItemSettings().openAtLogin === false, 'the OS login item was not turned off')
   assert(storedSettings.startAtLogin === false, 'settings.json was not turned off')
   assert(getStartupSettings().startAtLogin === false, 'getStartupSettings disagrees with what was just set')
+})
+
+// ---------------------------------------------------------------------------
+// Phase 8A.5 — the same three functions with NO login item to talk to, which
+// is what a headless daemon is. The rule they have to follow is the one §4's
+// picker work set: a control that cannot do what it says must SAY so, rather
+// than fail quietly downstream or report a value it invented.
+// ---------------------------------------------------------------------------
+
+await test('🔒 with no login item, get-startup reports unsupported rather than guessing', async () => {
+  const restore = getLoginItems()
+  setLoginItems(null)
+  try {
+    const state = getStartupSettings()
+    assert(state.supported === false, 'claimed the login item is supported with none registered')
+    assert(state.startAtLogin === false, 'invented a startAtLogin value')
+  } finally {
+    setLoginItems(restore)
+  }
+})
+
+await test('🔒 with no login item, set-startup refuses and writes nothing', async () => {
+  const restore = getLoginItems()
+  const before = storedSettings.startAtLogin
+  setLoginItems(null)
+  try {
+    const result = await setStartupSettings(true, settingsDeps)
+    assert(result.supported === false, 'reported success with no login item to set')
+    assert(typeof result.error === 'string' && result.error, 'refused without saying why')
+    // The refusal must not leave a settings.json key behind that nothing will
+    // ever act on — and that a later desktop start would read as an explicit
+    // choice an admin made (§7.4's resolveStartupReconciliation treats any
+    // stored boolean that way, forever after).
+    assert(storedSettings.startAtLogin === before, 'settings.json was written despite the refusal')
+  } finally {
+    setLoginItems(restore)
+  }
+})
+
+await test('🔒 with no login item, startup reconciliation is a no-op, not a seed', async () => {
+  const restore = getLoginItems()
+  setLoginItems(null)
+  const seen = []
+  try {
+    const result = reconcileStartupSetting({
+      readSettings: () => { seen.push('read'); return {} },
+      writeSettings: () => { seen.push('write') },
+    })
+    assert(result.supported === false, 'reported a supported login item')
+    assert(!seen.includes('write'), 'persisted a login-item preference on a platform with no login item')
+  } finally {
+    setLoginItems(restore)
+  }
+})
+
+await test('the desktop path still reports supported: true', async () => {
+  assert(getStartupSettings().supported === true, 'the wired login item reported unsupported')
 })
 
 console.log('\n-- 🔍 Phase 7 §7.5: deliberate shutdown --')

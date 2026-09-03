@@ -17,7 +17,7 @@
 // registerModelsHandlers' closure; it is module-level state now (same shape
 // as auth.mjs's `sessions` map) so a plain function and the IPC handler that
 // wraps it see the exact same live download, not two independent trackers.
-import { shell } from 'electron'
+import { hasRecycleBin, moveToRecycleBin } from '../desktop-integration.mjs'
 import { publish } from '../event-broker.mjs'
 import * as fsp from 'fs/promises'
 import * as path from 'path'
@@ -114,10 +114,21 @@ export async function deleteLocalModel(name, { resolveModelsDir }) {
     return { ok: false, error: 'Not a model file' }
   }
   try {
-    // Recycle bin rather than unlink: nothing in Redstart permanently
-    // destroys a file the user might not have meant to lose, and a model is
-    // a multi-gigabyte re-download.
-    await shell.trashItem(target)
+    // Recycle bin rather than unlink where there is one: nothing in Redstart
+    // permanently destroys a file the user might not have meant to lose, and
+    // a model is a multi-gigabyte re-download.
+    if (hasRecycleBin()) {
+      await moveToRecycleBin(target)
+      return { ok: true }
+    }
+    // Headless, there is no recycle bin — and unlike trash.mjs (which moves a
+    // user's documents into a .trash/ folder rather than ever destroying
+    // them), the right answer for a MODEL is to actually delete it. A 40GB
+    // file parked in a directory nothing ever empties is the outcome the
+    // admin was trying to avoid by pressing delete, and a model is
+    // re-downloadable in a way a user's own file is not. Deliberate
+    // divergence from the recoverable-delete rule, for this one file type.
+    await fsp.unlink(target)
     return { ok: true }
   } catch (err) {
     return { ok: false, error: err.message }

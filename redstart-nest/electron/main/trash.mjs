@@ -14,10 +14,15 @@
 // quietly stops being true on one of them.
 //
 // Two tiers, in order:
-//   1. The OS recycle bin, via Electron's shell.trashItem().
+//   1. The OS recycle bin, when the entrypoint registered one
+//      (desktop-integration.mjs — Electron's shell.trashItem).
 //   2. A .trash/<timestamp>/ folder inside the caller's own storage, when tier 1
-//      is unavailable (plain-node test runs) or fails (network share, removable
-//      media, group policy).
+//      is unavailable (the headless daemon, plain-node test runs) or fails
+//      (network share, removable media, group policy).
+//
+// Tier 1 being absent is NOT degradation here: a monitor-less box has no
+// desktop recycle bin to put anything in, and tier 2 keeps the invariant below
+// true on its own.
 //
 // INVARIANT: nothing here destroys data. A delete that cannot be made
 // recoverable FAILS and leaves the file where it was; it never falls through to
@@ -27,7 +32,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { shell } from 'electron'
+import { hasRecycleBin, moveToRecycleBin } from './desktop-integration.mjs'
 
 export const TRASH_DIR_NAME = '.trash'
 
@@ -56,9 +61,9 @@ function trashDestination(rootDir, fullPath) {
  *                  | {ok: false, error: string}>}
  */
 export async function moveToTrash(rootDir, fullPath) {
-  if (typeof shell?.trashItem === 'function') {
+  if (hasRecycleBin()) {
     try {
-      const result = await shell.trashItem(fullPath)
+      const result = await moveToRecycleBin(fullPath)
       // Electron <14 returned a boolean; current versions resolve void and
       // reject on failure. An explicit false is a failure either way.
       if (result !== false) return { ok: true, method: 'recycle-bin', hint: 'restore it from the Recycle Bin' }
