@@ -195,6 +195,14 @@ export type ControlPlaneState = {
   exposed: boolean
 }
 
+// Phase 7 §7.4. Reconciled against what the OS actually says
+// (app.getLoginItemSettings()), not only settings.json — a user can flip
+// this off from Task Manager's Startup tab behind Nest's back, so the UI
+// must always show what is currently true rather than what was last set.
+export type StartupState = {
+  startAtLogin: boolean
+}
+
 // networkMode defaults to true because the main use case is serving other
 // devices on the home network. A toggle exists to switch to localhost-only
 // (useful if the user only wants to use the chat from the same PC).

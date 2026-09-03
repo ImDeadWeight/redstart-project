@@ -9,7 +9,7 @@
 
 import type {
   HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup,
-  ExternalMcpServer, LlamaConfig, ClientApp, ControlPlaneState,
+  ExternalMcpServer, LlamaConfig, ClientApp, ControlPlaneState, StartupState,
   CatalogModel, ModelDetail, ModelArtifact, LocalModelFile, DownloadProgress,
 } from '../types'
 
@@ -59,6 +59,14 @@ export type RedstartAPI = {
     // report why in `error`; `state` is always the listener's state after
     // the call, success or not, so the caller never has to re-fetch.
     setBindHost: (host: string) => Promise<{ ok: boolean; error?: string; state: ControlPlaneState }>
+    // Phase 7 §7.4. Reconciled against the OS's own login-item record, not
+    // just settings.json — see StartupState's own comment for why.
+    getStartup: () => Promise<StartupState>
+    // Owner-gated like every control-plane route. Persists to settings.json
+    // AND calls app.setLoginItemSettings() so a later launch (background or
+    // not) and the Startup toggle here never disagree with Windows' own
+    // Task Manager view of it.
+    setStartup: (startAtLogin: boolean) => Promise<StartupState>
   }
   // The FolderPicker.tsx mechanism (Phase 4 §4.2-4.3) — one component behind
   // all nine former per-site pickers. Native picking (pickNative) retired in

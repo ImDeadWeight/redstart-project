@@ -20,6 +20,7 @@ import { api, getAPI } from './api/redstart'
 import { useStatusMessage } from './hooks/useStatusMessage'
 import { useAuthSetup } from './hooks/useAuthSetup'
 import { useControlPlaneExposure } from './hooks/useControlPlaneExposure'
+import { useStartupSettings } from './hooks/useStartupSettings'
 import { useExternalMcp } from './hooks/useExternalMcp'
 import { useToolsCatalog } from './hooks/useToolsCatalog'
 import { useCapabilities } from './hooks/useCapabilities'
@@ -47,6 +48,7 @@ export default function App() {
   // Domain hooks — each owns one slice of state and its IPC calls.
   const auth = useAuthSetup(showStatus)
   const controlPlaneExposure = useControlPlaneExposure(showStatus)
+  const startup = useStartupSettings(showStatus)
   const mcp = useExternalMcp()
   const caps = useCapabilities(config)
   const plugins = usePlugins()
@@ -188,6 +190,7 @@ export default function App() {
               hw={hw}
               auth={auth}
               controlPlaneExposure={controlPlaneExposure}
+              startup={startup}
             />
           )}
 

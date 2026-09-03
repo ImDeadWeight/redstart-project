@@ -4,6 +4,7 @@
 // Handler bodies are exported as plain functions (Phase 1, §1.3); importing
 // this module never registers anything, only adminHandlers()/buildAdminApi()
 // wiring it into the table does.
+import { app } from 'electron'
 import {
   startAdminListener, getAdminListenerState, bindHostRejection, isLoopbackBind,
 } from '../admin-listener.mjs'
@@ -100,6 +101,83 @@ export async function setControlPlaneBindHost(host, { readSettings, writeSetting
   return { ok: true, state: getAdminListenerState() }
 }
 
+/**
+ * Whether Redstart is set to start at login (Phase 7 §7.4).
+ *
+ * Reads the OS's own record (`app.getLoginItemSettings()`), not
+ * settings.json — a user can turn this off from Task Manager's Startup tab
+ * behind Nest's back, and the UI must show what is actually true, not what
+ * was last written. index.mjs reconciles the reverse direction (a fresh
+ * install, or settings.json disagreeing with the OS) once at startup; this
+ * function only ever reports the OS's current answer.
+ */
+export function getStartupSettings() {
+  const { openAtLogin } = app.getLoginItemSettings()
+  return { startAtLogin: openAtLogin }
+}
+
+/**
+ * Sets both halves at once — the OS login item (what actually makes Windows
+ * launch Redstart at sign-in) and settings.json (what a future boot's
+ * reconciliation in index.mjs treats as the admin's last explicit choice,
+ * distinct from the on-by-default seed a fresh install gets before anyone
+ * has touched this toggle). `--background` is the flag index.mjs checks to
+ * skip createWindow() on a login-triggered start — see §7.4's "windowless,
+ * tray-only" requirement.
+ */
+export function setStartupSettings(startAtLogin, { readSettings, writeSettings }) {
+  const value = !!startAtLogin
+  app.setLoginItemSettings({ openAtLogin: value, args: ['--background'] })
+
+  const settings = readSettings()
+  settings.startAtLogin = value
+  writeSettings(settings)
+
+  logEvent('admin', 'startup_changed', { startAtLogin: value })
+  return getStartupSettings()
+}
+
+/**
+ * The pure half of startup reconciliation (§7.8 asks for this split
+ * explicitly): given the persisted settings, what should the OS login item
+ * be right now, and does settings.json need writing to remember it? No
+ * Electron call in here — that is what makes it testable without a stub,
+ * unlike reconcileStartupSetting() below, whose one untestable line is the
+ * app.setLoginItemSettings() call itself.
+ *
+ * A fresh install (`settings.startAtLogin` is undefined — nobody has ever
+ * touched the toggle) seeds ON: flagged as an open question in the
+ * implementation plan and decided that way on the grounds that a daemon
+ * with no model loaded is a bound port and ~100MB, not the 40GB a loaded
+ * model would be. Once an admin has set it explicitly (via setStartupSettings
+ * above, so the value IS a boolean), that choice is reasserted forever —
+ * never the on-by-default seed again.
+ */
+export function resolveStartupReconciliation(settings) {
+  const hasStoredPreference = typeof settings?.startAtLogin === 'boolean'
+  const startAtLogin = hasStoredPreference ? settings.startAtLogin : true
+  return { startAtLogin, needsPersist: !hasStoredPreference }
+}
+
+/**
+ * Runs on every boot, not only the first — the OS is re-told what
+ * settings.json says every time, since a Windows update or a manual
+ * registry edit could otherwise leave the two disagreeing silently.
+ * `--background` is the flag index.mjs checks at startup to skip
+ * createWindow() on a login-triggered start (§7.4's "windowless, tray-only"
+ * requirement).
+ */
+export function reconcileStartupSetting({ readSettings, writeSettings }) {
+  const settings = readSettings()
+  const { startAtLogin, needsPersist } = resolveStartupReconciliation(settings)
+  app.setLoginItemSettings({ openAtLogin: startAtLogin, args: ['--background'] })
+  if (needsPersist) {
+    settings.startAtLogin = startAtLogin
+    writeSettings(settings)
+  }
+  return { startAtLogin }
+}
+
 // `set-bind-host` is now wired to the UI (AccountsPanel.tsx's exposure
 // toggle) — it sat unregistered from Phase 2 until then because offering the
 // button before there was a login screen a browser could reach would have let
@@ -113,5 +191,8 @@ export function adminHandlers(deps) {
     // collaborator bag every other namespace gets; only serverState is used.
     'admin:get-status': () => getFullStatus(deps ?? {}),
     'admin:set-bind-host': (host) => setControlPlaneBindHost(host, deps ?? {}),
+    // Phase 7 §7.4 — start-at-login.
+    'admin:get-startup': () => getStartupSettings(),
+    'admin:set-startup': (startAtLogin) => setStartupSettings(startAtLogin, deps ?? {}),
   }
 }

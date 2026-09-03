@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
 import type { useAuthSetup } from '../hooks/useAuthSetup'
 import type { useControlPlaneExposure } from '../hooks/useControlPlaneExposure'
+import type { useStartupSettings } from '../hooks/useStartupSettings'
 import { SectionTitle, TogglePill, btnCls, ControlPlaneNotice } from '../components/ui'
 import { buildAddresses } from './addresses'
 
@@ -51,7 +52,7 @@ function AddressRow({ url, label, note, primary }: {
 
 export function NetworkPanel({
   networkMode, onToggleNetworkMode, localIp, port,
-  auth, controlPlaneExposure,
+  auth, controlPlaneExposure, startup,
 }: {
   networkMode: boolean
   onToggleNetworkMode: () => void
@@ -59,12 +60,14 @@ export function NetworkPanel({
   port: number
   auth: ReturnType<typeof useAuthSetup>
   controlPlaneExposure: ReturnType<typeof useControlPlaneExposure>
+  startup: ReturnType<typeof useStartupSettings>
 }) {
   const addresses = buildAddresses(localIp, port)
   const primary = addresses[0]
   const [qr, setQr] = useState('')
   const { authRequired, toggleAuthRequired } = auth
   const { controlPlane, toggleExposure } = controlPlaneExposure
+  const { startup: startupState, toggleStartup } = startup
 
   // The QR encodes the direct-IP URL — pointing a phone camera at it needs no
   // name resolution at all, which is the only approach that works on every
@@ -146,6 +149,26 @@ export function NetworkPanel({
             whichever profile is active when you save it, so switching profiles can restore it.
           </p>
           <ControlPlaneNotice state={controlPlane} />
+        </div>
+
+        {/* Phase 7 §7.4 — the daemon now outlives the window, so "start at
+            login" is meaningful for the first time: it registers a
+            windowless (tray-only) login item with Windows rather than only
+            remembering a preference nothing acts on. Reconciled against the
+            OS's own record on every load (useStartupSettings), so this
+            reflects reality even if it was changed from Task Manager's
+            Startup tab. */}
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <TogglePill checked={!!startupState?.startAtLogin} onToggle={toggleStartup} />
+            <span className="text-xs text-zinc-300">
+              {startupState?.startAtLogin ? 'Start Redstart at login' : 'Do not start at login'}
+            </span>
+          </label>
+          <p className="mt-1 text-xs text-zinc-600">
+            Starts in the tray only, with no window and no model loaded — open it from the tray
+            icon or the Start menu when you want it.
+          </p>
         </div>
       </div>
     </section>

@@ -3,6 +3,7 @@ import type { useProfiles } from '../hooks/useProfiles'
 import type { useHardwareAndBinary } from '../hooks/useHardwareAndBinary'
 import type { useAuthSetup } from '../hooks/useAuthSetup'
 import type { useControlPlaneExposure } from '../hooks/useControlPlaneExposure'
+import type { useStartupSettings } from '../hooks/useStartupSettings'
 import { SectionTitle, inputCls } from '../components/ui'
 import { NetworkPanel } from '../panels/NetworkPanel'
 import { ProfilesPanel } from '../panels/ProfilesPanel'
@@ -12,7 +13,7 @@ export function ConfigTab({
   config, setConfig, networkMode, onToggleNetworkMode,
   localIp,
   generatedCommand, onGenerateCommand,
-  profilesHook, hw, auth, controlPlaneExposure,
+  profilesHook, hw, auth, controlPlaneExposure, startup,
 }: {
   config: LlamaConfig
   setConfig: React.Dispatch<React.SetStateAction<LlamaConfig>>
@@ -25,6 +26,7 @@ export function ConfigTab({
   hw: ReturnType<typeof useHardwareAndBinary>
   auth: ReturnType<typeof useAuthSetup>
   controlPlaneExposure: ReturnType<typeof useControlPlaneExposure>
+  startup: ReturnType<typeof useStartupSettings>
 }) {
   return (
     <>
@@ -167,6 +169,7 @@ export function ConfigTab({
         port={config.port}
         auth={auth}
         controlPlaneExposure={controlPlaneExposure}
+        startup={startup}
       />
 
       <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">

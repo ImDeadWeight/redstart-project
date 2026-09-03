@@ -63,7 +63,8 @@ const { mayAccessControlPlane } = await import('../electron/main/permissions.mjs
 const { serverPortRejection } = await import('../electron/main/ipc/validate.mjs')
 const { ADMIN_PORT, BEACON_PORT, DEFAULT_GATEWAY_PORT } = await import('../electron/main/ports.mjs')
 const { discoveryPlan, lastKnownDiscovery, discoveryRecordFor, stopDiscovery } = await import('../electron/main/discovery.mjs')
-const { getControlPlane, setControlPlaneBindHost } = await import('../electron/main/ipc/admin.mjs')
+const { getControlPlane, setControlPlaneBindHost, resolveStartupReconciliation, getStartupSettings, setStartupSettings } = await import('../electron/main/ipc/admin.mjs')
+const { app: electronAppStub } = await import('electron')
 const { buildAdminApi } = await import('../electron/main/admin/api-table.mjs')
 const { setAdminApi, pathForChannel } = await import('../electron/main/admin/api-routes.mjs')
 const {
@@ -540,6 +541,38 @@ await test('moving back to loopback clears the exposure', async () => {
   assert(result.state.exposed === false, 'loopback still reported as exposed')
 })
 
+console.log('\n-- 🔍 start-at-login, through the real dispatcher --')
+
+await test('🔍 admin:set-startup works end to end, through the real dispatcher', async () => {
+  const res = await post(pathForChannel('admin:set-startup'), [true], bearer(ownerToken))
+  assert(res.status === 200, `expected 200, got ${res.status}`)
+  const body = await res.json()
+  assert(body.result?.startAtLogin === true, `unexpected result: ${JSON.stringify(body)}`)
+  // The OS side actually changed — not just the returned value.
+  assert(electronAppStub.getLoginItemSettings().openAtLogin === true, 'the OS login item was not updated')
+  assert(storedSettings.startAtLogin === true, 'settings.json was not updated')
+})
+
+await test('🔍 admin:get-startup reads back what the OS says, not a cached value', async () => {
+  // Simulate "turned off from Task Manager's Startup tab behind Nest's back" —
+  // the OS record changes with nothing going through setStartupSettings().
+  electronAppStub.setLoginItemSettings({ openAtLogin: false, args: ['--background'] })
+  const res = await post(pathForChannel('admin:get-startup'), [], bearer(ownerToken))
+  assert(res.status === 200, `expected 200, got ${res.status}`)
+  const body = await res.json()
+  assert(body.result?.startAtLogin === false, `expected the OS's current answer (false), got ${JSON.stringify(body)}`)
+})
+
+await test('setStartupSettings(false) turns both halves off', async () => {
+  const result = await setStartupSettings(true, settingsDeps) // back to a known state first
+  assert(result.startAtLogin === true, 'setup step failed')
+  const off = await setStartupSettings(false, settingsDeps)
+  assert(off.startAtLogin === false, `expected false, got ${off.startAtLogin}`)
+  assert(electronAppStub.getLoginItemSettings().openAtLogin === false, 'the OS login item was not turned off')
+  assert(storedSettings.startAtLogin === false, 'settings.json was not turned off')
+  assert(getStartupSettings().startAtLogin === false, 'getStartupSettings disagrees with what was just set')
+})
+
 // Changing the bind address no longer touches discovery at all (Phase 6.5 —
 // setControlPlaneBindHost() used to re-run it because an exposed control
 // plane was a reason for mDNS to advertise; with mDNS gone there is nothing
@@ -563,6 +596,38 @@ await test('🔍 the socket is released on stop', async () => {
   })
   assert(outcome !== 'open', 'the admin port is still accepting connections after stop')
   return outcome
+})
+
+// ---------------------------------------------------------------------------
+// Phase 7 §7.4 — startup (start-at-login) reconciliation, pure half
+// ---------------------------------------------------------------------------
+// resolveStartupReconciliation() is deliberately split from
+// reconcileStartupSetting() so the DECISION is testable without Electron —
+// the one untestable line is app.setLoginItemSettings() itself, per §7.8.
+
+console.log('\n-- 🔍 startup reconciliation (pure decision) --')
+
+await test('🔍 a fresh install (no stored preference) seeds ON', () => {
+  const result = resolveStartupReconciliation({})
+  assert(result.startAtLogin === true, `expected true, got ${result.startAtLogin}`)
+  assert(result.needsPersist === true, 'a fresh install should be persisted so the seed sticks')
+})
+
+await test('🔍 an explicit false is reasserted, not overridden by the on-by-default seed', () => {
+  const result = resolveStartupReconciliation({ startAtLogin: false })
+  assert(result.startAtLogin === false, `expected false, got ${result.startAtLogin}`)
+  assert(result.needsPersist === false, 'an already-stored preference needs no re-persisting')
+})
+
+await test('🔍 an explicit true is reasserted the same way', () => {
+  const result = resolveStartupReconciliation({ startAtLogin: true })
+  assert(result.startAtLogin === true, `expected true, got ${result.startAtLogin}`)
+  assert(result.needsPersist === false, 'an already-stored preference needs no re-persisting')
+})
+
+await test('a missing settings object behaves like a fresh install, not a throw', () => {
+  const result = resolveStartupReconciliation(undefined)
+  assert(result.startAtLogin === true, `expected true, got ${result.startAtLogin}`)
 })
 
 // ---------------------------------------------------------------------------

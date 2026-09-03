@@ -10,6 +10,11 @@
 import { initPaths } from '../electron/main/platform-paths.mjs'
 import * as path from 'node:path'
 
+// Phase 7 §7.4's login-item state — a plain in-memory stand-in for what
+// Windows itself would track. Starts false, same as a real fresh Windows
+// install where nothing has ever registered a login item.
+let loginItemSettings = { openAtLogin: false, args: [] }
+
 export const app = {
   // llama-args.mjs reads app.isPackaged to pick the chat-ui static path; tests
   // run the unpackaged (dev) branch.
@@ -21,6 +26,12 @@ export const app = {
       return dir
     }
     return process.cwd()
+  },
+  getLoginItemSettings() {
+    return { ...loginItemSettings }
+  },
+  setLoginItemSettings(settings) {
+    loginItemSettings = { openAtLogin: !!settings?.openAtLogin, args: settings?.args ?? [] }
   },
 }
 

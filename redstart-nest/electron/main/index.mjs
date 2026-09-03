@@ -49,6 +49,7 @@ import { hasOwner } from './auth.mjs'
 import { readBootstrapToken } from './bootstrap-token.mjs'
 import { startTray } from './tray.mjs'
 import { stopServer } from './ipc/server.mjs'
+import { reconcileStartupSetting } from './ipc/admin.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -701,6 +702,13 @@ app.disableHardwareAcceleration()
 // working daemon behind it: the worst outcome available, and silent. Must be
 // requested before `whenReady` — the lock itself is what decides whether this
 // process gets to proceed to path/listener setup at all.
+// Phase 7 §7.4 — a login-triggered start passes this so the daemon comes up
+// windowless (tray-only): set on the OS login item below in
+// reconcileStartupSetting(), read here rather than trusted blindly, since
+// `--background` typed on an ordinary Start-menu launch should behave the
+// same way (there is nothing unsafe about it — it only skips createWindow()).
+const isBackgroundLaunch = process.argv.includes('--background')
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 
 if (!gotSingleInstanceLock) {
@@ -765,9 +773,17 @@ async function main() {
   setupAdminApi()
   startDiscoveryBeacon()
   startAdminPlane()
+  // §7.4 — pure decision logic lives in ipc/admin.mjs (resolveStartupReconciliation),
+  // testable without Electron; this is just the one untestable line
+  // (app.setLoginItemSettings) plus the settings read/write it needs.
+  reconcileStartupSetting({ readSettings, writeSettings })
   startTrayIcon()
   if (!app.isPackaged) await installReactDevTools()
-  createWindow()
+  // §7.4: a login-triggered start is windowless — tray-only until the admin
+  // opens it. Ground rule from §7.0 still holds either way: this never
+  // starts a model, only the daemon (admin listener, beacon, gateway
+  // config, MCP), all of which are already up by this line.
+  if (!isBackgroundLaunch) createWindow()
 }
 
 // Phase 7 §7.3. A missing icon (redstartIcon failed to generate, logged at
