@@ -69,12 +69,45 @@ export function generateLlamaCommand(config, { buildArgs }) {
 // shape would have raced toward: not a second caller told "already running"
 // after a wasted spawn, but a second caller told exactly what the first one
 // achieved, including its pid on success.
+//
+// COALESCING IS PER KIND; EXCLUSION IS ACROSS THEM. The two flags above
+// deduplicate callers asking for the SAME transition. They do not order a
+// launch against a stop, and that was a real gap rather than a theoretical
+// one: `serverState.process` is assigned synchronously right after spawn(),
+// but startGateway() and startMcpServer() are awaited AFTER it. A stop landing
+// in that window ran stopGateway() against a gateway that had not started
+// yet, killed the child, nulled the state — and then the launch resumed and
+// started the gateway anyway, returning success. The box was left with a
+// gateway listening in front of nothing and a UI that said stopped.
+//
+// So the two flags are kept for coalescing and a single chain is added
+// underneath for exclusion. Every lifecycle transition queues behind the
+// previous one, whichever kind it was, so the launch tail above can no longer
+// interleave with a stop's teardown.
 let launchInFlight = null
 let stopInFlight = null
 
+// The tail of the lifecycle chain. Not a promise anyone awaits for a RESULT —
+// only for its timing — so it is kept deliberately settled-and-empty: a
+// transition that rejects must order the next one, not poison it.
+let lifecycleTail = Promise.resolve()
+
+/**
+ * Run one lifecycle transition after every transition already queued.
+ *
+ * `.then(fn, fn)` rather than `.then(fn)` for the same reason the tail is
+ * neutralised below: a previous transition that threw has already been
+ * reported to ITS caller, and must not silently cancel this one.
+ */
+function runExclusive(fn) {
+  const result = lifecycleTail.then(fn, fn)
+  lifecycleTail = result.then(() => {}, () => {})
+  return result
+}
+
 export async function launchServer(config, deps) {
   if (launchInFlight) return launchInFlight
-  launchInFlight = doLaunchServer(config, deps)
+  launchInFlight = runExclusive(() => doLaunchServer(config, deps))
   try {
     return await launchInFlight
   } finally {
@@ -258,7 +291,7 @@ Place it in the build output directory or the project root, or set a custom path
 // ability to find the box while doing so. Discovery stops with the daemon.
 export async function stopServer(deps) {
   if (stopInFlight) return stopInFlight
-  stopInFlight = doStopServer(deps)
+  stopInFlight = runExclusive(() => doStopServer(deps))
   try {
     return await stopInFlight
   } finally {

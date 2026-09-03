@@ -19,6 +19,7 @@
 // =============================================================================
 
 import * as fs from 'node:fs'
+import * as net from 'node:net'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { register } from 'node:module'
@@ -244,6 +245,48 @@ await test('🔍 two concurrent stopServer() calls share one in-flight stop', as
   assert(a.success && b.success, 'both stop calls should report success')
   assert(deps.serverState.process === null, 'serverState.process should be cleared after stop')
   if (child && child.exitCode === null) await new Promise((resolve) => child.once('exit', resolve))
+})
+
+/** Is anything listening on this loopback port? */
+function portIsOpen(port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port })
+    const settle = (open) => { socket.destroy(); resolve(open) }
+    socket.setTimeout(1000)
+    socket.once('connect', () => settle(true))
+    socket.once('timeout', () => settle(false))
+    socket.once('error', () => settle(false))
+  })
+}
+
+// The gap the two per-kind guards above did NOT close. `serverState.process` is
+// assigned synchronously right after spawn(), but startGateway() and
+// startMcpServer() are awaited AFTER it — so a stop arriving in that window
+// used to run stopGateway() against a gateway that had not started yet, kill
+// the child, and then watch the launch resume and bind the gateway anyway.
+// The child was dead, the UI said stopped, and the public port was still open
+// in front of nothing.
+//
+// The port is what makes this observable: serverState.process ends up null
+// either way, so asserting on it would pass against the bug. A closed port is
+// the difference between "the stop won" and "the stop ran too early".
+await test('🔍 a stop racing a launch runs after it — no gateway left in front of nothing', async () => {
+  const deps = makeConcurrencyDeps()
+  const child = []
+  try {
+    const [launch, stop] = await Promise.all([
+      launchServer(CONCURRENCY_CONFIG, deps).then((r) => { child.push(deps.serverState.process); return r }),
+      stopServer(deps),
+    ])
+    assert(launch.success, `launch failed: ${launch.error}`)
+    assert(stop.success, `stop failed: ${stop.error}`)
+    assert(deps.serverState.process === null, 'the stop should have run last, leaving nothing running')
+    assert(!(await portIsOpen(CONCURRENCY_PORT)), `the gateway is still listening on ${CONCURRENCY_PORT} after the stop`)
+    return 'the stop queued behind the launch and tore down what it had started'
+  } finally {
+    const spawned = child[0]
+    if (spawned && spawned.exitCode === null) await new Promise((resolve) => spawned.once('exit', resolve))
+  }
 })
 
 fs.rmSync(concurrencyDir, { recursive: true, force: true })
