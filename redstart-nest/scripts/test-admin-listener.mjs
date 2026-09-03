@@ -63,11 +63,13 @@ const { mayAccessControlPlane } = await import('../electron/main/permissions.mjs
 const { serverPortRejection } = await import('../electron/main/ipc/validate.mjs')
 const { ADMIN_PORT, BEACON_PORT, DEFAULT_GATEWAY_PORT } = await import('../electron/main/ports.mjs')
 const { discoveryPlan, lastKnownDiscovery, discoveryRecordFor, stopDiscovery } = await import('../electron/main/discovery.mjs')
-const { getControlPlane, setControlPlaneBindHost, resolveStartupReconciliation, getStartupSettings, setStartupSettings, reconcileStartupSetting, shutdown } = await import('../electron/main/ipc/admin.mjs')
+const { getControlPlane, setControlPlaneBindHost, resolveStartupReconciliation, getStartupSettings, setStartupSettings, reconcileStartupSetting, shutdown, getFullStatus } = await import('../electron/main/ipc/admin.mjs')
 const { setLoginItems, getLoginItems } = await import('../electron/main/desktop-integration.mjs')
+const { parseAllowedOrigins, corsHeaders, isPreflight } = await import('../electron/main/admin/cors.mjs')
+const { apiRevisionOf } = await import('../electron/main/build-info.mjs')
 const { app: electronAppStub } = await import('electron')
 const { buildAdminApi } = await import('../electron/main/admin/api-table.mjs')
-const { setAdminApi, pathForChannel } = await import('../electron/main/admin/api-routes.mjs')
+const { setAdminApi, pathForChannel, apiRevision, getAdminApi } = await import('../electron/main/admin/api-routes.mjs')
 const {
   authenticateControlPlane, login, createOwner, createAccount, setAuthRequired,
   CONTROL_PLANE, DATA_PLANE,
@@ -650,6 +652,142 @@ await test('🔒 with no login item, startup reconciliation is a no-op, not a se
 
 await test('the desktop path still reports supported: true', async () => {
   assert(getStartupSettings().supported === true, 'the wired login item reported unsupported')
+})
+
+// ---------------------------------------------------------------------------
+// Phase 8A.6 — CORS. The listener has never sent a CORS header and that is
+// correct for the bundle it serves itself; this is opt-in machinery for a
+// client that did not come from this origin, which only a remote daemon makes
+// possible. Every case below is a way it could have been got wrong.
+// ---------------------------------------------------------------------------
+
+console.log('\n-- CORS allowlist (Phase 8A.6) --')
+
+await test('🔒 a wildcard origin is refused outright', () => {
+  // The one that matters. A wildcard on a process-spawning surface, paired
+  // with Access-Control-Allow-Headers: Authorization, is what would let any
+  // page an admin happens to visit make authenticated calls.
+  const { origins, rejection } = parseAllowedOrigins(['*'])
+  assert(rejection, 'a wildcard was accepted')
+  assert(origins.length === 0, 'a wildcard produced origins')
+})
+
+await test('🔒 one bad entry rejects the whole list, rather than being dropped', () => {
+  // Silently dropping the bad entry out of three would leave an admin
+  // believing a list they cannot see is in force.
+  const { origins, rejection } = parseAllowedOrigins(['https://good.example', '*'])
+  assert(rejection, 'a list containing a wildcard was accepted')
+  assert(origins.length === 0, `partial list applied: ${JSON.stringify(origins)}`)
+})
+
+await test('an absent or empty setting yields no origins and no complaint', () => {
+  for (const value of [undefined, null, []]) {
+    const { origins, rejection } = parseAllowedOrigins(value)
+    assert(rejection === null, `${JSON.stringify(value)} was rejected: ${rejection}`)
+    assert(origins.length === 0, `${JSON.stringify(value)} produced origins`)
+  }
+})
+
+await test('malformed entries are refused with a reason', () => {
+  for (const bad of ['not a url', 'ftp://host', 'https://host/path', 'https://host/?q=1', 42, '']) {
+    const { rejection } = parseAllowedOrigins([bad])
+    assert(rejection, `accepted ${JSON.stringify(bad)}`)
+  }
+})
+
+await test('a valid list normalises to origins and de-duplicates', () => {
+  const { origins, rejection } = parseAllowedOrigins([
+    'https://panel.example', 'https://panel.example', 'http://192.168.1.9:19083/',
+  ])
+  assert(rejection === null, `rejected a valid list: ${rejection}`)
+  assert(origins.length === 2, `expected 2 origins, got ${JSON.stringify(origins)}`)
+  assert(origins.includes('https://panel.example'), JSON.stringify(origins))
+  assert(origins.includes('http://192.168.1.9:19083'), JSON.stringify(origins))
+})
+
+await test('🔒 no headers are emitted when nothing is configured', () => {
+  // Today's behaviour, byte for byte. This is the case every existing install
+  // is in, and it must not change.
+  assert(Object.keys(corsHeaders('https://anywhere.example', [])).length === 0,
+    'emitted CORS headers with an empty allowlist')
+})
+
+await test('🔒 a disallowed origin gets no headers — never a reflection', () => {
+  // Reflecting the request's Origin is the wildcard wearing a hat: every
+  // origin is allowed and the response merely looks specific.
+  const headers = corsHeaders('https://evil.example', ['https://panel.example'])
+  assert(Object.keys(headers).length === 0, `reflected a disallowed origin: ${JSON.stringify(headers)}`)
+})
+
+await test('🔍 an allowed origin is echoed, with Vary and the auth header', () => {
+  const headers = corsHeaders('https://panel.example', ['https://panel.example'])
+  assert(headers['Access-Control-Allow-Origin'] === 'https://panel.example',
+    JSON.stringify(headers))
+  // Without Vary, a cache that saw one origin's response could hand it to
+  // another — the allowlist would hold and the cache would not.
+  assert(headers['Vary'] === 'Origin', 'no Vary: Origin')
+  // This listener authenticates with a bearer header, and the SSE feed rides
+  // on the same one; a preflight that does not allow it blocks every call.
+  assert(/Authorization/i.test(headers['Access-Control-Allow-Headers'] ?? ''),
+    `Authorization not allowed: ${headers['Access-Control-Allow-Headers']}`)
+})
+
+await test('a request with no Origin header gets no CORS headers', () => {
+  assert(Object.keys(corsHeaders(undefined, ['https://panel.example'])).length === 0,
+    'emitted CORS headers for a same-origin request')
+})
+
+await test('isPreflight only matches a real preflight', () => {
+  const preflight = { method: 'OPTIONS', headers: { origin: 'https://a.example', 'access-control-request-method': 'POST' } }
+  assert(isPreflight(preflight), 'did not recognise a preflight')
+  assert(!isPreflight({ method: 'OPTIONS', headers: {} }), 'treated a bare OPTIONS as a preflight')
+  assert(!isPreflight({ method: 'POST', headers: preflight.headers }), 'treated a POST as a preflight')
+})
+
+// ---------------------------------------------------------------------------
+// Phase 8A.6 — the version handshake (trap 5.7). Until 8A there was one
+// process, so client and daemon could not disagree; the browser panel is still
+// served BY the daemon and still always matches. What changed is that a daemon
+// can now run somewhere else, and a client pointed at it has no way to know.
+// ---------------------------------------------------------------------------
+
+console.log('\n-- version handshake (Phase 8A.6) --')
+
+await test('the API revision is derived from the method SET, not their order', () => {
+  // Handlers are spread into the table namespace by namespace, so the order is
+  // an accident of how buildAdminApi() is written. If that changed the
+  // revision, every client would report skew against a daemon that serves
+  // exactly the same methods.
+  const a = apiRevisionOf(['llama:launch', 'admin:shutdown', 'models:list'])
+  const b = apiRevisionOf(['models:list', 'llama:launch', 'admin:shutdown'])
+  assert(a === b, `order changed the revision: ${a} vs ${b}`)
+})
+
+await test('🔍 adding or removing a method changes the revision', () => {
+  // The whole point: a method added to the table is exactly what an older
+  // client will call and get a 404 for.
+  const base = apiRevisionOf(['llama:launch', 'admin:shutdown'])
+  assert(apiRevisionOf(['llama:launch', 'admin:shutdown', 'models:list']) !== base,
+    'adding a method left the revision unchanged')
+  assert(apiRevisionOf(['llama:launch']) !== base,
+    'removing a method left the revision unchanged')
+})
+
+await test('🔍 the live revision matches the table actually registered', () => {
+  // Derived, never hand-bumped — a version number someone has to remember to
+  // increment is one that silently stops being true.
+  const live = apiRevision()
+  assert(typeof live === 'string' && live.length === 12, `unexpected revision: ${live}`)
+  assert(live === apiRevisionOf(Object.keys(getAdminApi())), 'the reported revision is not this table\'s')
+})
+
+await test('the full status readout carries both version fields', () => {
+  const status = getFullStatus({ serverState: { process: null, lastConfig: null } })
+  assert(status.version, 'no version block in the status readout')
+  assert(typeof status.version.app === 'string' && status.version.app,
+    `no app version: ${JSON.stringify(status.version)}`)
+  assert(status.version.apiRevision === apiRevision(),
+    `status revision disagrees with the live one: ${JSON.stringify(status.version)}`)
 })
 
 console.log('\n-- 🔍 Phase 7 §7.5: deliberate shutdown --')

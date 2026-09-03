@@ -280,6 +280,21 @@ try {
     }
   })
 
+  await test('🔍 the status readout carries a version handshake', async () => {
+    // Phase 8A.6 (trap 5.7). Checked against the real daemon because that is
+    // the only place the API revision is computed from the table actually
+    // registered — a unit test can only check the function that computes it.
+    const res = await read(await callMethod('admin:get-status', [], ownerToken))
+    assert(res.status === 200, `expected 200, got ${res.status}: ${res.text}`)
+    const version = res.json?.result?.version
+    assert(version, `no version block: ${res.text}`)
+    assert(typeof version.app === 'string' && version.app !== 'unknown',
+      `the daemon could not read its own package.json: ${JSON.stringify(version)}`)
+    assert(typeof version.apiRevision === 'string' && version.apiRevision.length === 12,
+      `unexpected apiRevision: ${JSON.stringify(version)}`)
+    return `${version.app} / ${version.apiRevision}`
+  })
+
   await test('🔒 a second daemon refuses to start and exits 1', async () => {
     // 8A.2's adminBindFailureIsFatal decision, checked for real. On the
     // desktop a failed control-plane bind is survivable (there is a window to

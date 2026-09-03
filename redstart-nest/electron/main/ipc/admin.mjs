@@ -11,6 +11,8 @@ import {
 import { logEvent } from '../logger.mjs'
 import { getGatewayPort } from '../tools-gateway.mjs'
 import { getMcpServerRunning } from '../mcp-server.mjs'
+import { appVersion } from '../build-info.mjs'
+import { apiRevision } from '../admin/api-routes.mjs'
 
 export function getControlPlane() {
   return getAdminListenerState()
@@ -49,6 +51,10 @@ export function getFullStatus({ serverState }) {
     gateway: { port: config ? getGatewayPort(config.port) : null },
     mcp: { running: getMcpServerRunning() },
     adminListener: getAdminListenerState(),
+    // Phase 8A.6 (trap 5.7) — what a client compares itself against when it
+    // is not the bundle this daemon served. See build-info.mjs for why the
+    // revision, and not the release version, is the load-bearing half.
+    version: { app: appVersion(), apiRevision: apiRevision() },
   }
 }
 

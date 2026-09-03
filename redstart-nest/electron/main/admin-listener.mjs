@@ -54,6 +54,7 @@ import { isAdminAuthRoute, handleAdminAuthRoute } from './admin/auth-routes.mjs'
 import { isAdminApiRoute, handleAdminApiRoute } from './admin/api-routes.mjs'
 import { isAdminEventsRoute, handleAdminEventsRoute } from './admin/events-routes.mjs'
 import { sendJson } from './admin/http.mjs'
+import { parseAllowedOrigins, corsHeaders, isPreflight } from './admin/cors.mjs'
 import { logEvent } from './logger.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -175,6 +176,10 @@ export function buildStaticAllowlist(root = bundleRoot()) {
 
 let staticFiles = new Map()
 
+// Phase 8A.6 — the validated CORS allowlist. Empty means no CORS headers at
+// all, which is today's behaviour and the default.
+let corsOrigins = []
+
 // Applied to the HTML this listener serves, which from Phase 3 is a page that
 // actually loads in a browser rather than in an Electron window with a session
 // CSP already on it. Stricter than the Electron one (index.mjs), because the
@@ -248,6 +253,28 @@ async function handleAdminRequest(req, res) {
     return sendJson(res, 400, { error: 'Malformed request path' })
   }
 
+  // Phase 8A.6. Set on the response ONCE, here, rather than threaded through
+  // every route: Node merges setHeader() values into whatever writeHead()
+  // later sends, so this reaches the API dispatcher, the auth routes, the SSE
+  // feed and the static files without any of them having to know about CORS.
+  // Threading it would mean four call sites that each have to remember.
+  //
+  // Applied to the 401s too. A browser cannot read a response that lacks CORS
+  // headers — it reports it as a network error — so an admin debugging a
+  // remote client would otherwise be told "connection failed" when the real
+  // answer was "your session expired".
+  const cors = corsHeaders(req.headers['origin'], corsOrigins)
+  for (const [name, value] of Object.entries(cors)) res.setHeader(name, value)
+
+  // Preflight is answered BEFORE the gate. It carries no credentials by
+  // definition, so gating it would 401 every cross-origin request before the
+  // real one was ever sent. 204 with no body, and no CORS headers at all if
+  // the origin is not on the list — which is itself the correct answer.
+  if (isPreflight(req)) {
+    res.writeHead(204)
+    return res.end()
+  }
+
   // The app shell, anonymous — the login screen cannot appear until it loads,
   // and a browser cannot attach a bearer token to a document navigation anyway.
   // Exact-match lookup: `/../accounts.json` is simply not a key.
@@ -307,11 +334,22 @@ async function handleAdminRequest(req, res) {
  *   production so a client can find it without being told.
  * @returns {Promise<{ bindHost: string, port: number }>}
  */
-export function startAdminListener({ bindHost = DEFAULT_ADMIN_BIND_HOST, port = ADMIN_PORT } = {}) {
+export function startAdminListener({ bindHost = DEFAULT_ADMIN_BIND_HOST, port = ADMIN_PORT, allowedOrigins } = {}) {
   stopAdminListener()
 
   const rejection = bindHostRejection(bindHost)
   if (rejection) return Promise.reject(new Error(rejection))
+
+  // Phase 8A.6 — empty unless a deployment asked for it, and a bad list is
+  // refused wholesale rather than partially applied. Logged, not thrown: a
+  // malformed CORS setting must not stop the control plane from binding,
+  // because the control plane is what an admin uses to fix the setting.
+  const parsed = parseAllowedOrigins(allowedOrigins)
+  if (parsed.rejection) {
+    console.warn(`[admin-listener] ignoring allowedOrigins: ${parsed.rejection}`)
+    logEvent('admin', 'cors_config_rejected', { reason: parsed.rejection })
+  }
+  corsOrigins = parsed.origins
 
   staticFiles = buildStaticAllowlist()
 

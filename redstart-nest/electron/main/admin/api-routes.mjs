@@ -38,6 +38,7 @@
 // =============================================================================
 
 import { isLocalOnly } from '../ipc/transport.mjs'
+import { apiRevisionOf } from '../build-info.mjs'
 import { sendJson, readJsonBody } from './http.mjs'
 
 const PREFIX = '/admin/api/'
@@ -47,8 +48,25 @@ const PREFIX = '/admin/api/'
 // admin/api-table.mjs, which is the piece that knows about them.
 let api = null
 
+let revision = null
+
 export function setAdminApi(handlers) {
   api = handlers
+  revision = null
+}
+
+/**
+ * Phase 8A.6 (trap 5.7) — the identity a client's expectations are against.
+ *
+ * Computed from the table that is actually registered, not from a constant
+ * someone has to remember to bump, and recomputed whenever the table is
+ * replaced. Null before startup has registered one, which is the honest answer
+ * at that point rather than a digest of nothing.
+ */
+export function apiRevision() {
+  if (!api) return null
+  if (revision === null) revision = apiRevisionOf(Object.keys(api))
+  return revision
 }
 
 export function getAdminApi() {
