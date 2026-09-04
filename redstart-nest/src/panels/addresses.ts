@@ -12,11 +12,10 @@
 //              OpenWRT/Fritz!Box setups) refuse public names pointing at
 //              private IPs, so it is offered as an option, never a default.
 //
-// A third option, mDNS (`redstart.local`), was retired in Phase 6.5: Android's
+// A third option, mDNS (`redstart.local`), was retired: Android's
 // resolver never answered `.local` lookups for browser navigation, so a name
 // that failed on the one platform most clients are wasn't worth the UDP 5353
-// firewall rule and the elevated-prompt cost of keeping it. See
-// docs/notes/headless-admin-plane-implementation.md §6.5 for the record.
+// firewall rule and the elevated-prompt cost of keeping it.
 // =============================================================================
 
 export type ServerAddress = {

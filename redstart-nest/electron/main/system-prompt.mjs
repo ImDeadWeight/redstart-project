@@ -243,8 +243,7 @@ export function deriveEgressFacts(config, externalServers, hasTools) {
   // path by definition — the credential exists precisely so the plugin can
   // call out. Undeclared, this block would keep asserting "everything stays
   // local" while a plugin ships data to a SaaS: not a leak, but the product
-  // saying something untrue in its own voice. See
-  // docs/notes/mcp-plugin-system-plan.md D-f.
+  // saying something untrue in its own voice.
   const credentialPlugins = hasTools
     ? listPlugins()
         .filter((p) => p.enabled && p.envEnc && Object.keys(p.envEnc).length > 0)
@@ -290,19 +289,17 @@ export function deriveEgressFacts(config, externalServers, hasTools) {
 // user granted on their own PC while every other file/data tool runs on the
 // server.
 //
-// Without this the model gets a genuinely misleading picture, and not by
-// accident: data_handling says conversations and stored data stay "on this
-// machine", which is a PRIVACY claim written from the server's point of view
-// (nothing goes to a cloud provider). Rendered inside a desktop app it reads as
-// a LOCALITY claim about the user's laptop — and the model repeats it. Asked
-// "what files do I have locally?", it listed the server's documents, databases,
-// vault and repositories and said "everything is stored locally on this
-// machine". That answer is only true when Nest and Twig happen to share a PC.
+// Without this the model gets a genuinely misleading picture: data_handling
+// says conversations and stored data stay "on this machine", a PRIVACY claim
+// from the server's point of view. Rendered inside a desktop app it reads as
+// a LOCALITY claim about the user's laptop, and the model repeats it — asked
+// "what files do I have locally?", it listed the server's stores and said
+// "everything is stored locally", true only when Nest and Twig share a PC.
 //
 // Gated on the tools actually present, not on the surface being Twig: a Twig
-// user who has granted no folder has no local tools, and for them there is only
-// one machine. Same rule as every other claim here — substantiated by the
-// request, never assumed from configuration (spec §7).
+// user who has granted no folder has no local tools, and for them there is
+// only one machine. Same rule as every other claim here — substantiated by
+// the request, never assumed from configuration (spec §7).
 function buildLocality(clientToolNames) {
   if (!clientToolNames || clientToolNames.length === 0) return null
 
@@ -336,8 +333,7 @@ function buildDataHandling(egress) {
 
   // No hostname to name — the registry does not tell us which host a plugin
   // calls, and a guessed one in a privacy claim is worse than an unnamed
-  // service (plan decision D-f). The plugin's own name is the only honest
-  // handle available.
+  // service. The plugin's own name is the only honest handle available.
   if (egress.credentialPlugins.length) {
     const list = egress.credentialPlugins.map(p => p.name).join(', ')
     parts.push(`These installed plugins hold a credential for an external service and can send data there when called: ${list}.`)
@@ -389,7 +385,7 @@ function buildSession(account, now) {
  * @param {object}  [input.account]         authResult.account, or null (auth off)
  * @param {Date}    [input.now]
  * @param {string}  [input.surface]         a SURFACE_IDS entry, from the credential
- * @param {object}  [input.admin]           { context, policy, style } — spec §3, Phase 3
+ * @param {object}  [input.admin]           { context, policy, style } — spec §3
  * @param {string}  [input.mode]            a MODE_IDS entry; unknown IDs drop
  * @param {number}  [input.budget]
  * @returns {{ prompt: string, tokens: number, overBudget: boolean, blocks: string[] }}

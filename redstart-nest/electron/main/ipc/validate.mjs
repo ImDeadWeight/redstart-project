@@ -43,7 +43,7 @@ export function optional(value, check) {
 /**
  * What the server binary is called on this platform.
  *
- * Phase 8A.3 — it was `llama-server.exe`, hardcoded at four sites. It lives
+ * Once hardcoded as `llama-server.exe` at four sites. It lives
  * beside binaryPathRejection() because they are the same concern from two
  * directions: this says what Nest looks for, that says what Nest will accept,
  * and the two must not drift into disagreeing about what a server binary is.
@@ -60,7 +60,7 @@ export function serverBinaryName(platform = process.platform) {
  * executability check below is per-platform because "what could this OS launch
  * as a server" has two different answers.
  *
- * Phase 8A.3 — `platform` is an ARGUMENT, not a read of process.platform.
+ * `platform` is an ARGUMENT, not a read of process.platform.
  * Both branches then run in CI on either OS; reading the ambient platform
  * inside the function would leave half of a security check permanently
  * untestable. The Windows branch is unchanged and stays exactly as strict:

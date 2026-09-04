@@ -16,7 +16,7 @@
 // other, which is exactly the drift this pass exists to remove.
 //
 // `browse` (admin/browse-routes.mjs — browse:roots/list/mkdir) was never
-// registered over IPC even before Phase 6 retired IPC entirely: it existed
+// registered over IPC, even before IPC was retired entirely: it existed
 // specifically as the server-side stand-in for the native picker Electron
 // used to have, so the only caller it was ever for was one without IPC
 // access. Kept free of the `electron` import so it (and its test) run under
@@ -57,9 +57,9 @@ export function buildAdminApi(deps) {
     ...capabilitiesHandlers(deps),
     ...serverHandlers(deps),
     ...modelsHandlers(deps),
-    // No window dependency any more (Phase 5 §5.1) — plugins.mjs publishes
-    // install progress to the shared event broker instead of pushing to a
-    // window handle it used to be given.
+    // No window dependency any more — plugins.mjs publishes install progress
+    // to the shared event broker instead of pushing to a window handle it
+    // used to be given.
     ...pluginsHandlers({ refreshLiveToolsConfig: deps.refreshLiveToolsConfig }),
     ...browseRouteHandlers(),
   }

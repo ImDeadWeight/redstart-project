@@ -3,11 +3,11 @@ import { api, getAPI } from '../api/redstart'
 import type { ControlPlaneState } from '../types'
 
 // The control plane's own bind address — a separate axis from the data
-// plane's "Local network" toggle (plan decision 4). Read on mount so
+// plane's "Local network" toggle. Read on mount so
 // ControlPlaneNotice can warn immediately if settings.json was hand-edited
 // to something exposed before this toggle existed; `toggle()` is the one
-// write path, rebinding immediately (decision 4 again — an admin flipping
-// this may be doing it to recover access, not to schedule a future change).
+// write path, rebinding immediately — an admin flipping
+// this may be doing it to recover access, not to schedule a future change.
 export function useControlPlaneExposure(showStatus: (msg: string, ttlMs?: number) => void) {
   const [state, setState] = useState<ControlPlaneState | null>(null)
 
@@ -21,11 +21,10 @@ export function useControlPlaneExposure(showStatus: (msg: string, ttlMs?: number
   // that answers on every interface) — the same two values the data plane's
   // own toggle picks between in ipc/server.mjs.
   //
-  // Exposed separately from toggle() so a profile load (useProfiles'
-  // selectProfile, via exposeControlPlane) can request a specific value
-  // rather than flip whatever is currently set — and so it can no-op when
-  // the profile's saved value already matches, instead of firing a status
-  // message and a rebind for a change that isn't one.
+  // Internal, and deliberately no longer returned: this used to be handed to
+  // useProfiles so a profile load could request a specific exposure, which
+  // made selecting a profile rebind the control plane. Exposure changes now
+  // have exactly one entry point, the toggle a person clicks.
   async function setExposure(next: boolean) {
     if (state?.exposed === next) return
     const result = await api().admin.setBindHost(next ? '0.0.0.0' : '127.0.0.1')
@@ -43,5 +42,5 @@ export function useControlPlaneExposure(showStatus: (msg: string, ttlMs?: number
     await setExposure(!state?.exposed)
   }
 
-  return { controlPlane: state, toggleExposure: toggle, setExposure }
+  return { controlPlane: state, toggleExposure: toggle }
 }

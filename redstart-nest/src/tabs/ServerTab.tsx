@@ -38,7 +38,7 @@ export function ServerTab({ server }: { server: ReturnType<typeof useServerLifec
     logEndRef.current?.scrollIntoView({ behavior: 'auto' })
   }, [logLines])
 
-  // The full status endpoint (Phase 5 §5.4) — uptime and bindings, the two
+  // The full status endpoint — uptime and bindings, the two
   // fields worth a glance that server:status's plain running/health does not
   // carry. Polled independently of the health check above rather than
   // folded into it: this is admin-only, cross-transport information

@@ -73,7 +73,7 @@ export function useServerLifecycle(opts: {
 
     a.events.onTokensPerMinute(setTokensPerMin)
     // Subscribed for the component's whole lifetime, not just from
-    // launchServer() onward (Phase 5 §5.2-5.3) — a reconnecting SSE client
+    // launchServer() onward — a reconnecting SSE client
     // replays the daemon's ring buffer on connect, so an admin who opens
     // this tab while the server is already running (or just crashed) sees
     // that history immediately rather than an empty terminal that only

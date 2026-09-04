@@ -4,11 +4,11 @@
 // Redstart Nest — Session storage
 // =============================================================================
 // Sessions used to be a plain in-memory Map. Invisible today, because the window
-// and the runtime die together — and Phase 7 exists to break exactly that
-// coupling, so "stay logged in" would stop working at the moment it starts
-// mattering (headless-admin-plane-plan.md §3.7). Persisted from the start
-// instead: the storage pattern already exists next door in accounts-storage.mjs,
-// so doing it properly is barely more work than doing it temporarily.
+// and the runtime die together — and the daemon outliving its window breaks
+// exactly that coupling, so "stay logged in" would stop working at the moment
+// it starts mattering. Persisted from the start instead: the storage pattern
+// already exists next door in accounts-storage.mjs, so doing it properly is
+// barely more work than doing it temporarily.
 //
 // HASHED AT REST, and for the same reason API keys are. A session string IS
 // being logged in for the life of the session, so a readable sessions.json would

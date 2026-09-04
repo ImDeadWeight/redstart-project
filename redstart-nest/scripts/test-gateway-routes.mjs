@@ -360,6 +360,10 @@ async function main() {
   console.log('\n-- POST /v1/chat/completions (request rewriting) --')
 
   let lastForwarded = null
+  // Set to { status, body } to make the next upstream reply something other
+  // than a plain 200 — used by the context-exceeded tests below, which need
+  // llama-server's real rejection shape.
+  let nextUpstreamReply = null
   const upstream = http.createServer(async (req, res) => {
     let raw = ''
     for await (const chunk of req) raw += chunk
@@ -367,6 +371,17 @@ async function main() {
       lastForwarded = JSON.parse(raw)
     } catch {
       lastForwarded = raw
+    }
+    const reply = nextUpstreamReply
+    nextUpstreamReply = null
+    if (reply) {
+      const body = typeof reply.body === 'string' ? reply.body : JSON.stringify(reply.body)
+      res.writeHead(reply.status, {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      })
+      res.end(body)
+      return
     }
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ ok: true }))
@@ -443,6 +458,146 @@ async function main() {
     assert(res.status === 200, `expected 200, got ${res.status}`)
     assert(!JSON.stringify(lastForwarded).includes('git_diff'), 'a banned name appeared in the payload')
     updateGatewayConfig(baseConfig)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Ban/prompt ORDERING. The gateway composes the system prompt and strips
+  // banned tools in the same block, and for a long time it did them in that
+  // order — so every capability claim described the tool list the CLIENT sent
+  // rather than the one llama-server received. These three pin the order.
+  // The substantiation rule they enforce lives in system-prompt.mjs.
+  // ---------------------------------------------------------------------------
+
+  const systemOf = () => lastForwarded.messages.find(m => m.role === 'system')?.content ?? ''
+
+  await test('🔍 a ban that strips every tool leaves no capability claim in the prompt', async () => {
+    // The sharp case: enforceToolAllowList deletes `parsed.tools` outright when
+    // the filter empties it, so hasTools must be read after the strip or the
+    // whole capability section is claimed against a payload with no tools.
+    updateGatewayConfig({ ...baseConfig, documents: { enabled: true }, disabledTools: ['create_document'] })
+    await completions({
+      messages: [{ role: 'user', content: 'write it up' }],
+      tools: [toolDef('create_document')],
+    })
+    assert(!lastForwarded.tools, 'the tools array survived a total ban')
+    assert(
+      !/create_document/.test(systemOf()),
+      'the prompt offered a tool the model was never sent'
+    )
+  })
+
+  await test('🔍 an org-wide client-app ban also removes the locality claim', async () => {
+    // Banning 'twig' expands to its fs_* names. Those names are what
+    // clientToolNamesIn() reads to decide whether two computers are involved,
+    // so reading them pre-ban told the model it could reach the user's own
+    // files while handing it nothing to do it with.
+    const twig = ['fs_read_file', 'fs_write_file', 'fs_edit_file', 'fs_list_directory',
+      'fs_search_files', 'fs_get_file_info', 'fs_create_directory', 'fs_delete_file']
+    updateGatewayConfig({ ...baseConfig, disabledTools: twig })
+    await completions({
+      messages: [{ role: 'user', content: 'read my notes' }],
+      tools: [toolDef('fs_read_file'), toolDef('git_status')],
+    })
+    const names = (lastForwarded.tools || []).map(t => t.function.name)
+    assert(!names.includes('fs_read_file'), 'the banned client tool reached the model')
+    // git_status survives, so the request still carries tools — which is what
+    // makes the missing locality block about the BAN and not about hasTools.
+    assert(names.includes('git_status'), 'an allowed tool was stripped too')
+    assert(
+      !/Two different computers/.test(systemOf()),
+      'the prompt described the user\'s own machine after its tools were banned'
+    )
+  })
+
+  await test('🔍 with nothing banned, the claim the two tests above suppress is still made', async () => {
+    // The regression guard: the ordering swap must remove claims only where a
+    // ban removed the tool, never weaken the substantiated case.
+    updateGatewayConfig({ ...baseConfig, documents: { enabled: true } })
+    await completions({
+      messages: [{ role: 'user', content: 'write it up' }],
+      tools: [toolDef('create_document'), toolDef('fs_read_file')],
+    })
+    const system = systemOf()
+    assert(/create_document/.test(system), 'a permitted capability lost its claim')
+    assert(/Two different computers/.test(system), 'a permitted client tool lost its locality block')
+    updateGatewayConfig(baseConfig)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Context-exceeded diagnosis. llama-server's rejection carries the two
+  // numbers but cannot say what spent the window — it never saw a tool list.
+  // The gateway is the only component that knows both halves, and it is shared
+  // by every client, so the explanation is added here exactly once.
+  //
+  // The body below is llama-server's real shape, from the fork's own source:
+  // format_error_response() gives {code,message,type}, to_json() adds
+  // n_prompt_tokens/n_ctx for this type only, and res->error() nests it under
+  // "error" with code as the HTTP status.
+  // ---------------------------------------------------------------------------
+
+  const exceedBody = () => ({
+    error: {
+      code: 400,
+      message: 'request (59649 tokens) exceeds the available context size (32768 tokens), try increasing it',
+      type: 'exceed_context_size_error',
+      n_prompt_tokens: 59649,
+      n_ctx: 32768,
+    },
+  })
+
+  async function completionsRaw(body) {
+    lastForwarded = null
+    const res = await fetch(`${gw}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { ...bearer(ownerToken), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return { status: res.status, text: await res.text() }
+  }
+
+  await test('🔍 a context-exceeded rejection gains the tool cost that caused it', async () => {
+    nextUpstreamReply = { status: 400, body: exceedBody() }
+    const { status, text } = await completionsRaw({
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [toolDef('git_status'), toolDef('git_diff')],
+    })
+    assert(status === 400, `status was rewritten: ${status}`)
+    const body = JSON.parse(text)
+    assert(/2 tool definitions/.test(body.error.message), `tool count missing: ${body.error.message}`)
+    assert(/exceeds the available context size/.test(body.error.message), 'the upstream message was replaced rather than extended')
+    // The fields the chat-ui's error dialog reads must survive untouched.
+    assert(body.error.n_prompt_tokens === 59649, 'n_prompt_tokens was lost')
+    assert(body.error.n_ctx === 32768, 'n_ctx was lost')
+    assert(body.error.type === 'exceed_context_size_error', 'the error type was changed')
+  })
+
+  await test('🔍 a 400 that is not a context error is passed through untouched', async () => {
+    const original = JSON.stringify({ error: { code: 400, message: 'bad', type: 'invalid_request_error' } })
+    nextUpstreamReply = { status: 400, body: original }
+    const { status, text } = await completionsRaw({
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [toolDef('git_status')],
+    })
+    assert(status === 400, `expected 400, got ${status}`)
+    assert(text === original, `an unrelated error was rewritten:\n  ${text}`)
+  })
+
+  await test('a context-exceeded rejection with no tools in the request says nothing about tools', async () => {
+    // Nothing to blame, so nothing to add — the conversation itself is too big.
+    const original = JSON.stringify(exceedBody())
+    nextUpstreamReply = { status: 400, body: original }
+    const { text } = await completionsRaw({ messages: [{ role: 'user', content: 'hi' }] })
+    assert(text === original, 'a toolless request was told to turn off tools')
+  })
+
+  await test('an unparseable 400 body is forwarded as-is rather than becoming a gateway error', async () => {
+    nextUpstreamReply = { status: 400, body: 'not json at all' }
+    const { status, text } = await completionsRaw({
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [toolDef('git_status')],
+    })
+    assert(status === 400, `expected 400, got ${status}`)
+    assert(text === 'not json at all', `body was mangled: ${text}`)
   })
 
   await test('🔍 an unauthenticated completion never reaches llama-server', async () => {

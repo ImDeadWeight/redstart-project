@@ -338,7 +338,11 @@ class MCPStore {
 	}
 
 	/** Public accessor for a tool's provenance, by name. See redstartMeta. */
-	getNestToolMeta(toolName: string): { capability: string | null; toolClass: string | null } {
+	getNestToolMeta(toolName: string): {
+		capability: string | null;
+		toolClass: string | null;
+		source: string | null;
+	} {
 		return this.toolOps.getNestToolMeta(toolName);
 	}
 

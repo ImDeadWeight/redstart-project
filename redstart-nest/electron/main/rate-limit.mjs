@@ -16,7 +16,7 @@
 //
 // KEYED BY REMOTE ADDRESS, WHICH IS NOT A STRONG IDENTITY, and the limit is
 // chosen knowing that. A LAN attacker can change source address, and a reverse
-// proxy (the documented way to expose this — plan §3.3) makes every request
+// proxy (the documented way to expose this) makes every request
 // arrive from loopback, collapsing all callers onto one bucket. That second case
 // is the awkward one and it is deliberately not solved by trusting
 // X-Forwarded-For: a header the client controls is not an identity, and behind

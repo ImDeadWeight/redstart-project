@@ -3,8 +3,8 @@
 // ---------------------------------------------------------------------------
 // Plugin capability injection.
 //
-// Installed MCP plugins are capabilities too (see docs/notes/mcp-plugin-system-plan.md
-// decision D1), but they are discovered at runtime from plugins.json, not
+// Installed MCP plugins are capabilities too, but they are discovered at
+// runtime from plugins.json, not
 // declared here. plugin-registry.mjs calls setPluginCapabilityProvider() once at
 // startup to hand this module a live read of that registry.
 //
@@ -390,6 +390,12 @@ export function classifyTool(name) {
 // another server's fields.
 export const META_CAPABILITY_KEY = 'redstart/capability'
 export const META_CLASS_KEY = 'redstart/class'
+// A HUMAN LABEL for where a tool came from — "ComfyUI", not "comfyui_mcp".
+// Display only, and deliberately separate from META_CAPABILITY_KEY, which is
+// the id every policy decision keys on. A label is allowed to be ambiguous or
+// to change; an identity is not, and merging them would put a publisher's
+// display string on the path that resolves bans.
+export const META_SOURCE_KEY = 'redstart/source'
 
 const BUILTIN_CAPABILITY_BY_TOOL_NAME = new Map()
 for (const [capability, names] of Object.entries(BUILTIN_CAPABILITY_TOOL_NAMES)) {

@@ -10,7 +10,7 @@
 import type {
   HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup,
   ExternalMcpServer, LlamaConfig, ClientApp, ControlPlaneState, StartupState,
-  CatalogModel, ModelDetail, ModelArtifact, LocalModelFile, DownloadProgress,
+  CatalogModel, ModelDetail, ModelDescription, ModelArtifact, LocalModelFile, DownloadProgress,
 } from '../types'
 
 export type RedstartAPI = {
@@ -31,11 +31,10 @@ export type RedstartAPI = {
     // error, the next launch reads the saved profile fresh regardless.
     syncTools: (tools: LlamaConfig['tools']) => Promise<{ live: boolean }>
   }
-  // The control plane's own exposure — read-only from the launcher. Retires
-  // with this bridge when Phase 3 puts it on HTTP against the listener itself.
+  // The control plane's own exposure — read-only from the launcher.
   admin: {
     getControlPlane: () => Promise<ControlPlaneState>
-    // The full status endpoint (Phase 5 §5.4) — active profile is
+    // The full status endpoint — active profile is
     // deliberately absent, see the comment above getFullStatus() in
     // ipc/admin.mjs for why; the model path is absent on the same privacy
     // stance server.mjs already takes for the event log.
@@ -51,15 +50,15 @@ export type RedstartAPI = {
       mcp: { running: boolean }
       adminListener: ControlPlaneState
     }>
-    // Rebinds the control plane immediately (plan decision 4) — an admin
+    // Rebinds the control plane immediately — an admin
     // flipping this may be doing it to recover access, so it never waits for
-    // a restart. `host` is a bind address, not a boolean (plan §3.3);
+    // a restart. `host` is a bind address, not a boolean;
     // NetworkPanel.tsx's exposure toggle only ever sends '127.0.0.1' or '0.0.0.0'.
     // Rejected addresses (and a failed bind) restore the previous one and
     // report why in `error`; `state` is always the listener's state after
     // the call, success or not, so the caller never has to re-fetch.
     setBindHost: (host: string) => Promise<{ ok: boolean; error?: string; state: ControlPlaneState }>
-    // Phase 7 §7.4. Reconciled against the OS's own login-item record, not
+    // Reconciled against the OS's own login-item record, not
     // just settings.json — see StartupState's own comment for why.
     getStartup: () => Promise<StartupState>
     // Owner-gated like every control-plane route. Persists to settings.json
@@ -67,24 +66,24 @@ export type RedstartAPI = {
     // not) and the Startup toggle here never disagree with Windows' own
     // Task Manager view of it.
     setStartup: (startAtLogin: boolean) => Promise<StartupState>
-    // Phase 7 §7.5 — the only way to stop the daemon now that the window no
-    // longer means anything (§7.2). Owner-gated. The daemon answers 200 and
+    // The only way to stop the daemon now that the window no
+    // longer means anything. Owner-gated. The daemon answers 200 and
     // THEN quits on the next tick, so this always resolves before the
     // connection drops — a caller does not need to treat a network error
     // here as ambiguous between "it worked" and "it crashed".
     shutdown: () => Promise<{ ok: boolean }>
   }
-  // The FolderPicker.tsx mechanism (Phase 4 §4.2-4.3) — one component behind
-  // all nine former per-site pickers. Native picking (pickNative) retired in
-  // Phase 6 §6.1 along with IPC — roots/list/mkdir is the only picker there
+  // The FolderPicker.tsx mechanism — one component behind
+  // all nine former per-site pickers. Native picking (pickNative) is retired
+  // along with IPC — roots/list/mkdir is the only picker there
   // is now, used identically by every caller.
   browse: {
     roots: () => Promise<{ path: string; label: string }[]>
-    // readable/writable (Phase 8B.6) are the daemon's own access() probe on
+    // readable/writable are the daemon's own access() probe on
     // each path - best-effort and not a promise (a share can drop, and on
     // Windows W_OK reflects the read-only attribute rather than the ACL), but
     // a definite `false` is what lets the picker refuse a folder the daemon
-    // cannot use while the admin is still looking at it. Design section 3.5.
+    // cannot use while the admin is still looking at it.
     list: (opts: { path: string }) => Promise<{ path: string; parent: string | null; entries: { name: string; kind: 'directory'; readable?: boolean; writable?: boolean }[]; reason?: string; readable?: boolean; writable?: boolean }>
     mkdir: (opts: { path: string; name: string }) => Promise<{ ok: boolean; path?: string; error?: string }>
   }
@@ -117,6 +116,7 @@ export type RedstartAPI = {
     search: (opts: { query?: string; publisher?: string; limit?: number })
       => Promise<{ ok: boolean; models?: CatalogModel[]; error?: string }>
     detail: (repoId: string) => Promise<{ ok: boolean; detail?: ModelDetail; error?: string }>
+    describe: (repoId: string) => Promise<{ ok: boolean; description?: ModelDescription | null; error?: string }>
     local: () => Promise<{ ok: boolean; dir: string; files: LocalModelFile[]; error?: string }>
     diskSpace: () => Promise<{ ok: boolean; dir: string; freeBytes?: number; totalBytes?: number; error?: string }>
     deleteLocal: (name: string) => Promise<{ ok: boolean; error?: string }>
@@ -170,7 +170,7 @@ export type RedstartAPI = {
     install: (req: {
       id: string
       source: { kind: 'npm'; packageName: string; version: string }
-        // Phase 7 — installed via uv, not npm. Field is `identifier` (pypi's
+        // Installed via uv, not npm. Field is `identifier` (pypi's
         // own term, matches the registry API's package entries) rather than
         // `packageName`, so the source object's own shape says which
         // resolver it needs.
@@ -278,7 +278,7 @@ export type RegistrySearchResult = {
   description: string
   packageName?: string
   version?: string
-  // Phase 7: which install source kind this result needs ('npm' vs 'pypi') —
+  // Which install source kind this result needs ('npm' vs 'pypi') —
   // the two resolvers are not interchangeable, so picking a result has to
   // route to the right one. Absent/other values (oci, mcpb, ...) never reach
   // an installable verdict, so the renderer never needs to branch on them.
@@ -295,11 +295,11 @@ export type RegistrySearchResult = {
 // Electron window — is an HTTP client of the admin listener; there is no
 // second transport to choose between any more.
 //
-// Until Phase 6 §6.2 this module also held a preload-bridge implementation
+// This module used to also hold a preload-bridge implementation
 // (`window.redstartAPI`, set only inside Electron) and the
 // activeTransport()/isRemote()/isDaemonLocal() predicates that branched on
-// which one was live. All retired with the bridge itself — see decision 6,
-// "the Electron UI is a client of the daemon, like Twig."
+// which one was live. All retired with the bridge itself — "the Electron UI
+// is a client of the daemon, like Twig."
 
 let httpApi: RedstartAPI | undefined
 

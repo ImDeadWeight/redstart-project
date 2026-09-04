@@ -1,6 +1,6 @@
 // Auth IPC namespace — the auth-required flag.
 //
-// createFirstAdmin() / auth:create-first-admin retired in Phase 6 §6.2. Its
+// createFirstAdmin() / auth:create-first-admin is retired. Its
 // own comment named its own retirement condition: "safe today only because
 // IPC is its sole door" — once IPC is gone the route has no safe caller.
 // POST /admin/bootstrap (gateway/auth-routes.mjs, token-gated) is the one

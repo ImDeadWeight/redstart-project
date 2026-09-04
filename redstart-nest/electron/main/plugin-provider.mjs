@@ -32,6 +32,7 @@
 import * as path from 'path'
 import { configDir } from './platform-paths.mjs'
 import { listPlugins, getPlugin, updatePlugin, NAMESPACE_SEPARATOR } from './plugin-registry.mjs'
+import { META_SOURCE_KEY } from './tools-definitions.mjs'
 import { createPluginClient } from './mcp-plugin-client.mjs'
 import { decryptSecret } from './secrets.mjs'
 
@@ -131,10 +132,28 @@ function makeProvider(plugin) {
       // deliberately dropped: mcp-server.mjs stamps Redstart's own
       // classification via annotateTool(), and a plugin's opinion about
       // itself must never masquerade as that verdict (plan decision D3).
+      //
+      // `title` and the source label are the exception to that rule, and the
+      // difference is what makes them safe: neither is a claim about what the
+      // tool DOES, both are display strings, and neither is ever read back by
+      // anything that decides policy. The name stays the wire identity — the
+      // gateway is provenance-blind and bans are flat name matches, so the
+      // namespace prefix has to stay exactly as it is (docs/tool-namespacing.md).
+      // What a picker shows and what a ban resolves are now two fields instead
+      // of one overloaded string.
+      //
+      // The source label is the plugin's own displayName, which an admin
+      // reviewed at install, NOT anything the child said at runtime. It exists
+      // so a UI can group by plugin: every plugin's tools reach a client
+      // through Nest's one built-in MCP server, so without this they all land
+      // in a single "Redstart Built-in" bucket and the prefix in the name is
+      // the only thing saying which plugin owns what.
       return plugin.tools.map((t) => ({
         name: `${prefix}${t.name}`,
+        title: t.title || undefined,
         description: t.description,
         inputSchema: t.inputSchema,
+        _meta: { [META_SOURCE_KEY]: plugin.displayName || plugin.id },
       }))
     },
 

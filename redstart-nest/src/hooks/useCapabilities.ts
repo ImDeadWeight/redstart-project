@@ -9,7 +9,7 @@ import type { CapabilityConfig, LlamaConfig } from '../types'
 export type FolderCap = 'documents' | 'sqlite' | 'vault' | 'git' | 'file_system'
 
 // The picking itself (native dialog or the remote browser) lives in
-// FolderPicker.tsx now (Phase 4 §4.3) — this only knows how to APPLY a chosen
+// FolderPicker.tsx now — this only knows how to APPLY a chosen
 // path to the right config setter. `allowCreate` mirrors what each capability
 // used to pass to dialog.showOpenDialog: Documents and SQLite offered *New
 // Folder*, Vault/Git/File System could only select something that exists.

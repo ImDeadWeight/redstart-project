@@ -14,7 +14,7 @@
 // cleanly, handshakes cleanly, lists its tools, and then fails every call at
 // runtime. The registry's environmentVariables[] metadata is the only machine
 // -readable source for that, which is why browsing ships WITH the installer
-// (Phase 4b) rather than after it.
+// rather than after it.
 // =============================================================================
 
 /**
@@ -93,7 +93,7 @@ export async function searchRegistry({ query, cursor, signal } = {}) {
  *   any isRequired env/arg          -> needsSetup
  *   otherwise                       -> installable
  *
- * npm and pypi (Phase 7) share every check below "registryType not npm/pypi"
+ * npm and pypi share every check below "registryType not npm/pypi"
  * — runtime PRESENCE is a separate, live, per-machine check that happens at
  * actual install time (detectNpm()/detectUv() in plugin-install.mjs), not
  * here. This function only ever answers "installable in principle".
@@ -111,9 +111,9 @@ export async function searchRegistry({ query, cursor, signal } = {}) {
  * @returns {{state: string, reason?: string, packageRef?: object}}
  */
 // v1 support priority when a server offers more than one runtime (rare — 2 of
-// several hundred entries sampled, see plan "Runtime support"): prefer npm,
-// since that's what we can actually install; pypi is next (Phase 7), then the
-// two deferred kinds, in the order the plan itself gives up on them.
+// several hundred entries sampled): prefer npm,
+// since that's what we can actually install; pypi is next, then the
+// two deferred kinds, in that order of decreasing support.
 const STDIO_PRIORITY = ['npm', 'pypi', 'oci', 'mcpb']
 
 function hasRequiredField(list) {
@@ -125,7 +125,7 @@ export function verdictFor(serverEntry) {
     const server = serverEntry?.server
     const packages = Array.isArray(server?.packages) ? server.packages : []
     // `remotes[]` (streamable-http/SSE servers) is a different feature this
-    // system does not install (Trap 10) — packages is the only source of a
+    // system does not install — packages is the only source of a
     // stdio candidate, so an entry with none is 'remote' regardless of what
     // else it declares.
     const stdioPackages = packages.filter((p) => p?.transport?.type === 'stdio')
@@ -148,7 +148,7 @@ export function verdictFor(serverEntry) {
       return { state: VERDICT.unsupported, reason: 'unknown-runtime', packageRef: chosen }
     }
 
-    // npm and pypi (Phase 7) share every check from here — both resolve to
+    // npm and pypi share every check from here — both resolve to
     // "pin a version at install time, run one detected runtime". Runtime
     // PRESENCE is deliberately NOT checked here, for either one: this
     // mirrors how npm has always worked in this function — verdictFor()
@@ -156,7 +156,7 @@ export function verdictFor(serverEntry) {
     // per-machine check happens where it actually matters, inside
     // installNpmPackage()/installPypiPackage() itself (detectNpm()/
     // detectUv()), which is where a "runtime not found" error surfaces
-    // naming the specific missing thing (AC7). Before Phase 7 landed, pypi
+    // naming the specific missing thing. Before pypi support landed, it
     // short-circuited to needsRuntime unconditionally here; it no longer
     // does.
     const version = chosen.version

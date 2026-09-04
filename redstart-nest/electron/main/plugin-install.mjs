@@ -37,7 +37,7 @@ import { logEvent } from './logger.mjs'
 export const INSTALL_REASON = {
   badId: 'bad-id',
   npmMissing: 'npm-missing',
-  uvMissing: 'uv-missing', // Phase 7 — pypi's equivalent of npmMissing (AC7)
+  uvMissing: 'uv-missing', // pypi's equivalent of npmMissing
   packageNotFound: 'package-not-found',
   versionNotFound: 'version-not-found',
   network: 'network',
@@ -292,7 +292,7 @@ function readLockfileInfo(dir, packageName) {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 7 — install (pypi, via uv)
+// Install (pypi, via uv)
 // ---------------------------------------------------------------------------
 //
 // A second resolver alongside installNpmPackage, satisfying the same
@@ -506,7 +506,7 @@ export async function installPypiPackage({ id, identifier, version, onProgress, 
  */
 // Same filename convention shared/mcp-stdio-process.mjs's logStream() uses —
 // duplicated rather than imported so this stays a plain file read, never a
-// second change to that shared module (Trap 8).
+// second change to that shared module.
 function tailLogFile(logDir, id, maxChars = 2000) {
   if (!logDir) return ''
   try {
@@ -570,6 +570,12 @@ export async function probePlugin({ command, args, env, timeoutMs, logDir }) {
     // here, individually, in the Classify step.
     const classified = tools.map((t) => ({
       name: t.name,
+      // MCP's optional display label, carried through so the picker can show
+      // "Enqueue workflow" instead of "comfyui_mcp__enqueue_workflow". It is
+      // taken raw here and sanitised by validatePlugin, which runs on every
+      // read — capturing it clean and trusting it thereafter would leave an
+      // entry written by any other path unsanitised.
+      title: typeof t.title === 'string' ? t.title : '',
       description: typeof t.description === 'string' ? t.description : '',
       inputSchema: t.inputSchema && typeof t.inputSchema === 'object' ? t.inputSchema : {},
       class: 'destructive',

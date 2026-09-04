@@ -96,14 +96,24 @@ export function TruncatedText({ text, limit = 160, className = '' }: {
 // forwarding the control plane through a router, at which point the box joins
 // the population the internet scans continuously. That is a bigger real-world
 // risk than any certificate decision, and a visible warning costs almost
-// nothing (headless-admin-plane-plan.md decision 19). Lives in NetworkPanel.tsx
+// nothing. Lives in NetworkPanel.tsx
 // (the Configuration tab), alongside the exposure toggle itself — the old
 // sidebar's separate Accounts panel merged in here (2026-09-02) since both
 // showed the same fact from the same state shape and were on screen together.
 import type { ControlPlaneState } from '../types'
 
-export function ControlPlaneNotice({ state }: { state: ControlPlaneState | null }) {
+// localIp is what the warning SHOWS; state.bindHost is what the listener is
+// actually bound to. They are deliberately different: bindHost is the wildcard
+// 0.0.0.0, which is a correct answer to "where is it bound" and a useless one
+// to "what do I type on the other machine" — nobody can reach 0.0.0.0. The
+// warning exists to make the reachable surface concrete, so it names the
+// address someone could actually connect to.
+export function ControlPlaneNotice({ state, localIp }: {
+  state: ControlPlaneState | null
+  localIp?: string
+}) {
   if (!state?.exposed) return null
+  const reachableAt = localIp ? `${localIp}:${state.port}` : `port ${state.port} on this machine’s LAN address`
 
   return (
     <div className="mt-3 rounded border border-red-800 bg-red-950/40 p-3">
@@ -111,7 +121,7 @@ export function ControlPlaneNotice({ state }: { state: ControlPlaneState | null 
         Admin panel is open to the network
       </p>
       <p className="text-[11px] text-red-200/80 mt-1 leading-relaxed">
-        Anyone who can reach <span className="font-mono">{state.bindHost}:{state.port}</span> can try to sign
+        Anyone who can reach <span className="font-mono">{reachableAt}</span> can try to sign
         in as the owner. Never forward this port through a router.
       </p>
     </div>

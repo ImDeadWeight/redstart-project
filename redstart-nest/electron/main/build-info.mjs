@@ -3,11 +3,11 @@
 // =============================================================================
 // Redstart Nest — what this build is
 // =============================================================================
-// Phase 8A.6, for trap 5.7: "client and daemon can now differ in version."
-// Until 8A there was one process, so the question could not arise; the browser
-// admin panel is still served BY the daemon and therefore always matches. What
-// changes is that a daemon can now run somewhere else entirely, and a client
-// pointed at it has no way to know whether they agree.
+// Client and daemon can now differ in version. Once there was only ever one
+// process, so the question could not arise; the browser admin panel is still
+// served BY the daemon and therefore always matches. What changes is that a
+// daemon can now run somewhere else entirely, and a client pointed at it has
+// no way to know whether they agree.
 //
 // TWO numbers, and the second is the one that matters:
 //

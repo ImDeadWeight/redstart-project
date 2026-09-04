@@ -131,6 +131,7 @@
 										type="button"
 										class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted/50"
 										onclick={() => toolsStore.toggleTool(entry.key)}
+										title={entry.definition.function.name}
 									>
 										<span
 											data-slot="checkbox"
@@ -142,8 +143,16 @@
 											{/if}
 										</span>
 
-										<span class="min-w-0 flex-1 truncate font-mono text-[12px]">
-											{entry.definition.function.name}
+										<!--
+											The label, not the identity: `displayName` is the server's
+											own MCP title when it published one, otherwise the wire name
+											with its namespace prefix removed — which is only safe
+											because the group header above names the source. The full
+											name stays on the row's title attribute, and the Settings →
+											Tools list shows it outright.
+										-->
+										<span class="min-w-0 flex-1 truncate text-[12px]">
+											{entry.displayName}
 										</span>
 									</button>
 								{/each}

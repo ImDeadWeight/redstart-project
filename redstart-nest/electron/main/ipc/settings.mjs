@@ -7,12 +7,11 @@
 // settings.json, NOT in tools.json's capabilities block, because it is not a
 // model-facing capability root and nothing in the MCP layer reads it.
 //
-// Handler bodies are exported as plain functions (Phase 1, §1.3 of the
-// headless-admin-plane implementation plan) so an HTTP route can call them
+// Handler bodies are exported as plain functions so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerSettingsHandlers() does that. The two
 // dialog.showOpenDialog handlers that used to live here moved to a native
-// picker (Phase 4 §4.3), itself retired in Phase 6 §6.1.
+// picker, itself since retired.
 import { binaryPathRejection, isAbsolutePath } from './validate.mjs'
 import { logEvent } from '../logger.mjs'
 
@@ -43,8 +42,8 @@ export function setBinaryPath(p, { readSettings, writeSettings }) {
   return true
 }
 
-// selectBinary() retired — Phase 4 §4.3 replaced it with a native picker,
-// itself retired in Phase 6 §6.1. FolderPicker.tsx now calls
+// selectBinary() is retired — replaced with a native picker, itself since
+// retired. FolderPicker.tsx now calls
 // admin/browse-routes.mjs's browse:list, the same as every other folder/file
 // prompt in the launcher. The one thing lost along the way was the dev-build
 // default path (selectBinaryDefaultPath, computed from __dirname in

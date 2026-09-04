@@ -740,3 +740,55 @@ describe('gateway /files/download endpoint', () => {
 		expect(res.status).toBe(404);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Tool display names
+// ---------------------------------------------------------------------------
+// The wire name is the identity: Redstart's gateway is provenance-blind, so a
+// server-side ban is a flat name match and the namespace prefix is the only
+// thing that makes a ban targetable (docs/tool-namespacing.md). A friendlier
+// label is allowed to exist beside that name; it is never allowed to replace
+// it anywhere a decision is made. These pin the boundary.
+
+describe('tool display names', () => {
+	it('prefers the server-published MCP title', async () => {
+		const { toolDisplayName } = await import('$lib/stores/tools/tool-display');
+		expect(toolDisplayName('comfyui_mcp__enqueue_workflow', 'Enqueue workflow', true)).toBe(
+			'Enqueue workflow'
+		);
+	});
+
+	it('strips the namespace prefix ONLY when a header already names the source', async () => {
+		const { toolDisplayName } = await import('$lib/stores/tools/tool-display');
+		expect(toolDisplayName('comfyui_mcp__enqueue_workflow', undefined, true)).toBe(
+			'enqueue_workflow'
+		);
+		// No header: the prefix is the only thing saying where this came from.
+		expect(toolDisplayName('comfyui_mcp__enqueue_workflow', undefined, false)).toBe(
+			'comfyui_mcp__enqueue_workflow'
+		);
+	});
+
+	it('leaves an un-namespaced name alone', async () => {
+		const { toolDisplayName } = await import('$lib/stores/tools/tool-display');
+		expect(toolDisplayName('read_text_file', undefined, true)).toBe('read_text_file');
+		// A single underscore is a client-app prefix, not a namespace separator.
+		expect(toolDisplayName('fs_read_file', undefined, true)).toBe('fs_read_file');
+	});
+
+	it('does not slice a name that merely starts with, or ends at, the separator', async () => {
+		const { toolDisplayName } = await import('$lib/stores/tools/tool-display');
+		// Slicing here would leave a DIFFERENT tool's name behind.
+		expect(toolDisplayName('__read_text_file', undefined, true)).toBe('__read_text_file');
+		// A prefix with nothing after it is not a namespace, and an empty label
+		// would render an unclickable blank row.
+		expect(toolDisplayName('comfyui_mcp__', undefined, true)).toBe('comfyui_mcp__');
+	});
+
+	it('never returns an empty label', async () => {
+		const { toolDisplayName } = await import('$lib/stores/tools/tool-display');
+		for (const name of ['a__b', '__', 'x', 'plugin__tool']) {
+			expect(toolDisplayName(name, undefined, true).length).toBeGreaterThan(0);
+		}
+	});
+});

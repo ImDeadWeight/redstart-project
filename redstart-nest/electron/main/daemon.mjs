@@ -3,16 +3,12 @@
 // =============================================================================
 // Redstart Nest — the daemon
 // =============================================================================
-// Everything that is Nest-the-service, extracted from index.mjs in Phase 8A.2
-// so that a plain-Node process can run it. The Electron launcher and
-// bin/nestd.mjs are two entrypoints onto this one module; the daemon itself
-// cannot tell them apart, which is decision 6 ("the Electron UI is a client of
-// the daemon, like Twig") reaching the code.
-//
-// The seam was already a line in a file. index.mjs's main() ran paths, logger,
-// process log, capability folders, stale-process reaping, the admin API table,
-// the beacon and the admin plane — and only then the tray and the window.
-// Everything above the tray is here now; everything below it stayed there.
+// Everything that is Nest-the-service, extracted from index.mjs so that a
+// plain-Node process can run it. The Electron launcher and bin/nestd.mjs are
+// two entrypoints onto this one module; the daemon itself cannot tell them
+// apart — "the Electron UI is a client of the daemon, like Twig" reaching
+// the code. index.mjs's main() ran everything above the tray; that's here
+// now, and everything from the tray down stayed there.
 //
 // WHAT IS DELIBERATELY NOT HERE:
 //   - The window, the tray, the close notice, popup containment, the
@@ -21,14 +17,14 @@
 //     userData scheme, not a "where does data live" question this ever asks.
 //   - initPaths() and initSecrets(): the entrypoint decides where state lives
 //     and how secrets are encrypted, and those two answers are exactly what
-//     differ between a desktop install and an appliance (§1.1, §3.1). Passing
-//     them in rather than deciding them here is the whole point.
+//     differ between a desktop install and an appliance. Passing them in
+//     rather than deciding them here is the whole point.
 //
-// THE EXIT-CODE CONTRACT (§8A.2, and 8B.3's supervisor depends on it):
+// THE EXIT-CODE CONTRACT (a supervisor depends on it):
 //   1  the daemon crashed — a supervisor should restart it
 //   0  someone deliberately stopped it — a supervisor should leave it down
-// Phase 7 already chose these correctly (crash-handler's app.exit(1), §7.5's
-// ordinary quit). Both entrypoints must preserve them, or the admin UI's
+// These were already chosen correctly (crash-handler's app.exit(1), the
+// ordinary quit path). Both entrypoints must preserve them, or the admin UI's
 // "Shut down" becomes a button that gets undone a second later.
 // =============================================================================
 
@@ -76,7 +72,7 @@ const execFileAsync = promisify(execFile)
 let host = null
 
 const DEFAULT_HOST = {
-  // The ONE deliberate-quit path admin:shutdown gets (§7.5). Electron defers
+  // The ONE deliberate-quit path admin:shutdown gets. Electron defers
   // app.quit(); nestd stops the daemon and exits 0.
   quitApp: () => {},
   // Best-effort human warning on a crash. A desktop has a notification area;
@@ -86,11 +82,11 @@ const DEFAULT_HOST = {
   // suspect state by then.
   exitCrashed: () => process.exit(1),
   // Whether the daemon can survive not owning the control plane. On the
-  // desktop it can (the daemon still runs; only the UI cannot reach it —
-  // and §7.1's single-instance lock means a second process rarely gets
-  // this far). Headless it cannot: a daemon that controls nothing is worse
-  // than one that failed loudly, and §7.1's "make the failure legible"
-  // applies with more force where there is no window to notice.
+  // desktop it can (the daemon still runs; only the UI cannot reach it — and
+  // the single-instance lock means a second process rarely gets this far).
+  // Headless it cannot: a daemon that controls nothing is worse than one
+  // that failed loudly, and "make the failure legible" applies with more
+  // force where there is no window to notice.
   adminBindFailureIsFatal: false,
 }
 
@@ -104,9 +100,8 @@ let beaconServerInstance = null
 
 // Live tool-config refresh, bound to serverState. buildGatewayConfig +
 // createRefreshLiveToolsConfig live in gateway-config.mjs; this module only
-// owns the serverState the refresh closes over.
-// Bound inside setupAdminApi() (once paths are initialised, so configDir() is
-// safe to call) rather than here at module scope — see below.
+// owns the serverState the refresh closes over. Bound inside setupAdminApi()
+// (once paths are initialised, so configDir() is safe to call).
 let refreshLiveToolsConfig
 
 // ---------------------------------------------------------------------------
@@ -164,15 +159,11 @@ function ensureModelsDir() {
 // ---------------------------------------------------------------------------
 
 // The value this returns becomes spawn()'s first argument in ipc/server.mjs, so
-// it is checked HERE as well as at the settings:set-binary-path write. That is
-// not belt-and-braces for its own sake: settings.json is an ordinary file on
-// disk, and any value written by a build that predates the write-side check —
-// which is every install shipped so far — is read by this function and launched.
-// Validating only on the way in would leave the stored value trusted forever.
-//
+// it is checked HERE as well as at the settings:set-binary-path write —
+// settings.json is an ordinary file on disk, and a value written by an older
+// build that predates the write-side check would otherwise be trusted forever.
 // A rejected override falls through to the bundled binary rather than failing
-// the launch, which is the same thing that happens when the path simply does
-// not exist.
+// the launch, the same as when the path simply does not exist.
 function resolveBinary() {
   const settings = readSettings()
   if (settings.serverBinPath) {
@@ -205,14 +196,20 @@ function resolveBinary() {
     }
   }
 
+  // Where a package or service install puts it. Checked after the project tree
+  // so a developer's own build still wins in a checkout, and deliberately NOT
+  // extended to a PATH lookup: this value is the head of the escalation
+  // chain (ipc/validate.mjs), and resolving it from PATH would hand that
+  // decision to whatever the daemon's environment happens to say.
+  //
+  // The only candidate a HEADLESS install has, on every platform including
+  // Windows: nestd runs under plain Node, so the packaged branch above is
+  // unreachable (no resourcesPath) and the dev branch wants a build tree the
+  // install does not have. The operator drops the binary beside the state
+  // the daemon already owns.
+  candidates.push(path.join(configDir(), 'bin', name))
   if (process.platform !== 'win32') {
-    // Where a package install would put it. Checked after the project tree so
-    // a developer's own build still wins in a checkout, and deliberately NOT
-    // extended to a PATH lookup: this value is the head of the escalation
-    // chain (ipc/validate.mjs), and resolving it from PATH would hand that
-    // decision to whatever the daemon's environment happens to say.
     candidates.push(
-      path.join(configDir(), 'bin', name),
       path.join('/usr/lib/redstart/bin', name),
       path.join('/usr/local/lib/redstart/bin', name),
     )
@@ -283,29 +280,24 @@ async function startDiscoveryBeacon() {
 // ---------------------------------------------------------------------------
 // Admin listener (the control plane)
 // ---------------------------------------------------------------------------
-// Started HERE, beside the beacon, and not from the llama:launch handler. That
-// placement is the whole argument: the control plane must be up before, and
-// independently of, the thing it controls (headless-admin-plane-plan.md
-// decision 3). See admin-listener.mjs for what it serves.
+// Started HERE, beside the beacon, and not from the llama:launch handler:
+// the control plane must be up before, and independently of, the thing it
+// controls. See admin-listener.mjs for what it serves.
 //
-// Where it binds is a persisted setting holding an ADDRESS, not a boolean, and
-// it defaults to loopback — availability is always on, exposure is opt-in (plan
-// decision 4). Deliberately not `networkMode`, which is data-plane state read
+// Where it binds is a persisted setting holding an ADDRESS, not a boolean,
+// and it defaults to loopback — availability is always on, exposure is
+// opt-in. Deliberately not `networkMode`, which is data-plane state read
 // only at launch.
 //
 // A failure to bind is logged and swallowed rather than fatal ON THE DESKTOP
-// — the daemon itself (gateway, MCP, discovery) still comes up. Headless it is
-// fatal instead (host.adminBindFailureIsFatal): with no window and no tray, a
-// daemon that came up owning nothing has no way to tell anyone, and the
-// process that already holds :19083 is the one actually in charge. Since
-// Phase 6 §6.2,
-// though, the LAUNCHER window specifically has no fallback if this fails:
-// createWindow() loads this listener's own page, so a bind failure here
-// means the window loads nothing rather than a working-but-disconnected UI.
-// That is the accepted shape of "the Electron UI is a client of the daemon,
-// like Twig" (plan decision 6) — the alternative would be keeping a second,
-// privileged way for the window to render regardless, which is the exact
-// thing this phase retires.
+// (the daemon itself still comes up) but fatal headless
+// (host.adminBindFailureIsFatal) — with no window and no tray, a daemon that
+// came up owning nothing has no way to tell anyone. The LAUNCHER window
+// specifically has no fallback if this fails, though: createWindow() loads
+// this listener's own page, so a bind failure here means the window loads
+// nothing rather than a working-but-disconnected UI — "the Electron UI is a
+// client of the daemon, like Twig" leaves no privileged way for the window
+// to render regardless.
 async function startAdminPlane() {
   // Minted here, not on first use. A token that only appears at the moment
   // someone is locked out is a token they cannot get to — and an install that
@@ -315,38 +307,35 @@ async function startAdminPlane() {
   const settings = readSettings()
   const bindHost = settings.adminBindHost || DEFAULT_ADMIN_BIND_HOST
   try {
-    // Phase 8A.6 — absent on every install, which means no CORS headers at
-    // all. It exists for a client that did not come from this origin, which
-    // is a thing only a remote daemon makes possible.
+    // Absent on every install, which means no CORS headers at all. It exists
+    // for a client that did not come from this origin, which is a thing only
+    // a remote daemon makes possible.
     await startAdminListener({ bindHost, allowedOrigins: settings.adminAllowedOrigins })
   } catch (err) {
     console.warn('Admin listener failed to start:', err.message)
     logEvent('admin', 'listener_start_failed', { reason: err.code || 'error' })
     if (host.adminBindFailureIsFatal) throw err
   }
-  // Discovery (the port-80 clean URL, since Phase 6.5 retired mDNS) is a
-  // data-plane convenience keyed on networkMode alone — it no longer reads
-  // the listener's bind state at all. Still started here rather than only
-  // from `llama:launch`, so a box that was previously put in network mode
-  // gets the clean URL back at boot even before the next launch. See
-  // discovery.mjs.
+  // Discovery (the port-80 clean URL, discovery.mjs) is a data-plane
+  // convenience keyed on networkMode alone. Started here rather than only
+  // from `llama:launch`, so a box already in network mode gets the clean URL
+  // back at boot even before the next launch.
   startDiscovery(lastKnownDiscovery(readSettings()))
 }
 
 
 // ---------------------------------------------------------------------------
-// Crash detection and warning (Phase 7 §7.4a)
+// Crash detection and warning
 // ---------------------------------------------------------------------------
 // describeCrash()'s own module header (crash-handler.mjs) has the full
 // reasoning for warn-not-restart and for what this can and cannot catch.
 // This function is only the wiring: register the two handlers, and on
 // either firing, log, notify (best-effort), then exit directly.
 //
-// Called by the ENTRYPOINT rather than by startDaemon(), and deliberately so:
-// §7.4a installs these before initPaths() so that a crash during startup
-// itself is caught, and startDaemon() runs after paths are up. Both halves of
-// what differs between entrypoints — how to warn a human, how to leave — are
-// arguments, since a headless box has no notification area and no app.exit().
+// Called by the ENTRYPOINT rather than by startDaemon(): these install
+// before initPaths(), so a crash during startup itself is caught too, and
+// notifyCrash/exitCrashed are arguments because a headless box has no
+// notification area and no app.exit().
 export function installCrashHandlers({ notifyCrash, exitCrashed } = {}) {
   const notify = notifyCrash ?? DEFAULT_HOST.notifyCrash
   const exit = exitCrashed ?? DEFAULT_HOST.exitCrashed
@@ -366,8 +355,8 @@ export function installCrashHandlers({ notifyCrash, exitCrashed } = {}) {
     // suspect here, so this deliberately skips stopDaemon(). Leaves a running
     // llama-server orphaned — accepted, not solved here: reapStaleProcess()
     // already runs at the next startup and exists precisely for this case.
-    // The 1 is also the supervisor's signal to restart (8B.3); see this
-    // module's header on the exit-code contract.
+    // The 1 is also the supervisor's signal to restart; see this module's
+    // header on the exit-code contract.
     exit()
   }
   process.on('uncaughtException', onFatal)
@@ -377,13 +366,12 @@ export function installCrashHandlers({ notifyCrash, exitCrashed } = {}) {
 // ---------------------------------------------------------------------------
 // The control-plane API table
 // ---------------------------------------------------------------------------
-// Phase 6 §6.2 retired IPC — this used to also register every namespace's
-// handlers with ipcMain (registerIpcHandlers(), deleted along with
-// ipc/guard.mjs). buildAdminApi(deps) below is the only consumer of the
-// handler tables left, and it was always the design's real source of truth
-// (ipc/transport.mjs's header explains why: a route table derived from IPC
-// registration would be empty on a platform with no Electron, which is the
-// platform HTTP-only exists for).
+// IPC is retired — this used to also register every namespace's handlers
+// with ipcMain (registerIpcHandlers(), deleted along with ipc/guard.mjs).
+// buildAdminApi(deps) below is the only consumer of the handler tables left,
+// and it was always the real source of truth: a route table derived from
+// IPC registration would be empty on a platform with no Electron, which is
+// the platform HTTP-only exists for (see ipc/transport.mjs).
 function setupAdminApi() {
   const userDataDir = configDir()
   refreshLiveToolsConfig = createRefreshLiveToolsConfig(serverState, userDataDir)
@@ -415,12 +403,12 @@ function setupAdminApi() {
     // no profile has been started yet, since the ports are derived from it.
     getConfiguredPort: () => serverState.lastConfig?.port ?? 19080,
     userDataDir,
-    // Phase 7 §7.5 — the ONE deliberate-quit path admin:shutdown gets. Both
-    // entrypoints must let the HTTP response this call is answering leave the
-    // socket before teardown begins, or the caller sees a connection reset and
-    // cannot tell success from crash — see ipc/admin.mjs's shutdown() for why
-    // that ordering matters. Late-bound through host so the deps table can be
-    // built before an entrypoint's own quit path is reachable.
+    // The ONE deliberate-quit path admin:shutdown gets. Both entrypoints
+    // must let the HTTP response this call is answering leave the socket
+    // before teardown begins, or the caller sees a connection reset and
+    // cannot tell success from crash (see ipc/admin.mjs's shutdown()).
+    // Late-bound through host so the deps table can be built before an
+    // entrypoint's own quit path is reachable.
     quitApp: () => host.quitApp(),
   }
 
@@ -434,7 +422,7 @@ function setupAdminApi() {
 /**
  * Start everything that is Nest-the-service. The caller has already decided
  * where state lives (initPaths) and how secrets are encrypted (initSecrets);
- * this does the rest, in an order that has been load-bearing since Phase 1.
+ * this does the rest, in an order that has been load-bearing from the start.
  *
  * Throws only if the control plane fails to bind AND the entrypoint declared
  * that fatal — see DEFAULT_HOST.adminBindFailureIsFatal.
@@ -446,8 +434,8 @@ export async function startDaemon(entrypoint = {}) {
   // step below it is captured.
   initLogger(configDir())
   logEvent('app', 'ready', { platform: process.platform })
-  // llama-server's own output (Phase 5 §5.2) — a separate stream from the
-  // structured event log above, see process-log.mjs's header for why.
+  // llama-server's own output — a separate stream from the structured event
+  // log above, see process-log.mjs's header for why.
   initProcessLog(configDir())
   // Pre-provision default capability folders so Documents/SQLite/Vault/Git
   // are one-click enable out of the box. Fills only unset paths — a
@@ -484,10 +472,9 @@ export async function startDaemon(entrypoint = {}) {
 /**
  * Stop everything startDaemon() started, in reverse order of dependency.
  *
- * This was index.mjs's `before-quit` body verbatim. Design §4's Phase 7
- * paragraph asked for the teardown to move out of the client and into the
- * daemon; Phase 7 could not, because with one process there was only ever one
- * caller. There are two now, and a second copy that drifts is precisely how a
+ * This was index.mjs's `before-quit` body verbatim, moved out of the client
+ * and into the daemon — with one process there was only ever one caller.
+ * There are two now, and a second copy that drifts is precisely how a
  * llama-server child gets left running past quit.
  *
  * The tray is NOT torn down here — it is the client's, and the client's own
@@ -521,11 +508,11 @@ export function stopDaemon() {
 // Read-through for the client
 // ---------------------------------------------------------------------------
 // The Electron client legitimately needs a few daemon-side values in-process:
-// the tray asks whether a model is running and offers to stop it, §7.4's login
-// item and §7.7's close notice read and write settings.json. Exported directly
+// the tray asks whether a model is running and offers to stop it, the login
+// item and the close notice read and write settings.json. Exported directly
 // rather than routed through the admin API because the client shares this
 // process — a loopback HTTP round-trip to read a boolean out of the same heap
 // would be ceremony. That shortcut is available ONLY to an in-process client
-// and stops existing the moment the two are split for real (8B.7); anything
-// richer than this should go through the API instead of growing this list.
+// and stops existing the moment the two are split for real; anything richer
+// than this should go through the API instead of growing this list.
 export { serverState, readSettings, writeSettings }

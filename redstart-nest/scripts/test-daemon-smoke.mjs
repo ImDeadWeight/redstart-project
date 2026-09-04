@@ -374,6 +374,18 @@ try {
     assert(/fail|EADDRINUSE|listen/i.test(second.text()),
       `the bind failure was not reported:
 ${second.text()}`)
+
+    // The MESSAGE, not just the exit code. Headless this string is the entire
+    // failure report — no window, no tray, and on a service install nobody is
+    // watching the console at all, so it lands in a log somebody reads later.
+    // Node's own text names a mechanism ("address already in use 0.0.0.0:8765")
+    // and hides the cause, and it names the BEACON port rather than the admin
+    // port, because the beacon binds first — so the one number it does give is
+    // the one least likely to mean anything to the reader.
+    const text = second.text()
+    assert(/already running|already in use/i.test(text) && /redstart/i.test(text),
+      `the bind failure did not say a Redstart daemon is already running:
+${text}`)
     fs.rmSync(secondDir, { recursive: true, force: true })
     return 'exit 1'
   })

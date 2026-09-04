@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { api } from '../api/redstart'
 
-// Phase 7 §7.5 — the one deliberate way left to stop the daemon, now that
-// closing the window no longer does (§7.2). Two-step confirm, same shape as
+// The one deliberate way left to stop the daemon, now that
+// closing the window no longer does. Two-step confirm, same shape as
 // useServerLifecycle's requestStopServer/confirmStopServer: this stops the
 // model AND takes the box off the network for every other client, and a
 // remote admin cannot walk over and restart it, so an accidental single

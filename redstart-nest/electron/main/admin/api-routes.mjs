@@ -7,8 +7,7 @@
 // `llama:launch` is /admin/api/llama/launch. The handler behind each is the
 // SAME function object the preload bridge is bound to (ipc/transport.mjs), which
 // is what makes "every method has a route" true by construction rather than by
-// a list somebody maintains. Trap 5.8 asks for a replacement for
-// test-ipc-contract.mjs's parity invariant; this is the half of it that lives in
+// a list somebody maintains: this is the half of that invariant that lives in
 // the code, and scripts/test-admin-api.mjs is the half that checks it.
 //
 // A ROUTE PER METHOD, NOT ONE /rpc ENDPOINT. Both are the same dispatch under
@@ -32,9 +31,8 @@
 //
 // THE GATE IS NOT HERE. admin-listener.mjs authenticates and authorises before
 // dispatch reaches this module, so there is exactly one place where the
-// control-plane rule is applied and no route can be added that forgets it —
-// which is the structural version of decision 18's "one edit rather than an
-// audit of every route".
+// control-plane rule is applied and no route can be added that forgets it: one
+// edit rather than an audit of every route.
 // =============================================================================
 
 import { isLocalOnly } from '../ipc/transport.mjs'
@@ -56,7 +54,7 @@ export function setAdminApi(handlers) {
 }
 
 /**
- * Phase 8A.6 (trap 5.7) — the identity a client's expectations are against.
+ * The identity a client's expectations are against.
  *
  * Computed from the table that is actually registered, not from a constant
  * someone has to remember to bump, and recomputed whenever the table is

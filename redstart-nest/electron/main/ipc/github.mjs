@@ -6,8 +6,7 @@
 // collaborators passed in via `deps` rather than reached for as module globals.
 // This namespace has no shared state, so its deps object is empty.
 //
-// Handler bodies are exported as plain functions (Phase 1, §1.3 of the
-// headless-admin-plane implementation plan) so an HTTP route can call them
+// Handler bodies are exported as plain functions so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerGithubHandlers() does that.
 

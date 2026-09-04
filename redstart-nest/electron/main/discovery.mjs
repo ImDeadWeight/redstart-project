@@ -3,13 +3,11 @@
 // =============================================================================
 // Redstart Nest — Discovery (the port-80 clean URL)
 // =============================================================================
-// Phase 6.5 retired mDNS wholesale (`.local` names never worked on Android,
-// the primary mobile platform, and Twig's beacon scan never needed a name to
-// begin with — see the removal's own record in
-// docs/notes/headless-admin-plane-implementation.md §6.5.0). What is left of
-// this module is the port-80 proxy: a clean `http://<ip>` instead of
-// `http://<ip>:19080`, useful on the LAN and, unlike mDNS, working on every
-// client including Android.
+// mDNS was retired wholesale (`.local` names never worked on Android, the
+// primary mobile platform, and Twig's beacon scan never needed a name to
+// begin with). What is left of this module is the port-80 proxy: a clean
+// `http://<ip>` instead of `http://<ip>:19080`, useful on the LAN and,
+// unlike mDNS, working on every client including Android.
 //
 // WHAT MOVED AND WHY. This used to be started from inside the `llama:launch`
 // handler, which meant a box that had never launched a model had never
@@ -24,9 +22,8 @@
 // WHAT DECIDES WHETHER IT STARTS. `networkMode`, full stop — this is purely a
 // data-plane convenience now. (Historical note: this used to be "the union of
 // both planes," because an exposed control plane was also a reason to
-// advertise via mDNS. That reasoning is gone with mDNS; design decision 17
-// is accordingly half-void — see the Phase 6.5 record. What survives of it is
-// only "this starts with the daemon, not from inside `llama:launch`.")
+// advertise via mDNS. That reasoning is gone with mDNS. What survives of it
+// is only "this starts with the daemon, not from inside `llama:launch`.")
 // =============================================================================
 
 import { startPort80Proxy, stopPort80Proxy } from './port80-proxy.mjs'
@@ -71,18 +68,18 @@ export function discoveryRecordFor(config) {
 export function discoveryPlan({ networkMode, platform = process.platform } = {}) {
   if (networkMode !== true) return { advertise: false, reason: 'loopback-only' }
   if (platform !== 'win32') {
-    // Phase 8A.4 — the clean URL is a Windows-desktop convenience and it
-    // cannot work headless, for two independent reasons:
+    // The clean URL is a Windows-desktop convenience and it cannot work
+    // headless, for two independent reasons:
     //
     //   1. Port 80 is privileged on POSIX. An unprivileged daemon simply
     //      cannot bind it, and the answer is emphatically NOT to give Nest
-    //      the capability to do so — decision 9 exists to SHED privileges,
-    //      and CAP_NET_BIND_SERVICE on a process that spawns a
+    //      the capability to do so — the service account exists to SHED
+    //      privileges, and CAP_NET_BIND_SERVICE on a process that spawns a
     //      user-configurable binary and runs third-party plugin code undoes
-    //      the point of the service account.
-    //   2. Design §3.3 puts a reverse proxy in front at level 3, and it owns
-    //      80 and 443. Nest also binding 80 would be a collision with the
-    //      thing that is supposed to be terminating TLS.
+    //      the point of it.
+    //   2. A reverse proxy sits in front at level 3, and it owns 80 and 443.
+    //      Nest also binding 80 would be a collision with the thing that is
+    //      supposed to be terminating TLS.
     //
     // Reported rather than attempted-and-swallowed: an EADDRINUSE or EACCES
     // logged as a warning on every boot is how an operator learns to ignore

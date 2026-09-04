@@ -80,6 +80,33 @@ function write(data) {
 // Validation
 // ---------------------------------------------------------------------------
 
+/** A tool title is a display string, capped so it cannot dominate a picker row. */
+export const MAX_TOOL_TITLE_LENGTH = 64
+
+// A publisher-authored string that lands in the UI, so it is treated the way
+// every other piece of untrusted publisher text in this tree is.
+//
+// What this does NOT try to do: stop a title from being misleading. A plugin
+// may legitimately call its tool "Read File", and nothing here can tell that
+// apart from one impersonating Redstart's own. Two things carry that weight
+// instead — the group header naming the plugin, and the real wire name staying
+// visible wherever identity matters (the ban list, any audit view). A title is
+// never the thing a decision is made against.
+export function sanitizeToolTitle(value) {
+  if (typeof value !== 'string') return ''
+  const cleaned = value
+    // Control characters and every kind of line break: a title is one line,
+    // and a newline in a picker row is a way to push the rest of a list off
+    // the screen.
+    .replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g, ' ')
+    // Bidi controls reorder rendered text, which is a standing way to make a
+    // label render as something other than what it says.
+    .replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return cleaned.slice(0, MAX_TOOL_TITLE_LENGTH)
+}
+
 /**
  * Is this entry safe to trust as a permission record?
  *
@@ -134,6 +161,12 @@ export function validatePlugin(entry) {
     }
     tools.push({
       name: t.name,
+      // MCP's optional human-readable label for a tool. Sanitised HERE rather
+      // than at render time because validatePlugin runs on every read, so an
+      // entry written by an older build — or hand-edited into plugins.json — is
+      // cleaned on the way out too, not only on the way in. Same reasoning
+      // plugin-moderation-plan.md D3 gives for descriptions.
+      title: sanitizeToolTitle(t.title),
       description: typeof t.description === 'string' ? t.description : '',
       inputSchema: t.inputSchema && typeof t.inputSchema === 'object' ? t.inputSchema : {},
       class: t.class,

@@ -19,7 +19,7 @@
 //
 // Must also stay visually distinct from the Tools tab's External MCP section:
 // client-executed remote servers are a different mechanism with a different
-// trust boundary (plan Trap 10).
+// trust boundary.
 
 import { useState } from 'react'
 import { api } from '../api/redstart'

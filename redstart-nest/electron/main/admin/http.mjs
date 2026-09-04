@@ -60,8 +60,8 @@ export async function readJsonBody(req) {
 /**
  * The address a request came from, for rate limiting.
  *
- * `X-Forwarded-For` is deliberately NOT consulted. Behind the reverse proxy
- * that plan §3.3 documents, every request genuinely does arrive from loopback
+ * `X-Forwarded-For` is deliberately NOT consulted. Behind the documented
+ * reverse-proxy deployment, every request genuinely does arrive from loopback
  * and all callers share one bucket — which is a real weakness, stated in
  * rate-limit.mjs. Trusting the header instead would trade it for a worse one:
  * with no proxy in front, a client that sets its own header gets a fresh bucket

@@ -4,9 +4,9 @@
 
 # Redstart
 
-**A self-hosted AI ecosystem for home and small-office use.** Redstart Nest runs local models on hardware you own and exposes them to the applications you work in — chat from your phone or laptop, query your data, or drive a coding agent in your IDE. You choose the models, decide which applications and users can connect, and control what those tools can reach.
+**A local AI server for a household or small team.** Redstart Nest runs local models on hardware you own and exposes them to the applications you work in — chat from your phone or laptop, query your data, or drive a coding agent in your IDE. You choose the models, decide which applications and users can connect, and control what those tools can reach.
 
-**The apps:** [Nest](#the-apps) (the server) · [Twig](#the-apps) (chat client) · [Blueprints](https://github.com/ImDeadWeight/redstart-blueprints) (SQL data workbench - in progress) · [Yellowscript](https://github.com/ImDeadWeight/redstart-yellowscript) (VS Code Extension - in progress) · [Greenhouse](https://github.com/ImDeadWeight/redstart-greenhouse) (project management, planned)
+LM Studio, Jan and Ollama are model runners — very good ones — aimed at getting a model going on the PC in front of you. Redstart is the layer after that: accounts, tool policy and network discovery, so the model on the GPU box is usable from every device in the house. [How it compares](#alternatives-worth-knowing-about).
 
 **Documentation:** [Mission](docs/mission.md) · [Architecture](docs/architecture.md) · [Security](docs/security.md) · [Capabilities](docs/capabilities.md) · [Configuration](docs/configuration.md) · [Development](docs/development.md) · [Testing](TESTING.md) · [Deployment](deploy/README.md) · [Roadmap](docs/roadmap.md)
 
@@ -37,19 +37,28 @@
 
 ---
 
-## The apps
+## What Nest does
 
-Redstart is an ecosystem around one idea: a model you own, running on hardware you own, reachable from every tool you work in. **Redstart Nest hosts the model, the tools, and the policy. Everything else is a client** that finds it on the network, signs in with a Redstart account, and gets the same capabilities the admin configured once.
+**Redstart Nest is the server.** It runs the model, and it owns the four things a
+model on its own doesn't have: who may use it, what it may reach, how devices
+find it, and who may administer it. Everything else — Twig, a browser, a coding
+agent — is a client that connects and gets whatever the admin configured once.
 
-| App | Platform | Role | Status |
-|---|---|---|---|
-| **Redstart Nest** | Windows (Electron); daemon runs headless under Node | Server manager — runs the model, hosts the tools, accounts and policy, and broadcasts itself on the LAN. Administrable from a browser on another device | In this repo |
-| **Redstart Twig** | Android & Windows | Lightweight chat client; finds Nest automatically, no configuration | In this repo — Windows working; **Android build out of date, [see note](#redstart-twig-android)** |
-| **[Redstart Blueprints](https://github.com/ImDeadWeight/redstart-blueprints)** | Windows (Electron) | Local-first SQL data workbench with optional AI assistance | Separate repo |
-| **[Redstart Yellowscript](https://github.com/ImDeadWeight/redstart-yellowscript)** | VS Code extension | A coding agent that talks to a local Nest instead of a cloud | Separate repo |
-| **[Redstart Greenhouse](https://github.com/ImDeadWeight/redstart-greenhouse)** | Windows (Electron), planned | Project management, built the way Blueprints is built | Not yet started |
+- **Runs the model.** llama.cpp on your hardware, bound to loopback, driven from a launcher that handles model files, GPU offload and the server lifecycle. Closing the window doesn't stop it; it keeps serving from the tray.
+- **Serves every device on the network.** Nest broadcasts a beacon, so Twig finds it with no configuration and a phone camera can open the chat UI from a QR code. The chat UI is served by Nest itself, so any browser works with nothing installed.
+- **Owns accounts and roles.** Login is on by default with no localhost exemption, roles are assigned per account, and each account's files are structurally isolated from every other's.
+- **Owns the tool policy.** Capabilities and plugins are configured once on the server and apply to every client. Each client authenticates with a per-connector key that carries its own *surface*, so the server knows which app is calling from the credential rather than from a header it could fake.
+- **Keeps control separate from chat.** The admin plane is a different port, a different lifetime and a different login: signing in to the chat UI does not give you process control.
+- **Controls egress explicitly, and will tell you.** Nothing about a conversation leaves by default; what can leave is exactly what an admin turned on, and `GET /egress` returns the live answer.
 
-The integration points are contracts, not conventions: every client authenticates with a per-connector key that carries its own *surface*, so the server knows which app is calling from the credential rather than a header it could fake. See [Architecture](docs/architecture.md) for the full picture.
+### Redstart Twig
+
+The chat client that ships in this repo — a lightweight app that finds Nest on
+the LAN and signs in, with no hostname to type. **Windows works. The Android
+build is out of date and paused** ([see note](#redstart-twig-android)); a phone
+browser against the chat UI is the working substitute in the meantime.
+
+Since llama-server speaks the OpenAI API, [coding agents](#using-as-a-coding-agent-kilo-code--continue--etc) and any other OpenAI-compatible application are clients too, with no Redstart-specific code.
 
 ---
 
@@ -66,7 +75,7 @@ The integration points are contracts, not conventions: every client authenticate
   └─ Beacon      :8765
 ```
 
-Redstart Nest broadcasts a beacon on the LAN, so Twig finds it with no configuration and a phone camera can open the chat UI from a QR code. The chat UI is also reachable in any browser at `http://127.0.0.1:19080` — no app required. Since llama-server speaks the OpenAI API, any coding agent that accepts a custom base URL works against it.
+The chat UI is reachable in any browser at `http://127.0.0.1:19080`, and at the Nest machine's LAN address once network mode is on — no app required.
 
 **Two planes, two lifetimes.** 19080/19081/19082 exist because a model is running and go away when it stops. **19083 is the control plane** — it binds when Redstart Nest starts and stays up whether or not a model is, because a plane whose lifetime is tied to the thing it controls cannot be used to start that thing. It serves the same launcher interface in a browser, so the box can be administered from another device, and it authenticates separately: signing in to the chat UI does *not* give you process control. It listens on loopback unless you deliberately move it.
 
@@ -219,7 +228,31 @@ If you just want to run a model on a single PC, these are more mature options:
 
 All three can technically be reached from other devices on your LAN if you manually configure them to bind to `0.0.0.0` — but you are then on your own for finding the IP address and entering it in whatever client you use. None have a mobile app that discovers the server automatically, and none have a QR-to-connect flow.
 
-Redstart's niche is two things those don't try to be: making the **home network experience a first-class feature** rather than a manual network-configuration exercise, and being an **ecosystem of applications** — chat, data workbench, IDE agent, project management — that all share one server, one account system, and one tool policy. If single-PC use is all you need, LM Studio is probably the better starting point.
+Redstart's niche is the thing those don't try to be: a server for a group of people rather than a runner for one PC. Making the **home network experience a first-class feature** instead of a manual network-configuration exercise, and treating **accounts, tool policy and egress control as the product** rather than something bolted on afterwards, is the whole distinction. If single-PC use is all you need, LM Studio is probably the better starting point.
+
+---
+
+## Direction
+
+Nest's own roadmap — folder access grants, crash recovery, signed installers,
+document querying, macOS — is in [Roadmap](docs/roadmap.md), along with the
+limitations it hasn't cleared yet.
+
+Beyond Nest and Twig, the same server is what these are being built against.
+They live in their own repos and are **not** required to use Redstart:
+
+| App | Platform | Role | Status |
+|---|---|---|---|
+| **[Redstart Blueprints](https://github.com/ImDeadWeight/redstart-blueprints)** | Windows (Electron) | Local-first SQL data workbench with optional AI assistance | In progress |
+| **[Redstart Yellowscript](https://github.com/ImDeadWeight/redstart-yellowscript)** | VS Code extension | A coding agent that talks to a local Nest instead of a cloud | In progress |
+| **[Redstart Greenhouse](https://github.com/ImDeadWeight/redstart-greenhouse)** | Windows (Electron) | Project management, built the way Blueprints is built | Planned, not started |
+
+What makes that plausible rather than aspirational is that the integration
+points are contracts, not conventions: a client authenticates with a
+per-connector key carrying its own surface, and tool names are namespaced per
+app (`bp_*`, `ys_*`, `gh_*` — see [tool namespacing](docs/tool-namespacing.md)),
+so a new client is a credential and a namespace rather than a change to the
+server. See [Architecture](docs/architecture.md) for the full picture.
 
 ---
 

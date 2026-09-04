@@ -2,9 +2,9 @@
 // Redstart Nest — the control plane's front door
 // =============================================================================
 // Wraps the launcher for EVERY caller alike — a browser tab, and the
-// Electron window itself (Phase 6 §6.2 retired the IPC bridge that used to
-// let Electron skip this; see decision 6, "the Electron UI is a client of
-// the daemon, like Twig"). Nobody gets to App.tsx without a real session.
+// Electron window itself (the IPC bridge that used to let Electron skip this
+// is retired — "the Electron UI is a client of the daemon, like Twig").
+// Nobody gets to App.tsx without a real session.
 //
 // Two screens, and which one appears is the daemon's answer to
 // GET /admin/auth/config, never a guess:
@@ -30,7 +30,7 @@
 //
 // A NOTE ON WHAT THIS IS NOT. There is no "remember me" checkbox: the session
 // is remembered, for twelve sliding hours, and a longer-lived persistent token
-// is its own feature with its own storage decisions (plan decision 11).
+// is its own feature with its own storage decisions.
 // =============================================================================
 
 import { useEffect, useState } from 'react'

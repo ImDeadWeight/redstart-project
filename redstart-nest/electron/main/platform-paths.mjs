@@ -15,7 +15,7 @@
 //
 //   configDir()         Nest's own state — accounts, roles, tools, plugins,
 //                        profiles, settings, logs. Small, always wanted in a
-//                        backup, and what §3.2's last-resort reset
+//                        backup, and what the last-resort reset
 //                        (stop the daemon, delete accounts.json, re-bootstrap)
 //                        operates on.
 //
@@ -28,7 +28,7 @@
 // Collapsing these into one directory is the mistake this module exists to
 // prevent: a config reset must never be able to wander into a user's
 // documents, and a backup has to be able to treat "my settings" and "my
-// files" as different questions. See headless-admin-plane-plan.md §3.5.
+// files" as different questions.
 //
 // Fail-closed: reading before initPaths() has run is a
 // startup-ordering bug, not a condition to paper over with a default —
@@ -58,10 +58,10 @@ export function initPaths({ config, capabilityBase, isPackaged }) {
 }
 
 /**
- * Phase 8B.1 - the two directories must be separate subtrees, and this refuses
+ * The two directories must be separate subtrees, and this refuses
  * at startup rather than letting them quietly collapse.
  *
- * Design section 3.5 gives two reasons and both fail SILENTLY if they merge,
+ * Two reasons, and both fail SILENTLY if they merge,
  * which is why this is a hard error rather than a warning:
  *
  *   Backups. Config is small and always wanted; capability folders hold user

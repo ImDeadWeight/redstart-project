@@ -2,7 +2,7 @@
 // Redstart Nest — the control-plane session
 // =============================================================================
 // Used by every caller — a browser tab, and Electron's window, which is just
-// another HTTP client of the admin listener since Phase 6 §6.2 retired IPC.
+// another HTTP client of the admin listener now that IPC is retired.
 // Not in redstart.ts because it's a detail of the one transport there is, not
 // part of the RedstartAPI surface itself.
 //

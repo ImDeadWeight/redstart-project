@@ -1,15 +1,14 @@
 // Hardware IPC namespace — machine spec scan. (The GGUF model picker moved to
-// a native picker, Phase 4 §4.3 — itself retired in Phase 6 §6.1.)
+// a native picker, itself since retired.)
 //
 // KNOWN BUG (non-NVIDIA VRAM): the fallback below reads
 // Win32_VideoController.AdapterRAM, a 32-bit signed field that saturates at
 // 4095 MB — a 16 GB AMD or Intel card reports as 4 GB. The Models tab shows
 // this number as context next to artifact sizes without drawing a conclusion
 // from it, which is survivable. It must be fixed (registry qwMemorySize) before
-// anything *decides* anything from gpu.vram. See docs/notes/model-browser-plan.md.
+// anything *decides* anything from gpu.vram.
 //
-// Handler bodies are exported as plain functions (Phase 1, §1.3 of the
-// headless-admin-plane implementation plan) so an HTTP route can call them
+// Handler bodies are exported as plain functions so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerHardwareHandlers() does that.
 
@@ -85,10 +84,10 @@ $r | ConvertTo-Json -Compress
   return specs
 }
 
-// selectModelFile() retired — Phase 4 §4.3 moved model-file picking onto
+// selectModelFile() is retired — model-file picking moved onto
 // FolderPicker.tsx, which calls admin/browse-routes.mjs's browse:list
-// instead of a dedicated dialog here (Phase 6 §6.1 later retired the native
-// dialog it briefly grew as a middle step). The renderer already knows the
+// instead of a dedicated dialog here (the native dialog it briefly grew as a
+// middle step was later retired too). The renderer already knows the
 // models dir (settings.getModelsDir()) and passes it through as
 // FolderPicker's `defaultPath`, so nothing is lost.
 

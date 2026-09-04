@@ -3,13 +3,12 @@
 // =============================================================================
 // Control-plane CORS — an explicit origin allowlist, off by default
 // =============================================================================
-// Phase 8A.6. The admin listener has never sent a CORS header, and that is
-// exactly right for the way it is used today: the browser panel is served BY
-// the daemon, so every request it makes is same-origin, and Phase 6's Vite dev
-// proxy sidesteps the question during local UI development rather than
-// answering it.
+// The admin listener has never sent a CORS header, and that is exactly right
+// for the way it is used today: the browser panel is served BY the daemon,
+// so every request it makes is same-origin, and the Vite dev proxy sidesteps
+// the question during local UI development rather than answering it.
 //
-// What changes with 8A is that a daemon can now run somewhere else. A client
+// What changes now is that a daemon can run somewhere else. A client
 // that did not come from this origin — an Electron launcher pointed at a
 // remote box, a panel served from a different host — is a cross-origin caller,
 // and the browser will refuse its requests before the daemon ever sees them.

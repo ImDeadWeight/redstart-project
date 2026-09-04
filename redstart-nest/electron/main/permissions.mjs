@@ -27,7 +27,7 @@
 // cache that outlives a request. Role LOOKUP lives in roles-storage.mjs; this
 // module is handed the role object.
 //
-// FAIL POSTURE (agreed, see docs/notes/roles-and-permissions-plan.md):
+// FAIL POSTURE:
 //   account === null   → auth is off. No narrowing. The authRequired toggle
 //                        keeps meaning exactly what it says.
 //   tier === 'owner'   → no narrowing, and the owner cannot be assigned a role.
@@ -42,7 +42,7 @@ import { capabilityToolNames, expandDisabledToolIds } from './tools-definitions.
  *
  * A FUNCTION. This was `Object.keys(CAPABILITY_TOOL_NAMES)` evaluated at import,
  * which silently excluded every plugin from narrowConfig — meaning roles could
- * not withhold a plugin at all. See docs/notes/mcp-plugin-system-plan.md Trap 3.
+ * not withhold a plugin at all.
  */
 export function capabilityIds() {
   return Object.keys(capabilityToolNames())
@@ -261,7 +261,7 @@ export function restrictsSurfaces(role) {
  *
  * One function, called by every admin route, so widening the rule later — a
  * second owner, a delegated admin — is one edit rather than an audit of every
- * route (headless-admin-plane-plan.md decision 18).
+ * route.
  *
  * NOT a role permission, deliberately. Permissions in this file may only ever
  * TIGHTEN a tier, and the owner ignores narrowing entirely (see can() above and
@@ -274,7 +274,7 @@ export function restrictsSurfaces(role) {
  * `account === null` means "auth is off, do not narrow" — the fail-OPEN branch,
  * and correctly so for the data plane, where the toggle means what it says.
  * Here the same null is a refusal, because control-plane auth is mandatory
- * regardless of that toggle (decision 12): two switches for two planes, rather
+ * regardless of that toggle: two switches for two planes, rather
  * than one switch whose "off" position hands out process spawning. `?.` is what
  * makes that fall out rather than being remembered.
  */

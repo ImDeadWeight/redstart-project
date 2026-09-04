@@ -6,27 +6,20 @@
 // with the right arguments and then gets out of the way. The actual model
 // runs in llama-server, which also serves the chat UI directly via --path.
 //
-// This file used to be all of it. Since Phase 8A.2 the service itself lives in
-// daemon.mjs and this is one of two entrypoints onto it — the desktop one.
-// What is left here is everything that needs Electron and nothing that does
-// not: the window, the tray, the single-instance lock, the close notice, popup
+// This file used to be all of it. The service itself now lives in daemon.mjs
+// and this is one of two entrypoints onto it — the desktop one. What is left
+// here is everything that needs Electron and nothing that does not: the
+// window, the tray, the single-instance lock, the close notice, popup
 // containment, the login item, and the one-time Beaver userData migration.
-// bin/nestd.mjs is the other entrypoint and has no UI at all.
-//
-// The division is not cosmetic. Electron is what makes a Windows desktop app
-// possible and what makes a headless appliance impossible (it needs a display
-// connection on Linux), so everything that is genuinely Nest had to stop being
-// reachable only from here. See docs/notes/headless-admin-plane-implementation.md
-// §8A.2, and design decision 6 — the Electron UI is a client of the daemon,
-// like Twig.
+// bin/nestd.mjs is the other entrypoint and has no UI at all — everything
+// genuinely Nest had to stop being reachable only from here, since Electron
+// is what makes a headless appliance impossible.
 //
 // What THIS entrypoint answers that the daemon cannot answer for itself:
 //   - where state lives (initPaths, from Electron's app.getPath)
 //   - how secrets are encrypted (safeStorage — DPAPI on Windows)
 //   - what a crash does (a shell notification, then app.exit(1))
 //   - what a deliberate shutdown does (quitApp — app.quit(), deferred)
-//
-// Key architectural decisions documented inline below.
 // =============================================================================
 
 import { app, BrowserWindow, Menu, nativeImage, Notification, dialog, safeStorage, shell } from 'electron'
@@ -51,11 +44,9 @@ import { reconcileStartupSetting } from './ipc/admin.mjs'
 
 // ---------------------------------------------------------------------------
 // Redstart pixel-art icon — minimal PNG encoder + 32×32 American Redstart bust
-// (placeholder design — a graphic artist will replace this). I wrote a
-// minimal PNG encoder from scratch here rather than pulling in an image
-// library. The icon is only 32×32 pixels and I didn't want to add a
-// dependency just to display a taskbar icon. Node's built-in zlib handles the
-// deflate compression that PNG requires, so the only cost is a little code.
+// (placeholder design — a graphic artist will replace this). Hand-rolled
+// rather than an image library dependency for a 32×32 taskbar icon; Node's
+// built-in zlib handles the deflate compression PNG requires.
 // ---------------------------------------------------------------------------
 
 function pngEncode(width, height, getPixel) {
@@ -327,16 +318,15 @@ try {
 
 let mainWindow = null
 
-// Phase 7 §7.2: set only by a deliberate quit path — 7.3's tray "Quit
-// Redstart" (§7.3, below) and admin:shutdown (§7.5's quitApp(), below) are
-// the only two things that set it. Not read anywhere yet — it exists so
-// those two paths have one flag to set rather than inventing their own,
-// and so that window-all-closed's comment below has something concrete to
-// point at. Closing the window is deliberately NOT one of these paths —
-// see window-all-closed.
+// Set only by a deliberate quit path — the tray's "Quit Redstart" (below)
+// and admin:shutdown (quitApp(), below) are the only two things that set it.
+// Not read anywhere yet — it exists so those two paths have one flag to set
+// rather than inventing their own, and so that window-all-closed's comment
+// below has something concrete to point at. Closing the window is
+// deliberately NOT one of these paths — see window-all-closed.
 let isQuitting = false
 
-// Phase 7 §7.3 — set once startTray() succeeds; before-quit calls it to
+// Set once startTray() succeeds; before-quit calls it to
 // unsubscribe from the broker and destroy the icon. Tray creation can fail
 // (no shell notification area, unlikely but not impossible on a stripped-down
 // Windows install) and is treated the same way the admin listener's own bind
@@ -379,7 +369,7 @@ function migrateUserDataFromBeaver() {
 // the gateway in any browser. No captive BrowserWindow or local proxy needed.
 // ---------------------------------------------------------------------------
 
-// applyCSP()/CSP retired in Phase 6 §6.2. The window now loads the admin
+// applyCSP()/CSP retired. The window now loads the admin
 // listener's own served page over HTTP (see createWindow() below), and that
 // response already carries its own precise, purpose-built policy —
 // admin-listener.mjs's ADMIN_CSP, sent as a real header on the document
@@ -394,17 +384,12 @@ function migrateUserDataFromBeaver() {
 // ---------------------------------------------------------------------------
 // Nothing in the launcher legitimately opens a second window or attaches a
 // <webview> — both are flat denials. This used to be paired with strict
-// same-origin navigation pinning (renderer-location.mjs) to protect the
-// preload bridge a navigated-to page would otherwise inherit; Phase 6 §6.2
-// deleted the bridge itself; without it there is no elevated surface a
-// navigation could inherit, so the narrower containment left is exactly
-// what a plain browser tab already gets from the web platform (a page can
-// navigate itself, but gains no extra privilege by doing so — Electron's
-// window is meaningfully no different, since it now holds nothing a browser
-// tab wouldn't). Hung off `web-contents-created` rather than off
+// same-origin navigation pinning to protect the preload bridge a
+// navigated-to page would otherwise inherit; the bridge is deleted now, so
+// the narrower containment left is exactly what a plain browser tab already
+// gets from the web platform. Hung off `web-contents-created` rather than
 // `mainWindow` so it also covers webContents that do not exist yet — a
-// popup, a <webview> — which is precisely the set a per-window handler
-// would miss.
+// popup, a <webview> — which a per-window handler would miss.
 function installPopupContainment() {
   app.on('web-contents-created', (_event, contents) => {
     contents.setWindowOpenHandler(() => {
@@ -419,26 +404,18 @@ function installPopupContainment() {
   })
 }
 
-// Phase 7 §7.7 (trap 5.6) — "closing the window will stop stopping the
-// server" is a real reversal of user expectation from before this phase,
-// and the design doc asks for it to be said plainly, not left to be
-// discovered by someone wondering why the model is still resident.
+// "Closing the window will stop stopping the server" is a real reversal of
+// user expectation, and deserves to be said plainly rather than discovered.
 //
 // Intercepts the window's own 'close' (the X button / Alt+F4), shown once
-// ever — persisted in settings.json, not merely for this session, since
-// the point is a single plain explanation the first time behavior changes,
-// not a recurring nag every time the app is reopened. Skipped entirely on
-// a deliberate quit (isQuitting true — the tray's Quit or admin:shutdown):
-// the window is closing because the whole daemon is, so there is nothing
-// misleading to correct.
+// ever — persisted in settings.json, not merely for this session, so it is
+// a single plain explanation rather than a recurring nag. Skipped entirely
+// on a deliberate quit (isQuitting true): the window is closing because the
+// whole daemon is, so there is nothing misleading to correct.
 //
-// dialog.showMessageBox is NOT the native-picker mechanism Phase 6 §6.1
-// retired (trap 5.2 was about a dialog browsing the CLIENT's disk on
-// someone else's behalf, an act with no safe caller once nothing can tell
-// "local" from "remote"). This shows an informational box on THIS
-// process's own window, which by construction is always local to whoever
-// is running this Electron process — no remote-vs-local ambiguity exists
-// for it the way it did for a file picker.
+// dialog.showMessageBox here is an informational box on THIS process's own
+// window, always local to whoever is running it — no remote-vs-local
+// ambiguity the way a file picker had.
 function installCloseNotice(win) {
   win.on('close', (event) => {
     if (isQuitting) return
@@ -483,12 +460,11 @@ function createWindow() {
     //
     // Why the overlay rather than `frame: false` plus three HTML buttons:
     // buttons in the page would need a way to call win.minimize(), and the
-    // only channel for that was the preload bridge Phase 6 §6.2 deleted. The
-    // alternatives are both wrong — reintroducing a privileged channel for
-    // window chrome, or putting window control on the admin HTTP API, where a
-    // browser on another device could minimise someone else's window. The
-    // overlay needs neither: the buttons are native, the theming is
-    // declarative, and the page stays an ordinary page.
+    // only channel for that was the preload bridge, now deleted. Both
+    // alternatives are wrong — a privileged channel for window chrome, or
+    // window control on the admin HTTP API, where a browser on another
+    // device could minimise someone else's window. The overlay needs
+    // neither: native buttons, declarative theming, an ordinary page.
     titleBarStyle: 'hidden',
     titleBarOverlay: {
       color: '#18181b',       // zinc-900, matching App.tsx's header
@@ -501,19 +477,17 @@ function createWindow() {
     backgroundColor: '#09090b',
   })
 
-  // The window is one event-broker subscriber among others now (Phase 5
-  // §5.1), not the hard-coded destination server.mjs/models.mjs/plugins.mjs
-  // used to push to directly. Subscribed once, here, rather than re-derived
-  // per publish() — a destroyed window is checked at delivery time, same as
-  // the getMainWindow()?.webContents.send(...) guard this replaces.
+  // The window is one event-broker subscriber among others now, not the
+  // hard-coded destination server.mjs/models.mjs/plugins.mjs used to push to
+  // directly. Subscribed once, here, rather than re-derived per publish() —
+  // a destroyed window is checked at delivery time, same as the
+  // getMainWindow()?.webContents.send(...) guard this replaces.
   //
-  // Phase 7 §7.2: the window can now close without the process quitting
-  // (window-all-closed is a no-op below), so a closed-and-reopened window
-  // is routine, not a one-time app-shutdown event. subscribeToEvents()
-  // returns an unsubscribe handle specifically so this registration does not
-  // stack a second, permanently-dead listener (still checking
-  // win.isDestroyed() forever, still holding `win` alive) every time the
-  // window reopens.
+  // The window can now close without the process quitting, so a
+  // closed-and-reopened window is routine, not a one-time app-shutdown
+  // event. subscribeToEvents() returns an unsubscribe handle specifically so
+  // this registration does not stack a second, permanently-dead listener
+  // every time the window reopens.
   const win = mainWindow
   const unsubscribeFromEvents = subscribeToEvents((channel, payload) => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
@@ -525,27 +499,22 @@ function createWindow() {
   installCloseNotice(win)
 
   // Always the admin listener's own loopback address — Electron shares the
-  // daemon's machine (level 2, plan §1), so it connects to it exactly like
-  // any other local HTTP client, never via whatever bind address is
-  // configured for LAN exposure (which could be a wildcard Electron cannot
-  // usefully "connect to" from the same box). AdminGate.tsx gates this page
-  // exactly like a browser tab — sign-in, or first-run setup — see decision
-  // 6: the Electron UI is a client of the daemon, like Twig.
+  // daemon's machine (level 2), so it connects to it exactly like any other
+  // local HTTP client, never via whatever bind address is configured for LAN
+  // exposure. AdminGate.tsx gates this page exactly like a browser tab —
+  // sign-in, or first-run setup.
   //
   // DEV EXCEPTION: Vite's dev server (localhost:5173) is loaded instead of
-  // the admin listener directly, so UI work keeps hot-reload. It proxies
-  // everything under /admin to the real listener (vite.config.ts) — this is
-  // a dev-tooling convenience, not a security boundary; the packaged build
-  // has no dev server to reach and always loads the listener's own page.
+  // the admin listener directly, so UI work keeps hot-reload, proxying
+  // everything under /admin to the real listener (vite.config.ts) — a
+  // dev-tooling convenience, not a security boundary.
   const { port } = getAdminListenerState()
   let url = app.isPackaged ? `http://127.0.0.1:${port}/` : 'http://localhost:5173/'
-  // The bootstrap-token handoff (plan decision 16), without IPC: no owner
-  // exists yet, so this is a first-run (or post-wipe) box. Read the token
-  // here, where filesystem access already lives, and hand it to the page
-  // the same way any other "where should this window start" decision is
-  // made — a URL. AdminGate.tsx reads it once on mount and clears it from
-  // the address bar immediately after, so it does not linger anywhere a
-  // screenshot or a browser history entry would catch it.
+  // The bootstrap-token handoff, without IPC: no owner exists yet, so this
+  // is a first-run (or post-wipe) box. Read the token here and hand it to
+  // the page as a URL, the same as any other "where should this window
+  // start" decision. AdminGate.tsx reads it once on mount and clears it
+  // from the address bar immediately after.
   if (!hasOwner()) {
     const token = readBootstrapToken()
     if (token) url += `?setupToken=${encodeURIComponent(token)}`
@@ -568,11 +537,11 @@ function createWindow() {
   }
 }
 
-// Shared by the single-instance guard's 'second-instance' handler (§7.1) and
-// the tray's "Open Redstart" / left-click (§7.3) — both answer the same
-// question, "bring the UI in front of the user right now," and mainWindow
-// may legitimately be null in either case now that closing it no longer
-// quits the process (§7.2).
+// Shared by the single-instance guard's 'second-instance' handler and the
+// tray's "Open Redstart" / left-click — both answer the same question,
+// "bring the UI in front of the user right now," and mainWindow may
+// legitimately be null in either case now that closing it no longer quits
+// the process.
 function openOrFocusWindow() {
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore()
@@ -583,9 +552,9 @@ function openOrFocusWindow() {
   }
 }
 
-// Phase 7 §7.5 — the ONE deliberate-quit path admin:shutdown gets (the
-// tray's "Quit Redstart", §7.3, sets isQuitting inline itself since it
-// already has app in scope there too — this is the other caller). Deferred
+// The ONE deliberate-quit path admin:shutdown gets (the tray's
+// "Quit Redstart" sets isQuitting inline itself since it already has app in
+// scope there too — this is the other caller). Deferred
 // with setImmediate rather than calling app.quit() synchronously: the
 // caller is admin:shutdown's HTTP handler, and its 200 response must
 // actually leave the socket before before-quit's teardown begins, or the
@@ -601,20 +570,18 @@ function quitApp() {
 app.disableHardwareAcceleration()
 
 // ---------------------------------------------------------------------------
-// Single-instance guard (Phase 7 §7.1)
+// Single-instance guard
 // ---------------------------------------------------------------------------
-// Every later Phase 7 step assumes exactly one process owns the daemon —
-// the admin listener's port, the pid file, the tray icon. Before this guard,
-// a second launch raced the 19083 bind and lost into
+// Everything downstream assumes exactly one process owns the daemon — the
+// admin listener's port, the pid file, the tray icon. Before this guard, a
+// second launch raced the 19083 bind and lost into
 // `console.warn('Admin listener failed to start')`, leaving a window with no
-// working daemon behind it: the worst outcome available, and silent. Must be
-// requested before `whenReady` — the lock itself is what decides whether this
-// process gets to proceed to path/listener setup at all.
-// Phase 7 §7.4 — a login-triggered start passes this so the daemon comes up
-// windowless (tray-only): set on the OS login item below in
-// reconcileStartupSetting(), read here rather than trusted blindly, since
-// `--background` typed on an ordinary Start-menu launch should behave the
-// same way (there is nothing unsafe about it — it only skips createWindow()).
+// working daemon behind it: the worst outcome available, and silent. Must
+// be requested before `whenReady`.
+// A login-triggered start passes this so the daemon comes up windowless
+// (tray-only): set on the OS login item below in reconcileStartupSetting(),
+// read here rather than trusted blindly, since `--background` typed on an
+// ordinary Start-menu launch should behave the same way.
 const isBackgroundLaunch = process.argv.includes('--background')
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
@@ -627,10 +594,8 @@ if (!gotSingleInstanceLock) {
 } else {
   app.on('second-instance', () => {
     // A user clicked the Start-menu shortcut, or double-clicked the exe,
-    // while the daemon (with or without a window) is already running.
-    // logEvent runs safely here even before initLogger() has necessarily
-    // been called on a very fast second launch — logEvent no-ops until the
-    // logger is initialized rather than throwing (see logger.mjs).
+    // while the daemon is already running. logEvent no-ops safely even if
+    // initLogger() hasn't run yet on a very fast second launch (logger.mjs).
     logEvent('app', 'second_instance', {})
     openOrFocusWindow()
   })
@@ -639,9 +604,9 @@ if (!gotSingleInstanceLock) {
 }
 
 async function main() {
-  // Phase 7 §7.4a — installed before anything else, including initPaths(), so
-  // a crash during startup itself is caught too. Phase 8A.2 moved the wiring
-  // into daemon.mjs; what a DESKTOP does about a crash — raise a shell
+  // Installed before anything else, including initPaths(), so
+  // a crash during startup itself is caught too. The wiring lives in
+  // daemon.mjs; what a DESKTOP does about a crash — raise a shell
   // notification, leave through Electron's own app.exit() — is this
   // entrypoint's half of the answer, and is passed in.
   installCrashHandlers({
@@ -652,7 +617,7 @@ async function main() {
     },
     // app.exit(1), not app.quit(): process state is suspect here, so this
     // deliberately skips before-quit's ordinary teardown and exits directly.
-    // The 1 is also what a supervisor reads as "restart me" (§8B.3).
+    // The 1 is also what a supervisor reads as "restart me".
     exitCrashed: () => app.exit(1),
   })
   // Before anything else touches a path. migrateUserDataFromBeaver() below is
@@ -665,14 +630,14 @@ async function main() {
     isPackaged: app.isPackaged,
   })
   migrateUserDataFromBeaver()
-  // Phase 8A.1 — secrets.mjs is fail-closed and holds no crypto of its own;
-  // wire the provider before anything can read or write a credential. This is
-  // the desktop (level 2) entrypoint, so it gets safeStorage — the same DPAPI
+  // secrets.mjs is fail-closed and holds no crypto of its own; wire the
+  // provider before anything can read or write a credential. This is the
+  // desktop (level 2) entrypoint, so it gets safeStorage — the same DPAPI
   // that wrote every secret on every install shipped so far. The headless
   // daemon wires the key file provider instead, and that difference is the
-  // whole reason this seam exists (design §3.1).
+  // whole reason this seam exists.
   initSecrets(safeStorageProvider(safeStorage))
-  // Phase 8A.5 — the two things a desktop can do that a headless daemon
+  // The two things a desktop can do that a headless daemon
   // cannot. Registered rather than imported, because a module that imports
   // these from 'electron' cannot be loaded under plain Node at all; see
   // desktop-integration.mjs.
@@ -684,27 +649,26 @@ async function main() {
   installPopupContainment()
   // Everything that is Nest-the-service: the logger, the process log, the
   // capability folders, stale-process reaping, the control-plane API table,
-  // the beacon and the admin listener. One call now (Phase 8A.2) — the same
-  // one bin/nestd.mjs makes, in the same order, because the daemon is not
+  // the beacon and the admin listener. One call now — the same one
+  // bin/nestd.mjs makes, in the same order, because the daemon is not
   // supposed to be able to tell which entrypoint started it.
   //
   // quitApp is the one thing it cannot answer for itself: admin:shutdown
-  // (§7.5) has to leave the way this platform leaves.
+  // has to leave the way this platform leaves.
   await startDaemon({ quitApp })
-  // §7.4 — pure decision logic lives in ipc/admin.mjs (resolveStartupReconciliation),
+  // Pure decision logic lives in ipc/admin.mjs (resolveStartupReconciliation),
   // testable without Electron; this is just the one untestable line
   // (app.setLoginItemSettings) plus the settings read/write it needs.
   reconcileStartupSetting({ readSettings, writeSettings })
   startTrayIcon()
   if (!app.isPackaged) await installReactDevTools()
-  // §7.4: a login-triggered start is windowless — tray-only until the admin
-  // opens it. Ground rule from §7.0 still holds either way: this never
-  // starts a model, only the daemon (admin listener, beacon, gateway
-  // config, MCP), all of which are already up by this line.
+  // A login-triggered start is windowless — tray-only until the admin
+  // opens it. This never starts a model, only the daemon (admin listener,
+  // beacon, gateway config, MCP), all of which are already up by this line.
   if (!isBackgroundLaunch) createWindow()
 }
 
-// Phase 7 §7.3. A missing icon (redstartIcon failed to generate, logged at
+// A missing icon (redstartIcon failed to generate, logged at
 // module load above) or a Tray constructor failure (no shell notification
 // area) is swallowed the same way a admin-listener bind failure already is —
 // logged, non-fatal, daemon still comes up. No tray means no tray
@@ -750,12 +714,11 @@ async function installReactDevTools() {
   }
 }
 
-// The client's teardown, then the daemon's. Phase 8A.2 moved the daemon half
-// into stopDaemon() — design §4's Phase 7 paragraph asked for exactly that
-// ("move the before-quit teardown out of the client and into the daemon"),
-// and Phase 7 could not do it, because with a single process there was only
-// ever one caller. There are two now, and a second copy that drifts is how a
-// llama-server child gets left running past quit.
+// The client's teardown, then the daemon's. The daemon half moved into
+// stopDaemon() — the goal was to move the before-quit teardown out of the
+// client and into the daemon, which could not be done while a single
+// process was the only caller. There are two now, and a second copy that
+// drifts is how a llama-server child gets left running past quit.
 //
 // The tray goes first, where it used to sit mid-teardown: a client affordance
 // should stop before the thing it is an affordance for, so a broker event
@@ -768,18 +731,15 @@ app.on('before-quit', () => {
   stopDaemon()
 })
 
-// Phase 7 §7.2: closing the window closes a VIEW, not the daemon — the
-// admin listener, the beacon, and a loaded model all keep running with no
-// window open. This is the single line that used to make that untrue
-// (`app.quit()` on every platform but darwin, which is Electron's own
-// default there too). An explicit empty handler is required, not merely
-// "delete the listener": Electron's baked-in default behavior for
-// window-all-closed IS to quit, so doing nothing means registering a
-// no-op, not omitting the registration.
+// Closing the window closes a VIEW, not the daemon — the admin listener,
+// the beacon, and a loaded model all keep running with no window open. An
+// explicit empty handler is required, not merely "delete the listener":
+// Electron's baked-in default behavior for window-all-closed IS to quit, so
+// doing nothing means registering a no-op, not omitting the registration.
 //
 // The daemon still stops on a deliberate quit — the tray's "Quit Redstart"
-// (§7.3) and the admin UI's shutdown route (§7.5) call app.quit() directly,
-// which fires before-quit below regardless of any window state.
+// and the admin UI's shutdown route call app.quit() directly, which fires
+// before-quit below regardless of any window state.
 app.on('window-all-closed', () => {
   logEvent('app', 'window_closed', {})
 })

@@ -1,7 +1,7 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — GET /admin/events, the control plane's live feed (Phase 5 §5.3)
+// Redstart Nest — GET /admin/events, the control plane's live feed
 // =============================================================================
 // Server-Sent Events over the SAME bearer-token auth as every other admin
 // route. Deliberately not the browser's native EventSource — it cannot attach

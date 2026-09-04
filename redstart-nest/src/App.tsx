@@ -2,7 +2,7 @@
 // Redstart Nest — renderer UI shell
 // =============================================================================
 // The launcher UI — a browser tab's worth of React, whether it is actually
-// running in a browser or inside Electron's window (Phase 6 §6.2: both are
+// running in a browser or inside Electron's window: both are
 // plain HTTP clients of the admin listener now, gated by AdminGate.tsx
 // before this ever renders). All calls go through the RedstartAPI
 // implementation installed by AdminGate (see api/redstart.ts).
@@ -65,7 +65,7 @@ export default function App() {
   // profile it's editing is the one actually running, to decide whether to
   // push the change live (see syncToolsIfLive's own comment for why that
   // check exists — nothing stops the admin switching profiles mid-session).
-  const profilesHook = useProfiles(config, setConfig, controlPlaneExposure.setExposure, showStatus)
+  const profilesHook = useProfiles(config, setConfig, showStatus)
   const server = useServerLifecycle({
     config, showStatus, clearStatus,
     onLaunchStarted: () => setActiveTab('server'),
@@ -88,15 +88,6 @@ export default function App() {
   useEffect(() => {
     setConfig(prev => ({ ...prev, networkMode }))
   }, [networkMode])
-
-  // Folds the control plane's live exposure into config so "Save Current as
-  // Profile" captures whatever it's currently set to — the write path back
-  // out (loading a profile that saved a different value) is
-  // useProfiles.selectProfile calling controlPlaneExposure.setExposure
-  // directly, not this effect, since applying it is a rebind, not a state set.
-  useEffect(() => {
-    setConfig(prev => ({ ...prev, exposeControlPlane: !!controlPlaneExposure.controlPlane?.exposed }))
-  }, [controlPlaneExposure.controlPlane?.exposed])
 
   // --- Command preview ---
 

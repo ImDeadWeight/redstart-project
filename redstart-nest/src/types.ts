@@ -61,6 +61,18 @@ export type ModelDetail = {
   artifacts: ModelArtifact[]
 }
 
+// The prose the Hub's JSON has no field for, lifted out of a model card.
+// `source` says WHICH card answered: 'base_model' means the description came
+// from the model this GGUF was quantized from, which is the one written by the
+// people who trained it; 'repo' means the quantizer's own README, which is
+// usually about the conversion rather than the model.
+export type ModelDescription = {
+  text: string
+  source: 'base_model' | 'repo'
+  repoId: string
+  truncated: boolean
+}
+
 export type LocalModelFile = {
   name: string
   path: string
@@ -168,18 +180,11 @@ export type LlamaConfig = {
   kvCache?: 'off' | 'conservative' | 'balanced' | 'aggressive'
   additionalArgs?: string
   tools?: ProfileTools
-  // Whether THIS profile wants the control plane (admin listener) reachable
-  // on the network when it's selected — separate from networkMode (the data
-  // plane) for the same reason ControlPlaneState is its own type: a control
-  // plane on the LAN by default is a real security decision (see
-  // headless-admin-plane-plan.md decision 4/19), not one to make silently
-  // for every install. Tying it to profiles instead of a bare global default
-  // means "my home profile opens the admin panel to the LAN, my laptop-only
-  // profile doesn't" without a first-run prompt. Undefined (older saved
-  // profiles, or one never touched this session) means "leave the current
-  // exposure alone" — only a profile that explicitly saved a value ever
-  // changes it on load.
-  exposeControlPlane?: boolean
+  // NOTE: control-plane exposure deliberately does NOT live here. A profile
+  // describes how the MODEL runs; where the admin listener binds is a property
+  // of the machine. Selecting a profile used to rebind the control plane as a
+  // side effect, which put a network-exposure change behind a dropdown whose
+  // label promised a model configuration. See ControlPlaneState.
 }
 
 export type ServerState = 'stopped' | 'starting' | 'running' | 'stopping'
@@ -195,12 +200,12 @@ export type ControlPlaneState = {
   exposed: boolean
 }
 
-// Phase 7 §7.4. Reconciled against what the OS actually says
+// Reconciled against what the OS actually says
 // (app.getLoginItemSettings()), not only settings.json — a user can flip
 // this off from Task Manager's Startup tab behind Nest's back, so the UI
 // must always show what is currently true rather than what was last set.
 export type StartupState = {
-  // Phase 8A.5 — false on a headless daemon, where "start at login" has no
+  // False on a headless daemon, where "start at login" has no
   // meaning: nobody logs in, and a service's boot start belongs to the
   // supervisor, not to Nest. The UI hides the control rather than showing an
   // off switch that can never be turned on.

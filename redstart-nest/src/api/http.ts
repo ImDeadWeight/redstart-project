@@ -17,7 +17,7 @@
 // test by name rather than 404ing in a browser six months later — which is how
 // the one exception below was found.
 //
-// EVENTS, OVER ONE SHARED SSE CONNECTION (Phase 5 §5.3-5.5). Not the browser's
+// EVENTS, OVER ONE SHARED SSE CONNECTION. Not the browser's
 // native EventSource — it cannot attach an Authorization header, and this
 // listener sends no cookie for it to ride on instead. `fetch()` plus a
 // ReadableStream reader gets the same server-sent-events framing back while

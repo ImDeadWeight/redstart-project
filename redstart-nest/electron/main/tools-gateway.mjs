@@ -184,8 +184,57 @@ function withoutUpstreamCors(headers) {
   return out
 }
 
+// ---------------------------------------------------------------------------
+// Context-exceeded diagnosis.
+//
+// llama-server rejects a prompt larger than n_ctx with HTTP 400 and
+// { error: { type: 'exceed_context_size_error', message, n_prompt_tokens,
+// n_ctx } } — and in streaming mode too, because an error that is the FIRST
+// result is deliberately returned as a non-stream response rather than an SSE
+// frame (server-context.cpp, "in streaming mode, the first error must be
+// treated as non-stream response"). A prompt too large to process always fails
+// before the first token, so this rejection is always the first result.
+//
+// So the numbers do reach the client. What no client can know is WHY, and the
+// answer is usually the same one: every enabled tool's full JSON schema rides
+// on every request, so one plugin advertising forty tools can spend more of the
+// window than the conversation does. llama-server cannot say that — it never
+// saw a tool list, only a rendered prompt — and each client would otherwise
+// have to reinvent the explanation. The gateway is the one place that knows
+// both halves, so it annotates the message here, once, for every client.
+//
+// The count is of what was actually FORWARDED (post-ban, and post-retrieval
+// when that lands), so the number quoted is the one that was really spent.
+// Same chars/4 heuristic as estimateActiveToolTokens — a diagnosis, not an
+// accounting.
+// ---------------------------------------------------------------------------
+function toolCostOf(parsed) {
+  const tools = Array.isArray(parsed?.tools) ? parsed.tools : []
+  if (tools.length === 0) return null
+  return { count: tools.length, approxTokens: Math.ceil(JSON.stringify(tools).length / 4) }
+}
+
+export function annotateContextError(body, cost) {
+  // Anything unrecognised is returned byte-identical: this must never be able
+  // to turn an upstream error into a different one, or a parse failure into a
+  // gateway failure.
+  if (!cost) return body
+  let parsedBody
+  try { parsedBody = JSON.parse(body) } catch { return body }
+  if (parsedBody?.error?.type !== 'exceed_context_size_error') return body
+  if (typeof parsedBody.error.message !== 'string') return body
+
+  const { count, approxTokens } = cost
+  parsedBody.error.message +=
+    ` About ${approxTokens.toLocaleString()} of those tokens are the ${count} tool definition${count === 1 ? '' : 's'}` +
+    ' sent with this request — every enabled tool\'s full schema is included in every message.' +
+    ' Turning off tools you are not using, or raising the context size, both free up room.'
+  return JSON.stringify(parsedBody)
+}
+
 function forwardModified(res, internalPort, parsed) {
   const payload = JSON.stringify(parsed)
+  const toolCost = toolCostOf(parsed)
   const options = {
     hostname: '127.0.0.1',
     port: internalPort,
@@ -199,6 +248,29 @@ function forwardModified(res, internalPort, parsed) {
   }
 
   const proxyReq = http.request(options, proxyRes => {
+    // A 400 is small, complete, and never a stream — buffer it so the tool cost
+    // can be added to the message. Every other status is piped exactly as
+    // before, so nothing about the streaming path changes.
+    if (proxyRes.statusCode === 400 && toolCost) {
+      let raw = ''
+      proxyRes.setEncoding('utf8')
+      proxyRes.on('data', chunk => { raw += chunk })
+      proxyRes.on('end', () => {
+        const out = annotateContextError(raw, toolCost)
+        const headers = withoutUpstreamCors(proxyRes.headers)
+        // The body length changed, so the upstream's own value would truncate
+        // the response. Drop every spelling of it and let Node recompute.
+        for (const key of Object.keys(headers)) {
+          if (key.toLowerCase() === 'content-length') delete headers[key]
+        }
+        res.writeHead(400, { ...headers, 'Access-Control-Allow-Origin': '*' })
+        res.end(out)
+      })
+      // A truncated error response must still terminate the client's request.
+      proxyRes.on('error', () => { if (!res.writableEnded) res.end(raw) })
+      return
+    }
+
     res.writeHead(proxyRes.statusCode, {
       ...withoutUpstreamCors(proxyRes.headers),
       'Access-Control-Allow-Origin': '*',
@@ -438,7 +510,6 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
           return
         }
 
-        const requestHasTools = Array.isArray(parsed.tools) && parsed.tools.length > 0
         // Redstart-specific request field: a MODE ID, never mode prose. The
         // composer validates it against MODE_IDS and drops anything unknown,
         // so a client cannot inject an instruction block by naming a mode
@@ -447,13 +518,30 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         const requestedMode = parsed.redstart_mode
         delete parsed.redstart_mode
 
+        // BANS FIRST, PROMPT SECOND — and every value the prompt is derived
+        // from is read AFTER this line. The capability claims must describe
+        // what the model actually received this turn, which is the payload the
+        // ban filter left behind, not the one the client sent. Composing first
+        // broke that in two ways: an org-wide ban on a client app
+        // (disabledToolIds naming 'twig') still produced the locality block
+        // telling the model it could reach the user's own files, having taken
+        // the names from the pre-ban array; and a ban that stripped every tool
+        // left `enforceToolAllowList` deleting `parsed.tools` entirely while
+        // hasTools was still true, claiming the whole capability section
+        // against a payload carrying no tools at all. Both are the
+        // substantiation rule in system-prompt.mjs — a claim is made only when
+        // the request substantiates it — and the rule can only hold if the
+        // request has already been narrowed.
+        parsed = enforceToolAllowList(parsed, effectiveConfig)
+
+        const requestHasTools = Array.isArray(parsed.tools) && parsed.tools.length > 0
+
         // account is null when auth is off (see the posture note above) — the
         // composer degrades to a date-only session block rather than failing.
         // Surface comes from authResult — i.e. from the credential the caller
         // presented (spec §8) — never from a header. X-Redstart-Surface stays
         // accepted and inert; the connector-contract suite asserts that.
         parsed.messages = injectSystemContext([...(parsed.messages || [])], effectiveConfig, requestHasTools, authResult.account, requestedMode, authResult.surface, clientToolNamesIn(parsed))
-        parsed = enforceToolAllowList(parsed, effectiveConfig)
 
         try {
           forwardModified(res, internalPort, parsed)

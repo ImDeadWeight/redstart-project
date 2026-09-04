@@ -26,9 +26,9 @@ import * as sessionStore from './sessions-storage.mjs'
 // TWO PLANES, TWO SESSION LIFETIMES. 30 days was chosen for a chat client and
 // is right for one. Thirty days of standing access to something that starts and
 // stops processes is not, and it is exactly the kind of number nobody revisits
-// once shipped, so the control plane gets its own from the start
-// (headless-admin-plane-plan.md §3.7). Both slide, so an admin who works on the
-// box daily is never logged out mid-task; what the shorter one bounds is a
+// once shipped, so the control plane gets its own from the start. Both slide,
+// so an admin who works on the box daily is never logged out mid-task; what
+// the shorter one bounds is a
 // FORGOTTEN session — a browser tab left open on a laptop that then leaves the
 // building.
 const SESSION_TTL_MS = {
@@ -96,8 +96,8 @@ export function hashApiKey(rawKey) {
 // contract; what lives here is the policy.
 // ---------------------------------------------------------------------------
 // A session is BOUND TO ITS PLANE at creation, and each plane accepts only its
-// own. This is what makes plane separation structural rather than remembered
-// (plan §3.6): the gateway issues data-plane sessions, the admin listener issues
+// own. This is what makes plane separation structural rather than remembered:
+// the gateway issues data-plane sessions, the admin listener issues
 // control-plane ones, and an owner who logs into the chat UI therefore does NOT
 // thereby hold a credential that can start and stop processes. Only the
 // control-plane listener can mint control-plane access.
@@ -275,8 +275,8 @@ export function authenticate(req) {
 // and each difference is load-bearing:
 //
 //   1. It never reads getAuthRequired(). `authRequired` governs the data plane
-//      only (plan decision 12); control-plane auth is mandatory regardless.
-//      Note this is not merely "auth off must not let anyone in" — routing the
+//      only; control-plane auth is mandatory regardless. Note this is not
+//      merely "auth off must not let anyone in" — routing the
 //      control plane through authenticate() would ALSO lock the owner OUT with
 //      auth off, since that function short-circuits to account: null before it
 //      ever looks at the token. Both halves are wrong, and one function that
@@ -290,18 +290,18 @@ export function authenticate(req) {
 //      admin credential. Per-connector keys are refused for the same reason. And
 //      a session minted by the GATEWAY is refused too — the owner logging into
 //      the chat UI must not thereby hold process control. Only a session issued
-//      by this listener's own login route gets in (plan decision 18, §3.6), and
-//      it carries a 12-hour life rather than the data plane's 30 days.
+//      by this listener's own login route gets in, and it carries a 12-hour
+//      life rather than the data plane's 30 days.
 //
 // Authorization is NOT decided here: the caller pairs this with
 // mayAccessControlPlane(). Authentication answers "who is this", the
 // permissions module answers "may they" — same split as the gateway.
 //
 // No `surface` is returned. Surfaces exist so a role can narrow which apps an
-// account may connect from, and the control plane never narrows (plan §1). A
+// account may connect from, and the control plane never narrows. A
 // 'nest-admin' entry in SURFACE_IDS would be assignable in a role's surface
 // list like any other, which is precisely the quiet collapse of plane
-// separation decision 7 warns about.
+// separation this design warns against.
 export function authenticateControlPlane(req) {
   const token = bearerToken(req)
   if (!token) return { ok: false, reason: 'unauthorized' }
@@ -441,7 +441,7 @@ export function createOwner({ username, password }) {
  * there is none and lands here if there is one, because "nobody can get in" and
  * "nobody has been created yet" are the same question asked at different times,
  * and giving them two routes means one of them is a recovery path that has to be
- * argued about separately (plan §3.2).
+ * argued about separately.
  *
  * PRESERVES EVERYTHING BUT THE CREDENTIAL — accounts, roles, per-connector keys
  * and tools config all survive. That is the entire gain over the last-resort

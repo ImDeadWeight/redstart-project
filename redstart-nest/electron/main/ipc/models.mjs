@@ -6,11 +6,10 @@
 // models folder and the single-flight rule that keeps two multi-gigabyte
 // downloads from fighting over one disk. Every method here is owner-gated
 // over the control plane like any other admin/api-table.mjs namespace —
-// reveal-folder used to be the one exception (§4.4) and retired in Phase 6
-// §6.1 along with the rest of the local/remote distinction.
+// reveal-folder used to be the one exception and retired along with the
+// rest of the local/remote distinction.
 //
-// Handler bodies are exported as plain functions (Phase 1, §1.3 of the
-// headless-admin-plane implementation plan) so an HTTP route can call them
+// Handler bodies are exported as plain functions so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerModelsHandlers() does that. The
 // single-flight `active` download tracker used to be a variable local to
@@ -22,7 +21,7 @@ import { publish } from '../event-broker.mjs'
 import * as fsp from 'fs/promises'
 import * as path from 'path'
 
-import { searchModels, getModelDetail, TRUSTED_PUBLISHERS } from '../hf-catalog.mjs'
+import { searchModels, getModelDetail, getModelDescription, TRUSTED_PUBLISHERS } from '../hf-catalog.mjs'
 import { downloadArtifact, diskSpaceFor, discardPartials, PART_SUFFIX } from '../model-download.mjs'
 import { isPlainObject, isNonEmptyString, optional } from './validate.mjs'
 
@@ -49,6 +48,19 @@ export async function searchModelCatalog(opts) {
 export async function getModelDetailById(repoId) {
   try {
     return { ok: true, detail: await getModelDetail(repoId) }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+}
+
+// Deliberately NOT folded into getModelDetailById. A description costs one or
+// two more round trips (the card, and usually the upstream model's card before
+// it), and the artifact list is what the user opened the model to see. Keeping
+// them separate lets the tab render the sizes immediately and fill the prose in
+// when it arrives, instead of holding the whole panel for it.
+export async function getModelDescriptionById(repoId) {
+  try {
+    return { ok: true, description: await getModelDescription(repoId) }
   } catch (err) {
     return { ok: false, error: err.message }
   }
@@ -92,7 +104,7 @@ export async function getModelsDiskSpace({ resolveModelsDir, ensureModelsDir }) 
   }
 }
 
-// revealModelsFolder() retired — Phase 6 §6.1. Opening a file-explorer
+// revealModelsFolder() is retired. Opening a file-explorer
 // window is inherently an action on whichever machine runs it, and once IPC
 // no longer distinguishes "the caller is sitting at this machine" from
 // "the caller is a browser anywhere on the network", there is no safe
@@ -215,7 +227,7 @@ export function modelsHandlers(deps) {
   // channel, and an event hidden behind a variable would silently drop out
   // of that check.
   //
-  // Published to the shared broker (Phase 5 §5.1), not pushed to the window
+  // Published to the shared broker, not pushed to the window
   // directly — an HTTP caller subscribed to /admin/events now sees the same
   // progress the window does, closing the gap this comment used to describe.
   const sendProgress = (payload) => publish('models:download-progress', payload)
@@ -225,6 +237,7 @@ export function modelsHandlers(deps) {
     'models:publishers': () => listTrustedPublishers(),
     'models:search': async (opts) => searchModelCatalog(opts),
     'models:detail': async (repoId) => getModelDetailById(repoId),
+    'models:describe': async (repoId) => getModelDescriptionById(repoId),
 
     // --- Local storage ---
     'models:local': async () => listLocalModels(deps),

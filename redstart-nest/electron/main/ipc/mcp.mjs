@@ -3,8 +3,7 @@
 //
 // All collaborators come from tools-storage / node:crypto, so no deps needed.
 //
-// Handler bodies are exported as plain functions (Phase 1, §1.3 of the
-// headless-admin-plane implementation plan) so an HTTP route can call them
+// Handler bodies are exported as plain functions so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerMcpHandlers() does that.
 import * as crypto from 'crypto'

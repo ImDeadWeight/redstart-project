@@ -1,7 +1,7 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — llama-server's own output, persisted (Phase 5 §5.2)
+// Redstart Nest — llama-server's own output, persisted
 // =============================================================================
 // A SEPARATE stream from logger.mjs's event log, and deliberately so.
 // logger.mjs records the SHAPE of what happened (JSONL, privacy-filtered —
@@ -85,7 +85,7 @@ function rewriteFile() {
  * Start a new run's log file. Called once per `llama:launch`. Not idempotent
  * on purpose — calling it twice without an endRun() in between abandons the
  * previous run's in-memory buffer, matching serverState's own "one process at
- * a time" assumption (trap 5.5 — see the implementation notes).
+ * a time" assumption.
  */
 export function startRun() {
   if (!logsDir) throw new Error('initProcessLog() was not called before startRun()')

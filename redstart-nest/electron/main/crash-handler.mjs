@@ -1,17 +1,16 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — crash detection and warning (Phase 7 §7.4a)
+// Redstart Nest — crash detection and warning
 // =============================================================================
 // Explicit decision, made 2026-09-02, superseding a Task-Scheduler-based
 // auto-restart idea floated and rejected in review: on a daemon crash, WARN
-// — do not auto-restart. Crash-restart-with-backoff is Phase 8's systemd
+// — do not auto-restart. Crash-restart-with-backoff is the deployed systemd
 // unit's job, and its own reasoning ("a crash-looping service that
 // resurrects every time it is killed is its own outage") is exactly why
-// that should not arrive on Windows a phase early via a hand-rolled Task
-// Scheduler policy nobody is watching. A visible failure with a human in
-// the loop is the more honest state for something that is not yet
-// supervised properly.
+// that should not arrive on Windows early via a hand-rolled Task Scheduler
+// policy nobody is watching. A visible failure with a human in the loop is
+// the more honest state for something that is not yet supervised properly.
 //
 // WHAT THIS CATCHES: only what the process itself can catch before it dies
 // — process.on('uncaughtException')/('unhandledRejection'), installed as
@@ -21,12 +20,12 @@
 // run this at all — those stay silent until someone notices the tray icon
 // is gone or the admin UI is unreachable. Named as a real, remaining gap
 // rather than solved here; the honest fix is an external watcher (Task
-// Scheduler, or Phase 8's systemd), deliberately deferred rather than added
+// Scheduler, or a systemd unit), deliberately deferred rather than added
 // quietly as a while-I'm-in-here addition.
 //
 // This module holds only the PURE half — err -> { log fields, notification
-// text } — so that mapping is testable without Electron (§7.8 asks for this
-// split explicitly, same seam as ipc/admin.mjs's startup reconciliation).
+// text } — so that mapping is testable without Electron, same seam as
+// ipc/admin.mjs's startup reconciliation.
 // index.mjs does the actual process.on registration, the logEvent call, the
 // Notification, and app.exit(1) — none of which this module touches.
 // =============================================================================
