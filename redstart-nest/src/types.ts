@@ -200,12 +200,12 @@ export type ControlPlaneState = {
   exposed: boolean
 }
 
-// Phase 7 §7.4. Reconciled against what the OS actually says
+// Reconciled against what the OS actually says
 // (app.getLoginItemSettings()), not only settings.json — a user can flip
 // this off from Task Manager's Startup tab behind Nest's back, so the UI
 // must always show what is currently true rather than what was last set.
 export type StartupState = {
-  // Phase 8A.5 — false on a headless daemon, where "start at login" has no
+  // False on a headless daemon, where "start at login" has no
   // meaning: nobody logs in, and a service's boot start belongs to the
   // supervisor, not to Nest. The UI hides the control rather than showing an
   // off switch that can never be turned on.

@@ -12,16 +12,17 @@
 // (its own rule called netsh directly without elevation, which always threw
 // and was swallowed into a warn — inbound UDP 5353 stayed blocked on every
 // install and the advertiser was unreachable no matter what it broadcast).
-// The advertiser itself retired in Phase 6.5 (mDNS support was dropped
-// wholesale — see discovery.mjs); this module stays for the TCP rules the
-// gateway and port-80 proxy still need.
+// The advertiser itself retired (mDNS support was dropped wholesale — see
+// discovery.mjs); this module stays for the TCP rules the gateway and
+// port-80 proxy still need.
 //
-// POSIX (Phase 8A.4): this is a NO-OP off Windows and must stay one. Opening a
-// port on Linux belongs to the operator or the package (ufw, nftables, a cloud
-// security group) — never to Nest. Holding NET_ADMIN in order to do it itself
-// would undo decision 9, which exists precisely to shed privileges from a
-// process that spawns a user-configurable binary and runs third-party plugin
-// code. Nothing here needed deleting for the headless daemon; it needed saying.
+// POSIX: this is a NO-OP off Windows and must stay one. Opening a port on
+// Linux belongs to the operator or the package (ufw, nftables, a cloud
+// security group) — never to Nest. Holding NET_ADMIN in order to do it
+// itself would undo the point of the service account, which exists
+// precisely to shed privileges from a process that spawns a
+// user-configurable binary and runs third-party plugin code. Nothing here
+// needed deleting for the headless daemon; it needed saying.
 //
 // Deliberately free of any `electron` import: process.resourcesPath is a plain
 // global set by the Electron runtime, so test scripts can import modules that

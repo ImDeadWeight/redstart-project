@@ -26,8 +26,7 @@
 // classified them. A single combined call would remove the review step the
 // whole classify-then-enable flow depends on (plan spec R2 step 5).
 //
-// Handler bodies are exported as plain functions (Phase 1, §1.3 of the
-// headless-admin-plane implementation plan) so an HTTP route can call them
+// Handler bodies are exported as plain functions so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerPluginsHandlers() does that.
 
@@ -57,7 +56,7 @@ function pluginLogDir() {
   // Same directory plugin-provider.mjs's logDir() writes into — the install
   // probe and a running plugin's child share one log per id, which is exactly
   // what lets the probe read a stderr tail without a second change to
-  // shared/mcp-stdio-process.mjs (Trap 8).
+  // shared/mcp-stdio-process.mjs.
   return path.join(configDir(), 'mcp-plugin-logs')
 }
 
@@ -192,7 +191,7 @@ export async function installPlugin(req) {
   const controller = new AbortController()
   activeInstall = { id, controller }
 
-  // Published to the shared broker (Phase 5 §5.1) rather than pushed to the
+  // Published to the shared broker rather than pushed to the
   // window directly — see event-broker.mjs.
   const sendProgress = (payload) => publish('plugins:install-progress', { id, ...payload })
 
@@ -219,7 +218,7 @@ export async function installPlugin(req) {
       installDir = result.dir
       runAsNode = true // installNpmPackage always returns process.execPath + an entry .js
     } else if (source.kind === 'pypi') {
-      // Phase 7. identifier/version, not packageName — pypi's own
+      // identifier/version, not packageName — pypi's own
       // terminology (matches the registry API's package entries), kept
       // distinct from npm's field name so a source object's shape alone
       // says which resolver it needs.
@@ -375,7 +374,7 @@ export function setPluginEnabled(id, enabled, { refreshLiveToolsConfig }) {
   const result = updatePlugin(id, { enabled })
   if (!result.ok) return { ok: false, error: result.error }
   // Terminates the child of a plugin just disabled — registry state alone
-  // does not kill a process (Trap 2).
+  // does not kill a process.
   refreshLiveToolsConfig()
   return { ok: true }
 }
@@ -470,8 +469,8 @@ export async function searchPluginRegistry(opts) {
   const result = await searchRegistry({ query, cursor })
   if (result.error) return { ok: false, error: result.error }
 
-  // Every result gets a verdict — never filtered silently (Phase 4b
-  // "Compatibility verdicts"). The renderer decides how to display each state.
+  // Every result gets a verdict — never filtered silently. The renderer
+  // decides how to display each state.
   const entries = result.entries.map((entry) => {
     const verdict = verdictFor(entry)
     const fields = verdict.packageRef ? formFieldsFor(verdict.packageRef).fields : []
@@ -480,7 +479,7 @@ export async function searchPluginRegistry(opts) {
       description: entry?.server?.description ?? '',
       packageName: verdict.packageRef?.identifier,
       version: verdict.packageRef?.version,
-      // Phase 7: the renderer needs this to know which install source kind
+      // The renderer needs this to know which install source kind
       // ('npm' vs 'pypi') to submit when the admin clicks Install on a
       // registry result — the two resolvers are not interchangeable.
       registryType: verdict.packageRef?.registryType,
@@ -491,9 +490,8 @@ export async function searchPluginRegistry(opts) {
   return { ok: true, entries, nextCursor: result.nextCursor }
 }
 
-// pickPluginFolder() retired — Phase 4 §4.3 replaced it with a native
-// picker, itself retired in Phase 6 §6.1. FolderPicker.tsx now only ever
-// uses admin/browse-routes.mjs.
+// pickPluginFolder() is retired — replaced with a native picker, itself
+// since retired. FolderPicker.tsx now only ever uses admin/browse-routes.mjs.
 
 export function pluginsHandlers(deps) {
   return {

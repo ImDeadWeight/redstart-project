@@ -114,7 +114,7 @@ export function useModelCatalog() {
 
   const cancelDownload = useCallback(async () => { await api().models.cancelDownload() }, [])
 
-  // Picking itself lives in FolderPicker.tsx (Phase 4 §4.3); this applies
+  // Picking itself lives in FolderPicker.tsx; this applies
   // whatever path comes back.
   const changeFolder = useCallback(async (picked: string) => {
     await api().settings.setModelsDir(picked)

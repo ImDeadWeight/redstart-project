@@ -10,16 +10,14 @@
 // tools.json files and test fixtures still carry it. Do not remove it.
 // refreshLiveToolsConfig lives in index.mjs and is threaded via deps.
 //
-// Handler bodies are exported as plain functions (Phase 1, §1.3 of the
-// headless-admin-plane implementation plan) so an HTTP route can call them
+// Handler bodies are exported as plain functions so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerCapabilitiesHandlers() does that. The
 // folder-scoped trio's (vault/git/file_system) computed-channel-name
 // registration loop is unchanged for the setters — scripts/test-ipc-contract.mjs
 // specifically exercises that shape. The matching selectXFolder() dialogs
-// retired in Phase 4 §4.3, replaced by a native picker that itself retired
-// in Phase 6 §6.1 — FolderPicker.tsx now only ever uses
-// admin/browse-routes.mjs.
+// are retired, replaced by a native picker that itself retired — FolderPicker.tsx
+// now only ever uses admin/browse-routes.mjs.
 import { getCapabilities, setCapabilityConfig } from '../tools-storage.mjs'
 import { encryptSecret, decryptSecret } from '../secrets.mjs'
 import { testConnection as testPostgresConnection } from '../postgres-tool.mjs'
@@ -119,9 +117,9 @@ export async function testPostgresConfig(connectionString) {
 }
 
 // selectDocumentsFolder() / selectSqliteFolder() / selectFolderScopedFolder()
-// retired — Phase 4 §4.3, and the native picker they were replaced by itself
-// retired in Phase 6 §6.1. FolderPicker.tsx calls admin/browse-routes.mjs's
-// browse:list instead of a dedicated dialog per capability.
+// are retired, and the native picker they were replaced by itself retired.
+// FolderPicker.tsx calls admin/browse-routes.mjs's browse:list instead of a
+// dedicated dialog per capability.
 
 export function setDocumentsFolder(config, { refreshLiveToolsConfig }) {
   const bad = checkConfig('capabilities:set-documents-folder', config, 'outputDir')

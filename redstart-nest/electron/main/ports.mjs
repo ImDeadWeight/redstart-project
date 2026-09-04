@@ -35,9 +35,9 @@
 export const BEACON_PORT = 8765
 
 /**
- * The control plane (headless-admin-plane-plan.md §1). Bound at daemon start
- * regardless of whether a llama-server is running, which is what makes it a
- * control plane rather than a feature of the thing it controls.
+ * The control plane. Bound at daemon start regardless of whether a
+ * llama-server is running, which is what makes it a control plane rather
+ * than a feature of the thing it controls.
  */
 export const ADMIN_PORT = 19083
 

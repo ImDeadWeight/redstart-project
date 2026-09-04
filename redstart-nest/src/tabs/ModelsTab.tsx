@@ -94,7 +94,7 @@ export function ModelsTab({ catalog, hw, modelPath, onGenerateDefaultProfiles }:
             className={btnCls.secondary}>
             Change…
           </FolderPicker>
-          {/* Reveal-in-explorer retired in Phase 6 §6.1 — opening a
+          {/* Reveal-in-explorer is retired — opening a
               file-explorer window is inherently local to whichever machine
               runs it, and there is no longer a channel that can tell "the
               caller is sitting at this machine" from "the caller is a

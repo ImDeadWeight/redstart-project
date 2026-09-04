@@ -177,15 +177,15 @@ export function NetworkPanel({
           <ControlPlaneNotice state={controlPlane} localIp={localIp} />
         </div>
 
-        {/* Phase 7 §7.4 — the daemon now outlives the window, so "start at
-            login" is meaningful for the first time: it registers a
+        {/* The daemon now outlives the window, so "start at
+            login" is meaningful: it registers a
             windowless (tray-only) login item with Windows rather than only
             remembering a preference nothing acts on. Reconciled against the
             OS's own record on every load (useStartupSettings), so this
             reflects reality even if it was changed from Task Manager's
             Startup tab. */}
         {/* Hidden entirely, not disabled, when the daemon has no login item to
-            offer (Phase 8A.5 — a headless install). A greyed-out switch would
+            offer (a headless install). A greyed-out switch would
             invite someone to work out why it will not move; the honest answer
             is that this setting does not exist on that platform. */}
         {startupState?.supported && (
@@ -203,8 +203,8 @@ export function NetworkPanel({
           </div>
         )}
 
-        {/* Phase 7 §7.5 — the ONE deliberate way left to stop the daemon,
-            now that closing the window no longer does (§7.2). Two-step
+        {/* The ONE deliberate way left to stop the daemon,
+            now that closing the window no longer does. Two-step
             confirm: this stops the model AND takes the box off the network
             for every other client, and a remote admin cannot walk over and
             restart it. */}
@@ -222,7 +222,7 @@ export function NetworkPanel({
               <span className="flex-1 text-xs text-amber-400">
                 Shut down now? This stops the model and takes this box off the network for
                 every client — including this one. Nobody can restart it remotely.
-                {/* Phase 8B.3. On a desktop install the login item brings
+                {/* On a desktop install the login item brings
                     Redstart back at the next sign-in, so "shut down" is closer
                     to "until later". With no login item there is nothing to do
                     that — a service supervisor deliberately leaves a clean exit

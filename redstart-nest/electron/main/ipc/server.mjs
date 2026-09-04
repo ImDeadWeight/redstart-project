@@ -6,15 +6,14 @@
 // a mutable `serverState` object ({ process, ema, lastConfig, startedAt,
 // lastError }) rather than kept as module globals here — both sides mutate
 // the same object. startedAt/lastError exist for ipc/admin.mjs's full status
-// endpoint (Phase 5 §5.4) and are set/cleared alongside process/lastConfig at
-// every launch, exit and error.
+// endpoint and are set/cleared alongside process/lastConfig at every launch,
+// exit and error.
 //
-// Handler bodies are exported as plain functions (Phase 1, §1.3 of the
-// headless-admin-plane implementation plan) so an HTTP route can call them
+// Handler bodies are exported as plain functions so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerServerHandlers() does that. The six
 // getMainWindow()?.webContents.send(...) calls that used to live in
-// launchServer are now publish() calls into event-broker.mjs (Phase 5 §5.1) —
+// launchServer are now publish() calls into event-broker.mjs —
 // the window is one subscriber among others now, registered once from
 // index.mjs, rather than the only possible reader hard-coded at each site.
 import { spawn } from 'child_process'
@@ -55,7 +54,7 @@ export function generateLlamaCommand(config, { buildArgs }) {
   return `${serverBinaryName()} ${args.join(' ')}`
 }
 
-// Phase 7 §7.6 (trap 5.5, real since Phase 3): an always-on daemon reachable
+// An always-on daemon reachable
 // from the tray, a browser and the Electron window at once makes concurrent
 // `llama:launch`/`server:stop` calls routine rather than a race someone has
 // to contrive. Module-level, not per-call — the whole point is one guard
@@ -65,8 +64,8 @@ export function generateLlamaCommand(config, { buildArgs }) {
 // A second caller arriving while the first is still in flight is handed the
 // FIRST call's own promise and therefore its own result — it does not
 // re-enter launchServer()/stopServer(), so it can never reach spawn() a
-// second time. That is a different (and better) outcome than the pre-Phase-7
-// shape would have raced toward: not a second caller told "already running"
+// second time. That is a different (and better) outcome than the earlier,
+// unguarded shape would have raced toward: not a second caller told "already running"
 // after a wasted spawn, but a second caller told exactly what the first one
 // achieved, including its pid on success.
 //
@@ -164,7 +163,7 @@ Place it in the build output directory or the project root, or set a custom path
       detached: process.platform !== 'win32',
     })
 
-    // One file per launch (§5.2) — started here so even a launch that fails
+    // One file per launch — started here so even a launch that fails
     // before the first stdout line still leaves a file behind to look at.
     startRun()
 

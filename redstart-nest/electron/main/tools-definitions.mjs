@@ -3,8 +3,8 @@
 // ---------------------------------------------------------------------------
 // Plugin capability injection.
 //
-// Installed MCP plugins are capabilities too (see docs/notes/mcp-plugin-system-plan.md
-// decision D1), but they are discovered at runtime from plugins.json, not
+// Installed MCP plugins are capabilities too, but they are discovered at
+// runtime from plugins.json, not
 // declared here. plugin-registry.mjs calls setPluginCapabilityProvider() once at
 // startup to hand this module a live read of that registry.
 //

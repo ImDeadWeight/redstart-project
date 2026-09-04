@@ -1,12 +1,12 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — re-keying stored secrets (trap 5.3)
+// Redstart Nest — re-keying stored secrets
 // =============================================================================
-// The one step in this whole plan that can destroy user data silently, so the
+// The one step in this whole area that can destroy user data silently, so the
 // shape of it is deliberate everywhere.
 //
-// THE CONSTRAINT, from design §3.1: Electron's safeStorage is DPAPI on
+// THE CONSTRAINT: Electron's safeStorage is DPAPI on
 // Windows, and DPAPI is bound to the USER ACCOUNT. Ciphertext written by the
 // logged-in user cannot be decrypted by a service account. So an install that
 // converts to level 3 must decrypt and re-encrypt **while still running as the
@@ -38,8 +38,8 @@
 // conversion is "point at the old directory again", which needs no tooling and
 // no explanation.
 //
-// A NOTE ON THE PROVIDER TAG, correcting something Phase 8A.1's commit claimed.
-// That commit said the tag turns "find every blob the old provider wrote" into
+// A NOTE ON THE PROVIDER TAG, correcting an earlier claim about it.
+// The earlier claim said the tag turns "find every blob the old provider wrote" into
 // a query rather than a hand-audit of schemas. Half right: finding the FIELDS
 // is still structural, and that is what findSecrets() below does. What the tag
 // actually bought is the other half, and it is the half that matters here —

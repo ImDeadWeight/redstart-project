@@ -243,8 +243,7 @@ export function deriveEgressFacts(config, externalServers, hasTools) {
   // path by definition — the credential exists precisely so the plugin can
   // call out. Undeclared, this block would keep asserting "everything stays
   // local" while a plugin ships data to a SaaS: not a leak, but the product
-  // saying something untrue in its own voice. See
-  // docs/notes/mcp-plugin-system-plan.md D-f.
+  // saying something untrue in its own voice.
   const credentialPlugins = hasTools
     ? listPlugins()
         .filter((p) => p.enabled && p.envEnc && Object.keys(p.envEnc).length > 0)

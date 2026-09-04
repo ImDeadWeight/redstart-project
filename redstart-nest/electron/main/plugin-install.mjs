@@ -37,7 +37,7 @@ import { logEvent } from './logger.mjs'
 export const INSTALL_REASON = {
   badId: 'bad-id',
   npmMissing: 'npm-missing',
-  uvMissing: 'uv-missing', // Phase 7 — pypi's equivalent of npmMissing (AC7)
+  uvMissing: 'uv-missing', // pypi's equivalent of npmMissing
   packageNotFound: 'package-not-found',
   versionNotFound: 'version-not-found',
   network: 'network',
@@ -292,7 +292,7 @@ function readLockfileInfo(dir, packageName) {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 7 — install (pypi, via uv)
+// Install (pypi, via uv)
 // ---------------------------------------------------------------------------
 //
 // A second resolver alongside installNpmPackage, satisfying the same
@@ -506,7 +506,7 @@ export async function installPypiPackage({ id, identifier, version, onProgress, 
  */
 // Same filename convention shared/mcp-stdio-process.mjs's logStream() uses —
 // duplicated rather than imported so this stays a plain file read, never a
-// second change to that shared module (Trap 8).
+// second change to that shared module.
 function tailLogFile(logDir, id, maxChars = 2000) {
   if (!logDir) return ''
   try {

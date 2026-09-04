@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, getAPI } from '../api/redstart'
 import type { StartupState } from '../types'
 
-// Phase 7 §7.4 — start Redstart at login, windowless (--background), with a
+// Start Redstart at login, windowless (--background), with a
 // tray icon as the only affordance until the admin opens it. Reconciled
 // against the OS's own login-item record on every read (StartupState's own
 // comment explains why), so this hook always shows what Windows will

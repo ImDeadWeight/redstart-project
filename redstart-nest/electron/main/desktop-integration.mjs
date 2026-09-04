@@ -14,11 +14,11 @@
 //      named exports, so `import { shell } from 'electron'` is an IMPORT-TIME
 //      failure — a module that does it cannot be loaded at all, however
 //      carefully its callers avoid calling into it. That is what stopped
-//      bin/nestd.mjs booting after the 8A.2 split, and no runtime check can
-//      fix it.
+//      bin/nestd.mjs booting when it was first split from Electron, and no
+//      runtime check can fix it.
 //
-//   2. Phase 6 §6.1 already settled the shape of this question. A runtime test
-//      for "am I the privileged local caller" is exactly the ambiguity that
+//   2. This question is already settled elsewhere. A runtime test for "am I
+//      the privileged local caller" is exactly the ambiguity that
 //      killed reveal-in-explorer: nothing could distinguish "the user is
 //      sitting at this machine" from "a browser somewhere on the network".
 //      Registration has no such ambiguity — the process that registered the
@@ -61,7 +61,7 @@ export async function moveToRecycleBin(fullPath) {
 }
 
 // ---------------------------------------------------------------------------
-// The login item (Phase 7 §7.4)
+// The login item
 // ---------------------------------------------------------------------------
 
 /**

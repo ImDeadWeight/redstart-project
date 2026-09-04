@@ -96,7 +96,7 @@ export function TruncatedText({ text, limit = 160, className = '' }: {
 // forwarding the control plane through a router, at which point the box joins
 // the population the internet scans continuously. That is a bigger real-world
 // risk than any certificate decision, and a visible warning costs almost
-// nothing (headless-admin-plane-plan.md decision 19). Lives in NetworkPanel.tsx
+// nothing. Lives in NetworkPanel.tsx
 // (the Configuration tab), alongside the exposure toggle itself — the old
 // sidebar's separate Accounts panel merged in here (2026-09-02) since both
 // showed the same fact from the same state shape and were on screen together.

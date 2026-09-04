@@ -4,7 +4,7 @@ import { api, getAPI } from '../api/redstart'
 // The "Require login" switch (sidebar Accounts section) — data-plane state,
 // ongoing rather than one-time. Owner bootstrap used to live here too
 // (createFirstAdmin, hasOwnerAccount, the confirm-enable-with-no-admin
-// guard); Phase 6 §6.2 deleted it — AdminGate.tsx now gates every caller,
+// guard); that's deleted now — AdminGate.tsx gates every caller,
 // Electron included, before App.tsx (and this hook) can ever render, so an
 // owner always already exists by the time this runs. POST /admin/bootstrap
 // is the one door onto owner creation now, for every caller.

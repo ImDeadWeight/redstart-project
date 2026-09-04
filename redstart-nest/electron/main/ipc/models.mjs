@@ -6,11 +6,10 @@
 // models folder and the single-flight rule that keeps two multi-gigabyte
 // downloads from fighting over one disk. Every method here is owner-gated
 // over the control plane like any other admin/api-table.mjs namespace —
-// reveal-folder used to be the one exception (§4.4) and retired in Phase 6
-// §6.1 along with the rest of the local/remote distinction.
+// reveal-folder used to be the one exception and retired along with the
+// rest of the local/remote distinction.
 //
-// Handler bodies are exported as plain functions (Phase 1, §1.3 of the
-// headless-admin-plane implementation plan) so an HTTP route can call them
+// Handler bodies are exported as plain functions so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
 // registers anything; only registerModelsHandlers() does that. The
 // single-flight `active` download tracker used to be a variable local to
@@ -105,7 +104,7 @@ export async function getModelsDiskSpace({ resolveModelsDir, ensureModelsDir }) 
   }
 }
 
-// revealModelsFolder() retired — Phase 6 §6.1. Opening a file-explorer
+// revealModelsFolder() is retired. Opening a file-explorer
 // window is inherently an action on whichever machine runs it, and once IPC
 // no longer distinguishes "the caller is sitting at this machine" from
 // "the caller is a browser anywhere on the network", there is no safe
@@ -228,7 +227,7 @@ export function modelsHandlers(deps) {
   // channel, and an event hidden behind a variable would silently drop out
   // of that check.
   //
-  // Published to the shared broker (Phase 5 §5.1), not pushed to the window
+  // Published to the shared broker, not pushed to the window
   // directly — an HTTP caller subscribed to /admin/events now sees the same
   // progress the window does, closing the gap this comment used to describe.
   const sendProgress = (payload) => publish('models:download-progress', payload)

@@ -1,7 +1,7 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — the shared event broker (Phase 5 §5.1)
+// Redstart Nest — the shared event broker
 // =============================================================================
 // Eight call sites — six in ipc/server.mjs, one each in ipc/models.mjs and
 // ipc/plugins.mjs — used to independently decide that `getMainWindow()`'s

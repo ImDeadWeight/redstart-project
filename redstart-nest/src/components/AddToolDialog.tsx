@@ -73,7 +73,7 @@ const initialState = {
   registryQuery: '',
   registrySearched: false,
   registrySelected: null as RegistrySearchResult | null,
-  // Phase 7: which resolver a REGISTRY pick needs — npm or pypi (uv) are not
+  // Which resolver a REGISTRY pick needs — npm or pypi (uv) are not
   // interchangeable. Irrelevant for the manual 'npm'/'pypi' tabs, where
   // sourceKind alone already says which resolver to use.
   registryType: null as string | null,
@@ -164,7 +164,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
   // Single source of truth for the {kind, ...} object both runInstall() and
   // confirmInstall() send — they used to build this independently, which is
   // exactly how a future third divergence would go unnoticed. For a
-  // 'registry' pick, s.registryType (Phase 7) decides npm vs pypi; the two
+  // 'registry' pick, s.registryType decides npm vs pypi; the two
   // manual tabs already know which they are from sourceKind itself.
   function buildSource() {
     if (s.sourceKind === 'path') return { kind: 'path' as const, path: s.localPath }
@@ -177,7 +177,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
       : { kind: 'npm' as const, packageName: s.npmPackage, version: s.npmVersion }
   }
 
-  // Picking itself lives in FolderPicker.tsx (Phase 4 §4.3); this applies
+  // Picking itself lives in FolderPicker.tsx; this applies
   // whatever path comes back to a generated form field.
   function applyFieldFolder(fieldName: string, dir: string) {
     setState((prev) => ({ ...prev, values: { ...prev.values, [fieldName]: dir } }))
@@ -537,8 +537,8 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
   )
 }
 
-// Verdicts are shown, never used to filter (Phase 4b "Compatibility
-// verdicts") — every result renders, including ones the admin cannot install
+// Verdicts are shown, never used to filter — every result renders, including
+// ones the admin cannot install
 // from here, each with the reason stated.
 function verdictLabel(v: RegistrySearchResult['verdict']): { text: string; installable: boolean } {
   switch (v.state) {

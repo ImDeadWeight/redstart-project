@@ -3,11 +3,11 @@ import { api, getAPI } from '../api/redstart'
 import type { ControlPlaneState } from '../types'
 
 // The control plane's own bind address — a separate axis from the data
-// plane's "Local network" toggle (plan decision 4). Read on mount so
+// plane's "Local network" toggle. Read on mount so
 // ControlPlaneNotice can warn immediately if settings.json was hand-edited
 // to something exposed before this toggle existed; `toggle()` is the one
-// write path, rebinding immediately (decision 4 again — an admin flipping
-// this may be doing it to recover access, not to schedule a future change).
+// write path, rebinding immediately — an admin flipping
+// this may be doing it to recover access, not to schedule a future change.
 export function useControlPlaneExposure(showStatus: (msg: string, ttlMs?: number) => void) {
   const [state, setState] = useState<ControlPlaneState | null>(null)
 

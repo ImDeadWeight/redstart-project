@@ -2,7 +2,7 @@
 // Redstart Nest — renderer UI shell
 // =============================================================================
 // The launcher UI — a browser tab's worth of React, whether it is actually
-// running in a browser or inside Electron's window (Phase 6 §6.2: both are
+// running in a browser or inside Electron's window: both are
 // plain HTTP clients of the admin listener now, gated by AdminGate.tsx
 // before this ever renders). All calls go through the RedstartAPI
 // implementation installed by AdminGate (see api/redstart.ts).

@@ -5,7 +5,7 @@ import type { HardwareSpecs, LlamaConfig } from '../types'
 // Hardware scan, llama-server binary resolution/override, and model picking.
 //
 // applyBinaryPath / applyModelPath are the onPick callbacks for
-// FolderPicker.tsx (Phase 4 §4.3) — the picking itself (native dialog or the
+// FolderPicker.tsx — the picking itself (native dialog or the
 // remote browser) lives in the component now, not here. This hook only
 // applies whatever path comes back.
 export function useHardwareAndBinary(

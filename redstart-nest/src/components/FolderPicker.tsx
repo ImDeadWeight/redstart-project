@@ -1,17 +1,16 @@
 // =============================================================================
-// FolderPicker — the one component behind all nine former per-site pickers
-// (headless-admin-plane-plan.md Phase 4 §4.3).
+// FolderPicker — the one component behind all nine former per-site pickers.
 // =============================================================================
 // A small modal driven by browse:roots / browse:list / browse:mkdir
 // (admin/browse-routes.mjs) — pick a root, click into directories,
 // optionally create one, confirm. Used identically whether the caller is a
-// browser or the Electron launcher itself: Phase 6 retired the native-dialog
-// branch this component used to have (isDaemonLocal()) along with IPC
-// entirely — trap 5.2's "a native dialog browses the CLIENT's disk, wrong
+// browser or the Electron launcher itself: the native-dialog
+// branch this component used to have (isDaemonLocal()) is retired along with
+// IPC entirely — "a native dialog browses the CLIENT's disk, wrong
 // the moment a browser or remote launcher is the caller" stopped being a
 // branch to gate and became simply true of every caller, always.
 //
-// FILE MODE: browse:list is directories-only by design (§4.2 — it never
+// FILE MODE: browse:list is directories-only by design (it never
 // returns file contents, and a filename is not a directory to click into).
 // So picking a FILE is "navigate to the folder, then type the filename"
 // rather than a clickable file list.
@@ -68,9 +67,9 @@ export function FolderPicker({
 
 // --- the browser modal -------------------------------------------------
 
-// Phase 8B.6 - readable/writable come from the daemon's own access() probe,
+// readable/writable come from the daemon's own access() probe,
 // not from anything the browser can work out. They are what makes "the picker
-// refuses a folder it cannot use" possible at all (design section 3.5).
+// refuses a folder it cannot use" possible at all.
 type Entry = { name: string; kind: 'directory'; readable?: boolean; writable?: boolean }
 type Root = { path: string; label: string }
 
@@ -185,7 +184,7 @@ function BrowserModal({
           ))}
         </div>
 
-        {/* Phase 8B.6, design section 3.5's one hard requirement: say it HERE,
+        {/* The one hard requirement: say it HERE,
             while the admin is still looking at the picker, rather than letting
             the path be saved and fail later inside a tool call - where the
             error reaches the user as a confused model instead of as a

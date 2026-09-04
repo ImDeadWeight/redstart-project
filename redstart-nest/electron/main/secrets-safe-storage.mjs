@@ -4,22 +4,22 @@
 // Redstart Nest — Secrets provider: Electron safeStorage
 // =============================================================================
 // OS-level encryption: DPAPI on Windows, Keychain on macOS, libsecret/kwallet
-// on Linux. This is what every secret written before Phase 8 used, and it stays
-// the desktop (level 2) provider — the daemon runs as the logged-in user there,
-// so DPAPI works exactly as it always has and design §3.1's re-key problem
-// never arises.
+// on Linux. This is what every secret written before the headless split used,
+// and it stays the desktop (level 2) provider — the daemon runs as the
+// logged-in user there, so DPAPI works exactly as it always has and the
+// re-key problem never arises.
 //
 // `safeStorage` is passed IN rather than imported. Two reasons, both practical:
-// the entrypoint is the only thing that should decide which provider is wired
-// (secrets.mjs §8A.1), and importing 'electron' here would put this module
+// the entrypoint is the only thing that should decide which provider is wired,
+// and importing 'electron' here would put this module
 // inside an import cycle with the test stub that substitutes for it. The
 // consequence is that this file — the provider itself — is plain testable
 // JavaScript with no Electron dependency of its own.
 //
 // The tag is named for the PROVIDER, not the OS mechanism: safeStorage is DPAPI
 // only on Windows, and a value written on macOS is no more readable by the
-// keyfile provider than a Windows one is. Deviation from the plan text in
-// §8A.1, which said `v1.dpapi.`.
+// keyfile provider than a Windows one is. Deliberately not `v1.dpapi.`, which
+// would have named the mechanism instead.
 // =============================================================================
 
 export const SAFE_STORAGE_TAG = 'safestorage'

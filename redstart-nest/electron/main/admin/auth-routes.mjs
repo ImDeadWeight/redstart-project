@@ -26,7 +26,7 @@
 // NO LOCALHOST EXEMPTION anywhere here, matching auth.mjs's stated rule. Nest
 // spawns third-party plugin code that runs ON this box, so "requests from this
 // machine are trusted" would let any installed plugin seize ownership — and
-// behind the reverse proxy that plan §3.3 documents, every request arrives from
+// behind the documented reverse-proxy deployment, every request arrives from
 // loopback anyway, so the exemption would apply to the entire internet.
 // =============================================================================
 

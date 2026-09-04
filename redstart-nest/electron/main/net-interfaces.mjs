@@ -1,8 +1,8 @@
 'use strict'
 
 // ---------------------------------------------------------------------------
-// LAN interface selection — for the "server address" display (and, until
-// Phase 6.5 retired it, the mDNS advertiser).
+// LAN interface selection — for the "server address" display (and, until it
+// was retired, the mDNS advertiser).
 //
 // os.networkInterfaces() lists every adapter, and on a typical Windows box
 // that includes Hyper-V / WSL / VirtualBox switches and VPN taps. Taking the

@@ -7,7 +7,7 @@
 // docs/notes/mcp-plugin-system-tasks.md task T14.
 //
 // Answers "can this machine install and run this kind of plugin?" Consumed by
-// the Phase 4b compatibility verdicts (so the UI can say "Not supported: needs
+// the compatibility verdicts (so the UI can say "Not supported: needs
 // Python" rather than silently hiding a result) and by the installer.
 //
 // WHY NOT JUST RUN `npm`. On Windows `npm` is `npm.cmd`, a shell shim, so
@@ -35,7 +35,7 @@ import { execFile } from 'child_process'
 export const RUNTIME_REASON = {
   nodeNotFound: 'node-not-found',
   npmNotFound: 'npm-not-found',
-  uvNotFound: 'uv-not-found',   // reserved for Phase 7 (Python)
+  uvNotFound: 'uv-not-found',   // Python/pypi plugins
 }
 
 /**
@@ -137,7 +137,7 @@ export async function detectNpm() {
 }
 
 /**
- * Is uv installed on this machine, and where? (Phase 7 — Python/pypi plugins.)
+ * Is uv installed on this machine, and where? (Python/pypi plugins.)
  *
  * Unlike npm, uv ships as a real standalone executable, not a shell shim
  * (`uv.exe` on win32, not a `.cmd`) — so detection is a direct PATH lookup,

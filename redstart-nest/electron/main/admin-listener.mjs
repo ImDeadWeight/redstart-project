@@ -8,7 +8,7 @@
 // indifferent to whether a llama-server is running. A control plane whose
 // lifetime is tied to the thing it controls is not a control plane, and that
 // single test is what decided this is a separate listener rather than an
-// /admin prefix on the gateway (headless-admin-plane-plan.md §1, decisions 2-3).
+// /admin prefix on the gateway.
 //
 // THREE WAYS THIS DIFFERS FROM THE GATEWAY, all deliberate:
 //
@@ -21,25 +21,24 @@
 //   clients are other origins by design. This listener serves its own UI from
 //   its own origin and has no business being called cross-origin at all, so it
 //   sends no CORS headers and answers no preflight — including for the
-//   Electron launcher (Phase 6 §6.2), which reaches it same-origin, either
-//   directly (packaged) or through Vite's dev-server proxy (dev; see
-//   vite.config.ts) rather than by this listener granting a foreign origin
-//   anything.
+//   Electron launcher, which reaches it same-origin, either directly
+//   (packaged) or through Vite's dev-server proxy (dev; see vite.config.ts)
+//   rather than by this listener granting a foreign origin anything.
 //
 //   THE STATIC LAYER IS AN ALLOWLIST, NOT A PATTERN. isPublicAsset() in
 //   tools-gateway.mjs decides what gets forwarded UNAUTHENTICATED to
 //   llama-server — a program Nest does not control and whose route table is
 //   upstream's to change. It is a proxy rule wearing a file server's clothes,
-//   and it must never learn about admin paths (plan trap 5.4). What is below is
-//   a different mechanism: the set of files Nest itself shipped, enumerated off
-//   disk at start and looked up by exact match. A request path that is not a
-//   key in that map is not served, which is what makes `..` traversal
-//   structurally impossible here rather than filtered.
+//   and it must never learn about admin paths. What is below is a different
+//   mechanism: the set of files Nest itself shipped, enumerated off disk at
+//   start and looked up by exact match. A request path that is not a key in
+//   that map is not served, which is what makes `..` traversal structurally
+//   impossible here rather than filtered.
 //
 // The static bundle is served out of `dist/` with fs, which inside a packaged
 // build means reading through Electron's asar shim. Fine for as long as the
-// daemon lives inside Electron (plan decision 8's staged split); the day it
-// moves out, the bundle has to be unpacked beside it.
+// daemon lives inside Electron; the day it moves out, the bundle has to be
+// unpacked beside it.
 // =============================================================================
 
 import * as http from 'http'
@@ -66,12 +65,12 @@ let adminServer = null
 let activeBind = null // { bindHost, port }
 
 // ---------------------------------------------------------------------------
-// Exposure — availability and exposure are separate axes (plan decision 4)
+// Exposure — availability and exposure are separate axes
 // ---------------------------------------------------------------------------
 // Availability is not a toggle: the listener is always up. What IS settable is
-// WHERE it binds, and that is a bind ADDRESS rather than a boolean (plan §3.3),
-// so one setting covers loopback, a VPN interface, a management VLAN and the
-// full LAN without inventing a mechanism for each.
+// WHERE it binds, and that is a bind ADDRESS rather than a boolean, so one
+// setting covers loopback, a VPN interface, a management VLAN and the full
+// LAN without inventing a mechanism for each.
 //
 // Deliberately NOT `networkMode`: that is data-plane state, read once at server
 // launch (ipc/server.mjs), and keying the control plane to it would rebuild the
@@ -185,13 +184,13 @@ let staticFiles = new Map()
 // swap the bundle out from under a running suite.
 let staticRoot = null
 
-// Phase 8A.6 — the validated CORS allowlist. Empty means no CORS headers at
-// all, which is today's behaviour and the default.
+// The validated CORS allowlist. Empty means no CORS headers at all, which is
+// today's behaviour and the default.
 let corsOrigins = []
 
-// Applied to the HTML this listener serves, which from Phase 3 is a page that
-// actually loads in a browser rather than in an Electron window with a session
-// CSP already on it. Stricter than the Electron one (index.mjs), because the
+// Applied to the HTML this listener serves, which is a page that actually
+// loads in a browser rather than in an Electron window with a session CSP
+// already on it. Stricter than the Electron one (index.mjs), because the
 // built bundle needs less: the entry point is an external module script, so
 // script-src needs no 'unsafe-inline' at all. Styles do — React writes style
 // attributes, which style-src blocks without it.
@@ -251,7 +250,7 @@ function serveStatic(req, res, absPath) {
 // Denials are deliberately NOT logged per request. On a non-loopback bind this
 // port joins the population the internet scans continuously, and a log line per
 // probe is a disk-filling primitive handed to strangers. The events worth
-// having — a login, a bootstrap attempt — arrive with Phase 3's routes, which
+// having — a login, a bootstrap attempt — arrive with the auth routes, which
 // are rate-limited and logged there.
 
 async function handleAdminRequest(req, res) {
@@ -262,7 +261,7 @@ async function handleAdminRequest(req, res) {
     return sendJson(res, 400, { error: 'Malformed request path' })
   }
 
-  // Phase 8A.6. Set on the response ONCE, here, rather than threaded through
+  // Set on the response ONCE, here, rather than threaded through
   // every route: Node merges setHeader() values into whatever writeHead()
   // later sends, so this reaches the API dispatcher, the auth routes, the SSE
   // feed and the static files without any of them having to know about CORS.
@@ -312,16 +311,16 @@ async function handleAdminRequest(req, res) {
     return await handleAdminApiRoute(req, res, urlPath)
   }
 
-  // The live feed (Phase 5 §5.3) — a GET, not a POST/JSON route, so it lives
-  // beside the API dispatch rather than in its table: an SSE response is
-  // opened and held, not returned once.
+  // The live feed — a GET, not a POST/JSON route, so it lives beside the API
+  // dispatch rather than in its table: an SSE response is opened and held,
+  // not returned once.
   if (isAdminEventsRoute(urlPath)) {
     return handleAdminEventsRoute(req, res)
   }
 
-  // Kept from Phase 2, and still earning its place: the cheapest possible probe
-  // that the gate above lets the right caller through, with no side effects to
-  // reason about when it fails.
+  // Still earning its place: the cheapest possible probe that the gate above
+  // lets the right caller through, with no side effects to reason about when
+  // it fails.
   if (req.method === 'GET' && urlPath === '/admin/whoami') {
     return sendJson(res, 200, { user: authResult.account })
   }
@@ -351,7 +350,7 @@ export function startAdminListener({ bindHost = DEFAULT_ADMIN_BIND_HOST, port = 
   const rejection = bindHostRejection(bindHost)
   if (rejection) return Promise.reject(new Error(rejection))
 
-  // Phase 8A.6 — empty unless a deployment asked for it, and a bad list is
+  // Empty unless a deployment asked for it, and a bad list is
   // refused wholesale rather than partially applied. Logged, not thrown: a
   // malformed CORS setting must not stop the control plane from binding,
   // because the control plane is what an admin uses to fix the setting.
@@ -403,7 +402,7 @@ export function stopAdminListener() {
 }
 
 /**
- * What the UI needs to render the exposure warning (plan decision 19).
+ * What the UI needs to render the exposure warning.
  * `exposed` is the fact that matters: forwarding a non-loopback control plane
  * through a router is what turns a low-risk deployment into a scanned one.
  */

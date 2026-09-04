@@ -6,16 +6,16 @@
 // AES-256-GCM under a 32-byte key held in a file beside Nest's other state.
 // This is the headless daemon's provider — there is no keychain on an
 // appliance, no DBus session, and no console to type an unlock passphrase into
-// at boot (design §3.1).
+// at boot.
 //
 // BE CLEAR ABOUT WHAT THIS IS. On its own it is honest and weak: the key sits
 // in the same directory as the ciphertext, so anyone who can read that
 // directory can read the secrets, and a key file there buys exactly nothing
-// against them. That is deliberate and settled, not an oversight —
-// design §3.1 concluded that Nest must NOT try to resist physical access,
-// because §3.2 already concedes that possession of the box confers ownership
-// (the bootstrap token is on a label on the chassis). Defending here would cost
-// real complexity to resist a threat the product has deliberately conceded.
+// against them. That is deliberate and settled, not an oversight — Nest must
+// NOT try to resist physical access, because possession of the box already
+// confers ownership (the bootstrap token is on a label on the chassis).
+// Defending here would cost real complexity to resist a threat the product
+// has deliberately conceded.
 //
 // What makes it meaningful is underneath it: TPM-backed full-disk encryption
 // (LUKS+TPM2, or BitLocker+TPM on a Windows level-3 variant), which is what
@@ -26,7 +26,7 @@
 //
 // File permissions: 0600 at creation. On Windows that is approximated rather
 // than enforced by the mode bits — the real control at level 3 is the data
-// directory ACL'd to the service account (decision 9, §8B.1).
+// directory ACL'd to the service account.
 // =============================================================================
 
 import * as crypto from 'node:crypto'

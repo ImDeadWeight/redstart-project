@@ -1,7 +1,7 @@
 // Admin / control-plane IPC namespace — where the control plane is bound,
 // and changing it.
 //
-// Handler bodies are exported as plain functions (Phase 1, §1.3); importing
+// Handler bodies are exported as plain functions; importing
 // this module never registers anything, only adminHandlers()/buildAdminApi()
 // wiring it into the table does.
 import { getLoginItems } from '../desktop-integration.mjs'
@@ -19,7 +19,7 @@ export function getControlPlane() {
 }
 
 /**
- * The full status endpoint (Phase 5 §5.4) — "running: true" was the whole of
+ * The full status endpoint — "running: true" was the whole of
  * server:status before this; a remote admin watching a box they cannot see
  * the tray icon or the window title of needs more than a boolean.
  *
@@ -51,7 +51,7 @@ export function getFullStatus({ serverState }) {
     gateway: { port: config ? getGatewayPort(config.port) : null },
     mcp: { running: getMcpServerRunning() },
     adminListener: getAdminListenerState(),
-    // Phase 8A.6 (trap 5.7) — what a client compares itself against when it
+    // What a client compares itself against when it
     // is not the bundle this daemon served. See build-info.mjs for why the
     // revision, and not the release version, is the load-bearing half.
     version: { app: appVersion(), apiRevision: apiRevision() },
@@ -61,7 +61,7 @@ export function getFullStatus({ serverState }) {
 /**
  * Move the control plane to a different bind address.
  *
- * REBINDS IMMEDIATELY, not at next start (plan decision 4). The reason is not
+ * REBINDS IMMEDIATELY, not at next start. The reason is not
  * convenience: an admin changing this may be doing it to recover access, and a
  * setting that only takes effect after a restart they cannot perform remotely is
  * no use to them.
@@ -99,16 +99,16 @@ export async function setControlPlaneBindHost(host, { readSettings, writeSetting
   settings.adminBindHost = bindHost
   writeSettings(settings)
 
-  // Discovery no longer reads the control plane's bind address (Phase 6.5 —
-  // mDNS, the only mechanism that used to key on it, is retired). Nothing to
-  // re-run here any more.
+  // Discovery no longer reads the control plane's bind address — mDNS, the
+  // only mechanism that used to key on it, is retired. Nothing to re-run
+  // here any more.
 
   logEvent('admin', 'bind_changed', { loopback: isLoopbackBind(bindHost) })
   return { ok: true, state: getAdminListenerState() }
 }
 
 /**
- * Whether Redstart is set to start at login (Phase 7 §7.4).
+ * Whether Redstart is set to start at login.
  *
  * Reads the OS's own record (the login-item capability an entrypoint
  * registered), not settings.json — a user can turn this off from Task
@@ -117,10 +117,10 @@ export async function setControlPlaneBindHost(host, { readSettings, writeSetting
  * direction (a fresh install, or settings.json disagreeing with the OS) once
  * at startup; this function only ever reports the OS's current answer.
  *
- * Phase 8A.5 — `supported` is false on a headless daemon, where "start at
- * login" has no meaning at all: nobody logs in, and a service's boot start is
- * the supervisor's business (§8B.3), not a setting Nest owns. Reported rather
- * than answered `false` on its own, so the UI can hide a control that does not
+ * `supported` is false on a headless daemon, where "start at login" has no
+ * meaning at all: nobody logs in, and a service's boot start is the
+ * supervisor's business, not a setting Nest owns. Reported rather than
+ * answered `false` on its own, so the UI can hide a control that does not
  * apply instead of showing an off switch that can never be turned on.
  */
 export function getStartupSettings() {
@@ -136,14 +136,14 @@ export function getStartupSettings() {
  * reconciliation in index.mjs treats as the admin's last explicit choice,
  * distinct from the on-by-default seed a fresh install gets before anyone
  * has touched this toggle). `--background` is the flag index.mjs checks to
- * skip createWindow() on a login-triggered start — see §7.4's "windowless,
- * tray-only" requirement.
+ * skip createWindow() on a login-triggered start — a login-triggered start
+ * must stay windowless, tray-only.
  */
 export function setStartupSettings(startAtLogin, { readSettings, writeSettings }) {
   const loginItems = getLoginItems()
   if (!loginItems) {
     // Refuse visibly rather than write a settings.json key that nothing will
-    // ever act on. Same rule §4's picker work followed: a control that cannot
+    // ever act on. Same rule the picker work followed: a control that cannot
     // do what it says must say so, not fail quietly somewhere downstream.
     return { supported: false, startAtLogin: false, error: 'Start at login is not available on this platform' }
   }
@@ -159,17 +159,15 @@ export function setStartupSettings(startAtLogin, { readSettings, writeSettings }
 }
 
 /**
- * The pure half of startup reconciliation (§7.8 asks for this split
- * explicitly): given the persisted settings, what should the OS login item
- * be right now, and does settings.json need writing to remember it? No
- * Electron call in here — that is what makes it testable without a stub,
- * unlike reconcileStartupSetting() below, whose one untestable line is the
- * login item's own set() call.
+ * The pure half of startup reconciliation: given the persisted settings,
+ * what should the OS login item be right now, and does settings.json need
+ * writing to remember it? No Electron call in here — that is what makes it
+ * testable without a stub, unlike reconcileStartupSetting() below, whose one
+ * untestable line is the login item's own set() call.
  *
  * A fresh install (`settings.startAtLogin` is undefined — nobody has ever
- * touched the toggle) seeds ON: flagged as an open question in the
- * implementation plan and decided that way on the grounds that a daemon
- * with no model loaded is a bound port and ~100MB, not the 40GB a loaded
+ * touched the toggle) seeds ON, on the grounds that a daemon with no model
+ * loaded is a bound port and ~100MB, not the 40GB a loaded
  * model would be. Once an admin has set it explicitly (via setStartupSettings
  * above, so the value IS a boolean), that choice is reasserted forever —
  * never the on-by-default seed again.
@@ -185,8 +183,8 @@ export function resolveStartupReconciliation(settings) {
  * settings.json says every time, since a Windows update or a manual
  * registry edit could otherwise leave the two disagreeing silently.
  * `--background` is the flag index.mjs checks at startup to skip
- * createWindow() on a login-triggered start (§7.4's "windowless, tray-only"
- * requirement).
+ * createWindow() on a login-triggered start (which must stay windowless,
+ * tray-only).
  */
 export function reconcileStartupSetting({ readSettings, writeSettings }) {
   const loginItems = getLoginItems()
@@ -206,10 +204,9 @@ export function reconcileStartupSetting({ readSettings, writeSettings }) {
 }
 
 /**
- * Deliberate shutdown from the admin UI (Phase 7 §7.5). There was no
- * shutdown route before this — with the window no longer meaning anything
- * (§7.2), Task Manager would otherwise be the only exit, which is worse
- * than what existed before this phase.
+ * Deliberate shutdown from the admin UI. There was no shutdown route before
+ * this — with the window no longer meaning anything, Task Manager would
+ * otherwise be the only exit, which is worse than what existed before.
  *
  * `deps.quitApp` is index.mjs's own closure — the one place that holds
  * `isQuitting` and `app.quit()`. It defers the actual quit to the next
@@ -226,22 +223,19 @@ export function shutdown({ quitApp }) {
 }
 
 // `set-bind-host` is now wired to the UI (AccountsPanel.tsx's exposure
-// toggle) — it sat unregistered from Phase 2 until then because offering the
-// button before there was a login screen a browser could reach would have let
-// someone expose a process-spawning plane in exchange for nothing (plan
-// decision 19's warning exists for exactly this act). Owner-gated like every
-// other route on this table, same as the read.
+// toggle) — it sat unregistered until there was a login screen a browser
+// could reach, because offering the button any earlier would have let
+// someone expose a process-spawning plane in exchange for nothing. Owner-gated
+// like every other route on this table, same as the read.
 export function adminHandlers(deps) {
   return {
     'admin:get-control-plane': () => getControlPlane(),
-    // §5.4 — a remote admin's full-status readout. deps is the same big
+    // A remote admin's full-status readout. deps is the same big
     // collaborator bag every other namespace gets; only serverState is used.
     'admin:get-status': () => getFullStatus(deps ?? {}),
     'admin:set-bind-host': (host) => setControlPlaneBindHost(host, deps ?? {}),
-    // Phase 7 §7.4 — start-at-login.
     'admin:get-startup': () => getStartupSettings(),
     'admin:set-startup': (startAtLogin) => setStartupSettings(startAtLogin, deps ?? {}),
-    // Phase 7 §7.5 — deliberate shutdown.
     'admin:shutdown': () => shutdown(deps ?? {}),
   }
 }

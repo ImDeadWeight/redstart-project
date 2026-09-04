@@ -9,7 +9,7 @@
 // as a string in JSON; decryption only ever happens daemon-side and plaintext
 // is never returned to a client.
 //
-// Phase 8A.1 — this module no longer knows HOW anything is encrypted. It holds
+// This module no longer knows HOW anything is encrypted. It holds
 // the seam and the storage format; a provider supplies the crypto:
 //
 //   electron/main/secrets-safe-storage.mjs   Electron safeStorage (DPAPI on
@@ -17,11 +17,10 @@
 //   electron/main/secrets-keyfile.mjs        AES-256-GCM under a daemon-owned
 //                                            key file. The headless entrypoint.
 //
-// Why the seam exists: safeStorage is Electron-only, and design §3.1 settled
-// that the appliance gets a daemon-owned key instead. `secrets.mjs` was the
-// single hardest blocker to running this code under plain Node — it sits on
-// the daemon's critical path via gateway-config.mjs, so nothing boots without
-// it. See docs/notes/headless-admin-plane-implementation.md §8A.1.
+// Why the seam exists: safeStorage is Electron-only, and the appliance gets
+// a daemon-owned key instead. `secrets.mjs` was the single hardest blocker to
+// running this code under plain Node — it sits on the daemon's critical path
+// via gateway-config.mjs, so nothing boots without it.
 //
 // Fail-closed, exactly like platform-paths.mjs: reading before initSecrets()
 // is a startup-order bug, not a condition to paper over with a default. And as
@@ -42,12 +41,12 @@
 // safe rather than a guess: '.' is not in the base64 alphabet, so a bare
 // base64 blob can never begin with "v1." by accident.
 //
-// This exists for Phase 8B.2 — the DPAPI re-key. A Windows install converting
+// This exists for the DPAPI re-key. A Windows install converting
 // to a service account must decrypt every secret while still running as the
 // original user, and a tag turns "find every blob the old provider wrote" into
 // a query instead of a hand-audit of every config file's schema looking for
 // fields whose names happen to end in `Enc`. One string operation now; the
-// alternative later is the step in this whole plan most able to lose user data
+// alternative later is the step most able to lose user data
 // silently.
 // =============================================================================
 
@@ -97,7 +96,7 @@ export function activeSecretsTag() {
 /**
  * Split a stored value into { tag, payload } without decrypting it.
  *
- * Exported because Phase 8B.2's migration needs to enumerate secrets and
+ * Exported because the re-key migration needs to enumerate secrets and
  * report, per value, which provider wrote it — including ones the current
  * provider cannot read.
  */

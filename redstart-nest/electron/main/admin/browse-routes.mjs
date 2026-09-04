@@ -1,26 +1,25 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — server-side directory browser (Phase 4, §4.2)
+// Redstart Nest — server-side directory browser
 // =============================================================================
-// The native `dialog.showOpenDialog` pickers browse the CLIENT's disk (trap
-// 5.2, headless-admin-plane-plan.md §5) — correct while Electron and the
-// daemon share a box, wrong the moment a browser or a remote launcher is the
-// caller. These three methods are the daemon-side replacement: a directory
-// listing exposed as ordinary control-plane methods, on the regular admin API
-// table, so they inherit the listener's owner-only gate rather than growing
-// one of their own (api-routes.mjs's "THE GATE IS NOT HERE").
+// The native `dialog.showOpenDialog` pickers browse the CLIENT's disk —
+// correct while Electron and the daemon share a box, wrong the moment a
+// browser or a remote launcher is the caller. These three methods are the
+// daemon-side replacement: a directory listing exposed as ordinary
+// control-plane methods, on the regular admin API table, so they inherit the
+// listener's owner-only gate rather than growing one of their own
+// (api-routes.mjs's "THE GATE IS NOT HERE").
 //
-// SCOPING — the open question the implementation plan left genuinely open,
-// closed here as (a): NO SCOPE. `path-scope.mjs` answers "is this path inside
-// that configured root", which is the wrong question for a picker whose whole
-// job is choosing a root — there is nothing to be inside of yet. The caller is
-// always the Owner (the listener's gate), who can already set
+// SCOPING: NO SCOPE, deliberately. `path-scope.mjs` answers "is this path
+// inside that configured root", which is the wrong question for a picker
+// whose whole job is choosing a root — there is nothing to be inside of yet.
+// The caller is always the Owner (the listener's gate), who can already set
 // `settings.serverBinPath` to any path and have it SPAWNED (validate.mjs calls
 // that "the head of the escalation chain") — a directory listing grants
-// strictly less than what the Owner already holds. Revisit at level 3 (the
-// service account, headless-admin-plane-plan.md §3.5), where the daemon's own
-// filesystem reach is narrowed by the OS and the question changes shape.
+// strictly less than what the Owner already holds. Revisit once the daemon
+// can run as a dedicated service account, where the daemon's own filesystem
+// reach is narrowed by the OS and the question changes shape.
 //
 // Whichever way that is decided, two rules hold regardless and are enforced
 // below: `browse:list` never returns anything but names and kind (never file
@@ -94,14 +93,14 @@ export function listDirectory(targetPath) {
     dirents = fs.readdirSync(targetPath, { withFileTypes: true })
   } catch (err) {
     // The access flags belong on THIS path too, and leaving them off was a real
-    // bug: an unreadable directory is the exact case Phase 8B.6 exists to
+    // bug: an unreadable directory is exactly the case this route exists to
     // report, and it is the one branch that was answering `undefined` instead
     // of `false`. FolderPicker only warns on `readable === false` and only
     // blocks selection on the same test, so an admin on a box where this fires
-    // — a level-3 service account pointed at a share it was never granted — got
-    // no warning and could select the folder anyway, which is precisely the
-    // "accepted at selection, fails later inside a tool call" outcome the
-    // feature was built to prevent.
+    // — a service account pointed at a share it was never granted — got no
+    // warning and could select the folder anyway, which is precisely the
+    // "accepted at selection, fails later inside a tool call" outcome this
+    // route exists to prevent.
     return {
       path: targetPath,
       parent: parentOf(targetPath),
@@ -120,14 +119,13 @@ export function listDirectory(targetPath) {
 }
 
 /**
- * Phase 8B.6 - can this daemon actually USE this folder?
+ * Can this daemon actually USE this folder?
  *
- * Design section 3.5's one hard requirement about tool folders: the picker
- * must report an unreadable folder as unreadable AT SELECTION TIME, rather
- * than accepting the path and failing later inside a tool call - where the
- * error reaches the user as a confused model rather than as a permissions
- * problem. That is the failure this exists to prevent; it is not about
- * hiding folders.
+ * The one hard requirement about tool folders: the picker must report an
+ * unreadable folder as unreadable AT SELECTION TIME, rather than accepting
+ * the path and failing later inside a tool call - where the error reaches
+ * the user as a confused model rather than as a permissions problem. That is
+ * the failure this exists to prevent; it is not about hiding folders.
  *
  * Only bites at level 3, where an unprivileged service account is pointed at
  * a mounted share or an existing repository it was never granted. At level 2
