@@ -334,6 +334,43 @@ await test('nothing dropped reports all-selected', () => {
   assert(dropped.length === 0 && reason === 'all-selected', `expected a clean pass, got '${reason}' with ${dropped.length} dropped`)
 })
 
+await test('🔍 a relative floor cuts where an absolute one cannot', () => {
+  // The band bge actually produces on this tree's tools: everything between
+  // 0.57 and 0.82. An absolute floor is either a no-op or an arbitrary cut.
+  const scored = scoredList([['best', 0.82], ['good', 0.74], ['weak', 0.58], ['weaker', 0.57]])
+  const absolute = selectTools({ scored, floor: 0.5 }).selected.map(toolName)
+  assert(absolute.length === 4, `an absolute floor of 0.5 cut nothing, as expected: ${absolute.length}`)
+  const relative = selectTools({ scored, relativeFloor: 0.9 }).selected.map(toolName)
+  assert(relative.join(',') === 'best,good', `expected the top band only, got: ${relative.join(',')}`)
+})
+
+await test('the absolute and relative floors both apply — a tool must clear each', () => {
+  const scored = scoredList([['best', 0.9], ['mid', 0.5]])
+  // relativeFloor alone would admit 'mid' (0.5 >= 0.9 * 0.5); the absolute one
+  // must still be able to refuse it.
+  const names = selectTools({ scored, floor: 0.6, relativeFloor: 0.5 }).selected.map(toolName)
+  assert(names.join(',') === 'best', `the absolute floor was ignored: ${names.join(',')}`)
+})
+
+await test('a relative floor is inert when every score is zero', () => {
+  // A cold cache scores everything 0. That is not a licence to widen or to
+  // admit the whole registry on a division that never happened.
+  const scored = scoredList([['a', 0], ['b', 0]])
+  const names = selectTools({ scored, relativeFloor: 0.9 }).selected.map(toolName)
+  assert(names.length === 2, `a zero best score changed the outcome: ${names.join(',')}`)
+})
+
+await test('the relative floor is read off the scored field, and a pin still overrides it', () => {
+  // The bar is a fraction of the best score anything got this turn, pins
+  // included — "within x% of the best match" is a claim about the query, not
+  // about the selection. What must hold is that the pin itself is never
+  // measured against it.
+  const scored = scoredList([['pinned', 0.99], ['a', 0.60]])
+  const names = selectTools({ scored, pins: ['pinned'], relativeFloor: 0.9 }).selected.map(toolName)
+  assert(names.includes('pinned'), 'a pin was cut by the floor it set')
+  assert(!names.includes('a'), `0.60 is well under 0.9 x 0.99 and should not have survived: ${names.join(',')}`)
+})
+
 await test('an empty request selects nothing without throwing', () => {
   const { selected, dropped, reason } = selectTools({ scored: [] })
   assert(selected.length === 0 && dropped.length === 0 && reason === 'all-selected', 'an empty tool list should be a no-op')

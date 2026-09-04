@@ -233,10 +233,17 @@ export function scoreTools({ tools, query, store }) {
  *   included for the same reason, which is what makes the applied set
  *   monotonic. A tool wrongly added costs one re-prefill once; a set that
  *   churns costs one every turn, forever.
- * - Everything else is added by descending score while it clears `floor` and
+ * - Everything else is added by descending score while it clears the floor and
  *   while the running estimate stays under `budgetTokens`. Below the floor a
  *   tool is never added even with budget to spare, so a pathological query
  *   cannot drag the whole registry in.
+ * - The floor has two halves and a tool must clear BOTH. `floor` is absolute;
+ *   `relativeFloor` is a fraction of the best score this turn. The relative one
+ *   is the load-bearing half in practice: measured against this tree's own tool
+ *   descriptions, bge-small-en-v1.5 puts every score in a narrow band (0.57 to
+ *   0.82 across 21 tools and 18 asks), so an absolute cut is either a no-op or
+ *   an arbitrary guillotine, while "within x% of the best match this turn"
+ *   means the same thing on every query.
  * - `margin` is hysteresis against the weakest tool already included, so a
  *   score jittering by a hair does not toggle the set.
  *
@@ -246,11 +253,12 @@ export function scoreTools({ tools, query, store }) {
  *   previous?: Iterable<string>,
  *   budgetTokens?: number,
  *   floor?: number,
+ *   relativeFloor?: number,
  *   margin?: number,
  * }} args
  * @returns {{ selected: any[], dropped: any[], reason: string }}
  */
-export function selectTools({ scored, pins, previous, budgetTokens = Infinity, floor = 0, margin = 0 }) {
+export function selectTools({ scored, pins, previous, budgetTokens = Infinity, floor = 0, relativeFloor = 0, margin = 0 }) {
   const entries = Array.isArray(scored) ? scored : []
   const pinned = new Set(pins ?? [])
   const carried = new Set(previous ?? [])
@@ -271,11 +279,21 @@ export function selectTools({ scored, pins, previous, budgetTokens = Infinity, f
     ? Math.min(...[...included.values()].map(e => e.score))
     : null
 
+  // entries is sorted by descending score, so the best is the first — but a
+  // pinned tool that scores higher is already in `included` and must not raise
+  // the bar for everything else, which is why this reads the scored list rather
+  // than the selection.
+  const best = entries.length > 0 ? entries[0].score : 0
+  // A relative floor off a non-positive best score would admit everything or
+  // nothing depending on sign; a query that matched nothing is not a licence to
+  // widen, so fall back to the absolute floor alone.
+  const effectiveFloor = (relativeFloor > 0 && best > 0) ? Math.max(floor, best * relativeFloor) : floor
+
   let budgetBit = false, floorBit = false, marginBit = false
 
   for (const entry of entries) {
     if (included.has(entry.name)) continue
-    if (entry.score < floor) { floorBit = true; continue }
+    if (entry.score < effectiveFloor) { floorBit = true; continue }
     if (weakestIncluded !== null && entry.score < weakestIncluded + margin) { marginBit = true; continue }
     const cost = estimateToolTokens(entry.tool)
     // Stop at the first tool that does not fit rather than skipping it and
