@@ -243,6 +243,61 @@ await test('pluginCapabilities() namespaces tool names as "<id>__<name>" and inc
   return 'disabled plugin present, both tools namespaced'
 })
 
+console.log('\n-- tool titles: untrusted publisher text that lands in the UI --')
+
+await test('a title is sanitised on every read, not only at install', () => {
+  // validatePlugin runs on every read, so an entry hand-edited into
+  // plugins.json or written by a build that predates this check is cleaned on
+  // the way out too. That is the whole reason the sanitiser lives here rather
+  // than at render time.
+  const res = registry.validatePlugin({
+    id: 'titles',
+    tools: [
+      { name: 'a', title: '  Enqueue   workflow  ', inputSchema: {}, class: 'read' },
+      { name: 'b', title: 'Line one\nLine two\r\nthree', inputSchema: {}, class: 'read' },
+      { name: 'c', title: 42, inputSchema: {}, class: 'read' },
+      { name: 'd', inputSchema: {}, class: 'read' },
+    ],
+  })
+  assert(res.ok, `validatePlugin rejected the entry: ${res.error}`)
+  const byName = Object.fromEntries(res.plugin.tools.map((t) => [t.name, t.title]))
+  assert(byName.a === 'Enqueue workflow', `whitespace not collapsed: ${JSON.stringify(byName.a)}`)
+  assert(byName.b === 'Line one Line two three', `line breaks survived: ${JSON.stringify(byName.b)}`)
+  assert(byName.c === '', `a non-string became a title: ${JSON.stringify(byName.c)}`)
+  assert(byName.d === '', `a missing title became something: ${JSON.stringify(byName.d)}`)
+})
+
+await test('\ud83d\udd0d a title cannot carry control or bidi characters into a picker row', () => {
+  // A newline pushes the rest of a list off the screen; a bidi override makes
+  // a label render as something other than what it says. Both are ways to
+  // dress one tool up as another in a list the user picks from.
+  const dirty = 'Read\u202Eelif_etirw\u202C file\u0007\u200F'
+  const clean = registry.sanitizeToolTitle(dirty)
+  assert(!/[\u0000-\u001F\u007F-\u009F]/.test(clean), `control characters survived: ${JSON.stringify(clean)}`)
+  assert(!/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/.test(clean), `bidi controls survived: ${JSON.stringify(clean)}`)
+})
+
+await test('a title is capped so one tool cannot dominate the list', () => {
+  const long = 'x'.repeat(500)
+  assert(
+    registry.sanitizeToolTitle(long).length === registry.MAX_TOOL_TITLE_LENGTH,
+    'an over-long title was not capped'
+  )
+  assert(registry.sanitizeToolTitle(undefined) === '', 'undefined did not sanitise to empty')
+  assert(registry.sanitizeToolTitle(null) === '', 'null did not sanitise to empty')
+})
+
+await test('a title never becomes, or affects, the tool name', () => {
+  // The name is what a ban matches (docs/tool-namespacing.md). A title is
+  // display only and must not be able to reach that decision.
+  const res = registry.validatePlugin({
+    id: 'titlename',
+    tools: [{ name: 'real_name', title: 'other_name', inputSchema: {}, class: 'read' }],
+  })
+  assert(res.ok, res.error)
+  assert(res.plugin.tools[0].name === 'real_name', 'the title displaced the name')
+})
+
 // ---------------------------------------------------------------------------
 
 fs.rmSync(tmpDir, { recursive: true, force: true })

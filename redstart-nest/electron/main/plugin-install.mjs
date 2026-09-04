@@ -570,6 +570,12 @@ export async function probePlugin({ command, args, env, timeoutMs, logDir }) {
     // here, individually, in the Classify step.
     const classified = tools.map((t) => ({
       name: t.name,
+      // MCP's optional display label, carried through so the picker can show
+      // "Enqueue workflow" instead of "comfyui_mcp__enqueue_workflow". It is
+      // taken raw here and sanitised by validatePlugin, which runs on every
+      // read — capturing it clean and trusting it thereafter would leave an
+      // entry written by any other path unsanitised.
+      title: typeof t.title === 'string' ? t.title : '',
       description: typeof t.description === 'string' ? t.description : '',
       inputSchema: t.inputSchema && typeof t.inputSchema === 'object' ? t.inputSchema : {},
       class: 'destructive',

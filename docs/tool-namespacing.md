@@ -86,3 +86,43 @@ Don't. If a client app genuinely needs a tool that does what a Nest tool does, t
 usually that it should call the Nest one. If it truly must run locally — the Twig case, where the
 whole point is acting on the user's own machine rather than the server's — the local one takes the
 app prefix and both remain individually nameable.
+
+---
+
+## Names are not labels
+
+The rules above are about the **name**, which is the identity: what the model is
+sent, what it calls, and what a ban matches. None of it is about what a person
+reads in a list.
+
+Those are now two separate fields, because a name that has to stay targetable by
+a flat string match is a bad label. A tool row in the chat-ui shows, in order of
+preference:
+
+1. the server's own MCP `title`, when it published one;
+2. the name with its namespace prefix removed — **only** where the row already
+   sits under a header naming its source;
+3. the name, unchanged.
+
+`toolDisplayName()` (`src/chat-ui/src/lib/stores/tools/tool-display.ts`) is the
+only place that decides this, and it is pure.
+
+Two consequences worth stating plainly, because both are easy to undo by
+accident:
+
+- **A label is never an identity.** Two plugins may each expose a `search`, and
+  after the prefix is stripped both rows read "search". They stay distinct
+  entries with distinct keys under different headers, and both are still called,
+  matched and banned by their full names. Nothing may key a decision on the
+  displayed string.
+- **The prefix may only be dropped when something else names the source.** Nest
+  serves every installed plugin through its ONE built-in MCP server, so grouping
+  by server alone puts every plugin in a single bucket and leaves the prefix as
+  the only signal of ownership. What makes stripping it safe is
+  `_meta['redstart/source']` — the plugin's admin-reviewed display name, stamped
+  by `plugin-provider.mjs` and honoured only for Nest-provisioned servers — which
+  lets the UI give each plugin its own group header.
+
+A publisher-supplied `title` is untrusted text. It is sanitised in
+`validatePlugin()`, which runs on every read, and the real name stays visible in
+**Settings → Tools**, which is the surface where a server-side ban appears.

@@ -41,27 +41,37 @@ export class MCPToolOps {
 	private redstartMeta(
 		serverId: string,
 		tool: { _meta?: Record<string, unknown> }
-	): { capability: string | null; toolClass: string | null } {
+	): { capability: string | null; toolClass: string | null; source: string | null } {
 		if (!serverId.startsWith(NEST_MCP_SERVER_ID_PREFIX)) {
-			return { capability: null, toolClass: null };
+			return { capability: null, toolClass: null, source: null };
 		}
 		const meta = tool._meta ?? {};
 		const capability = meta['redstart/capability'];
 		const toolClass = meta['redstart/class'];
+		// A human label for what provided this tool ("ComfyUI"), for grouping and
+		// display only. Read behind the same server check as the other two: it is
+		// shown to the user, so a third-party server must not be able to caption
+		// its own tools with someone else's name.
+		const source = meta['redstart/source'];
 		return {
 			capability: typeof capability === 'string' ? capability : null,
-			toolClass: typeof toolClass === 'string' ? toolClass : null
+			toolClass: typeof toolClass === 'string' ? toolClass : null,
+			source: typeof source === 'string' && source ? source : null
 		};
 	}
 
 	/** Public accessor for a tool's provenance, by name. See redstartMeta. */
-	getNestToolMeta(toolName: string): { capability: string | null; toolClass: string | null } {
+	getNestToolMeta(toolName: string): {
+		capability: string | null;
+		toolClass: string | null;
+		source: string | null;
+	} {
 		for (const [serverId, connection] of this.conn.connections) {
 			for (const tool of connection.tools) {
 				if (tool.name === toolName) return this.redstartMeta(serverId, tool);
 			}
 		}
-		return { capability: null, toolClass: null };
+		return { capability: null, toolClass: null, source: null };
 	}
 
 	/**

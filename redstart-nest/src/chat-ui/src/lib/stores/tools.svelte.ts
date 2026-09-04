@@ -5,6 +5,7 @@ import { HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$li
 import { config } from '$lib/stores/settings.svelte';
 import { twigFsApi } from '$lib/utils/twig';
 import { isDestructiveClass } from '$lib/stores/tools/tool-class';
+import { toolDisplayName } from '$lib/stores/tools/tool-display';
 import {
 	LOCAL_OVERRIDDEN_CAPABILITY,
 	suppressedServerToolNames
@@ -187,9 +188,17 @@ class ToolsStore {
 	private mcpEntries(): {
 		serverId: string;
 		serverName: string;
+		title?: string;
+		sourceLabel?: string;
 		definition: OpenAIToolDefinition;
 	}[] {
-		const out: { serverId: string; serverName: string; definition: OpenAIToolDefinition }[] = [];
+		const out: {
+			serverId: string;
+			serverName: string;
+			title?: string;
+			sourceLabel?: string;
+			definition: OpenAIToolDefinition;
+		}[] = [];
 
 		const connections = mcpStore.getConnections();
 		if (connections.size > 0) {
@@ -200,6 +209,8 @@ class ToolsStore {
 					out.push({
 						serverId,
 						serverName,
+						title: typeof tool.title === 'string' ? tool.title : undefined,
+						sourceLabel: mcpStore.getNestToolMeta(tool.name).source ?? undefined,
 						definition: mcpDefinition(tool.name, tool.description, schema)
 					});
 				}
@@ -210,6 +221,9 @@ class ToolsStore {
 					out.push({
 						serverId,
 						serverName,
+						// The health-check shape carries name and description only, so
+						// a tool seen through it keeps its wire name until the live
+						// connection is up. Degrading to the truth beats guessing.
 						definition: mcpDefinition(tool.name, tool.description)
 					});
 				}
@@ -248,6 +262,7 @@ class ToolsStore {
 			const name = def.function.name;
 			push({
 				source: ToolSource.LOCAL_FS,
+				displayName: name,
 				key: toolKey(ToolSource.LOCAL_FS, name),
 				definition: def
 			});
@@ -255,25 +270,36 @@ class ToolsStore {
 
 		for (const def of this._builtinTools) {
 			const name = def.function.name;
-			push({ source: ToolSource.BUILTIN, key: toolKey(ToolSource.BUILTIN, name), definition: def });
+			push({
+				source: ToolSource.BUILTIN,
+				displayName: name,
+				key: toolKey(ToolSource.BUILTIN, name),
+				definition: def
+			});
 		}
 
 		for (const def of this.frontendTools) {
 			const name = def.function.name;
 			push({
 				source: ToolSource.FRONTEND,
+				displayName: name,
 				key: toolKey(ToolSource.FRONTEND, name),
 				definition: def
 			});
 		}
 
-		for (const { serverId, serverName, definition } of this.mcpEntries()) {
+		for (const { serverId, serverName, title, sourceLabel, definition } of this.mcpEntries()) {
 			const name = definition.function.name;
 			if (suppressedServerTools.has(name)) continue;
 			push({
 				source: ToolSource.MCP,
 				serverId,
 				serverName,
+				sourceLabel,
+				// A tool grouped under its own plugin's header can drop the prefix
+				// that names that plugin; one grouped under a bare server name
+				// cannot, because then nothing would say where it came from.
+				displayName: toolDisplayName(name, title, !!sourceLabel),
 				key: toolKey(ToolSource.MCP, name, serverId),
 				definition
 			});
@@ -281,7 +307,12 @@ class ToolsStore {
 
 		for (const def of this.customTools) {
 			const name = def.function.name;
-			push({ source: ToolSource.CUSTOM, key: toolKey(ToolSource.CUSTOM, name), definition: def });
+			push({
+				source: ToolSource.CUSTOM,
+				displayName: name,
+				key: toolKey(ToolSource.CUSTOM, name),
+				definition: def
+			});
 		}
 
 		return entries;
@@ -293,8 +324,15 @@ class ToolsStore {
 		const byKey = new SvelteMap<string, ToolGroup>();
 
 		for (const entry of this.allTools) {
+			// A plugin gets its own group. Every plugin's tools arrive over Nest's
+			// single built-in MCP server, so keying on serverId alone collapses
+			// every installed plugin plus Nest's own capabilities into one list —
+			// which is exactly what made the namespace prefix the only readable
+			// signal of ownership.
 			const groupKey =
-				entry.source === ToolSource.MCP ? `mcp:${entry.serverId ?? ''}` : entry.source;
+				entry.source === ToolSource.MCP
+					? `mcp:${entry.serverId ?? ''}:${entry.sourceLabel ?? ''}`
+					: entry.source;
 
 			let group = byKey.get(groupKey);
 			if (!group) {
@@ -317,7 +355,9 @@ class ToolsStore {
 	private groupLabel(entry: ToolEntry): string {
 		switch (entry.source) {
 			case ToolSource.MCP:
-				return entry.serverName ?? '';
+				// The plugin's name when there is one, since that is the answer to
+				// "which of these is ComfyUI"; the server's name otherwise.
+				return entry.sourceLabel ?? entry.serverName ?? '';
 			case ToolSource.CUSTOM:
 				return TOOL_GROUP_LABELS[ToolSource.CUSTOM];
 			case ToolSource.FRONTEND:

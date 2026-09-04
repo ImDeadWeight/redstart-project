@@ -185,6 +185,88 @@ await test('write_thing declares readOnlyHint:true in the fixture, but toolDefs 
   }
 })
 
+console.log('\n-- display labels: a title and a source, neither of them an identity --')
+
+await test('toolDefs carries the tool\'s title and stamps the plugin\'s name as the source', async () => {
+  registerFixturePlugin('labelled', 'normal', {
+    enabled: true,
+    displayName: 'Fixture Plugin',
+    tools: [
+      { name: 'echo', title: 'Say it back', description: 'Echo.', inputSchema: {}, class: 'read' },
+      { name: 'write_thing', description: 'No title published.', inputSchema: {}, class: 'write' },
+    ],
+  })
+  try {
+    const cfg = { labelled: { enabled: true } }
+    const provider = findProviderForPrefix('labelled__', cfg)
+    const defs = provider.toolDefs(cfg)
+
+    const echo = defs.find((d) => d.name === 'labelled__echo')
+    assert(echo.title === 'Say it back', `title lost: ${JSON.stringify(echo.title)}`)
+    assert(echo._meta?.['redstart/source'] === 'Fixture Plugin', `source label wrong: ${JSON.stringify(echo._meta)}`)
+
+    // The name is the identity and must be untouched by any of this.
+    assert(echo.name === 'labelled__echo', 'the namespaced wire name changed')
+
+    // A tool with no published title gets none invented for it — the client
+    // derives its own label, and a server-side guess would be worse.
+    const write = defs.find((d) => d.name === 'labelled__write_thing')
+    assert(write.title === undefined, `invented a title: ${JSON.stringify(write.title)}`)
+    assert(write._meta?.['redstart/source'] === 'Fixture Plugin', 'source label missing on the untitled tool')
+  } finally {
+    stopAllPlugins()
+    removePlugin('labelled')
+  }
+})
+
+await test('\ud83d\udd0d a title that is not a string, or is pure formatting, does not reach toolDefs', async () => {
+  // validatePlugin sanitises on every read, so the provider can only ever see
+  // a clean string. Newlines and bidi controls are the two that matter: one
+  // pushes a picker list off the screen, the other renders a label as
+  // something other than what it says.
+  registerFixturePlugin('dirtytitle', 'normal', {
+    enabled: true,
+    tools: [
+      { name: 'echo', title: 'Line one\nLine two', description: 'x', inputSchema: {}, class: 'read' },
+      { name: 'write_thing', title: 42, description: 'x', inputSchema: {}, class: 'write' },
+    ],
+  })
+  try {
+    const cfg = { dirtytitle: { enabled: true } }
+    const defs = findProviderForPrefix('dirtytitle__', cfg).toolDefs(cfg)
+    const echo = defs.find((d) => d.name === 'dirtytitle__echo')
+    assert(echo.title === 'Line one Line two', `newline survived: ${JSON.stringify(echo.title)}`)
+    const write = defs.find((d) => d.name === 'dirtytitle__write_thing')
+    assert(write.title === undefined, `a non-string title became one: ${JSON.stringify(write.title)}`)
+  } finally {
+    stopAllPlugins()
+    removePlugin('dirtytitle')
+  }
+})
+
+await test('\ud83d\udd0d a plugin cannot use _meta to claim a Redstart capability or class', async () => {
+  // toolDefs now emits _meta, which it never used to. mcp-server.mjs spreads a
+  // provider's _meta and then stamps its own keys AFTER, so Redstart's verdict
+  // wins. This pins that order: the provider's _meta must carry the source and
+  // nothing else, so there is no path by which a registry entry could smuggle
+  // a capability id or a tool class into the client's trust decision.
+  registerFixturePlugin('metaclaim', 'normal', { enabled: true })
+  try {
+    const cfg = { metaclaim: { enabled: true } }
+    const defs = findProviderForPrefix('metaclaim__', cfg).toolDefs(cfg)
+    for (const def of defs) {
+      const keys = Object.keys(def._meta || {})
+      assert(
+        keys.length === 1 && keys[0] === 'redstart/source',
+        `toolDefs emitted _meta beyond the source label: ${keys.join(', ')}`
+      )
+    }
+  } finally {
+    stopAllPlugins()
+    removePlugin('metaclaim')
+  }
+})
+
 console.log('\n-- namespace dispatch --')
 
 await test('callTool returns null (not an error) for a name outside this plugin\'s namespace', async () => {

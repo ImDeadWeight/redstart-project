@@ -70,7 +70,21 @@
 						{@const isAlwaysAllowed = permissionsStore.hasTool(permissionKey)}
 
 						<div class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50">
-							<TruncatedText text={toolName} class="flex-1" showTooltip={true} />
+							<!--
+								Both, deliberately. This list is where a tool is enabled and
+								where a server-side ban shows as a lock, and a ban matches the
+								WIRE NAME — so the name a policy acts on stays legible here even
+								when a friendlier label exists. The picker in the composer shows
+								the label alone; this one is the reference view.
+							-->
+							<div class="flex min-w-0 flex-1 flex-col">
+								<TruncatedText text={entry.displayName} showTooltip={true} />
+								{#if entry.displayName !== toolName}
+									<span class="truncate font-mono text-[11px] text-muted-foreground">
+										{toolName}
+									</span>
+								{/if}
+							</div>
 
 							<div class="flex w-16 shrink-0 justify-center">
 								{#if isServerBanned}
