@@ -23,6 +23,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 
 // ---------------------------------------------------------------------------
@@ -113,7 +114,7 @@ const sha256 = (buf) => createHash('sha256').update(buf).digest('hex')
 
 const {
   isHuggingFaceUrl, isValidRepoId, isValidRevision, parseQuant,
-  buildArtifacts, buildDownloadUrl,
+  buildArtifacts, buildDownloadUrl, baseModelOf, extractDescription,
 } = await import('../electron/main/hf-catalog.mjs')
 
 const {
@@ -587,6 +588,111 @@ await test('non-GGUF siblings are ignored', () => {
     { rfilename: 'm-Q4_K_M.gguf', size: 30, lfs: { sha256: 'c' } },
   ])
   assert(arts.length === 1, `expected only the GGUF, got ${arts.length}`)
+})
+
+// ===========================================================================
+// Model cards — the description the Hub's JSON does not carry
+// ===========================================================================
+// Both fixtures are real cards, captured 2026-09-04 and trimmed to their
+// openings, because the thing being tested IS the shape real cards take: the
+// quantizer's opens with a badge wall and a bullet list of Colab links, the
+// upstream one with a sentence about the model. A hand-written fixture would
+// have been written to pass.
+
+const cardsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures')
+const quantizerCard = fs.readFileSync(path.join(cardsDir, 'hf-card-quantizer-repo.md'), 'utf8')
+const upstreamCard = fs.readFileSync(path.join(cardsDir, 'hf-card-upstream-repo.md'), 'utf8')
+
+await test('🔍 base_model is validated as a repo id before it can reach a URL path', () => {
+  // It is remote text that gets interpolated into a request path, so it is a
+  // traversal primitive if trusted. Both real shapes are accepted (a string on
+  // a quantizer's card, an array on an upstream one); anything else is not.
+  assert(baseModelOf({ base_model: 'Qwen/Qwen3-30B-A3B' }) === 'Qwen/Qwen3-30B-A3B', 'rejected a valid string')
+  assert(baseModelOf({ base_model: ['Qwen/Qwen3-30B-A3B-Base'] }) === 'Qwen/Qwen3-30B-A3B-Base', 'rejected a valid array')
+  assert(baseModelOf({ base_model: '../../etc/passwd' }) === null, 'a traversal id was accepted')
+  assert(baseModelOf({ base_model: 'a/b?x=1' }) === null, 'a query-bearing id was accepted')
+  assert(baseModelOf({ base_model: 42 }) === null, 'a non-string was accepted')
+  assert(baseModelOf({}) === null, 'invented a base model')
+  assert(baseModelOf(undefined) === null, 'threw on a card with no data')
+})
+
+await test('🔍 an upstream card yields the paragraph that says what the model is', () => {
+  const text = extractDescription(upstreamCard)
+  assert(text, 'no description extracted from a card that plainly has one')
+  assert(/^Qwen3 is the latest generation/.test(text), `wrong opening: ${text.slice(0, 80)}`)
+  assert(!/^---/.test(text) && !/license:/.test(text), 'YAML frontmatter leaked into the description')
+})
+
+await test('🔍 a badge wall and a list of links never become the description', () => {
+  // The quantizer's card opens with centred HTML, shield images and a bullet
+  // list of Colab links. Taking "the first paragraph" literally returns that.
+  const text = extractDescription(quantizerCard)
+  assert(text, 'nothing extracted at all')
+  assert(!/<div|<img|<a href/i.test(text), `raw HTML reached the description: ${text.slice(0, 120)}`)
+  assert(!/Colab notebook here/.test(text), `a link bullet won over prose: ${text.slice(0, 120)}`)
+})
+
+await test('🔍 inline markup is stripped, so no URL or tag survives into the text', () => {
+  // The common card is not laid out in HTML, it is prose with markup threaded
+  // through it — real example, bartowski's: 'Using <a href=...>llama.cpp</a>
+  // release <a ...>b4877</a> for quantization.'
+  const md = 'Using <a href="https://github.com/ggerganov/llama.cpp/">llama.cpp</a> release <a href="https://x/y">b4877</a> for quantization of this model.\n'
+  const text = extractDescription(md)
+  assert(text, 'nothing extracted')
+  assert(!/<a |href=|https?:\/\//.test(text), `markup survived: ${text}`)
+  assert(/Using llama.cpp release b4877/.test(text), `the label text was lost too: ${text}`)
+})
+
+await test('🔍 a de-linked heading stub loses to a real sentence further down', () => {
+  // 'Model Page: Gemma  Resources and Technical Documentation:' passes every
+  // structural filter and is still not a description. A sentence terminator is
+  // what separates it from one.
+  const md = '**Model Page**: [Gemma](https://ai.google.dev/gemma/docs/core)\n**Resources and Technical Documentation**: [docs](https://example.com/documentation/here)\n\nGemma is a family of lightweight, state-of-the-art open models from Google.\n'
+  const text = extractDescription(md)
+  assert(/^Gemma is a family/.test(text), `the link stub won: ${text.slice(0, 90)}`)
+})
+
+await test('a card whose only prose has no full stop still returns it', () => {
+  // The sentence rule is a preference, not a gate — a card with no terminator
+  // anywhere must not come back empty.
+  const md = '# M\n\nA compact multilingual embedding model for offline semantic search\n'
+  const text = extractDescription(md)
+  assert(text && /compact multilingual embedding model/.test(text), `preference became a gate: ${text}`)
+})
+
+await test('a list-only card still describes itself rather than returning nothing', () => {
+  // Lists are held back, not discarded — a card with no prose at all has to
+  // fall back to them or the model has no description.
+  const listOnly = '---\nlicense: mit\n---\n\n# Thing\n\n- A compact model for summarising long documents offline.\n- Trained on public data only.\n'
+  const text = extractDescription(listOnly)
+  assert(text && /summarising long documents/.test(text), `list fallback did not fire: ${text}`)
+})
+
+await test('🔍 an unterminated leading --- is a horizontal rule, not frontmatter', () => {
+  // Eating the rest of the file on an unclosed delimiter is silent data loss.
+  const md = '---\n\nA small instruction-tuned model for local assistants and offline drafting work.\n'
+  const text = extractDescription(md)
+  assert(text && /small instruction-tuned model/.test(text), `body was swallowed: ${text}`)
+})
+
+await test('code fences are not mistaken for prose', () => {
+  const md = '# M\n\n```python\nfrom transformers import AutoModel  # this is a long enough line to pass the filter\n```\n\nA retrieval model for semantic search over technical documentation.\n'
+  const text = extractDescription(md)
+  assert(!/AutoModel/.test(text), `code leaked into the description: ${text}`)
+  assert(/retrieval model/.test(text), 'the prose after the fence was lost')
+})
+
+await test('the description is capped, and cut at a paragraph rather than mid-sentence', () => {
+  const para = 'This paragraph is comfortably longer than the forty character floor the extractor uses. '
+  const text = extractDescription(`${para}\n\n${para}\n\n${para}`, { maxChars: 120 })
+  assert(text.length <= 120, `cap exceeded: ${text.length}`)
+  assert(!text.includes('\n\n'), 'took a second paragraph past the cap')
+})
+
+await test('a card with nothing usable returns null rather than an empty string', () => {
+  assert(extractDescription('---\nlicense: mit\n---\n\n<div><img src="x"></div>\n') === null, 'invented a description')
+  assert(extractDescription('') === null, 'invented a description from nothing')
+  assert(extractDescription(null) === null, 'threw on a missing card')
 })
 
 // ---------------------------------------------------------------------------

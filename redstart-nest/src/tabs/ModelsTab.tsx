@@ -52,7 +52,7 @@ export function ModelsTab({ catalog, hw, modelPath, onGenerateDefaultProfiles }:
     catalogEnabled, connectCatalog, openTab,
     publishers, publisher, setPublisher, query, setQuery,
     models, searching, searchError, runSearch,
-    detail, detailLoading, detailError, openModel, closeModel,
+    detail, detailLoading, detailError, description, openModel, closeModel,
     modelsDir, localFiles, disk, localNames,
     changeFolder, deleteLocal,
     progress, downloading, downloadError, download, cancelDownload,
@@ -229,6 +229,17 @@ export function ModelsTab({ catalog, hw, modelPath, onGenerateDefaultProfiles }:
             </div>
             <button onClick={closeModel} className={btnCls.secondary}>Back</button>
           </div>
+
+          {description && (
+            <div className="mb-3">
+              <p className="text-xs text-zinc-400 whitespace-pre-line">{description.text}</p>
+              <p className="text-[11px] text-zinc-600 mt-1">
+                {description.source === 'base_model'
+                  ? `From the model card of ${description.repoId}, which this build was quantized from.`
+                  : 'From this repository’s own model card, which may describe the conversion rather than the model.'}
+              </p>
+            </div>
+          )}
 
           {detail.gated && (
             <p className="text-xs text-amber-400 mb-3">

@@ -22,7 +22,7 @@ import { publish } from '../event-broker.mjs'
 import * as fsp from 'fs/promises'
 import * as path from 'path'
 
-import { searchModels, getModelDetail, TRUSTED_PUBLISHERS } from '../hf-catalog.mjs'
+import { searchModels, getModelDetail, getModelDescription, TRUSTED_PUBLISHERS } from '../hf-catalog.mjs'
 import { downloadArtifact, diskSpaceFor, discardPartials, PART_SUFFIX } from '../model-download.mjs'
 import { isPlainObject, isNonEmptyString, optional } from './validate.mjs'
 
@@ -49,6 +49,19 @@ export async function searchModelCatalog(opts) {
 export async function getModelDetailById(repoId) {
   try {
     return { ok: true, detail: await getModelDetail(repoId) }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+}
+
+// Deliberately NOT folded into getModelDetailById. A description costs one or
+// two more round trips (the card, and usually the upstream model's card before
+// it), and the artifact list is what the user opened the model to see. Keeping
+// them separate lets the tab render the sizes immediately and fill the prose in
+// when it arrives, instead of holding the whole panel for it.
+export async function getModelDescriptionById(repoId) {
+  try {
+    return { ok: true, description: await getModelDescription(repoId) }
   } catch (err) {
     return { ok: false, error: err.message }
   }
@@ -225,6 +238,7 @@ export function modelsHandlers(deps) {
     'models:publishers': () => listTrustedPublishers(),
     'models:search': async (opts) => searchModelCatalog(opts),
     'models:detail': async (repoId) => getModelDetailById(repoId),
+    'models:describe': async (repoId) => getModelDescriptionById(repoId),
 
     // --- Local storage ---
     'models:local': async () => listLocalModels(deps),

@@ -10,7 +10,7 @@
 import type {
   HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup,
   ExternalMcpServer, LlamaConfig, ClientApp, ControlPlaneState, StartupState,
-  CatalogModel, ModelDetail, ModelArtifact, LocalModelFile, DownloadProgress,
+  CatalogModel, ModelDetail, ModelDescription, ModelArtifact, LocalModelFile, DownloadProgress,
 } from '../types'
 
 export type RedstartAPI = {
@@ -117,6 +117,7 @@ export type RedstartAPI = {
     search: (opts: { query?: string; publisher?: string; limit?: number })
       => Promise<{ ok: boolean; models?: CatalogModel[]; error?: string }>
     detail: (repoId: string) => Promise<{ ok: boolean; detail?: ModelDetail; error?: string }>
+    describe: (repoId: string) => Promise<{ ok: boolean; description?: ModelDescription | null; error?: string }>
     local: () => Promise<{ ok: boolean; dir: string; files: LocalModelFile[]; error?: string }>
     diskSpace: () => Promise<{ ok: boolean; dir: string; freeBytes?: number; totalBytes?: number; error?: string }>
     deleteLocal: (name: string) => Promise<{ ok: boolean; error?: string }>

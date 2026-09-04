@@ -9,7 +9,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api, getAPI } from '../api/redstart'
 import type {
-  CatalogModel, ModelDetail, ModelArtifact, LocalModelFile, DownloadProgress,
+  CatalogModel, ModelDetail, ModelDescription, ModelArtifact, LocalModelFile, DownloadProgress,
 } from '../types'
 
 export function useModelCatalog() {
@@ -25,6 +25,12 @@ export function useModelCatalog() {
   const [detail, setDetail] = useState<ModelDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  // Fetched separately from the detail and never blocking it — see the note on
+  // getModelDescriptionById. A card that is missing, gated or unparseable
+  // leaves this null, which the panel renders as nothing at all rather than as
+  // an error: a description is context, and its absence is not a failure the
+  // user has to act on.
+  const [description, setDescription] = useState<ModelDescription | null>(null)
 
   const [modelsDir, setModelsDir] = useState('')
   const [localFiles, setLocalFiles] = useState<LocalModelFile[]>([])
@@ -37,6 +43,8 @@ export function useModelCatalog() {
   // Guards against an in-flight search landing after a newer one — a slow
   // "qwen" resolving after a fast "llama" would otherwise show the wrong list.
   const searchSeq = useRef(0)
+  // The same guard for the detail panel, which now makes two sequential calls.
+  const detailSeq = useRef(0)
 
   const refreshLocal = useCallback(async () => {
     const a = getAPI()
@@ -68,14 +76,28 @@ export function useModelCatalog() {
     if (!a) return
     setDetail(null)
     setDetailError(null)
+    setDescription(null)
     setDetailLoading(true)
+    detailSeq.current += 1
+    const seq = detailSeq.current
     const res = await a.models.detail(repoId)
+    if (seq !== detailSeq.current) return
     setDetailLoading(false)
     if (res.ok) setDetail(res.detail || null)
-    else setDetailError(res.error || 'Could not load this model')
+    else { setDetailError(res.error || 'Could not load this model'); return }
+
+    // Same staleness guard as the search box, for the same reason: opening a
+    // second model while a slow card is still in flight must not caption it
+    // with the first model's description.
+    const described = await a.models.describe(repoId)
+    if (seq !== detailSeq.current) return
+    setDescription(described.ok ? (described.description ?? null) : null)
   }, [])
 
-  const closeModel = useCallback(() => { setDetail(null); setDetailError(null) }, [])
+  const closeModel = useCallback(() => {
+    detailSeq.current += 1
+    setDetail(null); setDetailError(null); setDescription(null)
+  }, [])
 
   const download = useCallback(async (artifact: ModelArtifact) => {
     if (!detail) return
@@ -149,7 +171,7 @@ export function useModelCatalog() {
     publishers, publisher, setPublisher,
     query, setQuery,
     models, searching, searchError, runSearch,
-    detail, detailLoading, detailError, openModel, closeModel,
+    detail, detailLoading, detailError, description, openModel, closeModel,
     modelsDir, localFiles, disk, localNames,
     refreshLocal, changeFolder, deleteLocal,
     progress, downloading, downloadError, download, cancelDownload,

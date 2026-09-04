@@ -221,8 +221,219 @@ export async function getModelDetail(repoId) {
     experts: typeof raw.config?.num_experts === 'number'
       ? { total: raw.config.num_experts, active: raw.config.num_experts_per_tok ?? null }
       : null,
+    // What the model is FOR, as the Hub classifies it ('text-generation',
+    // 'text-to-image', …). Structured and cheap; the prose that explains the
+    // same thing costs a second request (getModelCard).
+    pipelineTag: typeof raw.pipeline_tag === 'string' ? raw.pipeline_tag : null,
+    // The repo this one was quantized FROM. See baseModelOf() — this is the
+    // pointer that makes a useful description reachable at all.
+    baseModel: baseModelOf(raw.cardData),
     artifacts: buildArtifacts(raw.siblings || []),
   }
+}
+
+// ---------------------------------------------------------------------------
+// Model cards — the prose the API does not have
+// ---------------------------------------------------------------------------
+// Verified against the live API 2026-09-04: the Hub's model JSON has NO
+// description field of any kind. `/api/models/{id}` returns `cardData` (the
+// README's YAML frontmatter — license, tags, base_model, language) without
+// asking for `full=true`, and nothing else resembling prose. The description
+// lives in README.md, which is an ordinary file in the repo and is fetched the
+// same revision-pinned way a GGUF is.
+//
+// AND THE OBVIOUS README IS THE WRONG ONE. Checked the same day against
+// unsloth/Qwen3-30B-A3B-GGUF: 20 KB of quantizer marketing — Colab banners,
+// Discord badges, fine-tuning tables — and not one sentence about what the
+// model does. Its `cardData.base_model` points at Qwen/Qwen3-30B-A3B, whose
+// card opens with "Qwen3 Highlights" and a Model Overview listing parameters,
+// layers, experts and native context length. That is the difference between a
+// GGUF repo and a model repo: the first documents a CONVERSION, the second
+// documents the MODEL. Prefer the upstream card and fall back to the local one.
+//
+// `base_model` arrives as a string on a quantizer's card and as an array on an
+// upstream one, and it is REMOTE TEXT that this module then interpolates into a
+// URL path — exactly the traversal primitive isValidRepoId() exists to stop. It
+// is validated here for that reason and not as a formality.
+
+export function baseModelOf(cardData) {
+  const raw = cardData?.base_model
+  const first = Array.isArray(raw) ? raw[0] : raw
+  return isValidRepoId(first) ? first : null
+}
+
+// A card is a README written by whoever owns the repo. It is UNTRUSTED TEXT and
+// is treated as data everywhere downstream: capped here so a pathological repo
+// cannot stream megabytes into the app, never rendered as HTML, and — when it
+// eventually feeds a model — quoted as material, never as instructions.
+export const MAX_CARD_BYTES = 128 * 1024
+
+export async function getModelCard(repoId, revision = 'main') {
+  assertValidRepoId(repoId)
+  if (!isValidRevision(revision)) throw new Error(`Invalid revision: ${String(revision).slice(0, 80)}`)
+
+  // /raw/ serves the file itself; /resolve/ would redirect an LFS pointer to a
+  // CDN. A README is never LFS-backed, but /raw/ says what is meant.
+  const url = `${API_ORIGIN}/${repoId}/raw/${revision}/README.md`
+  const { response } = await fetchFollowingRedirects(url, {
+    isUrlAllowed: isHuggingFaceUrl,
+    headers: { 'User-Agent': USER_AGENT, Accept: 'text/plain' },
+    signal: AbortSignal.timeout(API_TIMEOUT_MS),
+  })
+  // A repo with no README is ordinary, not an error — say so and let the
+  // caller fall back rather than throwing through a description lookup.
+  if (response.status === 404) return null
+  if (!response.ok) throw new Error(`Hugging Face returned HTTP ${response.status}`)
+
+  const text = await response.text()
+  const truncated = Buffer.byteLength(text, 'utf8') > MAX_CARD_BYTES
+  return {
+    repoId,
+    markdown: truncated ? Buffer.from(text, 'utf8').subarray(0, MAX_CARD_BYTES).toString('utf8') : text,
+    truncated,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Card -> description
+// ---------------------------------------------------------------------------
+// Pure string work, so the whole extraction is testable against recorded cards
+// with no network — the same property that makes the rest of this module
+// testable.
+//
+// Model cards are markdown written for a web page, and the top of one is almost
+// never prose: YAML frontmatter, then a wall of centred HTML, shield badges and
+// linked logos. Everything below strips a KNOWN NON-PROSE FORM rather than
+// trying to recognise prose, because the failure directions are not equal — a
+// dropped paragraph costs a sentence of context, while a kept `<img>` wall
+// costs the entire description.
+
+function stripFrontmatter(markdown) {
+  // Only at position 0, and only closed. An unterminated '---' is a horizontal
+  // rule in the body, not a frontmatter block, and eating the rest of the file
+  // on that basis would be silent data loss.
+  if (!markdown.startsWith('---')) return markdown
+  const end = markdown.indexOf('\n---', 3)
+  if (end === -1) return markdown
+  const after = markdown.indexOf('\n', end + 1)
+  return after === -1 ? '' : markdown.slice(after + 1)
+}
+
+const NON_PROSE_LINE = [
+  /^\s*<[^>]/,                    // an HTML tag opening the line (badge walls, <div> layout)
+  /^\s*\|/,                       // a table row
+  /^\s*[-*+]?\s*!?\[[^\]]*\]\([^)]*\)\s*$/, // a line that is only a link or an image
+  /^\s*[-:|\s]+$/,                // a table rule, or a horizontal rule
+  /^\s*```/,                      // a fence — code is not a description
+]
+
+const LIST_LINE = /^\s{0,3}([-*+]|\d+[.)])\s/
+
+// Line-level filters catch a card that is LAID OUT in HTML; this catches the
+// far more common card that is prose with markup threaded through it —
+// bartowski's opens "Using <a href=...>llama.cpp</a> release <a ...>b4877</a>".
+// A URL is not information to a reader or to a model that will be asked to
+// summarise this, so links collapse to their text and everything else goes.
+function stripInlineMarkup(text) {
+  return text
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')      // images: no text worth keeping
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')    // links: keep the label, drop the URL
+    .replace(/<[^>]+>/g, ' ')                   // inline HTML tags
+    .replace(/[*_`]{1,3}/g, '')                 // emphasis and inline code marks
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+// A description is made of sentences. "**Model Page**: Gemma **Resources and
+// Technical Documentation**:" survives every filter above and is still not a
+// description — it is a link list with the links taken out. Requiring a
+// sentence terminator is the cheapest thing that separates the two, and it is
+// applied as a PREFERENCE rather than a rule so a card whose summary genuinely
+// has no full stop still produces something.
+const HAS_SENTENCE = /[.!?]["')\]]?(\s|$)/
+
+export function extractDescription(markdown, { maxChars = 1200 } = {}) {
+  if (typeof markdown !== 'string' || !markdown.trim()) return null
+
+  const lines = stripFrontmatter(markdown).split(/\r?\n/)
+  const kept = []       // prose only
+  const keptAny = []    // prose + lists, the fallback
+  let inFence = false
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) { inFence = !inFence; continue }
+    if (inFence) continue
+    // Headings are dropped as text but end the paragraph before them, so
+    // "# Qwen3-30B-A3B" does not glue the title onto the first sentence.
+    if (/^\s*#{1,6}\s/.test(line)) { kept.push(''); keptAny.push(''); continue }
+    if (NON_PROSE_LINE.some(re => re.test(line))) { kept.push(''); keptAny.push(''); continue }
+    // A bullet list is held back rather than dropped. A quantizer's card
+    // usually opens with one ("Fine-tune X for free using our Colab
+    // notebook!"), which reads as a paragraph once joined and would otherwise
+    // beat the real prose further down purely by being first. But a card that
+    // is ONLY a list still has to describe something, so the list survives as
+    // the fallback pass rather than being discarded.
+    if (LIST_LINE.test(line)) { kept.push(''); keptAny.push(line); continue }
+    kept.push(line)
+    keptAny.push(line)
+  }
+
+  // Paragraphs, in order, until the budget is spent. Taking whole paragraphs
+  // rather than a character slice is what keeps the result readable — and a
+  // model card's first real paragraph is reliably the summary.
+  const toParagraphs = source => source.join('\n').split(/\n\s*\n/)
+    .map(p => stripInlineMarkup(p))
+    // Two words is not a paragraph; it is a stray caption the filters missed.
+    // Measured AFTER stripping, so a line that was only markup cannot qualify
+    // on the length of its own URLs.
+    .filter(p => p.length > 40)
+
+  // Four tiers, best first. Each is a real card shape seen on the Hub, and the
+  // fallback chain is what stops a strict rule from returning nothing at all.
+  const prose = toParagraphs(kept)
+  const all = toParagraphs(keptAny)
+  const paragraphs =
+    prose.filter(p => HAS_SENTENCE.test(p)).length ? prose.filter(p => HAS_SENTENCE.test(p)) :
+    prose.length ? prose :
+    all.filter(p => HAS_SENTENCE.test(p)).length ? all.filter(p => HAS_SENTENCE.test(p)) :
+    all
+
+  if (paragraphs.length === 0) return null
+
+  const out = []
+  let total = 0
+  for (const p of paragraphs) {
+    if (total + p.length > maxChars && out.length > 0) break
+    out.push(p)
+    total += p.length
+    if (total >= maxChars) break
+  }
+  return out.join('\n\n').slice(0, maxChars)
+}
+
+// The whole lookup: prefer the upstream model's card, fall back to this repo's.
+// `source` is returned because which card answered is real information — a
+// description from the quantizer's own README is worth less than one from the
+// model's authors, and a caller that shows it should be able to say which.
+export async function getModelDescription(repoId, { detail = null } = {}) {
+  assertValidRepoId(repoId)
+  const info = detail ?? await getModelDetail(repoId)
+
+  const candidates = []
+  if (info.baseModel && info.baseModel !== repoId) {
+    candidates.push({ id: info.baseModel, source: 'base_model', revision: 'main' })
+  }
+  candidates.push({ id: repoId, source: 'repo', revision: info.revision || 'main' })
+
+  for (const candidate of candidates) {
+    let card
+    // An upstream repo can be gated, renamed or deleted long after a
+    // quantization of it was published. That is a reason to fall back, never a
+    // reason to fail the lookup.
+    try { card = await getModelCard(candidate.id, candidate.revision) } catch { continue }
+    const text = extractDescription(card?.markdown ?? '')
+    if (text) return { text, source: candidate.source, repoId: candidate.id, truncated: !!card.truncated }
+  }
+  return null
 }
 
 // Collapse the sibling list into selectable artifacts: one per quant, with

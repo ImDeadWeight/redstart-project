@@ -61,6 +61,18 @@ export type ModelDetail = {
   artifacts: ModelArtifact[]
 }
 
+// The prose the Hub's JSON has no field for, lifted out of a model card.
+// `source` says WHICH card answered: 'base_model' means the description came
+// from the model this GGUF was quantized from, which is the one written by the
+// people who trained it; 'repo' means the quantizer's own README, which is
+// usually about the conversion rather than the model.
+export type ModelDescription = {
+  text: string
+  source: 'base_model' | 'repo'
+  repoId: string
+  truncated: boolean
+}
+
 export type LocalModelFile = {
   name: string
   path: string
