@@ -438,7 +438,6 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
           return
         }
 
-        const requestHasTools = Array.isArray(parsed.tools) && parsed.tools.length > 0
         // Redstart-specific request field: a MODE ID, never mode prose. The
         // composer validates it against MODE_IDS and drops anything unknown,
         // so a client cannot inject an instruction block by naming a mode
@@ -447,13 +446,30 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         const requestedMode = parsed.redstart_mode
         delete parsed.redstart_mode
 
+        // BANS FIRST, PROMPT SECOND — and every value the prompt is derived
+        // from is read AFTER this line. The capability claims must describe
+        // what the model actually received this turn, which is the payload the
+        // ban filter left behind, not the one the client sent. Composing first
+        // broke that in two ways: an org-wide ban on a client app
+        // (disabledToolIds naming 'twig') still produced the locality block
+        // telling the model it could reach the user's own files, having taken
+        // the names from the pre-ban array; and a ban that stripped every tool
+        // left `enforceToolAllowList` deleting `parsed.tools` entirely while
+        // hasTools was still true, claiming the whole capability section
+        // against a payload carrying no tools at all. Both are the
+        // substantiation rule in system-prompt.mjs — a claim is made only when
+        // the request substantiates it — and the rule can only hold if the
+        // request has already been narrowed.
+        parsed = enforceToolAllowList(parsed, effectiveConfig)
+
+        const requestHasTools = Array.isArray(parsed.tools) && parsed.tools.length > 0
+
         // account is null when auth is off (see the posture note above) — the
         // composer degrades to a date-only session block rather than failing.
         // Surface comes from authResult — i.e. from the credential the caller
         // presented (spec §8) — never from a header. X-Redstart-Surface stays
         // accepted and inert; the connector-contract suite asserts that.
         parsed.messages = injectSystemContext([...(parsed.messages || [])], effectiveConfig, requestHasTools, authResult.account, requestedMode, authResult.surface, clientToolNamesIn(parsed))
-        parsed = enforceToolAllowList(parsed, effectiveConfig)
 
         try {
           forwardModified(res, internalPort, parsed)

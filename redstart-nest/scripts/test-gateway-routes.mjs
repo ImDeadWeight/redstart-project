@@ -445,6 +445,69 @@ async function main() {
     updateGatewayConfig(baseConfig)
   })
 
+  // ---------------------------------------------------------------------------
+  // Ban/prompt ORDERING. The gateway composes the system prompt and strips
+  // banned tools in the same block, and for a long time it did them in that
+  // order — so every capability claim described the tool list the CLIENT sent
+  // rather than the one llama-server received. These three pin the order.
+  // The substantiation rule they enforce lives in system-prompt.mjs.
+  // ---------------------------------------------------------------------------
+
+  const systemOf = () => lastForwarded.messages.find(m => m.role === 'system')?.content ?? ''
+
+  await test('🔍 a ban that strips every tool leaves no capability claim in the prompt', async () => {
+    // The sharp case: enforceToolAllowList deletes `parsed.tools` outright when
+    // the filter empties it, so hasTools must be read after the strip or the
+    // whole capability section is claimed against a payload with no tools.
+    updateGatewayConfig({ ...baseConfig, documents: { enabled: true }, disabledTools: ['create_document'] })
+    await completions({
+      messages: [{ role: 'user', content: 'write it up' }],
+      tools: [toolDef('create_document')],
+    })
+    assert(!lastForwarded.tools, 'the tools array survived a total ban')
+    assert(
+      !/create_document/.test(systemOf()),
+      'the prompt offered a tool the model was never sent'
+    )
+  })
+
+  await test('🔍 an org-wide client-app ban also removes the locality claim', async () => {
+    // Banning 'twig' expands to its fs_* names. Those names are what
+    // clientToolNamesIn() reads to decide whether two computers are involved,
+    // so reading them pre-ban told the model it could reach the user's own
+    // files while handing it nothing to do it with.
+    const twig = ['fs_read_file', 'fs_write_file', 'fs_edit_file', 'fs_list_directory',
+      'fs_search_files', 'fs_get_file_info', 'fs_create_directory', 'fs_delete_file']
+    updateGatewayConfig({ ...baseConfig, disabledTools: twig })
+    await completions({
+      messages: [{ role: 'user', content: 'read my notes' }],
+      tools: [toolDef('fs_read_file'), toolDef('git_status')],
+    })
+    const names = (lastForwarded.tools || []).map(t => t.function.name)
+    assert(!names.includes('fs_read_file'), 'the banned client tool reached the model')
+    // git_status survives, so the request still carries tools — which is what
+    // makes the missing locality block about the BAN and not about hasTools.
+    assert(names.includes('git_status'), 'an allowed tool was stripped too')
+    assert(
+      !/Two different computers/.test(systemOf()),
+      'the prompt described the user\'s own machine after its tools were banned'
+    )
+  })
+
+  await test('🔍 with nothing banned, the claim the two tests above suppress is still made', async () => {
+    // The regression guard: the ordering swap must remove claims only where a
+    // ban removed the tool, never weaken the substantiated case.
+    updateGatewayConfig({ ...baseConfig, documents: { enabled: true } })
+    await completions({
+      messages: [{ role: 'user', content: 'write it up' }],
+      tools: [toolDef('create_document'), toolDef('fs_read_file')],
+    })
+    const system = systemOf()
+    assert(/create_document/.test(system), 'a permitted capability lost its claim')
+    assert(/Two different computers/.test(system), 'a permitted client tool lost its locality block')
+    updateGatewayConfig(baseConfig)
+  })
+
   await test('🔍 an unauthenticated completion never reaches llama-server', async () => {
     lastForwarded = null
     const res = await fetch(`${gw}/v1/chat/completions`, {
