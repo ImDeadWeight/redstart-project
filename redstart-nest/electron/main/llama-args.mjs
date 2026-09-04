@@ -1,6 +1,7 @@
 'use strict'
 
 import { isPackaged } from './platform-paths.mjs'
+import { EMBED_PORT } from './ports.mjs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
 
@@ -103,6 +104,53 @@ export function buildArgs(config, raw = false) {
     args.push(...sanitizeAdditionalArgs(config.additionalArgs.trim().split(/\s+/)))
   }
   return args
+}
+
+/**
+ * Arguments for the SECOND llama-server: the embedding model behind tool
+ * retrieval.
+ *
+ * Same binary, entirely different job, so it shares nothing with buildArgs()
+ * except the localhost invariant and the quoting helper. In particular it takes
+ * a model path rather than a config: none of the user's chat settings apply to
+ * it, and letting a config through would be the first step toward one of them
+ * (--host, most obviously) reaching a process that has no business on the
+ * network.
+ *
+ * INVARIANT — --host is hardwired to 127.0.0.1 here for exactly the reason it
+ * is in buildArgs(), and the port is the fixed EMBED_PORT, never derived from
+ * config.port. There is no additionalArgs equivalent: this process is internal
+ * plumbing, not something a user configures.
+ *
+ * -ngl 0 keeps it on the CPU. A 33M-parameter model is a few tens of
+ * milliseconds per batch there, and the alternative is taking VRAM away from
+ * the chat model the user actually came for.
+ *
+ * No --path: this server has no UI, and nothing should be able to reach one.
+ *
+ * --pooling is deliberately NOT passed. llama.cpp reads a default from the
+ * GGUF, and bge and MiniLM disagree about what it should be; pinning a flag
+ * before the model is chosen would be guessing at the one parameter that
+ * silently changes what every vector means.
+ *
+ * @param {string} modelPath path to the embedding GGUF
+ * @param {boolean} [raw] false quotes paths for the copy-pasteable UI preview
+ * @returns {string[]}
+ */
+export function buildEmbedArgs(modelPath, raw = false) {
+  const q = raw ? (v) => v : (v) => `"${v}"`
+  return [
+    '-m', q(modelPath),
+    '--embeddings',
+    // Localhost only, always. See the invariant above.
+    '--host', '127.0.0.1',
+    '--port', String(EMBED_PORT),
+    // CPU only — never compete with the chat model for VRAM.
+    '-ngl', '0',
+    // Embedding models cap out at a few hundred positions anyway; a large
+    // context here would reserve memory nothing can use.
+    '-c', '512',
+  ]
 }
 
 // additionalArgs is a free-text advanced-user field appended to the launch
