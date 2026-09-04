@@ -27,6 +27,20 @@ import {
   scoreTools,
   selectTools,
 } from '../electron/main/tool-retrieval.mjs'
+import {
+  EMBED_PID_FILE,
+  startEmbedServer,
+  stopEmbedServer,
+  embedServerStatus,
+  embedTexts,
+  resetEmbedFailureLog,
+} from '../electron/main/embed-server.mjs'
+import { LLAMA_PID_FILE } from '../electron/main/process-supervision.mjs'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import { EventEmitter } from 'node:events'
+import * as http from 'node:http'
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-llama-args.mjs)
@@ -324,6 +338,234 @@ await test('an empty request selects nothing without throwing', () => {
   const { selected, dropped, reason } = selectTools({ scored: [] })
   assert(selected.length === 0 && dropped.length === 0 && reason === 'all-selected', 'an empty tool list should be a no-op')
 })
+
+console.log('\n-- the embedding server never fails a request --')
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-embed-'))
+const fakeModel = path.join(tmpDir, 'embed.gguf')
+const fakeBinary = path.join(tmpDir, 'llama-server-stub')
+
+// A spawn() stand-in: an EventEmitter with a pid and a kill(), which is the
+// whole surface embed-server.mjs uses. Nothing is actually launched.
+function stubSpawn(calls) {
+  return (binaryPath, args, options) => {
+    const child = new EventEmitter()
+    child.pid = 34343
+    child.kill = () => { child.killed = true }
+    calls.push({ binaryPath, args, options, child })
+    return child
+  }
+}
+
+await test('🔍 a missing model file resolves to unavailable, not a throw', async () => {
+  const status = await startEmbedServer({
+    resolveBinary: () => fakeBinary,
+    configDir: tmpDir,
+    modelPath: path.join(tmpDir, 'not-downloaded.gguf'),
+    spawn: stubSpawn([]),
+  })
+  assert(status.state === 'unavailable', `state was '${status.state}'`)
+  assert(/download/i.test(status.reason), `the reason does not say what to do: ${status.reason}`)
+  stopEmbedServer({ configDir: tmpDir })
+})
+
+await test('a missing binary resolves to unavailable too', async () => {
+  fs.writeFileSync(fakeModel, 'not really a gguf')
+  const status = await startEmbedServer({
+    resolveBinary: () => path.join(tmpDir, 'no-such-binary'),
+    configDir: tmpDir,
+    modelPath: fakeModel,
+    spawn: stubSpawn([]),
+  })
+  assert(status.state === 'unavailable', `state was '${status.state}'`)
+  stopEmbedServer({ configDir: tmpDir })
+})
+
+await test('a resolveBinary that throws is caught', async () => {
+  const status = await startEmbedServer({
+    resolveBinary: () => { throw new Error('settings.json is unreadable') },
+    configDir: tmpDir,
+    modelPath: fakeModel,
+    spawn: stubSpawn([]),
+  })
+  assert(status.state === 'unavailable', `state was '${status.state}'`)
+  assert(status.reason.includes('unreadable'), `the underlying reason was lost: ${status.reason}`)
+  stopEmbedServer({ configDir: tmpDir })
+})
+
+await test('a spawn that throws is caught', async () => {
+  fs.writeFileSync(fakeBinary, 'stub')
+  const status = await startEmbedServer({
+    resolveBinary: () => fakeBinary,
+    configDir: tmpDir,
+    modelPath: fakeModel,
+    spawn: () => { throw new Error('EACCES') },
+  })
+  assert(status.state === 'unavailable', `state was '${status.state}'`)
+  stopEmbedServer({ configDir: tmpDir })
+})
+
+await test('🔒 the pid file is NOT llama-server.pid', async () => {
+  assert(EMBED_PID_FILE !== LLAMA_PID_FILE, 'both servers are the same binary — a shared pid file lets one reap the other')
+  const calls = []
+  const status = await startEmbedServer({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls) })
+  assert(status.state === 'running', `state was '${status.state}'`)
+  assert(fs.existsSync(path.join(tmpDir, EMBED_PID_FILE)), 'no pid file was written')
+  assert(!fs.existsSync(path.join(tmpDir, LLAMA_PID_FILE)), 'the chat server pid file was overwritten')
+  stopEmbedServer({ configDir: tmpDir })
+  assert(!fs.existsSync(path.join(tmpDir, EMBED_PID_FILE)), 'the pid file outlived the process')
+  return EMBED_PID_FILE
+})
+
+await test('a second start while running does not spawn twice', async () => {
+  const calls = []
+  await startEmbedServer({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls) })
+  await startEmbedServer({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls) })
+  assert(calls.length === 1, `spawned ${calls.length} times`)
+  stopEmbedServer({ configDir: tmpDir })
+})
+
+await test('stop is idempotent, including before any start', () => {
+  stopEmbedServer({ configDir: tmpDir })
+  stopEmbedServer({ configDir: tmpDir })
+  assert(embedServerStatus().state === 'stopped', `state was '${embedServerStatus().state}'`)
+})
+
+await test('🔍 a deliberate stop reads as stopped; a crash reads as unavailable', async () => {
+  const calls = []
+  await startEmbedServer({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls) })
+  calls[0].child.emit('exit', 1, null)
+  assert(embedServerStatus().state === 'unavailable', 'a crashed embedding server still reported running')
+  assert(/exited/.test(embedServerStatus().reason ?? ''), `the reason does not say it exited: ${embedServerStatus().reason}`)
+
+  const calls2 = []
+  await startEmbedServer({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls2) })
+  stopEmbedServer({ configDir: tmpDir })
+  calls2[0].child.emit('exit', 0, 'SIGTERM')
+  assert(embedServerStatus().state === 'stopped', `a deliberate stop reported '${embedServerStatus().state}'`)
+})
+
+await test('the status is safe to hand to the control plane', () => {
+  const status = embedServerStatus()
+  assert(JSON.stringify(status).length > 0, 'the status does not serialize')
+  assert(!('process' in status), 'the status leaks the child process handle')
+})
+
+console.log('\n-- the embed client fails open, always --')
+
+// A stub server per case, so each failure is the real thing over a real socket
+// rather than a mocked fetch: the failures that matter here (a connection
+// refused, a body that is not JSON, a server that never answers) are properties
+// of the transport, not of the client's own control flow.
+async function withStubServer(handler, fn) {
+  const server = http.createServer(handler)
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = server.address().port
+  try {
+    return await fn(port)
+  } finally {
+    await new Promise(resolve => server.close(resolve))
+  }
+}
+
+function embeddingsBody(vectors) {
+  return JSON.stringify({ data: vectors.map((embedding, index) => ({ index, embedding, object: 'embedding' })) })
+}
+
+await test('a well-formed response comes back in request order', async () => {
+  await withStubServer((req, res) => {
+    res.setHeader('content-type', 'application/json')
+    res.end(embeddingsBody([[1, 0], [0, 1]]))
+  }, async (port) => {
+    const out = await embedTexts(['a', 'b'], { port })
+    assert(out !== null && out.length === 2, `got ${JSON.stringify(out)}`)
+    assert(out[0] instanceof Float32Array, 'rows are not Float32Array')
+    assert(out[0][0] === 1 && out[1][1] === 1, 'vectors came back scrambled')
+  })
+})
+
+await test('🔍 an out-of-order response is placed by index, not by position', async () => {
+  await withStubServer((req, res) => {
+    res.setHeader('content-type', 'application/json')
+    // Same two rows, emitted back to front.
+    res.end(JSON.stringify({ data: [
+      { index: 1, embedding: [0, 1] },
+      { index: 0, embedding: [1, 0] },
+    ] }))
+  }, async (port) => {
+    const out = await embedTexts(['a', 'b'], { port })
+    assert(out[0][0] === 1 && out[1][1] === 1, 'a reordered batch attached tools to the wrong vectors')
+  })
+})
+
+await test('🔒 a 500 yields null, not a throw', async () => {
+  await withStubServer((req, res) => { res.statusCode = 500; res.end('boom') }, async (port) => {
+    assert(await embedTexts(['a'], { port }) === null, 'a 500 did not fail open')
+  })
+})
+
+await test('🔒 a malformed body yields null', async () => {
+  await withStubServer((req, res) => { res.end('not json at all') }, async (port) => {
+    assert(await embedTexts(['a'], { port }) === null, 'unparseable JSON did not fail open')
+  })
+})
+
+await test('🔒 a body with the wrong number of rows yields null', async () => {
+  await withStubServer((req, res) => {
+    res.setHeader('content-type', 'application/json')
+    res.end(embeddingsBody([[1, 0]]))
+  }, async (port) => {
+    assert(await embedTexts(['a', 'b'], { port }) === null, 'a short batch was accepted — tools would take other tools\' vectors')
+  })
+})
+
+await test('🔒 a row with no usable vector yields null', async () => {
+  await withStubServer((req, res) => {
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({ data: [{ index: 0, embedding: [] }] }))
+  }, async (port) => {
+    assert(await embedTexts(['a'], { port }) === null, 'an empty vector was accepted')
+  })
+})
+
+await test('🔒 a server that never answers yields null within the timeout', async () => {
+  await withStubServer(() => { /* deliberately never responds */ }, async (port) => {
+    const started = Date.now()
+    const out = await embedTexts(['a'], { port, timeoutMs: 250 })
+    const elapsed = Date.now() - started
+    assert(out === null, 'a hung server did not fail open')
+    assert(elapsed < 3000, `the timeout did not fire: ${elapsed}ms`)
+    return `${elapsed}ms`
+  })
+})
+
+await test('🔒 nothing listening at all yields null', async () => {
+  // Port 1 on loopback: nothing binds it, so this is connection-refused.
+  assert(await embedTexts(['a'], { port: 1, timeoutMs: 500 }) === null, 'connection refused did not fail open')
+})
+
+await test('an empty input is an empty result, with no request made', async () => {
+  let called = false
+  const out = await embedTexts([], { fetchImpl: () => { called = true; throw new Error('should not be called') } })
+  assert(Array.isArray(out) && out.length === 0, 'an empty batch should be an empty array, not null')
+  assert(!called, 'an empty batch still hit the network')
+})
+
+await test('🔍 a persistent outage logs once, not once per request', async () => {
+  resetEmbedFailureLog()
+  const lines = []
+  const realLog = console.log
+  console.log = (...args) => lines.push(args.join(' '))
+  try {
+    for (let i = 0; i < 3; i++) await embedTexts(['a'], { port: 1, timeoutMs: 300 })
+  } finally {
+    console.log = realLog
+  }
+  const failures = lines.filter(l => l.includes('embed_failed'))
+  assert(failures.length <= 1, `logged ${failures.length} times for one outage`)
+})
+
+fs.rmSync(tmpDir, { recursive: true, force: true })
 
 // ---------------------------------------------------------------------------
 // Summary
