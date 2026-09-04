@@ -21,10 +21,11 @@
 // name is a deletion nobody can undo. It is a closed allowlist of fields, it
 // never records file contents, and nothing else in the codebase may use it.
 //
-// No Electron dependency: index.mjs calls initLogger(app.getPath('userData'))
-// once at startup. Until then (e.g. under the test harness) logging is a no-op
-// beyond nothing — so importing this module never pulls in Electron and never
-// pollutes test output.
+// No Electron dependency: index.mjs calls initLogger(configDir()) once at
+// startup — this module was the original model for platform-paths.mjs's
+// take-a-plain-directory-argument shape. Until then (e.g. under the test
+// harness) logging is a no-op beyond nothing — so importing this module
+// never pulls in Electron and never pollutes test output.
 // =============================================================================
 
 import * as fs from 'fs'

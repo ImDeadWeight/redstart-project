@@ -19,11 +19,17 @@ Repository layout, dev loops, and how to build the binaries and installers.
 ```
 redstart-project/
 ├── docs/                  # This documentation, plus contracts and specs
+├── deploy/                # Service units, SCM procedure and Caddyfile for appliance installs
 ├── redstart-nest/         # Redstart Nest Electron app (server manager)
-│   ├── electron/main/     # Electron main process — gateway, MCP server, providers
+│   ├── bin/nestd.mjs      # The headless entrypoint — the daemon under plain Node
+│   ├── electron/main/     # The daemon — gateway, MCP server, providers, control plane
+│   │   ├── admin/         # The control plane's HTTP routes (auth, api, events, cors)
+│   │   ├── gateway/       # The data plane's non-proxied routes
+│   │   └── ipc/           # Handler bodies, one module per namespace
 │   ├── scripts/           # Security/contract test suites (npm run test:security)
 │   ├── src/
-│   │   ├── App.tsx        # React UI (the launcher window)
+│   │   ├── App.tsx        # React UI (the launcher — a browser page, served by :19083)
+│   │   ├── api/http.ts    # The launcher's HTTP client for the control plane
 │   │   └── chat-ui/       # SvelteKit chat frontend (shared with all clients)
 │   │       └── android/   # Capacitor Android project (Redstart Twig for Android)
 │   └── electron-builder.json
@@ -35,7 +41,11 @@ redstart-project/
         └── SMOKE.md       # Manual checklist for what the suites cannot reach
 ```
 
-**Two frontend frameworks, two jobs.** React owns the launcher window only — the native Electron surface that starts and stops the model, picks folders, and manages accounts, talking to the main process over IPC. SvelteKit owns the chat UI, which is served over HTTP and shared by every client (browser, Twig Windows, Twig Android, Blueprints). They share no state, no routing and no auth code, and neither imports from the other; the boundary is the process/HTTP line.
+**Two frontend frameworks, two jobs.** React owns the launcher — the surface that starts and stops the model, configures capabilities and manages accounts. SvelteKit owns the chat UI, served on the data plane and shared by every client (browser, Twig Windows, Twig Android, Blueprints). They share no state, no routing and no auth code, and neither imports from the other.
+
+**The launcher talks HTTP, not IPC.** There is no preload script and no `contextBridge`; the bridge was retired once the launcher had to be servable to a browser, because a UI that reaches the main process through Electron-only plumbing cannot be. `src/api/http.ts` implements the same `RedstartAPI` surface against `POST /admin/api/<namespace>/<method>` on the control plane, so the Electron window and a browser on another machine are the same client over the same transport. `scripts/test-admin-api.mjs` holds the two halves together: every method the type declares must have a route, and every route must be gated.
+
+**One daemon, two entrypoints.** `electron/main/index.mjs` (desktop) and `bin/nestd.mjs` (headless) both start the *same* daemon; what differs is what they inject. Paths come from `platform-paths.mjs` and crypto from `secrets.mjs`, both fail-closed seams — the desktop wires up `app.getPath` and `safeStorage`, the daemon wires up a directory and a key file. Nothing below those seams imports `electron`, which is what makes the headless boot possible; `scripts/check-mjs.mjs` and the test suites' stub loader both depend on it staying that way.
 
 **Twig owns its local file tools.** Twig's `fs_*` tools act on a folder on the *user's* machine and live in `redstart-twig/windows/electron/fs/`. They keep the `fs_*` prefix rather than adopting the upstream server's names, so the model — and an admin writing a tool ban — can tell Twig's local filesystem from Nest's server-side one. Only `path-scope.mjs` is duplicated between the apps; it is kept in sync by hand, and both copies say so.
 
@@ -59,6 +69,37 @@ This starts Vite (React launcher UI), the SvelteKit chat-ui dev server, and Elec
 > **Note:** In dev mode the chat-ui runs on its own port (`:5174`). The `--path` flag that serves it through llama-server only applies in production builds.
 
 > **Starting a model in dev:** the launcher UI runs fine without the inference binary, but **Start Server** needs `llama-server.exe`. In dev it's looked up at `redstart-nest/llama-cpp-turboquant/build/bin/Release/llama-server.exe` (or point at a custom path in Settings). See [Building the llama-server binary](#building-from-source--llama-server-binary) to produce it.
+
+---
+
+## The daemon, without Electron
+
+```bash
+cd redstart-nest
+npm run daemon            # boots in ./.redstart-daemon (a dev scratch tree)
+npm run daemon:status     # running / stopped / stale / unknown
+npm run daemon:stop
+```
+
+The three scripts all pass `--dir .redstart-daemon` so a dev run never touches a
+real install. Invoked directly, `node bin/nestd.mjs` resolves its directory as
+`--dir`, else `$REDSTART_DIR`, else `~/.redstart` — no platform guessing, because
+a service install passes the directory it wants explicitly.
+
+No window, no desktop session, no Electron. The control plane comes up on
+`:19083` and serves the built launcher bundle, so administration is a browser
+tab — which also means `npm run build` has to have run at least once, or there
+is no bundle to serve.
+
+`daemon:status` distinguishes **stale** (a pid file whose process is gone — what
+a hard kill leaves behind) from **unknown** (a live process whose identity could
+not be confirmed). It will not signal an `unknown`: pid reuse is real, and
+killing on a matching number alone is the bug the whole supervision layer exists
+to have removed.
+
+For running it as a real service — systemd, the Windows SCM, TLS in front — see
+[`deploy/README.md`](../deploy/README.md). Those artifacts have not been run on
+real hardware yet and say so.
 
 ---
 
@@ -89,8 +130,12 @@ npm run storybook                # interactive, per-component
 cd redstart-nest
 npm run test:security     # the full invariant suite — see docs/security.md
 npm run typecheck         # tsc --noEmit for the launcher
-npm run check:mjs         # node --check across electron/main + shared
+npm run check:mjs         # node --check across electron/main + shared + bin
 ```
+
+What the suites cannot reach — anything needing a real window, a real service
+install or a second physical device — is a written manual checklist in
+[`TESTING.md`](../TESTING.md). Run it before cutting a release.
 
 Every suite in `test:security` must also appear as a step in `.github/workflows/ci.yml` — `scripts/test-ci-parity.mjs` fails the build otherwise, because a suite that runs locally but not in CI gates nothing. When you add a suite, add it in both places.
 
@@ -184,7 +229,7 @@ npm run build
 Output: `redstart-nest/release/<version>/Redstart Nest Setup <version>.exe`
 
 The version comes from `package.json`, and `electron-builder` puts the output in
-`release/${version}`. Currently `1.0.0-alpha.1` — the project ships as alpha
+`release/${version}`. Currently `1.0.0-alpha.3` — the project ships as alpha
 prereleases, so bump the `-alpha.N` suffix in `redstart-nest/package.json` and
 `redstart-twig/windows/package.json` (kept in lockstep) before cutting a build.
 

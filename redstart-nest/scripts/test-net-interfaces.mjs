@@ -1,12 +1,13 @@
 // =============================================================================
 // Tests for electron/main/net-interfaces.mjs — LAN adapter selection.
 // =============================================================================
-// This module decides which address the mDNS advertiser binds and which IP the
-// UI shows and encodes into the QR code. Getting it wrong is silent: the app
-// starts fine, reports an address, and simply cannot be reached from any other
-// device. The failure mode it exists to prevent — picking a Hyper-V/WSL virtual
-// switch over the real NIC — only reproduces on a machine that HAS those
-// adapters, so every case here is driven from a synthetic interface map.
+// This module decides which IP the UI shows and encodes into the QR code
+// (and, until Phase 6.5 retired mDNS, which address the advertiser bound).
+// Getting it wrong is silent: the app starts fine, reports an address, and
+// simply cannot be reached from any other device. The failure mode it exists
+// to prevent — picking a Hyper-V/WSL virtual switch over the real NIC — only
+// reproduces on a machine that HAS those adapters, so every case here is
+// driven from a synthetic interface map.
 //
 // net-interfaces.mjs imports only node:os — no Electron — so no stub is needed.
 //
@@ -16,8 +17,6 @@
 import {
   listLanInterfaces,
   getPrimaryLanIp,
-  interfaceSignature,
-  describeInterfaces,
 } from '../electron/main/net-interfaces.mjs'
 
 // ---------------------------------------------------------------------------
@@ -159,37 +158,6 @@ test('IPv6 and internal entries are ignored', () => {
   assert(lan.length === 1 && lan[0].address === '192.168.0.7',
     `got ${lan.map(i => i.address).join(', ')}`)
   return 'IPv4-only, non-internal'
-})
-
-console.log('\n-- change detection --')
-
-test('🔍 the signature changes when a DHCP lease moves the address', () => {
-  const before = interfaceSignature({ 'Wi-Fi': v4('192.168.1.20') })
-  const after = interfaceSignature({ 'Wi-Fi': v4('192.168.1.55') })
-  assert(before !== after, 'signature did not change — advertiser would keep a stale record')
-  return `${before} -> ${after}`
-})
-
-test('🔍 the signature is stable across adapter enumeration order', () => {
-  const a = interfaceSignature({ 'Wi-Fi': v4('192.168.1.20'), 'Ethernet': v4('192.168.1.21') })
-  const b = interfaceSignature({ 'Ethernet': v4('192.168.1.21'), 'Wi-Fi': v4('192.168.1.20') })
-  assert(a === b, `reorder produced a different signature: ${a} vs ${b} — would cause pointless re-announces`)
-  return 'order-independent'
-})
-
-test('the signature ignores virtual adapters appearing and disappearing', () => {
-  const withVm = interfaceSignature({ 'Ethernet': v4('192.168.0.213', 'a8:a1:59:00:00:01'), 'vEthernet (Default Switch)': v4('172.28.16.1', '00:15:5d:01:02:03') })
-  const without = interfaceSignature({ 'Ethernet': v4('192.168.0.213', 'a8:a1:59:00:00:01') })
-  assert(withVm === without, `a Docker/WSL start would trigger a needless re-announce: ${withVm} vs ${without}`)
-  return 'stable'
-})
-
-test('describeInterfaces explains why each adapter was skipped', () => {
-  const lines = describeInterfaces(HYPERV_BOX).join('\n')
-  assert(lines.includes('[skipped: virtual]'), 'virtual adapters not labelled in the diagnostic dump')
-  assert(lines.includes('192.168.0.213') && !lines.match(/192\.168\.0\.213.*skipped/),
-    'the real NIC must appear unskipped')
-  return `${describeInterfaces(HYPERV_BOX).length} adapters described`
 })
 
 // ---------------------------------------------------------------------------

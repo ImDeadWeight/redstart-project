@@ -1,15 +1,15 @@
 'use strict'
 
 // ---------------------------------------------------------------------------
-// LAN interface selection — shared by the mDNS advertiser and the "server
-// address" display.
+// LAN interface selection — for the "server address" display (and, until
+// Phase 6.5 retired it, the mDNS advertiser).
 //
 // os.networkInterfaces() lists every adapter, and on a typical Windows box
-// that includes Hyper-V / WSL / VirtualBox switches and VPN taps. Both callers
-// used to take the FIRST non-internal IPv4, which routinely picked a virtual
-// adapter: mDNS then multicast onto a switch no phone can see, and the UI
-// showed an IP nothing on the LAN could reach. Centralising the choice here
-// keeps every caller agreeing on which addresses are real.
+// that includes Hyper-V / WSL / VirtualBox switches and VPN taps. Taking the
+// FIRST non-internal IPv4 routinely picked a virtual adapter, showing the UI
+// (and encoding into the QR code) an IP nothing on the LAN could reach.
+// Centralising the choice here keeps every caller agreeing on which
+// addresses are real.
 // ---------------------------------------------------------------------------
 
 import * as os from 'node:os'
@@ -100,20 +100,4 @@ export function getPrimaryLanIp(ifaces) {
 
   const all = collect(ifaces)
   return all.length ? all[0].address : '127.0.0.1'
-}
-
-// Stable signature of the current interface set. The advertiser polls this to
-// notice Wi-Fi reconnects and DHCP lease changes, which otherwise leave it
-// advertising a stale address with no way to recover short of a restart.
-export function interfaceSignature(ifaces) {
-  return listLanInterfaces(ifaces).map(i => `${i.name}@${i.address}`).sort().join('|')
-}
-
-// Diagnostic dump — logged at advertiser start so a "can't reach it" report
-// shows which adapters were considered and which were skipped, and why.
-export function describeInterfaces(ifaces) {
-  return collect(ifaces).map(i => {
-    const skip = i.virtual ? ' [skipped: virtual]' : i.linkLocal ? ' [skipped: link-local]' : ''
-    return `${i.name} -> ${i.address}${skip}`
-  })
 }

@@ -168,10 +168,46 @@ export type LlamaConfig = {
   kvCache?: 'off' | 'conservative' | 'balanced' | 'aggressive'
   additionalArgs?: string
   tools?: ProfileTools
-  advertisedHost?: string
+  // Whether THIS profile wants the control plane (admin listener) reachable
+  // on the network when it's selected — separate from networkMode (the data
+  // plane) for the same reason ControlPlaneState is its own type: a control
+  // plane on the LAN by default is a real security decision (see
+  // headless-admin-plane-plan.md decision 4/19), not one to make silently
+  // for every install. Tying it to profiles instead of a bare global default
+  // means "my home profile opens the admin panel to the LAN, my laptop-only
+  // profile doesn't" without a first-run prompt. Undefined (older saved
+  // profiles, or one never touched this session) means "leave the current
+  // exposure alone" — only a profile that explicitly saved a value ever
+  // changes it on load.
+  exposeControlPlane?: boolean
 }
 
 export type ServerState = 'stopped' | 'starting' | 'running' | 'stopping'
+
+// Where the admin listener (the control plane) is bound. Separate from
+// networkMode on purpose: that is the DATA plane's exposure, read only at
+// server launch, while this is the control plane's and takes effect the moment
+// it changes. `exposed` is the one fact the UI warns on.
+export type ControlPlaneState = {
+  running: boolean
+  bindHost: string | null
+  port: number
+  exposed: boolean
+}
+
+// Phase 7 §7.4. Reconciled against what the OS actually says
+// (app.getLoginItemSettings()), not only settings.json — a user can flip
+// this off from Task Manager's Startup tab behind Nest's back, so the UI
+// must always show what is currently true rather than what was last set.
+export type StartupState = {
+  // Phase 8A.5 — false on a headless daemon, where "start at login" has no
+  // meaning: nobody logs in, and a service's boot start belongs to the
+  // supervisor, not to Nest. The UI hides the control rather than showing an
+  // off switch that can never be turned on.
+  supported: boolean
+  startAtLogin: boolean
+  error?: string
+}
 
 // networkMode defaults to true because the main use case is serving other
 // devices on the home network. A toggle exists to switch to localhost-only
@@ -179,6 +215,5 @@ export type ServerState = 'stopped' | 'starting' | 'running' | 'stopping'
 export const DEFAULT_CONFIG: LlamaConfig = {
   modelPath: '', ctxSize: 4096, batchSize: 256, threads: 4,
   gpuLayers: undefined, port: 19080, host: '0.0.0.0', networkMode: true,
-  advertisedHost: 'redstart.local',
   nCpuMoe: undefined, kvCache: 'balanced', additionalArgs: '',
 }

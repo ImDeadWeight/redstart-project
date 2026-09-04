@@ -9,8 +9,17 @@
 // profile's activeToolIds instead. The parameter is kept because stored
 // tools.json files and test fixtures still carry it. Do not remove it.
 // refreshLiveToolsConfig lives in index.mjs and is threaded via deps.
-import { dialog } from 'electron'
-import { handle } from './guard.mjs'
+//
+// Handler bodies are exported as plain functions (Phase 1, §1.3 of the
+// headless-admin-plane implementation plan) so an HTTP route can call them
+// directly without dragging IPC registration in — importing this module never
+// registers anything; only registerCapabilitiesHandlers() does that. The
+// folder-scoped trio's (vault/git/file_system) computed-channel-name
+// registration loop is unchanged for the setters — scripts/test-ipc-contract.mjs
+// specifically exercises that shape. The matching selectXFolder() dialogs
+// retired in Phase 4 §4.3, replaced by a native picker that itself retired
+// in Phase 6 §6.1 — FolderPicker.tsx now only ever uses
+// admin/browse-routes.mjs.
 import { getCapabilities, setCapabilityConfig } from '../tools-storage.mjs'
 import { encryptSecret, decryptSecret } from '../secrets.mjs'
 import { testConnection as testPostgresConnection } from '../postgres-tool.mjs'
@@ -36,156 +45,163 @@ function refuse(channel, reason) {
   return { ok: false, error: reason }
 }
 
-export function registerCapabilitiesHandlers({ refreshLiveToolsConfig }) {
-  // --- Capabilities ---
+export function getCapabilitiesConfig() {
+  const caps = getCapabilities()
+  return {
+    postgres: {
+      enabled: caps.postgres.enabled,
+      hasConnectionString: !!caps.postgres.connectionStringEnc,
+      maxRows: caps.postgres.maxRows,
+    },
+    documents: {
+      enabled: caps.documents.enabled,
+      outputDir: caps.documents.outputDir,
+    },
+    sqlite: {
+      enabled: caps.sqlite.enabled,
+      rootDir: caps.sqlite.rootDir,
+      maxRows: caps.sqlite.maxRows,
+    },
+    vault: {
+      enabled: caps.vault.enabled,
+      rootDir: caps.vault.rootDir,
+    },
+    git: {
+      enabled: caps.git.enabled,
+      rootDir: caps.git.rootDir,
+    },
+    file_system: {
+      enabled: caps.file_system.enabled,
+      rootDir: caps.file_system.rootDir,
+      // Permission policy — writes on by default, deletes off (see
+      // DEFAULT_CAPABILITIES). Surfaced so the UI can show/toggle them.
+      allowWrite: caps.file_system.allowWrite !== false,
+      allowDestructive: caps.file_system.allowDestructive === true,
+    },
+    scholar: {
+      enabled: caps.scholar.enabled,
+      venueFilter: caps.scholar.venueFilter,
+    },
+  }
+}
 
-  handle('capabilities:get', () => {
+export function setPostgresConfig(config, { refreshLiveToolsConfig }) {
+  const bad = checkConfig('capabilities:set-postgres', config)
+  if (bad) return refuse('capabilities:set-postgres', bad)
+  const { connectionString, maxRows, enabled } = config
+  const patch = {}
+  if (typeof enabled === 'boolean') patch.enabled = enabled
+  if (typeof maxRows === 'number') patch.maxRows = maxRows
+  if (connectionString) {
+    try {
+      patch.connectionStringEnc = encryptSecret(connectionString)
+    } catch (err) {
+      return { ok: false, error: err.message }
+    }
+  }
+  setCapabilityConfig('postgres', patch)
+  refreshLiveToolsConfig()
+  return { ok: true }
+}
+
+export async function testPostgresConfig(connectionString) {
+  let target = connectionString
+  if (!target) {
     const caps = getCapabilities()
-    return {
-      postgres: {
-        enabled: caps.postgres.enabled,
-        hasConnectionString: !!caps.postgres.connectionStringEnc,
-        maxRows: caps.postgres.maxRows,
-      },
-      documents: {
-        enabled: caps.documents.enabled,
-        outputDir: caps.documents.outputDir,
-      },
-      sqlite: {
-        enabled: caps.sqlite.enabled,
-        rootDir: caps.sqlite.rootDir,
-        maxRows: caps.sqlite.maxRows,
-      },
-      vault: {
-        enabled: caps.vault.enabled,
-        rootDir: caps.vault.rootDir,
-      },
-      git: {
-        enabled: caps.git.enabled,
-        rootDir: caps.git.rootDir,
-      },
-      file_system: {
-        enabled: caps.file_system.enabled,
-        rootDir: caps.file_system.rootDir,
-        // Permission policy — writes on by default, deletes off (see
-        // DEFAULT_CAPABILITIES). Surfaced so the UI can show/toggle them.
-        allowWrite: caps.file_system.allowWrite !== false,
-        allowDestructive: caps.file_system.allowDestructive === true,
-      },
-      scholar: {
-        enabled: caps.scholar.enabled,
-        venueFilter: caps.scholar.venueFilter,
-      },
+    if (!caps.postgres.connectionStringEnc) return { ok: false, message: 'No connection string configured' }
+    try {
+      target = decryptSecret(caps.postgres.connectionStringEnc)
+    } catch (err) {
+      return { ok: false, message: err.message }
     }
-  })
+  }
+  return await testPostgresConnection(target)
+}
 
-  handle('capabilities:set-postgres', (_, config) => {
-    const bad = checkConfig('capabilities:set-postgres', config)
-    if (bad) return refuse('capabilities:set-postgres', bad)
-    const { connectionString, maxRows, enabled } = config
-    const patch = {}
-    if (typeof enabled === 'boolean') patch.enabled = enabled
-    if (typeof maxRows === 'number') patch.maxRows = maxRows
-    if (connectionString) {
-      try {
-        patch.connectionStringEnc = encryptSecret(connectionString)
-      } catch (err) {
-        return { ok: false, error: err.message }
-      }
-    }
-    setCapabilityConfig('postgres', patch)
-    refreshLiveToolsConfig()
-    return { ok: true }
-  })
+// selectDocumentsFolder() / selectSqliteFolder() / selectFolderScopedFolder()
+// retired — Phase 4 §4.3, and the native picker they were replaced by itself
+// retired in Phase 6 §6.1. FolderPicker.tsx calls admin/browse-routes.mjs's
+// browse:list instead of a dedicated dialog per capability.
 
-  handle('capabilities:test-postgres', async (_, connectionString) => {
-    let target = connectionString
-    if (!target) {
-      const caps = getCapabilities()
-      if (!caps.postgres.connectionStringEnc) return { ok: false, message: 'No connection string configured' }
-      try {
-        target = decryptSecret(caps.postgres.connectionStringEnc)
-      } catch (err) {
-        return { ok: false, message: err.message }
-      }
-    }
-    return await testPostgresConnection(target)
-  })
+export function setDocumentsFolder(config, { refreshLiveToolsConfig }) {
+  const bad = checkConfig('capabilities:set-documents-folder', config, 'outputDir')
+  if (bad) return refuse('capabilities:set-documents-folder', bad)
+  const { outputDir, enabled } = config
+  const patch = {}
+  if (typeof enabled === 'boolean') patch.enabled = enabled
+  if (outputDir) patch.outputDir = outputDir
+  setCapabilityConfig('documents', patch)
+  refreshLiveToolsConfig()
+  return { ok: true }
+}
 
-  handle('capabilities:select-documents-folder', async () => {
-    const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
-    return result.canceled ? null : result.filePaths[0]
-  })
+export function setSqliteConfig(config, { refreshLiveToolsConfig }) {
+  const bad = checkConfig('capabilities:set-sqlite', config, 'rootDir')
+  if (bad) return refuse('capabilities:set-sqlite', bad)
+  const { rootDir, maxRows, enabled } = config
+  const patch = {}
+  if (typeof enabled === 'boolean') patch.enabled = enabled
+  if (typeof maxRows === 'number') patch.maxRows = maxRows
+  if (rootDir) patch.rootDir = rootDir
+  setCapabilityConfig('sqlite', patch)
+  refreshLiveToolsConfig()
+  return { ok: true }
+}
 
-  handle('capabilities:set-documents-folder', (_, config) => {
-    const bad = checkConfig('capabilities:set-documents-folder', config, 'outputDir')
-    if (bad) return refuse('capabilities:set-documents-folder', bad)
-    const { outputDir, enabled } = config
-    const patch = {}
-    if (typeof enabled === 'boolean') patch.enabled = enabled
-    if (outputDir) patch.outputDir = outputDir
-    setCapabilityConfig('documents', patch)
-    refreshLiveToolsConfig()
-    return { ok: true }
-  })
+export function setScholarConfig(config, { refreshLiveToolsConfig }) {
+  const bad = checkConfig('capabilities:set-scholar', config)
+  if (bad) return refuse('capabilities:set-scholar', bad)
+  const { venueFilter, enabled } = config
+  const patch = {}
+  if (typeof enabled === 'boolean') patch.enabled = enabled
+  if (venueFilter !== undefined) patch.venueFilter = String(venueFilter || '').trim() || null
+  setCapabilityConfig('scholar', patch)
+  refreshLiveToolsConfig()
+  return { ok: true }
+}
 
-  handle('capabilities:select-sqlite-folder', async () => {
-    const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
-    return result.canceled ? null : result.filePaths[0]
-  })
+// Vault, Git, and File System share the folder-scoped capability shape: pick a
+// folder, toggle enabled. The channel slug is hyphenated (file_system ->
+// file-system) to match the preload; the storage key stays the underscore
+// form. The shared picker (selectFolderScopedFolder) retired with the rest —
+// see the note above setDocumentsFolder().
+export function setFolderScopedCapability(cap, config, { refreshLiveToolsConfig }) {
+  const slug = cap.replace(/_/g, '-')
+  const channel = `capabilities:set-${slug}`
+  const bad = checkConfig(channel, config, 'rootDir')
+  if (bad) return refuse(channel, bad)
+  const { rootDir, enabled, allowWrite, allowDestructive } = config
+  const patch = {}
+  if (typeof enabled === 'boolean') patch.enabled = enabled
+  if (rootDir) patch.rootDir = rootDir
+  // File System carries a write/destructive permission policy; vault/git do
+  // not, so only thread these through for that capability.
+  if (cap === 'file_system') {
+    if (typeof allowWrite === 'boolean') patch.allowWrite = allowWrite
+    if (typeof allowDestructive === 'boolean') patch.allowDestructive = allowDestructive
+  }
+  setCapabilityConfig(cap, patch)     // storage key stays 'file_system'
+  refreshLiveToolsConfig()
+  return { ok: true }
+}
 
-  handle('capabilities:set-sqlite', (_, config) => {
-    const bad = checkConfig('capabilities:set-sqlite', config, 'rootDir')
-    if (bad) return refuse('capabilities:set-sqlite', bad)
-    const { rootDir, maxRows, enabled } = config
-    const patch = {}
-    if (typeof enabled === 'boolean') patch.enabled = enabled
-    if (typeof maxRows === 'number') patch.maxRows = maxRows
-    if (rootDir) patch.rootDir = rootDir
-    setCapabilityConfig('sqlite', patch)
-    refreshLiveToolsConfig()
-    return { ok: true }
-  })
+export function capabilitiesHandlers(deps) {
+  const handlers = {
+    'capabilities:get': () => getCapabilitiesConfig(),
+    'capabilities:set-postgres': (config) => setPostgresConfig(config, deps),
+    'capabilities:test-postgres': async (connectionString) => testPostgresConfig(connectionString),
+    'capabilities:set-documents-folder': (config) => setDocumentsFolder(config, deps),
+    'capabilities:set-sqlite': (config) => setSqliteConfig(config, deps),
+    'capabilities:set-scholar': (config) => setScholarConfig(config, deps),
+  }
 
-  handle('capabilities:set-scholar', (_, config) => {
-    const bad = checkConfig('capabilities:set-scholar', config)
-    if (bad) return refuse('capabilities:set-scholar', bad)
-    const { venueFilter, enabled } = config
-    const patch = {}
-    if (typeof enabled === 'boolean') patch.enabled = enabled
-    if (venueFilter !== undefined) patch.venueFilter = String(venueFilter || '').trim() || null
-    setCapabilityConfig('scholar', patch)
-    refreshLiveToolsConfig()
-    return { ok: true }
-  })
-
-  // Vault, Git, and File System share the folder-scoped capability shape: pick a
-  // folder, toggle enabled. One generic pair of handlers keeps them uniform. The
-  // channel slug is hyphenated (file_system -> file-system) to match the preload;
-  // the storage key stays the underscore form.
+  // Built in a loop, and that is exactly why the contract tests scan the real
+  // table rather than the source: a computed channel name is invisible to a grep
+  // and this trio has broken that way once already.
   for (const cap of ['vault', 'git', 'file_system']) {
     const slug = cap.replace(/_/g, '-')   // file_system -> file-system; vault/git unchanged
-    handle(`capabilities:select-${slug}-folder`, async () => {
-      const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
-      return result.canceled ? null : result.filePaths[0]
-    })
-    handle(`capabilities:set-${slug}`, (_, config) => {
-      const channel = `capabilities:set-${slug}`
-      const bad = checkConfig(channel, config, 'rootDir')
-      if (bad) return refuse(channel, bad)
-      const { rootDir, enabled, allowWrite, allowDestructive } = config
-      const patch = {}
-      if (typeof enabled === 'boolean') patch.enabled = enabled
-      if (rootDir) patch.rootDir = rootDir
-      // File System carries a write/destructive permission policy; vault/git do
-      // not, so only thread these through for that capability.
-      if (cap === 'file_system') {
-        if (typeof allowWrite === 'boolean') patch.allowWrite = allowWrite
-        if (typeof allowDestructive === 'boolean') patch.allowDestructive = allowDestructive
-      }
-      setCapabilityConfig(cap, patch)     // storage key stays 'file_system'
-      refreshLiveToolsConfig()
-      return { ok: true }
-    })
+    handlers[`capabilities:set-${slug}`] = (config) => setFolderScopedCapability(cap, config, deps)
   }
+
+  return handlers
 }

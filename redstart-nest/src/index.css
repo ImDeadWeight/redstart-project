@@ -1,3 +1,46 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* The theme color only ever lived on the inner React root div's Tailwind
+   classes (bg-zinc-950 on App.tsx's outer wrapper) — index.html's actual
+   <html>/<body> never got a background at all. Harmless as long as that div
+   exactly fills the viewport, but the moment anything overflows its box —
+   a fixed-column grid (Configuration's grid-cols-3/4) that doesn't collapse
+   on a narrow phone screen, most likely, given the reorg just added more of
+   those — the overflowing area renders past the div's edge and falls
+   through to the real page background underneath, which defaults to white.
+   Same class of bug as src/chat-ui/src/app.css's html rule; fixed the same
+   way, at the root, so no future overflow can expose unstyled white again
+   regardless of which component caused it. */
+html, body {
+  background-color: #09090b; /* zinc-950, matching App.tsx's outer wrapper */
+}
+
+/* Scrollbars — the UI is dark (zinc-950/900) everywhere, but browsers/Electron
+   default to a light OS scrollbar unless told otherwise. Firefox's shorthand
+   plus the WebKit pseudo-elements (Electron and every Chromium-based browser)
+   together cover every renderer this app actually runs in. */
+* {
+  scrollbar-color: #3f3f46 #18181b; /* thumb: zinc-700, track: zinc-900 */
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #18181b; /* zinc-900 */
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #3f3f46; /* zinc-700 */
+  border-radius: 9999px;
+  border: 2px solid #18181b; /* zinc-900 — inset look, matches the track */
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #f97316; /* orange-500, matching the accent color used everywhere else */
+}

@@ -2,11 +2,11 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { app } from 'electron'
+import { configDir } from './platform-paths.mjs'
 import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
 
 function getPath() {
-  return path.join(app.getPath('userData'), 'accounts.json')
+  return path.join(configDir(), 'accounts.json')
 }
 
 export function defaults() {

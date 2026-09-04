@@ -1,22 +1,21 @@
 // =============================================================================
-// Redstart Nest — renderer-side IPC bridge
+// Redstart Nest — renderer-side control-plane API
 // =============================================================================
-// Typed access to the redstartAPI object the preload script exposes on
-// window. Renderer code calls api() (throws loudly if the preload failed) or
-// getAPI() (returns undefined) — nothing else touches window directly, so the
-// full IPC surface is documented in exactly one place.
+// The type every RedstartAPI method lives under, and typed access to the
+// installed implementation (api/http.ts). Renderer code calls api() (throws
+// loudly if no session is installed yet) or getAPI() (returns undefined) —
+// the full API surface is documented in exactly one place.
 // =============================================================================
 
 import type {
   HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup,
-  ExternalMcpServer, LlamaConfig, ClientApp,
+  ExternalMcpServer, LlamaConfig, ClientApp, ControlPlaneState, StartupState,
   CatalogModel, ModelDetail, ModelArtifact, LocalModelFile, DownloadProgress,
 } from '../types'
 
 export type RedstartAPI = {
   hardware: {
     scan: () => Promise<HardwareSpecs>
-    selectModel: () => Promise<string | null>
   }
   llama: {
     generateCommand: (config: LlamaConfig) => Promise<string>
@@ -31,6 +30,63 @@ export type RedstartAPI = {
     // restart. { live: false } when nothing is running to push to — not an
     // error, the next launch reads the saved profile fresh regardless.
     syncTools: (tools: LlamaConfig['tools']) => Promise<{ live: boolean }>
+  }
+  // The control plane's own exposure — read-only from the launcher. Retires
+  // with this bridge when Phase 3 puts it on HTTP against the listener itself.
+  admin: {
+    getControlPlane: () => Promise<ControlPlaneState>
+    // The full status endpoint (Phase 5 §5.4) — active profile is
+    // deliberately absent, see the comment above getFullStatus() in
+    // ipc/admin.mjs for why; the model path is absent on the same privacy
+    // stance server.mjs already takes for the event log.
+    getStatus: () => Promise<{
+      running: boolean
+      pid: number | null
+      startedAt: number | null
+      uptimeMs: number | null
+      lastError: string | null
+      port: number | null
+      networkMode: boolean | null
+      gateway: { port: number | null }
+      mcp: { running: boolean }
+      adminListener: ControlPlaneState
+    }>
+    // Rebinds the control plane immediately (plan decision 4) — an admin
+    // flipping this may be doing it to recover access, so it never waits for
+    // a restart. `host` is a bind address, not a boolean (plan §3.3);
+    // NetworkPanel.tsx's exposure toggle only ever sends '127.0.0.1' or '0.0.0.0'.
+    // Rejected addresses (and a failed bind) restore the previous one and
+    // report why in `error`; `state` is always the listener's state after
+    // the call, success or not, so the caller never has to re-fetch.
+    setBindHost: (host: string) => Promise<{ ok: boolean; error?: string; state: ControlPlaneState }>
+    // Phase 7 §7.4. Reconciled against the OS's own login-item record, not
+    // just settings.json — see StartupState's own comment for why.
+    getStartup: () => Promise<StartupState>
+    // Owner-gated like every control-plane route. Persists to settings.json
+    // AND calls app.setLoginItemSettings() so a later launch (background or
+    // not) and the Startup toggle here never disagree with Windows' own
+    // Task Manager view of it.
+    setStartup: (startAtLogin: boolean) => Promise<StartupState>
+    // Phase 7 §7.5 — the only way to stop the daemon now that the window no
+    // longer means anything (§7.2). Owner-gated. The daemon answers 200 and
+    // THEN quits on the next tick, so this always resolves before the
+    // connection drops — a caller does not need to treat a network error
+    // here as ambiguous between "it worked" and "it crashed".
+    shutdown: () => Promise<{ ok: boolean }>
+  }
+  // The FolderPicker.tsx mechanism (Phase 4 §4.2-4.3) — one component behind
+  // all nine former per-site pickers. Native picking (pickNative) retired in
+  // Phase 6 §6.1 along with IPC — roots/list/mkdir is the only picker there
+  // is now, used identically by every caller.
+  browse: {
+    roots: () => Promise<{ path: string; label: string }[]>
+    // readable/writable (Phase 8B.6) are the daemon's own access() probe on
+    // each path - best-effort and not a promise (a share can drop, and on
+    // Windows W_OK reflects the read-only attribute rather than the ACL), but
+    // a definite `false` is what lets the picker refuse a folder the daemon
+    // cannot use while the admin is still looking at it. Design section 3.5.
+    list: (opts: { path: string }) => Promise<{ path: string; parent: string | null; entries: { name: string; kind: 'directory'; readable?: boolean; writable?: boolean }[]; reason?: string; readable?: boolean; writable?: boolean }>
+    mkdir: (opts: { path: string; name: string }) => Promise<{ ok: boolean; path?: string; error?: string }>
   }
   profiles: {
     list: () => Promise<string[]>
@@ -50,13 +106,11 @@ export type RedstartAPI = {
   settings: {
     getBinaryPath: () => Promise<string | null>
     setBinaryPath: (p: string | null) => Promise<boolean>
-    selectBinary: () => Promise<string | null>
     getResolvedBinary: () => Promise<string | null>
     // Always resolves to a real path — the user's choice, or the provisioned
     // <Documents>\Redstart\Models default. Never null.
     getModelsDir: () => Promise<string>
     setModelsDir: (p: string | null) => Promise<string>
-    selectModelsDir: () => Promise<string | null>
   }
   models: {
     publishers: () => Promise<{ id: string; label: string; note: string }[]>
@@ -65,7 +119,6 @@ export type RedstartAPI = {
     detail: (repoId: string) => Promise<{ ok: boolean; detail?: ModelDetail; error?: string }>
     local: () => Promise<{ ok: boolean; dir: string; files: LocalModelFile[]; error?: string }>
     diskSpace: () => Promise<{ ok: boolean; dir: string; freeBytes?: number; totalBytes?: number; error?: string }>
-    revealFolder: () => Promise<string>
     deleteLocal: (name: string) => Promise<{ ok: boolean; error?: string }>
     download: (req: { repoId: string; revision: string | null; artifact: ModelArtifact })
       => Promise<{ ok: boolean; cancelled?: boolean; error?: string; result?: { modelPath: string; totalBytes: number } }>
@@ -76,7 +129,6 @@ export type RedstartAPI = {
   auth: {
     getConfig: () => Promise<{ authRequired: boolean; hasOwner: boolean }>
     setRequired: (required: boolean) => Promise<boolean>
-    createFirstAdmin: (username: string, password: string) => Promise<{ success: boolean; error?: string; apiKey?: string; id?: string }>
   }
   mcp: {
     listExternal: () => Promise<ExternalMcpServer[]>
@@ -102,16 +154,11 @@ export type RedstartAPI = {
     get: () => Promise<CapabilityConfig>
     setPostgres: (config: { connectionString?: string; maxRows?: number; enabled?: boolean }) => Promise<{ ok: boolean; error?: string }>
     testPostgres: (connectionString?: string) => Promise<{ ok: boolean; message: string }>
-    selectDocumentsFolder: () => Promise<string | null>
     setDocumentsFolder: (config: { outputDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
-    selectSqliteFolder: () => Promise<string | null>
     setSqlite: (config: { rootDir?: string; maxRows?: number; enabled?: boolean }) => Promise<{ ok: boolean }>
     estimateToolContext: (config: LlamaConfig) => Promise<{ toolCount: number; approxTokens: number }>
-    selectVaultFolder: () => Promise<string | null>
     setVault: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
-    selectGitFolder: () => Promise<string | null>
     setGit: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
-    selectFileSystemFolder: () => Promise<string | null>
     setFileSystem: (config: { rootDir?: string; enabled?: boolean; allowWrite?: boolean; allowDestructive?: boolean }) => Promise<{ ok: boolean }>
     setScholar: (config: { venueFilter?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
   }
@@ -164,7 +211,6 @@ export type RedstartAPI = {
     search: (opts: { query?: string; cursor?: string }) => Promise<
       { ok: true; entries: RegistrySearchResult[]; nextCursor: string | null } | { ok: false; error: string }
     >
-    pickFolder: () => Promise<string | null>
   }
   events: {
     onTokensPerMinute: (cb: (tpm: number) => void) => void
@@ -173,6 +219,14 @@ export type RedstartAPI = {
     offServerLog: () => void
     onServerStopped: (cb: () => void) => void
     offServerStopped: () => void
+    // Broadcast to every SSE subscriber on a successful launch, from
+    // whichever client launched it — see useServerLifecycle.ts, which is
+    // the only thing this is for: a client that did NOT launch the server
+    // (a second tab, or the Electron window while admingate launches from a
+    // phone) has no other way to learn a launch just happened. Mirrors
+    // server:stopped, which already covered the reverse direction.
+    onServerStarted: (cb: () => void) => void
+    offServerStarted: () => void
     onModelDownloadProgress: (cb: (p: DownloadProgress) => void) => void
     offModelDownloadProgress: () => void
     onPluginInstallProgress: (cb: (p: PluginInstallProgress) => void) => void
@@ -233,10 +287,35 @@ export type RegistrySearchResult = {
   fields: { name: string; description: string; format: string; isRequired: boolean; isSecret: boolean; default?: unknown; placeholder?: string }[]
 }
 
-export const getAPI = (): RedstartAPI | undefined => (window as unknown as { redstartAPI?: RedstartAPI }).redstartAPI
+// ---------------------------------------------------------------------------
+// Transport
+// ---------------------------------------------------------------------------
+// ONE implementation of the type above now: api/http.ts, installed by
+// AdminGate.tsx once it has a session. Every caller — a browser tab, the
+// Electron window — is an HTTP client of the admin listener; there is no
+// second transport to choose between any more.
+//
+// Until Phase 6 §6.2 this module also held a preload-bridge implementation
+// (`window.redstartAPI`, set only inside Electron) and the
+// activeTransport()/isRemote()/isDaemonLocal() predicates that branched on
+// which one was live. All retired with the bridge itself — see decision 6,
+// "the Electron UI is a client of the daemon, like Twig."
+
+let httpApi: RedstartAPI | undefined
+
+/**
+ * Install the HTTP implementation.
+ *
+ * Called once by the shell after it has a session. Kept as an injection rather
+ * than constructed here so this module stays free of session handling — a
+ * detail that only exists for one of the two transports.
+ */
+export const setHttpAPI = (impl: RedstartAPI | undefined): void => { httpApi = impl }
+
+export const getAPI = (): RedstartAPI | undefined => httpApi
 
 export const api = (): RedstartAPI => {
   const a = getAPI()
-  if (!a) throw new Error('redstartAPI not available — preload may have failed')
+  if (!a) throw new Error('No transport available — no session has been established yet')
   return a
 }

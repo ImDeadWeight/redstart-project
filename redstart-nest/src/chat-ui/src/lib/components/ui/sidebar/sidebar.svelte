@@ -92,7 +92,7 @@
 		<div
 			data-slot="sidebar-container"
 			class={cn(
-				'fixed inset-y-0 z-[900] flex w-[calc(100dvw-1.5rem)] duration-200 ease-linear md:z-0 md:w-(--sidebar-width)',
+				'fixed inset-y-0 z-900 flex w-[calc(100dvw-1.5rem)] duration-200 ease-linear md:z-0 md:w-(--sidebar-width)',
 				'group-data-[collapsible=offcanvas]:pointer-events-none md:group-data-[collapsible=offcanvas]:pointer-events-auto',
 				sidebar.isResizing && 'duration-0!',
 				variant === 'floating'
@@ -106,8 +106,8 @@
 					: [
 							'h-svh transition-[left,right,width]',
 							side === 'left'
-								? 'left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]'
-								: 'right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]'
+								? 'left-0 group-data-[collapsible=offcanvas]:-left-(--sidebar-width)'
+								: 'right-0 group-data-[collapsible=offcanvas]:-right-(--sidebar-width)'
 						],
 				// Adjust the padding for inset variant.
 				variant === 'inset'

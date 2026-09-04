@@ -10,6 +10,7 @@ import { api } from '../api/redstart'
 import type { PluginToolInfo, RegistrySearchResult } from '../api/redstart'
 import type { usePlugins } from '../hooks/usePlugins'
 import { btnCls, inputCls, TruncatedText } from './ui'
+import { FolderPicker } from './FolderPicker'
 
 // A fixed-width sibling of inputCls.xs for the per-tool class picker. Deliberately
 // NOT built from inputCls.xs + ' w-32' — that variant's own w-full and a
@@ -176,9 +177,10 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
       : { kind: 'npm' as const, packageName: s.npmPackage, version: s.npmVersion }
   }
 
-  async function pickFolder(fieldName: string) {
-    const dir = await api().plugins.pickFolder()
-    if (dir) setState((prev) => ({ ...prev, values: { ...prev.values, [fieldName]: dir } }))
+  // Picking itself lives in FolderPicker.tsx (Phase 4 §4.3); this applies
+  // whatever path comes back to a generated form field.
+  function applyFieldFolder(fieldName: string, dir: string) {
+    setState((prev) => ({ ...prev, values: { ...prev.values, [fieldName]: dir } }))
   }
 
   function buildEnvPayload(): Record<string, EnvEntry> {
@@ -328,7 +330,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
                   <div className="flex gap-2">
                     <input className={inputCls.sm} placeholder="C:\path\to\server" value={s.localPath}
                       onChange={(e) => set('localPath', e.target.value)} />
-                    <button onClick={async () => { const dir = await api().plugins.pickFolder(); if (dir) set('localPath', dir) }} className={btnCls.secondary}>Browse…</button>
+                    <FolderPicker mode="directory" startPath={s.localPath || undefined} onPick={(dir) => set('localPath', dir)} className={btnCls.secondary}>Browse…</FolderPicker>
                   </div>
                 </div>
               )}
@@ -393,7 +395,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
                         <div className="flex gap-2">
                           <input className={inputCls.sm} value={s.values[f.name] ?? f.default ?? ''} placeholder={f.placeholder}
                             onChange={(e) => setState((prev) => ({ ...prev, values: { ...prev.values, [f.name]: e.target.value } }))} />
-                          <button onClick={() => pickFolder(f.name)} className={btnCls.secondary}>Browse…</button>
+                          <FolderPicker mode="directory" startPath={s.values[f.name] || undefined} onPick={(dir) => applyFieldFolder(f.name, dir)} className={btnCls.secondary}>Browse…</FolderPicker>
                         </div>
                       ) : (
                         <input

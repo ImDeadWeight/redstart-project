@@ -1,6 +1,6 @@
 'use strict'
 
-import { app } from 'electron'
+import { isPackaged } from './platform-paths.mjs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
 
@@ -43,7 +43,7 @@ export const KV_CACHE_PRESETS = {
 
 export function buildArgs(config, raw = false) {
   const q = raw ? (v) => v : (v) => `"${v}"`
-  const chatUiPath = app.isPackaged
+  const chatUiPath = isPackaged()
     ? path.join(process.resourcesPath, 'chat-ui')
     : path.join(__dirname, '..', '..', 'src', 'chat-ui', 'dist')
   const args = [

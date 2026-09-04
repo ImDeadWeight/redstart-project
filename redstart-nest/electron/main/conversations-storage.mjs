@@ -1,22 +1,24 @@
 'use strict'
 
 import * as path from 'path'
-import { app } from 'electron'
+import { configDir } from './platform-paths.mjs'
 import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
 
-const STORAGE_PATH = path.join(app.getPath('userData'), 'conversations.json')
 const CLEANUP_DAYS = 30
 
+// A function, not a module-level const: configDir() needs initPaths() to have
+// run first, and this module is imported (evaluating module-level code)
+// before app.whenReady() ever gets a chance to call it.
 function getPath() {
-  return STORAGE_PATH
+  return path.join(configDir(), 'conversations.json')
 }
 
 function read() {
-  return readJsonOr(STORAGE_PATH, { conversations: [] })
+  return readJsonOr(getPath(), { conversations: [] })
 }
 
 function write(data) {
-  writeJsonAtomic(STORAGE_PATH, data)
+  writeJsonAtomic(getPath(), data)
 }
 
 export function cleanupOldConversations() {

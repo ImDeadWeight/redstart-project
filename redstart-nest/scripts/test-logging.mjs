@@ -21,6 +21,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { initLogger, closeLogger, logEvent, logAudit } from '../electron/main/logger.mjs'
+import { describeCrash } from '../electron/main/crash-handler.mjs'
 
 const results = []
 
@@ -220,6 +221,18 @@ await test('logEvent() writes carry the caller-supplied category', async () => {
   return 'cat passthrough'
 })
 
+console.log('\n-- 🔍 Phase 7 §7.4a: crash-handler mapping survives logEvent() intact --')
+
+await test('🔍 an Error\'s message becomes the logged reason, verbatim, on disk', async () => {
+  const { logFields } = describeCrash(new Error('llama-server.exe binary not found'))
+  assert(logFields.reason === 'llama-server.exe binary not found', `unexpected reason: ${JSON.stringify(logFields)}`)
+  const before = currentLines().length
+  logEvent('app', 'crash', logFields)
+  const line = await waitForNewLine(before)
+  const record = JSON.parse(line)
+  assert(record.reason === 'llama-server.exe binary not found', `reason did not survive logEvent: ${line}`)
+})
+
 closeLogger()
 fs.rmSync(tmpDir, { recursive: true, force: true })
 
@@ -255,6 +268,36 @@ await test('every logAudit() call site passes only allowlisted fields', () => {
   assert(sitesChecked > 0, 'no logAudit( call sites found — grep pattern or file paths went stale')
   assert(offenders.length === 0, offenders.join('; '))
   return `${sitesChecked} call site(s) checked`
+})
+
+// ---------------------------------------------------------------------------
+// Phase 7 §7.4a — crash-handler mapping, remaining pure cases
+// ---------------------------------------------------------------------------
+// describeCrash() is the err -> { log fields, notification text } mapping,
+// deliberately split out of index.mjs's process.on('uncaughtException'/
+// 'unhandledRejection') registration so it's testable without Electron —
+// see crash-handler.mjs's own header. The disk round-trip lives above,
+// before closeLogger(); these two need no logger at all.
+
+console.log('\n-- 🔍 Phase 7 §7.4a: crash-handler mapping (pure cases) --')
+
+await test('unhandledRejection can hand back a non-Error — still produces a string reason, not a throw', () => {
+  for (const rejection of ['a plain string rejection', 42, { some: 'object' }, null, undefined]) {
+    const { logFields } = describeCrash(rejection)
+    assert(typeof logFields.reason === 'string' && logFields.reason.length > 0,
+      `describeCrash(${JSON.stringify(rejection)}) produced a non-string or empty reason: ${JSON.stringify(logFields)}`)
+  }
+})
+
+await test('the notification text never includes the raw error message', () => {
+  // decision: warn with a generic, actionable message — not the exception
+  // text itself, which could be arbitrarily long or, for an error thrown
+  // from deep in a dependency, carry a stack-trace-shaped string that is
+  // not useful in a toast notification.
+  const { notification } = describeCrash(new Error('some very specific internal stack detail'))
+  assert(!notification.body.includes('some very specific internal stack detail'), 'raw error text leaked into the notification body')
+  assert(!notification.title.includes('some very specific internal stack detail'), 'raw error text leaked into the notification title')
+  assert(notification.body.length > 0 && notification.title.length > 0, 'notification text must not be empty')
 })
 
 // ---------------------------------------------------------------------------

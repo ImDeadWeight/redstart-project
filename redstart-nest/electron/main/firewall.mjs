@@ -8,10 +8,20 @@
 // and short-circuits when the rule is already there, so a normal start prompts
 // for nothing — UAC fires once per rule, ever.
 //
-// Extracted from index.mjs so the mDNS advertiser can reuse it. Its own rule
-// previously called netsh directly without elevation, which always threw and
-// was swallowed into a warn — meaning inbound UDP 5353 stayed blocked on every
-// install and the advertiser was unreachable no matter what it broadcast.
+// Originally extracted from index.mjs so the mDNS advertiser could reuse it
+// (its own rule called netsh directly without elevation, which always threw
+// and was swallowed into a warn — inbound UDP 5353 stayed blocked on every
+// install and the advertiser was unreachable no matter what it broadcast).
+// The advertiser itself retired in Phase 6.5 (mDNS support was dropped
+// wholesale — see discovery.mjs); this module stays for the TCP rules the
+// gateway and port-80 proxy still need.
+//
+// POSIX (Phase 8A.4): this is a NO-OP off Windows and must stay one. Opening a
+// port on Linux belongs to the operator or the package (ufw, nftables, a cloud
+// security group) — never to Nest. Holding NET_ADMIN in order to do it itself
+// would undo decision 9, which exists precisely to shed privileges from a
+// process that spawns a user-configurable binary and runs third-party plugin
+// code. Nothing here needed deleting for the headless daemon; it needed saying.
 //
 // Deliberately free of any `electron` import: process.resourcesPath is a plain
 // global set by the Electron runtime, so test scripts can import modules that
@@ -72,17 +82,5 @@ export function ensureFirewallRule(gatewayPort) {
     name: `RedstartNest Gateway ${gatewayPort}`,
     protocol: 'TCP',
     port: gatewayPort,
-  })
-}
-
-// mDNS needs inbound UDP 5353 or queries from other devices never arrive —
-// the advertiser broadcasts into the void and nothing on the LAN can resolve
-// the advertised name.
-export function ensureMdnsFirewallRule() {
-  ensureInboundRule({
-    name: 'Redstart Nest mDNS',
-    protocol: 'UDP',
-    port: 5353,
-    label: 'Redstart Nest mDNS',
   })
 }

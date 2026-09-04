@@ -9,14 +9,21 @@
 // figure itself is capped at 4 GB by a Windows API quirk).
 //
 // Downloading does not change the running configuration. The model is selected
-// the way it always was — the sidebar's "Select .gguf File" button, which now
-// opens in this folder.
+// via the "Select .gguf File" button in the Selected Model section below,
+// which opens in this folder. Hardware scan and profile generation moved in
+// here too (from the old sidebar) — this is where "will it fit" questions
+// actually get asked, ahead of a future revamp that puts a real fit estimate
+// next to each artifact using the scanned specs.
 // =============================================================================
 
 import { useEffect } from 'react'
 import { SectionTitle, btnCls, inputCls } from '../components/ui'
+import { FolderPicker } from '../components/FolderPicker'
+import { HardwarePanel } from '../panels/HardwarePanel'
+import { ModelPanel } from '../panels/ModelPanel'
+import type { useHardwareAndBinary } from '../hooks/useHardwareAndBinary'
 import type { ModelCatalogHook } from '../hooks/useModelCatalog'
-import type { HardwareSpecs, ModelArtifact } from '../types'
+import type { ModelArtifact } from '../types'
 
 function gb(bytes: number | null | undefined) {
   if (typeof bytes !== 'number') return '—'
@@ -34,17 +41,20 @@ function params(n: number | null) {
   return n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : `${(n / 1e6).toFixed(0)}M`
 }
 
-export function ModelsTab({ catalog, hardware }: {
+export function ModelsTab({ catalog, hw, modelPath, onGenerateDefaultProfiles }: {
   catalog: ModelCatalogHook
-  hardware: HardwareSpecs | null
+  hw: ReturnType<typeof useHardwareAndBinary>
+  modelPath: string
+  onGenerateDefaultProfiles: () => void
 }) {
+  const { hardware, applyModelPath } = hw
   const {
     catalogEnabled, connectCatalog, openTab,
     publishers, publisher, setPublisher, query, setQuery,
     models, searching, searchError, runSearch,
     detail, detailLoading, detailError, openModel, closeModel,
     modelsDir, localFiles, disk, localNames,
-    changeFolder, deleteLocal, revealFolder,
+    changeFolder, deleteLocal,
     progress, downloading, downloadError, download, cancelDownload,
   } = catalog
 
@@ -64,6 +74,10 @@ export function ModelsTab({ catalog, hardware }: {
   return (
     <div className="flex flex-col gap-5">
 
+      {/* ── Hardware + selected model (moved in from the old sidebar) ── */}
+      <HardwarePanel hw={hw} onGenerateDefaults={onGenerateDefaultProfiles} />
+      <ModelPanel modelPath={modelPath} onSelectModel={applyModelPath} />
+
       {/* ── Storage ── */}
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
         <SectionTitle>Model storage</SectionTitle>
@@ -71,14 +85,28 @@ export function ModelsTab({ catalog, hardware }: {
           <code className="flex-1 text-xs text-zinc-400 break-all bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5">
             {modelsDir || '—'}
           </code>
-          <button onClick={changeFolder} className={btnCls.secondary}>Change…</button>
-          <button onClick={revealFolder} className={btnCls.secondary}>Open</button>
+          <FolderPicker
+            mode="directory"
+            allowCreate
+            title="Select the models folder"
+            startPath={modelsDir || undefined}
+            onPick={changeFolder}
+            className={btnCls.secondary}>
+            Change…
+          </FolderPicker>
+          {/* Reveal-in-explorer retired in Phase 6 §6.1 — opening a
+              file-explorer window is inherently local to whichever machine
+              runs it, and there is no longer a channel that can tell "the
+              caller is sitting at this machine" from "the caller is a
+              browser anywhere on the network" to gate it on. A copy button
+              for the path shown above, for every caller alike. */}
+          <button onClick={() => navigator.clipboard?.writeText(modelsDir || '')} className={btnCls.secondary}>Copy path</button>
         </div>
         <p className="text-xs text-zinc-500">
           {disk.freeBytes !== undefined
             ? <>{gb(disk.freeBytes)} free of {gb(disk.totalBytes)} on this drive.</>
             : 'Checking free space…'}
-          {' '}Downloaded models are selected with <span className="text-zinc-400">Select .gguf File</span> in the sidebar.
+          {' '}Downloaded models are selected with <span className="text-zinc-400">Select .gguf File</span> above.
         </p>
 
         {localFiles.length > 0 && (

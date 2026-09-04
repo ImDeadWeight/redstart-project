@@ -1,15 +1,28 @@
 // Test-only stub for the 'electron' module.
 //
-// Lets the real auth code (accounts-storage.mjs, which calls
-// app.getPath('userData')) run under plain Node so scripts/test-auth.mjs can
-// spin up the *actual* tools-gateway.mjs / mcp-server.mjs HTTP servers and
+// Lets the real auth code (accounts-storage.mjs, which used to call
+// app.getPath('userData') directly) run under plain Node so scripts/test-auth.mjs
+// can spin up the *actual* tools-gateway.mjs / mcp-server.mjs HTTP servers and
 // hit them over real sockets, without needing a full Electron GUI process.
 // Only 'electron' is intercepted (see auth-test-loader.mjs) — every other
 // import is the real, unmodified production module.
 
+import { initPaths } from '../electron/main/platform-paths.mjs'
+import { initSecrets } from '../electron/main/secrets.mjs'
+import { setLoginItems } from '../electron/main/desktop-integration.mjs'
+import { safeStorageProvider } from '../electron/main/secrets-safe-storage.mjs'
+import * as path from 'node:path'
+
+// Phase 7 §7.4's login-item state — a plain in-memory stand-in for what
+// Windows itself would track. Starts false, same as a real fresh Windows
+// install where nothing has ever registered a login item.
+let loginItemSettings = { openAtLogin: false, args: [] }
+
 export const app = {
-  // llama-args.mjs reads app.isPackaged to pick the chat-ui static path; tests
-  // run the unpackaged (dev) branch.
+  // Nothing in production reads this any more (Phase 8A.5 moved llama-args.mjs
+  // onto platform-paths' isPackaged()); kept because index.mjs, which no suite
+  // loads, still branches on it and a stub that lies about its shape is worse
+  // than one carrying a field nobody reads.
   isPackaged: false,
   getPath(name) {
     if (name === 'userData') {
@@ -19,12 +32,50 @@ export const app = {
     }
     return process.cwd()
   },
+  getLoginItemSettings() {
+    return { ...loginItemSettings }
+  },
+  setLoginItemSettings(settings) {
+    loginItemSettings = { openAtLogin: !!settings?.openAtLogin, args: settings?.args ?? [] }
+  },
 }
 
-// secrets.mjs imports safeStorage at module load (transitively, via
-// gateway-config.mjs -> secrets.mjs). A functional round-trip stub — no real OS
-// encryption, just a reversible encoding — so any encrypt/decrypt path a test
-// happens to hit still works, not merely the import.
+// Production code no longer calls app.getPath directly — it goes through
+// platform-paths.mjs's configDir()/capabilityBaseDir(), which need initPaths()
+// to have run before anything reads them (fail-closed by design). Every
+// suite that needs storage already sets
+// REDSTART_TEST_USERDATA_DIR before its `register()` call resolves this stub,
+// so this mirrors that ordering rather than adding a new one. A suite that
+// loads this stub without ever touching storage and never sets the var gets
+// initPaths() left deliberately uncalled, matching the getPath('userData')
+// lazy-throw above rather than failing eagerly for a path nothing in it needs.
+// (test-llama-args.mjs used to be such a suite and no longer is: Phase 8A.5
+// moved buildArgs() off app.isPackaged and onto the paths module's
+// isPackaged(), so it now sets the var like everyone else.)
+if (process.env.REDSTART_TEST_USERDATA_DIR) {
+  const dir = process.env.REDSTART_TEST_USERDATA_DIR
+  initPaths({
+    config: dir,
+    // A SIBLING of the config dir, not a child. Phase 8B.1 made overlapping
+    // trees a startup error, and this fixture was the first thing it caught:
+    // it had capabilityBase nested inside config, which is precisely the
+    // collapse design 3.5 forbids (a config reset able to wander into a
+    // user's documents; a backup unable to tell settings from files). A test
+    // fixture modelling the shape the production rule refuses is how that
+    // rule quietly stops being true.
+    capabilityBase: path.join(dir + '-capabilities'),
+    isPackaged: false,
+  })
+}
+
+// A functional round-trip stub — no real OS encryption, just a reversible
+// encoding — so any encrypt/decrypt path a test happens to hit still works.
+//
+// Phase 8A.1 moved secrets.mjs behind a provider seam, so this is no longer
+// needed merely to satisfy an import: production code takes safeStorage as an
+// argument now (secrets-safe-storage.mjs) and this stub stands in for the real
+// Electron object at the one place an entrypoint passes it. It is still
+// exported in case a suite wants it directly.
 export const safeStorage = {
   isEncryptionAvailable() {
     return true
@@ -37,36 +88,34 @@ export const safeStorage = {
   },
 }
 
-// Recording ipcMain — lets scripts/test-ipc-contract.mjs run the REAL
-// registerXHandlers() functions and observe every channel they actually
-// register, including the ones built dynamically in a loop (which a static
-// grep of the source cannot see). Handlers are kept callable so a test can
-// invoke one directly.
-export const ipcMain = {
-  handlers: new Map(),
-  listeners: new Map(),
-  handle(channel, fn) {
-    if (this.handlers.has(channel)) {
-      throw new Error(`ipcMain.handle called twice for the same channel: ${channel}`)
-    }
-    this.handlers.set(channel, fn)
-  },
-  on(channel, fn) {
-    if (!this.listeners.has(channel)) this.listeners.set(channel, [])
-    this.listeners.get(channel).push(fn)
-  },
-  removeHandler(channel) {
-    this.handlers.delete(channel)
-  },
-}
+// Phase 8A.1 — secrets.mjs is fail-closed: an entrypoint must wire a provider
+// before anything reads or writes a credential. index.mjs does this in main();
+// for suites, this stub is the equivalent seam, so it does the same thing with
+// the same provider factory the desktop entrypoint uses. Unconditional (unlike
+// initPaths above), because the safeStorage provider needs no directory.
+//
+// The dedicated round-trip coverage is scripts/test-secrets.mjs, which drives
+// the real key file provider against real crypto rather than this encoding.
+initSecrets(safeStorageProvider(safeStorage))
 
-// Registration-time only — no handler under test opens a dialog or a window
-// unless invoked, and the contract test never invokes those.
-export const dialog = {
-  showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
-  showSaveDialog: async () => ({ canceled: true, filePath: undefined }),
-  showMessageBox: async () => ({ response: 0 }),
-}
+// Phase 8A.5 — the login-item capability, wired the same way index.mjs wires
+// it, so suites that exercise the §7.4 startup toggle keep observing this
+// stub's in-memory login-item state through app.getLoginItemSettings().
+//
+// The RECYCLE BIN is deliberately NOT registered: plain node has no recycle
+// bin, so leaving it absent is the honest stand-in and it exercises the
+// fallback path (trash.mjs's .trash/ folder) that the boundary suites can
+// actually observe. That was already true of the old stub, whose
+// shell.trashItem returned false for the same reason.
+setLoginItems({
+  get: () => app.getLoginItemSettings(),
+  set: (settings) => app.setLoginItemSettings(settings),
+})
+
+// ipcMain / dialog / session retired from this stub in Phase 6 §6.2 —
+// production code stopped importing them from 'electron' (IPC retired,
+// dialog.showOpenDialog retired in §6.1) and the two suites that exercised
+// them (test-ipc-contract.mjs, test-ipc-guard.mjs) retired with IPC itself.
 
 export const BrowserWindow = {
   getAllWindows: () => [],
@@ -86,8 +135,4 @@ export const shell = {
 
 export const nativeImage = {
   createFromPath: () => ({ isEmpty: () => true }),
-}
-
-export const session = {
-  defaultSession: { webRequest: { onHeadersReceived() {} } },
 }

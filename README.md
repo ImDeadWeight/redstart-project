@@ -8,7 +8,7 @@
 
 **The apps:** [Nest](#the-apps) (the server) · [Twig](#the-apps) (chat client) · [Blueprints](https://github.com/ImDeadWeight/redstart-blueprints) (SQL data workbench - in progress) · [Yellowscript](https://github.com/ImDeadWeight/redstart-yellowscript) (VS Code Extension - in progress) · [Greenhouse](https://github.com/ImDeadWeight/redstart-greenhouse) (project management, planned)
 
-**Documentation:** [Mission](docs/mission.md) · [Architecture](docs/architecture.md) · [Security](docs/security.md) · [Capabilities](docs/capabilities.md) · [Configuration](docs/configuration.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md)
+**Documentation:** [Mission](docs/mission.md) · [Architecture](docs/architecture.md) · [Security](docs/security.md) · [Capabilities](docs/capabilities.md) · [Configuration](docs/configuration.md) · [Development](docs/development.md) · [Testing](TESTING.md) · [Deployment](deploy/README.md) · [Roadmap](docs/roadmap.md)
 
 ---
 
@@ -43,7 +43,7 @@ Redstart is an ecosystem around one idea: a model you own, running on hardware y
 
 | App | Platform | Role | Status |
 |---|---|---|---|
-| **Redstart Nest** | Windows (Electron) | Server manager — runs the model, hosts the tools, accounts and policy, and broadcasts itself on the LAN | In this repo |
+| **Redstart Nest** | Windows (Electron); daemon runs headless under Node | Server manager — runs the model, hosts the tools, accounts and policy, and broadcasts itself on the LAN. Administrable from a browser on another device | In this repo |
 | **Redstart Twig** | Android & Windows | Lightweight chat client; finds Nest automatically, no configuration | In this repo — Windows working; **Android build out of date, [see note](#redstart-twig-android)** |
 | **[Redstart Blueprints](https://github.com/ImDeadWeight/redstart-blueprints)** | Windows (Electron) | Local-first SQL data workbench with optional AI assistance | Separate repo |
 | **[Redstart Yellowscript](https://github.com/ImDeadWeight/redstart-yellowscript)** | VS Code extension | A coding agent that talks to a local Nest instead of a cloud | Separate repo |
@@ -62,11 +62,13 @@ The integration points are contracts, not conventions: every client authenticate
   │   └─ Injects Redstart context      ├─ Finds Redstart Nest automatically
   ├─ llama-server :19081 (localhost)   └─ Connects to http://IP:19080
   ├─ MCP server   :19082 (web_fetch, web_search, Postgres, Documents, SQLite, Vault, Git, File System, Scholar)
-  ├─ Beacon      :8765
-  └─ mDNS        redstart.local (advertises the server on the local network)
+  ├─ Admin plane :19083 (the launcher UI, in a browser — owner only, loopback by default)
+  └─ Beacon      :8765
 ```
 
 Redstart Nest broadcasts a beacon on the LAN, so Twig finds it with no configuration and a phone camera can open the chat UI from a QR code. The chat UI is also reachable in any browser at `http://127.0.0.1:19080` — no app required. Since llama-server speaks the OpenAI API, any coding agent that accepts a custom base URL works against it.
+
+**Two planes, two lifetimes.** 19080/19081/19082 exist because a model is running and go away when it stops. **19083 is the control plane** — it binds when Redstart Nest starts and stays up whether or not a model is, because a plane whose lifetime is tied to the thing it controls cannot be used to start that thing. It serves the same launcher interface in a browser, so the box can be administered from another device, and it authenticates separately: signing in to the chat UI does *not* give you process control. It listens on loopback unless you deliberately move it.
 
 Details: [Architecture](docs/architecture.md) · [Capabilities](docs/capabilities.md) · [Security](docs/security.md)
 
@@ -104,9 +106,15 @@ Accounts are **on by default** with no localhost exemption, and each account's f
 ### Redstart Nest
 1. Download the latest `Redstart Nest Setup 1.0.0-alpha.N.exe` from [Releases](../../releases)
 2. Run the installer — Windows Defender may warn about an unsigned binary, click **More info → Run anyway**
-3. Open Redstart Nest and **create the Owner account** in the sidebar's Accounts section. Login is required by default, so until an Owner exists no device — including a browser on this PC — can sign in to the chat UI. (Home users who don't want accounts can flip **Require login** off instead.)
+3. Open Redstart Nest. It opens on a setup screen asking for this machine's **setup code** and the Owner credential you want. On the host itself the code is filled in for you; it also lives in plain text at `bootstrap-token.txt` in Nest's config folder. Login is required by default, so until an Owner exists no device — including a browser on this PC — can sign in to the chat UI. (Home users who don't want accounts can flip **Require login** off afterwards.)
+
+   The setup code is a **recovery credential, not a password** — it is deliberately stored in plain text and meant to be readable by whoever has physical access to the box, like the sticker on the bottom of a router. It is also the way back in if the Owner password is lost: the same screen re-keys the Owner account, which signs out every existing session.
 4. Point it at a `.gguf` model file and click **Start Server**
 5. In **Configuration → Network**, turn on **Local network** mode to make the server reachable from other devices — each person signs in with an account the Owner/Admins create. The same panel shows the addresses to browse to, including a QR code to scan from a phone
+
+**Closing the window does not stop the server.** Redstart Nest keeps running in the tray so the model stays available to everyone else on the network; reopening the window reconnects to the daemon that was already running. To actually stop it, use **Shut down** in the launcher or **Quit Redstart** in the tray menu.
+
+**Administering it from another device** is off by default. The same Network panel has a second switch for the admin panel itself — separate from the one above, because making the chat UI reachable and making *process control* reachable are different decisions. Turn it on and the launcher interface is available at `http://<nest-ip>:19083`, Owner account only.
 
 ### Redstart Twig (Android)
 
@@ -172,10 +180,10 @@ The short list; the [full set is in the roadmap](docs/roadmap.md#known-limitatio
 
 - **Twig for Android is out of date and not working** — the Android client hasn't been rebuilt against recent server changes. Use a phone browser against the chat UI instead. Paused, not abandoned; see [the note above](#redstart-twig-android).
 - **Unsigned installers** — both will trigger Windows Defender SmartScreen.
-- **Windows only for the server** — the clients run anywhere, but Nest shells out to a Windows llama.cpp binary.
-- **Sessions don't survive a restart** — tokens are held in memory, so restarting Nest signs everyone out.
-- **HTTP only on the LAN** — self-signed TLS was tried and abandoned; Android WebView rejects it.
-- **`redstart.local` does not work on Android** and cannot be made to. Use the IP or the QR code.
+- **Windows is the only supported server platform** — the daemon itself runs headless under plain Node and `deploy/` carries a systemd unit, but the installer, the bundled llama.cpp binary and the port-80 proxy are all Windows, and none of the Linux artifacts has been run on real hardware yet.
+- **The deployment artifacts are a first draft** — `deploy/` (systemd, Windows SCM, Caddy) was written from the design and reviewed, not executed. Read each command before running it.
+- **HTTP only on the LAN** — self-signed TLS was tried and abandoned; Android WebView rejects it. For a deployment that needs TLS, `deploy/Caddyfile` terminates it in front of Nest.
+- **mDNS / `redstart.local` has been retired** — Android's resolver never answered `.local` lookups for browser navigation, so the name failed on the platform most clients are. Use the IP or the QR code; Twig's beacon scan never needed a name.
 - **Shared capabilities are all-or-nothing** — Vault, Git, SQLite and Postgres are shared across every account, with no per-account grants yet.
 
 ---
@@ -189,7 +197,15 @@ npm install --prefix src/chat-ui   # the chat-ui is its own package
 npm run dev
 ```
 
-Full setup, repo layout, test commands and installer builds: [Development](docs/development.md).
+To run the server without Electron — no window, no desktop session:
+
+```bash
+npm run daemon          # boots the daemon under plain Node, in ./.redstart-daemon
+npm run daemon:status
+npm run daemon:stop
+```
+
+Full setup, repo layout, test commands and installer builds: [Development](docs/development.md). Manual verification checklists: [Testing](TESTING.md). Running it as a service: [Deployment](deploy/README.md).
 
 ---
 

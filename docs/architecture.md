@@ -14,7 +14,7 @@ Redstart is an **ecosystem of applications** around one idea: a model you own, r
 
 | App | Platform | Role | Status |
 |---|---|---|---|
-| **Redstart Nest** | Windows (Electron) | Server manager — runs the model, hosts the tools, accounts and policy, and broadcasts itself on the LAN | In this repo |
+| **Redstart Nest** | Windows (Electron); the daemon also runs headless under Node | Server manager — runs the model, hosts the tools, accounts and policy, and broadcasts itself on the LAN | In this repo |
 | **Redstart Twig** | Android & Windows | Lightweight chat client; finds Nest automatically, no configuration | In this repo |
 | **[Redstart Blueprints](https://github.com/ImDeadWeight/redstart-blueprints)** | Windows (Electron) | A local-first SQL data workbench with optional AI assistance — register flat files, query them with DuckDB, build notebooks with charts and dashboards. The workbench works fully without a model; the assistant is a dockable panel you summon | Separate repo |
 | **[Redstart Yellowscript](https://github.com/ImDeadWeight/redstart-yellowscript)** | VS Code extension | A coding agent that talks to a local Nest instead of a cloud — zero-config discovery, Redstart login, and workspace-aware tools | Separate repo |
@@ -35,33 +35,87 @@ Nest, Twig and Blueprints share the same [SvelteKit](https://kit.svelte.dev/) fr
   │   └─ Injects Redstart context      ├─ Finds Redstart Nest automatically
   ├─ llama-server :19081 (localhost)   └─ Connects to http://IP:19080
   ├─ MCP server   :19082 (web_fetch, web_search, Postgres, Documents, SQLite, Vault, Git, File System, Scholar)
-  ├─ Beacon      :8765
-  └─ mDNS        redstart.local (advertises the server on the local network)
+  ├─ Admin plane :19083 (the launcher UI in a browser — owner only, loopback by default)
+  └─ Beacon      :8765
 ```
 
-Starting the server launches three services alongside the model — the gateway (`:19080`), llama-server (`:19081`, localhost-only) and the MCP server (`:19082`). See [Ports used](#ports-used).
+Starting the server launches three services alongside the model — the gateway (`:19080`), llama-server (`:19081`, localhost-only) and the MCP server (`:19082`). The admin listener (`:19083`) and the beacon (`:8765`) are already up before any of that: they belong to the app, not to the model. See [Ports used](#ports-used).
 
 **The gateway is the only thing clients talk to.** It intercepts every `POST /v1/chat/completions`, prepends the server-composed system prompt, strips banned tools, and pipes the request and response straight through — streaming included. Everything else is a transparent passthrough to llama-server. llama-server itself never accepts a LAN connection; see [Security](security.md#the-llama-server-boundary).
 
-**Discovery:** Redstart Nest broadcasts a JSON beacon on port 8765 and advertises itself via mDNS as `redstart.local` by default (configurable). Redstart Twig (both Android and Windows) scans the local subnet on startup and connects automatically if a running server is found — the beacon scan needs no hostname, so Twig never depends on mDNS.
+**Discovery:** Redstart Nest broadcasts a JSON beacon on port 8765. Redstart Twig (both Android and Windows) scans the local subnet on startup and connects automatically if a running server is found — the beacon scan needs no hostname. (mDNS/`redstart.local` was retired: Android's resolver never answered `.local` lookups for browser navigation, and Twig never depended on it either — see [Known limitations](roadmap.md#known-limitations).)
 
-**Reaching the server from a browser:** no single address reaches every client, so the launcher's **Configuration → Network** panel lists three and lets you pick whichever works, with the direct IP as a QR code:
+The port-80 clean URL starts with the **app**, not with a model launch — a box that has never started a model still gets it once put in network mode, which is the state an unconfigured machine is in and the one where being findable matters most. Whether it runs is `networkMode` alone (the data plane); it no longer follows the control plane's own exposure.
+
+**Reaching the server from a browser:** no single address reaches every client, so the launcher's **Configuration → Network** panel lists both and lets you pick whichever works, with the direct IP as a QR code:
 
 | Address | Reaches | Cost |
 |---|---|---|
 | `http://<LAN-IP>:19080` | **everything, including Android** | none — no name resolution at all |
-| `http://redstart.local:19080` | iOS, macOS, Windows 10 1703+, Linux with avahi + `nss-mdns` | **not Android** |
 | `http://<dashed-ip>.sslip.io:19080` | everything, including Android | needs internet DNS; blocked by routers with DNS-rebind protection |
 
 The QR code encodes the **direct IP URL** — pointing a phone camera at it opens the chat UI in the browser with no resolver involved, which is the only approach that works universally. It is not the old `redstart://connect` deep link (removed in the 2026-07-20 launcher cleanup); it does not require Redstart Twig to be installed.
 
-Prefer the IP and give the host a DHCP reservation on your router. The hostnames are conveniences layered on top, and each one fails somewhere — see [Known limitations](roadmap.md#known-limitations).
+Prefer the IP and give the host a DHCP reservation on your router. The sslip name is a convenience layered on top, and it fails on routers with DNS-rebind protection — see [Known limitations](roadmap.md#known-limitations).
 
 **OpenAI-compatible API:** llama-server exposes `/v1/chat/completions` and related endpoints, so any tool that accepts a custom OpenAI base URL can use Redstart Nest as its backend — including coding agents, scripts, and API clients.
 
 **Browser access:** When Redstart Nest is running, the chat UI is also accessible directly in any browser at `http://127.0.0.1:19080` (or `http://<LAN-IP>:19080` in network mode). No app required. If login is enabled, the browser shows the login screen first (see [Accounts & login](security.md#accounts--login)).
 
 **HTTP only:** The LAN connection uses plain HTTP. HTTPS with self-signed certificates was tried and abandoned — Android WebView rejects them without manual cert trust, which is too much friction for a home tool. Proper transport security is on the roadmap, likely via a lightweight CA or certificate pinning approach, and becomes more important as the project moves toward small business use.
+
+---
+
+## The daemon and the control plane
+
+**The daemon is the product; the window is one client of it.** `electron/main/`
+is a server that happens to be startable two ways: `index.mjs` under Electron
+(the desktop app) and `bin/nestd.mjs` under plain Node (headless, no window, no
+desktop session). Both start the *same* daemon. What differs is what they inject
+into two fail-closed seams — `platform-paths.mjs` (where does state live) and
+`secrets.mjs` (what encrypts a credential). The desktop supplies `app.getPath`
+and Electron's `safeStorage`; the daemon supplies a directory and an AES-256-GCM
+key file. Nothing beneath those seams imports `electron`, which is the property
+that makes the headless boot possible at all.
+
+**The launcher is a web page.** There is no preload script and no
+`contextBridge`. The React launcher talks to the daemon over HTTP —
+`POST /admin/api/<namespace>/<method>` on the control plane — so the Electron
+window and a browser on a different machine are the same client over the same
+transport, with no second UI to maintain. `src/api/redstart.ts` declares the
+surface; `src/api/http.ts` derives every route from it;
+`scripts/test-admin-api.mjs` fails the build if a declared method has no route or
+a route is not gated.
+
+**Why the control plane is a separate listener** rather than an `/admin` prefix
+on the gateway: lifetime. The gateway exists because a model is running and stops
+with it, and a plane whose lifetime is tied to the thing it controls cannot be
+used to start that thing. `:19083` binds when the daemon starts. Three further
+differences are deliberate:
+
+- **Authentication is mandatory and separate.** The listener never reads
+  `authRequired` — turning login off for the chat UI has no effect here. It
+  accepts only a session minted by its own login route, never an API key (those
+  sit in tool-client config files) and never a session the gateway issued. An
+  owner signed in to the chat UI does not thereby hold process control.
+- **No CORS.** It serves its own UI from its own origin and answers no preflight
+  unless a deployment explicitly configures an allowlist.
+- **The static layer is an enumerated allowlist**, built from what is actually on
+  disk at start and looked up by exact match — so path traversal is structurally
+  impossible rather than filtered.
+
+**Exposure is an address, not a boolean.** `adminBindHost` defaults to
+`127.0.0.1`; setting it to a LAN address, a VPN interface or `0.0.0.0` is one
+setting that covers every case, and hostnames are refused rather than resolved,
+because "bind to whatever this name resolves to right now" is not a stable
+exposure decision. Moving it never weakens authentication.
+
+**Closing the window stops nothing.** The daemon outlives it — the model stays
+available to everyone else on the network, and reopening reconnects to what was
+already running. Stopping is deliberate: **Shut down** in the launcher, **Quit**
+in the tray, a signal to `nestd`, or `npm run daemon:stop`.
+
+See [The control plane](security.md#the-control-plane) for the security contract.
 
 ---
 
@@ -88,9 +142,22 @@ MCP servers are managed in **one place — Redstart Nest** — not per device. C
 | 19080 | Gateway — all clients connect here (default, configurable in Redstart Nest). Bound to `127.0.0.1` unless network mode is on |
 | 19081 | llama-server — internal only, bound to `127.0.0.1` in both modes; never reachable from LAN |
 | 19082 | MCP server — built-in tool endpoint (web_fetch, web_search, Postgres, Documents, SQLite, Vault, Git, File System, Scholar) plus any installed [plugins](capabilities.md#plugins). Bound to `127.0.0.1` unless network mode is on |
+| 19083 | Admin listener — the control plane. Fixed, not configurable, and up whenever Redstart Nest is, whether or not a model is running. Bound to `127.0.0.1` unless `adminBindHost` says otherwise. See [The control plane](security.md#the-control-plane) |
 | 8765 | Beacon — Redstart Nest identity broadcast, always bound to `0.0.0.0` for LAN discovery |
 
-**Network mode is a bind, not a firewall rule.** With it off, the gateway and the MCP server listen on `127.0.0.1` only — a device on the LAN gets connection-refused, not a login screen, and that holds regardless of what the host's firewall is or isn't doing. Turning it on binds both to `0.0.0.0` and adds the Windows Firewall inbound rules (plus UDP 5353 for mDNS, and TCP 80 when the clean-URL proxy starts). Rules go in via the bundled `elevate.exe`, so UAC prompts at most once per rule and never again; in an unpackaged dev checkout `elevate.exe` is absent and rule creation is skipped with a warning. Rules are not removed when you turn network mode back off — deleting one needs elevation again, and a leftover rule is inert once nothing is listening on the wildcard.
+**Two planes, two lifecycles.** 19080/19081/19082 are the *data* plane: they exist
+because a model is running and go away when it stops. 19083 is the *control*
+plane, and it binds at app start regardless — a plane whose lifetime is tied to
+the thing it controls cannot be used to start that thing. The beacon has always
+worked this way and is the precedent.
+
+**19080 is configurable and 19083 is not**, which is why `config.port` is
+validated: the data plane claims three consecutive ports, so 19081 as a
+configured port would put the MCP server on the control plane's socket. A launch
+with a colliding port is refused with a message naming the collision rather than
+failing somewhere downstream (`serverPortRejection()` in `ipc/validate.mjs`).
+
+**Network mode is a bind, not a firewall rule.** With it off, the gateway and the MCP server listen on `127.0.0.1` only — a device on the LAN gets connection-refused, not a login screen, and that holds regardless of what the host's firewall is or isn't doing. Turning it on binds both to `0.0.0.0` and adds the Windows Firewall inbound rules (plus TCP 80 when the clean-URL proxy starts). Rules go in via the bundled `elevate.exe`, so UAC prompts at most once per rule and never again; in an unpackaged dev checkout `elevate.exe` is absent and rule creation is skipped with a warning. Rules are not removed when you turn network mode back off — deleting one needs elevation again, and a leftover rule is inert once nothing is listening on the wildcard.
 
 Port 19081 is localhost-only in both modes, enforced at the socket *and* at the launch arguments (`--host` is hardwired and stripped from the advanced-args field). The gateway and its two internal services shift together if you change the configured port — llama-server is always `configured-port + 1`, and the MCP server is always `configured-port + 2`. `scripts/test-network-binding.mjs` proves the boundary by binding each server and attempting a real TCP connection from this host's own LAN address.
 

@@ -7,7 +7,6 @@
   },
   "files": [
     "electron/main",
-    "electron/preload",
     "dist"
   ],
   "asarUnpack": [

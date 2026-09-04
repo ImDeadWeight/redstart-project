@@ -31,6 +31,15 @@ process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 
 register('./auth-test-loader.mjs', import.meta.url)
 
+// Explicit, main-thread trigger for the stub's platform-paths.mjs initialization.
+// module.register() hooks run in a separate worker thread, so a side effect
+// inside auth-test-loader.mjs itself can't reach this thread's copy of
+// platform-paths.mjs -- only an ordinary import, resolved here in the main
+// thread, can. Needed because production code no longer imports 'electron'
+// at all in several modules this suite exercises, so nothing else would
+// trigger the stub's initPaths() call.
+await import('./electron-stub.mjs')
+
 const { startGateway, stopGateway } = await import('../electron/main/tools-gateway.mjs')
 const { startMcpServer, stopMcpServer } = await import('../electron/main/mcp-server.mjs')
 const { setAuthRequired, createOwner } = await import('../electron/main/auth.mjs')
@@ -135,10 +144,10 @@ async function main() {
     assert(res.status === 400, `expected 400, got ${res.status}`)
   })
 
-  // Fixture setup: seed the Owner account the same way the App.tsx "Create
-  // Owner Account" button does under the hood (auth:create-first-admin IPC
-  // -> auth.mjs createOwner). There's no HTTP route for this by design
-  // (bootstrap is meant to happen locally/trusted, not remotely).
+  // Fixture setup: seed the Owner account directly via auth.mjs's own
+  // createOwner() — what POST /admin/bootstrap calls in production
+  // (gateway/auth-routes.mjs), token-gated there but not needed for this
+  // fixture.
   const owner = createOwner({ username: 'owner', password: 'OwnerPass123!' })
   assert(owner.ok, `fixture setup failed: ${owner.error}`)
   const ownerApiKey = owner.apiKey

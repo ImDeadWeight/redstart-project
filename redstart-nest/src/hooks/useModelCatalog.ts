@@ -92,11 +92,10 @@ export function useModelCatalog() {
 
   const cancelDownload = useCallback(async () => { await api().models.cancelDownload() }, [])
 
-  const changeFolder = useCallback(async () => {
-    const a = api()
-    const picked = await a.settings.selectModelsDir()
-    if (!picked) return
-    await a.settings.setModelsDir(picked)
+  // Picking itself lives in FolderPicker.tsx (Phase 4 §4.3); this applies
+  // whatever path comes back.
+  const changeFolder = useCallback(async (picked: string) => {
+    await api().settings.setModelsDir(picked)
     await refreshLocal()
   }, [refreshLocal])
 
@@ -104,8 +103,6 @@ export function useModelCatalog() {
     await api().models.deleteLocal(name)
     await refreshLocal()
   }, [refreshLocal])
-
-  const revealFolder = useCallback(async () => { await api().models.revealFolder() }, [])
 
   // --- Bootstrap ---
   //
@@ -154,7 +151,7 @@ export function useModelCatalog() {
     models, searching, searchError, runSearch,
     detail, detailLoading, detailError, openModel, closeModel,
     modelsDir, localFiles, disk, localNames,
-    refreshLocal, changeFolder, deleteLocal, revealFolder,
+    refreshLocal, changeFolder, deleteLocal,
     progress, downloading, downloadError, download, cancelDownload,
   }
 }

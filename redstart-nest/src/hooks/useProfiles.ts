@@ -3,12 +3,14 @@ import { api, getAPI } from '../api/redstart'
 import type { HardwareSpecs, LlamaConfig } from '../types'
 
 // Saved launch profiles: list/load/save + hardware-derived defaults.
-// advertisedHost is owned by the network section in App, but a loaded profile
-// carries one — onAdvertisedHostLoaded pushes it back up.
+// onExposeControlPlaneLoaded pushes a loaded profile's control-plane exposure
+// (LlamaConfig.exposeControlPlane) back up to App — a separate callback
+// rather than folding into setConfig because applying it means an actual
+// rebind (useControlPlaneExposure.setExposure), not just a state update.
 export function useProfiles(
   config: LlamaConfig,
   setConfig: React.Dispatch<React.SetStateAction<LlamaConfig>>,
-  onAdvertisedHostLoaded: (host: string) => void,
+  onExposeControlPlaneLoaded: (expose: boolean) => void,
   showStatus: (msg: string, ttlMs?: number) => void,
 ) {
   const [profiles, setProfiles] = useState<string[]>([])
@@ -35,10 +37,10 @@ export function useProfiles(
     const loaded = await api().profiles.load(name)
     if (loaded) {
       setConfig(prev => ({ ...loaded, networkMode: prev.networkMode }))
-      // A loaded profile may omit advertisedHost; default to redstart.local in
-      // network mode so mDNS keeps advertising a resolvable .local name.
-      const safeNetworkMode = loaded.networkMode ?? true
-      onAdvertisedHostLoaded(loaded.advertisedHost || (safeNetworkMode ? 'redstart.local' : ''))
+      // Undefined means this profile never recorded an opinion (saved before
+      // the field existed, or saved without ever touching the toggle) —
+      // leave the control plane's current exposure exactly as it is.
+      if (loaded.exposeControlPlane !== undefined) onExposeControlPlaneLoaded(loaded.exposeControlPlane)
       setSelectedProfile(name)
     }
   }

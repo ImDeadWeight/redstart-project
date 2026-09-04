@@ -11,6 +11,7 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 ## Contents
 
 - [Accounts & login](#accounts--login)
+- [The control plane](#the-control-plane)
 - [The identity model](#the-identity-model)
 - [Roles](#roles)
 - [The llama-server boundary](#the-llama-server-boundary)
@@ -36,13 +37,133 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 Redstart Nest has an optional account system, gated behind a global **Require login** toggle in the server settings. It's **on by default** — every client on the network, including the host machine's own browser, must authenticate before accessing the chat UI or API. With it off, anyone on your network can use the server with no login and no API key, exactly like a plain llama.cpp setup. Turn it on and the picture changes:
 
 - **Login gate.** When accounts are required, the chat UI is not reachable until you sign in — a device that isn't logged in gets the login screen, not the chat. This holds for browsers on other devices too, not just the app.
-- **Three-tier roles.** A single **Owner** creates and removes **Admin** accounts; Admins manage regular **Users** day-to-day; Users just log in and chat. Sessions are token-based and persist across app launches (they're held in memory server-side, so restarting Redstart Nest signs everyone out — clients handle that by returning to the login screen rather than erroring).
+- **Three-tier roles.** A single **Owner** creates and removes **Admin** accounts; Admins manage regular **Users** day-to-day; Users just log in and chat.
+- **Sessions survive a restart.** They are stored in `sessions.json` as SHA-256 hashes of the token, so the file cannot be replayed as a credential by anyone who reads it. Chat sessions slide on a 30-day expiry; control-plane sessions get 12 hours (see [The control plane](#the-control-plane)). Signing out, resetting a password and deleting an account each revoke on disk, not just in memory.
 - **Profile page.** A **Profile** entry in the sidebar (and in the collapsed icon rail) opens a full-page account view rather than a dropdown. Its **Account** tab shows role, account-created / last-login timestamps and API key management; its **Files** tab browses your own storage on the server (see [Your files](#your-files-web-ui)). A regenerated key is shown once and stays on the page until dismissed — the previous dropdown put it in a modal that a stray click could dismiss, and the server keeps only a hash, so a key lost that way is gone for good.
 - **API keys.** Each account has a long-lived API key (prefixed `rst_`) for OpenAI-compatible clients like Kilo Code. Only a hash is stored server-side, so an existing key is only ever shown as its prefix — regenerate to get a fresh full key. Admins can also manage keys for the accounts they oversee.
 - **Per-connector keys.** An account can also issue keys bound to a specific *surface* (`nest-chat`, `twig`, `blueprints`, `yellowscript`, `greenhouse`), managed under Settings → Connectors. The surface travels with the credential, so the server derives which app is calling from the key itself rather than believing a header.
-- **First run.** The Owner account is created in the Redstart Nest launcher itself — deliberately, there is no HTTP route for bootstrap, so creating the first account requires physical access to the host machine. Since login is on by default, do this before expecting any device (including a browser on the host PC) to sign in.
+- **First run.** The Owner account is created through the control plane's setup screen, which asks for the machine's **setup code** first — there is no anonymous route to ownership. On Windows the launcher shows that same screen with the code already filled in (it reads the code off the machine itself, the same way it always visually appeared to), so setup looks the same as before even though the launcher is now just another client of the daemon, same as a browser tab. Since login is on by default, do this before expecting any device (including the launcher, or a browser on the host PC) to sign in.
 
 This is a newer subsystem — treat the account-management surface as still stabilizing.
+
+---
+
+## The control plane
+
+Configuring Redstart Nest and using it are two different things, and from the
+2026-09 pass they are two different listeners with different rules.
+
+| | Data plane | Control plane |
+|---|---|---|
+| What | Gateway `19080`, MCP `19082`, port-80 proxy | Admin listener `19083` |
+| Serves | Inference and tools to chat clients, Twig, coding agents | Configuration and process lifecycle to administrators |
+| Up when | A model is running | Redstart Nest is running |
+| Login | Optional — the **Require login** toggle | **Always required.** The toggle does not reach it |
+| Who | Any account, narrowed by role | **The Owner, and nobody else** |
+
+**The toggle governs the data plane only.** Turning **Require login** off opens
+the chat API to your LAN, exactly as documented above — it does not open the
+control plane. Two switches for two planes, rather than one switch whose "off"
+position hands out the ability to start processes. Note the other half of that:
+with login off the Owner can still sign in to the control plane, because it
+never consults the toggle in either direction.
+
+**Owner only, behind one check.** Every control-plane route calls a single
+function — `mayAccessControlPlane()` in `permissions.mjs`, whose whole body is
+`account?.tier === 'owner'`. Admin-tier accounts are refused. It is deliberately
+not a role permission: roles in Redstart may only ever *narrow* a tier, and the
+Owner ignores narrowing, so a control-plane permission would be permanently true
+and never consulted. It becomes meaningful the day a non-Owner can hold it, and
+widening it is then one edit rather than an audit of every route.
+
+**A session opens one plane.** Sessions are bound to their plane when they are
+issued: the gateway issues chat sessions, the admin listener issues
+control-plane ones, and each accepts only its own. So signing in to the chat UI
+as the Owner does *not* give you a credential that can start and stop processes.
+API keys are refused outright here — those are pasted into third-party tool
+clients, and one of them should not also be an administrative credential. A
+password, exchanged for a session at the control plane's own login, is the only
+way in.
+
+**The setup code (`bootstrap-token.txt`).** One CSPRNG code per machine,
+generated on first run and stored in plain text in the data directory. It is the
+only thing that opens `POST /admin/bootstrap`, which both creates the first Owner
+and re-keys an existing one — one door, no separate recovery path, and no
+anonymous route to ownership. This is the router model: a unique password on a
+label, plus a reset that does not wipe the box.
+
+- Why it must exist: creating the first Owner over a LAN-reachable route is not
+  physical access, and "no Owner exists" is reachable by a corrupt
+  `accounts.json` as well as by a new install — so without a code, the first
+  stranger to find the port would own the machine.
+- Why it is plain text: the launcher reads it off the machine itself and
+  submits it for you, so Windows setup is unchanged and you never see it.
+  Hashing it would cost that and buy nothing — anyone who can read the file
+  can rewrite `accounts.json`, which is ownership by a shorter route.
+- A reset preserves everything but the Owner's credential: accounts, roles,
+  connector keys and tool configuration all survive, and the Owner's sessions are
+  revoked. That is the whole gain over the last-resort wipe (stop Redstart Nest,
+  delete `accounts.json`, start again), which remains the answer when the goal is
+  to invalidate everything rather than to get back in.
+- It can be rotated, for a machine that moved or a label that was photographed.
+- Both anonymous routes — login and bootstrap — are rate limited and log every
+  attempt. That is a brake on automated guessing, not an access control; what
+  makes the secrets unguessable is their entropy.
+
+**Exposure is a bind address, and it defaults to loopback.** `adminBindHost` in
+`settings.json` holds an address rather than an on/off flag, so one setting
+covers loopback, a VPN interface, a management VLAN or the whole LAN. It is
+*not* network mode — that is data-plane state read at launch, and the control
+plane must not depend on it. A change rebinds immediately rather than at next
+start, because an administrator changing it may be doing so to recover access.
+The Accounts panel has a toggle for the common case (loopback vs. every
+interface); it writes the same `adminBindHost` setting a specific VPN or
+management-VLAN address would need to be set by hand.
+
+> **If you move it off loopback, do not forward the port through a router.** That
+> single act is what turns a low-risk deployment into one being scanned
+> continuously, and it is a larger real-world risk than any certificate decision.
+> Put a reverse proxy in front of it, or keep it on a VPN or management network.
+> Redstart Nest speaks plain HTTP and does not encrypt this traffic itself (see
+> [Network exposure](#network-exposure)). The launcher shows a warning whenever
+> the bind address is not loopback.
+
+**What the browser gets served.** The admin listener serves the launcher's own
+built bundle, from a list of the files Redstart Nest shipped, enumerated off
+disk at start-up and matched exactly — a request path that is not in that list is
+not a file, so directory traversal is not filtered here, it is impossible. This
+is deliberately *not* the mechanism the gateway uses for the chat UI's assets:
+that one is a URL-pattern rule deciding what to forward unauthenticated to
+llama-server, which is someone else's namespace. The two must not be confused.
+The document is served with its own Content-Security-Policy — no inline script
+at all, and `connect-src 'self'` — the same one every caller gets, Electron's
+own window included: it loads this listener's page too rather than carrying a
+separate, looser policy of its own.
+
+**No CORS by default, and therefore no CSRF machinery.** Out of the box the
+listener sends no `Access-Control-Allow-Origin` header and answers no preflight;
+it serves its own origin. The credential is a bearer token the page attaches
+itself rather than a cookie, so a cross-site request carries no authority in the
+first place.
+
+A deployment whose admin client is served from somewhere else can set
+`adminAllowedOrigins` in `settings.json` to an explicit list of origins. It is
+an allowlist and only an allowlist: a wildcard is refused outright, an origin
+that is not on the list is never reflected back, and a request from an
+unlisted origin is handled exactly as it always was — authenticated on its own
+merits, with no CORS headers. There is no UI for this because the only thing
+that needs it is a client pointed at a remote daemon.
+
+**Every method, one route, one gate.** The administrative API is one route per
+method (`POST /admin/api/<namespace>/<method>`), and authentication and the
+Owner check run in the listener *before* dispatch — so a route added later is
+gated by default rather than by whoever remembers.
+`scripts/test-admin-api.mjs` asserts that every method the launcher can call has
+a route, and that every one of them refuses both an anonymous caller and an
+admin-tier session. Ten are deliberately excluded and answer `501` even for the
+Owner: the native file pickers and "reveal in Explorer", which act on the machine
+you are sitting at rather than on the server. A server-side folder browser is the
+planned replacement.
 
 ---
 
@@ -51,7 +172,9 @@ This is a newer subsystem — treat the account-management surface as still stab
 ```
 Account  (id, username, role, password hash)
 ├── role                      owner | admin | user
-├── session token(s)          in-memory, 30-day sliding, revoked on delete/reset
+├── session token(s)          sessions.json, SHA-256 hashed; 30-day sliding on the
+│                             data plane, 12-hour on the control plane; revoked on
+│                             delete/reset
 ├── general API key           rst_… — one per account, hash stored
 └── connector key(s)          rst_… — each bound to ONE surface
     └── surface               nest-chat | twig | blueprints | yellowscript | greenhouse
@@ -63,9 +186,9 @@ There is exactly one resolution path from an incoming request to an account: `au
 
 **The surface comes from the credential, never from a header.** A connector key resolves to `{ account, surface, clientKeyId }`, and the gateway passes that surface into the prompt composer. An `X-Redstart-Surface` header is accepted and inert; the connector contract suite asserts that a header cannot forge a surface the credential did not grant. Connector keys are independently revocable, and revocation takes effect on the next request.
 
-**Session revocation is centralized.** Deleting an account or resetting its password calls `revokeSessionsForAccount()`, so there is no path that removes an account while leaving a live token behind. Sessions are in-memory only, so a server restart signs everyone out — see [Known limitations](roadmap.md#known-limitations).
+**Session revocation is centralized.** Deleting an account or resetting its password calls `revokeSessionsForAccount()`, so there is no path that removes an account while leaving a live token behind. Revocation reaches disk, not just memory: sessions are persisted (see [Sessions survive a restart](#accounts--login) above), so a signed-out token stays signed out across a restart rather than being cleared by one.
 
-**Owner bootstrap has no HTTP route at all.** `createOwner()` is reachable only over Electron IPC from the launcher window, which requires physical access to the host. It is deliberately a separate function from `createAccount()` rather than an "allow owner" branch inside it, so the owner-creation path cannot be reached any other way.
+**Owner bootstrap has exactly one door.** `createOwner()` is reachable only through `POST /admin/bootstrap`, gated on the machine's setup code (above) — there is no second, anonymous or IPC path onto it. It is deliberately a separate function from `createAccount()` rather than an "allow owner" branch inside it, so the owner-creation path cannot be reached any other way.
 
 ---
 
@@ -122,9 +245,12 @@ The gateway is the only way in, and it authenticates first. `scripts/test-llama-
 
 Both servers default to loopback in code: LAN exposure is something a caller must explicitly ask for, so the failure mode of a missed configuration is *closed*. `scripts/test-network-binding.mjs` proves this by binding each server and attempting a real TCP connection from the host's own LAN address — a test that read a config variable would prove only that a variable holds a string.
 
+**The control plane binds separately, and also defaults to loopback.** Network
+mode does not move it; `adminBindHost` does. See [The control plane](#the-control-plane).
+
 Full detail, including why firewall rules are not removed on toggle-off, is in [Architecture → Ports used](architecture.md#ports-used).
 
-**Discovery is not authentication.** The beacon and mDNS answer "where might a Redstart server be?" — never "this server is trustworthy". The beacon payload is minimal by design (`{ app, running, port }`) and discloses no version, auth state, configuration or URLs. A discovered server still has to authenticate the client.
+**Discovery is not authentication.** The beacon answers "where might a Redstart server be?" — never "this server is trustworthy". The beacon payload is minimal by design (`{ app, running, port }`) and discloses no version, auth state, configuration or URLs. A discovered server still has to authenticate the client. (mDNS was retired — see [Known limitations](roadmap.md#known-limitations) — the beacon was always the mechanism that mattered; Twig never depended on the `.local` name.)
 
 ---
 
@@ -241,12 +367,12 @@ Because enforcement is at the MCP layer, a prompt-level jailbreak cannot overrid
 
 Redstart Nest can treat an MCP SSE endpoint on another device as an additional tool source. This is a **separate trust boundary** from the built-in providers and is worth stating precisely:
 
-- **Registration requires physical access to the host.** External servers are added over Electron IPC from the launcher window. There is no HTTP route, so no LAN client — authenticated or not, admin or not — can register one.
-- **The URL is validated where it is written.** The IPC handler is the only path into the registry, so validation lives there rather than in the renderer, where it would be advisory. Refused outright: non-http(s) schemes, malformed input, and any URL aimed at Nest's own gateway, llama-server or MCP port — that last one would make Nest its own tool source, with an auth boundary in the middle of the loop. Everything else is accepted with warnings surfaced in the UI: plaintext to a remote host, egress implications, and a path that does not look like an SSE endpoint. The refuse/warn split is deliberate — an admin at the console is *allowed* to point Nest at a plaintext LAN appliance, and a validator that blocked it would block the documented use case.
+- **Registration requires the Owner.** External servers are added over the control plane, gated the same way every admin route is — owner-tier session, nothing else (see [The control plane](#the-control-plane)). Not physical access: the launcher is a control-plane client like any other since the headless-admin-plane work, so this is an authorization boundary rather than a network-topology one.
+- **The URL is validated where it is written.** The handler behind `mcp:add-external` is the only path into the registry, so validation lives there rather than in the renderer, where it would be advisory. Refused outright: non-http(s) schemes, malformed input, and any URL aimed at Nest's own gateway, llama-server or MCP port — that last one would make Nest its own tool source, with an auth boundary in the middle of the loop. Everything else is accepted with warnings surfaced in the UI: plaintext to a remote host, egress implications, and a path that does not look like an SSE endpoint. The refuse/warn split is deliberate — an admin is *allowed* to point Nest at a plaintext LAN appliance, and a validator that blocked it would block the documented use case.
 - **Their tools are executed by clients, not by Nest's MCP server.** So the completions-proxy ban applies to them, but the MCP-side chokepoint does not. "Enforced at both chokepoints" is a statement about built-in tools.
 - **An external server is trusted to describe its own tools.** Redstart does not validate the tool definitions it returns, and their descriptions reach the model.
 - **A remote external server is network egress** and is reported as such at `GET /egress` and in the system prompt's data-handling block.
-- **An optional API key is encrypted at rest**, the same OS-level secret store (`electron/main/secrets.mjs`, DPAPI on Windows) used for the Postgres connection string. It never round-trips back to the renderer once saved — the registry only reports whether a key is set, never the key — and it is sent as `Authorization: Bearer <key>` to that server alone. **OAuth-protected servers are not supported** — there is no authorization-code flow, so a server that requires one cannot be registered.
+- **An optional API key is encrypted at rest**, the same secret store (`electron/main/secrets.mjs` — DPAPI on Windows via the OS keychain; an AES-256-GCM key file when Redstart runs as a headless daemon with no keychain to use) used for the Postgres connection string. It never round-trips back to the renderer once saved — the registry only reports whether a key is set, never the key — and it is sent as `Authorization: Bearer <key>` to that server alone. **OAuth-protected servers are not supported** — there is no authorization-code flow, so a server that requires one cannot be registered.
 
 Point one at a host you control, on a network you trust.
 
@@ -260,7 +386,7 @@ Redstart Nest can install a **third-party stdio MCP server** — a real child pr
 
 **Fail-closed classification.** A built-in capability's tools were written and classified by Redstart. A plugin's were not — they are third-party code nobody here has read. So every tool a fresh install discovers is classified `destructive` — refused everywhere, exactly like [`delete_file`](#destructive-operations) — until an admin has actually read its description and promoted it individually (or in bulk, for a plugin with dozens of tools). This is deliberately **not** inferred from what the plugin claims about itself: an MCP server can self-report a tool as read-only (`readOnlyHint: true`) and that claim is never trusted for policy, since a third party can misdeclare a tool by accident or design. Per-plugin `allowWrite`/`allowDestructive` policy flags — both off by default — then gate `write`/`destructive`-classified tools exactly the way File System's own flags do, generalizing the same policy gate rather than adding a second one.
 
-**Credentials.** A plugin may hold an API key for a third-party service (a search or image-generation API, for example) — a stdio server is just a local process, and nothing stops it opening outbound HTTPS, so "runs locally" and "sends nothing off this machine" are not the same claim. Any configured key is encrypted at rest the same way as the Postgres connection string and External MCP's API key (`electron/main/secrets.mjs`), decrypted only at the moment the plugin's child is spawned, and never returned over IPC — the Plugins tab reports whether a key is set, never its value. **A plugin holding a credential is reported as network egress**, at `GET /egress` and in the system prompt's data-handling block, in the same shape an external MCP server already is — this was shipped together with credential support in the same change, specifically so it could not ship separately: a plugin with a key and no corresponding disclosure would leave Nest telling users their data stays local while their queries left for a third party.
+**Credentials.** A plugin may hold an API key for a third-party service (a search or image-generation API, for example) — a stdio server is just a local process, and nothing stops it opening outbound HTTPS, so "runs locally" and "sends nothing off this machine" are not the same claim. Any configured key is encrypted at rest the same way as the Postgres connection string and External MCP's API key (`electron/main/secrets.mjs`), decrypted only at the moment the plugin's child is spawned, and never returned to the caller — the Plugins tab reports whether a key is set, never its value. **A plugin holding a credential is reported as network egress**, at `GET /egress` and in the system prompt's data-handling block, in the same shape an external MCP server already is — this was shipped together with credential support in the same change, specifically so it could not ship separately: a plugin with a key and no corresponding disclosure would leave Nest telling users their data stays local while their queries left for a third party.
 
 **Installing does not execute.** Fetching an npm or pypi package never runs its code — `npm install` runs with `--ignore-scripts` (no lifecycle hooks), and a pypi package's own build backend only runs when installing from a source distribution, which is inherent to Python packaging rather than something Redstart can suppress the way it suppresses npm's hooks. Either way, nothing from the package runs until the admin has reviewed its discovered tools and confirmed the install — probing what a server can do and enabling it are separate, deliberate steps.
 
@@ -327,6 +453,10 @@ The accurate one-line summary of the privacy model is **local inference with adm
 | `test-mcp-capabilities` / `test-provider-conformance` | every provider refuses direct calls when disabled and errors rather than crashing on malformed input |
 | `test-system-prompt` | capability claims gated on the request; privacy claims derived; admin policy outranks client prose; unknown mode IDs dropped |
 | `test-discovery-robustness` / `test-net-interfaces` | beacon payload minimalism; virtual adapters excluded from advertised addresses |
+| `test-sessions` | sessions survive a restart, are hashed on disk, open one plane only, and every revocation path outlives it |
+| `test-admin-listener` | the control plane refuses anonymous and non-owner callers, serves only shipped files, and answers before any model has been launched |
+| `test-admin-bootstrap` | the setup code is checked before anything else; create and reset are one door; login gives a non-owner the same answer as a wrong password |
+| `test-admin-api` | every launcher method has a route, every route refuses an anonymous caller and an admin-tier session, and the local-only exclusions stay exactly the client-machine actions |
 | `test-ci-parity` | every local suite also gates pull requests |
 | chat-ui `security.test.ts` | containment, SSRF, beacon and download-endpoint behaviour in the client |
 
@@ -336,16 +466,20 @@ The distinction worth drawing: these are mostly **adversarial and integration** 
 
 ## Static analysis
 
-GitHub code scanning (CodeQL, default setup) runs on this repository. Two alerts are dismissed deliberately; both are recorded here because a dismissal without a written reason is indistinguishable from an ignored finding.
+GitHub code scanning (CodeQL, default setup) runs on this repository. The alerts below are dismissed deliberately; each is recorded here because a dismissal without a written reason is indistinguishable from an ignored finding.
 
 | Rule | Location | Status | Why |
 |---|---|---|---|
 | `js/incomplete-url-substring-sanitization` | `scripts/test-system-prompt.mjs` | **False positive** | The flagged line asserts that the composed *prompt text* names an approved domain. It is a string search over prose, and nothing is authorised by it. Host allow-listing lives in `isAllowed()` (`web-fetch-tool.mjs`), which parses with `new URL()` and compares hostname exactly or as a dot-prefixed suffix. |
+| `js/biased-cryptographic-random` | `bootstrap-token.mjs` — `generateBootstrapToken()` | **False positive** | The modulo is unbiased here, and provably so: the alphabet is exactly 32 symbols and `randomBytes` yields 0-255, so `256 % 32 === 0` and every symbol is the image of exactly eight byte values. The rule is right that `% n` biases in general and cannot see that this `n` divides the range. Changing the alphabet to a size that is *not* a power of two would make the alert correct, which is why the constraint is stated in the function's own comment. |
+| `js/tainted-format-string` | `admin/api-routes.mjs` — the dispatch catch | **Fixed** | Not by silencing it: `channel` was interpolated into `console.warn`'s first argument, which is a format string. Nothing hostile could reach it — `channelFromPath()` admits no `%` and the channel must already be an own key of the handler table — but a log call whose safety rests on a regex two functions away is one a later edit can break silently. It now passes the channel as structured data. |
+| `js/incomplete-url-substring-sanitization` | `scripts/test-admin-listener.mjs` — the CORS allowlist test | **False positive** | `origins` is an **array**, so `origins.includes('https://panel.example')` is exact membership, not a substring search over a URL. The rule matched the method name. The thing that actually authorises an origin is `parseAllowedOrigins()`, which parses with `new URL()` and compares normalised origins exactly — and that is what this test asserts. |
+| `js/clear-text-logging` (×2) | `scripts/test-sessions.mjs`, `scripts/test-admin-listener.mjs` — the test harness's pass line | **False positive** | The tainted value is `apiKeyPrefix`, which is `apiKey.slice(0, 8)` — a display prefix that exists *in order to* be shown, so an admin can tell two keys apart in a list. It is stored in the account record, returned by `toPublicAccount()`, and rendered in the UI. Eight characters of a key is not the key; the rule matched the field name. |
 | `js/insufficient-password-hash` | `auth.mjs` — `hashApiKey()` | **Won't fix** | API keys are 24 CSPRNG bytes (192 bits), not passwords. Brute-forcing SHA-256 over that space is infeasible, so a slow KDF adds nothing; and the hash must stay deterministic and salt-free to resolve a presented key without running scrypt against every stored account on every request. Passwords — the actual low-entropy secret — *do* use scrypt with a per-record salt. Storing high-entropy tokens under a fast hash is standard practice. |
 
-The second one carries a trap worth naming: "fixing" it by switching to scrypt would satisfy the scanner while introducing a denial-of-service vector, to protect a secret that has no brute-force exposure. A cleaner dashboard is not worth a worse system.
+The last one carries a trap worth naming: "fixing" it by switching to scrypt would satisfy the scanner while introducing a denial-of-service vector, to protect a secret that has no brute-force exposure. A cleaner dashboard is not worth a worse system.
 
-The available real upgrade there is HMAC-SHA256 under a DPAPI-protected pepper, which keeps determinism and lookup cost but makes a stolen `accounts.json` useless on its own. It would not silence the alert either, since HMAC-SHA256 is still a fast hash — so it is worth doing on its own merits or not at all.
+The available real upgrade for it is HMAC-SHA256 under a DPAPI-protected pepper, which keeps determinism and lookup cost but makes a stolen `accounts.json` useless on its own. It would not silence the alert either, since HMAC-SHA256 is still a fast hash — so it is worth doing on its own merits or not at all.
 
 ---
 
@@ -353,8 +487,18 @@ The available real upgrade there is HMAC-SHA256 under a DPAPI-protected pepper, 
 
 Stated plainly, because a security document that lists only strengths is not one.
 
-- **Sessions are in-memory**, so a server restart invalidates every token. Persisting them means writing credentials to disk; that decision is deliberately open.
-- **HTTP only on the LAN.** Self-signed TLS was tried and abandoned — Android WebView rejects it without manual cert trust. Transport security is on the roadmap and matters more as the project moves toward office use.
+- **HTTP only, including the control plane, and this is a settled decision rather than an omission.** Redstart Nest does not do TLS at any layer: it binds loopback by default and speaks plain HTTP, and a reverse proxy in front (Caddy, nginx, Traefik) is the documented way to expose it — the same answer Home Assistant, Jellyfin, Grafana and Proxmox give. Self-signed TLS inside Nest was tried and abandoned (Android WebView rejects it without manual cert trust), and building certificate handling here would be a worse version of what a proxy already does properly. The consequence to be clear about: on an unproxied LAN, passwords, session tokens, the setup code, and every secret on its way to be encrypted at rest all travel in the clear.
+- **The control plane has no audit trail of *what* an administrator did.** Sign-in, sign-out, bootstrap and setup-code rotation are logged; the individual administrative calls behind them are not. With Owner-only access there is also only one account to attribute anything to, so two people sharing a box share one identity in the log.
+- **Rate limiting is keyed on the remote address**, which is weak in both directions: an attacker on the LAN can change source address, and behind the reverse proxy that is the documented deployment, every request arrives from loopback and all callers share one bucket. `X-Forwarded-For` is deliberately not trusted — a header the client controls is not an identity, and with no proxy in front it would be a way to get a fresh bucket per request. Treat the limit as a brake on automated guessing rather than as an access control.
+- **`GET /admin/events` (the live feed) has no explicit disconnect.** A browser session's single SSE connection stays open for the tab's lifetime rather than being closed on logout or token change; a 401 on its own reconnect attempt does stop it and clears the session client-side, so a revoked session cannot keep a live connection authenticated, but nothing proactively closes an inactive one early. Tidiness rather than exposure.
+- **Every admin browses folders, but not files, on the server — Windows included.** A server-side directory browser (`browse:roots`/`browse:list`/`browse:mkdir`) is the only picker there is now (native OS dialogs retired with IPC, Phase 6 §6.1), and the listing is directories-only by design — it never returns file contents. Picking a *file* (the model, the binary) means navigating to the right folder and typing the filename, not clicking it from a list. "Reveal in Explorer" retired the same way and is not coming back in this shape: nothing can tell "the caller is sitting at this machine" from "the caller is a browser anywhere on the network" any more, so there is no safe caller left for a window that opens on the *server's* desktop — every client gets a copy-path button instead.
+- **Level 3 (running as a service) exists on paper and has never been run.** `deploy/` carries a systemd unit, a Windows SCM procedure and a reverse-proxy config for running Redstart on a box nobody is logged into. They were written from the design and reviewed; none of them has been executed on real hardware, and nobody has converted a real install and confirmed afterwards that its stored credentials still work. Treat that directory as a careful first draft rather than a supported path.
+- **Converting a Windows desktop install to a service re-keys every stored secret, and the order is not optional.** DPAPI ciphertext is bound to the account that wrote it, so a service account cannot decrypt what your desktop install stored. `scripts/rekey-secrets.mjs` does the conversion and must run **while you are still logged in as the original user**; it is a dry run by default, it never modifies or deletes the original directory, and it verifies the new one before reporting success. A secret it cannot read is reported individually and left in place, to be re-entered by hand. Skipping this step loses every stored credential silently — which is why the tool refuses to run under plain `node`, where it could only ever report everything as unreadable.
+- **The daemon outlives its window (Phase 7), but crash recovery is a human, not a supervisor.** Closing the launcher window no longer stops the model — Redstart Nest keeps running in the notification area, with a tray icon showing whether one is loaded and a "Stop model" / "Quit Redstart" menu; it can also start at login, windowless. What this does NOT add is process supervision: on a crash (an uncaught exception, unhandled rejection), Redstart logs the failure and shows a notification, but does not auto-restart. A hard kill (Task Manager), an OOM kill, or a native-code crash get no chance to log or notify at all — those stay silent until someone notices the tray icon is gone. Auto-restart-with-backoff is the appliance daemon's job, running under real process supervision — the `deploy/` units express it as restart-on-failure with a give-up threshold, keyed on Redstart's exit codes (0 for a deliberate stop, 1 for a crash), never restart-always. That closes this gap **at level 3 only, and only once someone has actually installed one of those units**: a Windows desktop install still has no watchdog. A hand-rolled equivalent on Windows was considered and rejected as its own outage risk.
+- **The tray, autostart, and first-close notice are not covered by any automated test.** Each needs a real window manager and a human driving a packaged build to verify — the pure decision logic behind autostart and crash-notification text is unit-tested, but the actual OS-level behavior (does the icon appear, does Windows actually launch it at login, does the notice show exactly once) is not.
+- **Running headless, secrets are protected by a key file beside them, not by an OS keychain.** Redstart Nest can now run as a daemon with no window at all (`bin/nestd.mjs`), which is what a monitor-less box needs — and such a box has no keychain, no login session, and nobody to type an unlock passphrase at boot. In that mode the stored credentials (the Postgres connection string, external MCP keys, plugin environment values) are encrypted with AES-256-GCM under a 32-byte key file in Redstart's own config directory, mode 0600. Be clear about what that is worth: anyone who can read that directory can read the secrets, because the key is sitting next to them. It is meaningful only with full-disk encryption underneath it, which is the correct tool for the job it is actually doing — protecting a drive that leaves the box. **If you run Redstart headless on hardware you do not physically control, use encrypted storage.** On Windows, where Redstart runs as the logged-in user, nothing changes: secrets are still protected by DPAPI through the OS keychain exactly as before, and existing installs are read back unchanged.
+- **Deleting a model on a headless daemon deletes it, rather than sending it to a recycle bin.** There is no desktop recycle bin on such a machine. This is a deliberate exception to the never-destroy rule that governs *your* files — a model is a re-downloadable multi-gigabyte file, and parking one in a `.trash/` folder that nothing ever empties is the outcome you pressed delete to avoid. Your own storage is unaffected and still follows the recycle-bin-then-`.trash/` path described above.
+- **The clean-URL (port 80) proxy is Windows-only.** On any other platform Redstart does not attempt it: port 80 is privileged, and the alternative — granting the daemon the capability to bind it — would hand back privileges the unprivileged service account exists to shed, on a process that spawns a configurable binary and runs third-party plugin code. A reverse proxy in front is the answer there, and it is the same reverse proxy that terminates TLS.
 - **Shared capabilities are all-or-nothing.** Vault, Git, SQLite and Postgres are shared across every account with no per-account grants yet.
 - **Twig's local MCP servers are unmoderated.** Twig can run local stdio MCP servers from a file on the user's own machine — arbitrary command execution by design, with the local disk as the trust boundary. Tool bans can strip their tools by name, but the server never sees them registered.
 - **The filesystem containment check is not atomic with the operation.** The File System capability re-validates every path argument through `resolveWithinRoot()` before handing the call to the upstream stdio child, but the child is a separate process, so a check-then-operate window exists in principle. The upstream server re-validates independently, which makes this degraded defense-in-depth rather than a hole.
@@ -362,5 +506,6 @@ Stated plainly, because a security document that lists only strengths is not one
 - **DNS rebinding is not closed.** The SSRF guard resolves a hostname and checks the answers, but the record can change between that lookup and the socket. See [Whitelist & SSRF enforcement](#whitelist--ssrf-enforcement) for why the whitelist is the primary control.
 - **Plugin data and any credential are shared server-wide**, like every other capability — there is no per-account plugin access and no per-plugin, per-account credential. See [Plugins](#plugins).
 - **State files carry no schema version.** Writes are atomic (`json-store.mjs`), and an unparseable file is preserved as `.corrupt` rather than silently replaced — but there is no versioning to branch a future migration on.
+- **A sliding session expiry can lose up to an hour on a hard kill.** Expiry updates are batched rather than written on every request, so a power loss can roll a session's clock back by at most that much. It shortens a session and never extends one, which is the safe direction, but it means "12 hours since last use" is a ceiling rather than a guarantee.
 - **Account lifecycle isn't in the audit trail.** `logEvent()` records login attempts, key issuance/revocation, and role changes (see [Logging](#logging)), but `createAccount()`, `createOwner()`, `deleteAccount()`, and `resetPassword()` in `auth.mjs` don't call it — creating, deleting, or resetting the password on an account leaves no line in `redstart.log`. An admin/owner who did it and `accounts.json`'s current state are the only record. Closing this means adding `logEvent()` calls at those four call sites, which is a small, well-scoped fix rather than an open design question — it just hasn't been done yet.
 - **The log has no viewer, no export, and thin retention.** `redstart.log` is read by opening the file on the host; there's no in-app viewer and nothing serves it over HTTP. It rotates at 5MB keeping one previous generation, so there's no long-term archive — see [Logging](#logging).

@@ -1,61 +1,53 @@
 // =============================================================================
-// Redstart Nest — Electron main process
+// Redstart Nest — the Electron entrypoint
 // =============================================================================
-// This is the heart of the application. I chose Electron because it lets me
-// ship a native Windows desktop app that can manage OS-level processes (like
-// launching llama-server.exe) while still using web technologies for the UI.
-//
 // The overall design: Redstart Nest is a launcher and monitor for llama.cpp. It
 // doesn't do any AI inference itself — it just starts the llama-server binary
 // with the right arguments and then gets out of the way. The actual model
 // runs in llama-server, which also serves the chat UI directly via --path.
 //
+// This file used to be all of it. Since Phase 8A.2 the service itself lives in
+// daemon.mjs and this is one of two entrypoints onto it — the desktop one.
+// What is left here is everything that needs Electron and nothing that does
+// not: the window, the tray, the single-instance lock, the close notice, popup
+// containment, the login item, and the one-time Beaver userData migration.
+// bin/nestd.mjs is the other entrypoint and has no UI at all.
+//
+// The division is not cosmetic. Electron is what makes a Windows desktop app
+// possible and what makes a headless appliance impossible (it needs a display
+// connection on Linux), so everything that is genuinely Nest had to stop being
+// reachable only from here. See docs/notes/headless-admin-plane-implementation.md
+// §8A.2, and design decision 6 — the Electron UI is a client of the daemon,
+// like Twig.
+//
+// What THIS entrypoint answers that the daemon cannot answer for itself:
+//   - where state lives (initPaths, from Electron's app.getPath)
+//   - how secrets are encrypted (safeStorage — DPAPI on Windows)
+//   - what a crash does (a shell notification, then app.exit(1))
+//   - what a deliberate shutdown does (quitApp — app.quit(), deferred)
+//
 // Key architectural decisions documented inline below.
 // =============================================================================
 
-import { app, BrowserWindow, nativeImage, session } from 'electron'
-import { execFile } from 'child_process'
-import { promisify } from 'util'
+import { app, BrowserWindow, Menu, nativeImage, Notification, dialog, safeStorage, shell } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs'
-import { ensureDefaultCapabilityFolders } from './tools-storage.mjs'
-import { stopGateway } from './tools-gateway.mjs'
-import { stopMcpServer } from './mcp-server.mjs'
-import * as os from 'os'
 import * as zlib from 'zlib'
-import * as http from 'http'
-import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
-import { stopMdnsAdvertiser } from './mdns-advertiser.mjs'
-import { stopPort80Proxy } from './port80-proxy.mjs'
-import { ensureFirewallRule } from './firewall.mjs'
-import { getPrimaryLanIp } from './net-interfaces.mjs'
-import { cleanupOldConversations } from './conversations-storage.mjs'
-import { initLogger, closeLogger, logEvent } from './logger.mjs'
-import { fileURLToPath } from 'url'
-import { registerGithubHandlers } from './ipc/github.mjs'
-import { registerHardwareHandlers } from './ipc/hardware.mjs'
-import { registerSettingsHandlers } from './ipc/settings.mjs'
-import { registerAuthHandlers } from './ipc/auth.mjs'
-import { registerProfilesHandlers } from './ipc/profiles.mjs'
-import { registerToolsHandlers } from './ipc/tools.mjs'
-import { registerMcpHandlers } from './ipc/mcp.mjs'
-import { registerCapabilitiesHandlers } from './ipc/capabilities.mjs'
-import { registerServerHandlers } from './ipc/server.mjs'
-import { registerModelsHandlers } from './ipc/models.mjs'
-import { registerPluginsHandlers } from './ipc/plugins.mjs'
-import { buildGatewayConfig, createRefreshLiveToolsConfig } from './gateway-config.mjs'
-import { buildArgs } from './llama-args.mjs'
-import { DEV_RENDERER_ORIGIN, rendererIndexFile, isTrustedRendererUrl } from './renderer-location.mjs'
-import { setTrustedWindow } from './ipc/guard.mjs'
-import { binaryPathRejection } from './ipc/validate.mjs'
-import { setPluginCapabilityProvider } from './tools-definitions.mjs'
-import { pluginCapabilities } from './plugin-registry.mjs'
-import { sweepPendingDeletions } from './plugin-install.mjs'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-
-const execFileAsync = promisify(execFile)
+import { getAdminListenerState } from './admin-listener.mjs'
+import { logEvent } from './logger.mjs'
+import { subscribeToEvents } from './event-broker.mjs'
+import { initPaths } from './platform-paths.mjs'
+import {
+  startDaemon, stopDaemon, installCrashHandlers, serverState, readSettings, writeSettings,
+} from './daemon.mjs'
+import { setRecycleBin, setLoginItems } from './desktop-integration.mjs'
+import { initSecrets } from './secrets.mjs'
+import { safeStorageProvider } from './secrets-safe-storage.mjs'
+import { hasOwner } from './auth.mjs'
+import { readBootstrapToken } from './bootstrap-token.mjs'
+import { startTray } from './tray.mjs'
+import { stopServer } from './ipc/server.mjs'
+import { reconcileStartupSetting } from './ipc/admin.mjs'
 
 // ---------------------------------------------------------------------------
 // Redstart pixel-art icon — minimal PNG encoder + 32×32 American Redstart bust
@@ -103,7 +95,7 @@ function pngEncode(width, height, getPixel) {
   ])
 }
 
-function makeRedstartIconPng() {
+function makeRedstartIconPng(size = 32) {
   // Color palette (RGBA)
   const _ = [0,0,0,0], K = [28,25,23,255], O = [249,115,22,255]
   const R = [194,65,12,255], W = [250,250,249,255], Y = [217,119,6,255]
@@ -145,7 +137,28 @@ function makeRedstartIconPng() {
     [_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_],
     [_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_],
   ]
-  return pngEncode(32, 32, (x, y) => g[y][x])
+  // Nearest-neighbour from the 32x32 grid, the same way scripts/make-icon.mjs
+  // rasterizes each size in the .ico. Rendering AT the target size keeps the
+  // art crisp; asking nativeImage to resize a 32px raster down to 16 would
+  // interpolate it, and interpolated pixel art is mush — the eyes and beak are
+  // one or two pixels wide.
+  const scale = 32 / size
+  return pngEncode(size, size, (x, y) => g[Math.floor(y * scale)][Math.floor(x * scale)])
+}
+
+// The notification-area icon. Built at native size rather than downscaled, and
+// carrying a 2x representation so Windows has a crisp source at 125%/150%/200%
+// DPI instead of upscaling a 16px bitmap.
+function makeTrayIcon() {
+  const image = nativeImage.createFromBuffer(makeRedstartIconPng(16))
+  try {
+    image.addRepresentation({ scaleFactor: 2, buffer: makeRedstartIconPng(32) })
+  } catch (err) {
+    // A missing HiDPI representation is a slightly soft icon on a scaled
+    // display, not a missing tray. Never worth failing the tray over.
+    console.warn('Tray icon: no 2x representation:', err.message)
+  }
+  return image
 }
 
 // SVG version of the same icon — injected as favicon into the chat window
@@ -314,69 +327,23 @@ try {
 
 let mainWindow = null
 
-// Live server process state, shared by reference between the server IPC handlers
-// (ipc/server.mjs, which owns launch/stop/status) and the lifecycle +
-// gateway-refresh code in this file that reads it. process: the spawned
-// llama-server child; ema: smoothed tokens/sec; lastConfig: set on launch,
-// cleared on stop/exit.
-const serverState = { process: null, ema: 0, lastConfig: null }
-let beaconServerInstance = null
+// Phase 7 §7.2: set only by a deliberate quit path — 7.3's tray "Quit
+// Redstart" (§7.3, below) and admin:shutdown (§7.5's quitApp(), below) are
+// the only two things that set it. Not read anywhere yet — it exists so
+// those two paths have one flag to set rather than inventing their own,
+// and so that window-all-closed's comment below has something concrete to
+// point at. Closing the window is deliberately NOT one of these paths —
+// see window-all-closed.
+let isQuitting = false
 
-// Live tool-config refresh, bound to serverState. buildGatewayConfig +
-// createRefreshLiveToolsConfig live in gateway-config.mjs; index.mjs only owns
-// the serverState the refresh closes over.
-// Bound inside setupIpcHandlers() (after app.whenReady, when app.getPath is
-// safe to call) rather than here at module scope — see below.
-let refreshLiveToolsConfig
+// Phase 7 §7.3 — set once startTray() succeeds; before-quit calls it to
+// unsubscribe from the broker and destroy the icon. Tray creation can fail
+// (no shell notification area, unlikely but not impossible on a stripped-down
+// Windows install) and is treated the same way the admin listener's own bind
+// failure already is: logged and swallowed rather than fatal — a missing
+// tray means "no tray affordance", not "no daemon".
+let stopTray = null
 
-// ---------------------------------------------------------------------------
-// Settings helpers
-// ---------------------------------------------------------------------------
-
-function getSettingsPath() {
-  return path.join(app.getPath('userData'), 'settings.json')
-}
-
-function readSettings() {
-  const p = getSettingsPath()
-  if (!fs.existsSync(p)) return {}
-  try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return {} }
-}
-
-function writeSettings(data) {
-  fs.writeFileSync(getSettingsPath(), JSON.stringify(data, null, 2), 'utf8')
-}
-
-// ---------------------------------------------------------------------------
-// Models folder
-// ---------------------------------------------------------------------------
-// Where the Models tab downloads GGUF files and where the "Select .gguf File"
-// picker opens. Defaults to <Documents>\Redstart\Models to match the capability
-// folders provisioned above, but is user-changeable because model files are
-// tens of gigabytes and Documents usually lives on the system drive.
-//
-// Always resolves to a real path so no caller has to handle null — the picker's
-// defaultPath and the downloader's containment root must never disagree about
-// which folder is "the models folder".
-
-function defaultModelsDir() {
-  return path.join(app.getPath('documents'), 'Redstart', 'Models')
-}
-
-function resolveModelsDir() {
-  const configured = readSettings().modelsDir
-  return typeof configured === 'string' && configured.trim() ? configured : defaultModelsDir()
-}
-
-// Best-effort, same contract as ensureDefaultCapabilityFolders: a folder that
-// cannot be created is not fatal, the tab just reports it.
-function ensureModelsDir() {
-  try {
-    fs.mkdirSync(resolveModelsDir(), { recursive: true })
-  } catch (err) {
-    console.warn('Could not provision the models folder:', err.message)
-  }
-}
 
 // ---------------------------------------------------------------------------
 // userData migration (Beaver -> Redstart rename)
@@ -406,153 +373,39 @@ function migrateUserDataFromBeaver() {
 }
 
 // ---------------------------------------------------------------------------
-// Binary resolution
-// ---------------------------------------------------------------------------
-
-// The value this returns becomes spawn()'s first argument in ipc/server.mjs, so
-// it is checked HERE as well as at the settings:set-binary-path write. That is
-// not belt-and-braces for its own sake: settings.json is an ordinary file on
-// disk, and any value written by a build that predates the write-side check —
-// which is every install shipped so far — is read by this function and launched.
-// Validating only on the way in would leave the stored value trusted forever.
-//
-// A rejected override falls through to the bundled binary rather than failing
-// the launch, which is the same thing that happens when the path simply does
-// not exist.
-function resolveBinary() {
-  const settings = readSettings()
-  if (settings.serverBinPath) {
-    const rejection = binaryPathRejection(settings.serverBinPath)
-    if (rejection) {
-      logEvent('security', 'binary_override_rejected', { reason: rejection })
-    } else {
-      return settings.serverBinPath
-    }
-  }
-
-  const candidates = []
-
-  if (app.isPackaged) {
-    // Packaged: binary is placed at resources/bin/ via extraResources in electron-builder.json
-    candidates.push(path.join(process.resourcesPath, 'bin', 'llama-server.exe'))
-  } else {
-    // Dev: look in the project tree
-    const projectRoot = path.join(__dirname, '..', '..')
-    candidates.push(
-      path.join(projectRoot, 'llama-cpp-turboquant', 'build', 'bin', 'Release', 'llama-server.exe'),
-      path.join(projectRoot, 'llama-server.exe'),
-      path.join(process.cwd(), 'llama-server.exe'),
-    )
-  }
-
-  return candidates.find(p => fs.existsSync(p)) || null
-}
-
-// ---------------------------------------------------------------------------
-// Profile helpers
-// ---------------------------------------------------------------------------
-
-function getProfilesPath() {
-  return path.join(app.getPath('userData'), 'profiles.json')
-}
-
-function readProfiles() {
-  const p = getProfilesPath()
-  if (!fs.existsSync(p)) return { profiles: {} }
-  try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return { profiles: {} } }
-}
-
-function writeProfiles(data) {
-  fs.writeFileSync(getProfilesPath(), JSON.stringify(data, null, 2), 'utf8')
-}
-
-// ---------------------------------------------------------------------------
-// Network helpers
-// ---------------------------------------------------------------------------
-
-// Delegates to net-interfaces.mjs, which skips Hyper-V/WSL/VirtualBox/VPN
-// adapters. Taking the first non-internal IPv4 (as this did) routinely handed
-// back a virtual-switch address that nothing else on the LAN can reach — and
-// that address is what the UI shows and what the QR code encodes.
-function getLocalIp() {
-  return getPrimaryLanIp()
-}
-
-// ---------------------------------------------------------------------------
-// Token EMA parser
-// ---------------------------------------------------------------------------
-
-function parseEvalTokensPerSec(line) {
-  // llama_print_timings:        eval time = ... X tokens per second)
-  const match = line.match(/eval time\s+=.+?(\d+\.?\d*)\s+tokens per second/)
-  return match ? parseFloat(match[1]) : null
-}
-
-// ---------------------------------------------------------------------------
-// Server health poll
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Discovery beacon server
-// Runs on a fixed port (8765) as long as Redstart Nest is open, regardless of
-// whether a llama-server is running. Redstart Twig scans for this beacon to
-// confirm it found a real Redstart Nest instance and to get the actual server URL.
-// ---------------------------------------------------------------------------
-
-async function startDiscoveryBeacon() {
-  beaconServerInstance = await startBeaconServer(
-    () => !!serverState.process,
-    () => serverState.lastConfig?.port ?? 19080,
-  )
-  console.log(`Redstart Nest beacon listening on port 8765`)
-}
-
-// ---------------------------------------------------------------------------
 // Redstart proxy server
 // ---------------------------------------------------------------------------
 // Chat UI is served directly by llama-server via --path and accessed through
 // the gateway in any browser. No captive BrowserWindow or local proxy needed.
 // ---------------------------------------------------------------------------
 
-const CSP = [
-  "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "connect-src 'self' http://127.0.0.1:* https://127.0.0.1:* ws://127.0.0.1:* wss://127.0.0.1:* https://api.github.com",
-  "font-src 'self' data:",
-  "worker-src 'self' blob:",
-].join('; ')
+// applyCSP()/CSP retired in Phase 6 §6.2. The window now loads the admin
+// listener's own served page over HTTP (see createWindow() below), and that
+// response already carries its own precise, purpose-built policy —
+// admin-listener.mjs's ADMIN_CSP, sent as a real header on the document
+// response the way a server is supposed to send one. Stamping a second,
+// broader CSP over every response in the session (what this did, for the
+// old file://-loaded page which had no natural way to send one) would now
+// either duplicate or fight that header instead of complementing it.
 
-function applyCSP(session) {
-  session.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': [CSP],
-      },
-    })
-  })
-}
 
 // ---------------------------------------------------------------------------
-// Navigation containment
+// Popup / webview containment
 // ---------------------------------------------------------------------------
-// A preload script re-runs on EVERY navigation within a webContents. So if this
-// window is ever taken somewhere else — a `window.open()`, a stray
-// `location =`, an injected link — the destination page inherits the whole
-// `window.redstartAPI` surface and every IPC channel behind it. CSP does not
-// stop this: `default-src` does not constrain top-level navigation, and the
-// `navigate-to` directive was never shipped by anyone.
-//
-// Hung off `web-contents-created` rather than off `mainWindow` so it also covers
-// webContents that do not exist yet — a popup, a <webview> — which is precisely
-// the set a per-window handler would miss.
-//
-// Nothing in the launcher legitimately opens a window or attaches a <webview>,
-// so both are flat denials; navigation is allowed only back to where the
-// launcher already is (see renderer-location.mjs).
-function installNavigationContainment() {
+// Nothing in the launcher legitimately opens a second window or attaches a
+// <webview> — both are flat denials. This used to be paired with strict
+// same-origin navigation pinning (renderer-location.mjs) to protect the
+// preload bridge a navigated-to page would otherwise inherit; Phase 6 §6.2
+// deleted the bridge itself; without it there is no elevated surface a
+// navigation could inherit, so the narrower containment left is exactly
+// what a plain browser tab already gets from the web platform (a page can
+// navigate itself, but gains no extra privilege by doing so — Electron's
+// window is meaningfully no different, since it now holds nothing a browser
+// tab wouldn't). Hung off `web-contents-created` rather than off
+// `mainWindow` so it also covers webContents that do not exist yet — a
+// popup, a <webview> — which is precisely the set a per-window handler
+// would miss.
+function installPopupContainment() {
   app.on('web-contents-created', (_event, contents) => {
     contents.setWindowOpenHandler(() => {
       logEvent('security', 'window_open_denied', {})
@@ -563,39 +416,183 @@ function installNavigationContainment() {
       logEvent('security', 'webview_attach_denied', {})
       event.preventDefault()
     })
+  })
+}
 
-    contents.on('will-navigate', (event, url) => {
-      if (isTrustedRendererUrl(url)) return
-      // The DevTools frontend is a Chromium-internal page opened below in dev
-      // only. It is never reachable in a packaged build, so exempting it costs
-      // nothing there — and the IPC guard rejects a devtools:// frame anyway.
-      if (!app.isPackaged && url.startsWith('devtools://')) return
-      logEvent('security', 'navigation_denied', { scheme: url.split(':')[0] })
-      event.preventDefault()
+// Phase 7 §7.7 (trap 5.6) — "closing the window will stop stopping the
+// server" is a real reversal of user expectation from before this phase,
+// and the design doc asks for it to be said plainly, not left to be
+// discovered by someone wondering why the model is still resident.
+//
+// Intercepts the window's own 'close' (the X button / Alt+F4), shown once
+// ever — persisted in settings.json, not merely for this session, since
+// the point is a single plain explanation the first time behavior changes,
+// not a recurring nag every time the app is reopened. Skipped entirely on
+// a deliberate quit (isQuitting true — the tray's Quit or admin:shutdown):
+// the window is closing because the whole daemon is, so there is nothing
+// misleading to correct.
+//
+// dialog.showMessageBox is NOT the native-picker mechanism Phase 6 §6.1
+// retired (trap 5.2 was about a dialog browsing the CLIENT's disk on
+// someone else's behalf, an act with no safe caller once nothing can tell
+// "local" from "remote"). This shows an informational box on THIS
+// process's own window, which by construction is always local to whoever
+// is running this Electron process — no remote-vs-local ambiguity exists
+// for it the way it did for a file picker.
+function installCloseNotice(win) {
+  win.on('close', (event) => {
+    if (isQuitting) return
+    const settings = readSettings()
+    if (settings.closeNoticeShown) return
+    event.preventDefault()
+    dialog.showMessageBox(win, {
+      type: 'info',
+      title: 'Redstart keeps running',
+      message: 'Redstart keeps running in the notification area.',
+      detail: 'The model stays loaded. Quit from the tray icon to stop it.',
+      buttons: ['Got it'],
+    }).then(() => {
+      const latest = readSettings()
+      latest.closeNoticeShown = true
+      writeSettings(latest)
+      // win.close() rather than destroy() — re-fires 'close', but the
+      // settings write above just made this handler's early-return above
+      // fire this time, so it proceeds to the OS's normal close behavior
+      // instead of looping.
+      win.close()
     })
   })
 }
 
 function createWindow() {
+  // No File/Edit/View/Help. Nothing in them applies to this app — there are no
+  // documents to open and no preferences that are not in the UI already — and
+  // with the title bar hidden the menu would have nowhere sensible to live.
+  // Chromium still handles the editing shortcuts (Ctrl+C/V/X/A, undo) inside
+  // inputs natively on Windows, which is where the Edit menu's roles would
+  // otherwise have earned their place.
+  Menu.setApplicationMenu(null)
+
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 800,
     icon: redstartIcon,
-    webPreferences: {
-      preload: path.join(__dirname, '..', 'preload', 'index.mjs'),
+    // No OS title bar. The app draws its own top bar (App.tsx's header, and a
+    // drag strip on the sign-in screen) and Electron paints ONLY the
+    // minimise/maximise/close buttons over it, in the app's colours.
+    //
+    // Why the overlay rather than `frame: false` plus three HTML buttons:
+    // buttons in the page would need a way to call win.minimize(), and the
+    // only channel for that was the preload bridge Phase 6 §6.2 deleted. The
+    // alternatives are both wrong — reintroducing a privileged channel for
+    // window chrome, or putting window control on the admin HTTP API, where a
+    // browser on another device could minimise someone else's window. The
+    // overlay needs neither: the buttons are native, the theming is
+    // declarative, and the page stays an ordinary page.
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#18181b',       // zinc-900, matching App.tsx's header
+      symbolColor: '#a1a1aa', // zinc-400, matching its secondary text
+      height: 48,             // must equal the header's h-12
     },
+    // Paint the window zinc-950 from the first frame. Without it the window
+    // shows white until the page loads, which against this theme reads as a
+    // flash of broken.
+    backgroundColor: '#09090b',
   })
 
-  // Register BEFORE the first load so no handler can see a window it does not
-  // yet consider trusted. See ipc/guard.mjs.
-  setTrustedWindow(mainWindow)
+  // The window is one event-broker subscriber among others now (Phase 5
+  // §5.1), not the hard-coded destination server.mjs/models.mjs/plugins.mjs
+  // used to push to directly. Subscribed once, here, rather than re-derived
+  // per publish() — a destroyed window is checked at delivery time, same as
+  // the getMainWindow()?.webContents.send(...) guard this replaces.
+  //
+  // Phase 7 §7.2: the window can now close without the process quitting
+  // (window-all-closed is a no-op below), so a closed-and-reopened window
+  // is routine, not a one-time app-shutdown event. subscribeToEvents()
+  // returns an unsubscribe handle specifically so this registration does not
+  // stack a second, permanently-dead listener (still checking
+  // win.isDestroyed() forever, still holding `win` alive) every time the
+  // window reopens.
+  const win = mainWindow
+  const unsubscribeFromEvents = subscribeToEvents((channel, payload) => {
+    if (!win.isDestroyed()) win.webContents.send(channel, payload)
+  })
+  win.on('closed', () => {
+    unsubscribeFromEvents()
+    if (mainWindow === win) mainWindow = null
+  })
+  installCloseNotice(win)
 
-  if (!app.isPackaged) {
-    mainWindow.loadURL(DEV_RENDERER_ORIGIN)
-    mainWindow.webContents.openDevTools()
-  } else {
-    mainWindow.loadFile(rendererIndexFile())
+  // Always the admin listener's own loopback address — Electron shares the
+  // daemon's machine (level 2, plan §1), so it connects to it exactly like
+  // any other local HTTP client, never via whatever bind address is
+  // configured for LAN exposure (which could be a wildcard Electron cannot
+  // usefully "connect to" from the same box). AdminGate.tsx gates this page
+  // exactly like a browser tab — sign-in, or first-run setup — see decision
+  // 6: the Electron UI is a client of the daemon, like Twig.
+  //
+  // DEV EXCEPTION: Vite's dev server (localhost:5173) is loaded instead of
+  // the admin listener directly, so UI work keeps hot-reload. It proxies
+  // everything under /admin to the real listener (vite.config.ts) — this is
+  // a dev-tooling convenience, not a security boundary; the packaged build
+  // has no dev server to reach and always loads the listener's own page.
+  const { port } = getAdminListenerState()
+  let url = app.isPackaged ? `http://127.0.0.1:${port}/` : 'http://localhost:5173/'
+  // The bootstrap-token handoff (plan decision 16), without IPC: no owner
+  // exists yet, so this is a first-run (or post-wipe) box. Read the token
+  // here, where filesystem access already lives, and hand it to the page
+  // the same way any other "where should this window start" decision is
+  // made — a URL. AdminGate.tsx reads it once on mount and clears it from
+  // the address bar immediately after, so it does not linger anywhere a
+  // screenshot or a browser history entry would catch it.
+  if (!hasOwner()) {
+    const token = readBootstrapToken()
+    if (token) url += `?setupToken=${encodeURIComponent(token)}`
   }
+  mainWindow.loadURL(url)
+  if (!app.isPackaged) {
+    mainWindow.webContents.openDevTools()
+    // Setting the application menu to null (above) also removes the
+    // accelerators it carried, and the only one that mattered was
+    // toggle-devtools. Rebinding it here rather than keeping a menu bar just
+    // to hold it: dev-only, so a packaged build gains no shortcut into the
+    // renderer's internals.
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+      const toggle = input.control && input.shift && input.key.toLowerCase() === 'i'
+      if (input.type === 'keyDown' && (toggle || input.key === 'F12')) {
+        mainWindow.webContents.toggleDevTools()
+        event.preventDefault()
+      }
+    })
+  }
+}
+
+// Shared by the single-instance guard's 'second-instance' handler (§7.1) and
+// the tray's "Open Redstart" / left-click (§7.3) — both answer the same
+// question, "bring the UI in front of the user right now," and mainWindow
+// may legitimately be null in either case now that closing it no longer
+// quits the process (§7.2).
+function openOrFocusWindow() {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  } else {
+    createWindow()
+  }
+}
+
+// Phase 7 §7.5 — the ONE deliberate-quit path admin:shutdown gets (the
+// tray's "Quit Redstart", §7.3, sets isQuitting inline itself since it
+// already has app in scope there too — this is the other caller). Deferred
+// with setImmediate rather than calling app.quit() synchronously: the
+// caller is admin:shutdown's HTTP handler, and its 200 response must
+// actually leave the socket before before-quit's teardown begins, or the
+// caller sees a connection reset and cannot tell success from crash.
+function quitApp() {
+  isQuitting = true
+  setImmediate(() => app.quit())
 }
 
 // The launcher and chat windows are plain UI (no WebGL/canvas-heavy work) —
@@ -603,32 +600,140 @@ function createWindow() {
 // llama-server's own inference workload for the same GPU.
 app.disableHardwareAcceleration()
 
-app.whenReady().then(async () => {
+// ---------------------------------------------------------------------------
+// Single-instance guard (Phase 7 §7.1)
+// ---------------------------------------------------------------------------
+// Every later Phase 7 step assumes exactly one process owns the daemon —
+// the admin listener's port, the pid file, the tray icon. Before this guard,
+// a second launch raced the 19083 bind and lost into
+// `console.warn('Admin listener failed to start')`, leaving a window with no
+// working daemon behind it: the worst outcome available, and silent. Must be
+// requested before `whenReady` — the lock itself is what decides whether this
+// process gets to proceed to path/listener setup at all.
+// Phase 7 §7.4 — a login-triggered start passes this so the daemon comes up
+// windowless (tray-only): set on the OS login item below in
+// reconcileStartupSetting(), read here rather than trusted blindly, since
+// `--background` typed on an ordinary Start-menu launch should behave the
+// same way (there is nothing unsafe about it — it only skips createWindow()).
+const isBackgroundLaunch = process.argv.includes('--background')
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+
+if (!gotSingleInstanceLock) {
+  // Do not touch paths, the logger, or any listener — another process
+  // already owns them. Quit immediately and let that process's
+  // 'second-instance' handler bring its window forward.
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    // A user clicked the Start-menu shortcut, or double-clicked the exe,
+    // while the daemon (with or without a window) is already running.
+    // logEvent runs safely here even before initLogger() has necessarily
+    // been called on a very fast second launch — logEvent no-ops until the
+    // logger is initialized rather than throwing (see logger.mjs).
+    logEvent('app', 'second_instance', {})
+    openOrFocusWindow()
+  })
+
+  app.whenReady().then(main)
+}
+
+async function main() {
+  // Phase 7 §7.4a — installed before anything else, including initPaths(), so
+  // a crash during startup itself is caught too. Phase 8A.2 moved the wiring
+  // into daemon.mjs; what a DESKTOP does about a crash — raise a shell
+  // notification, leave through Electron's own app.exit() — is this
+  // entrypoint's half of the answer, and is passed in.
+  installCrashHandlers({
+    notifyCrash: (notification) => {
+      if (Notification.isSupported()) {
+        new Notification({ title: notification.title, body: notification.body }).show()
+      }
+    },
+    // app.exit(1), not app.quit(): process state is suspect here, so this
+    // deliberately skips before-quit's ordinary teardown and exits directly.
+    // The 1 is also what a supervisor reads as "restart me" (§8B.3).
+    exitCrashed: () => app.exit(1),
+  })
+  // Before anything else touches a path. migrateUserDataFromBeaver() below is
+  // exempt — it is one-time glue tied specifically to Electron's app-name
+  // userData scheme, not a "where does data live" question the daemon will
+  // ever need to answer, so it keeps using app.getPath directly.
+  initPaths({
+    config: app.getPath('userData'),
+    capabilityBase: path.join(app.getPath('documents'), 'Redstart'),
+    isPackaged: app.isPackaged,
+  })
   migrateUserDataFromBeaver()
-  // Structured logging to <userData>\redstart.log. First thing after the
-  // userData migration so subsequent startup steps are captured.
-  initLogger(app.getPath('userData'))
-  logEvent('app', 'ready', { platform: process.platform })
-  // Pre-provision default capability folders (<Documents>\Redstart\...) so
-  // Documents/SQLite/Vault/Git are one-click enable out of the box. Fills
-  // only unset paths — a user-chosen folder is never overridden — and leaves
-  // every capability disabled.
-  ensureDefaultCapabilityFolders(path.join(app.getPath('documents'), 'Redstart'))
-  // Same idea for the models folder — see resolveModelsDir().
-  ensureModelsDir()
-  applyCSP(session.defaultSession)
-  installNavigationContainment()
-  killOrphanedServers()
-  const cleanedConversations = cleanupOldConversations()
-  if (cleanedConversations > 0) console.log(`Cleaned ${cleanedConversations} conversations older than 30 days`)
-  // Retries any plugin folder an uninstall couldn't delete last session (a
-  // Windows file lock, most likely) — best-effort, never blocks startup (P4-4).
-  sweepPendingDeletions()
-  startDiscoveryBeacon()
+  // Phase 8A.1 — secrets.mjs is fail-closed and holds no crypto of its own;
+  // wire the provider before anything can read or write a credential. This is
+  // the desktop (level 2) entrypoint, so it gets safeStorage — the same DPAPI
+  // that wrote every secret on every install shipped so far. The headless
+  // daemon wires the key file provider instead, and that difference is the
+  // whole reason this seam exists (design §3.1).
+  initSecrets(safeStorageProvider(safeStorage))
+  // Phase 8A.5 — the two things a desktop can do that a headless daemon
+  // cannot. Registered rather than imported, because a module that imports
+  // these from 'electron' cannot be loaded under plain Node at all; see
+  // desktop-integration.mjs.
+  setRecycleBin((fullPath) => shell.trashItem(fullPath))
+  setLoginItems({
+    get: () => app.getLoginItemSettings(),
+    set: (settings) => app.setLoginItemSettings(settings),
+  })
+  installPopupContainment()
+  // Everything that is Nest-the-service: the logger, the process log, the
+  // capability folders, stale-process reaping, the control-plane API table,
+  // the beacon and the admin listener. One call now (Phase 8A.2) — the same
+  // one bin/nestd.mjs makes, in the same order, because the daemon is not
+  // supposed to be able to tell which entrypoint started it.
+  //
+  // quitApp is the one thing it cannot answer for itself: admin:shutdown
+  // (§7.5) has to leave the way this platform leaves.
+  await startDaemon({ quitApp })
+  // §7.4 — pure decision logic lives in ipc/admin.mjs (resolveStartupReconciliation),
+  // testable without Electron; this is just the one untestable line
+  // (app.setLoginItemSettings) plus the settings read/write it needs.
+  reconcileStartupSetting({ readSettings, writeSettings })
+  startTrayIcon()
   if (!app.isPackaged) await installReactDevTools()
-  createWindow()
-  setupIpcHandlers()
-})
+  // §7.4: a login-triggered start is windowless — tray-only until the admin
+  // opens it. Ground rule from §7.0 still holds either way: this never
+  // starts a model, only the daemon (admin listener, beacon, gateway
+  // config, MCP), all of which are already up by this line.
+  if (!isBackgroundLaunch) createWindow()
+}
+
+// Phase 7 §7.3. A missing icon (redstartIcon failed to generate, logged at
+// module load above) or a Tray constructor failure (no shell notification
+// area) is swallowed the same way a admin-listener bind failure already is —
+// logged, non-fatal, daemon still comes up. No tray means no tray
+// affordance, not no daemon.
+function startTrayIcon() {
+  if (!redstartIcon) {
+    console.warn('Tray not started: icon generation failed at startup')
+    return
+  }
+  try {
+    stopTray = startTray({
+      icon: makeTrayIcon(),
+      onOpen: openOrFocusWindow,
+      onStopModel: () => {
+        logEvent('app', 'tray_stop_model', {})
+        stopServer({ serverState }).catch((err) => console.warn('Tray stop-model failed:', err.message))
+      },
+      onQuit: () => {
+        logEvent('app', 'tray_quit', {})
+        isQuitting = true
+        app.quit()
+      },
+      initiallyRunning: !!serverState.process,
+    })
+  } catch (err) {
+    console.warn('Tray failed to start:', err.message)
+    logEvent('app', 'tray_start_failed', { reason: err.message })
+  }
+}
 
 // Dev-only: adds the Components/Profiler panels to Chromium DevTools so the
 // React tree is inspectable. Never runs in a packaged build — an extension
@@ -645,104 +750,37 @@ async function installReactDevTools() {
   }
 }
 
-function killOrphanedServers() {
-  // I call this both at startup and before the app quits. The startup call
-  // handles the case where a previous session crashed without cleaning up —
-  // if a stale llama-server.exe is still running, it holds port 19080 and the
-  // next launch silently fails. The quit call is a best-effort safety net for
-  // the normal exit path, though the child process should exit on its own too.
-  try {
-    execFile('taskkill', ['/F', '/IM', 'llama-server.exe'], () => {})
-  } catch { /* no orphans, fine */ }
-}
-
-// Inbound firewall rules now live in firewall.mjs so the mDNS advertiser can
-// reuse the same elevate.exe path for its UDP 5353 rule. `ensureFirewallRule`
-// is imported above and re-exported through the deps object below unchanged.
-
+// The client's teardown, then the daemon's. Phase 8A.2 moved the daemon half
+// into stopDaemon() — design §4's Phase 7 paragraph asked for exactly that
+// ("move the before-quit teardown out of the client and into the daemon"),
+// and Phase 7 could not do it, because with a single process there was only
+// ever one caller. There are two now, and a second copy that drifts is how a
+// llama-server child gets left running past quit.
+//
+// The tray goes first, where it used to sit mid-teardown: a client affordance
+// should stop before the thing it is an affordance for, so a broker event
+// published during the daemon's own teardown cannot reach a destroyed icon.
 app.on('before-quit', () => {
-  logEvent('app', 'quit', {})
-  killOrphanedServers()
-  stopGateway()
-  stopMcpServer()
-  stopMdnsAdvertiser()
-  stopPort80Proxy()
-  if (serverState.process) {
-    serverState.process = null
+  if (stopTray) {
+    stopTray()
+    stopTray = null
   }
-  if (beaconServerInstance) {
-    stopBeaconServer(beaconServerInstance)
-    beaconServerInstance = null
-  }
-  closeLogger()
+  stopDaemon()
 })
 
+// Phase 7 §7.2: closing the window closes a VIEW, not the daemon — the
+// admin listener, the beacon, and a loaded model all keep running with no
+// window open. This is the single line that used to make that untrue
+// (`app.quit()` on every platform but darwin, which is Electron's own
+// default there too). An explicit empty handler is required, not merely
+// "delete the listener": Electron's baked-in default behavior for
+// window-all-closed IS to quit, so doing nothing means registering a
+// no-op, not omitting the registration.
+//
+// The daemon still stops on a deliberate quit — the tray's "Quit Redstart"
+// (§7.3) and the admin UI's shutdown route (§7.5) call app.quit() directly,
+// which fires before-quit below regardless of any window state.
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  logEvent('app', 'window_closed', {})
 })
 
-// ---------------------------------------------------------------------------
-// IPC handlers
-// ---------------------------------------------------------------------------
-
-// Per-namespace IPC registrars extracted from setupIpcHandlers(). Shared
-// collaborators are threaded through `deps` so the modules never reach for
-// index.mjs globals. Namespaces still living inline below are migrated one
-// seam per commit; this dispatcher is where each lands as it moves out.
-function registerIpcHandlers(deps) {
-  registerGithubHandlers()
-  registerHardwareHandlers(deps)
-  registerSettingsHandlers(deps)
-  registerAuthHandlers()
-  registerProfilesHandlers(deps)
-  registerToolsHandlers(deps)
-  registerMcpHandlers(deps)
-  registerCapabilitiesHandlers(deps)
-  registerServerHandlers(deps)
-  registerModelsHandlers(deps)
-  // Named getWindow, not getMainWindow — plugins.mjs mirrors models.mjs's own
-  // progress-event dependency name.
-  registerPluginsHandlers({ refreshLiveToolsConfig: deps.refreshLiveToolsConfig, getWindow: deps.getMainWindow })
-}
-
-function setupIpcHandlers() {
-  const userDataDir = app.getPath('userData')
-  refreshLiveToolsConfig = createRefreshLiveToolsConfig(serverState, userDataDir)
-  // Hands tools-definitions.mjs a live read of the plugin registry. Must run
-  // before any tools/list or config build, or plugin tools resolve to no
-  // capability and are neither classified nor bannable.
-  setPluginCapabilityProvider(pluginCapabilities)
-  registerIpcHandlers({
-    execFileAsync,
-    readSettings,
-    writeSettings,
-    resolveBinary,
-    selectBinaryDefaultPath: path.join(__dirname, '..', '..', 'llama-cpp-turboquant', 'build', 'bin', 'Release'),
-    // Resolved lazily on every call — the user can repoint the models folder at
-    // runtime, so a value captured here would go stale.
-    resolveModelsDir,
-    getModelsDir: resolveModelsDir,
-    ensureModelsDir,
-    readProfiles,
-    writeProfiles,
-    buildGatewayConfig,
-    refreshLiveToolsConfig,
-    serverState,
-    getMainWindow: () => mainWindow,
-    buildArgs,
-    parseEvalTokensPerSec,
-    ensureFirewallRule,
-    getLocalIp,
-    // So the external-MCP validator knows which ports are ours and can refuse a
-    // server pointed at Nest itself. Falls back to the documented default when
-    // no profile has been started yet, since the ports are derived from it.
-    getConfiguredPort: () => serverState.lastConfig?.port ?? 19080,
-    userDataDir,
-  })
-}
-
-// ---------------------------------------------------------------------------
-// buildArgs + KV_CACHE_PRESETS live in ./llama-args.mjs (imported above) so the
-// llama-server localhost-only invariant can be unit-tested in isolation without
-// booting Electron. See scripts/test-llama-args.mjs.
-// ---------------------------------------------------------------------------

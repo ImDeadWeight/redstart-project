@@ -1,27 +1,46 @@
 import type { LlamaConfig } from '../types'
+import type { useProfiles } from '../hooks/useProfiles'
+import type { useHardwareAndBinary } from '../hooks/useHardwareAndBinary'
+import type { useAuthSetup } from '../hooks/useAuthSetup'
+import type { useControlPlaneExposure } from '../hooks/useControlPlaneExposure'
+import type { useStartupSettings } from '../hooks/useStartupSettings'
+import type { useShutdown } from '../hooks/useShutdown'
 import { SectionTitle, inputCls } from '../components/ui'
 import { NetworkPanel } from '../panels/NetworkPanel'
+import { ProfilesPanel } from '../panels/ProfilesPanel'
+import { BinaryPanel } from '../panels/BinaryPanel'
 
 export function ConfigTab({
   config, setConfig, networkMode, onToggleNetworkMode,
-  advertisedHost, setAdvertisedHost, localIp,
+  localIp,
   generatedCommand, onGenerateCommand,
+  profilesHook, hw, auth, controlPlaneExposure, startup, shutdown,
 }: {
   config: LlamaConfig
   setConfig: React.Dispatch<React.SetStateAction<LlamaConfig>>
   networkMode: boolean
   onToggleNetworkMode: () => void
-  advertisedHost: string
-  setAdvertisedHost: (host: string) => void
   localIp: string
   generatedCommand: string
   onGenerateCommand: () => void
+  profilesHook: ReturnType<typeof useProfiles>
+  hw: ReturnType<typeof useHardwareAndBinary>
+  auth: ReturnType<typeof useAuthSetup>
+  controlPlaneExposure: ReturnType<typeof useControlPlaneExposure>
+  startup: ReturnType<typeof useStartupSettings>
+  shutdown: ReturnType<typeof useShutdown>
 }) {
   return (
     <>
+      {/* Profile first: everything below describes the profile selected
+          here, so picking or saving one belongs above what it configures,
+          not off in a sidebar disconnected from it. */}
+      <ProfilesPanel profilesHook={profilesHook} />
+      <BinaryPanel hw={hw} />
+
       <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
         <SectionTitle className="mb-4">Configuration</SectionTitle>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {([
             ['ctxSize', 'Context Size'],
             ['batchSize', 'Batch Size'],
@@ -50,7 +69,7 @@ export function ConfigTab({
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-4 gap-4">
+        <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
           <div>
             <label className="block text-xs text-zinc-500 mb-1">GPU Layers <span className="text-zinc-600">(blank = auto)</span></label>
             <input
@@ -102,7 +121,7 @@ export function ConfigTab({
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-3 gap-4">
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <label className="block text-xs text-zinc-500 mb-1">
               KV Cache <span className="text-zinc-600">(TurboQuant)</span>
@@ -118,7 +137,7 @@ export function ConfigTab({
               <option value="aggressive">Aggressive (MoE) — q8_0 / turbo2</option>
             </select>
           </div>
-          <div className="col-span-2 flex items-end">
+          <div className="sm:col-span-2 flex items-end">
             <p className="text-xs text-zinc-500 leading-relaxed">
               {config.kvCache === 'off'
                 ? 'Full-precision f16 KV cache. Largest memory footprint — context is capped by VRAM.'
@@ -148,10 +167,12 @@ export function ConfigTab({
       <NetworkPanel
         networkMode={networkMode}
         onToggleNetworkMode={onToggleNetworkMode}
-        advertisedHost={advertisedHost}
-        setAdvertisedHost={setAdvertisedHost}
         localIp={localIp}
         port={config.port}
+        auth={auth}
+        controlPlaneExposure={controlPlaneExposure}
+        startup={startup}
+        shutdown={shutdown}
       />
 
       <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">

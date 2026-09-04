@@ -1,9 +1,11 @@
 import type { LlamaConfig } from '../types'
 import type { useToolsCatalog } from '../hooks/useToolsCatalog'
 import type { useCapabilities, FolderCap } from '../hooks/useCapabilities'
+import { folderCapAllowCreate } from '../hooks/useCapabilities'
 import type { useExternalMcp } from '../hooks/useExternalMcp'
 import type { usePlugins } from '../hooks/usePlugins'
 import { SectionTitle, TogglePill, btnCls, inputCls } from '../components/ui'
+import { FolderPicker } from '../components/FolderPicker'
 
 // ---------------------------------------------------------------------------
 // Folder-scoped capability card — one component for Documents/SQLite/Vault/
@@ -97,10 +99,16 @@ function FolderCapabilityCard({ caps, cap, title, emptyText, description, active
         <span className="flex-1 min-w-0 text-xs text-zinc-400 truncate">
           {dir || emptyText}
         </span>
-        <button onClick={() => caps.chooseFolder(cap)} disabled={caps.savingCap === cap}
+        <FolderPicker
+          mode="directory"
+          allowCreate={folderCapAllowCreate(cap)}
+          title={`Select the ${title} folder`}
+          startPath={dir ?? undefined}
+          onPick={(picked) => caps.applyFolder(cap, picked)}
+          disabled={caps.savingCap === cap}
           className="px-2.5 py-1 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 rounded text-xs transition-colors flex-shrink-0">
           Choose folder…
-        </button>
+        </FolderPicker>
       </div>
 
       {/* File System is the one read/write capability, so it carries a
@@ -257,7 +265,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
               )}
 
               {restrictOn && (
-                <div className="grid grid-cols-2 gap-6 mb-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-3">
                   {/* Left column: Groups */}
                   <div>
                     <p className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Source Groups</p>

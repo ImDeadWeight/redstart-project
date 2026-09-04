@@ -1,4 +1,5 @@
-// Hardware IPC namespace — machine spec scan and GGUF model picker.
+// Hardware IPC namespace — machine spec scan. (The GGUF model picker moved to
+// a native picker, Phase 4 §4.3 — itself retired in Phase 6 §6.1.)
 //
 // KNOWN BUG (non-NVIDIA VRAM): the fallback below reads
 // Win32_VideoController.AdapterRAM, a 32-bit signed field that saturates at
@@ -6,22 +7,22 @@
 // this number as context next to artifact sizes without drawing a conclusion
 // from it, which is survivable. It must be fixed (registry qwMemorySize) before
 // anything *decides* anything from gpu.vram. See docs/notes/model-browser-plan.md.
-import { dialog } from 'electron'
-import { handle } from './guard.mjs'
+//
+// Handler bodies are exported as plain functions (Phase 1, §1.3 of the
+// headless-admin-plane implementation plan) so an HTTP route can call them
+// directly without dragging IPC registration in — importing this module never
+// registers anything; only registerHardwareHandlers() does that.
 
-export function registerHardwareHandlers({ execFileAsync, getModelsDir }) {
-  // --- Hardware ---
+export async function scanHardware({ execFileAsync }) {
+  const specs = {
+    cpu: { name: '', cores: 0, threads: 0, architecture: process.arch, supportsAVX: false },
+    gpu: { name: '', vram: 0, vramFree: 0, cudaAvailable: false },
+    memory: { total: 0, available: 0 },
+    os: { platform: process.platform, arch: process.arch },
+  }
 
-  handle('hardware:scan', async () => {
-    const specs = {
-      cpu: { name: '', cores: 0, threads: 0, architecture: process.arch, supportsAVX: false },
-      gpu: { name: '', vram: 0, vramFree: 0, cudaAvailable: false },
-      memory: { total: 0, available: 0 },
-      os: { platform: process.platform, arch: process.arch },
-    }
-
-    // Single PowerShell call queries everything and returns JSON — no wmic, no header-row parsing bug
-    const psScript = `
+  // Single PowerShell call queries everything and returns JSON — no wmic, no header-row parsing bug
+  const psScript = `
 $r = @{ cpu = @{ name=''; cores=0; threads=0 }; memory = @{ totalBytes=0; availableBytes=0 }; gpu = @{ name=''; vramMb=0; vramFreeMb=0; cuda=$false } }
 try {
   $c = Get-CimInstance Win32_Processor | Select-Object -First 1
@@ -61,39 +62,38 @@ if (-not $r.gpu.cuda) {
 }
 $r | ConvertTo-Json -Compress
 `
-    try {
-      const out = await execFileAsync('powershell', [
-        '-NoProfile', '-NonInteractive', '-Command', psScript,
-      ])
-      const raw = JSON.parse(out.stdout.trim())
-      specs.cpu.name    = raw.cpu?.name    || ''
-      specs.cpu.cores   = raw.cpu?.cores   || 0
-      specs.cpu.threads = raw.cpu?.threads || 0
-      specs.memory.total       = (raw.memory?.totalBytes || 0) / (1024 ** 3)
-      specs.memory.available   = (raw.memory?.availableBytes || 0) / (1024 ** 3)
-      specs.gpu.name           = raw.gpu?.name   || ''
-      specs.gpu.vram           = raw.gpu?.vramMb || 0
-      specs.gpu.vramFree       = raw.gpu?.vramFreeMb || 0
-      specs.gpu.cudaAvailable  = !!raw.gpu?.cuda
-      specs.cpu.supportsAVX    = /AVX/i.test(specs.cpu.name) ||
-                                  /AVX/i.test(process.env.PROCESSOR_IDENTIFIER || '')
-    } catch (e) {
-      console.error('Hardware scan error:', e)
-    }
+  try {
+    const out = await execFileAsync('powershell', [
+      '-NoProfile', '-NonInteractive', '-Command', psScript,
+    ])
+    const raw = JSON.parse(out.stdout.trim())
+    specs.cpu.name    = raw.cpu?.name    || ''
+    specs.cpu.cores   = raw.cpu?.cores   || 0
+    specs.cpu.threads = raw.cpu?.threads || 0
+    specs.memory.total       = (raw.memory?.totalBytes || 0) / (1024 ** 3)
+    specs.memory.available   = (raw.memory?.availableBytes || 0) / (1024 ** 3)
+    specs.gpu.name           = raw.gpu?.name   || ''
+    specs.gpu.vram           = raw.gpu?.vramMb || 0
+    specs.gpu.vramFree       = raw.gpu?.vramFreeMb || 0
+    specs.gpu.cudaAvailable  = !!raw.gpu?.cuda
+    specs.cpu.supportsAVX    = /AVX/i.test(specs.cpu.name) ||
+                                /AVX/i.test(process.env.PROCESSOR_IDENTIFIER || '')
+  } catch (e) {
+    console.error('Hardware scan error:', e)
+  }
 
-    return specs
-  })
+  return specs
+}
 
-  handle('hardware:select-model', async () => {
-    // Open in the Redstart models folder so a model downloaded in the Models
-    // tab is the first thing the user sees here — the two halves of "download
-    // then select" are otherwise unconnected.
-    const defaultPath = getModelsDir?.() || undefined
-    const result = await dialog.showOpenDialog({
-      properties: ['openFile'],
-      defaultPath,
-      filters: [{ name: 'GGUF Models', extensions: ['gguf'] }, { name: 'All Files', extensions: ['*'] }],
-    })
-    return result.canceled ? null : result.filePaths[0]
-  })
+// selectModelFile() retired — Phase 4 §4.3 moved model-file picking onto
+// FolderPicker.tsx, which calls admin/browse-routes.mjs's browse:list
+// instead of a dedicated dialog here (Phase 6 §6.1 later retired the native
+// dialog it briefly grew as a middle step). The renderer already knows the
+// models dir (settings.getModelsDir()) and passes it through as
+// FolderPicker's `defaultPath`, so nothing is lost.
+
+export function hardwareHandlers(deps) {
+  return {
+    'hardware:scan': async () => scanHardware(deps),
+  }
 }

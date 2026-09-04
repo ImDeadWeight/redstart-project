@@ -1,23 +1,26 @@
 // =============================================================================
 // Server address derivation for the Network panel.
 // =============================================================================
-// Three URLs are offered because no single one reaches every client:
+// Two URLs are offered because no single one reaches every client:
 //
 //   ip       — always works, no name resolution, works fully offline. The only
 //              universal option, and the one behind the QR code.
-//   mdns     — resolves on iOS, macOS, Windows 10 1703+, and Linux with avahi
-//              + nss-mdns. Android does NOT resolve .local for browser
-//              navigation, so this can never be the primary path.
 //   sslip    — public wildcard DNS that maps an encoded IP back to itself, so
 //              it resolves through the client's normal DNS resolver. This is
 //              what gets Android a working *hostname*. Costs an internet DNS
 //              lookup, and routers with DNS-rebind protection (pfSense, some
 //              OpenWRT/Fritz!Box setups) refuse public names pointing at
 //              private IPs, so it is offered as an option, never a default.
+//
+// A third option, mDNS (`redstart.local`), was retired in Phase 6.5: Android's
+// resolver never answered `.local` lookups for browser navigation, so a name
+// that failed on the one platform most clients are wasn't worth the UDP 5353
+// firewall rule and the elevated-prompt cost of keeping it. See
+// docs/notes/headless-admin-plane-implementation.md §6.5 for the record.
 // =============================================================================
 
 export type ServerAddress = {
-  key: 'ip' | 'mdns' | 'sslip'
+  key: 'ip' | 'sslip'
   url: string
   label: string
   note: string
@@ -37,7 +40,7 @@ function withPort(host: string, port: number): string {
   return port === 80 ? `http://${host}` : `http://${host}:${port}`
 }
 
-export function buildAddresses(localIp: string, advertisedHost: string, port: number): ServerAddress[] {
+export function buildAddresses(localIp: string, port: number): ServerAddress[] {
   const out: ServerAddress[] = []
 
   if (localIp && localIp !== '127.0.0.1') {
@@ -46,16 +49,6 @@ export function buildAddresses(localIp: string, advertisedHost: string, port: nu
       url: withPort(localIp, port),
       label: 'Direct IP',
       note: 'Works on every device, including Android. No DNS involved.',
-    })
-  }
-
-  const host = advertisedHost.trim()
-  if (host && !/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
-    out.push({
-      key: 'mdns',
-      url: withPort(host, port),
-      label: 'mDNS name',
-      note: 'iPhone, Mac, Windows, Linux with avahi. Not Android.',
     })
   }
 

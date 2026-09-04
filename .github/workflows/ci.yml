@@ -87,6 +87,12 @@ jobs:
       - name: "Security: llama-server localhost-only args"
         run: node scripts/test-llama-args.mjs
 
+      # binaryPathRejection() guards spawn()'s first argument and had no
+      # coverage at all before 8A.3 made it per-platform. The POSIX branch's
+      # positive cases only run for real here — chmod is inert on win32.
+      - name: "Security: server binary name + path validation"
+        run: node scripts/test-server-binary.mjs
+
       - name: "Security: model downloads (host allowlist, containment, checksums)"
         run: node scripts/test-model-download.mjs
 
@@ -101,6 +107,25 @@ jobs:
 
       - name: "Durability: atomic JSON state writes"
         run: node scripts/test-json-store.mjs
+
+      - name: "Security: secrets provider seam + legacy ciphertext"
+        run: node scripts/test-secrets.mjs
+
+      # Trap 5.3 — the one step in the headless-admin-plane pass that can
+      # destroy stored credentials silently. Nearly every case here asserts a
+      # FAILURE path: what survives when a secret cannot be read, what is left
+      # behind when the write fails, what happens to a populated target.
+      - name: "Security: secrets re-key migration (trap 5.3)"
+        run: node scripts/test-secrets-migration.mjs
+
+      - name: "Process supervision: reap by PID, never by name"
+        run: node scripts/test-process-supervision.mjs
+
+      # The daemon's own pid file — what `npm run daemon:stop` signals. Every
+      # interesting case is one where the file is lying: stale after a hard
+      # kill, or a pid that has been recycled by an unrelated process.
+      - name: "Supervision: daemon pid file (stale + pid reuse)"
+        run: node scripts/test-daemon-pidfile.mjs
 
       - name: "Security: MCP plugin registry validation"
         run: node scripts/test-plugin-registry.mjs
@@ -135,14 +160,32 @@ jobs:
       - name: "Security: auth / sessions / roles"
         run: node scripts/test-auth.mjs
 
+      - name: "Security: session persistence / plane binding"
+        run: node scripts/test-sessions.mjs
+
       - name: "Security: gateway routes / request rewriting"
         run: node scripts/test-gateway-routes.mjs
 
-      - name: "Security: preload/main IPC contract"
-        run: node scripts/test-ipc-contract.mjs
+      - name: "Security: control plane (admin listener authz + static allowlist)"
+        run: node scripts/test-admin-listener.mjs
 
-      - name: "Security: IPC sender guard / trust boundary"
-        run: node scripts/test-ipc-guard.mjs
+      - name: "Security: bootstrap token / control-plane login"
+        run: node scripts/test-admin-bootstrap.mjs
+
+      - name: "Security: control-plane API coverage + gating"
+        run: node scripts/test-admin-api.mjs
+
+      - name: "Security: server-side directory browser (Phase 4)"
+        run: node scripts/test-browse-routes.mjs
+
+      - name: "Security: shared event broker (Phase 5)"
+        run: node scripts/test-event-broker.mjs
+
+      - name: "Security: llama-server process log (Phase 5)"
+        run: node scripts/test-process-log.mjs
+
+      - name: "Security: control-plane live feed / SSE (Phase 5)"
+        run: node scripts/test-admin-events.mjs
 
       - name: "Security: MCP capability gating"
         run: node scripts/test-mcp-capabilities.mjs
@@ -155,6 +198,13 @@ jobs:
 
       - name: "Security: connector contract conformance"
         run: node scripts/test-connector-contract.mjs
+
+      # The only suite that runs the actual daemon rather than importing its
+      # modules — and the only place the headless entrypoint is exercised at
+      # all. Linux, no display, no Electron, which is exactly the platform
+      # Phase 8A exists for.
+      - name: "Daemon: nestd boots, serves, and stops (smoke)"
+        run: node scripts/test-daemon-smoke.mjs
 
       - name: "Security: containment / SSRF / beacon / download endpoint (vitest)"
         run: npm --prefix src/chat-ui run test:security

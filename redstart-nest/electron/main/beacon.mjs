@@ -1,14 +1,13 @@
 'use strict'
 
 import { createServer } from 'http'
+import { BEACON_PORT } from './ports.mjs'
 
 // ---------------------------------------------------------------------------
 // Beacon — lightweight discovery endpoint for Redstart Twig and other
 // clients. Returns a minimal payload so the beacon no longer leaks
 // configuration details (version, auth state, MCP server list, URLs).
 // ---------------------------------------------------------------------------
-
-const BEACON_PORT = 8765
 
 // bindPort defaults to the well-known beacon port; callers (tests) may pass 0
 // to bind an ephemeral port and avoid colliding with a running instance.

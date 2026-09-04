@@ -12,7 +12,10 @@ import * as path from 'node:path'
 const base = 'electron/main'
 // ../shared holds repo-level modules (stdio MCP supervisor) imported by both
 // nest's main process and twig's — checked here since nest's CI runs this.
-const dirs = [base, path.join(base, 'ipc'), path.join(base, 'gateway'), '../shared']
+// 'bin' is the headless daemon entrypoint (Phase 8A.2). It is the one file in
+// the tree that no test imports and no bundler compiles, so a syntax error in
+// it would otherwise surface only when someone actually ran the daemon.
+const dirs = [base, path.join(base, 'ipc'), path.join(base, 'gateway'), path.join(base, 'admin'), '../shared', 'bin']
 
 let count = 0
 for (const dir of dirs) {
@@ -23,4 +26,4 @@ for (const dir of dirs) {
   }
 }
 
-console.log(`node --check clean: ${count} files under electron/main + shared`)
+console.log(`node --check clean: ${count} files under electron/main + shared + bin`)
