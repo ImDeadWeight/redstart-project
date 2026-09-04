@@ -8,7 +8,7 @@
 // =============================================================================
 
 import type {
-  HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup,
+  HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup, ToolContextEstimate,
   ExternalMcpServer, LlamaConfig, ClientApp, ControlPlaneState, StartupState,
   CatalogModel, ModelDetail, ModelDescription, ModelArtifact, LocalModelFile, DownloadProgress,
 } from '../types'
@@ -156,7 +156,7 @@ export type RedstartAPI = {
     testPostgres: (connectionString?: string) => Promise<{ ok: boolean; message: string }>
     setDocumentsFolder: (config: { outputDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
     setSqlite: (config: { rootDir?: string; maxRows?: number; enabled?: boolean }) => Promise<{ ok: boolean }>
-    estimateToolContext: (config: LlamaConfig) => Promise<{ toolCount: number; approxTokens: number }>
+    estimateToolContext: (config: LlamaConfig) => Promise<ToolContextEstimate>
     setVault: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
     setGit: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
     setFileSystem: (config: { rootDir?: string; enabled?: boolean; allowWrite?: boolean; allowDestructive?: boolean }) => Promise<{ ok: boolean }>

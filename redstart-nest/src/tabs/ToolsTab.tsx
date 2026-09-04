@@ -517,16 +517,40 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
           ))}
         </div>
 
+        {/* Two numbers, side by side and labelled, because they measure
+            different things. The estimate describes the tools THIS PROFILE
+            would serve over MCP; the observed line is what the last real
+            request carried, which is a larger set (the payload is composed
+            client-side, and the gateway adds a system prompt on top) and is
+            the only one that can say what a request actually costs. Collapsing
+            them into one number would have to be wrong about one of them. */}
         {toolContextEstimate && toolContextEstimate.toolCount > 0 && (
           <p className={`text-xs mt-4 ${
             toolContextEstimate.approxTokens > config.ctxSize * 0.25 ? 'text-amber-400' : 'text-zinc-500'
           }`}>
-            {toolContextEstimate.toolCount} active tool{toolContextEstimate.toolCount === 1 ? '' : 's'} ≈ {toolContextEstimate.approxTokens.toLocaleString()} tokens of context on every request
+            {toolContextEstimate.toolCount} active tool{toolContextEstimate.toolCount === 1 ? '' : 's'} in this profile ≈ {toolContextEstimate.approxTokens.toLocaleString()} tokens of context on every request
             {toolContextEstimate.approxTokens > config.ctxSize * 0.25
               ? ` — over a quarter of your ${config.ctxSize.toLocaleString()}-token window. Consider enabling fewer tools per profile.`
               : ''}
           </p>
         )}
+        {toolContextEstimate?.observed && (() => {
+          const o = toolContextEstimate.observed
+          const total = o.toolTokens + o.promptTokens
+          const ctx = o.ctxSize ?? config.ctxSize
+          return (
+            <p className={`text-xs mt-1 ${total > ctx * 0.5 ? 'text-amber-400' : 'text-zinc-500'}`}>
+              Last actual request: {o.toolsSent} tool{o.toolsSent === 1 ? '' : 's'} ≈ {o.toolTokens.toLocaleString()} tokens,
+              plus {o.promptTokens.toLocaleString()} for the prompt and conversation — {total.toLocaleString()} of {ctx.toLocaleString()}.
+              {o.toolsOffered > o.toolsAfterBans
+                ? ` ${o.toolsOffered - o.toolsAfterBans} of the ${o.toolsOffered} the client offered were withheld by policy.`
+                : ''}
+              {o.toolsAfterBans > o.toolsSent
+                ? ` Tool retrieval left out ${o.toolsAfterBans - o.toolsSent} more.`
+                : ''}
+            </p>
+          )
+        })()}
       </>) : (
         <p className="text-xs text-zinc-600">Enable tools to let the model use web access and local capabilities via the built-in MCP server. Settings are saved with the active profile.</p>
       )}

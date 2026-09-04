@@ -42,6 +42,7 @@ await import('./electron-stub.mjs')
 
 const { startGateway, stopGateway } = await import('../electron/main/tools-gateway.mjs')
 const { updateGatewayConfig } = await import('../electron/main/tools-gateway.mjs')
+const { observedWireCost } = await import('../electron/main/tool-filter.mjs')
 const { setAuthRequired, createOwner, createAccount } = await import('../electron/main/auth.mjs')
 
 const baseConfig = { allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 }
@@ -607,6 +608,67 @@ async function main() {
     const res = await completions({ messages: [{ role: 'user', content: 'hello' }] })
     assert(res.status === 200, `expected 200, got ${res.status}`)
     assert(!lastForwarded.tools, 'an empty request grew a tools array')
+    updateGatewayConfig(baseConfig)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Making the number honest. The Tools tab's estimate has always described a
+  // different set from the one that goes on the wire — it walks the providers
+  // Nest would serve over MCP, while the payload is composed client-side and
+  // the gateway then adds a prompt. Retrieval did not make that wrong; it made
+  // it matter. These pin the wire-side measurement the gateway now records.
+  // ---------------------------------------------------------------------------
+  console.log('\n-- what actually went on the wire --')
+
+  await test('🔍 the recorded cost counts what was forwarded, not what was offered', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 8192, disabledTools: ['git_diff'] })
+    await completions({
+      messages: [{ role: 'user', content: 'what changed' }],
+      tools: [toolDef('git_status'), toolDef('git_diff')],
+    })
+    const observed = observedWireCost()
+    assert(observed, 'no cost was recorded for a forwarded completion')
+    assert(observed.toolsOffered === 2, `offered was ${observed.toolsOffered}, expected 2`)
+    assert(observed.toolsAfterBans === 1, `after bans was ${observed.toolsAfterBans}`)
+    assert(observed.toolsSent === 1, `sent was ${observed.toolsSent} — the banned tool was counted as forwarded`)
+    assert(observed.toolTokens > 0, 'the forwarded tools were costed at zero')
+    assert(observed.ctxSize === 8192, `ctxSize was ${observed.ctxSize}`)
+    updateGatewayConfig(baseConfig)
+  })
+
+  await test('🔍 the prompt the gateway adds is counted, since the client never counted it', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 8192 })
+    await completions({ messages: [{ role: 'user', content: 'hi' }], tools: [toolDef('git_status')] })
+    const observed = observedWireCost()
+    const userMessageTokens = Math.ceil(JSON.stringify([{ role: 'user', content: 'hi' }]).length / 4)
+    assert(observed.promptTokens > userMessageTokens,
+      `the injected prompt was not counted: ${observed.promptTokens} vs a bare ${userMessageTokens}`)
+    updateGatewayConfig(baseConfig)
+  })
+
+  await test('a request with no tools still records a cost', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 8192 })
+    await completions({ messages: [{ role: 'user', content: 'hello' }] })
+    const observed = observedWireCost()
+    assert(observed.toolsOffered === 0 && observed.toolsSent === 0, 'a tool-free request invented tools')
+    assert(observed.promptTokens > 0, 'a tool-free request costed its prompt at zero')
+    assert(observed.filtered === false, 'a tool-free request claimed it was filtered')
+    updateGatewayConfig(baseConfig)
+  })
+
+  await test('🔒 the record carries counts and tokens only — never names or content', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 8192 })
+    await completions({
+      messages: [{ role: 'user', content: 'my password is hunter2' }],
+      tools: [toolDef('git_status')],
+    })
+    const serialized = JSON.stringify(observedWireCost())
+    assert(!/hunter2/.test(serialized), `message content leaked into the record: ${serialized}`)
+    assert(!/git_status/.test(serialized), `a tool name leaked into the record: ${serialized}`)
+    for (const key of Object.keys(observedWireCost())) {
+      assert(typeof observedWireCost()[key] === 'number' || typeof observedWireCost()[key] === 'boolean' || observedWireCost()[key] === null,
+        `${key} is not a number, a boolean or null — this record is shown to admins and must stay countable`)
+    }
     updateGatewayConfig(baseConfig)
   })
 

@@ -14,6 +14,7 @@ import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES, CLIENT_APPS } from
 import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup } from '../tools-storage.mjs'
 import { updateGatewayConfig, getGatewayPort } from '../tools-gateway.mjs'
 import { updateMcpConfig, estimateActiveToolTokens } from '../mcp-server.mjs'
+import { observedWireCost } from '../tool-filter.mjs'
 import { syncFilesystemProvider } from '../filesystem-mcp-provider.mjs'
 
 export function listAllTools() {
@@ -60,10 +61,26 @@ export function applyToolsConfig(llamaConfig, { buildGatewayConfig, userDataDir 
   return true
 }
 
-// Estimates the per-request context cost of the tool set the given profile
-// config would activate — same resolution path as an actual launch.
+/**
+ * What a profile's tools cost, from both directions.
+ *
+ * `toolCount`/`approxTokens` are the CONFIGURATION-TIME estimate: the tools
+ * this config would serve over MCP, resolved the same way an actual launch
+ * resolves them. It is a hint about a profile, and it under-counts a real
+ * request by construction — the completions payload is composed client-side
+ * (live MCP connections, health-check tools, a client app's own local tools)
+ * and the gateway then adds a system prompt the client never counted.
+ *
+ * `observed` is the OTHER number: what the last completion actually forwarded.
+ * Null until one has been. The two are reported side by side rather than
+ * reconciled into one, because they measure different things and a single
+ * number would have to be wrong about one of them.
+ */
 export function estimateToolsContext(llamaConfig, { buildGatewayConfig }) {
-  return estimateActiveToolTokens(buildGatewayConfig(llamaConfig))
+  return {
+    ...estimateActiveToolTokens(buildGatewayConfig(llamaConfig)),
+    observed: observedWireCost(),
+  }
 }
 
 export function toolsHandlers(deps) {

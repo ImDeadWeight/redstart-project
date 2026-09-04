@@ -29,7 +29,7 @@ import { handleAuthRoute } from './gateway/auth-routes.mjs'
 import { isConversationRoute, handleConversationRoute } from './gateway/conversation-routes.mjs'
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
-import { filterRequestTools, estimateMessagesTokens } from './tool-filter.mjs'
+import { filterRequestTools, estimateMessagesTokens, recordWireCost } from './tool-filter.mjs'
 
 let gatewayServer = null
 
@@ -533,6 +533,8 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         // substantiation rule in system-prompt.mjs — a claim is made only when
         // the request substantiates it — and the rule can only hold if the
         // request has already been narrowed.
+        const toolsOffered = Array.isArray(parsed.tools) ? parsed.tools.length : 0
+
         parsed = enforceToolAllowList(parsed, effectiveConfig)
 
         // RETRIEVAL THIRD, and strictly between the two. Bans are a boundary;
@@ -548,6 +550,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         // set. Reserving the messages plus a pins-only prompt gives a LOWER
         // bound on the non-tool cost, which is what breaks the circularity of
         // budgeting for a prompt that does not exist yet.
+        const toolsAfterBans = Array.isArray(parsed.tools) ? parsed.tools.length : 0
         if (Array.isArray(parsed.tools) && parsed.tools.length > 0) {
           const pinsOnlyPrompt = injectSystemContext(
             [...(parsed.messages || [])], effectiveConfig, true,
@@ -571,6 +574,20 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         // presented (spec §8) — never from a header. X-Redstart-Surface stays
         // accepted and inert; the connector-contract suite asserts that.
         parsed.messages = injectSystemContext([...(parsed.messages || [])], effectiveConfig, requestHasTools, authResult.account, requestedMode, authResult.surface, clientToolNamesIn(parsed))
+
+        // What was really forwarded, recorded after every rewrite this block
+        // performs. This is the only place that sees all three numbers at once
+        // — what the client offered, what survived bans and retrieval, and the
+        // prompt the gateway added — and the Tools tab's estimate has never
+        // seen any of them.
+        recordWireCost({
+          toolsOffered,
+          toolsAfterBans,
+          tools: parsed.tools,
+          messages: parsed.messages,
+          ctxSize: effectiveConfig.ctxSize,
+          filtered: toolsAfterBans > 0 && effectiveConfig.toolRetrieval?.enabled === true,
+        })
 
         try {
           forwardModified(res, internalPort, parsed)

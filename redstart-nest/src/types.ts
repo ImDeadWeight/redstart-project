@@ -113,6 +113,36 @@ export type ClientApp = {
   toolNames: string[]
 }
 
+/**
+ * What a profile's tools cost, from both directions — see
+ * electron/main/ipc/tools.mjs.
+ *
+ * `toolCount`/`approxTokens` estimate the tools this PROFILE would serve over
+ * MCP. `observed` is what the last completion actually forwarded, which is a
+ * different and larger set: the payload is composed client-side and the
+ * gateway adds a system prompt on top. Null until a completion has been made,
+ * and that null is meaningful — it is not the same as costing nothing.
+ */
+export type ToolContextEstimate = {
+  toolCount: number
+  approxTokens: number
+  observed: {
+    at: number
+    /** Tools the client sent, before bans and before retrieval. */
+    toolsOffered: number
+    /** What survived the ban filter — the difference from `toolsOffered` is policy. */
+    toolsAfterBans: number
+    /** Tools that actually reached llama-server. */
+    toolsSent: number
+    toolTokens: number
+    /** The composed system prompt plus the conversation. */
+    promptTokens: number
+    ctxSize: number | null
+    /** Whether tool retrieval was switched on for that request. */
+    filtered: boolean
+  } | null
+}
+
 export type CapabilityConfig = {
   postgres: { enabled: boolean; hasConnectionString: boolean; maxRows: number }
   documents: { enabled: boolean; outputDir: string | null }

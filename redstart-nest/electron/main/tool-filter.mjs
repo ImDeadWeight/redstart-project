@@ -174,6 +174,7 @@ export function estimateMessagesTokens(messages) {
 /** Test seam: forget everything cached between requests. */
 export function resetToolFilterState() {
   memory.clear()
+  lastWireCost = null
 }
 
 // ---------------------------------------------------------------------------
@@ -225,4 +226,60 @@ export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, e
   } catch {
     return null
   }
+}
+
+// ---------------------------------------------------------------------------
+// What actually went on the wire
+// ---------------------------------------------------------------------------
+// The Tools tab's estimate walks the providers Nest would serve over MCP. That
+// is a configuration-time hint and it has always UNDER-counted the real cost:
+// `parsed.tools` is composed client-side (live MCP connections, health-check
+// tools, and a client app's own local tools), and the gateway then adds a
+// system prompt the client never accounted for. Retrieval did not make that
+// wrong — it made it matter, because an admin now needs to know what the filter
+// removed as well as what was there to remove.
+//
+// So the gateway records what it actually forwarded, and the estimate is shown
+// beside it rather than instead of it. One observation, overwritten per
+// request: this is a "what is this costing me right now" readout, not a series,
+// and a history would be a log of one account's tool usage with a retention
+// policy to argue about.
+
+/** @type {{ at: number, toolsOffered: number, toolsAfterBans: number, toolsSent: number, toolTokens: number, promptTokens: number, ctxSize: number|null, filtered: boolean }|null} */
+let lastWireCost = null
+
+/**
+ * Record what one completions request really carried. Counts and token
+ * estimates only — no names, no content, nothing an account could be
+ * identified by.
+ *
+ * THREE tool counts, not two, because two would make the reconciliation
+ * dishonest: bans and retrieval both remove tools, and an admin looking at a
+ * shrunken list needs to know which did it. A ban is policy they set; a
+ * retrieval drop is a judgement the scorer made.
+ */
+export function recordWireCost({ toolsOffered, toolsAfterBans, tools, messages, ctxSize, filtered }) {
+  const sent = Array.isArray(tools) ? tools.length : 0
+  lastWireCost = {
+    at: Date.now(),
+    toolsOffered,
+    toolsAfterBans: toolsAfterBans ?? sent,
+    toolsSent: sent,
+    toolTokens: estimateToolTokens(tools ?? []),
+    promptTokens: estimateToolTokens(messages ?? []),
+    ctxSize: Number.isFinite(ctxSize) && ctxSize > 0 ? ctxSize : null,
+    filtered: !!filtered,
+  }
+}
+
+/**
+ * The last observed request cost, or null if no completion has been forwarded
+ * since this daemon started.
+ *
+ * Null is a meaningful answer and must not be papered over with zeros: "no
+ * request has been made yet" and "requests cost nothing" are different, and
+ * only one of them means the estimate beside it is the best available number.
+ */
+export function observedWireCost() {
+  return lastWireCost
 }

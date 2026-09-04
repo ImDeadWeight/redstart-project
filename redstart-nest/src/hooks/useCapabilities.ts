@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, getAPI } from '../api/redstart'
-import type { CapabilityConfig, LlamaConfig } from '../types'
+import type { CapabilityConfig, LlamaConfig, ToolContextEstimate } from '../types'
 
 // Folder-scoped capabilities all share one flow: pick a folder → save+enable,
 // or toggle enabled. Only the IPC method and the config key differ, so one
@@ -44,7 +44,7 @@ export function useCapabilities(config: LlamaConfig) {
   const [pgSaving, setPgSaving] = useState(false)
   const [savingCap, setSavingCap] = useState<FolderCap | null>(null)
   const [scholarVenueFilter, setScholarVenueFilter] = useState('')
-  const [toolContextEstimate, setToolContextEstimate] = useState<{ toolCount: number; approxTokens: number } | null>(null)
+  const [toolContextEstimate, setToolContextEstimate] = useState<ToolContextEstimate | null>(null)
 
   async function loadCapabilities() {
     try {
