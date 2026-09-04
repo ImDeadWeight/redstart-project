@@ -175,3 +175,54 @@ export function estimateMessagesTokens(messages) {
 export function resetToolFilterState() {
   memory.clear()
 }
+
+// ---------------------------------------------------------------------------
+// search_tools
+// ---------------------------------------------------------------------------
+
+/** How many matches a search returns. Enough to choose from, few enough to read. */
+export const SEARCH_RESULT_LIMIT = 10
+
+/**
+ * Rank a tool catalog against a free-text description of what the model wants.
+ *
+ * Shares this module's vector store, so a tool the filter has already embedded
+ * costs nothing to search, and vice versa.
+ *
+ * Returns `{ name, description }` and NEVER a schema. A search result is an
+ * index, not a definition: the names it surfaces become pins on the next turn
+ * (pinsFromMessages), and the tool arrives with its real schema through the
+ * ordinary path — so shipping schemas here would spend the context the whole
+ * feature exists to save.
+ *
+ * Returns null if it cannot rank, which callers must report as a failure rather
+ * than as an empty result: "no tools match" and "the scorer is down" are
+ * different answers and the model should not confuse them.
+ *
+ * @param {{ tools: any[], query: string, limit?: number, embed?: typeof embedTexts }} args
+ * @returns {Promise<{ name: string, description: string }[]|null>}
+ */
+export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, embed = embedTexts }) {
+  if (!Array.isArray(tools) || tools.length === 0) return []
+  if (typeof query !== 'string' || !query.trim()) return null
+
+  try {
+    const missing = store.missingHashes(tools)
+    if (missing.length > 0) {
+      const vectors = await embed(missing.map(m => m.text))
+      if (!vectors) return null
+      store.setMany(missing.map((m, i) => [m.hash, vectors[i]]))
+    }
+    const queryVectors = await embed([query])
+    if (!queryVectors) return null
+
+    return scoreTools({ tools, query: queryVectors[0], store })
+      .slice(0, limit)
+      .map(({ tool }) => ({
+        name: toolName(tool),
+        description: String((tool?.function ?? tool)?.description ?? ''),
+      }))
+  } catch {
+    return null
+  }
+}

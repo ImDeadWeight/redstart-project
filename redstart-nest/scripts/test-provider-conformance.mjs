@@ -217,6 +217,18 @@ const PROVIDERS = [
     badCall: { name: 'scholar_get', arguments: {} }, // missing id
   },
   {
+    // Retrieval's own tool. Its "enabled" switch is the retrieval setting
+    // rather than a capability folder, and its disabled phase is the one that
+    // matters most: with retrieval off it must be neither advertised nor
+    // callable, or a model on an unfiltered server wastes turns searching a
+    // list it can already read in full.
+    name: 'search-tools',
+    tools: ['search_tools'],
+    enable: () => ({ toolRetrieval: { enabled: true } }),
+    advertised: ['search_tools'],
+    badCall: { name: 'search_tools', arguments: {} }, // missing required query
+  },
+  {
     name: 'postgres',
     tools: CAPABILITY_TOOL_NAMES.postgres,
     enable: () => ({ postgres: { enabled: true, connectionString: PG_URL, maxRows: 200 } }),

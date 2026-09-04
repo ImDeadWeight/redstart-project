@@ -288,6 +288,10 @@ export const TOOL_CLASS = {
 }
 
 export const TOOL_CLASSES = {
+  // Retrieval's own tool. It reads a catalog of names and descriptions the
+  // policy gate has already filtered, touches nothing, and leaves the machine
+  // it runs on alone — 'read' is the honest class, stated rather than defaulted.
+  search_tools: 'read',
   // Web (egress governed by the whitelist/SSRF guard, tagged network here)
   web_fetch: 'network',
   web_search: 'network',

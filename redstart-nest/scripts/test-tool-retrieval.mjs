@@ -31,8 +31,11 @@ import {
   pinsFromMessages,
   createSelectionMemory,
 } from '../electron/main/tool-retrieval.mjs'
+import * as searchProvider from '../electron/main/search-tools-provider.mjs'
+import { EMBED_PORT } from '../electron/main/ports.mjs'
 import {
   filterRequestTools,
+  searchTools,
   toolBudget,
   resetToolFilterState,
   CONTEXT_BUDGET_FRACTION,
@@ -862,6 +865,130 @@ await test('🔍 the budget is enforced end to end', async () => {
   assert(out.map(toolName).includes('git_status'), 'the budget dropped the best match first')
 })
 
+
+console.log('\n-- search_tools --')
+
+// A stub embedding server on the real EMBED_PORT, so callTool() runs the whole
+// production path — embedTexts over a socket, the shared vector store, the
+// scorer — rather than through a seam wired in for the test. Keyword axes make
+// the ranking exact.
+const embedStub = http.createServer(async (req, res) => {
+  let raw = ''
+  for await (const chunk of req) raw += chunk
+  const input = JSON.parse(raw).input
+  const data = input.map((text, index) => {
+    const v = [0, 0, 0]
+    if (/git|commit|repo|status/i.test(text)) v[0] = 1
+    if (/document|text|read/i.test(text)) v[1] = 1
+    if (/web|page|fetch/i.test(text)) v[2] = 1
+    if (v.every(x => x === 0)) v[2] = 0.01
+    return { index, embedding: v, object: 'embedding' }
+  })
+  res.setHeader('content-type', 'application/json')
+  res.end(JSON.stringify({ data }))
+})
+await new Promise(resolve => embedStub.listen(EMBED_PORT, '127.0.0.1', resolve))
+resetEmbedFailureLog()
+
+const catalog = [
+  { name: 'git_status', description: 'Show the working-tree status of a git repository' },
+  { name: 'read_document', description: 'Read the text content of a document' },
+  { name: 'web_fetch', description: 'Fetch a web page and return its article text' },
+]
+
+function catalogConfig(extra = {}) {
+  return { toolRetrieval: { enabled: true }, ...extra }
+}
+
+await test('search_tools is advertised only while retrieval is on', () => {
+  assert(searchProvider.toolDefs({}).length === 0, 'a server with retrieval off advertised search_tools')
+  assert(searchProvider.toolDefs({ toolRetrieval: { enabled: false } }).length === 0, 'an explicit off still advertised it')
+  const defs = searchProvider.toolDefs(catalogConfig())
+  assert(defs.length === 1 && defs[0].name === 'search_tools', 'retrieval on did not advertise it')
+  assert(defs[0].inputSchema.required.includes('query'), 'query is not required')
+})
+
+await test('🔒 a result carries names and descriptions, never schemas', async () => {
+  searchProvider.setToolCatalogProvider(() => catalog.map(t => ({
+    ...t,
+    inputSchema: { type: 'object', properties: { secret_parameter: { type: 'string' } } },
+  })))
+  const result = await searchProvider.callTool('search_tools', { query: 'read a document' }, catalogConfig())
+  const text = result.content[0].text
+  assert(!/secret_parameter/.test(text), `a schema was returned: ${text}`)
+  assert(!/inputSchema/.test(text), `a schema field was returned: ${text}`)
+  const rows = JSON.parse(text)
+  assert(rows.every(r => Object.keys(r).sort().join(',') === 'description,name'), `unexpected row shape: ${text}`)
+})
+
+await test('🔒 the catalog it searches is the one the policy gate produced', async () => {
+  // The provider is handed a catalog rather than assembling one. This asserts
+  // the consequence: whatever the gate withheld simply is not there to find, so
+  // a ban cannot be walked around by describing the tool.
+  // Positive control first: with the tool in the catalog, this query finds it.
+  // Without that, the assertion below could pass because the search failed.
+  searchProvider.setToolCatalogProvider(() => catalog)
+  const found = await searchProvider.callTool('search_tools', { query: 'read the text of a document' }, catalogConfig())
+  assert(/read_document/.test(found.content[0].text), `setup: the query should find the tool when it is present: ${found.content[0].text}`)
+
+  searchProvider.setToolCatalogProvider(() => catalog.filter(t => t.name !== 'read_document'))
+  const result = await searchProvider.callTool('search_tools', { query: 'read the text of a document' }, catalogConfig())
+  assert(!result.isError, `the search failed rather than returning results: ${result.content[0].text}`)
+  assert(!/read_document/.test(result.content[0].text), 'a withheld tool was reachable by describing it')
+})
+
+await test('🔍 search_tools never returns itself', async () => {
+  searchProvider.setToolCatalogProvider(() => [
+    ...catalog,
+    { name: 'search_tools', description: 'Find tools that are available but not currently listed' },
+  ])
+  const result = await searchProvider.callTool('search_tools', { query: 'find a tool' }, catalogConfig())
+  assert(!/search_tools/.test(result.content[0].text), 'search_tools offered itself as a result')
+})
+
+await test('🔍 a scorer that is down is reported as such, not as "no matches"', async () => {
+  // Different answers. A model told nothing matched stops looking; one told the
+  // search is unavailable keeps using what it can already see.
+  searchProvider.setToolCatalogProvider(() => catalog)
+  const down = await searchTools({ tools: catalog, query: 'anything', embed: async () => null })
+  assert(down === null, 'a dead embedding server returned a list')
+  const empty = await searchTools({ tools: [], query: 'anything', embed: async () => null })
+  assert(Array.isArray(empty) && empty.length === 0, 'an empty catalog is an empty result, not a failure')
+})
+
+await test('a blank query is refused rather than scored', async () => {
+  searchProvider.setToolCatalogProvider(() => catalog)
+  for (const bad of [{}, { query: '' }, { query: '   ' }, { query: 42 }]) {
+    const result = await searchProvider.callTool('search_tools', bad, catalogConfig())
+    assert(result.isError === true, `${JSON.stringify(bad)} was accepted as a query`)
+  }
+})
+
+await test('🔒 search_tools refuses to run when retrieval is off', async () => {
+  searchProvider.setToolCatalogProvider(() => catalog)
+  const result = await searchProvider.callTool('search_tools', { query: 'read a document' }, { toolRetrieval: { enabled: false } })
+  assert(result.isError === true, 'a call succeeded on a server where retrieval is off')
+})
+
+await test('search_tools declines a call that is not its own', async () => {
+  const result = await searchProvider.callTool('git_status', {}, catalogConfig())
+  assert(result === null, 'the provider answered for a tool it does not own')
+})
+
+await test('🔍 results are ranked, best first', async () => {
+  const embed = async (texts) => texts.map(text => {
+    const v = new Float32Array(3)
+    if (/git|commit|repo/i.test(text)) v[0] = 1
+    if (/document|text/i.test(text)) v[1] = 1
+    if (/web|page/i.test(text)) v[2] = 1
+    if (v.every(x => x === 0)) v[2] = 0.01
+    return v
+  })
+  const ranked = await searchTools({ tools: catalog, query: 'look at recent commits in the repo', embed })
+  assert(ranked[0].name === 'git_status', `wrong first result: ${ranked.map(r => r.name).join(',')}`)
+})
+
+await new Promise(resolve => embedStub.close(resolve))
 
 // ---------------------------------------------------------------------------
 // Summary

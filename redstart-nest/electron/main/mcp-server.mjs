@@ -31,6 +31,7 @@ import * as gitTool from './git-tool.mjs'
 import * as filesystemProvider from './filesystem-mcp-provider.mjs'
 import * as fsDeleteTool from './fs-delete-tool.mjs'
 import * as scholarTool from './scholar-tool.mjs'
+import * as searchToolsProvider from './search-tools-provider.mjs'
 import { pluginProviders, stopAllPlugins } from './plugin-provider.mjs'
 import {
   classifyTool,
@@ -45,7 +46,10 @@ import {
 } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 
-const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool]
+// searchToolsProvider is LAST, and deliberately: it is the only provider whose
+// job is to describe the others, so it must never shadow one of them on a name
+// collision, and its own tool must never appear in the catalog it searches.
+const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, searchToolsProvider]
 
 // Resolved per call, never captured in a const: a plugin installed or removed
 // while Nest is running must take effect without a restart. Built-ins come
@@ -54,6 +58,41 @@ const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool
 function resolveProviders() {
   return [...BUILTIN_PROVIDERS, ...pluginProviders()]
 }
+
+/**
+ * Every tool this config would actually serve: the registry, deduplicated by
+ * name, with the policy gate applied.
+ *
+ * ONE walk, three consumers — tools/list, the Tools tab's estimate, and
+ * search_tools' catalog. They were two separate copies of the same loop before
+ * search_tools needed a third, and a search that walked its own copy could have
+ * offered a tool tools/list withholds, which is precisely the ban-as-speed-bump
+ * failure D5 exists to prevent.
+ *
+ * @param {any} cfg
+ * @returns {any[]}
+ */
+export function activeToolCatalog(cfg) {
+  const tools = []
+  const seen = new Set()
+  for (const provider of resolveProviders()) {
+    for (const tool of provider.toolDefs(cfg)) {
+      if (seen.has(tool.name)) {
+        console.warn(`MCP: duplicate tool name "${tool.name}" — keeping the first provider's definition. Namespace your tool names.`)
+        continue
+      }
+      seen.add(tool.name)
+      if (!evaluateToolPolicy(tool.name, cfg).allowed) continue
+      tools.push(tool)
+    }
+  }
+  return tools
+}
+
+// The provider that describes the others cannot import the registry it needs —
+// it IS one of the entries in it. Handed in here instead, the same way
+// tools-definitions.mjs receives its plugin capability provider.
+searchToolsProvider.setToolCatalogProvider(activeToolCatalog)
 
 export const ALLOWED_CORS_HEADERS =
   'Content-Type, Authorization, mcp-protocol-version, mcp-session-id, last-event-id'
@@ -210,20 +249,7 @@ async function handleRpc(msg, send, ctx = { account: null }) {
   }
 
   if (method === 'tools/list') {
-    const tools = []
-    const seen = new Set()
-    for (const provider of resolveProviders()) {
-      for (const tool of provider.toolDefs(cfg)) {
-        if (seen.has(tool.name)) {
-          console.warn(`MCP: duplicate tool name "${tool.name}" — keeping the first provider's definition. Namespace your tool names.`)
-          continue
-        }
-        seen.add(tool.name)
-        if (!evaluateToolPolicy(tool.name, cfg).allowed) continue
-        tools.push(annotateTool(tool))
-      }
-    }
-    send({ jsonrpc: '2.0', id, result: { tools } })
+    send({ jsonrpc: '2.0', id, result: { tools: activeToolCatalog(cfg).map(annotateTool) } })
     return
   }
 
@@ -471,15 +497,6 @@ export function getMcpServerRunning() {
 // the Tools UI so users see why "turn everything on" is a bad default.
 // chars/4 is the usual rough token heuristic; close enough for a warning.
 export function estimateActiveToolTokens(config) {
-  const seen = new Set()
-  const tools = []
-  for (const provider of resolveProviders()) {
-    for (const tool of provider.toolDefs(config)) {
-      if (seen.has(tool.name)) continue
-      seen.add(tool.name)
-      if (!evaluateToolPolicy(tool.name, config).allowed) continue
-      tools.push(tool)
-    }
-  }
+  const tools = activeToolCatalog(config)
   return { toolCount: tools.length, approxTokens: Math.ceil(JSON.stringify(tools).length / 4) }
 }
