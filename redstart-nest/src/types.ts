@@ -180,18 +180,11 @@ export type LlamaConfig = {
   kvCache?: 'off' | 'conservative' | 'balanced' | 'aggressive'
   additionalArgs?: string
   tools?: ProfileTools
-  // Whether THIS profile wants the control plane (admin listener) reachable
-  // on the network when it's selected — separate from networkMode (the data
-  // plane) for the same reason ControlPlaneState is its own type: a control
-  // plane on the LAN by default is a real security decision (see
-  // headless-admin-plane-plan.md decision 4/19), not one to make silently
-  // for every install. Tying it to profiles instead of a bare global default
-  // means "my home profile opens the admin panel to the LAN, my laptop-only
-  // profile doesn't" without a first-run prompt. Undefined (older saved
-  // profiles, or one never touched this session) means "leave the current
-  // exposure alone" — only a profile that explicitly saved a value ever
-  // changes it on load.
-  exposeControlPlane?: boolean
+  // NOTE: control-plane exposure deliberately does NOT live here. A profile
+  // describes how the MODEL runs; where the admin listener binds is a property
+  // of the machine. Selecting a profile used to rebind the control plane as a
+  // side effect, which put a network-exposure change behind a dropdown whose
+  // label promised a model configuration. See ControlPlaneState.
 }
 
 export type ServerState = 'stopped' | 'starting' | 'running' | 'stopping'

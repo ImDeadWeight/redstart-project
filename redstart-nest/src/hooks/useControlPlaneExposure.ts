@@ -21,11 +21,10 @@ export function useControlPlaneExposure(showStatus: (msg: string, ttlMs?: number
   // that answers on every interface) — the same two values the data plane's
   // own toggle picks between in ipc/server.mjs.
   //
-  // Exposed separately from toggle() so a profile load (useProfiles'
-  // selectProfile, via exposeControlPlane) can request a specific value
-  // rather than flip whatever is currently set — and so it can no-op when
-  // the profile's saved value already matches, instead of firing a status
-  // message and a rebind for a change that isn't one.
+  // Internal, and deliberately no longer returned: this used to be handed to
+  // useProfiles so a profile load could request a specific exposure, which
+  // made selecting a profile rebind the control plane. Exposure changes now
+  // have exactly one entry point, the toggle a person clicks.
   async function setExposure(next: boolean) {
     if (state?.exposed === next) return
     const result = await api().admin.setBindHost(next ? '0.0.0.0' : '127.0.0.1')
@@ -43,5 +42,5 @@ export function useControlPlaneExposure(showStatus: (msg: string, ttlMs?: number
     await setExposure(!state?.exposed)
   }
 
-  return { controlPlane: state, toggleExposure: toggle, setExposure }
+  return { controlPlane: state, toggleExposure: toggle }
 }

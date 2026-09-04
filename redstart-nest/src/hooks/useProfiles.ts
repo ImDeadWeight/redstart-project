@@ -3,14 +3,16 @@ import { api, getAPI } from '../api/redstart'
 import type { HardwareSpecs, LlamaConfig } from '../types'
 
 // Saved launch profiles: list/load/save + hardware-derived defaults.
-// onExposeControlPlaneLoaded pushes a loaded profile's control-plane exposure
-// (LlamaConfig.exposeControlPlane) back up to App — a separate callback
-// rather than folding into setConfig because applying it means an actual
-// rebind (useControlPlaneExposure.setExposure), not just a state update.
+//
+// Loading a profile changes MODEL configuration and nothing else. It used to
+// also rebind the admin listener (via a saved exposeControlPlane field), so
+// picking "Office" from a dropdown could put the control plane on the LAN —
+// a network-exposure change with no confirmation, behind a label that promised
+// a model configuration. Exposure is machine state now and lives only in
+// useControlPlaneExposure.
 export function useProfiles(
   config: LlamaConfig,
   setConfig: React.Dispatch<React.SetStateAction<LlamaConfig>>,
-  onExposeControlPlaneLoaded: (expose: boolean) => void,
   showStatus: (msg: string, ttlMs?: number) => void,
 ) {
   const [profiles, setProfiles] = useState<string[]>([])
@@ -36,11 +38,13 @@ export function useProfiles(
     if (!name) { setSelectedProfile(''); return }
     const loaded = await api().profiles.load(name)
     if (loaded) {
-      setConfig(prev => ({ ...loaded, networkMode: prev.networkMode }))
-      // Undefined means this profile never recorded an opinion (saved before
-      // the field existed, or saved without ever touching the toggle) —
-      // leave the control plane's current exposure exactly as it is.
-      if (loaded.exposeControlPlane !== undefined) onExposeControlPlaneLoaded(loaded.exposeControlPlane)
+      // networkMode and exposeControlPlane are both machine state. The latter
+      // is no longer part of LlamaConfig, but profiles.json files written
+      // before that still carry one — stripped here rather than ignored, so a
+      // stale value cannot be written back out by the next "Save as Profile".
+      const { exposeControlPlane: _machineState, ...modelConfig } =
+        loaded as LlamaConfig & { exposeControlPlane?: boolean }
+      setConfig(prev => ({ ...modelConfig, networkMode: prev.networkMode }))
       setSelectedProfile(name)
     }
   }

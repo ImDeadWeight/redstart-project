@@ -132,14 +132,17 @@ export function NetworkPanel({
         </div>
 
         {/* The control plane's OWN exposure — a separate switch from the data
-            plane's login requirement above. See headless-admin-plane-plan.md
-            decision 4: availability is always on, this only decides whether
-            it's reachable off this machine. Also settable per-profile via
-            LlamaConfig.exposeControlPlane (headless-admin-plane-implementation.md,
-            "Deviations from the design" §6) — this toggle is still the source of
-            truth; selecting a
-            profile that saved a different value changes it the same way this
-            click does. */}
+            plane's login requirement above, and from the Local network toggle
+            at the top of this panel. Availability is always on; this decides
+            only whether it is reachable off this machine.
+
+            The two axes are independent, which means the admin plane can be on
+            the LAN while the chat API is not. That is a legitimate and useful
+            configuration (administer the box remotely, serve inference only
+            locally) but it is not one anybody can infer from two switches, so
+            the copy below states the resulting topology outright rather than
+            pointing at an address list that is not rendered when Local network
+            is off. */}
         <div>
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <TogglePill checked={!!controlPlane?.exposed} onToggle={toggleExposure} />
@@ -148,11 +151,30 @@ export function NetworkPanel({
             </span>
           </label>
           <p className="mt-1 text-xs text-zinc-600">
-            Lets another device sign in here with the credentials above, at port{' '}
-            {controlPlane?.port ?? 19083} on the same address(es) listed above. Saved with
-            whichever profile is active when you save it, so switching profiles can restore it.
+            Lets another device sign in here with the credentials above. This is a setting for
+            this machine — it is not part of a profile, and switching profiles never changes it.
           </p>
-          <ControlPlaneNotice state={controlPlane} />
+          {controlPlane?.exposed && (
+            <dl className="mt-2 space-y-1 text-[11px]">
+              <div className="flex gap-2">
+                <dt className="w-24 shrink-0 text-zinc-600">Admin panel</dt>
+                <dd className="font-mono text-amber-300">
+                  {localIp ? `${localIp}:${controlPlane.port}` : `:${controlPlane.port}`}
+                  <span className="ml-2 font-sans text-zinc-500">your local network</span>
+                </dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="w-24 shrink-0 text-zinc-600">Chat API</dt>
+                <dd className="font-mono text-zinc-400">
+                  {networkMode ? `${localIp}:${port}` : `127.0.0.1:${port}`}
+                  <span className="ml-2 font-sans text-zinc-500">
+                    {networkMode ? 'your local network' : 'this machine only — the admin panel does not expose it'}
+                  </span>
+                </dd>
+              </div>
+            </dl>
+          )}
+          <ControlPlaneNotice state={controlPlane} localIp={localIp} />
         </div>
 
         {/* Phase 7 §7.4 — the daemon now outlives the window, so "start at
