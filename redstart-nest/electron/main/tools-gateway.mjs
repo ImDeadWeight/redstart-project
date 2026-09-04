@@ -184,8 +184,57 @@ function withoutUpstreamCors(headers) {
   return out
 }
 
+// ---------------------------------------------------------------------------
+// Context-exceeded diagnosis.
+//
+// llama-server rejects a prompt larger than n_ctx with HTTP 400 and
+// { error: { type: 'exceed_context_size_error', message, n_prompt_tokens,
+// n_ctx } } — and in streaming mode too, because an error that is the FIRST
+// result is deliberately returned as a non-stream response rather than an SSE
+// frame (server-context.cpp, "in streaming mode, the first error must be
+// treated as non-stream response"). A prompt too large to process always fails
+// before the first token, so this rejection is always the first result.
+//
+// So the numbers do reach the client. What no client can know is WHY, and the
+// answer is usually the same one: every enabled tool's full JSON schema rides
+// on every request, so one plugin advertising forty tools can spend more of the
+// window than the conversation does. llama-server cannot say that — it never
+// saw a tool list, only a rendered prompt — and each client would otherwise
+// have to reinvent the explanation. The gateway is the one place that knows
+// both halves, so it annotates the message here, once, for every client.
+//
+// The count is of what was actually FORWARDED (post-ban, and post-retrieval
+// when that lands), so the number quoted is the one that was really spent.
+// Same chars/4 heuristic as estimateActiveToolTokens — a diagnosis, not an
+// accounting.
+// ---------------------------------------------------------------------------
+function toolCostOf(parsed) {
+  const tools = Array.isArray(parsed?.tools) ? parsed.tools : []
+  if (tools.length === 0) return null
+  return { count: tools.length, approxTokens: Math.ceil(JSON.stringify(tools).length / 4) }
+}
+
+export function annotateContextError(body, cost) {
+  // Anything unrecognised is returned byte-identical: this must never be able
+  // to turn an upstream error into a different one, or a parse failure into a
+  // gateway failure.
+  if (!cost) return body
+  let parsedBody
+  try { parsedBody = JSON.parse(body) } catch { return body }
+  if (parsedBody?.error?.type !== 'exceed_context_size_error') return body
+  if (typeof parsedBody.error.message !== 'string') return body
+
+  const { count, approxTokens } = cost
+  parsedBody.error.message +=
+    ` About ${approxTokens.toLocaleString()} of those tokens are the ${count} tool definition${count === 1 ? '' : 's'}` +
+    ' sent with this request — every enabled tool\'s full schema is included in every message.' +
+    ' Turning off tools you are not using, or raising the context size, both free up room.'
+  return JSON.stringify(parsedBody)
+}
+
 function forwardModified(res, internalPort, parsed) {
   const payload = JSON.stringify(parsed)
+  const toolCost = toolCostOf(parsed)
   const options = {
     hostname: '127.0.0.1',
     port: internalPort,
@@ -199,6 +248,29 @@ function forwardModified(res, internalPort, parsed) {
   }
 
   const proxyReq = http.request(options, proxyRes => {
+    // A 400 is small, complete, and never a stream — buffer it so the tool cost
+    // can be added to the message. Every other status is piped exactly as
+    // before, so nothing about the streaming path changes.
+    if (proxyRes.statusCode === 400 && toolCost) {
+      let raw = ''
+      proxyRes.setEncoding('utf8')
+      proxyRes.on('data', chunk => { raw += chunk })
+      proxyRes.on('end', () => {
+        const out = annotateContextError(raw, toolCost)
+        const headers = withoutUpstreamCors(proxyRes.headers)
+        // The body length changed, so the upstream's own value would truncate
+        // the response. Drop every spelling of it and let Node recompute.
+        for (const key of Object.keys(headers)) {
+          if (key.toLowerCase() === 'content-length') delete headers[key]
+        }
+        res.writeHead(400, { ...headers, 'Access-Control-Allow-Origin': '*' })
+        res.end(out)
+      })
+      // A truncated error response must still terminate the client's request.
+      proxyRes.on('error', () => { if (!res.writableEnded) res.end(raw) })
+      return
+    }
+
     res.writeHead(proxyRes.statusCode, {
       ...withoutUpstreamCors(proxyRes.headers),
       'Access-Control-Allow-Origin': '*',

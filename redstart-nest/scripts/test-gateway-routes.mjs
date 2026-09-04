@@ -360,6 +360,10 @@ async function main() {
   console.log('\n-- POST /v1/chat/completions (request rewriting) --')
 
   let lastForwarded = null
+  // Set to { status, body } to make the next upstream reply something other
+  // than a plain 200 — used by the context-exceeded tests below, which need
+  // llama-server's real rejection shape.
+  let nextUpstreamReply = null
   const upstream = http.createServer(async (req, res) => {
     let raw = ''
     for await (const chunk of req) raw += chunk
@@ -367,6 +371,17 @@ async function main() {
       lastForwarded = JSON.parse(raw)
     } catch {
       lastForwarded = raw
+    }
+    const reply = nextUpstreamReply
+    nextUpstreamReply = null
+    if (reply) {
+      const body = typeof reply.body === 'string' ? reply.body : JSON.stringify(reply.body)
+      res.writeHead(reply.status, {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      })
+      res.end(body)
+      return
     }
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ ok: true }))
@@ -506,6 +521,83 @@ async function main() {
     assert(/create_document/.test(system), 'a permitted capability lost its claim')
     assert(/Two different computers/.test(system), 'a permitted client tool lost its locality block')
     updateGatewayConfig(baseConfig)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Context-exceeded diagnosis. llama-server's rejection carries the two
+  // numbers but cannot say what spent the window — it never saw a tool list.
+  // The gateway is the only component that knows both halves, and it is shared
+  // by every client, so the explanation is added here exactly once.
+  //
+  // The body below is llama-server's real shape, from the fork's own source:
+  // format_error_response() gives {code,message,type}, to_json() adds
+  // n_prompt_tokens/n_ctx for this type only, and res->error() nests it under
+  // "error" with code as the HTTP status.
+  // ---------------------------------------------------------------------------
+
+  const exceedBody = () => ({
+    error: {
+      code: 400,
+      message: 'request (59649 tokens) exceeds the available context size (32768 tokens), try increasing it',
+      type: 'exceed_context_size_error',
+      n_prompt_tokens: 59649,
+      n_ctx: 32768,
+    },
+  })
+
+  async function completionsRaw(body) {
+    lastForwarded = null
+    const res = await fetch(`${gw}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { ...bearer(ownerToken), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return { status: res.status, text: await res.text() }
+  }
+
+  await test('🔍 a context-exceeded rejection gains the tool cost that caused it', async () => {
+    nextUpstreamReply = { status: 400, body: exceedBody() }
+    const { status, text } = await completionsRaw({
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [toolDef('git_status'), toolDef('git_diff')],
+    })
+    assert(status === 400, `status was rewritten: ${status}`)
+    const body = JSON.parse(text)
+    assert(/2 tool definitions/.test(body.error.message), `tool count missing: ${body.error.message}`)
+    assert(/exceeds the available context size/.test(body.error.message), 'the upstream message was replaced rather than extended')
+    // The fields the chat-ui's error dialog reads must survive untouched.
+    assert(body.error.n_prompt_tokens === 59649, 'n_prompt_tokens was lost')
+    assert(body.error.n_ctx === 32768, 'n_ctx was lost')
+    assert(body.error.type === 'exceed_context_size_error', 'the error type was changed')
+  })
+
+  await test('🔍 a 400 that is not a context error is passed through untouched', async () => {
+    const original = JSON.stringify({ error: { code: 400, message: 'bad', type: 'invalid_request_error' } })
+    nextUpstreamReply = { status: 400, body: original }
+    const { status, text } = await completionsRaw({
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [toolDef('git_status')],
+    })
+    assert(status === 400, `expected 400, got ${status}`)
+    assert(text === original, `an unrelated error was rewritten:\n  ${text}`)
+  })
+
+  await test('a context-exceeded rejection with no tools in the request says nothing about tools', async () => {
+    // Nothing to blame, so nothing to add — the conversation itself is too big.
+    const original = JSON.stringify(exceedBody())
+    nextUpstreamReply = { status: 400, body: original }
+    const { text } = await completionsRaw({ messages: [{ role: 'user', content: 'hi' }] })
+    assert(text === original, 'a toolless request was told to turn off tools')
+  })
+
+  await test('an unparseable 400 body is forwarded as-is rather than becoming a gateway error', async () => {
+    nextUpstreamReply = { status: 400, body: 'not json at all' }
+    const { status, text } = await completionsRaw({
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [toolDef('git_status')],
+    })
+    assert(status === 400, `expected 400, got ${status}`)
+    assert(text === 'not json at all', `body was mangled: ${text}`)
   })
 
   await test('🔍 an unauthenticated completion never reaches llama-server', async () => {
