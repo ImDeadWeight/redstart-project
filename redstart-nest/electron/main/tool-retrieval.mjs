@@ -314,3 +314,148 @@ export function selectTools({ scored, pins, previous, budgetTokens = Infinity, f
 
   return { selected, dropped, reason }
 }
+
+// ---------------------------------------------------------------------------
+// Reading the request
+// ---------------------------------------------------------------------------
+// No conversation identity reaches the gateway: chat.service.ts takes a
+// conversationId and does not put it in the body, so everything below is
+// derived from the `messages` array, which arrives in full on every request.
+// That turns out to be a feature — pins are a pure function of the payload,
+// with no session table to grow, expire, or leak across accounts.
+
+/**
+ * The text scored against the tools: every user message in the conversation,
+ * plus the name of every tool it has already called.
+ *
+ * The WHOLE conversation, not the last turn. It costs one embed either way, and
+ * the last turn is the most volatile input available — a query built from it
+ * would reshuffle the tool list constantly, and each reshuffle re-prefills the
+ * entire KV cache. A query that drifts slowly is what makes a monotonic
+ * selection nearly free rather than a constant fight against the scorer.
+ *
+ * @param {any[]} messages
+ * @returns {string}
+ */
+export function conversationQueryText(messages) {
+  const parts = []
+  for (const msg of Array.isArray(messages) ? messages : []) {
+    if (msg?.role === 'user') {
+      const text = messageText(msg.content)
+      if (text) parts.push(text)
+    }
+    for (const call of Array.isArray(msg?.tool_calls) ? msg.tool_calls : []) {
+      const name = call?.function?.name
+      if (typeof name === 'string' && name) parts.push(name)
+    }
+  }
+  return parts.join('\n')
+}
+
+// Content is a string in the simple case and an array of parts in the
+// multimodal one. Only text parts are read: an image contributes nothing to
+// which tool is wanted, and its base64 would swamp the query if it did.
+function messageText(content) {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter(part => part?.type === 'text' && typeof part.text === 'string')
+    .map(part => part.text)
+    .join(' ')
+}
+
+/**
+ * A stable key for the conversation this request belongs to.
+ *
+ * The first user message plus the account id. The first message is the one part
+ * of a conversation that never changes as it grows, and the account id keeps
+ * two users who opened with the same sentence in separate buckets. Only ever
+ * used as a cache key for the previously-applied set, so a miss costs one
+ * re-prefill and never correctness.
+ *
+ * @param {any[]} messages
+ * @param {string|null|undefined} accountId
+ * @returns {string}
+ */
+export function conversationKey(messages, accountId) {
+  const first = (Array.isArray(messages) ? messages : []).find(m => m?.role === 'user')
+  return createHash('sha256')
+    .update(`${accountId ?? ''}\u0000${messageText(first?.content)}`)
+    .digest('hex')
+}
+
+/**
+ * Tools this request has already committed to, which must therefore survive
+ * any filtering: everything the model has already called, and everything a
+ * previous search_tools call surfaced.
+ *
+ * A tool dropped mid-task is the worst failure this feature has, and deriving
+ * the pins from the payload makes avoiding it structural rather than a rule
+ * someone has to remember.
+ *
+ * @param {any[]} messages
+ * @param {{ searchToolName?: string }} [options]
+ * @returns {Set<string>}
+ */
+export function pinsFromMessages(messages, { searchToolName = 'search_tools' } = {}) {
+  const pins = new Set()
+  for (const msg of Array.isArray(messages) ? messages : []) {
+    for (const call of Array.isArray(msg?.tool_calls) ? msg.tool_calls : []) {
+      const name = call?.function?.name
+      if (typeof name === 'string' && name) pins.add(name)
+    }
+    // A search result is a tool-role message whose body is the JSON this
+    // gateway produced. Names it surfaced become pins on the next turn, which
+    // is the entire mechanism behind search_tools — no new protocol, no server
+    // state, just the transcript the client already sends back.
+    if (msg?.role === 'tool' && msg?.name === searchToolName) {
+      for (const name of searchResultNames(msg.content)) pins.add(name)
+    }
+  }
+  return pins
+}
+
+function searchResultNames(content) {
+  const text = messageText(content)
+  if (!text) return []
+  try {
+    const body = JSON.parse(text)
+    const rows = Array.isArray(body) ? body : Array.isArray(body?.tools) ? body.tools : []
+    return rows.map(r => (typeof r === 'string' ? r : r?.name)).filter(n => typeof n === 'string' && n)
+  } catch {
+    // Not JSON: a client that rewrote the result into prose gets no pins from
+    // it rather than a guess parsed out of English.
+    return []
+  }
+}
+
+/**
+ * A bounded map of conversation key to the tool names applied on its last turn.
+ *
+ * Deliberately lossy. Eviction costs one re-prefill for a conversation nobody
+ * has touched in a while, never a wrong answer, so there is no expiry policy to
+ * get wrong and nothing to persist across a restart.
+ *
+ * @param {{ max?: number }} [options]
+ */
+export function createSelectionMemory({ max = 200 } = {}) {
+  /** @type {Map<string, string[]>} */
+  const entries = new Map()
+  return {
+    get(key) {
+      const value = entries.get(key)
+      if (!value) return []
+      // Re-insert so the least recently USED is evicted, not the oldest.
+      entries.delete(key)
+      entries.set(key, value)
+      return value
+    },
+    set(key, names) {
+      entries.delete(key)
+      entries.set(key, [...names])
+      while (entries.size > max) entries.delete(entries.keys().next().value)
+    },
+    size: () => entries.size,
+    clear: () => entries.clear(),
+  }
+}

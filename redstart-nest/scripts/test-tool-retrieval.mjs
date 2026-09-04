@@ -26,7 +26,17 @@ import {
   cosine,
   scoreTools,
   selectTools,
+  conversationQueryText,
+  conversationKey,
+  pinsFromMessages,
+  createSelectionMemory,
 } from '../electron/main/tool-retrieval.mjs'
+import {
+  filterRequestTools,
+  toolBudget,
+  resetToolFilterState,
+  CONTEXT_BUDGET_FRACTION,
+} from '../electron/main/tool-filter.mjs'
 import {
   EMBED_PID_FILE,
   startEmbedServer,
@@ -603,6 +613,255 @@ await test('🔍 a persistent outage logs once, not once per request', async () 
 })
 
 fs.rmSync(tmpDir, { recursive: true, force: true })
+
+console.log('\n-- reading the request --')
+
+await test('the query is the WHOLE conversation, not the last turn', () => {
+  const text = conversationQueryText([
+    { role: 'user', content: 'find my tax notes' },
+    { role: 'assistant', content: '', tool_calls: [{ function: { name: 'vault_search' } }] },
+    { role: 'tool', name: 'vault_search', content: '[]' },
+    { role: 'user', content: 'now check the repo' },
+  ])
+  assert(/tax notes/.test(text), 'an earlier user message was dropped — the query would churn every turn')
+  assert(/check the repo/.test(text), 'the latest message was dropped')
+  assert(/vault_search/.test(text), 'the name of a tool already called is part of the query')
+})
+
+await test('tool RESULTS are not part of the query', () => {
+  // A search result or a file read can be tens of kilobytes and says nothing
+  // about what the user wants next; it would swamp the sentence that does.
+  const text = conversationQueryText([
+    { role: 'user', content: 'hi' },
+    { role: 'tool', name: 'read_document', content: 'CHAPTER ONE. It was a dark and stormy night.' },
+  ])
+  assert(!/stormy/.test(text), `a tool result leaked into the query: ${text}`)
+})
+
+await test('multimodal content contributes its text and not its image data', () => {
+  const text = conversationQueryText([{
+    role: 'user',
+    content: [{ type: 'text', text: 'what is in this' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }],
+  }])
+  assert(text === 'what is in this', `unexpected query text: ${text}`)
+})
+
+await test('🔍 the conversation key is stable as the conversation grows', () => {
+  const opening = { role: 'user', content: 'what changed in the repo' }
+  const early = conversationKey([opening], 'acct-1')
+  const later = conversationKey([opening, { role: 'assistant', content: 'ok' }, { role: 'user', content: 'and now?' }], 'acct-1')
+  assert(early === later, 'the key changed as messages were added — every turn would be a cache miss')
+})
+
+await test('🔒 two accounts opening with the same sentence get different keys', () => {
+  const messages = [{ role: 'user', content: 'hello' }]
+  assert(conversationKey(messages, 'a') !== conversationKey(messages, 'b'), 'the applied set would be shared across accounts')
+})
+
+await test('a conversation with no user message still keys without throwing', () => {
+  assert(/^[0-9a-f]{64}$/.test(conversationKey([{ role: 'system', content: 'x' }], null)), 'no key produced')
+})
+
+await test('🔍 every tool already called is pinned', () => {
+  const pins = pinsFromMessages([
+    { role: 'assistant', tool_calls: [{ function: { name: 'git_log' } }, { function: { name: 'git_diff' } }] },
+    { role: 'assistant', tool_calls: [{ function: { name: 'read_document' } }] },
+  ])
+  assert(pins.has('git_log') && pins.has('git_diff') && pins.has('read_document'),
+    `a tool used mid-task was not pinned: ${[...pins].join(',')}`)
+})
+
+await test('🔍 names a search_tools result surfaced become pins', () => {
+  const pins = pinsFromMessages([
+    { role: 'assistant', tool_calls: [{ function: { name: 'search_tools' } }] },
+    { role: 'tool', name: 'search_tools', content: JSON.stringify([{ name: 'vault_search', description: 'x' }]) },
+  ])
+  assert(pins.has('vault_search'), 'a searched-for tool was not pinned on the next turn')
+})
+
+await test('an unparseable search result pins nothing rather than guessing', () => {
+  const pins = pinsFromMessages([
+    { role: 'tool', name: 'search_tools', content: 'I found vault_search for you' },
+  ])
+  assert(!pins.has('vault_search'), 'a name was parsed out of prose')
+})
+
+await test('a tool result from something OTHER than search_tools pins nothing', () => {
+  const pins = pinsFromMessages([
+    { role: 'tool', name: 'read_document', content: JSON.stringify([{ name: 'delete_everything' }]) },
+  ])
+  assert(!pins.has('delete_everything'), 'a tool result could name its own pins — content is not authority')
+})
+
+console.log('\n-- the selection memory --')
+
+await test('the memory returns what was applied, and an empty list for a miss', () => {
+  const mem = createSelectionMemory({ max: 3 })
+  assert(mem.get('nope').length === 0, 'a miss should be an empty list, not undefined')
+  mem.set('k', ['a', 'b'])
+  assert(mem.get('k').join(',') === 'a,b', 'the applied set did not round-trip')
+})
+
+await test('🔍 the memory is bounded, and evicts least-recently-used', () => {
+  const mem = createSelectionMemory({ max: 2 })
+  mem.set('a', ['1'])
+  mem.set('b', ['2'])
+  mem.get('a')            // 'a' is now the most recently used
+  mem.set('c', ['3'])     // evicts 'b', not 'a'
+  assert(mem.size() === 2, `memory grew to ${mem.size()}`)
+  assert(mem.get('a').length === 1, 'the recently used entry was evicted')
+  assert(mem.get('b').length === 0, 'the stale entry survived')
+})
+
+console.log('\n-- the filter, end to end --')
+
+const t = {
+  git: fnTool('git_status', 'Show the working-tree status of a git repository'),
+  doc: fnTool('read_document', 'Read the text content of a document'),
+  web: fnTool('web_fetch', 'Fetch a web page and return its article text'),
+}
+const allTools = [t.git, t.doc, t.web]
+const ask = [{ role: 'user', content: 'what changed in the repo' }]
+
+// A stand-in embedder: each text gets a vector along the axis of whichever
+// keyword it contains, so relevance is exact and the assertions are about the
+// filter's decisions rather than about a model's judgement.
+function keywordEmbed(axes) {
+  return async (texts) => texts.map(text => {
+    const v = new Float32Array(axes.length)
+    axes.forEach((word, i) => { if (text.toLowerCase().includes(word)) v[i] = 1 })
+    // Never hand back an all-zero vector for a text that matched nothing: that
+    // is a legitimate score of 0, but it would make every miss identical.
+    if (v.every(x => x === 0)) v[axes.length - 1] = 0.01
+    return v
+  })
+}
+const embed = keywordEmbed(['repo', 'document', 'web'])
+
+await test('🔒 with the setting off, the very same array comes back', async () => {
+  resetToolFilterState()
+  const out = await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: false }, embed })
+  assert(out === allTools, 'the array was rebuilt with retrieval off — callers rely on identity to know nothing happened')
+})
+
+await test('🔒 a null from the embedder returns the same array', async () => {
+  resetToolFilterState()
+  const out = await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: true }, embed: async () => null })
+  assert(out === allTools, 'a dead embedding server changed the tool list')
+})
+
+await test('🔒 an embedder that throws returns the same array', async () => {
+  resetToolFilterState()
+  const out = await filterRequestTools({
+    tools: allTools, messages: ask, settings: { enabled: true },
+    embed: async () => { throw new Error('kaboom') },
+  })
+  assert(out === allTools, 'an exception escaped the filter')
+})
+
+await test('🔍 an on-topic ask keeps the matching tool and drops the rest', async () => {
+  resetToolFilterState()
+  const out = await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: true }, embed })
+  const names = out.map(toolName)
+  assert(names.includes('git_status'), `the relevant tool was dropped: ${names.join(',')}`)
+  assert(!names.includes('web_fetch'), `an unrelated tool survived: ${names.join(',')}`)
+})
+
+await test('🔒 the result is always a subset of what was offered', async () => {
+  resetToolFilterState()
+  const out = await filterRequestTools({ tools: [t.git], messages: ask, settings: { enabled: true }, embed })
+  assert(out.every(x => allTools.includes(x)), 'the filter returned a tool that was not offered')
+  assert(out.length <= 1, `the filter grew the list to ${out.length}`)
+})
+
+await test('🔍 the applied set never shrinks across turns in one conversation', async () => {
+  resetToolFilterState()
+  const first = await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: true }, embed })
+  const firstNames = first.map(toolName)
+  // The topic moves on. Monotonicity says nothing already applied may leave.
+  const turn2 = [...ask, { role: 'assistant', content: 'ok' }, { role: 'user', content: 'now read a document' }]
+  const second = await filterRequestTools({ tools: allTools, messages: turn2, settings: { enabled: true, margin: 0 }, embed })
+  const secondNames = second.map(toolName)
+  for (const name of firstNames) {
+    assert(secondNames.includes(name), `${name} was applied last turn and vanished — that is a re-prefill and a broken task`)
+  }
+  assert(secondNames.includes('read_document'), `the new topic's tool was not added: ${secondNames.join(',')}`)
+})
+
+await test('🔍 hysteresis suppresses a tie, which is the point of it', () => {
+  // The turn above with the default margin instead of 0. The new topic scores
+  // EXACTLY what the carried tool scores, and the margin refuses it — a set
+  // that reshuffles on a tie costs a full re-prefill every turn, and because
+  // the query is the whole conversation the tie breaks on its own as the
+  // conversation moves rather than staying stuck. Pinned here because it is
+  // surprising, not because it is incidental.
+  const scored = scoredList([['carried', 0.707], ['newcomer', 0.707]])
+  const withDefault = selectTools({ scored, previous: ['carried'], floor: 0, margin: 0.02 }).selected.map(toolName)
+  assert(!withDefault.includes('newcomer'), `a tie was admitted: ${withDefault.join(',')}`)
+  const withNone = selectTools({ scored, previous: ['carried'], floor: 0, margin: 0 }).selected.map(toolName)
+  assert(withNone.includes('newcomer'), 'setup: with no margin the tie should be admitted')
+})
+
+await test('🔒 a tool the model has already called is never dropped', async () => {
+  resetToolFilterState()
+  const messages = [
+    { role: 'user', content: 'read a document' },
+    { role: 'assistant', tool_calls: [{ function: { name: 'web_fetch' } }] },
+    { role: 'tool', name: 'web_fetch', content: 'ok' },
+    { role: 'user', content: 'read a document' },
+  ]
+  const out = await filterRequestTools({ tools: allTools, messages, settings: { enabled: true }, embed })
+  assert(out.map(toolName).includes('web_fetch'), 'a tool already called mid-task was filtered away')
+})
+
+await test('🔒 an empty selection falls back to the full list rather than stripping everything', async () => {
+  resetToolFilterState()
+  // An embedder that answers with vectors of the wrong length: every cosine is
+  // 0, so nothing clears a floor. Sending no tools at all would strip a
+  // capability the prompt is about to claim.
+  const out = await filterRequestTools({
+    tools: allTools, messages: ask, settings: { enabled: true, floor: 0.5 },
+    embed: async (texts) => texts.map(() => new Float32Array([0, 0, 0, 0, 0])),
+  })
+  assert(out === allTools, 'a scorer that matched nothing emptied the request')
+})
+
+await test('a conversation with no user text is left alone', async () => {
+  resetToolFilterState()
+  const out = await filterRequestTools({
+    tools: allTools, messages: [{ role: 'system', content: 'you are a bot' }],
+    settings: { enabled: true }, embed,
+  })
+  assert(out === allTools, 'a request with nothing to score was filtered anyway')
+})
+
+await test('🔍 the budget leaves room for the conversation and the answer', () => {
+  assert(toolBudget(4096, 0) === Math.floor(4096 * CONTEXT_BUDGET_FRACTION),
+    `an empty conversation should get the whole tool share: ${toolBudget(4096, 0)}`)
+  assert(toolBudget(4096, 1000) === Math.floor(4096 * CONTEXT_BUDGET_FRACTION) - 1000,
+    'the reserved prompt was not subtracted')
+  assert(toolBudget(4096, 999999) === 0, 'a conversation larger than the window produced a negative budget')
+})
+
+await test('an unknown context size budgets nothing rather than guessing', () => {
+  for (const bad of [undefined, null, 0, -1, NaN, 'big']) {
+    assert(toolBudget(bad, 0) === Infinity, `${JSON.stringify(bad)} produced an invented budget`)
+  }
+  return 'the floors still decide'
+})
+
+await test('🔍 the budget is enforced end to end', async () => {
+  resetToolFilterState()
+  // A window small enough that one tool fits and three do not.
+  const perTool = estimateToolTokens(t.git)
+  const out = await filterRequestTools({
+    tools: allTools, messages: ask, settings: { enabled: true, relativeFloor: 0, floor: -1 },
+    ctxSize: Math.ceil((perTool * 2) / CONTEXT_BUDGET_FRACTION), embed,
+  })
+  assert(out.length < allTools.length, `the budget did not bind: kept ${out.length} of ${allTools.length}`)
+  assert(out.map(toolName).includes('git_status'), 'the budget dropped the best match first')
+})
+
 
 // ---------------------------------------------------------------------------
 // Summary

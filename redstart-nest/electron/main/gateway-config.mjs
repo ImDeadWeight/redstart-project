@@ -22,6 +22,23 @@ import { decryptSecret } from './secrets.mjs'
 import { listPlugins } from './plugin-registry.mjs'
 import { syncPluginProviders, stopAllPlugins } from './plugin-provider.mjs'
 
+// Tool retrieval's per-profile settings, carried through to the gateway.
+//
+// OFF by default and per profile, deliberately: this is a rollout control, not
+// the engagement question. When retrieval runs it runs on every tool-carrying
+// request; this decides whether it runs at all, and it goes away once the
+// default flips. ctxSize rides along because the gateway is where the budget is
+// measured and it has no other route to the number.
+function retrievalSettings(llamaConfig) {
+  const r = llamaConfig?.tools?.retrieval
+  return {
+    enabled: r?.enabled === true,
+    ...(Number.isFinite(r?.relativeFloor) ? { relativeFloor: r.relativeFloor } : {}),
+    ...(Number.isFinite(r?.floor) ? { floor: r.floor } : {}),
+    ...(Number.isFinite(r?.margin) ? { margin: r.margin } : {}),
+  }
+}
+
 export function buildGatewayConfig(llamaConfig) {
   const toolSettings = llamaConfig?.tools
 
@@ -42,6 +59,8 @@ export function buildGatewayConfig(llamaConfig) {
   if (!toolSettings?.enabled) {
     return {
       disabledTools,
+      toolRetrieval: retrievalSettings(llamaConfig),
+      ctxSize: llamaConfig?.ctxSize,
       webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 },
       postgres: { enabled: false },
       documents: { enabled: false },
@@ -101,6 +120,8 @@ export function buildGatewayConfig(llamaConfig) {
 
   return {
     disabledTools,
+    toolRetrieval: retrievalSettings(llamaConfig),
+    ctxSize: llamaConfig?.ctxSize,
     webFetch: {
       // Absent webAccessEnabled means enabled — see ProfileTools.webAccessEnabled
       // in src/types.ts for why this is `!== false` and not an activeToolIds check.

@@ -29,6 +29,7 @@ import { handleAuthRoute } from './gateway/auth-routes.mjs'
 import { isConversationRoute, handleConversationRoute } from './gateway/conversation-routes.mjs'
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
+import { filterRequestTools, estimateMessagesTokens } from './tool-filter.mjs'
 
 let gatewayServer = null
 
@@ -533,6 +534,34 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         // the request substantiates it — and the rule can only hold if the
         // request has already been narrowed.
         parsed = enforceToolAllowList(parsed, effectiveConfig)
+
+        // RETRIEVAL THIRD, and strictly between the two. Bans are a boundary;
+        // this is a selection over what survives one, so it can only ever
+        // shrink the post-ban list — and because it lands before the prompt is
+        // composed, the capability claims still describe what the model
+        // actually received. Off by default, and a failure of any kind returns
+        // the array by identity, so `parsed.tools` is unchanged.
+        //
+        // The budget is measured on the WIRE, not from the Tools tab's
+        // estimate: that estimator walks the providers Nest would serve over
+        // MCP, while parsed.tools is composed client-side and is a different
+        // set. Reserving the messages plus a pins-only prompt gives a LOWER
+        // bound on the non-tool cost, which is what breaks the circularity of
+        // budgeting for a prompt that does not exist yet.
+        if (Array.isArray(parsed.tools) && parsed.tools.length > 0) {
+          const pinsOnlyPrompt = injectSystemContext(
+            [...(parsed.messages || [])], effectiveConfig, true,
+            authResult.account, requestedMode, authResult.surface, [],
+          )
+          parsed.tools = await filterRequestTools({
+            tools: parsed.tools,
+            messages: parsed.messages || [],
+            accountId,
+            settings: effectiveConfig.toolRetrieval,
+            ctxSize: effectiveConfig.ctxSize,
+            reservedTokens: estimateMessagesTokens(pinsOnlyPrompt),
+          })
+        }
 
         const requestHasTools = Array.isArray(parsed.tools) && parsed.tools.length > 0
 

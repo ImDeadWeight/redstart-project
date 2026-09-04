@@ -524,6 +524,93 @@ async function main() {
   })
 
   // ---------------------------------------------------------------------------
+  // Tool retrieval. It sits between the ban filter and the prompt composer, so
+  // these are the only tests that can say it never widened what the ban filter
+  // left and never claimed a capability it then removed. Everything about
+  // scoring lives in test-tool-retrieval.mjs; what is asserted here is the
+  // WIRING — including, most importantly, that both of its off states forward a
+  // byte-identical request.
+  // ---------------------------------------------------------------------------
+  console.log('\n-- tool retrieval, at the call site --')
+
+  const retrievalTools = [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch')]
+  const retrievalBody = () => ({
+    messages: [{ role: 'user', content: 'what changed in the repo' }],
+    tools: retrievalTools,
+  })
+
+  await test('🔒 with retrieval off, the forwarded request is byte-identical to today', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096 })
+    await completions(retrievalBody())
+    const off = JSON.stringify(lastForwarded)
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: false } })
+    await completions(retrievalBody())
+    assert(JSON.stringify(lastForwarded) === off, 'an explicit off differs from no setting at all')
+    const names = lastForwarded.tools.map(t => t.function.name)
+    assert(names.length === 3, `tools were filtered with retrieval off: ${names.join(',')}`)
+  })
+
+  await test('🔒 with retrieval on and no embedding server, the request is byte-identical too', async () => {
+    // Nothing is listening on EMBED_PORT in this suite, so this is the real
+    // fail-open path — a connection refused, not a mocked one. It is the state
+    // every install is in until the model is downloaded, so it is the one that
+    // has to be free.
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: false } })
+    await completions(retrievalBody())
+    const off = JSON.stringify(lastForwarded)
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+    await completions(retrievalBody())
+    assert(JSON.stringify(lastForwarded) === off, 'a dead sidecar changed the forwarded request')
+    updateGatewayConfig(baseConfig)
+  })
+
+  await test('🔒 a banned tool cannot come back through retrieval', async () => {
+    // Retrieval is handed the POST-ban array. Even switched on with a live
+    // scorer it could only ever return a subset of it — but the ordering is
+    // what makes that true, so it is asserted at the call site rather than
+    // trusted from the module.
+    updateGatewayConfig({
+      ...baseConfig, ctxSize: 4096,
+      toolRetrieval: { enabled: true },
+      disabledTools: ['create_document'],
+      documents: { enabled: true },
+    })
+    await completions(retrievalBody())
+    const names = (lastForwarded.tools || []).map(t => t.function.name)
+    assert(!names.includes('create_document'), 'a banned tool reached the model')
+    assert(names.includes('git_status'), `the rest of the list was lost: ${names.join(',')}`)
+    updateGatewayConfig(baseConfig)
+  })
+
+  await test('🔍 retrieval runs before the prompt, so a claim still describes what was sent', async () => {
+    // The Phase 0.1 invariant, now with a second thing between the ban filter
+    // and the composer. If retrieval ever moved after injectSystemContext, this
+    // is the test that would notice.
+    updateGatewayConfig({
+      ...baseConfig, ctxSize: 4096,
+      toolRetrieval: { enabled: true },
+      documents: { enabled: true },
+    })
+    await completions({
+      messages: [{ role: 'user', content: 'write it up' }],
+      tools: [toolDef('create_document')],
+    })
+    const names = (lastForwarded.tools || []).map(t => t.function.name)
+    const claimed = /create_document/.test(systemOf())
+    assert(claimed === names.includes('create_document'),
+      `the prompt ${claimed ? 'claimed' : 'did not claim'} a tool the payload ${names.includes('create_document') ? 'carried' : 'did not carry'}`)
+    updateGatewayConfig(baseConfig)
+  })
+
+  await test('a request carrying no tools is untouched by retrieval', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+    const res = await completions({ messages: [{ role: 'user', content: 'hello' }] })
+    assert(res.status === 200, `expected 200, got ${res.status}`)
+    assert(!lastForwarded.tools, 'an empty request grew a tools array')
+    updateGatewayConfig(baseConfig)
+  })
+
+  // ---------------------------------------------------------------------------
   // Context-exceeded diagnosis. llama-server's rejection carries the two
   // numbers but cannot say what spent the window — it never saw a tool list.
   // The gateway is the only component that knows both halves, and it is shared
