@@ -205,14 +205,25 @@ function resolveBinary() {
     }
   }
 
+  // Where a package or service install puts it. Checked after the project tree
+  // so a developer's own build still wins in a checkout, and deliberately NOT
+  // extended to a PATH lookup: this value is the head of the escalation
+  // chain (ipc/validate.mjs), and resolving it from PATH would hand that
+  // decision to whatever the daemon's environment happens to say.
+  //
+  // configDir()/bin is the cross-platform one, and it is the only candidate a
+  // HEADLESS install has: nestd runs under plain Node, so the packaged branch
+  // above is unreachable (no resourcesPath to consult) and the dev branch wants
+  // a build tree the install does not have. The operator drops the binary
+  // beside the state the daemon already owns.
+  //
+  // This was POSIX-only until now, which left a Windows service with no way to
+  // resolve a llama-server at all — neither packaged nor a checkout, and a
+  // service install is neither. Windows was the platform the deploy runbook
+  // documented and the only one that could not satisfy it.
+  candidates.push(path.join(configDir(), 'bin', name))
   if (process.platform !== 'win32') {
-    // Where a package install would put it. Checked after the project tree so
-    // a developer's own build still wins in a checkout, and deliberately NOT
-    // extended to a PATH lookup: this value is the head of the escalation
-    // chain (ipc/validate.mjs), and resolving it from PATH would hand that
-    // decision to whatever the daemon's environment happens to say.
     candidates.push(
-      path.join(configDir(), 'bin', name),
       path.join('/usr/lib/redstart/bin', name),
       path.join('/usr/local/lib/redstart/bin', name),
     )

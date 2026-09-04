@@ -51,6 +51,29 @@ export const FIXED_PORTS = Object.freeze({
 })
 
 /**
+ * A startup bind failure, rewritten to name what actually went wrong.
+ *
+ * Node's own text for this is `listen EADDRINUSE: address already in use
+ * 0.0.0.0:8765`, which states the mechanism and hides the cause. The cause is
+ * almost always a second daemon: both fixed ports are taken for the daemon's
+ * whole lifetime, so whoever holds one is the Redstart already running. That
+ * matters most headless, where this string is the entire failure report —
+ * there is no window and no tray to notice anything.
+ *
+ * Returns null for anything it cannot improve on, so callers fall back to the
+ * original error rather than losing detail to a guess.
+ *
+ * @param {NodeJS.ErrnoException & { port?: number }} err
+ * @returns {string|null}
+ */
+export function portConflictMessage(err) {
+  if (!err || err.code !== 'EADDRINUSE') return null
+  const owner = FIXED_PORTS[err.port]
+  if (!owner) return null
+  return `port ${err.port} (${owner}) is already in use — a Redstart Nest daemon is almost certainly running on this machine already. Stop it before starting another.`
+}
+
+/**
  * The three ports a given config.port claims: the gateway, llama-server, and
  * the built-in MCP server.
  *

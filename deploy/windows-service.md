@@ -1,16 +1,28 @@
 # Redstart Nest as a Windows service (level 3)
 
-**UNVERIFIED.** Every command here is written from the design's requirements and
-has not been run on a real machine. Read each one before running it; they need
-an elevated prompt and they change how the box boots.
+**PARTLY VERIFIED.** The daemon itself is proven: `node bin/nestd.mjs --dir
+<dir>` boots with no Electron, mints a bootstrap token, binds the control plane,
+and accepts bootstrap and login — `scripts/test-daemon-smoke.mjs` runs exactly
+that on every commit. **What has never been run on a real machine is everything
+around it**: the service registration, the account and ACL steps, the restart
+policy, and the secrets re-key. Read each command before running it; they need an
+elevated prompt and they change how the box boots.
+
+**This is a source install, not the desktop installer's output.** The NSIS
+installer packages the Electron app (`electron/main` + `dist`) and does not ship
+`bin/nestd.mjs`, `scripts/`, or a `node_modules` a plain `node` could resolve.
+The service therefore runs from a checkout with dependencies installed, which is
+also what the eventual Linux packaging will do — the same entry point, the same
+`--dir` contract, and no Electron in the picture. Do not point `sc.exe` at
+`C:\Program Files\Redstart Nest`; nothing under it is a headless daemon.
 
 **This is not the Windows desktop install.** The desktop app runs as you, at
 [level 2](#why-two-levels) — it outlives its window, starts at login, and needs
 none of this. A service runs without anyone logged in, survives logout, and
 starts at boot. It is what a dedicated box wants and what a laptop does not.
 
-Design [decision 9] settles the account question and it is the part not to
-improvise on.
+The account question — which identity the service runs as — is the part not to
+improvise on. Section 2 states the rule and the reason.
 
 ---
 
@@ -38,7 +50,7 @@ external MCP keys, plugin environment values.
 While still logged in as the account that has been running Redstart:
 
 ```
-cd <the Redstart Nest source or install directory>
+cd <the Redstart Nest source checkout — see step 3>
 npx electron scripts/rekey-secrets.mjs -- ^
   --source "%APPDATA%\redstart" ^
   --target "C:\ProgramData\Redstart\config"
@@ -100,11 +112,46 @@ migration writes into an already-ACL'd tree.
 
 ---
 
-## 3. Register the service
+## 3. Place the source tree and the server binary
+
+The service runs the daemon out of a checkout. Put it somewhere the service
+account can read and ordinary users cannot write — `C:\Redstart\app` below —
+and install dependencies as an administrator:
+
+```
+git clone <your remote> C:\Redstart\app
+cd C:\Redstart\app\redstart-nest
+npm ci
+npm run build      :: produces dist/ and src/chat-ui/dist, both of which the
+                   :: daemon serves; without it the admin page 404s
+```
+
+**The llama-server binary is not in the checkout.** The desktop installer gets
+it from `extraResources`, which is an Electron mechanism the headless daemon has
+no access to. `nestd` looks for it in the nest directory instead:
+
+```
+mkdir C:\ProgramData\Redstart\config\bin
+copy <your build>\llama-server.exe C:\ProgramData\Redstart\config\bin\
+copy <your build>\*.dll           C:\ProgramData\Redstart\config\bin\
+```
+
+`<config>\bin` is checked on every platform, and on a service install it is the
+only candidate that can match — the packaged branch needs `process.resourcesPath`
+(Electron only) and the development branch needs a `llama-cpp-turboquant` build
+tree. A Linux package install has the same fallback plus `/usr/lib/redstart/bin`.
+
+Skip this and Nest starts, serves the admin panel, and refuses to launch a model
+with no binary found — which is a survivable state, not a broken one, and the
+admin panel will say so.
+
+---
+
+## 4. Register the service
 
 ```
 sc.exe create RedstartNest ^
-  binPath= "\"C:\Program Files\nodejs\node.exe\" \"C:\Program Files\Redstart Nest\bin\nestd.mjs\" --dir \"C:\ProgramData\Redstart\"" ^
+  binPath= "\"C:\Program Files\nodejs\node.exe\" \"C:\Redstart\app\redstart-nest\bin\nestd.mjs\" --dir \"C:\ProgramData\Redstart\"" ^
   DisplayName= "Redstart Nest" ^
   start= auto ^
   obj= "NT SERVICE\RedstartNest"
@@ -117,7 +164,7 @@ confusingly without.
 
 ---
 
-## 4. The restart policy
+## 5. The restart policy
 
 The equivalent of systemd's `Restart=on-failure` with a give-up threshold.
 Restart after 5 seconds for the first two failures, then stop trying; the
@@ -142,7 +189,7 @@ it is killed is its own outage, and one that stops leaves something legible in
 
 ---
 
-## 5. Start it, and check
+## 6. Start it, and check
 
 ```
 sc.exe start RedstartNest
@@ -160,7 +207,7 @@ Then, from the box:
 
 ---
 
-## 6. Only then, tidy up
+## 7. Only then, tidy up
 
 Once the service works and the credentials check out:
 
@@ -189,5 +236,3 @@ encrypted, encrypt it.
 
 **Put a reverse proxy in front before exposing the control plane.** Nest speaks
 plain HTTP by design; see `deploy/Caddyfile`.
-
-[decision 9]: ../docs/notes/headless-admin-plane-plan.md

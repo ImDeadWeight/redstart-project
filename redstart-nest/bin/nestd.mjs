@@ -46,6 +46,7 @@ import { initSecrets } from '../electron/main/secrets.mjs'
 import { keyfileProvider } from '../electron/main/secrets-keyfile.mjs'
 import { startDaemon, stopDaemon, installCrashHandlers } from '../electron/main/daemon.mjs'
 import { logEvent } from '../electron/main/logger.mjs'
+import { portConflictMessage } from '../electron/main/ports.mjs'
 import { resolveNestDir } from './nest-dir.mjs'
 
 // ---------------------------------------------------------------------------
@@ -91,10 +92,17 @@ async function main() {
   initPaths({
     config: path.join(nestDir, 'config'),
     capabilityBase: path.join(nestDir, 'data'),
-    // Not an Electron packaged app. Affects where the bundled chat UI and the
-    // server binary are looked for (llama-args.mjs, resolveBinary) — the
-    // dev-tree branch is the right one for a checkout, and 8B's packaging is
-    // what will need this to mean something else.
+    // Not an Electron packaged app, and this is a statement of fact rather
+    // than a deferral: nestd runs under plain Node, so `process.resourcesPath`
+    // does not exist and the packaged branch of llama-args.mjs / resolveBinary
+    // could never be the right answer here.
+    //
+    // What each consumer does with `false`:
+    //   chat UI (llama-args.mjs)  src/chat-ui/dist, relative to this tree —
+    //                             correct for a source or package install,
+    //                             which is the shape headless ships in.
+    //   llama-server (daemon.mjs) falls through the dev-tree candidates to
+    //                             <config>/bin, which is the headless one.
     isPackaged: false,
   })
   // The headless provider: a daemon-owned key file, since there is no
@@ -121,10 +129,16 @@ async function main() {
 }
 
 main().catch((err) => {
-  // Startup failed: no admin listener, or a path/secret provider that could
-  // not be initialised. Exit 1 — this is the case a supervisor SHOULD retry,
-  // since a bind failure is frequently a slow-releasing socket from the
-  // previous run.
-  console.error('Redstart Nest daemon failed to start:', err.message)
+  // Startup failed: no admin listener, no beacon, or a path/secret provider
+  // that could not be initialised. Exit 1 — this is the case a supervisor
+  // SHOULD retry, since a bind failure is frequently a slow-releasing socket
+  // from the previous run.
+  //
+  // A fixed-port collision gets named rather than passed through raw. The
+  // header above says the admin listener's bind is the de-facto single-instance
+  // guard, which is true of the INTENT and not of the ordering: the beacon
+  // binds first, so a second daemon fails on 8765 and Node's own message
+  // ("address already in use 0.0.0.0:8765") never mentions Redstart at all.
+  console.error(`Redstart Nest daemon failed to start: ${portConflictMessage(err) || err.message}`)
   process.exit(1)
 })
