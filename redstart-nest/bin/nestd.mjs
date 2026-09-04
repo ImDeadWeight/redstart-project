@@ -4,23 +4,22 @@
 // =============================================================================
 // nestd — the Redstart Nest daemon, without Electron
 // =============================================================================
-// The headless entrypoint. Runs exactly the same daemon the Electron launcher
-// runs (electron/main/daemon.mjs); the difference is entirely in the four
-// answers an entrypoint owes it — where state lives, how secrets are
-// encrypted, what a crash does, what a deliberate shutdown does.
+// The headless entrypoint. Runs the same daemon the Electron launcher runs
+// (electron/main/daemon.mjs); the difference is in the four answers an
+// entrypoint owes it — where state lives, how secrets are encrypted, what a
+// crash does, what a deliberate shutdown does.
 //
-// There is no window, no tray, and no Electron single-instance lock. The admin
-// listener's port bind is the de-facto guard, and here a failure to take it is
-// FATAL rather than logged and survived: with no UI to notice, a daemon that
-// came up owning nothing has no way to tell anyone, and the process already
-// holding :19083 is the one actually in charge.
+// With no window, tray, or Electron single-instance lock, the admin
+// listener's port bind is the de-facto guard, and a failure to take it is
+// FATAL rather than logged and survived: a daemon that came up owning
+// nothing has no way to tell anyone, with no UI to notice.
 //
 // Usage:
 //   nestd [--dir <nest directory>]
 //   REDSTART_DIR=<nest directory> nestd
 //
-// The flag names the NEST directory, not the config directory, because the
-// directory needs two subtrees that must never collapse into one:
+// The flag names the NEST directory, not the config directory: it needs two
+// subtrees that must never collapse into one —
 //
 //   <nest dir>/config    Nest's own state — accounts, roles, tools, plugins,
 //                        profiles, settings, logs, and the secret key.
@@ -28,8 +27,7 @@
 //
 // Backups want those treated differently, and the last-resort reset ("stop
 // the daemon, delete accounts.json") must never be a step someone takes in a
-// directory adjacent to a user's documents. Deliberately not `--config-dir`:
-// that would have named the inner subtree and left the outer one implicit.
+// directory adjacent to a user's documents.
 //
 // EXIT CODES ARE A CONTRACT (a supervisor reads them):
 //   0  a deliberate stop — admin:shutdown, SIGTERM, SIGINT. Stay down.
@@ -89,17 +87,11 @@ async function main() {
   initPaths({
     config: path.join(nestDir, 'config'),
     capabilityBase: path.join(nestDir, 'data'),
-    // Not an Electron packaged app, and this is a statement of fact rather
-    // than a deferral: nestd runs under plain Node, so `process.resourcesPath`
+    // Never true: nestd runs under plain Node, so `process.resourcesPath`
     // does not exist and the packaged branch of llama-args.mjs / resolveBinary
-    // could never be the right answer here.
-    //
-    // What each consumer does with `false`:
-    //   chat UI (llama-args.mjs)  src/chat-ui/dist, relative to this tree —
-    //                             correct for a source or package install,
-    //                             which is the shape headless ships in.
-    //   llama-server (daemon.mjs) falls through the dev-tree candidates to
-    //                             <config>/bin, which is the headless one.
+    // could never be the right answer here. Each consumer falls through to a
+    // headless-appropriate path instead — src/chat-ui/dist for the chat UI,
+    // <config>/bin for llama-server.
     isPackaged: false,
   })
   // The headless provider: a daemon-owned key file, since there is no
@@ -129,13 +121,9 @@ main().catch((err) => {
   // Startup failed: no admin listener, no beacon, or a path/secret provider
   // that could not be initialised. Exit 1 — this is the case a supervisor
   // SHOULD retry, since a bind failure is frequently a slow-releasing socket
-  // from the previous run.
-  //
-  // A fixed-port collision gets named rather than passed through raw. The
-  // header above says the admin listener's bind is the de-facto single-instance
-  // guard, which is true of the INTENT and not of the ordering: the beacon
-  // binds first, so a second daemon fails on 8765 and Node's own message
-  // ("address already in use 0.0.0.0:8765") never mentions Redstart at all.
+  // from the previous run. A fixed-port collision gets named rather than
+  // passed through raw — the beacon binds first, so a second daemon fails on
+  // 8765 and Node's own message never mentions Redstart at all.
   console.error(`Redstart Nest daemon failed to start: ${portConflictMessage(err) || err.message}`)
   process.exit(1)
 })

@@ -3,12 +3,11 @@
 // =============================================================================
 // Redstart Nest — Admin listener (the control plane)
 // =============================================================================
-// Modelled on beacon.mjs, NOT on the gateway. The beacon already has the exact
-// lifecycle this needs — bound at app start, up for as long as Nest is,
-// indifferent to whether a llama-server is running. A control plane whose
-// lifetime is tied to the thing it controls is not a control plane, and that
-// single test is what decided this is a separate listener rather than an
-// /admin prefix on the gateway.
+// Modelled on beacon.mjs, NOT on the gateway: bound at app start, up for as
+// long as Nest is, indifferent to whether a llama-server is running. A
+// control plane whose lifetime is tied to the thing it controls is not a
+// control plane — that test is why this is a separate listener rather than
+// an /admin prefix on the gateway.
 //
 // THREE WAYS THIS DIFFERS FROM THE GATEWAY, all deliberate:
 //
@@ -67,14 +66,13 @@ let activeBind = null // { bindHost, port }
 // ---------------------------------------------------------------------------
 // Exposure — availability and exposure are separate axes
 // ---------------------------------------------------------------------------
-// Availability is not a toggle: the listener is always up. What IS settable is
-// WHERE it binds, and that is a bind ADDRESS rather than a boolean, so one
-// setting covers loopback, a VPN interface, a management VLAN and the full
-// LAN without inventing a mechanism for each.
-//
-// Deliberately NOT `networkMode`: that is data-plane state, read once at server
-// launch (ipc/server.mjs), and keying the control plane to it would rebuild the
-// very coupling this phase exists to remove.
+// Availability is not a toggle: the listener is always up. What IS settable
+// is WHERE it binds, and that is a bind ADDRESS rather than a boolean, so
+// one setting covers loopback, a VPN interface, a management VLAN and the
+// full LAN without inventing a mechanism for each. Deliberately NOT
+// `networkMode`, which is data-plane state read once at server launch
+// (ipc/server.mjs) — keying the control plane to it would rebuild the
+// coupling this design removes.
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost'])
 
@@ -175,13 +173,11 @@ export function buildStaticAllowlist(root = bundleRoot()) {
 
 let staticFiles = new Map()
 
-// Overridable for tests only, exactly like `port` below. A suite needs a bundle
-// whose contents it controls rather than whatever `npm run build` last left in
-// dist/ — which on a CI runner that never built one is nothing at all, and the
-// difference between "the document carries a CSP" passing and failing was
-// therefore whether the developer happened to have a stale build lying around.
-// Remembered across restarts so a rebind (setControlPlaneBindHost) does not
-// swap the bundle out from under a running suite.
+// Overridable for tests only, exactly like `port` below — a suite needs a
+// bundle whose contents it controls rather than whatever `npm run build`
+// last left in dist/, which is nothing at all on a CI runner that never
+// built one. Remembered across restarts so a rebind (setControlPlaneBindHost)
+// does not swap the bundle out from under a running suite.
 let staticRoot = null
 
 // The validated CORS allowlist. Empty means no CORS headers at all, which is
@@ -243,15 +239,14 @@ function serveStatic(req, res, absPath) {
 // ---------------------------------------------------------------------------
 // Gate FIRST, route second. An unknown path gets 401 rather than 404, so the
 // listener does not answer "does this route exist?" to anyone who has not
-// authenticated — the route table of a process-spawning surface is not public
-// information, and the ordering means a route added later is gated by default
-// rather than by whoever remembers.
+// authenticated, and a route added later is gated by default rather than by
+// whoever remembers.
 //
-// Denials are deliberately NOT logged per request. On a non-loopback bind this
-// port joins the population the internet scans continuously, and a log line per
-// probe is a disk-filling primitive handed to strangers. The events worth
-// having — a login, a bootstrap attempt — arrive with the auth routes, which
-// are rate-limited and logged there.
+// Denials are deliberately NOT logged per request — on a non-loopback bind
+// this port joins the population the internet scans continuously, and a log
+// line per probe is a disk-filling primitive handed to strangers. The events
+// worth having arrive with the auth routes, which are rate-limited and
+// logged there.
 
 async function handleAdminRequest(req, res) {
   let urlPath
@@ -261,16 +256,13 @@ async function handleAdminRequest(req, res) {
     return sendJson(res, 400, { error: 'Malformed request path' })
   }
 
-  // Set on the response ONCE, here, rather than threaded through
-  // every route: Node merges setHeader() values into whatever writeHead()
-  // later sends, so this reaches the API dispatcher, the auth routes, the SSE
-  // feed and the static files without any of them having to know about CORS.
-  // Threading it would mean four call sites that each have to remember.
-  //
-  // Applied to the 401s too. A browser cannot read a response that lacks CORS
-  // headers — it reports it as a network error — so an admin debugging a
-  // remote client would otherwise be told "connection failed" when the real
-  // answer was "your session expired".
+  // Set on the response ONCE, here, rather than threaded through every
+  // route: Node merges setHeader() values into whatever writeHead() later
+  // sends, so this reaches every handler without each having to know about
+  // CORS. Applied to the 401s too — a browser cannot read a response that
+  // lacks CORS headers, reporting it as a network error instead, so a remote
+  // admin would otherwise be told "connection failed" when the real answer
+  // was "your session expired".
   const cors = corsHeaders(req.headers['origin'], corsOrigins)
   for (const [name, value] of Object.entries(cors)) res.setHeader(name, value)
 
@@ -291,10 +283,10 @@ async function handleAdminRequest(req, res) {
     if (file) return serveStatic(req, res, file)
   }
 
-  // Login and bootstrap have to be reachable before anyone holds a credential,
-  // so they run before the gate and do their own authentication — the same shape
-  // the gateway uses for /auth/*. They are also the only two routes here that
-  // take a secret from a stranger, which is why they carry the rate limits.
+  // Login and bootstrap run before the gate and do their own authentication
+  // — the same shape the gateway uses for /auth/*. They are also the only
+  // two routes here that take a secret from a stranger, which is why they
+  // carry the rate limits.
   if (isAdminAuthRoute(urlPath)) {
     return await handleAdminAuthRoute(req, res, urlPath)
   }

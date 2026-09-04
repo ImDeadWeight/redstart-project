@@ -24,18 +24,11 @@ export function getControlPlane() {
  * the tray icon or the window title of needs more than a boolean.
  *
  * Deliberately NOT included: the model path or any other value logger.mjs's
- * BLOCKED_KEYS would strip from the event log. Status is owner-only, same as
- * every control-plane route, but the privacy stance server.mjs already takes
- * ("log the port only — never the model path") is worth keeping consistent
- * here rather than reopening it because this is a different code path.
- *
- * activeProfile is likewise absent — serverState carries the resolved llama
- * CONFIG a launch used, not the profile NAME the launcher's profile selector
- * showed at the time (that pairing lives only in the renderer, per-tab, and
- * is not persisted). Reporting the config's non-secret shape (port,
- * networkMode) is what is actually available server-side; a named "active
- * profile" would need the launcher to start telling the daemon the name at
- * launch, which it does not do today.
+ * BLOCKED_KEYS would strip from the event log — same privacy stance
+ * server.mjs already takes ("log the port only — never the model path").
+ * activeProfile is likewise absent: serverState carries the resolved llama
+ * CONFIG a launch used, not the profile NAME the selector showed at the
+ * time, and that pairing lives only in the renderer, unpersisted.
  */
 export function getFullStatus({ serverState }) {
   const running = !!serverState.process
@@ -61,16 +54,14 @@ export function getFullStatus({ serverState }) {
 /**
  * Move the control plane to a different bind address.
  *
- * REBINDS IMMEDIATELY, not at next start. The reason is not
- * convenience: an admin changing this may be doing it to recover access, and a
- * setting that only takes effect after a restart they cannot perform remotely is
- * no use to them.
+ * REBINDS IMMEDIATELY, not at next start — an admin changing this may be
+ * doing it to recover access, and a setting that only takes effect after a
+ * restart they cannot perform remotely is no use to them.
  *
- * The order below matters. Bind first, persist second: a setting saved for an
- * address the machine cannot bind would be read back at every subsequent boot
- * and fail every time, and the box would come up with no control plane at all
- * with nothing but a log line to say why. If the new address fails, the previous
- * one is restored so a rejected change leaves the admin exactly where they were.
+ * Bind first, persist second: a setting saved for an address the machine
+ * cannot bind would be read back at every subsequent boot and fail every
+ * time, with nothing but a log line to say why. If the new address fails,
+ * the previous one is restored.
  */
 export async function setControlPlaneBindHost(host, { readSettings, writeSettings }) {
   const rejection = bindHostRejection(host)
@@ -113,15 +104,13 @@ export async function setControlPlaneBindHost(host, { readSettings, writeSetting
  * Reads the OS's own record (the login-item capability an entrypoint
  * registered), not settings.json — a user can turn this off from Task
  * Manager's Startup tab behind Nest's back, and the UI must show what is
- * actually true, not what was last written. index.mjs reconciles the reverse
- * direction (a fresh install, or settings.json disagreeing with the OS) once
- * at startup; this function only ever reports the OS's current answer.
+ * actually true. index.mjs reconciles the reverse direction once at startup;
+ * this function only ever reports the OS's current answer.
  *
  * `supported` is false on a headless daemon, where "start at login" has no
- * meaning at all: nobody logs in, and a service's boot start is the
- * supervisor's business, not a setting Nest owns. Reported rather than
- * answered `false` on its own, so the UI can hide a control that does not
- * apply instead of showing an off switch that can never be turned on.
+ * meaning: nobody logs in, and a service's boot start is the supervisor's
+ * business, not a setting Nest owns. Reported rather than answered `false`
+ * on its own, so the UI can hide a control that does not apply.
  */
 export function getStartupSettings() {
   const loginItems = getLoginItems()
@@ -161,16 +150,14 @@ export function setStartupSettings(startAtLogin, { readSettings, writeSettings }
 /**
  * The pure half of startup reconciliation: given the persisted settings,
  * what should the OS login item be right now, and does settings.json need
- * writing to remember it? No Electron call in here — that is what makes it
- * testable without a stub, unlike reconcileStartupSetting() below, whose one
- * untestable line is the login item's own set() call.
+ * writing to remember it? No Electron call in here — testable without a
+ * stub, unlike reconcileStartupSetting() below, whose one untestable line is
+ * the login item's own set() call.
  *
- * A fresh install (`settings.startAtLogin` is undefined — nobody has ever
- * touched the toggle) seeds ON, on the grounds that a daemon with no model
- * loaded is a bound port and ~100MB, not the 40GB a loaded
- * model would be. Once an admin has set it explicitly (via setStartupSettings
- * above, so the value IS a boolean), that choice is reasserted forever —
- * never the on-by-default seed again.
+ * A fresh install (`settings.startAtLogin` undefined) seeds ON, on the
+ * grounds that a daemon with no model loaded is a bound port and ~100MB,
+ * not the 40GB a loaded model would be. Once set explicitly, that choice is
+ * reasserted forever — never the on-by-default seed again.
  */
 export function resolveStartupReconciliation(settings) {
   const hasStoredPreference = typeof settings?.startAtLogin === 'boolean'
@@ -206,15 +193,13 @@ export function reconcileStartupSetting({ readSettings, writeSettings }) {
 /**
  * Deliberate shutdown from the admin UI. There was no shutdown route before
  * this — with the window no longer meaning anything, Task Manager would
- * otherwise be the only exit, which is worse than what existed before.
+ * otherwise be the only exit.
  *
  * `deps.quitApp` is index.mjs's own closure — the one place that holds
- * `isQuitting` and `app.quit()`. It defers the actual quit to the next
- * tick, so the HTTP response this function returns actually leaves the
- * socket before before-quit's teardown begins; the caller must see 200,
- * not a connection reset, or it cannot tell success from crash. That
- * deferral lives in index.mjs, not here — this function only decides
- * WHETHER to quit and logs that the decision was made.
+ * `isQuitting` and `app.quit()`. It defers the actual quit to the next tick,
+ * so the caller sees this call's 200 response rather than a connection reset
+ * it could not tell apart from a crash. That deferral lives in index.mjs,
+ * not here — this function only decides WHETHER to quit.
  */
 export function shutdown({ quitApp }) {
   logEvent('app', 'shutdown_requested', {})

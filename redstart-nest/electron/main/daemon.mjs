@@ -7,12 +7,8 @@
 // plain-Node process can run it. The Electron launcher and bin/nestd.mjs are
 // two entrypoints onto this one module; the daemon itself cannot tell them
 // apart — "the Electron UI is a client of the daemon, like Twig" reaching
-// the code.
-//
-// The seam was already a line in a file. index.mjs's main() ran paths, logger,
-// process log, capability folders, stale-process reaping, the admin API table,
-// the beacon and the admin plane — and only then the tray and the window.
-// Everything above the tray is here now; everything below it stayed there.
+// the code. index.mjs's main() ran everything above the tray; that's here
+// now, and everything from the tray down stayed there.
 //
 // WHAT IS DELIBERATELY NOT HERE:
 //   - The window, the tray, the close notice, popup containment, the
@@ -104,9 +100,8 @@ let beaconServerInstance = null
 
 // Live tool-config refresh, bound to serverState. buildGatewayConfig +
 // createRefreshLiveToolsConfig live in gateway-config.mjs; this module only
-// owns the serverState the refresh closes over.
-// Bound inside setupAdminApi() (once paths are initialised, so configDir() is
-// safe to call) rather than here at module scope — see below.
+// owns the serverState the refresh closes over. Bound inside setupAdminApi()
+// (once paths are initialised, so configDir() is safe to call).
 let refreshLiveToolsConfig
 
 // ---------------------------------------------------------------------------
@@ -164,15 +159,11 @@ function ensureModelsDir() {
 // ---------------------------------------------------------------------------
 
 // The value this returns becomes spawn()'s first argument in ipc/server.mjs, so
-// it is checked HERE as well as at the settings:set-binary-path write. That is
-// not belt-and-braces for its own sake: settings.json is an ordinary file on
-// disk, and any value written by a build that predates the write-side check —
-// which is every install shipped so far — is read by this function and launched.
-// Validating only on the way in would leave the stored value trusted forever.
-//
+// it is checked HERE as well as at the settings:set-binary-path write —
+// settings.json is an ordinary file on disk, and a value written by an older
+// build that predates the write-side check would otherwise be trusted forever.
 // A rejected override falls through to the bundled binary rather than failing
-// the launch, which is the same thing that happens when the path simply does
-// not exist.
+// the launch, the same as when the path simply does not exist.
 function resolveBinary() {
   const settings = readSettings()
   if (settings.serverBinPath) {
@@ -211,16 +202,11 @@ function resolveBinary() {
   // chain (ipc/validate.mjs), and resolving it from PATH would hand that
   // decision to whatever the daemon's environment happens to say.
   //
-  // configDir()/bin is the cross-platform one, and it is the only candidate a
-  // HEADLESS install has: nestd runs under plain Node, so the packaged branch
-  // above is unreachable (no resourcesPath to consult) and the dev branch wants
-  // a build tree the install does not have. The operator drops the binary
-  // beside the state the daemon already owns.
-  //
-  // This was POSIX-only until now, which left a Windows service with no way to
-  // resolve a llama-server at all — neither packaged nor a checkout, and a
-  // service install is neither. Windows was the platform the deploy runbook
-  // documented and the only one that could not satisfy it.
+  // The only candidate a HEADLESS install has, on every platform including
+  // Windows: nestd runs under plain Node, so the packaged branch above is
+  // unreachable (no resourcesPath) and the dev branch wants a build tree the
+  // install does not have. The operator drops the binary beside the state
+  // the daemon already owns.
   candidates.push(path.join(configDir(), 'bin', name))
   if (process.platform !== 'win32') {
     candidates.push(
@@ -294,28 +280,24 @@ async function startDiscoveryBeacon() {
 // ---------------------------------------------------------------------------
 // Admin listener (the control plane)
 // ---------------------------------------------------------------------------
-// Started HERE, beside the beacon, and not from the llama:launch handler. That
-// placement is the whole argument: the control plane must be up before, and
-// independently of, the thing it controls. See admin-listener.mjs for what
-// it serves.
+// Started HERE, beside the beacon, and not from the llama:launch handler:
+// the control plane must be up before, and independently of, the thing it
+// controls. See admin-listener.mjs for what it serves.
 //
-// Where it binds is a persisted setting holding an ADDRESS, not a boolean, and
-// it defaults to loopback — availability is always on, exposure is opt-in.
-// Deliberately not `networkMode`, which is data-plane state read only at
-// launch.
+// Where it binds is a persisted setting holding an ADDRESS, not a boolean,
+// and it defaults to loopback — availability is always on, exposure is
+// opt-in. Deliberately not `networkMode`, which is data-plane state read
+// only at launch.
 //
 // A failure to bind is logged and swallowed rather than fatal ON THE DESKTOP
-// — the daemon itself (gateway, MCP, discovery) still comes up. Headless it is
-// fatal instead (host.adminBindFailureIsFatal): with no window and no tray, a
-// daemon that came up owning nothing has no way to tell anyone, and the
-// process that already holds :19083 is the one actually in charge. The
-// LAUNCHER window specifically has no fallback if this fails, though:
-// createWindow() loads this listener's own page, so a bind failure here
-// means the window loads nothing rather than a working-but-disconnected UI.
-// That is the accepted shape of "the Electron UI is a client of the daemon,
-// like Twig" — the alternative would be keeping a second, privileged way for
-// the window to render regardless, which is the exact thing this design
-// retires.
+// (the daemon itself still comes up) but fatal headless
+// (host.adminBindFailureIsFatal) — with no window and no tray, a daemon that
+// came up owning nothing has no way to tell anyone. The LAUNCHER window
+// specifically has no fallback if this fails, though: createWindow() loads
+// this listener's own page, so a bind failure here means the window loads
+// nothing rather than a working-but-disconnected UI — "the Electron UI is a
+// client of the daemon, like Twig" leaves no privileged way for the window
+// to render regardless.
 async function startAdminPlane() {
   // Minted here, not on first use. A token that only appears at the moment
   // someone is locked out is a token they cannot get to — and an install that
@@ -334,12 +316,10 @@ async function startAdminPlane() {
     logEvent('admin', 'listener_start_failed', { reason: err.code || 'error' })
     if (host.adminBindFailureIsFatal) throw err
   }
-  // Discovery (the port-80 clean URL) is a data-plane convenience keyed on
-  // networkMode alone — it no longer reads
-  // the listener's bind state at all. Still started here rather than only
-  // from `llama:launch`, so a box that was previously put in network mode
-  // gets the clean URL back at boot even before the next launch. See
-  // discovery.mjs.
+  // Discovery (the port-80 clean URL, discovery.mjs) is a data-plane
+  // convenience keyed on networkMode alone. Started here rather than only
+  // from `llama:launch`, so a box already in network mode gets the clean URL
+  // back at boot even before the next launch.
   startDiscovery(lastKnownDiscovery(readSettings()))
 }
 
@@ -352,11 +332,10 @@ async function startAdminPlane() {
 // This function is only the wiring: register the two handlers, and on
 // either firing, log, notify (best-effort), then exit directly.
 //
-// Called by the ENTRYPOINT rather than by startDaemon(), and deliberately so:
-// these install before initPaths() so that a crash during startup itself is
-// caught, and startDaemon() runs after paths are up. Both halves of
-// what differs between entrypoints — how to warn a human, how to leave — are
-// arguments, since a headless box has no notification area and no app.exit().
+// Called by the ENTRYPOINT rather than by startDaemon(): these install
+// before initPaths(), so a crash during startup itself is caught too, and
+// notifyCrash/exitCrashed are arguments because a headless box has no
+// notification area and no app.exit().
 export function installCrashHandlers({ notifyCrash, exitCrashed } = {}) {
   const notify = notifyCrash ?? DEFAULT_HOST.notifyCrash
   const exit = exitCrashed ?? DEFAULT_HOST.exitCrashed
@@ -390,10 +369,9 @@ export function installCrashHandlers({ notifyCrash, exitCrashed } = {}) {
 // IPC is retired — this used to also register every namespace's handlers
 // with ipcMain (registerIpcHandlers(), deleted along with ipc/guard.mjs).
 // buildAdminApi(deps) below is the only consumer of the handler tables left,
-// and it was always the real source of truth (ipc/transport.mjs's header
-// explains why: a route table derived from IPC
-// registration would be empty on a platform with no Electron, which is the
-// platform HTTP-only exists for).
+// and it was always the real source of truth: a route table derived from
+// IPC registration would be empty on a platform with no Electron, which is
+// the platform HTTP-only exists for (see ipc/transport.mjs).
 function setupAdminApi() {
   const userDataDir = configDir()
   refreshLiveToolsConfig = createRefreshLiveToolsConfig(serverState, userDataDir)
@@ -425,12 +403,12 @@ function setupAdminApi() {
     // no profile has been started yet, since the ports are derived from it.
     getConfiguredPort: () => serverState.lastConfig?.port ?? 19080,
     userDataDir,
-    // The ONE deliberate-quit path admin:shutdown gets. Both
-    // entrypoints must let the HTTP response this call is answering leave the
-    // socket before teardown begins, or the caller sees a connection reset and
-    // cannot tell success from crash — see ipc/admin.mjs's shutdown() for why
-    // that ordering matters. Late-bound through host so the deps table can be
-    // built before an entrypoint's own quit path is reachable.
+    // The ONE deliberate-quit path admin:shutdown gets. Both entrypoints
+    // must let the HTTP response this call is answering leave the socket
+    // before teardown begins, or the caller sees a connection reset and
+    // cannot tell success from crash (see ipc/admin.mjs's shutdown()).
+    // Late-bound through host so the deps table can be built before an
+    // entrypoint's own quit path is reachable.
     quitApp: () => host.quitApp(),
   }
 
