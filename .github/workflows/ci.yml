@@ -78,6 +78,9 @@ jobs:
       - name: "Security: tool namespacing (ban targetability)"
         run: node scripts/test-tool-namespacing.mjs
 
+      - name: "Security: tool retrieval (subset-only selection)"
+        run: node scripts/test-tool-retrieval.mjs
+
       - name: "Security: per-account storage scope (path traversal)"
         run: node scripts/test-user-scope.mjs
 
