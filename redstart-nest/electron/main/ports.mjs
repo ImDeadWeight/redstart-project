@@ -3,11 +3,13 @@
 // =============================================================================
 // Redstart Nest — the ports Nest owns
 // =============================================================================
-// FIXED ports (beacon 8765, admin listener 19083) are chosen by Nest and
-// bound for the daemon's lifetime. DERIVED ports are config.port and the two
-// ports arithmetically downstream of it — llama-server on +1, the built-in
-// MCP server on +2 — so a user setting config.port to 19081 would put the MCP
-// server on 19083 and steal the admin listener's socket. serverPortRejection()
+// FIXED ports (beacon 8765, admin listener 19083, embedding server 19084) are
+// chosen by Nest and bound for the daemon's lifetime. DERIVED ports are
+// config.port and the two ports arithmetically downstream of it — llama-server
+// on +1, the built-in MCP server on +2 — so a user setting config.port to 19081
+// would put the MCP server on 19083 and steal the admin listener's socket.
+// Note that 19082 collides with TWO fixed ports at once, which is why the
+// rejection message names every collision rather than the first one. serverPortRejection()
 // in ipc/validate.mjs is the enforcement point; this module is the map it reads.
 //
 // serverPortFamily() below is deliberately a SECOND expression of the +1/+2
@@ -30,6 +32,14 @@ export const BEACON_PORT = 8765
  */
 export const ADMIN_PORT = 19083
 
+/**
+ * The embedding server for tool retrieval — a second llama-server, localhost
+ * only, CPU only. Reserved unconditionally, whether or not retrieval is
+ * enabled: a port that is only claimed while a feature is on is a port a user
+ * can be sitting on the day they turn that feature on.
+ */
+export const EMBED_PORT = 19084
+
 /** config.port's default, duplicated in src/types.ts's DEFAULT_CONFIG. */
 export const DEFAULT_GATEWAY_PORT = 19080
 
@@ -37,6 +47,7 @@ export const DEFAULT_GATEWAY_PORT = 19080
 export const FIXED_PORTS = Object.freeze({
   [BEACON_PORT]: 'the discovery beacon',
   [ADMIN_PORT]: 'the admin listener',
+  [EMBED_PORT]: 'the embedding server',
 })
 
 /**
