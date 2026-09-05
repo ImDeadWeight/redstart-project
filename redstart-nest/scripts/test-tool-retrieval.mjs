@@ -401,6 +401,13 @@ const fakeBinary = path.join(tmpDir, 'llama-server-stub')
 
 // A spawn() stand-in: an EventEmitter with a pid and a kill(), which is the
 // whole surface embed-server.mjs uses. Nothing is actually launched.
+// startEmbedServer now watches /health in the background to decide when
+// 'starting' becomes 'running'. These spawn-shape tests care about neither, so
+// they run against a health endpoint that never turns green and a zero-length
+// deadline — one probe, no timer left behind, no traffic to the real port.
+const NEVER_READY = { fetchImpl: async () => ({ ok: false }), readyTimeoutMs: 0, readyPollMs: 1 }
+const startStub = (options) => startEmbedServer({ ...NEVER_READY, ...options })
+
 function stubSpawn(calls) {
   return (binaryPath, args, options) => {
     const child = new EventEmitter()
@@ -412,7 +419,7 @@ function stubSpawn(calls) {
 }
 
 await test('🔍 a missing model file resolves to unavailable, not a throw', async () => {
-  const status = await startEmbedServer({
+  const status = await startStub({
     resolveBinary: () => fakeBinary,
     configDir: tmpDir,
     modelPath: path.join(tmpDir, 'not-downloaded.gguf'),
@@ -425,7 +432,7 @@ await test('🔍 a missing model file resolves to unavailable, not a throw', asy
 
 await test('a missing binary resolves to unavailable too', async () => {
   fs.writeFileSync(fakeModel, 'not really a gguf')
-  const status = await startEmbedServer({
+  const status = await startStub({
     resolveBinary: () => path.join(tmpDir, 'no-such-binary'),
     configDir: tmpDir,
     modelPath: fakeModel,
@@ -436,7 +443,7 @@ await test('a missing binary resolves to unavailable too', async () => {
 })
 
 await test('a resolveBinary that throws is caught', async () => {
-  const status = await startEmbedServer({
+  const status = await startStub({
     resolveBinary: () => { throw new Error('settings.json is unreadable') },
     configDir: tmpDir,
     modelPath: fakeModel,
@@ -449,7 +456,7 @@ await test('a resolveBinary that throws is caught', async () => {
 
 await test('a spawn that throws is caught', async () => {
   fs.writeFileSync(fakeBinary, 'stub')
-  const status = await startEmbedServer({
+  const status = await startStub({
     resolveBinary: () => fakeBinary,
     configDir: tmpDir,
     modelPath: fakeModel,
@@ -462,8 +469,9 @@ await test('a spawn that throws is caught', async () => {
 await test('🔒 the pid file is NOT llama-server.pid', async () => {
   assert(EMBED_PID_FILE !== LLAMA_PID_FILE, 'both servers are the same binary — a shared pid file lets one reap the other')
   const calls = []
-  const status = await startEmbedServer({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls) })
-  assert(status.state === 'running', `state was '${status.state}'`)
+  const status = await startStub({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls) })
+  // 'starting', not 'running' — see the readiness tests below.
+  assert(status.state === 'starting', `state was '${status.state}'`)
   assert(fs.existsSync(path.join(tmpDir, EMBED_PID_FILE)), 'no pid file was written')
   assert(!fs.existsSync(path.join(tmpDir, LLAMA_PID_FILE)), 'the chat server pid file was overwritten')
   stopEmbedServer({ configDir: tmpDir })
@@ -473,8 +481,8 @@ await test('🔒 the pid file is NOT llama-server.pid', async () => {
 
 await test('a second start while running does not spawn twice', async () => {
   const calls = []
-  await startEmbedServer({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls) })
-  await startEmbedServer({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls) })
+  await startStub({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls) })
+  await startStub({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls) })
   assert(calls.length === 1, `spawned ${calls.length} times`)
   stopEmbedServer({ configDir: tmpDir })
 })
@@ -485,15 +493,97 @@ await test('stop is idempotent, including before any start', () => {
   assert(embedServerStatus().state === 'stopped', `state was '${embedServerStatus().state}'`)
 })
 
+await test('🔒 a freshly spawned server reads as starting, not running', async () => {
+  // The defect the first real run of this path exposed. The state was set to
+  // 'running' the instant spawn() returned, so the Tools tab reported a working
+  // sidecar while every embed call was still being refused — measured at ~900ms
+  // for bge-small, and llama-server accepts the connection well before that, so
+  // no connection check would have caught it either.
+  const calls = []
+  const status = await startStub({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls) })
+  assert(status.state === 'starting', `a just-spawned server reported '${status.state}'`)
+  stopEmbedServer({ configDir: tmpDir })
+  return 'spawned is not answering'
+})
+
+await test('🔒 starting becomes running once /health answers', async () => {
+  const calls = []
+  let probes = 0
+  await startEmbedServer({
+    resolveBinary: () => fakeBinary,
+    configDir: tmpDir,
+    modelPath: fakeModel,
+    spawn: stubSpawn(calls),
+    // 503 while loading, then 200 — the shape llama-server actually returns.
+    fetchImpl: async () => ({ ok: ++probes >= 3 }),
+    readyTimeoutMs: 5000,
+    readyPollMs: 1,
+  })
+  assert(embedServerStatus().state === 'starting', 'flipped to running before /health was healthy')
+  const until = Date.now() + 2000
+  while (embedServerStatus().state === 'starting' && Date.now() < until) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  assert(embedServerStatus().state === 'running', `never became ready (state '${embedServerStatus().state}', ${probes} probes)`)
+  stopEmbedServer({ configDir: tmpDir })
+  return `ready after ${probes} probes`
+})
+
+await test('🔒 a server that never loads stays starting — it is not a failure', async () => {
+  // The process is alive and may still come up. Reporting 'unavailable' would
+  // claim a failure that has not happened, and the reason has to say which.
+  const calls = []
+  await startEmbedServer({
+    resolveBinary: () => fakeBinary,
+    configDir: tmpDir,
+    modelPath: fakeModel,
+    spawn: stubSpawn(calls),
+    fetchImpl: async () => ({ ok: false }),
+    readyTimeoutMs: 0,
+    readyPollMs: 1,
+  })
+  const until = Date.now() + 2000
+  while (embedServerStatus().reason === null && Date.now() < until) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  const status = embedServerStatus()
+  assert(status.state === 'starting', `a slow load reported '${status.state}'`)
+  assert(/finished loading/.test(status.reason ?? ''), `the reason does not say what is happening: ${status.reason}`)
+  stopEmbedServer({ configDir: tmpDir })
+  return status.reason
+})
+
+await test('🔒 the readiness watch stops when the server does', async () => {
+  // Otherwise a stopped server keeps a timer alive for the whole deadline, and
+  // a restart races the old watch into flipping the new process to running.
+  const calls = []
+  let probes = 0
+  await startEmbedServer({
+    resolveBinary: () => fakeBinary,
+    configDir: tmpDir,
+    modelPath: fakeModel,
+    spawn: stubSpawn(calls),
+    fetchImpl: async () => { probes++; return { ok: false } },
+    readyTimeoutMs: 10000,
+    readyPollMs: 5,
+  })
+  stopEmbedServer({ configDir: tmpDir })
+  const after = probes
+  await new Promise(resolve => setTimeout(resolve, 60))
+  assert(probes <= after + 1, `the watch kept polling after the stop (${after} -> ${probes})`)
+  assert(embedServerStatus().state === 'stopped', `state was '${embedServerStatus().state}'`)
+  return 'watch ended with the process'
+})
+
 await test('🔍 a deliberate stop reads as stopped; a crash reads as unavailable', async () => {
   const calls = []
-  await startEmbedServer({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls) })
+  await startStub({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls) })
   calls[0].child.emit('exit', 1, null)
   assert(embedServerStatus().state === 'unavailable', 'a crashed embedding server still reported running')
   assert(/exited/.test(embedServerStatus().reason ?? ''), `the reason does not say it exited: ${embedServerStatus().reason}`)
 
   const calls2 = []
-  await startEmbedServer({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls2) })
+  await startStub({ resolveBinary: () => fakeBinary, configDir: tmpDir, modelPath: fakeModel, spawn: stubSpawn(calls2) })
   stopEmbedServer({ configDir: tmpDir })
   calls2[0].child.emit('exit', 0, 'SIGTERM')
   assert(embedServerStatus().state === 'stopped', `a deliberate stop reported '${embedServerStatus().state}'`)

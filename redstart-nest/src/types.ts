@@ -127,7 +127,8 @@ export type ClientApp = {
  * What the Tools tab needs to render the retrieval switch honestly.
  *
  * Three separate facts, because they fail separately: the profile setting is
- * on, the embedding model is on disk, and the sidecar is running. A switch that
+ * on, the embedding model is on disk, and the sidecar is answering (its state
+ * is 'starting' between spawn and the first healthy /health). A switch that
  * showed only the first would say "on" for a server doing no retrieval at all.
  */
 export type RetrievalStatus = {
@@ -146,6 +147,10 @@ export type RetrievalStatus = {
 export type ToolContextEstimate = {
   toolCount: number
   approxTokens: number
+  /**
+   * The most recent completion the daemon forwarded, from ANY account — one
+   * observation, overwritten per request, never a series. See recordWireCost.
+   */
   observed: {
     at: number
     /** Tools the client sent, before bans and before retrieval. */

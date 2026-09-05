@@ -51,6 +51,59 @@ const state = {
   reason: null,
 }
 
+/**
+ * How long to keep asking before saying so. Generous: a cold page cache on a
+ * slow disk is the case this must not give up on, and giving up costs nothing
+ * anyway — the state is a report, and the next embed call will work whenever
+ * the server is ready regardless of what this concluded.
+ */
+const READY_TIMEOUT_MS = 30000
+const READY_POLL_MS = 250
+
+/**
+ * Watch a freshly spawned server until it answers, then flip 'starting' to
+ * 'running'.
+ *
+ * Uses `/health` rather than an embed call: llama-server returns 503 there
+ * while it loads and 200 once it can serve, so readiness is a fact it reports
+ * rather than one inferred from a failure. It also keeps embedTexts' one-line-
+ * per-outage log out of ordinary startup, which would otherwise record a
+ * connection refusal every time the daemon starts.
+ *
+ * Deliberately NOT awaited by startEmbedServer. Blocking the daemon's start on
+ * a model load would make retrieval — an optimization that must never be load
+ * bearing — the slowest thing in the boot path.
+ */
+async function watchUntilReady({ fetchImpl, timeoutMs, pollMs }) {
+  const startedAt = Date.now()
+  const deadline = startedAt + timeoutMs
+
+  while (state.process && state.state === 'starting') {
+    try {
+      const response = await fetchImpl(`http://127.0.0.1:${EMBED_PORT}/health`, {
+        signal: AbortSignal.timeout(1000),
+      })
+      if (response.ok) {
+        state.state = 'running'
+        state.reason = null
+        logEvent('retrieval', 'embed_server_ready', { ms: Date.now() - startedAt })
+        return
+      }
+    } catch {
+      /* refused or timed out — still loading, or gone; the loop decides which */
+    }
+
+    if (Date.now() >= deadline) {
+      // Stay 'starting': the process is alive and may still come up. Saying
+      // 'unavailable' would claim a failure that has not happened.
+      state.reason = 'the embedding server has not finished loading the model yet'
+      logEvent('retrieval', 'embed_server_slow_start', { ms: Date.now() - startedAt })
+      return
+    }
+    await new Promise(resolve => setTimeout(resolve, pollMs))
+  }
+}
+
 function unavailable(reason) {
   state.process = null
   state.pid = null
@@ -66,9 +119,21 @@ function unavailable(reason) {
  *
  * `state` is one of:
  *   'stopped'     — not running, and nothing is wrong; nobody has started it.
- *   'running'     — spawned, pid recorded.
+ *   'starting'    — spawned, but not yet answering. llama-server accepts the
+ *                   connection before it has loaded the model, so this is a
+ *                   real interval and not a formality: measured at ~900ms for
+ *                   bge-small on a warm page cache.
+ *   'running'     — answering. `/health` has returned 200 at least once.
  *   'unavailable' — cannot run, and `reason` says why in a sentence an admin
  *                   can act on. Not an error: retrieval is simply off.
+ *
+ * 'starting' exists because the first real run of this path found the status
+ * lying. The state was set to 'running' the instant spawn() returned, so the
+ * Tools tab reported a working sidecar while every embed call was still being
+ * refused — which is exactly the "switch reading on for a server doing no
+ * retrieval" the control was built to avoid. Nothing was broken by it (the
+ * filter fails open and the full tool list goes out), but an admin watching
+ * the switch was told the wrong thing.
  */
 export function embedServerStatus() {
   return {
@@ -88,10 +153,16 @@ export function embedServerStatus() {
  *   configDir: string,
  *   modelPath: string|null|undefined,
  *   spawn?: typeof nodeSpawn,
+ *   fetchImpl?: typeof fetch,
+ *   readyTimeoutMs?: number,
+ *   readyPollMs?: number,
  * }} deps
  * @returns {Promise<ReturnType<typeof embedServerStatus>>}
  */
-export async function startEmbedServer({ resolveBinary, configDir, modelPath, spawn = nodeSpawn }) {
+export async function startEmbedServer({
+  resolveBinary, configDir, modelPath, spawn = nodeSpawn,
+  fetchImpl = fetch, readyTimeoutMs = READY_TIMEOUT_MS, readyPollMs = READY_POLL_MS,
+}) {
   if (state.process) return embedServerStatus()
 
   // A previous session that never ran its exit handler may have left one of
@@ -158,13 +229,18 @@ export async function startEmbedServer({ resolveBinary, configDir, modelPath, sp
   state.process = child
   state.pid = child.pid ?? null
   state.startedAt = Date.now()
-  state.state = 'running'
+  // NOT 'running' — see the state list above. It is spawned, not answering.
+  state.state = 'starting'
   state.reason = null
 
   if (child.pid) {
     writePidFile(configDir, { pid: child.pid, binaryPath, startedAt: state.startedAt }, { name: EMBED_PID_FILE })
   }
   logEvent('retrieval', 'embed_server_started', { port: EMBED_PORT })
+
+  // Fire and forget: the status catches up on its own, and nothing waits on it.
+  void watchUntilReady({ fetchImpl, timeoutMs: readyTimeoutMs, pollMs: readyPollMs })
+
   return embedServerStatus()
 }
 

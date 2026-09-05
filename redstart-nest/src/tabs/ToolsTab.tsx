@@ -528,6 +528,11 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
           const dl = retrievalStatus?.model.download
           const downloading = on && (dl?.state === 'downloading')
           const running = retrievalStatus?.server.state === 'running'
+          // Spawned but not yet answering. A real interval — llama-server
+          // accepts the connection before the model is loaded — and it used to
+          // be reported as "running", which is the one reading this control
+          // exists to avoid.
+          const starting = retrievalStatus?.server.state === 'starting'
           const pct = dl && dl.totalBytes > 0 ? Math.min(100, Math.round((dl.receivedBytes / dl.totalBytes) * 100)) : 0
           return (
             <div className="bg-zinc-800/40 rounded px-3 py-2.5 mt-4">
@@ -572,13 +577,15 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                         ? `⚠ The ranking model could not be downloaded${dl?.error ? `: ${dl.error}` : ''}. Every tool is still being sent — nothing is broken, but nothing is being saved either. Toggle this off and on to retry.`
                         : !retrievalStatus.model.present
                           ? '⚠ The ranking model is not downloaded yet. Toggle this off and on to fetch it.'
-                          : !running
-                            ? `⚠ The ranking model is downloaded, but its process is not running${retrievalStatus.server.reason ? `: ${retrievalStatus.server.reason}` : ''}. Every tool is still being sent.`
-                            : !retrievalStatus.applied.gatewayUp
-                              ? '✓ Ready. Filtering starts when you launch a model.'
-                              : !retrievalStatus.applied.enabled
-                                ? '⚠ Ready, but the running server is still using the previously saved settings. Save this profile to apply it.'
-                                : '✓ Running. Filtering applies from your next message.'}
+                          : starting
+                            ? 'Loading the ranking model into memory. Every tool is still being sent until it finishes.'
+                            : !running
+                              ? `⚠ The ranking model is downloaded, but its process is not running${retrievalStatus.server.reason ? `: ${retrievalStatus.server.reason}` : ''}. Every tool is still being sent.`
+                              : !retrievalStatus.applied.gatewayUp
+                                ? '✓ Ready. Filtering starts when you launch a model.'
+                                : !retrievalStatus.applied.enabled
+                                  ? '⚠ Ready, but the running server is still using the previously saved settings. Save this profile to apply it.'
+                                  : '✓ Running. Filtering applies from your next message.'}
                 </p>
               )}
 
@@ -612,9 +619,18 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
           const ctx = o.ctxSize ?? config.ctxSize
           return (
             /* Amber on the same quarter-of-the-window threshold the estimate
-               above uses, and that tool-filter.mjs budgets against. */
+               above uses, and that tool-filter.mjs budgets against.
+
+               "from any account" is not padding. This is ONE observation,
+               overwritten by every completion the daemon serves, so on a
+               multi-user box it is whoever asked last — not this admin, and not
+               a series. Reading it as "my last request" is the obvious mistake
+               and the number is useless once it has been made. A per-account
+               history was declined deliberately (it is a log of one user's tool
+               usage, with a retention policy to argue about), so saying what
+               the number is stands in for keeping more of them. */
             <p className={`text-xs mt-1 ${o.toolTokens > ctx * 0.25 ? 'text-amber-400' : 'text-zinc-500'}`}>
-              Last actual request: {o.toolsSent} tool{o.toolsSent === 1 ? '' : 's'} ≈ {o.toolTokens.toLocaleString()} tokens,
+              Last request from any account: {o.toolsSent} tool{o.toolsSent === 1 ? '' : 's'} ≈ {o.toolTokens.toLocaleString()} tokens,
               plus {o.promptTokens.toLocaleString()} for the prompt and conversation — {total.toLocaleString()} of {ctx.toLocaleString()}.
               {o.toolsOffered > o.toolsAfterBans
                 ? ` ${o.toolsOffered - o.toolsAfterBans} of the ${o.toolsOffered} the client offered were withheld by policy.`
