@@ -32,6 +32,7 @@ import {
   createSelectionMemory,
 } from '../electron/main/tool-retrieval.mjs'
 import * as searchProvider from '../electron/main/search-tools-provider.mjs'
+const { retrievalStatus, syncRetrieval } = await import('../electron/main/ipc/tools.mjs')
 import { EMBED_PORT } from '../electron/main/ports.mjs'
 import {
   filterRequestTools,
@@ -989,6 +990,80 @@ await test('🔍 results are ranked, best first', async () => {
 })
 
 await new Promise(resolve => embedStub.close(resolve))
+
+console.log('\n-- turning retrieval on --')
+
+// The switch has three things behind it that fail separately: a profile field,
+// a 67 MB download, and a child process. These pin the two that are easy to get
+// wrong — that a settings save is never held up by the download, and that the
+// status tells the truth about all three rather than echoing the setting.
+
+const enableDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-enable-'))
+// Both seams are stubbed: this suite has no business pulling 67 MB off the
+// network or spawning a server to prove that a settings save does not block.
+let modelFetches = 0
+let serverStarts = 0
+const enableDeps = {
+  resolveModelsDir: () => enableDir,
+  ensureModelsDir: () => fs.mkdirSync(enableDir, { recursive: true }),
+  resolveBinary: () => process.execPath,
+  userDataDir: enableDir,
+  fetchModel: () => { modelFetches++; return new Promise(() => {}) }, // never settles: "still downloading"
+  startServer: async () => { serverStarts++ },
+}
+const profileWith = (retrieval) => ({ tools: { enabled: true, retrieval } })
+
+await test('the status reports the setting, the model and the sidecar separately', () => {
+  const status = retrievalStatus(profileWith({ enabled: true }), enableDeps)
+  assert(status.enabled === true, 'the profile setting was not read')
+  assert(status.model.present === false, 'a model that is not there was reported present')
+  assert(status.model.bytes > 0 && typeof status.model.label === 'string', 'the model is not described')
+  assert(status.server.state !== 'running', `the sidecar cannot be running: ${status.server.state}`)
+})
+
+await test('🔍 the status does not claim retrieval is happening just because the setting is on', () => {
+  // The failure this exists to prevent: a switch that reads "on" for a server
+  // doing no retrieval at all, which is worse than one that reads "off".
+  const status = retrievalStatus(profileWith({ enabled: true }), enableDeps)
+  assert(status.enabled && !status.model.present && status.server.state !== 'running',
+    'setup: this is the state where the setting is on and nothing is running')
+})
+
+await test('🔒 turning it off stops the sidecar and downloads nothing', () => {
+  const result = syncRetrieval(profileWith({ enabled: false }), enableDeps)
+  assert(result.enabled === false, 'off did not read as off')
+  assert(modelFetches === 0, 'switching retrieval off fetched a model')
+  assert(serverStarts === 0, 'switching retrieval off started a server')
+})
+
+await test('a profile with no retrieval field at all reads as off', () => {
+  assert(retrievalStatus({ tools: { enabled: true } }, enableDeps).enabled === false,
+    'an older profile with no retrieval key read as on')
+  assert(syncRetrieval({ tools: { enabled: true } }, enableDeps).enabled === false, 'an absent setting started something')
+})
+
+await test('🔍 turning it on returns immediately rather than waiting on a 67 MB download', () => {
+  // A settings save must not block on a transfer. The call returns
+  // `downloading: true` and the progress is read back through the status.
+  const started = Date.now()
+  const result = syncRetrieval(profileWith({ enabled: true }), enableDeps)
+  const elapsed = Date.now() - started
+  assert(result.enabled === true, 'on did not read as on')
+  assert(result.downloading === true, 'a missing model did not start a download')
+  assert(elapsed < 1000, `the call blocked for ${elapsed}ms — a settings save would hang`)
+})
+
+await test('a second call while the download is running does not start a second one', () => {
+  const again = syncRetrieval(profileWith({ enabled: true }), enableDeps)
+  assert(again.downloading === true, 'the in-flight download was not reported')
+  assert(modelFetches === 1, `the download was started ${modelFetches} times`)
+  const status = retrievalStatus(profileWith({ enabled: true }), enableDeps)
+  assert(status.model.download.state === 'downloading', `download state was ${status.model.download.state}`)
+})
+
+syncRetrieval(profileWith({ enabled: false }), enableDeps)
+fs.rmSync(enableDir, { recursive: true, force: true })
+
 
 // ---------------------------------------------------------------------------
 // Summary

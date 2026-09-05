@@ -8,7 +8,7 @@
 // =============================================================================
 
 import type {
-  HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup, ToolContextEstimate,
+  HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup, ToolContextEstimate, RetrievalStatus,
   ExternalMcpServer, LlamaConfig, ClientApp, ControlPlaneState, StartupState,
   CatalogModel, ModelDetail, ModelDescription, ModelArtifact, LocalModelFile, DownloadProgress,
 } from '../types'
@@ -101,6 +101,8 @@ export type RedstartAPI = {
     addGroup: (group: Omit<ToolGroup, 'builtIn'>) => Promise<boolean>
     deleteGroup: (id: string) => Promise<boolean>
     applyConfig: (config: LlamaConfig) => Promise<boolean>
+    retrievalStatus: (config: LlamaConfig) => Promise<RetrievalStatus>
+    syncRetrieval: (config: LlamaConfig) => Promise<{ enabled: boolean; downloading?: boolean }>
   }
   settings: {
     getBinaryPath: () => Promise<string | null>

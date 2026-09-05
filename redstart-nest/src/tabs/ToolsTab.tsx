@@ -176,7 +176,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
     capabilityConfig, pgConnectionString, setPgConnectionString, pgMaxRows, setPgMaxRows,
     pgTestResult, pgSaving, savePostgresConfig, testPostgresConnection,
     scholarVenueFilter, setScholarVenueFilter, saveScholarVenueFilter,
-    toolContextEstimate,
+    toolContextEstimate, retrievalStatus,
   } = caps
   const {
     externalServers, showAddExternal, setShowAddExternal,
@@ -516,6 +516,58 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
             </div>
           ))}
         </div>
+
+        {/* ---- Tool retrieval ----
+            Placed directly under the two cost readouts, because it is the
+            answer to the number they report. Its three states are shown
+            separately (setting, model, sidecar) rather than collapsed into one
+            "on", since a switch reading on for a server doing no retrieval is
+            the worst version of this control. */}
+        {(() => {
+          const on = config.tools?.retrieval?.enabled === true
+          const dl = retrievalStatus?.model.download
+          const downloading = on && (dl?.state === 'downloading')
+          const running = retrievalStatus?.server.state === 'running'
+          const pct = dl && dl.totalBytes > 0 ? Math.min(100, Math.round((dl.receivedBytes / dl.totalBytes) * 100)) : 0
+          return (
+            <div className="bg-zinc-800/40 rounded px-3 py-2.5 mt-4">
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0">
+                  <span className="text-sm text-zinc-200">Send only the tools a conversation needs</span>
+                  <span className="block text-xs text-zinc-600 mt-0.5">
+                    Ranks your enabled tools against the conversation and sends the ones that match, instead of
+                    every schema on every message. Runs a small model locally
+                    {retrievalStatus ? ` (${retrievalStatus.model.label}, ${Math.round(retrievalStatus.model.bytes / 1e6)} MB, downloaded once)` : ''}.
+                    Tools the model has already used are never taken away mid-task, and it can ask for others by name.
+                  </span>
+                </span>
+                <TogglePill
+                  checked={on}
+                  onToggle={() => setToolsField('retrieval', { ...(config.tools?.retrieval ?? {}), enabled: !on })}
+                  className="flex-shrink-0"
+                />
+              </div>
+
+              {on && (
+                <p className="text-xs mt-2 pt-2 border-t border-zinc-700/50 text-zinc-500">
+                  {downloading
+                    ? `Downloading the ranking model — ${pct}%. Tools are unfiltered until it finishes.`
+                    : dl?.state === 'failed'
+                      ? `⚠ The ranking model could not be downloaded${dl.error ? `: ${dl.error}` : ''}. Every tool is still being sent; nothing is broken, but nothing is being saved either.`
+                      : running
+                        ? '✓ Running. Filtering applies from your next message.'
+                        : retrievalStatus?.server.reason
+                          ? `⚠ Not running: ${retrievalStatus.server.reason}. Every tool is still being sent.`
+                          : 'Starting…'}
+                </p>
+              )}
+
+              {on && !config.tools?.enabled && (
+                <p className="text-xs mt-2 text-zinc-600">Tools are switched off for this profile, so there is nothing to filter.</p>
+              )}
+            </div>
+          )
+        })()}
 
         {/* Two numbers, side by side and labelled, because they measure
             different things. The estimate describes the tools THIS PROFILE

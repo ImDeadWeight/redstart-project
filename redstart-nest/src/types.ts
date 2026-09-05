@@ -123,6 +123,24 @@ export type ClientApp = {
  * gateway adds a system prompt on top. Null until a completion has been made,
  * and that null is meaningful — it is not the same as costing nothing.
  */
+/**
+ * What the Tools tab needs to render the retrieval switch honestly.
+ *
+ * Three separate facts, because they fail separately: the profile setting is
+ * on, the embedding model is on disk, and the sidecar is running. A switch that
+ * showed only the first would say "on" for a server doing no retrieval at all.
+ */
+export type RetrievalStatus = {
+  enabled: boolean
+  model: {
+    label: string
+    bytes: number
+    present: boolean
+    download: { state: string; receivedBytes: number; totalBytes: number; error: string | null }
+  }
+  server: { state: string; reason: string | null; pid: number | null; startedAt: number | null; port: number }
+}
+
 export type ToolContextEstimate = {
   toolCount: number
   approxTokens: number
@@ -193,6 +211,12 @@ export type ProfileTools = {
   // An admin uses this to enforce an org policy (e.g. disable write_file)
   // that non-technical staff cannot override client-side.
   disabledToolIds: string[]
+  // Tool retrieval. When on, the gateway narrows the tool list on each
+  // completion to what the conversation plausibly needs, using a local
+  // embedding model. Off by default and absent on every profile saved before
+  // it, which reads as off — the safe direction, since the whole feature is an
+  // optimization the server works without.
+  retrieval?: { enabled?: boolean; relativeFloor?: number; floor?: number; margin?: number }
 }
 
 export type LlamaConfig = {
