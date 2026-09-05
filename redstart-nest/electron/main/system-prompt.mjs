@@ -253,6 +253,43 @@ function buildToolPolicy(config, hasTools, toolNames) {
 }
 
 // ---------------------------------------------------------------------------
+// Block 6b — retrieval (the tool list is a subset)
+// ---------------------------------------------------------------------------
+// Every other block in this file exists to stop the model claiming something
+// the request does not support. This one exists to stop the opposite error.
+//
+// With tool retrieval on, the payload carries a SELECTION — scored against the
+// conversation, narrowed to a budget — and nothing in the request says so. A
+// model reasons from what it can see, so an absent tool reads as a capability
+// the deployment does not have, and it will say so: that is the "are there any
+// databases?" -> "none exist" failure recorded above deriveEgressFacts's
+// localStores, reintroduced by a mechanism that removes tools on purpose.
+//
+// The remedy already exists and had one line of prose to announce itself, in
+// search_tools' own description, competing for attention with every other tool
+// in the list. Stating it here costs about sixty tokens and is the difference
+// between a model that looks for a tool and one that tells the user it does not
+// exist.
+//
+// GATED ON search_tools BEING IN THE PAYLOAD, not on the retrieval setting.
+// search-tools-provider.mjs only advertises it while retrieval is enabled, so
+// its presence is the request's own evidence that the list was narrowed — the
+// same substantiation rule as everywhere else here. It also keeps the advice
+// actionable: a client that sends its own tools without connecting to Nest's
+// MCP server gets a narrowed list and no search_tools, and telling that model
+// to call a tool it does not have would be one more false claim.
+function buildRetrieval(toolNames) {
+  const names = Array.isArray(toolNames) ? toolNames : []
+  if (!names.includes('search_tools')) return null
+
+  return [
+    'The tools listed for this turn are a subset chosen for this conversation, not everything this server can do.',
+    'If what you need is not there, call search_tools to look for it before concluding it does not exist.',
+    'Telling the user a capability is unavailable because it is missing from your tool list is the one wrong answer here.',
+  ].join(' ')
+}
+
+// ---------------------------------------------------------------------------
 // Block 8 — data handling (spec §7)
 // ---------------------------------------------------------------------------
 // Derived from live configuration, never hand-written. A hand-authored tool
@@ -504,6 +541,10 @@ export function composePrompt(input = {}) {
     ['mode', resolveMode(mode)],
     ['policy', admin.policy],
     ['tool_policy', buildToolPolicy(config, hasTools, toolNames)],
+    // After tool_policy — it qualifies the list those constraints apply to —
+    // and before locality, so "your list is partial" is settled before "and
+    // these ones touch a different computer".
+    ['retrieval', buildRetrieval(toolNames)],
     // After tool_policy (it is about tools) and before the style/data blocks,
     // so the model knows which machine a tool touches before it is told where
     // data is stored. Spec §3.

@@ -281,6 +281,55 @@ await test('🔒 hasTools with no toolNames states no tool-specific constraint',
   return 'failure handling only'
 })
 
+await test('🔒 a narrowed tool list says so, and points at the way out', async () => {
+  // Every other block here stops the model claiming what the request does not
+  // support. This one stops the opposite error: with retrieval on, an absent
+  // tool reads as a capability the deployment lacks, and the model says so.
+  const { prompt, blocks } = composePrompt({
+    config: LOCAL_ONLY_CONFIG,
+    hasTools: true,
+    toolNames: ['postgres_query', 'search_tools'],
+    now: NOW,
+  })
+  assert(blocks.includes('retrieval'), 'no retrieval block with search_tools in the payload')
+  assert(prompt.includes('subset chosen for this conversation'), 'the list is not described as partial')
+  assert(prompt.includes('call search_tools'), 'the remedy is not named')
+  assert(prompt.includes('is the one wrong answer here'), 'the failure mode is not ruled out')
+  return 'partial list disclosed'
+})
+
+await test('🔒 no search_tools in the payload → no retrieval block', async () => {
+  // Gated on the TOOL, not on the setting. search-tools-provider only
+  // advertises it while retrieval is enabled, so its presence is the request's
+  // own evidence that the list was narrowed — and a client that sends its own
+  // tools without connecting to Nest's MCP server would otherwise be told to
+  // call something it does not have.
+  const { prompt, blocks } = composePrompt({
+    config: LOCAL_ONLY_CONFIG,
+    hasTools: true,
+    toolNames: ['postgres_query'],
+    now: NOW,
+  })
+  assert(!blocks.includes('retrieval'), 'promised a search tool the request does not carry')
+  assert(!prompt.includes('search_tools'), 'named search_tools with none in the payload')
+  return 'silent without the tool'
+})
+
+await test('🔒 the retrieval block stays small enough to be worth its tokens', async () => {
+  // Same discipline as the modes (spec §9): a block that costs 300 tokens
+  // defeats its own purpose in an assembly with a 1200-token soft budget.
+  const withOut = composePrompt({
+    config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query'], now: NOW,
+  }).tokens
+  const withIn = composePrompt({
+    config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query', 'search_tools'], now: NOW,
+  }).tokens
+  const cost = withIn - withOut
+  assert(cost > 0, 'the block cost nothing, so it is not being emitted')
+  assert(cost <= 100, `the retrieval block costs ${cost} tokens`)
+  return `${cost} tokens`
+})
+
 await test('identity survives even with no config at all', async () => {
   const { prompt } = composePrompt({ config: null, hasTools: false, now: NOW })
   assert(prompt.includes('Redstart'), 'identity block missing')
@@ -511,12 +560,13 @@ await test('block order matches the spec §3 contract', async () => {
     mode: 'research',
     // Every optional block has to be present for this to test the ORDER rather
     // than which blocks happened to be emitted — locality included, and
-    // tool_policy now needs the names as well as the config.
-    toolNames: ALL_TOOL_NAMES,
+    // tool_policy now needs the names as well as the config. search_tools is
+    // what makes the retrieval block appear.
+    toolNames: [...ALL_TOOL_NAMES, 'search_tools'],
     clientToolNames: ['fs_read_file'],
     now: NOW,
   })
-  const expected = ['identity', 'surface', 'context', 'mode', 'policy', 'tool_policy', 'locality', 'style', 'data_handling', 'session', 'precedence']
+  const expected = ['identity', 'surface', 'context', 'mode', 'policy', 'tool_policy', 'retrieval', 'locality', 'style', 'data_handling', 'session', 'precedence']
   // `mode` must be a real ID now that modes are code-defined (spec §9).
   assert(
     blocks.join(',') === expected.join(','),

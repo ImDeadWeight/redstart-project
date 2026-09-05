@@ -92,7 +92,8 @@ Assembled in this order. Every block is optional except `identity` and `session`
 | 4 | `mode` | user-selected | snapshot | One task block (§6). |
 | 5 | `policy` | admin | snapshot | Template §4. Carries the precedence clause (§4). |
 | 6 | `tool_policy` | admin + code | per-request | Preference, confirmation, failure handling. Never signatures. |
-| 6b | `locality` | derived | per-request | Which computer a tool acts on. Emitted only when the request carries client-side tools (§7b). |
+| 6b | `retrieval` | derived | per-request | The tool list is a subset. Emitted only when the request carries `search_tools` (§6b). |
+| 6c | `locality` | derived | per-request | Which computer a tool acts on. Emitted only when the request carries client-side tools (§7b). |
 | 7 | `style` | admin | snapshot | Template §3 — format conventions. |
 | 8 | `data_handling` | derived | per-request | §7. Generated from config, never hand-written. |
 | 9 | `preferences` | user | snapshot | Tone and formatting only. |
@@ -190,6 +191,33 @@ The `tool_policy` block carries only what schemas cannot express:
 - failure handling (*report tool errors verbatim; do not retry destructive calls*)
 
 Code contributes the invariants; admins append deployment-specific preferences.
+
+### 6b. Retrieval — the list is a subset, and saying so
+
+Every other block in this spec exists to stop the assistant claiming something
+the request does not support. This one exists to stop the opposite error.
+
+With tool retrieval enabled the payload carries a **selection** — scored
+against the conversation, cut to a budget — and nothing in the request says so.
+A model reasons from what it can see, so an absent tool reads as a capability
+the deployment does not have, and it reports it that way. That is the same
+failure recorded in §7's derivation notes, where a data-handling block that
+omitted SQLite, Vault and Git produced *"are there any databases?"* → *"none
+exist"* — except reintroduced by a mechanism that removes tools **on purpose**,
+and therefore on every turn rather than on a misconfiguration.
+
+The remedy already exists — `search_tools` — and announcing it only in that
+tool's own description leaves it competing for attention with every other tool
+in the list. The block states the inference rule instead: absence from the list
+is not evidence of absence from the deployment.
+
+**Gated on `search_tools` being in the payload, not on the retrieval setting.**
+The provider advertises that tool only while retrieval is enabled, so its
+presence is the request's own evidence that the list was narrowed — the same
+substantiation rule as every other block here. It also keeps the advice
+actionable: a client that sends its own tools without connecting to Nest's MCP
+server gets a narrowed list and no `search_tools`, and telling that model to
+call a tool it does not have would be one more false claim.
 
 ---
 

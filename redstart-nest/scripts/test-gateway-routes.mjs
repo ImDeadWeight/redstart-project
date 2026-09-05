@@ -618,6 +618,34 @@ async function main() {
     updateGatewayConfig(baseConfig)
   })
 
+  await test('🔒 a payload carrying search_tools is told its tool list is partial', async () => {
+    // End to end for the block: search_tools has to survive the ban filter and
+    // the retrieval filter and still be in the names the composer reads, or the
+    // model is handed a narrowed list with nothing saying it was narrowed.
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+    await completions({
+      messages: [{ role: 'user', content: 'what changed in the repo' }],
+      tools: [toolDef('git_status'), toolDef('search_tools')],
+    })
+    const system = systemOf()
+    assert(/subset chosen for this conversation/.test(system), 'the narrowed list was not disclosed')
+    assert(/call search_tools/.test(system), 'the way out was not named')
+    updateGatewayConfig(baseConfig)
+  })
+
+  await test('🔒 without search_tools the prompt makes no promise about finding more', async () => {
+    // The gate is the tool, not the setting: retrieval is ON here and the
+    // payload still gets no retrieval block, because this client has no
+    // search_tools to call.
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+    await completions({
+      messages: [{ role: 'user', content: 'what changed in the repo' }],
+      tools: [toolDef('git_status')],
+    })
+    assert(!/subset chosen for this conversation/.test(systemOf()), 'promised a search tool the payload lacks')
+    updateGatewayConfig(baseConfig)
+  })
+
   await test('a request carrying no tools is untouched by retrieval', async () => {
     updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
     const res = await completions({ messages: [{ role: 'user', content: 'hello' }] })
