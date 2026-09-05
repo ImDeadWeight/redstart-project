@@ -149,6 +149,26 @@ import { DRAG_REGION } from '../hooks/useWindowControlsOverlay'
 // nothing, since a server status is not a claim to make before the caller has
 // been authenticated.
 
+/**
+ * The status readout that sits at the right of the top bar.
+ *
+ * Shared so the sign-in screen and the running app produce the same pixels
+ * rather than two near-identical copies of the same three Tailwind strings —
+ * which is what "the bar should look the same on both" actually requires.
+ */
+export function StatusPill({ tone, label }: {
+  tone: 'on' | 'pending' | 'off'
+  label: string
+}) {
+  const dot = tone === 'on' ? 'bg-orange-500' : tone === 'pending' ? 'bg-amber-400' : 'bg-zinc-600'
+  return (
+    <div className="flex items-center gap-2">
+      <span className={`w-2 h-2 rounded-full ${dot}`} />
+      <span className="text-xs uppercase tracking-widest text-zinc-400">{label}</span>
+    </div>
+  )
+}
+
 export function TopBar({ right, overlay }: {
   right?: React.ReactNode
   overlay: { active: boolean; rightInset: number }

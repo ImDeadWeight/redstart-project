@@ -23,7 +23,7 @@ import { useControlPlaneExposure } from './hooks/useControlPlaneExposure'
 import { useStartupSettings } from './hooks/useStartupSettings'
 import { useShutdown } from './hooks/useShutdown'
 import { useWindowControlsOverlay } from './hooks/useWindowControlsOverlay'
-import { TopBar } from './components/ui'
+import { TopBar, StatusPill } from './components/ui'
 import { useExternalMcp } from './hooks/useExternalMcp'
 import { useToolsCatalog } from './hooks/useToolsCatalog'
 import { useCapabilities } from './hooks/useCapabilities'
@@ -118,12 +118,10 @@ export default function App() {
       <TopBar
         overlay={overlay}
         right={<>
-          <div className="flex items-center gap-2">
-            <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-orange-500' : isStopping || isStarting ? 'bg-amber-400' : 'bg-zinc-600'}`} />
-            <span className="text-xs uppercase tracking-widest text-zinc-400">
-              {serverState === 'running' ? healthLabel : serverState === 'stopping' ? 'Stopping…' : serverState === 'starting' ? 'Starting…' : 'Stopped'}
-            </span>
-          </div>
+          <StatusPill
+            tone={isRunning ? 'on' : isStopping || isStarting ? 'pending' : 'off'}
+            label={serverState === 'running' ? healthLabel : serverState === 'stopping' ? 'Stopping…' : serverState === 'starting' ? 'Starting…' : 'Stopped'}
+          />
           {isRunning && (
             <div className="text-xs text-zinc-400">
               <span className="text-orange-400 font-semibold">{tokensPerMin.toLocaleString()}</span> tok/min

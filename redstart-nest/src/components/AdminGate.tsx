@@ -39,7 +39,7 @@ import type { RedstartAPI } from '../api/redstart'
 import { setHttpAPI } from '../api/redstart'
 import { createHttpAPI } from '../api/http'
 import { getSessionToken, setSessionToken, clearSessionToken } from '../api/session'
-import { btnCls, inputCls, TopBar } from './ui'
+import { btnCls, inputCls, TopBar, StatusPill } from './ui'
 
 /** The setupToken query param, read once — see "THE ELECTRON TOKEN HANDOFF" above. */
 function consumeSetupToken(): string {
@@ -66,9 +66,10 @@ async function postJson(urlPath: string, body: unknown) {
   return { ok: res.ok, status: res.status, body: json as Record<string, unknown> | null }
 }
 
-function Shell({ title, subtitle, children }: {
+function Shell({ title, subtitle, status, children }: {
   title: string
   subtitle: string
+  status: string
   children: React.ReactNode
 }) {
   const overlay = useWindowControlsOverlay()
@@ -83,9 +84,12 @@ function Shell({ title, subtitle, children }: {
           means the h-12 that has to equal titleBarOverlay.height in
           electron/main/index.mjs is stated in exactly one place.
 
-          No status on the right: a server state is not a claim to make to a
-          caller who has not been authenticated yet. */}
-      <TopBar overlay={overlay} />
+          The right-hand slot is filled, but not with the server state: whether
+          a model is running is not a claim to make to a caller who has not
+          authenticated, and `server:status` will not answer one either. What
+          goes there is something true of THIS screen — connecting, signed out,
+          first run — so the bar keeps its shape without inventing a fact. */}
+      <TopBar overlay={overlay} right={<StatusPill tone="off" label={status} />} />
       <div className="flex flex-1 items-center justify-center px-4 overflow-y-auto">
         <div className="w-full max-w-sm py-8">
           <p className="text-xs uppercase tracking-widest text-zinc-500 mb-1">{title}</p>
@@ -156,7 +160,7 @@ export function AdminGate({ children }: { children: React.ReactNode }) {
   if (phase === 'ready') return <>{children}</>
 
   if (phase === 'checking') {
-    return <Shell title="Control plane" subtitle="Connecting…"><div /></Shell>
+    return <Shell title="Control plane" subtitle="Connecting…" status="Connecting…"><div /></Shell>
   }
 
   async function signIn(event: React.FormEvent) {
@@ -233,6 +237,7 @@ export function AdminGate({ children }: { children: React.ReactNode }) {
       <Shell
         title="Set up this box"
         subtitle="No owner account exists yet. Enter the setup code printed on this machine, then choose the credential you will sign in with."
+        status="First run"
       >
         <form onSubmit={setUp} className="space-y-2">
           <input
@@ -258,7 +263,7 @@ export function AdminGate({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <Shell title="Sign in" subtitle="This is the Redstart Nest control plane. Only the owner account can sign in here.">
+    <Shell title="Sign in" subtitle="This is the Redstart Nest control plane. Only the owner account can sign in here." status="Signed out">
       <form onSubmit={signIn} className="space-y-2">
         {fields}
         {error && <p className="text-xs text-red-400 leading-relaxed">{error}</p>}
