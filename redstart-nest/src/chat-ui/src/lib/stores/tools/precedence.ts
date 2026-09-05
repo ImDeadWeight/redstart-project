@@ -3,10 +3,16 @@
  *
  * Redstart Twig grants a folder on the USER'S OWN machine and executes its
  * `fs_*` tools there. Redstart Nest's File System capability acts on the
- * SERVER, whose root is a single folder shared by every account. When both are
+ * SERVER, under an admin-configured root inside which every call is resolved
+ * into the caller's own folder (`user-scope.mjs` on the server). When both are
  * live the model holds two complete filesystem APIs pointing at two different
  * computers, and nothing in either tool's name or schema distinguishes them —
  * so "save this to notes.md" resolves to whichever the model happens to pick.
+ *
+ * Which machine, not which account, is what this module decides. The scoping is
+ * noted only because the older wording here called the server root "a single
+ * folder shared by every account" — true of the capability root the MCP child
+ * is spawned at, and not of the folder any call actually reaches.
  *
  * The old defence was accidental. Nest's file tools were once ALSO named
  * `fs_*`, so pushing the local ones first let a name-collision dedupe shadow
