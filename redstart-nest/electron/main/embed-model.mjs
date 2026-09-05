@@ -51,6 +51,17 @@ import { logEvent } from './logger.mjs'
 export const EMBED_MODEL = Object.freeze({
   label: 'bge-small-en-v1.5',
   dimensions: 384,
+  /**
+   * The model's hard positional limit, and llama-server's `-c` for it.
+   *
+   * NOT advisory. An input over this returns HTTP 500 ("input (N tokens) is too
+   * large to process") and takes the whole batch with it, so every text handed
+   * to the embedder is truncated to fit. Found the way these things are found:
+   * D2 says the query is the whole conversation, this model can see 512 tokens
+   * of it, and the Phase 2.4 evaluation used one-sentence queries so the two
+   * never met until a real conversation did.
+   */
+  maxTokens: 512,
   repoId: 'CompendiumLabs/bge-small-en-v1.5-gguf',
   // A commit sha, not 'main': the pinned hash below describes the file at this
   // revision, and a branch that moves would turn a verified download into a

@@ -1,6 +1,7 @@
 'use strict'
 
 import { embedTexts } from './embed-server.mjs'
+import { EMBED_MODEL } from './embed-model.mjs'
 import { logEvent } from './logger.mjs'
 import {
   conversationKey,
@@ -95,7 +96,7 @@ export async function filterRequestTools({
       store.setMany(missing.map((m, i) => [m.hash, vectors[i]]))
     }
 
-    const queryText = conversationQueryText(messages)
+    const queryText = conversationQueryText(messages, { maxTokens: EMBED_MODEL.maxTokens })
     if (!queryText.trim()) return unchanged(tools, 'no-query')
     const queryVectors = await embed([queryText])
     if (!queryVectors) return unchanged(tools, 'no-embedding-server')

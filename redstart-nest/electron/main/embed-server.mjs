@@ -7,6 +7,8 @@ import * as path from 'path'
 import { buildEmbedArgs } from './llama-args.mjs'
 import { logEvent } from './logger.mjs'
 import { EMBED_PORT } from './ports.mjs'
+import { EMBED_MODEL } from './embed-model.mjs'
+import { truncateForEmbedding } from './tool-retrieval.mjs'
 import { writePidFile, deletePidFile, reapStaleProcess } from './process-supervision.mjs'
 
 // =============================================================================
@@ -230,18 +232,24 @@ let lastFailureReason = null
 export async function embedTexts(texts, { port = EMBED_PORT, timeoutMs = EMBED_TIMEOUT_MS, fetchImpl = fetch } = {}) {
   if (!Array.isArray(texts) || texts.length === 0) return []
 
+  // Last line of defence, applied to EVERY caller rather than trusted to each.
+  // An input past the model's positional limit is not a degraded embedding, it
+  // is a 500 that fails the whole batch — so the one function that knows the
+  // server's limits is the one that enforces them.
+  const bounded = texts.map(t => truncateForEmbedding(String(t ?? ''), EMBED_MODEL.maxTokens))
+
   try {
     const response = await fetchImpl(`http://127.0.0.1:${port}/v1/embeddings`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ input: texts }),
+      body: JSON.stringify({ input: bounded }),
       signal: AbortSignal.timeout(timeoutMs),
     })
     if (!response.ok) return failure(`the embedding server answered ${response.status}`)
 
     const body = await response.json()
     const data = body?.data
-    if (!Array.isArray(data) || data.length !== texts.length) {
+    if (!Array.isArray(data) || data.length !== bounded.length) {
       return failure('the embedding server returned a body this client does not understand')
     }
 
@@ -250,11 +258,11 @@ export async function embedTexts(texts, { port = EMBED_PORT, timeoutMs = EMBED_T
     // reordered batch would silently attach every tool to the wrong vector,
     // which is the one failure mode here that produces bad results rather than
     // no results.
-    const out = new Array(texts.length)
+    const out = new Array(bounded.length)
     for (const row of data) {
       const at = Number.isInteger(row?.index) ? row.index : data.indexOf(row)
       const vector = row?.embedding
-      if (at < 0 || at >= texts.length || !Array.isArray(vector) || vector.length === 0) {
+      if (at < 0 || at >= bounded.length || !Array.isArray(vector) || vector.length === 0) {
         return failure('the embedding server returned a row with no usable vector')
       }
       out[at] = Float32Array.from(vector)

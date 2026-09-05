@@ -325,6 +325,33 @@ export function selectTools({ scored, pins, previous, budgetTokens = Infinity, f
 // with no session table to grow, expire, or leak across accounts.
 
 /**
+ * Characters per token, for sizing text against a model's positional limit.
+ *
+ * Deliberately pessimistic — English runs nearer 4 — because the two errors are
+ * not symmetric. Over-estimating the token count costs a little text; under-
+ * estimating it costs the whole request, since an over-long input returns a 500
+ * that takes its entire batch down with it.
+ */
+export const CHARS_PER_TOKEN = 3
+
+/**
+ * Cut a string to a token budget, on a word boundary when one is near the end.
+ *
+ * @param {string} text
+ * @param {number} maxTokens
+ * @returns {string}
+ */
+export function truncateForEmbedding(text, maxTokens) {
+  if (typeof text !== 'string') return ''
+  if (!Number.isFinite(maxTokens) || maxTokens <= 0) return text
+  const maxChars = Math.floor(maxTokens * CHARS_PER_TOKEN)
+  if (text.length <= maxChars) return text
+  const cut = text.slice(0, maxChars)
+  const lastSpace = cut.lastIndexOf(' ')
+  return lastSpace > maxChars * 0.8 ? cut.slice(0, lastSpace) : cut
+}
+
+/**
  * The text scored against the tools: every user message in the conversation,
  * plus the name of every tool it has already called.
  *
@@ -334,22 +361,52 @@ export function selectTools({ scored, pins, previous, budgetTokens = Infinity, f
  * entire KV cache. A query that drifts slowly is what makes a monotonic
  * selection nearly free rather than a constant fight against the scorer.
  *
+ * The embedding model has a hard positional limit, so "the whole conversation"
+ * has a ceiling whether anyone likes it or not. When it is reached the OLDEST
+ * user messages are dropped first and the tool names are always kept: names are
+ * a handful of tokens each and are the strongest signal in the query, while the
+ * opening of a long conversation is the part least likely to describe what is
+ * wanted now.
+ *
+ * Dropping the oldest reintroduces some of the volatility that choosing the
+ * whole conversation was meant to avoid — but only some, and it is affordable
+ * precisely because application is monotonic: a drifting query can add tools,
+ * never take them away, so the cost of drift is bounded at one re-prefill.
+ *
  * @param {any[]} messages
+ * @param {{ maxTokens?: number }} [options]
  * @returns {string}
  */
-export function conversationQueryText(messages) {
-  const parts = []
+export function conversationQueryText(messages, { maxTokens = Infinity } = {}) {
+  const userParts = []
+  const toolNames = []
   for (const msg of Array.isArray(messages) ? messages : []) {
     if (msg?.role === 'user') {
       const text = messageText(msg.content)
-      if (text) parts.push(text)
+      if (text) userParts.push(text)
     }
     for (const call of Array.isArray(msg?.tool_calls) ? msg.tool_calls : []) {
       const name = call?.function?.name
-      if (typeof name === 'string' && name) parts.push(name)
+      if (typeof name === 'string' && name && !toolNames.includes(name)) toolNames.push(name)
     }
   }
-  return parts.join('\n')
+
+  if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
+    return [...userParts, ...toolNames].join('\n')
+  }
+
+  const budget = Math.floor(maxTokens * CHARS_PER_TOKEN)
+  // Names first, so what survives a tight budget is the part that identifies
+  // tools rather than the part that describes a problem.
+  const names = truncateForEmbedding(toolNames.join('\n'), maxTokens)
+  let remaining = budget - names.length - 1
+  const kept = []
+  for (let i = userParts.length - 1; i >= 0 && remaining > 0; i--) {
+    const part = userParts[i].length <= remaining ? userParts[i] : userParts[i].slice(-remaining)
+    kept.unshift(part)
+    remaining -= part.length + 1
+  }
+  return [...kept, names].filter(Boolean).join('\n')
 }
 
 // Content is a string in the simple case and an array of parts in the

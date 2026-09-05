@@ -30,10 +30,13 @@ import {
   conversationKey,
   pinsFromMessages,
   createSelectionMemory,
+  truncateForEmbedding,
+  CHARS_PER_TOKEN,
 } from '../electron/main/tool-retrieval.mjs'
 import * as searchProvider from '../electron/main/search-tools-provider.mjs'
 const { retrievalStatus, syncRetrieval, applyToolsConfig, resetRetrievalState } = await import('../electron/main/ipc/tools.mjs')
 import { EMBED_PORT } from '../electron/main/ports.mjs'
+import { EMBED_MODEL } from '../electron/main/embed-model.mjs'
 import {
   filterRequestTools,
   searchTools,
@@ -867,6 +870,100 @@ await test('🔍 the budget is enforced end to end', async () => {
 })
 
 
+console.log('\n-- the embedding model cannot see more than 512 tokens --')
+
+// The bug this section exists for. The query is the whole conversation by
+// design, bge-small stops at 512 positions, and llama-server answers an
+// over-long input with a 500 that fails the ENTIRE batch — so one long
+// conversation cost every tool its vector and the request went out unfiltered.
+// The Phase 2.4 evaluation used one-sentence queries, so the two decisions
+// never met until a real conversation put them together.
+
+await test('truncateForEmbedding leaves text that already fits alone', () => {
+  assert(truncateForEmbedding('short enough', 512) === 'short enough', 'a short string was cut')
+  assert(truncateForEmbedding('anything at all', Infinity) === 'anything at all', 'an unbounded budget cut a string')
+})
+
+await test('🔍 truncateForEmbedding cuts to the budget', () => {
+  const cut = truncateForEmbedding('x'.repeat(10000), 512)
+  assert(cut.length <= 512 * CHARS_PER_TOKEN, `still ${cut.length} chars for a 512-token budget`)
+})
+
+await test('it prefers a word boundary, but not at any cost', () => {
+  const words = truncateForEmbedding(('word '.repeat(2000)), 10)
+  assert(!words.endsWith(' ') && !/\sw?o?r?$/.test(words), `cut mid-word with a boundary available: ${JSON.stringify(words.slice(-8))}`)
+  // No boundary anywhere near the end: take the hard cut rather than almost nothing.
+  const solid = truncateForEmbedding('a'.repeat(500) + ' ' + 'b'.repeat(500), 100)
+  assert(solid.length === 300, `a boundary at 20% of the budget was used anyway: ${solid.length}`)
+})
+
+await test('a non-string and a zero budget are handled rather than thrown on', () => {
+  assert(truncateForEmbedding(null, 512) === '', 'null did not become an empty string')
+  assert(truncateForEmbedding('text', 0) === 'text', 'a zero budget cut everything')
+})
+
+await test('🔍 a bounded query stays inside the budget, however long the conversation', () => {
+  const messages = [
+    { role: 'user', content: 'x'.repeat(20000) },
+    { role: 'assistant', tool_calls: [{ function: { name: 'git_status' } }] },
+    { role: 'user', content: 'now check the repo' },
+  ]
+  const q = conversationQueryText(messages, { maxTokens: 512 })
+  assert(q.length <= 512 * CHARS_PER_TOKEN, `query was ${q.length} chars — this is the 500`)
+})
+
+await test('🔒 tool names survive a tight budget; the oldest prose does not', () => {
+  const messages = [
+    { role: 'user', content: 'the opening question, long ago '.repeat(200) },
+    { role: 'assistant', tool_calls: [{ function: { name: 'vault_search' } }] },
+    { role: 'user', content: 'and what about now' },
+  ]
+  const q = conversationQueryText(messages, { maxTokens: 64 })
+  assert(q.length <= 64 * CHARS_PER_TOKEN, `over budget at ${q.length} chars`)
+  assert(q.includes('vault_search'), `a tool already called was dropped from the query: ${JSON.stringify(q)}`)
+  assert(q.includes('and what about now'), 'the most recent question was dropped in favour of the oldest')
+  // The opening message is 6,200 characters; whatever survives of it is a tail
+  // fragment, never the message.
+  assert(q.length < messages[0].content.length, 'the whole opening survived a 64-token budget')
+})
+
+await test('an unbounded call is still the whole conversation', () => {
+  const messages = [
+    { role: 'user', content: 'first' },
+    { role: 'assistant', tool_calls: [{ function: { name: 'git_log' } }] },
+    { role: 'user', content: 'second' },
+  ]
+  const q = conversationQueryText(messages)
+  assert(/first/.test(q) && /second/.test(q) && /git_log/.test(q), `something was lost with no budget: ${q}`)
+})
+
+await test('🔒 embedTexts truncates before sending, so one long input cannot fail the batch', async () => {
+  // A stub that behaves the way llama-server actually does: refuse anything past
+  // the model's limit, and fail the whole request when it does.
+  const limitChars = EMBED_MODEL.maxTokens * CHARS_PER_TOKEN
+  let sawOversized = false
+  await withStubServer(async (req, res) => {
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    const input = JSON.parse(raw).input
+    if (input.some(t => t.length > limitChars)) {
+      sawOversized = true
+      res.statusCode = 500
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ error: { code: 500, message: 'input is too large to process', type: 'server_error' } }))
+      return
+    }
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({ data: input.map((_, index) => ({ index, embedding: [1, 0] })) }))
+  }, async (port) => {
+    resetEmbedFailureLog()
+    const out = await embedTexts(['word '.repeat(20000), 'a short tool description'], { port })
+    assert(!sawOversized, 'an over-long input reached the server — the 500 would take the whole batch with it')
+    assert(out !== null && out.length === 2, `expected 2 vectors, got ${out && out.length}`)
+  })
+})
+
+
 console.log('\n-- search_tools --')
 
 // A stub embedding server on the real EMBED_PORT, so callTool() runs the whole
@@ -888,8 +985,18 @@ const embedStub = http.createServer(async (req, res) => {
   res.setHeader('content-type', 'application/json')
   res.end(JSON.stringify({ data }))
 })
-await new Promise(resolve => embedStub.listen(EMBED_PORT, '127.0.0.1', resolve))
+// EMBED_PORT specifically, because these drive the provider's real callTool()
+// and it embeds through the production client, which knows one port. A running
+// Redstart owns that port, so this section skips rather than failing — the same
+// bargain test-daemon-smoke.mjs makes, and CI always has the port to itself.
+const embedPortFree = await new Promise(resolve => {
+  embedStub.once('error', () => resolve(false))
+  embedStub.listen(EMBED_PORT, '127.0.0.1', () => resolve(true))
+})
 resetEmbedFailureLog()
+if (!embedPortFree) {
+  console.log(`  SKIP - port ${EMBED_PORT} is in use; is a Redstart embedding server running?`)
+}
 
 const catalog = [
   { name: 'git_status', description: 'Show the working-tree status of a git repository' },
@@ -901,7 +1008,7 @@ function catalogConfig(extra = {}) {
   return { toolRetrieval: { enabled: true }, ...extra }
 }
 
-await test('search_tools is advertised only while retrieval is on', () => {
+if (embedPortFree) await test('search_tools is advertised only while retrieval is on', () => {
   assert(searchProvider.toolDefs({}).length === 0, 'a server with retrieval off advertised search_tools')
   assert(searchProvider.toolDefs({ toolRetrieval: { enabled: false } }).length === 0, 'an explicit off still advertised it')
   const defs = searchProvider.toolDefs(catalogConfig())
@@ -909,7 +1016,7 @@ await test('search_tools is advertised only while retrieval is on', () => {
   assert(defs[0].inputSchema.required.includes('query'), 'query is not required')
 })
 
-await test('🔒 a result carries names and descriptions, never schemas', async () => {
+if (embedPortFree) await test('🔒 a result carries names and descriptions, never schemas', async () => {
   searchProvider.setToolCatalogProvider(() => catalog.map(t => ({
     ...t,
     inputSchema: { type: 'object', properties: { secret_parameter: { type: 'string' } } },
@@ -922,7 +1029,7 @@ await test('🔒 a result carries names and descriptions, never schemas', async 
   assert(rows.every(r => Object.keys(r).sort().join(',') === 'description,name'), `unexpected row shape: ${text}`)
 })
 
-await test('🔒 the catalog it searches is the one the policy gate produced', async () => {
+if (embedPortFree) await test('🔒 the catalog it searches is the one the policy gate produced', async () => {
   // The provider is handed a catalog rather than assembling one. This asserts
   // the consequence: whatever the gate withheld simply is not there to find, so
   // a ban cannot be walked around by describing the tool.
@@ -938,7 +1045,7 @@ await test('🔒 the catalog it searches is the one the policy gate produced', a
   assert(!/read_document/.test(result.content[0].text), 'a withheld tool was reachable by describing it')
 })
 
-await test('🔍 search_tools never returns itself', async () => {
+if (embedPortFree) await test('🔍 search_tools never returns itself', async () => {
   searchProvider.setToolCatalogProvider(() => [
     ...catalog,
     { name: 'search_tools', description: 'Find tools that are available but not currently listed' },
@@ -947,7 +1054,7 @@ await test('🔍 search_tools never returns itself', async () => {
   assert(!/search_tools/.test(result.content[0].text), 'search_tools offered itself as a result')
 })
 
-await test('🔍 a scorer that is down is reported as such, not as "no matches"', async () => {
+if (embedPortFree) await test('🔍 a scorer that is down is reported as such, not as "no matches"', async () => {
   // Different answers. A model told nothing matched stops looking; one told the
   // search is unavailable keeps using what it can already see.
   searchProvider.setToolCatalogProvider(() => catalog)
@@ -957,7 +1064,7 @@ await test('🔍 a scorer that is down is reported as such, not as "no matches"'
   assert(Array.isArray(empty) && empty.length === 0, 'an empty catalog is an empty result, not a failure')
 })
 
-await test('a blank query is refused rather than scored', async () => {
+if (embedPortFree) await test('a blank query is refused rather than scored', async () => {
   searchProvider.setToolCatalogProvider(() => catalog)
   for (const bad of [{}, { query: '' }, { query: '   ' }, { query: 42 }]) {
     const result = await searchProvider.callTool('search_tools', bad, catalogConfig())
@@ -965,18 +1072,18 @@ await test('a blank query is refused rather than scored', async () => {
   }
 })
 
-await test('🔒 search_tools refuses to run when retrieval is off', async () => {
+if (embedPortFree) await test('🔒 search_tools refuses to run when retrieval is off', async () => {
   searchProvider.setToolCatalogProvider(() => catalog)
   const result = await searchProvider.callTool('search_tools', { query: 'read a document' }, { toolRetrieval: { enabled: false } })
   assert(result.isError === true, 'a call succeeded on a server where retrieval is off')
 })
 
-await test('search_tools declines a call that is not its own', async () => {
+if (embedPortFree) await test('search_tools declines a call that is not its own', async () => {
   const result = await searchProvider.callTool('git_status', {}, catalogConfig())
   assert(result === null, 'the provider answered for a tool it does not own')
 })
 
-await test('🔍 results are ranked, best first', async () => {
+if (embedPortFree) await test('🔍 results are ranked, best first', async () => {
   const embed = async (texts) => texts.map(text => {
     const v = new Float32Array(3)
     if (/git|commit|repo/i.test(text)) v[0] = 1
@@ -989,7 +1096,7 @@ await test('🔍 results are ranked, best first', async () => {
   assert(ranked[0].name === 'git_status', `wrong first result: ${ranked.map(r => r.name).join(',')}`)
 })
 
-await new Promise(resolve => embedStub.close(resolve))
+if (embedPortFree) await new Promise(resolve => embedStub.close(resolve))
 
 console.log('\n-- turning retrieval on --')
 

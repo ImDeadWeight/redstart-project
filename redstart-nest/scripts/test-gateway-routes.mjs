@@ -22,6 +22,7 @@
 
 import { register } from 'node:module'
 import * as http from 'node:http'
+import * as net from 'node:net'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -43,6 +44,7 @@ await import('./electron-stub.mjs')
 const { startGateway, stopGateway } = await import('../electron/main/tools-gateway.mjs')
 const { updateGatewayConfig } = await import('../electron/main/tools-gateway.mjs')
 const { observedWireCost } = await import('../electron/main/tool-filter.mjs')
+const { EMBED_PORT } = await import('../electron/main/ports.mjs')
 const { setAuthRequired, createOwner, createAccount } = await import('../electron/main/auth.mjs')
 
 const baseConfig = { allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 }
@@ -551,11 +553,25 @@ async function main() {
     assert(names.length === 3, `tools were filtered with retrieval off: ${names.join(',')}`)
   })
 
-  await test('🔒 with retrieval on and no embedding server, the request is byte-identical too', async () => {
-    // Nothing is listening on EMBED_PORT in this suite, so this is the real
-    // fail-open path — a connection refused, not a mocked one. It is the state
-    // every install is in until the model is downloaded, so it is the one that
-    // has to be free.
+  // This one test needs the ABSENCE of a server on a fixed production port, so
+  // it is the one thing in this suite a developer running Redstart can falsify.
+  // Probed rather than assumed: a real embedding server on 19084 makes the
+  // premise false, and a test that quietly measures something else is worse
+  // than one that says it did not run. The property itself is covered without a
+  // port in test-tool-retrieval.mjs ("a null from the embedder returns the same
+  // array"); what only this can show is the wiring end to end.
+  const embedPortBusy = await new Promise(resolve => {
+    const probe = net.createServer()
+    probe.once('error', () => resolve(true))
+    probe.listen(EMBED_PORT, '127.0.0.1', () => probe.close(() => resolve(false)))
+  })
+  if (embedPortBusy) {
+    console.log(`  SKIP - port ${EMBED_PORT} is in use; a real embedding server would answer, so "no embedding server" cannot be tested here`)
+  }
+
+  if (!embedPortBusy) await test('🔒 with retrieval on and no embedding server, the request is byte-identical too', async () => {
+    // A real connection-refused, not a mocked one. It is the state every install
+    // is in until the model is downloaded, so it is the one that has to be free.
     updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: false } })
     await completions(retrievalBody())
     const off = JSON.stringify(lastForwarded)
