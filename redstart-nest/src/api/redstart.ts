@@ -206,6 +206,9 @@ export type RedstartAPI = {
       env?: Record<string, { value: string; isSecret: boolean }>
     }) => Promise<{ ok: boolean; error?: string }>
     setEnabled: (id: string, enabled: boolean) => Promise<{ ok: boolean; error?: string }>
+    // Display only. The id — the ban handle and the tools' namespace prefix —
+    // is deliberately not renameable; see setPluginDisplayName in ipc/plugins.mjs.
+    setDisplayName: (id: string, displayName: string) => Promise<{ ok: boolean; error?: string; displayName?: string }>
     setClass: (id: string, toolName: string, cls: PluginToolInfo['class']) => Promise<{ ok: boolean; error?: string }>
     setClasses: (id: string, toolNames: string[], cls: PluginToolInfo['class']) => Promise<{ ok: boolean; updated?: number; error?: string }>
     uninstall: (id: string) => Promise<{ ok: boolean; folderRemoved?: boolean; error?: string }>
@@ -276,7 +279,10 @@ export type PluginInstallProgress = {
 }
 
 export type RegistrySearchResult = {
+  /** The registry's canonical reverse-DNS identifier, e.g. io.github.artokun/comfyui-mcp. */
   name: string
+  /** What a person should see: the registry's own `title` where it has one, else derived. */
+  suggestedDisplayName: string
   description: string
   packageName?: string
   version?: string

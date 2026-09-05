@@ -38,7 +38,7 @@ import { isPlainObject, isNonEmptyString, optional } from './validate.mjs'
 import { logEvent } from '../logger.mjs'
 import {
   listPlugins, getPlugin, addPlugin, updatePlugin,
-  PLUGIN_ID_PATTERN, VALID_TOOL_CLASSES,
+  PLUGIN_ID_PATTERN, VALID_TOOL_CLASSES, sanitizeDisplayName, suggestDisplayName,
 } from '../plugin-registry.mjs'
 import { installNpmPackage, installPypiPackage, probePlugin, uninstallPlugin } from '../plugin-install.mjs'
 import { encryptSecret, decryptSecret } from '../secrets.mjs'
@@ -379,6 +379,33 @@ export function setPluginEnabled(id, enabled, { refreshLiveToolsConfig }) {
   return { ok: true }
 }
 
+/**
+ * Rename a plugin, for display only.
+ *
+ * The id is untouched and deliberately so: it is the ban handle
+ * (disabledToolIds), the provenance key behind every tool's namespace prefix,
+ * and the thing saved profiles already reference. A rename that moved it would
+ * silently stop existing bans applying, which is the one failure this system
+ * must not have. So this changes what a person reads and nothing a policy is
+ * decided against.
+ *
+ * An empty name resets to the id rather than leaving a blank row — a plugin
+ * with no visible name is worse than one with an ugly one.
+ */
+export function setPluginDisplayName(id, displayName, { refreshLiveToolsConfig }) {
+  if (typeof id !== 'string') return refuse('plugins:set-display-name', 'id must be a string.')
+  if (typeof displayName !== 'string') return refuse('plugins:set-display-name', 'displayName must be a string.')
+  if (!getPlugin(id)) return { ok: false, error: `no plugin with id "${id}"` }
+  const cleaned = sanitizeDisplayName(displayName)
+  const result = updatePlugin(id, { displayName: cleaned || id })
+  if (!result.ok) return { ok: false, error: result.error }
+  // The name rides along on every tool's _meta source label and in the system
+  // prompt's plugin list, both of which are built from the live config — so a
+  // rename that skipped this would show up on the Plugins tab and nowhere else.
+  refreshLiveToolsConfig()
+  return { ok: true, displayName: cleaned || id }
+}
+
 export function setPluginToolClass(id, toolName, cls) {
   if (typeof id !== 'string') return refuse('plugins:set-class', 'id must be a string.')
   if (typeof toolName !== 'string') return refuse('plugins:set-class', 'toolName must be a string.')
@@ -474,8 +501,21 @@ export async function searchPluginRegistry(opts) {
   const entries = result.entries.map((entry) => {
     const verdict = verdictFor(entry)
     const fields = verdict.packageRef ? formFieldsFor(verdict.packageRef).fields : []
+    const serverName = entry?.server?.name ?? '(unnamed)'
     return {
-      name: entry?.server?.name ?? '(unnamed)',
+      name: serverName,
+      // The name above is the registry's canonical reverse-DNS identifier
+      // ("io.github.artokun/comfyui-mcp"). `title` is the human one, and it is
+      // OPTIONAL — roughly half the registry publishes it. Seeding the display
+      // name from `name` because it was the only field read is why installed
+      // plugins have been showing a package identifier everywhere a person
+      // reads a name. Suggested here, where the taken names are known; the
+      // admin still edits it in the dialog and can rename it afterwards.
+      suggestedDisplayName: suggestDisplayName({
+        title: entry?.server?.title,
+        serverName,
+        taken: listPlugins().map((p) => p.displayName),
+      }),
       description: entry?.server?.description ?? '',
       packageName: verdict.packageRef?.identifier,
       version: verdict.packageRef?.version,
@@ -507,6 +547,7 @@ export function pluginsHandlers(deps) {
 
     // --- lifecycle ---
     'plugins:set-enabled': (id, enabled) => setPluginEnabled(id, enabled, deps),
+    'plugins:set-display-name': (id, displayName) => setPluginDisplayName(id, displayName, deps),
     'plugins:set-class': (id, toolName, cls) => setPluginToolClass(id, toolName, cls),
     'plugins:set-classes': (id, toolNames, cls) => setPluginToolClasses(id, toolNames, cls),
     'plugins:uninstall': async (id) => uninstallPluginById(id, deps),

@@ -125,6 +125,80 @@ export function sanitizeToolTitle(value) {
   return cleaned.slice(0, MAX_TOOL_TITLE_LENGTH)
 }
 
+/** A plugin's display name gets the same cap and the same cleaning as a tool title. */
+export const MAX_DISPLAY_NAME_LENGTH = 64
+
+/**
+ * The name a human reads for a plugin, wherever one is shown.
+ *
+ * Same treatment as sanitizeToolTitle and for the same reason — it is
+ * publisher-authored text that lands in the UI — with one addition: it may not
+ * be empty, because an empty display name would render as a blank row rather
+ * than as a name, and the caller falls back to the id instead.
+ */
+export function sanitizeDisplayName(value) {
+  return sanitizeToolTitle(value).slice(0, MAX_DISPLAY_NAME_LENGTH)
+}
+
+/**
+ * A readable name derived from an MCP registry server name, for the servers
+ * that publish no `title` of their own.
+ *
+ * `io.github.artokun/comfyui-mcp` -> `Comfyui MCP`. The publisher half is
+ * dropped: it identifies who shipped it, which is what the id is for, and it is
+ * the entire reason these names read as machine identifiers in the first place.
+ *
+ * The acronym list is small and deliberately so. This is a default an admin can
+ * overwrite in one field, not a transformation that has to be right — the thing
+ * that makes a name correct is that somebody can change it.
+ */
+const ACRONYMS = new Set(['mcp', 'ai', 'api', 'ui', 'cli', 'db', 'sql', 'http', 'io', 'os', 'pdf', 'gpu'])
+
+export function humanizeServerName(serverName) {
+  if (typeof serverName !== 'string' || !serverName.trim()) return ''
+  const last = serverName.split('/').pop() ?? ''
+  const words = last.split(/[-_.\s]+/).filter(Boolean)
+  if (words.length === 0) return ''
+  return sanitizeDisplayName(
+    words
+      .map(w => (ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1)))
+      .join(' '),
+  )
+}
+
+/**
+ * The publisher half of a reverse-DNS server name: the last dotted segment
+ * before the slash. `io.github.artokun/comfyui-mcp` -> `artokun`.
+ */
+export function publisherOf(serverName) {
+  if (typeof serverName !== 'string') return ''
+  const [scope] = serverName.split('/')
+  if (!scope || scope === serverName) return ''
+  return sanitizeDisplayName(scope.split('.').pop() ?? '')
+}
+
+/**
+ * The display name to offer for a server being installed.
+ *
+ * The registry's own `title` when it has one, otherwise a name derived from the
+ * server name. Where that would duplicate a plugin already installed, the
+ * publisher is added — two rows both reading "Comfyui MCP" is worse than a
+ * long name, because the whole point of a display name is telling them apart.
+ *
+ * A suggestion, not a rule: it lands in an editable field.
+ *
+ * @param {{ title?: string, serverName?: string, taken?: Iterable<string> }} args
+ * @returns {string}
+ */
+export function suggestDisplayName({ title, serverName, taken } = {}) {
+  const base = sanitizeDisplayName(title) || humanizeServerName(serverName)
+  if (!base) return ''
+  const used = new Set([...(taken ?? [])].map(n => String(n).toLowerCase()))
+  if (!used.has(base.toLowerCase())) return base
+  const publisher = publisherOf(serverName)
+  return publisher ? sanitizeDisplayName(`${base} (${publisher})`) : base
+}
+
 /**
  * Is this entry safe to trust as a permission record?
  *
