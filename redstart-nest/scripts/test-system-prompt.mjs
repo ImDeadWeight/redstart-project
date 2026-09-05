@@ -401,6 +401,11 @@ await test('🔒 egress disclosure survives a tool being filtered out; the capab
   })
   assert(!prompt.includes('approved sources'), 'allowlist stated for a tool that was not sent')
   assert(prompt.includes('reach outside the Redstart server'), 'egress disclosure dropped with the tool')
+  // CodeQL: js/incomplete-url-substring-sanitization — false positive, dismissed.
+  // Same shape and same reason as the assertion in "the constraints a schema
+  // cannot carry are stated" above: this searches composed PROSE for a domain
+  // name, authorises nothing, and `prompt` is not a URL. The real host check is
+  // isAllowed() in web-fetch-tool.mjs. See docs/security.md (Static analysis).
   assert(prompt.includes('docs.example.org'), 'egress destination no longer named')
   return 'capability withheld, egress still disclosed'
 })
