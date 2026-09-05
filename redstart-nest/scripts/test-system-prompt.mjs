@@ -96,6 +96,18 @@ const LOCAL_ONLY_CONFIG = {
   documents: { enabled: true },
 }
 
+// The tool names each fixture's capabilities would put on the wire. Capability
+// claims are substantiated against THESE, not against the config above — see
+// buildToolPolicy. A config fixture without its matching names is a request an
+// admin has enabled things for and whose payload arrived carrying none of them,
+// which is a real state (retrieval can produce it) and claims nothing.
+const LOCAL_ONLY_TOOL_NAMES = [
+  'postgres_query', 'postgres_list_tables', 'postgres_describe_table',
+  'create_document',
+]
+const WEB_TOOL_NAMES = ['web_fetch']
+const ALL_TOOL_NAMES = [...LOCAL_ONLY_TOOL_NAMES, ...WEB_TOOL_NAMES]
+
 // Phrases that assert locality. If any appears while egress exists, the model
 // is telling users something the configuration does not support.
 const LOCALITY_CLAIMS = [
@@ -133,6 +145,7 @@ await test('tools in the request → the enabled capabilities are described', as
   const { prompt } = composePrompt({
     config: { ...LOCAL_ONLY_CONFIG, ...WEB_CONFIG },
     hasTools: true,
+    toolNames: ALL_TOOL_NAMES,
     now: NOW,
   })
   assert(prompt.includes('web_fetch'), 'web_fetch not described')
@@ -148,6 +161,78 @@ await test('tools in the request → the enabled capabilities are described', as
   assert(prompt.includes('postgres_query'), 'postgres not described')
   assert(prompt.includes('create_document'), 'documents not described')
   return 'web + postgres + documents'
+})
+
+await test('🔒 a capability enabled in config but absent from the payload is not claimed', async () => {
+  // The retrieval defect this gate closes. Nothing about the CONFIG changes
+  // when a selection drops create_document — documents.enabled is still true —
+  // so a config-gated claim went on telling the model it could save a file it
+  // had been handed no way to save. Same failure the bans-before-prompt
+  // ordering fixed, arriving through the tool filter instead of the ban list.
+  const { prompt } = composePrompt({
+    config: { ...LOCAL_ONLY_CONFIG, ...WEB_CONFIG },
+    hasTools: true,
+    // Retrieval kept the postgres tools and dropped the rest.
+    toolNames: ['postgres_query', 'postgres_list_tables', 'postgres_describe_table'],
+    now: NOW,
+  })
+  assert(prompt.includes('postgres_query'), 'withheld a capability that WAS sent')
+  assert(!prompt.includes('create_document'), 'claimed create_document after retrieval dropped it')
+  // The CAPABILITY claim goes; the egress disclosure below it deliberately
+  // stays. See the next test.
+  assert(!prompt.includes('You have access to the web_fetch tool'), 'claimed web_fetch after retrieval dropped it')
+  assert(!prompt.includes('Approved sources'), 'listed an approved-source allowlist with no web_fetch to use it')
+  return 'postgres claimed, documents and web_fetch withheld'
+})
+
+await test('🔒 egress disclosure survives a tool being filtered out, capability claim does not', async () => {
+  // The one place two blocks describe the same tool and are ALLOWED to
+  // disagree, because they fail in opposite directions: a withheld capability
+  // costs nothing, a withheld egress disclosure is a false reassurance. Pinned
+  // so the asymmetry cannot be "tidied up" into consistency by accident — see
+  // the note above deriveEgressFacts.
+  const { prompt } = composePrompt({
+    config: WEB_CONFIG,
+    hasTools: true,
+    toolNames: ['postgres_query'],
+    now: NOW,
+  })
+  assert(!prompt.includes('You have access to the web_fetch tool'), 'capability claimed for a tool that was not sent')
+  assert(prompt.includes('reach outside the Redstart server'), 'egress disclosure dropped with the tool')
+  assert(prompt.includes('docs.example.org'), 'egress destination no longer named')
+  return 'capability withheld, egress still disclosed'
+})
+
+await test('🔒 only the tools actually sent are named within a capability', async () => {
+  // A partial selection is the normal case under retrieval, and a prose list
+  // naming a sibling that did not arrive is the same invitation to invent a
+  // call format as claiming the capability outright.
+  const { prompt } = composePrompt({
+    config: LOCAL_ONLY_CONFIG,
+    hasTools: true,
+    toolNames: ['postgres_query'],
+    now: NOW,
+  })
+  assert(prompt.includes('postgres_query'), 'the tool that was sent is not named')
+  assert(!prompt.includes('postgres_list_tables'), 'named a postgres tool that was not sent')
+  assert(!prompt.includes('postgres_describe_table'), 'named a postgres tool that was not sent')
+  assert(prompt.includes('read-only'), 'lost the read-only constraint a schema cannot express')
+  return 'one tool named, two siblings withheld'
+})
+
+await test('🔒 hasTools with no toolNames claims nothing — understate, never overstate', async () => {
+  // The safe direction, and it is deliberate rather than incidental: a caller
+  // that cannot say what it sent does not get to assert capabilities on the
+  // model's behalf. Both production callers pass names.
+  const { prompt, blocks } = composePrompt({
+    config: { ...LOCAL_ONLY_CONFIG, ...WEB_CONFIG },
+    hasTools: true,
+    now: NOW,
+  })
+  assert(!blocks.includes('tool_policy'), 'composed a tool_policy block from config alone')
+  assert(!prompt.includes('postgres_query'), 'claimed postgres with no names supplied')
+  assert(!prompt.includes('create_document'), 'claimed documents with no names supplied')
+  return 'no tool_policy block'
 })
 
 await test('identity survives even with no config at all', async () => {
@@ -361,7 +446,9 @@ await test('block order matches the spec §3 contract', async () => {
     admin: { context: 'CONTEXT', policy: 'POLICY', style: 'STYLE' },
     mode: 'research',
     // Every optional block has to be present for this to test the ORDER rather
-    // than which blocks happened to be emitted — locality included.
+    // than which blocks happened to be emitted — locality included, and
+    // tool_policy now needs the names as well as the config.
+    toolNames: ALL_TOOL_NAMES,
     clientToolNames: ['fs_read_file'],
     now: NOW,
   })

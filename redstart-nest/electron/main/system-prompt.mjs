@@ -1,6 +1,7 @@
 'use strict'
 
 import { listPlugins } from './plugin-registry.mjs'
+import { BUILTIN_CAPABILITY_TOOL_NAMES } from './tools-definitions.mjs'
 
 // =============================================================================
 // Redstart Nest — System Prompt Composer
@@ -163,13 +164,35 @@ export function listModes() {
 // This gate is the original instance of the substantiation rule that §7
 // generalises to egress. Preserve it.
 
-function buildToolPolicy(config, hasTools) {
+/** "a", "a and b", "a, b, and c" — for naming tools in prose. */
+function andList(names) {
+  if (names.length === 1) return names[0]
+  if (names.length === 2) return `${names[0]} and ${names[1]}`
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
+}
+
+function buildToolPolicy(config, hasTools, toolNames) {
   if (!hasTools) return null
+
+  // Substantiation is per TOOL, not per capability. `config` says what the
+  // admin enabled; `toolNames` says what this request actually carries, and
+  // retrieval means the two now disagree routinely — a selection that drops
+  // create_document leaves documents.enabled true, and a config-gated claim
+  // would still tell the model it can save a file it was handed no way to save.
+  //
+  // That is the same defect the bans-before-prompt ordering fixed in
+  // tools-gateway.mjs, arriving through a different door: that change made
+  // `hasTools` honest about WHETHER tools were sent, and nothing made this
+  // block honest about WHICH. An empty `toolNames` therefore claims nothing,
+  // which is the safe direction — a caller that cannot say what it sent does
+  // not get to assert capabilities on the model's behalf.
+  const present = new Set(Array.isArray(toolNames) ? toolNames : [])
+  const has = (name) => present.has(name)
 
   const parts = []
   const tools = config?.webFetch?.activeTools
 
-  if (tools?.length) {
+  if (tools?.length && has('web_fetch')) {
     const list = tools.map(t => {
       let hostname = t.baseUrl
       try { hostname = new URL(t.baseUrl).hostname } catch {}
@@ -178,11 +201,15 @@ function buildToolPolicy(config, hasTools) {
     parts.push(`You have access to the web_fetch tool to retrieve live content from approved sources.\n\nApproved sources:\n${list}\n\nOnly fetch from these approved domains. Do not attempt to access any other URLs.`)
   }
 
-  if (config?.postgres?.enabled) {
-    parts.push('You have access to postgres_query, postgres_list_tables, and postgres_describe_table to read from a connected local Postgres database. Queries are read-only.')
+  // Name only the postgres tools that arrived. A list naming a tool the model
+  // does not have is the invitation to invent a call format that the whole
+  // substantiation rule exists to withdraw.
+  const postgresNames = BUILTIN_CAPABILITY_TOOL_NAMES.postgres.filter(has)
+  if (config?.postgres?.enabled && postgresNames.length > 0) {
+    parts.push(`You have access to ${andList(postgresNames)} to read from a connected local Postgres database. Queries are read-only.`)
   }
 
-  if (config?.documents?.enabled) {
+  if (config?.documents?.enabled && has('create_document')) {
     parts.push('You have access to create_document to save a docx, pdf, or markdown file to a local output folder for the user.')
   }
 
@@ -222,6 +249,24 @@ export function isLocalUrl(url) {
  * @param externalServers  getExternalServers() from tools-storage
  * @param hasTools         whether the request carries tool definitions
  */
+// WHY THIS STAYS GATED ON `hasTools` AND NOT ON THE TOOL NAMES
+//
+// buildToolPolicy substantiates per tool; this deliberately does not, and the
+// difference is not an oversight. The two blocks fail in opposite directions:
+//
+//   Overstating a CAPABILITY teaches the model to invent a call format for a
+//   tool it cannot reach, so the safe error is to claim less.
+//   Overstating EGRESS makes the model more careful about data than it strictly
+//   needs to be; UNDERSTATING it makes the model reassure a user wrongly, in the
+//   deployment's own voice. So the safe error here is to disclose more.
+//
+// Retrieval decides per turn, and search_tools can bring a dropped tool back
+// mid-conversation. Gating this on the payload would make the privacy claim
+// flicker between turns of one conversation — "your data can reach these
+// domains", then silence, then back — and a privacy claim that flickers is
+// worse than one that is steadily conservative. The configuration is the right
+// evidence for "what can this deployment do with my data"; the payload is the
+// right evidence for "what can you do this turn".
 export function deriveEgressFacts(config, externalServers, hasTools) {
   // Nest hosts llama-server itself, bound to 127.0.0.1 on publicPort + 1 and
   // not LAN-reachable. Inference locality is therefore an architectural
@@ -381,6 +426,8 @@ function buildSession(account, now) {
  * @param {object}  input
  * @param {object}  input.config            activeConfig
  * @param {boolean} input.hasTools          request carries tool definitions
+ * @param {string[]} [input.toolNames]      every tool name in THIS request,
+ *                                          post-ban and post-retrieval
  * @param {Array}   [input.externalServers] getExternalServers()
  * @param {object}  [input.account]         authResult.account, or null (auth off)
  * @param {Date}    [input.now]
@@ -404,6 +451,10 @@ export function composePrompt(input = {}) {
     // than the server. Resolved by the caller from the request payload — see
     // buildLocality for why it is derived from the request, not the surface.
     clientToolNames = [],
+    // Every tool name the request carries, not just the client-side ones.
+    // buildToolPolicy substantiates against this; see the note there for why
+    // config alone stopped being enough once retrieval could narrow a payload.
+    toolNames = [],
     budget = DEFAULT_TOKEN_BUDGET,
   } = input
 
@@ -416,7 +467,7 @@ export function composePrompt(input = {}) {
     ['context', admin.context],
     ['mode', resolveMode(mode)],
     ['policy', admin.policy],
-    ['tool_policy', buildToolPolicy(config, hasTools)],
+    ['tool_policy', buildToolPolicy(config, hasTools, toolNames)],
     // After tool_policy (it is about tools) and before the style/data blocks,
     // so the model knows which machine a tool touches before it is told where
     // data is stored. Spec §3.

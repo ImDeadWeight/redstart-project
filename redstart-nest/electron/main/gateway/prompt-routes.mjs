@@ -22,6 +22,7 @@
 import { canDo } from '../auth.mjs'
 import { logEvent } from '../logger.mjs'
 import { getExternalServers } from '../tools-storage.mjs'
+import { activeToolCatalog } from '../mcp-server.mjs'
 import { composePrompt, deriveEgressFacts, DEFAULT_TOKEN_BUDGET, listModes } from '../system-prompt.mjs'
 import { getPromptBlocks, getPromptBlocksMeta, setPromptBlocks, MAX_BLOCK_CHARS } from '../prompt-storage.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
@@ -71,9 +72,21 @@ export async function handlePromptRoute(req, res, urlPath, config, account) {
   // preference (spec §4).
   if (req.method === 'GET' && urlPath === '/prompt-blocks') {
     const meta = getPromptBlocksMeta()
+    // A preview, so it stands in the best-case request: every tool this config
+    // would serve, which is the fourth consumer of activeToolCatalog's one walk
+    // (tools/list, the Tools tab's estimate and search_tools are the others).
+    //
+    // It has to pass tool NAMES now that buildToolPolicy substantiates against
+    // them rather than against config. Passing none would show the admin a
+    // preview with no tool_policy block at all — an assembly no real request
+    // produces — and passing the catalog is also the honest reading of what
+    // this preview has always meant: what a client that asked for everything
+    // would be told. A live request carrying fewer tools says less, which is
+    // the point of the change and is worth an admin seeing the ceiling of.
     const preview = composePrompt({
       config,
       hasTools: true,
+      toolNames: activeToolCatalog(config).map(t => t.name),
       externalServers: getExternalServers(),
       account,
       admin: getPromptBlocks(),

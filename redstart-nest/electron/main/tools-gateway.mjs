@@ -47,16 +47,12 @@ let activeConfig = null
 //
 // `hasTools` = the request actually carries tool definitions, and gates every
 // capability claim; see the substantiation rule in system-prompt.mjs.
-function buildSystemContext(config, hasTools, account, mode, surface, clientToolNames) {
+function buildSystemContext(config, facts) {
   const { prompt } = composePrompt({
     config,
-    hasTools,
     externalServers: getExternalServers(),
-    account,
     admin: getPromptBlocks(),
-    mode,
-    surface,
-    clientToolNames,
+    ...facts,
   })
   return prompt
 }
@@ -70,12 +66,7 @@ function buildSystemContext(config, hasTools, account, mode, surface, clientTool
 // This is the same rule the rest of the prompt follows: a claim is made only
 // when the request substantiates it.
 function clientToolNamesIn(parsed) {
-  if (!Array.isArray(parsed?.tools)) return []
-  const present = new Set()
-  for (const tool of parsed.tools) {
-    const name = typeof tool === 'object' && tool !== null ? tool.function?.name : tool?.name
-    if (typeof name === 'string') present.add(name)
-  }
+  const present = new Set(toolNamesIn(parsed))
   const local = []
   for (const names of Object.values(CLIENT_APP_TOOL_NAMES)) {
     for (const name of names) if (present.has(name)) local.push(name)
@@ -83,12 +74,29 @@ function clientToolNamesIn(parsed) {
   return local
 }
 
+// Every tool name in the payload, in both shapes the gateway sees: OpenAI's
+// { function: { name } } on the wire and MCP's flat { name }.
+//
+// This is what the capability claims are substantiated against. It must be read
+// AFTER bans and retrieval have both run — config says what an admin enabled,
+// and since retrieval can narrow a payload without changing any config, config
+// is no longer evidence that the model received anything in particular.
+function toolNamesIn(parsed) {
+  if (!Array.isArray(parsed?.tools)) return []
+  const names = []
+  for (const tool of parsed.tools) {
+    const name = typeof tool === 'object' && tool !== null ? tool.function?.name : tool?.name
+    if (typeof name === 'string' && name) names.push(name)
+  }
+  return names
+}
+
 // The composed prompt is PREPENDED to any client-supplied system message, so
 // client text lands after the precedence clause and is thereby subordinated to
 // admin policy (spec §4). Phase 7 stops accepting client system prose
 // altogether; until then this ordering is what makes the floor hold.
-function injectSystemContext(messages, config, hasTools, account, mode, surface, clientToolNames) {
-  const context = buildSystemContext(config, hasTools, account, mode, surface, clientToolNames)
+function injectSystemContext(messages, config, facts) {
+  const context = buildSystemContext(config, facts)
   const sysIdx = messages.findIndex(m => m.role === 'system')
   if (sysIdx >= 0) {
     messages[sysIdx] = { ...messages[sysIdx], content: `${context}\n\n${messages[sysIdx].content}` }
@@ -553,8 +561,15 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         const toolsAfterBans = Array.isArray(parsed.tools) ? parsed.tools.length : 0
         if (Array.isArray(parsed.tools) && parsed.tools.length > 0) {
           const pinsOnlyPrompt = injectSystemContext(
-            [...(parsed.messages || [])], effectiveConfig, true,
-            authResult.account, requestedMode, authResult.surface, [],
+            [...(parsed.messages || [])], effectiveConfig,
+            {
+              hasTools: true,
+              account: authResult.account,
+              mode: requestedMode,
+              surface: authResult.surface,
+              clientToolNames: [],
+              toolNames: [],
+            },
           )
           parsed.tools = await filterRequestTools({
             tools: parsed.tools,
@@ -573,7 +588,17 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         // Surface comes from authResult — i.e. from the credential the caller
         // presented (spec §8) — never from a header. X-Redstart-Surface stays
         // accepted and inert; the connector-contract suite asserts that.
-        parsed.messages = injectSystemContext([...(parsed.messages || [])], effectiveConfig, requestHasTools, authResult.account, requestedMode, authResult.surface, clientToolNamesIn(parsed))
+        parsed.messages = injectSystemContext([...(parsed.messages || [])], effectiveConfig, {
+          hasTools: requestHasTools,
+          account: authResult.account,
+          mode: requestedMode,
+          surface: authResult.surface,
+          clientToolNames: clientToolNamesIn(parsed),
+          // Read here, after enforceToolAllowList and filterRequestTools have
+          // both had their say, so the capability claims describe the payload
+          // the model is actually about to receive.
+          toolNames: toolNamesIn(parsed),
+        })
 
         // What was really forwarded, recorded after every rewrite this block
         // performs. This is the only place that sees all three numbers at once
