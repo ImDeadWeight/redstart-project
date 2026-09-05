@@ -294,7 +294,7 @@ await test('🔒 a narrowed tool list says so, and points at the way out', async
   assert(blocks.includes('retrieval'), 'no retrieval block with search_tools in the payload')
   assert(prompt.includes('subset chosen for this conversation'), 'the list is not described as partial')
   assert(prompt.includes('call search_tools'), 'the remedy is not named')
-  assert(prompt.includes('is the one wrong answer here'), 'the failure mode is not ruled out')
+  assert(prompt.includes('never tell the user a capability is unavailable'), 'the failure mode is not ruled out')
   return 'partial list disclosed'
 })
 
