@@ -32,7 +32,7 @@ import {
   createSelectionMemory,
 } from '../electron/main/tool-retrieval.mjs'
 import * as searchProvider from '../electron/main/search-tools-provider.mjs'
-const { retrievalStatus, syncRetrieval } = await import('../electron/main/ipc/tools.mjs')
+const { retrievalStatus, syncRetrieval, applyToolsConfig, resetRetrievalState } = await import('../electron/main/ipc/tools.mjs')
 import { EMBED_PORT } from '../electron/main/ports.mjs'
 import {
   filterRequestTools,
@@ -1059,6 +1059,70 @@ await test('a second call while the download is running does not start a second 
   assert(modelFetches === 1, `the download was started ${modelFetches} times`)
   const status = retrievalStatus(profileWith({ enabled: true }), enableDeps)
   assert(status.model.download.state === 'downloading', `download state was ${status.model.download.state}`)
+})
+
+await test('🔍 the sidecar starts with NO chat server running', () => {
+  // The bug this pins. The embedding sidecar's lifetime is the DAEMON's, not a
+  // chat model's — that is the whole reason it can warm its cache before the
+  // first completion. It was wired behind applyToolsConfig's "is the gateway
+  // up?" early return, so it started only once a model was already loaded,
+  // which in practice meant it never started at all and the switch sat at
+  // "Starting…" forever.
+  resetRetrievalState()
+  modelFetches = 0
+  // No gateway is running in this suite, so applyToolsConfig returns false —
+  // and retrieval must still have been dealt with on the way past.
+  const live = applyToolsConfig(
+    { port: 19080, ...profileWith({ enabled: true }) },
+    { ...enableDeps, buildGatewayConfig: () => ({}) },
+  )
+  assert(live === false, 'setup: this suite has no gateway, so the live sync should report false')
+  assert(modelFetches === 1, 'retrieval was skipped because no chat server was running')
+  syncRetrieval(profileWith({ enabled: false }), enableDeps)
+})
+
+await test('🔍 a failed download can be retried by toggling off and on', () => {
+  // The advice the switch gives when a download fails. Guarding on the state
+  // string rather than the in-flight promise made that advice false: 'failed'
+  // was fine, but a download interrupted by the switch going off left
+  // 'downloading' behind and swallowed every retry after it.
+  resetRetrievalState()
+  let fetches = 0
+  const failing = { ...enableDeps, fetchModel: async () => { fetches++; return null } }
+  syncRetrieval(profileWith({ enabled: true }), failing)
+  return new Promise(resolve => setImmediate(() => {
+    assert(retrievalStatus(profileWith({ enabled: true }), failing).model.download.state === 'failed',
+      'a download that returned nothing did not report as failed')
+    syncRetrieval(profileWith({ enabled: false }), failing)
+    syncRetrieval(profileWith({ enabled: true }), failing)
+    assert(fetches === 2, `the retry was swallowed: ${fetches} attempt(s)`)
+    resolve()
+  }))
+})
+
+await test('🔒 a download that finishes after the switch went off does not start a server', () => {
+  resetRetrievalState()
+  let started = 0
+  let settle
+  const slow = {
+    ...enableDeps,
+    fetchModel: () => new Promise(r => { settle = r }),
+    startServer: async () => { started++ },
+  }
+  syncRetrieval(profileWith({ enabled: true }), slow)
+  syncRetrieval(profileWith({ enabled: false }), slow)   // user changed their mind
+  settle('/models/embed.gguf')                            // the transfer lands anyway
+  return new Promise(resolve => setImmediate(() => {
+    assert(started === 0, 'a completed download started a server the user had switched off')
+    resolve()
+  }))
+})
+
+await test('the status distinguishes the profile setting from what the server is doing', () => {
+  const status = retrievalStatus(profileWith({ enabled: true }), enableDeps)
+  assert(status.enabled === true, 'the profile setting was not read')
+  assert(status.applied.gatewayUp === false, 'no gateway is running in this suite')
+  assert(status.applied.enabled === false, 'a gateway that was never told reported the filter as on')
 })
 
 syncRetrieval(profileWith({ enabled: false }), enableDeps)

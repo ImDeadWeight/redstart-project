@@ -139,6 +139,8 @@ export type RetrievalStatus = {
     download: { state: string; receivedBytes: number; totalBytes: number; error: string | null }
   }
   server: { state: string; reason: string | null; pid: number | null; startedAt: number | null; port: number }
+  /** What the RUNNING gateway is doing — only equals `enabled` once the profile has been saved. */
+  applied: { gatewayUp: boolean; enabled: boolean }
 }
 
 export type ToolContextEstimate = {

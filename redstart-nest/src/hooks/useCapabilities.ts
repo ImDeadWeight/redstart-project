@@ -165,8 +165,19 @@ export function useCapabilities(config: LlamaConfig) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toolsEnabled, retrievalOn])
 
+  // Called by the switch itself. The embedding sidecar is a DAEMON resource, so
+  // it must start on the toggle rather than riding along with a live chat
+  // server's tool sync — which only fires when a model is already loaded, and
+  // was why the switch used to sit at "Starting…" forever with a model unloaded.
+  async function applyRetrieval(next: LlamaConfig) {
+    try {
+      await api().tools.syncRetrieval(next)
+      setRetrievalStatus(await api().tools.retrievalStatus(next))
+    } catch { /* the poll below re-reads it; a failure here is not the user's problem */ }
+  }
+
   return {
-    retrievalStatus,
+    retrievalStatus, applyRetrieval,
     capabilityConfig, loadCapabilities,
     pgConnectionString, setPgConnectionString, pgMaxRows, setPgMaxRows,
     pgTestResult, pgSaving, savePostgresConfig, testPostgresConnection,

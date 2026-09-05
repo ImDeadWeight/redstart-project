@@ -12,7 +12,7 @@
 import * as path from 'path'
 import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES, CLIENT_APPS } from '../tools-definitions.mjs'
 import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup } from '../tools-storage.mjs'
-import { updateGatewayConfig, getGatewayPort } from '../tools-gateway.mjs'
+import { updateGatewayConfig, getGatewayPort, gatewayToolRetrieval } from '../tools-gateway.mjs'
 import { updateMcpConfig, estimateActiveToolTokens } from '../mcp-server.mjs'
 import { observedWireCost } from '../tool-filter.mjs'
 import { EMBED_MODEL, embedModelPath, hasEmbedModel, ensureEmbedModel } from '../embed-model.mjs'
@@ -53,6 +53,16 @@ export function deleteGroup(id) {
 // already running.
 export function applyToolsConfig(llamaConfig, deps) {
   const { buildGatewayConfig, userDataDir } = deps
+  // BEFORE the gateway check, and that ordering is the whole point. The
+  // embedding sidecar's lifetime is the DAEMON's, not a chat model's — that is
+  // what lets its cache warm before the first completion. Wiring it behind this
+  // early return made it start only when a model was already loaded, which is
+  // the opposite of the decision, and in practice meant it never started at all.
+  try {
+    syncRetrieval(llamaConfig, deps)
+  } catch (err) {
+    console.warn('[retrieval] could not apply the retrieval setting:', err.message)
+  }
   if (!getGatewayPort(llamaConfig?.port ?? 19080)) return false
   const cfg = buildGatewayConfig(llamaConfig)
   updateGatewayConfig(cfg)
@@ -61,15 +71,6 @@ export function applyToolsConfig(llamaConfig, deps) {
   // takes a moment and this IPC call isn't awaited by its caller.
   syncFilesystemProvider(cfg.fileSystem, path.join(userDataDir, 'mcp-fs-logs'))
     .catch((err) => console.warn('[filesystem-mcp-provider] sync failed:', err.message))
-  // Same shape, and for the same reason: the retrieval switch has a 67 MB
-  // download and a child process behind it, and neither may hold up a settings
-  // save. A failure leaves the sidecar down, which the gateway already treats
-  // as "forward the full tool list".
-  try {
-    syncRetrieval(llamaConfig, deps)
-  } catch (err) {
-    console.warn('[retrieval] could not apply the retrieval setting:', err.message)
-  }
   return true
 }
 
@@ -109,6 +110,16 @@ export function estimateToolsContext(llamaConfig, { buildGatewayConfig }) {
 
 /** @type {{ state: string, receivedBytes: number, totalBytes: number, error: string|null }} */
 let modelDownload = { state: 'idle', receivedBytes: 0, totalBytes: EMBED_MODEL.size, error: null }
+// The guard against starting a second download is the PROMISE, not the state
+// string beside it. Guarding on the string meant a download that failed, or one
+// interrupted by the switch going off, left 'downloading' behind forever — and
+// every later attempt to retry was silently swallowed by its own progress
+// report.
+let downloadInFlight = null
+// Read by the download's continuation: the switch can go off while 67 MB is in
+// flight, and finishing that transfer is not a reason to start a server nobody
+// asked for any more.
+let retrievalWanted = false
 
 /**
  * Everything the Tools tab needs to render the retrieval switch honestly: is it
@@ -124,6 +135,11 @@ export function retrievalStatus(llamaConfig, { resolveModelsDir }) {
       download: modelDownload,
     },
     server: embedServerStatus(),
+    // What the RUNNING gateway is doing, which is not the same question as what
+    // the profile says: a profile field only reaches the gateway when the
+    // profile is saved. Reporting only the setting is what made a switch that
+    // had changed nothing read as though it had.
+    applied: gatewayToolRetrieval(),
   }
 }
 
@@ -143,6 +159,7 @@ export function syncRetrieval(llamaConfig, {
   fetchModel = ensureEmbedModel, startServer = startEmbedServer,
 }) {
   const wanted = llamaConfig?.tools?.retrieval?.enabled === true
+  retrievalWanted = wanted
   if (!wanted) {
     stopEmbedServer({ configDir: userDataDir })
     return { enabled: false }
@@ -155,24 +172,35 @@ export function syncRetrieval(llamaConfig, {
     return { enabled: true, downloading: false }
   }
 
-  if (modelDownload.state === 'downloading') return { enabled: true, downloading: true }
+  if (downloadInFlight) return { enabled: true, downloading: true }
 
   ensureModelsDir()
   modelDownload = { state: 'downloading', receivedBytes: 0, totalBytes: EMBED_MODEL.size, error: null }
-  fetchModel({
+  downloadInFlight = fetchModel({
     modelsDir,
     onProgress: (p) => { modelDownload.receivedBytes = p.receivedBytes ?? 0 },
   }).then(async (modelPath) => {
+    downloadInFlight = null
     if (!modelPath) {
       modelDownload = { ...modelDownload, state: 'failed', error: 'the embedding model could not be downloaded' }
       return
     }
     modelDownload = { ...modelDownload, state: 'ready', receivedBytes: EMBED_MODEL.size, error: null }
-    await startServer({ resolveBinary, configDir: userDataDir, modelPath })
+    // Checked here, not at the top: the switch may have gone off during the
+    // transfer, and the model is still worth keeping either way.
+    if (retrievalWanted) await startServer({ resolveBinary, configDir: userDataDir, modelPath })
   }).catch(err => {
+    downloadInFlight = null
     modelDownload = { ...modelDownload, state: 'failed', error: err?.message ?? 'unknown error' }
   })
   return { enabled: true, downloading: true }
+}
+
+/** Test seam: forget an in-flight download so a suite can drive this twice. */
+export function resetRetrievalState() {
+  downloadInFlight = null
+  retrievalWanted = false
+  modelDownload = { state: 'idle', receivedBytes: 0, totalBytes: EMBED_MODEL.size, error: null }
 }
 
 export function toolsHandlers(deps) {

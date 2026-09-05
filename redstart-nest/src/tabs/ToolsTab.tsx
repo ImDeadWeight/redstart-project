@@ -176,7 +176,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
     capabilityConfig, pgConnectionString, setPgConnectionString, pgMaxRows, setPgMaxRows,
     pgTestResult, pgSaving, savePostgresConfig, testPostgresConnection,
     scholarVenueFilter, setScholarVenueFilter, saveScholarVenueFilter,
-    toolContextEstimate, retrievalStatus,
+    toolContextEstimate, retrievalStatus, applyRetrieval,
   } = caps
   const {
     externalServers, showAddExternal, setShowAddExternal,
@@ -543,22 +543,42 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                 </span>
                 <TogglePill
                   checked={on}
-                  onToggle={() => setToolsField('retrieval', { ...(config.tools?.retrieval ?? {}), enabled: !on })}
+                  onToggle={() => {
+                    const retrieval = { ...(config.tools?.retrieval ?? {}), enabled: !on }
+                    setToolsField('retrieval', retrieval)
+                    // Straight to the daemon, not through the live-server tool
+                    // sync: the sidecar's lifetime is the daemon's, so it must
+                    // start whether or not a chat model happens to be loaded.
+                    applyRetrieval({ ...config, tools: { ...(config.tools ?? {}), retrieval } as typeof config.tools })
+                  }}
                   className="flex-shrink-0"
                 />
               </div>
 
+              {/* Every branch below is read off a fact the daemon reported. The
+                  one this replaced ended in a bare "Starting…" whenever the
+                  sidecar was merely untouched, which is indistinguishable from
+                  starting and was wrong in exactly the case that mattered:
+                  nothing had been asked to start at all. */}
               {on && (
-                <p className="text-xs mt-2 pt-2 border-t border-zinc-700/50 text-zinc-500">
-                  {downloading
-                    ? `Downloading the ranking model — ${pct}%. Tools are unfiltered until it finishes.`
-                    : dl?.state === 'failed'
-                      ? `⚠ The ranking model could not be downloaded${dl.error ? `: ${dl.error}` : ''}. Every tool is still being sent; nothing is broken, but nothing is being saved either.`
-                      : running
-                        ? '✓ Running. Filtering applies from your next message.'
-                        : retrievalStatus?.server.reason
-                          ? `⚠ Not running: ${retrievalStatus.server.reason}. Every tool is still being sent.`
-                          : 'Starting…'}
+                <p className={`text-xs mt-2 pt-2 border-t border-zinc-700/50 ${
+                  running && retrievalStatus?.applied.enabled ? 'text-zinc-500' : 'text-amber-400'
+                }`}>
+                  {!retrievalStatus
+                    ? 'Checking…'
+                    : downloading
+                      ? `Downloading the ranking model — ${pct}% of ${Math.round((dl?.totalBytes ?? 0) / 1e6)} MB. Every tool is still being sent until it finishes.`
+                      : dl?.state === 'failed'
+                        ? `⚠ The ranking model could not be downloaded${dl?.error ? `: ${dl.error}` : ''}. Every tool is still being sent — nothing is broken, but nothing is being saved either. Toggle this off and on to retry.`
+                        : !retrievalStatus.model.present
+                          ? '⚠ The ranking model is not downloaded yet. Toggle this off and on to fetch it.'
+                          : !running
+                            ? `⚠ The ranking model is downloaded, but its process is not running${retrievalStatus.server.reason ? `: ${retrievalStatus.server.reason}` : ''}. Every tool is still being sent.`
+                            : !retrievalStatus.applied.gatewayUp
+                              ? '✓ Ready. Filtering starts when you launch a model.'
+                              : !retrievalStatus.applied.enabled
+                                ? '⚠ Ready, but the running server is still using the previously saved settings. Save this profile to apply it.'
+                                : '✓ Running. Filtering applies from your next message.'}
                 </p>
               )}
 

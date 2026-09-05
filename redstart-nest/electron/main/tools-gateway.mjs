@@ -634,6 +634,22 @@ export function updateGatewayConfig(config) {
   activeConfig = config
 }
 
+/**
+ * Is the RUNNING gateway filtering tools?
+ *
+ * Deliberately distinct from what the profile says. A profile field only
+ * reaches the gateway when the profile is saved and applied, so the two can
+ * legitimately disagree — and a switch that reported the profile while the
+ * server was still using the previous settings would be lying about the thing
+ * the user actually wants to know.
+ */
+export function gatewayToolRetrieval() {
+  return {
+    gatewayUp: gatewayServer !== null,
+    enabled: activeConfig?.toolRetrieval?.enabled === true,
+  }
+}
+
 export function getGatewayPort(publicPort) {
   return gatewayServer ? publicPort : null
 }
