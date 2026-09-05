@@ -96,6 +96,18 @@ const LOCAL_ONLY_CONFIG = {
   documents: { enabled: true },
 }
 
+// The tool names each fixture's capabilities would put on the wire. Capability
+// claims are substantiated against THESE, not against the config above — see
+// buildToolPolicy. A config fixture without its matching names is a request an
+// admin has enabled things for and whose payload arrived carrying none of them,
+// which is a real state (retrieval can produce it) and claims nothing.
+const LOCAL_ONLY_TOOL_NAMES = [
+  'postgres_query', 'postgres_list_tables', 'postgres_describe_table',
+  'create_document',
+]
+const WEB_TOOL_NAMES = ['web_fetch']
+const ALL_TOOL_NAMES = [...LOCAL_ONLY_TOOL_NAMES, ...WEB_TOOL_NAMES]
+
 // Phrases that assert locality. If any appears while egress exists, the model
 // is telling users something the configuration does not support.
 const LOCALITY_CLAIMS = [
@@ -129,13 +141,13 @@ await test('no tools in the request → no capability claims, whatever the admin
   return 'all three capabilities withheld'
 })
 
-await test('tools in the request → the enabled capabilities are described', async () => {
+await test('tools in the request → the constraints a schema cannot carry are stated', async () => {
   const { prompt } = composePrompt({
     config: { ...LOCAL_ONLY_CONFIG, ...WEB_CONFIG },
     hasTools: true,
+    toolNames: ALL_TOOL_NAMES,
     now: NOW,
   })
-  assert(prompt.includes('web_fetch'), 'web_fetch not described')
   // CodeQL: js/incomplete-url-substring-sanitization — false positive, dismissed.
   // This asserts that the composed PROMPT TEXT names an approved domain; it is a
   // string search over prose, not a host check, and nothing is authorised by it.
@@ -145,9 +157,198 @@ await test('tools in the request → the enabled capabilities are described', as
   // `docs.example.org.attacker.com` are both rejected there. See
   // docs/security.md (Static analysis) for the full triage note.
   assert(prompt.includes('docs.example.org'), 'approved domain not listed')
-  assert(prompt.includes('postgres_query'), 'postgres not described')
-  assert(prompt.includes('create_document'), 'documents not described')
-  return 'web + postgres + documents'
+  assert(prompt.includes('only retrieve from these approved sources'), 'allowlist constraint missing')
+  assert(prompt.includes('read-only'), 'read-only SQL constraint missing')
+  assert(prompt.includes('If a tool call fails'), 'failure handling missing')
+  return 'allowlist + read-only + failure handling'
+})
+
+await test('🔒 tool signatures are never restated in prose (spec §6)', async () => {
+  // The block used to say "You have access to create_document to save a docx,
+  // pdf, or markdown file" — the tool's own description with a preamble. MCP
+  // already ships the schema, the prose copy drifts, and the model trusts prose
+  // over schema when they disagree. It HAD drifted: two capabilities described
+  // here against six known to deriveEgressFacts.
+  const { prompt } = composePrompt({
+    config: { ...LOCAL_ONLY_CONFIG, ...WEB_CONFIG },
+    hasTools: true,
+    toolNames: ALL_TOOL_NAMES,
+    now: NOW,
+  })
+  assert(!prompt.includes('You have access to'), 'a capability is being announced in prose again')
+  assert(!prompt.includes('save a docx'), 'the create_document schema description is restated in the prompt')
+  assert(!prompt.includes('postgres_list_tables'), 'a tool signature is being enumerated in prose again')
+  return 'no signatures in the prompt'
+})
+
+await test('🔒 a constraint is withheld when the tool it governs is absent (the retrieval defect)', async () => {
+  // Nothing about the CONFIG changes when a selection drops web_fetch —
+  // webFetch.activeTools is still populated — so a config-gated allowlist went
+  // on describing approved sources for a tool the model had no way to call.
+  // Same failure the bans-before-prompt ordering fixed, arriving through the
+  // tool filter instead of the ban list.
+  const { prompt } = composePrompt({
+    config: { ...LOCAL_ONLY_CONFIG, ...WEB_CONFIG },
+    hasTools: true,
+    toolNames: ['postgres_query'],
+    now: NOW,
+  })
+  assert(prompt.includes('read-only'), 'withheld a constraint for a tool that WAS sent')
+  assert(!prompt.includes('approved sources'), 'listed an allowlist with no web_fetch to use it')
+  assert(!prompt.includes('Confirm with the user'), 'asked for confirmation with no destructive tool sent')
+  return 'SQL constraint kept, allowlist and confirmation withheld'
+})
+
+await test('🔒 the destructive-confirmation clause names only what was sent', async () => {
+  const { prompt } = composePrompt({
+    config: LOCAL_ONLY_CONFIG,
+    hasTools: true,
+    toolNames: ['read_file', 'write_file', 'delete_file'],
+    now: NOW,
+  })
+  assert(prompt.includes('Confirm with the user before calling delete_file'), 'delete_file not named')
+  assert(!prompt.includes('write_file,'), 'a write-class tool was pulled into the destructive clause')
+  assert(prompt.includes('covers one call, not a session'), 'confirmation is not scoped per call')
+  return 'delete_file only'
+})
+
+await test('🔒 the Twig fs_delete_file reaches the confirmation clause', async () => {
+  // classifyTool() defaults an unknown name to 'read', which is the right
+  // failure for the POLICY GATE (it only ever restricts) and the wrong one
+  // here: fs_delete_file is the single delete in the system that runs on a
+  // machine no server-side policy can reach, and it arrives at the gateway as
+  // a plain OpenAI function definition with nowhere to carry an annotation.
+  // A confirmation clause that silently omitted it would be wrong exactly
+  // where it matters most.
+  const { prompt } = composePrompt({
+    config: LOCAL_ONLY_CONFIG,
+    hasTools: true,
+    toolNames: ['fs_read_file', 'fs_write_file', 'fs_delete_file'],
+    clientToolNames: ['fs_read_file', 'fs_write_file', 'fs_delete_file'],
+    now: NOW,
+  })
+  assert(prompt.includes('Confirm with the user before calling fs_delete_file'), 'fs_delete_file is not in the confirmation clause')
+  return 'the one delete no server policy can reach is covered'
+})
+
+await test('🔒 SQLite gets the read-only constraint too — the drift this rewrite fixes', async () => {
+  // The old block knew about postgres and documents only. A deployment with
+  // SQLite enabled got a tool policy describing neither of its capabilities,
+  // which is the drift spec §6 predicts for hand-maintained prose.
+  const { prompt } = composePrompt({
+    config: { sqlite: { enabled: true } },
+    hasTools: true,
+    toolNames: ['sqlite_query', 'sqlite_list_tables'],
+    now: NOW,
+  })
+  assert(prompt.includes('read-only'), 'SQLite did not get the read-only constraint')
+  return 'one clause, every SQL capability'
+})
+
+await test('🔒 documents/file-system overlap is stated only when both are present', async () => {
+  const both = composePrompt({
+    config: LOCAL_ONLY_CONFIG,
+    hasTools: true,
+    toolNames: ['read_document', 'read_file'],
+    now: NOW,
+  }).prompt
+  assert(both.includes('prefer read_document'), 'overlap rule missing when both tools are present')
+
+  const onlyDocs = composePrompt({
+    config: LOCAL_ONLY_CONFIG,
+    hasTools: true,
+    toolNames: ['read_document'],
+    now: NOW,
+  }).prompt
+  assert(!onlyDocs.includes('prefer read_document'), 'stated a preference with nothing to prefer it over')
+  return 'stated when ambiguous, silent when not'
+})
+
+await test('🔒 hasTools with no toolNames states no tool-specific constraint', async () => {
+  // The safe direction, and deliberate: a caller that cannot say what it sent
+  // does not get to describe tools on the model's behalf. Both production
+  // callers pass names. The failure-handling sentence still applies — it is
+  // substantiated by there being tools at all, not by which.
+  const { prompt } = composePrompt({
+    config: { ...LOCAL_ONLY_CONFIG, ...WEB_CONFIG },
+    hasTools: true,
+    now: NOW,
+  })
+  assert(!prompt.includes('approved sources'), 'listed an allowlist with no names supplied')
+  assert(!prompt.includes('read-only'), 'claimed read-only SQL with no names supplied')
+  assert(!prompt.includes('Confirm with the user'), 'asked for confirmation with no names supplied')
+  assert(prompt.includes('If a tool call fails'), 'lost the failure-handling clause, which needs no names')
+  return 'failure handling only'
+})
+
+await test('🔒 a narrowed tool list says so, and points at the way out', async () => {
+  // Every other block here stops the model claiming what the request does not
+  // support. This one stops the opposite error: with retrieval on, an absent
+  // tool reads as a capability the deployment lacks, and the model says so.
+  const { prompt, blocks } = composePrompt({
+    config: LOCAL_ONLY_CONFIG,
+    hasTools: true,
+    toolNames: ['postgres_query', 'search_tools'],
+    toolsFiltered: true,
+    now: NOW,
+  })
+  assert(blocks.includes('retrieval'), 'no retrieval block after tools were removed')
+  assert(prompt.includes('subset chosen for this conversation'), 'the list is not described as partial')
+  assert(prompt.includes('call search_tools'), 'the remedy is not named')
+  assert(prompt.includes('never tell the user a capability is unavailable'), 'the failure mode is not ruled out')
+  return 'partial list disclosed'
+})
+
+await test('🔒 a client with no search_tools is told what to say instead', async () => {
+  // search_tools is advertised only to clients connected to Nest's MCP server.
+  // An OpenAI-compatible client that sends its own tool definitions is filtered
+  // just the same and has nothing to call. Naming search_tools to that model
+  // would be a false claim; saying nothing leaves it to report the capability
+  // as non-existent, which is the failure this block exists for.
+  const { prompt, blocks } = composePrompt({
+    config: LOCAL_ONLY_CONFIG,
+    hasTools: true,
+    toolNames: ['postgres_query'],
+    toolsFiltered: true,
+    now: NOW,
+  })
+  assert(blocks.includes('retrieval'), 'a filtered request with no search_tools got no disclosure')
+  assert(prompt.includes('subset chosen for this conversation'), 'the list is not described as partial')
+  assert(!prompt.includes('search_tools'), 'named a tool the payload does not carry')
+  assert(prompt.includes('not available in this session'), 'the model is not told what to say instead')
+  assert(prompt.includes('never that this server cannot do it'), 'the wrong answer is not ruled out')
+  return 'disclosed without a remedy it does not have'
+})
+
+await test('🔒 nothing removed → no retrieval block, whatever the setting says', async () => {
+  // Retrieval fails open: sidecar down, cold cache, empty selection all forward
+  // the full list. "Enabled" is therefore not evidence of a subset, so the gate
+  // is on tools having actually gone — measured by the gateway, not inferred.
+  const { blocks, prompt } = composePrompt({
+    config: LOCAL_ONLY_CONFIG,
+    hasTools: true,
+    toolNames: ['postgres_query', 'search_tools'],
+    toolsFiltered: false,
+    now: NOW,
+  })
+  assert(!blocks.includes('retrieval'), 'called a complete tool list a subset')
+  assert(!prompt.includes('subset chosen for this conversation'), 'claimed a narrowing that did not happen')
+  return 'silent when nothing was dropped'
+})
+
+await test('🔒 the retrieval block stays small enough to be worth its tokens', async () => {
+  // Same discipline as the modes (spec §9): a block that costs 300 tokens
+  // defeats its own purpose in an assembly with a 1200-token soft budget.
+  const withOut = composePrompt({
+    config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query', 'search_tools'], now: NOW,
+  }).tokens
+  const withIn = composePrompt({
+    config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query', 'search_tools'], toolsFiltered: true, now: NOW,
+  }).tokens
+  const cost = withIn - withOut
+  assert(cost > 0, 'the block cost nothing, so it is not being emitted')
+  assert(cost <= 100, `the retrieval block costs ${cost} tokens`)
+  return `${cost} tokens`
 })
 
 await test('identity survives even with no config at all', async () => {
@@ -186,6 +387,29 @@ await test('web_fetch against an external domain is disclosed as egress', async 
   return 'egress disclosed and named'
 })
 
+await test('🔒 egress disclosure survives a tool being filtered out; the capability claim does not', async () => {
+  // The one place two blocks describe the same tool and are ALLOWED to
+  // disagree, because they fail in opposite directions: a withheld capability
+  // costs nothing, a withheld egress disclosure is a false reassurance. Pinned
+  // so the asymmetry cannot be tidied into consistency by accident — see the
+  // note above deriveEgressFacts.
+  const { prompt } = composePrompt({
+    config: WEB_CONFIG,
+    hasTools: true,
+    toolNames: ['postgres_query'],
+    now: NOW,
+  })
+  assert(!prompt.includes('approved sources'), 'allowlist stated for a tool that was not sent')
+  assert(prompt.includes('reach outside the Redstart server'), 'egress disclosure dropped with the tool')
+  // CodeQL: js/incomplete-url-substring-sanitization — false positive, dismissed.
+  // Same shape and same reason as the assertion in "the constraints a schema
+  // cannot carry are stated" above: this searches composed PROSE for a domain
+  // name, authorises nothing, and `prompt` is not a URL. The real host check is
+  // isAllowed() in web-fetch-tool.mjs. See docs/security.md (Static analysis).
+  assert(prompt.includes('docs.example.org'), 'egress destination no longer named')
+  return 'capability withheld, egress still disclosed'
+})
+
 await test('a remote MCP server is disclosed as egress; a localhost one is not', async () => {
   const servers = [
     { id: 'a', name: 'Remote Index', url: 'https://mcp.vendor.example/sse' },
@@ -213,6 +437,92 @@ await test('no egress → no unknown-terms disclaimer (it would be noise)', asyn
   const { prompt } = composePrompt({ config: LOCAL_ONLY_CONFIG, hasTools: true, now: NOW })
   assert(!prompt.includes('no record of how those external services'), 'unknown-terms text emitted with no egress')
   return 'disclaimer scoped to deployments that need it'
+})
+
+await test('🔒 per-account stores are named as private, shared ones as shared', async () => {
+  // "Held on the Redstart server, not in any cloud service" answers WHERE the
+  // data is. Users read it as an answer to WHO CAN SEE IT, and on a household
+  // server those are different questions — the model had only a sentence about
+  // cloud services to reason from when asked "can anyone else see this file?".
+  const { prompt } = composePrompt({
+    config: { documents: { enabled: true }, fileSystem: { rootDir: '/srv/files' }, postgres: { enabled: true }, git: { enabled: true } },
+    hasTools: true,
+    toolNames: ['read_document'],
+    account: { username: 'pat', role: 'owner' },
+    now: NOW,
+  })
+  assert(/Private to this account: [^.]*documents folder/.test(prompt), 'the documents folder is not claimed as private')
+  assert(/Private to this account: [^.]*file-system folder/.test(prompt), 'the file-system folder is not claimed as private')
+  assert(/Shared by every user: [^.]*Postgres/.test(prompt), 'Postgres is not disclosed as shared')
+  assert(/Shared by every user: [^.]*git repositories/.test(prompt), 'git is not disclosed as shared')
+  // The claim that would be worst to get backwards.
+  assert(!/Private to this account: [^.]*Postgres/.test(prompt), 'claimed privacy for a store every account can read')
+  return 'documents + files private, Postgres + git shared'
+})
+
+await test('🔒 with auth off there is no private storage, and the prompt says so', async () => {
+  // resolveUserScope(null) maps every caller to one anonymous folder, so the
+  // per-account stores are not per-account at all. Derived from the same value
+  // that decides the folder — account is null exactly when auth is off.
+  // Spec §7: silence would read as reassurance, so the case is stated.
+  const { prompt } = composePrompt({
+    config: { documents: { enabled: true }, fileSystem: { rootDir: '/srv/files' } },
+    hasTools: true,
+    toolNames: ['read_document'],
+    account: null,
+    now: NOW,
+  })
+  assert(!/Private to this account/.test(prompt), 'claimed per-account privacy with no accounts configured')
+  assert(/no accounts/.test(prompt), 'the auth-off posture is not stated')
+  assert(/shared by everyone who can reach the server/.test(prompt), 'the consequence of auth-off is not stated')
+  return 'auth-off inversion disclosed'
+})
+
+await test('🔒 a deployment with only shared stores claims no privacy at all', async () => {
+  const { prompt } = composePrompt({
+    config: { postgres: { enabled: true }, vault: { enabled: true } },
+    hasTools: true,
+    toolNames: ['postgres_query'],
+    account: { username: 'pat', role: 'user' },
+    now: NOW,
+  })
+  assert(!/Private to this account/.test(prompt), 'claimed private storage where none is per-account')
+  assert(/shared by every user/i.test(prompt), 'shared stores not disclosed as shared')
+  return 'no privacy claimed'
+})
+
+await test('🔒 the store labels are enumerated once, not once per group', async () => {
+  // The grouped rendering replaced a list followed by a second, regrouped copy
+  // of the same labels. On the longest block in the assembly the duplicate cost
+  // more tokens than the fact it carried.
+  const { prompt } = composePrompt({
+    config: { documents: { enabled: true }, postgres: { enabled: true } },
+    hasTools: true,
+    toolNames: ['read_document'],
+    account: { username: 'pat', role: 'user' },
+    now: NOW,
+  })
+  const occurrences = prompt.split('a documents folder').length - 1
+  assert(occurrences === 1, `the documents label appears ${occurrences} times`)
+  return 'one enumeration'
+})
+
+await test('🔒 GET /egress keeps its published localStores shape', async () => {
+  // deriveEgressFacts grew privateStores and sharedStores; localStores is the
+  // field the route publishes and the chat-ui types, so it stays a flat array
+  // of every enabled store.
+  const facts = deriveEgressFacts(
+    { documents: { enabled: true }, postgres: { enabled: true }, git: { enabled: true } },
+    [],
+    true,
+  )
+  assert(Array.isArray(facts.localStores), 'localStores is no longer an array')
+  assert(facts.localStores.length === 3, `localStores has ${facts.localStores.length} entries, expected 3`)
+  assert(
+    facts.privateStores.length + facts.sharedStores.length === facts.localStores.length,
+    'the split does not account for every store',
+  )
+  return `${facts.localStores.length} stores, ${facts.privateStores.length} private`
 })
 
 await test('egress facts follow the same substantiation gate as capabilities', async () => {
@@ -361,11 +671,15 @@ await test('block order matches the spec §3 contract', async () => {
     admin: { context: 'CONTEXT', policy: 'POLICY', style: 'STYLE' },
     mode: 'research',
     // Every optional block has to be present for this to test the ORDER rather
-    // than which blocks happened to be emitted — locality included.
+    // than which blocks happened to be emitted — locality included, and
+    // tool_policy now needs the names as well as the config. search_tools is
+    // what makes the retrieval block appear.
+    toolNames: [...ALL_TOOL_NAMES, 'search_tools'],
+    toolsFiltered: true,
     clientToolNames: ['fs_read_file'],
     now: NOW,
   })
-  const expected = ['identity', 'surface', 'context', 'mode', 'policy', 'tool_policy', 'locality', 'style', 'data_handling', 'session', 'precedence']
+  const expected = ['identity', 'surface', 'context', 'mode', 'policy', 'tool_policy', 'retrieval', 'locality', 'style', 'data_handling', 'session', 'precedence']
   // `mode` must be a real ID now that modes are code-defined (spec §9).
   assert(
     blocks.join(',') === expected.join(','),

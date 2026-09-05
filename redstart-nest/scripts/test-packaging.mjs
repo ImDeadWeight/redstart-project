@@ -182,6 +182,33 @@ for (const app of APPS) {
 
 console.log('\n-- assets that cannot run from inside an asar --')
 
+// ---------------------------------------------------------------------------
+// The title bar's height is stated in three files and must agree in all of
+// them: Electron paints the caption buttons over a strip of exactly that
+// height, App.tsx and the sign-in screen draw the bar the buttons sit on, and
+// index.html draws the same bar before any of that has loaded. Two of the three
+// are markup nothing else checks, and the failure mode is cosmetic and
+// permanent — buttons that do not line up with the bar under them.
+// ---------------------------------------------------------------------------
+
+test('🔍 the title bar is the same height in Electron, in React and in index.html', () => {
+  const read = (rel) => fs.readFileSync(path.join(REPO, rel), 'utf8')
+  const main = read('redstart-nest/electron/main/index.mjs')
+  const overlayHeight = Number(/titleBarOverlay:\s*\{[^}]*height:\s*(\d+)/s.exec(main)?.[1])
+  assert(overlayHeight > 0, 'could not read titleBarOverlay.height from index.mjs')
+
+  // Tailwind's h-12 is 3rem — 48px at the browser default root size.
+  const ui = read('redstart-nest/src/components/ui.tsx')
+  assert(/className="[^"]*h-12[ "]/.test(ui), 'TopBar no longer uses h-12; the overlay height has nothing to match')
+  assert(overlayHeight === 48, `titleBarOverlay.height is ${overlayHeight} but TopBar is h-12 (48px)`)
+
+  const html = read('redstart-nest/index.html')
+  const bootHeight = Number(/height:\s*(\d+)px/.exec(html)?.[1])
+  assert(bootHeight === overlayHeight,
+    `index.html's pre-mount bar is ${bootHeight}px but the overlay reserves ${overlayHeight}px`)
+  return `${overlayHeight}px, three ways`
+})
+
 test('🔍 Nest unpacks native .node binaries', () => {
   const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
   const unpack = config.asarUnpack ?? []

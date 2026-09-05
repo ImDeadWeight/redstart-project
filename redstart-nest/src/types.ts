@@ -113,6 +113,61 @@ export type ClientApp = {
   toolNames: string[]
 }
 
+/**
+ * What a profile's tools cost, from both directions — see
+ * electron/main/ipc/tools.mjs.
+ *
+ * `toolCount`/`approxTokens` estimate the tools this PROFILE would serve over
+ * MCP. `observed` is what the last completion actually forwarded, which is a
+ * different and larger set: the payload is composed client-side and the
+ * gateway adds a system prompt on top. Null until a completion has been made,
+ * and that null is meaningful — it is not the same as costing nothing.
+ */
+/**
+ * What the Tools tab needs to render the retrieval switch honestly.
+ *
+ * Three separate facts, because they fail separately: the profile setting is
+ * on, the embedding model is on disk, and the sidecar is answering (its state
+ * is 'starting' between spawn and the first healthy /health). A switch that
+ * showed only the first would say "on" for a server doing no retrieval at all.
+ */
+export type RetrievalStatus = {
+  enabled: boolean
+  model: {
+    label: string
+    bytes: number
+    present: boolean
+    download: { state: string; receivedBytes: number; totalBytes: number; error: string | null }
+  }
+  server: { state: string; reason: string | null; pid: number | null; startedAt: number | null; port: number }
+  /** What the RUNNING gateway is doing — only equals `enabled` once the profile has been saved. */
+  applied: { gatewayUp: boolean; enabled: boolean }
+}
+
+export type ToolContextEstimate = {
+  toolCount: number
+  approxTokens: number
+  /**
+   * The most recent completion the daemon forwarded, from ANY account — one
+   * observation, overwritten per request, never a series. See recordWireCost.
+   */
+  observed: {
+    at: number
+    /** Tools the client sent, before bans and before retrieval. */
+    toolsOffered: number
+    /** What survived the ban filter — the difference from `toolsOffered` is policy. */
+    toolsAfterBans: number
+    /** Tools that actually reached llama-server. */
+    toolsSent: number
+    toolTokens: number
+    /** The composed system prompt plus the conversation. */
+    promptTokens: number
+    ctxSize: number | null
+    /** Whether tool retrieval was switched on for that request. */
+    filtered: boolean
+  } | null
+}
+
 export type CapabilityConfig = {
   postgres: { enabled: boolean; hasConnectionString: boolean; maxRows: number }
   documents: { enabled: boolean; outputDir: string | null }
@@ -163,6 +218,12 @@ export type ProfileTools = {
   // An admin uses this to enforce an org policy (e.g. disable write_file)
   // that non-technical staff cannot override client-side.
   disabledToolIds: string[]
+  // Tool retrieval. When on, the gateway narrows the tool list on each
+  // completion to what the conversation plausibly needs, using a local
+  // embedding model. Off by default and absent on every profile saved before
+  // it, which reads as off — the safe direction, since the whole feature is an
+  // optimization the server works without.
+  retrieval?: { enabled?: boolean; relativeFloor?: number; floor?: number; margin?: number }
 }
 
 export type LlamaConfig = {

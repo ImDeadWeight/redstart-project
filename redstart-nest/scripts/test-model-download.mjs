@@ -374,6 +374,95 @@ await test('🔍 a size mismatch is caught even when no checksum is published', 
 })
 
 // ===========================================================================
+console.log('\n--- the fixed embedding-model artifact ---')
+// ===========================================================================
+// Everything above drives an artifact assembled from a Hugging Face listing at
+// runtime. The embedding model is the other kind: one file, chosen by Nest,
+// pinned by sha256 in embed-model.mjs, fetched on first need rather than
+// picked. It goes down the SAME path, and these checks say so — a second
+// downloader for the small file is exactly how "an interrupted download must
+// never look like a model" stops being true in one place.
+//
+// `pin` is a test seam on ensureEmbedModel/hasEmbedModel: it lets the
+// production code run against bytes the stub server can actually serve.
+// Production never passes it.
+
+const { EMBED_MODEL, embedModelPath, hasEmbedModel, ensureEmbedModel } =
+  await import('../electron/main/embed-model.mjs')
+
+// The real pin, with the checksum and size of whatever the stub is serving.
+function pinFor(buf) {
+  return { ...EMBED_MODEL, rfilename: 'embed-test.gguf', sha256: sha256(buf), size: buf.length }
+}
+
+await test('the pinned artifact names a commit, not a moving branch', () => {
+  assert(/^[0-9a-f]{40}$/.test(EMBED_MODEL.revision), `revision is not a commit sha: ${EMBED_MODEL.revision}`)
+  assert(/^[0-9a-f]{64}$/.test(EMBED_MODEL.sha256), `sha256 is not a hash: ${EMBED_MODEL.sha256}`)
+  assert(EMBED_MODEL.size > 0, 'no pinned size')
+  return EMBED_MODEL.label
+})
+
+await test('🔍 the fixed artifact lands verified, and is then recognised on disk', async () => {
+  const buf = Buffer.from('GGUF-embedding-model-bytes')
+  const pin = pinFor(buf)
+  routeFile(buf)
+  const dest = embedModelPath(modelsDir, pin)
+  fs.rmSync(dest, { force: true })
+  const got = await ensureEmbedModel({ modelsDir, pin })
+  assert(got === dest, `landed at ${got}, expected ${dest}`)
+  assert(fs.readFileSync(dest).equals(buf), 'content mismatch')
+  assert(!fs.existsSync(dest + PART_SUFFIX), '.part left behind')
+  assert(hasEmbedModel(modelsDir, pin), 'a complete download was not recognised')
+})
+
+await test('🔒 a corrupt embedding model yields null rather than throwing, and leaves nothing', async () => {
+  const buf = Buffer.from('GGUF-embedding-model-corrupt')
+  const pin = { ...pinFor(buf), sha256: sha256(Buffer.from('different bytes entirely')) }
+  routeFile(buf)
+  const dest = embedModelPath(modelsDir, pin)
+  fs.rmSync(dest, { force: true })
+  const got = await ensureEmbedModel({ modelsDir, pin })
+  assert(got === null, `a hash mismatch returned ${got} instead of null`)
+  assert(!fs.existsSync(dest), 'a corrupt file was renamed into place')
+  assert(!hasEmbedModel(modelsDir, pin), 'hasEmbedModel accepted a file that is not there')
+})
+
+await test('🔒 a truncated download is not mistaken for a model', async () => {
+  const buf = Buffer.from('GGUF-embedding-model-truncated-at-the-source')
+  const pin = pinFor(buf)
+  routeFile(buf, { truncateAfter: 8 })
+  const dest = embedModelPath(modelsDir, pin)
+  fs.rmSync(dest, { force: true })
+  fs.rmSync(dest + PART_SUFFIX, { force: true })
+  const got = await ensureEmbedModel({ modelsDir, pin })
+  assert(got === null, 'a truncated transfer reported success')
+  assert(!fs.existsSync(dest), 'a partial file was renamed into place')
+})
+
+await test('a file of the wrong size on disk is replaced, not served', async () => {
+  const buf = Buffer.from('GGUF-embedding-model-wrong-size-on-disk')
+  const pin = pinFor(buf)
+  const dest = embedModelPath(modelsDir, pin)
+  fs.rmSync(dest + PART_SUFFIX, { force: true })
+  fs.writeFileSync(dest, 'far too short')
+  assert(!hasEmbedModel(modelsDir, pin), 'a short file was accepted as the model')
+  routeFile(buf)
+  const got = await ensureEmbedModel({ modelsDir, pin })
+  assert(got === dest && fs.readFileSync(dest).equals(buf), 'the stale file was not replaced')
+})
+
+await test('🔍 an already-present model is not downloaded again', async () => {
+  const buf = Buffer.from('GGUF-embedding-model-already-here')
+  const pin = pinFor(buf)
+  fs.writeFileSync(embedModelPath(modelsDir, pin), buf)
+  reset()
+  routes.set('https://huggingface.co/', () => { throw new Error('should not have been requested') })
+  const got = await ensureEmbedModel({ modelsDir, pin })
+  assert(got === embedModelPath(modelsDir, pin), 'an existing model was not returned')
+  assert(requested.length === 0, `a present model was re-fetched: ${requested.join(', ')}`)
+})
+
+// ===========================================================================
 console.log('\n--- interruption, resume and cancellation ---')
 // ===========================================================================
 

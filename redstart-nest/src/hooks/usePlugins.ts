@@ -43,6 +43,11 @@ export function usePlugins() {
   }, [])
 
   /** The registry master switch (Plugins tab). Does NOT touch activeToolIds. */
+  async function setDisplayName(id: string, displayName: string): Promise<void> {
+    await api().plugins.setDisplayName(id, displayName)
+    await loadPlugins()
+  }
+
   async function setEnabled(id: string, enabled: boolean): Promise<void> {
     await api().plugins.setEnabled(id, enabled)
     await loadPlugins()
@@ -92,6 +97,6 @@ export function usePlugins() {
     plugins, setPlugins, loading,
     installProgress, setInstallProgress,
     searchResults, setSearchResults, searchError,
-    loadPlugins, setEnabled, uninstall, testPlugin, setToolClass, setToolClasses, search,
+    loadPlugins, setEnabled, setDisplayName, uninstall, testPlugin, setToolClass, setToolClasses, search,
   }
 }

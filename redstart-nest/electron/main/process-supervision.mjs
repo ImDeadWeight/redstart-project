@@ -35,8 +35,19 @@ import { promisify } from 'util'
 
 const execFileAsync = promisify(execFile)
 
-function pidFilePath(dir) {
-  return path.join(dir, 'llama-server.pid')
+/**
+ * The default PID-file name — the chat llama-server's.
+ *
+ * Every function here takes a `name` so a SECOND supervised child (the
+ * embedding server, embed-server.mjs) gets its own record. Sharing one file
+ * would mean reapStaleProcess() reaping one process using the other's pid, and
+ * a pid that has been recycled is exactly what isLikelyOurProcess() exists to
+ * refuse to act on.
+ */
+export const LLAMA_PID_FILE = 'llama-server.pid'
+
+function pidFilePath(dir, name = LLAMA_PID_FILE) {
+  return path.join(dir, name)
 }
 
 /**
@@ -44,9 +55,9 @@ function pidFilePath(dir) {
  * spawn(); if the process fails to actually start, the error/exit handlers in
  * ipc/server.mjs clean this file up, same as a normal exit does.
  */
-export function writePidFile(dir, { pid, binaryPath, startedAt }) {
+export function writePidFile(dir, { pid, binaryPath, startedAt }, { name = LLAMA_PID_FILE } = {}) {
   try {
-    fs.writeFileSync(pidFilePath(dir), JSON.stringify({ pid, binaryPath, startedAt }))
+    fs.writeFileSync(pidFilePath(dir, name), JSON.stringify({ pid, binaryPath, startedAt }))
   } catch (err) {
     // Best-effort: worst case a future startup can't reap this one specific
     // orphan. Not worth failing the launch over.
@@ -54,17 +65,17 @@ export function writePidFile(dir, { pid, binaryPath, startedAt }) {
   }
 }
 
-export function deletePidFile(dir) {
+export function deletePidFile(dir, { name = LLAMA_PID_FILE } = {}) {
   try {
-    fs.unlinkSync(pidFilePath(dir))
+    fs.unlinkSync(pidFilePath(dir, name))
   } catch {
     /* already gone — fine, this is called from multiple cleanup paths */
   }
 }
 
-export function readPidFile(dir) {
+export function readPidFile(dir, { name = LLAMA_PID_FILE } = {}) {
   try {
-    const data = JSON.parse(fs.readFileSync(pidFilePath(dir), 'utf8'))
+    const data = JSON.parse(fs.readFileSync(pidFilePath(dir, name), 'utf8'))
     if (typeof data.pid !== 'number' || typeof data.binaryPath !== 'string') return null
     return data
   } catch {
@@ -134,9 +145,9 @@ export async function isLikelyOurProcess(pid, expectedBinaryPath) {
  * same binary before reaping it, then always clear the file either way. A
  * mismatch means the pid was recycled by something unrelated; leave it alone.
  */
-export async function reapStaleProcess(dir) {
-  const recorded = readPidFile(dir)
-  deletePidFile(dir) // stale either way, whether or not anything gets killed below
+export async function reapStaleProcess(dir, { name = LLAMA_PID_FILE } = {}) {
+  const recorded = readPidFile(dir, { name })
+  deletePidFile(dir, { name }) // stale either way, whether or not anything gets killed below
   if (!recorded) return
   if (await isLikelyOurProcess(recorded.pid, recorded.binaryPath)) {
     await killByPid(recorded.pid)

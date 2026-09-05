@@ -203,6 +203,11 @@ try {
     // a llama-server is spawned, so its absence is the honest check.
     const pidFile = path.join(nestDir, 'config', 'llama-server.pid')
     assert(!fs.existsSync(pidFile), 'a llama-server pid file exists — the boot started a model')
+    // Nor an embedding server: with no model downloaded there is nothing to
+    // start, and a boot that pulled 67 MB to find that out would be a surprise
+    // on a machine that has never enabled retrieval.
+    assert(!fs.existsSync(path.join(nestDir, 'config', 'embed-server.pid')),
+      'an embed-server pid file exists — the boot started one with no model present')
   })
 
   await test('🔒 config and capability data land in two separate subtrees', async () => {
@@ -408,6 +413,10 @@ ${text}`)
     assert(!(await portInUse(ADMIN_PORT)), `${ADMIN_PORT} is still bound after shutdown`)
     assert(!fs.existsSync(path.join(nestDir, 'config', 'llama-server.pid')),
       'a llama-server pid file survived shutdown')
+    // The embedding server is the daemon's own child, so a shutdown that
+    // skipped it would leave an orphan the next start has to reap.
+    assert(!fs.existsSync(path.join(nestDir, 'config', 'embed-server.pid')),
+      'an embed-server pid file survived shutdown')
     // The daemon's OWN pid file goes too, on a clean exit. A stale one left
     // behind would make `daemon:status` report a daemon that is not there.
     assert(!fs.existsSync(path.join(nestDir, 'config', 'nestd.pid')),

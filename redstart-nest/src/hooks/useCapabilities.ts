@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, getAPI } from '../api/redstart'
-import type { CapabilityConfig, LlamaConfig } from '../types'
+import type { CapabilityConfig, LlamaConfig, ToolContextEstimate, RetrievalStatus } from '../types'
 
 // Folder-scoped capabilities all share one flow: pick a folder → save+enable,
 // or toggle enabled. Only the IPC method and the config key differ, so one
@@ -44,7 +44,8 @@ export function useCapabilities(config: LlamaConfig) {
   const [pgSaving, setPgSaving] = useState(false)
   const [savingCap, setSavingCap] = useState<FolderCap | null>(null)
   const [scholarVenueFilter, setScholarVenueFilter] = useState('')
-  const [toolContextEstimate, setToolContextEstimate] = useState<{ toolCount: number; approxTokens: number } | null>(null)
+  const [toolContextEstimate, setToolContextEstimate] = useState<ToolContextEstimate | null>(null)
+  const [retrievalStatus, setRetrievalStatus] = useState<RetrievalStatus | null>(null)
 
   async function loadCapabilities() {
     try {
@@ -139,7 +140,44 @@ export function useCapabilities(config: LlamaConfig) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toolsSignature, toolsEnabled, capabilityConfig])
 
+  // Retrieval has a 67 MB download and a child process behind its switch, so the
+  // switch cannot report its own state — it polls while something is in flight
+  // and then stops. Every failure reads as "no status", which the tab renders as
+  // the honest "not running" rather than as an error nobody can act on.
+  const retrievalOn = config.tools?.retrieval?.enabled === true
+  useEffect(() => {
+    if (!toolsEnabled) { setRetrievalStatus(null); return }
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout>
+    const poll = async () => {
+      try {
+        const status = await api().tools.retrievalStatus(config)
+        if (cancelled) return
+        setRetrievalStatus(status)
+        // Keep polling only while there is something to watch change.
+        if (status.enabled && (status.model.download.state === 'downloading' || !status.model.present)) {
+          timer = setTimeout(poll, 1000)
+        }
+      } catch { if (!cancelled) setRetrievalStatus(null) }
+    }
+    poll()
+    return () => { cancelled = true; clearTimeout(timer) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toolsEnabled, retrievalOn])
+
+  // Called by the switch itself. The embedding sidecar is a DAEMON resource, so
+  // it must start on the toggle rather than riding along with a live chat
+  // server's tool sync — which only fires when a model is already loaded, and
+  // was why the switch used to sit at "Starting…" forever with a model unloaded.
+  async function applyRetrieval(next: LlamaConfig) {
+    try {
+      await api().tools.syncRetrieval(next)
+      setRetrievalStatus(await api().tools.retrievalStatus(next))
+    } catch { /* the poll below re-reads it; a failure here is not the user's problem */ }
+  }
+
   return {
+    retrievalStatus, applyRetrieval,
     capabilityConfig, loadCapabilities,
     pgConnectionString, setPgConnectionString, pgMaxRows, setPgMaxRows,
     pgTestResult, pgSaving, savePostgresConfig, testPostgresConnection,

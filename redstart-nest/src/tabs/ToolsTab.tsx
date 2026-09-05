@@ -176,7 +176,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
     capabilityConfig, pgConnectionString, setPgConnectionString, pgMaxRows, setPgMaxRows,
     pgTestResult, pgSaving, savePostgresConfig, testPostgresConnection,
     scholarVenueFilter, setScholarVenueFilter, saveScholarVenueFilter,
-    toolContextEstimate,
+    toolContextEstimate, retrievalStatus, applyRetrieval,
   } = caps
   const {
     externalServers, showAddExternal, setShowAddExternal,
@@ -517,16 +517,130 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
           ))}
         </div>
 
+        {/* ---- Tool retrieval ----
+            Placed directly under the two cost readouts, because it is the
+            answer to the number they report. Its three states are shown
+            separately (setting, model, sidecar) rather than collapsed into one
+            "on", since a switch reading on for a server doing no retrieval is
+            the worst version of this control. */}
+        {(() => {
+          const on = config.tools?.retrieval?.enabled === true
+          const dl = retrievalStatus?.model.download
+          const downloading = on && (dl?.state === 'downloading')
+          const running = retrievalStatus?.server.state === 'running'
+          // Spawned but not yet answering. A real interval — llama-server
+          // accepts the connection before the model is loaded — and it used to
+          // be reported as "running", which is the one reading this control
+          // exists to avoid.
+          const starting = retrievalStatus?.server.state === 'starting'
+          const pct = dl && dl.totalBytes > 0 ? Math.min(100, Math.round((dl.receivedBytes / dl.totalBytes) * 100)) : 0
+          return (
+            <div className="bg-zinc-800/40 rounded px-3 py-2.5 mt-4">
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0">
+                  <span className="text-sm text-zinc-200">Send only the tools a conversation needs</span>
+                  <span className="block text-xs text-zinc-600 mt-0.5">
+                    Ranks your enabled tools against the conversation and sends the ones that match, instead of
+                    every schema on every message. Runs a small model locally
+                    {retrievalStatus ? ` (${retrievalStatus.model.label}, ${Math.round(retrievalStatus.model.bytes / 1e6)} MB, downloaded once)` : ''}.
+                    Tools the model has already used are never taken away mid-task, and it can ask for others by name.
+                  </span>
+                </span>
+                <TogglePill
+                  checked={on}
+                  onToggle={() => {
+                    const retrieval = { ...(config.tools?.retrieval ?? {}), enabled: !on }
+                    setToolsField('retrieval', retrieval)
+                    // Straight to the daemon, not through the live-server tool
+                    // sync: the sidecar's lifetime is the daemon's, so it must
+                    // start whether or not a chat model happens to be loaded.
+                    applyRetrieval({ ...config, tools: { ...(config.tools ?? {}), retrieval } as typeof config.tools })
+                  }}
+                  className="flex-shrink-0"
+                />
+              </div>
+
+              {/* Every branch below is read off a fact the daemon reported. The
+                  one this replaced ended in a bare "Starting…" whenever the
+                  sidecar was merely untouched, which is indistinguishable from
+                  starting and was wrong in exactly the case that mattered:
+                  nothing had been asked to start at all. */}
+              {on && (
+                <p className={`text-xs mt-2 pt-2 border-t border-zinc-700/50 ${
+                  running && retrievalStatus?.applied.enabled ? 'text-zinc-500' : 'text-amber-400'
+                }`}>
+                  {!retrievalStatus
+                    ? 'Checking…'
+                    : downloading
+                      ? `Downloading the ranking model — ${pct}% of ${Math.round((dl?.totalBytes ?? 0) / 1e6)} MB. Every tool is still being sent until it finishes.`
+                      : dl?.state === 'failed'
+                        ? `⚠ The ranking model could not be downloaded${dl?.error ? `: ${dl.error}` : ''}. Every tool is still being sent — nothing is broken, but nothing is being saved either. Toggle this off and on to retry.`
+                        : !retrievalStatus.model.present
+                          ? '⚠ The ranking model is not downloaded yet. Toggle this off and on to fetch it.'
+                          : starting
+                            ? 'Loading the ranking model into memory. Every tool is still being sent until it finishes.'
+                            : !running
+                              ? `⚠ The ranking model is downloaded, but its process is not running${retrievalStatus.server.reason ? `: ${retrievalStatus.server.reason}` : ''}. Every tool is still being sent.`
+                              : !retrievalStatus.applied.gatewayUp
+                                ? '✓ Ready. Filtering starts when you launch a model.'
+                                : !retrievalStatus.applied.enabled
+                                  ? '⚠ Ready, but the running server is still using the previously saved settings. Save this profile to apply it.'
+                                  : '✓ Running. Filtering applies from your next message.'}
+                </p>
+              )}
+
+              {on && !config.tools?.enabled && (
+                <p className="text-xs mt-2 text-zinc-600">Tools are switched off for this profile, so there is nothing to filter.</p>
+              )}
+            </div>
+          )
+        })()}
+
+        {/* Two numbers, side by side and labelled, because they measure
+            different things. The estimate describes the tools THIS PROFILE
+            would serve over MCP; the observed line is what the last real
+            request carried, which is a larger set (the payload is composed
+            client-side, and the gateway adds a system prompt on top) and is
+            the only one that can say what a request actually costs. Collapsing
+            them into one number would have to be wrong about one of them. */}
         {toolContextEstimate && toolContextEstimate.toolCount > 0 && (
           <p className={`text-xs mt-4 ${
             toolContextEstimate.approxTokens > config.ctxSize * 0.25 ? 'text-amber-400' : 'text-zinc-500'
           }`}>
-            {toolContextEstimate.toolCount} active tool{toolContextEstimate.toolCount === 1 ? '' : 's'} ≈ {toolContextEstimate.approxTokens.toLocaleString()} tokens of context on every request
+            {toolContextEstimate.toolCount} active tool{toolContextEstimate.toolCount === 1 ? '' : 's'} in this profile ≈ {toolContextEstimate.approxTokens.toLocaleString()} tokens of context on every request
             {toolContextEstimate.approxTokens > config.ctxSize * 0.25
               ? ` — over a quarter of your ${config.ctxSize.toLocaleString()}-token window. Consider enabling fewer tools per profile.`
               : ''}
           </p>
         )}
+        {toolContextEstimate?.observed && (() => {
+          const o = toolContextEstimate.observed
+          const total = o.toolTokens + o.promptTokens
+          const ctx = o.ctxSize ?? config.ctxSize
+          return (
+            /* Amber on the same quarter-of-the-window threshold the estimate
+               above uses, and that tool-filter.mjs budgets against.
+
+               "from any account" is not padding. This is ONE observation,
+               overwritten by every completion the daemon serves, so on a
+               multi-user box it is whoever asked last — not this admin, and not
+               a series. Reading it as "my last request" is the obvious mistake
+               and the number is useless once it has been made. A per-account
+               history was declined deliberately (it is a log of one user's tool
+               usage, with a retention policy to argue about), so saying what
+               the number is stands in for keeping more of them. */
+            <p className={`text-xs mt-1 ${o.toolTokens > ctx * 0.25 ? 'text-amber-400' : 'text-zinc-500'}`}>
+              Last request from any account: {o.toolsSent} tool{o.toolsSent === 1 ? '' : 's'} ≈ {o.toolTokens.toLocaleString()} tokens,
+              plus {o.promptTokens.toLocaleString()} for the prompt and conversation — {total.toLocaleString()} of {ctx.toLocaleString()}.
+              {o.toolsOffered > o.toolsAfterBans
+                ? ` ${o.toolsOffered - o.toolsAfterBans} of the ${o.toolsOffered} the client offered were withheld by policy.`
+                : ''}
+              {o.toolsAfterBans > o.toolsSent
+                ? ` Tool retrieval left out ${o.toolsAfterBans - o.toolsSent} more.`
+                : ''}
+            </p>
+          )
+        })()}
       </>) : (
         <p className="text-xs text-zinc-600">Enable tools to let the model use web access and local capabilities via the built-in MCP server. Settings are saved with the active profile.</p>
       )}

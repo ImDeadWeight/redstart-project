@@ -128,7 +128,10 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
       registryType: entry.registryType ?? null,
       npmPackage: entry.packageName || '',
       npmVersion: entry.version || '',
-      displayName: entry.name,
+      // The human name, not the reverse-DNS identifier. The ID still comes from
+      // the identifier: it is the ban handle and the tools' namespace prefix,
+      // so it stays unique and stable while the label above it reads properly.
+      displayName: entry.suggestedDisplayName || entry.name,
       pluginId: prev.pluginIdTouched ? prev.pluginId : slugify(entry.name),
       fields: entry.fields.map((f) => ({
         name: f.name,
@@ -151,8 +154,14 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
       // had just derived from entry.name with the literal fallback "plugin".
       // Every registry-sourced install got the same meaningless id unless the
       // admin happened to hand-edit the id field first.
+      // The registry seed is the SERVER NAME, not the display name. They used to
+      // be the same string; now that the display name is the human one, seeding
+      // from it would quietly start handing out different (shorter, and no
+      // longer publisher-qualified) ids than every install before it — and the
+      // id is the ban handle, the namespace prefix and what saved profiles
+      // reference. The label changed; the identifier deliberately did not.
       const seed =
-        s.sourceKind === 'registry' ? s.displayName
+        s.sourceKind === 'registry' ? (s.registrySelected?.name ?? s.displayName)
         : s.sourceKind === 'npm' || s.sourceKind === 'pypi' ? s.npmPackage
         : s.sourceKind === 'command' ? s.command
         : s.localPath

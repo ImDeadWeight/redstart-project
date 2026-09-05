@@ -7,7 +7,67 @@
     <link rel="icon" type="image/svg+xml" href="/redstart.svg"/>
   </head>
   <body>
-    <div id="root"></div>
+    <!--
+      The top bar, painted BEFORE the bundle mounts.
+
+      Electron hides the native title bar and paints only the caption buttons
+      over the top 48px, so until React renders TopBar there is nothing for
+      them to sit on: the window opens as bare zinc-950 with three buttons
+      floating in the corner, and stays that way for as long as it takes to
+      parse ~330 kB of JavaScript. No component can fix that — at that moment
+      no component has run.
+
+      So the same bar exists twice, deliberately, and this copy is markup
+      rather than a component because its whole purpose is to be on screen
+      before any component can be. createRoot().render() clears #root, so React
+      replaces it on mount; both are 48px of zinc-900 carrying the same title,
+      which is what makes the swap invisible.
+
+      INLINE styles, not classes: Tailwind's stylesheet is a separate request
+      (and in dev is injected by the bundle itself), so a class here would be
+      unstyled at exactly the moment this needs to look right. Keep the values
+      in step with TopBar in src/components/ui.tsx and with
+      titleBarOverlay.height in electron/main/index.mjs — 48px, three ways.
+    -->
+    <div id="root">
+      <div style="
+        height: 48px;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        padding: 0 20px;
+        background-color: #18181b;
+        border-bottom: 1px solid #27272a;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+        font-size: 1.125rem;
+        font-weight: 700;
+        letter-spacing: 0.025em;
+        color: #f97316;
+        -webkit-app-region: drag;
+        justify-content: space-between;
+        /* Clear of the caption buttons, which are painted over this bar and
+           are about 138 CSS px wide. React measures the real inset once it is
+           running (useWindowControlsOverlay); static markup cannot, so this
+           errs wide — too much padding is a status sitting slightly left for a
+           moment, too little is one underneath the close button. */
+        padding-right: 160px;
+      ">
+        <span>Redstart Nest</span>
+        <span style="
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 0.75rem;
+          font-weight: 400;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          color: #a1a1aa;
+        ">
+          <span style="width: 8px; height: 8px; border-radius: 9999px; background-color: #52525b;"></span>
+          Connecting…
+        </span>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

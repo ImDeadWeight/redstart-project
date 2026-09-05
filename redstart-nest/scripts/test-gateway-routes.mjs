@@ -22,6 +22,7 @@
 
 import { register } from 'node:module'
 import * as http from 'node:http'
+import * as net from 'node:net'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -42,6 +43,8 @@ await import('./electron-stub.mjs')
 
 const { startGateway, stopGateway } = await import('../electron/main/tools-gateway.mjs')
 const { updateGatewayConfig } = await import('../electron/main/tools-gateway.mjs')
+const { observedWireCost } = await import('../electron/main/tool-filter.mjs')
+const { EMBED_PORT } = await import('../electron/main/ports.mjs')
 const { setAuthRequired, createOwner, createAccount } = await import('../electron/main/auth.mjs')
 
 const baseConfig = { allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 }
@@ -474,15 +477,15 @@ async function main() {
     // The sharp case: enforceToolAllowList deletes `parsed.tools` outright when
     // the filter empties it, so hasTools must be read after the strip or the
     // whole capability section is claimed against a payload with no tools.
-    updateGatewayConfig({ ...baseConfig, documents: { enabled: true }, disabledTools: ['create_document'] })
+    updateGatewayConfig({ ...baseConfig, disabledTools: ['delete_file'] })
     await completions({
-      messages: [{ role: 'user', content: 'write it up' }],
-      tools: [toolDef('create_document')],
+      messages: [{ role: 'user', content: 'clear it out' }],
+      tools: [toolDef('delete_file')],
     })
     assert(!lastForwarded.tools, 'the tools array survived a total ban')
     assert(
-      !/create_document/.test(systemOf()),
-      'the prompt offered a tool the model was never sent'
+      !/Confirm with the user/.test(systemOf()),
+      'the prompt governed a tool the model was never sent'
     )
   })
 
@@ -512,14 +515,258 @@ async function main() {
   await test('🔍 with nothing banned, the claim the two tests above suppress is still made', async () => {
     // The regression guard: the ordering swap must remove claims only where a
     // ban removed the tool, never weaken the substantiated case.
-    updateGatewayConfig({ ...baseConfig, documents: { enabled: true } })
+    updateGatewayConfig(baseConfig)
     await completions({
-      messages: [{ role: 'user', content: 'write it up' }],
-      tools: [toolDef('create_document'), toolDef('fs_read_file')],
+      messages: [{ role: 'user', content: 'clear it out' }],
+      tools: [toolDef('delete_file'), toolDef('fs_read_file')],
     })
     const system = systemOf()
-    assert(/create_document/.test(system), 'a permitted capability lost its claim')
+    assert(/Confirm with the user before calling delete_file/.test(system), 'a permitted capability lost its claim')
     assert(/Two different computers/.test(system), 'a permitted client tool lost its locality block')
+    updateGatewayConfig(baseConfig)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Tool retrieval. It sits between the ban filter and the prompt composer, so
+  // these are the only tests that can say it never widened what the ban filter
+  // left and never claimed a capability it then removed. Everything about
+  // scoring lives in test-tool-retrieval.mjs; what is asserted here is the
+  // WIRING — including, most importantly, that both of its off states forward a
+  // byte-identical request.
+  // ---------------------------------------------------------------------------
+  console.log('\n-- tool retrieval, at the call site --')
+
+  const retrievalTools = [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch')]
+  const retrievalBody = () => ({
+    messages: [{ role: 'user', content: 'what changed in the repo' }],
+    tools: retrievalTools,
+  })
+
+  await test('🔒 with retrieval off, the forwarded request is byte-identical to today', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096 })
+    await completions(retrievalBody())
+    const off = JSON.stringify(lastForwarded)
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: false } })
+    await completions(retrievalBody())
+    assert(JSON.stringify(lastForwarded) === off, 'an explicit off differs from no setting at all')
+    const names = lastForwarded.tools.map(t => t.function.name)
+    assert(names.length === 3, `tools were filtered with retrieval off: ${names.join(',')}`)
+  })
+
+  // This one test needs the ABSENCE of a server on a fixed production port, so
+  // it is the one thing in this suite a developer running Redstart can falsify.
+  // Probed rather than assumed: a real embedding server on 19084 makes the
+  // premise false, and a test that quietly measures something else is worse
+  // than one that says it did not run. The property itself is covered without a
+  // port in test-tool-retrieval.mjs ("a null from the embedder returns the same
+  // array"); what only this can show is the wiring end to end.
+  const embedPortBusy = await new Promise(resolve => {
+    const probe = net.createServer()
+    probe.once('error', () => resolve(true))
+    probe.listen(EMBED_PORT, '127.0.0.1', () => probe.close(() => resolve(false)))
+  })
+  if (embedPortBusy) {
+    console.log(`  SKIP - port ${EMBED_PORT} is in use; a real embedding server would answer, so "no embedding server" cannot be tested here`)
+  }
+
+  if (!embedPortBusy) await test('🔒 with retrieval on and no embedding server, the request is byte-identical too', async () => {
+    // A real connection-refused, not a mocked one. It is the state every install
+    // is in until the model is downloaded, so it is the one that has to be free.
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: false } })
+    await completions(retrievalBody())
+    const off = JSON.stringify(lastForwarded)
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+    await completions(retrievalBody())
+    assert(JSON.stringify(lastForwarded) === off, 'a dead sidecar changed the forwarded request')
+    updateGatewayConfig(baseConfig)
+  })
+
+  await test('🔒 a banned tool cannot come back through retrieval', async () => {
+    // Retrieval is handed the POST-ban array. Even switched on with a live
+    // scorer it could only ever return a subset of it — but the ordering is
+    // what makes that true, so it is asserted at the call site rather than
+    // trusted from the module.
+    updateGatewayConfig({
+      ...baseConfig, ctxSize: 4096,
+      toolRetrieval: { enabled: true },
+      disabledTools: ['create_document'],
+      documents: { enabled: true },
+    })
+    await completions(retrievalBody())
+    const names = (lastForwarded.tools || []).map(t => t.function.name)
+    assert(!names.includes('create_document'), 'a banned tool reached the model')
+    assert(names.includes('git_status'), `the rest of the list was lost: ${names.join(',')}`)
+    updateGatewayConfig(baseConfig)
+  })
+
+  await test('🔍 retrieval runs before the prompt, so a claim still describes what was sent', async () => {
+    // The Phase 0.1 invariant, now with a second thing between the ban filter
+    // and the composer. If retrieval ever moved after injectSystemContext, this
+    // is the test that would notice.
+    updateGatewayConfig({
+      ...baseConfig, ctxSize: 4096,
+      toolRetrieval: { enabled: true },
+    })
+    await completions({
+      messages: [{ role: 'user', content: 'clear it out' }],
+      tools: [toolDef('delete_file')],
+    })
+    const names = (lastForwarded.tools || []).map(t => t.function.name)
+    const claimed = /Confirm with the user before calling delete_file/.test(systemOf())
+    assert(claimed === names.includes('delete_file'),
+      `the prompt ${claimed ? 'claimed' : 'did not claim'} a tool the payload ${names.includes('delete_file') ? 'carried' : 'did not carry'}`)
+    updateGatewayConfig(baseConfig)
+  })
+
+  await test('🔒 retrieval that fails open discloses nothing — "enabled" is not "narrowed"', async () => {
+    // No embedding server, so the filter forwards the full list. The block is
+    // gated on tools having actually gone, not on the setting, so a request
+    // that kept everything must not be told it is looking at a subset.
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+    await completions({
+      messages: [{ role: 'user', content: 'what changed in the repo' }],
+      tools: [toolDef('git_status'), toolDef('search_tools')],
+    })
+    const names = (lastForwarded.tools || []).map(t => t.function.name)
+    assert(names.length === 2, `the filter dropped something with no embedder: ${names.join(',')}`)
+    assert(!/subset chosen for this conversation/.test(systemOf()), 'claimed a narrowing that did not happen')
+    updateGatewayConfig(baseConfig)
+  })
+
+  // A stub embedding server on the real port, so the whole chain runs: embed
+  // the tools, embed the conversation, score, drop, compose. Vectors are
+  // deterministic and orthogonal — anything matching the query's subject gets
+  // [1,0] and everything else [0,1], so the relative floor (0.85 of the best
+  // score) cuts exactly the tools that scored zero.
+  const withStubEmbedder = async (fn) => {
+    const server = http.createServer((req, res) => {
+      let body = ''
+      req.on('data', chunk => { body += chunk })
+      req.on('end', () => {
+        let input = []
+        try { input = JSON.parse(body).input ?? [] } catch { /* answered below as empty */ }
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({
+          data: input.map((text, index) => ({
+            index,
+            object: 'embedding',
+            embedding: /git|repo|search_tools/.test(String(text)) ? [1, 0] : [0, 1],
+          })),
+        }))
+      })
+    })
+    await new Promise(resolve => server.listen(EMBED_PORT, '127.0.0.1', resolve))
+    try {
+      return await fn()
+    } finally {
+      await new Promise(resolve => server.close(resolve))
+      updateGatewayConfig(baseConfig)
+    }
+  }
+
+  if (!embedPortBusy) await test('🔒 a genuinely narrowed list is disclosed, and names search_tools when it survives', async () => {
+    await withStubEmbedder(async () => {
+      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+      await completions({
+        messages: [{ role: 'user', content: 'what changed in the git repo today' }],
+        tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch'), toolDef('search_tools')],
+      })
+      const names = (lastForwarded.tools || []).map(t => t.function.name)
+      assert(names.includes('git_status'), 'the matching tool was dropped')
+      assert(names.includes('search_tools'), 'search_tools was dropped, so this tests the wrong branch')
+      assert(!names.includes('create_document'), 'nothing was filtered, so there is no narrowing to disclose')
+      const system = systemOf()
+      assert(/subset chosen for this conversation/.test(system), 'the narrowing was not disclosed')
+      assert(/call search_tools/.test(system), 'search_tools survived but the remedy was not named')
+    })
+  })
+
+  if (!embedPortBusy) await test('🔒 a narrowed list with no search_tools is told what to say instead', async () => {
+    // The gap this closes: an OpenAI-compatible client that sends its own tools
+    // and never connects to Nest's MCP server is filtered like any other and
+    // has nothing to search with. It used to be told nothing at all.
+    await withStubEmbedder(async () => {
+      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+      await completions({
+        messages: [{ role: 'user', content: 'summarise what changed in the git repo this week' }],
+        tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch')],
+      })
+      const names = (lastForwarded.tools || []).map(t => t.function.name)
+      assert(names.includes('git_status'), 'the matching tool was dropped')
+      assert(!names.includes('web_fetch'), 'nothing was filtered, so there is no narrowing to disclose')
+      const system = systemOf()
+      assert(/subset chosen for this conversation/.test(system), 'the narrowing was not disclosed')
+      assert(!/search_tools/.test(system), 'named a tool this client cannot call')
+      assert(/not available in this session/.test(system), 'the model was not told what to say instead')
+    })
+  })
+
+  await test('a request carrying no tools is untouched by retrieval', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+    const res = await completions({ messages: [{ role: 'user', content: 'hello' }] })
+    assert(res.status === 200, `expected 200, got ${res.status}`)
+    assert(!lastForwarded.tools, 'an empty request grew a tools array')
+    updateGatewayConfig(baseConfig)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Making the number honest. The Tools tab's estimate has always described a
+  // different set from the one that goes on the wire — it walks the providers
+  // Nest would serve over MCP, while the payload is composed client-side and
+  // the gateway then adds a prompt. Retrieval did not make that wrong; it made
+  // it matter. These pin the wire-side measurement the gateway now records.
+  // ---------------------------------------------------------------------------
+  console.log('\n-- what actually went on the wire --')
+
+  await test('🔍 the recorded cost counts what was forwarded, not what was offered', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 8192, disabledTools: ['git_diff'] })
+    await completions({
+      messages: [{ role: 'user', content: 'what changed' }],
+      tools: [toolDef('git_status'), toolDef('git_diff')],
+    })
+    const observed = observedWireCost()
+    assert(observed, 'no cost was recorded for a forwarded completion')
+    assert(observed.toolsOffered === 2, `offered was ${observed.toolsOffered}, expected 2`)
+    assert(observed.toolsAfterBans === 1, `after bans was ${observed.toolsAfterBans}`)
+    assert(observed.toolsSent === 1, `sent was ${observed.toolsSent} — the banned tool was counted as forwarded`)
+    assert(observed.toolTokens > 0, 'the forwarded tools were costed at zero')
+    assert(observed.ctxSize === 8192, `ctxSize was ${observed.ctxSize}`)
+    updateGatewayConfig(baseConfig)
+  })
+
+  await test('🔍 the prompt the gateway adds is counted, since the client never counted it', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 8192 })
+    await completions({ messages: [{ role: 'user', content: 'hi' }], tools: [toolDef('git_status')] })
+    const observed = observedWireCost()
+    const userMessageTokens = Math.ceil(JSON.stringify([{ role: 'user', content: 'hi' }]).length / 4)
+    assert(observed.promptTokens > userMessageTokens,
+      `the injected prompt was not counted: ${observed.promptTokens} vs a bare ${userMessageTokens}`)
+    updateGatewayConfig(baseConfig)
+  })
+
+  await test('a request with no tools still records a cost', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 8192 })
+    await completions({ messages: [{ role: 'user', content: 'hello' }] })
+    const observed = observedWireCost()
+    assert(observed.toolsOffered === 0 && observed.toolsSent === 0, 'a tool-free request invented tools')
+    assert(observed.promptTokens > 0, 'a tool-free request costed its prompt at zero')
+    assert(observed.filtered === false, 'a tool-free request claimed it was filtered')
+    updateGatewayConfig(baseConfig)
+  })
+
+  await test('🔒 the record carries counts and tokens only — never names or content', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 8192 })
+    await completions({
+      messages: [{ role: 'user', content: 'my password is hunter2' }],
+      tools: [toolDef('git_status')],
+    })
+    const serialized = JSON.stringify(observedWireCost())
+    assert(!/hunter2/.test(serialized), `message content leaked into the record: ${serialized}`)
+    assert(!/git_status/.test(serialized), `a tool name leaked into the record: ${serialized}`)
+    for (const key of Object.keys(observedWireCost())) {
+      assert(typeof observedWireCost()[key] === 'number' || typeof observedWireCost()[key] === 'boolean' || observedWireCost()[key] === null,
+        `${key} is not a number, a boolean or null — this record is shown to admins and must stay countable`)
+    }
     updateGatewayConfig(baseConfig)
   })
 

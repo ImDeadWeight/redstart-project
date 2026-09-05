@@ -8,7 +8,7 @@
 // =============================================================================
 
 import type {
-  HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup,
+  HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup, ToolContextEstimate, RetrievalStatus,
   ExternalMcpServer, LlamaConfig, ClientApp, ControlPlaneState, StartupState,
   CatalogModel, ModelDetail, ModelDescription, ModelArtifact, LocalModelFile, DownloadProgress,
 } from '../types'
@@ -101,6 +101,8 @@ export type RedstartAPI = {
     addGroup: (group: Omit<ToolGroup, 'builtIn'>) => Promise<boolean>
     deleteGroup: (id: string) => Promise<boolean>
     applyConfig: (config: LlamaConfig) => Promise<boolean>
+    retrievalStatus: (config: LlamaConfig) => Promise<RetrievalStatus>
+    syncRetrieval: (config: LlamaConfig) => Promise<{ enabled: boolean; downloading?: boolean }>
   }
   settings: {
     getBinaryPath: () => Promise<string | null>
@@ -156,7 +158,7 @@ export type RedstartAPI = {
     testPostgres: (connectionString?: string) => Promise<{ ok: boolean; message: string }>
     setDocumentsFolder: (config: { outputDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
     setSqlite: (config: { rootDir?: string; maxRows?: number; enabled?: boolean }) => Promise<{ ok: boolean }>
-    estimateToolContext: (config: LlamaConfig) => Promise<{ toolCount: number; approxTokens: number }>
+    estimateToolContext: (config: LlamaConfig) => Promise<ToolContextEstimate>
     setVault: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
     setGit: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
     setFileSystem: (config: { rootDir?: string; enabled?: boolean; allowWrite?: boolean; allowDestructive?: boolean }) => Promise<{ ok: boolean }>
@@ -204,6 +206,9 @@ export type RedstartAPI = {
       env?: Record<string, { value: string; isSecret: boolean }>
     }) => Promise<{ ok: boolean; error?: string }>
     setEnabled: (id: string, enabled: boolean) => Promise<{ ok: boolean; error?: string }>
+    // Display only. The id — the ban handle and the tools' namespace prefix —
+    // is deliberately not renameable; see setPluginDisplayName in ipc/plugins.mjs.
+    setDisplayName: (id: string, displayName: string) => Promise<{ ok: boolean; error?: string; displayName?: string }>
     setClass: (id: string, toolName: string, cls: PluginToolInfo['class']) => Promise<{ ok: boolean; error?: string }>
     setClasses: (id: string, toolNames: string[], cls: PluginToolInfo['class']) => Promise<{ ok: boolean; updated?: number; error?: string }>
     uninstall: (id: string) => Promise<{ ok: boolean; folderRemoved?: boolean; error?: string }>
@@ -274,7 +279,10 @@ export type PluginInstallProgress = {
 }
 
 export type RegistrySearchResult = {
+  /** The registry's canonical reverse-DNS identifier, e.g. io.github.artokun/comfyui-mcp. */
   name: string
+  /** What a person should see: the registry's own `title` where it has one, else derived. */
+  suggestedDisplayName: string
   description: string
   packageName?: string
   version?: string

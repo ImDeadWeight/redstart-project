@@ -34,7 +34,8 @@ import { initPaths } from '../electron/main/platform-paths.mjs'
 // them is wanted.
 initPaths({ config: 'unused-by-buildArgs/config', capabilityBase: 'unused-by-buildArgs/data', isPackaged: false })
 
-const { buildArgs } = await import('../electron/main/llama-args.mjs')
+const { buildArgs, buildEmbedArgs } = await import('../electron/main/llama-args.mjs')
+const { EMBED_PORT } = await import('../electron/main/ports.mjs')
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-path-scope.mjs)
@@ -147,6 +148,47 @@ await test('non-host flags survive alongside a stripped --host override', async 
   const args = buildArgs({ ...baseConfig, additionalArgs: '-ngl 40 --host 0.0.0.0 --foo bar' })
   const joined = args.join(' ')
   assert(joined.includes('-ngl 40') && joined.includes('--foo bar'), `legit additionalArgs lost: ${joined}`)
+})
+
+
+console.log('\n-- the embedding server is localhost-only too --')
+
+await test('🔍 buildEmbedArgs binds 127.0.0.1 and nothing else', async () => {
+  const args = buildEmbedArgs('/models/embed.gguf')
+  assert(flagValue(args, '--host') === '127.0.0.1', `--host was ${flagValue(args, '--host')}`)
+  assert(count(args, '--host') === 1, `expected exactly one --host, got ${count(args, '--host')}`)
+  for (const tok of args) {
+    assert(tok !== '0.0.0.0' && tok !== '::' && tok !== '[::]', `wildcard bind leaked: ${tok}`)
+  }
+})
+
+await test('🔍 the embedding port is the fixed EMBED_PORT, never derived from config.port', async () => {
+  const args = buildEmbedArgs('/models/embed.gguf')
+  assert(flagValue(args, '--port') === String(EMBED_PORT), `--port was ${flagValue(args, '--port')}, expected ${EMBED_PORT}`)
+  // buildEmbedArgs takes a path, not a config, so there is no config.port for it
+  // to read even by accident — this pins that signature.
+  assert(buildEmbedArgs.length <= 2, 'buildEmbedArgs grew a config argument — chat settings must not reach this process')
+})
+
+await test('🔒 the embedding server serves no UI', async () => {
+  const args = buildEmbedArgs('/models/embed.gguf')
+  assert(!args.includes('--path'), 'the embedding server was given a static file root')
+})
+
+await test('the embedding server stays on the CPU', async () => {
+  const args = buildEmbedArgs('/models/embed.gguf')
+  assert(flagValue(args, '-ngl') === '0', `-ngl was ${flagValue(args, '-ngl')} — this would take VRAM from the chat model`)
+  assert(args.includes('--embeddings'), 'no --embeddings: this would launch a second chat server')
+})
+
+await test('the model path is quoted for the preview and raw for the spawn', async () => {
+  const spacey = 'C:\\Program Files\\models\\embed.gguf'
+  assert(flagValue(buildEmbedArgs(spacey), '-m') === `"${spacey}"`, 'preview form did not quote a path with spaces')
+  assert(flagValue(buildEmbedArgs(spacey, true), '-m') === spacey, 'raw form quoted the path — spawn would look for a file whose name includes quotes')
+})
+
+await test('no --pooling is guessed before the model is chosen', async () => {
+  assert(!buildEmbedArgs('/models/embed.gguf').includes('--pooling'), 'a pooling mode was pinned without reading the GGUF that defines it')
 })
 
 // ---------------------------------------------------------------------------

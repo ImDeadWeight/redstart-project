@@ -133,9 +133,21 @@ npm run typecheck         # tsc --noEmit for the launcher
 npm run check:mjs         # node --check across electron/main + shared + bin
 ```
 
-What the suites cannot reach — anything needing a real window, a real service
-install or a second physical device — is a written manual checklist in
-[`TESTING.md`](../TESTING.md). Run it before cutting a release.
+Two things the suites do not cover, and cannot as they stand:
+
+- **The launcher window has no automated coverage at all.** Nothing opens an
+  Electron window in CI, so every change to `src/` is verified by running
+  `npm run dev` and looking at it. The daemon behind it is covered thoroughly
+  (`test-daemon-smoke.mjs` and the admin suites), which is the half that can be
+  driven headlessly.
+- **`bin/` is not in the packaged build.** `electron-builder.json`'s `files`
+  ships `electron/main` and `dist`, so `bin/nestd.mjs` exists only in a
+  checkout. That is fine while there is nothing to install it onto; it matters
+  the moment there is.
+
+Running Nest as a service is documented in [`deploy/`](../deploy/README.md),
+which states its own gap: none of those artifacts have been run on real
+hardware.
 
 Every suite in `test:security` must also appear as a step in `.github/workflows/ci.yml` — `scripts/test-ci-parity.mjs` fails the build otherwise, because a suite that runs locally but not in CI gates nothing. When you add a suite, add it in both places.
 

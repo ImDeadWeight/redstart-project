@@ -183,6 +183,105 @@ await test('a timeoutMs outside the allowed range is rejected', async () => {
   return 'both rejected'
 })
 
+await test('🔍 callTimeoutMs is its own field, with its own larger ceiling', async () => {
+  // The handshake budget and the tool-call budget are different questions —
+  // one is "can this plugin speak", the other is "how long may this work take".
+  // Sharing one number is what reported a successful multi-minute install as a
+  // plugin that had not responded.
+  const tooLow = registry.addPlugin(samplePlugin({ id: 'calllow', callTimeoutMs: 10 }))
+  assert(tooLow.ok === false, 'a callTimeoutMs below the minimum was accepted')
+  const tooHigh = registry.addPlugin(samplePlugin({ id: 'callhigh', callTimeoutMs: 999999999 }))
+  assert(tooHigh.ok === false, 'a callTimeoutMs above the maximum was accepted')
+
+  // The point of the separate field: a value a plain timeoutMs would refuse.
+  const long = registry.addPlugin(samplePlugin({ id: 'calllong', callTimeoutMs: 300000 }))
+  assert(long.ok === true, `five minutes should be allowed for a tool call: ${long.error}`)
+  assert(registry.addPlugin(samplePlugin({ id: 'handshakelong', timeoutMs: 300000 })).ok === false,
+    'five minutes was accepted as a HANDSHAKE budget — a plugin that slow is broken, not busy')
+  registry.removePlugin('calllong')  // a later test counts the whole file
+  return 'separate ceilings'
+})
+
+await test('a plugin with no callTimeoutMs gets the default, not the handshake budget', async () => {
+  registry.addPlugin(samplePlugin({ id: 'calldefault', timeoutMs: 5000 }))
+  const entry = registry.listPlugins().find(p => p.id === 'calldefault')
+  assert(entry.callTimeoutMs === registry.DEFAULT_CALL_TIMEOUT_MS,
+    `callTimeoutMs was ${entry.callTimeoutMs}, expected the default ${registry.DEFAULT_CALL_TIMEOUT_MS}`)
+  assert(entry.callTimeoutMs > entry.timeoutMs,
+    'the default call budget is no larger than the handshake budget, so nothing was gained')
+  registry.removePlugin('calldefault')
+  return `${entry.callTimeoutMs}ms`
+})
+
+console.log('\n-- display names --')
+
+// Every surface that shows a plugin was already reading displayName. It read as
+// "io_github_artokun_comfyui_mcp" everywhere because the value ITSELF was the
+// id: the install dialog seeded displayName from the registry's `name`, which
+// is a reverse-DNS package identifier, and the registry's human `title` — which
+// about half of servers publish — was never read at all.
+
+await test('a registry title is used when the publisher provides one', () => {
+  assert(
+    registry.suggestDisplayName({ title: 'ComfyUI MCP', serverName: 'io.github.EntityAdam/comfyui-mcp', taken: [] }) === 'ComfyUI MCP',
+    'the publisher\'s own title was ignored',
+  )
+})
+
+await test('🔍 a server with no title still gets a readable name', () => {
+  // The case that prompted this: io.github.artokun/comfyui-mcp publishes no
+  // title, so reading `title` alone would have fixed nothing here.
+  const name = registry.suggestDisplayName({ serverName: 'io.github.artokun/comfyui-mcp', taken: [] })
+  assert(name === 'Comfyui MCP', `expected a derived name, got ${JSON.stringify(name)}`)
+  assert(!name.includes('io.github'), 'the publisher prefix survived into the display name')
+})
+
+await test('known acronyms are not title-cased into nonsense', () => {
+  assert(registry.humanizeServerName('com.example/db-api-tools') === 'DB API Tools',
+    registry.humanizeServerName('com.example/db-api-tools'))
+  assert(registry.humanizeServerName('weather') === 'Weather', 'a bare name should still work')
+})
+
+await test('🔍 two plugins that would share a name are told apart by publisher', () => {
+  // Both ComfyUI servers humanize to the same string. Two rows reading
+  // "Comfyui MCP" is worse than one long name — telling them apart is the
+  // entire job of a display name.
+  const first = registry.suggestDisplayName({ title: 'ComfyUI MCP', serverName: 'io.github.EntityAdam/comfyui-mcp', taken: [] })
+  const second = registry.suggestDisplayName({ serverName: 'io.github.artokun/comfyui-mcp', taken: [first, 'Comfyui MCP'] })
+  assert(second !== first, 'the second install got the same name as the first')
+  assert(second.includes('artokun'), `the publisher was not used to disambiguate: ${second}`)
+})
+
+await test('a display name cannot smuggle control characters or line breaks into a row', () => {
+  const nasty = registry.sanitizeDisplayName('Evil‮Name\nsecond line ')
+  assert(!/[\n ‮]/.test(nasty), `unsanitised: ${JSON.stringify(nasty)}`)
+  assert(nasty.length <= registry.MAX_DISPLAY_NAME_LENGTH, 'no length cap applied')
+})
+
+await test('a very long display name is capped rather than allowed to fill the row', () => {
+  const capped = registry.sanitizeDisplayName('x'.repeat(500))
+  assert(capped.length === registry.MAX_DISPLAY_NAME_LENGTH, `length was ${capped.length}`)
+})
+
+await test('🔒 renaming a plugin changes the label and NOTHING a policy is keyed on', () => {
+  // The id is the ban handle (disabledToolIds), the namespace prefix on every
+  // one of the plugin's tools, and what saved profiles already reference. A
+  // rename that moved it would silently stop existing bans applying.
+  registry.addPlugin(samplePlugin({ id: 'renameme', displayName: 'renameme' }))
+  const before = registry.getPlugin('renameme')
+  const toolsBefore = JSON.stringify(before.tools)
+
+  const result = registry.updatePlugin('renameme', { displayName: 'Something Readable' })
+  assert(result.ok, `rename failed: ${result.error}`)
+
+  const after = registry.getPlugin('renameme')
+  assert(after.displayName === 'Something Readable', `the name did not change: ${after.displayName}`)
+  assert(after.id === 'renameme', `THE ID MOVED: ${after.id}`)
+  assert(JSON.stringify(after.tools) === toolsBefore, 'the tools changed under a rename')
+  registry.removePlugin('renameme')
+})
+
+
 await test('a file containing one valid and one invalid entry returns exactly the valid one', async () => {
   registry.addPlugin(samplePlugin({ id: 'valid_one' }))
 

@@ -60,9 +60,27 @@ export const VALID_TOOL_CLASSES = new Set(['read', 'write', 'destructive', 'netw
 /** Lowercase, underscore-separated, 2–32 chars. Also used as the namespace prefix. */
 export const PLUGIN_ID_PATTERN = /^[a-z][a-z0-9_]{1,31}$/
 
+/**
+ * Handshake and tools/list. A plugin that cannot say hello in fifteen seconds
+ * is broken, not busy — there is nothing for it to be doing yet.
+ */
 export const DEFAULT_TIMEOUT_MS = 15_000
 export const MIN_TIMEOUT_MS = 1_000
 export const MAX_TIMEOUT_MS = 120_000
+
+/**
+ * tools/call, which is a different question entirely: a tool may legitimately
+ * be installing an application, fetching model weights or training something.
+ *
+ * The default is the old MAXIMUM rather than a newly invented number — two
+ * minutes was already the longest this system was willing to consider
+ * reasonable, so it is the least surprising floor to raise the ordinary case
+ * to. The ceiling is ten minutes, for the plugin whose job really does take
+ * that long; past it, a tool should be reporting progress rather than blocking
+ * a conversation.
+ */
+export const DEFAULT_CALL_TIMEOUT_MS = 120_000
+export const MAX_CALL_TIMEOUT_MS = 600_000
 
 function getPath() {
   return path.join(configDir(), 'plugins.json')
@@ -107,6 +125,80 @@ export function sanitizeToolTitle(value) {
   return cleaned.slice(0, MAX_TOOL_TITLE_LENGTH)
 }
 
+/** A plugin's display name gets the same cap and the same cleaning as a tool title. */
+export const MAX_DISPLAY_NAME_LENGTH = 64
+
+/**
+ * The name a human reads for a plugin, wherever one is shown.
+ *
+ * Same treatment as sanitizeToolTitle and for the same reason — it is
+ * publisher-authored text that lands in the UI — with one addition: it may not
+ * be empty, because an empty display name would render as a blank row rather
+ * than as a name, and the caller falls back to the id instead.
+ */
+export function sanitizeDisplayName(value) {
+  return sanitizeToolTitle(value).slice(0, MAX_DISPLAY_NAME_LENGTH)
+}
+
+/**
+ * A readable name derived from an MCP registry server name, for the servers
+ * that publish no `title` of their own.
+ *
+ * `io.github.artokun/comfyui-mcp` -> `Comfyui MCP`. The publisher half is
+ * dropped: it identifies who shipped it, which is what the id is for, and it is
+ * the entire reason these names read as machine identifiers in the first place.
+ *
+ * The acronym list is small and deliberately so. This is a default an admin can
+ * overwrite in one field, not a transformation that has to be right — the thing
+ * that makes a name correct is that somebody can change it.
+ */
+const ACRONYMS = new Set(['mcp', 'ai', 'api', 'ui', 'cli', 'db', 'sql', 'http', 'io', 'os', 'pdf', 'gpu'])
+
+export function humanizeServerName(serverName) {
+  if (typeof serverName !== 'string' || !serverName.trim()) return ''
+  const last = serverName.split('/').pop() ?? ''
+  const words = last.split(/[-_.\s]+/).filter(Boolean)
+  if (words.length === 0) return ''
+  return sanitizeDisplayName(
+    words
+      .map(w => (ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1)))
+      .join(' '),
+  )
+}
+
+/**
+ * The publisher half of a reverse-DNS server name: the last dotted segment
+ * before the slash. `io.github.artokun/comfyui-mcp` -> `artokun`.
+ */
+export function publisherOf(serverName) {
+  if (typeof serverName !== 'string') return ''
+  const [scope] = serverName.split('/')
+  if (!scope || scope === serverName) return ''
+  return sanitizeDisplayName(scope.split('.').pop() ?? '')
+}
+
+/**
+ * The display name to offer for a server being installed.
+ *
+ * The registry's own `title` when it has one, otherwise a name derived from the
+ * server name. Where that would duplicate a plugin already installed, the
+ * publisher is added — two rows both reading "Comfyui MCP" is worse than a
+ * long name, because the whole point of a display name is telling them apart.
+ *
+ * A suggestion, not a rule: it lands in an editable field.
+ *
+ * @param {{ title?: string, serverName?: string, taken?: Iterable<string> }} args
+ * @returns {string}
+ */
+export function suggestDisplayName({ title, serverName, taken } = {}) {
+  const base = sanitizeDisplayName(title) || humanizeServerName(serverName)
+  if (!base) return ''
+  const used = new Set([...(taken ?? [])].map(n => String(n).toLowerCase()))
+  if (!used.has(base.toLowerCase())) return base
+  const publisher = publisherOf(serverName)
+  return publisher ? sanitizeDisplayName(`${base} (${publisher})`) : base
+}
+
 /**
  * Is this entry safe to trust as a permission record?
  *
@@ -117,6 +209,7 @@ export function sanitizeToolTitle(value) {
  *     and no built-in tool name
  *   - every tools[].class is in VALID_TOOL_CLASSES
  *   - timeoutMs is a number within [MIN_TIMEOUT_MS, MAX_TIMEOUT_MS]
+ *   - callTimeoutMs is a number within [MIN_TIMEOUT_MS, MAX_CALL_TIMEOUT_MS]
  *   - enabled / allowWrite / allowDestructive are booleans
  *
  * Import the built-in id and tool-name sources from tools-definitions.mjs.
@@ -182,6 +275,15 @@ export function validatePlugin(entry) {
     timeoutMs = entry.timeoutMs
   }
 
+  let callTimeoutMs = DEFAULT_CALL_TIMEOUT_MS
+  if (entry.callTimeoutMs !== undefined) {
+    if (typeof entry.callTimeoutMs !== 'number' || !Number.isFinite(entry.callTimeoutMs) ||
+        entry.callTimeoutMs < MIN_TIMEOUT_MS || entry.callTimeoutMs > MAX_CALL_TIMEOUT_MS) {
+      return { ok: false, error: `plugin "${id}" has an invalid callTimeoutMs "${entry.callTimeoutMs}"` }
+    }
+    callTimeoutMs = entry.callTimeoutMs
+  }
+
   const boolOr = (value, fieldName) => {
     if (value === undefined) return { ok: true, value: false }
     if (typeof value !== 'boolean') return { ok: false, error: `plugin "${id}" field "${fieldName}" must be a boolean` }
@@ -217,6 +319,7 @@ export function validatePlugin(entry) {
     id,
     tools,
     timeoutMs,
+    callTimeoutMs,
     enabled: enabledResult.value,
     allowWrite: allowWriteResult.value,
     allowDestructive: allowDestructiveResult.value,

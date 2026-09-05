@@ -61,7 +61,7 @@ const {
 } = await import('../electron/main/admin-listener.mjs')
 const { mayAccessControlPlane } = await import('../electron/main/permissions.mjs')
 const { serverPortRejection } = await import('../electron/main/ipc/validate.mjs')
-const { ADMIN_PORT, BEACON_PORT, DEFAULT_GATEWAY_PORT } = await import('../electron/main/ports.mjs')
+const { ADMIN_PORT, BEACON_PORT, EMBED_PORT, DEFAULT_GATEWAY_PORT } = await import('../electron/main/ports.mjs')
 const { discoveryPlan, lastKnownDiscovery, discoveryRecordFor, stopDiscovery } = await import('../electron/main/discovery.mjs')
 const { getControlPlane, setControlPlaneBindHost, resolveStartupReconciliation, getStartupSettings, setStartupSettings, reconcileStartupSetting, shutdown, getFullStatus } = await import('../electron/main/ipc/admin.mjs')
 const { setLoginItems, getLoginItems } = await import('../electron/main/desktop-integration.mjs')
@@ -225,6 +225,25 @@ await test('the beacon port and its family are refused too', () => {
   for (const port of [BEACON_PORT, BEACON_PORT - 1, BEACON_PORT - 2]) {
     assert(serverPortRejection(port) !== null, `${port} was accepted, but its family claims ${BEACON_PORT}`)
   }
+})
+
+await test("🔍 the embedding server port and its family are refused", () => {
+  for (const port of [EMBED_PORT, EMBED_PORT - 1, EMBED_PORT - 2]) {
+    const rejection = serverPortRejection(port)
+    assert(rejection !== null, `${port} was accepted, but its family claims ${EMBED_PORT}`)
+    assert(rejection.includes(String(EMBED_PORT)), `the message does not name the collision: ${rejection}`)
+  }
+  return 'reserved whether or not retrieval is on'
+})
+
+await test('🔍 a port colliding with two fixed ports names both, not just the first', () => {
+  // 19082's family is 19082/19083/19084: the admin listener AND the embedding
+  // server. A message naming only the admin listener sends the user to 19083,
+  // which is worse.
+  const rejection = serverPortRejection(EMBED_PORT - 2)
+  assert(rejection.includes(String(ADMIN_PORT)), `does not name the admin listener: ${rejection}`)
+  assert(rejection.includes(String(EMBED_PORT)), `does not name the embedding server: ${rejection}`)
+  assert(rejection.includes('the admin listener') && rejection.includes('the embedding server'), `does not name both owners: ${rejection}`)
 })
 
 await test('the default and other ordinary ports are accepted', () => {

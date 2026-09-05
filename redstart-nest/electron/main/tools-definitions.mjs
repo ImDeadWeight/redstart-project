@@ -228,11 +228,37 @@ export const CLIENT_APPS = [
       'fs_create_directory',
       'fs_delete_file',
     ],
+    // Twig ships this same map over its preload bridge (see its fs-tool.mjs),
+    // but that copy only ever reaches the chat-ui. These tools arrive at the
+    // gateway as plain OpenAI function definitions with nowhere to carry an
+    // annotation, so Nest has to know their classes independently or not at all.
+    //
+    // Not for the policy gate — evaluateToolPolicy never sees these, because a
+    // client app's tools never pass through resolveProviders(). It is for
+    // anything server-side that has to reason about what a name DOES, and the
+    // default of 'read' is wrong for exactly the tool it matters most for:
+    // fs_delete_file is the only delete in the system that runs on a machine no
+    // server-side policy can reach.
+    classes: {
+      fs_read_file: 'read',
+      fs_list_directory: 'read',
+      fs_search_files: 'read',
+      fs_get_file_info: 'read',
+      fs_write_file: 'write',
+      fs_edit_file: 'write',
+      fs_create_directory: 'write',
+      fs_delete_file: 'destructive',
+    },
   },
 ]
 
 export const CLIENT_APP_TOOL_NAMES = Object.fromEntries(
   CLIENT_APPS.map((app) => [app.id, app.toolNames]),
+)
+
+/** Every client app's tool classes, flattened by tool name. */
+export const CLIENT_APP_TOOL_CLASSES = Object.fromEntries(
+  CLIENT_APPS.flatMap((app) => Object.entries(app.classes ?? {})),
 )
 
 // Expand a list of banned IDs into the concrete tool function names the gateway
@@ -288,6 +314,10 @@ export const TOOL_CLASS = {
 }
 
 export const TOOL_CLASSES = {
+  // Retrieval's own tool. It reads a catalog of names and descriptions the
+  // policy gate has already filtered, touches nothing, and leaves the machine
+  // it runs on alone — 'read' is the honest class, stated rather than defaulted.
+  search_tools: 'read',
   // Web (egress governed by the whitelist/SSRF guard, tagged network here)
   web_fetch: 'network',
   web_search: 'network',
@@ -360,7 +390,11 @@ export function classifyTool(name) {
     const cls = readPluginCapabilities()[capability]?.classes?.[name]
     if (cls) return cls
   }
-  return TOOL_CLASSES[name] ?? 'read'
+  // Client-app tools last among the known maps, and still ahead of the default:
+  // a built-in of the same name must win (docs/tool-namespacing.md forbids the
+  // collision, and this is the belt to that braces), but 'read' is the wrong
+  // answer for a name we do in fact know the class of.
+  return TOOL_CLASSES[name] ?? CLIENT_APP_TOOL_CLASSES[name] ?? 'read'
 }
 
 // ---------------------------------------------------------------------------

@@ -48,6 +48,8 @@ import { cleanupOldConversations } from './conversations-storage.mjs'
 import { initLogger, closeLogger, logEvent } from './logger.mjs'
 import { initProcessLog } from './process-log.mjs'
 import { reapStaleProcess, deletePidFile } from './process-supervision.mjs'
+import { startEmbedServer, stopEmbedServer } from './embed-server.mjs'
+import { embedModelPath, hasEmbedModel } from './embed-model.mjs'
 import { writeDaemonPid, clearDaemonPid } from './daemon-pidfile.mjs'
 import { configDir, capabilityBaseDir, isPackaged } from './platform-paths.mjs'
 import { buildGatewayConfig, createRefreshLiveToolsConfig } from './gateway-config.mjs'
@@ -467,6 +469,18 @@ export async function startDaemon(entrypoint = {}) {
   // and then exited, leaving a file pointing at a dead process. See
   // daemon-pidfile.mjs.
   writeDaemonPid(configDir())
+  // The embedding server, if its model is already on disk. Its lifetime is the
+  // DAEMON's, not a chat model's, so the vector cache can warm before the first
+  // completion — but nothing here downloads anything: a user who has never
+  // enabled retrieval has no model, and startEmbedServer resolves to a clean
+  // 'unavailable' rather than pulling 67 MB at every boot.
+  if (hasEmbedModel(resolveModelsDir())) {
+    await startEmbedServer({
+      resolveBinary,
+      configDir: configDir(),
+      modelPath: embedModelPath(resolveModelsDir()),
+    })
+  }
 }
 
 /**
@@ -494,6 +508,10 @@ export function stopDaemon() {
     serverState.process = null
     deletePidFile(configDir())
   }
+  // Alongside the gateway rather than with the chat server: it is the daemon's
+  // child, and a stop that skipped it would leave an orphan whose pid file the
+  // next start would have to reap.
+  stopEmbedServer({ configDir: configDir() })
   if (beaconServerInstance) {
     stopBeaconServer(beaconServerInstance)
     beaconServerInstance = null

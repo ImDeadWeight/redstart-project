@@ -16,8 +16,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * Inside Redstart Twig the model can hold two complete filesystem APIs at the
  * same time: Twig's `fs_*` tools, which act on the user's OWN PC in a folder
  * they granted, and Nest's File System capability, which acts on the SERVER in
- * a root shared by every account. Neither set's description said which machine
- * it operated on, so "delete the old draft" could hit either one.
+ * the caller's own folder under an admin-configured root. Neither set's
+ * description said which machine it operated on, so "delete the old draft"
+ * could hit either one.
  *
  * The original protection was a coincidence: Nest's file tools used to be named
  * `fs_*` too, and the client deduped by name with the local ones first. The FS

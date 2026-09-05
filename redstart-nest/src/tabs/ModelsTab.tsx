@@ -232,6 +232,7 @@ export function ModelsTab({ catalog, hw, modelPath, onGenerateDefaultProfiles }:
 
           {description && (
             <div className="mb-3">
+              <p className="text-xs uppercase tracking-widest text-zinc-500 mb-1">Description</p>
               <p className="text-xs text-zinc-400 whitespace-pre-line">{description.text}</p>
               <p className="text-[11px] text-zinc-600 mt-1">
                 {description.source === 'base_model'

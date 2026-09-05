@@ -8,7 +8,7 @@
 
 LM Studio, Jan and Ollama are model runners — very good ones — aimed at getting a model going on the PC in front of you. Redstart is the layer after that: accounts, tool policy and network discovery, so the model on the GPU box is usable from every device in the house. [How it compares](#alternatives-worth-knowing-about).
 
-**Documentation:** [Mission](docs/mission.md) · [Architecture](docs/architecture.md) · [Security](docs/security.md) · [Capabilities](docs/capabilities.md) · [Configuration](docs/configuration.md) · [Development](docs/development.md) · [Testing](TESTING.md) · [Deployment](deploy/README.md) · [Roadmap](docs/roadmap.md)
+**Documentation:** [Mission](docs/mission.md) · [Architecture](docs/architecture.md) · [Security](docs/security.md) · [Capabilities](docs/capabilities.md) · [Configuration](docs/configuration.md) · [Development](docs/development.md) · [Deployment](deploy/README.md) · [Roadmap](docs/roadmap.md)
 
 ---
 
@@ -214,7 +214,7 @@ npm run daemon:status
 npm run daemon:stop
 ```
 
-Full setup, repo layout, test commands and installer builds: [Development](docs/development.md). Manual verification checklists: [Testing](TESTING.md). Running it as a service: [Deployment](deploy/README.md).
+Full setup, repo layout, test commands and installer builds: [Development](docs/development.md). Running it as a service: [Deployment](deploy/README.md).
 
 ---
 

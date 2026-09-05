@@ -25,7 +25,7 @@ import { useState } from 'react'
 import { api } from '../api/redstart'
 import type { PluginSummary, PluginToolInfo } from '../api/redstart'
 import type { usePlugins } from '../hooks/usePlugins'
-import { SectionTitle, TogglePill, TruncatedText, btnCls } from '../components/ui'
+import { SectionTitle, TogglePill, TruncatedText, btnCls, inputCls } from '../components/ui'
 import { AddToolDialog } from '../components/AddToolDialog'
 
 type Props = {
@@ -41,8 +41,11 @@ function sourceLabel(source: PluginSummary['source']): string {
 }
 
 export function PluginsTab({ plugins }: Props) {
-  const { plugins: list, loading, uninstall, setEnabled, testPlugin, loadPlugins } = plugins
+  const { plugins: list, loading, uninstall, setEnabled, setDisplayName, testPlugin, loadPlugins } = plugins
   const [showAdd, setShowAdd] = useState(false)
+  // Click the name to rename it. Display only — the id stays put, because it
+  // is what bans and tool namespaces are keyed on.
+  const [renaming, setRenaming] = useState<string | null>(null)
   const [testing, setTesting] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, { ok: boolean; message: string }>>({})
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -80,7 +83,25 @@ export function PluginsTab({ plugins }: Props) {
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-zinc-200 truncate">{p.displayName}</span>
+                  {renaming === p.id ? (
+                    <input
+                      autoFocus
+                      defaultValue={p.displayName}
+                      className={inputCls.xs + ' flex-1 min-w-0'}
+                      placeholder={p.id}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') { void setDisplayName(p.id, e.currentTarget.value); setRenaming(null) }
+                        if (e.key === 'Escape') setRenaming(null)
+                      }}
+                      onBlur={(e) => { void setDisplayName(p.id, e.currentTarget.value); setRenaming(null) }}
+                    />
+                  ) : (
+                    <button
+                      onClick={() => setRenaming(p.id)}
+                      title="Rename — display only; the plugin's id and its tools' names do not change"
+                      className="text-sm text-zinc-200 truncate hover:text-orange-400 text-left"
+                    >{p.displayName}</button>
+                  )}
                   {p.lastError ? (
                     <span className="text-xs text-red-400 flex-shrink-0" title={p.lastErrorAt || undefined}>● unhealthy</span>
                   ) : (

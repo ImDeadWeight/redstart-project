@@ -121,16 +121,30 @@ export function serverPortRejection(port) {
   if (!Number.isInteger(port)) return 'A port must be a whole number.'
   if (port < 1 || port > 65535) return 'A port must be between 1 and 65535.'
 
+  // Every collision, not the first one: 19082's family lands on BOTH the admin
+  // listener (19083) and the embedding server (19084), and a message naming
+  // only one of them sends the user to move their port by one, straight onto
+  // the other.
+  const collisions = []
   for (const { port: claimed, what } of serverPortFamily(port)) {
     if (claimed > 65535) {
       return `Port ${port} leaves no room for ${what} on ${claimed} — the highest usable port is 65533.`
     }
     const owner = FIXED_PORTS[claimed]
-    if (owner) {
-      return claimed === port
-        ? `Port ${port} is reserved for ${owner}.`
-        : `Port ${port} puts ${what} on ${claimed}, which is reserved for ${owner}.`
-    }
+    if (owner) collisions.push({ claimed, what, owner })
+  }
+
+  if (collisions.length === 1) {
+    const { claimed, what, owner } = collisions[0]
+    return claimed === port
+      ? `Port ${port} is reserved for ${owner}.`
+      : `Port ${port} puts ${what} on ${claimed}, which is reserved for ${owner}.`
+  }
+  if (collisions.length > 1) {
+    const parts = collisions.map(({ claimed, what, owner }) => (
+      claimed === port ? `${port} is reserved for ${owner}` : `${what} would land on ${claimed}, reserved for ${owner}`
+    ))
+    return `Port ${port} collides with more than one port Nest owns: ${parts.join('; ')}.`
   }
 
   return null
