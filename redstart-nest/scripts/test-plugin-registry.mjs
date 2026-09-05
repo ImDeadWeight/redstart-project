@@ -183,6 +183,36 @@ await test('a timeoutMs outside the allowed range is rejected', async () => {
   return 'both rejected'
 })
 
+await test('🔍 callTimeoutMs is its own field, with its own larger ceiling', async () => {
+  // The handshake budget and the tool-call budget are different questions —
+  // one is "can this plugin speak", the other is "how long may this work take".
+  // Sharing one number is what reported a successful multi-minute install as a
+  // plugin that had not responded.
+  const tooLow = registry.addPlugin(samplePlugin({ id: 'calllow', callTimeoutMs: 10 }))
+  assert(tooLow.ok === false, 'a callTimeoutMs below the minimum was accepted')
+  const tooHigh = registry.addPlugin(samplePlugin({ id: 'callhigh', callTimeoutMs: 999999999 }))
+  assert(tooHigh.ok === false, 'a callTimeoutMs above the maximum was accepted')
+
+  // The point of the separate field: a value a plain timeoutMs would refuse.
+  const long = registry.addPlugin(samplePlugin({ id: 'calllong', callTimeoutMs: 300000 }))
+  assert(long.ok === true, `five minutes should be allowed for a tool call: ${long.error}`)
+  assert(registry.addPlugin(samplePlugin({ id: 'handshakelong', timeoutMs: 300000 })).ok === false,
+    'five minutes was accepted as a HANDSHAKE budget — a plugin that slow is broken, not busy')
+  registry.removePlugin('calllong')  // a later test counts the whole file
+  return 'separate ceilings'
+})
+
+await test('a plugin with no callTimeoutMs gets the default, not the handshake budget', async () => {
+  registry.addPlugin(samplePlugin({ id: 'calldefault', timeoutMs: 5000 }))
+  const entry = registry.listPlugins().find(p => p.id === 'calldefault')
+  assert(entry.callTimeoutMs === registry.DEFAULT_CALL_TIMEOUT_MS,
+    `callTimeoutMs was ${entry.callTimeoutMs}, expected the default ${registry.DEFAULT_CALL_TIMEOUT_MS}`)
+  assert(entry.callTimeoutMs > entry.timeoutMs,
+    'the default call budget is no larger than the handshake budget, so nothing was gained')
+  registry.removePlugin('calldefault')
+  return `${entry.callTimeoutMs}ms`
+})
+
 await test('a file containing one valid and one invalid entry returns exactly the valid one', async () => {
   registry.addPlugin(samplePlugin({ id: 'valid_one' }))
 

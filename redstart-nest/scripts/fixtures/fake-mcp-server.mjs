@@ -74,6 +74,10 @@ function handle(msg) {
   const { id, method } = msg
 
   if (method === 'initialize') {
+    // Never answers the handshake. Distinct from 'silent', which handshakes
+    // fine and then swallows tool calls — the two budgets need separate ways
+    // to fail or a test cannot tell which one it measured.
+    if (mode === 'no-handshake') return
     ok(id, {
       protocolVersion: '2024-11-05',
       capabilities: { tools: {} },
@@ -93,6 +97,13 @@ function handle(msg) {
 
   if (method === 'tools/call') {
     if (mode === 'silent') return                 // never answer — drives the timeout
+    // Answers, but slowly: the shape of a real tool that installs something or
+    // downloads weights. Handshake stays instant, so this separates the two
+    // timeouts — the thing a single shared budget could not express.
+    if (mode === 'slow-call') {
+      setTimeout(() => ok(id, { content: [{ type: 'text', text: 'done eventually' }] }), 800)
+      return
+    }
     if (mode === 'exit-on-call') process.exit(1)  // die mid-request
 
     if (mode === 'auth-fail') {

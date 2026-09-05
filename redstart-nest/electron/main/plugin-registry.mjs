@@ -60,9 +60,27 @@ export const VALID_TOOL_CLASSES = new Set(['read', 'write', 'destructive', 'netw
 /** Lowercase, underscore-separated, 2–32 chars. Also used as the namespace prefix. */
 export const PLUGIN_ID_PATTERN = /^[a-z][a-z0-9_]{1,31}$/
 
+/**
+ * Handshake and tools/list. A plugin that cannot say hello in fifteen seconds
+ * is broken, not busy — there is nothing for it to be doing yet.
+ */
 export const DEFAULT_TIMEOUT_MS = 15_000
 export const MIN_TIMEOUT_MS = 1_000
 export const MAX_TIMEOUT_MS = 120_000
+
+/**
+ * tools/call, which is a different question entirely: a tool may legitimately
+ * be installing an application, fetching model weights or training something.
+ *
+ * The default is the old MAXIMUM rather than a newly invented number — two
+ * minutes was already the longest this system was willing to consider
+ * reasonable, so it is the least surprising floor to raise the ordinary case
+ * to. The ceiling is ten minutes, for the plugin whose job really does take
+ * that long; past it, a tool should be reporting progress rather than blocking
+ * a conversation.
+ */
+export const DEFAULT_CALL_TIMEOUT_MS = 120_000
+export const MAX_CALL_TIMEOUT_MS = 600_000
 
 function getPath() {
   return path.join(configDir(), 'plugins.json')
@@ -117,6 +135,7 @@ export function sanitizeToolTitle(value) {
  *     and no built-in tool name
  *   - every tools[].class is in VALID_TOOL_CLASSES
  *   - timeoutMs is a number within [MIN_TIMEOUT_MS, MAX_TIMEOUT_MS]
+ *   - callTimeoutMs is a number within [MIN_TIMEOUT_MS, MAX_CALL_TIMEOUT_MS]
  *   - enabled / allowWrite / allowDestructive are booleans
  *
  * Import the built-in id and tool-name sources from tools-definitions.mjs.
@@ -182,6 +201,15 @@ export function validatePlugin(entry) {
     timeoutMs = entry.timeoutMs
   }
 
+  let callTimeoutMs = DEFAULT_CALL_TIMEOUT_MS
+  if (entry.callTimeoutMs !== undefined) {
+    if (typeof entry.callTimeoutMs !== 'number' || !Number.isFinite(entry.callTimeoutMs) ||
+        entry.callTimeoutMs < MIN_TIMEOUT_MS || entry.callTimeoutMs > MAX_CALL_TIMEOUT_MS) {
+      return { ok: false, error: `plugin "${id}" has an invalid callTimeoutMs "${entry.callTimeoutMs}"` }
+    }
+    callTimeoutMs = entry.callTimeoutMs
+  }
+
   const boolOr = (value, fieldName) => {
     if (value === undefined) return { ok: true, value: false }
     if (typeof value !== 'boolean') return { ok: false, error: `plugin "${id}" field "${fieldName}" must be a boolean` }
@@ -217,6 +245,7 @@ export function validatePlugin(entry) {
     id,
     tools,
     timeoutMs,
+    callTimeoutMs,
     enabled: enabledResult.value,
     allowWrite: allowWriteResult.value,
     allowDestructive: allowDestructiveResult.value,

@@ -22,6 +22,7 @@ import * as os from 'node:os'
 import * as fs from 'node:fs'
 import { createPluginClient } from '../electron/main/mcp-plugin-client.mjs'
 import { createStdioProcessManager } from '../../shared/mcp-stdio-process.mjs'
+import { initLogger, closeLogger } from '../electron/main/logger.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-mcp-server.mjs')
@@ -52,6 +53,7 @@ function makeClient(id, mode, opts = {}) {
     args: [FIXTURE, mode],
     env: opts.env ?? {},
     timeoutMs: opts.timeoutMs ?? 15000,
+    callTimeoutMs: opts.callTimeoutMs,
     logDir,
   })
 }
@@ -85,6 +87,96 @@ await test('normal: callTool() forwards a bare name and returns the result', asy
   client.stop()
   return 'echoed'
 })
+
+console.log('\n-- a slow tool call is not a dead plugin --')
+
+// The failure this section exists for, reported from real use: a plugin tool
+// that installs an application ran past the client's single 15-second budget,
+// the caller was told the plugin "did not respond", and the install carried on
+// and SUCCEEDED unheard. The model was handed a failure it could act on, so it
+// walked the user through doing the whole thing again by hand.
+//
+// Three things had to be true at once for that, and each gets a check here.
+
+await test('🔍 a tools/call may outlast the handshake budget', async () => {
+  // The handshake budget is short on purpose — a plugin that cannot say hello
+  // quickly is broken. A tool call that takes longer than a handshake ever
+  // should is ordinary, and used to be indistinguishable from a hang.
+  const client = makeClient('slowclient', 'slow-call', { timeoutMs: 300, callTimeoutMs: 5000 })
+  const started = Date.now()
+  const result = await withTimeout(client.callTool('echo', { text: 'x' }), 8000, 'slow callTool')
+  const elapsed = Date.now() - started
+  assert(result, 'the call returned nothing')
+  assert(elapsed > 300, `the call finished in ${elapsed}ms — the fixture should have taken ~800ms`)
+  client.stop()
+  return `answered in ${elapsed}ms, past a ${300}ms handshake budget`
+})
+
+await test('the handshake keeps its own short budget', async () => {
+  // The other half: raising the call timeout must not make a broken plugin
+  // take five seconds to be recognised as broken.
+  const client = makeClient('handshakeclient', 'no-handshake', { timeoutMs: 400, callTimeoutMs: 30000 })
+  const started = Date.now()
+  let rejected = null
+  try {
+    await withTimeout(client.callTool('echo', {}), 5000, 'handshake')
+  } catch (err) { rejected = err }
+  const elapsed = Date.now() - started
+  assert(rejected, 'a plugin that never handshakes should not resolve')
+  assert(elapsed < 3000, `took ${elapsed}ms — the handshake used the call budget instead of its own`)
+  client.stop()
+  return `gave up in ${elapsed}ms`
+})
+
+await test('🔒 the timeout message does not claim the work failed', async () => {
+  // It is a wait that was given up on, not a result. A model told "did not
+  // respond" concludes the operation failed and offers to redo it, which for an
+  // installer means doing it twice.
+  const client = makeClient('msgclient', 'silent', { timeoutMs: 300, callTimeoutMs: 400 })
+  let rejected = null
+  try {
+    await withTimeout(client.callTool('echo', { text: 'x' }), 4000, 'silent')
+  } catch (err) { rejected = err }
+  assert(rejected, 'the call did not reject')
+  const msg = rejected.message
+  assert(/may still be running/i.test(msg), `the message asserts failure: ${msg}`)
+  assert(/duplicate|again/i.test(msg), `the message does not warn against blindly retrying: ${msg}`)
+  assert(msg.includes('echo'), `the message does not name the call: ${msg}`)
+  assert(msg.includes('msgclient'), `the message does not name the plugin: ${msg}`)
+  client.stop()
+})
+
+await test('🔍 an answer that arrives after the timeout is recorded, not dropped', async () => {
+  // The silent half of the bug. The late result cannot be delivered — the
+  // caller is long gone — but a tool call that timed out and then succeeded
+  // used to leave no trace anywhere, which is why nothing contradicted the
+  // "it failed" the model had already been given.
+  const logDirForLate = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-late-log-'))
+  initLogger(logDirForLate)
+  try {
+    const client = makeClient('lateclient', 'slow-call', { timeoutMs: 300, callTimeoutMs: 200 })
+    let rejected = null
+    try {
+      await withTimeout(client.callTool('echo', { text: 'x' }), 4000, 'late')
+    } catch (err) { rejected = err }
+    assert(rejected, 'a 200ms budget against an 800ms answer should have timed out')
+    // Wait past the fixture's own delay so the late answer actually arrives.
+    await new Promise(r => setTimeout(r, 1500))
+    client.stop()
+
+    const log = fs.readFileSync(path.join(logDirForLate, 'redstart.log'), 'utf8')
+    const line = log.split('\n').filter(Boolean).map(l => JSON.parse(l)).find(e => e.event === 'late_response')
+    assert(line, `no late_response was recorded. log was: ${log}`)
+    assert(line.plugin === 'lateclient', `wrong plugin recorded: ${line.plugin}`)
+    assert(line.call === 'echo', `the call was not named: ${line.call}`)
+    assert(typeof line.afterMs === 'number' && line.afterMs >= 0, `no elapsed time recorded: ${line.afterMs}`)
+    return `${line.call} answered ${line.afterMs}ms after it was abandoned`
+  } finally {
+    closeLogger()
+    fs.rmSync(logDirForLate, { recursive: true, force: true })
+  }
+})
+
 
 console.log('\n-- timeout isolation --')
 

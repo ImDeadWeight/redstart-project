@@ -28,6 +28,7 @@
 // =============================================================================
 
 import { createStdioProcessManager } from '../../../shared/mcp-stdio-process.mjs'
+import { logEvent } from './logger.mjs'
 
 // Crash-restart pacing, per plugin. A child that dies instantly every time must
 // not spawn-churn forever — give up and report, rather than retrying until the
@@ -35,6 +36,9 @@ import { createStdioProcessManager } from '../../../shared/mcp-stdio-process.mjs
 const RESTART_INITIAL_MS = 2_000
 const RESTART_MAX_MS = 60_000
 const RESTART_MAX_ATTEMPTS = 5
+
+/** How many timed-out request ids to remember, so a late answer can be explained. */
+const ABANDONED_MAX = 64
 
 /**
  * @typedef {object} PluginClient
@@ -53,14 +57,16 @@ const RESTART_MAX_ATTEMPTS = 5
  * @param {string} opts.command     resolved at INSTALL time, never at spawn (plan decision D5)
  * @param {string[]} opts.args
  * @param {Record<string,string>} opts.env  explicit allowlist + admin values; secrets already decrypted
- * @param {number} opts.timeoutMs   per-plugin, from the registry entry
+ * @param {number} opts.timeoutMs   handshake/list timeout, per-plugin, from the registry entry
+ * @param {number} [opts.callTimeoutMs]  tools/call timeout; see the note on request()
  * @param {string} [opts.logDir]    per-server stderr logs; the install probe reads this file's tail
  * @returns {PluginClient}
  */
-export function createPluginClient({ id, command, args, env, timeoutMs, logDir }) {
+export function createPluginClient({ id, command, args, env, timeoutMs, callTimeoutMs, logDir }) {
   // ---- per-instance state (NEVER module scope — see the header) -----------
   let manager = null
   const pending = new Map()   // request id -> { resolve, reject, timer }
+  const abandoned = new Map() // request id -> { label, at } for requests we stopped waiting for
   let nextRequestId = 1
   let ready = false
   let starting = false        // guards overlapping ensureReady() calls
@@ -96,7 +102,24 @@ export function createPluginClient({ id, command, args, env, timeoutMs, logDir }
     }
     if (msg.id === undefined || msg.id === null) return
     const waiter = pending.get(msg.id)
-    if (!waiter) return
+    if (!waiter) {
+      // An answer to a request we stopped waiting for. It used to be dropped
+      // in silence, which is how a tool call that timed out and then SUCCEEDED
+      // left no trace anywhere — the caller was told it had not answered and
+      // nothing ever said otherwise. Cannot be delivered (the caller is long
+      // gone), but it can be recorded.
+      const late = abandoned.get(msg.id)
+      if (late) {
+        abandoned.delete(msg.id)
+        logEvent('plugin', 'late_response', {
+          plugin: id,
+          call: late.label,
+          afterMs: Date.now() - late.at,
+          isError: !!msg.error,
+        })
+      }
+      return
+    }
     pending.delete(msg.id)
     clearTimeout(waiter.timer)
     if (msg.error) waiter.reject(new Error(msg.error.message || 'MCP error'))
@@ -131,19 +154,41 @@ export function createPluginClient({ id, command, args, env, timeoutMs, logDir }
   }
 
   /**
-   * Send a JSON-RPC request, resolve/reject its promise. Timeout uses THIS
-   * client's timeoutMs — a hung plugin must not block the providers that come
-   * after it in the tools/call dispatch loop, and other clients are
-   * unaffected either way since each owns its own pending map.
+   * Send a JSON-RPC request, resolve/reject its promise.
+   *
+   * TWO timeouts, because the two kinds of request have nothing in common. A
+   * handshake or a tools/list that takes more than a few seconds means a broken
+   * plugin — there is nothing for it to be doing. A tools/call can legitimately
+   * run for minutes: installing an application, downloading weights, training.
+   * Sharing one 15-second budget between them meant every long tool call was
+   * reported as a plugin that had not answered, while the work carried on and
+   * finished unheard.
+   *
+   * A timeout ABANDONS the request; it does not cancel it. Nothing here can
+   * cancel one — MCP has no cancellation and the child is mid-operation — so
+   * the honest thing is to say so, both to the caller (below) and in the log
+   * (handleMessage, when the answer eventually arrives).
+   *
+   * Per-client either way: a hung plugin must not block the providers that come
+   * after it in the tools/call dispatch loop, and each client owns its own
+   * pending map.
    */
-  function request(method, params) {
+  function request(method, params, { timeout = timeoutMs, label = method } = {}) {
     const reqId = nextRequestId++
     const payload = JSON.stringify({ jsonrpc: '2.0', id: reqId, method, params })
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(reqId)
-        reject(new Error(`Plugin "${id}" did not respond within ${timeoutMs}ms`))
-      }, timeoutMs)
+        abandoned.set(reqId, { label, at: Date.now() })
+        // Bounded: this only exists to explain a late answer, and an unbounded
+        // map keyed by a monotonic id is a leak with a nice name.
+        if (abandoned.size > ABANDONED_MAX) abandoned.delete(abandoned.keys().next().value)
+        reject(new Error(
+          `Plugin "${id}" has not answered "${label}" within ${timeout}ms. ` +
+          'It may still be running — this is a wait that was given up on, not a failure that was reported. ' +
+          'Check whether the work completed before trying again, since repeating it may duplicate what it already did.',
+        ))
+      }, timeout)
       pending.set(reqId, { resolve, reject, timer })
       const res = manager.send(id, payload)
       if (!res.ok) {
@@ -224,7 +269,10 @@ export function createPluginClient({ id, command, args, env, timeoutMs, logDir }
      */
     async callTool(name, callArgs) {
       await ensureReadyImpl()
-      return request('tools/call', { name, arguments: callArgs ?? {} })
+      return request('tools/call', { name, arguments: callArgs ?? {} }, {
+        timeout: callTimeoutMs ?? timeoutMs,
+        label: name,
+      })
     },
 
     /** tools/list. Used by the install probe, not by tools/list dispatch. */

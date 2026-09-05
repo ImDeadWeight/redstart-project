@@ -72,6 +72,7 @@ function clientFor(plugin) {
     args: plugin.resolvedArgs ?? [],
     env,
     timeoutMs: plugin.timeoutMs,
+    callTimeoutMs: plugin.callTimeoutMs,
     logDir: logDir(),
   })
   clients.set(plugin.id, client)
