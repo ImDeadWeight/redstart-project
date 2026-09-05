@@ -302,6 +302,12 @@ export function recordWireCost({ toolsOffered, toolsAfterBans, tools, messages, 
  * The last observed request cost, or null if no completion has been forwarded
  * since this daemon started.
  *
+ * SERVER-WIDE. Every account's completions overwrite the same slot, so on a
+ * multi-user daemon this is whoever asked last. That is the deliberate trade —
+ * a per-account series is a log of one user's tool usage with a retention
+ * policy to argue about — but it makes the number easy to misread as "my last
+ * request", so the Tools tab labels it "Last request from any account".
+ *
  * Null is a meaningful answer and must not be papered over with zeros: "no
  * request has been made yet" and "requests cost nothing" are different, and
  * only one of them means the estimate beside it is the best available number.

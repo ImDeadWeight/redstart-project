@@ -22,6 +22,20 @@ import { searchTools, SEARCH_RESULT_LIMIT } from './tool-filter.mjs'
 // Advertised only while retrieval is enabled. With the filter off the model can
 // already see every tool, so a search over them is a tool call that can only
 // waste a turn.
+//
+// IT SEARCHES THIS SERVER'S CATALOG, WHICH IS NOT THE WHOLE PAYLOAD. The
+// completions request is assembled client-side and can carry tools Nest never
+// served — a client app's own local tools (Twig's fs_*), or an MCP server the
+// client connects to directly. Retrieval can drop those, and a search cannot
+// bring them back, because mcp-server.mjs has no view of the payload and
+// deliberately does not get one.
+//
+// That asymmetry cannot be fixed from here, so it is at least made LEGIBLE: the
+// tool says what it indexes, and a no-match answer says what it did not look
+// at. A model told "no tools match" by an index it believes is complete will
+// report the capability as non-existent — the same failure the retrieval block
+// in system-prompt.mjs exists to prevent, arriving through the remedy instead
+// of through the narrowed list.
 // =============================================================================
 
 /**
@@ -48,7 +62,7 @@ export function toolDefs(cfg) {
   return [{
     name: 'search_tools',
     description:
-      'Find tools that are available but not currently listed. Describe what you are trying to do in your own words — for example "read a spreadsheet" or "look at recent commits" — and this returns the names and descriptions of the closest matches. Call a returned tool by name on your next turn and it will be available.',
+      'Find tools THIS SERVER offers that are not currently listed. Describe what you are trying to do in your own words — for example "read a spreadsheet" or "look at recent commits" — and this returns the names and descriptions of the closest matches. Call a returned tool by name on your next turn and it will be available. It indexes this server\'s own tools only: tools your application supplies itself, such as file tools that run on the user\'s computer, are not searchable here and a nil result says nothing about them.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -91,7 +105,10 @@ export async function callTool(name, args, cfg, _ctx) {
     return errorResult('Tool search is temporarily unavailable. The tools you can already see are still the ones you can use.')
   }
   if (matches.length === 0) {
-    return textResult('No other tools match that description.')
+    // Says what was searched, not just that nothing was found. "No tools match"
+    // from an index the model believes is complete becomes "this deployment
+    // cannot do that" in the answer to the user.
+    return textResult('No other tools on this server match that description. This index covers this server\'s own tools only, so it says nothing about tools your application provides itself.')
   }
 
   return textResult(JSON.stringify(matches))
