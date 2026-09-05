@@ -127,3 +127,45 @@ export function ControlPlaneNotice({ state, localIp }: {
     </div>
   )
 }
+
+import { DRAG_REGION } from '../hooks/useWindowControlsOverlay'
+
+// ---------------------------------------------------------------------------
+// The window's top bar — and, in Electron, its title bar.
+// ---------------------------------------------------------------------------
+// ONE component for both screens. The native title bar is hidden and Electron
+// paints only the minimise/maximise/close buttons over the top 48px, so
+// whatever occupies that strip is the title bar: h-12 here must stay equal to
+// titleBarOverlay.height in electron/main/index.mjs or the buttons will not
+// line up with it.
+//
+// It exists because the sign-in screen used to draw its own invisible drag
+// strip instead, which left the window buttons floating over a bare background
+// with nothing beside them — the bar the rest of the app has was simply not
+// there until you signed in. A real bar on both screens is one less thing that
+// changes shape at the moment a user is trying to work out where they are.
+//
+// `right` is whatever belongs opposite the title; the sign-in screen passes
+// nothing, since a server status is not a claim to make before the caller has
+// been authenticated.
+
+export function TopBar({ right, overlay }: {
+  right?: React.ReactNode
+  overlay: { active: boolean; rightInset: number }
+}) {
+  return (
+    <header
+      className="flex items-center justify-between px-5 h-12 bg-zinc-900 border-b border-zinc-800 shrink-0"
+      // Padding rather than a margin: the buttons are painted OVER the page, so
+      // the space has to be inside the element they sit on top of.
+      style={overlay.active
+        ? { ...DRAG_REGION, paddingRight: overlay.rightInset + 20 }
+        : undefined}
+    >
+      <h1 className="text-lg font-bold tracking-wide">
+        <span className="text-orange-500">Redstart Nest</span>
+      </h1>
+      {right ? <div className="flex items-center gap-5">{right}</div> : null}
+    </header>
+  )
+}

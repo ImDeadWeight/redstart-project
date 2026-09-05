@@ -34,12 +34,12 @@
 // =============================================================================
 
 import { useEffect, useState } from 'react'
-import { useWindowControlsOverlay, DRAG_REGION } from '../hooks/useWindowControlsOverlay'
+import { useWindowControlsOverlay } from '../hooks/useWindowControlsOverlay'
 import type { RedstartAPI } from '../api/redstart'
 import { setHttpAPI } from '../api/redstart'
 import { createHttpAPI } from '../api/http'
 import { getSessionToken, setSessionToken, clearSessionToken } from '../api/session'
-import { btnCls, inputCls } from './ui'
+import { btnCls, inputCls, TopBar } from './ui'
 
 /** The setupToken query param, read once — see "THE ELECTRON TOKEN HANDOFF" above. */
 function consumeSetupToken(): string {
@@ -74,24 +74,24 @@ function Shell({ title, subtitle, children }: {
   const overlay = useWindowControlsOverlay()
 
   return (
-    <div className="flex items-center justify-center h-screen bg-zinc-950 text-white font-mono text-sm px-4">
-      {/* The sign-in and first-run screens are a different tree from App.tsx
-          and have no header, so without this the Electron window could not be
-          MOVED until after signing in — the native title bar is hidden and
-          nothing else here is draggable. Fixed rather than in the flow so it
-          costs no layout: the card below is vertically centred and never
-          reaches the top edge. Inert in a browser, where the hook is
-          inactive. */}
-      {overlay.active && (
-        <div className="fixed top-0 left-0 right-0 h-12 z-50" style={DRAG_REGION} />
-      )}
-      <div className="w-full max-w-sm">
-        <h1 className="text-lg font-bold tracking-wide mb-1">
-          <span className="text-orange-500">Redstart Nest</span>
-        </h1>
-        <p className="text-xs uppercase tracking-widest text-zinc-500 mb-1">{title}</p>
-        <p className="text-xs text-zinc-500 mb-5 leading-relaxed">{subtitle}</p>
-        {children}
+    <div className="flex flex-col h-screen bg-zinc-950 text-white font-mono text-sm">
+      {/* The same bar App.tsx renders, not a stand-in for it. This screen used
+          to cover the whole window and lay an invisible drag strip over the top
+          48px, so the strip that everywhere else reads "Redstart Nest" was
+          simply absent until you signed in — the window buttons floated over a
+          bare background with nothing beside them. Sharing the component also
+          means the h-12 that has to equal titleBarOverlay.height in
+          electron/main/index.mjs is stated in exactly one place.
+
+          No status on the right: a server state is not a claim to make to a
+          caller who has not been authenticated yet. */}
+      <TopBar overlay={overlay} />
+      <div className="flex flex-1 items-center justify-center px-4 overflow-y-auto">
+        <div className="w-full max-w-sm py-8">
+          <p className="text-xs uppercase tracking-widest text-zinc-500 mb-1">{title}</p>
+          <p className="text-xs text-zinc-500 mb-5 leading-relaxed">{subtitle}</p>
+          {children}
+        </div>
       </div>
     </div>
   )

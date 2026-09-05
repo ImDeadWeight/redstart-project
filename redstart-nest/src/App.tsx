@@ -22,7 +22,8 @@ import { useAuthSetup } from './hooks/useAuthSetup'
 import { useControlPlaneExposure } from './hooks/useControlPlaneExposure'
 import { useStartupSettings } from './hooks/useStartupSettings'
 import { useShutdown } from './hooks/useShutdown'
-import { useWindowControlsOverlay, DRAG_REGION } from './hooks/useWindowControlsOverlay'
+import { useWindowControlsOverlay } from './hooks/useWindowControlsOverlay'
+import { TopBar } from './components/ui'
 import { useExternalMcp } from './hooks/useExternalMcp'
 import { useToolsCatalog } from './hooks/useToolsCatalog'
 import { useCapabilities } from './hooks/useCapabilities'
@@ -111,22 +112,12 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-white font-mono text-sm overflow-hidden">
 
-      {/* ── Top bar ──
-          Also the window's title bar in Electron: the native one is hidden, so
-          this is the region that drags the window, and h-12 must stay equal to
-          the titleBarOverlay height in index.mjs or the buttons will not line
-          up with it. In a browser the hook reports inactive and this is an
-          ordinary header, unchanged. */}
-      <header
-        className="flex items-center justify-between px-5 h-12 bg-zinc-900 border-b border-zinc-800 shrink-0"
-        style={overlay.active
-          ? { ...DRAG_REGION, paddingRight: overlay.rightInset + 20 }
-          : undefined}
-      >
-        <h1 className="text-lg font-bold tracking-wide">
-          <span className="text-orange-500">Redstart Nest</span>
-        </h1>
-        <div className="flex items-center gap-5">
+      {/* Also the window's title bar in Electron — see TopBar in
+          components/ui.tsx, which the sign-in screen shares so the bar does not
+          appear only after signing in. */}
+      <TopBar
+        overlay={overlay}
+        right={<>
           <div className="flex items-center gap-2">
             <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-orange-500' : isStopping || isStarting ? 'bg-amber-400' : 'bg-zinc-600'}`} />
             <span className="text-xs uppercase tracking-widest text-zinc-400">
@@ -138,8 +129,8 @@ export default function App() {
               <span className="text-orange-400 font-semibold">{tokensPerMin.toLocaleString()}</span> tok/min
             </div>
           )}
-        </div>
-      </header>
+        </>}
+      />
 
       <div className="flex flex-1 overflow-hidden">
 
