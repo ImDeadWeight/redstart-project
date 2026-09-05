@@ -38,11 +38,26 @@ const store = createVectorStore()
 const memory = createSelectionMemory({ max: 200 })
 
 /**
- * How much of the context window the tool list and the prompt may occupy
- * between them. The rest is the conversation and the answer — a tool list that
- * fits the window exactly is a request that cannot be replied to.
+ * How much of the context window the tool list may occupy.
+ *
+ * A QUARTER, matching the threshold the Tools tab has always used to turn its
+ * estimate amber ("over a quarter of your window — consider enabling fewer
+ * tools"). Two numbers in one product disagreeing about what "too much context
+ * spent on tools" means is how a filter comes to report success while sending
+ * a request the UI would have warned about.
+ *
+ * It was a half, and a half is enough rope to make the filter useless: on a
+ * query where every tool scores alike — "which tools are relevant here?" is the
+ * pathological case, since it is *about* tool descriptions — the floors admit
+ * nearly everything and this becomes the only constraint left. Retrieval then
+ * stops selecting and starts packing: measured at 29 of 76 tools and 15,494
+ * tokens, which is a filter that has technically run and saved the user very
+ * little. At a quarter the same query yields 14 tools and 7,480 tokens.
+ *
+ * When this is the binding constraint the scorer could not tell the tools
+ * apart, which is worth knowing — `reason: 'budget'` in the telemetry says so.
  */
-export const CONTEXT_BUDGET_FRACTION = 0.5
+export const CONTEXT_BUDGET_FRACTION = 0.25
 
 /** Defaults for the knobs an admin does not set. */
 export const RETRIEVAL_DEFAULTS = Object.freeze({
@@ -85,6 +100,7 @@ export async function filterRequestTools({
   if (!config.enabled) return tools
   if (!Array.isArray(tools) || tools.length === 0) return tools
 
+  const startedAt = Date.now()
   try {
     // Fill the cache before scoring. A tool is embedded once per content hash,
     // ever, so this is empty on all but the first request that sees a given
@@ -103,12 +119,13 @@ export async function filterRequestTools({
 
     const key = conversationKey(messages, accountId)
     const scored = scoreTools({ tools, query: queryVectors[0], store })
+    const budgetTokens = toolBudget(ctxSize, reservedTokens)
 
     const { selected, dropped, reason } = selectTools({
       scored,
       pins: pinsFromMessages(messages),
       previous: memory.get(key),
-      budgetTokens: toolBudget(ctxSize, reservedTokens),
+      budgetTokens,
       floor: config.floor,
       relativeFloor: config.relativeFloor,
       margin: config.margin,
@@ -125,11 +142,19 @@ export async function filterRequestTools({
     // The privacy contract in logger.mjs is about what a support log may
     // contain, and "which tools this user has" is exactly the kind of fact it
     // exists to keep out.
+    // `ms` is here because the first question asked of a filter that runs on
+    // every request is "is this what made the model slow?", and counts alone
+    // cannot answer it. Cold is one batch of embeds; warm is single-digit
+    // milliseconds, and a log that shows which is which settles the question
+    // instead of inviting a guess.
     logEvent('retrieval', 'tools_filtered', {
       offered: tools.length,
       selected: selected.length,
       dropped: dropped.length,
       reason,
+      ms: Date.now() - startedAt,
+      budgetTokens: Number.isFinite(budgetTokens) ? budgetTokens : null,
+      sentTokens: estimateToolTokens(selected),
     })
     return selected
   } catch (err) {

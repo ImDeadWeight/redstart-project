@@ -842,6 +842,22 @@ await test('a conversation with no user text is left alone', async () => {
   assert(out === allTools, 'a request with nothing to score was filtered anyway')
 })
 
+await test('🔒 the gateway budget and the Tools tab agree on what is too much', () => {
+  // Two numbers in one product deciding "too much context spent on tools"
+  // independently is how a filter comes to report success while sending a
+  // request the UI would have warned about. The tab's amber threshold has
+  // always been a quarter of the window; the budget matches it, and this reads
+  // the tab to say so rather than trusting a comment.
+  const tab = fs.readFileSync(new URL('../src/tabs/ToolsTab.tsx', import.meta.url), 'utf8')
+  const thresholds = [...tab.matchAll(/ctxSize \* ([\d.]+)|ctx \* ([\d.]+)/g)].map(m => Number(m[1] ?? m[2]))
+  assert(thresholds.length > 0, 'no context threshold found in ToolsTab.tsx — has it changed shape?')
+  for (const t of thresholds) {
+    assert(t === CONTEXT_BUDGET_FRACTION,
+      `the Tools tab warns at ${t} of the window but the gateway budgets ${CONTEXT_BUDGET_FRACTION}`)
+  }
+  return `both ${CONTEXT_BUDGET_FRACTION}, across ${thresholds.length} site(s)`
+})
+
 await test('🔍 the budget leaves room for the conversation and the answer', () => {
   assert(toolBudget(4096, 0) === Math.floor(4096 * CONTEXT_BUDGET_FRACTION),
     `an empty conversation should get the whole tool share: ${toolBudget(4096, 0)}`)

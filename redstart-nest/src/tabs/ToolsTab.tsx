@@ -611,7 +611,9 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
           const total = o.toolTokens + o.promptTokens
           const ctx = o.ctxSize ?? config.ctxSize
           return (
-            <p className={`text-xs mt-1 ${total > ctx * 0.5 ? 'text-amber-400' : 'text-zinc-500'}`}>
+            /* Amber on the same quarter-of-the-window threshold the estimate
+               above uses, and that tool-filter.mjs budgets against. */
+            <p className={`text-xs mt-1 ${o.toolTokens > ctx * 0.25 ? 'text-amber-400' : 'text-zinc-500'}`}>
               Last actual request: {o.toolsSent} tool{o.toolsSent === 1 ? '' : 's'} ≈ {o.toolTokens.toLocaleString()} tokens,
               plus {o.promptTokens.toLocaleString()} for the prompt and conversation — {total.toLocaleString()} of {ctx.toLocaleString()}.
               {o.toolsOffered > o.toolsAfterBans
