@@ -413,6 +413,92 @@ await test('no egress → no unknown-terms disclaimer (it would be noise)', asyn
   return 'disclaimer scoped to deployments that need it'
 })
 
+await test('🔒 per-account stores are named as private, shared ones as shared', async () => {
+  // "Held on the Redstart server, not in any cloud service" answers WHERE the
+  // data is. Users read it as an answer to WHO CAN SEE IT, and on a household
+  // server those are different questions — the model had only a sentence about
+  // cloud services to reason from when asked "can anyone else see this file?".
+  const { prompt } = composePrompt({
+    config: { documents: { enabled: true }, fileSystem: { rootDir: '/srv/files' }, postgres: { enabled: true }, git: { enabled: true } },
+    hasTools: true,
+    toolNames: ['read_document'],
+    account: { username: 'pat', role: 'owner' },
+    now: NOW,
+  })
+  assert(/Private to this account: [^.]*documents folder/.test(prompt), 'the documents folder is not claimed as private')
+  assert(/Private to this account: [^.]*file-system folder/.test(prompt), 'the file-system folder is not claimed as private')
+  assert(/Shared by every user: [^.]*Postgres/.test(prompt), 'Postgres is not disclosed as shared')
+  assert(/Shared by every user: [^.]*git repositories/.test(prompt), 'git is not disclosed as shared')
+  // The claim that would be worst to get backwards.
+  assert(!/Private to this account: [^.]*Postgres/.test(prompt), 'claimed privacy for a store every account can read')
+  return 'documents + files private, Postgres + git shared'
+})
+
+await test('🔒 with auth off there is no private storage, and the prompt says so', async () => {
+  // resolveUserScope(null) maps every caller to one anonymous folder, so the
+  // per-account stores are not per-account at all. Derived from the same value
+  // that decides the folder — account is null exactly when auth is off.
+  // Spec §7: silence would read as reassurance, so the case is stated.
+  const { prompt } = composePrompt({
+    config: { documents: { enabled: true }, fileSystem: { rootDir: '/srv/files' } },
+    hasTools: true,
+    toolNames: ['read_document'],
+    account: null,
+    now: NOW,
+  })
+  assert(!/Private to this account/.test(prompt), 'claimed per-account privacy with no accounts configured')
+  assert(/no accounts/.test(prompt), 'the auth-off posture is not stated')
+  assert(/shared by everyone who can reach the server/.test(prompt), 'the consequence of auth-off is not stated')
+  return 'auth-off inversion disclosed'
+})
+
+await test('🔒 a deployment with only shared stores claims no privacy at all', async () => {
+  const { prompt } = composePrompt({
+    config: { postgres: { enabled: true }, vault: { enabled: true } },
+    hasTools: true,
+    toolNames: ['postgres_query'],
+    account: { username: 'pat', role: 'user' },
+    now: NOW,
+  })
+  assert(!/Private to this account/.test(prompt), 'claimed private storage where none is per-account')
+  assert(/shared by every user/i.test(prompt), 'shared stores not disclosed as shared')
+  return 'no privacy claimed'
+})
+
+await test('🔒 the store labels are enumerated once, not once per group', async () => {
+  // The grouped rendering replaced a list followed by a second, regrouped copy
+  // of the same labels. On the longest block in the assembly the duplicate cost
+  // more tokens than the fact it carried.
+  const { prompt } = composePrompt({
+    config: { documents: { enabled: true }, postgres: { enabled: true } },
+    hasTools: true,
+    toolNames: ['read_document'],
+    account: { username: 'pat', role: 'user' },
+    now: NOW,
+  })
+  const occurrences = prompt.split('a documents folder').length - 1
+  assert(occurrences === 1, `the documents label appears ${occurrences} times`)
+  return 'one enumeration'
+})
+
+await test('🔒 GET /egress keeps its published localStores shape', async () => {
+  // deriveEgressFacts grew privateStores and sharedStores; localStores is the
+  // field the route publishes and the chat-ui types, so it stays a flat array
+  // of every enabled store.
+  const facts = deriveEgressFacts(
+    { documents: { enabled: true }, postgres: { enabled: true }, git: { enabled: true } },
+    [],
+    true,
+  )
+  assert(Array.isArray(facts.localStores), 'localStores is no longer an array')
+  assert(facts.localStores.length === 3, `localStores has ${facts.localStores.length} entries, expected 3`)
+  assert(
+    facts.privateStores.length + facts.sharedStores.length === facts.localStores.length,
+    'the split does not account for every store',
+  )
+  return `${facts.localStores.length} stores, ${facts.privateStores.length} private`
+})
+
 await test('egress facts follow the same substantiation gate as capabilities', async () => {
   const facts = deriveEgressFacts(WEB_CONFIG, [], false)
   assert(facts.webDomains.length === 0, 'reported web egress for a request carrying no tools')

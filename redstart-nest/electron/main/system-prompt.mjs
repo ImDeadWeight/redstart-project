@@ -322,6 +322,36 @@ export function isLocalUrl(url) {
  * @param externalServers  getExternalServers() from tools-storage
  * @param hasTools         whether the request carries tool definitions
  */
+/**
+ * Every local store this deployment can hold, whether it is enabled, and
+ * whether each account gets its own.
+ *
+ * A table rather than six inline predicates because two different questions
+ * are asked of the same list and they must not drift apart: the audit wants
+ * every store, the privacy claim wants them split by who can see them.
+ *
+ * COMPLETENESS IS THE POINT. This is what tells the model which kinds of local
+ * data exist at all, and an omission reads to the model as an absence — it will
+ * confidently report having no access to something it can in fact query.
+ * SQLite, Vault and Git were once missing, which is exactly how "are there any
+ * databases?" got answered with "none exist".
+ *
+ * `perAccount` mirrors which providers call resolveUserRoot(): documents and
+ * the file system resolve every path inside the caller's own folder, while
+ * Postgres, SQLite, Vault and Git are shared reference material and are the
+ * same for every account — each of those providers says so in its own callTool
+ * comment. Keep this column in step with them; it is a privacy claim, and a
+ * wrong one is worse than none.
+ */
+const LOCAL_STORES = [
+  { label: 'a Postgres database', enabled: c => !!c?.postgres?.enabled, perAccount: false },
+  { label: 'a documents folder', enabled: c => !!c?.documents?.enabled, perAccount: true },
+  { label: 'a file-system folder', enabled: c => !!c?.fileSystem?.rootDir, perAccount: true },
+  { label: 'SQLite database files', enabled: c => !!c?.sqlite?.enabled, perAccount: false },
+  { label: 'a vault of markdown notes', enabled: c => !!c?.vault?.enabled, perAccount: false },
+  { label: 'git repositories', enabled: c => !!c?.git?.enabled, perAccount: false },
+]
+
 // WHY THIS STAYS GATED ON `hasTools` AND NOT ON THE TOOL NAMES
 //
 // buildToolPolicy substantiates per tool; this deliberately does not, and the
@@ -374,18 +404,11 @@ export function deriveEgressFacts(config, externalServers, hasTools) {
         .map(s => ({ name: s.name || s.id || 'unnamed server', host: hostnameOf(s.url) }))
     : []
 
-  // Every enabled local store, not a subset. This block is what tells the model
-  // which kinds of local data exist at all — omissions here read to the model as
-  // absences, and it will confidently report that it has no access to something
-  // it can in fact query. SQLite, Vault and Git were missing, which is exactly
-  // how "are there any databases?" got answered with "none exist".
-  const localStores = []
-  if (config?.postgres?.enabled) localStores.push('a local Postgres database')
-  if (config?.documents?.enabled) localStores.push('a local documents folder')
-  if (config?.fileSystem?.rootDir) localStores.push('a local file-system folder')
-  if (config?.sqlite?.enabled) localStores.push('a local folder of SQLite database files')
-  if (config?.vault?.enabled) localStores.push('a local vault of markdown notes')
-  if (config?.git?.enabled) localStores.push('local git repositories')
+  // Every enabled local store, not a subset — see LOCAL_STORES for why the
+  // completeness matters and why the list is a table rather than six inline
+  // predicates.
+  const active = LOCAL_STORES.filter(store => store.enabled(config))
+  const localStores = active.map(store => store.label)
 
   return {
     inference,
@@ -393,6 +416,12 @@ export function deriveEgressFacts(config, externalServers, hasTools) {
     remoteToolServers,
     credentialPlugins,
     localStores,
+    // The same set split by who can see it. Kept beside localStores rather than
+    // derived by the caller: which stores are per-account is a property of the
+    // capability, and a second place deciding it is a second place to get it
+    // wrong. localStores keeps its shape — it is published by GET /egress.
+    privateStores: active.filter(s => s.perAccount).map(s => s.label),
+    sharedStores: active.filter(s => !s.perAccount).map(s => s.label),
     get hasEgress() {
       return this.webDomains.length > 0 || this.remoteToolServers.length > 0 || this.credentialPlugins.length > 0
     },
@@ -430,7 +459,54 @@ function buildLocality(clientToolNames) {
   ].join(' ')
 }
 
-function buildDataHandling(egress) {
+/**
+ * Who else can see the local stores.
+ *
+ * "Held on the Redstart server, not in any cloud service" is a claim about
+ * where data is, and users read it as a claim about who can reach it. On a
+ * household server those are different questions, and the model had no answer
+ * to the second: asked "can anyone else see this file?", it had only a sentence
+ * about cloud services to reason from.
+ *
+ * TWO FACTS, and the second is the one that is easy to get wrong. Documents and
+ * the file system resolve inside the caller's own folder; Postgres, SQLite,
+ * Vault and Git are shared by everyone. Claiming privacy for the shared ones
+ * would be the worst kind of error this file can make.
+ *
+ * And per-account storage needs an account. resolveUserScope(null) maps every
+ * caller to one anonymous folder, so with auth off the "private" stores are
+ * shared by everyone who can reach the server — the exact opposite of the claim,
+ * derived from the same value that decides the folder. Spec §7's rule applies
+ * with full force here: silence would read as reassurance, so the auth-off case
+ * is stated rather than skipped.
+ */
+function localStoresSentence(egress, account) {
+  const { localStores = [], privateStores = [], sharedStores = [] } = egress
+  if (!localStores.length) return null
+
+  // The single most misread sentence in this block: it means "not in a cloud
+  // service", and a desktop user hears "on my laptop". Naming the server keeps
+  // the privacy claim intact without implying a location it never meant.
+  const where = 'These stores are held on the Redstart server, not in any cloud service'
+
+  // Auth off: resolveUserScope(null) puts every caller in one anonymous folder,
+  // so the per-account stores are not per-account at all. One list, one truth.
+  if (!account || !privateStores.length) {
+    const everything = localStores.join(', ')
+    return privateStores.length
+      ? `${where}. This deployment has no accounts, so all of them are shared by everyone who can reach the server: ${everything}.`
+      : `${where}, and are shared by every user: ${everything}.`
+  }
+
+  // The labels are enumerated ONCE and grouped, rather than listed and then
+  // re-listed per group — the second copy cost more tokens than the fact it
+  // carried, on the longest block in the assembly.
+  const groups = [`Private to this account: ${privateStores.join(', ')}.`]
+  if (sharedStores.length) groups.push(`Shared by every user: ${sharedStores.join(', ')}.`)
+  return `${where}. ${groups.join(' ')}`
+}
+
+function buildDataHandling(egress, account) {
   const parts = []
 
   if (egress.inference.local) {
@@ -441,7 +517,7 @@ function buildDataHandling(egress) {
   }
 
   if (egress.webDomains.length) {
-    parts.push(`Some tools do reach outside the Redstart server. The web_fetch tool sends the URLs it is asked to retrieve, and receives content back, from: ${egress.webDomains.join(', ')}.`)
+    parts.push(`Some tools reach outside the Redstart server: web_fetch sends the URLs it is asked to retrieve, and receives their content, from: ${egress.webDomains.join(', ')}.`)
   }
 
   if (egress.remoteToolServers.length) {
@@ -465,12 +541,8 @@ function buildDataHandling(egress) {
     parts.push('Redstart has no record of how those external services retain or use what they receive. If asked, say that plainly rather than reassuring the user.')
   }
 
-  if (egress.localStores.length) {
-    // The single most misread sentence in this block: it means "not in a cloud
-    // service", and a desktop user hears "on my laptop". Naming the server keeps
-    // the privacy claim intact without implying a location it never meant.
-    parts.push(`These stores are held on the Redstart server, not in any cloud service: ${egress.localStores.join(', ')}.`)
-  }
+  const stores = localStoresSentence(egress, account)
+  if (stores) parts.push(stores)
 
   return parts.length ? parts.join(' ') : null
 }
@@ -550,7 +622,7 @@ export function composePrompt(input = {}) {
     // data is stored. Spec §3.
     ['locality', buildLocality(clientToolNames)],
     ['style', admin.style],
-    ['data_handling', buildDataHandling(egress)],
+    ['data_handling', buildDataHandling(egress, account)],
     ['session', buildSession(account, now)],
   ]
 
