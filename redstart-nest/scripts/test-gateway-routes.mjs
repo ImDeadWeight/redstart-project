@@ -618,32 +618,87 @@ async function main() {
     updateGatewayConfig(baseConfig)
   })
 
-  await test('🔒 a payload carrying search_tools is told its tool list is partial', async () => {
-    // End to end for the block: search_tools has to survive the ban filter and
-    // the retrieval filter and still be in the names the composer reads, or the
-    // model is handed a narrowed list with nothing saying it was narrowed.
+  await test('🔒 retrieval that fails open discloses nothing — "enabled" is not "narrowed"', async () => {
+    // No embedding server, so the filter forwards the full list. The block is
+    // gated on tools having actually gone, not on the setting, so a request
+    // that kept everything must not be told it is looking at a subset.
     updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
     await completions({
       messages: [{ role: 'user', content: 'what changed in the repo' }],
       tools: [toolDef('git_status'), toolDef('search_tools')],
     })
-    const system = systemOf()
-    assert(/subset chosen for this conversation/.test(system), 'the narrowed list was not disclosed')
-    assert(/call search_tools/.test(system), 'the way out was not named')
+    const names = (lastForwarded.tools || []).map(t => t.function.name)
+    assert(names.length === 2, `the filter dropped something with no embedder: ${names.join(',')}`)
+    assert(!/subset chosen for this conversation/.test(systemOf()), 'claimed a narrowing that did not happen')
     updateGatewayConfig(baseConfig)
   })
 
-  await test('🔒 without search_tools the prompt makes no promise about finding more', async () => {
-    // The gate is the tool, not the setting: retrieval is ON here and the
-    // payload still gets no retrieval block, because this client has no
-    // search_tools to call.
-    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
-    await completions({
-      messages: [{ role: 'user', content: 'what changed in the repo' }],
-      tools: [toolDef('git_status')],
+  // A stub embedding server on the real port, so the whole chain runs: embed
+  // the tools, embed the conversation, score, drop, compose. Vectors are
+  // deterministic and orthogonal — anything matching the query's subject gets
+  // [1,0] and everything else [0,1], so the relative floor (0.85 of the best
+  // score) cuts exactly the tools that scored zero.
+  const withStubEmbedder = async (fn) => {
+    const server = http.createServer((req, res) => {
+      let body = ''
+      req.on('data', chunk => { body += chunk })
+      req.on('end', () => {
+        let input = []
+        try { input = JSON.parse(body).input ?? [] } catch { /* answered below as empty */ }
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({
+          data: input.map((text, index) => ({
+            index,
+            object: 'embedding',
+            embedding: /git|repo|search_tools/.test(String(text)) ? [1, 0] : [0, 1],
+          })),
+        }))
+      })
     })
-    assert(!/subset chosen for this conversation/.test(systemOf()), 'promised a search tool the payload lacks')
-    updateGatewayConfig(baseConfig)
+    await new Promise(resolve => server.listen(EMBED_PORT, '127.0.0.1', resolve))
+    try {
+      return await fn()
+    } finally {
+      await new Promise(resolve => server.close(resolve))
+      updateGatewayConfig(baseConfig)
+    }
+  }
+
+  if (!embedPortBusy) await test('🔒 a genuinely narrowed list is disclosed, and names search_tools when it survives', async () => {
+    await withStubEmbedder(async () => {
+      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+      await completions({
+        messages: [{ role: 'user', content: 'what changed in the git repo today' }],
+        tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch'), toolDef('search_tools')],
+      })
+      const names = (lastForwarded.tools || []).map(t => t.function.name)
+      assert(names.includes('git_status'), 'the matching tool was dropped')
+      assert(names.includes('search_tools'), 'search_tools was dropped, so this tests the wrong branch')
+      assert(!names.includes('create_document'), 'nothing was filtered, so there is no narrowing to disclose')
+      const system = systemOf()
+      assert(/subset chosen for this conversation/.test(system), 'the narrowing was not disclosed')
+      assert(/call search_tools/.test(system), 'search_tools survived but the remedy was not named')
+    })
+  })
+
+  if (!embedPortBusy) await test('🔒 a narrowed list with no search_tools is told what to say instead', async () => {
+    // The gap this closes: an OpenAI-compatible client that sends its own tools
+    // and never connects to Nest's MCP server is filtered like any other and
+    // has nothing to search with. It used to be told nothing at all.
+    await withStubEmbedder(async () => {
+      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+      await completions({
+        messages: [{ role: 'user', content: 'summarise what changed in the git repo this week' }],
+        tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch')],
+      })
+      const names = (lastForwarded.tools || []).map(t => t.function.name)
+      assert(names.includes('git_status'), 'the matching tool was dropped')
+      assert(!names.includes('web_fetch'), 'nothing was filtered, so there is no narrowing to disclose')
+      const system = systemOf()
+      assert(/subset chosen for this conversation/.test(system), 'the narrowing was not disclosed')
+      assert(!/search_tools/.test(system), 'named a tool this client cannot call')
+      assert(/not available in this session/.test(system), 'the model was not told what to say instead')
+    })
   })
 
   await test('a request carrying no tools is untouched by retrieval', async () => {

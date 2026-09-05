@@ -569,6 +569,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
               surface: authResult.surface,
               clientToolNames: [],
               toolNames: [],
+              toolsFiltered: false,
             },
           )
           parsed.tools = await filterRequestTools({
@@ -582,6 +583,13 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         }
 
         const requestHasTools = Array.isArray(parsed.tools) && parsed.tools.length > 0
+
+        // Did retrieval actually take anything away? Counted rather than
+        // inferred from the setting, because filterRequestTools fails open and
+        // because selectTools returns a fresh array even when it kept
+        // everything — an identity check would report a subset that is not one.
+        const toolsSent = Array.isArray(parsed.tools) ? parsed.tools.length : 0
+        const toolsFiltered = toolsAfterBans > toolsSent
 
         // account is null when auth is off (see the posture note above) — the
         // composer degrades to a date-only session block rather than failing.
@@ -598,6 +606,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
           // both had their say, so the capability claims describe the payload
           // the model is actually about to receive.
           toolNames: toolNamesIn(parsed),
+          toolsFiltered,
         })
 
         // What was really forwarded, recorded after every rewrite this block

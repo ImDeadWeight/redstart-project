@@ -289,40 +289,61 @@ await test('🔒 a narrowed tool list says so, and points at the way out', async
     config: LOCAL_ONLY_CONFIG,
     hasTools: true,
     toolNames: ['postgres_query', 'search_tools'],
+    toolsFiltered: true,
     now: NOW,
   })
-  assert(blocks.includes('retrieval'), 'no retrieval block with search_tools in the payload')
+  assert(blocks.includes('retrieval'), 'no retrieval block after tools were removed')
   assert(prompt.includes('subset chosen for this conversation'), 'the list is not described as partial')
   assert(prompt.includes('call search_tools'), 'the remedy is not named')
   assert(prompt.includes('never tell the user a capability is unavailable'), 'the failure mode is not ruled out')
   return 'partial list disclosed'
 })
 
-await test('🔒 no search_tools in the payload → no retrieval block', async () => {
-  // Gated on the TOOL, not on the setting. search-tools-provider only
-  // advertises it while retrieval is enabled, so its presence is the request's
-  // own evidence that the list was narrowed — and a client that sends its own
-  // tools without connecting to Nest's MCP server would otherwise be told to
-  // call something it does not have.
+await test('🔒 a client with no search_tools is told what to say instead', async () => {
+  // search_tools is advertised only to clients connected to Nest's MCP server.
+  // An OpenAI-compatible client that sends its own tool definitions is filtered
+  // just the same and has nothing to call. Naming search_tools to that model
+  // would be a false claim; saying nothing leaves it to report the capability
+  // as non-existent, which is the failure this block exists for.
   const { prompt, blocks } = composePrompt({
     config: LOCAL_ONLY_CONFIG,
     hasTools: true,
     toolNames: ['postgres_query'],
+    toolsFiltered: true,
     now: NOW,
   })
-  assert(!blocks.includes('retrieval'), 'promised a search tool the request does not carry')
-  assert(!prompt.includes('search_tools'), 'named search_tools with none in the payload')
-  return 'silent without the tool'
+  assert(blocks.includes('retrieval'), 'a filtered request with no search_tools got no disclosure')
+  assert(prompt.includes('subset chosen for this conversation'), 'the list is not described as partial')
+  assert(!prompt.includes('search_tools'), 'named a tool the payload does not carry')
+  assert(prompt.includes('not available in this session'), 'the model is not told what to say instead')
+  assert(prompt.includes('never that this server cannot do it'), 'the wrong answer is not ruled out')
+  return 'disclosed without a remedy it does not have'
+})
+
+await test('🔒 nothing removed → no retrieval block, whatever the setting says', async () => {
+  // Retrieval fails open: sidecar down, cold cache, empty selection all forward
+  // the full list. "Enabled" is therefore not evidence of a subset, so the gate
+  // is on tools having actually gone — measured by the gateway, not inferred.
+  const { blocks, prompt } = composePrompt({
+    config: LOCAL_ONLY_CONFIG,
+    hasTools: true,
+    toolNames: ['postgres_query', 'search_tools'],
+    toolsFiltered: false,
+    now: NOW,
+  })
+  assert(!blocks.includes('retrieval'), 'called a complete tool list a subset')
+  assert(!prompt.includes('subset chosen for this conversation'), 'claimed a narrowing that did not happen')
+  return 'silent when nothing was dropped'
 })
 
 await test('🔒 the retrieval block stays small enough to be worth its tokens', async () => {
   // Same discipline as the modes (spec §9): a block that costs 300 tokens
   // defeats its own purpose in an assembly with a 1200-token soft budget.
   const withOut = composePrompt({
-    config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query'], now: NOW,
+    config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query', 'search_tools'], now: NOW,
   }).tokens
   const withIn = composePrompt({
-    config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query', 'search_tools'], now: NOW,
+    config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query', 'search_tools'], toolsFiltered: true, now: NOW,
   }).tokens
   const cost = withIn - withOut
   assert(cost > 0, 'the block cost nothing, so it is not being emitted')
@@ -649,6 +670,7 @@ await test('block order matches the spec §3 contract', async () => {
     // tool_policy now needs the names as well as the config. search_tools is
     // what makes the retrieval block appear.
     toolNames: [...ALL_TOOL_NAMES, 'search_tools'],
+    toolsFiltered: true,
     clientToolNames: ['fs_read_file'],
     now: NOW,
   })

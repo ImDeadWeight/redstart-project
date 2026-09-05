@@ -276,21 +276,29 @@ function buildToolPolicy(config, hasTools, toolNames) {
 // between a model that looks for a tool and one that tells the user it does not
 // exist.
 //
-// GATED ON search_tools BEING IN THE PAYLOAD, not on the retrieval setting.
-// search-tools-provider.mjs only advertises it while retrieval is enabled, so
-// its presence is the request's own evidence that the list was narrowed — the
-// same substantiation rule as everywhere else here. It also keeps the advice
-// actionable: a client that sends its own tools without connecting to Nest's
-// MCP server gets a narrowed list and no search_tools, and telling that model
-// to call a tool it does not have would be one more false claim.
-function buildRetrieval(toolNames) {
+// GATED ON TOOLS HAVING ACTUALLY BEEN REMOVED, which the gateway measures by
+// counting the payload before and after the filter. Not on the retrieval
+// setting: retrieval fails open, so "enabled" is compatible with a request
+// that carried every tool it started with, and calling that a subset would be
+// the same unsubstantiated claim this file exists to prevent.
+//
+// TWO WORDINGS, because the remedy is not always present. search_tools is
+// advertised only to clients connected to Nest's MCP server; a client that
+// sends its own tool definitions (an OpenAI-compatible coding agent, say) is
+// filtered just the same and has nothing to call. Telling that model to call
+// search_tools would be a false claim, and telling it nothing leaves it to
+// conclude the capability does not exist — the failure this block exists for.
+// So it is told what happened and what to say instead, which is the part that
+// reaches the user either way.
+function buildRetrieval(toolNames, toolsFiltered) {
+  if (!toolsFiltered) return null
   const names = Array.isArray(toolNames) ? toolNames : []
-  if (!names.includes('search_tools')) return null
 
-  return [
-    'The tools listed this turn are a subset chosen for this conversation, not everything this server can do.',
-    'If what you need is missing, call search_tools before concluding it does not exist — never tell the user a capability is unavailable just because it is not in your list.',
-  ].join(' ')
+  const opening = 'The tools listed this turn are a subset chosen for this conversation, not everything this server can do.'
+
+  return names.includes('search_tools')
+    ? `${opening} If what you need is missing, call search_tools before concluding it does not exist — never tell the user a capability is unavailable just because it is not in your list.`
+    : `${opening} There is no way to search for the rest from here, so if what you need is missing, say it is not available in this session — never that this server cannot do it.`
 }
 
 // ---------------------------------------------------------------------------
@@ -580,6 +588,8 @@ function buildSession(account, now) {
  * @param {boolean} input.hasTools          request carries tool definitions
  * @param {string[]} [input.toolNames]      every tool name in THIS request,
  *                                          post-ban and post-retrieval
+ * @param {boolean} [input.toolsFiltered]    retrieval actually removed tools
+ *                                          from this request
  * @param {Array}   [input.externalServers] getExternalServers()
  * @param {object}  [input.account]         authResult.account, or null (auth off)
  * @param {Date}    [input.now]
@@ -607,6 +617,9 @@ export function composePrompt(input = {}) {
     // buildToolPolicy substantiates against this; see the note there for why
     // config alone stopped being enough once retrieval could narrow a payload.
     toolNames = [],
+    // Whether retrieval REMOVED anything this turn, measured by the gateway.
+    // Retrieval fails open, so the setting alone is not evidence of a subset.
+    toolsFiltered = false,
     budget = DEFAULT_TOKEN_BUDGET,
   } = input
 
@@ -623,7 +636,7 @@ export function composePrompt(input = {}) {
     // After tool_policy — it qualifies the list those constraints apply to —
     // and before locality, so "your list is partial" is settled before "and
     // these ones touch a different computer".
-    ['retrieval', buildRetrieval(toolNames)],
+    ['retrieval', buildRetrieval(toolNames, toolsFiltered)],
     // After tool_policy (it is about tools) and before the style/data blocks,
     // so the model knows which machine a tool touches before it is told where
     // data is stored. Spec §3.
