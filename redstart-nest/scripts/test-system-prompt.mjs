@@ -141,14 +141,13 @@ await test('no tools in the request → no capability claims, whatever the admin
   return 'all three capabilities withheld'
 })
 
-await test('tools in the request → the enabled capabilities are described', async () => {
+await test('tools in the request → the constraints a schema cannot carry are stated', async () => {
   const { prompt } = composePrompt({
     config: { ...LOCAL_ONLY_CONFIG, ...WEB_CONFIG },
     hasTools: true,
     toolNames: ALL_TOOL_NAMES,
     now: NOW,
   })
-  assert(prompt.includes('web_fetch'), 'web_fetch not described')
   // CodeQL: js/incomplete-url-substring-sanitization — false positive, dismissed.
   // This asserts that the composed PROMPT TEXT names an approved domain; it is a
   // string search over prose, not a host check, and nothing is authorised by it.
@@ -158,81 +157,128 @@ await test('tools in the request → the enabled capabilities are described', as
   // `docs.example.org.attacker.com` are both rejected there. See
   // docs/security.md (Static analysis) for the full triage note.
   assert(prompt.includes('docs.example.org'), 'approved domain not listed')
-  assert(prompt.includes('postgres_query'), 'postgres not described')
-  assert(prompt.includes('create_document'), 'documents not described')
-  return 'web + postgres + documents'
+  assert(prompt.includes('only retrieve from these approved sources'), 'allowlist constraint missing')
+  assert(prompt.includes('read-only'), 'read-only SQL constraint missing')
+  assert(prompt.includes('If a tool call fails'), 'failure handling missing')
+  return 'allowlist + read-only + failure handling'
 })
 
-await test('🔒 a capability enabled in config but absent from the payload is not claimed', async () => {
-  // The retrieval defect this gate closes. Nothing about the CONFIG changes
-  // when a selection drops create_document — documents.enabled is still true —
-  // so a config-gated claim went on telling the model it could save a file it
-  // had been handed no way to save. Same failure the bans-before-prompt
-  // ordering fixed, arriving through the tool filter instead of the ban list.
+await test('🔒 tool signatures are never restated in prose (spec §6)', async () => {
+  // The block used to say "You have access to create_document to save a docx,
+  // pdf, or markdown file" — the tool's own description with a preamble. MCP
+  // already ships the schema, the prose copy drifts, and the model trusts prose
+  // over schema when they disagree. It HAD drifted: two capabilities described
+  // here against six known to deriveEgressFacts.
   const { prompt } = composePrompt({
     config: { ...LOCAL_ONLY_CONFIG, ...WEB_CONFIG },
     hasTools: true,
-    // Retrieval kept the postgres tools and dropped the rest.
-    toolNames: ['postgres_query', 'postgres_list_tables', 'postgres_describe_table'],
+    toolNames: ALL_TOOL_NAMES,
     now: NOW,
   })
-  assert(prompt.includes('postgres_query'), 'withheld a capability that WAS sent')
-  assert(!prompt.includes('create_document'), 'claimed create_document after retrieval dropped it')
-  // The CAPABILITY claim goes; the egress disclosure below it deliberately
-  // stays. See the next test.
-  assert(!prompt.includes('You have access to the web_fetch tool'), 'claimed web_fetch after retrieval dropped it')
-  assert(!prompt.includes('Approved sources'), 'listed an approved-source allowlist with no web_fetch to use it')
-  return 'postgres claimed, documents and web_fetch withheld'
+  assert(!prompt.includes('You have access to'), 'a capability is being announced in prose again')
+  assert(!prompt.includes('save a docx'), 'the create_document schema description is restated in the prompt')
+  assert(!prompt.includes('postgres_list_tables'), 'a tool signature is being enumerated in prose again')
+  return 'no signatures in the prompt'
 })
 
-await test('🔒 egress disclosure survives a tool being filtered out, capability claim does not', async () => {
-  // The one place two blocks describe the same tool and are ALLOWED to
-  // disagree, because they fail in opposite directions: a withheld capability
-  // costs nothing, a withheld egress disclosure is a false reassurance. Pinned
-  // so the asymmetry cannot be "tidied up" into consistency by accident — see
-  // the note above deriveEgressFacts.
+await test('🔒 a constraint is withheld when the tool it governs is absent (the retrieval defect)', async () => {
+  // Nothing about the CONFIG changes when a selection drops web_fetch —
+  // webFetch.activeTools is still populated — so a config-gated allowlist went
+  // on describing approved sources for a tool the model had no way to call.
+  // Same failure the bans-before-prompt ordering fixed, arriving through the
+  // tool filter instead of the ban list.
   const { prompt } = composePrompt({
-    config: WEB_CONFIG,
+    config: { ...LOCAL_ONLY_CONFIG, ...WEB_CONFIG },
     hasTools: true,
     toolNames: ['postgres_query'],
     now: NOW,
   })
-  assert(!prompt.includes('You have access to the web_fetch tool'), 'capability claimed for a tool that was not sent')
-  assert(prompt.includes('reach outside the Redstart server'), 'egress disclosure dropped with the tool')
-  assert(prompt.includes('docs.example.org'), 'egress destination no longer named')
-  return 'capability withheld, egress still disclosed'
+  assert(prompt.includes('read-only'), 'withheld a constraint for a tool that WAS sent')
+  assert(!prompt.includes('approved sources'), 'listed an allowlist with no web_fetch to use it')
+  assert(!prompt.includes('Confirm with the user'), 'asked for confirmation with no destructive tool sent')
+  return 'SQL constraint kept, allowlist and confirmation withheld'
 })
 
-await test('🔒 only the tools actually sent are named within a capability', async () => {
-  // A partial selection is the normal case under retrieval, and a prose list
-  // naming a sibling that did not arrive is the same invitation to invent a
-  // call format as claiming the capability outright.
+await test('🔒 the destructive-confirmation clause names only what was sent', async () => {
   const { prompt } = composePrompt({
     config: LOCAL_ONLY_CONFIG,
     hasTools: true,
-    toolNames: ['postgres_query'],
+    toolNames: ['read_file', 'write_file', 'delete_file'],
     now: NOW,
   })
-  assert(prompt.includes('postgres_query'), 'the tool that was sent is not named')
-  assert(!prompt.includes('postgres_list_tables'), 'named a postgres tool that was not sent')
-  assert(!prompt.includes('postgres_describe_table'), 'named a postgres tool that was not sent')
-  assert(prompt.includes('read-only'), 'lost the read-only constraint a schema cannot express')
-  return 'one tool named, two siblings withheld'
+  assert(prompt.includes('Confirm with the user before calling delete_file'), 'delete_file not named')
+  assert(!prompt.includes('write_file,'), 'a write-class tool was pulled into the destructive clause')
+  assert(prompt.includes('covers one call, not a session'), 'confirmation is not scoped per call')
+  return 'delete_file only'
 })
 
-await test('🔒 hasTools with no toolNames claims nothing — understate, never overstate', async () => {
-  // The safe direction, and it is deliberate rather than incidental: a caller
-  // that cannot say what it sent does not get to assert capabilities on the
-  // model's behalf. Both production callers pass names.
-  const { prompt, blocks } = composePrompt({
+await test('🔒 the Twig fs_delete_file reaches the confirmation clause', async () => {
+  // classifyTool() defaults an unknown name to 'read', which is the right
+  // failure for the POLICY GATE (it only ever restricts) and the wrong one
+  // here: fs_delete_file is the single delete in the system that runs on a
+  // machine no server-side policy can reach, and it arrives at the gateway as
+  // a plain OpenAI function definition with nowhere to carry an annotation.
+  // A confirmation clause that silently omitted it would be wrong exactly
+  // where it matters most.
+  const { prompt } = composePrompt({
+    config: LOCAL_ONLY_CONFIG,
+    hasTools: true,
+    toolNames: ['fs_read_file', 'fs_write_file', 'fs_delete_file'],
+    clientToolNames: ['fs_read_file', 'fs_write_file', 'fs_delete_file'],
+    now: NOW,
+  })
+  assert(prompt.includes('Confirm with the user before calling fs_delete_file'), 'fs_delete_file is not in the confirmation clause')
+  return 'the one delete no server policy can reach is covered'
+})
+
+await test('🔒 SQLite gets the read-only constraint too — the drift this rewrite fixes', async () => {
+  // The old block knew about postgres and documents only. A deployment with
+  // SQLite enabled got a tool policy describing neither of its capabilities,
+  // which is the drift spec §6 predicts for hand-maintained prose.
+  const { prompt } = composePrompt({
+    config: { sqlite: { enabled: true } },
+    hasTools: true,
+    toolNames: ['sqlite_query', 'sqlite_list_tables'],
+    now: NOW,
+  })
+  assert(prompt.includes('read-only'), 'SQLite did not get the read-only constraint')
+  return 'one clause, every SQL capability'
+})
+
+await test('🔒 documents/file-system overlap is stated only when both are present', async () => {
+  const both = composePrompt({
+    config: LOCAL_ONLY_CONFIG,
+    hasTools: true,
+    toolNames: ['read_document', 'read_file'],
+    now: NOW,
+  }).prompt
+  assert(both.includes('prefer read_document'), 'overlap rule missing when both tools are present')
+
+  const onlyDocs = composePrompt({
+    config: LOCAL_ONLY_CONFIG,
+    hasTools: true,
+    toolNames: ['read_document'],
+    now: NOW,
+  }).prompt
+  assert(!onlyDocs.includes('prefer read_document'), 'stated a preference with nothing to prefer it over')
+  return 'stated when ambiguous, silent when not'
+})
+
+await test('🔒 hasTools with no toolNames states no tool-specific constraint', async () => {
+  // The safe direction, and deliberate: a caller that cannot say what it sent
+  // does not get to describe tools on the model's behalf. Both production
+  // callers pass names. The failure-handling sentence still applies — it is
+  // substantiated by there being tools at all, not by which.
+  const { prompt } = composePrompt({
     config: { ...LOCAL_ONLY_CONFIG, ...WEB_CONFIG },
     hasTools: true,
     now: NOW,
   })
-  assert(!blocks.includes('tool_policy'), 'composed a tool_policy block from config alone')
-  assert(!prompt.includes('postgres_query'), 'claimed postgres with no names supplied')
-  assert(!prompt.includes('create_document'), 'claimed documents with no names supplied')
-  return 'no tool_policy block'
+  assert(!prompt.includes('approved sources'), 'listed an allowlist with no names supplied')
+  assert(!prompt.includes('read-only'), 'claimed read-only SQL with no names supplied')
+  assert(!prompt.includes('Confirm with the user'), 'asked for confirmation with no names supplied')
+  assert(prompt.includes('If a tool call fails'), 'lost the failure-handling clause, which needs no names')
+  return 'failure handling only'
 })
 
 await test('identity survives even with no config at all', async () => {
@@ -269,6 +315,24 @@ await test('web_fetch against an external domain is disclosed as egress', async 
   assert(prompt.includes('reach outside the Redstart server'), 'external reach not disclosed')
   assert(prompt.includes('docs.example.org'), 'egress destination not named')
   return 'egress disclosed and named'
+})
+
+await test('🔒 egress disclosure survives a tool being filtered out; the capability claim does not', async () => {
+  // The one place two blocks describe the same tool and are ALLOWED to
+  // disagree, because they fail in opposite directions: a withheld capability
+  // costs nothing, a withheld egress disclosure is a false reassurance. Pinned
+  // so the asymmetry cannot be tidied into consistency by accident — see the
+  // note above deriveEgressFacts.
+  const { prompt } = composePrompt({
+    config: WEB_CONFIG,
+    hasTools: true,
+    toolNames: ['postgres_query'],
+    now: NOW,
+  })
+  assert(!prompt.includes('approved sources'), 'allowlist stated for a tool that was not sent')
+  assert(prompt.includes('reach outside the Redstart server'), 'egress disclosure dropped with the tool')
+  assert(prompt.includes('docs.example.org'), 'egress destination no longer named')
+  return 'capability withheld, egress still disclosed'
 })
 
 await test('a remote MCP server is disclosed as egress; a localhost one is not', async () => {

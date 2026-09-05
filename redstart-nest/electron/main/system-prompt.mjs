@@ -1,7 +1,7 @@
 'use strict'
 
 import { listPlugins } from './plugin-registry.mjs'
-import { BUILTIN_CAPABILITY_TOOL_NAMES } from './tools-definitions.mjs'
+import { BUILTIN_CAPABILITY_TOOL_NAMES, classifyTool } from './tools-definitions.mjs'
 
 // =============================================================================
 // Redstart Nest — System Prompt Composer
@@ -151,18 +151,28 @@ export function listModes() {
 // ---------------------------------------------------------------------------
 // Block 6 — tool policy (spec §6)
 // ---------------------------------------------------------------------------
-// `hasTools` = the request actually carries tool definitions.
+// ONLY WHAT A SCHEMA CANNOT SAY. Spec §6 is explicit that tool signatures never
+// appear here: MCP already ships them, a prose copy drifts, and the model trusts
+// prose over schema when the two disagree.
 //
-// Capability claims are only TRUE when it does. Whether a tool is reachable is
-// decided by the client (it owns the MCP connection), not by this config — an
-// admin can have Documents enabled here while the client sends no tools at
-// all. Claiming "you have access to create_document" in that state teaches the
-// model to invent a call format for a tool it cannot reach: it emits a
-// plausible-looking blob, nothing executes, and it reports success for work
-// that never happened.
+// This block used to restate schemas — "You have access to create_document to
+// save a docx, pdf, or markdown file" is the tool's own description with a
+// preamble — and it had already drifted the way §6 predicts. It knew about two
+// capabilities while deriveEgressFacts below knew about six, so a deployment
+// with SQLite, Vault and Git enabled got a tool policy describing neither. The
+// fix is not a third and fourth paragraph to keep in sync; it is to stop
+// describing tools here at all and say the things the schema has no field for:
 //
-// This gate is the original instance of the substantiation rule that §7
-// generalises to egress. Preserve it.
+//   - the web allowlist: no schema can express "only these domains"
+//   - read-only-ness: nothing in a SQL tool's signature says the transaction is
+//     READ ONLY, and a model that does not know will offer to fix the data
+//   - overlap: which of two tools that both "read a file" to prefer, and why
+//   - confirmation: a destructive class exists in tools-definitions.mjs and had
+//     no route to the model at all
+//   - failure handling: what to do with an error, which no schema describes
+//
+// Every clause is gated on the tools it talks about being present in THIS
+// request — see the substantiation note in buildToolPolicy.
 
 /** "a", "a and b", "a, b, and c" — for naming tools in prose. */
 function andList(names) {
@@ -170,6 +180,17 @@ function andList(names) {
   if (names.length === 2) return `${names[0]} and ${names[1]}`
   return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
 }
+
+// The SQL capabilities, whose read-only-ness is enforced by the database and is
+// invisible in the tool signature.
+const READ_ONLY_SQL_TOOLS = [
+  ...BUILTIN_CAPABILITY_TOOL_NAMES.postgres,
+  ...BUILTIN_CAPABILITY_TOOL_NAMES.sqlite,
+]
+
+// File-system reads that overlap with the Documents capability. Both can open a
+// file in the documents folder; only one of them understands the format.
+const FS_READ_TOOLS = ['read_file', 'read_text_file', 'read_multiple_files']
 
 function buildToolPolicy(config, hasTools, toolNames) {
   if (!hasTools) return null
@@ -186,32 +207,47 @@ function buildToolPolicy(config, hasTools, toolNames) {
   // block honest about WHICH. An empty `toolNames` therefore claims nothing,
   // which is the safe direction — a caller that cannot say what it sent does
   // not get to assert capabilities on the model's behalf.
-  const present = new Set(Array.isArray(toolNames) ? toolNames : [])
+  const names = Array.isArray(toolNames) ? toolNames : []
+  const present = new Set(names)
   const has = (name) => present.has(name)
 
   const parts = []
-  const tools = config?.webFetch?.activeTools
 
-  if (tools?.length && has('web_fetch')) {
-    const list = tools.map(t => {
+  // The allowlist. Unexpressible in a schema, and the one thing here that has
+  // always belonged in this block.
+  const webTools = config?.webFetch?.activeTools
+  if (webTools?.length && has('web_fetch')) {
+    const list = webTools.map(t => {
       let hostname = t.baseUrl
       try { hostname = new URL(t.baseUrl).hostname } catch {}
       return `- ${t.name} (${hostname})${t.description ? ` — ${t.description}` : ''}`
     }).join('\n')
-    parts.push(`You have access to the web_fetch tool to retrieve live content from approved sources.\n\nApproved sources:\n${list}\n\nOnly fetch from these approved domains. Do not attempt to access any other URLs.`)
+    parts.push(`web_fetch may only retrieve from these approved sources:\n${list}\nDo not attempt to fetch any other URL.`)
   }
 
-  // Name only the postgres tools that arrived. A list naming a tool the model
-  // does not have is the invitation to invent a call format that the whole
-  // substantiation rule exists to withdraw.
-  const postgresNames = BUILTIN_CAPABILITY_TOOL_NAMES.postgres.filter(has)
-  if (config?.postgres?.enabled && postgresNames.length > 0) {
-    parts.push(`You have access to ${andList(postgresNames)} to read from a connected local Postgres database. Queries are read-only.`)
+  // A model that does not know the transaction is READ ONLY will offer to
+  // correct the data it just read, and be believed.
+  if (READ_ONLY_SQL_TOOLS.some(has)) {
+    parts.push('The SQL tools are read-only — they cannot insert, update, delete or alter anything. Do not offer to change the data, and do not report a change as made.')
   }
 
-  if (config?.documents?.enabled && has('create_document')) {
-    parts.push('You have access to create_document to save a docx, pdf, or markdown file to a local output folder for the user.')
+  // Overlap: both tools open a file in the documents folder, and nothing in
+  // either signature says which one understands the format.
+  if (has('read_document') && FS_READ_TOOLS.some(has)) {
+    parts.push('For anything inside the documents folder, prefer read_document and list_documents over the file-system read tools: they extract text from pdf, docx and xlsx, which the file-system tools return unusable.')
   }
+
+  // The destructive class exists in tools-definitions.mjs and governs the
+  // server's own gate; until now nothing carried it to the model.
+  const destructive = names.filter(name => classifyTool(name) === 'destructive')
+  if (destructive.length > 0) {
+    parts.push(`Confirm with the user before calling ${andList(destructive.sort())}, every time. A confirmation covers one call, not a session, and never batch these.`)
+  }
+
+  // No schema has a field for what to do when the call comes back wrong, and
+  // the failure mode is specific: paraphrasing an error as the outcome the model
+  // expected is how work that never happened gets reported as done.
+  parts.push('If a tool call fails, say what it returned rather than what you expected it to do, and never retry a write or a delete without saying so first.')
 
   return parts.length ? parts.join('\n\n') : null
 }

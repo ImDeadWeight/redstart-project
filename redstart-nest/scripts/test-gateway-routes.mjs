@@ -477,15 +477,15 @@ async function main() {
     // The sharp case: enforceToolAllowList deletes `parsed.tools` outright when
     // the filter empties it, so hasTools must be read after the strip or the
     // whole capability section is claimed against a payload with no tools.
-    updateGatewayConfig({ ...baseConfig, documents: { enabled: true }, disabledTools: ['create_document'] })
+    updateGatewayConfig({ ...baseConfig, disabledTools: ['delete_file'] })
     await completions({
-      messages: [{ role: 'user', content: 'write it up' }],
-      tools: [toolDef('create_document')],
+      messages: [{ role: 'user', content: 'clear it out' }],
+      tools: [toolDef('delete_file')],
     })
     assert(!lastForwarded.tools, 'the tools array survived a total ban')
     assert(
-      !/create_document/.test(systemOf()),
-      'the prompt offered a tool the model was never sent'
+      !/Confirm with the user/.test(systemOf()),
+      'the prompt governed a tool the model was never sent'
     )
   })
 
@@ -515,13 +515,13 @@ async function main() {
   await test('🔍 with nothing banned, the claim the two tests above suppress is still made', async () => {
     // The regression guard: the ordering swap must remove claims only where a
     // ban removed the tool, never weaken the substantiated case.
-    updateGatewayConfig({ ...baseConfig, documents: { enabled: true } })
+    updateGatewayConfig(baseConfig)
     await completions({
-      messages: [{ role: 'user', content: 'write it up' }],
-      tools: [toolDef('create_document'), toolDef('fs_read_file')],
+      messages: [{ role: 'user', content: 'clear it out' }],
+      tools: [toolDef('delete_file'), toolDef('fs_read_file')],
     })
     const system = systemOf()
-    assert(/create_document/.test(system), 'a permitted capability lost its claim')
+    assert(/Confirm with the user before calling delete_file/.test(system), 'a permitted capability lost its claim')
     assert(/Two different computers/.test(system), 'a permitted client tool lost its locality block')
     updateGatewayConfig(baseConfig)
   })
@@ -606,16 +606,15 @@ async function main() {
     updateGatewayConfig({
       ...baseConfig, ctxSize: 4096,
       toolRetrieval: { enabled: true },
-      documents: { enabled: true },
     })
     await completions({
-      messages: [{ role: 'user', content: 'write it up' }],
-      tools: [toolDef('create_document')],
+      messages: [{ role: 'user', content: 'clear it out' }],
+      tools: [toolDef('delete_file')],
     })
     const names = (lastForwarded.tools || []).map(t => t.function.name)
-    const claimed = /create_document/.test(systemOf())
-    assert(claimed === names.includes('create_document'),
-      `the prompt ${claimed ? 'claimed' : 'did not claim'} a tool the payload ${names.includes('create_document') ? 'carried' : 'did not carry'}`)
+    const claimed = /Confirm with the user before calling delete_file/.test(systemOf())
+    assert(claimed === names.includes('delete_file'),
+      `the prompt ${claimed ? 'claimed' : 'did not claim'} a tool the payload ${names.includes('delete_file') ? 'carried' : 'did not carry'}`)
     updateGatewayConfig(baseConfig)
   })
 
