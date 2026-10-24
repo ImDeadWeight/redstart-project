@@ -1,0 +1,6 @@
+# deploy/ is copied onto Linux machines — a VPS, an appliance — and read by
+# wg-quick, HAProxy, systemd and Caddy there. Checked out with CRLF (this
+# repo is worked on from Windows with core.autocrlf on), those files carry a
+# carriage return into every value. Pinned to LF here only; the rest of the
+# repo keeps whatever each contributor's Git does.
+deploy/** text eol=lf
