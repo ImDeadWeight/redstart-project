@@ -169,6 +169,13 @@ jobs:
       - name: "Security: gateway routes / request rewriting"
         run: node scripts/test-gateway-routes.mjs
 
+      # deploy/ cannot be RUN in CI — no Caddy, HAProxy, WireGuard or Authelia —
+      # so this checks the properties the configs must keep, as text: the front
+      # door never proxies the admin port, the VPS never holds a key, each
+      # tunnel end routes a /32, and the ports agree with ports.mjs.
+      - name: "Deploy: proxy, relay, tunnel and portal configs keep their invariants"
+        run: node scripts/test-deploy-configs.mjs
+
       - name: "Security: control plane (admin listener authz + static allowlist)"
         run: node scripts/test-admin-listener.mjs
 

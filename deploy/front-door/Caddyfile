@@ -1,0 +1,111 @@
+# Redstart Nest — the internet-facing front door, home side.
+#
+# This is NOT the LAN proxy (../Caddyfile). That file serves the control plane
+# on :443 and must never be reachable from the internet; this one serves the
+# chat UI only, behind a login portal, and is reachable only through the VPS
+# relay. They are separate files so that forwarding one cannot expose the other.
+#
+#   work browser ──TLS──▶ VPS :443 (haproxy.cfg — raw TCP, holds no keys)
+#                  ──WireGuard──▶ THIS Caddy, on the tunnel address only
+#                  ──▶ Authelia ──▶ Nest on loopback
+#
+# TLS ends HERE, on hardware you own. The VPS relays ciphertext and never holds
+# a certificate or a key, so it can see that someone connected, never what
+# they sent. ../README.md, "The front door", is the procedure and the checklist.
+#
+# UNVERIFIED. Written from Caddy's, HAProxy's and Authelia's documentation;
+# nobody has run it.
+#
+# Placeholders to replace: chat.example.com, auth.example.com, example.com,
+# 10.66.0.1 (the VPS's tunnel address), 10.66.0.2 (this machine's), and the DNS
+# provider in the tls blocks. scripts/test-deploy-configs.mjs checks that the
+# addresses here agree with wireguard/*.conf, so change them together.
+
+{
+	# No HTTP->HTTPS redirect listener. Only 443 is relayed, and the
+	# certificate comes over DNS (below), so port 80 has nothing to do.
+	auto_https disable_redirects
+
+	servers {
+		# Every connection arrives from the VPS. The PROXY protocol header it
+		# prepends carries the real client address, which is what Authelia's
+		# lockout (regulation) keys on — without it every client, attacker or
+		# you, is one address. Accepted from the VPS's tunnel address only.
+		listener_wrappers {
+			proxy_protocol {
+				timeout 5s
+				allow 10.66.0.1/32
+			}
+			tls
+		}
+
+		# HTTP/3 is UDP, and the relay forwards TCP only. Advertising it
+		# would send browsers to try a port that answers nothing first.
+		protocols h1 h2
+	}
+}
+
+# The login portal. Public by necessity — it is where an unauthenticated
+# browser is sent — and it is the thing that faces the internet in front of
+# Nest's own login, so it is the one to keep updated.
+auth.example.com {
+	bind 10.66.0.2
+
+	# DNS-01: the certificate is issued by proving control of DNS, not of the
+	# IP the name points at. The name points at the VPS, so an HTTP challenge
+	# would be answerable BY the VPS — which could then obtain a valid
+	# certificate for your name and read everything. Pair with the CAA record
+	# in ../README.md. Needs a Caddy build with your provider's DNS module.
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+	}
+
+	reverse_proxy 127.0.0.1:9091
+}
+
+# The chat UI. Every request is checked by Authelia first; only a request it
+# accepts reaches Nest, whose own login is then the second wall.
+chat.example.com {
+	bind 10.66.0.2
+
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+	}
+
+	forward_auth 127.0.0.1:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Email Remote-Name
+	}
+
+	# Same split as the LAN proxy: the built-in MCP server is its own
+	# listener (gateway port + 2), connected to from the browser at the URL
+	# the gateway advertises — which, behind this proxy, is this origin plus
+	# /mcp (builtInMcpUrl() in tools-gateway.mjs).
+	handle /mcp {
+		reverse_proxy 127.0.0.1:19082
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:19080
+	}
+}
+
+# ---------------------------------------------------------------------------
+# What this file deliberately does not have
+# ---------------------------------------------------------------------------
+#
+# NO CONTROL PLANE. 19083 does not appear here, and the test suite fails if it
+# ever does. Administer Nest from home (loopback, or the LAN proxy), or over
+# your private door (Tailscale) — never through the front door.
+#
+# NO tls internal. A self-signed certificate on the internet is a click-through
+# warning that trains you to click through warnings, which is the one habit an
+# interception attack needs.
+#
+# NO basic_auth. The chat UI already sends its own Authorization: Bearer
+# header, and basic_auth would collide with it. Authelia's session is a cookie,
+# which does not.
+#
+# NO SATELLITE APPS. Twig, Yellowscript and Blueprints cannot pass Authelia (no
+# interactive browser login), and Blueprints cannot speak HTTPS at all. Your own
+# devices use the private door instead. See ../README.md.

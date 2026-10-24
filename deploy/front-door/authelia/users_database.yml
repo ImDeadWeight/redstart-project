@@ -1,0 +1,16 @@
+# Redstart Nest — the front door's accounts (Authelia file backend).
+#
+# These are portal accounts, separate from Nest's own. Passing the portal gets
+# a browser as far as Nest's login screen and no further.
+#
+# UNVERIFIED. Replace the placeholder with a real hash, generated with:
+#   authelia crypto hash generate argon2
+# Never commit the file once it holds a real hash.
+
+users:
+  you:
+    disabled: false
+    displayname: 'You'
+    password: '<ARGON2_HASH>'
+    email: 'you@example.com'
+    groups: []

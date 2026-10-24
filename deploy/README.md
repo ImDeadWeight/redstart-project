@@ -8,7 +8,8 @@ install needs none of it.
 |---|---|
 | `redstart-nest.service` | systemd unit — Linux |
 | `windows-service.md` | the SCM procedure — Windows |
-| `Caddyfile` | the reverse proxy that terminates TLS in front, for both planes |
+| `Caddyfile` | the reverse proxy that terminates TLS in front, for both planes — **LAN only** |
+| `front-door/` | browser access from the internet, through a VPS relay that never decrypts |
 
 **None of it has been run on a real box.** These artifacts were written from the
 design's requirements and reviewed, not executed — there is no appliance
@@ -99,6 +100,159 @@ Things to know:
   itself. If you need it remotely, set `adminBindHost` to the machine's
   Tailscale address. That is the VPN-interface case the bind address exists
   for, and it is plain HTTP inside the tunnel, which Tailscale encrypts.
+- **This is the private door for the satellite apps.** Twig, Yellowscript and
+  Blueprints on your own devices reach Nest over the tailnet at
+  `http://<machine>:19080`, exactly as they do on a LAN. They cannot use the
+  front door below. If you use plain WireGuard instead of Tailscale, connect
+  each device **straight to the Nest machine**, never through the front door's
+  VPS as a hub. A hub decrypts both tunnels, so that inner plain HTTP would be
+  readable on the VPS.
+
+## The front door: a browser on a machine you do not control
+
+**UNVERIFIED.** Every file in `front-door/` was written from its software's
+documentation. None has been run, and the syntax has not been checked.
+
+For a work computer, or anything else where you cannot install a VPN, only a
+browser is available. Every way to reach a home server from a bare browser
+puts something on the public internet; the choice is what that something is,
+and who can read the traffic. This shape answers both:
+
+```
+work browser ──TLS──▶ VPS :443   haproxy.cfg: raw TCP + PROXY v2, holds no keys
+               ──WireGuard──▶ home Caddy   front-door/Caddyfile, tunnel address only
+               ──▶ Authelia (passkey or TOTP)   authelia/configuration.yml
+               ──▶ Nest :19080 / :19082 on loopback, and Nest's own login
+```
+
+- **Only you can read the content.** TLS ends on your machine. The VPS
+  forwards ciphertext; it learns that someone connected, when, and how much
+  data moved, never what was said.
+- **Your home IP stays private, and the router stays closed.** DNS points at the
+  VPS, and home opens the tunnel outbound, so this works behind CGNAT too.
+- **Two walls.** Authelia, which is widely deployed and reviewed, faces the
+  internet. Nest's login is behind it.
+- **Browser only.** The satellite apps use the private door above.
+
+### What goes where
+
+| Machine | Runs | From |
+|---|---|---|
+| VPS | WireGuard, HAProxy | `wireguard/wg-vps.conf`, `haproxy.cfg` |
+| Home | WireGuard, Caddy, Authelia, Nest | `wireguard/wg-home.conf`, `front-door/Caddyfile`, `authelia/` |
+
+The addresses in the files (`10.66.0.1` for the VPS, `10.66.0.2` for home)
+are placeholders that have to agree with each other.
+`scripts/test-deploy-configs.mjs` checks that they do, so change them
+everywhere at once.
+
+### Procedure
+
+1. **A domain, and two names in it.** `chat.example.com` and
+   `auth.example.com`, both as A records pointing at the **VPS's** public IP.
+   If your DNS is on Cloudflare, set both to **DNS only (grey cloud)**. Proxied
+   (orange) puts Cloudflare in the middle, decrypting, which is what this
+   design avoids.
+2. **CAA, so nobody else can get a certificate for your names.** The names
+   point at the VPS, so whoever controls the VPS could otherwise pass Let's
+   Encrypt's HTTP check for them. After Caddy's first successful issuance, take
+   your ACME account URI from Caddy's storage and publish:
+
+   ```
+   example.com.  CAA 0 issue "letsencrypt.org; accounturi=<your ACME account URI>; validationmethods=dns-01"
+   ```
+
+   Certificate authorities that honour RFC 8657 then refuse any account but
+   yours, and any validation method but DNS.
+3. **The VPS.** Install WireGuard and HAProxy. Then:
+   - Lock SSH to keys only.
+   - Turn on automatic security updates.
+   - Allow exactly three things in the firewall. With ufw:
+
+   ```
+   ufw default deny incoming
+   ufw allow 22/tcp
+   ufw allow 443/tcp
+   ufw allow 51820/udp
+   ufw enable
+   ```
+
+4. **The tunnel.** Generate a key pair on each end, fill in both
+   `wireguard/*.conf`, and bring the tunnel up on both machines. From home,
+   `ping 10.66.0.1` should answer.
+5. **The home firewall: from the tunnel, 443 and nothing else.** This is not
+   optional. Anything on the home machine listening on all interfaces answers
+   on the tunnel address too. If Nest's network mode is on, that includes the
+   gateway on 19080 in plain HTTP, and a compromised VPS could walk around
+   Authelia straight to Nest's login.
+   - Windows, assuming the tunnel is named `wg-home`. Block rules beat allow
+     rules, so this overrides any rule network mode added:
+
+     ```powershell
+     New-NetFirewallRule -DisplayName "Redstart front door: 443 from the VPS" -Direction Inbound -InterfaceAlias wg-home -Protocol TCP -LocalPort 443 -RemoteAddress 10.66.0.1 -Action Allow
+     New-NetFirewallRule -DisplayName "Redstart front door: block other TCP" -Direction Inbound -InterfaceAlias wg-home -Protocol TCP -LocalPort 1-442,444-65535 -Action Block
+     New-NetFirewallRule -DisplayName "Redstart front door: block UDP" -Direction Inbound -InterfaceAlias wg-home -Protocol UDP -Action Block
+     ```
+
+   - Linux, with nftables, in the input chain:
+
+     ```
+     iifname "wg0" ip saddr 10.66.0.1 tcp dport 443 accept
+     iifname "wg0" drop
+     ```
+
+   Leave IP forwarding **off** on the home machine (the default on both
+   platforms), so the tunnel cannot be used as a route into the rest of your
+   network.
+6. **Authelia.** Write the three secret files. Hash a password into
+   `users_database.yml`. Start Authelia with the three `_FILE` variables set.
+7. **Caddy.** The certificate comes over DNS, so Caddy needs a build that
+   includes your DNS provider's module. Standard downloads do not include one.
+   Build it with `xcaddy`, or pick the module on Caddy's download page. Set the
+   provider's API token as an environment variable, scoped to DNS edits on
+   this one zone, and run `front-door/Caddyfile`. Then do step 2.
+8. **Nest.** The control plane stays on loopback. Network mode can stay as it
+   is for the LAN; the firewall in step 5 is what keeps it off the tunnel.
+9. **A work account.** In Nest, create a separate account for the work machine,
+   with a role that withholds File System, destructive operations and anything
+   else you would not want reachable from a machine you do not control. Sign out
+   when you are done there.
+
+### Checklist
+
+- [ ] From outside, `https://chat.example.com` shows **Authelia's** login, not
+      Nest's. Nest's should appear only after passing it.
+- [ ] `https://auth.example.com` has a valid certificate, with no warning.
+- [ ] Three wrong Authelia passwords from one network get **that** address
+      banned, and you can still sign in from another. That proves the PROXY
+      protocol is carrying real client addresses.
+- [ ] From the VPS: `nc -zv 10.66.0.2 443` connects, and
+      `nc -zv 10.66.0.2 19080` and `nc -zv 10.66.0.2 19083` do **not**. That
+      proves the firewall. Use a port check rather than curl here: a bare
+      request carries no PROXY header and no hostname, so its answer says
+      nothing either way.
+- [ ] Signed in, `/redstart/mcp-servers` advertises
+      `https://chat.example.com/mcp`, and the built-in tools connect.
+- [ ] A long reply streams token by token, and a slow first token (a large
+      prompt) is not cut off.
+- [ ] The CAA record is published, and a CAA checker shows it.
+- [ ] The control plane is not reachable through the front door by any path.
+
+### Things to know
+
+- **The VPS provider sees metadata.** When you connect, from which addresses,
+  and how much moves. Not the content. Pick a provider you are comfortable
+  knowing that.
+- **The work network sees the hostname.** It is sent unencrypted at the start of
+  every TLS connection (SNI). Pick a dull name.
+- **Your employer may decrypt everything anyway.** A managed machine can
+  inspect HTTPS with its own root certificate, and can record the screen.
+  Nothing on your side changes that.
+- **Authelia is now the thing to keep updated.** It is what the internet talks
+  to first.
+- **Long, silent requests are the untested edge.** HAProxy's idle limits are
+  set to an hour, but nothing has measured a real model's slowest first token
+  through this path.
 
 ## Where state lives
 

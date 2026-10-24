@@ -1,0 +1,85 @@
+# Redstart Nest — the front door's login portal (Authelia 4.38+), home side.
+#
+# Everything that reaches the chat UI from the internet passes this first, so
+# Nest's own login is the second wall rather than the only one. It runs on the
+# home machine, on loopback, behind front-door/Caddyfile.
+#
+# UNVERIFIED. Written from Authelia's documentation; nobody has run it, and
+# Authelia renames keys between minor versions — check the release you install.
+#
+# SECRETS ARE NOT IN THIS FILE. Each one is read from a file named by an
+# environment variable, so this file can be committed and copied without
+# carrying anything that unlocks the portal:
+#
+#   AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET_FILE
+#   AUTHELIA_SESSION_SECRET_FILE
+#   AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE
+#
+# Fill each file with at least 64 random characters, for example:
+#   openssl rand -hex 64 > session_secret
+#
+# The test suite fails if a secret is written inline here.
+
+server:
+  # Loopback only. Caddy is the only thing that should ever talk to it.
+  address: 'tcp://127.0.0.1:9091/'
+
+log:
+  level: 'info'
+
+theme: 'auto'
+
+totp:
+  issuer: 'redstart'
+
+# Passkeys. Phishing-resistant, and they work in any modern browser — including
+# a work machine's — without installing anything.
+webauthn:
+  disable: false
+  display_name: 'Redstart'
+
+authentication_backend:
+  # No self-service reset: it would need a working email notifier, and a reset
+  # link is one more thing that faces the internet. You reset by editing the
+  # users file at home.
+  password_reset:
+    disable: true
+  file:
+    path: '/config/users_database.yml'
+    password:
+      algorithm: 'argon2'
+
+access_control:
+  # Anything not named below is refused. A typo in a hostname therefore locks
+  # you out rather than letting everyone in.
+  default_policy: 'deny'
+  rules:
+    - domain: 'chat.example.com'
+      policy: 'two_factor'
+
+session:
+  cookies:
+    - domain: 'example.com'
+      authelia_url: 'https://auth.example.com'
+      default_redirection_url: 'https://chat.example.com'
+  # Shorter than Nest's own 30-day chat session on purpose. A work machine is
+  # not yours, and this is the wall that faces it.
+  expiration: '12h'
+  inactivity: '1h'
+
+# The lockout. It keys on the client address, which is real only because the
+# VPS sends the PROXY protocol and Caddy accepts it (see haproxy.cfg).
+regulation:
+  max_retries: 3
+  find_time: '2m'
+  ban_time: '30m'
+
+storage:
+  local:
+    path: '/config/db.sqlite3'
+
+# Registering a passkey or TOTP device sends a confirmation. With no mail
+# server it is written to this file instead, which you read at home.
+notifier:
+  filesystem:
+    filename: '/config/notification.txt'
