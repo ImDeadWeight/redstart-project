@@ -43,6 +43,7 @@ await import('./electron-stub.mjs')
 
 const { startGateway, stopGateway } = await import('../electron/main/tools-gateway.mjs')
 const { updateGatewayConfig, builtInMcpUrl } = await import('../electron/main/tools-gateway.mjs')
+const { startMcpServer, stopMcpServer } = await import('../electron/main/mcp-server.mjs')
 const { observedWireCost } = await import('../electron/main/tool-filter.mjs')
 const { EMBED_PORT } = await import('../electron/main/ports.mjs')
 const { setAuthRequired, createOwner, createAccount } = await import('../electron/main/auth.mjs')
@@ -398,6 +399,29 @@ async function main() {
     }
     return `${probes.length} probes`
   })
+
+  // The function tests above prove the decision; this proves the route uses
+  // it, with the headers arriving over HTTP the way a proxy sends them. It
+  // needs the MCP server up, because the route advertises it only then.
+  await startMcpServer(GATEWAY_PORT + 2, baseConfig)
+  try {
+    await test('🔍 through the route: proxied, the built-in server is advertised on the proxy origin', async () => {
+      const proxied = await json(await fetch(`${gw}/redstart/mcp-servers`, {
+        headers: { ...bearer(ownerToken), 'X-Forwarded-Proto': 'https', 'X-Forwarded-Host': 'chat.example.com' },
+      }))
+      const builtIn = proxied.servers.find(s => s.name === 'Redstart Built-in')
+      assert(builtIn, `no built-in entry: ${JSON.stringify(proxied.servers)}`)
+      assert(builtIn.url === 'https://chat.example.com/mcp', `got ${builtIn.url}`)
+    })
+
+    await test('through the route: direct, it is advertised on the MCP port as before', async () => {
+      const direct = await json(await fetch(`${gw}/redstart/mcp-servers`, { headers: bearer(ownerToken) }))
+      const builtIn = direct.servers.find(s => s.name === 'Redstart Built-in')
+      assert(builtIn?.url === `http://127.0.0.1:${GATEWAY_PORT + 2}/mcp`, `got ${builtIn?.url}`)
+    })
+  } finally {
+    stopMcpServer()
+  }
 
   // -------------------------------------------------------------------------
   // POST /v1/chat/completions — the one route the gateway REWRITES rather than
