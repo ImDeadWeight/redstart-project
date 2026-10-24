@@ -62,7 +62,7 @@ Prefer the IP and give the host a DHCP reservation on your router. The sslip nam
 
 **Browser access:** When Redstart Nest is running, the chat UI is also accessible directly in any browser at `http://127.0.0.1:19080` (or `http://<LAN-IP>:19080` in network mode). No app required. If login is enabled, the browser shows the login screen first (see [Accounts & login](security.md#accounts--login)).
 
-**HTTP only:** The LAN connection uses plain HTTP. HTTPS with self-signed certificates was tried and abandoned — Android WebView rejects them without manual cert trust, which is too much friction for a home tool. Proper transport security is on the roadmap, likely via a lightweight CA or certificate pinning approach, and becomes more important as the project moves toward small business use.
+**HTTP only:** Nest itself speaks plain HTTP and will not terminate TLS. HTTPS with self-signed certificates was tried early and abandoned (Android WebView rejects them without manual cert trust), and the later design settled on a reverse proxy in front as the answer rather than certificate handling inside Nest — the same answer Home Assistant, Jellyfin and Proxmox give. [`deploy/`](../deploy/README.md) carries a Caddy config for both the chat UI and the admin UI, and a Tailscale Serve recipe for remote access by a few people; both are unverified (see [Known gaps](security.md#known-gaps)).
 
 ---
 

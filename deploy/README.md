@@ -8,7 +8,7 @@ install needs none of it.
 |---|---|
 | `redstart-nest.service` | systemd unit — Linux |
 | `windows-service.md` | the SCM procedure — Windows |
-| `Caddyfile` | the reverse proxy that terminates TLS in front |
+| `Caddyfile` | the reverse proxy that terminates TLS in front, for both planes |
 
 **None of it has been run on a real box.** These artifacts were written from the
 design's requirements and reviewed, not executed — there is no appliance
@@ -21,19 +21,84 @@ correct something.
 ## The shape
 
 ```
-                     :443
+                     :443 (admin)
+                     :8443 (chat)
   [ browser ] ─────────────▶ [ Caddy ]
                                  │  plain HTTP, loopback only
                                  ▼
                           :19083  Redstart Nest — control plane
                                   (admin UI, configuration, process control)
-                          :19080  gateway — inference and tools, with the
-                                  model process behind it on 19081
+                          :19080  gateway — the chat UI and inference, with
+                                  the model process behind it on 19081
+                          :19082  built-in MCP server, routed as /mcp on
+                                  the chat site
 ```
 
 Nest does not do TLS at any layer, and that is settled rather than missing
 (design §3.3). The proxy in front handles certificates and renewal properly;
 building a worse version of that inside Nest was considered and rejected.
+
+Both planes go behind it. The gateway is what people use every day: logins,
+session tokens, conversations and tool calls. A proxy that covered only the
+admin UI would encrypt the rarely used half. Leave **network mode off** so the
+proxy is the only route in. Network mode binds the gateway and MCP server to
+every interface, and they then answer in the clear beside it.
+
+**The built-in tools follow the proxy.** The chat UI connects to the MCP server
+from the browser, at a URL the gateway advertises. Behind a proxy that sets
+`X-Forwarded-Proto`, the gateway advertises the proxy's own origin plus `/mcp`
+rather than `http://<host>:19082/mcp`. The proxy has to route `/mcp` to 19082
+for that URL to work. See the Caddyfile's "TOOLS IN THE CHAT UI" note.
+
+## Remote access for a few people: Tailscale Serve
+
+**UNVERIFIED.** Written from Tailscale's documented behaviour; nobody has run
+it against Nest yet.
+
+For one household or a handful of people who need Nest away from home, this
+replaces both Caddy and port forwarding, and it works on a Windows desktop
+install as well as at level 3. Every device joins your tailnet. Nest stays on
+loopback, nothing on the router is opened, and Tailscale terminates HTTPS with
+a real certificate for the machine's `*.ts.net` name, so there is no
+click-through warning.
+
+Prerequisites, in the Tailscale admin console: **MagicDNS** on, and **HTTPS
+certificates** enabled. Then, on the Nest machine:
+
+```
+tailscale serve --bg 19080
+tailscale serve --bg --set-path /mcp http://127.0.0.1:19082/mcp
+tailscale serve status
+```
+
+The chat UI is then at `https://<machine>.<tailnet>.ts.net` from any device on
+the tailnet. `tailscale serve reset` undoes it.
+
+Things to know:
+
+- **Serve, not Funnel.** Serve is reachable only from your tailnet. Funnel
+  publishes the same thing to the whole internet, which is the port forward
+  this section exists to avoid.
+- **The `/mcp` mapping is the part most likely to need correcting.** Check it
+  with `curl -i https://<machine>.<tailnet>.ts.net/mcp`. A `401` means the
+  request reached the MCP server and was refused for having no credential,
+  which is correct. A `404` means the path was rewritten on the way. The same
+  check applies to the Caddy block.
+- **The built-in tools depend on what Serve forwards.** Nest advertises the
+  `ts.net` origin only if Serve sends `X-Forwarded-Proto`, plus either the
+  original `Host` or `X-Forwarded-Host`. Signed in, open `/redstart/mcp-servers`:
+  the built-in entry should read `https://<machine>.<tailnet>.ts.net/mcp`. An
+  `http://…:19082` URL there means Serve sent neither header, and the tools
+  will not connect.
+- **The machine name becomes public.** The certificate is logged in public
+  Certificate Transparency logs, which publishes `<machine>.<tailnet>.ts.net`.
+  It does not make the machine reachable; it does make the name known.
+- **Every caller arrives from loopback**, as behind Caddy, so the login rate
+  limit is one shared bucket.
+- **Leave the control plane on loopback** and administer Nest from the machine
+  itself. If you need it remotely, set `adminBindHost` to the machine's
+  Tailscale address. That is the VPN-interface case the bind address exists
+  for, and it is plain HTTP inside the tunnel, which Tailscale encrypts.
 
 ## Where state lives
 

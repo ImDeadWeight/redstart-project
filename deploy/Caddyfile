@@ -13,7 +13,10 @@
 # a real deployment yet.
 #
 # ---------------------------------------------------------------------------
-# Pick ONE of the two blocks below.
+# Pick ONE of the two shapes below. Each has a CONTROL-PLANE block (19083, the
+# admin UI) and a DATA-PLANE block (19080, the chat UI and inference, with the
+# built-in MCP server's /mcp beside it). They are separate sites on purpose —
+# see "THE DATA PLANE IS SEPARATE" at the bottom.
 # ---------------------------------------------------------------------------
 
 # (1) A REAL DOMAIN. Caddy obtains and renews a publicly trusted certificate
@@ -22,6 +25,15 @@
 #
 # nest.example.com {
 #     reverse_proxy 127.0.0.1:19083
+# }
+#
+# chat.example.com {
+#     handle /mcp {
+#         reverse_proxy 127.0.0.1:19082
+#     }
+#     handle {
+#         reverse_proxy 127.0.0.1:19080
+#     }
 # }
 
 # (2) NO DOMAIN — the small-operator case, and the one that looks worst while
@@ -34,6 +46,27 @@
 :443 {
 	tls internal
 	reverse_proxy 127.0.0.1:19083
+}
+
+# The data plane, on a port of its own because both sites cannot share :443
+# without a hostname to tell them apart. The browser reaches it at
+# https://<this-box>:8443. Expect a second click-through: the warning is per
+# origin, and this is a different one.
+:8443 {
+	tls internal
+
+	# The built-in MCP server is a separate listener (gateway port + 2) that the
+	# chat UI connects to from the BROWSER, not through the gateway. Serving it
+	# on the same origin keeps it inside the TLS and avoids a mixed-content
+	# block. It answers /mcp and nothing else, so the exact path is the whole
+	# route. See "TOOLS IN THE CHAT UI" below for how the chat UI learns it.
+	handle /mcp {
+		reverse_proxy 127.0.0.1:19082
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:19080
+	}
 }
 
 # ---------------------------------------------------------------------------
@@ -60,5 +93,36 @@
 # apply its own per-client limits if that matters for a deployment.
 #
 # THE DATA PLANE IS SEPARATE. The gateway (19080) serves inference and the chat
-# UI and has its own auth setting; it is not proxied here. Add a block for it
-# deliberately if it should be reachable, rather than by widening this one.
+# UI and has its own auth setting, so it gets its own site rather than a path
+# under the control plane's. Two sites keep "who can reach the admin UI" a
+# question with its own answer: drop the control-plane block and the chat
+# stays up, and the reverse holds too.
+#
+# THE DATA PLANE STAYS ON LOOPBACK TOO. Leave network mode OFF. Network mode
+# binds the gateway and the MCP server to every interface, and then 19080 and
+# 19082 answer in the clear beside this proxy — the same decoration problem as
+# above. It also starts the Windows clean-URL proxy on port 80, which Caddy
+# needs for HTTP->HTTPS redirects and, with a real domain, the ACME challenge.
+#
+# STREAMING. Completions, the MCP transport and the live event feed are all
+# server-sent events. Caddy flushes text/event-stream responses immediately by
+# default, so no flush_interval is set here. If replies arrive all at once
+# instead of token by token, this is the first thing to suspect.
+#
+# THE GATEWAY IS UP ONLY WHILE A MODEL IS RUNNING. With no model loaded, the
+# data-plane site answers 502. That is Caddy reporting nothing behind it, not a
+# proxy fault.
+#
+# RATE LIMITING ON THE CHAT LOGIN. The shared-bucket point above matters more
+# here than on the control plane: every account's login attempts, from every
+# device, land in the one bucket. Stock Caddy has no rate-limit directive (it
+# is a third-party module), so this file sets none.
+#
+# TOOLS IN THE CHAT UI. The gateway tells the chat UI where the built-in MCP
+# server is (GET /redstart/mcp-servers), and the browser connects to that URL
+# itself. When the request carries X-Forwarded-Proto, which Caddy sets on
+# every proxied request, Nest advertises <proto>://<host>/mcp: this site's own
+# origin, which the /mcp route above serves. Without it, Nest advertises
+# http://<host>:19082/mcp, which an https page will not call. If the built-in
+# tools do not connect, open /redstart/mcp-servers and check which URL came
+# back. builtInMcpUrl() in tools-gateway.mjs is the code.
