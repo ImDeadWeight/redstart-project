@@ -42,7 +42,7 @@ register('./auth-test-loader.mjs', import.meta.url)
 await import('./electron-stub.mjs')
 
 const { startGateway, stopGateway } = await import('../electron/main/tools-gateway.mjs')
-const { updateGatewayConfig } = await import('../electron/main/tools-gateway.mjs')
+const { updateGatewayConfig, builtInMcpUrl } = await import('../electron/main/tools-gateway.mjs')
 const { observedWireCost } = await import('../electron/main/tool-filter.mjs')
 const { EMBED_PORT } = await import('../electron/main/ports.mjs')
 const { setAuthRequired, createOwner, createAccount } = await import('../electron/main/auth.mjs')
@@ -353,6 +353,50 @@ async function main() {
       `expected the live ban list, got ${JSON.stringify(body.disabledTools)}`
     )
     updateGatewayConfig(baseConfig)
+  })
+
+  // The route only advertises the built-in server while it runs, and this
+  // suite starts no MCP server — so the URL itself is asserted on the function.
+  await test('a direct client is told the Host it used, on the MCP port', async () => {
+    const url = builtInMcpUrl({ host: '192.168.1.20:19080' }, 19080)
+    assert(url === 'http://192.168.1.20:19082/mcp', `got ${url}`)
+  })
+
+  await test('🔍 behind a TLS proxy the client is told the proxy origin, not port+2', async () => {
+    // What Caddy sends: Host preserved, X-Forwarded-Proto set. An https page
+    // refuses an http URL, so getting this wrong means no built-in tools.
+    const viaHost = builtInMcpUrl({ host: 'nest.lan:8443', 'x-forwarded-proto': 'https' }, 19080)
+    assert(viaHost === 'https://nest.lan:8443/mcp', `got ${viaHost}`)
+    const viaForwardedHost = builtInMcpUrl({
+      host: '127.0.0.1:19080',
+      'x-forwarded-proto': 'https',
+      'x-forwarded-host': 'box.tailnet.ts.net',
+    }, 19080)
+    assert(viaForwardedHost === 'https://box.tailnet.ts.net/mcp', `got ${viaForwardedHost}`)
+  })
+
+  await test('a proxy chain is read from its client-facing (first) hop', async () => {
+    const url = builtInMcpUrl({
+      host: '127.0.0.1:19080',
+      'x-forwarded-proto': 'https, http',
+      'x-forwarded-host': 'chat.example.com, inner.proxy',
+    }, 19080)
+    assert(url === 'https://chat.example.com/mcp', `got ${url}`)
+  })
+
+  await test('🔍 malformed forwarded headers fall back to the direct URL, never echo', async () => {
+    const probes = [
+      { 'x-forwarded-proto': 'javascript' },
+      { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'evil.example/path' },
+      { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'user@evil.example' },
+      { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'a b' },
+      { 'x-forwarded-proto': '' },
+    ]
+    for (const extra of probes) {
+      const url = builtInMcpUrl({ host: '192.168.1.20:19080', ...extra }, 19080)
+      assert(url === 'http://192.168.1.20:19082/mcp', `${JSON.stringify(extra)} produced ${url}`)
+    }
+    return `${probes.length} probes`
   })
 
   // -------------------------------------------------------------------------

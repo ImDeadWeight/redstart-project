@@ -21,7 +21,9 @@
 // is the awkward one and it is deliberately not solved by trusting
 // X-Forwarded-For: a header the client controls is not an identity, and behind
 // no proxy it is a way to get a fresh bucket per request. So this is a brake on
-// automated guessing, not an access control. What actually makes the secrets
+// automated guessing, not an access control. (The one place Nest does read a
+// forwarded header, builtInMcpUrl() in tools-gateway.mjs, decides only which
+// URL a caller is told, never who it is.) What actually makes the secrets
 // unguessable is their entropy — 32 CSPRNG bytes for the token, scrypt for the
 // password — and the limit exists so a slow attempt is also a loud one.
 //
