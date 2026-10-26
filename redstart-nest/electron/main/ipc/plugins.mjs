@@ -40,7 +40,7 @@ import {
   listPlugins, getPlugin, addPlugin, updatePlugin,
   PLUGIN_ID_PATTERN, VALID_TOOL_CLASSES, sanitizeDisplayName, suggestDisplayName,
 } from '../plugin-registry.mjs'
-import { installNpmPackage, installPypiPackage, probePlugin, uninstallPlugin } from '../plugin-install.mjs'
+import { installNpmPackage, installPypiPackage, probePlugin, uninstallPlugin, normalizeConstraints } from '../plugin-install.mjs'
 import { encryptSecret, decryptSecret } from '../secrets.mjs'
 import { searchRegistry, verdictFor, formFieldsFor } from '../plugin-registry-api.mjs'
 
@@ -177,6 +177,15 @@ export async function installPlugin(req) {
   if (!optional(timeoutMs, (v) => typeof v === 'number')) {
     return refuse('plugins:install', 'timeoutMs must be a number.')
   }
+  // Checked here as well as in the installer so a bad constraint is refused
+  // before a runtime is detected or a directory created. Only package sources
+  // take them; on a path or command source the field is meaningless.
+  let constraints = []
+  if (source.kind === 'npm' || source.kind === 'pypi') {
+    const checked = normalizeConstraints(source.kind, source.constraints)
+    if (!checked.ok) return refuse('plugins:install', `Invalid constraint: ${checked.error}.`)
+    constraints = checked.constraints
+  }
 
   // Values arrive in plaintext for this one round trip — the probe spawns a
   // real child and needs them. Nothing here is written to disk; encryption
@@ -204,7 +213,7 @@ export async function installPlugin(req) {
       }
       sendProgress({ state: 'resolving', message: 'Checking npm...' })
       const result = await installNpmPackage({
-        id, packageName: source.packageName, version: source.version,
+        id, packageName: source.packageName, version: source.version, constraints,
         onProgress: sendProgress, signal: controller.signal,
       })
       if (!result.ok) {
@@ -227,7 +236,7 @@ export async function installPlugin(req) {
       }
       sendProgress({ state: 'resolving', message: 'Checking uv...' })
       const result = await installPypiPackage({
-        id, identifier: source.identifier, version: source.version,
+        id, identifier: source.identifier, version: source.version, constraints,
         onProgress: sendProgress, signal: controller.signal,
       })
       if (!result.ok) {
@@ -318,6 +327,18 @@ export function confirmPluginInstall(entry, { refreshLiveToolsConfig }) {
     }
   }
 
+  // Constraints are stored on the source as a record of what the install was
+  // narrowed by — the card shows them. Nothing re-applies them: there is no
+  // reinstall path (see docs/roadmap.md). Normalised here too: this is the
+  // write, and the renderer is untrusted.
+  let storedSource = isPlainObject(source) ? source : null
+  if (storedSource && (storedSource.kind === 'npm' || storedSource.kind === 'pypi')) {
+    const checked = normalizeConstraints(storedSource.kind, storedSource.constraints)
+    if (!checked.ok) return refuse('plugins:confirm-install', `Invalid constraint: ${checked.error}.`)
+    const { constraints: _dropped, ...rest } = storedSource
+    storedSource = checked.constraints.length > 0 ? { ...rest, constraints: checked.constraints } : rest
+  }
+
   const plainEnv = runAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}
   const envEnc = {}
   if (isPlainObject(env)) {
@@ -340,7 +361,7 @@ export function confirmPluginInstall(entry, { refreshLiveToolsConfig }) {
   const plugin = {
     id,
     displayName: isNonEmptyString(displayName) ? displayName : id,
-    source: isPlainObject(source) ? source : null,
+    source: storedSource,
     resolvedCommand,
     resolvedArgs: Array.isArray(resolvedArgs) ? resolvedArgs : [],
     resolvedVersion: typeof resolvedVersion === 'string' ? resolvedVersion : null,

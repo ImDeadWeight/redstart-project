@@ -119,7 +119,116 @@ await test('buildUvInstallArgs() includes tool install, --python-preference only
   assert(args.includes('--python-preference'), `--python-preference missing from argv: ${JSON.stringify(args)}`)
   assert(args.includes('only-managed'), `"only-managed" missing from argv: ${JSON.stringify(args)}`)
   assert(args.includes('armor-mcp==0.6.1'), 'the pinned package==version spec is missing')
+  assert(args[args.indexOf('--color') + 1] === 'never', `--color never missing from argv: ${JSON.stringify(args)}`)
   return args.join(' ')
+})
+
+await test('parseUvInstallOutput() strips ANSI bold from the executable name (mtg-mcp regression)', async () => {
+  // The exact shape that failed live: the name arrived as "\x1b[1mmtg-mcp\x1b[0m"
+  // and became the path of a non-existent .exe.
+  const stderr = 'Resolved 12 packages in 1.2s\n + \x1b[1mmtg-mcp\x1b[0m\x1b[2m==0.3.1\x1b[0m\nInstalled 1 executable: \x1b[1mmtg-mcp\x1b[0m\n'
+  const parsed = install.parseUvInstallOutput(stderr, 'mtg-mcp')
+  assert(JSON.stringify(parsed.names) === '["mtg-mcp"]', `expected ["mtg-mcp"], got ${JSON.stringify(parsed.names)}`)
+  assert(parsed.resolvedVersion === '0.3.1', `expected resolved version 0.3.1, got ${parsed.resolvedVersion}`)
+  return parsed.names[0]
+})
+
+console.log('\n-- dependency constraints (network-free) --')
+
+await test('normalizeConstraints() accepts plain version constraints for each kind, and an absent list', async () => {
+  const pypi = install.normalizeConstraints('pypi', ['mcp<2', ' pydantic >= 2 , < 3 ', '', 'Foo.Bar_baz~=1.4'])
+  assert(pypi.ok, `pypi rejected: ${pypi.error}`)
+  assert(pypi.constraints.length === 3, `blank lines should be dropped, got ${JSON.stringify(pypi.constraints)}`)
+  const npm = install.normalizeConstraints('npm', ['zod@^3', '@modelcontextprotocol/sdk@1.29.0', 'left-pad@>=1.0.0 <2 || 3.x'])
+  assert(npm.ok, `npm rejected: ${npm.error}`)
+  assert(install.normalizeConstraints('npm', undefined).ok, 'an absent list must be valid')
+  return 'ok'
+})
+
+await test('normalizeConstraints() refuses anything that could swap in code from another source', async () => {
+  const refused = {
+    pypi: [
+      '--index-url https://evil.example/simple', // option line in a constraints file
+      'mcp<2\n--index-url https://evil.example', // smuggled second line
+      'mcp\n==1',
+      'mcp @ https://evil.example/mcp.whl', // direct reference
+      'mcp[cli]<2', // extras install more than they constrain
+      'mcp', // no comparison — constrains nothing
+      '-r other.txt',
+    ],
+    npm: [
+      'zod@npm:evil-zod@1', // alias
+      'zod@file:../evil', // local path
+      'zod@git+https://evil.example/zod.git',
+      'zod@evil/zod', // GitHub shorthand
+      'zod@$zod', // root-dependency reference
+      'zod', // no range
+      '@scope@1',
+    ],
+  }
+  for (const [kind, list] of Object.entries(refused)) {
+    for (const c of list) {
+      assert(!install.normalizeConstraints(kind, [c]).ok, `${kind} accepted ${JSON.stringify(c)}`)
+    }
+  }
+  assert(!install.normalizeConstraints('pypi', ['mcp<2', 'MCP>=1']).ok, 'duplicate names (case-insensitive) accepted')
+  assert(!install.normalizeConstraints('command', ['mcp<2']).ok, 'a command source accepted constraints')
+  assert(!install.normalizeConstraints('pypi', 'mcp<2').ok, 'a bare string accepted in place of a list')
+  return `${refused.pypi.length + refused.npm.length} refused`
+})
+
+await test('npm constraints become overrides; pypi constraints become --constraints before the spec', async () => {
+  const overrides = install.buildNpmOverrides(['zod@^3', '@modelcontextprotocol/sdk@1.29.0'])
+  assert(overrides.zod === '^3' && overrides['@modelcontextprotocol/sdk'] === '1.29.0', `got ${JSON.stringify(overrides)}`)
+  const args = install.buildUvInstallArgs({ spec: 'mtg-mcp==0.1.3', constraintsPath: 'C:\\fake\\constraints.txt' })
+  const i = args.indexOf('--constraints')
+  assert(i > 0 && args[i + 1] === 'C:\\fake\\constraints.txt', `--constraints missing: ${JSON.stringify(args)}`)
+  assert(args[args.length - 1] === 'mtg-mcp==0.1.3', 'the spec must stay last')
+  assert(!install.buildUvInstallArgs({ spec: 'x==1' }).includes('--constraints'), '--constraints passed with no constraints')
+  return args.join(' ')
+})
+
+await test('installers refuse a bad constraint before touching the filesystem', async () => {
+  const npm = await install.installNpmPackage({ id: 'badconstraint', packageName: 'x', version: '1.0.0', constraints: ['zod@file:../evil'] })
+  const pypi = await install.installPypiPackage({ id: 'badconstraint', identifier: 'x', version: '1.0.0', constraints: ['--index-url x'] })
+  for (const r of [npm, pypi]) {
+    assert(r.ok === false && r.reason === 'bad-constraint', `expected bad-constraint, got ${JSON.stringify(r)}`)
+  }
+  assert(!fs.existsSync(path.join(install.pluginsRoot(), 'badconstraint')), 'a directory was created for a refused install')
+  return 'bad-constraint'
+})
+
+await test('the install handler refuses a bad constraint; confirm stores only normalised ones', async () => {
+  const ipc = await import('../electron/main/ipc/plugins.mjs')
+  const refused = await ipc.installPlugin({
+    id: 'ipcbadconstraint',
+    source: { kind: 'pypi', identifier: 'x', version: '1', constraints: ['mcp<2\n--index-url https://evil.example'] },
+  })
+  assert(refused.ok === false && /constraint/i.test(refused.error ?? ''), `expected a constraint refusal, got ${JSON.stringify(refused)}`)
+
+  const entry = (id, constraints) => ({
+    id, source: { kind: 'pypi', identifier: 'x', version: '1', constraints },
+    resolvedCommand: process.execPath, resolvedArgs: [], runAsNode: false,
+    tools: [{ name: 't', description: '', inputSchema: {}, class: 'destructive' }],
+  })
+  const deps = { refreshLiveToolsConfig: () => {} }
+  const bad = ipc.confirmPluginInstall(entry('ipcconfirmbad', ['zod@file:../evil']), deps)
+  assert(bad.ok === false, 'confirm stored an invalid constraint')
+  assert(!registry.getPlugin('ipcconfirmbad'), 'a refused confirm still wrote an entry')
+
+  const good = ipc.confirmPluginInstall(entry('ipcconfirmgood', [' mcp<2 ', '']), deps)
+  assert(good.ok, `confirm failed: ${good.error}`)
+  const stored = registry.getPlugin('ipcconfirmgood').source.constraints
+  assert(JSON.stringify(stored) === '["mcp<2"]', `expected ["mcp<2"] stored, got ${JSON.stringify(stored)}`)
+  registry.removePlugin('ipcconfirmgood')
+  return 'refused, then stored ["mcp<2"]'
+})
+
+await test('parseUvInstallOutput() reads plain multi-executable output', async () => {
+  const parsed = install.parseUvInstallOutput(' + pip-tools==7.4.1\nInstalled 2 executables: pip-compile, pip-sync\n', 'pip-tools')
+  assert(JSON.stringify(parsed.names) === '["pip-compile","pip-sync"]', `got ${JSON.stringify(parsed.names)}`)
+  assert(parsed.resolvedVersion === '7.4.1', `got ${parsed.resolvedVersion}`)
+  return parsed.names.join(', ')
 })
 
 // ---------------------------------------------------------------------------
@@ -306,6 +415,24 @@ if (!online) {
     return `entry: ${result.args[0]}`
   })
 
+  await test('an npm constraint pins a transitive dependency below what the package\'s own range resolves', async () => {
+    // server-memory declares @modelcontextprotocol/sdk ^1.29.0; unconstrained,
+    // that resolves to the newest 1.x. The override must hold it at 1.29.0.
+    const result = await withTimeout(
+      install.installNpmPackage({
+        id: 'constrainednpm', packageName: '@modelcontextprotocol/server-memory', version: '2026.7.4',
+        constraints: ['@modelcontextprotocol/sdk@1.29.0'],
+      }),
+      120000, 'installNpmPackage constrained',
+    )
+    assert(result.ok, `install failed: ${result.reason} ${result.detail ?? ''}`)
+    const lock = JSON.parse(fs.readFileSync(path.join(result.dir, 'package-lock.json'), 'utf8'))
+    const sdk = lock.packages?.['node_modules/@modelcontextprotocol/sdk']?.version
+    assert(sdk === '1.29.0', `expected sdk 1.29.0 under the override, got ${sdk}`)
+    fs.rmSync(result.dir, { recursive: true, force: true })
+    return `sdk ${sdk}`
+  })
+
   await test('a nonexistent package returns reason: package-not-found', async () => {
     const result = await withTimeout(
       install.installNpmPackage({ id: 'nopkgtest', packageName: 'redstart-definitely-does-not-exist-xyz-123', version: '1.0.0' }),
@@ -375,6 +502,20 @@ if (!uv.ok) {
       assert(result.resolvedVersion === '6.1', `expected resolvedVersion "6.1" (parsed from uv's own "+ cowsay==6.1" line), got "${result.resolvedVersion}"`)
       fs.rmSync(result.dir, { recursive: true, force: true })
       return `entry: ${result.command}`
+    })
+
+    await test('a pypi constraint pins a dependency below what the package\'s own range resolves', async () => {
+      // markdown-it-py 3.0.0 declares mdurl~=0.1; unconstrained, that resolves
+      // to the newest 0.1.x. The constraints file must hold it at 0.1.0.
+      const result = await withTimeout(
+        install.installPypiPackage({ id: 'constrainedpypi', identifier: 'markdown-it-py', version: '3.0.0', constraints: ['mdurl==0.1.0'] }),
+        120000, 'installPypiPackage constrained',
+      )
+      assert(result.ok, `install failed: ${result.reason} ${result.detail ?? ''}`)
+      const found = fs.readdirSync(result.dir, { recursive: true }).map(String).filter((p) => /mdurl-[^\\/]+\.dist-info$/.test(p))
+      assert(found.length === 1 && found[0].endsWith('mdurl-0.1.0.dist-info'), `expected mdurl 0.1.0 under the constraint, found ${JSON.stringify(found)}`)
+      fs.rmSync(result.dir, { recursive: true, force: true })
+      return path.basename(found[0])
     })
 
     await test('a nonexistent pypi package returns reason: package-not-found', async () => {

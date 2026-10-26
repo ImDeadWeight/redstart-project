@@ -171,12 +171,14 @@ export type RedstartAPI = {
     // confirmInstall. `env` values are plaintext for this one round trip only.
     install: (req: {
       id: string
-      source: { kind: 'npm'; packageName: string; version: string }
+      // `constraints` narrow a dependency's version on top of the package's
+      // own ranges: "zod@^3" for npm, "mcp<2" for pypi. Validated server-side.
+      source: { kind: 'npm'; packageName: string; version: string; constraints?: string[] }
         // Installed via uv, not npm. Field is `identifier` (pypi's
         // own term, matches the registry API's package entries) rather than
         // `packageName`, so the source object's own shape says which
         // resolver it needs.
-        | { kind: 'pypi'; identifier: string; version: string }
+        | { kind: 'pypi'; identifier: string; version: string; constraints?: string[] }
         | { kind: 'command'; command: string; args?: string[] }
         | { kind: 'path'; path: string }
       env?: Record<string, { value: string; isSecret: boolean }>
@@ -247,7 +249,7 @@ export type RedstartAPI = {
 export type PluginSummary = {
   id: string
   displayName: string
-  source: { kind: 'npm' | 'pypi' | 'path' | 'command'; packageName?: string; identifier?: string; version?: string; path?: string; command?: string } | null
+  source: { kind: 'npm' | 'pypi' | 'path' | 'command'; packageName?: string; identifier?: string; version?: string; constraints?: string[]; path?: string; command?: string } | null
   resolvedVersion: string | null
   enabled: boolean            // registry master switch (Plugins tab), NOT activeToolIds
   allowWrite: boolean

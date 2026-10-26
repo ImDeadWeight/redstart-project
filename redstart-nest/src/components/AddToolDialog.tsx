@@ -83,6 +83,9 @@ const initialState = {
   // actually consumes them.
   npmPackage: '',
   npmVersion: '',
+  // One per line; npm or pypi syntax depending on which resolver runs. The
+  // server validates — see normalizeConstraints in plugin-install.mjs.
+  constraints: '',
   localPath: '',
   command: '',
   commandArgs: '',
@@ -107,6 +110,9 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
     setState((prev) => ({ ...prev, [key]: value }))
 
   if (!open) return null
+
+  const isPypiSource = s.sourceKind === 'pypi' || (s.sourceKind === 'registry' && s.registryType === 'pypi')
+  const isPackageSource = s.sourceKind === 'npm' || s.sourceKind === 'pypi' || (s.sourceKind === 'registry' && !!s.registrySelected)
 
   function reset() {
     setState(initialState)
@@ -180,10 +186,10 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
     if (s.sourceKind === 'command') {
       return { kind: 'command' as const, command: s.command, args: s.commandArgs.split(/\s+/).filter(Boolean) }
     }
-    const isPypi = s.sourceKind === 'pypi' || (s.sourceKind === 'registry' && s.registryType === 'pypi')
-    return isPypi
-      ? { kind: 'pypi' as const, identifier: s.npmPackage, version: s.npmVersion }
-      : { kind: 'npm' as const, packageName: s.npmPackage, version: s.npmVersion }
+    const constraints = s.constraints.split('\n').map((c) => c.trim()).filter(Boolean)
+    return isPypiSource
+      ? { kind: 'pypi' as const, identifier: s.npmPackage, version: s.npmVersion, constraints }
+      : { kind: 'npm' as const, packageName: s.npmPackage, version: s.npmVersion, constraints }
   }
 
   // Picking itself lives in FolderPicker.tsx; this applies
@@ -330,6 +336,19 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
                   <label className="block text-xs text-zinc-400">Version (pinned — no ranges, no "latest")</label>
                   <input className={inputCls.sm} placeholder="0.6.1" value={s.npmVersion}
                     onChange={(e) => set('npmVersion', e.target.value)} />
+                </div>
+              )}
+
+              {isPackageSource && (
+                <div className="space-y-1">
+                  <label className="block text-xs text-zinc-400">Dependency constraints (optional, one per line)</label>
+                  <p className="text-xs text-zinc-600">
+                    Narrows a dependency the package pulls in, for when its own range lets in a version it breaks on.
+                    {isPypiSource ? ' A name and version comparisons, e.g. mcp<2.' : ' A name, @, and a version range, e.g. zod@^3.'}
+                  </p>
+                  <textarea className={inputCls.sm + ' font-mono'} rows={2} spellCheck={false}
+                    placeholder={isPypiSource ? 'mcp<2' : 'zod@^3'} value={s.constraints}
+                    onChange={(e) => set('constraints', e.target.value)} />
                 </div>
               )}
 
