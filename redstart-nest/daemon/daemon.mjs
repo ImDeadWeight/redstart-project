@@ -184,7 +184,7 @@ function resolveBinary() {
   const name = serverBinaryName()
 
   if (isPackaged()) {
-    // Packaged: binary is placed at resources/bin/ via extraResources in electron-builder.json
+    // Packaged: binary is placed at resources/bin/ by scripts/stage-shell-bundle.mjs
     candidates.push(path.join(resourcesDir(), 'bin', name))
   } else {
     // Dev: look in the project tree

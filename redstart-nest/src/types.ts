@@ -275,7 +275,7 @@ export type StartupState = {
   error?: string
 }
 
-// The Windows auto-updater (daemon/auto-update.mjs), as
+// The desktop shell's auto-updater (shell/src/update.rs), as
 // admin:get-update reports it and update:status events push it.
 export type UpdateStatus = {
   state: 'idle' | 'checking' | 'downloading' | 'ready' | 'error'

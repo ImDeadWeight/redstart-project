@@ -1,4 +1,4 @@
-//! The shell's auto-updater: `daemon/auto-update.mjs`'s behaviour on
+//! The shell's auto-updater: the Electron updater's behaviour, on
 //! Tauri's signed updater (plan D6). Release builds on Windows only.
 //!
 //! The split of work:

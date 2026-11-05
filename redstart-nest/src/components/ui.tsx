@@ -134,11 +134,11 @@ import { useTauriWindow, type TauriWindow } from '../hooks/useTauriWindow'
 // ---------------------------------------------------------------------------
 // The window's top bar — and, in Electron, its title bar.
 // ---------------------------------------------------------------------------
-// ONE component for both screens. The native title bar is hidden and Electron
-// paints only the minimise/maximise/close buttons over the top 48px, so
-// whatever occupies that strip is the title bar: h-12 here must stay equal to
-// titleBarOverlay.height in daemon/index.mjs or the buttons will not
-// line up with it.
+// ONE component for both screens. In the desktop shell there is no OS title
+// bar, so whatever occupies the top 48px IS the title bar: on Windows it
+// carries the page-drawn window buttons (WindowControls below, full height),
+// on macOS the native traffic lights sit over its left end. h-12 here must
+// stay equal to index.html's pre-mount bar (test-packaging.mjs checks it).
 //
 // It exists because the sign-in screen used to draw its own invisible drag
 // strip instead, which left the window buttons floating over a bare background

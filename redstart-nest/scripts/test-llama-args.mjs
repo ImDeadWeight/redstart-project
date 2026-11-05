@@ -9,7 +9,7 @@
 // future change ever wires --host to a config field (e.g. a "network mode"
 // toggle), these tests fail loudly.
 //
-// buildArgs() was extracted out of daemon/index.mjs specifically so this
+// buildArgs() was extracted out of the old Electron main process (electron/main/index.mjs) specifically so this
 // invariant can be exercised without booting Electron. Phase 8A.5 finished that
 // job: the packaged-build check that picks the chat-ui path reads
 // platform-paths.mjs's isPackaged() now instead of app.isPackaged, so there is

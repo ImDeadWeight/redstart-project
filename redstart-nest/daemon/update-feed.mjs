@@ -28,9 +28,9 @@
 export const UPDATE_REPO = Object.freeze({ owner: 'ImDeadWeight', repo: 'redstart-project' })
 
 /**
- * The update manifest's base name for this app. electron-builder.json's
- * win.publish.channel writes `${UPDATE_CHANNEL}.yml`. The two must match, and
- * scripts/test-update-feed.mjs checks that they do.
+ * The update manifest's base name for this app. The release writes
+ * `${UPDATE_CHANNEL}.yml` (scripts/make-shell-manifests.mjs) for Electron-era
+ * installs, and scripts/test-update-feed.mjs checks the two agree.
  */
 export const UPDATE_CHANNEL = 'nest'
 

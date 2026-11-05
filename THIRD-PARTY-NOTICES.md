@@ -8,12 +8,13 @@ under what terms, as those licenses require.
 Two categories matter, and they are kept separate because they arrive by
 different routes and are verified differently:
 
-1. **Bundled native binaries** — copied into the installer by
-   `electron-builder.json` from paths that are *not* in this repository. These
+1. **Bundled native binaries**: copied into the installer (by
+   `scripts/stage-shell-bundle.mjs` for Nest, `electron-builder.json` for Twig)
+   from paths that are *not* in this repository. These
    are the ones a reader cannot verify from a clone, so they are enumerated
    here explicitly.
-2. **npm dependencies** — resolved from `package-lock.json` and packaged into
-   `app.asar`. These are machine-enumerable; the summary and generation command
+2. **npm dependencies** — resolved from `package-lock.json` and packaged into the install
+   (`resources/app/node_modules` for Nest, `app.asar` for Twig). These are machine-enumerable; the summary and generation command
    are below.
 
 ---

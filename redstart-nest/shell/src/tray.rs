@@ -1,4 +1,4 @@
-//! The notification-area icon: the same items as `daemon/tray.mjs`.
+//! The notification-area icon: the same items the Electron shell's tray had.
 //! Open Redstart, a model status line, Stop model (while one runs), and
 //! Quit Redstart. The update items return with T3's updater.
 //!

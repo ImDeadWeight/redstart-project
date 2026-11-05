@@ -81,8 +81,8 @@ function Shell({ title, subtitle, status, children }: {
           48px, so the strip that everywhere else reads "Redstart Nest" was
           simply absent until you signed in — the window buttons floated over a
           bare background with nothing beside them. Sharing the component also
-          means the h-12 that has to equal titleBarOverlay.height in
-          daemon/index.mjs is stated in exactly one place.
+          means the bar's h-12 (the window's title bar in the desktop shell)
+          is stated in exactly one place.
 
           The right-hand slot is filled, but not with the server state: whether
           a model is running is not a claim to make to a caller who has not

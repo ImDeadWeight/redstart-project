@@ -61,7 +61,7 @@ const { setAuthRequired } = await import('../daemon/auth.mjs')
 const { capabilityForTool, classifyTool, expandDisabledToolIds, setPluginCapabilityProvider } = await import('../daemon/tools-definitions.mjs')
 const { addPlugin, removePlugin, pluginCapabilities } = await import('../daemon/plugin-registry.mjs')
 
-// Real app startup wires this in daemon/index.mjs; this suite imports
+// Real app startup wires this in daemon.mjs; this suite imports
 // mcp-server.mjs and plugin-registry.mjs independently of that bootstrap, so
 // it has to do the same wiring itself or every plugin-ban test below would
 // pass for the wrong reason (capabilityToolNames() would simply never see the

@@ -5,7 +5,7 @@
 // The daemon split (docs/notes/daemon-split-tauri-plan.md D8): on the desktop,
 // the daemon runs as `nestd --shell-pipe` under a bundled Node 26, not under
 // Electron's Node 20. This downloads that one pinned build into
-// deps/node/ (gitignored), where electron-builder.json picks it up.
+// deps/node/ (gitignored), where stage-shell-bundle.mjs picks it up.
 //
 // PINNED BY HASH, not just by version: the sha256 below was copied from
 // nodejs.org's SHASUMS256.txt for this release, and a download that doesn't
