@@ -701,6 +701,39 @@ async function main() {
     })
   })
 
+  if (!embedPortBusy) await test('🔒 redstart_retrieval: false keeps every post-ban tool and is never forwarded', async () => {
+    // The same request that the stub scorer narrows above, opted out. A client
+    // with its own curated list and no search_tools must be able to say "send
+    // them all" — and that must still be bounded by the ban list.
+    await withStubEmbedder(async () => {
+      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true }, disabledTools: ['create_document'] })
+      await completions({
+        messages: [{ role: 'user', content: 'summarise what changed in the git repo this week' }],
+        tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch')],
+        redstart_retrieval: false,
+      })
+      const names = (lastForwarded.tools || []).map(t => t.function.name)
+      assert(!('redstart_retrieval' in lastForwarded), 'the Redstart-only field was forwarded to llama-server')
+      assert(names.includes('web_fetch'), `the opt-out was ignored: ${names.join(',')}`)
+      assert(!names.includes('create_document'), 'opting out of retrieval let a banned tool through')
+      assert(!/subset chosen for this conversation/.test(systemOf()), 'claimed a narrowing that did not happen')
+    })
+  })
+
+  if (!embedPortBusy) await test('🔍 only the literal false opts out of retrieval', async () => {
+    await withStubEmbedder(async () => {
+      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+      await completions({
+        messages: [{ role: 'user', content: 'summarise what changed in the git repo this month' }],
+        tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch')],
+        redstart_retrieval: 'false',
+      })
+      const names = (lastForwarded.tools || []).map(t => t.function.name)
+      assert(!('redstart_retrieval' in lastForwarded), 'the Redstart-only field was forwarded to llama-server')
+      assert(!names.includes('web_fetch'), 'a non-boolean value opted out')
+    })
+  })
+
   await test('a request carrying no tools is untouched by retrieval', async () => {
     updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
     const res = await completions({ messages: [{ role: 'user', content: 'hello' }] })

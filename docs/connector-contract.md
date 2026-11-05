@@ -66,6 +66,10 @@ The gateway rewrites the request before forwarding:
 
 - `messages`, `stream`, `tools`, and the usual sampling parameters
 - `redstart_mode` — a task mode **ID** (§3)
+- `redstart_retrieval: false` — don't narrow this request's `tools` with tool
+  retrieval. For a connector that sends its own short, curated tool list and
+  has no `search_tools` to recover a dropped tool. Bans still apply. Only the
+  literal `false` counts; the field is consumed and never forwarded
 - unknown extra fields are tolerated and ignored, so a newer connector can
   talk to an older Nest
 
@@ -73,8 +77,9 @@ The gateway rewrites the request before forwarding:
 
 A client-supplied `system` message is **not** authoritative. It is placed after
 the admin policy block and after a precedence clause stating that later
-instructions may adjust tone, verbosity and formatting only. Treat it as user
-preference text, because that is how the model is told to treat it.
+instructions may adjust tone, verbosity and formatting, and may explain how to
+use the app's own tools. Treat it as user preference text plus usage notes for
+the tools you send, because that is how the model is told to treat it.
 
 Do not put deployment policy, capability claims, or privacy statements in it.
 They will be outranked, and in the privacy case they will be *wrong* — the
