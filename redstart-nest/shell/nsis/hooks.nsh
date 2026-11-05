@@ -55,7 +55,10 @@
   Delete "$R4"
 
   ; Install where the Electron app was. Everything after this hook (files,
-  ; shortcuts, the uninstall entry) uses $INSTDIR.
+  ; shortcuts, the uninstall entry) uses $INSTDIR. The template's SetOutPath
+  ; already created the default directory; remove it if it is still empty
+  ; (plain RMDir never deletes contents).
+  RMDir $INSTDIR
   StrCpy $INSTDIR $R5
   SetOutPath $INSTDIR
 
