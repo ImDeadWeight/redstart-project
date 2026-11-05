@@ -161,3 +161,18 @@ export async function findUpdateRelease({
     return { release: null, error: err?.message ?? String(err) }
   }
 }
+
+/**
+ * Should this process run the updater at all? Here, not in
+ * auto-update.mjs, because that module imports electron-updater, which
+ * cannot load outside Electron, and this one has to be testable.
+ *
+ * @param {{ isPackaged: boolean, platform: string, settings: object|null|undefined }} env
+ */
+export function shouldAutoUpdate({ isPackaged, platform, settings }) {
+  if (!isPackaged) return false
+  if (platform !== 'win32') return false
+  // On unless switched off. A settings file from before this existed has no
+  // key, and that install should update like a fresh one.
+  return settings?.autoUpdate !== false
+}

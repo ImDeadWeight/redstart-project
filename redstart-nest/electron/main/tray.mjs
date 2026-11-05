@@ -27,8 +27,12 @@ import { logEvent } from './logger.mjs'
 let tray = null
 let modelRunning = false
 let currentHandlers = null
+// The version of a downloaded, not yet installed update (auto-update.mjs), or
+// null. Pushed in by index.mjs through setTrayUpdate() like the model state
+// arrives through the broker. The tray decides nothing about updates.
+let updateVersion = null
 
-function buildMenu({ onOpen, onStopModel, onQuit }) {
+function buildMenu({ onOpen, onStopModel, onQuit, onInstallUpdate }) {
   const template = [
     { label: 'Open Redstart', click: onOpen },
     { type: 'separator' },
@@ -40,7 +44,12 @@ function buildMenu({ onOpen, onStopModel, onQuit }) {
     template.push({ label: 'Stop model', click: onStopModel })
   }
   template.push({ type: 'separator' })
-  template.push({ label: 'Quit Redstart', click: onQuit })
+  if (updateVersion && onInstallUpdate) {
+    template.push({ label: `Restart to update to ${updateVersion}`, click: onInstallUpdate })
+  }
+  // Quitting also installs a downloaded update. The label says so, so a
+  // quit is never an install the user did not see coming.
+  template.push({ label: updateVersion ? 'Quit Redstart and install update' : 'Quit Redstart', click: onQuit })
   return Menu.buildFromTemplate(template)
 }
 
@@ -64,12 +73,14 @@ function refresh() {
  *   app.quit() (index.mjs's isQuitting, consumed here for the first time).
  * @param {boolean} opts.initiallyRunning seed state from serverState at
  *   startup, so the tray never has to guess before its first event.
+ * @param {() => void} [opts.onInstallUpdate] install the downloaded update
+ *   and start again. Shown only while setTrayUpdate() has a version.
  * @returns {() => void} teardown — unsubscribes from the broker and
  *   destroys the tray icon.
  */
-export function startTray({ icon, onOpen, onStopModel, onQuit, initiallyRunning }) {
+export function startTray({ icon, onOpen, onStopModel, onQuit, onInstallUpdate, initiallyRunning }) {
   modelRunning = !!initiallyRunning
-  currentHandlers = { onOpen, onStopModel, onQuit }
+  currentHandlers = { onOpen, onStopModel, onQuit, onInstallUpdate }
 
   tray = new Tray(icon)
   tray.on('click', onOpen)
@@ -93,4 +104,15 @@ export function startTray({ icon, onOpen, onStopModel, onQuit, initiallyRunning 
     tray = null
     currentHandlers = null
   }
+}
+
+/**
+ * Show or clear the "update ready" items. Safe to call before the tray starts
+ * or after it stops. The version is kept, and the next refresh shows it.
+ *
+ * @param {string|null} version
+ */
+export function setTrayUpdate(version) {
+  updateVersion = version || null
+  refresh()
 }

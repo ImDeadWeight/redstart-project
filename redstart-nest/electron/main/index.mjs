@@ -38,7 +38,8 @@ import { initSecrets } from './secrets.mjs'
 import { safeStorageProvider } from './secrets-safe-storage.mjs'
 import { hasOwner } from './auth.mjs'
 import { readBootstrapToken } from './bootstrap-token.mjs'
-import { startTray } from './tray.mjs'
+import { startTray, setTrayUpdate } from './tray.mjs'
+import { startAutoUpdate } from './auto-update.mjs'
 import { stopServer } from './ipc/server.mjs'
 import { reconcileStartupSetting } from './ipc/admin.mjs'
 
@@ -318,12 +319,10 @@ try {
 
 let mainWindow = null
 
-// Set only by a deliberate quit path — the tray's "Quit Redstart" (below)
-// and admin:shutdown (quitApp(), below) are the only two things that set it.
-// Not read anywhere yet — it exists so those two paths have one flag to set
-// rather than inventing their own, and so that window-all-closed's comment
-// below has something concrete to point at. Closing the window is
-// deliberately NOT one of these paths — see window-all-closed.
+// Set only by deliberateQuit() (below), which every deliberate quit path goes
+// through: the tray's "Quit Redstart" and "Restart to update", and
+// admin:shutdown via quitApp(). Closing the window is deliberately NOT one of
+// these paths. See window-all-closed.
 let isQuitting = false
 
 // Set once startTray() succeeds; before-quit calls it to
@@ -333,6 +332,11 @@ let isQuitting = false
 // failure already is: logged and swallowed rather than fatal — a missing
 // tray means "no tray affordance", not "no daemon".
 let stopTray = null
+
+// Set in main() once the daemon is up. Null before that, so a quit during
+// startup is an ordinary quit. On a dev run or a non-Windows build it is a
+// controller that does nothing (auto-update.mjs).
+let updater = null
 
 
 // ---------------------------------------------------------------------------
@@ -552,16 +556,52 @@ function openOrFocusWindow() {
   }
 }
 
-// The ONE deliberate-quit path admin:shutdown gets (the tray's
-// "Quit Redstart" sets isQuitting inline itself since it already has app in
-// scope there too — this is the other caller). Deferred
-// with setImmediate rather than calling app.quit() synchronously: the
+// admin:shutdown's way into deliberateQuit() (below). Deferred
+// with setImmediate rather than quitting synchronously: the
 // caller is admin:shutdown's HTTP handler, and its 200 response must
 // actually leave the socket before before-quit's teardown begins, or the
 // caller sees a connection reset and cannot tell success from crash.
 function quitApp() {
+  setImmediate(() => deliberateQuit({ relaunch: false }))
+}
+
+// Every deliberate quit comes through here: the tray's "Quit Redstart", its
+// "Restart to update", and admin:shutdown (quitApp, above). A downloaded
+// update installs on these paths and no others. An OS shutdown, a logoff or
+// a crash quits without touching it (auto-update.mjs's header says why).
+// When the install is abandoned (a child would not exit in time), the
+// ordinary quit still happens. The daemon is already down by then, and
+// before-quit's second stopDaemon() is a no-op.
+function deliberateQuit({ relaunch }) {
   isQuitting = true
-  setImmediate(() => app.quit())
+  if (!updater?.hasPendingUpdate()) {
+    app.quit()
+    return
+  }
+  updater.installAndQuit({ relaunch }).then(
+    (installing) => { if (!installing) app.quit() },
+    (err) => {
+      console.warn('Update install failed:', err?.message)
+      app.quit()
+    },
+  )
+}
+
+// The tray item and a one-time notification, both driven by the updater's
+// state. Shown once per downloaded version, not once per check.
+let notifiedUpdateVersion = null
+function onUpdateStatus(status) {
+  const ready = status.state === 'ready' ? status.version : null
+  setTrayUpdate(ready)
+  if (ready && ready !== notifiedUpdateVersion) {
+    notifiedUpdateVersion = ready
+    if (Notification.isSupported()) {
+      new Notification({
+        title: 'Redstart update ready',
+        body: `Version ${ready} has downloaded. It installs the next time you quit Redstart, or choose "Restart to update" from the tray.`,
+      }).show()
+    }
+  }
 }
 
 // The launcher and chat windows are plain UI (no WebGL/canvas-heavy work) —
@@ -661,6 +701,22 @@ async function main() {
   // (app.setLoginItemSettings) plus the settings read/write it needs.
   reconcileStartupSetting({ readSettings, writeSettings })
   startTrayIcon()
+  // After the daemon and the tray, since an update has to be able to stop
+  // both. Does nothing at all on a dev run or off Windows.
+  updater = startAutoUpdate({
+    app,
+    readSettings,
+    // before-quit's own teardown, done early so the install path can wait
+    // for the children stopDaemon() names.
+    stopForInstall: () => {
+      if (stopTray) {
+        stopTray()
+        stopTray = null
+      }
+      return stopDaemon()
+    },
+    onStatus: onUpdateStatus,
+  })
   if (!app.isPackaged) await installReactDevTools()
   // A login-triggered start is windowless — tray-only until the admin
   // opens it. This never starts a model, only the daemon (admin listener,
@@ -688,8 +744,11 @@ function startTrayIcon() {
       },
       onQuit: () => {
         logEvent('app', 'tray_quit', {})
-        isQuitting = true
-        app.quit()
+        deliberateQuit({ relaunch: false })
+      },
+      onInstallUpdate: () => {
+        logEvent('app', 'tray_install_update', {})
+        deliberateQuit({ relaunch: true })
       },
       initiallyRunning: !!serverState.process,
     })

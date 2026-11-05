@@ -24,6 +24,7 @@ import {
   findUpdateRelease,
   parseVersion,
   pickUpdateRelease,
+  shouldAutoUpdate,
 } from '../electron/main/update-feed.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -191,6 +192,34 @@ await test('🔍 the installer name has no spaces, so the manifest URL matches t
   const expanded = name.replaceAll('${productName}', config.productName)
   assert(!/\s/.test(expanded), `"${name}" expands to "${expanded}", which contains a space`)
   return expanded
+})
+
+console.log('\n-- 🔍 when the updater runs, and when it installs --')
+
+await test('only a packaged Windows build checks for updates', () => {
+  assert(shouldAutoUpdate({ isPackaged: true, platform: 'win32', settings: {} }) === true, 'packaged Windows')
+  assert(shouldAutoUpdate({ isPackaged: false, platform: 'win32', settings: {} }) === false, 'a dev run must never update itself')
+  assert(shouldAutoUpdate({ isPackaged: true, platform: 'darwin', settings: {} }) === false, 'macOS needs a Developer ID first')
+  assert(shouldAutoUpdate({ isPackaged: true, platform: 'linux', settings: {} }) === false, 'linux has no installer')
+})
+
+await test('on unless settings say autoUpdate: false; a missing or unreadable file is "on"', () => {
+  assert(shouldAutoUpdate({ isPackaged: true, platform: 'win32', settings: { autoUpdate: false } }) === false, 'switched off')
+  assert(shouldAutoUpdate({ isPackaged: true, platform: 'win32', settings: { autoUpdate: true } }) === true, 'switched on')
+  assert(shouldAutoUpdate({ isPackaged: true, platform: 'win32', settings: null }) === true, 'no settings file')
+})
+
+// auto-update.mjs imports electron-updater, which cannot load under plain
+// Node. So the invariant "an update installs only on a deliberate quit" is
+// checked in the source, which is where it would be broken.
+await test('🔍 an update never installs on an ordinary app quit (OS shutdown, logoff, crash)', () => {
+  const src = fs.readFileSync(path.join(here, '..', 'electron', 'main', 'auto-update.mjs'), 'utf8')
+  assert(/autoUpdater\.autoInstallOnAppQuit\s*=\s*false/.test(src), 'auto-update.mjs must set autoInstallOnAppQuit = false')
+  assert(/await waitForPidsExit\(/.test(src) && src.indexOf('await waitForPidsExit(') < src.indexOf('autoUpdater.quitAndInstall('),
+    'installAndQuit must wait for the children before it starts the installer')
+  const index = fs.readFileSync(path.join(here, '..', 'electron', 'main', 'index.mjs'), 'utf8')
+  assert(!/quitAndInstall|electron-updater/.test(index), 'index.mjs must go through auto-update.mjs, not drive electron-updater itself')
+  return 'autoInstallOnAppQuit off, children awaited before NSIS'
 })
 
 console.log('\n' + '='.repeat(60))
