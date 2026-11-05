@@ -18,6 +18,7 @@
 
 import { DatabaseService } from '$lib/services/database.service';
 import type { ConversationCoreState } from './conversation-core.svelte';
+import type { DatabaseConversation } from '$lib/types/database';
 
 export class ConversationTitle {
 	constructor(private readonly core: ConversationCoreState) {}
@@ -39,40 +40,78 @@ export class ConversationTitle {
 	 * @param name - The new name for the conversation
 	 */
 	async updateConversationName(convId: string, name: string): Promise<void> {
-		try {
-			await DatabaseService.updateConversation(convId, { name });
+		await this.updateNaming(convId, { name });
+	}
 
-			const convIndex = this.core.conversations.findIndex((c) => c.id === convId);
-
-			if (convIndex !== -1) {
-				this.core.conversations[convIndex].name = name;
-				this.core.conversations = [...this.core.conversations];
-			}
-
-			if (this.core.activeConversation?.id === convId) {
-				this.core.activeConversation = { ...this.core.activeConversation, name };
-			}
-		} catch (error) {
-			console.error('Failed to update conversation name:', error);
-		}
+	/** The user typed this name; the model will not rename the conversation after this. */
+	async renameByUser(convId: string, name: string): Promise<void> {
+		await this.updateNaming(convId, { name, nameSetByUser: true });
 	}
 
 	/**
-	 * Updates conversation title with optional confirmation dialog based on settings
-	 * @param convId - The conversation ID to update
-	 * @param newTitle - The new title content
-	 * @returns True if title was updated, false if cancelled
+	 * The model's name for the conversation (chat-title.service). Dropped if the
+	 * user renamed it while the model was thinking of one.
+	 */
+	async applyAutoTitle(convId: string, name: string, titledAt: number): Promise<void> {
+		if (this.find(convId)?.nameSetByUser) return;
+		await this.updateNaming(convId, { name, autoTitledAt: titledAt });
+	}
+
+	/**
+	 * The first prompt changed (edited, or another branch chosen), so the title
+	 * may no longer fit.
+	 * - A name the user typed stays.
+	 * - A name the model gave stays for now and is marked stale, so the model
+	 *   names the conversation afresh after its next answer. Swapping it back to
+	 *   the raw prompt would only make the title worse in the meantime.
+	 * - Otherwise the title is still the first prompt's text, so it follows the
+	 *   new prompt.
+	 * @returns True if the title or its state was updated
 	 */
 	async updateConversationTitleWithConfirmation(
 		convId: string,
 		newTitle: string
 	): Promise<boolean> {
 		try {
+			const conv = this.find(convId);
+			if (conv?.nameSetByUser) return false;
+			if (conv?.autoTitledAt !== undefined && conv?.autoTitledAt !== null) {
+				await this.updateNaming(convId, { autoTitledAt: null });
+				return true;
+			}
 			await this.updateConversationName(convId, newTitle);
 			return true;
 		} catch (error) {
 			console.error('Failed to update conversation title with confirmation:', error);
 			return false;
+		}
+	}
+
+	private find(convId: string): DatabaseConversation | undefined {
+		if (this.core.activeConversation?.id === convId) return this.core.activeConversation;
+		return this.core.conversations.find((c) => c.id === convId);
+	}
+
+	/** Writes naming fields to the server, then to the list and the open conversation. */
+	private async updateNaming(
+		convId: string,
+		changes: Pick<Partial<DatabaseConversation>, 'name' | 'nameSetByUser' | 'autoTitledAt'>
+	): Promise<void> {
+		try {
+			await DatabaseService.updateConversation(convId, changes);
+
+			const convIndex = this.core.conversations.findIndex((c) => c.id === convId);
+
+			if (convIndex !== -1) {
+				this.core.conversations[convIndex] = { ...this.core.conversations[convIndex], ...changes };
+				this.core.conversations = [...this.core.conversations];
+			}
+
+			if (this.core.activeConversation?.id === convId) {
+				this.core.activeConversation = { ...this.core.activeConversation, ...changes };
+			}
+		} catch (error) {
+			console.error('Failed to update conversation name:', error);
 		}
 	}
 
