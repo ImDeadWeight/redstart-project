@@ -5,15 +5,8 @@
   "directories": {
     "output": "release/${version}"
   },
-  "files": [
-    "electron/main",
-    "dist"
-  ],
-  "asarUnpack": [
-    "**/*.node",
-    "node_modules/@modelcontextprotocol/server-filesystem/**",
-    "node_modules/sql.js/dist/**"
-  ],
+  "files": ["electron/main", "dist"],
+  "asarUnpack": ["**/*.node", "node_modules/@modelcontextprotocol/server-filesystem/**", "node_modules/sql.js/dist/**"],
   "extraResources": [
     {
       "from": "src/chat-ui/dist",
@@ -24,20 +17,6 @@
       "from": "../shared",
       "to": "shared",
       "filter": ["**/*.mjs"]
-    },
-    {
-      "from": "llama-cpp-turboquant/build/bin/Release",
-      "to": "bin",
-      "filter": ["llama-server.exe", "*.dll", "*.DLL"]
-    },
-    {
-      "from": "deps/windows",
-      "to": "bin",
-      "filter": ["*.dll", "*.DLL"]
-    },
-    {
-      "from": "deps/windows/elevate.exe",
-      "to": "elevate.exe"
     },
     {
       "from": "../THIRD-PARTY-NOTICES.md",
@@ -53,9 +32,45 @@
       "filter": ["**/*"]
     }
   ],
+  "afterPack": "scripts/mac-adhoc-sign.cjs",
   "win": {
     "target": "nsis",
-    "icon": "build/icon.ico"
+    "icon": "build/icon.ico",
+    "extraResources": [
+      {
+        "from": "llama-cpp-turboquant/build/bin/Release",
+        "to": "bin",
+        "filter": ["llama-server.exe", "*.dll", "*.DLL"]
+      },
+      {
+        "from": "deps/windows",
+        "to": "bin",
+        "filter": ["*.dll", "*.DLL"]
+      },
+      {
+        "from": "deps/windows/elevate.exe",
+        "to": "elevate.exe"
+      }
+    ]
+  },
+  "mac": {
+    "target": [
+      {
+        "target": "dmg",
+        "arch": ["arm64"]
+      }
+    ],
+    "icon": "build/icon.png",
+    "category": "public.app-category.developer-tools",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "identity": null,
+    "extraResources": [
+      {
+        "from": "llama-cpp-turboquant/build/bin",
+        "to": "bin",
+        "filter": ["llama-server", "*.dylib"]
+      }
+    ]
   },
   "nsis": {
     "oneClick": false,
