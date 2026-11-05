@@ -54,7 +54,10 @@ const CHILD_EXIT_TIMEOUT_MS = 15_000
 
 /**
  * @typedef {{ state: 'idle'|'checking'|'downloading'|'ready'|'error',
- *             version: string|null, error: string|null }} UpdateStatus
+ *             version: string|null, error: string|null,
+ *             checkedAt: number|null }} UpdateStatus
+ *   version: the update's version once one is found (downloading or ready).
+ *   checkedAt: when the last check finished, whatever it found.
  */
 
 /**
@@ -74,7 +77,7 @@ const CHILD_EXIT_TIMEOUT_MS = 15_000
  */
 export function startAutoUpdate({ app, readSettings, stopForInstall, onStatus = () => {} }) {
   /** @type {UpdateStatus} */
-  let status = { state: 'idle', version: null, error: null }
+  let status = { state: 'idle', version: null, error: null, checkedAt: null }
   const setStatus = (next) => {
     status = { ...status, ...next }
     onStatus(status)
@@ -87,6 +90,7 @@ export function startAutoUpdate({ app, readSettings, stopForInstall, onStatus = 
   })
 
   const inert = {
+    active: false,
     status: () => status,
     hasPendingUpdate: () => false,
     installAndQuit: async () => false,
@@ -128,13 +132,19 @@ export function startAutoUpdate({ app, readSettings, stopForInstall, onStatus = 
   })
 
   let checking = false
-  async function checkNow() {
+  /**
+   * @param {{ manual?: boolean }} [opts] manual: an admin pressed "Check
+   *   now". That runs even with autoUpdate off, since the setting turns off
+   *   the automatic checks and the button is an explicit request. The timers
+   *   call this with no argument.
+   */
+  async function checkNow({ manual = false } = {}) {
     // A ready update stays the update. Replacing it with a newer one
     // mid-session is a second large download for an install that has not
     // happened yet, and the next check after the install finds the newer one
     // anyway.
     if (checking || status.state === 'downloading' || status.state === 'ready') return
-    if (!enabledNow()) return
+    if (!manual && !enabledNow()) return
     checking = true
     setStatus({ state: 'checking', error: null })
     try {
@@ -159,12 +169,12 @@ export function startAutoUpdate({ app, readSettings, stopForInstall, onStatus = 
       logEvent('update', 'check_failed', { message: err?.message ?? String(err) })
     } finally {
       checking = false
-      if (status.state === 'checking') setStatus({ state: 'idle' })
+      setStatus({ state: status.state === 'checking' ? 'idle' : status.state, checkedAt: Date.now() })
     }
   }
 
-  const first = setTimeout(checkNow, FIRST_CHECK_DELAY_MS)
-  const every = setInterval(checkNow, CHECK_INTERVAL_MS)
+  const first = setTimeout(() => checkNow(), FIRST_CHECK_DELAY_MS)
+  const every = setInterval(() => checkNow(), CHECK_INTERVAL_MS)
   // Neither timer should be what keeps the process alive.
   first.unref?.()
   every.unref?.()
@@ -202,6 +212,11 @@ export function startAutoUpdate({ app, readSettings, stopForInstall, onStatus = 
   }
 
   return {
+    // True only here: a packaged Windows build. index.mjs registers the
+    // controller with the admin API only when it is, so everywhere else the
+    // Updates control reads as unsupported rather than as a switch that does
+    // nothing.
+    active: true,
     status: () => status,
     hasPendingUpdate: () => status.state === 'ready' && !installing,
     installAndQuit,

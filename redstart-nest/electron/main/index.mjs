@@ -28,12 +28,12 @@ import * as fs from 'fs'
 import * as zlib from 'zlib'
 import { getAdminListenerState } from './admin-listener.mjs'
 import { logEvent } from './logger.mjs'
-import { subscribeToEvents } from './event-broker.mjs'
+import { subscribeToEvents, publish } from './event-broker.mjs'
 import { initPaths } from './platform-paths.mjs'
 import {
   startDaemon, stopDaemon, installCrashHandlers, serverState, readSettings, writeSettings,
 } from './daemon.mjs'
-import { setRecycleBin, setLoginItems } from './desktop-integration.mjs'
+import { setRecycleBin, setLoginItems, setUpdater } from './desktop-integration.mjs'
 import { initSecrets } from './secrets.mjs'
 import { safeStorageProvider } from './secrets-safe-storage.mjs'
 import { hasOwner } from './auth.mjs'
@@ -591,6 +591,9 @@ function deliberateQuit({ relaunch }) {
 // state. Shown once per downloaded version, not once per check.
 let notifiedUpdateVersion = null
 function onUpdateStatus(status) {
+  // To every admin UI, local or remote, over the same SSE feed the model's
+  // started/stopped events use. A remote admin has no tray to read.
+  publish('update:status', status)
   const ready = status.state === 'ready' ? status.version : null
   setTrayUpdate(ready)
   if (ready && ready !== notifiedUpdateVersion) {
@@ -717,6 +720,22 @@ async function main() {
     },
     onStatus: onUpdateStatus,
   })
+  // The admin API's view of it (admin:get-update and the rest, in
+  // ipc/admin.mjs). Not registered when the updater is inert, so a dev run
+  // reports "does not update itself" instead of offering a switch.
+  if (updater.active) {
+    setUpdater({
+      status: () => updater.status(),
+      checkNow: (opts) => updater.checkNow(opts),
+      // The same path as the tray's "Restart to update". Deferred, like
+      // quitApp, so admin:install-update's response leaves first.
+      install: () => {
+        if (!updater.hasPendingUpdate()) return false
+        setImmediate(() => deliberateQuit({ relaunch: true }))
+        return true
+      },
+    })
+  }
   if (!app.isPackaged) await installReactDevTools()
   // A login-triggered start is windowless — tray-only until the admin
   // opens it. This never starts a model, only the daemon (admin listener,

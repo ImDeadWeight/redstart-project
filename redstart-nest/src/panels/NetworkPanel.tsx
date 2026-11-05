@@ -4,12 +4,29 @@ import type { useAuthSetup } from '../hooks/useAuthSetup'
 import type { useControlPlaneExposure } from '../hooks/useControlPlaneExposure'
 import type { useStartupSettings } from '../hooks/useStartupSettings'
 import type { useShutdown } from '../hooks/useShutdown'
+import type { useUpdateSettings } from '../hooks/useUpdateSettings'
+import type { UpdateState } from '../types'
 import { SectionTitle, TogglePill, btnCls, ControlPlaneNotice } from '../components/ui'
 import { buildAddresses } from './addresses'
 
 // Lives in the Configuration tab rather than the sidebar: it sits next to the
 // Host/Port fields it depends on, and the QR code plus address list needs more
 // width than the 256px sidebar allowed.
+
+// One line saying where the updater is, for the Updates block below.
+function updateSummary(u: UpdateState): string {
+  switch (u.state) {
+    case 'checking': return 'Checking for updates…'
+    case 'downloading': return `Downloading ${u.version ?? 'an update'} in the background…`
+    case 'ready': return `Version ${u.version} is ready. It installs the next time Redstart quits, or restart now.`
+    case 'error': return `The last check failed: ${u.error ?? 'unknown error'}`
+    default: {
+      if (!u.checkedAt) return `Version ${u.currentVersion}. Not checked yet this session.`
+      const at = new Date(u.checkedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+      return `Version ${u.currentVersion} is the latest. Last checked ${at}.`
+    }
+  }
+}
 
 // One row per reachable URL. The IP row leads because it is the only address
 // that resolves on every client; the sslip row is a hostname convenience that
@@ -53,7 +70,7 @@ function AddressRow({ url, label, note, primary }: {
 
 export function NetworkPanel({
   networkMode, onToggleNetworkMode, localIp, port,
-  auth, controlPlaneExposure, startup, shutdown,
+  auth, controlPlaneExposure, startup, updates, shutdown,
 }: {
   networkMode: boolean
   onToggleNetworkMode: () => void
@@ -62,6 +79,7 @@ export function NetworkPanel({
   auth: ReturnType<typeof useAuthSetup>
   controlPlaneExposure: ReturnType<typeof useControlPlaneExposure>
   startup: ReturnType<typeof useStartupSettings>
+  updates: ReturnType<typeof useUpdateSettings>
   shutdown: ReturnType<typeof useShutdown>
 }) {
   const addresses = buildAddresses(localIp, port)
@@ -70,6 +88,10 @@ export function NetworkPanel({
   const { authRequired, toggleAuthRequired } = auth
   const { controlPlane, toggleExposure } = controlPlaneExposure
   const { startup: startupState, toggleStartup } = startup
+  const {
+    update, toggleUpdate, checkNow, checking,
+    confirmInstall, setConfirmInstall, installing, requestInstall, confirmInstallNow,
+  } = updates
   const { confirmShutdown, setConfirmShutdown, shuttingDown, requestShutdown, confirmShutdownNow } = shutdown
 
   // The QR encodes the direct-IP URL — pointing a phone camera at it needs no
@@ -199,6 +221,68 @@ export function NetworkPanel({
             <p className="mt-1 text-xs text-zinc-600">
               Starts in the tray only, with no window and no model loaded — open it from the tray
               icon or the Start menu when you want it.
+            </p>
+          </div>
+        )}
+
+        {/* Hidden, like start-at-login, wherever this install does not update
+            itself: a headless daemon (a source checkout, updated with git), a
+            dev run, macOS. The switch governs the automatic checks; "Check
+            now" works either way. Restart is a two-step confirm because it
+            restarts the daemon for every client, and on a per-machine install
+            Windows asks for permission on THIS machine's screen, which a
+            remote admin cannot see. */}
+        {update?.supported && (
+          <div>
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <TogglePill checked={update.enabled} onToggle={toggleUpdate} />
+              <span className="text-xs text-zinc-300">
+                {update.enabled ? 'Check for updates automatically' : 'Do not check for updates'}
+              </span>
+            </label>
+            <p className={`mt-1 text-xs ${update.state === 'ready' ? 'text-amber-400' : update.state === 'error' ? 'text-red-400' : 'text-zinc-500'}`}>
+              {updateSummary(update)}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {update.state !== 'ready' && (
+                <button
+                  onClick={checkNow}
+                  disabled={checking || update.state === 'checking' || update.state === 'downloading'}
+                  className={`${btnCls.secondary} disabled:opacity-50 disabled:cursor-not-allowed`}>
+                  {checking || update.state === 'checking' ? 'Checking…' : 'Check now'}
+                </button>
+              )}
+              {update.state === 'ready' && !confirmInstall && (
+                <button
+                  onClick={requestInstall}
+                  disabled={installing}
+                  className={`${btnCls.primary} text-white disabled:opacity-50 disabled:cursor-not-allowed`}>
+                  {installing ? 'Restarting…' : `Restart to update to ${update.version}`}
+                </button>
+              )}
+            </div>
+            {update.state === 'ready' && confirmInstall && (
+              <div className="mt-2 flex items-center gap-3 rounded-lg border border-amber-800 bg-zinc-900 px-4 py-2">
+                <span className="flex-1 text-xs text-amber-400">
+                  Restart now? The model stops and every client disconnects for a minute or two
+                  while the update installs. If Redstart was installed for all users, Windows asks
+                  for permission on this machine's screen first, and the update waits until
+                  someone there answers.
+                </span>
+                <button onClick={confirmInstallNow} className={`${btnCls.primary} text-white shrink-0`}>
+                  Restart and update
+                </button>
+                <button
+                  onClick={() => setConfirmInstall(false)}
+                  className="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded text-xs transition-colors shrink-0">
+                  Cancel
+                </button>
+              </div>
+            )}
+            <p className="mt-1 text-xs text-zinc-600">
+              Updates come from this project's GitHub releases. Checking sends GitHub this
+              machine's address and Redstart's version, and nothing else. An update never installs
+              on its own: only when Redstart quits, or when you restart it here or from the tray.
             </p>
           </div>
         )}

@@ -275,6 +275,28 @@ export type StartupState = {
   error?: string
 }
 
+// The Windows auto-updater (electron/main/auto-update.mjs), as
+// admin:get-update reports it and update:status events push it.
+export type UpdateStatus = {
+  state: 'idle' | 'checking' | 'downloading' | 'ready' | 'error'
+  // The update's version, once one has been found.
+  version: string | null
+  error: string | null
+  // When the last check finished (ms since epoch), whatever it found.
+  checkedAt: number | null
+}
+
+export type UpdateState = UpdateStatus & {
+  // False wherever this install does not update itself: a headless daemon
+  // (a source checkout), a dev run, macOS. The UI hides the control, as it
+  // does for start-at-login.
+  supported: boolean
+  // settings.json's autoUpdate. Governs the automatic checks only; "Check
+  // now" runs either way.
+  enabled: boolean
+  currentVersion: string
+}
+
 // networkMode defaults to true because the main use case is serving other
 // devices on the home network. A toggle exists to switch to localhost-only
 // (useful if the user only wants to use the chat from the same PC).

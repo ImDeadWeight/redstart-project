@@ -21,6 +21,7 @@ import { useStatusMessage } from './hooks/useStatusMessage'
 import { useAuthSetup } from './hooks/useAuthSetup'
 import { useControlPlaneExposure } from './hooks/useControlPlaneExposure'
 import { useStartupSettings } from './hooks/useStartupSettings'
+import { useUpdateSettings } from './hooks/useUpdateSettings'
 import { useShutdown } from './hooks/useShutdown'
 import { useWindowControlsOverlay } from './hooks/useWindowControlsOverlay'
 import { TopBar, StatusPill } from './components/ui'
@@ -52,6 +53,7 @@ export default function App() {
   const auth = useAuthSetup(showStatus)
   const controlPlaneExposure = useControlPlaneExposure(showStatus)
   const startup = useStartupSettings(showStatus)
+  const updates = useUpdateSettings(showStatus)
   const shutdown = useShutdown(showStatus)
   // Electron hides the OS title bar, so the header above doubles as it. See
   // the hook for why this is feature-detected rather than an "is Electron" check.
@@ -187,6 +189,7 @@ export default function App() {
               auth={auth}
               controlPlaneExposure={controlPlaneExposure}
               startup={startup}
+              updates={updates}
               shutdown={shutdown}
             />
           )}

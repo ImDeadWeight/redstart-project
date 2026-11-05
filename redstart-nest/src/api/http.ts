@@ -92,6 +92,7 @@ const EVENT_CHANNELS: Record<string, string> = {
   onServerStarted: 'server:started',
   onModelDownloadProgress: 'models:download-progress',
   onPluginInstallProgress: 'plugins:install-progress',
+  onUpdateStatus: 'update:status',
 }
 
 type SseMessage =
