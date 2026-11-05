@@ -7,10 +7,10 @@
 // Only 'electron' is intercepted (see auth-test-loader.mjs) — every other
 // import is the real, unmodified production module.
 
-import { initPaths } from '../electron/main/platform-paths.mjs'
-import { initSecrets } from '../electron/main/secrets.mjs'
-import { setLoginItems } from '../electron/main/desktop-integration.mjs'
-import { safeStorageProvider } from '../electron/main/secrets-safe-storage.mjs'
+import { initPaths } from '../daemon/platform-paths.mjs'
+import { initSecrets } from '../daemon/secrets.mjs'
+import { setLoginItems } from '../daemon/desktop-integration.mjs'
+import { safeStorageProvider } from '../daemon/secrets-safe-storage.mjs'
 import * as path from 'node:path'
 
 // Phase 7 §7.4's login-item state — a plain in-memory stand-in for what

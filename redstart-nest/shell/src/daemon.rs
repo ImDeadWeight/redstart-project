@@ -1,4 +1,4 @@
-//! Hosting nestd: the Rust counterpart of `electron/main/daemon-host.mjs`.
+//! Hosting nestd: the Rust counterpart of `daemon/daemon-host.mjs`.
 //!
 //! Spawns `node nestd.mjs --shell-pipe --config … --capability-base …
 //! [--resources …]`, puts it in the Job Object, says hello with the

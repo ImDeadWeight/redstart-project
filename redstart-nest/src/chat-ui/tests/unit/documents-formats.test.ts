@@ -19,12 +19,12 @@ beforeEach(async () => {
 	rmSync(TEST_DIR, { recursive: true, force: true });
 	outputDir = join(TEST_DIR, 'documents');
 	mkdirSync(outputDir, { recursive: true });
-	const { resolveUserRoot } = await import('$lib/../../../../electron/main/user-scope.mjs');
+	const { resolveUserRoot } = await import('$lib/../../../../daemon/user-scope.mjs');
 	writtenDir = resolveUserRoot(outputDir, null, { create: true });
 });
 
 async function loadTool() {
-	return import('$lib/../../../../electron/main/documents-tool.mjs');
+	return import('$lib/../../../../daemon/documents-tool.mjs');
 }
 
 function cfg() {

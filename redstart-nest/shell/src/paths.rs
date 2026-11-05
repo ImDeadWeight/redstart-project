@@ -9,10 +9,10 @@
 //! Packaged, the daemon and its runtime sit under `<resource_dir>/resources`,
 //! the layout Electron's `resources/` had, so the daemon's own lookups
 //! (resources/bin, resources/chat-ui, resources/elevate.exe, and
-//! `../../../shared` from resources/app/electron/main) stay as they are:
+//! `../../../shared` from resources/app/daemon) stay as they are:
 //!
 //!   resources/node/node.exe
-//!   resources/app/{bin,electron/main,dist,node_modules,package.json}
+//!   resources/app/{bin,daemon,dist,node_modules,package.json}
 //!   resources/{shared,bin,chat-ui,elevate.exe}
 //!
 //! A debug build runs the checkout instead: `bin/nestd.mjs` on

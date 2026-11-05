@@ -1,6 +1,6 @@
 // GitHub IPC namespace — release-tag lookups for the upstream engines.
 //
-// First seam of the electron/main IPC decomposition (see CHANGELOG). Each
+// First seam of the daemon IPC decomposition (see CHANGELOG). Each
 // namespace module exports register<Namespace>Handlers(deps): a pure move of
 // the matching handlers out of index.mjs's setupIpcHandlers(), with shared
 // collaborators passed in via `deps` rather than reached for as module globals.

@@ -15,7 +15,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { windowsAssets, macosAssets, mergeManifests, installerName, dmgName, macUpdateName } from './make-shell-manifests.mjs'
-import { pickUpdateRelease } from '../electron/main/update-feed.mjs'
+import { pickUpdateRelease } from '../daemon/update-feed.mjs'
 
 const results = []
 function test(name, fn) {

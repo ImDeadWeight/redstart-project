@@ -24,9 +24,9 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { findSecrets, planRekey, applyRekey } from '../electron/main/secrets-migration.mjs'
-import { safeStorageProvider } from '../electron/main/secrets-safe-storage.mjs'
-import { keyfileProvider } from '../electron/main/secrets-keyfile.mjs'
+import { findSecrets, planRekey, applyRekey } from '../daemon/secrets-migration.mjs'
+import { safeStorageProvider } from '../daemon/secrets-safe-storage.mjs'
+import { keyfileProvider } from '../daemon/secrets-keyfile.mjs'
 import { parseRekeyArgs, providerAvailability, formatPlan, desktopProvider } from './rekey-secrets.mjs'
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-rekey-'))

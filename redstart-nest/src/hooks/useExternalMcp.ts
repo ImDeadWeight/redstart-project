@@ -17,7 +17,7 @@ export function useExternalMcp() {
   // Refusal reason for the URL just typed, and non-blocking cautions about the
   // one just added (plaintext to a remote host, egress, an odd path). The main
   // process owns both — it is the only thing that can write the registry, so a
-  // check here would be advisory. See electron/main/external-mcp-url.mjs.
+  // check here would be advisory. See daemon/external-mcp-url.mjs.
   const [addExternalError, setAddExternalError] = useState<string | null>(null)
   const [addExternalWarnings, setAddExternalWarnings] = useState<string[]>([])
 

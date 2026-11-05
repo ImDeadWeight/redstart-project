@@ -7,7 +7,7 @@
 // explicitly granted. This is the "Claude Desktop" capability: the model can
 // read configs, write scripts, edit project files — all within that root.
 //
-// THIS IS TWIG'S CODE. It began life as redstart-nest/electron/main/fs-tool.mjs
+// THIS IS TWIG'S CODE. It began life as redstart-nest/daemon/fs-tool.mjs
 // and Twig loaded it across the source tree; Nest deleted that module during the
 // FS MCP migration (it now runs @modelcontextprotocol/server-filesystem instead),
 // which broke both Twig's dev import and its packaging step. Vendored here on

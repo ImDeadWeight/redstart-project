@@ -3,7 +3,7 @@
 // =============================================================================
 // Both Electron apps import a module that lives OUTSIDE their own app root:
 //
-//   redstart-nest/electron/main/filesystem-mcp-provider.mjs
+//   redstart-nest/daemon/filesystem-mcp-provider.mjs
 //   redstart-twig/windows/electron/mcp-manager.mjs
 //        -> ../../../shared/mcp-stdio-process.mjs
 //
@@ -184,7 +184,7 @@ for (const app of APPS) {
 // ERR_MODULE_NOT_FOUND.
 {
   const escaping = []
-  for (const dir of ['electron/main', 'bin']) {
+  for (const dir of ['daemon', 'bin']) {
     for (const file of walk(path.join(NEST, dir))) {
       for (const spec of importSpecifiers(fs.readFileSync(file, 'utf8'))) {
         const levels = escapeLevels(NEST, file, spec)
@@ -232,7 +232,7 @@ test('🔍 Nest stages its production dependencies from the lockfile, including 
 })
 
 test('🔍 Nest stages bin/ and the daemon tree, where the shell spawns nestd', () => {
-  for (const d of ["out('app', 'bin')", "out('app', 'electron', 'main')", "out('app', 'dist')"]) {
+  for (const d of ["out('app', 'bin')", "out('app', 'daemon')", "out('app', 'dist')"]) {
     assert(STAGE_SRC.includes(d), `stage-shell-bundle.mjs no longer writes ${d}`)
   }
   for (const f of ['nestd.mjs', 'shell-mode.mjs', 'stdout-guard.mjs', 'nest-dir.mjs']) {
@@ -252,7 +252,7 @@ const readShell = (rel) => fs.readFileSync(path.join(SHELL, rel), 'utf8')
 
 test('🔍 the window-controls capability covers the admin origin and nothing but window chrome', () => {
   const cap = JSON.parse(readShell('capabilities/window-controls.json'))
-  const ports = fs.readFileSync(path.join(REPO, 'redstart-nest', 'electron', 'main', 'ports.mjs'), 'utf8')
+  const ports = fs.readFileSync(path.join(REPO, 'redstart-nest', 'daemon', 'ports.mjs'), 'utf8')
   const adminPort = /ADMIN_PORT\s*=\s*(\d+)/.exec(ports)?.[1]
   assert(adminPort, 'could not read ADMIN_PORT from ports.mjs')
   assert(cap.remote?.urls?.includes(`http://127.0.0.1:${adminPort}/*`),

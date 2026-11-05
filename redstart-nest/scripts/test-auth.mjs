@@ -8,7 +8,7 @@
 // localhost bypass was deliberately removed in the hardening pass) requires
 // actually connecting from both socket types.
 //
-// electron/main/accounts-storage.mjs calls Electron's app.getPath(), which
+// daemon/accounts-storage.mjs calls Electron's app.getPath(), which
 // doesn't exist under plain Node — auth-test-loader.mjs stubs just that one
 // import so the rest of the auth code runs completely unmodified.
 //
@@ -40,9 +40,9 @@ registerElectronStub()
 // trigger the stub's initPaths() call.
 await import('./electron-stub.mjs')
 
-const { startGateway, stopGateway } = await import('../electron/main/tools-gateway.mjs')
-const { startMcpServer, stopMcpServer } = await import('../electron/main/mcp-server.mjs')
-const { setAuthRequired, createOwner } = await import('../electron/main/auth.mjs')
+const { startGateway, stopGateway } = await import('../daemon/tools-gateway.mjs')
+const { startMcpServer, stopMcpServer } = await import('../daemon/mcp-server.mjs')
+const { setAuthRequired, createOwner } = await import('../daemon/auth.mjs')
 
 // ---------------------------------------------------------------------------
 // Ports (well clear of the app's real defaults so this can run alongside a

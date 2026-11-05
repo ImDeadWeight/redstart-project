@@ -1,5 +1,5 @@
 // =============================================================================
-// Invariant tests for electron/main/permissions.mjs — the per-account role layer.
+// Invariant tests for daemon/permissions.mjs — the per-account role layer.
 // =============================================================================
 // Priority 5/5 (permission escalation). A role is a RESTRICTION: effective
 // access is (what the profile enabled) ∩ (what the role permits). Every rule in
@@ -33,8 +33,8 @@ import {
   CAPABILITY_CONFIG_KEY,
   ADMIN_PERMISSIONS,
   DENY_ALL,
-} from '../electron/main/permissions.mjs'
-import { CAPABILITY_TOOL_NAMES, setPluginCapabilityProvider } from '../electron/main/tools-definitions.mjs'
+} from '../daemon/permissions.mjs'
+import { CAPABILITY_TOOL_NAMES, setPluginCapabilityProvider } from '../daemon/tools-definitions.mjs'
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-tool-policy.mjs)

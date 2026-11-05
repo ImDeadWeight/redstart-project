@@ -1,4 +1,4 @@
-// Syntax-check every electron/main .mjs (including ipc/) with `node --check`.
+// Syntax-check every daemon .mjs (including ipc/) with `node --check`.
 //
 // A standalone script rather than an inline `node -e` one-liner: the inline
 // form needed backtick template literals, which Windows cmd ignores but POSIX
@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process'
 import { readdirSync } from 'node:fs'
 import * as path from 'node:path'
 
-const base = 'electron/main'
+const base = 'daemon'
 // ../shared holds repo-level modules (stdio MCP supervisor) imported by both
 // nest's main process and twig's — checked here since nest's CI runs this.
 // 'bin' is the headless daemon entrypoint (Phase 8A.2). It is the one file in
@@ -26,4 +26,4 @@ for (const dir of dirs) {
   }
 }
 
-console.log(`node --check clean: ${count} files under electron/main + shared + bin`)
+console.log(`node --check clean: ${count} files under daemon + shared + bin`)

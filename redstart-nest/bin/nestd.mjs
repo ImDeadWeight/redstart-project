@@ -5,7 +5,7 @@
 // nestd — the Redstart Nest daemon, without Electron
 // =============================================================================
 // The headless entrypoint. Runs the same daemon the Electron launcher runs
-// (electron/main/daemon.mjs); the difference is in the four answers an
+// (daemon/daemon.mjs); the difference is in the four answers an
 // entrypoint owes it — where state lives, how secrets are encrypted, what a
 // crash does, what a deliberate shutdown does.
 //
@@ -39,12 +39,12 @@
 // FIRST: in --shell-pipe mode stdout carries the protocol, so console output
 // must be on stderr before any other module can print at load time.
 import { SHELL_PIPE } from './stdout-guard.mjs'
-import { initPaths, configDir } from '../electron/main/platform-paths.mjs'
-import { initSecrets } from '../electron/main/secrets.mjs'
-import { keyfileProvider } from '../electron/main/secrets-keyfile.mjs'
-import { startDaemon, stopDaemon, installCrashHandlers } from '../electron/main/daemon.mjs'
-import { logEvent } from '../electron/main/logger.mjs'
-import { portConflictMessage } from '../electron/main/ports.mjs'
+import { initPaths, configDir } from '../daemon/platform-paths.mjs'
+import { initSecrets } from '../daemon/secrets.mjs'
+import { keyfileProvider } from '../daemon/secrets-keyfile.mjs'
+import { startDaemon, stopDaemon, installCrashHandlers } from '../daemon/daemon.mjs'
+import { logEvent } from '../daemon/logger.mjs'
+import { portConflictMessage } from '../daemon/ports.mjs'
 import { resolveDaemonPaths } from './nest-dir.mjs'
 import { runShellMode, shellModeFailed } from './shell-mode.mjs'
 

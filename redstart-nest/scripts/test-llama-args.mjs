@@ -1,5 +1,5 @@
 // =============================================================================
-// Invariant tests for electron/main/llama-args.mjs — llama-server is
+// Invariant tests for daemon/llama-args.mjs — llama-server is
 // localhost-only.
 // =============================================================================
 // The headline Priority-9 architecture invariant: the raw, unauthenticated
@@ -9,7 +9,7 @@
 // future change ever wires --host to a config field (e.g. a "network mode"
 // toggle), these tests fail loudly.
 //
-// buildArgs() was extracted out of electron/main/index.mjs specifically so this
+// buildArgs() was extracted out of daemon/index.mjs specifically so this
 // invariant can be exercised without booting Electron. Phase 8A.5 finished that
 // job: the packaged-build check that picks the chat-ui path reads
 // platform-paths.mjs's isPackaged() now instead of app.isPackaged, so there is
@@ -24,7 +24,7 @@
 // Run:  node scripts/test-llama-args.mjs
 // =============================================================================
 
-import { initPaths } from '../electron/main/platform-paths.mjs'
+import { initPaths } from '../daemon/platform-paths.mjs'
 
 // Two DISTINCT placeholders, not one string twice: Phase 8B.1 made initPaths()
 // refuse a config directory that overlaps the capability base, and passing the
@@ -34,8 +34,8 @@ import { initPaths } from '../electron/main/platform-paths.mjs'
 // them is wanted.
 initPaths({ config: 'unused-by-buildArgs/config', capabilityBase: 'unused-by-buildArgs/data', isPackaged: false })
 
-const { buildArgs, buildEmbedArgs } = await import('../electron/main/llama-args.mjs')
-const { EMBED_PORT } = await import('../electron/main/ports.mjs')
+const { buildArgs, buildEmbedArgs } = await import('../daemon/llama-args.mjs')
+const { EMBED_PORT } = await import('../daemon/ports.mjs')
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-path-scope.mjs)

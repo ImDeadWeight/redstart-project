@@ -12,10 +12,10 @@
 // resources/elevate.exe, ../../../shared) work unchanged:
 //
 //   node/node.exe, node/LICENSE      the pinned Node 26 (stage-node.mjs)
-//   app/bin, app/electron/main       nestd and the daemon
+//   app/bin, app/daemon       nestd and the daemon
 //   app/dist                         the launcher the admin listener serves
 //   app/node_modules                 production dependencies only (npm ci)
-//   shared/*.mjs                     ../../../shared from app/electron/main
+//   shared/*.mjs                     ../../../shared from app/daemon
 //   chat-ui/                         the chat UI llama-server serves
 //   bin/                             llama-server + the DLLs it loads
 //   elevate.exe                      firewall rules with UAC
@@ -91,7 +91,7 @@ function main() {
 
   // The daemon, and its production dependencies installed from the lockfile.
   copyDir(path.join(NEST, 'bin'), out('app', 'bin'))
-  copyDir(path.join(NEST, 'electron', 'main'), out('app', 'electron', 'main'))
+  copyDir(path.join(NEST, 'daemon'), out('app', 'daemon'))
   copyDir(path.join(NEST, 'dist'), out('app', 'dist'))
   for (const f of ['package.json', 'package-lock.json']) fs.copyFileSync(need(path.join(NEST, f)), out('app', f))
   // --ignore-scripts: no production dependency needs an install script, and

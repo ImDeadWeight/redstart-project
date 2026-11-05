@@ -3,7 +3,7 @@
 // =============================================================================
 // Redstart Twig — Path containment for the local file-system tools
 // =============================================================================
-// VENDORED COPY of redstart-nest/electron/main/path-scope.mjs, taken verbatim
+// VENDORED COPY of redstart-nest/daemon/path-scope.mjs, taken verbatim
 // on 2026-08-07 (byte-identical at the time of the copy). Twig previously
 // reached across the source tree into Nest for this module; that coupling broke
 // when Nest reorganised its filesystem capability, so Twig now carries its own.

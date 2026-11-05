@@ -35,7 +35,7 @@ corrected: llama.cpp's copyright line is "The ggml authors," not one
 individual, and the bundled TurboQuant fork is built from
 https://github.com/TheTom/llama-cpp-turboquant — not turboderp/llama.cpp,
 an unrelated real developer's unrelated project that was named here and in
-electron/main/ipc/github.mjs by mistake.
+daemon/ipc/github.mjs by mistake.
 
 See THIRD-PARTY-NOTICES.md for the full list, license texts, and copyright
 holders.

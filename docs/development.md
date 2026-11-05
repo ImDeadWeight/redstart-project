@@ -22,7 +22,7 @@ redstart-project/
 ├── deploy/                # Service units, SCM procedure and Caddyfile for appliance installs
 ├── redstart-nest/         # Redstart Nest Electron app (server manager)
 │   ├── bin/nestd.mjs      # The headless entrypoint — the daemon under plain Node
-│   ├── electron/main/     # The daemon — gateway, MCP server, providers, control plane
+│   ├── daemon/     # The daemon — gateway, MCP server, providers, control plane
 │   │   ├── admin/         # The control plane's HTTP routes (auth, api, events, cors)
 │   │   ├── gateway/       # The data plane's non-proxied routes
 │   │   └── ipc/           # Handler bodies, one module per namespace
@@ -45,7 +45,7 @@ redstart-project/
 
 **The launcher talks HTTP, not IPC.** There is no preload script and no `contextBridge`; the bridge was retired once the launcher had to be servable to a browser, because a UI that reaches the main process through Electron-only plumbing cannot be. `src/api/http.ts` implements the same `RedstartAPI` surface against `POST /admin/api/<namespace>/<method>` on the control plane, so the Electron window and a browser on another machine are the same client over the same transport. `scripts/test-admin-api.mjs` holds the two halves together: every method the type declares must have a route, and every route must be gated.
 
-**One daemon, two entrypoints.** `electron/main/index.mjs` (desktop) and `bin/nestd.mjs` (headless) both start the *same* daemon; what differs is what they inject. Paths come from `platform-paths.mjs` and crypto from `secrets.mjs`, both fail-closed seams — the desktop wires up `app.getPath` and `safeStorage`, the daemon wires up a directory and a key file. Nothing below those seams imports `electron`, which is what makes the headless boot possible; `scripts/check-mjs.mjs` and the test suites' stub loader both depend on it staying that way.
+**One daemon, two entrypoints.** `daemon/index.mjs` (desktop) and `bin/nestd.mjs` (headless) both start the *same* daemon; what differs is what they inject. Paths come from `platform-paths.mjs` and crypto from `secrets.mjs`, both fail-closed seams — the desktop wires up `app.getPath` and `safeStorage`, the daemon wires up a directory and a key file. Nothing below those seams imports `electron`, which is what makes the headless boot possible; `scripts/check-mjs.mjs` and the test suites' stub loader both depend on it staying that way.
 
 **Twig owns its local file tools.** Twig's `fs_*` tools act on a folder on the *user's* machine and live in `redstart-twig/windows/electron/fs/`. They keep the `fs_*` prefix rather than adopting the upstream server's names, so the model — and an admin writing a tool ban — can tell Twig's local filesystem from Nest's server-side one. Only `path-scope.mjs` is duplicated between the apps; it is kept in sync by hand, and both copies say so.
 
@@ -130,7 +130,7 @@ npm run storybook                # interactive, per-component
 cd redstart-nest
 npm run test:security     # the full invariant suite — see docs/security.md
 npm run typecheck         # tsc --noEmit for the launcher
-npm run check:mjs         # node --check across electron/main + shared + bin
+npm run check:mjs         # node --check across daemon + shared + bin
 ```
 
 Two things the suites do not cover, and cannot as they stand:
@@ -141,7 +141,7 @@ Two things the suites do not cover, and cannot as they stand:
   (`test-daemon-smoke.mjs` and the admin suites), which is the half that can be
   driven headlessly.
 - **`bin/` is not in the packaged build.** `electron-builder.json`'s `files`
-  ships `electron/main` and `dist`, so `bin/nestd.mjs` exists only in a
+  ships `daemon` and `dist`, so `bin/nestd.mjs` exists only in a
   checkout. That is fine while there is nothing to install it onto; it matters
   the moment there is.
 

@@ -24,7 +24,7 @@
 
 import { createRequire } from 'node:module'
 import * as path from 'node:path'
-import { createStdioProcessManager } from '../../../shared/mcp-stdio-process.mjs'
+import { createStdioProcessManager } from '../../shared/mcp-stdio-process.mjs'
 import { resolveWithinRoot } from './path-scope.mjs'
 import { resolveUserRoot } from './user-scope.mjs'
 

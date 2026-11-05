@@ -4,7 +4,7 @@
 //! owns (plan D2) and talks to over the shell pipe (D3). This process is only
 //! the desktop around it: one window onto the admin listener, the tray, the
 //! login item, the recycle bin, notifications, and the secrets key's DPAPI
-//! unwrap. Its behaviour matches the T1 Electron shell (`electron/main/index.mjs`,
+//! unwrap. Its behaviour matches the T1 Electron shell (`daemon/index.mjs`,
 //! split path), which stays the shipping shell until T3's bridge release.
 //!
 //! Startup: single-instance check → paths → Beaver migration → secrets key →

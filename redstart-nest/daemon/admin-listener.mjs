@@ -106,7 +106,7 @@ export function bindHostRejection(host) {
 
 /** The built launcher bundle. Same directory index.mjs's packaged-build window load points at. */
 function bundleRoot() {
-  return path.join(__dirname, '..', '..', 'dist')
+  return path.join(__dirname, '..', 'dist')
 }
 
 // An extension filter ON TOP OF the enumeration, not instead of it. The

@@ -21,7 +21,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {
   writeDaemonPid, readDaemonPid, clearDaemonPid, daemonStatus, DAEMON_PID_FILE,
-} from '../electron/main/daemon-pidfile.mjs'
+} from '../daemon/daemon-pidfile.mjs'
 import { resolveNestDir, configDirFor, resolveDaemonPaths } from '../bin/nest-dir.mjs'
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-daemonpid-'))
@@ -95,7 +95,7 @@ await test('🔍 half a pair, or both shapes at once, is refused', () => {
 })
 
 await test('a packaged initPaths must name its resources directory', async () => {
-  const { initPaths } = await import('../electron/main/platform-paths.mjs')
+  const { initPaths } = await import('../daemon/platform-paths.mjs')
   let threw = null
   try { initPaths({ config: '/nest/config', capabilityBase: '/nest/data', isPackaged: true }) } catch (err) { threw = err }
   assert(threw && /resources/.test(threw.message), 'a packaged build with no resources directory was accepted')

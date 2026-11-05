@@ -1,5 +1,5 @@
 // =============================================================================
-// Unit tests for electron/main/mcp-plugin-client.mjs — the per-plugin stdio
+// Unit tests for daemon/mcp-plugin-client.mjs — the per-plugin stdio
 // MCP client.
 // =============================================================================
 // The riskiest module in the plugin system (see task T6): a wrong body here
@@ -20,9 +20,9 @@ import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as os from 'node:os'
 import * as fs from 'node:fs'
-import { createPluginClient } from '../electron/main/mcp-plugin-client.mjs'
+import { createPluginClient } from '../daemon/mcp-plugin-client.mjs'
 import { createStdioProcessManager } from '../../shared/mcp-stdio-process.mjs'
-import { initLogger, closeLogger } from '../electron/main/logger.mjs'
+import { initLogger, closeLogger } from '../daemon/logger.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-mcp-server.mjs')

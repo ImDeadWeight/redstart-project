@@ -26,8 +26,8 @@
 // =============================================================================
 
 import { resolveDaemonPaths } from '../bin/nest-dir.mjs'
-import { daemonStatus, clearDaemonPid, readDaemonPid } from '../electron/main/daemon-pidfile.mjs'
-import { readPidFile } from '../electron/main/process-supervision.mjs'
+import { daemonStatus, clearDaemonPid, readDaemonPid } from '../daemon/daemon-pidfile.mjs'
+import { readPidFile } from '../daemon/process-supervision.mjs'
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))

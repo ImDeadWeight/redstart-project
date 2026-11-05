@@ -46,7 +46,7 @@ export function buildArgs(config, raw = false) {
   const q = raw ? (v) => v : (v) => `"${v}"`
   const chatUiPath = isPackaged()
     ? path.join(resourcesDir(), 'chat-ui')
-    : path.join(__dirname, '..', '..', 'src', 'chat-ui', 'dist')
+    : path.join(__dirname, '..', 'src', 'chat-ui', 'dist')
   const args = [
     '-m', q(config.modelPath),
     '-c', String(config.ctxSize),

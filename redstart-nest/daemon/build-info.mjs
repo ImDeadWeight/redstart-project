@@ -48,7 +48,7 @@ let cachedVersion = null
 export function appVersion() {
   if (cachedVersion !== null) return cachedVersion
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8'))
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'))
     cachedVersion = typeof pkg.version === 'string' ? pkg.version : 'unknown'
   } catch {
     cachedVersion = 'unknown'

@@ -1,5 +1,5 @@
 // =============================================================================
-// Unit tests for electron/main/path-scope.mjs — the shared containment check
+// Unit tests for daemon/path-scope.mjs — the shared containment check
 // used by every file-based MCP capability provider.
 // =============================================================================
 // Pure Node, no Electron dependency (path-scope.mjs imports only fs/path).
@@ -11,7 +11,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { resolveWithinRoot, tryResolveWithinRoot } from '../electron/main/path-scope.mjs'
+import { resolveWithinRoot, tryResolveWithinRoot } from '../daemon/path-scope.mjs'
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-auth.mjs)

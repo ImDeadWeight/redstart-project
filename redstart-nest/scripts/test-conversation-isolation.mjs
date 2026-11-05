@@ -1,5 +1,5 @@
 // =============================================================================
-// Unit tests for electron/main/conversations-storage.mjs — per-account
+// Unit tests for daemon/conversations-storage.mjs — per-account
 // conversation isolation.
 // =============================================================================
 // This is a Priority-8 invariant and, in the multi-application ecosystem Core
@@ -41,7 +41,7 @@ registerElectronStub()
 // trigger the stub's initPaths() call.
 await import('./electron-stub.mjs')
 
-const store = await import('../electron/main/conversations-storage.mjs')
+const store = await import('../daemon/conversations-storage.mjs')
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-path-scope.mjs)

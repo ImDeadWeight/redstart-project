@@ -302,7 +302,7 @@ jobs:
         with:
           name: ${{ matrix.app }}-${{ runner.os }}
           # The .yml and .blockmap are what Nest's auto-updater reads (see
-          # electron/main/update-feed.mjs). nest.yml names the installer and its
+          # daemon/update-feed.mjs). nest.yml names the installer and its
           # sha512. The blockmap lets the NEXT release download only the blocks
           # that changed, which is most of the point with a ~1 GB CUDA DLL that
           # does not change between alphas. Twig writes no .yml yet; its
@@ -339,7 +339,7 @@ jobs:
           path: src
           sparse-checkout: |
             redstart-nest/scripts
-            redstart-nest/electron/main
+            redstart-nest/daemon
 
       - name: Merge the Tauri update manifest
         run: node src/redstart-nest/scripts/make-shell-manifests.mjs merge dist

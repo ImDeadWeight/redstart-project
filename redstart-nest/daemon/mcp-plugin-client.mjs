@@ -27,7 +27,7 @@
 // cheaper than destabilising it. Converge later if it earns it.)
 // =============================================================================
 
-import { createStdioProcessManager } from '../../../shared/mcp-stdio-process.mjs'
+import { createStdioProcessManager } from '../../shared/mcp-stdio-process.mjs'
 import { logEvent } from './logger.mjs'
 
 // Crash-restart pacing, per plugin. A child that dies instantly every time must

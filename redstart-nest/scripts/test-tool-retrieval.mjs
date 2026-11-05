@@ -1,5 +1,5 @@
 // =============================================================================
-// Invariant tests for electron/main/tool-retrieval.mjs
+// Invariant tests for daemon/tool-retrieval.mjs
 // =============================================================================
 // Three things this suite exists to catch, all of which are easy to lose to an
 // innocent-looking edit:
@@ -32,18 +32,18 @@ import {
   createSelectionMemory,
   truncateForEmbedding,
   CHARS_PER_TOKEN,
-} from '../electron/main/tool-retrieval.mjs'
-import * as searchProvider from '../electron/main/search-tools-provider.mjs'
-const { retrievalStatus, syncRetrieval, applyToolsConfig, resetRetrievalState } = await import('../electron/main/ipc/tools.mjs')
-import { EMBED_PORT } from '../electron/main/ports.mjs'
-import { EMBED_MODEL } from '../electron/main/embed-model.mjs'
+} from '../daemon/tool-retrieval.mjs'
+import * as searchProvider from '../daemon/search-tools-provider.mjs'
+const { retrievalStatus, syncRetrieval, applyToolsConfig, resetRetrievalState } = await import('../daemon/ipc/tools.mjs')
+import { EMBED_PORT } from '../daemon/ports.mjs'
+import { EMBED_MODEL } from '../daemon/embed-model.mjs'
 import {
   filterRequestTools,
   searchTools,
   toolBudget,
   resetToolFilterState,
   CONTEXT_BUDGET_FRACTION,
-} from '../electron/main/tool-filter.mjs'
+} from '../daemon/tool-filter.mjs'
 import {
   EMBED_PID_FILE,
   startEmbedServer,
@@ -51,8 +51,8 @@ import {
   embedServerStatus,
   embedTexts,
   resetEmbedFailureLog,
-} from '../electron/main/embed-server.mjs'
-import { LLAMA_PID_FILE } from '../electron/main/process-supervision.mjs'
+} from '../daemon/embed-server.mjs'
+import { LLAMA_PID_FILE } from '../daemon/process-supervision.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'

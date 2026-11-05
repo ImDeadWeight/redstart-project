@@ -1,5 +1,5 @@
 //! The shell's own event log: `<config>/shell/redstart.log`, one JSON object
-//! per line, the same shape `electron/main/logger.mjs` writes, so one reader
+//! per line, the same shape `daemon/logger.mjs` writes, so one reader
 //! handles both. The daemon keeps its own `<config>/redstart.log`. Two
 //! processes appending to (and rotating) one file would garble it.
 //!

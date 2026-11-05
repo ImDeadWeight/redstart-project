@@ -56,12 +56,12 @@ registerElectronStub()
 // trigger the stub's initPaths() call.
 await import('./electron-stub.mjs')
 
-const { startMcpServer, stopMcpServer } = await import('../electron/main/mcp-server.mjs')
-const { setAuthRequired } = await import('../electron/main/auth.mjs')
-const { capabilityForTool, classifyTool, expandDisabledToolIds, setPluginCapabilityProvider } = await import('../electron/main/tools-definitions.mjs')
-const { addPlugin, removePlugin, pluginCapabilities } = await import('../electron/main/plugin-registry.mjs')
+const { startMcpServer, stopMcpServer } = await import('../daemon/mcp-server.mjs')
+const { setAuthRequired } = await import('../daemon/auth.mjs')
+const { capabilityForTool, classifyTool, expandDisabledToolIds, setPluginCapabilityProvider } = await import('../daemon/tools-definitions.mjs')
+const { addPlugin, removePlugin, pluginCapabilities } = await import('../daemon/plugin-registry.mjs')
 
-// Real app startup wires this in electron/main/index.mjs; this suite imports
+// Real app startup wires this in daemon/index.mjs; this suite imports
 // mcp-server.mjs and plugin-registry.mjs independently of that bootstrap, so
 // it has to do the same wiring itself or every plugin-ban test below would
 // pass for the wrong reason (capabilityToolNames() would simply never see the
@@ -139,7 +139,7 @@ async function main() {
   console.log('\n-- default capability folder provisioning --')
 
   {
-    const storage = await import('../electron/main/tools-storage.mjs')
+    const storage = await import('../daemon/tools-storage.mjs')
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-default-folders-'))
 
     await test('first run provisions Documents/Databases/Notes/Repos and sets paths', async () => {
@@ -205,7 +205,7 @@ async function main() {
     assert(res.error?.code === -32601, `expected -32601, got ${JSON.stringify(res)}`)
   })
 
-  const { updateMcpConfig } = await import('../electron/main/mcp-server.mjs')
+  const { updateMcpConfig } = await import('../daemon/mcp-server.mjs')
 
   console.log('\n-- web_fetch / web_search policy (offline) --')
 
@@ -983,10 +983,10 @@ async function main() {
   // child must be spawned + handshaked (syncFilesystemProvider) before its tools
   // appear, since toolDefs() serves the cached tools/list from the live child.
   {
-    const { buildGatewayConfig } = await import('../electron/main/gateway-config.mjs')
-    const { expandDisabledToolIds } = await import('../electron/main/tools-definitions.mjs')
-    const storageFs = await import('../electron/main/tools-storage.mjs')
-    const fsProvider = await import('../electron/main/filesystem-mcp-provider.mjs')
+    const { buildGatewayConfig } = await import('../daemon/gateway-config.mjs')
+    const { expandDisabledToolIds } = await import('../daemon/tools-definitions.mjs')
+    const storageFs = await import('../daemon/tools-storage.mjs')
+    const fsProvider = await import('../daemon/filesystem-mcp-provider.mjs')
     storageFs.setCapabilityConfig('file_system', { enabled: true, rootDir: tmpFsDir })
     fs.writeFileSync(path.join(scopedFsDir, 'note.txt'), 'hello world')
     const fsProfile = { tools: { enabled: true, activeToolIds: ['file_system'] } }
@@ -1012,7 +1012,7 @@ async function main() {
       // Web Access off + whitelist on + sources selected: the combination where
       // the pre-Step-2b gate consulted allowedBaseUrls and never looked at
       // `enabled`, so the card's Disable silently served the tools anyway.
-      const webFetchTool = await import('../electron/main/web-fetch-tool.mjs')
+      const webFetchTool = await import('../daemon/web-fetch-tool.mjs')
       const webOff = webFetchTool.toolDefs({
         webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: ['https://example.com/'], activeTools: [], maxFetchTokens: 2000 },
       })

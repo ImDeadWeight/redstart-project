@@ -1,5 +1,5 @@
 // =============================================================================
-// Unit tests for electron/main/plugin-registry.mjs — the installed MCP plugin
+// Unit tests for daemon/plugin-registry.mjs — the installed MCP plugin
 // registry.
 // =============================================================================
 // A registry entry decides what a third-party process is allowed to do, so
@@ -37,7 +37,7 @@ registerElectronStub()
 // trigger the stub's initPaths() call.
 await import('./electron-stub.mjs')
 
-const registry = await import('../electron/main/plugin-registry.mjs')
+const registry = await import('../daemon/plugin-registry.mjs')
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-json-store.mjs)

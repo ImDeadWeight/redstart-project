@@ -12,9 +12,9 @@
 // This module no longer knows HOW anything is encrypted. It holds
 // the seam and the storage format; a provider supplies the crypto:
 //
-//   electron/main/secrets-safe-storage.mjs   Electron safeStorage (DPAPI on
+//   daemon/secrets-safe-storage.mjs   Electron safeStorage (DPAPI on
 //                                            Windows). The desktop entrypoint.
-//   electron/main/secrets-keyfile.mjs        AES-256-GCM under a daemon-owned
+//   daemon/secrets-keyfile.mjs        AES-256-GCM under a daemon-owned
 //                                            key file. The headless entrypoint.
 //
 // Why the seam exists: safeStorage is Electron-only, and the appliance gets

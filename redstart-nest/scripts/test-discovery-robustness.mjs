@@ -1,5 +1,5 @@
 // =============================================================================
-// Robustness tests for electron/main/beacon.mjs — the inbound discovery
+// Robustness tests for daemon/beacon.mjs — the inbound discovery
 // endpoint.
 // =============================================================================
 // Priority 7: malformed discovery traffic must be rejected safely with no
@@ -21,7 +21,7 @@
 
 import * as http from 'node:http'
 import * as net from 'node:net'
-import { startBeaconServer, stopBeaconServer } from '../electron/main/beacon.mjs'
+import { startBeaconServer, stopBeaconServer } from '../daemon/beacon.mjs'
 
 // ---------------------------------------------------------------------------
 // Harness

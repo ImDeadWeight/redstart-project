@@ -1,5 +1,5 @@
 // =============================================================================
-// Unit tests for electron/main/admin/browse-routes.mjs — the server-side
+// Unit tests for daemon/admin/browse-routes.mjs — the server-side
 // directory browser that replaces the native pickers over HTTP (Phase 4 §4.2).
 // =============================================================================
 // Pure Node, no Electron dependency (browse-routes.mjs imports only fs/os/path).
@@ -13,8 +13,8 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {
   browseRoots, listDirectory, browseMkdir, browseRouteHandlers,
-} from '../electron/main/admin/browse-routes.mjs'
-import { isLocalOnly } from '../electron/main/ipc/transport.mjs'
+} from '../daemon/admin/browse-routes.mjs'
+import { isLocalOnly } from '../daemon/ipc/transport.mjs'
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-path-scope.mjs)

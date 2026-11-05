@@ -24,7 +24,7 @@ import {
   findUpdateRelease,
   parseVersion,
   pickUpdateRelease,
-} from '../electron/main/update-feed.mjs'
+} from '../daemon/update-feed.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const results = []

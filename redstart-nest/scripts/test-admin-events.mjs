@@ -26,10 +26,10 @@ process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 registerElectronStub()
 await import('./electron-stub.mjs')
 
-const { startAdminListener, stopAdminListener } = await import('../electron/main/admin-listener.mjs')
-const { createOwner, createAccount, login, CONTROL_PLANE } = await import('../electron/main/auth.mjs')
-const { publish } = await import('../electron/main/event-broker.mjs')
-const { initProcessLog, appendLine: appendProcessLine } = await import('../electron/main/process-log.mjs')
+const { startAdminListener, stopAdminListener } = await import('../daemon/admin-listener.mjs')
+const { createOwner, createAccount, login, CONTROL_PLANE } = await import('../daemon/auth.mjs')
+const { publish } = await import('../daemon/event-broker.mjs')
+const { initProcessLog, appendLine: appendProcessLine } = await import('../daemon/process-log.mjs')
 
 const PORT = 48386
 const admin = `http://127.0.0.1:${PORT}`

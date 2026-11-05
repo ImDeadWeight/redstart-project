@@ -2,7 +2,7 @@
 // Structured logging — the privacy contract must hold on disk, not just in
 // the source comment.
 // =============================================================================
-// electron/main/logger.mjs promises two things:
+// daemon/logger.mjs promises two things:
 //   - logEvent() drops a finite blocklist of sensitive-sounding keys, AND
 //     (defense in depth) drops any object/array value under a key that
 //     ISN'T blocked, so a future field name nobody thought to blocklist
@@ -20,8 +20,8 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { initLogger, closeLogger, logEvent, logAudit } from '../electron/main/logger.mjs'
-import { describeCrash } from '../electron/main/crash-handler.mjs'
+import { initLogger, closeLogger, logEvent, logAudit } from '../daemon/logger.mjs'
+import { describeCrash } from '../daemon/crash-handler.mjs'
 
 const results = []
 
@@ -44,7 +44,7 @@ function assert(cond, message) {
   if (!cond) throw new Error(message)
 }
 
-// Mirrors the BLOCKED_KEYS set in electron/main/logger.mjs — kept as a literal
+// Mirrors the BLOCKED_KEYS set in daemon/logger.mjs — kept as a literal
 // copy (not imported) so this suite notices if the source list ever drifts
 // without a matching update here.
 const BLOCKED_KEYS = [
@@ -240,8 +240,8 @@ console.log('\n-- real call-site sanity (static, light) --')
 
 await test('every logAudit() call site passes only allowlisted fields', () => {
   const callSites = [
-    path.join(import.meta.dirname, '../electron/main/files-api.mjs'),
-    path.join(import.meta.dirname, '../electron/main/fs-delete-tool.mjs'),
+    path.join(import.meta.dirname, '../daemon/files-api.mjs'),
+    path.join(import.meta.dirname, '../daemon/fs-delete-tool.mjs'),
   ]
   const allowed = new Set(AUDIT_FIELDS)
   const offenders = []

@@ -1,5 +1,5 @@
 //! The secrets key, held by the shell and handed to the daemon in `hello`.
-//! A port of `electron/main/shell-secrets-key.mjs`, reading and writing the
+//! A port of `daemon/shell-secrets-key.mjs`, reading and writing the
 //! same `secrets-key.json`, so an install upgraded by T1 is read here
 //! unchanged.
 //!

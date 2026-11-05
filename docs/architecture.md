@@ -68,7 +68,7 @@ Prefer the IP and give the host a DHCP reservation on your router. The sslip nam
 
 ## The daemon and the control plane
 
-**The daemon is the product; the window is one client of it.** `electron/main/`
+**The daemon is the product; the window is one client of it.** `daemon/`
 is a server that happens to be startable two ways: `index.mjs` under Electron
 (the desktop app) and `bin/nestd.mjs` under plain Node (headless, no window, no
 desktop session). Both start the *same* daemon. What differs is what they inject
@@ -84,7 +84,7 @@ updater, recycle bin. It spawns `nestd --shell-pipe` on a Node 26 bundled
 under `resources/node` (pinned by version and SHA-256 in
 `scripts/stage-node.mjs`), so the daemon runs on a current Node no matter
 how old Electron's own is. The two talk in JSON lines over the child's stdin
-and stdout (`electron/main/shell-pipe.mjs`). The shell sends `hello` with the
+and stdout (`daemon/shell-pipe.mjs`). The shell sends `hello` with the
 paths and the unwrapped secrets key, and the daemon answers `ready` with its
 port. After that, the daemon asks the shell for the things only a desktop
 session can do (trash a file, set the login item, check for an update), and

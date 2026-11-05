@@ -21,7 +21,7 @@ Precise specifications that code and tests are held to:
 
 | Document | Contract |
 |---|---|
-| [System prompt spec](system-prompt-spec.md) | The block contract, precedence, egress reporting, surface identity and modes. Code across `electron/main` and the chat-ui cites its sections as "spec §N" |
+| [System prompt spec](system-prompt-spec.md) | The block contract, precedence, egress reporting, surface identity and modes. Code across `daemon` and the chat-ui cites its sections as "spec §N" |
 | [Connector contract](connector-contract.md) | How a client app authenticates and how its surface is derived |
 | [Tool namespacing](tool-namespacing.md) | Prefix rules that keep admin tool bans targetable across apps |
 

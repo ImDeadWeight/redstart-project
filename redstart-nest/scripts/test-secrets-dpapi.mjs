@@ -27,9 +27,9 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const fixture = JSON.parse(fs.readFileSync(path.join(here, 'fixtures', 'oscrypt-electron33.json'), 'utf8'))
 const KEY = Buffer.from(fixture.keyBase64, 'base64')
 
-const { oscryptProvider, oscryptMacProvider, providerForHello, readWrappedKey, OSCRYPT_KEY_BYTES } = await import('../electron/main/secrets-dpapi.mjs')
-const { SAFE_STORAGE_TAG } = await import('../electron/main/secrets-safe-storage.mjs')
-const secrets = await import('../electron/main/secrets.mjs')
+const { oscryptProvider, oscryptMacProvider, providerForHello, readWrappedKey, OSCRYPT_KEY_BYTES } = await import('../daemon/secrets-dpapi.mjs')
+const { SAFE_STORAGE_TAG } = await import('../daemon/secrets-safe-storage.mjs')
+const secrets = await import('../daemon/secrets.mjs')
 
 const results = []
 async function test(name, fn) {

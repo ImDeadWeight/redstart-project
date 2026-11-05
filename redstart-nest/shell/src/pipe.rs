@@ -1,4 +1,4 @@
-//! The shell's end of the shell pipe: `electron/main/shell-pipe.mjs`'s
+//! The shell's end of the shell pipe: `daemon/shell-pipe.mjs`'s
 //! framing in Rust. One JSON object per line, each carrying `"rs": 1`:
 //!
 //!   { rs:1, type:'request',  id, method, params }    either direction

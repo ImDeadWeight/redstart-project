@@ -33,8 +33,8 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { keyfileProvider, KEY_FILE_NAME, KEY_BYTES, KEYFILE_TAG } from '../electron/main/secrets-keyfile.mjs'
-import { safeStorageProvider, SAFE_STORAGE_TAG } from '../electron/main/secrets-safe-storage.mjs'
+import { keyfileProvider, KEY_FILE_NAME, KEY_BYTES, KEYFILE_TAG } from '../daemon/secrets-keyfile.mjs'
+import { safeStorageProvider, SAFE_STORAGE_TAG } from '../daemon/secrets-safe-storage.mjs'
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-secrets-'))
 
@@ -70,7 +70,7 @@ function throws(fn, matcher, message) {
 // the ESM module cache; nothing in the module depends on its own URL.
 let freshCount = 0
 function freshSecrets() {
-  return import(`../electron/main/secrets.mjs?case=${++freshCount}`)
+  return import(`../daemon/secrets.mjs?case=${++freshCount}`)
 }
 
 function newDir(name) {

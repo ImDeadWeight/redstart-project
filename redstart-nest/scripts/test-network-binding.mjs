@@ -42,9 +42,9 @@ registerElectronStub()
 // trigger the stub's initPaths() call.
 await import('./electron-stub.mjs')
 
-const { startGateway, stopGateway } = await import('../electron/main/tools-gateway.mjs')
-const { startMcpServer, stopMcpServer } = await import('../electron/main/mcp-server.mjs')
-const { setAuthRequired } = await import('../electron/main/auth.mjs')
+const { startGateway, stopGateway } = await import('../daemon/tools-gateway.mjs')
+const { startMcpServer, stopMcpServer } = await import('../daemon/mcp-server.mjs')
+const { setAuthRequired } = await import('../daemon/auth.mjs')
 
 // This suite is about reachability, not the auth gate (test-auth.mjs owns
 // that). Auth off keeps the loopback probes to a plain 200 instead of a 401 —

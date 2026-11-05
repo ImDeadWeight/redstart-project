@@ -1,5 +1,5 @@
 // =============================================================================
-// Invariant tests for electron/main/tools-definitions.mjs — the tool
+// Invariant tests for daemon/tools-definitions.mjs — the tool
 // classification that the permission gate is built on.
 // =============================================================================
 // Priority 4/5 (permission escalation). The MCP server's non-bypassable gate
@@ -28,7 +28,7 @@ import {
   expandDisabledToolIds,
   capabilityForTool,
   setPluginCapabilityProvider,
-} from '../electron/main/tools-definitions.mjs'
+} from '../daemon/tools-definitions.mjs'
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-path-scope.mjs)

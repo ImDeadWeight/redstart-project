@@ -1,5 +1,5 @@
 // =============================================================================
-// Unit tests for electron/main/plugin-provider.mjs — the adapter that turns a
+// Unit tests for daemon/plugin-provider.mjs — the adapter that turns a
 // registry entry into a provider-contract object mcp-server.mjs can dispatch
 // to (task T7 / Phase 6 test plan).
 // =============================================================================
@@ -42,8 +42,8 @@ registerElectronStub()
 // trigger the stub's initPaths() call.
 await import('./electron-stub.mjs')
 
-const { addPlugin, getPlugin, removePlugin } = await import('../electron/main/plugin-registry.mjs')
-const { pluginProviders, stopAllPlugins, syncPluginProviders } = await import('../electron/main/plugin-provider.mjs')
+const { addPlugin, getPlugin, removePlugin } = await import('../daemon/plugin-registry.mjs')
+const { pluginProviders, stopAllPlugins, syncPluginProviders } = await import('../daemon/plugin-provider.mjs')
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-mcp-server.mjs')

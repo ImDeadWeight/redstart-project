@@ -29,7 +29,7 @@ import {
   capabilityForTool,
   capabilityToolNames,
   setPluginCapabilityProvider,
-} from '../electron/main/tools-definitions.mjs'
+} from '../daemon/tools-definitions.mjs'
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-tool-policy.mjs)

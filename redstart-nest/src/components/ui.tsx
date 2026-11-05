@@ -137,7 +137,7 @@ import { useTauriWindow, type TauriWindow } from '../hooks/useTauriWindow'
 // ONE component for both screens. The native title bar is hidden and Electron
 // paints only the minimise/maximise/close buttons over the top 48px, so
 // whatever occupies that strip is the title bar: h-12 here must stay equal to
-// titleBarOverlay.height in electron/main/index.mjs or the buttons will not
+// titleBarOverlay.height in daemon/index.mjs or the buttons will not
 // line up with it.
 //
 // It exists because the sign-in screen used to draw its own invisible drag

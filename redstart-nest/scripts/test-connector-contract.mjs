@@ -35,8 +35,8 @@ registerElectronStub()
 // trigger the stub's initPaths() call.
 await import('./electron-stub.mjs')
 
-const { startGateway, stopGateway } = await import('../electron/main/tools-gateway.mjs')
-const { setAuthRequired, createOwner } = await import('../electron/main/auth.mjs')
+const { startGateway, stopGateway } = await import('../daemon/tools-gateway.mjs')
+const { setAuthRequired, createOwner } = await import('../daemon/auth.mjs')
 
 const PORT = 48280
 const gw = `http://127.0.0.1:${PORT}`

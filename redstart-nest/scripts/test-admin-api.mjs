@@ -45,13 +45,13 @@ process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 registerElectronStub()
 await import('./electron-stub.mjs')
 
-const { startAdminListener, stopAdminListener } = await import('../electron/main/admin-listener.mjs')
+const { startAdminListener, stopAdminListener } = await import('../daemon/admin-listener.mjs')
 const {
   setAdminApi, channelFromPath, pathForChannel, isAdminApiRoute,
-} = await import('../electron/main/admin/api-routes.mjs')
-const { buildAdminApi } = await import('../electron/main/admin/api-table.mjs')
-const { isLocalOnly } = await import('../electron/main/ipc/transport.mjs')
-const { createOwner, createAccount, login, CONTROL_PLANE } = await import('../electron/main/auth.mjs')
+} = await import('../daemon/admin/api-routes.mjs')
+const { buildAdminApi } = await import('../daemon/admin/api-table.mjs')
+const { isLocalOnly } = await import('../daemon/ipc/transport.mjs')
+const { createOwner, createAccount, login, CONTROL_PLANE } = await import('../daemon/auth.mjs')
 
 const PORT = 48385
 const admin = `http://127.0.0.1:${PORT}`
@@ -230,7 +230,7 @@ await test('the table assembles a real number of namespaces', () => {
   // second transport is ever added again. What is still worth pinning: the
   // table actually assembles something, so a namespace import throwing
   // silently at build time does not quietly shrink the whole admin API.
-  const tableSource = fs.readFileSync(path.join(repoRoot, 'electron', 'main', 'admin', 'api-table.mjs'), 'utf8')
+  const tableSource = fs.readFileSync(path.join(repoRoot, 'daemon', 'admin', 'api-table.mjs'), 'utf8')
   const tabled = [...tableSource.matchAll(/\.\.\.(\w+)Handlers\(/g)].map(m => m[1].toLowerCase())
   assert(tabled.length >= 10, `expected at least 10 namespaces, found ${tabled.length}`)
   return `${tabled.length} namespaces`

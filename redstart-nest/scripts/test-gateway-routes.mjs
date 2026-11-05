@@ -41,11 +41,11 @@ registerElectronStub()
 // trigger the stub's initPaths() call.
 await import('./electron-stub.mjs')
 
-const { startGateway, stopGateway } = await import('../electron/main/tools-gateway.mjs')
-const { updateGatewayConfig } = await import('../electron/main/tools-gateway.mjs')
-const { observedWireCost } = await import('../electron/main/tool-filter.mjs')
-const { EMBED_PORT } = await import('../electron/main/ports.mjs')
-const { setAuthRequired, createOwner, createAccount } = await import('../electron/main/auth.mjs')
+const { startGateway, stopGateway } = await import('../daemon/tools-gateway.mjs')
+const { updateGatewayConfig } = await import('../daemon/tools-gateway.mjs')
+const { observedWireCost } = await import('../daemon/tool-filter.mjs')
+const { EMBED_PORT } = await import('../daemon/ports.mjs')
+const { setAuthRequired, createOwner, createAccount } = await import('../daemon/auth.mjs')
 
 const baseConfig = { allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 }
 

@@ -44,10 +44,10 @@ await import('./electron-stub.mjs')
 const {
   login, authenticate, authenticateControlPlane, createOwner, createAccount,
   revokeSession, resetPassword, deleteAccount, DATA_PLANE, CONTROL_PLANE,
-} = await import('../electron/main/auth.mjs')
+} = await import('../daemon/auth.mjs')
 const {
   listSessions, reloadSessions, findByTokenHash,
-} = await import('../electron/main/sessions-storage.mjs')
+} = await import('../daemon/sessions-storage.mjs')
 
 const sessionsFile = path.join(tmpDir, 'sessions.json')
 

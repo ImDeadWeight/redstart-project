@@ -192,7 +192,7 @@
  * overlay); +layout adds `twig-desktop` on <html> and renders `.twig-titlebar`.
  * The strip is the draggable "title bar"; the offsets below push the app and
  * the fixed-position sidebar out from under it. The height must match
- * TITLEBAR_HEIGHT in redstart-twig/windows/electron/main.mjs.
+ * TITLEBAR_HEIGHT in redstart-twig/windows/daemon.mjs.
  */
 html.twig-desktop {
 	/* CSS pixels, and the Twig shell zooms its web content (UI_ZOOM in

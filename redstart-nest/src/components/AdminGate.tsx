@@ -13,7 +13,7 @@
 //   SET UP      no owner exists yet. The box's bootstrap token, plus the
 //               credential to create. The token is what stops the first
 //               stranger to find the port from owning the box — see
-//               electron/main/bootstrap-token.mjs for why that route can
+//               daemon/bootstrap-token.mjs for why that route can
 //               never be anonymous.
 //
 // The set-up screen is also the RECOVERY screen, because they are the same
@@ -82,7 +82,7 @@ function Shell({ title, subtitle, status, children }: {
           simply absent until you signed in — the window buttons floated over a
           bare background with nothing beside them. Sharing the component also
           means the h-12 that has to equal titleBarOverlay.height in
-          electron/main/index.mjs is stated in exactly one place.
+          daemon/index.mjs is stated in exactly one place.
 
           The right-hand slot is filled, but not with the server state: whether
           a model is running is not a claim to make to a caller who has not

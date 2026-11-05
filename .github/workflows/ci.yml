@@ -48,7 +48,7 @@ jobs:
       - name: Typecheck launcher (tsc --noEmit)
         run: npm run typecheck
 
-      - name: Syntax-check electron/main (node --check)
+      - name: Syntax-check daemon (node --check)
         run: npm run check:mjs
 
       # Security suites run as separate steps so a failure is identifiable from

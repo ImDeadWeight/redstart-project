@@ -188,7 +188,7 @@ function resolveBinary() {
     candidates.push(path.join(resourcesDir(), 'bin', name))
   } else {
     // Dev: look in the project tree
-    const projectRoot = path.join(__dirname, '..', '..')
+    const projectRoot = path.join(__dirname, '..')
     candidates.push(
       path.join(projectRoot, 'llama-cpp-turboquant', 'build', 'bin', 'Release', name),
       path.join(projectRoot, name),

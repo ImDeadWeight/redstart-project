@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, getAPI } from '../api/redstart'
 import type { UpdateState } from '../types'
 
-// The Windows auto-updater (electron/main/auto-update.mjs): the automatic-check
+// The Windows auto-updater (daemon/auto-update.mjs): the automatic-check
 // switch, "Check now", and "Restart to update". State is read once, then kept
 // current by update:status events, so a remote admin sees a download finish
 // without reloading the page.

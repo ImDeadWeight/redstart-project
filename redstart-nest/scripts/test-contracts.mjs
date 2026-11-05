@@ -38,9 +38,9 @@ registerElectronStub()
 // trigger the stub's initPaths() call.
 await import('./electron-stub.mjs')
 
-const { startGateway, stopGateway } = await import('../electron/main/tools-gateway.mjs')
-const { startMcpServer, stopMcpServer } = await import('../electron/main/mcp-server.mjs')
-const { setAuthRequired, createOwner } = await import('../electron/main/auth.mjs')
+const { startGateway, stopGateway } = await import('../daemon/tools-gateway.mjs')
+const { startMcpServer, stopMcpServer } = await import('../daemon/mcp-server.mjs')
+const { setAuthRequired, createOwner } = await import('../daemon/auth.mjs')
 
 const GATEWAY_PORT = 48082 // internal (unused) is +1
 const MCP_PORT = 48096

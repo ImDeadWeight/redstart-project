@@ -1,5 +1,5 @@
 // =============================================================================
-// Invariant tests for electron/main/system-prompt.mjs — the composed system
+// Invariant tests for daemon/system-prompt.mjs — the composed system
 // prompt that every completion carries.
 // =============================================================================
 // Two properties matter here, and they fail in opposite directions:
@@ -17,7 +17,7 @@
 //      drifts makes the model lie to users in the deployment's own voice.
 //
 // Formerly a pure module importing nothing; since task T13 it reads the
-// plugin registry (electron/main/plugin-registry.mjs, which calls
+// plugin registry (daemon/plugin-registry.mjs, which calls
 // app.getPath('userData')) to compute credentialPlugins. So this suite now
 // needs the same electron-stub resolve hook scripts/test-conversation-isolation.mjs
 // uses, with the temp userData dir set BEFORE the first import.
@@ -57,8 +57,8 @@ const {
   MODES,
   MODE_IDS,
   DEFAULT_TOKEN_BUDGET,
-} = await import('../electron/main/system-prompt.mjs')
-const { addPlugin, removePlugin } = await import('../electron/main/plugin-registry.mjs')
+} = await import('../daemon/system-prompt.mjs')
+const { addPlugin, removePlugin } = await import('../daemon/plugin-registry.mjs')
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-tool-policy.mjs)
@@ -151,7 +151,7 @@ await test('tools in the request → the constraints a schema cannot carry are s
   // CodeQL: js/incomplete-url-substring-sanitization — false positive, dismissed.
   // This asserts that the composed PROMPT TEXT names an approved domain; it is a
   // string search over prose, not a host check, and nothing is authorised by it.
-  // Host allow-listing lives in isAllowed() (electron/main/web-fetch-tool.mjs),
+  // Host allow-listing lives in isAllowed() (daemon/web-fetch-tool.mjs),
   // which parses with `new URL()` and compares `hostname` exactly or as a
   // dot-prefixed suffix — so `evil-docs.example.org` and
   // `docs.example.org.attacker.com` are both rejected there. See

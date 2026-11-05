@@ -1,5 +1,5 @@
 // =============================================================================
-// Unit tests for electron/main/plugin-runtimes.mjs — npm/uv detection.
+// Unit tests for daemon/plugin-runtimes.mjs — npm/uv detection.
 // =============================================================================
 // npmCliPathCandidates() is exported specifically so this suite can assert
 // BOTH real layouts without depending on which one happens to be true on the
@@ -19,7 +19,7 @@
 // =============================================================================
 
 import * as path from 'node:path'
-import { npmCliPathCandidates, detectNode, detectNpm, detectUv, RUNTIME_REASON } from '../electron/main/plugin-runtimes.mjs'
+import { npmCliPathCandidates, detectNode, detectNpm, detectUv, RUNTIME_REASON } from '../daemon/plugin-runtimes.mjs'
 
 const results = []
 

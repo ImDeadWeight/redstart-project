@@ -36,9 +36,9 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import { ADMIN_PORT, BEACON_PORT } from '../electron/main/ports.mjs'
-import { createPeer } from '../electron/main/shell-pipe.mjs'
-import { startDaemonProcess } from '../electron/main/daemon-host.mjs'
+import { ADMIN_PORT, BEACON_PORT } from '../daemon/ports.mjs'
+import { createPeer } from '../daemon/shell-pipe.mjs'
+import { startDaemonProcess } from '../daemon/daemon-host.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.join(here, '..')

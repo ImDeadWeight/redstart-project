@@ -30,9 +30,9 @@ vi.mock('electron', () => ({
 	}
 }));
 
-// Most of the electron/main modules this file exercises no longer import
+// Most of the daemon modules this file exercises no longer import
 // 'electron' at all -- they go through platform-paths.mjs's configDir() /
-// capabilityBaseDir() instead (see electron/main/platform-paths.mjs). The
+// capabilityBaseDir() instead (see daemon/platform-paths.mjs). The
 // vi.mock above is kept for anything still importing 'electron' directly
 // (e.g. secrets.mjs's safeStorage), but it can no longer be the thing that
 // makes storage paths resolve. initPaths() has to be called explicitly, once,
@@ -45,7 +45,7 @@ vi.mock('electron', () => ({
 // whole file down with it. Nothing in this suite reads capabilityBase — the
 // paths it exercises are passed explicitly (rootDir, outputDir) — so a
 // separate directory satisfies the invariant without changing what is tested.
-const { initPaths } = await import('$lib/../../../../electron/main/platform-paths.mjs');
+const { initPaths } = await import('$lib/../../../../daemon/platform-paths.mjs');
 initPaths({
 	config: TEST_DIR,
 	capabilityBase: CAPABILITY_DIR,
@@ -64,27 +64,27 @@ function writeAccounts(data: unknown) {
 
 describe('accounts-storage', () => {
 	it('defaults authRequired to true', async () => {
-		const { defaults } = await import('$lib/../../../../electron/main/accounts-storage.mjs');
+		const { defaults } = await import('$lib/../../../../daemon/accounts-storage.mjs');
 		expect(defaults()).toEqual({ authRequired: true, accounts: [] });
 	});
 
 	it('normalizes missing authRequired to true on read', async () => {
 		writeAccounts({ accounts: [] });
-		const { read } = await import('$lib/../../../../electron/main/accounts-storage.mjs');
+		const { read } = await import('$lib/../../../../daemon/accounts-storage.mjs');
 		const data = read();
 		expect(data.authRequired).toBe(true);
 	});
 
 	it('preserves existing authRequired value', async () => {
 		writeAccounts({ authRequired: false, accounts: [] });
-		const { read } = await import('$lib/../../../../electron/main/accounts-storage.mjs');
+		const { read } = await import('$lib/../../../../daemon/accounts-storage.mjs');
 		const data = read();
 		expect(data.authRequired).toBe(false);
 	});
 
 	it('setAuthRequired persists true', async () => {
 		const { setAuthRequired, getAuthRequired } =
-			await import('$lib/../../../../electron/main/accounts-storage.mjs');
+			await import('$lib/../../../../daemon/accounts-storage.mjs');
 		setAuthRequired(true);
 		expect(getAuthRequired()).toBe(true);
 	});
@@ -96,13 +96,13 @@ describe('accounts-storage', () => {
 
 describe('auth.mjs', () => {
 	async function loadAuth() {
-		const mod = await import('$lib/../../../../electron/main/auth.mjs');
+		const mod = await import('$lib/../../../../daemon/auth.mjs');
 		return mod;
 	}
 
 	async function setupAccounts(overrides: { account?: Record<string, unknown> } = {}) {
 		const { setAuthRequired, insertAccount } =
-			await import('$lib/../../../../electron/main/accounts-storage.mjs');
+			await import('$lib/../../../../daemon/accounts-storage.mjs');
 		setAuthRequired(true);
 		if (overrides.account) {
 			await insertAccount(overrides.account);
@@ -214,7 +214,7 @@ describe('auth.mjs', () => {
 describe('beacon payload', () => {
 	it('returns only the app identity marker, running, and port — no version, auth, or server URLs', async () => {
 		const { startBeaconServer, stopBeaconServer } =
-			await import('$lib/../../../../electron/main/beacon.mjs');
+			await import('$lib/../../../../daemon/beacon.mjs');
 
 		// Bind an ephemeral port (0) so this test never collides with a running
 		// Redstart instance already holding the real beacon port 8765.
@@ -259,13 +259,13 @@ describe('beacon payload', () => {
 
 describe('auth.mjs — sessions and roles', () => {
 	async function loadAuth() {
-		const mod = await import('$lib/../../../../electron/main/auth.mjs');
+		const mod = await import('$lib/../../../../daemon/auth.mjs');
 		return mod;
 	}
 
 	async function createTestAccount(username = 'testuser', role = 'user') {
 		const { setAuthRequired, insertAccount } =
-			await import('$lib/../../../../electron/main/accounts-storage.mjs');
+			await import('$lib/../../../../daemon/accounts-storage.mjs');
 		setAuthRequired(true);
 		const { hashPassword } = await loadAuth();
 		const pw = hashPassword('testpass');
@@ -312,7 +312,7 @@ describe('auth.mjs — sessions and roles', () => {
 
 	it('login rejects disabled account', async () => {
 		const { setAuthRequired, insertAccount } =
-			await import('$lib/../../../../electron/main/accounts-storage.mjs');
+			await import('$lib/../../../../daemon/accounts-storage.mjs');
 		setAuthRequired(true);
 		const { hashPassword } = await loadAuth();
 		const pw = hashPassword('testpass');
@@ -381,7 +381,7 @@ describe('auth.mjs — sessions and roles', () => {
 
 		// Revoke all sessions for user1
 		const user1Record = await (
-			await import('$lib/../../../../electron/main/accounts-storage.mjs')
+			await import('$lib/../../../../daemon/accounts-storage.mjs')
 		).findByUsername('user1');
 		revokeSessionsForAccount(user1Record.id);
 
@@ -492,7 +492,7 @@ describe('filesystem provider containment gate', () => {
 
 	async function gate(args: Record<string, unknown>, root = rootDir) {
 		const { containmentError } =
-			await import('$lib/../../../../electron/main/filesystem-mcp-provider.mjs');
+			await import('$lib/../../../../daemon/filesystem-mcp-provider.mjs');
 		return containmentError(root, args);
 	}
 
@@ -647,7 +647,7 @@ describe('gateway /files/download endpoint', () => {
 	let authToken: string;
 
 	beforeAll(async () => {
-		const gw = await import('$lib/../../../../electron/main/tools-gateway.mjs');
+		const gw = await import('$lib/../../../../daemon/tools-gateway.mjs');
 		await gw.startGateway(TEST_PORT, {
 			fileSystem: { enabled: true, rootDir: join(TEST_DIR, 'workspace') },
 			// Documents has its own root: create_document writes here, and a browser
@@ -660,12 +660,12 @@ describe('gateway /files/download endpoint', () => {
 	}, 30000);
 
 	afterAll(async () => {
-		const gw = await import('$lib/../../../../electron/main/tools-gateway.mjs');
+		const gw = await import('$lib/../../../../daemon/tools-gateway.mjs');
 		gw.stopGateway();
 	});
 
 	beforeEach(async () => {
-		const auth = await import('$lib/../../../../electron/main/auth.mjs');
+		const auth = await import('$lib/../../../../daemon/auth.mjs');
 		const owner = auth.createOwner({ username: 'dladmin', password: 'dlpass' });
 		expect(owner.ok).toBe(true);
 		const login = auth.login('dladmin', 'dlpass');
@@ -676,7 +676,7 @@ describe('gateway /files/download endpoint', () => {
 		// roots rather than the roots themselves, so fixtures go where the tools
 		// write. The folder name is derived from the account, so ask the same helper
 		// the endpoint uses instead of hardcoding the slug.
-		const { resolveUserRoot } = await import('$lib/../../../../electron/main/user-scope.mjs');
+		const { resolveUserRoot } = await import('$lib/../../../../daemon/user-scope.mjs');
 		const account = { id: owner.account.id, username: 'dladmin' };
 
 		// The capability roots themselves still have to exist — containment is

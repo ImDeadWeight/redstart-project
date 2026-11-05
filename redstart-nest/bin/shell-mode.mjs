@@ -29,23 +29,23 @@
 // =============================================================================
 
 import * as fs from 'node:fs'
-import { initPaths } from '../electron/main/platform-paths.mjs'
-import { initSecrets } from '../electron/main/secrets.mjs'
-import { providerForHello } from '../electron/main/secrets-dpapi.mjs'
+import { initPaths } from '../daemon/platform-paths.mjs'
+import { initSecrets } from '../daemon/secrets.mjs'
+import { providerForHello } from '../daemon/secrets-dpapi.mjs'
 import {
   startDaemon, stopDaemon, installCrashHandlers, serverState, readSettings, writeSettings,
-} from '../electron/main/daemon.mjs'
-import { setRecycleBin, setLoginItems, setUpdater } from '../electron/main/desktop-integration.mjs'
-import { reconcileStartupSetting } from '../electron/main/ipc/admin.mjs'
-import { subscribeToEvents, publish } from '../electron/main/event-broker.mjs'
-import { getAdminListenerState } from '../electron/main/admin-listener.mjs'
-import { hasOwner } from '../electron/main/auth.mjs'
-import { readBootstrapToken } from '../electron/main/bootstrap-token.mjs'
-import { stopServer } from '../electron/main/ipc/server.mjs'
-import { logEvent, whenLoggerClosed } from '../electron/main/logger.mjs'
-import { portConflictMessage } from '../electron/main/ports.mjs'
-import { createPeer, PROTOCOL_VERSION } from '../electron/main/shell-pipe.mjs'
-import { findUpdateRelease } from '../electron/main/update-feed.mjs'
+} from '../daemon/daemon.mjs'
+import { setRecycleBin, setLoginItems, setUpdater } from '../daemon/desktop-integration.mjs'
+import { reconcileStartupSetting } from '../daemon/ipc/admin.mjs'
+import { subscribeToEvents, publish } from '../daemon/event-broker.mjs'
+import { getAdminListenerState } from '../daemon/admin-listener.mjs'
+import { hasOwner } from '../daemon/auth.mjs'
+import { readBootstrapToken } from '../daemon/bootstrap-token.mjs'
+import { stopServer } from '../daemon/ipc/server.mjs'
+import { logEvent, whenLoggerClosed } from '../daemon/logger.mjs'
+import { portConflictMessage } from '../daemon/ports.mjs'
+import { createPeer, PROTOCOL_VERSION } from '../daemon/shell-pipe.mjs'
+import { findUpdateRelease } from '../daemon/update-feed.mjs'
 import { resolveDaemonPaths } from './nest-dir.mjs'
 
 // How long the shell has to say hello. It spawns us and writes hello

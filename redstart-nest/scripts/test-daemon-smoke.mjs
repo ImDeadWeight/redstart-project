@@ -55,7 +55,7 @@ import * as net from 'node:net'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ADMIN_PORT, BEACON_PORT } from '../electron/main/ports.mjs'
+import { ADMIN_PORT, BEACON_PORT } from '../daemon/ports.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.join(here, '..')

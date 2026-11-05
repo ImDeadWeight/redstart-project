@@ -5,7 +5,7 @@ import type { CapabilityConfig, LlamaConfig, ToolContextEstimate, RetrievalStatu
 // Folder-scoped capabilities all share one flow: pick a folder → save+enable,
 // or toggle enabled. Only the IPC method and the config key differ, so one
 // generic implementation replaces the per-capability choose/toggle pairs
-// (mirroring the generic handler loop in electron/main/index.mjs).
+// (mirroring the generic handler loop in daemon/index.mjs).
 export type FolderCap = 'documents' | 'sqlite' | 'vault' | 'git' | 'file_system'
 
 // The picking itself (native dialog or the remote browser) lives in

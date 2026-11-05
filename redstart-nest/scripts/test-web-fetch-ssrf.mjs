@@ -27,7 +27,7 @@ import * as dns from 'node:dns/promises'
 
 registerElectronStub()
 
-const webFetch = await import('../electron/main/web-fetch-tool.mjs')
+const webFetch = await import('../daemon/web-fetch-tool.mjs')
 const { isPrivateAddress, callTool } = webFetch
 
 // Whitelist OFF — the posture this suite exists to test. With it on, the

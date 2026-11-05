@@ -9,7 +9,7 @@ policy, and the secrets re-key. Read each command before running it; they need a
 elevated prompt and they change how the box boots.
 
 **This is a source install, not the desktop installer's output.** The NSIS
-installer packages the Electron app (`electron/main` + `dist`) and does not ship
+installer packages the Electron app (`daemon` + `dist`) and does not ship
 `bin/nestd.mjs`, `scripts/`, or a `node_modules` a plain `node` could resolve.
 The service therefore runs from a checkout with dependencies installed, which is
 also what the eventual Linux packaging will do — the same entry point, the same

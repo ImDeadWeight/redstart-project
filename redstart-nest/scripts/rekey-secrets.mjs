@@ -28,10 +28,10 @@
 
 import * as path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { planRekey, applyRekey, findSecrets } from '../electron/main/secrets-migration.mjs'
-import { keyfileProvider } from '../electron/main/secrets-keyfile.mjs'
-import { oscryptProvider } from '../electron/main/secrets-dpapi.mjs'
-import { readSecretsKey } from '../electron/main/shell-secrets-key.mjs'
+import { planRekey, applyRekey, findSecrets } from '../daemon/secrets-migration.mjs'
+import { keyfileProvider } from '../daemon/secrets-keyfile.mjs'
+import { oscryptProvider } from '../daemon/secrets-dpapi.mjs'
+import { readSecretsKey } from '../daemon/shell-secrets-key.mjs'
 
 /**
  * Parse the operator's arguments.

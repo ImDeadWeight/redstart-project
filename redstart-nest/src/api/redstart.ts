@@ -198,7 +198,7 @@ export type RedstartAPI = {
       { ok: true; tools: PluginToolInfo[]; resolvedCommand: string; resolvedArgs: string[]
         resolvedVersion: string | null; integrity: string | null; installDir: string | null; runAsNode: boolean }
       // Two distinct failure shapes, both real: the npm/probe pipeline
-      // (electron/main/plugin-install.mjs) reports { reason, detail }; the
+      // (daemon/plugin-install.mjs) reports { reason, detail }; the
       // handler's own up-front validation (bad id, id already installed,
       // malformed source, ...) goes through ipc/plugins.mjs's shared
       // refuse() helper and reports { error } instead.
