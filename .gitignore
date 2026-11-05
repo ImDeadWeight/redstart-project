@@ -95,3 +95,4 @@ docs/notes/
 # Tauri shell (daemon split T2)
 redstart-nest/shell/target/
 redstart-nest/shell/gen/
+redstart-nest/shell/bundle/

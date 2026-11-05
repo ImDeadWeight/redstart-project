@@ -173,6 +173,9 @@ jobs:
       - name: "Packaging: escaping imports + asar-unpacked assets"
         run: node scripts/test-packaging.mjs
 
+      - name: "Packaging: Tauri release assets + both update manifests (the bridge)"
+        run: node scripts/test-shell-manifests.mjs
+
       - name: "Security: auth / sessions / roles"
         run: node scripts/test-auth.mjs
 

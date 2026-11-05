@@ -266,6 +266,54 @@ test('🔍 Nest packages the pinned Node runtime into resources/node on Windows'
   return `${entry.from} -> ${entry.to}`
 })
 
+console.log('\n-- the Tauri shell and its installer (daemon split T2/T3) --')
+
+const SHELL = path.join(REPO, 'redstart-nest', 'shell')
+const readShell = (rel) => fs.readFileSync(path.join(SHELL, rel), 'utf8')
+
+test('🔍 the window-controls capability covers the admin origin and nothing but window chrome', () => {
+  const cap = JSON.parse(readShell('capabilities/window-controls.json'))
+  const ports = fs.readFileSync(path.join(REPO, 'redstart-nest', 'electron', 'main', 'ports.mjs'), 'utf8')
+  const adminPort = /ADMIN_PORT\s*=\s*(\d+)/.exec(ports)?.[1]
+  assert(adminPort, 'could not read ADMIN_PORT from ports.mjs')
+  assert(cap.remote?.urls?.includes(`http://127.0.0.1:${adminPort}/*`),
+    `the capability's origin must be the admin listener (127.0.0.1:${adminPort}), or the page's window buttons stop working`)
+  assert(cap.windows?.length === 1 && cap.windows[0] === 'main', 'granted to a window other than main')
+  const bad = (cap.permissions ?? []).filter((p) => !/^core:(window|event):allow-/.test(p))
+  assert(bad.length === 0, `the admin page must get window chrome only, not: ${bad.join(', ')}`)
+  return `${cap.permissions.length} permissions`
+})
+
+test('🔍 the shell is the same app (identifier) at the same version, with an updater key', () => {
+  const conf = JSON.parse(readShell('tauri.conf.json'))
+  assert(conf.identifier === 'com.redstart.nest', `identifier ${conf.identifier}`)
+  assert(conf.version === '../package.json', 'version must come from package.json, which the release job bumps')
+  const pub = Buffer.from(conf.plugins?.updater?.pubkey ?? '', 'base64').toString('utf8')
+  assert(pub.startsWith('untrusted comment: minisign public key'), 'plugins.updater.pubkey is not a minisign public key')
+})
+
+test('🔍 the installer ships the staged layout paths.rs reads, signed for the updater', () => {
+  const b = JSON.parse(readShell('tauri.bundle.conf.json')).bundle
+  assert(b.resources?.['bundle/resources/'] === 'resources/', 'bundle/resources/ must land at <resource_dir>/resources/')
+  assert(b.createUpdaterArtifacts === true, 'no .sig, no update')
+  assert(b.windows?.nsis?.installMode === 'currentUser', 'per-user, like the Electron install it replaces')
+  assert(fs.existsSync(path.join(SHELL, b.windows.nsis.installerHooks)), 'installerHooks file missing')
+  const paths = readShell('src/paths.rs')
+  assert(paths.includes('.join("node").join(node_exe())') && paths.includes('.join("app").join("bin").join("nestd.mjs")'),
+    'paths.rs no longer reads resources/node and resources/app/bin/nestd.mjs')
+  const stage = fs.readFileSync(path.join(REPO, 'redstart-nest', 'scripts', 'stage-shell-bundle.mjs'), 'utf8')
+  assert(stage.includes("out('node', 'node.exe')") && stage.includes("out('app', 'bin')"), 'stage-shell-bundle.mjs no longer writes that layout')
+})
+
+test('🔍 the bridge replaces the Electron install it updates from', () => {
+  const hooks = readShell(JSON.parse(readShell('tauri.bundle.conf.json')).bundle.windows.nsis.installerHooks)
+  // electron-builder's per-user uninstall key: a UUID v5 of the appId.
+  assert(hooks.includes('09e3ae85-f70e-5de1-8268-af6ccbf16b9b'), 'the Electron uninstall key GUID is missing')
+  assert(hooks.includes('_?='), 'without _?= the uninstaller returns at once and ExecWait does not wait')
+  assert(hooks.includes('"electron.app.Redstart Nest"'), "Electron's login item would survive the bridge")
+  assert(hooks.includes('--force-run'), "electron-updater's Restart to update would leave the app stopped")
+})
+
 console.log('\n-- extraResources the main process reaches for at runtime --')
 
 // Both of these shipped broken and neither failed anything: the app starts

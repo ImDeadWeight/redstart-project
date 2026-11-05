@@ -238,9 +238,9 @@ jobs:
           "$bin/llama-server" --version
 
       # ── Nest's daemon runtime ──────────────────────────────────────────────
-      # On Windows the shell runs nestd on a bundled Node, pinned by version
-      # and sha256 in stage-node.mjs; electron-builder copies deps/node into
-      # resources/node. macOS keeps the in-process daemon until the Tauri shell.
+      # On Windows the Tauri shell runs nestd on a bundled Node, pinned by
+      # version and sha256 in stage-node.mjs. macOS stays on Electron (in-process
+      # daemon) until the Mac pass.
       - name: Stage the pinned Node runtime (Windows)
         if: matrix.app == 'nest' && runner.os == 'Windows'
         run: node scripts/stage-node.mjs && deps/node/node.exe --version
@@ -250,8 +250,41 @@ jobs:
       # --publish never: electron-builder auto-publishes when it detects a tag
       # in CI. Publishing is the release job's job, once, for all four.
       - name: Build installer
+        if: ${{ !(matrix.app == 'nest' && runner.os == 'Windows') }}
         run: npm run build -- ${{ matrix.target }} --publish never
         working-directory: ${{ matrix.dir }}
+
+      # Nest on Windows: the Tauri shell (daemon split T3). The same UI and
+      # chat-ui builds and licence list as `npm run build`, then the staged
+      # resources, then `tauri build`, which signs the installer for the
+      # updater with the CI secret. No secret, no .sig, and
+      # make-shell-manifests refuses, so an unsigned build never publishes.
+      - uses: actions/cache@v4
+        if: matrix.app == 'nest' && runner.os == 'Windows'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            redstart-nest/shell/target
+          key: shell-release-${{ runner.os }}-${{ hashFiles('redstart-nest/shell/Cargo.lock') }}
+
+      - name: Build installer (Nest, Tauri)
+        if: matrix.app == 'nest' && runner.os == 'Windows'
+        working-directory: redstart-nest
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          npm run build:chat
+          node scripts/make-icon.mjs
+          npx vite build
+          npm run license:gen
+          node scripts/stage-shell-bundle.mjs
+          (cd shell && npx tauri build --config tauri.bundle.conf.json)
+          built=$(ls shell/target/release/bundle/nsis/*-setup.exe)
+          node scripts/make-shell-manifests.mjs "$VERSION" "$built" "release/$VERSION"
 
       - name: Show what was built
         run: ls -la "${{ matrix.dir }}/release/${{ needs.version.outputs.version }}"
@@ -269,6 +302,7 @@ jobs:
             ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*Setup*.exe
             ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*Setup*.exe.blockmap
             ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/${{ matrix.app }}.yml
+            ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/nest-latest.json
             ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*.dmg
           if-no-files-found: error
           # Installers are already compressed; zipping them again is time for nothing.
@@ -317,6 +351,11 @@ jobs:
           **Windows** — run the `Setup` installer. The installers are unsigned, so
           SmartScreen will warn; choose *More info → Run anyway*. Nest's GPU
           inference needs an NVIDIA driver recent enough for CUDA 12.4.
+
+          **Redstart Nest on Windows is now a Tauri app** with its server on a
+          bundled Node 26. An existing install updates itself as usual and keeps
+          its accounts, settings and stored secrets, but the Nest window asks you
+          to **sign in once** after the update (it has a new browser profile).
 
           **macOS** — open the `.dmg` and drag the app to Applications. The apps
           are ad-hoc signed but not notarized, so the first launch is blocked:
