@@ -24,20 +24,24 @@
 // user-configurable binary and runs third-party plugin code. Nothing here
 // needed deleting for the headless daemon; it needed saying.
 //
-// Deliberately free of any `electron` import: process.resourcesPath is a plain
-// global set by the Electron runtime, so test scripts can import modules that
-// depend on this without stubbing Electron. In dev, resourcesPath points at
-// Electron's own resources directory where elevate.exe does not exist, so the
-// existsSync check fails and we warn-and-skip — the pre-existing dev behaviour.
+// Deliberately free of any `electron` import. elevate.exe is found through
+// platform-paths' resourcesDir(), which the entrypoint sets: Electron passes
+// process.resourcesPath, and a packaged nestd gets --resources from its shell
+// (plain Node has no process.resourcesPath at all). In dev and headless runs
+// there is no resources directory, so this warns and skips, the pre-existing
+// dev behaviour.
 // ---------------------------------------------------------------------------
 
 import { execFile } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { resourcesDir } from './platform-paths.mjs'
 
 function resolveElevatePath() {
-  if (!process.resourcesPath) return null
-  const candidate = path.join(process.resourcesPath, 'elevate.exe')
+  let dir = null
+  try { dir = resourcesDir() } catch { return null } // paths not initialised yet
+  if (!dir) return null
+  const candidate = path.join(dir, 'elevate.exe')
   return fs.existsSync(candidate) ? candidate : null
 }
 

@@ -36,14 +36,13 @@
 // undone a second later by systemd.
 // =============================================================================
 
-import * as path from 'node:path'
 import { initPaths, configDir } from '../electron/main/platform-paths.mjs'
 import { initSecrets } from '../electron/main/secrets.mjs'
 import { keyfileProvider } from '../electron/main/secrets-keyfile.mjs'
 import { startDaemon, stopDaemon, installCrashHandlers } from '../electron/main/daemon.mjs'
 import { logEvent } from '../electron/main/logger.mjs'
 import { portConflictMessage } from '../electron/main/ports.mjs'
-import { resolveNestDir } from './nest-dir.mjs'
+import { resolveDaemonPaths } from './nest-dir.mjs'
 
 // ---------------------------------------------------------------------------
 // Stopping
@@ -83,16 +82,17 @@ async function main() {
     exitCrashed: () => process.exit(1),
   })
 
-  const nestDir = resolveNestDir(process.argv.slice(2))
+  const daemonPaths = resolveDaemonPaths(process.argv.slice(2))
+  const nestDir = daemonPaths.label
   initPaths({
-    config: path.join(nestDir, 'config'),
-    capabilityBase: path.join(nestDir, 'data'),
-    // Never true: nestd runs under plain Node, so `process.resourcesPath`
-    // does not exist and the packaged branch of llama-args.mjs / resolveBinary
-    // could never be the right answer here. Each consumer falls through to a
-    // headless-appropriate path instead — src/chat-ui/dist for the chat UI,
-    // <config>/bin for llama-server.
-    isPackaged: false,
+    config: daemonPaths.config,
+    capabilityBase: daemonPaths.capabilityBase,
+    // Packaged only when a shell names the resources directory (--resources):
+    // plain Node has no process.resourcesPath, so without it each consumer
+    // falls through to a headless-appropriate path instead (src/chat-ui/dist
+    // for the chat UI, <config>/bin for llama-server).
+    isPackaged: daemonPaths.resources !== null,
+    resources: daemonPaths.resources,
   })
   // The headless provider: a daemon-owned key file, since there is no
   // keychain on an appliance and no console to unlock one at boot.

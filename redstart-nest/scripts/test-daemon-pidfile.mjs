@@ -22,7 +22,7 @@ import * as path from 'node:path'
 import {
   writeDaemonPid, readDaemonPid, clearDaemonPid, daemonStatus, DAEMON_PID_FILE,
 } from '../electron/main/daemon-pidfile.mjs'
-import { resolveNestDir, configDirFor } from '../bin/nest-dir.mjs'
+import { resolveNestDir, configDirFor, resolveDaemonPaths } from '../bin/nest-dir.mjs'
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-daemonpid-'))
 
@@ -74,6 +74,31 @@ await test('--dir with no value is refused rather than swallowing the next flag'
 
 await test('config lives in a subtree of the nest directory', () => {
   assert(configDirFor('/nest') === path.join('/nest', 'config'), configDirFor('/nest'))
+})
+
+await test('🔍 a desktop shell can name an existing install\'s two directories explicitly', () => {
+  const p = resolveDaemonPaths(['--config', 'C:/u/AppData/redstart', '--capability-base', 'C:/u/Documents/Redstart', '--resources', 'C:/app/resources'], {})
+  assert(p.config === path.resolve('C:/u/AppData/redstart'), `config: ${p.config}`)
+  assert(p.capabilityBase === path.resolve('C:/u/Documents/Redstart'), `capabilityBase: ${p.capabilityBase}`)
+  assert(p.resources === path.resolve('C:/app/resources'), `resources: ${p.resources}`)
+  const headless = resolveDaemonPaths(['--dir', 'n'], {})
+  assert(headless.config === path.join(path.resolve('n'), 'config') && headless.capabilityBase === path.join(path.resolve('n'), 'data'), 'the --dir shape changed')
+  assert(headless.resources === null, 'a headless run reported a resources directory')
+})
+
+await test('🔍 half a pair, or both shapes at once, is refused', () => {
+  const refuses = (argv) => { try { resolveDaemonPaths(argv, {}); return false } catch { return true } }
+  assert(refuses(['--config', 'a']), '--config without --capability-base accepted')
+  assert(refuses(['--capability-base', 'b']), '--capability-base without --config accepted')
+  assert(refuses(['--dir', 'n', '--config', 'a', '--capability-base', 'b']), '--dir mixed with --config accepted')
+  assert(refuses(['--config', '--capability-base', 'b']), '--config swallowed the next flag')
+})
+
+await test('a packaged initPaths must name its resources directory', async () => {
+  const { initPaths } = await import('../electron/main/platform-paths.mjs')
+  let threw = null
+  try { initPaths({ config: '/nest/config', capabilityBase: '/nest/data', isPackaged: true }) } catch (err) { threw = err }
+  assert(threw && /resources/.test(threw.message), 'a packaged build with no resources directory was accepted')
 })
 
 console.log('\n-- writing and reading --')

@@ -45,3 +45,46 @@ export function resolveNestDir(argv, env = process.env) {
 export function configDirFor(nestDir) {
   return path.join(nestDir, 'config')
 }
+
+// A flag that takes a directory. Absent → undefined; present without a value
+// (or followed straight by another flag) is an error, never a silent default.
+function dirFlag(argv, name) {
+  const i = argv.indexOf(name)
+  if (i === -1) return undefined
+  const value = argv[i + 1]
+  if (!value || value.startsWith('--')) throw new Error(`${name} needs a directory path`)
+  return path.resolve(value)
+}
+
+/**
+ * Every path the daemon needs from its command line.
+ *
+ * Two shapes, never mixed:
+ *   --dir <nest>                         headless: <nest>/config + <nest>/data
+ *   --config <dir> --capability-base <dir>   a desktop shell naming an existing
+ *                                        install's directories, which never had
+ *                                        the nest layout (%APPDATA%\redstart and
+ *                                        Documents\Redstart)
+ * Mixing them is refused: two answers to "where does state live" is the
+ * split-state failure platform-paths.mjs exists to prevent.
+ *
+ * --resources <dir> (either shape) is the packaged resources directory: the
+ * bundled llama-server, chat-ui and elevate.exe. Its presence is what makes
+ * the daemon run as a packaged build.
+ *
+ * @returns {{ config: string, capabilityBase: string, resources: string|null, label: string }}
+ */
+export function resolveDaemonPaths(argv, env = process.env) {
+  const config = dirFlag(argv, '--config')
+  const capabilityBase = dirFlag(argv, '--capability-base')
+  const resources = dirFlag(argv, '--resources') ?? null
+  if ((config === undefined) !== (capabilityBase === undefined)) {
+    throw new Error('--config and --capability-base must be given together')
+  }
+  if (config !== undefined) {
+    if (argv.includes('--dir')) throw new Error('--dir cannot be combined with --config/--capability-base')
+    return { config, capabilityBase, resources, label: config }
+  }
+  const nestDir = resolveNestDir(argv, env)
+  return { config: configDirFor(nestDir), capabilityBase: path.join(nestDir, 'data'), resources, label: nestDir }
+}

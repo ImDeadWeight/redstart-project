@@ -671,6 +671,7 @@ async function main() {
     config: app.getPath('userData'),
     capabilityBase: path.join(app.getPath('documents'), 'Redstart'),
     isPackaged: app.isPackaged,
+    resources: app.isPackaged ? process.resourcesPath : null,
   })
   migrateUserDataFromBeaver()
   // secrets.mjs is fail-closed and holds no crypto of its own; wire the

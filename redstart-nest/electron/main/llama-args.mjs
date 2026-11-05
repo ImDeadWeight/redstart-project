@@ -1,6 +1,6 @@
 'use strict'
 
-import { isPackaged } from './platform-paths.mjs'
+import { isPackaged, resourcesDir } from './platform-paths.mjs'
 import { EMBED_PORT } from './ports.mjs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
@@ -45,7 +45,7 @@ export const KV_CACHE_PRESETS = {
 export function buildArgs(config, raw = false) {
   const q = raw ? (v) => v : (v) => `"${v}"`
   const chatUiPath = isPackaged()
-    ? path.join(process.resourcesPath, 'chat-ui')
+    ? path.join(resourcesDir(), 'chat-ui')
     : path.join(__dirname, '..', '..', 'src', 'chat-ui', 'dist')
   const args = [
     '-m', q(config.modelPath),

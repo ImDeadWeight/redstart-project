@@ -51,7 +51,7 @@ import { reapStaleProcess, deletePidFile } from './process-supervision.mjs'
 import { startEmbedServer, stopEmbedServer, embedServerStatus } from './embed-server.mjs'
 import { embedModelPath, hasEmbedModel } from './embed-model.mjs'
 import { writeDaemonPid, clearDaemonPid } from './daemon-pidfile.mjs'
-import { configDir, capabilityBaseDir, isPackaged } from './platform-paths.mjs'
+import { configDir, capabilityBaseDir, isPackaged, resourcesDir } from './platform-paths.mjs'
 import { buildGatewayConfig, createRefreshLiveToolsConfig } from './gateway-config.mjs'
 import { buildArgs } from './llama-args.mjs'
 import { binaryPathRejection, serverBinaryName } from './ipc/validate.mjs'
@@ -185,7 +185,7 @@ function resolveBinary() {
 
   if (isPackaged()) {
     // Packaged: binary is placed at resources/bin/ via extraResources in electron-builder.json
-    candidates.push(path.join(process.resourcesPath, 'bin', name))
+    candidates.push(path.join(resourcesDir(), 'bin', name))
   } else {
     // Dev: look in the project tree
     const projectRoot = path.join(__dirname, '..', '..')

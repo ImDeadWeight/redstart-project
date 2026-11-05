@@ -44,17 +44,24 @@ let paths = null
  * @param {object} input
  * @param {string} input.config          Nest's own state directory.
  * @param {string} input.capabilityBase  Base for the folder-scoped capabilities.
+ * @param {string|null} [input.resources]  The packaged resources directory
+ *   (bundled llama-server, chat-ui, elevate.exe), or null. Electron passes
+ *   process.resourcesPath; nestd gets it from --resources. Plain Node has no
+ *   process.resourcesPath, so nothing below platform-paths may read it.
  * @param {boolean} input.isPackaged     Packaged-build mode, not a path — kept
  *   here for convenience (every caller of the paths module tends to want both),
  *   but deliberately not folded into the same concept: the daemon will always
  *   want the paths and may not care about packaging at all.
  */
-export function initPaths({ config, capabilityBase, isPackaged }) {
+export function initPaths({ config, capabilityBase, isPackaged, resources = null }) {
   if (typeof config !== 'string' || !config) throw new Error('initPaths: config must be a non-empty string')
   if (typeof capabilityBase !== 'string' || !capabilityBase) throw new Error('initPaths: capabilityBase must be a non-empty string')
   const overlap = subtreeRejection(config, capabilityBase)
   if (overlap) throw new Error(`initPaths: ${overlap}`)
-  paths = { config, capabilityBase, isPackaged: !!isPackaged }
+  if (isPackaged && (typeof resources !== 'string' || !resources)) {
+    throw new Error('initPaths: a packaged build must say where its resources are')
+  }
+  paths = { config, capabilityBase, isPackaged: !!isPackaged, resources: resources || null }
 }
 
 /**
@@ -114,4 +121,13 @@ export function capabilityBaseDir() {
 
 export function isPackaged() {
   return requirePaths().isPackaged
+}
+
+/**
+ * The packaged resources directory, or null in a dev/headless run. Callers
+ * use it only on their packaged branch, so null there is unreachable by
+ * construction (initPaths refuses packaged without it).
+ */
+export function resourcesDir() {
+  return requirePaths().resources
 }
