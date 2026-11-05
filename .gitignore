@@ -91,3 +91,7 @@ docs/notes/
 
 # Local nest directory for `npm run daemon` — a throwaway headless install.
 .redstart-daemon/
+
+# Tauri shell (daemon split T2)
+redstart-nest/shell/target/
+redstart-nest/shell/gen/
