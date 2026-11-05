@@ -1,5 +1,5 @@
 // =============================================================================
-// Model downloader security suite — electron/main/model-download.mjs,
+// Model downloader security suite — daemon/model-download.mjs,
 // ./hf-catalog.mjs and ./http-redirects.mjs.
 // =============================================================================
 // This is the only code in Redstart that writes multi-gigabyte files fetched
@@ -115,13 +115,13 @@ const sha256 = (buf) => createHash('sha256').update(buf).digest('hex')
 const {
   isHuggingFaceUrl, isValidRepoId, isValidRevision, parseQuant,
   buildArtifacts, buildDownloadUrl, baseModelOf, extractDescription,
-} = await import('../electron/main/hf-catalog.mjs')
+} = await import('../daemon/hf-catalog.mjs')
 
 const {
   downloadArtifact, destinationFor, discardPartials, PART_SUFFIX,
-} = await import('../electron/main/model-download.mjs')
+} = await import('../daemon/model-download.mjs')
 
-const { fetchFollowingRedirects } = await import('../electron/main/http-redirects.mjs')
+const { fetchFollowingRedirects } = await import('../daemon/http-redirects.mjs')
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-model-dl-'))
 const modelsDir = path.join(base, 'Models')
@@ -388,7 +388,7 @@ console.log('\n--- the fixed embedding-model artifact ---')
 // Production never passes it.
 
 const { EMBED_MODEL, embedModelPath, hasEmbedModel, ensureEmbedModel } =
-  await import('../electron/main/embed-model.mjs')
+  await import('../daemon/embed-model.mjs')
 
 // The real pin, with the checksum and size of whatever the stub is serving.
 function pinFor(buf) {

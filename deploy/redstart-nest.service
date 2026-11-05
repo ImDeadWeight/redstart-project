@@ -42,7 +42,7 @@ ExecStart=/usr/bin/node /usr/lib/redstart/bin/nestd.mjs --dir /var/lib/redstart
 # THE RESTART POLICY IS THE POINT, and `on-failure` rather than `always` is
 # deliberate — design §4 is explicit about it.
 #
-# Nest's exit codes are the interface (electron/main/daemon.mjs):
+# Nest's exit codes are the interface (daemon/daemon.mjs):
 #   0  a human meant it — the admin UI's Shut Down, or SIGTERM. Stay down.
 #   1  it crashed, or could not bind the control plane. Bring it back.
 #

@@ -115,7 +115,7 @@
 
 		showEditDialog = false;
 
-		conversationsStore.updateConversationName(selectedConversation.id, editedName);
+		conversationsStore.renameConversationByUser(selectedConversation.id, editedName);
 		selectedConversation = null;
 	}
 

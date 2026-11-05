@@ -32,7 +32,7 @@
 // Run:  node scripts/test-admin-listener.mjs
 // =============================================================================
 
-import { register } from 'node:module'
+import { registerElectronStub } from './electron-stub-hooks.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as net from 'node:net'
@@ -41,7 +41,7 @@ import * as path from 'node:path'
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-admin-test-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 
-register('./auth-test-loader.mjs', import.meta.url)
+registerElectronStub()
 
 // Explicit, main-thread trigger for the stub's platform-paths.mjs
 // initialization. module.register() hooks run in a separate worker thread, so a
@@ -58,23 +58,23 @@ const {
   isLoopbackBind,
   getAdminListenerState,
   DEFAULT_ADMIN_BIND_HOST,
-} = await import('../electron/main/admin-listener.mjs')
-const { mayAccessControlPlane } = await import('../electron/main/permissions.mjs')
-const { serverPortRejection } = await import('../electron/main/ipc/validate.mjs')
-const { ADMIN_PORT, BEACON_PORT, EMBED_PORT, DEFAULT_GATEWAY_PORT } = await import('../electron/main/ports.mjs')
-const { discoveryPlan, lastKnownDiscovery, discoveryRecordFor, stopDiscovery } = await import('../electron/main/discovery.mjs')
-const { getControlPlane, setControlPlaneBindHost, resolveStartupReconciliation, getStartupSettings, setStartupSettings, reconcileStartupSetting, shutdown, getFullStatus } = await import('../electron/main/ipc/admin.mjs')
-const { setLoginItems, getLoginItems, setUpdater, getUpdater } = await import('../electron/main/desktop-integration.mjs')
-const { parseAllowedOrigins, corsHeaders, isPreflight } = await import('../electron/main/admin/cors.mjs')
-const { apiRevisionOf } = await import('../electron/main/build-info.mjs')
-const { subtreeRejection } = await import('../electron/main/platform-paths.mjs')
+} = await import('../daemon/admin-listener.mjs')
+const { mayAccessControlPlane } = await import('../daemon/permissions.mjs')
+const { serverPortRejection } = await import('../daemon/ipc/validate.mjs')
+const { ADMIN_PORT, BEACON_PORT, EMBED_PORT, DEFAULT_GATEWAY_PORT } = await import('../daemon/ports.mjs')
+const { discoveryPlan, lastKnownDiscovery, discoveryRecordFor, stopDiscovery } = await import('../daemon/discovery.mjs')
+const { getControlPlane, setControlPlaneBindHost, resolveStartupReconciliation, getStartupSettings, setStartupSettings, reconcileStartupSetting, shutdown, getFullStatus } = await import('../daemon/ipc/admin.mjs')
+const { setLoginItems, getLoginItems, setUpdater, getUpdater } = await import('../daemon/desktop-integration.mjs')
+const { parseAllowedOrigins, corsHeaders, isPreflight } = await import('../daemon/admin/cors.mjs')
+const { apiRevisionOf } = await import('../daemon/build-info.mjs')
+const { subtreeRejection } = await import('../daemon/platform-paths.mjs')
 const { app: electronAppStub } = await import('electron')
-const { buildAdminApi } = await import('../electron/main/admin/api-table.mjs')
-const { setAdminApi, pathForChannel, apiRevision, getAdminApi } = await import('../electron/main/admin/api-routes.mjs')
+const { buildAdminApi } = await import('../daemon/admin/api-table.mjs')
+const { setAdminApi, pathForChannel, apiRevision, getAdminApi } = await import('../daemon/admin/api-routes.mjs')
 const {
   authenticateControlPlane, login, createOwner, createAccount, setAuthRequired,
   CONTROL_PLANE, DATA_PLANE,
-} = await import('../electron/main/auth.mjs')
+} = await import('../daemon/auth.mjs')
 
 const ADMIN_TEST_PORT = 48383 // well clear of the real 19083
 const admin = `http://127.0.0.1:${ADMIN_TEST_PORT}`
@@ -985,7 +985,7 @@ await test('🔒 initPaths refuses an overlapping pair outright', async () => {
   // A FRESH module instance: platform-paths keeps its state at module scope,
   // and calling initPaths() on the live one would repoint every other suite
   // case at a directory that does not exist.
-  const fresh = await import('../electron/main/platform-paths.mjs?case=8b1')
+  const fresh = await import('../daemon/platform-paths.mjs?case=8b1')
   let threw = null
   try {
     fresh.initPaths({ config: '/nest', capabilityBase: '/nest/data', isPackaged: false })

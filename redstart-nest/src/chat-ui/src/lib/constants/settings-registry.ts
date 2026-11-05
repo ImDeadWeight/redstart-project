@@ -166,9 +166,21 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
+				key: SETTINGS_KEYS.AUTO_TITLE_CONVERSATIONS,
+				label: 'Let the model name conversations',
+				help: 'After the first answer, the model names the conversation in a few words, and names it again after your third message. A name you type yourself is never replaced.',
+				defaultValue: true,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				sync: {
+					serverKey: SETTINGS_KEYS.AUTO_TITLE_CONVERSATIONS,
+					paramType: SyncableParameterType.BOOLEAN
+				}
+			},
+			{
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
 				label: 'Use first non-empty line for conversation title',
-				help: 'Use only the first non-empty line of the prompt to generate the conversation title.',
+				help: 'Use only the first non-empty line of the prompt as the conversation title until the model names it (or always, if the model does not name conversations).',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,

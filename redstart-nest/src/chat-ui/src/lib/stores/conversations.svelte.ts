@@ -182,6 +182,14 @@ class ConversationsStore {
 		return this.title.updateConversationName(convId, name);
 	}
 
+	async renameConversationByUser(convId: string, name: string): Promise<void> {
+		return this.title.renameByUser(convId, name);
+	}
+
+	async applyAutoTitle(convId: string, name: string, titledAt: number): Promise<void> {
+		return this.title.applyAutoTitle(convId, name, titledAt);
+	}
+
 	async updateConversationTitleWithConfirmation(
 		convId: string,
 		newTitle: string

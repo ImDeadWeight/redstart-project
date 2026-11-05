@@ -27,7 +27,7 @@
 // Run:  node scripts/test-sessions.mjs
 // =============================================================================
 
-import { register } from 'node:module'
+import { registerElectronStub } from './electron-stub-hooks.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -35,7 +35,7 @@ import * as path from 'node:path'
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-sessions-test-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 
-register('./auth-test-loader.mjs', import.meta.url)
+registerElectronStub()
 
 // Explicit, main-thread trigger for the stub's platform-paths.mjs
 // initialization — module.register() hooks run in a separate worker thread.
@@ -44,10 +44,10 @@ await import('./electron-stub.mjs')
 const {
   login, authenticate, authenticateControlPlane, createOwner, createAccount,
   revokeSession, resetPassword, deleteAccount, DATA_PLANE, CONTROL_PLANE,
-} = await import('../electron/main/auth.mjs')
+} = await import('../daemon/auth.mjs')
 const {
   listSessions, reloadSessions, findByTokenHash,
-} = await import('../electron/main/sessions-storage.mjs')
+} = await import('../daemon/sessions-storage.mjs')
 
 const sessionsFile = path.join(tmpDir, 'sessions.json')
 

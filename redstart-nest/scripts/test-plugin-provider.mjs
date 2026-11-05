@@ -1,5 +1,5 @@
 // =============================================================================
-// Unit tests for electron/main/plugin-provider.mjs — the adapter that turns a
+// Unit tests for daemon/plugin-provider.mjs — the adapter that turns a
 // registry entry into a provider-contract object mcp-server.mjs can dispatch
 // to (task T7 / Phase 6 test plan).
 // =============================================================================
@@ -22,7 +22,7 @@
 // Run:  node scripts/test-plugin-provider.mjs
 // =============================================================================
 
-import { register } from 'node:module'
+import { registerElectronStub } from './electron-stub-hooks.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -31,7 +31,7 @@ import { fileURLToPath } from 'node:url'
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-plugin-provider-test-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 
-register('./auth-test-loader.mjs', import.meta.url)
+registerElectronStub()
 
 // Explicit, main-thread trigger for the stub's platform-paths.mjs initialization.
 // module.register() hooks run in a separate worker thread, so a side effect
@@ -42,8 +42,8 @@ register('./auth-test-loader.mjs', import.meta.url)
 // trigger the stub's initPaths() call.
 await import('./electron-stub.mjs')
 
-const { addPlugin, getPlugin, removePlugin } = await import('../electron/main/plugin-registry.mjs')
-const { pluginProviders, stopAllPlugins, syncPluginProviders } = await import('../electron/main/plugin-provider.mjs')
+const { addPlugin, getPlugin, removePlugin } = await import('../daemon/plugin-registry.mjs')
+const { pluginProviders, stopAllPlugins, syncPluginProviders } = await import('../daemon/plugin-provider.mjs')
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-mcp-server.mjs')

@@ -24,8 +24,7 @@ import {
   findUpdateRelease,
   parseVersion,
   pickUpdateRelease,
-  shouldAutoUpdate,
-} from '../electron/main/update-feed.mjs'
+} from '../daemon/update-feed.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const results = []
@@ -90,6 +89,21 @@ await test('the newest qualifying release wins, whatever order the list is in', 
   )
   assert(picked?.tag === '1.0.0-alpha.9', `picked ${JSON.stringify(picked)}`)
   assert(picked.version === '1.0.0-alpha.9', 'version is reported without decoration')
+})
+
+await test('🔍 the Tauri shell asks for its own manifest: a release with only nest.yml is not its update', () => {
+  // The bridge release carries both. A release from before T3 carries only
+  // nest.yml, which an installed Tauri shell cannot use.
+  const picked = pickUpdateRelease(
+    [release('1.0.0-alpha.9', { assets: ['nest.yml'] }), release('1.0.0-alpha.8', { assets: ['nest.yml', 'nest-latest.json'] })],
+    { currentVersion: '1.0.0-alpha.7', manifest: 'nest-latest.json' },
+  )
+  assert(picked?.tag === '1.0.0-alpha.8', `picked ${JSON.stringify(picked)}`)
+  const electron = pickUpdateRelease(
+    [release('1.0.0-alpha.9', { assets: ['nest.yml'] }), release('1.0.0-alpha.8', { assets: ['nest.yml', 'nest-latest.json'] })],
+    { currentVersion: '1.0.0-alpha.7' },
+  )
+  assert(electron?.tag === '1.0.0-alpha.9', 'the default is still nest.yml')
 })
 
 await test('🔍 a release with no Nest manifest is skipped, not chosen with nothing to read', () => {
@@ -167,59 +181,51 @@ await test('a tag is URL-encoded into the feed path', () => {
   assert(feedUrlForTag('a b/c').endsWith('/download/a%20b%2Fc/'), feedUrlForTag('a b/c'))
 })
 
-console.log('\n-- 🔍 the manifest name agrees with the build config --')
+console.log('\n-- 🔍 the manifest names agree with the release and the shell --')
 
-await test('electron-builder writes the manifest this module looks for', () => {
-  const config = JSON.parse(fs.readFileSync(path.join(here, '..', 'electron-builder.json'), 'utf8'))
-  const publish = config.win?.publish
-  assert(publish && !Array.isArray(publish), 'electron-builder.json needs a single win.publish entry')
-  assert(publish.provider === 'generic', `win.publish.provider is ${publish.provider}; the GitHub provider cannot tell Nest from Twig`)
-  assert(publish.channel === UPDATE_CHANNEL, `win.publish.channel is ${publish.channel}, update-feed.mjs reads ${UPDATE_CHANNEL}.yml`)
-  // A top-level publish would also emit nest-mac.yml, and nothing reads that yet.
-  assert(config.publish == null, 'publish belongs under win only until macOS updates exist')
+const readRepo = (...p) => fs.readFileSync(path.join(here, '..', ...p), 'utf8')
+
+await test('the release writes nest.yml, the manifest Electron installs look for (the bridge)', () => {
+  assert(UPDATE_CHANNEL === 'nest', `UPDATE_CHANNEL is ${UPDATE_CHANNEL}`)
+  assert(readRepo('scripts', 'make-shell-manifests.mjs').includes(`'${UPDATE_CHANNEL}.yml'`),
+    `make-shell-manifests.mjs no longer writes ${UPDATE_CHANNEL}.yml, so no Electron install would ever find the bridge`)
   return `${UPDATE_CHANNEL}.yml`
 })
 
-await test('🔍 the installer name has no spaces, so the manifest URL matches the uploaded asset', () => {
-  // GitHub rewrites spaces in asset names when they are uploaded. The generic
-  // provider resolves the manifest's path verbatim, unlike the GitHub
-  // provider, which rewrites spaces as well. A space would mean a 404 on
-  // every download.
-  const config = JSON.parse(fs.readFileSync(path.join(here, '..', 'electron-builder.json'), 'utf8'))
-  const name = config.nsis?.artifactName
-  assert(typeof name === 'string', 'nsis.artifactName must be set (the default contains spaces)')
-  // ${productName} is "Redstart Nest", so the name has to be spelled out.
-  const expanded = name.replaceAll('${productName}', config.productName)
-  assert(!/\s/.test(expanded), `"${name}" expands to "${expanded}", which contains a space`)
-  return expanded
+await test('🔍 the shell asks for the manifest the release writes', async () => {
+  const { MANIFEST } = await import('./make-shell-manifests.mjs')
+  const rust = /pub const MANIFEST: &str = "([^"]+)"/.exec(readRepo('shell', 'src', 'update.rs'))?.[1]
+  assert(rust === MANIFEST, `update.rs asks for ${rust}, the release writes ${MANIFEST}`)
+  return MANIFEST
 })
 
-console.log('\n-- 🔍 when the updater runs, and when it installs --')
-
-await test('only a packaged Windows build checks for updates', () => {
-  assert(shouldAutoUpdate({ isPackaged: true, platform: 'win32', settings: {} }) === true, 'packaged Windows')
-  assert(shouldAutoUpdate({ isPackaged: false, platform: 'win32', settings: {} }) === false, 'a dev run must never update itself')
-  assert(shouldAutoUpdate({ isPackaged: true, platform: 'darwin', settings: {} }) === false, 'macOS needs a Developer ID first')
-  assert(shouldAutoUpdate({ isPackaged: true, platform: 'linux', settings: {} }) === false, 'linux has no installer')
+await test('🔍 the installer name has no spaces, so the manifest URL matches the uploaded asset', async () => {
+  // GitHub rewrites spaces in asset names when they are uploaded, and both
+  // manifests name the file verbatim. A space would mean a 404 on every update.
+  const { installerName, macUpdateName } = await import('./make-shell-manifests.mjs')
+  for (const name of [installerName('1.0.0-alpha.7'), macUpdateName('1.0.0-alpha.7')]) {
+    assert(!/\s/.test(name), `"${name}" contains a space`)
+  }
 })
 
-await test('on unless settings say autoUpdate: false; a missing or unreadable file is "on"', () => {
-  assert(shouldAutoUpdate({ isPackaged: true, platform: 'win32', settings: { autoUpdate: false } }) === false, 'switched off')
-  assert(shouldAutoUpdate({ isPackaged: true, platform: 'win32', settings: { autoUpdate: true } }) === true, 'switched on')
-  assert(shouldAutoUpdate({ isPackaged: true, platform: 'win32', settings: null }) === true, 'no settings file')
-})
+console.log('\n-- 🔍 when the updater installs --')
 
-// auto-update.mjs imports electron-updater, which cannot load under plain
-// Node. So the invariant "an update installs only on a deliberate quit" is
-// checked in the source, which is where it would be broken.
+// The Tauri shell's updater is Rust, so the invariant "an update installs
+// only on a deliberate quit, after the children are gone" is checked in its
+// source, which is where it would be broken.
 await test('🔍 an update never installs on an ordinary app quit (OS shutdown, logoff, crash)', () => {
-  const src = fs.readFileSync(path.join(here, '..', 'electron', 'main', 'auto-update.mjs'), 'utf8')
-  assert(/autoUpdater\.autoInstallOnAppQuit\s*=\s*false/.test(src), 'auto-update.mjs must set autoInstallOnAppQuit = false')
-  assert(/await waitForPidsExit\(/.test(src) && src.indexOf('await waitForPidsExit(') < src.indexOf('autoUpdater.quitAndInstall('),
-    'installAndQuit must wait for the children before it starts the installer')
-  const index = fs.readFileSync(path.join(here, '..', 'electron', 'main', 'index.mjs'), 'utf8')
-  assert(!/quitAndInstall|electron-updater/.test(index), 'index.mjs must go through auto-update.mjs, not drive electron-updater itself')
-  return 'autoInstallOnAppQuit off, children awaited before NSIS'
+  const update = readRepo('shell', 'src', 'update.rs')
+  const fn = update.slice(update.indexOf('pub fn install_and_quit'))
+  assert(fn.indexOf('wait_pids_gone(') > 0 && fn.indexOf('wait_pids_gone(') < fn.indexOf('.install(bytes)'),
+    'install_and_quit must wait for the children before it runs the installer')
+  assert(/if !still\.is_empty\(\) \{[\s\S]{0,200}?return false;/.test(fn), 'a child that outlives the wait must abandon the install')
+  const main = readRepo('shell', 'src', 'main.rs')
+  const callers = main.split('update::install_and_quit(').length - 1
+  assert(callers === 1 && /pub fn deliberate_quit_with[\s\S]*update::install_and_quit\(/.test(main),
+    'install_and_quit must be reached from deliberate_quit_with only')
+  const exitHandler = main.slice(main.indexOf('RunEvent::Exit =>'), main.indexOf('RunEvent::Exit =>') + 400)
+  assert(!/install/.test(exitHandler), 'the app-exit handler must not install anything')
+  return 'children awaited, deliberate quits only'
 })
 
 console.log('\n' + '='.repeat(60))

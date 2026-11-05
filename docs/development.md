@@ -20,9 +20,9 @@ Repository layout, dev loops, and how to build the binaries and installers.
 redstart-project/
 ├── docs/                  # This documentation, plus contracts and specs
 ├── deploy/                # Service units, SCM procedure and Caddyfile for appliance installs
-├── redstart-nest/         # Redstart Nest Electron app (server manager)
-│   ├── bin/nestd.mjs      # The headless entrypoint — the daemon under plain Node
-│   ├── electron/main/     # The daemon — gateway, MCP server, providers, control plane
+├── redstart-nest/         # Redstart Nest (server manager)
+│   ├── bin/nestd.mjs      # The daemon's entrypoint (headless, or --shell-pipe under the shell)
+│   ├── daemon/            # The daemon: gateway, MCP server, providers, control plane
 │   │   ├── admin/         # The control plane's HTTP routes (auth, api, events, cors)
 │   │   ├── gateway/       # The data plane's non-proxied routes
 │   │   └── ipc/           # Handler bodies, one module per namespace
@@ -32,7 +32,7 @@ redstart-project/
 │   │   ├── api/http.ts    # The launcher's HTTP client for the control plane
 │   │   └── chat-ui/       # SvelteKit chat frontend (shared with all clients)
 │   │       └── android/   # Capacitor Android project (Redstart Twig for Android)
-│   └── electron-builder.json
+│   └── shell/             # The desktop shell (Tauri, Rust): window, tray, updater, installer
 ├── shared/                # Code shared between Nest and Twig main processes
 │   └── mcp-stdio-process.mjs   # stdio MCP child-process supervisor
 └── redstart-twig/         # Redstart Twig client apps
@@ -43,9 +43,9 @@ redstart-project/
 
 **Two frontend frameworks, two jobs.** React owns the launcher — the surface that starts and stops the model, configures capabilities and manages accounts. SvelteKit owns the chat UI, served on the data plane and shared by every client (browser, Twig Windows, Twig Android, Blueprints). They share no state, no routing and no auth code, and neither imports from the other.
 
-**The launcher talks HTTP, not IPC.** There is no preload script and no `contextBridge`; the bridge was retired once the launcher had to be servable to a browser, because a UI that reaches the main process through Electron-only plumbing cannot be. `src/api/http.ts` implements the same `RedstartAPI` surface against `POST /admin/api/<namespace>/<method>` on the control plane, so the Electron window and a browser on another machine are the same client over the same transport. `scripts/test-admin-api.mjs` holds the two halves together: every method the type declares must have a route, and every route must be gated.
+**The launcher talks HTTP, not IPC.** The launcher has to be servable to a browser, so it reaches the daemon only over HTTP: `src/api/http.ts` implements the `RedstartAPI` surface against `POST /admin/api/<namespace>/<method>` on the control plane, and the desktop window and a browser on another machine are the same client over the same transport. The one exception is window chrome: inside the Tauri shell the page's own minimise/maximise/close call Tauri's window API, which `shell/capabilities/window-controls.json` allows for the admin origin only. `scripts/test-admin-api.mjs` holds the two halves together: every method the type declares must have a route, and every route must be gated.
 
-**One daemon, two entrypoints.** `electron/main/index.mjs` (desktop) and `bin/nestd.mjs` (headless) both start the *same* daemon; what differs is what they inject. Paths come from `platform-paths.mjs` and crypto from `secrets.mjs`, both fail-closed seams — the desktop wires up `app.getPath` and `safeStorage`, the daemon wires up a directory and a key file. Nothing below those seams imports `electron`, which is what makes the headless boot possible; `scripts/check-mjs.mjs` and the test suites' stub loader both depend on it staying that way.
+**One daemon, two ways in.** `bin/nestd.mjs` starts the daemon either headless or under the desktop shell (`--shell-pipe`, see `bin/shell-mode.mjs`); what differs is what is injected. Paths come from `platform-paths.mjs` and crypto from `secrets.mjs`, both fail-closed seams. Under the shell, the paths and the OSCrypt key arrive in `hello`; headless, they come from a directory and a key file. The test suites still stub a module named `electron` for a few legacy imports in test helpers; nothing in `daemon/` imports it.
 
 **Twig owns its local file tools.** Twig's `fs_*` tools act on a folder on the *user's* machine and live in `redstart-twig/windows/electron/fs/`. They keep the `fs_*` prefix rather than adopting the upstream server's names, so the model — and an admin writing a tool ban — can tell Twig's local filesystem from Nest's server-side one. Only `path-scope.mjs` is duplicated between the apps; it is kept in sync by hand, and both copies say so.
 
@@ -59,12 +59,13 @@ The launcher and the chat-ui are **two separate npm packages** — you must inst
 
 ```bash
 cd redstart-nest
-npm install                       # launcher / Electron main-process deps
+npm install                       # launcher, daemon and Tauri CLI deps
 npm install --prefix src/chat-ui  # the SvelteKit chat-ui is its own package
+node scripts/stage-node.mjs       # the pinned Node 26 the shell runs the daemon on
 npm run dev
 ```
 
-This starts Vite (React launcher UI), the SvelteKit chat-ui dev server, and Electron concurrently. (`npm install` in `redstart-nest` does **not** install the chat-ui's dependencies — `npm run dev` launches the chat-ui dev server via `--prefix src/chat-ui`, so its `node_modules` must exist first.)
+This starts Vite (React launcher UI), the SvelteKit chat-ui dev server, and the Tauri shell in debug (`cargo run` in `shell/`, via `scripts/dev-shell.mjs`), whose window loads Vite. It needs a Rust toolchain (`rustup`, stable). A debug shell runs this checkout's `bin/nestd.mjs`, uses your real `%APPDATA%\redstart` unless `REDSTART_CONFIG_DIR` points elsewhere, and never touches the login item or the updater. (`npm install` in `redstart-nest` does **not** install the chat-ui's dependencies — `npm run dev` launches the chat-ui dev server via `--prefix src/chat-ui`, so its `node_modules` must exist first.)
 
 > **Note:** In dev mode the chat-ui runs on its own port (`:5174`). The `--path` flag that serves it through llama-server only applies in production builds.
 
@@ -72,7 +73,7 @@ This starts Vite (React launcher UI), the SvelteKit chat-ui dev server, and Elec
 
 ---
 
-## The daemon, without Electron
+## The daemon, without the desktop shell
 
 ```bash
 cd redstart-nest
@@ -86,7 +87,7 @@ real install. Invoked directly, `node bin/nestd.mjs` resolves its directory as
 `--dir`, else `$REDSTART_DIR`, else `~/.redstart` — no platform guessing, because
 a service install passes the directory it wants explicitly.
 
-No window, no desktop session, no Electron. The control plane comes up on
+No window, no desktop session, no shell. The control plane comes up on
 `:19083` and serves the built launcher bundle, so administration is a browser
 tab — which also means `npm run build` has to have run at least once, or there
 is no bundle to serve.
@@ -111,7 +112,7 @@ npm install
 npm run dev:redstart      # Vite on :5174, hot-reloads on save
 ```
 
-This is the fast loop for UI work: Redstart Nest keeps running and serving the API, the chat-ui hot-reloads, and neither a bundle build nor an Electron relaunch is needed. The dev server proxies the API routes (`/v1`, `/props`, `/models`, `/tools`, `/slots`, `/auth`, `/files`, `/redstart`) to a Nest on `http://localhost:19080`; override with `VITE_PUBLIC_SERVER_ORIGIN`.
+This is the fast loop for UI work: Redstart Nest keeps running and serving the API, the chat-ui hot-reloads, and neither a bundle build nor a shell restart is needed. The dev server proxies the API routes (`/v1`, `/props`, `/models`, `/tools`, `/slots`, `/auth`, `/files`, `/redstart`) to a Nest on `http://localhost:19080`; override with `VITE_PUBLIC_SERVER_ORIGIN`.
 
 For component work with no server at all:
 
@@ -130,20 +131,21 @@ npm run storybook                # interactive, per-component
 cd redstart-nest
 npm run test:security     # the full invariant suite — see docs/security.md
 npm run typecheck         # tsc --noEmit for the launcher
-npm run check:mjs         # node --check across electron/main + shared + bin
+npm run check:mjs         # node --check across daemon + shared + bin
 ```
 
 Two things the suites do not cover, and cannot as they stand:
 
-- **The launcher window has no automated coverage at all.** Nothing opens an
-  Electron window in CI, so every change to `src/` is verified by running
+- **The launcher window has no automated coverage at all.** Nothing opens the
+  Tauri window in CI, so every change to `src/` is verified by running
   `npm run dev` and looking at it. The daemon behind it is covered thoroughly
-  (`test-daemon-smoke.mjs` and the admin suites), which is the half that can be
-  driven headlessly.
-- **`bin/` is not in the packaged build.** `electron-builder.json`'s `files`
-  ships `electron/main` and `dist`, so `bin/nestd.mjs` exists only in a
-  checkout. That is fine while there is nothing to install it onto; it matters
-  the moment there is.
+  (`test-daemon-smoke.mjs`, `test-shell-pipe.mjs` and the admin suites), and
+  the shell's Rust has unit tests (`cargo test` in `shell/`, run by CI on
+  Windows and macOS). The tray and the window are checked by hand.
+- **The installer itself is not exercised in CI.** The release workflow builds
+  it, and `test-packaging.mjs` checks the staging script and Tauri config
+  statically. Installing it, and the bridge from an Electron-era install, were
+  run by hand (see the implementation notes).
 
 Running Nest as a service is documented in [`deploy/`](../deploy/README.md),
 which states its own gap: none of those artifacts have been run on real
@@ -187,7 +189,7 @@ Then open `redstart-nest/src/chat-ui/android` in Android Studio and run on a dev
 
 Redstart Nest does **not** commit the inference binary or its runtime DLLs — they're large and platform-specific, so the entire `redstart-nest/llama-cpp-turboquant/` tree and `redstart-nest/deps/` are git-ignored. A fresh clone has neither. Building the installer from scratch means assembling two things by hand.
 
-> **Released installers don't build it at all.** The [release workflow](#releases) downloads TurboQuant+'s own prebuilt release (`windows-x64-cuda12.4`, `macos-arm64-metal`), checks it against a pinned SHA-256, and stages it into the same paths described below — so a source build and a downloaded one are interchangeable as far as `electron-builder.json` is concerned. Its `Stage llama-server` steps are also the quickest way to get a working binary locally without a CUDA toolchain.
+> **Released installers don't build it at all.** The [release workflow](#releases) downloads TurboQuant+'s own prebuilt release (`windows-x64-cuda12.4`, `macos-arm64-metal`), checks it against a pinned SHA-256, and stages it into the same paths described below — so a source build and a downloaded one are interchangeable as far as `stage-shell-bundle.mjs` is concerned. Its `Stage llama-server` steps are also the quickest way to get a working binary locally without a CUDA toolchain.
 >
 > On **macOS** the layout is `llama-cpp-turboquant/build/bin/` (no `Release/` — that is an MSVC convention), holding `llama-server` and the `lib*.dylib` set beside it, and there is no `deps/` folder: Metal is a system framework.
 
@@ -227,7 +229,7 @@ npm install --prefix src/chat-ui  # the build compiles the chat-ui too
 npm run build
 ```
 
-`npm run build` builds the chat-ui, then runs `electron-builder`, which copies **both** `llama-cpp-turboquant/build/bin/Release/` and `deps/windows/` into the installer's `bin/` folder automatically.
+`npm run build` builds the chat-ui and the launcher, then `scripts/stage-shell-bundle.mjs` copies **both** `llama-cpp-turboquant/build/bin/Release/` and `deps/windows/` into the staged `resources/bin/`, and `tauri build` packages it.
 
 ---
 
@@ -235,24 +237,30 @@ npm run build
 
 ### Redstart Nest
 
-Prerequisites: both packages' dependencies installed (`npm install` in `redstart-nest` **and** `npm install --prefix src/chat-ui`), plus the llama-server binary and `deps/windows/` DLLs in place — see [Building from Source](#building-from-source--llama-server-binary).
+Prerequisites: both packages' dependencies installed (`npm install` in `redstart-nest` **and** `npm install --prefix src/chat-ui`), a Rust toolchain, plus the llama-server binary and `deps/windows/` DLLs in place (see [Building from Source](#building-from-source--llama-server-binary)). The updater signature needs the signing key in the environment, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Without them the build fails, so an installer that cannot be updated never comes out of it.
 
 ```bash
 cd redstart-nest
 npm run build
 ```
 
-Output: `redstart-nest/release/<version>/Redstart-Nest-Setup-<version>.exe` (plus `nest.yml` and a `.blockmap`, which the auto-updater reads)
+`npm run build` runs, in order:
+- the chat-ui and launcher builds;
+- the npm and Rust licence lists;
+- `stage-node.mjs` (the pinned Node 26);
+- `stage-shell-bundle.mjs`, which assembles `shell/bundle/resources/`: Node, the daemon with its production `node_modules`, `shared/`, the chat-ui, `bin/` and `elevate.exe`;
+- `tauri build`.
 
-The version comes from `package.json`, and `electron-builder` puts the output in
-`release/${version}`. Don't bump it by hand — the [release workflow](#releases)
+Output: `shell/target/release/bundle/nsis/Redstart Nest_<version>_x64-setup.exe` and its `.sig`. The release workflow renames it to `Redstart-Nest-Setup-<version>.exe` and writes the update manifests (`scripts/make-shell-manifests.mjs`).
+
+The version comes from `package.json` (`shell/tauri.conf.json` reads it). Don't bump it by hand — the [release workflow](#releases)
 does that on every merge, in `redstart-nest/package.json` and
 `redstart-twig/windows/package.json` together (it refuses to run if they
 disagree).
 
-On a Mac, `npm run build -- --mac` produces
-`release/<version>/Redstart Nest-<version>-arm64.dmg` instead. Nest is Apple
-Silicon only, because the only prebuilt Metal binary is arm64.
+On a Mac, `npm run build` produces `shell/target/release/bundle/dmg/*.dmg`
+and the updater's `.app.tar.gz`, ad-hoc signed. Nest is Apple Silicon only,
+because the only prebuilt Metal binary is arm64.
 
 ### Redstart Twig Windows
 
@@ -263,7 +271,7 @@ npm run build
 
 Output: `redstart-twig/windows/release/<version>/Redstart Twig Setup <version>.exe`
 
-The Windows build script builds the chat-ui first, then packages the Electron app. Both installers are NSIS-based and self-contained.
+The Windows build script builds the chat-ui first, then packages the Electron app (Twig is still Electron). Both Windows installers are NSIS-based and self-contained.
 
 Despite the directory name, the same project builds Twig for macOS: `npm run build -- --mac` produces an `arm64` and an `x64` `.dmg`.
 
@@ -279,7 +287,8 @@ Things worth knowing:
 
 - **A failed build leaves a tag without a release.** If the failure was transient (a download, a runner), use **Re-run failed jobs** — it keeps the version already chosen; *Re-run all jobs* bumps again and skips a number. If it needs a code change, re-running rebuilds the same broken tag: merge the fix instead, let that cut the next version, and delete the orphaned tag (`git push origin :refs/tags/<version>`).
 - **Leaving alpha is a manual step.** The bump only understands `X.Y.Z-alpha.N`; anything else stops the workflow with an error, so set the next version by hand in a PR when it is time for a beta or a 1.0.
-- **Nothing is signed with a real identity.** Windows installers are unsigned, as before. macOS apps are ad-hoc signed by [`scripts/mac-adhoc-sign.cjs`](../redstart-nest/scripts/mac-adhoc-sign.cjs) — enough that Apple Silicon does not call them "damaged", not enough to pass Gatekeeper without the user's *Open Anyway*.
+- **Nothing is signed with a real identity.** Windows installers are unsigned, as before. macOS apps are ad-hoc signed: Nest by `stage-shell-bundle.mjs` (every Mach-O) plus Tauri's `signingIdentity: "-"`, Twig by [`scripts/mac-adhoc-sign.cjs`](../redstart-nest/scripts/mac-adhoc-sign.cjs). That is enough that Apple Silicon does not call them "damaged", but not enough to pass Gatekeeper without the user's *Open Anyway*.
+- **Nest's updates ARE signed**, with the updater key (repo secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the public key is in `shell/tauri.conf.json`). Each build job writes a manifest fragment, and the release job merges them into `nest-latest.json`. The Windows job also writes `nest.yml`, which is how Electron-era installs find the bridge installer. Lose the key and no install can be updated again: keep a backup off the machine.
 - **Moving the TurboQuant+ pin** means changing `TQP_TAG`, both asset names and both SHA-256 values at the top of the workflow, then re-reading the CUDA DLL entries in [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) — a new CUDA major renames them. The Windows job's [`check-dll-closure.mjs`](../redstart-nest/scripts/check-dll-closure.mjs) step fails the build if the new set imports a DLL that was not staged.
 
 ### Redstart Twig Android

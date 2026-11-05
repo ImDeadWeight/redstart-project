@@ -129,15 +129,16 @@ export function ControlPlaneNotice({ state, localIp }: {
 }
 
 import { DRAG_REGION } from '../hooks/useWindowControlsOverlay'
+import { useTauriWindow, type TauriWindow } from '../hooks/useTauriWindow'
 
 // ---------------------------------------------------------------------------
 // The window's top bar — and, in Electron, its title bar.
 // ---------------------------------------------------------------------------
-// ONE component for both screens. The native title bar is hidden and Electron
-// paints only the minimise/maximise/close buttons over the top 48px, so
-// whatever occupies that strip is the title bar: h-12 here must stay equal to
-// titleBarOverlay.height in electron/main/index.mjs or the buttons will not
-// line up with it.
+// ONE component for both screens. In the desktop shell there is no OS title
+// bar, so whatever occupies the top 48px IS the title bar: on Windows it
+// carries the page-drawn window buttons (WindowControls below, full height),
+// on macOS the native traffic lights sit over its left end. h-12 here must
+// stay equal to index.html's pre-mount bar (test-packaging.mjs checks it).
 //
 // It exists because the sign-in screen used to draw its own invisible drag
 // strip instead, which left the window buttons floating over a bare background
@@ -173,9 +174,25 @@ export function TopBar({ right, overlay }: {
   right?: React.ReactNode
   overlay: { active: boolean; rightInset: number }
 }) {
+  const tauri = useTauriWindow()
+
+  // Tauri: the bar is the drag area, and the buttons are ours (see the hook).
+  // A press on the bar itself moves the window and a double-click maximises,
+  // as on a native title bar. A press on anything interactive in it is left
+  // alone.
+  const onMouseDown = tauri.active
+    ? (e: React.MouseEvent) => {
+        if (e.button !== 0) return
+        if ((e.target as HTMLElement).closest('button, a, input, select, textarea, [role="button"]')) return
+        if (e.detail === 2) tauri.toggleMaximize()
+        else tauri.startDragging()
+      }
+    : undefined
+
   return (
     <header
-      className="flex items-center justify-between px-5 h-12 bg-zinc-900 border-b border-zinc-800 shrink-0"
+      className={`flex items-center justify-between h-12 bg-zinc-900 border-b border-zinc-800 shrink-0 select-none ${!tauri.active ? 'px-5' : tauri.mac ? 'pl-20 pr-5' : 'pl-5'}`}
+      onMouseDown={onMouseDown}
       // Padding rather than a margin: the buttons are painted OVER the page, so
       // the space has to be inside the element they sit on top of.
       style={overlay.active
@@ -185,7 +202,36 @@ export function TopBar({ right, overlay }: {
       <h1 className="text-lg font-bold tracking-wide">
         <span className="text-orange-500">Redstart Nest</span>
       </h1>
-      {right ? <div className="flex items-center gap-5">{right}</div> : null}
+      <div className="flex items-center h-full">
+        {right ? <div className={`flex items-center gap-5 ${tauri.active && !tauri.mac ? 'mr-4' : ''}`}>{right}</div> : null}
+        {tauri.active && !tauri.mac ? <WindowControls win={tauri} /> : null}
+      </div>
     </header>
+  )
+}
+
+// Minimise / maximise-restore / close, sized and drawn like Windows' own
+// (46 px wide, the full bar height, 10 px glyphs), in the bar's colours.
+// Close turns red on hover, as Windows' does.
+function WindowControls({ win }: { win: Extract<TauriWindow, { active: true }> }) {
+  const base = 'w-[46px] h-full flex items-center justify-center text-zinc-400 transition-colors focus:outline-none'
+  const glyph = { width: 10, height: 10, viewBox: '0 0 10 10', fill: 'none', stroke: 'currentColor', strokeWidth: 1 }
+  return (
+    <div className="flex h-full">
+      <button type="button" aria-label="Minimise" title="Minimise"
+        className={`${base} hover:bg-zinc-800 hover:text-zinc-100`} onClick={win.minimize}>
+        <svg {...glyph}><path d="M0 5.5h10" /></svg>
+      </button>
+      <button type="button" aria-label={win.maximized ? 'Restore' : 'Maximise'} title={win.maximized ? 'Restore' : 'Maximise'}
+        className={`${base} hover:bg-zinc-800 hover:text-zinc-100`} onClick={win.toggleMaximize}>
+        {win.maximized
+          ? <svg {...glyph}><path d="M2.5 2.5V0.5h7v7h-2" /><rect x="0.5" y="2.5" width="7" height="7" /></svg>
+          : <svg {...glyph}><rect x="0.5" y="0.5" width="9" height="9" /></svg>}
+      </button>
+      <button type="button" aria-label="Close" title="Close"
+        className={`${base} hover:bg-red-600 hover:text-white`} onClick={win.close}>
+        <svg {...glyph}><path d="M0.5 0.5l9 9M9.5 0.5l-9 9" /></svg>
+      </button>
+    </div>
   )
 }

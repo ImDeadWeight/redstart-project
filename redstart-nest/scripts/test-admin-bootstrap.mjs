@@ -28,7 +28,7 @@
 // Run:  node scripts/test-admin-bootstrap.mjs
 // =============================================================================
 
-import { register } from 'node:module'
+import { registerElectronStub } from './electron-stub-hooks.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -36,21 +36,21 @@ import * as path from 'node:path'
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-bootstrap-test-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 
-register('./auth-test-loader.mjs', import.meta.url)
+registerElectronStub()
 await import('./electron-stub.mjs')
 
-const { startAdminListener, stopAdminListener } = await import('../electron/main/admin-listener.mjs')
-const { __resetAdminAuthLimiters } = await import('../electron/main/admin/auth-routes.mjs')
+const { startAdminListener, stopAdminListener } = await import('../daemon/admin-listener.mjs')
+const { __resetAdminAuthLimiters } = await import('../daemon/admin/auth-routes.mjs')
 const {
   ensureBootstrapToken, readBootstrapToken, rotateBootstrapToken, verifyBootstrapToken,
-} = await import('../electron/main/bootstrap-token.mjs')
-const { hasOwner, createAccount } = await import('../electron/main/auth.mjs')
+} = await import('../daemon/bootstrap-token.mjs')
+const { hasOwner, createAccount } = await import('../daemon/auth.mjs')
 // The UNFILTERED list. auth.mjs's listAccounts(actor) applies management
 // visibility — an actor that is not the owner sees only user-tier records, and
 // no actor at all sees the same — which is right for a route and wrong for a
 // test asserting what is on disk.
-const { listAccounts } = await import('../electron/main/accounts-storage.mjs')
-const { listSessions } = await import('../electron/main/sessions-storage.mjs')
+const { listAccounts } = await import('../daemon/accounts-storage.mjs')
+const { listSessions } = await import('../daemon/sessions-storage.mjs')
 
 const PORT = 48384
 const admin = `http://127.0.0.1:${PORT}`

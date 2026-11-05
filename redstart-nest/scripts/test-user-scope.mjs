@@ -1,5 +1,5 @@
 // =============================================================================
-// Invariant tests for electron/main/user-scope.mjs — per-account storage names
+// Invariant tests for daemon/user-scope.mjs — per-account storage names
 // =============================================================================
 // Priority 1 (path traversal). This module turns an account into the directory
 // name that account's files live under. It is the FIRST of the two containment
@@ -32,7 +32,7 @@ import {
   USER_FILES_DIR,
   resolveUserScope,
   userScopePath,
-} from '../electron/main/user-scope.mjs'
+} from '../daemon/user-scope.mjs'
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-path-scope.mjs)

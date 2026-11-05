@@ -1,5 +1,5 @@
 // =============================================================================
-// Unit tests for electron/main/plugin-registry.mjs — the installed MCP plugin
+// Unit tests for daemon/plugin-registry.mjs — the installed MCP plugin
 // registry.
 // =============================================================================
 // A registry entry decides what a third-party process is allowed to do, so
@@ -18,7 +18,7 @@
 // Run:  node scripts/test-plugin-registry.mjs
 // =============================================================================
 
-import { register } from 'node:module'
+import { registerElectronStub } from './electron-stub-hooks.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -26,7 +26,7 @@ import * as path from 'node:path'
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-plugin-registry-test-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 
-register('./auth-test-loader.mjs', import.meta.url)
+registerElectronStub()
 
 // Explicit, main-thread trigger for the stub's platform-paths.mjs initialization.
 // module.register() hooks run in a separate worker thread, so a side effect
@@ -37,7 +37,7 @@ register('./auth-test-loader.mjs', import.meta.url)
 // trigger the stub's initPaths() call.
 await import('./electron-stub.mjs')
 
-const registry = await import('../electron/main/plugin-registry.mjs')
+const registry = await import('../daemon/plugin-registry.mjs')
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-json-store.mjs)

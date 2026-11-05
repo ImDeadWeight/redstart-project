@@ -63,7 +63,7 @@ Two rules come out of that:
 ## Adding tools to a client app
 
 1. Prefix every name with the app's namespace.
-2. Register the app in `CLIENT_APPS` in `redstart-nest/electron/main/tools-definitions.mjs`, listing
+2. Register the app in `CLIENT_APPS` in `redstart-nest/daemon/tools-definitions.mjs`, listing
    every tool name. This is what lets an admin ban the app's whole set by naming the app, and it is
    what the collision test checks against.
 3. Run `npm run test:security` in `redstart-nest`. A collision fails the build.

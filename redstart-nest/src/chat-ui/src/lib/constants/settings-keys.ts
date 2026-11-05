@@ -14,6 +14,7 @@ export const SETTINGS_KEYS = {
 	CONTEXT_COMPACTION: 'contextCompaction',
 	PDF_AS_IMAGE: 'pdfAsImage',
 	TITLE_GENERATION_USE_FIRST_LINE: 'titleGenerationUseFirstLine',
+	AUTO_TITLE_CONVERSATIONS: 'autoTitleConversations',
 	MAX_IMAGE_RESOLUTION: 'maxImageMPixels',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',

@@ -1,5 +1,5 @@
 // =============================================================================
-// Unit tests for electron/main/process-log.mjs (Phase 5 §5.2) — llama-server's
+// Unit tests for daemon/process-log.mjs (Phase 5 §5.2) — llama-server's
 // own output, persisted separately from logger.mjs's privacy-filtered event log.
 // =============================================================================
 // Pure Node, no Electron dependency.
@@ -12,7 +12,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {
   initProcessLog, startRun, appendLine, endRun, ringBuffer, currentRunFile,
-} from '../electron/main/process-log.mjs'
+} from '../daemon/process-log.mjs'
 
 const results = []
 

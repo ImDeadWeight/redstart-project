@@ -1,5 +1,5 @@
 // =============================================================================
-// Tests for electron/main/net-interfaces.mjs — LAN adapter selection.
+// Tests for daemon/net-interfaces.mjs — LAN adapter selection.
 // =============================================================================
 // This module decides which IP the UI shows and encodes into the QR code
 // (and, until Phase 6.5 retired mDNS, which address the advertiser bound).
@@ -17,7 +17,7 @@
 import {
   listLanInterfaces,
   getPrimaryLanIp,
-} from '../electron/main/net-interfaces.mjs'
+} from '../daemon/net-interfaces.mjs'
 
 // ---------------------------------------------------------------------------
 // Harness

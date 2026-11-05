@@ -16,7 +16,7 @@
 // Run:  node scripts/test-external-mcp-url.mjs
 // =============================================================================
 
-import { validateExternalMcpUrl, parseMcpResponseBody } from '../electron/main/external-mcp-url.mjs'
+import { validateExternalMcpUrl, parseMcpResponseBody } from '../daemon/external-mcp-url.mjs'
 
 const GATEWAY_PORT = 19080
 

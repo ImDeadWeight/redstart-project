@@ -1,5 +1,5 @@
 // =============================================================================
-// Unit tests for electron/main/plugin-registry-api.mjs — the official MCP
+// Unit tests for daemon/plugin-registry-api.mjs — the official MCP
 // registry client (task T18).
 // =============================================================================
 // FIXTURE-DRIVEN, NEVER LIVE NETWORK. A suite inside test:security must not
@@ -17,7 +17,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { searchRegistry, verdictFor, formFieldsFor, VERDICT, REGISTRY_BASE } from '../electron/main/plugin-registry-api.mjs'
+import { searchRegistry, verdictFor, formFieldsFor, VERDICT, REGISTRY_BASE } from '../daemon/plugin-registry-api.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.join(__dirname, 'fixtures')

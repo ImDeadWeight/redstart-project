@@ -22,7 +22,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { writeJsonAtomic, readJsonOr } from '../electron/main/json-store.mjs'
+import { writeJsonAtomic, readJsonOr } from '../daemon/json-store.mjs'
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-json-store-'))
 

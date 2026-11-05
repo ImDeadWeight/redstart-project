@@ -12,6 +12,14 @@ export interface DatabaseConversation {
 	id: string;
 	lastModified: number;
 	name: string;
+	/**
+	 * How many prompts the conversation had when the model last named it, or
+	 * null/absent when it has not (chat-title.service). Cleared when the first
+	 * prompt changes, so the model names it afresh after the next answer.
+	 */
+	autoTitledAt?: number | null;
+	/** The user typed this name; the model never replaces it. */
+	nameSetByUser?: boolean;
 	mcpServerOverrides?: McpServerOverride[];
 	thinkingEnabled?: boolean;
 	reasoningEffort?: ReasoningEffort;

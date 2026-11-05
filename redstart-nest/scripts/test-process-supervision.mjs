@@ -22,7 +22,7 @@ import * as fs from 'node:fs'
 import * as net from 'node:net'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { register } from 'node:module'
+import { registerElectronStub } from './electron-stub-hooks.mjs'
 import {
   writePidFile,
   readPidFile,
@@ -30,7 +30,7 @@ import {
   isLikelyOurProcess,
   reapStaleProcess,
   waitForPidsExit,
-} from '../electron/main/process-supervision.mjs'
+} from '../daemon/process-supervision.mjs'
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-proc-sup-'))
 
@@ -202,10 +202,10 @@ const concurrencyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-server-co
 // ones at the top of the file. REDSTART_TEST_USERDATA_DIR set first because
 // electron-stub.mjs's initPaths() call reads it as soon as it is imported.
 process.env.REDSTART_TEST_USERDATA_DIR = concurrencyDir
-register('./auth-test-loader.mjs', import.meta.url)
+registerElectronStub()
 await import('./electron-stub.mjs')
-const { launchServer, stopServer } = await import('../electron/main/ipc/server.mjs')
-const { initProcessLog } = await import('../electron/main/process-log.mjs')
+const { launchServer, stopServer } = await import('../daemon/ipc/server.mjs')
+const { initProcessLog } = await import('../daemon/process-log.mjs')
 initProcessLog(concurrencyDir)
 
 // A minimal but valid buildGatewayConfig() result — every capability
@@ -359,7 +359,7 @@ await test('🔍 a stop racing a launch runs after it — no gateway left in fro
 console.log('\n-- 🔍 stopDaemon: names its children, runs once --')
 
 await test('🔍 stopDaemon returns the chat server pid it killed, and a second call kills nothing', async () => {
-  const { stopDaemon, serverState } = await import('../electron/main/daemon.mjs')
+  const { stopDaemon, serverState } = await import('../daemon/daemon.mjs')
   let kills = 0
   serverState.process = { pid: 424242, kill: () => { kills++ } }
   const first = stopDaemon()

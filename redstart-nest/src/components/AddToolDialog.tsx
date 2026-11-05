@@ -568,20 +568,57 @@ function RegistryResults({ results, error, onPick, selected, searched }: {
   if (error) return <p className="text-xs text-red-400">Registry unavailable ({error}) — install by package name instead.</p>
   if (!searched) return <p className="text-xs text-zinc-600">Search above, or switch to "npm package" / "Local folder" / "Advanced".</p>
   if (results.length === 0) return <p className="text-xs text-zinc-600">No results.</p>
+  return <RegistryResultList results={results} onPick={onPick} selected={selected} />
+}
+
+// Clicking a row unfolds it to the publisher's full description, plus the
+// package it would install; the collapsed row is truncated to a single line,
+// which is too little to decide whether a plugin is worth installing. An
+// installable row is also selected by that click. A row that can't be
+// installed from here still unfolds, so you can read why you'd want it before
+// finding another way to install it. One row open at a time keeps the
+// list short.
+function RegistryResultList({ results, onPick, selected }: {
+  results: RegistrySearchResult[]
+  onPick: (e: RegistrySearchResult) => void
+  selected: RegistrySearchResult | null
+}) {
+  const [openKey, setOpenKey] = useState<string | null>(null)
   return (
-    <div className="max-h-56 overflow-y-auto divide-y divide-zinc-800 border border-zinc-800 rounded">
+    <div className="max-h-72 overflow-y-auto divide-y divide-zinc-800 border border-zinc-800 rounded">
       {results.map((r, i) => {
         const v = verdictLabel(r.verdict)
+        const key = `${r.name}-${i}`
+        const isOpen = openKey === key
         const isSelected = selected?.name === r.name && selected?.packageName === r.packageName
         return (
-          <button key={`${r.name}-${i}`} disabled={!v.installable}
-            onClick={() => onPick(r)}
-            className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between gap-3 ${
-              isSelected ? 'bg-orange-500/10' : v.installable ? 'hover:bg-zinc-800' : 'opacity-50 cursor-not-allowed'
+          <button key={key} aria-expanded={isOpen}
+            onClick={() => {
+              setOpenKey(isOpen ? null : key)
+              if (v.installable) onPick(r)
+            }}
+            className={`w-full text-left px-3 py-2 text-xs flex items-start justify-between gap-3 ${
+              isSelected ? 'bg-orange-500/10' : 'hover:bg-zinc-800'
             }`}>
-            <span className="min-w-0">
-              <span className="block text-zinc-200 truncate">{r.name}</span>
-              <span className="block text-zinc-600 truncate">{r.description}</span>
+            <span className={`min-w-0 flex-1 ${v.installable ? '' : 'opacity-60'}`}>
+              <span className="flex items-center gap-1.5 text-zinc-200">
+                <span className="text-zinc-500 flex-shrink-0" aria-hidden>{isOpen ? '▾' : '▸'}</span>
+                <span className={isOpen ? 'break-all' : 'truncate'}>{r.name}</span>
+              </span>
+              {isOpen ? (
+                <span className="block mt-1 pl-4 space-y-1">
+                  <span className="block text-zinc-400 whitespace-pre-wrap break-words">
+                    {r.description || '(no description provided by the registry)'}
+                  </span>
+                  {(r.packageName || r.registryType) && (
+                    <span className="block text-zinc-600 break-all">
+                      {r.registryType ? `${r.registryType} · ` : ''}{r.packageName ?? ''}{r.version ? `@${r.version}` : ''}
+                    </span>
+                  )}
+                </span>
+              ) : (
+                <span className="block text-zinc-600 truncate pl-4">{r.description}</span>
+              )}
             </span>
             <span className={`flex-shrink-0 ${v.installable ? 'text-green-400' : 'text-zinc-500'}`}>{v.text}</span>
           </button>

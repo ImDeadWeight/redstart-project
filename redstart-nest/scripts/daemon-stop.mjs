@@ -25,9 +25,9 @@
 // graceful.
 // =============================================================================
 
-import { resolveNestDir, configDirFor } from '../bin/nest-dir.mjs'
-import { daemonStatus, clearDaemonPid, readDaemonPid } from '../electron/main/daemon-pidfile.mjs'
-import { readPidFile } from '../electron/main/process-supervision.mjs'
+import { resolveDaemonPaths } from '../bin/nest-dir.mjs'
+import { daemonStatus, clearDaemonPid, readDaemonPid } from '../daemon/daemon-pidfile.mjs'
+import { readPidFile } from '../daemon/process-supervision.mjs'
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -36,8 +36,10 @@ function sleep(ms) {
 async function main() {
   const argv = process.argv.slice(2)
   const statusOnly = argv.includes('--status')
-  const nestDir = resolveNestDir(argv.filter(a => a !== '--status'))
-  const config = configDirFor(nestDir)
+  // Same resolution nestd uses, so --config works here too.
+  const paths = resolveDaemonPaths(argv.filter(a => a !== '--status'))
+  const nestDir = paths.label
+  const config = paths.config
 
   const status = await daemonStatus(config)
 

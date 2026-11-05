@@ -1,5 +1,5 @@
 // =============================================================================
-// Unit tests for electron/main/plugin-install.mjs — the plugin install
+// Unit tests for daemon/plugin-install.mjs — the plugin install
 // pipeline (task T15: installer, task T16: probe + uninstall).
 // =============================================================================
 // Two kinds of check here, and they are kept apart:
@@ -18,7 +18,7 @@
 // Run:  node scripts/test-plugin-install.mjs
 // =============================================================================
 
-import { register } from 'node:module'
+import { registerElectronStub } from './electron-stub-hooks.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url'
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-plugin-install-test-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 
-register('./auth-test-loader.mjs', import.meta.url)
+registerElectronStub()
 
 // Explicit, main-thread trigger for the stub's platform-paths.mjs initialization.
 // module.register() hooks run in a separate worker thread, so a side effect
@@ -38,8 +38,8 @@ register('./auth-test-loader.mjs', import.meta.url)
 // trigger the stub's initPaths() call.
 await import('./electron-stub.mjs')
 
-const install = await import('../electron/main/plugin-install.mjs')
-const registry = await import('../electron/main/plugin-registry.mjs')
+const install = await import('../daemon/plugin-install.mjs')
+const registry = await import('../daemon/plugin-registry.mjs')
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-mcp-server.mjs')
@@ -352,7 +352,7 @@ if (!online) {
 // the closest thing to an automated AC7 check — a genuinely missing runtime
 // must produce install.INSTALL_REASON.uvMissing, not a generic failure.
 
-const { detectUv } = await import('../electron/main/plugin-runtimes.mjs')
+const { detectUv } = await import('../daemon/plugin-runtimes.mjs')
 const uv = await detectUv()
 
 if (!uv.ok) {

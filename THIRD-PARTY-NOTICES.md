@@ -8,12 +8,13 @@ under what terms, as those licenses require.
 Two categories matter, and they are kept separate because they arrive by
 different routes and are verified differently:
 
-1. **Bundled native binaries** — copied into the installer by
-   `electron-builder.json` from paths that are *not* in this repository. These
+1. **Bundled native binaries**: copied into the installer (by
+   `scripts/stage-shell-bundle.mjs` for Nest, `electron-builder.json` for Twig)
+   from paths that are *not* in this repository. These
    are the ones a reader cannot verify from a clone, so they are enumerated
    here explicitly.
-2. **npm dependencies** — resolved from `package-lock.json` and packaged into
-   `app.asar`. These are machine-enumerable; the summary and generation command
+2. **npm dependencies** — resolved from `package-lock.json` and packaged into the install
+   (`resources/app/node_modules` for Nest, `app.asar` for Twig). These are machine-enumerable; the summary and generation command
    are below.
 
 ---
@@ -259,8 +260,20 @@ npx license-checker-rseidelsohn \
   --out licenses/npm-licenses.json
 ```
 
-The generated `licenses/` folder is included in the installer through
-`electron-builder.json`'s `extraResources`.
+The generated `licenses/` folder is included in the installer: through
+`electron-builder.json`'s `extraResources` for the Electron builds, and
+through `scripts/stage-shell-bundle.mjs` for the Windows Tauri installer.
+
+The Windows desktop shell (`redstart-nest/shell`) is a Rust binary compiled
+from crates.io crates. `node scripts/rust-licenses.mjs` writes
+`licenses/rust-licenses.json`: every crate compiled into it for
+`x86_64-pc-windows-msvc`, with its version, its SPDX licence expression and
+its repository. At the time of writing that is 287 crates, all under
+permissive licences (MIT, Apache-2.0, BSD, Zlib, ISC, Unicode-3.0,
+Unlicense), apart from five under MPL-2.0. MPL-2.0 is file-level copyleft:
+those files are unmodified and their source is published on crates.io at
+the listed version. Node.js itself (MIT) ships its own `LICENSE` beside
+`resources/node/node.exe`.
 
 <!-- Add to electron-builder.json extraResources:
      { "from": "licenses", "to": "licenses", "filter": ["**/*"] }
@@ -280,6 +293,9 @@ checklist:
       the installed application directory after running the installer.
 - [ ] The npm license appendix was regenerated against the current lockfile,
       not carried over from a previous release.
+- [ ] `licenses/rust-licenses.json` was regenerated against the shell's
+      current `Cargo.lock`, and any new licence outside the list above has been
+      looked at.
 - [ ] Every bundled native binary in `bin/` has an entry in section 1 above.
       A DLL that appears in the build output with no entry here is a blocker,
       not a footnote.

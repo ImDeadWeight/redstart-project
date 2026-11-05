@@ -1,0 +1,7 @@
+{
+  "note": "Throwaway key and a dummy value, written by real Electron 33.4.11 safeStorage.encryptString on Windows (2026-11-05). The key was unwrapped from that run's Local State with DPAPI. Not a real secret.",
+  "electron": "33.4.11",
+  "keyBase64": "tzYZVJTol7qNJN2JL+cVm6VFyB0GxwDhLmRxOCL4X00=",
+  "blobBase64": "djEwgN0834ECGYOtNc9NnuCj/nJNobow3PuO/31qpqv0a2/n/uA+TMHinHmNCPk=",
+  "plaintext": "dummy-secret-123"
+}

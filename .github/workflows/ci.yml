@@ -29,9 +29,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # chat-ui depends on @capacitor/cli (engines: node >=22) and its
-          # .npmrc sets engine-strict=true, so anything below 22 fails npm ci.
-          node-version: 22
+          # 26: the Node the desktop shell bundles and runs nestd on
+          # (scripts/stage-node.mjs), so the suites run where the daemon does.
+          # chat-ui's @capacitor/cli needs >= 22 under engine-strict anyway.
+          node-version: 26
           cache: npm
           cache-dependency-path: |
             redstart-nest/package-lock.json
@@ -47,7 +48,7 @@ jobs:
       - name: Typecheck launcher (tsc --noEmit)
         run: npm run typecheck
 
-      - name: Syntax-check electron/main (node --check)
+      - name: Syntax-check daemon (node --check)
         run: npm run check:mjs
 
       # Security suites run as separate steps so a failure is identifiable from
@@ -114,6 +115,12 @@ jobs:
       - name: "Security: secrets provider seam + legacy ciphertext"
         run: node scripts/test-secrets.mjs
 
+      - name: "Security: OSCrypt provider reads what Electron safeStorage wrote"
+        run: node scripts/test-secrets-dpapi.mjs
+
+      - name: "Security: the shell pins the secrets key and DPAPI-wraps it"
+        run: node scripts/test-shell-secrets-key.mjs
+
       # Trap 5.3 — the one step in the headless-admin-plane pass that can
       # destroy stored credentials silently. Nearly every case here asserts a
       # FAILURE path: what survives when a secret cannot be read, what is left
@@ -132,7 +139,9 @@ jobs:
 
       # Which release the auto-updater moves an install to. A wrong answer is
       # a downgrade, a stable install pulled onto an alpha, or a release with
-      # no Nest manifest. Also pins electron-builder.json's update channel.
+      # no Nest manifest. Also pins the manifest names the release writes and
+      # the Tauri shell asks for, and that an update installs only on a
+      # deliberate quit.
       - name: "Updates: release selection (no downgrades)"
         run: node scripts/test-update-feed.mjs
 
@@ -165,6 +174,9 @@ jobs:
 
       - name: "Packaging: escaping imports + asar-unpacked assets"
         run: node scripts/test-packaging.mjs
+
+      - name: "Packaging: Tauri release assets + both update manifests (the bridge)"
+        run: node scripts/test-shell-manifests.mjs
 
       - name: "Security: auth / sessions / roles"
         run: node scripts/test-auth.mjs
@@ -215,6 +227,9 @@ jobs:
       - name: "Daemon: nestd boots, serves, and stops (smoke)"
         run: node scripts/test-daemon-smoke.mjs
 
+      - name: "Daemon: nestd under a shell (pipe protocol, shell's key, EOF stops it)"
+        run: node scripts/test-shell-pipe.mjs
+
       - name: "Security: containment / SSRF / beacon / download endpoint (vitest)"
         run: npm --prefix src/chat-ui run test:security
 
@@ -245,3 +260,39 @@ jobs:
 
       - name: "Client render tests (vitest browser)"
         run: npm --prefix src/chat-ui run test:client -- --run
+
+  shell:
+    # The Tauri desktop shell (daemon split T2/T3). The Windows unit tests
+    # include a real DPAPI round trip for the runner's account.
+    name: Desktop shell (Rust, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15: the only place the macOS half (Keychain, LaunchAgent,
+        # traffic-light window) is compiled and unit-tested at all.
+        os: [windows-latest, macos-15]
+    defaults:
+      run:
+        working-directory: redstart-nest/shell
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            redstart-nest/shell/target
+          key: shell-${{ runner.os }}-${{ hashFiles('redstart-nest/shell/Cargo.lock') }}
+
+      # tauri::generate_context!() embeds the app icons at compile time, and
+      # build/ is generated (gitignored), as `npm run build` does first.
+      - name: Generate the app icons
+        run: node ../scripts/make-icon.mjs
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Unit tests (pipe framing, secrets key incl. real DPAPI, origin check)
+        run: cargo test --locked

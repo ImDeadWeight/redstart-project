@@ -24,7 +24,7 @@
 // Run:  node scripts/test-file-isolation.mjs
 // =============================================================================
 
-import { register } from 'node:module'
+import { registerElectronStub } from './electron-stub-hooks.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -36,7 +36,7 @@ const dirs = {
 }
 process.env.REDSTART_TEST_USERDATA_DIR = dirs.userData
 
-register('./auth-test-loader.mjs', import.meta.url)
+registerElectronStub()
 
 // Explicit, main-thread trigger for the stub's platform-paths.mjs initialization.
 // module.register() hooks run in a separate worker thread, so a side effect
@@ -47,8 +47,8 @@ register('./auth-test-loader.mjs', import.meta.url)
 // trigger the stub's initPaths() call.
 await import('./electron-stub.mjs')
 
-const documentsTool = await import('../electron/main/documents-tool.mjs')
-const { resolveUserRoot, resolveUserScope, userScopePath } = await import('../electron/main/user-scope.mjs')
+const documentsTool = await import('../daemon/documents-tool.mjs')
+const { resolveUserRoot, resolveUserScope, userScopePath } = await import('../daemon/user-scope.mjs')
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-path-scope.mjs)
@@ -230,8 +230,8 @@ await test('an authenticated account cannot see anonymous-mode files', async () 
 
 console.log('\n-- surface 2: GET /files/download --')
 
-const { startGateway, stopGateway, updateGatewayConfig } = await import('../electron/main/tools-gateway.mjs')
-const { setAuthRequired, createOwner, createAccount, login } = await import('../electron/main/auth.mjs')
+const { startGateway, stopGateway, updateGatewayConfig } = await import('../daemon/tools-gateway.mjs')
+const { setAuthRequired, createOwner, createAccount, login } = await import('../daemon/auth.mjs')
 
 const GATEWAY_PORT = 48097
 
@@ -495,7 +495,7 @@ await test('🔍 an upload cannot traverse out of the caller\'s storage', async 
 })
 
 await test('an oversized upload is refused even when Content-Length lies', async () => {
-  const { UPLOAD_LIMITS } = await import('../electron/main/files-api.mjs')
+  const { UPLOAD_LIMITS } = await import('../daemon/files-api.mjs')
   const tooBig = Buffer.alloc(UPLOAD_LIMITS.maxBytes + 1024, 0x61)
   const res = await upload(bobToken, 'huge.txt', tooBig)
   assert(res.status === 413, `expected 413, got ${res.status}`)

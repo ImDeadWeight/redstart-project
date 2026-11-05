@@ -14,7 +14,7 @@ Redstart is an **ecosystem of applications** around one idea: a model you own, r
 
 | App | Platform | Role | Status |
 |---|---|---|---|
-| **Redstart Nest** | Windows (Electron); the daemon also runs headless under Node | Server manager — runs the model, hosts the tools, accounts and policy, and broadcasts itself on the LAN | In this repo |
+| **Redstart Nest** | Windows and macOS (Tauri shell, daemon on Node 26); the daemon also runs headless | Server manager — runs the model, hosts the tools, accounts and policy, and broadcasts itself on the LAN | In this repo |
 | **Redstart Twig** | Android & Windows | Lightweight chat client; finds Nest automatically, no configuration | In this repo |
 | **[Redstart Blueprints](https://github.com/ImDeadWeight/redstart-blueprints)** | Windows (Electron) | A local-first SQL data workbench with optional AI assistance — register flat files, query them with DuckDB, build notebooks with charts and dashboards. The workbench works fully without a model; the assistant is a dockable panel you summon | Separate repo |
 | **[Redstart Yellowscript](https://github.com/ImDeadWeight/redstart-yellowscript)** | VS Code extension | A coding agent that talks to a local Nest instead of a cloud — zero-config discovery, Redstart login, and workspace-aware tools | Separate repo |
@@ -68,19 +68,51 @@ Prefer the IP and give the host a DHCP reservation on your router. The sslip nam
 
 ## The daemon and the control plane
 
-**The daemon is the product; the window is one client of it.** `electron/main/`
-is a server that happens to be startable two ways: `index.mjs` under Electron
-(the desktop app) and `bin/nestd.mjs` under plain Node (headless, no window, no
-desktop session). Both start the *same* daemon. What differs is what they inject
-into two fail-closed seams — `platform-paths.mjs` (where does state live) and
-`secrets.mjs` (what encrypts a credential). The desktop supplies `app.getPath`
-and Electron's `safeStorage`; the daemon supplies a directory and an AES-256-GCM
-key file. Nothing beneath those seams imports `electron`, which is the property
-that makes the headless boot possible at all.
+**The daemon is the product; the window is one client of it.** `daemon/` is
+a server that runs on Node, started by `bin/nestd.mjs` in one of two ways: under
+the desktop shell (`nestd --shell-pipe`), or headless (no window, no desktop
+session). Both start the *same* daemon. What differs is what is injected into
+two fail-closed seams: `platform-paths.mjs` (where state lives) and
+`secrets.mjs` (what encrypts a credential). Under the shell, the paths and the
+secrets key come from the shell. Headless, they come from a directory and an
+AES-256-GCM key file.
+
+**The desktop app is a small native shell around the daemon.** Redstart Nest's
+window, tray, notifications, login item, updater and recycle-bin access are a
+Tauri app (`redstart-nest/shell/`, Rust). The daemon is a separate process: the
+shell starts `nestd --shell-pipe` on a Node 26 bundled in the install (pinned
+by version and SHA-256 in `scripts/stage-node.mjs`). They talk in JSON lines
+over the child's stdin and stdout (`daemon/shell-pipe.mjs` here,
+`shell/src/pipe.rs` there):
+
+- the shell sends `hello` with the paths and the unwrapped secrets key, and
+  the daemon answers `ready` with its port;
+- after that, the daemon asks the shell for what only a desktop session can do
+  (trash a file, set the login item, check for an update);
+- the shell asks the daemon to stop the model or shut down.
+
+**The shell owns the daemon's lifetime.** Quitting waits for the daemon to
+stop, and the daemon stops llama-server first. If the shell dies, the daemon
+sees end-of-file on stdin and stops itself. On Windows it also runs inside a
+Job Object, so even a wedged daemon goes down with the shell. A daemon that
+exits on its own only raises a notification; nothing restarts it.
+
+**The secrets key never leaves the shell wrapped.** On Windows the shell
+unwraps it with DPAPI (`secrets-key.json`, carried over once from Electron's
+`Local State`). On macOS it reads the Keychain password Electron's
+safeStorage created. Either way the daemon gets the key in `hello` and
+decrypts with the same OSCrypt format Electron used (`daemon/secrets-dpapi.mjs`),
+so nothing stored before the move was re-encrypted.
+
+**Updates are signed.** The shell asks the daemon which GitHub release is the
+update (`update-feed.mjs`), then Tauri's updater downloads that release's
+installer and checks its signature against a public key compiled into the
+shell. It installs only on a deliberate quit, after the daemon and its
+children are gone.
 
 **The launcher is a web page.** There is no preload script and no
 `contextBridge`. The React launcher talks to the daemon over HTTP —
-`POST /admin/api/<namespace>/<method>` on the control plane — so the Electron
+`POST /admin/api/<namespace>/<method>` on the control plane, so the desktop
 window and a browser on a different machine are the same client over the same
 transport, with no second UI to maintain. `src/api/redstart.ts` declares the
 surface; `src/api/http.ts` derives every route from it;

@@ -1,5 +1,5 @@
 // =============================================================================
-// Unit tests for electron/main/conversations-storage.mjs — per-account
+// Unit tests for daemon/conversations-storage.mjs — per-account
 // conversation isolation.
 // =============================================================================
 // This is a Priority-8 invariant and, in the multi-application ecosystem Core
@@ -22,7 +22,7 @@
 // Run:  node scripts/test-conversation-isolation.mjs
 // =============================================================================
 
-import { register } from 'node:module'
+import { registerElectronStub } from './electron-stub-hooks.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -30,7 +30,7 @@ import * as path from 'node:path'
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-convo-iso-test-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 
-register('./auth-test-loader.mjs', import.meta.url)
+registerElectronStub()
 
 // Explicit, main-thread trigger for the stub's platform-paths.mjs initialization.
 // module.register() hooks run in a separate worker thread, so a side effect
@@ -41,7 +41,7 @@ register('./auth-test-loader.mjs', import.meta.url)
 // trigger the stub's initPaths() call.
 await import('./electron-stub.mjs')
 
-const store = await import('../electron/main/conversations-storage.mjs')
+const store = await import('../daemon/conversations-storage.mjs')
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors scripts/test-path-scope.mjs)

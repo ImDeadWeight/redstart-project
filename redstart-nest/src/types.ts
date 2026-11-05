@@ -12,7 +12,7 @@
 // vram itself is also unreliable there: Win32_VideoController.AdapterRAM caps
 // at 4095 MB, so a 16 GB AMD card reports as 4 GB. The Models tab shows these
 // as context without drawing a conclusion from them; see the note in
-// electron/main/ipc/hardware.mjs before building anything that decides.
+// daemon/ipc/hardware.mjs before building anything that decides.
 export type HardwareSpecs = {
   cpu: { name: string; cores: number; threads: number; architecture: string; supportsAVX: boolean }
   gpu: { name: string; vram: number; vramFree: number; cudaAvailable: boolean }
@@ -115,7 +115,7 @@ export type ClientApp = {
 
 /**
  * What a profile's tools cost, from both directions — see
- * electron/main/ipc/tools.mjs.
+ * daemon/ipc/tools.mjs.
  *
  * `toolCount`/`approxTokens` estimate the tools this PROFILE would serve over
  * MCP. `observed` is what the last completion actually forwarded, which is a
@@ -192,7 +192,7 @@ export type ExternalMcpServer = {
   url: string
   enabled: boolean
   // Whether an API key is stored for this server — never the key itself. The
-  // key is encrypted at rest (electron/main/secrets.mjs, OS-level) and the
+  // key is encrypted at rest (daemon/secrets.mjs, OS-level) and the
   // main process never sends the ciphertext or plaintext back to the
   // renderer, same as Postgres's hasConnectionString. Sent as
   // `Authorization: Bearer <apiKey>` on the connection test.
@@ -275,7 +275,7 @@ export type StartupState = {
   error?: string
 }
 
-// The Windows auto-updater (electron/main/auto-update.mjs), as
+// The desktop shell's auto-updater (shell/src/update.rs), as
 // admin:get-update reports it and update:status events push it.
 export type UpdateStatus = {
   state: 'idle' | 'checking' | 'downloading' | 'ready' | 'error'

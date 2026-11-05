@@ -15,7 +15,7 @@
 // Run:  node scripts/test-admin-events.mjs
 // =============================================================================
 
-import { register } from 'node:module'
+import { registerElectronStub } from './electron-stub-hooks.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -23,13 +23,13 @@ import * as path from 'node:path'
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-admin-events-test-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 
-register('./auth-test-loader.mjs', import.meta.url)
+registerElectronStub()
 await import('./electron-stub.mjs')
 
-const { startAdminListener, stopAdminListener } = await import('../electron/main/admin-listener.mjs')
-const { createOwner, createAccount, login, CONTROL_PLANE } = await import('../electron/main/auth.mjs')
-const { publish } = await import('../electron/main/event-broker.mjs')
-const { initProcessLog, appendLine: appendProcessLine } = await import('../electron/main/process-log.mjs')
+const { startAdminListener, stopAdminListener } = await import('../daemon/admin-listener.mjs')
+const { createOwner, createAccount, login, CONTROL_PLANE } = await import('../daemon/auth.mjs')
+const { publish } = await import('../daemon/event-broker.mjs')
+const { initProcessLog, appendLine: appendProcessLine } = await import('../daemon/process-log.mjs')
 
 const PORT = 48386
 const admin = `http://127.0.0.1:${PORT}`

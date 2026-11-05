@@ -29,7 +29,7 @@ Everything about egress in this spec follows from that.
 
 ## 1. Current state
 
-More of this spec is already built than first assumed. `electron/main/tools-gateway.mjs`
+More of this spec is already built than first assumed. `daemon/tools-gateway.mjs`
 is a real gateway: llama-server binds to `127.0.0.1:port+1` and is not
 LAN-reachable, while the gateway owns the public port and intercepts every
 `POST /v1/chat/completions` (line 582), injecting a system context (line 594)

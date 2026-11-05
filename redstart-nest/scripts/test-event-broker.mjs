@@ -1,12 +1,12 @@
 // =============================================================================
-// Unit tests for electron/main/event-broker.mjs (Phase 5 §5.1).
+// Unit tests for daemon/event-broker.mjs (Phase 5 §5.1).
 // =============================================================================
 // Pure Node, no Electron dependency.
 //
 // Run:  node scripts/test-event-broker.mjs
 // =============================================================================
 
-import { publish, subscribeToEvents, subscriberCount } from '../electron/main/event-broker.mjs'
+import { publish, subscribeToEvents, subscriberCount } from '../daemon/event-broker.mjs'
 
 const results = []
 

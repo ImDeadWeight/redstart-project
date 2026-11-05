@@ -22,14 +22,20 @@ import {
 	getConversationModel as computeConversationModel
 } from '$lib/stores/chat/chat-options';
 import * as messageRepo from '$lib/stores/chat/chat-message-repo';
-import { normalizeModelName, isAbortError, generateConversationTitle } from '$lib/utils';
+import { ChatTitleService } from '$lib/services/chat-title.service';
+import {
+	normalizeModelName,
+	isAbortError,
+	generateConversationTitle,
+	filterByLeafNodeId
+} from '$lib/utils';
 import { ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
 import type {
 	ChatMessageTimings,
 	ChatMessagePromptProgress,
 	ChatStreamCallbacks
 } from '$lib/types/chat';
-import type { DatabaseMessage, DatabaseMessageExtra } from '$lib/types';
+import type { DatabaseConversation, DatabaseMessage, DatabaseMessageExtra } from '$lib/types';
 import type { ChatRuntimeState } from '$lib/stores/chat/chat-runtime.svelte';
 import type { ChatUiState } from '$lib/stores/chat/chat-ui-state.svelte';
 
@@ -366,16 +372,22 @@ export class ChatSendController {
 
 				if (onComplete) onComplete(streamedContent);
 				if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
-				// Pre-encode conversation in KV cache for faster next turn
-				if (config().preEncodeConversation) {
-					this.triggerPreEncode(
-						allMessages,
-						assistantMessage,
-						streamedContent,
-						effectiveModel,
-						!!config().excludeReasoningFromContext
-					);
-				}
+				const finalContent = streamedContent;
+				// Naming goes first: on a single-slot server its request replaces the
+				// slot's cached prompt, and the pre-encode below puts the
+				// conversation back. The other order would throw that work away.
+				void this.nameConversation(convId, effectiveModel).finally(() => {
+					// Pre-encode conversation in KV cache for faster next turn
+					if (config().preEncodeConversation) {
+						this.triggerPreEncode(
+							allMessages,
+							assistantMessage,
+							finalContent,
+							effectiveModel,
+							!!config().excludeReasoningFromContext
+						);
+					}
+				});
 			},
 			onError: async (error: Error) => {
 				this.runtime.setStreamingActive(false);
@@ -475,6 +487,8 @@ export class ChatSendController {
 					cleanupStreamingState();
 					if (onComplete) await onComplete(content);
 					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
+					// Not awaited: a slow model must not hold up a queued message.
+					void this.nameConversation(convId, effectiveModel);
 
 					// Check if there's a pending message queued during streaming
 					const pending = this.ui.consumePendingMessage(convId);
@@ -553,6 +567,31 @@ export class ChatSendController {
 		} catch (error) {
 			lastMessage.content = partialContent;
 			console.error('Failed to save partial response:', error);
+		}
+	}
+
+	/**
+	 * Lets the model name the conversation if it is due a name (first answer,
+	 * and again after the third prompt; see chat-title.service). Never throws:
+	 * the conversation keeps whatever title it has.
+	 */
+	private async nameConversation(convId: string, model?: string | null): Promise<void> {
+		try {
+			let conv: DatabaseConversation | undefined;
+			let messages: readonly DatabaseMessage[];
+			if (conversationsStore.activeConversation?.id === convId) {
+				conv = conversationsStore.activeConversation;
+				messages = conversationsStore.activeMessages;
+			} else {
+				// The user moved to another chat while this one was answering.
+				conv = await DatabaseService.getConversation(convId);
+				messages = conv?.currNode ? filterByLeafNodeId(conv.messages ?? [], conv.currNode) : [];
+			}
+			if (!conv) return;
+			const named = await ChatTitleService.suggest(conv, messages, model);
+			if (named) await conversationsStore.applyAutoTitle(convId, named.title, named.titledAt);
+		} catch (error) {
+			console.warn('[ChatStore] Naming the conversation failed:', error);
 		}
 	}
 

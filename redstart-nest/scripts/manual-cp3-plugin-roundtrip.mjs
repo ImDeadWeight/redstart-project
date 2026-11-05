@@ -15,7 +15,7 @@
 // Run:  node scripts/manual-cp3-plugin-roundtrip.mjs
 // =============================================================================
 
-import { register } from 'node:module'
+import { registerElectronStub } from './electron-stub-hooks.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url'
 const tmpUserDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-cp3-userdata-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpUserDataDir
 
-register('./auth-test-loader.mjs', import.meta.url)
+registerElectronStub()
 
 // Explicit, main-thread trigger for the stub's platform-paths.mjs initialization.
 // module.register() hooks run in a separate worker thread, so a side effect
@@ -38,11 +38,11 @@ await import('./electron-stub.mjs')
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-mcp-server.mjs')
 
-const { startMcpServer, stopMcpServer } = await import('../electron/main/mcp-server.mjs')
-const { setAuthRequired } = await import('../electron/main/auth.mjs')
-const { addPlugin } = await import('../electron/main/plugin-registry.mjs')
-const { setPluginCapabilityProvider } = await import('../electron/main/tools-definitions.mjs')
-const { pluginCapabilities } = await import('../electron/main/plugin-registry.mjs')
+const { startMcpServer, stopMcpServer } = await import('../daemon/mcp-server.mjs')
+const { setAuthRequired } = await import('../daemon/auth.mjs')
+const { addPlugin } = await import('../daemon/plugin-registry.mjs')
+const { setPluginCapabilityProvider } = await import('../daemon/tools-definitions.mjs')
+const { pluginCapabilities } = await import('../daemon/plugin-registry.mjs')
 const { connectMcpClient } = await import('./lib/mcp-test-client.mjs')
 
 setAuthRequired(false)

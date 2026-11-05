@@ -30,7 +30,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { binaryPathRejection, serverBinaryName } from '../electron/main/ipc/validate.mjs'
+import { binaryPathRejection, serverBinaryName } from '../daemon/ipc/validate.mjs'
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-server-binary-'))
 
