@@ -199,7 +199,8 @@ test('🔍 the title bar is the same height in Electron, in React and in index.h
 
   // Tailwind's h-12 is 3rem — 48px at the browser default root size.
   const ui = read('redstart-nest/src/components/ui.tsx')
-  assert(/className="[^"]*h-12[ "]/.test(ui), 'TopBar no longer uses h-12; the overlay height has nothing to match')
+  // A plain string or a template literal (TopBar's padding differs in the Tauri shell).
+  assert(/className=(?:"|\{`)[^"`]*\bh-12[ "`]/.test(ui), 'TopBar no longer uses h-12; the overlay height has nothing to match')
   assert(overlayHeight === 48, `titleBarOverlay.height is ${overlayHeight} but TopBar is h-12 (48px)`)
 
   const html = read('redstart-nest/index.html')
