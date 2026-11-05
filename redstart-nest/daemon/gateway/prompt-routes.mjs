@@ -90,6 +90,9 @@ export async function handlePromptRoute(req, res, urlPath, config, account) {
       externalServers: getExternalServers(),
       account,
       admin: getPromptBlocks(),
+      // Same header the completions path reads, so the preview shows the
+      // date line the admin's own chats would get.
+      timeZone: typeof req.headers['x-redstart-timezone'] === 'string' ? req.headers['x-redstart-timezone'] : null,
     })
     sendJson(res, 200, {
       blocks: meta,

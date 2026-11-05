@@ -24,10 +24,23 @@ export function getAuthHeaders(): Record<string, string> {
  * Get standard JSON headers with optional authorization
  */
 export function getJsonHeaders(): Record<string, string> {
+	const timeZone = browserTimeZone();
 	return {
 		'Content-Type': 'application/json',
-		...getAuthHeaders()
+		...getAuthHeaders(),
+		// The server states the user's LOCAL date in the system prompt from
+		// this (session-time.mjs in Nest). Without it the date is the server's.
+		...(timeZone ? { 'X-Redstart-Timezone': timeZone } : {})
 	};
+}
+
+/** The browser's IANA zone (e.g. 'America/Chicago'), or null if unavailable. */
+export function browserTimeZone(): string | null {
+	try {
+		return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+	} catch {
+		return null;
+	}
 }
 
 /**

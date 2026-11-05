@@ -155,6 +155,14 @@ would be an impersonation primitive.
 surface the credential did not. Both properties are asserted by the conformance
 suite. Do not gate capability on the header.
 
+`X-Redstart-Timezone` (optional, on `/v1/chat/completions`) is the user's IANA
+zone, e.g. `America/Chicago`. Send it: the session block then states the
+user's **local** date and labels the zone as theirs. Without it, or with a
+value the server cannot format, the date is the server's, labelled as such.
+Only the date is composed, never the time of day (a changing prompt prefix
+defeats llama-server's prompt cache). chat-ui sends it on every completions
+call.
+
 Surfaces: `nest-chat`, `twig`, `blueprints`, `yellowscript`, `greenhouse`.
 A registered surface may have no behavioural text yet — `greenhouse` does not —
 in which case it authenticates normally and contributes nothing to the prompt.

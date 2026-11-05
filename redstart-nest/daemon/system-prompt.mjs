@@ -2,6 +2,7 @@
 
 import { listPlugins } from './plugin-registry.mjs'
 import { BUILTIN_CAPABILITY_TOOL_NAMES, classifyTool } from './tools-definitions.mjs'
+import { sessionDateLine } from './session-time.mjs'
 
 // =============================================================================
 // Redstart Nest — System Prompt Composer
@@ -586,9 +587,13 @@ function buildDataHandling(egress, account, toolNames) {
 // posture, documented at tools-gateway.mjs:402-409, where completions must
 // keep working for token-less clients. Degrade, never reject: the date
 // composes unconditionally, identity only when there is an identity.
+//
+// The date is the USER'S local date when the client sent a valid zone, and
+// the server's (labelled as such) otherwise — see session-time.mjs, which
+// also records why the time of day is deliberately not stated.
 
-function buildSession(account, now) {
-  const parts = [`Current date: ${now.toISOString().slice(0, 10)}.`]
+function buildSession(account, now, timeZone) {
+  const parts = [sessionDateLine(now, timeZone)]
   if (account?.username) {
     parts.push(`You are speaking with ${account.username}${account.role ? ` (${account.role})` : ''}.`)
   }
@@ -613,6 +618,7 @@ function buildSession(account, now) {
  * @param {string}  [input.surface]         a SURFACE_IDS entry, from the credential
  * @param {object}  [input.admin]           { context, policy, style } — spec §3
  * @param {string}  [input.mode]            a MODE_IDS entry; unknown IDs drop
+ * @param {string}  [input.timeZone]        client IANA zone (X-Redstart-Timezone)
  * @param {number}  [input.budget]
  * @returns {{ prompt: string, tokens: number, overBudget: boolean, blocks: string[] }}
  */
@@ -637,6 +643,9 @@ export function composePrompt(input = {}) {
     // Whether retrieval REMOVED anything this turn, measured by the gateway.
     // Retrieval fails open, so the setting alone is not evidence of a subset.
     toolsFiltered = false,
+    // The client's IANA zone, unvalidated (session-time.mjs validates it).
+    // Absent → the server's zone, labelled as such in the prompt.
+    timeZone = null,
     budget = DEFAULT_TOKEN_BUDGET,
   } = input
 
@@ -660,7 +669,7 @@ export function composePrompt(input = {}) {
     ['locality', buildLocality(clientToolNames)],
     ['style', admin.style],
     ['data_handling', buildDataHandling(egress, account, toolNames)],
-    ['session', buildSession(account, now)],
+    ['session', buildSession(account, now, timeZone)],
   ]
 
   const blocks = []

@@ -381,8 +381,9 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
           // X-Redstart-Device-Id is sent by the chat-ui's DatabaseService on
           // every /conversations call; without it here, browsers block those
-          // cross-origin requests at preflight.
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Redstart-Device-Id',
+          // cross-origin requests at preflight. X-Redstart-Timezone rides on
+          // every completions call (the user's local date, session-time.mjs).
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Redstart-Device-Id, X-Redstart-Timezone',
           'Access-Control-Max-Age': '86400',
         })
         res.end()
@@ -540,6 +541,15 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         const retrievalOptOut = parsed.redstart_retrieval === false
         delete parsed.redstart_retrieval
 
+        // The browser's IANA zone, so the prompt states the USER'S date rather
+        // than the UTC one. A header, not a body field, so every completions
+        // caller in chat-ui (chat, titles, compaction) sends it from one place.
+        // Unvalidated here: session-time.mjs validates it before it reaches
+        // the prompt, and an invalid value degrades to the server's zone.
+        const timeZone = typeof req.headers['x-redstart-timezone'] === 'string'
+          ? req.headers['x-redstart-timezone']
+          : null
+
         // BANS FIRST, PROMPT SECOND — and every value the prompt is derived
         // from is read AFTER this line. The capability claims must describe
         // what the model actually received this turn, which is the payload the
@@ -580,6 +590,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
               account: authResult.account,
               mode: requestedMode,
               surface: authResult.surface,
+              timeZone,
               clientToolNames: [],
               toolNames: [],
               toolsFiltered: false,
@@ -614,6 +625,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
           account: authResult.account,
           mode: requestedMode,
           surface: authResult.surface,
+          timeZone,
           clientToolNames: clientToolNamesIn(parsed),
           // Read here, after enforceToolAllowList and filterRequestTools have
           // both had their say, so the capability claims describe the payload
