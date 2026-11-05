@@ -4,7 +4,7 @@
 // Handler bodies are exported as plain functions; importing
 // this module never registers anything, only adminHandlers()/buildAdminApi()
 // wiring it into the table does.
-import { getLoginItems } from '../desktop-integration.mjs'
+import { getLoginItems, getUpdater } from '../desktop-integration.mjs'
 import {
   startAdminListener, getAdminListenerState, bindHostRejection, isLoopbackBind,
 } from '../admin-listener.mjs'
@@ -190,6 +190,87 @@ export function reconcileStartupSetting({ readSettings, writeSettings }) {
   return { startAtLogin }
 }
 
+// ---------------------------------------------------------------------------
+// Updates (auto-update.mjs, registered through desktop-integration.mjs)
+// ---------------------------------------------------------------------------
+
+const UPDATES_UNSUPPORTED = 'This install does not update itself'
+
+/**
+ * The updater's state, plus the admin's setting.
+ *
+ * `supported` is false wherever no updater was registered: a headless daemon
+ * (a source checkout, updated with git), a dev run, macOS. Reported rather
+ * than answered with `enabled: false`, for the same reason as
+ * getStartupSettings: so the UI hides a control that does not apply rather
+ * than offering a switch that can never do anything.
+ *
+ * `enabled` is settings.json's autoUpdate, absent meaning on. It governs the
+ * automatic checks only. A "Check now" runs either way.
+ */
+export function getUpdateSettings({ readSettings } = {}) {
+  const updater = getUpdater()
+  const currentVersion = appVersion()
+  if (!updater) {
+    return { supported: false, enabled: false, currentVersion, state: 'idle', version: null, error: null, checkedAt: null }
+  }
+  let settings = null
+  try {
+    settings = readSettings?.() ?? null
+  } catch {
+    // An unreadable settings.json reads as the default, the same way
+    // auto-update.mjs's own check treats it.
+  }
+  const { state, version, error, checkedAt } = updater.status()
+  return { supported: true, enabled: settings?.autoUpdate !== false, currentVersion, state, version, error, checkedAt }
+}
+
+/**
+ * Turn the automatic checks on or off. Turning them on also starts a check,
+ * so the switch shows something happen rather than nothing for six hours.
+ */
+export function setUpdateSettings(enabled, { readSettings, writeSettings }) {
+  const updater = getUpdater()
+  if (!updater) return { ...getUpdateSettings({ readSettings }), error: UPDATES_UNSUPPORTED }
+  const value = !!enabled
+  const settings = readSettings()
+  settings.autoUpdate = value
+  writeSettings(settings)
+  logEvent('admin', 'auto_update_changed', { enabled: value })
+  if (value) {
+    updater.checkNow().catch(() => { /* reported through the updater's own status */ })
+  }
+  return getUpdateSettings({ readSettings })
+}
+
+/**
+ * Check now, whatever the setting says: an explicit request from an admin.
+ * Resolves once GitHub has answered and, if there is an update, its download
+ * has started. The download itself carries on afterwards, and its progress
+ * arrives as update:status events.
+ */
+export async function checkForUpdates({ readSettings } = {}) {
+  const updater = getUpdater()
+  if (!updater) return { ...getUpdateSettings({ readSettings }), error: UPDATES_UNSUPPORTED }
+  logEvent('admin', 'update_check_requested', {})
+  await updater.checkNow({ manual: true })
+  return getUpdateSettings({ readSettings })
+}
+
+/**
+ * Restart Nest into the downloaded update. Like shutdown(), this only decides
+ * WHETHER. The registered install() hands off to index.mjs's deliberate-quit
+ * path on the next tick, so this response leaves before the daemon stops.
+ * `ok: false` when there is nothing downloaded to install.
+ */
+export function installUpdate({ readSettings } = {}) {
+  const updater = getUpdater()
+  if (!updater) return { ok: false, error: UPDATES_UNSUPPORTED }
+  const ok = updater.install()
+  logEvent('admin', 'update_install_requested', { ok })
+  return ok ? { ok: true } : { ok: false, error: 'No update has been downloaded yet' }
+}
+
 /**
  * Deliberate shutdown from the admin UI. There was no shutdown route before
  * this — with the window no longer meaning anything, Task Manager would
@@ -222,5 +303,9 @@ export function adminHandlers(deps) {
     'admin:get-startup': () => getStartupSettings(),
     'admin:set-startup': (startAtLogin) => setStartupSettings(startAtLogin, deps ?? {}),
     'admin:shutdown': () => shutdown(deps ?? {}),
+    'admin:get-update': () => getUpdateSettings(deps ?? {}),
+    'admin:set-update': (enabled) => setUpdateSettings(enabled, deps ?? {}),
+    'admin:check-update': () => checkForUpdates(deps ?? {}),
+    'admin:install-update': () => installUpdate(deps ?? {}),
   }
 }

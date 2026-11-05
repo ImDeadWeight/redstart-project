@@ -51,7 +51,12 @@
         "from": "deps/windows/elevate.exe",
         "to": "elevate.exe"
       }
-    ]
+    ],
+    "publish": {
+      "provider": "generic",
+      "url": "https://github.com/ImDeadWeight/redstart-project/releases/download/",
+      "channel": "nest"
+    }
   },
   "mac": {
     "target": [
@@ -73,6 +78,7 @@
     ]
   },
   "nsis": {
+    "artifactName": "Redstart-Nest-Setup-${version}.${ext}",
     "oneClick": false,
     "allowElevation": true,
     "allowToChangeInstallationDirectory": true,

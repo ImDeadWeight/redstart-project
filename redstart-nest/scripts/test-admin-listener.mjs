@@ -64,7 +64,7 @@ const { serverPortRejection } = await import('../electron/main/ipc/validate.mjs'
 const { ADMIN_PORT, BEACON_PORT, EMBED_PORT, DEFAULT_GATEWAY_PORT } = await import('../electron/main/ports.mjs')
 const { discoveryPlan, lastKnownDiscovery, discoveryRecordFor, stopDiscovery } = await import('../electron/main/discovery.mjs')
 const { getControlPlane, setControlPlaneBindHost, resolveStartupReconciliation, getStartupSettings, setStartupSettings, reconcileStartupSetting, shutdown, getFullStatus } = await import('../electron/main/ipc/admin.mjs')
-const { setLoginItems, getLoginItems } = await import('../electron/main/desktop-integration.mjs')
+const { setLoginItems, getLoginItems, setUpdater, getUpdater } = await import('../electron/main/desktop-integration.mjs')
 const { parseAllowedOrigins, corsHeaders, isPreflight } = await import('../electron/main/admin/cors.mjs')
 const { apiRevisionOf } = await import('../electron/main/build-info.mjs')
 const { subtreeRejection } = await import('../electron/main/platform-paths.mjs')
@@ -676,6 +676,122 @@ await test('🔒 with no login item, startup reconciliation is a no-op, not a se
 
 await test('the desktop path still reports supported: true', async () => {
   assert(getStartupSettings().supported === true, 'the wired login item reported unsupported')
+})
+
+// ---------------------------------------------------------------------------
+// Updates: the auto-updater's admin routes. A stand-in for auto-update.mjs's
+// controller is registered the way index.mjs registers the real one; the
+// routes are driven through the real dispatcher.
+// ---------------------------------------------------------------------------
+
+console.log('\n-- 🔍 updates, through the real dispatcher --')
+
+function fakeUpdater(initial = {}) {
+  const calls = { checks: [], installs: 0 }
+  let status = { state: 'idle', version: null, error: null, checkedAt: null, ...initial }
+  return {
+    calls,
+    setStatus: (next) => { status = { ...status, ...next } },
+    impl: {
+      status: () => status,
+      checkNow: async (opts) => { calls.checks.push(opts ?? null); status = { ...status, checkedAt: 1 } },
+      install: () => { calls.installs++; return status.state === 'ready' },
+    },
+  }
+}
+
+async function callAdmin(channel, args = []) {
+  const res = await post(pathForChannel(channel), args, bearer(ownerToken))
+  assert(res.status === 200, `${channel}: expected 200, got ${res.status}`)
+  return (await res.json()).result
+}
+
+await test('🔒 with no updater registered (headless, dev, macOS), every update route says unsupported', async () => {
+  const restore = getUpdater()
+  setUpdater(null)
+  const before = storedSettings.autoUpdate
+  try {
+    const got = await callAdmin('admin:get-update')
+    assert(got.supported === false && got.enabled === false, `get-update: ${JSON.stringify(got)}`)
+    const set = await callAdmin('admin:set-update', [true])
+    assert(set.supported === false && set.error, `set-update: ${JSON.stringify(set)}`)
+    // Same rule as set-startup: no settings key nothing will ever act on.
+    assert(storedSettings.autoUpdate === before, 'settings.json was written with no updater to read it')
+    const check = await callAdmin('admin:check-update')
+    assert(check.supported === false && check.error, `check-update: ${JSON.stringify(check)}`)
+    const install = await callAdmin('admin:install-update')
+    assert(install.ok === false && install.error, `install-update: ${JSON.stringify(install)}`)
+  } finally {
+    setUpdater(restore)
+  }
+})
+
+await test("🔍 get-update reports the updater's state, and a missing setting as on", async () => {
+  const fake = fakeUpdater({ state: 'downloading', version: '9.9.9' })
+  setUpdater(fake.impl)
+  delete storedSettings.autoUpdate
+  try {
+    const got = await callAdmin('admin:get-update')
+    assert(got.supported === true && got.enabled === true, `expected supported + enabled, got ${JSON.stringify(got)}`)
+    assert(got.state === 'downloading' && got.version === '9.9.9', `state not passed through: ${JSON.stringify(got)}`)
+    assert(typeof got.currentVersion === 'string' && got.currentVersion.length > 0, 'no running version reported')
+  } finally {
+    setUpdater(null)
+  }
+})
+
+await test('🔍 set-update persists the setting; turning it on starts an automatic (not manual) check', async () => {
+  const fake = fakeUpdater()
+  setUpdater(fake.impl)
+  try {
+    const off = await callAdmin('admin:set-update', [false])
+    assert(off.enabled === false && storedSettings.autoUpdate === false, `off: ${JSON.stringify(off)}, stored ${storedSettings.autoUpdate}`)
+    assert(fake.calls.checks.length === 0, 'turning updates off started a check')
+    const on = await callAdmin('admin:set-update', [true])
+    assert(on.enabled === true && storedSettings.autoUpdate === true, `on: ${JSON.stringify(on)}`)
+    assert(fake.calls.checks.length === 1, `expected one check, got ${fake.calls.checks.length}`)
+    // Automatic, so the updater itself still honours the setting it was just given.
+    assert(!fake.calls.checks[0]?.manual, `the switch's check was flagged manual: ${JSON.stringify(fake.calls.checks[0])}`)
+  } finally {
+    setUpdater(null)
+  }
+})
+
+await test('🔍 check-update is a manual check, and runs with automatic checks off', async () => {
+  const fake = fakeUpdater()
+  setUpdater(fake.impl)
+  storedSettings.autoUpdate = false
+  try {
+    const result = await callAdmin('admin:check-update')
+    assert(fake.calls.checks.length === 1 && fake.calls.checks[0]?.manual === true,
+      `expected one manual check, got ${JSON.stringify(fake.calls.checks)}`)
+    assert(result.checkedAt === 1, 'the response is not the state after the check')
+    assert(result.enabled === false, 'a manual check changed the setting')
+  } finally {
+    setUpdater(null)
+  }
+})
+
+await test('🔍 install-update refuses with nothing downloaded, and hands off when an update is ready', async () => {
+  const fake = fakeUpdater()
+  setUpdater(fake.impl)
+  try {
+    const early = await callAdmin('admin:install-update')
+    assert(early.ok === false && early.error, `installed with nothing downloaded: ${JSON.stringify(early)}`)
+    fake.setStatus({ state: 'ready', version: '9.9.9' })
+    const ready = await callAdmin('admin:install-update')
+    assert(ready.ok === true, `refused a ready update: ${JSON.stringify(ready)}`)
+    assert(fake.calls.installs === 2, `expected two install() calls, got ${fake.calls.installs}`)
+  } finally {
+    setUpdater(null)
+  }
+})
+
+await test('🔒 the update routes need a control-plane session', async () => {
+  for (const channel of ['admin:get-update', 'admin:set-update', 'admin:check-update', 'admin:install-update']) {
+    const res = await post(pathForChannel(channel), [], {})
+    assert(res.status === 401, `${channel} answered ${res.status} with no session`)
+  }
 })
 
 // ---------------------------------------------------------------------------

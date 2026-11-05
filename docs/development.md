@@ -242,7 +242,7 @@ cd redstart-nest
 npm run build
 ```
 
-Output: `redstart-nest/release/<version>/Redstart Nest Setup <version>.exe`
+Output: `redstart-nest/release/<version>/Redstart-Nest-Setup-<version>.exe` (plus `nest.yml` and a `.blockmap`, which the auto-updater reads)
 
 The version comes from `package.json`, and `electron-builder` puts the output in
 `release/${version}`. Don't bump it by hand — the [release workflow](#releases)

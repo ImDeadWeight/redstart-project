@@ -109,6 +109,51 @@ export async function killByPid(pid, { tree = true } = {}) {
 }
 
 /**
+ * Is any process at all alive at this pid? Signal 0 delivers nothing; it only
+ * asks the OS whether the pid could be signalled. EPERM means "exists, but not
+ * yours to signal", which is still alive.
+ */
+function pidIsAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return err?.code === 'EPERM'
+  }
+}
+
+/**
+ * Wait until every pid in `pids` has exited, or until `timeoutMs` passes.
+ * Never kills anything. The caller has already asked them to stop.
+ *
+ * It exists for the update installer. ChildProcess.kill() returns as soon as
+ * the signal is sent, not once the process is gone, and on Windows a dying
+ * process still holds its image and every DLL it loaded. The NSIS installer
+ * that runs right after quit overwrites resources/bin. If llama-server.exe
+ * still has ggml-cuda.dll mapped, that write fails partway and leaves an
+ * install that is half one version and half the other. NSIS's own
+ * running-app check only looks for "Redstart Nest.exe" by image name, so it
+ * never sees llama-server.exe.
+ *
+ * A pid recycled between the kill and this poll would read as still alive,
+ * so the timeout bounds the cost: the installer starts late, not never.
+ *
+ * @param {Array<number|null|undefined>} pids
+ * @param {{ timeoutMs?: number, pollMs?: number }} [opts]
+ * @returns {Promise<{ stillRunning: number[] }>} empty on a clean exit
+ */
+export async function waitForPidsExit(pids, { timeoutMs = 15_000, pollMs = 100 } = {}) {
+  let pending = pids.filter((pid) => Number.isInteger(pid) && pid > 0)
+  const deadline = Date.now() + timeoutMs
+  while (pending.length > 0) {
+    pending = pending.filter(pidIsAlive)
+    if (pending.length === 0 || Date.now() >= deadline) break
+    await new Promise((resolve) => setTimeout(resolve, pollMs))
+  }
+  return { stillRunning: pending }
+}
+
+/**
  * Does a live process with this pid still exist, and is it plausibly the one
  * we launched? PID reuse is real — after enough process churn, `pid` can
  * belong to something else entirely, and killing on nothing more than a

@@ -9,7 +9,7 @@
 
 import type {
   HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup, ToolContextEstimate, RetrievalStatus,
-  ExternalMcpServer, LlamaConfig, ClientApp, ControlPlaneState, StartupState,
+  ExternalMcpServer, LlamaConfig, ClientApp, ControlPlaneState, StartupState, UpdateState, UpdateStatus,
   CatalogModel, ModelDetail, ModelDescription, ModelArtifact, LocalModelFile, DownloadProgress,
 } from '../types'
 
@@ -72,6 +72,19 @@ export type RedstartAPI = {
     // connection drops — a caller does not need to treat a network error
     // here as ambiguous between "it worked" and "it crashed".
     shutdown: () => Promise<{ ok: boolean }>
+    // The Windows auto-updater. `supported: false` on any install that does
+    // not update itself (headless, dev, macOS). See UpdateState.
+    getUpdate: () => Promise<UpdateState>
+    // Turns the automatic checks on or off (settings.json autoUpdate).
+    // Turning them on also starts a check.
+    setUpdate: (enabled: boolean) => Promise<UpdateState & { error?: string }>
+    // Checks now whatever the setting says. Resolves once GitHub has answered
+    // and any download has started. Progress arrives as onUpdateStatus.
+    checkUpdate: () => Promise<UpdateState & { error?: string }>
+    // Restarts Nest into the downloaded update, for every client. Answers
+    // before the daemon stops, like shutdown. ok: false when nothing is
+    // downloaded yet.
+    installUpdate: () => Promise<{ ok: boolean; error?: string }>
   }
   // The FolderPicker.tsx mechanism — one component behind
   // all nine former per-site pickers. Native picking (pickNative) is retired
@@ -236,6 +249,10 @@ export type RedstartAPI = {
     offModelDownloadProgress: () => void
     onPluginInstallProgress: (cb: (p: PluginInstallProgress) => void) => void
     offPluginInstallProgress: () => void
+    // Every change in the updater's state, to every admin UI. A remote admin
+    // has no tray, so this is how they learn an update is ready.
+    onUpdateStatus: (cb: (s: UpdateStatus) => void) => void
+    offUpdateStatus: () => void
   }
 }
 

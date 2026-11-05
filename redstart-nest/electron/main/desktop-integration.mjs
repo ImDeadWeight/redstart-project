@@ -5,7 +5,7 @@
 // =============================================================================
 // The things a DESKTOP client can do that a headless daemon cannot, held as
 // capabilities an entrypoint registers rather than as imports the daemon makes.
-// Two of them so far: the OS recycle bin, and the login item.
+// Three of them so far: the OS recycle bin, the login item, and the updater.
 //
 // Why a registry and not `if (process.platform === ...)` or a try/catch around
 // `import('electron')`:
@@ -33,6 +33,7 @@
 
 let recycleBin = null
 let loginItems = null
+let updater = null
 
 // ---------------------------------------------------------------------------
 // The OS recycle bin
@@ -75,4 +76,29 @@ export function setLoginItems(impl) {
 
 export function getLoginItems() {
   return loginItems
+}
+
+// ---------------------------------------------------------------------------
+// The updater
+// ---------------------------------------------------------------------------
+// Registered by index.mjs from auto-update.mjs's controller, on a packaged
+// Windows build only. A headless daemon has no installer to update and a dev
+// run must never update itself, so absence means "this install does not
+// update itself", which the Updates control reports as unsupported.
+
+/**
+ * @param {{ status(): { state: string, version: string|null, error: string|null, checkedAt: number|null },
+ *           checkNow(): Promise<void>,
+ *           install(): boolean } | null} impl
+ *   install() hands off to index.mjs's deliberate-quit path and returns
+ *   whether there was an update to install. It must not quit synchronously,
+ *   since the caller's HTTP response has to leave first.
+ */
+export function setUpdater(impl) {
+  updater = (impl && typeof impl.status === 'function' && typeof impl.checkNow === 'function'
+    && typeof impl.install === 'function') ? impl : null
+}
+
+export function getUpdater() {
+  return updater
 }
