@@ -48,7 +48,7 @@ import { cleanupOldConversations } from './conversations-storage.mjs'
 import { initLogger, closeLogger, logEvent } from './logger.mjs'
 import { initProcessLog } from './process-log.mjs'
 import { reapStaleProcess, deletePidFile } from './process-supervision.mjs'
-import { startEmbedServer, stopEmbedServer } from './embed-server.mjs'
+import { startEmbedServer, stopEmbedServer, embedServerStatus } from './embed-server.mjs'
 import { embedModelPath, hasEmbedModel } from './embed-model.mjs'
 import { writeDaemonPid, clearDaemonPid } from './daemon-pidfile.mjs'
 import { configDir, capabilityBaseDir, isPackaged } from './platform-paths.mjs'
@@ -99,6 +99,9 @@ const DEFAULT_HOST = {
 // cleared on stop/exit.
 const serverState = { process: null, ema: 0, lastConfig: null }
 let beaconServerInstance = null
+// Set by stopDaemon(), cleared by startDaemon(). See stopDaemon's note on why
+// a second stop has to be a no-op.
+let daemonStopped = false
 
 // Live tool-config refresh, bound to serverState. buildGatewayConfig +
 // createRefreshLiveToolsConfig live in gateway-config.mjs; this module only
@@ -431,6 +434,7 @@ function setupAdminApi() {
  */
 export async function startDaemon(entrypoint = {}) {
   host = { ...DEFAULT_HOST, ...entrypoint }
+  daemonStopped = false
 
   // Structured logging to <configDir>/redstart.log. First, so every startup
   // step below it is captured.
@@ -493,8 +497,19 @@ export async function startDaemon(entrypoint = {}) {
  *
  * The tray is NOT torn down here — it is the client's, and the client's own
  * before-quit still owns it.
+ *
+ * Idempotent. The updater's install path calls this itself, so it can wait
+ * for the children to exit before NSIS starts, and app.quit()'s before-quit
+ * then calls it again. A second run would close an already-closed logger and
+ * stop listeners that are gone.
+ *
+ * @returns {{ childPids: number[] }} the children this stop signalled. They
+ *   may still be exiting. kill() does not wait (see waitForPidsExit).
  */
 export function stopDaemon() {
+  if (daemonStopped) return { childPids: [] }
+  daemonStopped = true
+  const childPids = []
   logEvent('app', 'quit', {})
   stopGateway()
   stopMcpServer()
@@ -504,6 +519,7 @@ export function stopDaemon() {
     // by-name sweep — this line never actually killed the child itself, only
     // dropped the reference. Kill by pid explicitly now that the sweep is
     // gone, or Nest's own llama-server would leak past quit.
+    if (serverState.process.pid) childPids.push(serverState.process.pid)
     serverState.process.kill()
     serverState.process = null
     deletePidFile(configDir())
@@ -511,6 +527,8 @@ export function stopDaemon() {
   // Alongside the gateway rather than with the chat server: it is the daemon's
   // child, and a stop that skipped it would leave an orphan whose pid file the
   // next start would have to reap.
+  const embedPid = embedServerStatus().pid
+  if (embedPid) childPids.push(embedPid)
   stopEmbedServer({ configDir: configDir() })
   if (beaconServerInstance) {
     stopBeaconServer(beaconServerInstance)
@@ -520,6 +538,7 @@ export function stopDaemon() {
   // Before the logger closes, so a failure here still gets a line.
   clearDaemonPid(configDir())
   closeLogger()
+  return { childPids }
 }
 
 // ---------------------------------------------------------------------------

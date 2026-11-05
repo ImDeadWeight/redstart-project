@@ -29,6 +29,7 @@ import {
   deletePidFile,
   isLikelyOurProcess,
   reapStaleProcess,
+  waitForPidsExit,
 } from '../electron/main/process-supervision.mjs'
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-proc-sup-'))
@@ -116,6 +117,64 @@ await test('a pid file for a process that no longer exists is cleared without er
   writePidFile(tmpDir, { pid: 999999, binaryPath: 'llama-server.exe', startedAt: Date.now() })
   await reapStaleProcess(tmpDir)
   assert(readPidFile(tmpDir) === null, 'pid file should be cleared')
+})
+
+// =============================================================================
+// waitForPidsExit — the update installer must not race a dying child
+// =============================================================================
+// ChildProcess.kill() returns when the signal is sent, not when the process is
+// gone. The updater's quit path waits on this before it starts NSIS, which
+// overwrites the DLLs llama-server.exe has mapped. Real children throughout:
+// what is under test is the OS's view of the pid, which a stub cannot fake.
+
+console.log('\n-- 🔍 waitForPidsExit: the installer waits for children to be gone --')
+
+const { spawn } = await import('node:child_process')
+
+function spawnSleeper() {
+  return spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000)'], { stdio: 'ignore' })
+}
+
+await test('🔍 a killed child is waited out, not just signalled', async () => {
+  const child = spawnSleeper()
+  await new Promise((resolve) => child.once('spawn', resolve))
+  let exited = false
+  child.once('exit', () => { exited = true })
+  child.kill()
+  const { stillRunning } = await waitForPidsExit([child.pid], { timeoutMs: 10_000 })
+  assert(stillRunning.length === 0, `pid ${child.pid} still reported running`)
+  // The OS's answer and Node's own exit event agree, give or take the event
+  // loop delivering 'exit' a tick later.
+  await new Promise((resolve) => (exited ? resolve() : child.once('exit', resolve)))
+  return 'returned only once the pid was gone'
+})
+
+await test('🔍 a child that will not exit returns at the timeout, naming it', async () => {
+  const child = spawnSleeper()
+  await new Promise((resolve) => child.once('spawn', resolve))
+  try {
+    const started = Date.now()
+    const { stillRunning } = await waitForPidsExit([child.pid], { timeoutMs: 300, pollMs: 50 })
+    const waited = Date.now() - started
+    assert(stillRunning.length === 1 && stillRunning[0] === child.pid, `expected [${child.pid}], got ${JSON.stringify(stillRunning)}`)
+    assert(waited >= 250 && waited < 5_000, `waited ${waited}ms against a 300ms timeout`)
+    return `gave up after ${waited}ms`
+  } finally {
+    child.kill()
+    await new Promise((resolve) => (child.exitCode !== null ? resolve() : child.once('exit', resolve)))
+  }
+})
+
+await test('null, undefined and non-pids are ignored rather than polled', async () => {
+  const started = Date.now()
+  const { stillRunning } = await waitForPidsExit([null, undefined, 0, -1, 1.5], { timeoutMs: 5_000 })
+  assert(stillRunning.length === 0, `got ${JSON.stringify(stillRunning)}`)
+  assert(Date.now() - started < 1_000, 'should return at once with nothing to wait for')
+})
+
+await test('a pid that never existed counts as already exited', async () => {
+  const { stillRunning } = await waitForPidsExit([999999], { timeoutMs: 1_000 })
+  assert(stillRunning.length === 0, `got ${JSON.stringify(stillRunning)}`)
 })
 
 // =============================================================================
@@ -287,6 +346,34 @@ await test('🔍 a stop racing a launch runs after it — no gateway left in fro
     const spawned = child[0]
     if (spawned && spawned.exitCode === null) await new Promise((resolve) => spawned.once('exit', resolve))
   }
+})
+
+// =============================================================================
+// stopDaemon — reports what it signalled, and runs once
+// =============================================================================
+// The updater's install path calls stopDaemon() itself, waits on the pids it
+// returns, then app.quit() fires before-quit, which calls it again. The second
+// call must be a no-op, and the first must name every child it killed, or
+// waitForPidsExit has nothing to wait on.
+
+console.log('\n-- 🔍 stopDaemon: names its children, runs once --')
+
+await test('🔍 stopDaemon returns the chat server pid it killed, and a second call kills nothing', async () => {
+  const { stopDaemon, serverState } = await import('../electron/main/daemon.mjs')
+  let kills = 0
+  serverState.process = { pid: 424242, kill: () => { kills++ } }
+  const first = stopDaemon()
+  assert(JSON.stringify(first.childPids) === '[424242]', `first stop returned ${JSON.stringify(first)}`)
+  assert(kills === 1, `expected one kill, got ${kills}`)
+  assert(serverState.process === null, 'the reference should be dropped')
+
+  // Re-plant a child: a teardown that re-ran would kill it a second time.
+  serverState.process = { pid: 434343, kill: () => { kills++ } }
+  const second = stopDaemon()
+  assert(second.childPids.length === 0, `second stop returned ${JSON.stringify(second)}`)
+  assert(kills === 1, `the second stop ran the teardown again (${kills} kills)`)
+  serverState.process = null
+  return 'one teardown, one kill, its pid reported'
 })
 
 fs.rmSync(concurrencyDir, { recursive: true, force: true })
