@@ -42,7 +42,7 @@ import { getAdminListenerState } from '../electron/main/admin-listener.mjs'
 import { hasOwner } from '../electron/main/auth.mjs'
 import { readBootstrapToken } from '../electron/main/bootstrap-token.mjs'
 import { stopServer } from '../electron/main/ipc/server.mjs'
-import { logEvent } from '../electron/main/logger.mjs'
+import { logEvent, whenLoggerClosed } from '../electron/main/logger.mjs'
 import { portConflictMessage } from '../electron/main/ports.mjs'
 import { createPeer, PROTOCOL_VERSION } from '../electron/main/shell-pipe.mjs'
 import { resolveDaemonPaths } from './nest-dir.mjs'
@@ -83,7 +83,10 @@ export async function runShellMode(argv) {
     // The pids the shell's updater must see gone before it installs. Our own
     // pid is the shell's to wait for; it knows it.
     peer.send({ type: 'stopping', pids: childPids })
-    process.stdout.write('', () => process.exit(0))
+    // Exit once the log has flushed (stopDaemon closed it) and stdout has
+    // drained. On EOF the pipe is already gone, so the write fails at once.
+    // The timer is the bound if either hangs.
+    whenLoggerClosed().then(() => process.stdout.write('', () => process.exit(0)))
     setTimeout(() => process.exit(0), 2000).unref()
   }
 

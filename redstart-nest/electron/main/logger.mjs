@@ -59,9 +59,22 @@ export function initLogger(userDataDir) {
   }
 }
 
+// Resolves once the last close has flushed to disk. A caller that exits the
+// process right after stopping (nestd --shell-pipe) waits on this, or the
+// final lines, including the shutdown record itself, never reach the file.
+let closed = Promise.resolve()
+
 export function closeLogger() {
-  try { stream?.end() } catch { /* ignore */ }
+  const s = stream
   stream = null
+  if (!s) return
+  closed = new Promise((resolve) => {
+    try { s.end(resolve) } catch { resolve() }
+  })
+}
+
+export function whenLoggerClosed() {
+  return closed
 }
 
 // Keep only safe scalars; drop blocked keys and any non-primitive value.

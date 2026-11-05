@@ -293,6 +293,9 @@ if (!skip) {
       if (code === 'timeout') e.child.kill()
       assert(code === 0, `expected exit 0 after EOF, got ${code}`)
       assert(!(await portInUse(ADMIN_PORT)) && !(await portInUse(BEACON_PORT)), 'a port is still bound: the daemon outlived its shell')
+      // The exit waits for the log to flush: this record was lost before.
+      const log = fs.readFileSync(path.join(configDir, 'redstart.log'), 'utf8')
+      assert(/"event":"shutdown","reason":"shell-pipe-closed"/.test(log), 'the shutdown record never reached redstart.log')
     })
 
     await test('without a login item from the shell, start-at-login reads unsupported', async () => {
