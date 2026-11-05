@@ -4,6 +4,16 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ---
 
+## 2026-11-05
+
+- **Redstart Nest updates itself on Windows.** A packaged Windows install checks GitHub about four times a day, downloads a newer release in the background, and installs it on the next deliberate quit (tray *Quit*, the new tray *Restart to update*, or admin shutdown). Never on an OS shutdown, a logoff or a crash, and Nest never restarts itself because a download finished, since other devices may be using it. Full gap list: [Security → Known gaps](docs/security.md#known-gaps).
+  - **Why not electron-updater's GitHub provider.** Nest and Twig publish into one release, so each needs its own manifest (`nest.yml`, later `twig.yml`). With a custom channel and `-alpha.N` tags, that provider never finds a release, and when it does it fetches `alpha.yml` regardless. `electron/main/update-feed.mjs` picks the release from the GitHub API, and electron-updater's *generic* provider is pointed at that release's download folder. electron-updater still does the download, the SHA-512 check, the blockmap differential and the install.
+  - **The installer waits for llama-server to be gone.** `ChildProcess.kill()` does not wait, and NSIS overwrites `resources/bin` while a dying `llama-server.exe` still has `ggml-cuda.dll` mapped. electron-builder's running-app check only looks for `Redstart Nest.exe`. The install path now stops the daemon itself, waits for the pids `stopDaemon()` reports, and abandons the install (quitting normally) if they outlive 15 s.
+  - **The installer file is now `Redstart-Nest-Setup-<version>.exe`.** GitHub rewrites spaces in asset names and the generic provider does not, so the old name would 404.
+  - **Upgrading from alpha.5 or earlier is manual, once.** Those installs have no updater in them.
+
+---
+
 ## 2026-09-03
 
 - **The headless admin plane.** Redstart Nest stopped being a desktop app that happens to run a server and became a **daemon that happens to have a window**. Eight phases on `feat/headless-admin-plane`; the design record and the phase-by-phase implementation notes are working notes, so the reasoning worth keeping is summarised here and in [Architecture → The daemon and the control plane](docs/architecture.md#the-daemon-and-the-control-plane).
