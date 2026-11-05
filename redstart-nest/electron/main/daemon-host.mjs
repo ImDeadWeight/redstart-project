@@ -44,7 +44,9 @@ const READY_TIMEOUT_MS = 60_000
  */
 export function startDaemonProcess(opts) {
   const { nodePath, nestdPath, paths, key, loginItem = null, updater = null, handlers = {}, events = {} } = opts
-  const args = [nestdPath, '--shell-pipe', '--config', paths.config, '--capability-base', paths.capabilityBase]
+  // --no-experimental-webstorage: Node 26's localStorage global warns when a
+  // dependency probes it. Off, it is absent, as on Node 20.
+  const args = ['--no-experimental-webstorage', nestdPath, '--shell-pipe', '--config', paths.config, '--capability-base', paths.capabilityBase]
   if (paths.resources) args.push('--resources', paths.resources)
 
   // Electron's own variable must not reach the child: under the real Node it is
