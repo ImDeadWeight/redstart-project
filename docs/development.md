@@ -187,6 +187,10 @@ Then open `redstart-nest/src/chat-ui/android` in Android Studio and run on a dev
 
 Redstart Nest does **not** commit the inference binary or its runtime DLLs — they're large and platform-specific, so the entire `redstart-nest/llama-cpp-turboquant/` tree and `redstart-nest/deps/` are git-ignored. A fresh clone has neither. Building the installer from scratch means assembling two things by hand.
 
+> **Released installers don't build it at all.** The [release workflow](#releases) downloads TurboQuant+'s own prebuilt release (`windows-x64-cuda12.4`, `macos-arm64-metal`), checks it against a pinned SHA-256, and stages it into the same paths described below — so a source build and a downloaded one are interchangeable as far as `electron-builder.json` is concerned. Its `Stage llama-server` steps are also the quickest way to get a working binary locally without a CUDA toolchain.
+>
+> On **macOS** the layout is `llama-cpp-turboquant/build/bin/` (no `Release/` — that is an MSVC convention), holding `llama-server` and the `lib*.dylib` set beside it, and there is no `deps/` folder: Metal is a system framework.
+
 ### 1. Build the TurboQuant `llama-server`
 
 Clone [TurboQuant](https://github.com/TheTom/llama-cpp-turboquant) **into `redstart-nest/llama-cpp-turboquant/`** (that exact path — it's where both the dev binary lookup and `electron-builder` expect it) and build it there:
@@ -241,9 +245,14 @@ npm run build
 Output: `redstart-nest/release/<version>/Redstart Nest Setup <version>.exe`
 
 The version comes from `package.json`, and `electron-builder` puts the output in
-`release/${version}`. Currently `1.0.0-alpha.3` — the project ships as alpha
-prereleases, so bump the `-alpha.N` suffix in `redstart-nest/package.json` and
-`redstart-twig/windows/package.json` (kept in lockstep) before cutting a build.
+`release/${version}`. Don't bump it by hand — the [release workflow](#releases)
+does that on every merge, in `redstart-nest/package.json` and
+`redstart-twig/windows/package.json` together (it refuses to run if they
+disagree).
+
+On a Mac, `npm run build -- --mac` produces
+`release/<version>/Redstart Nest-<version>-arm64.dmg` instead. Nest is Apple
+Silicon only, because the only prebuilt Metal binary is arm64.
 
 ### Redstart Twig Windows
 
@@ -255,6 +264,23 @@ npm run build
 Output: `redstart-twig/windows/release/<version>/Redstart Twig Setup <version>.exe`
 
 The Windows build script builds the chat-ui first, then packages the Electron app. Both installers are NSIS-based and self-contained.
+
+Despite the directory name, the same project builds Twig for macOS: `npm run build -- --mac` produces an `arm64` and an `x64` `.dmg`.
+
+### Releases
+
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) runs whenever a pull request is **merged** into `main` (closing one unmerged does nothing), and can be started by hand from the Actions tab. It:
+
+1. bumps `-alpha.N` in both `package.json` files, commits `chore(release): <version>` to `main` and pushes a matching tag — `1.0.0-alpha.4`, etc.;
+2. builds four installers from that tag: Nest and Twig, each for Windows (NSIS `.exe`) and macOS (`.dmg`);
+3. publishes one GitHub **prerelease** titled `Nest/Twig <version>` with all of them attached, plus GitHub's generated list of merged PRs.
+
+Things worth knowing:
+
+- **A failed build leaves a tag without a release.** If the failure was transient (a download, a runner), use **Re-run failed jobs** — it keeps the version already chosen; *Re-run all jobs* bumps again and skips a number. If it needs a code change, re-running rebuilds the same broken tag: merge the fix instead, let that cut the next version, and delete the orphaned tag (`git push origin :refs/tags/<version>`).
+- **Leaving alpha is a manual step.** The bump only understands `X.Y.Z-alpha.N`; anything else stops the workflow with an error, so set the next version by hand in a PR when it is time for a beta or a 1.0.
+- **Nothing is signed with a real identity.** Windows installers are unsigned, as before. macOS apps are ad-hoc signed by [`scripts/mac-adhoc-sign.cjs`](../redstart-nest/scripts/mac-adhoc-sign.cjs) — enough that Apple Silicon does not call them "damaged", not enough to pass Gatekeeper without the user's *Open Anyway*.
+- **Moving the TurboQuant+ pin** means changing `TQP_TAG`, both asset names and both SHA-256 values at the top of the workflow, then re-reading the CUDA DLL entries in [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) — a new CUDA major renames them. The Windows job's [`check-dll-closure.mjs`](../redstart-nest/scripts/check-dll-closure.mjs) step fails the build if the new set imports a DLL that was not staged.
 
 ### Redstart Twig Android
 

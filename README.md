@@ -146,6 +146,10 @@ Accounts are **on by default** with no localhost exemption, and each account's f
 1. Download the latest `Redstart Twig Setup 1.0.0-alpha.N.exe` from [Releases](../../releases)
 2. Install and open — it scans your network automatically
 
+### macOS (experimental)
+
+Each release also carries `.dmg` installers — Nest for Apple Silicon, Twig for Apple Silicon (`arm64`) and Intel (`x64`). **They are built automatically and have never been run on a Mac**, so treat them as a preview. They are not notarized: after dragging the app to Applications, the first launch is blocked until you choose **Open Anyway** in System Settings → Privacy & Security.
+
 ---
 
 ## Using as a coding agent (Kilo Code / Continue / etc.)
@@ -188,8 +192,8 @@ This is the hardware and model used during development. Results will vary by GPU
 The short list; the [full set is in the roadmap](docs/roadmap.md#known-limitations).
 
 - **Twig for Android is out of date and not working** — the Android client hasn't been rebuilt against recent server changes. Use a phone browser against the chat UI instead. Paused, not abandoned; see [the note above](#redstart-twig-android).
-- **Unsigned installers** — both will trigger Windows Defender SmartScreen.
-- **Windows is the only supported server platform** — the daemon itself runs headless under plain Node and `deploy/` carries a systemd unit, but the installer, the bundled llama.cpp binary and the port-80 proxy are all Windows, and none of the Linux artifacts has been run on real hardware yet.
+- **Unsigned installers** — both will trigger Windows Defender SmartScreen; the macOS builds are not notarized, so Gatekeeper blocks their first launch.
+- **Windows is the only supported server platform** — the daemon itself runs headless under plain Node and `deploy/` carries a systemd unit, and releases now include macOS `.dmg` builds, but neither the Mac builds nor any of the Linux artifacts has been run on real hardware yet. The port-80 proxy is Windows-only.
 - **The deployment artifacts are a first draft** — `deploy/` (systemd, Windows SCM, Caddy) was written from the design and reviewed, not executed. Read each command before running it.
 - **HTTP only on the LAN** — self-signed TLS was tried and abandoned; Android WebView rejects it. For a deployment that needs TLS, `deploy/Caddyfile` terminates it in front of Nest.
 - **mDNS / `redstart.local` has been retired** — Android's resolver never answered `.local` lookups for browser navigation, so the name failed on the platform most clients are. Use the IP or the QR code; Twig's beacon scan never needed a name.

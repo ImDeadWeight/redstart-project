@@ -22,9 +22,14 @@ different routes and are verified differently:
 
 ### llama-server and its runtime libraries
 
-Redstart Nest bundles `llama-server.exe` and its accompanying runtime DLLs,
-built from **TurboQuant+** — a fork of **llama.cpp** that adds advanced weight
-and KV-cache quantization.
+Redstart Nest bundles `llama-server.exe` and its accompanying runtime DLLs on
+Windows, and `llama-server` with its `lib*.dylib` set on macOS, from
+**TurboQuant+** — a fork of **llama.cpp** that adds advanced weight and
+KV-cache quantization. Released installers carry the fork's own prebuilt
+release binaries (currently `tqp-v0.4.0`: `windows-x64-cuda12.4` and
+`macos-arm64-metal`), downloaded and SHA-256-verified by
+[`.github/workflows/release.yml`](.github/workflows/release.yml) rather than
+compiled by this project.
 
 - Upstream project: llama.cpp — <https://github.com/ggerganov/llama.cpp>
 - Fork used for the bundled build: TurboQuant —
@@ -114,18 +119,24 @@ The MIT license text applying to the above:
 
 ### NVIDIA CUDA runtime (cuBLAS)
 
-`redstart-nest/deps/windows/` bundles `cublas64_13.dll` and
-`cublasLt64_13.dll` for GPU-accelerated inference. Identified from the
-binaries' own version resources: CompanyName "NVIDIA Corporation", "NVIDIA
-CUDA BLAS Library, Version 13.5.1", Copyright "NVIDIA Corporation 2010-2026".
+The Windows installer bundles `cublas64_12.dll`, `cublasLt64_12.dll` and
+`cudart64_12.dll` for GPU-accelerated inference — shipped inside TurboQuant+'s
+`windows-x64-cuda12.4` release archive, and copied from it unmodified.
+Identified from the binaries' own version resources: CompanyName "NVIDIA
+Corporation"; "NVIDIA CUDA BLAS Library, Version 12.4.5" and "NVIDIA CUDA BLAS
+Light Library, Version 12.4.5" (Copyright "NVIDIA Corporation 2010 - 2024");
+"NVIDIA CUDA Runtime, Version 12.4.127" (Copyright "NVIDIA Corporation 1993 -
+2021"). The macOS build uses Metal, a system framework, and bundles nothing
+from NVIDIA.
 
 **This is NOT MIT.** These are redistributable components of the CUDA Toolkit,
 governed by the NVIDIA CUDA Toolkit End User License Agreement, Attachment A
-(cuBLAS is explicitly listed there as redistributable):
+(cuBLAS and the CUDA Runtime are both explicitly listed there as
+redistributable):
 
 - License: NVIDIA CUDA Toolkit EULA, Attachment A —
   <https://docs.nvidia.com/cuda/eula/index.html>
-- Copyright (c) 2010-2026 NVIDIA Corporation
+- Copyright (c) 1993-2024 NVIDIA Corporation
 
 Obligations that attach to redistributing these files, per that agreement:
 
@@ -141,12 +152,11 @@ Obligations that attach to redistributing these files, per that agreement:
   to these specific files, so this file's notice is what carries that
   obligation forward.
 
-<!-- VERIFY BEFORE PUBLISHING: confirm the CUDA Toolkit version actually used
-     to build the bundled 13.5.1 binaries has an EULA at the URL above with
-     unchanged Attachment A terms — NVIDIA revises the EULA per toolkit
-     release, and the canonical URL always reflects the current one, not
-     necessarily the one that shipped with 13.5.1. Pull the EULA.txt that
-     ships inside that specific toolkit installer and compare before release. -->
+<!-- VERIFY BEFORE PUBLISHING: confirm the CUDA 12.4 Toolkit EULA has
+     unchanged Attachment A terms against the URL above — NVIDIA revises the
+     EULA per toolkit release, and the canonical URL always reflects the
+     current one, not necessarily the one that shipped with 12.4. Pull the
+     EULA.txt that ships inside the 12.4 toolkit installer and compare. -->
 
 ### Microsoft Visual C++ Runtime
 
@@ -276,7 +286,10 @@ checklist:
 - [ ] Electron's `LICENSES.chromium.html` survived packaging.
 - [ ] The NVIDIA CUDA EULA URL in the cuBLAS entry above still matches the
       EULA shipped inside the CUDA Toolkit installer actually used to build
-      the current `cublas64_*.dll` / `cublasLt64_*.dll`.
+      the current `cublas64_*.dll` / `cublasLt64_*.dll` / `cudart64_*.dll`.
+      When the `TQP_TAG` pin in `.github/workflows/release.yml` moves, re-read
+      the version resources above — a new TurboQuant+ release can change the
+      CUDA major version, and with it these file names.
 
 ---
 

@@ -237,10 +237,20 @@ console.log('\n-- extraResources the main process reaches for at runtime --')
 // fine without them and only degrades, so nothing surfaced the gap. These
 // assertions read the config statically, so they hold in CI where deps/ and
 // llama-cpp-turboquant/ do not exist.
+//
+// The platform binaries live under `win.extraResources` / `mac.extraResources`
+// rather than the top-level list, because a mac build has no deps/windows/ to
+// copy from. electron-builder concatenates the top-level list with the
+// platform one, so each check reads the merged view the packager would build.
+
+/** What electron-builder would package for one platform: top-level + platform-specific. */
+function resourcesFor(config, platform) {
+  return [...(config.extraResources ?? []), ...(config[platform]?.extraResources ?? [])]
+}
 
 test('🔍 Nest packages elevate.exe, which firewall.mjs resolves from resourcesPath', () => {
   const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
-  const resources = config.extraResources ?? []
+  const resources = resourcesFor(config, 'win')
   assert(
     resources.some((r) => typeof r === 'object' && `${r.from} ${r.to}`.includes('elevate.exe')),
     'firewall.mjs does path.join(process.resourcesPath, "elevate.exe") to add inbound rules with UAC. ' +
@@ -252,7 +262,7 @@ test('🔍 Nest packages elevate.exe, which firewall.mjs resolves from resources
 
 test('🔍 DLL filters are case-insensitive, or uppercase .DLL files are dropped', () => {
   const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
-  const dllEntries = (config.extraResources ?? []).filter(
+  const dllEntries = resourcesFor(config, 'win').filter(
     (r) => typeof r === 'object' && Array.isArray(r.filter) && r.filter.some((f) => /\.dll$/i.test(f))
   )
   assert(dllEntries.length > 0, 'no extraResources entry filters DLLs at all')
@@ -266,6 +276,40 @@ test('🔍 DLL filters are case-insensitive, or uppercase .DLL files are dropped
     )
   }
   return `${dllEntries.length} DLL filter(s) cover both cases`
+})
+
+test("🔍 Nest's mac build ships llama-server where daemon.mjs looks for it", () => {
+  // resolveBinary() checks path.join(process.resourcesPath, 'bin', serverBinaryName())
+  // and nothing else when packaged — so a binary placed anywhere other than bin/,
+  // or under its Windows name, means Start Server fails on every Mac install.
+  const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
+  const entry = resourcesFor(config, 'mac').find(
+    (r) => typeof r === 'object' && r.to === 'bin' && (r.filter ?? []).includes('llama-server')
+  )
+  assert(entry, 'no mac extraResources entry places "llama-server" (no .exe) into resources/bin')
+  assert(
+    entry.filter.includes('*.dylib'),
+    'llama-server on macOS is dynamically linked against libllama/libggml*.dylib beside it; ' +
+      'shipping the executable alone produces a binary that dies at load with "Library not loaded"'
+  )
+  return entry.from
+})
+
+test('🔍 every mac build is ad-hoc signed after packing, or Apple Silicon calls it damaged', () => {
+  // electron-builder 24 skips signing when there is no certificate, and
+  // its own edits invalidate the signature Electron's binary shipped with.
+  for (const app of APPS) {
+    const config = JSON.parse(fs.readFileSync(app.config, 'utf8'))
+    if (!config.mac) continue
+    assert(config.afterPack, `${app.name}: mac target declared but no afterPack hook signs the bundle`)
+    const hook = path.resolve(path.dirname(app.config), config.afterPack)
+    assert(fs.existsSync(hook), `${app.name}: afterPack points at ${config.afterPack}, which does not exist`)
+    assert(
+      /codesign/.test(fs.readFileSync(hook, 'utf8')),
+      `${app.name}: afterPack hook ${config.afterPack} never calls codesign`
+    )
+  }
+  return 'hooked'
 })
 
 // ---------------------------------------------------------------------------

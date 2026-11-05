@@ -1,8 +1,10 @@
 /**
- * Generates a multi-size Windows .ico from the American Redstart pixel art
+ * Generates the app icons from the American Redstart pixel art
  * (placeholder design — a graphic artist will replace this).
  * No external dependencies — only Node.js built-ins.
- * Output: build/icon.ico (referenced by both electron-builder configs)
+ * Output: build/icon.ico (Windows) and build/icon.png (macOS — electron-builder
+ *         converts it to .icns, and refuses anything under 512px), both
+ *         referenced by both electron-builder configs
  */
 
 import * as fs from 'fs'
@@ -134,3 +136,9 @@ fs.mkdirSync(outDir, { recursive: true })
 const outPath = path.join(outDir, 'icon.ico')
 fs.writeFileSync(outPath, ico)
 console.log(`✓ icon.ico → ${outPath}  (${SIZES.join(', ')}px, ${(ico.length / 1024).toFixed(1)} KB)`)
+
+// 1024 is an exact multiple of the 32px grid, so every source pixel stays a
+// crisp square rather than being resampled.
+const pngPath = path.join(outDir, 'icon.png')
+fs.writeFileSync(pngPath, makePng(1024))
+console.log(`✓ icon.png → ${pngPath}  (1024px)`)
