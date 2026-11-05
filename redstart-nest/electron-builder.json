@@ -5,7 +5,8 @@
   "directories": {
     "output": "release/${version}"
   },
-  "files": ["electron/main", "dist"],
+  "files": ["electron/main", "bin", "dist"],
+  "asar": false,
   "asarUnpack": ["**/*.node", "node_modules/@modelcontextprotocol/server-filesystem/**", "node_modules/sql.js/dist/**"],
   "extraResources": [
     {
@@ -50,6 +51,11 @@
       {
         "from": "deps/windows/elevate.exe",
         "to": "elevate.exe"
+      },
+      {
+        "from": "deps/node",
+        "to": "node",
+        "filter": ["node.exe", "LICENSE"]
       }
     ],
     "publish": {

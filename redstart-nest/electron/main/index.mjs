@@ -20,6 +20,16 @@
 //   - how secrets are encrypted (safeStorage — DPAPI on Windows)
 //   - what a crash does (a shell notification, then app.exit(1))
 //   - what a deliberate shutdown does (quitApp — app.quit(), deferred)
+//
+// ON WINDOWS THE DAEMON IS NO LONGER IN THIS PROCESS (daemon split T1,
+// docs/notes/daemon-split-tauri-plan.md). This shell spawns `nestd
+// --shell-pipe` on the bundled Node 26 (daemon-host.mjs) and answers the
+// same questions over the shell pipe: the paths as flags, the secrets key
+// (pinned and DPAPI-unwrapped HERE, shell-secrets-key.mjs; the daemon never
+// calls DPAPI), and the recycle bin, login item, notifications and updater
+// as requests. Electron is the window, tray and updater only. macOS and Linux
+// keep the in-process daemon until the Tauri shell (T2): their safeStorage
+// is a keychain, not the OSCrypt format the daemon's provider reads.
 // =============================================================================
 
 import { app, BrowserWindow, Menu, nativeImage, Notification, dialog, safeStorage, shell } from 'electron'
@@ -27,7 +37,7 @@ import * as path from 'path'
 import * as fs from 'fs'
 import * as zlib from 'zlib'
 import { getAdminListenerState } from './admin-listener.mjs'
-import { logEvent } from './logger.mjs'
+import { logEvent, initLogger } from './logger.mjs'
 import { subscribeToEvents, publish } from './event-broker.mjs'
 import { initPaths } from './platform-paths.mjs'
 import {
@@ -42,6 +52,11 @@ import { startTray, setTrayUpdate } from './tray.mjs'
 import { startAutoUpdate } from './auto-update.mjs'
 import { stopServer } from './ipc/server.mjs'
 import { reconcileStartupSetting } from './ipc/admin.mjs'
+import { startDaemonProcess } from './daemon-host.mjs'
+import { resolveSecretsKey } from './shell-secrets-key.mjs'
+
+// The split (see the header). One switch, read everywhere below.
+const SPLIT_DAEMON = process.platform === 'win32'
 
 // ---------------------------------------------------------------------------
 // Redstart pixel-art icon — minimal PNG encoder + 32×32 American Redstart bust
@@ -338,6 +353,11 @@ let stopTray = null
 // controller that does nothing (auto-update.mjs).
 let updater = null
 
+// The split daemon (Windows): the daemon-host handle, and what its `ready`
+// said. Both null on the in-process path and before startup finishes.
+let daemonHost = null
+let daemonReady = null
+
 
 // ---------------------------------------------------------------------------
 // userData migration (Beaver -> Redstart rename)
@@ -420,11 +440,32 @@ function installPopupContainment() {
 // dialog.showMessageBox here is an informational box on THIS process's own
 // window, always local to whoever is running it — no remote-vs-local
 // ambiguity the way a file picker had.
+// On the split path settings.json belongs to the daemon (another process
+// rewrites it), so the shell records this in its own small file instead and
+// only READS settings.json, to honour a notice shown before the split.
+function shellStatePath() {
+  return path.join(app.getPath('userData'), 'shell', 'shell-state.json')
+}
+function closeNoticeAlreadyShown() {
+  if (readSettings().closeNoticeShown) return true
+  if (!SPLIT_DAEMON) return false
+  try { return !!JSON.parse(fs.readFileSync(shellStatePath(), 'utf8')).closeNoticeShown } catch { return false }
+}
+function markCloseNoticeShown() {
+  if (!SPLIT_DAEMON) {
+    const latest = readSettings()
+    latest.closeNoticeShown = true
+    writeSettings(latest)
+    return
+  }
+  fs.mkdirSync(path.dirname(shellStatePath()), { recursive: true })
+  fs.writeFileSync(shellStatePath(), JSON.stringify({ closeNoticeShown: true }, null, 2))
+}
+
 function installCloseNotice(win) {
   win.on('close', (event) => {
     if (isQuitting) return
-    const settings = readSettings()
-    if (settings.closeNoticeShown) return
+    if (closeNoticeAlreadyShown()) return
     event.preventDefault()
     dialog.showMessageBox(win, {
       type: 'info',
@@ -433,9 +474,7 @@ function installCloseNotice(win) {
       detail: 'The model stays loaded. Quit from the tray icon to stop it.',
       buttons: ['Got it'],
     }).then(() => {
-      const latest = readSettings()
-      latest.closeNoticeShown = true
-      writeSettings(latest)
+      markCloseNoticeShown()
       // win.close() rather than destroy() — re-fires 'close', but the
       // settings write above just made this handler's early-return above
       // fire this time, so it proceeds to the OS's normal close behavior
@@ -446,6 +485,9 @@ function installCloseNotice(win) {
 }
 
 function createWindow() {
+  // A second launch can arrive before the split daemon is ready; main()
+  // opens the window once it is, so there is nothing to show yet.
+  if (SPLIT_DAEMON && !daemonReady) return
   // No File/Edit/View/Help. Nothing in them applies to this app — there are no
   // documents to open and no preferences that are not in the UI already — and
   // with the title bar hidden the menu would have nowhere sensible to live.
@@ -492,12 +534,11 @@ function createWindow() {
   // event. subscribeToEvents() returns an unsubscribe handle specifically so
   // this registration does not stack a second, permanently-dead listener
   // every time the window reopens.
+  // Broker events used to be forwarded here to webContents.send. Nothing has
+  // received them since Phase 6 deleted the preload, and with the split the
+  // broker that matters is in another process. Dropped (T1.0 call 7).
   const win = mainWindow
-  const unsubscribeFromEvents = subscribeToEvents((channel, payload) => {
-    if (!win.isDestroyed()) win.webContents.send(channel, payload)
-  })
   win.on('closed', () => {
-    unsubscribeFromEvents()
     if (mainWindow === win) mainWindow = null
   })
   installCloseNotice(win)
@@ -512,17 +553,15 @@ function createWindow() {
   // the admin listener directly, so UI work keeps hot-reload, proxying
   // everything under /admin to the real listener (vite.config.ts) — a
   // dev-tooling convenience, not a security boundary.
-  const { port } = getAdminListenerState()
+  // Split: the daemon told us its port and, while no owner exists, the setup
+  // code, in `ready`. In-process: ask the modules directly, as before.
+  const port = SPLIT_DAEMON ? daemonReady.adminPort : getAdminListenerState().port
   let url = app.isPackaged ? `http://127.0.0.1:${port}/` : 'http://localhost:5173/'
   // The bootstrap-token handoff, without IPC: no owner exists yet, so this
-  // is a first-run (or post-wipe) box. Read the token here and hand it to
-  // the page as a URL, the same as any other "where should this window
-  // start" decision. AdminGate.tsx reads it once on mount and clears it
-  // from the address bar immediately after.
-  if (!hasOwner()) {
-    const token = readBootstrapToken()
-    if (token) url += `?setupToken=${encodeURIComponent(token)}`
-  }
+  // is a first-run (or post-wipe) box, and the page gets the code as a URL.
+  // AdminGate.tsx reads it once on mount and clears it from the address bar.
+  const token = SPLIT_DAEMON ? daemonReady.setupToken : (hasOwner() ? null : readBootstrapToken())
+  if (token) url += `?setupToken=${encodeURIComponent(token)}`
   mainWindow.loadURL(url)
   if (!app.isPackaged) {
     mainWindow.webContents.openDevTools()
@@ -594,6 +633,8 @@ function onUpdateStatus(status) {
   // To every admin UI, local or remote, over the same SSE feed the model's
   // started/stopped events use. A remote admin has no tray to read.
   publish('update:status', status)
+  // Split: the admin API and its SSE feed live in the daemon now.
+  daemonHost?.pushUpdateStatus(status)
   const ready = status.state === 'ready' ? status.version : null
   setTrayUpdate(ready)
   if (ready && ready !== notifiedUpdateVersion) {
@@ -674,6 +715,22 @@ async function main() {
     resources: app.isPackaged ? process.resourcesPath : null,
   })
   migrateUserDataFromBeaver()
+  installPopupContainment()
+  // Windows: the daemon is a separate nestd process (see the header).
+  // Elsewhere, still in this process until the Tauri shell.
+  const started = SPLIT_DAEMON ? await startSplitDaemon() : await startInProcessDaemon()
+  if (!started) return
+  if (!app.isPackaged) await installReactDevTools()
+  // A login-triggered start is windowless — tray-only until the admin
+  // opens it. This never starts a model, only the daemon (admin listener,
+  // beacon, gateway config, MCP), all of which are already up by this line.
+  if (!isBackgroundLaunch) createWindow()
+}
+
+// ---------------------------------------------------------------------------
+// The daemon, in this process (macOS/Linux until T2)
+// ---------------------------------------------------------------------------
+async function startInProcessDaemon() {
   // secrets.mjs is fail-closed and holds no crypto of its own; wire the
   // provider before anything can read or write a credential. This is the
   // desktop (level 2) entrypoint, so it gets safeStorage — the same DPAPI
@@ -690,7 +747,6 @@ async function main() {
     get: () => app.getLoginItemSettings(),
     set: (settings) => app.setLoginItemSettings(settings),
   })
-  installPopupContainment()
   // Everything that is Nest-the-service: the logger, the process log, the
   // capability folders, stale-process reaping, the control-plane API table,
   // the beacon and the admin listener. One call now — the same one
@@ -737,11 +793,125 @@ async function main() {
       },
     })
   }
-  if (!app.isPackaged) await installReactDevTools()
-  // A login-triggered start is windowless — tray-only until the admin
-  // opens it. This never starts a model, only the daemon (admin listener,
-  // beacon, gateway config, MCP), all of which are already up by this line.
-  if (!isBackgroundLaunch) createWindow()
+  return true
+}
+
+// ---------------------------------------------------------------------------
+// The daemon, as a separate nestd process (Windows, daemon split T1)
+// ---------------------------------------------------------------------------
+
+// Which Node runs nestd. Packaged: the pinned Node 26 electron-builder copied
+// into resources/node (scripts/stage-node.mjs). Dev: REDSTART_NODE, else the
+// same staged binary under deps/node, else whatever `node` is on PATH, with a
+// warning, since the tests and the shipped build run 26.
+function resolveDaemonNode() {
+  if (app.isPackaged) return path.join(process.resourcesPath, 'node', 'node.exe')
+  if (process.env.REDSTART_NODE) return process.env.REDSTART_NODE
+  const staged = path.join(app.getAppPath(), 'deps', 'node', process.platform === 'win32' ? 'node.exe' : 'node')
+  if (fs.existsSync(staged)) return staged
+  console.warn('[daemon] deps/node is not staged (node scripts/stage-node.mjs); running nestd on the node on PATH')
+  return 'node'
+}
+
+function showNotification(title, body) {
+  if (Notification.isSupported()) new Notification({ title, body }).show()
+}
+
+// Startup failed before the daemon was ready: say why, in a box, and leave.
+// There is no window to fall back to and nothing for the tray to control.
+function fatalStartup(message) {
+  logEvent('app', 'daemon_start_failed', { reason: message.split('\n')[0] })
+  dialog.showErrorBox('Redstart could not start', message)
+  app.exit(1)
+}
+
+// The daemon exited without the shell asking it to. Warn only (settled: a
+// configurable restart comes later). Exit 1 is a crash: the daemon has
+// already sent its own notification when it could, so this one covers the
+// hard deaths (killed, out of memory) that never got to. Exit 0 is the
+// daemon stopping itself (admin Shut down's fallback): quit with it.
+function onDaemonExit({ code, signal, expected }) {
+  if (expected || isQuitting) return
+  logEvent('app', 'daemon_exited', { code, signal })
+  if (code === 0) {
+    app.quit()
+    return
+  }
+  showNotification('Redstart stopped unexpectedly', 'The Redstart server process exited. Start Redstart again from the Start menu.')
+  app.exit(1)
+}
+
+async function startSplitDaemon() {
+  const userData = app.getPath('userData')
+  // The shell's own log, in its own folder: two processes appending to (and
+  // rotating) one redstart.log would garble it. The daemon keeps the main one.
+  initLogger(path.join(userData, 'shell'))
+
+  // Before the daemon: an update install has to be able to stop it, and
+  // hello carries the updater's state. Does nothing on a dev run.
+  updater = startAutoUpdate({
+    app,
+    readSettings,
+    // Done early so the install path can wait for the daemon AND the
+    // children it reports (llama-server) before the installer runs.
+    stopForInstall: async () => {
+      if (stopTray) {
+        stopTray()
+        stopTray = null
+      }
+      return daemonHost ? daemonHost.stop() : { childPids: [] }
+    },
+    onStatus: onUpdateStatus,
+  })
+
+  // The secrets key: pinned in the config dir and DPAPI-unwrapped here, in
+  // the shell. The daemon only ever sees the unwrapped key, in hello.
+  let key
+  try {
+    ({ key } = resolveSecretsKey(userData))
+  } catch (err) {
+    fatalStartup(`Redstart could not open its secrets key.\n\n${err.message}`)
+    return false
+  }
+
+  daemonHost = startDaemonProcess({
+    nodePath: resolveDaemonNode(),
+    nestdPath: path.join(app.getAppPath(), 'bin', 'nestd.mjs'),
+    paths: {
+      config: userData,
+      capabilityBase: path.join(app.getPath('documents'), 'Redstart'),
+      resources: app.isPackaged ? process.resourcesPath : null,
+    },
+    key,
+    loginItem: { enabled: app.getLoginItemSettings().openAtLogin },
+    updater: updater.active ? { active: true, status: updater.status() } : null,
+    handlers: {
+      trash: (p) => shell.trashItem(p),
+      setLoginItem: (settings) => app.setLoginItemSettings(settings),
+      checkForUpdate: (opts) => updater.checkNow(opts),
+    },
+    events: {
+      // The tray subscribes to THIS process's broker; the daemon's events are
+      // republished into it.
+      onEvent: (channel) => publish(channel, {}),
+      onNotify: (n) => showNotification(n.title, n.body),
+      onQuitRequested: () => deliberateQuit({ relaunch: false }),
+      onInstallUpdate: () => { if (updater.hasPendingUpdate()) deliberateQuit({ relaunch: true }) },
+      onExit: onDaemonExit,
+      onStderr: (text) => process.stderr.write(text),
+    },
+  })
+  key.fill(0)
+
+  try {
+    daemonReady = await daemonHost.ready
+  } catch (err) {
+    fatalStartup(err.message)
+    return false
+  }
+  logEvent('app', 'daemon_ready', { pid: daemonHost.pid })
+  startTrayIcon()
+  return true
 }
 
 // A missing icon (redstartIcon failed to generate, logged at
@@ -760,7 +930,8 @@ function startTrayIcon() {
       onOpen: openOrFocusWindow,
       onStopModel: () => {
         logEvent('app', 'tray_stop_model', {})
-        stopServer({ serverState }).catch((err) => console.warn('Tray stop-model failed:', err.message))
+        const stopping = SPLIT_DAEMON ? daemonHost.stopModel() : stopServer({ serverState })
+        stopping.catch((err) => console.warn('Tray stop-model failed:', err.message))
       },
       onQuit: () => {
         logEvent('app', 'tray_quit', {})
@@ -770,7 +941,7 @@ function startTrayIcon() {
         logEvent('app', 'tray_install_update', {})
         deliberateQuit({ relaunch: true })
       },
-      initiallyRunning: !!serverState.process,
+      initiallyRunning: SPLIT_DAEMON ? !!daemonReady?.modelRunning : !!serverState.process,
     })
   } catch (err) {
     console.warn('Tray failed to start:', err.message)
@@ -802,12 +973,22 @@ async function installReactDevTools() {
 // The tray goes first, where it used to sit mid-teardown: a client affordance
 // should stop before the thing it is an affordance for, so a broker event
 // published during the daemon's own teardown cannot reach a destroyed icon.
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
   if (stopTray) {
     stopTray()
     stopTray = null
   }
-  stopDaemon()
+  if (!SPLIT_DAEMON) {
+    stopDaemon()
+    return
+  }
+  // Split: the quit waits for the daemon. Hold it, stop the daemon (it stops
+  // llama-server and exits), then quit again; that second before-quit finds
+  // the child gone and lets the quit through.
+  const child = daemonHost?.child
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  event.preventDefault()
+  daemonHost.stop().finally(() => app.quit())
 })
 
 // Closing the window closes a VIEW, not the daemon — the admin listener,

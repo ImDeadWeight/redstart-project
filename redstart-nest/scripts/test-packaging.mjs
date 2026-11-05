@@ -231,6 +231,40 @@ test('🔍 Nest unpacks the stdio MCP server it spawns as a child process', () =
   return 'unpacked'
 })
 
+console.log('\n-- the split daemon (nestd on the bundled Node 26) --')
+
+// Daemon split T1.4: on Windows the Electron shell spawns
+// resources/node/node.exe on <app>/bin/nestd.mjs. A plain Node cannot read
+// inside an asar, so the app tree has to be a real directory, bin/ has to be in
+// it, and the pinned Node has to be copied in. Any one missing and the packaged
+// app shows "Redstart could not start" on first launch.
+
+test('🔍 Nest ships an unpacked app tree, which the bundled Node can read', () => {
+  const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
+  assert(config.asar === false, 'asar must be false: nestd runs on a real Node, which cannot import from app.asar')
+  return 'asar: false'
+})
+
+test('🔍 Nest packages bin/, where nestd.mjs and its shell-mode entry live', () => {
+  const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
+  const files = config.files ?? []
+  assert(files.includes('bin'), 'electron-builder "files" must include "bin": the shell spawns bin/nestd.mjs')
+  for (const f of ['nestd.mjs', 'shell-mode.mjs', 'stdout-guard.mjs', 'nest-dir.mjs']) {
+    assert(fs.existsSync(path.join(APPS[0].appRoot, 'bin', f)), `bin/${f} is missing`)
+  }
+  return files.join(', ')
+})
+
+test('🔍 Nest packages the pinned Node runtime into resources/node on Windows', () => {
+  const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
+  const entry = (config.win?.extraResources ?? []).find((r) => typeof r === 'object' && r.from === 'deps/node')
+  assert(entry, 'win.extraResources needs { from: "deps/node", to: "node" } (scripts/stage-node.mjs stages it)')
+  assert(entry.to === 'node', `deps/node must land at resources/node (index.mjs resolveDaemonNode), not ${entry.to}`)
+  assert((entry.filter ?? []).includes('node.exe'), 'the deps/node filter must include node.exe')
+  assert((entry.filter ?? []).includes('LICENSE'), "Node's LICENSE travels with the binary it covers")
+  return `${entry.from} -> ${entry.to}`
+})
+
 console.log('\n-- extraResources the main process reaches for at runtime --')
 
 // Both of these shipped broken and neither failed anything: the app starts

@@ -38,6 +38,7 @@ import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { ADMIN_PORT, BEACON_PORT } from '../electron/main/ports.mjs'
 import { createPeer } from '../electron/main/shell-pipe.mjs'
+import { startDaemonProcess } from '../electron/main/daemon-host.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.join(here, '..')
@@ -303,6 +304,48 @@ if (!skip) {
       e.child.stdin.end(); await e.exited
       assert(got.json?.result?.supported === false, `expected unsupported: ${got.text}`)
       assert(e.loginSets.length === 0, 'asked a shell with no login item to set one')
+    })
+
+    // The Electron shell's side of the same protocol (daemon-host.mjs), hosting
+    // the real nestd: what index.mjs relies on for startup, the tray's stop,
+    // and the quit path's wait.
+    await test('🔍 daemon-host: ready carries the port; stop() waits for exit and reports the daemon pid', async () => {
+      const notified = []
+      let exitInfo = null
+      const h = startDaemonProcess({
+        nodePath: process.execPath,
+        nestdPath: nestd,
+        paths: { config: configDir, capabilityBase: capDir, resources: null },
+        key: KEY,
+        loginItem: null,
+        updater: null,
+        handlers: { trash: () => true },
+        events: { onNotify: (n) => notified.push(n), onExit: (i) => { exitInfo = i } },
+      })
+      const ready = await h.ready
+      assert(ready.adminPort === ADMIN_PORT, `ready.adminPort ${ready.adminPort}`)
+      const model = await h.stopModel()
+      assert(model !== undefined, 'stop-model got no answer')
+      const { childPids } = await h.stop()
+      assert(childPids.includes(h.pid), `stop() did not report the daemon pid: ${childPids}`)
+      assert(exitInfo && exitInfo.expected === true && exitInfo.code === 0, `exit ${JSON.stringify(exitInfo)}`)
+      assert(!(await portInUse(ADMIN_PORT)), 'admin port still bound after stop()')
+      return `pids ${childPids.length}`
+    })
+
+    await test('🔍 daemon-host: a daemon that dies during startup rejects ready with its stderr', async () => {
+      const h = startDaemonProcess({
+        nodePath: process.execPath,
+        nestdPath: nestd,
+        // Half a path pair: nest-dir refuses it before hello is even read.
+        paths: { config: configDir, capabilityBase: '', resources: null },
+        key: KEY,
+      })
+      let err = null
+      try { await h.ready } catch (e) { err = e }
+      assert(err && /exited during startup/.test(err.message), `expected a startup failure, got ${err?.message}`)
+      const info = await h.exited
+      assert(info.expected === false, 'a startup death was reported as expected')
     })
   } finally {
     if (d && d.child.exitCode === null) d.child.kill()

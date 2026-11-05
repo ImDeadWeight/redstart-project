@@ -197,7 +197,7 @@ export function startAutoUpdate({ app, readSettings, stopForInstall, onStatus = 
     // After this the logger is closed. Anything left to report goes to the
     // console, which a packaged build discards. The pid wait is the reason
     // for doing this stop here rather than leaving it to before-quit.
-    const { childPids } = stopForInstall()
+    const { childPids } = await stopForInstall()
     const { stillRunning } = await waitForPidsExit(childPids, { timeoutMs: CHILD_EXIT_TIMEOUT_MS })
     if (stillRunning.length > 0) {
       console.warn(`Update not installed: pid(s) ${stillRunning.join(', ')} still running after ${CHILD_EXIT_TIMEOUT_MS}ms`)

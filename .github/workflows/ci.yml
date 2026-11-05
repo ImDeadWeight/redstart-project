@@ -117,6 +117,9 @@ jobs:
       - name: "Security: OSCrypt provider reads what Electron safeStorage wrote"
         run: node scripts/test-secrets-dpapi.mjs
 
+      - name: "Security: the shell pins the secrets key and DPAPI-wraps it"
+        run: node scripts/test-shell-secrets-key.mjs
+
       # Trap 5.3 — the one step in the headless-admin-plane pass that can
       # destroy stored credentials silently. Nearly every case here asserts a
       # FAILURE path: what survives when a secret cannot be read, what is left
