@@ -281,6 +281,7 @@ jobs:
           node scripts/make-icon.mjs
           npx vite build
           npm run license:gen
+          node scripts/rust-licenses.mjs
           node scripts/stage-shell-bundle.mjs
           (cd shell && npx tauri build --config tauri.bundle.conf.json)
           built=$(ls shell/target/release/bundle/nsis/*-setup.exe)

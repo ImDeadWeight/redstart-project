@@ -85,6 +85,8 @@ function main() {
 
   fs.copyFileSync(need(path.join(NEST, 'LICENSE.txt')), out('LICENSE.txt'))
   fs.copyFileSync(need(path.join(REPO, 'THIRD-PARTY-NOTICES.md')), out('THIRD-PARTY-NOTICES.md'))
+  // npm-licenses.json (license:gen) and rust-licenses.json (rust-licenses.mjs).
+  need(path.join(NEST, 'licenses', 'rust-licenses.json'))
   copyDir(path.join(NEST, 'licenses'), out('licenses'))
 
   console.log(`Staged ${path.relative(REPO, BUNDLE_DIR)}`)
