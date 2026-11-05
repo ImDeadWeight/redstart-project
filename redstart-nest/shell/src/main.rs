@@ -17,6 +17,7 @@
 mod daemon;
 mod dpapi;
 mod job;
+mod keychain;
 mod log;
 mod login_item;
 mod paths;
@@ -93,7 +94,7 @@ fn main() {
             // A release build on Windows updates itself. A dev run doesn't, and
             // the admin UI then says so instead of offering a dead switch.
             let packaged = shell(&handle).layout.packaged;
-            app.manage(update::Updater::new(packaged && cfg!(windows)));
+            app.manage(update::Updater::new(packaged && (cfg!(windows) || cfg!(target_os = "macos"))));
             start_daemon(&handle);
             Ok(())
         })
@@ -127,7 +128,15 @@ fn start_daemon(app: &AppHandle) {
 
     // The key: DPAPI-unwrapped here, in the shell, natively. The daemon only
     // ever receives the unwrapped key, in hello.
-    let (mut key, source) = match secrets_key::resolve(&s.layout.config, &secrets_key::NATIVE) {
+    // Windows: DPAPI (secrets-key.json / Local State). macOS: the Keychain
+    // password Electron's safeStorage created.
+    let key_format = if cfg!(target_os = "macos") { Some("oscrypt-mac") } else { None };
+    let resolved = if cfg!(target_os = "macos") {
+        keychain::resolve()
+    } else {
+        secrets_key::resolve(&s.layout.config, &secrets_key::NATIVE)
+    };
+    let (mut key, source) = match resolved {
         Ok(k) => k,
         Err(e) => {
             fatal(app, &format!("Redstart could not open its secrets key.\n\n{e}"));
@@ -143,7 +152,7 @@ fn start_daemon(app: &AppHandle) {
     let handle = app.clone();
     let u = app.state::<update::Updater>();
     let updater = if u.active { json!({ "active": true, "status": u.status() }) } else { serde_json::Value::Null };
-    let started = DaemonHost::start(&s.layout, Hello { key: key.clone(), login_item, updater }, move |ev| {
+    let started = DaemonHost::start(&s.layout, Hello { key: key.clone(), key_format, login_item, updater }, move |ev| {
         on_daemon_event(&handle, ev)
     });
     key.iter_mut().for_each(|b| *b = 0);

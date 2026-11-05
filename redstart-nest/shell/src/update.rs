@@ -243,10 +243,21 @@ pub fn install_and_quit(app: &AppHandle, relaunch: bool) -> bool {
         log::event("update", "install_abandoned", json!({ "stillRunning": still }));
         return false;
     }
-    // Runs the NSIS installer (passive: a progress bar, no questions) and
-    // exits this process. On failure it returns, and we quit normally.
-    if let Err(e) = update.restart_after_install(relaunch).install(bytes) {
-        log::event("update", "install_failed", json!({ "message": e.to_string() }));
+    // Windows: runs the NSIS installer (passive: a progress bar, no
+    // questions) and exits this process. macOS: replaces the .app bundle in
+    // place and returns, so the restart (or the plain exit) is ours.
+    match update.restart_after_install(relaunch).install(bytes) {
+        Ok(()) => {
+            if cfg!(target_os = "macos") {
+                log::event("update", "installed", json!({ "relaunch": relaunch }));
+                if relaunch {
+                    app.restart();
+                }
+                app.exit(0);
+                return true;
+            }
+        }
+        Err(e) => log::event("update", "install_failed", json!({ "message": e.to_string() })),
     }
     false
 }
@@ -273,9 +284,18 @@ fn wait_pids_gone(pids: &[u32], timeout: Duration) -> Vec<u32> {
     still
 }
 
-#[cfg(not(windows))]
-fn wait_pids_gone(_: &[u32], _: Duration) -> Vec<u32> {
-    Vec::new()
+/// kill(pid, 0) succeeds while the process exists.
+#[cfg(unix)]
+fn wait_pids_gone(pids: &[u32], timeout: Duration) -> Vec<u32> {
+    let deadline = std::time::Instant::now() + timeout;
+    let alive = |pid: u32| unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
+    loop {
+        let still: Vec<u32> = pids.iter().copied().filter(|p| alive(*p)).collect();
+        if still.is_empty() || std::time::Instant::now() >= deadline {
+            return still;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[cfg(all(test, windows))]

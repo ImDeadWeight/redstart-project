@@ -78,6 +78,9 @@ pub struct DaemonHost {
 
 pub struct Hello {
     pub key: Vec<u8>,
+    /// None: the 32-byte DPAPI-unwrapped key (Windows). "oscrypt-mac": the
+    /// Keychain password the daemon derives the key from.
+    pub key_format: Option<&'static str>,
     /// None where the shell does not own the login item (a dev build).
     pub login_item: Option<bool>,
     /// { active, status } when this shell updates itself, else null.
@@ -211,6 +214,7 @@ impl DaemonHost {
         host.peer.send(json!({
             "type": "hello",
             "key": B64.encode(&hello.key),
+            "keyFormat": hello.key_format,
             "loginItem": hello.login_item.map(|enabled| json!({ "enabled": enabled })),
             "updater": hello.updater,
         }));

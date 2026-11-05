@@ -191,7 +191,7 @@ export function TopBar({ right, overlay }: {
 
   return (
     <header
-      className={`flex items-center justify-between h-12 bg-zinc-900 border-b border-zinc-800 shrink-0 select-none ${tauri.active ? 'pl-5' : 'px-5'}`}
+      className={`flex items-center justify-between h-12 bg-zinc-900 border-b border-zinc-800 shrink-0 select-none ${!tauri.active ? 'px-5' : tauri.mac ? 'pl-20 pr-5' : 'pl-5'}`}
       onMouseDown={onMouseDown}
       // Padding rather than a margin: the buttons are painted OVER the page, so
       // the space has to be inside the element they sit on top of.
@@ -203,8 +203,8 @@ export function TopBar({ right, overlay }: {
         <span className="text-orange-500">Redstart Nest</span>
       </h1>
       <div className="flex items-center h-full">
-        {right ? <div className={`flex items-center gap-5 ${tauri.active ? 'mr-4' : ''}`}>{right}</div> : null}
-        {tauri.active ? <WindowControls win={tauri} /> : null}
+        {right ? <div className={`flex items-center gap-5 ${tauri.active && !tauri.mac ? 'mr-4' : ''}`}>{right}</div> : null}
+        {tauri.active && !tauri.mac ? <WindowControls win={tauri} /> : null}
       </div>
     </header>
   )

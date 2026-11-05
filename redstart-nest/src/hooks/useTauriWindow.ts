@@ -43,6 +43,9 @@ export function useTauriWindow() {
   const win = getCurrentWindow()
   return {
     active: true as const,
+    // macOS keeps its native traffic lights (the shell's Overlay title bar):
+    // the page leaves room for them at the left and draws no buttons.
+    mac: /Macintosh|Mac OS X/.test(navigator.userAgent),
     maximized,
     minimize: () => { win.minimize().catch(() => {}) },
     toggleMaximize: () => { win.toggleMaximize().catch(() => {}) },

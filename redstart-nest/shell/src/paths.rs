@@ -46,9 +46,9 @@ fn dev_override(name: &str) -> Option<PathBuf> {
 }
 
 pub fn resolve(app: &AppHandle) -> Result<Layout, String> {
-    let appdata = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .ok_or("APPDATA is not set")?;
+    // %APPDATA% on Windows, ~/Library/Application Support on macOS: where
+    // Electron's userData lived (app name "redstart").
+    let appdata = app.path().data_dir().map_err(|e| format!("No app data folder: {e}"))?;
     let documents = app
         .path()
         .document_dir()
@@ -121,8 +121,7 @@ fn node_exe() -> &'static str {
 /// One-time glue from the 2026-07 rebrand, ported from index.mjs: copy the
 /// four state files from the old Beaver userData if this install has none.
 pub fn migrate_from_beaver(config: &std::path::Path) {
-    let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) else { return };
-    let old = appdata.join("beaver");
+    let Some(old) = config.parent().map(|p| p.join("beaver")) else { return };
     if old == config || !old.exists() {
         return;
     }

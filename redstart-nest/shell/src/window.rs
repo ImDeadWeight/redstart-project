@@ -73,11 +73,19 @@ pub fn open_or_focus(app: &AppHandle) {
     }
 
     let origin = base_url.clone();
-    let built = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::External(url))
+    let builder = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::External(url))
         .title("Redstart Nest")
-        .inner_size(1100.0, 800.0)
-        .decorations(false)
-        .shadow(true)
+        .inner_size(1100.0, 800.0);
+    // Windows: no OS frame at all; the page draws minimise/maximise/close.
+    // macOS: keep the native traffic lights, laid over the page's top bar
+    // (the page leaves room for them on the left and draws no buttons).
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.decorations(false).shadow(true);
+    let built = builder
         // zinc-950 from the first frame, so the window never flashes white.
         .background_color(Color(9, 9, 11, 255))
         .additional_browser_args(BROWSER_ARGS)
