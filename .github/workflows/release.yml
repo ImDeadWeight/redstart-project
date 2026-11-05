@@ -250,8 +250,16 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.app }}-${{ runner.os }}
+          # The .yml and .blockmap are what Nest's auto-updater reads (see
+          # electron/main/update-feed.mjs). nest.yml names the installer and its
+          # sha512. The blockmap lets the NEXT release download only the blocks
+          # that changed, which is most of the point with a ~1 GB CUDA DLL that
+          # does not change between alphas. Twig writes no .yml yet; its
+          # blockmap is uploaded anyway, for when it does.
           path: |
             ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*Setup*.exe
+            ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*Setup*.exe.blockmap
+            ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/${{ matrix.app }}.yml
             ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*.dmg
           if-no-files-found: error
           # Installers are already compressed; zipping them again is time for nothing.

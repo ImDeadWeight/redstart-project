@@ -130,6 +130,12 @@ jobs:
       - name: "Supervision: daemon pid file (stale + pid reuse)"
         run: node scripts/test-daemon-pidfile.mjs
 
+      # Which release the auto-updater moves an install to. A wrong answer is
+      # a downgrade, a stable install pulled onto an alpha, or a release with
+      # no Nest manifest. Also pins electron-builder.json's update channel.
+      - name: "Updates: release selection (no downgrades)"
+        run: node scripts/test-update-feed.mjs
+
       - name: "Security: MCP plugin registry validation"
         run: node scripts/test-plugin-registry.mjs
 

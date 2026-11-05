@@ -113,7 +113,7 @@ Accounts are **on by default** with no localhost exemption, and each account's f
 > exposing a service would matter.
 
 ### Redstart Nest
-1. Download the latest `Redstart Nest Setup 1.0.0-alpha.N.exe` from [Releases](../../releases)
+1. Download the latest `Redstart-Nest-Setup-1.0.0-alpha.N.exe` from [Releases](../../releases)
 2. Run the installer — Windows Defender may warn about an unsigned binary, click **More info → Run anyway**
 3. Open Redstart Nest. It opens on a setup screen asking for this machine's **setup code** and the Owner credential you want. On the host itself the code is filled in for you; it also lives in plain text at `bootstrap-token.txt` in Nest's config folder. Login is required by default, so until an Owner exists no device — including a browser on this PC — can sign in to the chat UI. (Home users who don't want accounts can flip **Require login** off afterwards.)
 
