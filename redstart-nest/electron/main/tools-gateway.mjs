@@ -527,6 +527,19 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         const requestedMode = parsed.redstart_mode
         delete parsed.redstart_mode
 
+        // Redstart-specific request field: `redstart_retrieval: false` asks the
+        // gateway not to narrow THIS request's tools. For a connector that sends
+        // its own small, curated tool list (Dungeon Books sends ~25 notes tools)
+        // and has no search_tools to recover a dropped one: a selection keyed on
+        // the opening message can lose the one tool the task needs for the whole
+        // conversation, and the model then tells the user it does not exist.
+        // Safe to honour from any client because retrieval is an optimization,
+        // never a boundary — opting out can only return the post-BAN list, so a
+        // banned tool stays banned. Only the literal `false` opts out; consumed
+        // either way so llama-server never sees it.
+        const retrievalOptOut = parsed.redstart_retrieval === false
+        delete parsed.redstart_retrieval
+
         // BANS FIRST, PROMPT SECOND — and every value the prompt is derived
         // from is read AFTER this line. The capability claims must describe
         // what the model actually received this turn, which is the payload the
@@ -559,7 +572,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         // bound on the non-tool cost, which is what breaks the circularity of
         // budgeting for a prompt that does not exist yet.
         const toolsAfterBans = Array.isArray(parsed.tools) ? parsed.tools.length : 0
-        if (Array.isArray(parsed.tools) && parsed.tools.length > 0) {
+        if (!retrievalOptOut && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
           const pinsOnlyPrompt = injectSystemContext(
             [...(parsed.messages || [])], effectiveConfig,
             {
@@ -620,7 +633,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
           tools: parsed.tools,
           messages: parsed.messages,
           ctxSize: effectiveConfig.ctxSize,
-          filtered: toolsAfterBans > 0 && effectiveConfig.toolRetrieval?.enabled === true,
+          filtered: !retrievalOptOut && toolsAfterBans > 0 && effectiveConfig.toolRetrieval?.enabled === true,
         })
 
         try {

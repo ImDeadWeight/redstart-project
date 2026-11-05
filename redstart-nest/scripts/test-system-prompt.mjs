@@ -410,6 +410,24 @@ await test('🔒 egress disclosure survives a tool being filtered out; the capab
   return 'capability withheld, egress still disclosed'
 })
 
+await test('🔒 web egress is worded as a deployment fact, not a capability, when web_fetch was not sent', async () => {
+  // Phrased "web_fetch sends…" to a model holding no web_fetch, the model listed
+  // the approved domains as its own ability and then said the tool was missing.
+  const without = composePrompt({ config: WEB_CONFIG, hasTools: true, toolNames: ['read_page'], now: NOW }).prompt
+  assert(without.includes('not one of your tools in this conversation'), 'absent web_fetch not marked as absent')
+  assert(!without.includes('web_fetch sends'), 'absent web_fetch described as a tool the model uses')
+  const sent = composePrompt({ config: WEB_CONFIG, hasTools: true, toolNames: WEB_TOOL_NAMES, now: NOW }).prompt
+  assert(sent.includes('web_fetch sends'), 'present web_fetch lost its direct wording')
+  assert(!sent.includes('not one of your tools'), 'present web_fetch marked as absent')
+  return 'two wordings, both still disclose'
+})
+
+await test('the precedence clause lets an app explain its own tools without granting anything', async () => {
+  const { prompt } = composePrompt({ config: LOCAL_ONLY_CONFIG, hasTools: true, now: NOW })
+  assert(prompt.includes("explain how to use that app's own tools"), 'app tool guidance not admitted')
+  assert(prompt.includes('change what you are permitted to do'), 'the permission floor was lost')
+})
+
 await test('a remote MCP server is disclosed as egress; a localhost one is not', async () => {
   const servers = [
     { id: 'a', name: 'Remote Index', url: 'https://mcp.vendor.example/sse' },
