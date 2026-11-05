@@ -1,0 +1,323 @@
+name: Release
+
+# Every merged pull request into main cuts a prerelease: bump -alpha.N, tag,
+# build Nest and Twig for Windows (NSIS .exe) and macOS (.dmg), publish.
+#
+# Order of operations, and why:
+#   1. version — bumps both package.json files, commits to main, pushes a tag.
+#      Done FIRST, within seconds of the merge, so the window in which another
+#      merge can move main underneath it is seconds rather than the length of
+#      a build. The cost: a failed build leaves a tag with no release. Recover
+#      with "Re-run failed jobs" (which keeps this job's outputs), never
+#      "Re-run all jobs" (which bumps again and skips a number).
+#   2. build — four jobs, each checked out AT THE TAG, so every installer is
+#      built from exactly the tree the tag names.
+#   3. release — one GitHub prerelease carrying all of them.
+#
+# The bump commit is pushed with GITHUB_TOKEN, and pushes made with that token
+# do not trigger workflows — so it cannot re-trigger CI or this workflow.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+  # Manual escape hatch: cut a release from main without a PR.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # The inference binary is TurboQuant+'s own prebuilt release, not a CI build
+  # of the fork: a CUDA toolchain on a hosted runner costs about an hour per
+  # build and would pin a GPU architecture list this project would then own.
+  # The prebuilt Windows zip covers every architecture CUDA 12.4 supports, at
+  # the price of a ~960 MB ggml-cuda.dll. To move the pin: change the tag,
+  # re-hash both assets (GitHub publishes the digest on the release page), and
+  # re-check THIRD-PARTY-NOTICES.md — a new CUDA major renames the DLLs.
+  TQP_REPO: TheTom/llama-cpp-turboquant
+  TQP_TAG: tqp-v0.4.0
+  TQP_WIN_ASSET: turboquant-plus-tqp-v0.4.0-windows-x64-cuda12.4.zip
+  TQP_WIN_SHA256: 033c0a2ce4d876bd1f4c840f1c6eef9a3a55f6af54e20f61bde59e7b2181e6d7
+  TQP_MAC_ASSET: turboquant-plus-tqp-v0.4.0-macos-arm64-metal.tar.gz
+  TQP_MAC_SHA256: f38d0c68e2db29b705ec3944360296c1f8003e4f920d60e6740f9968f3f93769
+  # elevate.exe (firewall.mjs's UAC shim) is the one shipped inside
+  # electron-builder's own pinned NSIS bundle — byte-identical to the copy
+  # previous installers carried. Both the archive and the file are pinned.
+  NSIS_ASSET_URL: https://github.com/electron-userland/electron-builder-binaries/releases/download/nsis-3.0.4.1/nsis-3.0.4.1.7z
+  NSIS_SHA256: 9877df902530f96357d13a7a31ae2b9df67f48b11ffc9a1700a7c961574ec5fa
+  ELEVATE_SHA256: 9b1fbf0c11c520ae714af8aa9af12cfd48503eedecd7398d8992ee94d1b4dc37
+
+jobs:
+  version:
+    name: Bump version and tag
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Serialise the bump, so two PRs merged back to back produce alpha.N and
+    # alpha.N+1 rather than two runs racing to push alpha.N. On this job, not
+    # the workflow: GitHub keeps only ONE pending run per group and cancels the
+    # older one, so a workflow-level group would let closing an unrelated
+    # (unmerged) PR cancel a queued release. A job whose `if` is false never
+    # enters the group. Three merges inside one bump (~30s) can still cancel
+    # the middle run's bump — its changes then ship in the next release, and
+    # nothing is lost but a version number.
+    concurrency:
+      group: release-version
+      cancel-in-progress: false
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Compute and apply the next -alpha.N
+        id: bump
+        run: |
+          set -euo pipefail
+          nest=$(node -p "require('./redstart-nest/package.json').version")
+          twig=$(node -p "require('./redstart-twig/windows/package.json').version")
+          # The two apps ship as one release and are versioned in lockstep
+          # (docs/development.md). Refuse to guess which one is right.
+          if [ "$nest" != "$twig" ]; then
+            echo "::error::Nest is $nest but Twig is $twig — they must match before a release can be cut"
+            exit 1
+          fi
+          next=$(node -e '
+            const m = /^(\d+\.\d+\.\d+)-alpha\.(\d+)$/.exec(process.argv[1])
+            if (!m) { console.error(`::error::${process.argv[1]} is not X.Y.Z-alpha.N; bump it by hand to leave alpha`); process.exit(1) }
+            console.log(`${m[1]}-alpha.${Number(m[2]) + 1}`)
+          ' "$nest")
+          if git ls-remote --exit-code --tags origin "refs/tags/$next" >/dev/null; then
+            echo "::error::tag $next already exists on origin"
+            exit 1
+          fi
+          # npm version also rewrites each package-lock.json, keeping the
+          # lockfile's own version field from drifting.
+          npm version "$next" --no-git-tag-version --prefix redstart-nest
+          npm version "$next" --no-git-tag-version --prefix redstart-twig/windows
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "Releasing $nest -> $next"
+
+      - name: Commit, tag and push
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(release): $VERSION"
+          # --atomic: main and the tag land together or not at all, so a
+          # rejected push never leaves a tag pointing off-main. A rejection
+          # means main moved since checkout (a direct push, or a merge in the
+          # seconds this job takes): replay the bump on top and re-tag. The
+          # bump touches only version fields, so a rebase conflict means
+          # someone else bumped — stop rather than guess.
+          for attempt in 1 2 3; do
+            git tag -f -a "$VERSION" -m "Redstart Nest / Twig $VERSION"
+            if git push --atomic origin HEAD:main "refs/tags/$VERSION"; then exit 0; fi
+            echo "::warning::push rejected (attempt $attempt); rebasing onto the new main"
+            git fetch origin main
+            git rebase origin/main
+          done
+          echo "::error::could not push the release commit after 3 attempts"
+          exit 1
+
+  build:
+    name: ${{ matrix.label }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      # One platform failing should not hide whether the others build.
+      fail-fast: false
+      matrix:
+        include:
+          - { label: 'Nest — Windows', app: nest, os: windows-latest, target: --win, dir: redstart-nest }
+          - { label: 'Nest — macOS',   app: nest, os: macos-14,       target: --mac, dir: redstart-nest }
+          - { label: 'Twig — Windows', app: twig, os: windows-latest, target: --win, dir: redstart-twig/windows }
+          - { label: 'Twig — macOS',   app: twig, os: macos-14,       target: --mac, dir: redstart-twig/windows }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.version.outputs.version }}
+
+      - uses: actions/setup-node@v4
+        with:
+          # chat-ui's @capacitor/cli requires Node >= 22 under engine-strict.
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            redstart-nest/package-lock.json
+            redstart-nest/src/chat-ui/package-lock.json
+            redstart-twig/windows/package-lock.json
+
+      # Both apps package the same chat-ui build.
+      - name: Install chat-ui deps
+        run: npm ci
+        working-directory: redstart-nest/src/chat-ui
+
+      - name: Install ${{ matrix.app }} deps
+        run: npm ci
+        working-directory: ${{ matrix.dir }}
+
+      # ── Nest's inference binary ────────────────────────────────────────────
+      # Staged into the same paths a local source build uses, so
+      # electron-builder.json has one meaning whichever way the files arrived.
+
+      - name: Stage llama-server + runtime DLLs (Windows)
+        if: matrix.app == 'nest' && runner.os == 'Windows'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dl="$RUNNER_TEMP/tqp"
+          gh release download "$TQP_TAG" -R "$TQP_REPO" -p "$TQP_WIN_ASSET" -D "$dl"
+          echo "$TQP_WIN_SHA256  $dl/$TQP_WIN_ASSET" | sha256sum -c -
+
+          bin=redstart-nest/llama-cpp-turboquant/build/bin/Release
+          deps=redstart-nest/deps/windows
+          mkdir -p "$bin" "$deps"
+          # The server and exactly the libraries it loads — not the archive's
+          # ~20 other tools, which nothing in Nest spawns.
+          7z e -y "$dl/$TQP_WIN_ASSET" -o"$bin" llama-server.exe llama-server-impl.dll \
+            llama-common.dll llama.dll mtmd.dll 'ggml*.dll'
+          7z e -y "$dl/$TQP_WIN_ASSET" -o"$deps" 'cublas64_*.dll' 'cublasLt64_*.dll' 'cudart64_*.dll'
+
+          # VC++ runtime: the hosted image has the 2015-2022 redistributable
+          # installed. VCOMP140 is the OpenMP runtime — the one an earlier
+          # case-sensitive filter silently dropped (test-packaging.mjs).
+          for f in msvcp140.dll vcruntime140.dll vcruntime140_1.dll vcomp140.dll; do
+            cp "/c/Windows/System32/$f" "$deps/"
+          done
+
+          curl -fsSL -o "$RUNNER_TEMP/nsis.7z" "$NSIS_ASSET_URL"
+          echo "$NSIS_SHA256  $RUNNER_TEMP/nsis.7z" | sha256sum -c -
+          7z e -y "$RUNNER_TEMP/nsis.7z" -o"$deps" elevate.exe
+          echo "$ELEVATE_SHA256  $deps/elevate.exe" | sha256sum -c -
+
+          # Not a smoke run: ggml-cuda.dll imports nvcuda.dll, which only an
+          # NVIDIA driver provides, so llama-server.exe cannot even load on a
+          # GPU-less runner. Instead prove the staged set is closed under its
+          # own imports — what an install's single bin/ has to be.
+          node redstart-nest/scripts/check-dll-closure.mjs "$bin/llama-server.exe" "$bin" "$deps"
+
+      - name: Stage llama-server + dylibs (macOS)
+        if: matrix.app == 'nest' && runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dl="$RUNNER_TEMP/tqp"
+          gh release download "$TQP_TAG" -R "$TQP_REPO" -p "$TQP_MAC_ASSET" -D "$dl"
+          echo "$TQP_MAC_SHA256  $dl/$TQP_MAC_ASSET" | shasum -a 256 -c -
+          tar -xzf "$dl/$TQP_MAC_ASSET" -C "$dl"
+
+          # build/bin/ (no Release/) is where a POSIX CMake build puts it, and
+          # where daemon.mjs's dev lookup already checks on non-Windows.
+          bin=redstart-nest/llama-cpp-turboquant/build/bin
+          mkdir -p "$bin"
+          # -L: the archive's libfoo.dylib / libfoo.0.dylib are symlinks.
+          # Dereferenced, every name the loader may ask for is a real file,
+          # and electron-builder never has to carry a symlink into the bundle.
+          cp -L "$dl/turboquant-plus-$TQP_TAG/llama-server" "$dl/turboquant-plus-$TQP_TAG/"*.dylib "$bin/"
+
+          # Smoke, with the extracted archive gone: proves the binary finds its
+          # dylibs beside itself (@loader_path), not at the path it unpacked to.
+          rm -rf "$dl"
+          "$bin/llama-server" --version
+
+      # ── Package ────────────────────────────────────────────────────────────
+      # --publish never: electron-builder auto-publishes when it detects a tag
+      # in CI. Publishing is the release job's job, once, for all four.
+      - name: Build installer
+        run: npm run build -- ${{ matrix.target }} --publish never
+        working-directory: ${{ matrix.dir }}
+
+      - name: Show what was built
+        run: ls -la "${{ matrix.dir }}/release/${{ needs.version.outputs.version }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app }}-${{ runner.os }}
+          path: |
+            ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*Setup*.exe
+            ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*.dmg
+          if-no-files-found: error
+          # Installers are already compressed; zipping them again is time for nothing.
+          compression-level: 0
+          retention-days: 7
+
+  release:
+    name: Publish GitHub release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Check asset sizes
+        run: |
+          set -euo pipefail
+          ls -la dist
+          # GitHub rejects any single release asset of 2 GiB or more. The
+          # Windows Nest installer is the one that could get there.
+          limit=$((2 * 1024 * 1024 * 1024))
+          for f in dist/*; do
+            size=$(stat -c %s "$f")
+            if [ "$size" -ge "$limit" ]; then
+              echo "::error::$(basename "$f") is $size bytes; GitHub's per-asset limit is $limit"
+              exit 1
+            fi
+          done
+
+      - name: Create the prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          {
+            if [ -n "${PR_URL:-}" ]; then echo "Cut automatically from $PR_URL."; echo; fi
+            cat <<'EOF'
+          ## Installing
+
+          **Windows** — run the `Setup` installer. The installers are unsigned, so
+          SmartScreen will warn; choose *More info → Run anyway*. Nest's GPU
+          inference needs an NVIDIA driver recent enough for CUDA 12.4.
+
+          **macOS** — open the `.dmg` and drag the app to Applications. The apps
+          are ad-hoc signed but not notarized, so the first launch is blocked:
+          open *System Settings → Privacy & Security* and choose *Open Anyway*
+          (or run `xattr -dr com.apple.quarantine "/Applications/<App>.app"`).
+          Nest is Apple Silicon only (Metal); Twig ships for both Apple Silicon
+          (`arm64`) and Intel (`x64`).
+
+          > macOS builds are new and have not yet been verified on real
+          > hardware — see [Known limitations](https://github.com/ImDeadWeight/redstart-project/blob/main/docs/roadmap.md#known-limitations).
+          EOF
+          } > notes.md
+
+          # --generate-notes appends GitHub's PR list after notes.md.
+          gh release create "$VERSION" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --prerelease \
+            --title "Nest/Twig $VERSION" \
+            --notes-file notes.md \
+            --generate-notes
