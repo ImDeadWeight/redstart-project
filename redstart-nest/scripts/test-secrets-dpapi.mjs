@@ -16,14 +16,12 @@
 // Run:  node scripts/test-secrets-dpapi.mjs
 // =============================================================================
 
-import { register } from 'node:module'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import * as crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
-register('./auth-test-loader.mjs', import.meta.url)
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const fixture = JSON.parse(fs.readFileSync(path.join(here, 'fixtures', 'oscrypt-electron33.json'), 'utf8'))

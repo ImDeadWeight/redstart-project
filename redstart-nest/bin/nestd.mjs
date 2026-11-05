@@ -36,6 +36,9 @@
 // undone a second later by systemd.
 // =============================================================================
 
+// FIRST: in --shell-pipe mode stdout carries the protocol, so console output
+// must be on stderr before any other module can print at load time.
+import { SHELL_PIPE } from './stdout-guard.mjs'
 import { initPaths, configDir } from '../electron/main/platform-paths.mjs'
 import { initSecrets } from '../electron/main/secrets.mjs'
 import { keyfileProvider } from '../electron/main/secrets-keyfile.mjs'
@@ -43,6 +46,7 @@ import { startDaemon, stopDaemon, installCrashHandlers } from '../electron/main/
 import { logEvent } from '../electron/main/logger.mjs'
 import { portConflictMessage } from '../electron/main/ports.mjs'
 import { resolveDaemonPaths } from './nest-dir.mjs'
+import { runShellMode, shellModeFailed } from './shell-mode.mjs'
 
 // ---------------------------------------------------------------------------
 // Stopping
@@ -117,7 +121,12 @@ async function main() {
   console.log(`Redstart Nest daemon running — ${nestDir}`)
 }
 
-main().catch((err) => {
+// Under a desktop shell (Electron in T1, Tauri in T2) the daemon is driven
+// over the shell pipe instead: bin/shell-mode.mjs. Same daemon, same exit-code
+// contract; paths and the secrets key come from the shell.
+if (SHELL_PIPE) {
+  runShellMode(process.argv.slice(2)).catch(shellModeFailed)
+} else main().catch((err) => {
   // Startup failed: no admin listener, no beacon, or a path/secret provider
   // that could not be initialised. Exit 1 — this is the case a supervisor
   // SHOULD retry, since a bind failure is frequently a slow-releasing socket

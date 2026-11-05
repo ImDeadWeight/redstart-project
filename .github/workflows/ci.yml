@@ -218,6 +218,9 @@ jobs:
       - name: "Daemon: nestd boots, serves, and stops (smoke)"
         run: node scripts/test-daemon-smoke.mjs
 
+      - name: "Daemon: nestd under a shell (pipe protocol, shell's key, EOF stops it)"
+        run: node scripts/test-shell-pipe.mjs
+
       - name: "Security: containment / SSRF / beacon / download endpoint (vitest)"
         run: npm --prefix src/chat-ui run test:security
 
