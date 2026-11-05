@@ -27,7 +27,7 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const fixture = JSON.parse(fs.readFileSync(path.join(here, 'fixtures', 'oscrypt-electron33.json'), 'utf8'))
 const KEY = Buffer.from(fixture.keyBase64, 'base64')
 
-const { oscryptProvider, readWrappedKey, OSCRYPT_KEY_BYTES } = await import('../electron/main/secrets-dpapi.mjs')
+const { oscryptProvider, oscryptMacProvider, providerForHello, readWrappedKey, OSCRYPT_KEY_BYTES } = await import('../electron/main/secrets-dpapi.mjs')
 const { SAFE_STORAGE_TAG } = await import('../electron/main/secrets-safe-storage.mjs')
 const secrets = await import('../electron/main/secrets.mjs')
 
@@ -136,6 +136,61 @@ await test('a Local State without a DPAPI key is refused with the file named', (
   assert(throws(() => readWrappedKey(none), /encrypted_key/), 'missing key not refused')
   assert(throws(() => readWrappedKey(notDpapi), /not DPAPI/), 'non-DPAPI key not refused')
   assert(throws(() => readWrappedKey(path.join(tmp, 'absent')), /absent/), 'missing file not named')
+})
+
+// ---------------------------------------------------------------------------
+// macOS: os_crypt_mac (Electron safeStorage on a Mac)
+// ---------------------------------------------------------------------------
+// No Mac here, so no blob written by real Electron. Instead a second,
+// independent implementation of Chromium's parameters through WebCrypto
+// (PBKDF2 + AES-CBC from crypto.subtle) encrypts, and the provider must
+// decrypt it, and vice versa. A wrong salt, iteration count, key length, IV
+// or prefix in either fails this.
+console.log('\n-- 🔍 macOS: os_crypt_mac --')
+
+const subtle = globalThis.crypto.subtle
+async function chromiumMacKey(password) {
+  const base = await subtle.importKey('raw', password, 'PBKDF2', false, ['deriveKey'])
+  return subtle.deriveKey(
+    { name: 'PBKDF2', hash: 'SHA-1', salt: new TextEncoder().encode('saltysalt'), iterations: 1003 },
+    base, { name: 'AES-CBC', length: 128 }, false, ['encrypt', 'decrypt'])
+}
+const IV = new Uint8Array(16).fill(0x20)
+// What Electron stores: 16 random bytes, base64 (24 characters).
+const KEYCHAIN_PASSWORD = Buffer.from('q2b1Wv7Kc6hJ9QZ0x4R3sA==', 'latin1')
+
+await test('🔍 a v10 blob made to Chromium\'s macOS parameters decrypts', async () => {
+  const k = await chromiumMacKey(KEYCHAIN_PASSWORD)
+  const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv: IV }, k, new TextEncoder().encode('postgres://u:p@h/db')))
+  const blob = Buffer.concat([Buffer.from('v10'), Buffer.from(ct)]).toString('base64')
+  const plain = oscryptMacProvider(KEYCHAIN_PASSWORD).decrypt(blob)
+  assert(plain === 'postgres://u:p@h/db', `got ${JSON.stringify(plain)}`)
+})
+
+await test('🔍 what the provider writes, Chromium\'s parameters read', async () => {
+  const blob = Buffer.from(oscryptMacProvider(KEYCHAIN_PASSWORD).encrypt('sk-live-123'), 'base64')
+  assert(blob.subarray(0, 3).toString() === 'v10', 'no v10 prefix')
+  const k = await chromiumMacKey(KEYCHAIN_PASSWORD)
+  const pt = await subtle.decrypt({ name: 'AES-CBC', iv: IV }, k, blob.subarray(3))
+  assert(new TextDecoder().decode(pt) === 'sk-live-123', 'independent decrypt disagrees')
+})
+
+await test('a different Keychain password does not read it', () => {
+  const blob = oscryptMacProvider(KEYCHAIN_PASSWORD).encrypt('x'.repeat(40))
+  let out = null
+  try { out = oscryptMacProvider(Buffer.from('another-password')).decrypt(blob) } catch { out = null }
+  assert(out !== 'x'.repeat(40), 'decrypted with the wrong password')
+})
+
+await test('hello picks the provider: no keyFormat is Windows, oscrypt-mac is the Mac, anything else is refused', () => {
+  const winKey = crypto.randomBytes(OSCRYPT_KEY_BYTES)
+  const win = providerForHello(winKey, undefined)
+  assert(oscryptProvider(winKey).decrypt(win.encrypt('w')) === 'w', 'Windows provider not chosen')
+  const mac = providerForHello(KEYCHAIN_PASSWORD, 'oscrypt-mac')
+  assert(oscryptMacProvider(KEYCHAIN_PASSWORD).decrypt(mac.encrypt('m')) === 'm', 'Mac provider not chosen')
+  let err = null
+  try { providerForHello(winKey, 'plaintext') } catch (e) { err = e }
+  assert(err && /Unknown secrets key format/.test(err.message), 'an unknown format was accepted')
 })
 
 fs.rmSync(tmp, { recursive: true, force: true })

@@ -31,7 +31,7 @@
 import * as fs from 'node:fs'
 import { initPaths } from '../electron/main/platform-paths.mjs'
 import { initSecrets } from '../electron/main/secrets.mjs'
-import { oscryptProvider } from '../electron/main/secrets-dpapi.mjs'
+import { providerForHello } from '../electron/main/secrets-dpapi.mjs'
 import {
   startDaemon, stopDaemon, installCrashHandlers, serverState, readSettings, writeSettings,
 } from '../electron/main/daemon.mjs'
@@ -117,7 +117,9 @@ export async function runShellMode(argv) {
   })
 
   const key = Buffer.from(String(hello.key ?? ''), 'base64')
-  initSecrets(oscryptProvider(key))
+  // Windows: the DPAPI-unwrapped AES-256 key. macOS (keyFormat
+  // 'oscrypt-mac'): the Keychain password the key is derived from.
+  initSecrets(providerForHello(key, hello.keyFormat))
   key.fill(0)
 
   // ---- the desktop seams, now answered by the shell ----

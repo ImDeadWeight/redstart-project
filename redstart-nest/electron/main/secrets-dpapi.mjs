@@ -107,3 +107,65 @@ export function oscryptProvider(key) {
     },
   }
 }
+
+// =============================================================================
+// macOS: Chromium's os_crypt_mac, which Electron's safeStorage is on a Mac
+// =============================================================================
+// The secret is a password in the login Keychain (Electron creates it on
+// first use: 16 random bytes, base64). The Mac shell reads it from the
+// Keychain and hands it over in hello (keyFormat 'oscrypt-mac'), as the
+// Windows shell hands over the DPAPI-unwrapped key. The rest is fixed by
+// Chromium (components/os_crypt/sync/os_crypt_mac.mm):
+//   key  = PBKDF2-HMAC-SHA1(password, "saltysalt", 1003 iterations, 16 bytes)
+//   blob = "v10" + AES-128-CBC(key, iv = 16 spaces, PKCS#7)(plaintext)
+// No authentication tag: a wrong key shows up as bad padding, or as
+// garbage that happens to unpad.
+
+const MAC_SALT = Buffer.from('saltysalt', 'latin1')
+const MAC_ITERATIONS = 1003
+const MAC_KEY_BYTES = 16
+const MAC_IV = Buffer.alloc(16, 0x20)
+
+/** @param {Buffer} password  the Keychain password's bytes, as stored */
+export function oscryptMacProvider(password) {
+  if (!Buffer.isBuffer(password) || password.length === 0) {
+    throw new Error('oscryptMacProvider() needs the Keychain password')
+  }
+  const k = crypto.pbkdf2Sync(password, MAC_SALT, MAC_ITERATIONS, MAC_KEY_BYTES, 'sha1')
+
+  return {
+    tag: SAFE_STORAGE_TAG,
+    encrypt(plaintext) {
+      const cipher = crypto.createCipheriv('aes-128-cbc', k, MAC_IV)
+      const body = Buffer.concat([cipher.update(String(plaintext), 'utf8'), cipher.final()])
+      return Buffer.concat([VERSION_PREFIX, body]).toString('base64')
+    },
+    decrypt(payload) {
+      const blob = Buffer.from(String(payload), 'base64')
+      if (!blob.subarray(0, VERSION_PREFIX.length).equals(VERSION_PREFIX)) {
+        throw new Error('This secret is not in the OSCrypt v10 format this provider reads')
+      }
+      const body = blob.subarray(VERSION_PREFIX.length)
+      if (body.length === 0 || body.length % 16 !== 0) throw new Error('This secret is truncated')
+      const decipher = crypto.createDecipheriv('aes-128-cbc', k, MAC_IV)
+      try {
+        return Buffer.concat([decipher.update(body), decipher.final()]).toString('utf8')
+      } catch {
+        throw new Error('This secret could not be decrypted with this install\'s key')
+      }
+    },
+  }
+}
+
+/**
+ * The provider hello asks for. Windows shells (T1 Electron, T2 Tauri) send
+ * no keyFormat: the 32-byte DPAPI-unwrapped key.
+ *
+ * @param {Buffer} key
+ * @param {'oscrypt-win'|'oscrypt-mac'|undefined} keyFormat
+ */
+export function providerForHello(key, keyFormat) {
+  if (keyFormat === undefined || keyFormat === null || keyFormat === 'oscrypt-win') return oscryptProvider(key)
+  if (keyFormat === 'oscrypt-mac') return oscryptMacProvider(key)
+  throw new Error(`Unknown secrets key format from the shell: ${keyFormat}`)
+}
