@@ -80,11 +80,12 @@ pub fn resolve(app: &AppHandle) -> Result<Layout, String> {
         });
     }
 
-    let resources = app
-        .path()
-        .resource_dir()
-        .map_err(|e| format!("No resource directory: {e}"))?
-        .join("resources");
+    let resources = plain_path(
+        app.path()
+            .resource_dir()
+            .map_err(|e| format!("No resource directory: {e}"))?
+            .join("resources"),
+    );
     Ok(Layout {
         config,
         capability_base,
@@ -95,6 +96,18 @@ pub fn resolve(app: &AppHandle) -> Result<Layout, String> {
         packaged: true,
         dev_url: None,
     })
+}
+
+/// `\\?\C:\…` → `C:\…`. Tauri's resource_dir is a verbatim path, and the
+/// daemon derives every resource path from `--resources`: llama-server's
+/// command line, firewall rules, messages to the user. A verbatim prefix in
+/// those is at best noise. UNC (`\\?\UNC\…`) is left alone.
+pub fn plain_path(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with(r"UNC\") => PathBuf::from(rest),
+        _ => p,
+    }
 }
 
 fn node_exe() -> &'static str {
@@ -122,5 +135,17 @@ pub fn migrate_from_beaver(config: &std::path::Path) {
                 crate::log::event("app", "migrated_from_beaver", serde_json::json!({ "file": file }));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verbatim_prefix_is_dropped_but_unc_is_kept() {
+        assert_eq!(plain_path(PathBuf::from(r"\\?\C:\Apps\Nest\resources")), PathBuf::from(r"C:\Apps\Nest\resources"));
+        assert_eq!(plain_path(PathBuf::from(r"C:\Apps")), PathBuf::from(r"C:\Apps"));
+        assert_eq!(plain_path(PathBuf::from(r"\\?\UNC\srv\share")), PathBuf::from(r"\\?\UNC\srv\share"));
     }
 }

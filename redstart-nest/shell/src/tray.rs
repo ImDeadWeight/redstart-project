@@ -13,7 +13,9 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Wry};
 
-use crate::{deliberate_quit, log, shell, window};
+use crate::update::Updater;
+use crate::{deliberate_quit, deliberate_quit_with, log, shell, window};
+use tauri::Manager;
 
 const TRAY_ID: &str = "main";
 
@@ -28,14 +30,23 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         None::<&str>,
     )?;
     let stop = MenuItem::with_id(app, "stop-model", "Stop model", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Redstart", true, None::<&str>)?;
+    let ready = app.try_state::<Updater>().and_then(|u| u.ready_version());
+    // Quitting also installs a downloaded update, and the label says so: a
+    // quit is never an install the user didn't see coming.
+    let quit_label = if ready.is_some() { "Quit Redstart and install update" } else { "Quit Redstart" };
+    let quit = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(app, &[&open, &sep1, &status])?;
     if running {
-        Menu::with_items(app, &[&open, &sep1, &status, &stop, &sep2, &quit])
-    } else {
-        Menu::with_items(app, &[&open, &sep1, &status, &sep2, &quit])
+        menu.append(&stop)?;
     }
+    menu.append(&sep2)?;
+    if let Some(v) = ready {
+        menu.append(&MenuItem::with_id(app, "install-update", format!("Restart to update to {v}"), true, None::<&str>)?)?;
+    }
+    menu.append(&quit)?;
+    Ok(menu)
 }
 
 fn tooltip(app: &AppHandle) -> String {
@@ -65,6 +76,10 @@ pub fn start(app: &AppHandle) {
                 "quit" => {
                     log::event("app", "tray_quit", Value::Null);
                     deliberate_quit(app);
+                }
+                "install-update" => {
+                    log::event("app", "tray_install_update", Value::Null);
+                    deliberate_quit_with(app, true);
                 }
                 _ => {}
             })

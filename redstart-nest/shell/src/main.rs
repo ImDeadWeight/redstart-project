@@ -23,10 +23,11 @@ mod paths;
 mod pipe;
 mod secrets_key;
 mod tray;
+mod update;
 mod window;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::json;
@@ -50,6 +51,13 @@ pub fn shell(app: &AppHandle) -> tauri::State<'_, Shell> {
     app.state::<Shell>()
 }
 
+static APP: OnceLock<AppHandle> = OnceLock::new();
+
+/// For pipe requests answered off any app context (update-check).
+pub fn app_handle() -> Option<&'static AppHandle> {
+    APP.get()
+}
+
 fn main() {
     let background = std::env::args().any(|a| a == "--background");
 
@@ -62,8 +70,10 @@ fn main() {
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             let handle = app.handle().clone();
+            let _ = APP.set(handle.clone());
             let layout = match paths::resolve(&handle) {
                 Ok(l) => l,
                 Err(e) => {
@@ -80,6 +90,10 @@ fn main() {
                 model_running: AtomicBool::new(false),
                 background,
             });
+            // A release build on Windows updates itself. A dev run doesn't, and
+            // the admin UI then says so instead of offering a dead switch.
+            let packaged = shell(&handle).layout.packaged;
+            app.manage(update::Updater::new(packaged && cfg!(windows)));
             start_daemon(&handle);
             Ok(())
         })
@@ -127,7 +141,9 @@ fn start_daemon(app: &AppHandle) {
     let login_item = if s.layout.packaged { Some(login_item::is_enabled()) } else { None };
 
     let handle = app.clone();
-    let started = DaemonHost::start(&s.layout, Hello { key: key.clone(), login_item }, move |ev| {
+    let u = app.state::<update::Updater>();
+    let updater = if u.active { json!({ "active": true, "status": u.status() }) } else { serde_json::Value::Null };
+    let started = DaemonHost::start(&s.layout, Hello { key: key.clone(), login_item, updater }, move |ev| {
         on_daemon_event(&handle, ev)
     });
     key.iter_mut().for_each(|b| *b = 0);
@@ -172,6 +188,7 @@ fn on_daemon_event(app: &AppHandle, ev: DaemonEvent) {
                     window::open_or_focus(&h);
                 }
             });
+            update::start(app);
         }
         DaemonEvent::Event(channel) => {
             let running = match channel.as_str() {
@@ -184,6 +201,11 @@ fn on_daemon_event(app: &AppHandle, ev: DaemonEvent) {
         }
         DaemonEvent::Notify { title, body } => notify(app, &title, &body),
         DaemonEvent::QuitRequested => deliberate_quit(app),
+        DaemonEvent::InstallUpdate => {
+            if app.state::<update::Updater>().ready_version().is_some() {
+                deliberate_quit_with(app, true);
+            }
+        }
         DaemonEvent::Exit(info) => {
             log::event("app", "daemon_exited", json!({ "code": info.code, "expected": info.expected }));
             if info.expected || s.quitting.load(Ordering::SeqCst) {
@@ -220,8 +242,14 @@ fn on_daemon_event(app: &AppHandle, ev: DaemonEvent) {
 }
 
 /// Every deliberate quit: tray Quit and admin Shut down. Stops the daemon
-/// (it stops llama-server first), waits for it, then exits.
+/// (it stops llama-server first), waits for it, then exits. A downloaded
+/// update installs here and nowhere else (update.rs).
 pub fn deliberate_quit(app: &AppHandle) {
+    deliberate_quit_with(app, false)
+}
+
+/// `relaunch`: Restart to update, from the tray or the admin UI.
+pub fn deliberate_quit_with(app: &AppHandle, relaunch: bool) {
     let s = shell(app);
     if s.quitting.swap(true, Ordering::SeqCst) {
         return;
@@ -230,12 +258,21 @@ pub fn deliberate_quit(app: &AppHandle) {
     let daemon = s.daemon.lock().unwrap().clone();
     let handle = app.clone();
     std::thread::spawn(move || {
+        // Ends the process itself when it installs. When it returns, the
+        // install was abandoned or there was none, and this is a plain quit.
+        if app_updater_ready(&handle) && update::install_and_quit(&handle, relaunch) {
+            return;
+        }
         if let Some(d) = daemon {
             let pids = d.stop();
             log::event("app", "daemon_stopped", json!({ "pids": pids.len() }));
         }
         handle.exit(0);
     });
+}
+
+fn app_updater_ready(app: &AppHandle) -> bool {
+    app.try_state::<update::Updater>().map(|u| u.ready_version().is_some()).unwrap_or(false)
 }
 
 pub fn notify(app: &AppHandle, title: &str, body: &str) {

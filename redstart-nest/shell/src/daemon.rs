@@ -61,6 +61,8 @@ pub enum DaemonEvent {
     Notify { title: String, body: String },
     /// admin Shut down: the shell runs its deliberate quit.
     QuitRequested,
+    /// admin Restart to update: a deliberate quit that installs and relaunches.
+    InstallUpdate,
     Exit(ExitInfo),
 }
 
@@ -78,6 +80,8 @@ pub struct Hello {
     pub key: Vec<u8>,
     /// None where the shell does not own the login item (a dev build).
     pub login_item: Option<bool>,
+    /// { active, status } when this shell updates itself, else null.
+    pub updater: Value,
 }
 
 impl DaemonHost {
@@ -208,8 +212,7 @@ impl DaemonHost {
             "type": "hello",
             "key": B64.encode(&hello.key),
             "loginItem": hello.login_item.map(|enabled| json!({ "enabled": enabled })),
-            // T3 brings the Tauri updater; until then this shell has none.
-            "updater": Value::Null,
+            "updater": hello.updater,
         }));
         Ok(host)
     }
@@ -242,8 +245,7 @@ impl DaemonHost {
                         .unwrap_or_default();
                     *self.stopping_pids.lock().unwrap() = pids;
                 }
-                // No updater in this shell yet (T3): nothing to install.
-                "install-update" => log::event("app", "install_update_ignored", Value::Null),
+                "install-update" => on_event(DaemonEvent::InstallUpdate),
                 other => log::event("app", "shell_pipe_unknown_message", json!({ "type": other })),
             },
             Incoming::Request { id, method, params } => {
@@ -298,6 +300,21 @@ impl DaemonHost {
         self.job.terminate();
     }
 
+    /// Which release is the update (update-feed.mjs, in the daemon).
+    pub fn find_update(&self, current_version: &str, manifest: &str) -> Result<Option<Value>, String> {
+        let v = self.peer.request(
+            "update-find",
+            json!({ "currentVersion": current_version, "manifest": manifest }),
+            Duration::from_secs(30),
+        )?;
+        Ok(if v.is_null() { None } else { Some(v) })
+    }
+
+    pub fn push_update_status(&self, status: &Value) {
+        self.peer.send(json!({ "type": "update-status", "status": status }));
+    }
+
+    #[allow(dead_code)] // the login item only changes through the daemon today
     pub fn push_login_item(&self, enabled: bool) {
         self.peer.send(json!({ "type": "login-item", "enabled": enabled }));
     }
@@ -320,7 +337,14 @@ fn handle_request(method: &str, params: &Value) -> Result<Value, String> {
             log::event("app", "login_item_set", json!({ "enabled": enabled }));
             Ok(json!(true))
         }
-        "update-check" => Err("No updater in this shell".into()),
+        "update-check" => {
+            let app = crate::app_handle().ok_or("No updater in this shell")?;
+            if !crate::update::is_active(app) {
+                return Err("No updater in this shell".into());
+            }
+            crate::update::check_now(app, params["manual"].as_bool().unwrap_or(true));
+            Ok(json!(true))
+        }
         other => Err(format!("Unknown method: {other}")),
     }
 }
