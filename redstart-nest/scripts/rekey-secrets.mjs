@@ -6,19 +6,20 @@
 // something a daemon does to itself on startup. This is that human's tool.
 //
 //   Dry run (default — writes nothing, and is not optional):
-//     npx electron scripts/rekey-secrets.mjs -- --source <dir> --target <dir>
+//     node scripts/rekey-secrets.mjs --source <dir> --target <dir>
 //
 //   Apply, once the dry run reads correctly:
-//     npx electron scripts/rekey-secrets.mjs -- --source <dir> --target <dir> --apply
+//     node scripts/rekey-secrets.mjs --source <dir> --target <dir> --apply
 //
-// WHY `electron` AND NOT `node`, and this is the whole practical difficulty of
-// trap 5.3: the secrets being read were encrypted with DPAPI, which only
-// Electron's safeStorage can reach, and only while running AS THE ORIGINAL
-// USER on the ORIGINAL MACHINE. A plain-node process cannot decrypt them — not
-// slowly, not with a flag, not at all. So this refuses to pretend: run under
-// plain node against a safeStorage tree and it stops and says so, rather than
-// reporting every secret as unreadable and letting somebody conclude their
-// credentials are already gone.
+// THE DIFFICULTY (trap 5.3): a desktop install's secrets are encrypted under
+// a key that DPAPI protects for ONE Windows account on ONE machine. Only that
+// user, there, can unwrap it. Since the daemon split, plain Node reads them:
+// the key comes from the install's secrets-key.json (or Electron's Local
+// State), DPAPI-unwrapped through PowerShell (shell-secrets-key.mjs), into
+// the same OSCrypt provider the daemon uses. Electron is no longer needed.
+// It still must run AS THE ORIGINAL USER: as anyone else the unwrap fails,
+// and this stops and says so rather than reporting every secret as
+// unreadable.
 //
 // It never registers a service, never repoints a running daemon, and never
 // deletes the source. It produces a converted directory; the runbook in
@@ -29,7 +30,8 @@ import * as path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { planRekey, applyRekey, findSecrets } from '../electron/main/secrets-migration.mjs'
 import { keyfileProvider } from '../electron/main/secrets-keyfile.mjs'
-import { safeStorageProvider } from '../electron/main/secrets-safe-storage.mjs'
+import { oscryptProvider } from '../electron/main/secrets-dpapi.mjs'
+import { readSecretsKey } from '../electron/main/shell-secrets-key.mjs'
 
 /**
  * Parse the operator's arguments.
@@ -70,21 +72,30 @@ export function parseRekeyArgs(argv) {
  * looks exactly like a corrupted install, and the reasonable conclusion from
  * it ("the credentials are gone, start over") is wrong and destructive.
  */
-export function providerAvailability(from, hasElectron) {
+export function providerAvailability(from, platform = process.platform) {
   if (from === 'keyfile') return { ok: true }
-  if (hasElectron) return { ok: true }
+  if (platform === 'win32') return { ok: true }
   return {
     ok: false,
     error: [
-      'This tree\'s secrets were written by the OS keychain (DPAPI on Windows), which only',
-      'Electron can read — and only as the user who wrote them, on the machine that wrote them.',
-      '',
-      'Re-run under Electron:',
-      '  npx electron scripts/rekey-secrets.mjs -- --source <dir> --target <dir>',
+      'This tree\'s secrets were written by the desktop app (DPAPI on Windows, the Keychain on',
+      'macOS). This tool reads the Windows kind only, on the machine and as the user that wrote them.',
       '',
       'Refusing rather than reporting every secret as unreadable, which would look exactly',
       'like a corrupted install and invite exactly the wrong conclusion.',
     ].join('\n'),
+  }
+}
+
+/**
+ * The provider for a desktop (safestorage) tree: its own key, DPAPI-unwrapped
+ * as the current user. Fails loudly when that user cannot unwrap it.
+ */
+export function desktopProvider(sourceDir) {
+  try {
+    return oscryptProvider(readSecretsKey(sourceDir).key)
+  } catch (err) {
+    throw new Error(`${err.message}\n\nRun this as the Windows user the desktop install belongs to, on that machine.`)
   }
 }
 
@@ -114,27 +125,19 @@ async function main() {
     process.exit(2)
   }
 
-  // Electron, when present, has to be ready before safeStorage answers.
-  let electronSafeStorage = null
-  try {
-    const electron = await import('electron')
-    if (electron?.app?.whenReady) {
-      await electron.app.whenReady()
-      electronSafeStorage = electron.safeStorage
-    }
-  } catch {
-    // Plain node. Handled by providerAvailability() below, loudly.
-  }
-
-  const availability = providerAvailability(args.from, !!electronSafeStorage)
+  const availability = providerAvailability(args.from)
   if (!availability.ok) {
     console.error(`\n${availability.error}\n`)
     process.exit(2)
   }
 
-  const from = args.from === 'keyfile'
-    ? keyfileProvider(args.source)
-    : safeStorageProvider(electronSafeStorage)
+  let from
+  try {
+    from = args.from === 'keyfile' ? keyfileProvider(args.source) : desktopProvider(args.source)
+  } catch (err) {
+    console.error(`\n${err.message}\n`)
+    process.exit(2)
+  }
   const to = keyfileProvider(args.target)
 
   console.log(`\nRedstart Nest — re-key stored secrets`)

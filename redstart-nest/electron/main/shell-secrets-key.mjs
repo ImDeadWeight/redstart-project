@@ -1,13 +1,16 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — the secrets key, as the desktop shell finds it (Windows)
+// Redstart Nest — the secrets key file, read from JavaScript (Windows)
 // =============================================================================
-// SHELL-SIDE ONLY. The daemon never calls DPAPI (settled decision Q2); the shell
-// unwraps the OSCrypt key and hands it to nestd in hello (shell-mode.mjs). In
-// T1 the shell is Electron and DPAPI is reached through PowerShell's
-// ProtectedData. T2's Tauri shell calls CryptUnprotectData natively, against
-// THE SAME FILE this writes.
+// The daemon never calls DPAPI (settled decision Q2). The desktop shell
+// (shell/src/secrets_key.rs, native CryptUnprotectData) unwraps the OSCrypt
+// key and hands it to nestd in hello. This module is the JavaScript reading
+// of THE SAME FILE, through PowerShell's ProtectedData. It was the T1
+// Electron shell's, and is now used by tools that run as the desktop user
+// under plain Node: scripts/rekey-secrets.mjs (readSecretsKey, read-only)
+// and the interop tests. resolveSecretsKey() mirrors the Rust resolver, and
+// test-shell-secrets-key.mjs keeps the two honest.
 //
 // THE KEY IS PINNED IN A NEST-OWNED FILE, `secrets-key.json` in the config dir,
 // in Local State's own shape: { os_crypt: { encrypted_key: base64("DPAPI"|blob) } }.
@@ -113,4 +116,23 @@ export function resolveSecretsKey(configDir, dpapi = powershellDpapi) {
   const key = crypto.randomBytes(OSCRYPT_KEY_BYTES)
   writeKeyFile(pinned, dpapi.protect(key), 'generated')
   return { key, source: 'generated' }
+}
+
+/**
+ * READ-ONLY: the unwrapped key of an existing install, for tools that must
+ * never pin or generate anything (scripts/rekey-secrets.mjs). Throws when
+ * there is no key to read, rather than inventing one that decrypts nothing.
+ *
+ * @param {string} configDir
+ * @returns {{ key: Buffer, source: 'pinned' | 'local-state' }}
+ */
+export function readSecretsKey(configDir, dpapi = powershellDpapi) {
+  for (const [file, source] of [[SECRETS_KEY_FILE, 'pinned'], [LOCAL_STATE_FILE, 'local-state']]) {
+    const p = path.join(configDir, file)
+    if (!fs.existsSync(p)) continue
+    const key = dpapi.unprotect(readWrappedKey(p))
+    if (key.length !== OSCRYPT_KEY_BYTES) throw new Error(`The secrets key in ${p} unwrapped to ${key.length} bytes, not ${OSCRYPT_KEY_BYTES}`)
+    return { key, source }
+  }
+  throw new Error(`${configDir} has neither ${SECRETS_KEY_FILE} nor ${LOCAL_STATE_FILE}: no secrets key to read`)
 }

@@ -127,10 +127,14 @@ fn set_status(app: &AppHandle, patch: Value) {
 /// settings.json's autoUpdate, read before every automatic check (the
 /// daemon owns the file; the shell only reads it). Absent means on.
 fn auto_enabled(app: &AppHandle) -> bool {
-    let path = shell(app).layout.config.join("settings.json");
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+    auto_enabled_in(fs::read_to_string(shell(app).layout.config.join("settings.json")).ok().as_deref())
+}
+
+/// On unless settings.json says `"autoUpdate": false`. A missing,
+/// unreadable or older file (no key) is "on", like a fresh install.
+fn auto_enabled_in(settings: Option<&str>) -> bool {
+    settings
+        .and_then(|t| serde_json::from_str::<Value>(t).ok())
         .map(|v| v["autoUpdate"] != json!(false))
         .unwrap_or(true)
 }
@@ -295,6 +299,20 @@ fn wait_pids_gone(pids: &[u32], timeout: Duration) -> Vec<u32> {
             return still;
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[cfg(test)]
+mod setting_tests {
+    use super::auto_enabled_in;
+
+    #[test]
+    fn on_unless_settings_say_autoupdate_false() {
+        assert!(!auto_enabled_in(Some(r#"{"autoUpdate":false}"#)));
+        assert!(auto_enabled_in(Some(r#"{"autoUpdate":true}"#)));
+        assert!(auto_enabled_in(Some(r#"{"startAtLogin":false}"#)), "a file from before the setting existed");
+        assert!(auto_enabled_in(None), "no settings file");
+        assert!(auto_enabled_in(Some("{not json")), "an unreadable file");
     }
 }
 

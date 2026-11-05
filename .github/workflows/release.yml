@@ -173,7 +173,7 @@ jobs:
 
       # ── Nest's inference binary ────────────────────────────────────────────
       # Staged into the same paths a local source build uses, so
-      # electron-builder.json has one meaning whichever way the files arrived.
+      # stage-shell-bundle.mjs has one meaning whichever way the files arrived.
 
       - name: Stage llama-server + runtime DLLs (Windows)
         if: matrix.app == 'nest' && runner.os == 'Windows'

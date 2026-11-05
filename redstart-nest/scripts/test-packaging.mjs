@@ -51,17 +51,12 @@ function assert(cond, message) {
   if (!cond) throw new Error(message)
 }
 
-// The two packaged Electron apps: where their config lives, which directory is
-// the app root (the thing that becomes app.asar), and which trees hold their
-// main-process sources.
+// The packaged ELECTRON app (Twig): where its config lives, which directory is
+// the app root (the thing that becomes app.asar), and which trees hold its
+// main-process sources. Nest is no longer an Electron app (daemon split T4):
+// its package is shell/bundle/resources, built by stage-shell-bundle.mjs, and
+// its checks follow that script below.
 const APPS = [
-  {
-    name: 'Redstart Nest',
-    appRoot: path.join(REPO, 'redstart-nest'),
-    config: path.join(REPO, 'redstart-nest', 'electron-builder.json'),
-    // electron/preload retired in Phase 6 §6.2 (IPC/the preload bridge).
-    sourceDirs: ['electron/main'],
-  },
   {
     name: 'Redstart Twig',
     appRoot: path.join(REPO, 'redstart-twig', 'windows'),
@@ -69,6 +64,9 @@ const APPS = [
     sourceDirs: ['electron'],
   },
 ]
+
+const NEST = path.join(REPO, 'redstart-nest')
+const STAGE_SRC = fs.readFileSync(path.join(NEST, 'scripts', 'stage-shell-bundle.mjs'), 'utf8')
 
 function walk(dir) {
   const out = []
@@ -180,90 +178,71 @@ for (const app of APPS) {
   })
 }
 
-console.log('\n-- assets that cannot run from inside an asar --')
+// Nest: the daemon runs from resources/app, so an import escaping
+// redstart-nest/ by one level lands in resources/<top>. stage-shell-bundle
+// must copy exactly that directory there, or nestd dies at startup with
+// ERR_MODULE_NOT_FOUND.
+{
+  const escaping = []
+  for (const dir of ['electron/main', 'bin']) {
+    for (const file of walk(path.join(NEST, dir))) {
+      for (const spec of importSpecifiers(fs.readFileSync(file, 'utf8'))) {
+        const levels = escapeLevels(NEST, file, spec)
+        if (levels > 0) escaping.push({ file, spec, levels, top: escapedTopLevel(NEST, file, spec) })
+      }
+    }
+  }
+  test('🔍 Redstart Nest: every escaping import is staged where the daemon will look', () => {
+    assert(escaping.length > 0, 'expected at least the ../../../shared import')
+    for (const { file, spec, levels, top } of escaping) {
+      assert(levels === 1, `${path.relative(REPO, file)} imports ${spec}, escaping ${levels} levels; only resources/<dir> is staged`)
+      assert(fs.existsSync(path.resolve(path.dirname(file), spec)), `${spec} does not exist`)
+      assert(STAGE_SRC.includes(`out('${top}')`), `${spec} lands in resources/${top}, which stage-shell-bundle.mjs never writes`)
+    }
+    return `${escaping.length} escaping import(s)`
+  })
+}
 
-// ---------------------------------------------------------------------------
-// The title bar's height is stated in three files and must agree in all of
-// them: Electron paints the caption buttons over a strip of exactly that
-// height, App.tsx and the sign-in screen draw the bar the buttons sit on, and
-// index.html draws the same bar before any of that has loaded. Two of the three
-// are markup nothing else checks, and the failure mode is cosmetic and
-// permanent — buttons that do not line up with the bar under them.
-// ---------------------------------------------------------------------------
+console.log('\n-- the launcher title bar --')
 
-test('🔍 the title bar is the same height in Electron, in React and in index.html', () => {
+// TopBar is the window's title bar in the Tauri shell (Windows: it carries the
+// page-drawn buttons at full height; macOS: the traffic lights sit over it),
+// and index.html draws the same bar before React has loaded. If the two
+// heights differ the bar jumps the moment the app mounts.
+test('🔍 the title bar is the same height in React and in index.html', () => {
   const read = (rel) => fs.readFileSync(path.join(REPO, rel), 'utf8')
-  const main = read('redstart-nest/electron/main/index.mjs')
-  const overlayHeight = Number(/titleBarOverlay:\s*\{[^}]*height:\s*(\d+)/s.exec(main)?.[1])
-  assert(overlayHeight > 0, 'could not read titleBarOverlay.height from index.mjs')
-
   // Tailwind's h-12 is 3rem — 48px at the browser default root size.
   const ui = read('redstart-nest/src/components/ui.tsx')
-  // A plain string or a template literal (TopBar's padding differs in the Tauri shell).
-  assert(/className=(?:"|\{`)[^"`]*\bh-12[ "`]/.test(ui), 'TopBar no longer uses h-12; the overlay height has nothing to match')
-  assert(overlayHeight === 48, `titleBarOverlay.height is ${overlayHeight} but TopBar is h-12 (48px)`)
-
-  const html = read('redstart-nest/index.html')
-  const bootHeight = Number(/height:\s*(\d+)px/.exec(html)?.[1])
-  assert(bootHeight === overlayHeight,
-    `index.html's pre-mount bar is ${bootHeight}px but the overlay reserves ${overlayHeight}px`)
-  return `${overlayHeight}px, three ways`
+  // A plain string or a template literal (TopBar's padding differs by platform).
+  assert(/className=(?:"|\{`)[^"`]*\bh-12[ "`]/.test(ui), 'TopBar no longer uses h-12')
+  const bootHeight = Number(/height:\s*(\d+)px/.exec(read('redstart-nest/index.html'))?.[1])
+  assert(bootHeight === 48, `index.html's pre-mount bar is ${bootHeight}px but TopBar is h-12 (48px)`)
+  return '48px, both ways'
 })
 
-test('🔍 Nest unpacks native .node binaries', () => {
-  const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
-  const unpack = config.asarUnpack ?? []
-  assert(
-    unpack.some((p) => p.includes('.node')),
-    'no asarUnpack rule covers **/*.node — process.dlopen cannot load a native module from inside an asar, ' +
-      'so any dependency with a native binary fails at runtime'
-  )
-  return unpack.length + ' asarUnpack rule(s)'
+console.log('\n-- what the daemon needs at runtime is staged --')
+
+test('🔍 Nest stages its production dependencies from the lockfile, including the MCP server it spawns', () => {
+  assert(/npm ci --omit=dev/.test(STAGE_SRC), 'stage-shell-bundle.mjs must install from package-lock.json with --omit=dev')
+  const pkg = JSON.parse(fs.readFileSync(path.join(NEST, 'package.json'), 'utf8'))
+  // The File System capability spawns it as a child process from a real path.
+  assert(pkg.dependencies?.['@modelcontextprotocol/server-filesystem'], 'server-filesystem must be a production dependency or it is not staged')
+  assert(!pkg.dependencies?.electron && !pkg.devDependencies?.electron, 'Nest no longer ships Electron')
+  return 'npm ci --omit=dev'
 })
 
-test('🔍 Nest unpacks the stdio MCP server it spawns as a child process', () => {
-  const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
-  const unpack = config.asarUnpack ?? []
-  assert(
-    unpack.some((p) => p.includes('server-filesystem')),
-    'the File System capability spawns @modelcontextprotocol/server-filesystem as a child process; ' +
-      'it must be unpacked so a real file path exists on disk'
-  )
-  return 'unpacked'
-})
-
-console.log('\n-- the split daemon (nestd on the bundled Node 26) --')
-
-// Daemon split T1.4: on Windows the Electron shell spawns
-// resources/node/node.exe on <app>/bin/nestd.mjs. A plain Node cannot read
-// inside an asar, so the app tree has to be a real directory, bin/ has to be in
-// it, and the pinned Node has to be copied in. Any one missing and the packaged
-// app shows "Redstart could not start" on first launch.
-
-test('🔍 Nest ships an unpacked app tree, which the bundled Node can read', () => {
-  const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
-  assert(config.asar === false, 'asar must be false: nestd runs on a real Node, which cannot import from app.asar')
-  return 'asar: false'
-})
-
-test('🔍 Nest packages bin/, where nestd.mjs and its shell-mode entry live', () => {
-  const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
-  const files = config.files ?? []
-  assert(files.includes('bin'), 'electron-builder "files" must include "bin": the shell spawns bin/nestd.mjs')
-  for (const f of ['nestd.mjs', 'shell-mode.mjs', 'stdout-guard.mjs', 'nest-dir.mjs']) {
-    assert(fs.existsSync(path.join(APPS[0].appRoot, 'bin', f)), `bin/${f} is missing`)
+test('🔍 Nest stages bin/ and the daemon tree, where the shell spawns nestd', () => {
+  for (const d of ["out('app', 'bin')", "out('app', 'electron', 'main')", "out('app', 'dist')"]) {
+    assert(STAGE_SRC.includes(d), `stage-shell-bundle.mjs no longer writes ${d}`)
   }
-  return files.join(', ')
+  for (const f of ['nestd.mjs', 'shell-mode.mjs', 'stdout-guard.mjs', 'nest-dir.mjs']) {
+    assert(fs.existsSync(path.join(NEST, 'bin', f)), `bin/${f} is missing`)
+  }
 })
 
-test('🔍 Nest packages the pinned Node runtime into resources/node on Windows', () => {
-  const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
-  const entry = (config.win?.extraResources ?? []).find((r) => typeof r === 'object' && r.from === 'deps/node')
-  assert(entry, 'win.extraResources needs { from: "deps/node", to: "node" } (scripts/stage-node.mjs stages it)')
-  assert(entry.to === 'node', `deps/node must land at resources/node (index.mjs resolveDaemonNode), not ${entry.to}`)
-  assert((entry.filter ?? []).includes('node.exe'), 'the deps/node filter must include node.exe')
-  assert((entry.filter ?? []).includes('LICENSE'), "Node's LICENSE travels with the binary it covers")
-  return `${entry.from} -> ${entry.to}`
+test('🔍 Nest stages the pinned Node runtime with its licence', () => {
+  assert(/stagedBinaryPath\(process\.platform\)/.test(STAGE_SRC), 'the staged Node is not the one stage-node.mjs pinned')
+  assert(STAGE_SRC.includes("out('node', 'LICENSE')"), "Node's LICENSE travels with the binary it covers")
 })
 
 console.log('\n-- the Tauri shell and its installer (daemon split T2/T3) --')
@@ -314,85 +293,51 @@ test('🔍 the bridge replaces the Electron install it updates from', () => {
   assert(hooks.includes('--force-run'), "electron-updater's Restart to update would leave the app stopped")
 })
 
-console.log('\n-- extraResources the main process reaches for at runtime --')
+console.log('\n-- resources the daemon reaches for at runtime --')
 
-// Both of these shipped broken and neither failed anything: the app starts
-// fine without them and only degrades, so nothing surfaced the gap. These
-// assertions read the config statically, so they hold in CI where deps/ and
-// llama-cpp-turboquant/ do not exist.
-//
-// The platform binaries live under `win.extraResources` / `mac.extraResources`
-// rather than the top-level list, because a mac build has no deps/windows/ to
-// copy from. electron-builder concatenates the top-level list with the
-// platform one, so each check reads the merged view the packager would build.
+// Each of these shipped broken once and failed nothing: the app starts fine
+// without them and only degrades. They read stage-shell-bundle.mjs
+// statically, so they hold in CI where deps/ and llama-cpp-turboquant/ do
+// not exist.
 
-/** What electron-builder would package for one platform: top-level + platform-specific. */
-function resourcesFor(config, platform) {
-  return [...(config.extraResources ?? []), ...(config[platform]?.extraResources ?? [])]
-}
-
-test('🔍 Nest packages elevate.exe, which firewall.mjs resolves from resourcesPath', () => {
-  const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
-  const resources = resourcesFor(config, 'win')
-  assert(
-    resources.some((r) => typeof r === 'object' && `${r.from} ${r.to}`.includes('elevate.exe')),
-    'firewall.mjs does path.join(process.resourcesPath, "elevate.exe") to add inbound rules with UAC. ' +
-      'It fails SOFT when the file is absent — logs a warning and skips the rule — so a packaged build ' +
-      'silently stops configuring the firewall and LAN mode appears broken for no visible reason.'
-  )
-  return 'declared'
+test('🔍 Nest stages elevate.exe, which firewall.mjs resolves from the resources dir', () => {
+  assert(STAGE_SRC.includes("out('elevate.exe')"),
+    'firewall.mjs looks for <resources>/elevate.exe to add inbound rules with UAC. It fails SOFT when the ' +
+      'file is absent (logs a warning, skips the rule), so LAN mode would appear broken for no visible reason.')
+  return 'staged'
 })
 
-test('🔍 DLL filters are case-insensitive, or uppercase .DLL files are dropped', () => {
-  const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
-  const dllEntries = resourcesFor(config, 'win').filter(
-    (r) => typeof r === 'object' && Array.isArray(r.filter) && r.filter.some((f) => /\.dll$/i.test(f))
-  )
-  assert(dllEntries.length > 0, 'no extraResources entry filters DLLs at all')
-  for (const entry of dllEntries) {
-    assert(
-      entry.filter.includes('*.dll') && entry.filter.includes('*.DLL'),
-      `"${entry.from}" filters DLLs with ${JSON.stringify(entry.filter)}. electron-builder matches ` +
-        'case-sensitively, and the VC++ redistributable ships VCOMP140.DLL in uppercase — it was silently ' +
-        'omitted from every installer built before this check existed. llama-server is built with ' +
-        'OPENMP=1 and links against it, so on a machine without the redistributable it will not load.'
-    )
-  }
-  return `${dllEntries.length} DLL filter(s) cover both cases`
+test('🔍 the DLL filter is case-insensitive, or uppercase .DLL files are dropped', () => {
+  assert(/\/\\\.dll\$\/i/.test(STAGE_SRC),
+    'stage-shell-bundle.mjs must match DLLs case-insensitively: the VC++ redistributable ships VCOMP140.DLL in ' +
+      'uppercase, llama-server is built with OPENMP=1 and links it, and a case-sensitive filter silently dropped it once.')
+  return '/\\.dll$/i'
 })
 
-test("🔍 Nest's mac build ships llama-server where daemon.mjs looks for it", () => {
-  // resolveBinary() checks path.join(process.resourcesPath, 'bin', serverBinaryName())
-  // and nothing else when packaged — so a binary placed anywhere other than bin/,
-  // or under its Windows name, means Start Server fails on every Mac install.
-  const config = JSON.parse(fs.readFileSync(APPS[0].config, 'utf8'))
-  const entry = resourcesFor(config, 'mac').find(
-    (r) => typeof r === 'object' && r.to === 'bin' && (r.filter ?? []).includes('llama-server')
-  )
-  assert(entry, 'no mac extraResources entry places "llama-server" (no .exe) into resources/bin')
-  assert(
-    entry.filter.includes('*.dylib'),
-    'llama-server on macOS is dynamically linked against libllama/libggml*.dylib beside it; ' +
-      'shipping the executable alone produces a binary that dies at load with "Library not loaded"'
-  )
-  return entry.from
+test("🔍 Nest's mac build stages llama-server and its dylibs where daemon.mjs looks", () => {
+  // resolveBinary() checks <resources>/bin/<serverBinaryName()> and nothing
+  // else when packaged.
+  assert(/path\.basename\(p\) === 'llama-server'/.test(STAGE_SRC), 'no mac llama-server (no .exe) staged into bin/')
+  assert(/\\\.dylib\$/.test(STAGE_SRC),
+    'llama-server on macOS loads libllama/libggml*.dylib beside it; the executable alone dies with "Library not loaded"')
 })
 
-test('🔍 every mac build is ad-hoc signed after packing, or Apple Silicon calls it damaged', () => {
-  // electron-builder 24 skips signing when there is no certificate, and
-  // its own edits invalidate the signature Electron's binary shipped with.
+test('🔍 every mac build is ad-hoc signed, or Apple Silicon calls it damaged', () => {
+  // Twig (electron-builder 24 skips signing without a certificate, and its own
+  // edits invalidate Electron's signature): an afterPack hook signs.
   for (const app of APPS) {
     const config = JSON.parse(fs.readFileSync(app.config, 'utf8'))
     if (!config.mac) continue
     assert(config.afterPack, `${app.name}: mac target declared but no afterPack hook signs the bundle`)
     const hook = path.resolve(path.dirname(app.config), config.afterPack)
     assert(fs.existsSync(hook), `${app.name}: afterPack points at ${config.afterPack}, which does not exist`)
-    assert(
-      /codesign/.test(fs.readFileSync(hook, 'utf8')),
-      `${app.name}: afterPack hook ${config.afterPack} never calls codesign`
-    )
+    assert(/codesign/.test(fs.readFileSync(hook, 'utf8')), `${app.name}: afterPack hook ${config.afterPack} never calls codesign`)
   }
-  return 'hooked'
+  // Nest (Tauri): every staged Mach-O is signed, and the .app ad-hoc.
+  assert(/adhocSignMachO\(BUNDLE_DIR\)/.test(STAGE_SRC) && /'codesign'/.test(STAGE_SRC), 'Nest: staged Mach-O files are not signed')
+  const mac = JSON.parse(fs.readFileSync(path.join(NEST, 'shell', 'tauri.bundle.conf.json'), 'utf8')).bundle.macOS
+  assert(mac?.signingIdentity === '-', 'Nest: bundle.macOS.signingIdentity must be "-" (ad-hoc)')
+  return 'Twig hooked, Nest staged + ad-hoc'
 })
 
 // ---------------------------------------------------------------------------

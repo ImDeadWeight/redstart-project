@@ -51,7 +51,7 @@ While still logged in as the account that has been running Redstart:
 
 ```
 cd <the Redstart Nest source checkout — see step 3>
-npx electron scripts/rekey-secrets.mjs -- ^
+node scripts/rekey-secrets.mjs ^
   --source "%APPDATA%\redstart" ^
   --target "C:\ProgramData\Redstart\config"
 ```
@@ -66,11 +66,12 @@ That is a **dry run**. It writes nothing. Read the output:
 
 When the numbers look right, run it again with `--apply`.
 
-**`npx electron`, not `node`.** The secrets were written by DPAPI, which only
-Electron's `safeStorage` can reach, and only as the user who wrote them on the
-machine that wrote them. Run it under plain `node` and it refuses rather than
-reporting everything as unreadable — which would look exactly like a corrupted
-install.
+**As the original user, on the original machine.** The secrets are encrypted
+under a key that DPAPI protects for the Windows account that ran the desktop
+app (`secrets-key.json`, or Electron's `Local State` on an older install). The
+tool unwraps it through PowerShell, so plain `node` is enough. As any other user
+the unwrap fails, and the tool stops and says so rather than reporting
+everything as unreadable, which would look exactly like a corrupted install.
 
 **Your existing install is not touched.** The migration copies; it never moves
 or deletes. If anything below goes wrong, the old directory is still there and

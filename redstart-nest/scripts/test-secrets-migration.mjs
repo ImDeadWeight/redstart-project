@@ -27,7 +27,7 @@ import * as path from 'node:path'
 import { findSecrets, planRekey, applyRekey } from '../electron/main/secrets-migration.mjs'
 import { safeStorageProvider } from '../electron/main/secrets-safe-storage.mjs'
 import { keyfileProvider } from '../electron/main/secrets-keyfile.mjs'
-import { parseRekeyArgs, providerAvailability, formatPlan } from './rekey-secrets.mjs'
+import { parseRekeyArgs, providerAvailability, formatPlan, desktopProvider } from './rekey-secrets.mjs'
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-rekey-'))
 
@@ -371,18 +371,28 @@ test('🔒 a FRESH provider over the target can read what was written', () => {
 
 console.log('\n-- the operator CLI (scripts/rekey-secrets.mjs) --')
 
-test('🔒 refuses to run under plain node against a safeStorage tree', () => {
-  // The refusal that matters most. Reporting "0 of 12 secrets readable" from a
-  // plain-node process is technically accurate and completely misleading: it
-  // looks exactly like a corrupted install, and the reasonable conclusion from
-  // it — "the credentials are gone, start over" — is wrong and destructive.
-  const denied = providerAvailability('safestorage', false)
-  assert(denied.ok === false, 'plain node claimed it could read DPAPI ciphertext')
-  assert(/electron/i.test(denied.error), `the refusal does not say what to do: ${denied.error}`)
+test('🔒 refuses a desktop tree where it cannot read one, instead of calling every secret unreadable', () => {
+  // The refusal that matters most. Reporting "0 of 12 secrets readable" is
+  // technically accurate and completely misleading: it looks exactly like a
+  // corrupted install, and the reasonable conclusion from it, "the credentials
+  // are gone, start over", is wrong and destructive. Since the daemon split
+  // plain Node reads a Windows desktop tree (DPAPI through PowerShell); a
+  // macOS one (Keychain) it cannot.
+  const denied = providerAvailability('safestorage', 'darwin')
+  assert(denied.ok === false, 'claimed it could read a macOS Keychain tree')
+  assert(/Windows/.test(denied.error), `the refusal does not say what it can read: ${denied.error}`)
 
-  assert(providerAvailability('safestorage', true).ok, 'refused under Electron')
-  // keyfile ciphertext needs no keychain, so plain node is fine there.
-  assert(providerAvailability('keyfile', false).ok, 'refused a keyfile source under plain node')
+  assert(providerAvailability('safestorage', 'win32').ok, 'refused a Windows desktop tree on Windows')
+  // keyfile ciphertext needs no keychain anywhere.
+  assert(providerAvailability('keyfile', 'linux').ok, 'refused a keyfile source')
+})
+
+test('🔒 a desktop tree with no key to read fails loudly, naming the user to run as', () => {
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-rekey-nokey-'))
+  let err = null
+  try { desktopProvider(empty) } catch (e) { err = e }
+  fs.rmSync(empty, { recursive: true, force: true })
+  assert(err && /no secrets key to read/.test(err.message) && /Windows user/.test(err.message), `got ${err?.message}`)
 })
 
 test('🔒 refuses source and target being the same directory', () => {

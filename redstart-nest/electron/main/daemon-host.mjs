@@ -1,21 +1,20 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — hosting nestd from the desktop shell (the shell's end of the pipe)
+// Redstart Nest — hosting nestd from JavaScript (the shell's end of the pipe)
 // =============================================================================
-// Daemon split T1.4 (docs/notes/daemon-split-tauri-plan.md). The Electron
-// shell no longer runs the daemon in its own process. It spawns
-// `nestd --shell-pipe` on the bundled Node 26 and talks to it through
-// shell-pipe.mjs. bin/shell-mode.mjs is the other end.
+// The desktop shell is Rust (shell/src/daemon.rs). This is the same end of
+// the protocol in JavaScript: it spawns `nestd --shell-pipe` and talks to it
+// through shell-pipe.mjs (bin/shell-mode.mjs is the other end). It was the
+// T1 Electron shell's host. Now test-shell-pipe.mjs drives the real nestd
+// with it, which keeps the protocol checked from both sides.
 //
-// No Electron import: everything Electron-specific (trash, login items,
-// notifications, the updater) is passed in as plain functions, so a test can
-// host the real nestd with this module and stand-ins. T2's Tauri shell
-// reimplements this file in Rust against the same protocol.
+// Everything desktop-specific (trash, login items, notifications, the
+// updater) is passed in as plain functions.
 //
 // THE LIFETIME RULE (plan D2): this process owns the daemon. stop() asks it to
-// shut down and waits for it. If the shell dies, the daemon sees EOF on stdin
-// and stops itself. There is no Job Object in T1 (gap → T2).
+// shut down and waits for it. If the host dies, the daemon sees EOF on stdin
+// and stops itself. (The Rust shell adds a Job Object on top.)
 // =============================================================================
 
 import { spawn } from 'node:child_process'

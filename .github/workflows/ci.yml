@@ -139,7 +139,9 @@ jobs:
 
       # Which release the auto-updater moves an install to. A wrong answer is
       # a downgrade, a stable install pulled onto an alpha, or a release with
-      # no Nest manifest. Also pins electron-builder.json's update channel.
+      # no Nest manifest. Also pins the manifest names the release writes and
+      # the Tauri shell asks for, and that an update installs only on a
+      # deliberate quit.
       - name: "Updates: release selection (no downgrades)"
         run: node scripts/test-update-feed.mjs
 
