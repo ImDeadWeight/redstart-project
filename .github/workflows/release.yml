@@ -238,29 +238,30 @@ jobs:
           "$bin/llama-server" --version
 
       # ── Nest's daemon runtime ──────────────────────────────────────────────
-      # On Windows the Tauri shell runs nestd on a bundled Node, pinned by
-      # version and sha256 in stage-node.mjs. macOS stays on Electron (in-process
-      # daemon) until the Mac pass.
-      - name: Stage the pinned Node runtime (Windows)
-        if: matrix.app == 'nest' && runner.os == 'Windows'
-        run: node scripts/stage-node.mjs && deps/node/node.exe --version
+      # The Tauri shell runs nestd on a bundled Node, pinned by version and
+      # sha256 in stage-node.mjs (Windows x64 and macOS arm64).
+      - name: Stage the pinned Node runtime
+        if: matrix.app == 'nest'
+        run: |
+          node scripts/stage-node.mjs
+          if [ "$RUNNER_OS" = Windows ]; then deps/node/node.exe --version; else deps/node/node --version; fi
         working-directory: redstart-nest
 
       # ── Package ────────────────────────────────────────────────────────────
       # --publish never: electron-builder auto-publishes when it detects a tag
       # in CI. Publishing is the release job's job, once, for all four.
       - name: Build installer
-        if: ${{ !(matrix.app == 'nest' && runner.os == 'Windows') }}
+        if: matrix.app != 'nest'
         run: npm run build -- ${{ matrix.target }} --publish never
         working-directory: ${{ matrix.dir }}
 
-      # Nest on Windows: the Tauri shell (daemon split T3). The same UI and
+      # Nest: the Tauri shell (daemon split T3). The same UI and
       # chat-ui builds and licence list as `npm run build`, then the staged
       # resources, then `tauri build`, which signs the installer for the
       # updater with the CI secret. No secret, no .sig, and
       # make-shell-manifests refuses, so an unsigned build never publishes.
       - uses: actions/cache@v4
-        if: matrix.app == 'nest' && runner.os == 'Windows'
+        if: matrix.app == 'nest'
         with:
           path: |
             ~/.cargo/registry
@@ -269,7 +270,7 @@ jobs:
           key: shell-release-${{ runner.os }}-${{ hashFiles('redstart-nest/shell/Cargo.lock') }}
 
       - name: Build installer (Nest, Tauri)
-        if: matrix.app == 'nest' && runner.os == 'Windows'
+        if: matrix.app == 'nest'
         working-directory: redstart-nest
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -283,9 +284,16 @@ jobs:
           npm run license:gen
           node scripts/rust-licenses.mjs
           node scripts/stage-shell-bundle.mjs
-          (cd shell && npx tauri build --config tauri.bundle.conf.json)
-          built=$(ls shell/target/release/bundle/nsis/*-setup.exe)
-          node scripts/make-shell-manifests.mjs "$VERSION" "$built" "release/$VERSION"
+          b=shell/target/release/bundle
+          if [ "$RUNNER_OS" = Windows ]; then
+            (cd shell && npx tauri build --config tauri.bundle.conf.json --bundles nsis)
+            node scripts/make-shell-manifests.mjs windows "$VERSION" "$(ls $b/nsis/*-setup.exe)" "release/$VERSION"
+          else
+            # Ad-hoc signed (bundle.macOS.signingIdentity "-"), like the
+            # Electron build was; stage-shell-bundle signed every Mach-O inside.
+            (cd shell && npx tauri build --config tauri.bundle.conf.json --bundles app,dmg)
+            node scripts/make-shell-manifests.mjs macos "$VERSION" "$(ls $b/dmg/*.dmg)" "$(ls $b/macos/*.app.tar.gz)" "release/$VERSION"
+          fi
 
       - name: Show what was built
         run: ls -la "${{ matrix.dir }}/release/${{ needs.version.outputs.version }}"
@@ -303,7 +311,8 @@ jobs:
             ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*Setup*.exe
             ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*Setup*.exe.blockmap
             ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/${{ matrix.app }}.yml
-            ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/nest-latest.json
+            ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/nest-latest.*.json
+            ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*.app.tar.gz
             ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*.dmg
           if-no-files-found: error
           # Installers are already compressed; zipping them again is time for nothing.
@@ -321,6 +330,19 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      # The Tauri manifest is per platform until here: each build job wrote a
+      # fragment, and only this job has all of them.
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.version.outputs.version }}
+          path: src
+          sparse-checkout: |
+            redstart-nest/scripts
+            redstart-nest/electron/main
+
+      - name: Merge the Tauri update manifest
+        run: node src/redstart-nest/scripts/make-shell-manifests.mjs merge dist
 
       - name: Check asset sizes
         run: |
@@ -353,10 +375,14 @@ jobs:
           SmartScreen will warn; choose *More info → Run anyway*. Nest's GPU
           inference needs an NVIDIA driver recent enough for CUDA 12.4.
 
-          **Redstart Nest on Windows is now a Tauri app** with its server on a
-          bundled Node 26. An existing install updates itself as usual and keeps
-          its accounts, settings and stored secrets, but the Nest window asks you
-          to **sign in once** after the update (it has a new browser profile).
+          **Redstart Nest is now a Tauri app** with its server on a bundled
+          Node 26. On Windows an existing install updates itself as usual and
+          keeps its accounts, settings and stored secrets, but the Nest window
+          asks you to **sign in once** after the update (it has a new browser
+          profile). On macOS, install the new `.dmg` over the old app once (the
+          Electron build never updated itself); macOS then asks whether Redstart
+          Nest may use its "redstart Safe Storage" Keychain item: choose
+          *Always Allow*. From then on the Mac app updates itself too.
 
           **macOS** — open the `.dmg` and drag the app to Applications. The apps
           are ad-hoc signed but not notarized, so the first launch is blocked:

@@ -302,7 +302,7 @@ test('🔍 the installer ships the staged layout paths.rs reads, signed for the 
   assert(paths.includes('.join("node").join(node_exe())') && paths.includes('.join("app").join("bin").join("nestd.mjs")'),
     'paths.rs no longer reads resources/node and resources/app/bin/nestd.mjs')
   const stage = fs.readFileSync(path.join(REPO, 'redstart-nest', 'scripts', 'stage-shell-bundle.mjs'), 'utf8')
-  assert(stage.includes("out('node', 'node.exe')") && stage.includes("out('app', 'bin')"), 'stage-shell-bundle.mjs no longer writes that layout')
+  assert(stage.includes("out('node', win ? 'node.exe' : 'node')") && stage.includes("out('app', 'bin')"), 'stage-shell-bundle.mjs no longer writes that layout')
 })
 
 test('🔍 the bridge replaces the Electron install it updates from', () => {

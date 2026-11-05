@@ -2,6 +2,10 @@
 // =============================================================================
 // Stage what the Tauri installer ships beside the shell (daemon split T3)
 // =============================================================================
+// Windows and macOS (Apple Silicon). Mac-specific: node is `node`, bin/ holds
+// llama-server + its dylibs, there is no elevate.exe, and every Mach-O is
+// ad-hoc signed (Apple Silicon runs nothing unsigned).
+//
 // Builds shell/bundle/resources/ (gitignored), the layout shell/src/paths.rs
 // resolves at <resource_dir>/resources. It is Electron's old `resources/`,
 // so the daemon's own lookups (resources/bin, resources/chat-ui,
@@ -28,7 +32,7 @@
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { execSync } from 'node:child_process'
+import { execFileSync, execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { stagedBinaryPath } from './stage-node.mjs'
 
@@ -46,15 +50,43 @@ function copyDir(from, to, filter = () => true) {
   fs.cpSync(need(from), to, { recursive: true, filter: (src) => fs.statSync(src).isDirectory() || filter(src) })
 }
 
+const MACHO_MAGIC = new Set([0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca])
+function isMachO(file) {
+  const fd = fs.openSync(file, 'r')
+  try {
+    const head = Buffer.alloc(4)
+    return fs.readSync(fd, head, 0, 4, 0) === 4 && MACHO_MAGIC.has(head.readUInt32BE(0))
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+/**
+ * macOS: every Mach-O in the staged tree gets an ad-hoc signature of its own,
+ * as mac-adhoc-sign.cjs did for the Electron build. Apple Silicon refuses to
+ * run an unsigned executable or load an unsigned dylib, and signing the .app
+ * (Tauri's signingIdentity "-") does not sign loose files in Resources.
+ */
+function adhocSignMachO(dir) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name)
+    if (entry.isSymbolicLink()) continue
+    if (entry.isDirectory()) adhocSignMachO(full)
+    else if (isMachO(full)) execFileSync('codesign', ['--force', '--sign', '-', full], { stdio: 'inherit' })
+  }
+}
+
 function main() {
-  if (process.platform !== 'win32') throw new Error('The Tauri installer is Windows-only for now (plan D7)')
+  const win = process.platform === 'win32'
+  if (!win && process.platform !== 'darwin') throw new Error('The Tauri shell ships for Windows and macOS only')
   fs.rmSync(BUNDLE_DIR, { recursive: true, force: true })
   fs.mkdirSync(BUNDLE_DIR, { recursive: true })
   const out = (...p) => path.join(BUNDLE_DIR, ...p)
 
   // The runtime.
   fs.mkdirSync(out('node'))
-  fs.copyFileSync(need(stagedBinaryPath('win32')), out('node', 'node.exe'))
+  fs.copyFileSync(need(stagedBinaryPath(process.platform)), out('node', win ? 'node.exe' : 'node'))
+  if (!win) fs.chmodSync(out('node', 'node'), 0o755)
   fs.copyFileSync(need(path.join(NEST, 'deps', 'node', 'LICENSE')), out('node', 'LICENSE'))
 
   // The daemon, and its production dependencies installed from the lockfile.
@@ -75,13 +107,20 @@ function main() {
   copyDir(path.join(NEST, 'src', 'chat-ui', 'dist'), out('chat-ui'))
 
   // llama-server and exactly what it loads (the release workflow stages these;
-  // check-dll-closure.mjs proves the set is closed).
-  const dll = (p) => /\.dll$/i.test(p)
-  copyDir(path.join(NEST, 'llama-cpp-turboquant', 'build', 'bin', 'Release'), out('bin'),
-    (p) => dll(p) || /llama-server\.exe$/i.test(p))
-  copyDir(path.join(NEST, 'deps', 'windows'), out('bin'), dll)
-  need(out('bin', 'llama-server.exe'))
-  fs.copyFileSync(need(path.join(NEST, 'deps', 'windows', 'elevate.exe')), out('elevate.exe'))
+  // on Windows check-dll-closure.mjs proves the set is closed).
+  if (win) {
+    const dll = (p) => /\.dll$/i.test(p)
+    copyDir(path.join(NEST, 'llama-cpp-turboquant', 'build', 'bin', 'Release'), out('bin'),
+      (p) => dll(p) || /llama-server\.exe$/i.test(p))
+    copyDir(path.join(NEST, 'deps', 'windows'), out('bin'), dll)
+    need(out('bin', 'llama-server.exe'))
+    fs.copyFileSync(need(path.join(NEST, 'deps', 'windows', 'elevate.exe')), out('elevate.exe'))
+  } else {
+    // build/bin, not Release/: the POSIX layout electron-builder's mac build used.
+    copyDir(path.join(NEST, 'llama-cpp-turboquant', 'build', 'bin'), out('bin'),
+      (p) => /\.dylib$/.test(p) || path.basename(p) === 'llama-server')
+    need(out('bin', 'llama-server'))
+  }
 
   fs.copyFileSync(need(path.join(NEST, 'LICENSE.txt')), out('LICENSE.txt'))
   fs.copyFileSync(need(path.join(REPO, 'THIRD-PARTY-NOTICES.md')), out('THIRD-PARTY-NOTICES.md'))
@@ -89,6 +128,7 @@ function main() {
   need(path.join(NEST, 'licenses', 'rust-licenses.json'))
   copyDir(path.join(NEST, 'licenses'), out('licenses'))
 
+  if (!win) adhocSignMachO(BUNDLE_DIR)
   console.log(`Staged ${path.relative(REPO, BUNDLE_DIR)}`)
 }
 

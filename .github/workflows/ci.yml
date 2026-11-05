@@ -260,11 +260,16 @@ jobs:
         run: npm --prefix src/chat-ui run test:client -- --run
 
   shell:
-    # The Tauri desktop shell (daemon split T2). Windows only for now: its
-    # DPAPI, Job Object and login-item code is Windows code, and the unit
-    # tests include a real DPAPI round trip for the runner's account.
-    name: Desktop shell (Rust)
-    runs-on: windows-latest
+    # The Tauri desktop shell (daemon split T2/T3). The Windows unit tests
+    # include a real DPAPI round trip for the runner's account.
+    name: Desktop shell (Rust, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-14: the only place the macOS half (Keychain, LaunchAgent,
+        # traffic-light window) is compiled and unit-tested at all.
+        os: [windows-latest, macos-14]
     defaults:
       run:
         working-directory: redstart-nest/shell

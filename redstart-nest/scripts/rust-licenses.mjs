@@ -3,11 +3,10 @@
 // Licences of the Rust crates compiled into the Tauri shell
 // =============================================================================
 // The npm side has license:gen (licenses/npm-licenses.json). The shell exe is
-// built from ~400 crates, and their licences ship with it the same way:
+// built from ~300 crates, and their licences ship with it the same way:
 // licenses/rust-licenses.json, one entry per crate that is actually compiled
-// for the Windows build (the resolved dependency graph for
-// x86_64-pc-windows-msvc, normal dependencies only, not build or dev
-// dependencies). The licence field is the crate's own SPDX expression, as
+// for this platform's build (the resolved dependency graph for TARGET below,
+// normal dependencies only, not build or dev dependencies). The licence field is the crate's own SPDX expression, as
 // published.
 //
 //   node scripts/rust-licenses.mjs      (run before stage-shell-bundle.mjs)
@@ -21,7 +20,8 @@ import { fileURLToPath } from 'node:url'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const NEST = path.join(here, '..')
 const OUT = path.join(NEST, 'licenses', 'rust-licenses.json')
-const TARGET = 'x86_64-pc-windows-msvc'
+// The crates differ by platform (DPAPI vs Keychain, WebView2 vs WKWebView).
+const TARGET = process.platform === 'darwin' ? 'aarch64-apple-darwin' : 'x86_64-pc-windows-msvc'
 
 export function compiledCrates(metadata) {
   const byId = new Map(metadata.packages.map((p) => [p.id, p]))
