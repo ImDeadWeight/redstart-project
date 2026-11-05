@@ -44,7 +44,9 @@ directory it wants explicitly.
 | `mcp.json` | External MCP servers, with any API key stored as ciphertext (`apiKeyEnc`) and never returned to a client in plaintext. |
 | `plugins.json` | Installed MCP plugins — the registry snapshot taken at install-review time, each tool's permission class, and the per-plugin enable switch. |
 | `prompt-blocks.json` | Admin-authored system-prompt blocks. Absent until you edit one. |
-| `secret.key` | The daemon-owned AES-256-GCM key, **headless deployments only**. The desktop build encrypts through Electron's `safeStorage` (DPAPI) and writes no key file. Whoever can read this file can read every stored credential. |
+| `secret.key` | The daemon-owned AES-256-GCM key, **headless deployments only**. The desktop build writes no such file. Whoever can read this file can read every stored credential. |
+| `secrets-key.json` | **Windows desktop only.** The key that encrypts stored credentials, **wrapped with DPAPI** for your Windows account, so this file is useless on another account or machine. On first run after the update, Redstart copies it from Electron's `Local State`, so existing secrets read back unchanged. The window process unwraps it and hands it to the daemon at startup. Do not delete it: without it (and without `Local State`), stored secrets cannot be decrypted and must be re-entered. |
+| `shell/` | **Windows desktop only.** The window process's own files: `redstart.log` (its log, apart from the daemon's) and `shell-state.json` (whether the close-window notice has been shown). |
 | `nestd.pid` | The running daemon's own pid, so `npm run daemon:stop` and a service manager can find it without probing a port. Written *after* the control plane binds, so a second daemon that loses the port race cannot overwrite a live entry. |
 | `llama-server.pid` | The pid of the model process Nest launched, so a hard-killed Nest can reap exactly its own child at the next start — never by image name. |
 

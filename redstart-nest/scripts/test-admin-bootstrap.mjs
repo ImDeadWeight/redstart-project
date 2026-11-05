@@ -28,7 +28,7 @@
 // Run:  node scripts/test-admin-bootstrap.mjs
 // =============================================================================
 
-import { register } from 'node:module'
+import { registerElectronStub } from './electron-stub-hooks.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -36,7 +36,7 @@ import * as path from 'node:path'
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-bootstrap-test-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 
-register('./auth-test-loader.mjs', import.meta.url)
+registerElectronStub()
 await import('./electron-stub.mjs')
 
 const { startAdminListener, stopAdminListener } = await import('../electron/main/admin-listener.mjs')

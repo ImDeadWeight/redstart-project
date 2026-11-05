@@ -22,10 +22,10 @@
 // Run:  node scripts/test-web-fetch-ssrf.mjs
 // =============================================================================
 
-import { register } from 'node:module'
+import { registerElectronStub } from './electron-stub-hooks.mjs'
 import * as dns from 'node:dns/promises'
 
-register('./auth-test-loader.mjs', import.meta.url)
+registerElectronStub()
 
 const webFetch = await import('../electron/main/web-fetch-tool.mjs')
 const { isPrivateAddress, callTool } = webFetch

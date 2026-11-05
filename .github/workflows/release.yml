@@ -76,7 +76,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 26
 
       - name: Compute and apply the next -alpha.N
         id: bump
@@ -155,7 +155,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           # chat-ui's @capacitor/cli requires Node >= 22 under engine-strict.
-          node-version: 22
+          node-version: 26
           cache: npm
           cache-dependency-path: |
             redstart-nest/package-lock.json
@@ -236,6 +236,15 @@ jobs:
           # dylibs beside itself (@loader_path), not at the path it unpacked to.
           rm -rf "$dl"
           "$bin/llama-server" --version
+
+      # ── Nest's daemon runtime ──────────────────────────────────────────────
+      # On Windows the shell runs nestd on a bundled Node, pinned by version
+      # and sha256 in stage-node.mjs; electron-builder copies deps/node into
+      # resources/node. macOS keeps the in-process daemon until the Tauri shell.
+      - name: Stage the pinned Node runtime (Windows)
+        if: matrix.app == 'nest' && runner.os == 'Windows'
+        run: node scripts/stage-node.mjs && deps/node/node.exe --version
+        working-directory: redstart-nest
 
       # ── Package ────────────────────────────────────────────────────────────
       # --publish never: electron-builder auto-publishes when it detects a tag

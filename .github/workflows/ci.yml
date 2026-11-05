@@ -29,9 +29,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # chat-ui depends on @capacitor/cli (engines: node >=22) and its
-          # .npmrc sets engine-strict=true, so anything below 22 fails npm ci.
-          node-version: 22
+          # 26: the Node the desktop shell bundles and runs nestd on
+          # (scripts/stage-node.mjs), so the suites run where the daemon does.
+          # chat-ui's @capacitor/cli needs >= 22 under engine-strict anyway.
+          node-version: 26
           cache: npm
           cache-dependency-path: |
             redstart-nest/package-lock.json

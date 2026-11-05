@@ -78,6 +78,23 @@ and Electron's `safeStorage`; the daemon supplies a directory and an AES-256-GCM
 key file. Nothing beneath those seams imports `electron`, which is the property
 that makes the headless boot possible at all.
 
+**On Windows the desktop app runs the daemon as a separate process.** The
+Electron process is a *shell*: window, tray, notifications, login item,
+updater, recycle bin. It spawns `nestd --shell-pipe` on a Node 26 bundled
+under `resources/node` (pinned by version and SHA-256 in
+`scripts/stage-node.mjs`), so the daemon runs on a current Node no matter
+how old Electron's own is. The two talk in JSON lines over the child's stdin
+and stdout (`electron/main/shell-pipe.mjs`). The shell sends `hello` with the
+paths and the unwrapped secrets key, and the daemon answers `ready` with its
+port. After that, the daemon asks the shell for the things only a desktop
+session can do (trash a file, set the login item, check for an update), and
+the shell asks the daemon to stop the model or shut down. **The shell owns
+the daemon's lifetime:** quitting waits for the daemon to stop, and if the
+shell dies, the daemon sees end-of-file on stdin and stops itself. A daemon
+that exits on its own only raises a notification. Nothing restarts it. macOS
+still runs the daemon inside the Electron process for now. The shell is
+being replaced by a Tauri one that speaks the same protocol.
+
 **The launcher is a web page.** There is no preload script and no
 `contextBridge`. The React launcher talks to the daemon over HTTP —
 `POST /admin/api/<namespace>/<method>` on the control plane — so the Electron
