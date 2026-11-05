@@ -269,9 +269,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-14: the only place the macOS half (Keychain, LaunchAgent,
+        # macos-15: the only place the macOS half (Keychain, LaunchAgent,
         # traffic-light window) is compiled and unit-tested at all.
-        os: [windows-latest, macos-14]
+        os: [windows-latest, macos-15]
     defaults:
       run:
         working-directory: redstart-nest/shell

@@ -141,9 +141,9 @@ jobs:
       matrix:
         include:
           - { label: 'Nest — Windows', app: nest, os: windows-latest, target: --win, dir: redstart-nest }
-          - { label: 'Nest — macOS',   app: nest, os: macos-14,       target: --mac, dir: redstart-nest }
+          - { label: 'Nest — macOS',   app: nest, os: macos-15,       target: --mac, dir: redstart-nest }
           - { label: 'Twig — Windows', app: twig, os: windows-latest, target: --win, dir: redstart-twig/windows }
-          - { label: 'Twig — macOS',   app: twig, os: macos-14,       target: --mac, dir: redstart-twig/windows }
+          - { label: 'Twig — macOS',   app: twig, os: macos-15,       target: --mac, dir: redstart-twig/windows }
     defaults:
       run:
         shell: bash
