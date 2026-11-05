@@ -6,6 +6,36 @@ This is an honest work-in-progress. The project started as a personal home tool 
 
 ---
 
+## What is being worked on, in order
+
+The phase lists below say *what* is planned. This says *next*, because the phases
+are not a queue — Phase 2 and Phase 3 items interleave, and a couple of the
+remaining ones depend on hardware rather than on effort.
+
+1. **Resource grants, with an administrative trail.** Per-role access to subtrees
+   of the shared capabilities, so an admin can hand one account the databases
+   folder without also handing over the repositories — plus an append-only log of
+   what policy decided. This is the piece the rest of the product thesis rests on:
+   a server where the administrator controls what the AI may reach is not a claim
+   worth making until the control is finer than on/off.
+2. **Deployment and transport security, validated on real hardware.** Everything
+   in [`deploy/`](../deploy/README.md) — the systemd unit, the Windows service
+   procedure, the TLS proxy — is written and has never been run. Crash recovery
+   is part of this rather than separate from it: on an appliance, recovery *is*
+   the service manager's restart policy, and that cannot be verified without a
+   box to crash. Nest does not terminate TLS itself and will not; the work is
+   making the proxy path complete (the data plane needs a block of its own) and
+   proving it.
+3. **Document querying (RAG).** Deliberately after grants, not before: which
+   documents an account is allowed to query has to have an answer before there is
+   an index, or access control ends up bolted onto the results instead of built
+   into the store.
+4. **Model lifecycle.** Browse, download, load, switch, unload as one flow. Last,
+   and honestly so — it is the area where general-purpose local runners are
+   already strong, and it is not where Redstart is trying to win.
+
+---
+
 ## Known limitations
 
 - **Unsigned installers** — both installers will trigger Windows Defender SmartScreen. This is expected for unsigned binaries distributed outside the Microsoft Store. A code signing certificate would resolve this.
@@ -69,10 +99,12 @@ Making Redstart usable in a small workplace rather than just on one person's hom
 - [x] Per-user conversation history — conversations are stored server-side in `conversations.json`, scoped to the logged-in account (or device ID when auth is off), and sync across all devices on the network; unused conversations auto-delete after 30 days
 - [x] ~~mDNS discovery~~ — shipped, then retired: a convenience layer only, and Android could never resolve `.local` at all; see [Known limitations](#known-limitations)
 - [x] Universal browser access — the Configuration tab offers the direct IP (as a QR code) and an `sslip.io` DNS name, so every client has at least one address that works
-- [ ] **Folder access grants** — per-account access to the shared "company" folders (Vault, Git, SQLite), so an admin can give a data analyst the databases folder without also handing over the code repositories. Personal `user_files` stay private; admins reach everything by role. Read-only by default, since two accounts writing one folder re-creates exactly what per-account storage removed. Must surface in both the file explorer and the system prompt — a granted folder the model cannot enumerate is, from the model's side, indistinguishable from one it was never given
+- [ ] **Folder access grants** — per-account access to the shared "company" folders (Vault, Git, SQLite), so an admin can give a data analyst the databases folder without also handing over the code repositories. Personal `user_files` stay private; admins reach everything by role. Read-only by default, since two accounts writing one folder re-creates exactly what per-account storage removed. Must surface in both the file explorer and the system prompt — a granted folder the model cannot enumerate is, from the model's side, indistinguishable from one it was never given, and an ungranted folder that still appears in a listing leaks the org chart in directory names. **This is the next piece of work**, together with the administrative trail below, since it is where the decisions worth logging get made
 - [ ] Guided onboarding & in-app instruction — first-run walkthrough (create the Owner account, pick a model, launch), contextual help on the tools/capabilities panels, and plain-language explanations aimed at non-technical staff in a small office
 - [x] Admin interface accessible from any device on the network — **shipped.** The control plane serves the launcher UI over HTTP on `:19083`, owner-only and authenticated independently of the chat UI. Off-machine access is opt-in per bind address; see [The control plane](security.md#the-control-plane)
-- [ ] Auto-restart on crash — if the model dies at 9am Monday, it recovers without manual intervention
+- [ ] **An administrative trail** — an append-only log of what policy decided and who changed it: sign-ins, policy edits, plugin installs, connector changes, and access a grant refused. Denials rather than every permitted call, because the permitted ones are already in the tool log and burying the interesting line is how an audit becomes unread. Deliberately not an enterprise SIEM; an admin needs to be able to answer "what changed, and what was refused" without leaving the box
+- [ ] Auto-restart on crash — if the model dies at 9am Monday, it recovers without manual intervention. On an appliance this is the service manager's restart policy, and `deploy/` already carries one for each platform with the exit-code contract it depends on; what it does not have is a single run on real hardware. Tracked with the deployment validation above rather than as separate work
+- [ ] **TLS end to end** — Nest speaks plain HTTP and will keep doing so; certificates and renewal belong to a reverse proxy that does them properly (see [`deploy/Caddyfile`](../deploy/Caddyfile)). What is missing is not encryption on the admin plane — that block exists — but the **data plane**: `:19080` carries the chat UI, session tokens and conversation content, and has no proxy block, so the supported story today encrypts administration and not the thing staff actually use
 - [ ] Signed installers — removes the Windows Defender SmartScreen warning, looks professional in a workplace setting
 - [ ] macOS support — many non-profits and small agencies run Macs
 
@@ -86,9 +118,9 @@ The long-term goal: a purpose-built machine that sits in the office and runs the
 - [x] Web-based admin UI — **shipped**, as the same React launcher served over the control plane rather than a second UI written twice
 - [~] Linux support — the daemon, the paths seam, the secret store and binary resolution are all cross-platform now; what is not is the packaged installer, the bundled llama.cpp binary and the port-80 proxy. Reachable, not yet supported
 - [x] Auto-start on boot — start-at-login on the desktop, and the service units in `deploy/` for a box nobody logs into
-- [ ] Document querying (RAG) — staff can upload policy manuals, templates, and reference documents and query against them
+- [ ] Document querying (RAG) — staff can upload policy manuals, templates, and reference documents and query against them. Sequenced after folder access grants: the index keys on what a role may reach, so grants have to exist first or access control ends up filtering results rather than scoping the store. Most of the machinery arrived with tool retrieval — a pinned embedding model, an embedding server, cosine scoring, on-device text extraction for PDF/DOCX/XLSX — so what is genuinely new is persistence and chunking
 - [ ] iOS client (Redstart Twig for iPhone)
-- [ ] Model library management — browse, download, and switch models from any client device
+- [ ] Model library management — browse, download, and switch models from any client device. Last of the planned work, and deliberately: the pieces exist separately (hash-verified resumable downloads, a Hugging Face catalog browser, profile switching) but joining them into one flow competes directly with what general-purpose local model runners already do well, and that is not the ground Redstart is trying to hold
 
 ---
 
