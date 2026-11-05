@@ -114,6 +114,9 @@ jobs:
       - name: "Security: secrets provider seam + legacy ciphertext"
         run: node scripts/test-secrets.mjs
 
+      - name: "Security: OSCrypt provider reads what Electron safeStorage wrote"
+        run: node scripts/test-secrets-dpapi.mjs
+
       # Trap 5.3 — the one step in the headless-admin-plane pass that can
       # destroy stored credentials silently. Nearly every case here asserts a
       # FAILURE path: what survives when a secret cannot be read, what is left
