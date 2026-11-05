@@ -286,6 +286,11 @@ jobs:
             redstart-nest/shell/target
           key: shell-${{ runner.os }}-${{ hashFiles('redstart-nest/shell/Cargo.lock') }}
 
+      # tauri::generate_context!() embeds the app icons at compile time, and
+      # build/ is generated (gitignored), as `npm run build` does first.
+      - name: Generate the app icons
+        run: node ../scripts/make-icon.mjs
+
       - name: Build
         run: cargo build --locked
 

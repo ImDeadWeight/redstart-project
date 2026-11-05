@@ -11,11 +11,16 @@
 // Extra arguments go to the shell, e.g. `npm run dev -- --background`.
 // =============================================================================
 
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
+import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
+// The shell embeds build/icon.* at compile time, and build/ is generated.
+if (!fs.existsSync(path.join(here, '..', 'build', 'icon.png'))) {
+  execFileSync(process.execPath, [path.join(here, 'make-icon.mjs')], { stdio: 'inherit' })
+}
 const child = spawn('cargo', ['run', '--', ...process.argv.slice(2)], {
   cwd: path.join(here, '..', 'shell'),
   stdio: 'inherit',
