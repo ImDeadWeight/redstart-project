@@ -44,6 +44,9 @@ export function useCapabilities(config: LlamaConfig) {
   const [pgSaving, setPgSaving] = useState(false)
   const [savingCap, setSavingCap] = useState<FolderCap | null>(null)
   const [scholarVenueFilter, setScholarVenueFilter] = useState('')
+  const [searxngUrl, setSearxngUrl] = useState('')
+  const [braveApiKey, setBraveApiKey] = useState('')
+  const [webSearchError, setWebSearchError] = useState<string | null>(null)
   const [toolContextEstimate, setToolContextEstimate] = useState<ToolContextEstimate | null>(null)
   const [retrievalStatus, setRetrievalStatus] = useState<RetrievalStatus | null>(null)
 
@@ -53,6 +56,7 @@ export function useCapabilities(config: LlamaConfig) {
       setCapabilityConfig(data)
       setPgMaxRows(data.postgres.maxRows)
       setScholarVenueFilter(data.scholar.venueFilter || '')
+      setSearxngUrl(data.web_search?.searxngUrl || '')
     } catch { /* capabilities unavailable */ }
   }
 
@@ -121,6 +125,27 @@ export function useCapabilities(config: LlamaConfig) {
     await loadCapabilities()
   }
 
+  // --- General web search engine connection (global) ---
+  // Which engine a profile uses is setToolsField('webSearchEngine'); this only
+  // records where SearXNG lives and the Brave key. The key input is write-only:
+  // it is cleared after saving and never filled from the server.
+
+  async function saveWebSearchConfig() {
+    setWebSearchError(null)
+    const result = await api().capabilities.setWebSearch({
+      searxngUrl,
+      ...(braveApiKey.trim() ? { braveApiKey } : {}),
+    })
+    if (!result.ok) { setWebSearchError(result.error || 'Failed to save'); return }
+    setBraveApiKey('')
+    await loadCapabilities()
+  }
+
+  async function clearBraveApiKey() {
+    await api().capabilities.setWebSearch({ clearBraveApiKey: true })
+    await loadCapabilities()
+  }
+
   // --- Tool-context estimate ---
   // Every active tool's JSON schema is sent with every completion request, so
   // this is a standing per-request cost — recomputed whenever the tool
@@ -183,6 +208,8 @@ export function useCapabilities(config: LlamaConfig) {
     pgTestResult, pgSaving, savePostgresConfig, testPostgresConnection,
     savingCap, applyFolder, toggleFsPolicy,
     scholarVenueFilter, setScholarVenueFilter, saveScholarVenueFilter,
+    searxngUrl, setSearxngUrl, braveApiKey, setBraveApiKey, webSearchError,
+    saveWebSearchConfig, clearBraveApiKey,
     toolContextEstimate,
   }
 }

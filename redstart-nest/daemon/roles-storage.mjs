@@ -68,6 +68,9 @@ export const BUILTIN_ROLES = [
       capabilities: [],
       fileSystem: { allowWrite: false, allowDestructive: false },
       allowWhitelistBypass: false,
+      // No general web search engine: queries to SearXNG/Brave are a new
+      // egress path, and this role is the conservative starting point.
+      allowWebSearchEngine: false,
       admin: {},
     },
   },

@@ -176,6 +176,7 @@ export type RedstartAPI = {
     setGit: (config: { rootDir?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
     setFileSystem: (config: { rootDir?: string; enabled?: boolean; allowWrite?: boolean; allowDestructive?: boolean }) => Promise<{ ok: boolean }>
     setScholar: (config: { venueFilter?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
+    setWebSearch: (config: { searxngUrl?: string | null; braveApiKey?: string; clearBraveApiKey?: boolean }) => Promise<{ ok: boolean; error?: string }>
   }
   plugins: {
     list: () => Promise<PluginSummary[]>

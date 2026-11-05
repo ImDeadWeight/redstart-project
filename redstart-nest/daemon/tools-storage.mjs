@@ -109,6 +109,12 @@ const DEFAULT_CAPABILITIES = {
   // chokepoint (see mcp-server.mjs + tools-definitions classify).
   file_system: { enabled: false, rootDir: null, allowWrite: true, allowDestructive: false },
   scholar:     { enabled: false, venueFilter: null },
+  // NOT a capability id: the global CONNECTION for Web Access's "web" search
+  // source (chat-tooling Phase 4b). Which engine a profile uses is that
+  // profile's tools.webSearchEngine; this only says where each engine is.
+  // The Brave key is encrypted at rest like Postgres's connection string and
+  // never returned to the renderer.
+  web_search:  { searxngUrl: null, braveApiKeyEnc: null },
 }
 
 export function getCapabilities() {

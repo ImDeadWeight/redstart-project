@@ -22,6 +22,7 @@ import { getCapabilities, setCapabilityConfig } from '../tools-storage.mjs'
 import { encryptSecret, decryptSecret } from '../secrets.mjs'
 import { testConnection as testPostgresConnection } from '../postgres-tool.mjs'
 import { isPlainObject, isAbsolutePath, optional } from './validate.mjs'
+import { isHttpUrl } from '../web-search-engines.mjs'
 import { logEvent } from '../logger.mjs'
 
 // Every setter below takes one config object and destructures it directly.
@@ -79,6 +80,13 @@ export function getCapabilitiesConfig() {
     scholar: {
       enabled: caps.scholar.enabled,
       venueFilter: caps.scholar.venueFilter,
+    },
+    // Where each general web search engine lives. Which one a profile uses is
+    // the profile's tools.webSearchEngine. The Brave key is reported as
+    // present/absent only, like Postgres's connection string.
+    web_search: {
+      searxngUrl: caps.web_search.searxngUrl,
+      hasBraveApiKey: !!caps.web_search.braveApiKeyEnc,
     },
   }
 }
@@ -158,6 +166,38 @@ export function setScholarConfig(config, { refreshLiveToolsConfig }) {
   return { ok: true }
 }
 
+// The general web search engines' connection (chat-tooling Phase 4b).
+//   searxngUrl    an http(s) base URL, or '' / null to clear
+//   braveApiKey   a new key (encrypted before it is stored); absent = keep
+//   clearBraveApiKey  true removes the stored key
+// The SearXNG URL is refused unless it's http(s): it's the one URL in this
+// feature that an admin types, and it gets no SSRF guard (it may well be on
+// the LAN), so at least its scheme is pinned.
+export function setWebSearchConfig(config, { refreshLiveToolsConfig }) {
+  const channel = 'capabilities:set-web-search'
+  const bad = checkConfig(channel, config)
+  if (bad) return refuse(channel, bad)
+  const { searxngUrl, braveApiKey, clearBraveApiKey } = config
+  const patch = {}
+  if (searxngUrl !== undefined) {
+    const trimmed = String(searxngUrl ?? '').trim()
+    if (trimmed && !isHttpUrl(trimmed)) return refuse(channel, 'searxngUrl must be an http(s) URL.')
+    patch.searxngUrl = trimmed || null
+  }
+  if (clearBraveApiKey === true) {
+    patch.braveApiKeyEnc = null
+  } else if (typeof braveApiKey === 'string' && braveApiKey.trim()) {
+    try {
+      patch.braveApiKeyEnc = encryptSecret(braveApiKey.trim())
+    } catch (err) {
+      return { ok: false, error: err.message }
+    }
+  }
+  setCapabilityConfig('web_search', patch)
+  refreshLiveToolsConfig()
+  return { ok: true }
+}
+
 // Vault, Git, and File System share the folder-scoped capability shape: pick a
 // folder, toggle enabled. The channel slug is hyphenated (file_system ->
 // file-system) to match the preload; the storage key stays the underscore
@@ -191,6 +231,7 @@ export function capabilitiesHandlers(deps) {
     'capabilities:set-documents-folder': (config) => setDocumentsFolder(config, deps),
     'capabilities:set-sqlite': (config) => setSqliteConfig(config, deps),
     'capabilities:set-scholar': (config) => setScholarConfig(config, deps),
+    'capabilities:set-web-search': (config) => setWebSearchConfig(config, deps),
   }
 
   // Built in a loop, and that is exactly why the contract tests scan the real

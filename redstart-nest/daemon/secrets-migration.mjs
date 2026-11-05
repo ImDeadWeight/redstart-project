@@ -57,7 +57,7 @@ import { KEY_FILE_NAME } from './secrets-keyfile.mjs'
 // Nest's own state files. Only these are parsed as JSON looking for secrets;
 // everything else in the tree is copied byte-for-byte.
 const STATE_FILES = [
-  'tools.json',    // postgres connectionStringEnc, externalServers[].apiKeyEnc
+  'tools.json',    // postgres connectionStringEnc, externalServers[].apiKeyEnc, web_search braveApiKeyEnc
   'plugins.json',  // per-plugin envEnc maps
   'settings.json',
   'profiles.json',

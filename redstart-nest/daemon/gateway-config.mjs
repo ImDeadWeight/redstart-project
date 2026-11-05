@@ -21,6 +21,7 @@ import { syncFilesystemProvider } from './filesystem-mcp-provider.mjs'
 import { decryptSecret } from './secrets.mjs'
 import { listPlugins } from './plugin-registry.mjs'
 import { syncPluginProviders, stopAllPlugins } from './plugin-provider.mjs'
+import { resolveEngine } from './web-search-engines.mjs'
 
 // Tool retrieval's per-profile settings, carried through to the gateway.
 //
@@ -29,6 +30,26 @@ import { syncPluginProviders, stopAllPlugins } from './plugin-provider.mjs'
 // request; this decides whether it runs at all, and it goes away once the
 // default flips. ctxSize rides along because the gateway is where the budget is
 // measured and it has no other route to the number.
+// The general web search engine for this profile (web_search source "web").
+//
+// Choice per profile, connection global: the admin picks an engine for each
+// profile, and says once where SearXNG lives / what the Brave key is. Absent
+// choice, an unknown value, or a chosen engine with no connection all resolve
+// to { kind: 'none' } — OFF is the default and the fail direction (plan D1).
+// A key that fails to decrypt is also off, logged, never a half-configured
+// engine.
+function searchEngineFor(toolSettings, capabilities) {
+  const choice = toolSettings?.webSearchEngine
+  const conn = capabilities?.web_search || {}
+  let braveApiKey = null
+  if (choice === 'brave' && conn.braveApiKeyEnc) {
+    try { braveApiKey = decryptSecret(conn.braveApiKeyEnc) } catch (err) {
+      console.warn('Failed to decrypt Brave Search API key:', err.message)
+    }
+  }
+  return resolveEngine(choice, { searxngUrl: conn.searxngUrl, braveApiKey })
+}
+
 function retrievalSettings(llamaConfig) {
   const r = llamaConfig?.tools?.retrieval
   return {
@@ -61,7 +82,7 @@ export function buildGatewayConfig(llamaConfig) {
       disabledTools,
       toolRetrieval: retrievalSettings(llamaConfig),
       ctxSize: llamaConfig?.ctxSize,
-      webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 },
+      webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000, searchEngine: { kind: 'none' } },
       postgres: { enabled: false },
       documents: { enabled: false },
       sqlite: { enabled: false },
@@ -133,6 +154,10 @@ export function buildGatewayConfig(llamaConfig) {
       allowedBaseUrls,
       activeTools,
       maxFetchTokens: toolSettings.maxFetchTokens ?? 2000,
+      // The resolved engine, secret included (this config never leaves the
+      // main process; GET /egress publishes only kind + host, via
+      // deriveEgressFacts). { kind: 'none' } unless chosen AND configured.
+      searchEngine: searchEngineFor(toolSettings, capabilities),
     },
     postgres: {
       enabled: postgresWanted && !!postgresConnectionString,

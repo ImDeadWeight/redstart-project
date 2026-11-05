@@ -33,7 +33,7 @@ directory it wants explicitly.
 
 | File | Holds |
 |---|---|
-| `profiles.json` | Per profile: model path, context/batch/threads, GPU layers, port, network mode, and web source config. Also the per-profile `tools` block — whether tools are on, the whitelist and active sources/groups, activated capabilities (`activeToolIds`) and banned tools (`disabledToolIds`). |
+| `profiles.json` | Per profile: model path, context/batch/threads, GPU layers, port, network mode, and web source config. Also the per-profile `tools` block — whether tools are on, the whitelist and active sources/groups, the general web search engine (`webSearchEngine`: `none`, `searxng` or `brave`), activated capabilities (`activeToolIds`) and banned tools (`disabledToolIds`). |
 | `tools.json` | User-defined tools, groups, external MCP servers, and global capability config (schema below). |
 | `accounts.json` | Accounts, when login is enabled. Passwords and API keys are stored only as hashes. Each account carries a `tier` (`owner`/`admin`/`user`) and a `roleId` (`null` = Full Access). |
 | `roles.json` | Admin-defined capability roles. Built-in roles live in code and are merged in at read time, so this file holds only the ones you create. Absent until you create one. |
@@ -83,12 +83,13 @@ Two consequences worth being explicit about:
     "vault":       { "enabled": false, "rootDir": "..." },
     "git":         { "enabled": false, "rootDir": "..." },
     "file_system": { "enabled": false, "rootDir": "...", "allowWrite": true, "allowDestructive": false },
-    "scholar":     { "enabled": false, "venueFilter": null }
+    "scholar":     { "enabled": false, "venueFilter": null },
+    "web_search":  { "searxngUrl": null, "braveApiKeyEnc": null }
   }
 }
 ```
 
-`allowDestructive` is the switch that permits `delete_file` — off by default, meaning the tool is neither advertised nor executable. The Postgres connection string is the one secret in the file, and it is encrypted through whichever provider the entrypoint wired up: Electron's `safeStorage` (DPAPI) on the desktop, an AES-256-GCM key file on a headless box. Stored values are tagged `v1.<provider>.<payload>` so a file records what wrote it, and a re-key driver re-encrypts an existing tree when the provider changes. Encryption being unavailable is a refusal to store, never a silent fallback to plaintext. Profiles are managed (save, load, delete) in the Redstart Nest UI.
+`allowDestructive` is the switch that permits `delete_file` — off by default, meaning the tool is neither advertised nor executable. `web_search` is not a capability: it says where each general web search engine lives (a SearXNG base URL, a Brave Search API key). Which engine a profile uses, if any, is that profile's `tools.webSearchEngine` (`none` when absent). See [the general web search engine](security.md#the-general-web-search-engine-opt-in). The Postgres connection string and the Brave key are the secrets in the file, and they are encrypted through whichever provider the entrypoint wired up: Electron's `safeStorage` (DPAPI) on the desktop, an AES-256-GCM key file on a headless box. Stored values are tagged `v1.<provider>.<payload>` so a file records what wrote it, and a re-key driver re-encrypts an existing tree when the provider changes. Encryption being unavailable is a refusal to store, never a silent fallback to plaintext. Profiles are managed (save, load, delete) in the Redstart Nest UI.
 
 ---
 

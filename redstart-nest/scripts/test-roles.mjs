@@ -86,6 +86,7 @@ function randomConfig() {
       allowedBaseUrls: activeTools.map(t => t.baseUrl),
       activeTools,
       maxFetchTokens: pick([500, 2000, 8000]),
+      searchEngine: pick([{ kind: 'none' }, { kind: 'searxng', url: 'http://searx.lan/' }, { kind: 'brave', apiKey: 'k' }]),
     },
     postgres: cap(),
     documents: cap(),
@@ -107,6 +108,7 @@ function randomPermissions() {
   if (chance(0.6)) p.capabilities = subset(capabilityIds())
   if (chance(0.5)) p.webSourceIds = subset(WEB_SOURCES)
   if (chance(0.4)) p.allowWhitelistBypass = chance(0.5)
+  if (chance(0.4)) p.allowWebSearchEngine = chance(0.5)
   if (chance(0.4)) p.maxFetchTokens = pick([100, 1000, 99999])
   if (chance(0.5)) p.fileSystem = { allowWrite: chance(0.5), allowDestructive: chance(0.5) }
   if (chance(0.3)) p.surfaces = ['nest-chat']
@@ -152,6 +154,13 @@ function widenedAnywhere(base, narrowed) {
 
   if (base.webFetch.whitelistEnabled === true && narrowed.webFetch.whitelistEnabled !== true) {
     return 'the URL whitelist was switched off'
+  }
+
+  // The engine may go to none; it may never come on, or change to another one.
+  const baseEngine = base.webFetch.searchEngine?.kind ?? 'none'
+  const narrowedEngine = narrowed.webFetch.searchEngine?.kind ?? 'none'
+  if (narrowedEngine !== 'none' && narrowedEngine !== baseEngine) {
+    return `web search engine went from ${baseEngine} to ${narrowedEngine}`
   }
 
   if (narrowed.webFetch.maxFetchTokens > base.webFetch.maxFetchTokens) {

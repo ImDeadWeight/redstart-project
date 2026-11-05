@@ -106,6 +106,9 @@ jobs:
       - name: "Security: web_fetch SSRF guard (literal + DNS resolution)"
         run: node scripts/test-web-fetch-ssrf.mjs
 
+      - name: "Security: open web search is off unless chosen (schema, call, role, prompt)"
+        run: node scripts/test-web-search-engine.mjs
+
       - name: "Security: external MCP endpoint validation"
         run: node scripts/test-external-mcp-url.mjs
 

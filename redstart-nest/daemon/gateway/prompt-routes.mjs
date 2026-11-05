@@ -46,6 +46,9 @@ export async function handlePromptRoute(req, res, urlPath, config, account) {
       webDomains: facts.webDomains,
       remoteToolServers: facts.remoteToolServers,
       credentialPlugins: facts.credentialPlugins,
+      // { kind, label, host } or null. Never the Brave key: webSearchEngineOf
+      // in system-prompt.mjs reduces the resolved engine to these three.
+      webSearchEngine: facts.webSearchEngine,
       localStores: facts.localStores,
       hasEgress: facts.hasEgress,
       // Redstart records no retention/training terms for third parties.

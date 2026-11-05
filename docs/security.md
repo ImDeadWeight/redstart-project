@@ -362,7 +362,17 @@ The DNS guard deliberately does **not** apply when the whitelist is on. An appro
 
 Because enforcement is at the MCP layer, a prompt-level jailbreak cannot override it — which is the point for something like a law firm scoping sources to one jurisdiction's databases.
 
-`web_search` never involves a third-party search engine: endpoints are hardcoded per source, and the model picks a source and a query, never a URL, so it cannot redirect a search elsewhere.
+`web_search`'s named sources (Wikipedia, arXiv, PubMed, MDN, Stack Overflow) involve no third-party search engine: endpoints are hardcoded per source, and the model picks a source and a query, never a URL, so it cannot redirect a search elsewhere.
+
+### The general web search engine (opt-in)
+
+A profile can also give `web_search` a `web` source backed by a general search engine: a self-hosted **SearXNG** at a URL the administrator gives, or the **Brave Search API** with a key held encrypted like any other secret. This reverses the stance above, so it is stated here in its own words:
+
+- **The query leaves the server.** With Brave, it goes to a hosted service outside your network. With SearXNG, it goes to an instance you run, which then forwards it to whichever public engines it is configured to use. Even a SearXNG on the same machine is an egress path, and Redstart reports it as one.
+- **Results are unreviewed text.** Each result carries a short snippet from a page nobody approved, delivered straight into the model's context. Snippets are stripped of markup and capped at 300 characters, only http(s) result URLs are kept, and the model is told to `web_fetch` a page before quoting it and to treat instructions inside results as page content. That reduces prompt injection through search results; it does not eliminate it.
+- **Off is the default, and off is enforced, not displayed.** With no engine chosen (or one chosen but not configured), `web` is removed from the tool's source enum, so the model never learns it exists. A call naming it anyway is refused by the MCP server and no request is made. A role can switch it off under a profile that has it on (`allowWebSearchEngine: false`; the built-in Restricted role does), and no role field can switch it on or pick a different engine. `scripts/test-web-search-engine.mjs` asserts all of this against a stub engine, counting requests.
+- **The whitelist still applies.** With sources restricted, engine results are filtered to the approved domains, which makes the engine a search across the whitelist. With it off, every result is returned, and `web_fetch`'s SSRF guard still governs whatever the model opens next.
+- **The SearXNG URL is a trust decision, like a whitelisted intranet source.** It gets no SSRF guard (it is usually on the LAN), but it must be http(s), and redirects from it are refused.
 
 ---
 
@@ -422,12 +432,13 @@ Inference is local and architecturally so — llama-server runs on this machine,
 | Path | When it is active |
 |---|---|
 | Approved web domains (`web_fetch`, `web_search`) | a source group or custom source is enabled for the profile |
+| A general web search engine (SearXNG or Brave Search), and through SearXNG the engines it forwards to | the profile selects one and it is configured — see [above](#the-general-web-search-engine-opt-in) |
 | Scholar (OpenAlex, arXiv, PubMed) | the Scholar capability is enabled |
 | An external MCP server on another host | one is registered and enabled, and its URL is not local |
 | A plugin holding a credential | it is enabled and configured with a key — see [Plugins](#plugins) |
 | GitHub (`api.github.com`, then the release download) — the update check | the Windows desktop app, unless automatic checks are off (Configuration → Network → Updates), and whenever an admin presses *Check now* |
 
-Nothing else transmits. There is no telemetry and no third-party search engine. The update check runs about four times a day. It sends GitHub the machine's IP address and a `User-Agent` naming the installed version (`Redstart-Nest/1.0.0-alpha.N`), and nothing about accounts, models or conversations. `GET /egress` does not list it, because that endpoint describes where *request data* can go and the update check carries none. The headless daemon (`bin/nestd.mjs`) and development runs never check.
+Nothing else transmits. There is no telemetry, and no third-party search engine unless a profile selects one. The update check runs about four times a day. It sends GitHub the machine's IP address and a `User-Agent` naming the installed version (`Redstart-Nest/1.0.0-alpha.N`), and nothing about accounts, models or conversations. `GET /egress` does not list it, because that endpoint describes where *request data* can go and the update check carries none. The headless daemon (`bin/nestd.mjs`) and development runs never check.
 
 `GET /egress` returns the live answer as data — inference locality, approved domains, remote tool servers, enabled local stores, and an explicit `externalTermsKnown: false` because Redstart records no retention or training terms for third parties. Reporting the absence is the point. The audit deliberately reports every *configured* path, whether or not the current request carries tools, because understating configured egress to an auditor is the same failure as overstating privacy to a user.
 
@@ -449,6 +460,7 @@ The accurate one-line summary of the privacy model is **local inference with adm
 | `test-connector-contract` | a header cannot forge a surface; revocation is immediate; hashes never appear in listings |
 | `test-network-binding` | LAN exposure is a socket boundary — real TCP connects, not config reads |
 | `test-web-fetch-ssrf` | both halves of the SSRF guard: literal hostnames, and public names resolving into private space |
+| `test-web-search-engine` | the general web search engine is off unless chosen and configured: stripped from the schema, refused on the call path with zero requests made, forced off by role and never on, and the prompt and `/egress` agree; the Brave key never reaches the model, the renderer or plaintext storage |
 | `test-external-mcp-url` | external endpoints — what is refused, what is merely warned about, and why the split |
 | `test-json-store` | state survives an interrupted write; a torn file never reads as empty state |
 | `test-logging` | `logEvent`'s blocklist and scalars-only defense-in-depth; `logAudit`'s closed allowlist and truncation; both against the bytes actually written to `redstart.log` |
@@ -490,6 +502,8 @@ The available real upgrade for it is HMAC-SHA256 under a DPAPI-protected pepper,
 ## Known gaps
 
 Stated plainly, because a security document that lists only strengths is not one.
+
+- **General web search results can carry prompt injection.** When a profile turns on a search engine, result snippets from unreviewed pages reach the model directly. They're capped, stripped and labelled as page content, but a model can still be steered by them, and a steered model can then call any tool it holds. The engine is off by default for this reason; a role can withhold it from accounts that hold write or destructive tools.
 
 - **HTTP only, including the control plane, and this is a settled decision rather than an omission.** Redstart Nest does not do TLS at any layer: it binds loopback by default and speaks plain HTTP, and a reverse proxy in front (Caddy, nginx, Traefik) is the documented way to expose it — the same answer Home Assistant, Jellyfin, Grafana and Proxmox give. Self-signed TLS inside Nest was tried and abandoned (Android WebView rejects it without manual cert trust), and building certificate handling here would be a worse version of what a proxy already does properly. The consequence to be clear about: on an unproxied LAN, passwords, session tokens, the setup code, and every secret on its way to be encrypted at rest all travel in the clear.
 - **With tool retrieval on, a client that does not use Nest's MCP server cannot ask for the tools it was not sent.** Retrieval selects the tools most relevant to the conversation and drops the rest. The assistant is always told when its list has been shortened, and clients connected to Nest's built-in MCP server (the chat UI, Twig) also get a `search_tools` tool for finding what is missing. An OpenAI-compatible application that sends its own tool definitions gets the shortened list and the notice, but has nothing to search with — it is told to say a capability is unavailable in that session rather than that the server cannot do it, which is the honest answer available to it. Retrieval is off by default; this applies once it is turned on.

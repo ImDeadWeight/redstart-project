@@ -176,6 +176,7 @@ export type CapabilityConfig = {
   git: { enabled: boolean; rootDir: string | null }
   file_system: { enabled: boolean; rootDir: string | null; allowWrite: boolean; allowDestructive: boolean }
   scholar: { enabled: boolean; venueFilter: string | null }
+  web_search: { searxngUrl: string | null; hasBraveApiKey: boolean }
 }
 
 export type ToolGroup = {
@@ -199,6 +200,8 @@ export type ExternalMcpServer = {
   hasApiKey: boolean
 }
 
+export type WebSearchEngine = 'none' | 'searxng' | 'brave'
+
 export type ProfileTools = {
   enabled: boolean
   activeGroupIds: string[]
@@ -212,6 +215,10 @@ export type ProfileTools = {
   // capabilities — an absent array entry would read as "off" and silently
   // disable web access for every existing profile.
   webAccessEnabled?: boolean
+  // General web search engine for web_search's "web" source. Absent = 'none':
+  // off is the default (chat-tooling plan D1). The engine's connection (SearXNG
+  // URL, Brave key) is global, in CapabilityConfig.web_search.
+  webSearchEngine?: WebSearchEngine
   // Server-enforced tool bans. Tool names listed here are removed from the
   // model's vocabulary for every client (gateway strips them from the
   // completions request), regardless of a user's local enable/disable toggle.
