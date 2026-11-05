@@ -45,6 +45,7 @@ import { stopServer } from '../electron/main/ipc/server.mjs'
 import { logEvent, whenLoggerClosed } from '../electron/main/logger.mjs'
 import { portConflictMessage } from '../electron/main/ports.mjs'
 import { createPeer, PROTOCOL_VERSION } from '../electron/main/shell-pipe.mjs'
+import { findUpdateRelease } from '../electron/main/update-feed.mjs'
 import { resolveDaemonPaths } from './nest-dir.mjs'
 
 // How long the shell has to say hello. It spawns us and writes hello
@@ -156,6 +157,23 @@ export async function runShellMode(argv) {
       },
     })
   }
+
+  // The Tauri shell's updater asks which release is its update. The answer
+  // comes from the same tested GitHub logic electron-updater used
+  // (update-feed.mjs). The shell verifies the download's signature itself,
+  // so this only chooses where to look. It decides nothing about trust.
+  peer.handle('update-find', async ({ currentVersion, manifest } = {}) => {
+    if (typeof currentVersion !== 'string' || typeof manifest !== 'string' || !/^[\w.-]+$/.test(manifest)) {
+      throw new Error('update-find needs currentVersion and a manifest file name')
+    }
+    const { release, error } = await findUpdateRelease({
+      currentVersion,
+      manifest,
+      userAgent: `Redstart-Nest/${currentVersion}`,
+    })
+    if (error) throw new Error(error)
+    return release ? { tag: release.tag, version: release.version, manifestUrl: release.feedUrl + manifest } : null
+  })
 
   peer.handle('stop-model', async () => {
     await stopServer({ serverState })

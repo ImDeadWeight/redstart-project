@@ -329,6 +329,11 @@ if (!skip) {
       assert(ready.adminPort === ADMIN_PORT, `ready.adminPort ${ready.adminPort}`)
       const model = await h.stopModel()
       assert(model !== undefined, 'stop-model got no answer')
+      // The Tauri updater's question. A manifest name that is not a plain
+      // file name never reaches a URL.
+      let refused = null
+      try { await h.peer.request('update-find', { currentVersion: '1.0.0', manifest: '../evil' }) } catch (e) { refused = e }
+      assert(refused && /manifest file name/.test(refused.message), `update-find accepted a path: ${refused?.message}`)
       const { childPids } = await h.stop()
       assert(childPids.includes(h.pid), `stop() did not report the daemon pid: ${childPids}`)
       assert(exitInfo && exitInfo.expected === true && exitInfo.code === 0, `exit ${JSON.stringify(exitInfo)}`)

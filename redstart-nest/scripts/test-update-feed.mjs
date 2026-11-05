@@ -92,6 +92,21 @@ await test('the newest qualifying release wins, whatever order the list is in', 
   assert(picked.version === '1.0.0-alpha.9', 'version is reported without decoration')
 })
 
+await test('🔍 the Tauri shell asks for its own manifest: a release with only nest.yml is not its update', () => {
+  // The bridge release carries both. A release from before T3 carries only
+  // nest.yml, which an installed Tauri shell cannot use.
+  const picked = pickUpdateRelease(
+    [release('1.0.0-alpha.9', { assets: ['nest.yml'] }), release('1.0.0-alpha.8', { assets: ['nest.yml', 'nest-latest.json'] })],
+    { currentVersion: '1.0.0-alpha.7', manifest: 'nest-latest.json' },
+  )
+  assert(picked?.tag === '1.0.0-alpha.8', `picked ${JSON.stringify(picked)}`)
+  const electron = pickUpdateRelease(
+    [release('1.0.0-alpha.9', { assets: ['nest.yml'] }), release('1.0.0-alpha.8', { assets: ['nest.yml', 'nest-latest.json'] })],
+    { currentVersion: '1.0.0-alpha.7' },
+  )
+  assert(electron?.tag === '1.0.0-alpha.9', 'the default is still nest.yml')
+})
+
 await test('🔍 a release with no Nest manifest is skipped, not chosen with nothing to read', () => {
   // The release that predates the updater, and one carrying only Twig's manifest.
   const picked = pickUpdateRelease(

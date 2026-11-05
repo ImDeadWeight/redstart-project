@@ -87,9 +87,10 @@ export function compareVersions(a, b) {
  * A release qualifies when:
  *   - it is not a draft;
  *   - its tag is a version parseVersion() understands;
- *   - it carries this app's manifest (`${channel}.yml`). Releases cut before
- *     the updater existed have none, and neither does one that is still
- *     uploading;
+ *   - it carries this app's manifest: `${channel}.yml` for electron-updater,
+ *     or the name the caller passes (the Tauri shell asks for
+ *     `nest-latest.json`). Releases cut before the updater existed have
+ *     none, and neither does one that is still uploading;
  *   - it is newer than the running version. A stable install never moves to
  *     a prerelease. Every release so far is an alpha, so that rule only
  *     matters once one is not.
@@ -99,13 +100,12 @@ export function compareVersions(a, b) {
  * flag would otherwise hide all of them.
  *
  * @param {Array<{ tag_name?: string, draft?: boolean, assets?: Array<{ name?: string }> }>} releases
- * @param {{ currentVersion: string, channel?: string }} opts
+ * @param {{ currentVersion: string, channel?: string, manifest?: string }} opts
  * @returns {{ tag: string, version: string } | null}
  */
-export function pickUpdateRelease(releases, { currentVersion, channel = UPDATE_CHANNEL }) {
+export function pickUpdateRelease(releases, { currentVersion, channel = UPDATE_CHANNEL, manifest = `${channel}.yml` }) {
   const current = parseVersion(currentVersion)
   if (!current || !Array.isArray(releases)) return null
-  const manifest = `${channel}.yml`
   let best = null
   for (const release of releases) {
     if (!release || release.draft) continue
@@ -141,12 +141,12 @@ export function releasesApiUrl(repo = UPDATE_REPO) {
  * Never throws: an unreachable network, a rate limit or a malformed response
  * all mean "no update this time", and the reason comes back for the log.
  *
- * @param {{ currentVersion: string, channel?: string, userAgent: string,
+ * @param {{ currentVersion: string, channel?: string, manifest?: string, userAgent: string,
  *           fetchImpl?: typeof fetch, timeoutMs?: number }} opts
  * @returns {Promise<{ release: { tag: string, version: string, feedUrl: string } | null, error?: string }>}
  */
 export async function findUpdateRelease({
-  currentVersion, channel = UPDATE_CHANNEL, userAgent, fetchImpl = fetch, timeoutMs = 15_000,
+  currentVersion, channel = UPDATE_CHANNEL, manifest = `${channel}.yml`, userAgent, fetchImpl = fetch, timeoutMs = 15_000,
 }) {
   try {
     const res = await fetchImpl(releasesApiUrl(), {
@@ -155,7 +155,7 @@ export async function findUpdateRelease({
       signal: AbortSignal.timeout(timeoutMs),
     })
     if (!res.ok) return { release: null, error: `GitHub answered ${res.status}` }
-    const picked = pickUpdateRelease(await res.json(), { currentVersion, channel })
+    const picked = pickUpdateRelease(await res.json(), { currentVersion, channel, manifest })
     return { release: picked ? { ...picked, feedUrl: feedUrlForTag(picked.tag) } : null }
   } catch (err) {
     return { release: null, error: err?.message ?? String(err) }
