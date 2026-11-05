@@ -618,7 +618,8 @@ async function main() {
     updateGatewayConfig(baseConfig)
   })
 
-  await test('🔒 retrieval that fails open discloses nothing — "enabled" is not "narrowed"', async () => {
+  // Same premise as above (no embedding server on the real port), same guard.
+  if (!embedPortBusy) await test('🔒 retrieval that fails open discloses nothing — "enabled" is not "narrowed"', async () => {
     // No embedding server, so the filter forwards the full list. The block is
     // gated on tools having actually gone, not on the setting, so a request
     // that kept everything must not be told it is looking at a subset.
