@@ -174,6 +174,19 @@ export async function isLikelyOurProcess(pid, expectedBinaryPath) {
       return false
     }
   }
+  // Linux: the kernel's own record of the executable. `ps -o comm=` is the
+  // main thread's NAME, which a process can change and is truncated to 15
+  // characters. Under Node 26 on Linux it stopped reading "node" for Node
+  // itself. A process owned by someone else can't be read (EACCES), and is not
+  // ours.
+  if (process.platform === 'linux') {
+    try {
+      const exe = await fs.promises.readlink(`/proc/${pid}/exe`)
+      return path.basename(exe.replace(/ \(deleted\)$/, '')).toLowerCase() === expectedName
+    } catch {
+      return false
+    }
+  }
   try {
     const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'comm='])
     const name = stdout.trim().toLowerCase()
