@@ -270,6 +270,12 @@ function buildToolPolicy(config, hasTools, toolNames) {
     if (has('run_javascript')) parts.push('Prefer run_python over run_javascript: it has pandas and matplotlib, and its files persist with the conversation.')
   }
 
+  // search_documents (Phase 5a): citations are the product claim, and what
+  // the schema cannot say is that an uncited answer from a passage is wrong.
+  if (has('search_documents')) {
+    parts.push('When an answer comes from search_documents, cite each claim with its passage number and file name, and if no passage covers the question, say so instead of answering from general knowledge.')
+  }
+
   // The destructive class exists in tools-definitions.mjs and governs the
   // server's own gate; until now nothing carried it to the model.
   const destructive = names.filter(name => classifyTool(name) === 'destructive')

@@ -86,6 +86,7 @@ Two consequences worth being explicit about:
     "scholar":     { "enabled": false, "venueFilter": null },
     "python":      { "enabled": false, "maxKernels": 2, "timeoutS": 30, "workspaceCapMb": 200, "accountCapMb": 2048 },
     "memory":      { "enabled": false, "promptBudgetChars": 1200 },
+    "document_search": { "enabled": false },
     "web_search":  { "searxngUrl": null, "braveApiKeyEnc": null }
   }
 }

@@ -116,6 +116,9 @@ const DEFAULT_CAPABILITIES = {
   // Memory (chat-tooling Phase 3). Nothing to configure but the size of the
   // prompt block: ≈300 tokens of the most recent memories (plan §3).
   memory:      { enabled: false, promptBudgetChars: 1200 },
+  // Document search (chat-tooling Phase 5a). Its index is Nest's own state
+  // (<config>/document-index.sqlite); it searches the Documents root.
+  document_search: { enabled: false },
   // NOT a capability id: the global CONNECTION for Web Access's "web" search
   // source (chat-tooling Phase 4b). Which engine a profile uses is that
   // profile's tools.webSearchEngine; this only says where each engine is.

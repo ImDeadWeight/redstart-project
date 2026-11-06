@@ -96,6 +96,7 @@ function randomConfig() {
     scholar: cap(),
     python: cap(),
     memory: cap(),
+    documentSearch: cap(),
     fileSystem: {
       enabled: chance(0.6),
       rootDir: 'C:/root',
@@ -123,7 +124,7 @@ function randomPermissions() {
  * on any field roles can touch? Returns a reason string, or null when fine.
  */
 function widenedAnywhere(base, narrowed) {
-  const capKeys = ['postgres', 'documents', 'sqlite', 'vault', 'git', 'scholar', 'python', 'memory', 'fileSystem']
+  const capKeys = ['postgres', 'documents', 'sqlite', 'vault', 'git', 'scholar', 'python', 'memory', 'documentSearch', 'fileSystem']
   for (const key of capKeys) {
     if (!base[key]) continue
     if (narrowed[key].enabled === true && base[key].enabled !== true) {
@@ -257,7 +258,7 @@ await test('🔍 DENY_ALL permits nothing — the broken-invariant fallback', as
   const config = randomConfig()
   const out = narrowConfig(config, DENY_ALL)
   for (const id of capabilityIds()) {
-    const key = id === 'file_system' ? 'fileSystem' : id
+    const key = CAPABILITY_CONFIG_KEY[id] ?? id
     assert(out[key].enabled === false, `${id} survived DENY_ALL`)
   }
   assert(out.fileSystem.allowWrite === false, 'DENY_ALL left writes on')
@@ -279,7 +280,7 @@ await test('a user-tier account IS narrowed by its role', async () => {
   const config = randomConfig()
   const out = resolveEffectiveConfig({ id: 'u', tier: 'user' }, config, RESTRICTIVE)
   for (const id of capabilityIds()) {
-    const key = id === 'file_system' ? 'fileSystem' : id
+    const key = CAPABILITY_CONFIG_KEY[id] ?? id
     assert(out[key].enabled === false, `${id} survived a role that permits no capabilities`)
   }
 })

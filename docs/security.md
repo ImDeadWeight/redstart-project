@@ -21,6 +21,7 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 - [Destructive operations](#destructive-operations)
 - [Logging](#logging)
 - [Running model-written code (run_python)](#running-model-written-code-run_python)
+- [Document search](#document-search)
 - [Memory](#memory)
 - [Tool bans](#tool-bans)
 - [Whitelist & SSRF enforcement](#whitelist--ssrf-enforcement)
@@ -353,6 +354,12 @@ What runs instead is **Pyodide** (CPython compiled to WebAssembly) in a separate
 
 ---
 
+## Document search
+
+`search_documents` searches the text of **your own** documents: everything in your Documents folder, including conversation workspaces and files you attached. It can't reach another account's files. Its index is built from your folder only, every passage is stored under your account's scope, and a search reads only that scope. It also can't reach shared folders yet; those arrive with resource grants. The index (`<config>/document-index.sqlite`) holds extracted text and vectors for every account in one file, so the box's administrator can read it, as with the files themselves. Deleting a file removes it from the index on your next search, and files in the recycle bin or `.trash/` are never indexed. Nothing leaves the machine: extraction is on-device, and ranking uses the local embedding model or plain word matching.
+
+---
+
 ## Memory
 
 With the Memory capability on, the assistant can save durable facts a user tells it about themselves ("uses Postgres 16", "prefers British English") and see them in later chats. They're stored per account in `memories.json` (with login off, everyone shares one memory, as with files). The newest, about 300 tokens' worth, are added to every request and the rest can be searched.
@@ -545,6 +552,7 @@ Stated plainly, because a security document that lists only strengths is not one
 - **run_python's sandbox rests on Node's permission model and on Pyodide's internals staying as they are.** Python can reach Pyodide's own JavaScript API, including internals. One of those (its Node socket support) was a real escape under the old Electron Node, which had no network permission. The runtime now refuses it, and the sandbox suite proves that against a counting stub, but a Pyodide release could add a new route. That is why the runtime is hash-pinned and the suite must pass before any upgrade. The suite is part of CI (Linux) and has been run by hand on Windows. It has never run on macOS.
 - **run_python's memory and disk limits are coarse.** A run can use up to WebAssembly's 4 GB address space before its timeout kills it, and there's no smaller memory cap. Workspace caps are checked before and after each run, not on every write, so one run can overshoot the cap by whatever it writes within its timeout. The next run is then refused until files are removed.
 - **A remembered instruction can still steer the assistant.** Memories are framed as data and every save is visible with Undo, but a model can still act on one that reads like an instruction, and a save from an injected page is only *flagged*, not blocked. The web flag is time-based (15 minutes after a network tool call in that conversation), so it can mark an innocent save and can miss a plugin whose tools reach the network without being classed as network. Check **Settings → Memory** now and then, and withhold Memory from roles that hold write or destructive tools if that worries you.
+- **The document index keeps a deleted file's text until that account searches again.** The index catches up on access, not on delete, so a file removed in the file explorer is still in `document-index.sqlite` until its owner's next search (or a rebuild). The index also holds every account's extracted text in one file on disk.
 - **Attachments uploaded for run_python stay on the server until the conversation goes.** That's on delete, or the 30-day prune. Like every per-account store, the box's administrator can read them on disk.
 
 - **General web search results can carry prompt injection.** When a profile turns on a search engine, result snippets from unreviewed pages reach the model directly. They're capped, stripped and labelled as page content, but a model can still be steered by them, and a steered model can then call any tool it holds. The engine is off by default for this reason; a role can withhold it from accounts that hold write or destructive tools.

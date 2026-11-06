@@ -140,6 +140,12 @@ export const BUILTIN_CAPABILITIES = [
     description: 'Run model-written Python (numpy, pandas, matplotlib) in a sandbox with no network, against files in the conversation workspace. Needs Documents configured, and a one-time ~30 MB runtime download',
   },
   {
+    id: 'document_search',
+    name: 'Document search',
+    kind: 'capability',
+    description: 'Lets the assistant search the text of the documents each user owns (uploads, attachments, conversation workspaces, created documents) and cite the passages it used. Needs Documents configured; ranks by meaning when the embedding model runs, by words otherwise',
+  },
+  {
     id: 'memory',
     name: 'Memory',
     kind: 'capability',
@@ -191,6 +197,7 @@ export const BUILTIN_CAPABILITY_TOOL_NAMES = {
   scholar: ['scholar_search', 'scholar_get', 'scholar_save_pdf'],
   python: ['run_python'],
   memory: ['memory_save', 'memory_search', 'memory_forget'],
+  document_search: ['search_documents'],
 }
 
 /**
@@ -398,6 +405,9 @@ export const TOOL_CLASSES = {
   memory_save: 'write',
   memory_search: 'read',
   memory_forget: 'destructive',
+  // Document search — reads the caller's own Documents folder and Nest's own
+  // index of it; nothing leaves the machine.
+  search_documents: 'read',
 }
 
 // Classify a tool by its function name. Unknown names default to 'read' — see

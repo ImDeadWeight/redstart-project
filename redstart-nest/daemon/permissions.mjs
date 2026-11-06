@@ -95,6 +95,7 @@ export const CAPABILITY_CONFIG_KEY = {
   scholar: 'scholar',
   python: 'python',
   memory: 'memory',
+  document_search: 'documentSearch',
 }
 
 /**

@@ -57,6 +57,7 @@ function isCapabilityReady(cc: CapabilityConfig, id: string): boolean {
     case 'documents': return !!cc.documents.outputDir
     case 'scholar': return true   // no setup required
     case 'memory': return true   // nothing to configure
+    case 'document_search': return !!cc.documents.outputDir
     case 'python': return !!cc.documents.outputDir && cc.python.runtimeInstalled && cc.python.sandboxAvailable
     case 'sqlite':
     case 'vault':
@@ -545,6 +546,23 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
             onToggle={() => toggleTool('python')}
             onChanged={caps.loadCapabilities}
           />
+
+          {/* ---- Document search ---- */}
+          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-zinc-200">Document search</span>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`text-xs ${isActive('document_search') ? (capabilityConfig?.documents.outputDir ? 'text-green-400' : 'text-amber-400') : 'text-zinc-500'}`}>
+                  {isActive('document_search') ? (capabilityConfig?.documents.outputDir ? 'Enabled' : 'Enabled, not ready') : 'Disabled'}
+                </span>
+                <button onClick={() => toggleTool('document_search')} className={btnCls.chip}>
+                  {isActive('document_search') ? 'Disable' : 'Enable'}
+                </button>
+              </div>
+            </div>
+            {!capabilityConfig?.documents.outputDir && <p className="text-xs text-amber-400 mb-1.5">Choose a Documents folder first: this searches each user's files there.</p>}
+            <p className="text-xs text-zinc-600 mt-1.5">Gives the assistant search_documents: it finds the passages in a user's own files (uploads, chat attachments, conversation workspaces, created documents) that answer a question, and cites them. Private per account; nothing leaves the machine. The index is kept in Redstart's config folder and catches up on each search. Ranking uses the embedding model when it runs (it starts with tool retrieval) and word matching otherwise. Shared folders come with resource grants.</p>
+          </div>
 
           {/* ---- Memory ---- */}
           <div className="bg-zinc-800/40 rounded px-3 py-2.5">

@@ -95,6 +95,7 @@ export function buildGatewayConfig(llamaConfig) {
       scholar: { enabled: false },
       python: { enabled: false },
       memory: { enabled: false },
+      documentSearch: { enabled: false },
       ...Object.fromEntries(listPlugins().map((p) => [p.id, { enabled: false, isPlugin: true }])),
     }
   }
@@ -213,6 +214,12 @@ export function buildGatewayConfig(llamaConfig) {
       timeoutS: capabilities.python.timeoutS,
       workspaceCapBytes: capabilities.python.workspaceCapMb * 1024 * 1024,
       accountCapBytes: capabilities.python.accountCapMb * 1024 * 1024,
+    },
+    // camelCase like fileSystem: permissions.mjs CAPABILITY_CONFIG_KEY maps
+    // document_search to it.
+    documentSearch: {
+      enabled: toolIdSet.has('document_search') && !!capabilities.documents.outputDir,
+      documentsRoot: capabilities.documents.outputDir,
     },
     memory: {
       enabled: toolIdSet.has('memory'),
