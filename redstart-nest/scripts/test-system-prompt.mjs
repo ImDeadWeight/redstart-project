@@ -869,7 +869,7 @@ await test('auth-off (account null) still composes, with date and no identity', 
 
 console.log('\n-- the session date is the user\'s local date --')
 
-const { validateTimeZone, sessionDateLine } = await import('../electron/main/session-time.mjs')
+const { validateTimeZone, sessionDateLine } = await import('../daemon/session-time.mjs')
 
 await test('🔍 01:30 UTC is still the previous evening in Chicago', async () => {
   const late = new Date('2026-11-06T01:30:00Z') // 19:30 CST on Thursday 5th

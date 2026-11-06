@@ -30,11 +30,11 @@ process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 register('./auth-test-loader.mjs', import.meta.url)
 await import('./electron-stub.mjs')
 
-const engines = await import('../electron/main/web-search-engines.mjs')
-const webTool = await import('../electron/main/web-fetch-tool.mjs')
-const { narrowConfig, DENY_ALL } = await import('../electron/main/permissions.mjs')
-const { composePrompt, deriveEgressFacts } = await import('../electron/main/system-prompt.mjs')
-const { BUILTIN_ROLES } = await import('../electron/main/roles-storage.mjs')
+const engines = await import('../daemon/web-search-engines.mjs')
+const webTool = await import('../daemon/web-fetch-tool.mjs')
+const { narrowConfig, DENY_ALL } = await import('../daemon/permissions.mjs')
+const { composePrompt, deriveEgressFacts } = await import('../daemon/system-prompt.mjs')
+const { BUILTIN_ROLES } = await import('../daemon/roles-storage.mjs')
 
 const results = []
 async function test(name, fn) {
@@ -303,8 +303,8 @@ await test('🔍 the Brave key never appears in the prompt or the egress facts',
 
 console.log('\n-- buildGatewayConfig resolves the engine --')
 
-const { buildGatewayConfig } = await import('../electron/main/gateway-config.mjs')
-const { setCapabilityConfig } = await import('../electron/main/tools-storage.mjs')
+const { buildGatewayConfig } = await import('../daemon/gateway-config.mjs')
+const { setCapabilityConfig } = await import('../daemon/tools-storage.mjs')
 
 await test('🔍 absent choice is off even with a connection configured; a chosen, configured engine is on', async () => {
   setCapabilityConfig('web_search', { searxngUrl: SEARXNG_URL })
@@ -318,7 +318,7 @@ await test('🔍 absent choice is off even with a connection configured; a chose
 
 console.log('\n-- admin config handler --')
 
-const { setWebSearchConfig, getCapabilitiesConfig } = await import('../electron/main/ipc/capabilities.mjs')
+const { setWebSearchConfig, getCapabilitiesConfig } = await import('../daemon/ipc/capabilities.mjs')
 const noRefresh = { refreshLiveToolsConfig: () => {} }
 
 await test('🔍 the SearXNG URL must be http(s); the Brave key is stored encrypted and never returned', async () => {
@@ -335,7 +335,7 @@ await test('🔍 the SearXNG URL must be http(s); the Brave key is stored encryp
   assert(brave.kind === 'brave' && brave.apiKey === BRAVE_KEY, 'stored key did not decrypt into the resolved engine')
   // The re-key driver finds secrets by the `…Enc` naming convention. A key it
   // cannot see is a key a provider change silently destroys.
-  const { findSecrets } = await import('../electron/main/secrets-migration.mjs')
+  const { findSecrets } = await import('../daemon/secrets-migration.mjs')
   const found = JSON.stringify(findSecrets(tmpDir))
   assert(found.includes('braveApiKeyEnc'), `the re-key walk does not see the Brave key: ${found.slice(0, 200)}`)
   assert(setWebSearchConfig({ clearBraveApiKey: true }, noRefresh).ok && getCapabilitiesConfig().web_search.hasBraveApiKey === false, 'key not cleared')
