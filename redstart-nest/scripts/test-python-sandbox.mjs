@@ -269,7 +269,12 @@ await test('run_python writes a figure and a CSV into the conversation workspace
   assert(!res.isError, text)
   assert(/rows 3/.test(text) && /Result: (np\.int64\()?14/.test(text), text)
   assert(/Files changed: .*fig-1\.png.*out\.csv/.test(text), text)
-  assert(res.content.some((c) => c.type === 'image' && c.mimeType === 'image/png'), 'no image content')
+  // Phase 2: files come back as resource links into the workspace, never as bytes.
+  assert(!res.content.some((c) => c.type === 'image'), 'a figure came back as base64 image content')
+  const links = res.content.filter((c) => c.type === 'resource_link')
+  const fig = links.find((l) => l.mimeType === 'image/png')
+  assert(fig && fig.uri === '/files/download?path=' + encodeURIComponent('chats/conv-abc/fig-1.png') && fig.size > 0, JSON.stringify(links))
+  assert(links.some((l) => l.mimeType === 'text/csv' && l.name === 'out.csv'), JSON.stringify(links))
   const ws = workspaceDir(docsRoot, account, 'conv-abc')
   assert(fs.existsSync(path.join(ws, 'out.csv')) && fs.existsSync(path.join(ws, 'fig-1.png')), 'files not in the workspace')
   assert(ws.includes(path.join('user_files', 'pat-')) && ws.endsWith(path.join('chats', 'conv-abc')), ws)

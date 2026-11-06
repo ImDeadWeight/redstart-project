@@ -18,19 +18,18 @@
 // capability id `python`.
 // =============================================================================
 
-import * as fs from 'fs'
-import * as path from 'path'
 import { KernelPool, DEFAULT_MAX_KERNELS } from './python-kernel.mjs'
 import { runtimeReady, resolvePythonNode, PYTHON_VERSION, TOP_LEVEL_PACKAGES } from './python-runtime.mjs'
 import { workspaceDir, workspaceRelative, checkCaps, changedFiles } from './conversation-workspace.mjs'
 import { resolveUserScope } from './user-scope.mjs'
 import { logEvent } from './logger.mjs'
+import { fileLink } from './tool-result-links.mjs'
 
 export const TOOL_NAME = 'run_python'
 export const OUTPUT_CAP = 8192   // same as run_javascript's
 export const DEFAULT_TIMEOUT_S = 30
 export const MAX_TIMEOUT_S = 120
-const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024
+const MAX_LINKS = 20
 
 let pool = new KernelPool()
 const keysThatRan = new Set()
@@ -142,15 +141,12 @@ export async function callTool(name, args, cfg, ctx) {
   const wsRel = workspaceRelative(conversationId)
   const text = formatResult({ ...outcome, ranBefore, files, wsRel, capWarning: after.ok ? null : `Warning: ${after.reason}` })
 
+  // Every changed file, figures included, as a resource link (Phase 2): the
+  // chat UI draws images inline, CSVs as a table and the rest as a download,
+  // and the model gets one line per file. Never the bytes, so a chart no
+  // longer lands in conversations.json as base64.
   const content = [{ type: 'text', text }]
-  for (const fig of outcome.reply?.figures ?? []) {
-    try {
-      const full = path.join(ws, fig)
-      const bytes = fs.statSync(full).size
-      if (bytes > MAX_INLINE_IMAGE_BYTES) continue
-      content.push({ type: 'image', mimeType: 'image/png', data: fs.readFileSync(full).toString('base64') })
-    } catch { /* the figure was removed by the code itself */ }
-  }
+  for (const f of files.slice(0, MAX_LINKS)) content.push(fileLink(`${wsRel}/${f.path}`, { bytes: f.bytes }))
 
   logEvent('python', 'run', {
     durationMs: Date.now() - startedAt,

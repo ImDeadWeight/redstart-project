@@ -30,6 +30,7 @@ import mammoth from 'mammoth'
 import ExcelJS from 'exceljs'
 import { resolveWithinRoot } from './path-scope.mjs'
 import { resolveUserRoot } from './user-scope.mjs'
+import { fileLink } from './tool-result-links.mjs'
 
 const FORMATS = [
   'markdown', 'docx', 'pdf',
@@ -658,7 +659,11 @@ export async function callTool(name, args, cfg, ctx) {
           `with path "${relativePath}" — the File System tools (read_text_file, list_directory) ` +
           `use a different root and cannot see documents.\n` +
           `Document created: ${outputPath}`,
-      }],
+      },
+      // Phase 2: the same file as an MCP resource link, which the chat UI
+      // draws as a download chip. The [FILE:] line above stays for clients
+      // that predate links; the UI de-duplicates the two by path.
+      fileLink(relativePath, { bytes: fs.statSync(outputPath).size })],
     }
   } catch (err) {
     return { isError: true, content: [{ type: 'text', text: `Failed to create document: ${err.message}` }] }

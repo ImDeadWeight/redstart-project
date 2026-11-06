@@ -61,6 +61,7 @@ import {
 	createDiagnosticFetch
 } from './mcp/mcp-diagnostics';
 import { createTransport } from './mcp/mcp-transport';
+import { resourceLinkText } from '$lib/utils/resource-links';
 
 interface ToolResultContentItem {
 	type: string;
@@ -68,6 +69,10 @@ interface ToolResultContentItem {
 	data?: string;
 	mimeType?: string;
 	resource?: { text?: string; blob?: string; uri?: string };
+	// resource_link (Phase 2)
+	uri?: string;
+	name?: string;
+	size?: number;
 }
 
 interface ToolCallResult {
@@ -546,6 +551,12 @@ export class MCPService {
 
 		if (content.type === MCPContentType.IMAGE && content.data) {
 			return createBase64DataUrl(content.mimeType ?? DEFAULT_IMAGE_MIME_TYPE, content.data);
+		}
+
+		// A file the tool wrote, by reference: one line for the model and the
+		// renderer both (utils/resource-links.ts). Never the bytes.
+		if (content.type === MCPContentType.RESOURCE_LINK) {
+			return resourceLinkText(content);
 		}
 
 		if (content.type === MCPContentType.RESOURCE && content.resource) {

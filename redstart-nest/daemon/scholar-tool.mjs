@@ -29,6 +29,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { resolveWithinRoot } from './path-scope.mjs'
 import { resolveUserRoot } from './user-scope.mjs'
+import { fileLink } from './tool-result-links.mjs'
 
 const TOOL_NAMES = ['scholar_search', 'scholar_get', 'scholar_save_pdf']
 const USER_AGENT = 'Redstart/1.0 (local AI assistant)'
@@ -354,7 +355,12 @@ export async function callTool(name, args, cfg, ctx) {
     }
     const saveDir = resolveUserRoot(scholarCfg.saveDir, ctx?.account, { create: true })
     const saved = await savePdf(saveDir, parsed, filter)
-    return { content: [{ type: 'text', text: `Saved: ${saved.filename} (${(saved.bytes / 1024).toFixed(0)} KB) in the documents folder. Use read_document with path "${saved.filename}" to read it.` }] }
+    // The link is what the chat UI turns into a download chip (Phase 2); the
+    // text stays for the model and for clients that ignore links.
+    return { content: [
+      { type: 'text', text: `Saved: ${saved.filename} (${(saved.bytes / 1024).toFixed(0)} KB) in the documents folder. Use read_document with path "${saved.filename}" to read it.` },
+      fileLink(saved.filename, { bytes: saved.bytes, mimeType: 'application/pdf' }),
+    ] }
   } catch (err) {
     return { isError: true, content: [{ type: 'text', text: `Scholar error: ${err.message}` }] }
   }

@@ -127,6 +127,9 @@ jobs:
       - name: "Security: conversation workspaces (layout, ownership, caps, trash)"
         run: node scripts/test-conversation-workspace.mjs
 
+      - name: "Output: tool results carry files as resource links, not bytes"
+        run: node scripts/test-tool-result-links.mjs
+
       - name: "Security: external MCP endpoint validation"
         run: node scripts/test-external-mcp-url.mjs
 
