@@ -102,7 +102,7 @@ Delete `%APPDATA%\redstart-twig-windows\twig-fs-config.json` first, so this is a
 ### 4b. Fallback path
 
 Hard to trigger on a normal local disk — the recycle bin usually works. If you can grant a folder on
-a network share or a removable drive where `shell.trashItem` fails:
+a network share or a removable drive where the recycle bin refuses the path:
 
 - [ ] Delete lands in a `.trash/<timestamp>/` folder inside the granted root, preserving the
       original relative path, and the reply says where to find it.
