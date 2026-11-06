@@ -47,6 +47,16 @@ async function test(name, fn) {
     console.log(`FAIL  - ${name}\n        ${err.message}`)
   }
 }
+
+// Every http(s) URL in a block of text, parsed. Assertions compare parsed
+// hosts and hrefs, never substrings: "contains en.wikipedia.org" is also true
+// of en.wikipedia.org.evil.example.
+function urlsIn(text) {
+  return [...String(text).matchAll(/https?:\/\/[^\s)\]>"']+/g)]
+    .map((m) => { try { return new URL(m[0]) } catch { return null } })
+    .filter(Boolean)
+}
+const hostOf = (u) => { try { return new URL(u).hostname } catch { return null } }
 function assert(cond, message) { if (!cond) throw new Error(message) }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +155,12 @@ await test('Brave request: fixed endpoint, key in the header only, count clamped
 
 await test('🔍 parsing: non-http URLs dropped, tags stripped, snippets capped', async () => {
   const parsed = engines.parseResults(SEARXNG, { results: STUB_RESULTS })
-  assert(!parsed.some(r => r.url.startsWith('javascript:')), 'a javascript: URL survived')
+  assert(parsed.every(r => ['http:', 'https:'].includes(new URL(r.url).protocol)), 'a non-http(s) URL survived')
+  // The two ways a strip-then-decode, single-pass cleaner hands back a tag.
+  for (const hostile of ['&lt;script&gt;alert(1)&lt;/script&gt;', '<scr<b>ipt>alert(1)</scr</b>ipt>', '<<b>img src=x onerror=alert(1)>']) {
+    const out = engines.cleanSnippet(hostile)
+    assert(!/[<>]/.test(out), `markup survived cleanSnippet(${JSON.stringify(hostile)}): ${JSON.stringify(out)}`)
+  }
   assert(parsed[0].title === 'Wiki page' && parsed[0].snippet === 'A small bird & more', `tags/entities not cleaned: ${JSON.stringify(parsed[0])}`)
   assert(parsed[1].snippet.length <= engines.SNIPPET_MAX_CHARS, `snippet not capped: ${parsed[1].snippet.length}`)
   return `${parsed.length} kept of ${STUB_RESULTS.length}`
@@ -198,7 +213,7 @@ await test('engine on: the query reaches the stub and results come back with URL
   const r = await callWeb(cfg({ engine: SEARXNG }))
   assert(!r.isError, textOf(r))
   assert(stubHits === hits + 1, 'stub not called exactly once')
-  assert(textOf(r).includes('https://en.wikipedia.org/wiki/Redstart'), 'result URL missing')
+  assert(urlsIn(textOf(r)).some((u) => u.href === 'https://en.wikipedia.org/wiki/Redstart'), 'result URL missing')
   assert(/Use web_fetch on a URL to read the page before quoting it/.test(textOf(r)), 'trailer guidance missing')
 })
 
@@ -211,7 +226,7 @@ await test('whitelist off: results capped at 8', async () => {
 await test('🔍 whitelist on: only approved domains survive', async () => {
   const r = await callWeb(cfg({ engine: SEARXNG, whitelistEnabled: true, allowed: ['https://en.wikipedia.org'] }))
   const text = textOf(r)
-  assert(text.includes('en.wikipedia.org'), 'the approved result was filtered out')
+  assert(urlsIn(text).some((u) => u.hostname === 'en.wikipedia.org'), 'the approved result was filtered out')
   assert(!/blog\.example\.net|developer\.mozilla\.org|filler/.test(text), 'a non-approved domain survived the whitelist')
   return 'a search across the whitelist'
 })
@@ -227,7 +242,7 @@ await test('SearXNG without JSON enabled gets an error that says how to fix it',
 await test('🔍 Brave: key goes in the header, never into the result text', async () => {
   const before = outbound.length
   const r = await callWeb(cfg({ engine: BRAVE }))
-  const call = outbound.slice(before).find(o => o.url.includes('api.search.brave.com'))
+  const call = outbound.slice(before).find(o => hostOf(o.url) === 'api.search.brave.com')
   assert(call && call.headers['X-Subscription-Token'] === BRAVE_KEY, 'Brave not called with the key')
   assert(!textOf(r).includes(BRAVE_KEY), 'the API key reached the model')
   assert(textOf(r).includes('bold text'), 'Brave snippet not cleaned')
@@ -294,7 +309,9 @@ await test('🔍 the Brave key never appears in the prompt or the egress facts',
   const { prompt } = composePrompt({ config, hasTools: true, toolNames: ['web_fetch', 'web_search'], now: NOW })
   assert(!prompt.includes(BRAVE_KEY), 'key in the prompt')
   assert(!JSON.stringify(deriveEgressFacts(config, [], true)).includes(BRAVE_KEY), 'key in /egress facts')
-  assert(prompt.includes('api.search.brave.com'), 'Brave host not disclosed')
+  // The prompt names the host in parentheses (system-prompt.mjs); matched as
+  // that exact token, not as a substring of whatever host might contain it.
+  assert(/\(api\.search\.brave\.com\)/.test(prompt), 'Brave host not disclosed')
 })
 
 // ---------------------------------------------------------------------------

@@ -102,14 +102,21 @@ export function buildRequest(engine, query, count) {
   throw new Error('No web search engine is configured.')
 }
 
-// Tags out, entities decoded once (&amp; last, as in web-fetch-tool's
-// decodeHtml), whitespace collapsed, length capped.
+// Entities decoded ONCE (&amp; last, as in web-fetch-tool's decodeHtml), THEN
+// tags stripped until none are left, then any stray angle bracket dropped.
+// The order matters: stripping first and decoding after turned
+// "&lt;script&gt;" back into a literal <script>, and a single strip pass
+// leaves "<scr<b>ipt>" as "<script>". A snippet is plain text, so a lone
+// "<" or ">" costs nothing to lose.
 export function cleanSnippet(text) {
-  const plain = String(text ?? '')
-    .replace(/<[^>]*>/g, '')
+  let plain = String(text ?? '')
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
-    .replace(/\s+/g, ' ')
-    .trim()
+  let previous
+  do {
+    previous = plain
+    plain = plain.replace(/<[^<>]*>/g, '')
+  } while (plain !== previous)
+  plain = plain.replace(/[<>]/g, '').replace(/\s+/g, ' ').trim()
   return plain.length > SNIPPET_MAX_CHARS ? `${plain.slice(0, SNIPPET_MAX_CHARS - 1)}…` : plain
 }
 
