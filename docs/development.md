@@ -33,11 +33,16 @@ redstart-project/
 │   │   └── chat-ui/       # SvelteKit chat frontend (shared with all clients)
 │   │       └── android/   # Capacitor Android project (Redstart Twig for Android)
 │   └── shell/             # The desktop shell (Tauri, Rust): window, tray, updater, installer
-├── shared/                # Code shared between Nest and Twig main processes
-│   └── mcp-stdio-process.mjs   # stdio MCP child-process supervisor
+├── shared/                # Code shared between nestd and twigd
+│   ├── mcp-stdio-process.mjs   # stdio MCP child-process supervisor
+│   ├── shell-pipe.mjs     # the JSON-lines pipe between a Tauri shell and its Node half
+│   └── update-feed.mjs    # which GitHub release is an app's update
 └── redstart-twig/         # Redstart Twig client apps
-    └── windows/           # Redstart Twig Windows Electron app
-        ├── electron/fs/   # Twig's own local file tools (fs_*) — see below
+    └── windows/           # Redstart Twig desktop (Windows and macOS, despite the name)
+        ├── bin/twigd.mjs  # twigd: Twig's Node half, run by the shell
+        ├── daemon/        # what twigd does: the granted folder, local MCP, LAN scan
+        │   └── fs/        # Twig's own local file tools (fs_*) — see below
+        ├── shell/         # The Tauri shell (Rust): window, chat-ui origin, updater, installer
         └── SMOKE.md       # Manual checklist for what the suites cannot reach
 ```
 
@@ -47,7 +52,7 @@ redstart-project/
 
 **One daemon, two ways in.** `bin/nestd.mjs` starts the daemon either headless or under the desktop shell (`--shell-pipe`, see `bin/shell-mode.mjs`); what differs is what is injected. Paths come from `platform-paths.mjs` and crypto from `secrets.mjs`, both fail-closed seams. Under the shell, the paths and the OSCrypt key arrive in `hello`; headless, they come from a directory and a key file. The test suites still stub a module named `electron` for a few legacy imports in test helpers; nothing in `daemon/` imports it.
 
-**Twig owns its local file tools.** Twig's `fs_*` tools act on a folder on the *user's* machine and live in `redstart-twig/windows/electron/fs/`. They keep the `fs_*` prefix rather than adopting the upstream server's names, so the model — and an admin writing a tool ban — can tell Twig's local filesystem from Nest's server-side one. Only `path-scope.mjs` is duplicated between the apps; it is kept in sync by hand, and both copies say so.
+**Twig owns its local file tools.** Twig's `fs_*` tools act on a folder on the *user's* machine and live in `redstart-twig/windows/daemon/fs/`. They keep the `fs_*` prefix rather than adopting the upstream server's names, so the model — and an admin writing a tool ban — can tell Twig's local filesystem from Nest's server-side one. Only `path-scope.mjs` is duplicated between the apps; it is kept in sync by hand, and both copies say so.
 
 **Chat-ui state.** `chat.svelte.ts` is a thin facade over focused sub-stores in `lib/stores/chat/` (UI state, runtime state, message repo, send pipeline, message ops, helpers). Dependencies flow one way and the public API is unchanged.
 
@@ -269,11 +274,11 @@ cd redstart-twig/windows
 npm run build
 ```
 
-Output: `redstart-twig/windows/release/<version>/Redstart Twig Setup <version>.exe`
+Output: `redstart-twig/windows/shell/target/release/bundle/nsis/Redstart Twig_<version>_x64-setup.exe` (about 32 MB).
 
-The Windows build script builds the chat-ui first, then packages the Electron app (Twig is still Electron). Both Windows installers are NSIS-based and self-contained.
+Twig is a Tauri app built the way Nest is: `npm run build` builds the chat-ui, stages Nest's pinned Node 26 (one pin for both apps), lists the Rust crates' licences, stages `shell/bundle/resources` (`scripts/stage-shell-bundle.mjs`), and runs `tauri build`, which needs the updater signing key in `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`). Despite the directory name, the same project builds Twig for macOS (Apple Silicon only).
 
-Despite the directory name, the same project builds Twig for macOS: `npm run build -- --mac` produces an `arm64` and an `x64` `.dmg`.
+`npm run dev` runs the shell from the checkout (`cargo run`): twigd on `REDSTART_NODE` or Nest's staged `deps/node`, and the chat-ui from `redstart-nest/src/chat-ui/dist` (build it first). `TWIG_CONFIG_DIR` points a dev run at a throwaway state folder.
 
 ### Releases
 
@@ -287,8 +292,8 @@ Things worth knowing:
 
 - **A failed build leaves a tag without a release.** If the failure was transient (a download, a runner), use **Re-run failed jobs** — it keeps the version already chosen; *Re-run all jobs* bumps again and skips a number. If it needs a code change, re-running rebuilds the same broken tag: merge the fix instead, let that cut the next version, and delete the orphaned tag (`git push origin :refs/tags/<version>`).
 - **Leaving alpha is a manual step.** The bump only understands `X.Y.Z-alpha.N`; anything else stops the workflow with an error, so set the next version by hand in a PR when it is time for a beta or a 1.0.
-- **Nothing is signed with a real identity.** Windows installers are unsigned, as before. macOS apps are ad-hoc signed: Nest by `stage-shell-bundle.mjs` (every Mach-O) plus Tauri's `signingIdentity: "-"`, Twig by [`scripts/mac-adhoc-sign.cjs`](../redstart-nest/scripts/mac-adhoc-sign.cjs). That is enough that Apple Silicon does not call them "damaged", but not enough to pass Gatekeeper without the user's *Open Anyway*.
-- **Nest's updates ARE signed**, with the updater key (repo secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the public key is in `shell/tauri.conf.json`). Each build job writes a manifest fragment, and the release job merges them into `nest-latest.json`. The Windows job also writes `nest.yml`, which is how Electron-era installs find the bridge installer. Lose the key and no install can be updated again: keep a backup off the machine.
+- **Nothing is signed with a real identity.** Windows installers are unsigned, as before. macOS apps are ad-hoc signed: each by its `stage-shell-bundle.mjs` (every Mach-O) plus Tauri's `signingIdentity: "-"`. That is enough that Apple Silicon does not call them "damaged", but not enough to pass Gatekeeper without the user's *Open Anyway*.
+- **Both apps' updates ARE signed**, with one updater key (repo secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the public key is in each `shell/tauri.conf.json`, and `test-packaging.mjs` checks they match). Each build job writes a manifest fragment, and the release job merges them into `nest-latest.json` and `twig-latest.json`. The Windows job also writes `nest.yml`, which is how Electron-era installs find the bridge installer. Lose the key and no install can be updated again: keep a backup off the machine.
 - **Moving the TurboQuant+ pin** means changing `TQP_TAG`, both asset names and both SHA-256 values at the top of the workflow, then re-reading the CUDA DLL entries in [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) — a new CUDA major renames them. The Windows job's [`check-dll-closure.mjs`](../redstart-nest/scripts/check-dll-closure.mjs) step fails the build if the new set imports a DLL that was not staged.
 
 ### Redstart Twig Android

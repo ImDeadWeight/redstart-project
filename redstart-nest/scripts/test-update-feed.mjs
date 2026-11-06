@@ -24,7 +24,7 @@ import {
   findUpdateRelease,
   parseVersion,
   pickUpdateRelease,
-} from '../daemon/update-feed.mjs'
+} from '../../shared/update-feed.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const results = []

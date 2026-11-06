@@ -28,8 +28,8 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import * as fsTool from '../electron/fs/fs-tool.mjs'
-import { resetTrashImpl, setTrashImpl } from '../electron/fs/trash.mjs'
+import * as fsTool from '../daemon/fs/fs-tool.mjs'
+import { resetTrashImpl, setTrashImpl } from '../daemon/fs/trash.mjs'
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors redstart-nest/scripts/test-path-scope.mjs)

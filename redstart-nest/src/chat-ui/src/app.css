@@ -125,6 +125,11 @@
 		   that gap regardless of which element's box the browser considers
 		   responsible for a given sliver of the viewport. */
 		background-color: var(--background);
+		/* The app is dark-only. Telling the engine so makes everything it
+		   draws itself dark too: any scrollbar not covered by the rules below
+		   (an iframe, a native <select> list, a textarea's resize grip), form
+		   controls, and the canvas. Without it those render light. */
+		color-scheme: dark;
 	}
 
 	body {
@@ -135,14 +140,20 @@
 		overflow: hidden; /* Added due to Mermaid rendering somehow causing the double scrollbar */
 	}
 
-	/* Global scrollbar styling - visible only on hover */
+	/* Global scrollbar styling - visible only on hover.
+	 *
+	 * The theme tokens are oklch() colours, so they are mixed with
+	 * color-mix(), never wrapped in hsl(): `hsl(var(--x) / 0.3)` with an
+	 * oklch() value is an invalid colour, the whole declaration is dropped,
+	 * and the engine draws its default (light) scrollbar. That was the white
+	 * scrollbar in Twig, and in Chromium browsers on the web UI. */
 	* {
 		scrollbar-width: thin;
 		scrollbar-color: transparent transparent;
 	}
 
 	*:hover {
-		scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+		scrollbar-color: color-mix(in oklch, var(--muted-foreground) 30%, transparent) transparent;
 	}
 
 	*::-webkit-scrollbar {
@@ -161,11 +172,15 @@
 	}
 
 	*:hover::-webkit-scrollbar-thumb {
-		background: hsl(var(--muted-foreground) / 0.3);
+		background: color-mix(in oklch, var(--muted-foreground) 30%, transparent);
 	}
 
 	*::-webkit-scrollbar-thumb:hover {
-		background: hsl(var(--muted-foreground) / 0.5);
+		background: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+	}
+
+	*::-webkit-scrollbar-corner {
+		background: transparent;
 	}
 
 	:where(code, pre, kbd, samp) {
@@ -188,19 +203,15 @@
 /* ---------------------------------------------------------------------------
  * Redstart Twig desktop window chrome
  * ---------------------------------------------------------------------------
- * The Twig Electron shell runs frameless (hidden title bar + window-controls
- * overlay); +layout adds `twig-desktop` on <html> and renders `.twig-titlebar`.
- * The strip is the draggable "title bar"; the offsets below push the app and
- * the fixed-position sidebar out from under it. The height must match
- * TITLEBAR_HEIGHT in redstart-twig/windows/daemon.mjs.
+ * The Twig Tauri shell runs frameless; +layout adds `twig-desktop` on <html>
+ * and renders TwigTitleBar (`.twig-titlebar`). The page draws the whole title
+ * bar, including the minimise / maximise / close buttons on Windows, so the
+ * height is this file's alone. (Electron Twig had Windows draw the buttons as
+ * an overlay whose height had to match this one; that coupling is gone.) The
+ * offsets below push the app and the fixed-position sidebar out from under it.
  */
 html.twig-desktop {
-	/* CSS pixels, and the Twig shell zooms its web content (UI_ZOOM in
-	 * main.mjs), so this is NOT the height the OS-drawn window-controls overlay
-	 * uses — that one is in device pixels and is derived over there as
-	 * TITLEBAR_CSS_HEIGHT * UI_ZOOM. Keep this value equal to
-	 * TITLEBAR_CSS_HEIGHT: if they disagree, the draggable strip stops lining up
-	 * with the minimise/maximise/close buttons it sits beside. */
+	/* CSS pixels. The shell zooms the page to 0.8 (window.rs UI_ZOOM). */
 	--twig-titlebar-height: 40px;
 }
 
@@ -210,9 +221,44 @@ html.twig-desktop .twig-titlebar {
 	left: 0;
 	right: 0;
 	height: var(--twig-titlebar-height);
-	z-index: 1000;
-	-webkit-app-region: drag;
+	/* Above everything, the full-window loading screen (z-9999) and dialogs
+	 * included: it is the only way to move or close the window. Electron's
+	 * OS-drawn buttons were above the page by construction. */
+	z-index: 10000;
+	display: flex;
+	justify-content: flex-end;
+	user-select: none;
 	background: var(--background);
+}
+
+/* macOS: the native traffic lights sit over the bar's left end. */
+html.twig-desktop .twig-titlebar-mac {
+	padding-left: 80px;
+}
+
+html.twig-desktop .twig-window-controls {
+	display: flex;
+	height: 100%;
+}
+
+html.twig-desktop .twig-window-controls button {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 46px;
+	height: 100%;
+	color: var(--muted-foreground);
+	transition: background-color 120ms, color 120ms;
+}
+
+html.twig-desktop .twig-window-controls button:hover {
+	background: var(--accent);
+	color: var(--foreground);
+}
+
+html.twig-desktop .twig-window-controls button.twig-close:hover {
+	background: #c42b1c;
+	color: #fff;
 }
 
 html.twig-desktop body {

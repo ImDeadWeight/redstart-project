@@ -1,19 +1,17 @@
 {
   "name": "redstart-twig-windows",
   "version": "1.0.0-alpha.9",
-  "description": "Lightweight Windows chat client for connecting to a Redstart Nest or llama.cpp-compatible server on your local network.",
+  "description": "Lightweight desktop chat client (Windows, macOS) for a Redstart Nest or llama.cpp-compatible server on your local network.",
   "author": "Patrick Carswell",
   "private": true,
   "type": "module",
-  "main": "electron/main.mjs",
   "scripts": {
     "build:chat": "npm --prefix ../../redstart-nest/src/chat-ui run build",
-    "build": "npm run build:chat && node ../../redstart-nest/scripts/make-icon.mjs && electron-builder",
-    "dev": "electron .",
-    "test": "node scripts/test-fs-tool.mjs && node scripts/test-color.mjs && node scripts/test-window-chrome.mjs"
+    "build": "npm run build:chat && node ../../redstart-nest/scripts/make-icon.mjs && node ../../redstart-nest/scripts/stage-node.mjs && node ../../redstart-nest/scripts/rust-licenses.mjs --shell shell --out licenses/rust-licenses.json && node scripts/stage-shell-bundle.mjs && node scripts/build-shell.mjs",
+    "dev": "cargo run --manifest-path shell/Cargo.toml",
+    "test": "node scripts/test-fs-tool.mjs && node scripts/test-twigd.mjs"
   },
   "devDependencies": {
-    "electron": "^33.4.11",
-    "electron-builder": "^24.13.3"
+    "@tauri-apps/cli": "2.12.4"
   }
 }

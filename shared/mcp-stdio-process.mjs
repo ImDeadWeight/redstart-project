@@ -289,6 +289,18 @@ export function createStdioProcessManager({ logDir, onMessage, onExit, shouldRes
     return Array.from(running.keys())
   }
 
+  /**
+   * The pids of every child still alive, including ones being stopped. Read it
+   * right after shutdown(): a desktop updater waits for exactly these before it
+   * replaces files a dying child may still hold open (Twig's install-on-quit).
+   */
+  function pids() {
+    return Array.from(running.values())
+      .map((entry) => entry.child)
+      .filter((child) => child.pid && child.exitCode === null && child.signalCode === null)
+      .map((child) => child.pid)
+  }
+
   /** Kill every child; call on quit so no orphans survive in Task Manager. */
   function shutdown() {
     quitting = true
@@ -297,5 +309,5 @@ export function createStdioProcessManager({ logDir, onMessage, onExit, shouldRes
     for (const id of Array.from(running.keys())) stop(id)
   }
 
-  return { start, stop, send, isRunning, listRunning, shutdown }
+  return { start, stop, send, isRunning, listRunning, pids, shutdown }
 }

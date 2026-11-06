@@ -42,7 +42,7 @@
 </script>
 
 <!-- bg-background, not a hardcoded zinc: this screen covers the whole window,
-     including Twig's drag strip at z-1000, so any shade that isn't --background
+     up to Twig's title bar (which sits above it), so any shade that isn't --background
      shows up as a lighter window that darkens the moment the chat appears. -->
 <div class="fixed inset-0 z-9999 flex items-center justify-center bg-background">
 	<div class="flex w-full max-w-xs flex-col items-center gap-6 px-6">

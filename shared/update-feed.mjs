@@ -1,9 +1,14 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest: which release, if any, is the update
+// Redstart Nest and Twig: which release, if any, is the update
 // =============================================================================
-// electron-updater ships a GitHub provider. It cannot be used here, for two
+// Shared by both apps' daemons (nestd's and twigd's `update-find`). Each Tauri
+// shell names its own manifest (nest-latest.json, twig-latest.json), which is
+// how one release carrying both apps is told apart. UPDATE_CHANNEL below is
+// Nest's Electron-era default and only matters for nest.yml.
+//
+// The history: electron-updater ships a GitHub provider. It cannot be used here, for two
 // reasons, both read from its source (electron-updater 6.8.9,
 // providers/GitHubProvider.js):
 //

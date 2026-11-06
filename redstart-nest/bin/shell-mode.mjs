@@ -44,8 +44,8 @@ import { readBootstrapToken } from '../daemon/bootstrap-token.mjs'
 import { stopServer } from '../daemon/ipc/server.mjs'
 import { logEvent, whenLoggerClosed } from '../daemon/logger.mjs'
 import { portConflictMessage } from '../daemon/ports.mjs'
-import { createPeer, PROTOCOL_VERSION } from '../daemon/shell-pipe.mjs'
-import { findUpdateRelease } from '../daemon/update-feed.mjs'
+import { createPeer, PROTOCOL_VERSION } from '../../shared/shell-pipe.mjs'
+import { findUpdateRelease } from '../../shared/update-feed.mjs'
 import { resolveDaemonPaths } from './nest-dir.mjs'
 
 // How long the shell has to say hello. It spawns us and writes hello

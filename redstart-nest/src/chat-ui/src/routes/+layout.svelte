@@ -31,7 +31,8 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
-	import { twigShellApi } from '$lib/utils/twig';
+	import { twigShellApi, twigWindowApi } from '$lib/utils/twig';
+	import TwigTitleBar from '$lib/components/app/misc/TwigTitleBar.svelte';
 	import { ROUTES } from '$lib/constants/routes';
 	import { RouterService } from '$lib/services/router.service';
 	import { Toaster } from 'svelte-sonner';
@@ -378,28 +379,13 @@
 		}
 	});
 
-	// Twig desktop only: colour the window-controls overlay (min/max/close) to
-	// match the app. No-op elsewhere. The theme name is a constant now that the
-	// app is dark-only, but the background is still read from the DOM (below).
-	$effect(() => {
-		const shell = twigShellApi();
-		if (!shell) return;
-		// Send the background colour the app is ACTUALLY painting, not just the
-		// theme name. The Electron shell colours the window-controls overlay (the
-		// strip behind minimise/maximise/close), and it used to map theme -> a
-		// hardcoded hex. Those two values drifted: the app renders
-		// oklch(0.12 0 0) = #060606 while the overlay was #09090b, leaving a
-		// visibly lighter band behind the buttons. Reading the computed value
-		// means the overlay follows the theme by construction instead of by two
-		// constants happening to agree.
-		const background = getComputedStyle(document.body).backgroundColor;
-		void shell.setTheme('dark', background);
-	});
-
-	// Twig desktop runs frameless (hidden title bar + window-controls overlay).
-	// The `twig-desktop` class activates the drag strip and the layout offsets
-	// that make room for it (see app.css).
+	// Twig desktop runs frameless: the page draws the title bar (TwigTitleBar,
+	// with the window buttons on Windows). The `twig-desktop` class activates
+	// it and the layout offsets that make room for it (see app.css). Electron
+	// Twig also needed the overlay's colour reported here (setTheme); the Tauri
+	// shell has no overlay, so nothing is reported.
 	const inTwigShell = twigShellApi() !== null;
+	const twigWindow = twigWindowApi();
 	$effect(() => {
 		if (inTwigShell) document.documentElement.classList.add('twig-desktop');
 	});
@@ -539,10 +525,9 @@
 </svelte:head>
 
 {#if inTwigShell}
-	<!-- Frameless-window drag strip. Spans the top edge under the OS-drawn
-	     min/max/close overlay buttons; -webkit-app-region: drag makes it the
-	     window's title bar (drag to move, double-click to maximize). -->
-	<div class="twig-titlebar" aria-hidden="true"></div>
+	<!-- The frameless window's title bar: drag to move, double-click to
+	     maximise, and (Windows) the window buttons. -->
+	<TwigTitleBar win={twigWindow} />
 {/if}
 
 <!-- PWA update prompt -->

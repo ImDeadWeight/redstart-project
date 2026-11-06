@@ -140,10 +140,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { label: 'Nest — Windows', app: nest, os: windows-latest, target: --win, dir: redstart-nest }
-          - { label: 'Nest — macOS',   app: nest, os: macos-15,       target: --mac, dir: redstart-nest }
-          - { label: 'Twig — Windows', app: twig, os: windows-latest, target: --win, dir: redstart-twig/windows }
-          - { label: 'Twig — macOS',   app: twig, os: macos-15,       target: --mac, dir: redstart-twig/windows }
+          - { label: 'Nest — Windows', app: nest, os: windows-latest, dir: redstart-nest }
+          - { label: 'Nest — macOS',   app: nest, os: macos-15,       dir: redstart-nest }
+          - { label: 'Twig — Windows', app: twig, os: windows-latest, dir: redstart-twig/windows }
+          - { label: 'Twig — macOS',   app: twig, os: macos-15,       dir: redstart-twig/windows }
     defaults:
       run:
         shell: bash
@@ -237,37 +237,52 @@ jobs:
           rm -rf "$dl"
           "$bin/llama-server" --version
 
-      # ── Nest's daemon runtime ──────────────────────────────────────────────
-      # The Tauri shell runs nestd on a bundled Node, pinned by version and
-      # sha256 in stage-node.mjs (Windows x64 and macOS arm64).
+      # ── The daemon runtime (both apps) ─────────────────────────────────────
+      # Both Tauri shells run their Node half (nestd, twigd) on a bundled
+      # Node, pinned by version and sha256 in redstart-nest's stage-node.mjs
+      # (Windows x64 and macOS arm64). One pin for both apps.
       - name: Stage the pinned Node runtime
-        if: matrix.app == 'nest'
         run: |
           node scripts/stage-node.mjs
           if [ "$RUNNER_OS" = Windows ]; then deps/node/node.exe --version; else deps/node/node --version; fi
         working-directory: redstart-nest
 
       # ── Package ────────────────────────────────────────────────────────────
-      # --publish never: electron-builder auto-publishes when it detects a tag
-      # in CI. Publishing is the release job's job, once, for all four.
-      - name: Build installer
-        if: matrix.app != 'nest'
-        run: npm run build -- ${{ matrix.target }} --publish never
-        working-directory: ${{ matrix.dir }}
-
-      # Nest: the Tauri shell (daemon split T3). The same UI and
-      # chat-ui builds and licence list as `npm run build`, then the staged
-      # resources, then `tauri build`, which signs the installer for the
-      # updater with the CI secret. No secret, no .sig, and
+      # Both apps are Tauri shells. Each build makes the same UI builds and
+      # licence lists as its `npm run build`, stages its resources, then runs
+      # `tauri build`, which signs the installer for the updater with the CI
+      # secret (one key for both apps). No secret, no .sig, and
       # make-shell-manifests refuses, so an unsigned build never publishes.
       - uses: actions/cache@v4
-        if: matrix.app == 'nest'
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            redstart-nest/shell/target
-          key: shell-release-${{ runner.os }}-${{ hashFiles('redstart-nest/shell/Cargo.lock') }}
+            ${{ matrix.dir }}/shell/target
+          key: shell-release-${{ matrix.app }}-${{ runner.os }}-${{ hashFiles(format('{0}/shell/Cargo.lock', matrix.dir)) }}
+
+      - name: Build installer (Twig, Tauri)
+        if: matrix.app == 'twig'
+        working-directory: redstart-twig/windows
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          npm run build:chat
+          node ../../redstart-nest/scripts/make-icon.mjs
+          node ../../redstart-nest/scripts/rust-licenses.mjs --shell shell --out licenses/rust-licenses.json
+          node scripts/stage-shell-bundle.mjs
+          manifests=../../redstart-nest/scripts/make-shell-manifests.mjs
+          b=shell/target/release/bundle
+          if [ "$RUNNER_OS" = Windows ]; then
+            (cd shell && npx tauri build --config tauri.bundle.conf.json --bundles nsis)
+            node "$manifests" windows "$VERSION" "$(ls $b/nsis/*-setup.exe)" "release/$VERSION" --app twig
+          else
+            (cd shell && npx tauri build --config tauri.bundle.conf.json --bundles app,dmg)
+            node "$manifests" macos "$VERSION" "$(ls $b/dmg/*.dmg)" "$(ls $b/macos/*.app.tar.gz)" "release/$VERSION" --app twig
+          fi
 
       - name: Build installer (Nest, Tauri)
         if: matrix.app == 'nest'
@@ -301,17 +316,14 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.app }}-${{ runner.os }}
-          # The .yml and .blockmap are what Nest's auto-updater reads (see
-          # daemon/update-feed.mjs). nest.yml names the installer and its
-          # sha512. The blockmap lets the NEXT release download only the blocks
-          # that changed, which is most of the point with a ~1 GB CUDA DLL that
-          # does not change between alphas. Twig writes no .yml yet; its
-          # blockmap is uploaded anyway, for when it does.
+          # <app>-latest.<platform>.json are the Tauri manifest fragments the
+          # release job merges (make-shell-manifests.mjs). nest.yml is Nest's
+          # bridge for Electron-era installs (shared/update-feed.mjs); Twig has
+          # none, since Electron Twig never updated itself.
           path: |
             ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*Setup*.exe
-            ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*Setup*.exe.blockmap
-            ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/${{ matrix.app }}.yml
-            ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/nest-latest.*.json
+            ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/nest.yml
+            ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/${{ matrix.app }}-latest.*.json
             ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*.app.tar.gz
             ${{ matrix.dir }}/release/${{ needs.version.outputs.version }}/*.dmg
           if-no-files-found: error
@@ -340,6 +352,7 @@ jobs:
           sparse-checkout: |
             redstart-nest/scripts
             redstart-nest/daemon
+            shared
 
       - name: Merge the Tauri update manifest
         run: node src/redstart-nest/scripts/make-shell-manifests.mjs merge dist
@@ -384,12 +397,19 @@ jobs:
           Nest may use its "redstart Safe Storage" Keychain item: choose
           *Always Allow*. From then on the Mac app updates itself too.
 
+          **Redstart Twig is now a Tauri app too, and updates itself.** Electron
+          Twig never did, so install this release by hand once, over the old
+          one: the installer removes the Electron Twig first and keeps your
+          granted folder and local MCP servers. From then on Twig downloads
+          updates in the background and installs them when you close it
+          (Settings → Server → Updates). Twig is now Apple Silicon only on
+          macOS; Intel Macs keep their last Electron build.
+
           **macOS** — open the `.dmg` and drag the app to Applications. The apps
           are ad-hoc signed but not notarized, so the first launch is blocked:
           open *System Settings → Privacy & Security* and choose *Open Anyway*
           (or run `xattr -dr com.apple.quarantine "/Applications/<App>.app"`).
-          Nest is Apple Silicon only (Metal); Twig ships for both Apple Silicon
-          (`arm64`) and Intel (`x64`).
+          Both apps are Apple Silicon only (`arm64`).
 
           > macOS builds are new and have not yet been verified on real
           > hardware — see [Known limitations](https://github.com/ImDeadWeight/redstart-project/blob/main/docs/roadmap.md#known-limitations).

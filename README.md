@@ -148,7 +148,7 @@ Accounts are **on by default** with no localhost exemption, and each account's f
 
 ### macOS (experimental)
 
-Each release also carries `.dmg` installers — Nest for Apple Silicon, Twig for Apple Silicon (`arm64`) and Intel (`x64`). **They are built automatically and have never been run on a Mac**, so treat them as a preview. They are not notarized: after dragging the app to Applications, the first launch is blocked until you choose **Open Anyway** in System Settings → Privacy & Security.
+Each release also carries `.dmg` installers — Nest for Apple Silicon, Twig for Apple Silicon (`arm64`) too. **They are built automatically and have never been run on a Mac**, so treat them as a preview. They are not notarized: after dragging the app to Applications, the first launch is blocked until you choose **Open Anyway** in System Settings → Privacy & Security.
 
 ---
 

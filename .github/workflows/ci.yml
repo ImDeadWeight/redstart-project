@@ -326,3 +326,66 @@ jobs:
 
       - name: Unit tests (pipe framing, secrets key incl. real DPAPI, origin check)
         run: cargo test --locked
+
+  twig:
+    # twigd, Twig's Node half: the folder tools' containment and recoverable
+    # delete, and the pipe contract the Tauri shell relies on (driven over
+    # stdio against the real twigd, including the shell's method allowlist).
+    # No dependencies to install: twigd imports only this repo.
+    name: Twig (twigd + local file tools)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows: the platform twigd ships on most, and where the MCP
+        # children are cmd.exe trees. Ubuntu: symlink containment cases.
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: redstart-twig/windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+
+      # npm test is the suite list (package.json), so CI and a local run
+      # cannot drift: test-fs-tool (containment, recoverable delete), then
+      # test-twigd (the shell pipe contract). No install: no dependencies run.
+      - name: Twig suites (npm test)
+        run: npm test
+
+  twig-shell:
+    # Twig's Tauri shell: the chat UI's protocol (containment, the 503 rule,
+    # CSP), the page's allowlist, the origin pin, the pid wait on real children.
+    name: Twig desktop shell (Rust, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15: the only place Twig's macOS half is compiled at all.
+        os: [windows-latest, macos-15]
+    defaults:
+      run:
+        working-directory: redstart-twig/windows/shell
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            redstart-twig/windows/shell/target
+          key: twig-shell-${{ runner.os }}-${{ hashFiles('redstart-twig/windows/shell/Cargo.lock') }}
+
+      # generate_context!() embeds the icons, which Nest's make-icon generates.
+      - name: Generate the app icons
+        run: node ../../../redstart-nest/scripts/make-icon.mjs
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Unit tests (protocol containment, allowlist, origin, pid wait)
+        run: cargo test --locked

@@ -10,6 +10,8 @@
 // published.
 //
 //   node scripts/rust-licenses.mjs      (run before stage-shell-bundle.mjs)
+//   node scripts/rust-licenses.mjs --shell <crate dir> --out <file>
+//                                       another shell crate (Twig's)
 // =============================================================================
 
 import * as fs from 'node:fs'
@@ -47,13 +49,16 @@ export function compiledCrates(metadata) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const arg = (name) => { const i = process.argv.indexOf(name); return i > 0 ? path.resolve(process.argv[i + 1]) : null }
+  const shellDir = arg('--shell') ?? path.join(NEST, 'shell')
+  const out = arg('--out') ?? OUT
   const raw = execFileSync('cargo', ['metadata', '--format-version', '1', '--locked', '--filter-platform', TARGET], {
-    cwd: path.join(NEST, 'shell'),
+    cwd: shellDir,
     maxBuffer: 256 * 1024 * 1024,
   })
   const crates = compiledCrates(JSON.parse(raw.toString()))
   const unknown = crates.filter((c) => c.license === 'UNKNOWN')
-  fs.mkdirSync(path.dirname(OUT), { recursive: true })
-  fs.writeFileSync(OUT, JSON.stringify({ target: TARGET, crates }, null, 2) + '\n')
-  console.log(`Wrote ${crates.length} crates to ${path.relative(NEST, OUT)}${unknown.length ? `; no licence field: ${unknown.map((c) => c.name).join(', ')}` : ''}`)
+  fs.mkdirSync(path.dirname(out), { recursive: true })
+  fs.writeFileSync(out, JSON.stringify({ target: TARGET, crates }, null, 2) + '\n')
+  console.log(`Wrote ${crates.length} crates to ${path.relative(process.cwd(), out)}${unknown.length ? `; no licence field: ${unknown.map((c) => c.name).join(', ')}` : ''}`)
 }

@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "The chat UI may listen for the events the shell emits to it (local MCP output, update status). Everything else it reaches goes through the shell's own `twig*` commands, which forward an allowlist (bridge.rs). No filesystem, shell or window plugin permissions. Local origin only: the window shows the shell's `twig` protocol and nothing else (navigation off it is denied).",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

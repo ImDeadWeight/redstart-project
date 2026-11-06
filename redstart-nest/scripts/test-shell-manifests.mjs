@@ -15,7 +15,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { windowsAssets, macosAssets, mergeManifests, installerName, dmgName, macUpdateName } from './make-shell-manifests.mjs'
-import { pickUpdateRelease } from '../daemon/update-feed.mjs'
+import { pickUpdateRelease } from '../../shared/update-feed.mjs'
 
 const results = []
 function test(name, fn) {
@@ -43,15 +43,22 @@ const make = (name, body, sig) => {
 const setup = make(`Redstart Nest_${V}_x64-setup.exe`, 'MZ fake installer bytes', 'V0lOU0lH')
 const dmg = make(`Redstart Nest_${V}_aarch64.dmg`, 'fake dmg')
 const tgz = make('Redstart Nest.app.tar.gz', 'fake app tarball', 'TUFDU0lH')
+const twigSetup = make(`Redstart Twig_${V}_x64-setup.exe`, 'MZ fake twig installer', 'VFdJR1dJTg==')
+const twigDmg = make(`Redstart Twig_${V}_aarch64.dmg`, 'fake twig dmg')
+const twigTgz = make('Redstart Twig.app.tar.gz', 'fake twig tarball', 'VFdJR01BQw==')
 
 // Each build job writes into its own folder; the release job's download
 // merges them into one.
 const winOut = path.join(tmp, 'win'), macOut = path.join(tmp, 'mac'), rel = path.join(tmp, 'release')
+const twigWinOut = path.join(tmp, 'twig-win'), twigMacOut = path.join(tmp, 'twig-mac')
 const w = windowsAssets({ version: V, installer: setup, outDir: winOut, now })
 const m = macosAssets({ version: V, dmg, appTarGz: tgz, outDir: macOut })
+const tw = windowsAssets({ version: V, installer: twigSetup, outDir: twigWinOut, now, app: 'twig' })
+const tm = macosAssets({ version: V, dmg: twigDmg, appTarGz: twigTgz, outDir: twigMacOut, app: 'twig' })
 fs.mkdirSync(rel)
-for (const d of [winOut, macOut]) for (const f of fs.readdirSync(d)) fs.copyFileSync(path.join(d, f), path.join(rel, f))
-const manifest = mergeManifests({ outDir: rel, now })
+for (const d of [winOut, macOut, twigWinOut, twigMacOut]) for (const f of fs.readdirSync(d)) fs.copyFileSync(path.join(d, f), path.join(rel, f))
+const merged = mergeManifests({ outDir: rel, now })
+const manifest = merged.nest
 
 test('🔍 asset names: the Windows installer keeps the name every release has used', () => {
   assert(w.file === installerName(V) && w.file === `Redstart-Nest-Setup-${V}.exe`, w.file)
@@ -83,6 +90,24 @@ test('🔍 the release is found by BOTH updaters', () => {
   const release = { tag_name: V, draft: false, assets: fs.readdirSync(rel).map((name) => ({ name })) }
   assert(pickUpdateRelease([release], { currentVersion: '1.0.0-alpha.6' })?.tag === V, 'Electron (nest.yml) misses it')
   assert(pickUpdateRelease([release], { currentVersion: '1.0.0-alpha.6', manifest: 'nest-latest.json' })?.tag === V, 'Tauri misses it')
+})
+
+test("🔍 twig-latest.json is Twig's own: its installers, its signatures, no Nest asset", () => {
+  const t = merged.twig
+  assert(tw.file === `Redstart-Twig-Setup-${V}.exe` && tm.dmg === `Redstart-Twig-${V}-arm64.dmg`, JSON.stringify({ tw, tm }))
+  assert(t?.version === V, 'twig manifest version')
+  assert(t.platforms['windows-x86_64'].url === BASE + tw.file && t.platforms['windows-x86_64'].signature === 'VFdJR1dJTg==', 'twig windows entry')
+  assert(t.platforms['darwin-aarch64'].url === BASE + tm.update && t.platforms['darwin-aarch64'].signature === 'VFdJR01BQw==', 'twig mac entry')
+  assert(!JSON.stringify(t).includes('Nest') && !JSON.stringify(manifest).includes('Twig'), 'the manifests cross over')
+  assert(fs.existsSync(path.join(rel, 'twig-latest.json')), 'twig-latest.json not written')
+  assert(!fs.existsSync(path.join(rel, 'twig.yml')) && !fs.existsSync(path.join(twigWinOut, 'nest.yml')), 'Twig wrote an electron-updater .yml')
+})
+
+test('🔍 each Tauri app finds the shared release by its own manifest', () => {
+  const release = { tag_name: V, draft: false, assets: fs.readdirSync(rel).map((name) => ({ name })) }
+  assert(pickUpdateRelease([release], { currentVersion: '1.0.0-alpha.6', manifest: 'twig-latest.json' })?.tag === V, 'Twig misses it')
+  const nestOnly = { ...release, assets: release.assets.filter((a) => a.name !== 'twig-latest.json') }
+  assert(pickUpdateRelease([nestOnly], { currentVersion: '1.0.0-alpha.6', manifest: 'twig-latest.json' }) === null, 'Twig took a release without its manifest')
 })
 
 test('fragments from different versions are refused, not merged', () => {

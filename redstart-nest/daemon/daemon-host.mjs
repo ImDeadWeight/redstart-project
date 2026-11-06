@@ -18,7 +18,7 @@
 // =============================================================================
 
 import { spawn } from 'node:child_process'
-import { createPeer } from './shell-pipe.mjs'
+import { createPeer } from '../../shared/shell-pipe.mjs'
 
 // How long a graceful stop may take before the daemon is killed. stopDaemon()
 // itself waits on llama-server; this bounds the whole thing.

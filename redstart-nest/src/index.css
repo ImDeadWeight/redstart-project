@@ -17,6 +17,12 @@ html, body {
   background-color: #09090b; /* zinc-950, matching App.tsx's outer wrapper */
 }
 
+/* Dark-only UI: the engine draws its own parts (a <select>'s open list,
+   form controls, any scrollbar the rules below miss) dark as well. */
+html {
+  color-scheme: dark;
+}
+
 /* Scrollbars — the UI is dark (zinc-950/900) everywhere, but browsers/Electron
    default to a light OS scrollbar unless told otherwise. Firefox's shorthand
    plus the WebKit pseudo-elements (Electron and every Chromium-based browser)

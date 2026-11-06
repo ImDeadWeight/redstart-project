@@ -82,7 +82,7 @@ window, tray, notifications, login item, updater and recycle-bin access are a
 Tauri app (`redstart-nest/shell/`, Rust). The daemon is a separate process: the
 shell starts `nestd --shell-pipe` on a Node 26 bundled in the install (pinned
 by version and SHA-256 in `scripts/stage-node.mjs`). They talk in JSON lines
-over the child's stdin and stdout (`daemon/shell-pipe.mjs` here,
+over the child's stdin and stdout (`shared/shell-pipe.mjs` here,
 `shell/src/pipe.rs` there):
 
 - the shell sends `hello` with the paths and the unwrapped secrets key, and
@@ -109,6 +109,19 @@ update (`update-feed.mjs`), then Tauri's updater downloads that release's
 installer and checks its signature against a public key compiled into the
 shell. It installs only on a deliberate quit, after the daemon and its
 children are gone.
+
+**Twig is built the same way.** Redstart Twig, the desktop chat client, is a
+Tauri shell (`redstart-twig/windows/shell/`) around `twigd`, its own Node
+half on the same bundled Node 26 and the same shell pipe. twigd does what the
+page needs on the user's machine: the granted folder's `fs_*` tools, local
+stdio MCP servers, the LAN scan for a Nest. The shell serves the chat UI from
+its own `twig` protocol (`http://twig.localhost/`, a fixed origin, so the
+UI's local storage survives restarts) and rebuilds Electron's
+`window.redstartTwigAPI` as an injected script over Tauri IPC. It forwards
+an allowlist of methods to twigd. Granting a folder is not on that list: it
+happens only through the shell's own folder dialog. Twig's updater is Nest's,
+reading `twig-latest.json` and signed with the same key, and installs when
+Twig is closed.
 
 **The launcher is a web page.** There is no preload script and no
 `contextBridge`. The React launcher talks to the daemon over HTTP —

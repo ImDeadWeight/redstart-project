@@ -4,14 +4,17 @@ Twig has no automated test suite. These are the checks that must pass by hand be
 build, and they exist because Twig's local file tools act on **the user's own disk** with no
 server-side policy gate over them — Nest's `evaluateToolPolicy` has no reach here.
 
-Run `npm test` first — it covers containment and delete recoverability automatically under plain
-node (`scripts/test-fs-tool.mjs`). Everything below is what that suite *cannot* reach: the Electron
-shell, the real recycle bin, the packaged layout, and the UI.
+Run `npm test` first. It covers containment and delete recoverability under plain node
+(`scripts/test-fs-tool.mjs`) and the pipe contract with the real twigd (`scripts/test-twigd.mjs`), and
+`cargo test` in `shell/` covers the chat-ui protocol and the bridge allowlist. Everything below is what
+those cannot reach: the window, the real recycle bin, the packaged layout, the installer, the updater, and
+the UI.
 
-Then run against a **dev** launch (`npm run dev` in `windows/`) and again against a **packaged**
-build (`npm run build`), because the two resolve module and asset paths differently — and it was
-exactly that divergence that let a broken dev import ship unnoticed while the packaged app kept
-working off a stale copy.
+Then run against a **dev** launch (`npm run dev` in `windows/`, after building the chat-ui; set
+`TWIG_CONFIG_DIR` to a throwaway folder) and again against a **packaged** build (`npm run build`, or the
+exe in `shell/target/release`, which runs the packaged layout), because the two resolve module and
+asset paths differently. It was exactly that divergence that once let a broken dev import ship unnoticed
+while the packaged app kept working off a stale copy.
 
 Use a throwaway folder as the grant root. Never smoke-test against a real working directory.
 
@@ -19,16 +22,16 @@ Use a throwaway folder as the grant root. Never smoke-test against a real workin
 
 ## 0. Build integrity
 
-Packaging was verified on 2026-08-07 (`npx electron-builder --win --dir`): the build completes,
-`resources/` has no `fs-tool/` folder, `app.asar` contains `electron/fs/{fs-tool,path-scope,trash}.mjs`,
-the preload is unpacked where `main.mjs` looks for it, and `resources/chat-ui` is the current bundle.
-What remains is confirming the packaged app actually *runs*.
+Verified on 2026-11-05 (Windows): `npm run build` makes a signed 31.75 MiB NSIS installer, and the exe in
+`shell/target/release` started twigd on `resources\node\node.exe` from `resources\app\twigd`. The
+installer itself has not been run.
 
 - [ ] The packaged app launches and reaches the chat UI.
-- [ ] **The served UI is current.** Twig serves a chat-ui bundle built separately from it — check
-      that Profile has a **Files** tab and the sidebar shows **Profile** (not your username). If it
-      does not, the bundle is stale: run `npm run build:chat` from `redstart-nest` and repackage.
-      This has caught the project out twice.
+- [ ] **The served UI is current.** Twig serves a chat-ui bundle built separately from it. Check
+      that Settings → Server has an **Updates** block. If it does not, the bundle is stale: run
+      `npm run build:chat` and repackage. This has caught the project out twice.
+- [ ] **Settings survive a restart.** Change a chat setting, close Twig, open it again: it is
+      still set. (Electron Twig lost them every launch: a new port was a new origin.)
 
 ## 0b. Caught up with the current chat UI
 
@@ -58,7 +61,7 @@ ever attempted there was no error either, so not even the Retry button appeared.
 
 ## 1. No folder is granted by default
 
-Delete `%APPDATA%\redstart-twig\twig-fs-config.json` first, so this is a true first launch.
+Delete `%APPDATA%\redstart-twig-windows\twig-fs-config.json` first, so this is a true first launch.
 
 - [ ] On launch, **no** `Documents\Redstart-twig` folder is created.
 - [ ] Under the chat composer, the folder control reads *"Grant a folder on this PC for local file
@@ -69,7 +72,8 @@ Delete `%APPDATA%\redstart-twig\twig-fs-config.json` first, so this is a true fi
 
 ## 2. Granting a folder
 
-- [ ] Clicking the composer control opens a folder picker.
+- [ ] Clicking the composer control opens a folder picker (the shell's own dialog).
+- [ ] Cancelling the picker leaves the grant as it was.
 - [ ] After choosing, the control shows the chosen path in monospace.
 - [ ] The eight `fs_*` tools become available **without restarting** the app.
 - [ ] Settings → Server shows the same path with a green check.
@@ -98,7 +102,7 @@ Delete `%APPDATA%\redstart-twig\twig-fs-config.json` first, so this is a true fi
 ### 4b. Fallback path
 
 Hard to trigger on a normal local disk — the recycle bin usually works. If you can grant a folder on
-a network share or a removable drive where `shell.trashItem` fails:
+a network share or a removable drive where the recycle bin refuses the path:
 
 - [ ] Delete lands in a `.trash/<timestamp>/` folder inside the granted root, preserving the
       original relative path, and the reply says where to find it.
@@ -170,22 +174,48 @@ granted that includes **This computer**, alongside the server's own spaces.
 
 ## 6c. Window chrome
 
-The frameless window draws its own title bar, so two things have to line up that
-the automated tests cannot see.
+The window has no OS frame on Windows: the page draws the title bar and its buttons.
 
-- [ ] **The bar is one colour end to end.** The strip behind the minimise /
-      maximise / close buttons is drawn by Windows, the rest by the app. They used
-      to be different (`#09090b` vs the app's actual `#060606`), showing as a
-      slightly lighter band on the right. The shell now takes the colour from the
-      renderer, so any future theme change follows automatically.
-- [ ] **Nothing is clipped by the top strip.** In particular the sidebar toggle:
-      it is absolutely positioned against the viewport, so it ignores the body
-      padding that offsets everything else and used to sit half-under the 32px
-      drag strip.
-- [ ] Dragging the top strip moves the window; double-clicking it maximises.
+- [ ] Minimise, maximise/restore and close work, and the maximise icon flips to restore.
+- [ ] **The buttons are there on every screen**, including "Looking for your server…" and "No
+      server found". They sit above the loading screen. If they ever vanish, a Twig with no server can
+      be neither moved nor closed.
+- [ ] Dragging the bar moves the window; double-clicking it maximises.
+- [ ] Nothing is clipped by the bar, in particular the sidebar toggle and the icon rail.
+- [ ] F12 opens DevTools.
+- [ ] A link in a chat answer opens in the default browser, not in a new Twig window.
+- [ ] **Scrollbars are dark everywhere**: the chat list, a long answer, Settings, an open dropdown.
+- [ ] macOS: the traffic lights sit over the bar's left end, with no Windows buttons drawn.
 
 ## 7. Local MCP servers (unchanged by this work, but easy to break)
 
-- [ ] Servers in `%APPDATA%\redstart-twig\twig-mcp.json` still appear in Settings → Server.
+- [ ] Servers in `%APPDATA%\redstart-twig-windows\twig-mcp.json` still appear in Settings → Server.
 - [ ] Starting one connects and its tools appear.
-- [ ] Closing the app stops the child processes (check Task Manager for orphans).
+- [ ] Closing the app stops the child processes (check Task Manager for orphans, including
+      `node.exe` children of an `npx` server).
+
+## 8. Installing over Electron Twig (once)
+
+Needs a machine with an Electron Twig (1.0.0-alpha.9 or earlier) installed. Not this dev box's real
+setup unless you mean it.
+
+- [ ] Per-user Electron install: the Tauri installer removes it silently and installs into the same
+      folder (`%LOCALAPPDATA%\Programs\Redstart Twig`). A taskbar pin still opens Twig.
+- [ ] Only one **Redstart Twig** remains in Settings → Apps.
+- [ ] The granted folder and local MCP servers are still there.
+- [ ] All-users Electron install: a UAC prompt appears for its uninstaller. Accept it, and only the new
+      Twig remains. Decline it, and both are installed (expected; the old one is removed by hand).
+
+## 9. Updates
+
+Needs two releases cut by the workflow, the second newer than the installed one.
+
+- [ ] Settings → Server → Updates shows the running version and the automatic-check switch, on.
+- [ ] **Check now** finds the newer release, shows "Downloading…", then "ready", and a toast says so.
+- [ ] Nothing restarts on its own. Close Twig: a passive installer runs, and the next launch is the new
+      version.
+- [ ] With an update ready, **Restart to update** installs and reopens Twig.
+- [ ] With a local MCP server running, closing still installs (its process is gone first).
+- [ ] Switch automatic checks off, restart Twig, and wait over a minute: no check happens
+      (`%APPDATA%\redstart-twig-windows\shell\redstart.log` has no `update` lines). Check now still works.
+- [ ] A dev run says it does not update itself.
