@@ -1,28 +1,22 @@
 // =============================================================================
-// Packaging invariants — imports that escape the app root must be shipped
+// Packaging invariants: imports that escape the app root must be shipped
 // =============================================================================
-// Both Electron apps import a module that lives OUTSIDE their own app root:
+// Both apps' Node halves import modules that live OUTSIDE their own app root:
 //
-//   redstart-nest/daemon/filesystem-mcp-provider.mjs
-//   redstart-twig/windows/electron/mcp-manager.mjs
-//        -> ../../../shared/mcp-stdio-process.mjs
+//   redstart-nest/daemon/*.mjs, bin/*.mjs        -> ../../shared/*.mjs
+//   redstart-twig/windows/{bin,daemon}/*.mjs     -> ../../../shared/*.mjs
 //
 // In a dev checkout that resolves fine, because the repo has the parent
-// directories. In a packaged build the app root becomes app.asar, and a
-// specifier that climbs above it lands OUTSIDE the archive — where nothing was
-// copied. The build still succeeds. The installer still installs. The app then
-// dies at startup with ERR_MODULE_NOT_FOUND, which is exactly what shipped.
+// directories. Packaged, each app's tree is copied under resources/ by its
+// stage-shell-bundle.mjs, and a specifier that climbs above it lands wherever
+// the staging put (or did not put) the directory. The build still succeeds.
+// The installer still installs. The app then dies at startup with
+// ERR_MODULE_NOT_FOUND, which is exactly what shipped once under Electron.
 //
-// The number of levels an import escapes decides where the file has to be put,
-// and the two apps differ because their sources sit at different depths:
+// This test derives the escape depth from the source and checks the staging
+// script writes that directory where the import will look.
 //
-//   escape 1 level  -> resources/          -> electron-builder `extraResources`
-//   escape 2 levels -> the app directory   -> electron-builder `extraFiles`
-//
-// This test derives that from the source and fails if the config does not
-// place the file where the import will actually look.
-//
-// Reads only JSON and source text — no build, no Electron.
+// Reads only JSON and source text: no build.
 //
 // Run:  node scripts/test-packaging.mjs
 // =============================================================================
@@ -50,20 +44,6 @@ function test(name, fn) {
 function assert(cond, message) {
   if (!cond) throw new Error(message)
 }
-
-// The packaged ELECTRON app (Twig): where its config lives, which directory is
-// the app root (the thing that becomes app.asar), and which trees hold its
-// main-process sources. Nest is no longer an Electron app (daemon split T4):
-// its package is shell/bundle/resources, built by stage-shell-bundle.mjs, and
-// its checks follow that script below.
-const APPS = [
-  {
-    name: 'Redstart Twig',
-    appRoot: path.join(REPO, 'redstart-twig', 'windows'),
-    config: path.join(REPO, 'redstart-twig', 'windows', 'electron-builder.json'),
-    sourceDirs: ['electron'],
-  },
-]
 
 const NEST = path.join(REPO, 'redstart-nest')
 const STAGE_SRC = fs.readFileSync(path.join(NEST, 'scripts', 'stage-shell-bundle.mjs'), 'utf8')
@@ -116,65 +96,33 @@ function escapedTopLevel(appRoot, fileAbs, specifier) {
   return parts[0] ?? null
 }
 
-function fileSets(config, key) {
-  const raw = config[key]
-  if (!raw) return []
-  return (Array.isArray(raw) ? raw : [raw])
-    .filter((e) => typeof e === 'object' && e !== null)
-}
-
 console.log('\n-- imports that escape the app root are shipped --')
 
-for (const app of APPS) {
-  const config = JSON.parse(fs.readFileSync(app.config, 'utf8'))
+const TWIG = path.join(REPO, 'redstart-twig', 'windows')
+const TWIG_STAGE_SRC = fs.readFileSync(path.join(TWIG, 'scripts', 'stage-shell-bundle.mjs'), 'utf8')
 
+// Twig: twigd runs from resources/app/twigd/{bin,daemon}, so an import
+// escaping redstart-twig/windows/ by two levels lands in resources/<top>.
+{
   const escaping = []
-  for (const dir of app.sourceDirs) {
-    for (const file of walk(path.join(app.appRoot, dir))) {
-      const source = fs.readFileSync(file, 'utf8')
-      for (const spec of importSpecifiers(source)) {
-        const levels = escapeLevels(app.appRoot, file, spec)
-        if (levels > 0) escaping.push({ file, spec, levels })
+  for (const dir of ['daemon', 'bin']) {
+    for (const file of walk(path.join(TWIG, dir))) {
+      for (const spec of importSpecifiers(fs.readFileSync(file, 'utf8'))) {
+        const levels = escapeLevels(TWIG, file, spec)
+        if (levels > 0) escaping.push({ file, spec, levels, top: escapedTopLevel(TWIG, file, spec) })
       }
     }
   }
-
-  test(`${app.name}: escaping imports resolve to a file that exists on disk`, () => {
-    for (const { file, spec } of escaping) {
-      const target = path.resolve(path.dirname(file), spec)
-      assert(fs.existsSync(target), `${path.relative(REPO, file)} imports ${spec}, which does not exist`)
+  test('🔍 Redstart Twig: every escaping import is staged where twigd will look', () => {
+    assert(escaping.length > 0, 'expected at least the ../../../shared imports')
+    for (const { file, spec, levels, top } of escaping) {
+      assert(levels === 2, `${path.relative(REPO, file)} imports ${spec}, escaping ${levels} levels; twigd is staged two below resources/`)
+      assert(fs.existsSync(path.resolve(path.dirname(file), spec)), `${spec} does not exist`)
+      assert(TWIG_STAGE_SRC.includes(`out('${top}')`), `${spec} lands in resources/${top}, which Twig's stage-shell-bundle.mjs never writes`)
     }
+    assert(TWIG_STAGE_SRC.includes("out('app', 'twigd', 'bin')") && TWIG_STAGE_SRC.includes("out('app', 'twigd', 'daemon')"),
+      'twigd must be staged at resources/app/twigd/{bin,daemon}, two levels below resources/')
     return `${escaping.length} escaping import(s)`
-  })
-
-  test(`🔍 ${app.name}: every escaping import is copied into the package`, () => {
-    for (const { file, spec, levels } of escaping) {
-      const top = escapedTopLevel(app.appRoot, file, spec)
-      assert(top, `could not determine target directory for ${spec}`)
-
-      // 1 level above app.asar is resources/; 2 levels is the app directory.
-      const key = levels === 1 ? 'extraResources' : levels === 2 ? 'extraFiles' : null
-      assert(
-        key,
-        `${path.relative(REPO, file)} imports ${spec}, escaping ${levels} levels — ` +
-          `too deep for electron-builder to place (max 2). Move the module inside the app root.`
-      )
-
-      const covered = fileSets(config, key).some((entry) => {
-        const to = String(entry.to ?? '').replace(/[\\/]+$/, '')
-        if (to !== top) return false
-        const from = path.resolve(path.dirname(app.config), String(entry.from ?? ''))
-        return fs.existsSync(from)
-      })
-
-      assert(
-        covered,
-        `${path.relative(REPO, file)} imports ${spec} (escapes ${levels} level(s) -> "${top}/"), ` +
-          `but ${path.basename(app.config)} has no ${key} entry with to: "${top}". ` +
-          `The build will succeed and the app will die at startup with ERR_MODULE_NOT_FOUND.`
-      )
-    }
-    return `${escaping.length} checked`
   })
 }
 
@@ -293,6 +241,51 @@ test('🔍 the bridge replaces the Electron install it updates from', () => {
   assert(hooks.includes('--force-run'), "electron-updater's Restart to update would leave the app stopped")
 })
 
+console.log('\n-- Twig\'s Tauri shell and its installer --')
+
+const TWIG_SHELL = path.join(TWIG, 'shell')
+const readTwig = (rel) => fs.readFileSync(path.join(TWIG_SHELL, rel), 'utf8')
+
+test('🔍 Twig: the same app at the same version, updated with the same key as Nest', () => {
+  const conf = JSON.parse(readTwig('tauri.conf.json'))
+  const nest = JSON.parse(readShell('tauri.conf.json'))
+  assert(conf.identifier === 'com.redstart.twig', `identifier ${conf.identifier}`)
+  assert(conf.version === '../package.json', 'version must come from package.json, which the release job bumps')
+  assert(conf.mainBinaryName === 'Redstart Twig', 'the exe name taskbar pins point at')
+  assert(conf.plugins?.updater?.pubkey === nest.plugins?.updater?.pubkey,
+    'one signing secret signs both apps in CI; a different pubkey here means no Twig update ever verifies')
+})
+
+test('🔍 Twig: the installer ships the layout paths.rs reads, signed for the updater', () => {
+  const b = JSON.parse(readTwig('tauri.bundle.conf.json')).bundle
+  assert(b.resources?.['bundle/resources/'] === 'resources/', 'bundle/resources/ must land at <resource_dir>/resources/')
+  assert(b.createUpdaterArtifacts === true, 'no .sig, no update')
+  assert(b.windows?.nsis?.installMode === 'currentUser', 'per-user')
+  assert(b.macOS?.signingIdentity === '-', 'macOS must be ad-hoc signed')
+  const paths = readTwig('src/paths.rs')
+  assert(paths.includes('.join("app").join("twigd").join("bin").join("twigd.mjs")') && paths.includes('resources.join("chat-ui")'),
+    'paths.rs no longer reads resources/app/twigd/bin/twigd.mjs and resources/chat-ui')
+  for (const d of ["out('node', win ? 'node.exe' : 'node')", "out('node', 'LICENSE')", "out('chat-ui')", "out('shared')"]) {
+    assert(TWIG_STAGE_SRC.includes(d), `Twig's stage-shell-bundle.mjs no longer writes ${d}`)
+  }
+  assert(/adhocSignMachO\(BUNDLE_DIR\)/.test(TWIG_STAGE_SRC), 'Twig: staged Mach-O files (node) are not signed')
+})
+
+test('🔍 Twig: the installer replaces an Electron Twig instead of sitting beside it', () => {
+  const hooks = readTwig(JSON.parse(readTwig('tauri.bundle.conf.json')).bundle.windows.nsis.installerHooks)
+  // electron-builder's uninstall key: UUIDv5 of com.redstart.twig (the same
+  // derivation gives Nest's known 09e3ae85-… for com.redstart.nest).
+  assert(hooks.includes('347afa00-6d01-59bd-b1c4-8860b58f9de1'), 'the Electron Twig uninstall key GUID is missing')
+  assert(hooks.includes('HKCU') && hooks.includes('HKLM'), 'Electron Twig could be per-user or all-users; both must be handled')
+  assert(hooks.includes('_?='), 'without _?= the uninstaller returns at once and ExecWait does not wait')
+})
+
+test('🔍 Twig no longer ships Electron', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(TWIG, 'package.json'), 'utf8'))
+  assert(!pkg.dependencies?.electron && !pkg.devDependencies?.electron && !pkg.devDependencies?.['electron-builder'], 'Electron is still a dependency')
+  assert(!fs.existsSync(path.join(TWIG, 'electron')) && !fs.existsSync(path.join(TWIG, 'electron-builder.json')), 'the Electron tree is still there')
+})
+
 console.log('\n-- resources the daemon reaches for at runtime --')
 
 // Each of these shipped broken once and failed nothing: the app starts fine
@@ -323,21 +316,11 @@ test("🔍 Nest's mac build stages llama-server and its dylibs where daemon.mjs 
 })
 
 test('🔍 every mac build is ad-hoc signed, or Apple Silicon calls it damaged', () => {
-  // Twig (electron-builder 24 skips signing without a certificate, and its own
-  // edits invalidate Electron's signature): an afterPack hook signs.
-  for (const app of APPS) {
-    const config = JSON.parse(fs.readFileSync(app.config, 'utf8'))
-    if (!config.mac) continue
-    assert(config.afterPack, `${app.name}: mac target declared but no afterPack hook signs the bundle`)
-    const hook = path.resolve(path.dirname(app.config), config.afterPack)
-    assert(fs.existsSync(hook), `${app.name}: afterPack points at ${config.afterPack}, which does not exist`)
-    assert(/codesign/.test(fs.readFileSync(hook, 'utf8')), `${app.name}: afterPack hook ${config.afterPack} never calls codesign`)
-  }
   // Nest (Tauri): every staged Mach-O is signed, and the .app ad-hoc.
   assert(/adhocSignMachO\(BUNDLE_DIR\)/.test(STAGE_SRC) && /'codesign'/.test(STAGE_SRC), 'Nest: staged Mach-O files are not signed')
   const mac = JSON.parse(fs.readFileSync(path.join(NEST, 'shell', 'tauri.bundle.conf.json'), 'utf8')).bundle.macOS
   assert(mac?.signingIdentity === '-', 'Nest: bundle.macOS.signingIdentity must be "-" (ad-hoc)')
-  return 'Twig hooked, Nest staged + ad-hoc'
+  return 'Nest staged + ad-hoc (Twig: see its installer test)'
 })
 
 // ---------------------------------------------------------------------------
