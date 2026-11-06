@@ -14,6 +14,7 @@
     "active": false,
     "icon": [
       "../build/icon.ico",
+      "../build/icon.icns",
       "../build/icon.png"
     ]
   },
