@@ -297,6 +297,22 @@ await test('🔍 another account cannot traverse to it', async () => {
   }
 })
 
+await test('🔍 a tool-result resource link (Phase 2) serves its owner and 404s for anyone else', async () => {
+  // The exact URI a tool hands back: fileLink() from tool-result-links.mjs,
+  // pointing into a conversation workspace.
+  const { fileLink } = await import('../daemon/tool-result-links.mjs')
+  const ws = path.join(aliceDownloadRoot, 'chats', 'conv-1')
+  fs.mkdirSync(ws, { recursive: true })
+  fs.writeFileSync(path.join(ws, 'fig-1.png'), 'alice-figure-bytes')
+  const link = fileLink('chats/conv-1/fig-1.png', { bytes: 18 })
+  const get = (token) => fetch(`http://127.0.0.1:${GATEWAY_PORT}${link.uri}`, { headers: { Authorization: `Bearer ${token}` } })
+  const own = await get(aliceToken)
+  assert(own.status === 200 && (await own.text()) === 'alice-figure-bytes', `owner got ${own.status}`)
+  const other = await get(bobToken)
+  assert(other.status !== 200, `LEAK — bob fetched alice's linked figure (${other.status})`)
+  assert(!(await other.text()).includes('alice-figure-bytes'), 'LEAK — contents returned')
+})
+
 await test('an unauthenticated download is still rejected', async () => {
   const res = await fetch(`http://127.0.0.1:${GATEWAY_PORT}/files/download?path=private.md`)
   assert(res.status === 401, `expected 401, got ${res.status}`)

@@ -86,6 +86,7 @@ function randomConfig() {
       allowedBaseUrls: activeTools.map(t => t.baseUrl),
       activeTools,
       maxFetchTokens: pick([500, 2000, 8000]),
+      searchEngine: pick([{ kind: 'none' }, { kind: 'searxng', url: 'http://searx.lan/' }, { kind: 'brave', apiKey: 'k' }]),
     },
     postgres: cap(),
     documents: cap(),
@@ -93,6 +94,9 @@ function randomConfig() {
     vault: cap(),
     git: cap(),
     scholar: cap(),
+    python: cap(),
+    memory: cap(),
+    documentSearch: cap(),
     fileSystem: {
       enabled: chance(0.6),
       rootDir: 'C:/root',
@@ -107,6 +111,7 @@ function randomPermissions() {
   if (chance(0.6)) p.capabilities = subset(capabilityIds())
   if (chance(0.5)) p.webSourceIds = subset(WEB_SOURCES)
   if (chance(0.4)) p.allowWhitelistBypass = chance(0.5)
+  if (chance(0.4)) p.allowWebSearchEngine = chance(0.5)
   if (chance(0.4)) p.maxFetchTokens = pick([100, 1000, 99999])
   if (chance(0.5)) p.fileSystem = { allowWrite: chance(0.5), allowDestructive: chance(0.5) }
   if (chance(0.3)) p.surfaces = ['nest-chat']
@@ -119,7 +124,7 @@ function randomPermissions() {
  * on any field roles can touch? Returns a reason string, or null when fine.
  */
 function widenedAnywhere(base, narrowed) {
-  const capKeys = ['postgres', 'documents', 'sqlite', 'vault', 'git', 'scholar', 'fileSystem']
+  const capKeys = ['postgres', 'documents', 'sqlite', 'vault', 'git', 'scholar', 'python', 'memory', 'documentSearch', 'fileSystem']
   for (const key of capKeys) {
     if (!base[key]) continue
     if (narrowed[key].enabled === true && base[key].enabled !== true) {
@@ -152,6 +157,13 @@ function widenedAnywhere(base, narrowed) {
 
   if (base.webFetch.whitelistEnabled === true && narrowed.webFetch.whitelistEnabled !== true) {
     return 'the URL whitelist was switched off'
+  }
+
+  // The engine may go to none; it may never come on, or change to another one.
+  const baseEngine = base.webFetch.searchEngine?.kind ?? 'none'
+  const narrowedEngine = narrowed.webFetch.searchEngine?.kind ?? 'none'
+  if (narrowedEngine !== 'none' && narrowedEngine !== baseEngine) {
+    return `web search engine went from ${baseEngine} to ${narrowedEngine}`
   }
 
   if (narrowed.webFetch.maxFetchTokens > base.webFetch.maxFetchTokens) {
@@ -246,7 +258,7 @@ await test('🔍 DENY_ALL permits nothing — the broken-invariant fallback', as
   const config = randomConfig()
   const out = narrowConfig(config, DENY_ALL)
   for (const id of capabilityIds()) {
-    const key = id === 'file_system' ? 'fileSystem' : id
+    const key = CAPABILITY_CONFIG_KEY[id] ?? id
     assert(out[key].enabled === false, `${id} survived DENY_ALL`)
   }
   assert(out.fileSystem.allowWrite === false, 'DENY_ALL left writes on')
@@ -268,7 +280,7 @@ await test('a user-tier account IS narrowed by its role', async () => {
   const config = randomConfig()
   const out = resolveEffectiveConfig({ id: 'u', tier: 'user' }, config, RESTRICTIVE)
   for (const id of capabilityIds()) {
-    const key = id === 'file_system' ? 'fileSystem' : id
+    const key = CAPABILITY_CONFIG_KEY[id] ?? id
     assert(out[key].enabled === false, `${id} survived a role that permits no capabilities`)
   }
 })

@@ -26,6 +26,7 @@ import { activeToolCatalog } from '../mcp-server.mjs'
 import { composePrompt, deriveEgressFacts, DEFAULT_TOKEN_BUDGET, listModes } from '../system-prompt.mjs'
 import { getPromptBlocks, getPromptBlocksMeta, setPromptBlocks, MAX_BLOCK_CHARS } from '../prompt-storage.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
+import { memoriesFor } from '../memory-storage.mjs'
 
 // Returns true when the request was handled (a response has been written),
 // false when the path is not ours and the gateway should keep dispatching.
@@ -46,6 +47,9 @@ export async function handlePromptRoute(req, res, urlPath, config, account) {
       webDomains: facts.webDomains,
       remoteToolServers: facts.remoteToolServers,
       credentialPlugins: facts.credentialPlugins,
+      // { kind, label, host } or null. Never the Brave key: webSearchEngineOf
+      // in system-prompt.mjs reduces the resolved engine to these three.
+      webSearchEngine: facts.webSearchEngine,
       localStores: facts.localStores,
       hasEgress: facts.hasEgress,
       // Redstart records no retention/training terms for third parties.
@@ -90,6 +94,10 @@ export async function handlePromptRoute(req, res, urlPath, config, account) {
       externalServers: getExternalServers(),
       account,
       admin: getPromptBlocks(),
+      ...memoriesFor(config, account),
+      // Same header the completions path reads, so the preview shows the
+      // date line the admin's own chats would get.
+      timeZone: typeof req.headers['x-redstart-timezone'] === 'string' ? req.headers['x-redstart-timezone'] : null,
     })
     sendJson(res, 200, {
       blocks: meta,

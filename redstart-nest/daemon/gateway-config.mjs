@@ -12,7 +12,10 @@
 //
 // Note: tools-gateway.mjs RUNS the gateway (proxy, auth, allow-list, system
 // context) and CONSUMES this config; this module PRODUCES it. No overlap.
+import * as fs from 'fs'
 import * as path from 'path'
+import { configDir } from './platform-paths.mjs'
+import { runtimeDir } from './python-runtime.mjs'
 import { BUILTIN_TOOLS, BUILTIN_GROUPS, expandDisabledToolIds } from './tools-definitions.mjs'
 import { getUserTools, getUserGroups, getCapabilities } from './tools-storage.mjs'
 import { updateGatewayConfig, getGatewayPort } from './tools-gateway.mjs'
@@ -21,6 +24,7 @@ import { syncFilesystemProvider } from './filesystem-mcp-provider.mjs'
 import { decryptSecret } from './secrets.mjs'
 import { listPlugins } from './plugin-registry.mjs'
 import { syncPluginProviders, stopAllPlugins } from './plugin-provider.mjs'
+import { resolveEngine } from './web-search-engines.mjs'
 
 // Tool retrieval's per-profile settings, carried through to the gateway.
 //
@@ -29,6 +33,28 @@ import { syncPluginProviders, stopAllPlugins } from './plugin-provider.mjs'
 // request; this decides whether it runs at all, and it goes away once the
 // default flips. ctxSize rides along because the gateway is where the budget is
 // measured and it has no other route to the number.
+// The general web search engine for this profile (web_search source "web").
+//
+// Choice per profile, connection global: the admin picks an engine for each
+// profile, and says once where SearXNG lives / what the Brave key is. Absent
+// choice, an unknown value, or a chosen engine with no connection all resolve
+// to { kind: 'none' } — OFF is the default and the fail direction (plan D1).
+// A key that fails to decrypt is also off, logged, never a half-configured
+// engine.
+function searchEngineFor(toolSettings, capabilities) {
+  const choice = toolSettings?.webSearchEngine
+  const conn = capabilities?.web_search || {}
+  let braveApiKey = null
+  if (choice === 'brave' && conn.braveApiKeyEnc) {
+    try { braveApiKey = decryptSecret(conn.braveApiKeyEnc) } catch {
+      // Nothing from the error is logged, not even its code: a decrypt failure is
+      // derived from handling the ciphertext, and this log is plaintext on disk.
+      console.warn('Failed to decrypt the Brave Search API key; web search engine is off.')
+    }
+  }
+  return resolveEngine(choice, { searxngUrl: conn.searxngUrl, braveApiKey })
+}
+
 function retrievalSettings(llamaConfig) {
   const r = llamaConfig?.tools?.retrieval
   return {
@@ -61,7 +87,7 @@ export function buildGatewayConfig(llamaConfig) {
       disabledTools,
       toolRetrieval: retrievalSettings(llamaConfig),
       ctxSize: llamaConfig?.ctxSize,
-      webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 },
+      webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000, searchEngine: { kind: 'none' } },
       postgres: { enabled: false },
       documents: { enabled: false },
       sqlite: { enabled: false },
@@ -69,6 +95,9 @@ export function buildGatewayConfig(llamaConfig) {
       fileSystem: { enabled: false },
       git:       { enabled: false },
       scholar: { enabled: false },
+      python: { enabled: false },
+      memory: { enabled: false },
+      documentSearch: { enabled: false },
       ...Object.fromEntries(listPlugins().map((p) => [p.id, { enabled: false, isPlugin: true }])),
     }
   }
@@ -106,8 +135,9 @@ export function buildGatewayConfig(llamaConfig) {
   if (postgresWanted) {
     try {
       postgresConnectionString = decryptSecret(capabilities.postgres.connectionStringEnc)
-    } catch (err) {
-      console.warn('Failed to decrypt Postgres connection string:', err.message)
+    } catch {
+      // Same rule as the Brave key above: no error text from a decrypt in the log.
+      console.warn('Failed to decrypt the Postgres connection string; Postgres is off.')
     }
   }
 
@@ -117,6 +147,12 @@ export function buildGatewayConfig(llamaConfig) {
   const gitWanted = toolIdSet.has('git') && !!capabilities.git.rootDir
   const fileSystemWanted = toolIdSet.has('file_system') && !!capabilities.file_system.rootDir
   const scholarWanted = toolIdSet.has('scholar')
+  // Python needs Documents configured (its workspace lives there, plan §2) and
+  // the runtime installed. The runtime check is a cheap existence test here;
+  // python-tool.mjs verifies every hash before the first kernel starts.
+  const pythonRuntimeDir = runtimeDir(configDir())
+  const pythonWanted = toolIdSet.has('python') && !!capabilities.documents.outputDir
+    && fs.existsSync(path.join(pythonRuntimeDir, 'pyodide-lock.json'))
 
   return {
     disabledTools,
@@ -133,6 +169,10 @@ export function buildGatewayConfig(llamaConfig) {
       allowedBaseUrls,
       activeTools,
       maxFetchTokens: toolSettings.maxFetchTokens ?? 2000,
+      // The resolved engine, secret included (this config never leaves the
+      // main process; GET /egress publishes only kind + host, via
+      // deriveEgressFacts). { kind: 'none' } unless chosen AND configured.
+      searchEngine: searchEngineFor(toolSettings, capabilities),
     },
     postgres: {
       enabled: postgresWanted && !!postgresConnectionString,
@@ -168,6 +208,25 @@ export function buildGatewayConfig(llamaConfig) {
       // writes on, deletes off (see DEFAULT_CAPABILITIES.file_system).
       allowWrite: capabilities.file_system.allowWrite !== false,
       allowDestructive: capabilities.file_system.allowDestructive === true,
+    },
+    python: {
+      enabled: pythonWanted,
+      runtimeDir: pythonRuntimeDir,
+      documentsRoot: capabilities.documents.outputDir,
+      maxKernels: capabilities.python.maxKernels,
+      timeoutS: capabilities.python.timeoutS,
+      workspaceCapBytes: capabilities.python.workspaceCapMb * 1024 * 1024,
+      accountCapBytes: capabilities.python.accountCapMb * 1024 * 1024,
+    },
+    // camelCase like fileSystem: permissions.mjs CAPABILITY_CONFIG_KEY maps
+    // document_search to it.
+    documentSearch: {
+      enabled: toolIdSet.has('document_search') && !!capabilities.documents.outputDir,
+      documentsRoot: capabilities.documents.outputDir,
+    },
+    memory: {
+      enabled: toolIdSet.has('memory'),
+      promptBudgetChars: capabilities.memory.promptBudgetChars,
     },
     scholar: {
       enabled: scholarWanted,

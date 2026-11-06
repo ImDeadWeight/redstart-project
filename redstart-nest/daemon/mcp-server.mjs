@@ -31,6 +31,11 @@ import * as gitTool from './git-tool.mjs'
 import * as filesystemProvider from './filesystem-mcp-provider.mjs'
 import * as fsDeleteTool from './fs-delete-tool.mjs'
 import * as scholarTool from './scholar-tool.mjs'
+import * as pythonTool from './python-tool.mjs'
+import * as memoryTool from './memory-tool.mjs'
+import * as documentSearchTool from './document-search-tool.mjs'
+import { getConversation } from './conversations-storage.mjs'
+import { isWellFormedConversationId } from './conversation-workspace.mjs'
 import * as searchToolsProvider from './search-tools-provider.mjs'
 import { pluginProviders, stopAllPlugins } from './plugin-provider.mjs'
 import {
@@ -49,7 +54,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 // searchToolsProvider is LAST, and deliberately: it is the only provider whose
 // job is to describe the others, so it must never shadow one of them on a name
 // collision, and its own tool must never appear in the catalog it searches.
-const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, searchToolsProvider]
+const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, memoryTool, documentSearchTool, searchToolsProvider]
 
 // Resolved per call, never captured in a const: a plugin installed or removed
 // while Nest is running must take effect without a restart. Built-ins come
@@ -204,6 +209,28 @@ function annotateTool(tool) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The conversation a tool call belongs to (chat-tooling plan §2).
+//
+// chat-ui sends it as params._meta['redstart/conversationId'] on tools/call.
+// It is a CLAIM until checked: with an account, the conversation must be one
+// of that account's (conversations-storage keys every record by accountId).
+// With auth off, conversations are keyed by an unauthenticated device id this
+// connection does not carry, and every caller shares the anonymous scope
+// anyway, so a well-formed id is taken as-is. Anything else resolves to no
+// conversation, which tools treat as the account's scratch workspace.
+//
+// A forged id could not escape anyway (it resolves inside the caller's own
+// scope); the check keeps workspace folder names meaningful.
+// ---------------------------------------------------------------------------
+export const META_CONVERSATION_KEY = 'redstart/conversationId'
+
+export function verifiedConversationId(account, claimed) {
+  if (!isWellFormedConversationId(claimed)) return null
+  if (!account) return getAuthRequired() ? null : claimed
+  return getConversation(account.id, claimed) ? claimed : null
+}
+
 let mcpServer = null
 let activeToolsConfig = null   // { webFetch: {...}, postgres: {...}, documents: {...} }
 
@@ -264,9 +291,11 @@ async function handleRpc(msg, send, ctx = { account: null }) {
       return
     }
 
+    const callCtx = { ...ctx, conversationId: verifiedConversationId(ctx.account, params?._meta?.[META_CONVERSATION_KEY]) }
+
     const startedAt = Date.now()
     for (const provider of resolveProviders()) {
-      const result = await provider.callTool(toolName, args, cfg, ctx)
+      const result = await provider.callTool(toolName, args, cfg, callCtx)
       if (result !== null && result !== undefined) {
         // `plugin` and `account` are recorded now so the deferred per-account
         // permission work reads an existing field instead of re-plumbing this
@@ -280,6 +309,10 @@ async function handleRpc(msg, send, ctx = { account: null }) {
           isError: !!result.isError,
           durationMs: Date.now() - startedAt,
         })
+        // Memory marks a save made soon after the web was read in the same
+        // conversation (memory-tool.mjs). Recorded for every network-class
+        // call, successful or not: an error page is web content too.
+        if (policy.cls === 'network') memoryTool.noteNetworkCall(callCtx)
         send({ jsonrpc: '2.0', id, result })
         return
       }
@@ -466,6 +499,7 @@ export function stopMcpServer() {
   }
   activeToolsConfig = null
   postgresTool.closePool()
+  pythonTool.stopAllKernels()
   // Plugin children are separate OS processes; without this they outlive the
   // server that spawned them.
   stopAllPlugins()

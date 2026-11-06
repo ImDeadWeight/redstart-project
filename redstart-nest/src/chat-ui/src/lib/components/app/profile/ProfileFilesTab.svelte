@@ -17,6 +17,27 @@
 	import { FilesService, type FileEntry } from '$lib/services/files.service';
 	import { localBrowser, serverBrowser, type FileBrowser } from '$lib/services/file-browser';
 	import { SvelteSet } from 'svelte/reactivity';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { resolveApiPath } from '$lib/utils/api-fetch';
+	import { getAuthHeaders } from '$lib/utils/api-headers';
+	import { toast } from 'svelte-sonner';
+
+	// search_documents (Phase 5a) keeps an index of these files. It catches up
+	// by itself on each search; this is the manual rebuild for when it looks
+	// wrong. Shown only when the server offers the tool.
+	let rebuilding = $state(false);
+	async function rebuildIndex() {
+		rebuilding = true;
+		try {
+			const res = await fetch(resolveApiPath('/documents/reindex'), { method: 'POST', headers: getAuthHeaders() });
+			if (!res.ok) throw new Error(`${res.status}`);
+			toast.success('Search index cleared. It rebuilds on the next document search.');
+		} catch (e) {
+			toast.error(`Could not rebuild the index (${e instanceof Error ? e.message : e})`);
+		} finally {
+			rebuilding = false;
+		}
+	}
 
 	// Browser for the user's files, wherever they live.
 	//
@@ -583,6 +604,18 @@
 					Preview truncated — download the file to see all of it.
 				</p>
 			{/if}
+		</div>
+	{/if}
+
+	{#if mcpStore.hasTool('search_documents')}
+		<div class="flex items-center justify-between gap-3 border-t border-border/40 pt-3">
+			<p class="text-xs text-muted-foreground">
+				The assistant can search the text of these files. Its index updates itself; rebuild it if search
+				results look out of date.
+			</p>
+			<Button size="sm" variant="outline" onclick={rebuildIndex} disabled={rebuilding}>
+				{rebuilding ? 'Rebuilding…' : 'Rebuild search index'}
+			</Button>
 		</div>
 	{/if}
 </div>

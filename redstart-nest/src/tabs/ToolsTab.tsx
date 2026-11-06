@@ -1,4 +1,4 @@
-import type { LlamaConfig } from '../types'
+import type { LlamaConfig, WebSearchEngine } from '../types'
 import type { useToolsCatalog } from '../hooks/useToolsCatalog'
 import type { useCapabilities, FolderCap } from '../hooks/useCapabilities'
 import { folderCapAllowCreate } from '../hooks/useCapabilities'
@@ -6,6 +6,7 @@ import type { useExternalMcp } from '../hooks/useExternalMcp'
 import type { usePlugins } from '../hooks/usePlugins'
 import { SectionTitle, TogglePill, btnCls, inputCls } from '../components/ui'
 import { FolderPicker } from '../components/FolderPicker'
+import { PythonCapabilityCard } from '../components/PythonCapabilityCard'
 
 // ---------------------------------------------------------------------------
 // Folder-scoped capability card — one component for Documents/SQLite/Vault/
@@ -55,6 +56,9 @@ function isCapabilityReady(cc: CapabilityConfig, id: string): boolean {
     case 'postgres': return cc.postgres.hasConnectionString
     case 'documents': return !!cc.documents.outputDir
     case 'scholar': return true   // no setup required
+    case 'memory': return true   // nothing to configure
+    case 'document_search': return !!cc.documents.outputDir
+    case 'python': return !!cc.documents.outputDir && cc.python.runtimeInstalled && cc.python.sandboxAvailable
     case 'sqlite':
     case 'vault':
     case 'git':
@@ -176,6 +180,8 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
     capabilityConfig, pgConnectionString, setPgConnectionString, pgMaxRows, setPgMaxRows,
     pgTestResult, pgSaving, savePostgresConfig, testPostgresConnection,
     scholarVenueFilter, setScholarVenueFilter, saveScholarVenueFilter,
+    searxngUrl, setSearxngUrl, braveApiKey, setBraveApiKey, webSearchError,
+    saveWebSearchConfig, clearBraveApiKey,
     toolContextEstimate, retrievalStatus, applyRetrieval,
   } = caps
   const {
@@ -192,6 +198,17 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
   const isActive = (id: string) => config.tools?.activeToolIds?.includes(id) ?? false
   const webAccessOn = config.tools?.webAccessEnabled !== false
   const restrictOn = config.tools?.whitelistEnabled !== false
+
+  // Mirrors resolveEngine in web-search-engines.mjs: chosen AND configured, or
+  // off. The UI says "off" in exactly the cases the server treats as off.
+  const searchEngine: WebSearchEngine = config.tools?.webSearchEngine ?? 'none'
+  const savedSearxng = capabilityConfig?.web_search?.searxngUrl || null
+  const searchEngineReady =
+    (searchEngine === 'searxng' && !!savedSearxng) ||
+    (searchEngine === 'brave' && !!capabilityConfig?.web_search?.hasBraveApiKey)
+  const searchEngineDestination = searchEngine === 'searxng'
+    ? (() => { try { return `SearXNG at ${new URL(savedSearxng || '').host}` } catch { return 'SearXNG' } })()
+    : 'Brave Search (api.search.brave.com)'
 
   return (
     <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
@@ -390,6 +407,64 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                 </div>
               )}
 
+              {/* General web search engine (web_search source "web"). Off by
+                  default; "off" is a visible state, not an absent control, and
+                  the selected engine's destination is named (plan D1). The
+                  choice is this profile's; the connection below is global. */}
+              <div className="py-2 border-t border-zinc-700/50 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0">
+                    <span className="text-xs text-zinc-300">Web search engine</span>
+                    <span className="block text-xs text-zinc-600">
+                      {searchEngine === 'none'
+                        ? 'Off. The model can only search the specific sources above.'
+                        : searchEngineReady
+                        ? `Queries are sent to ${searchEngineDestination}.`
+                        : 'Selected but not configured below, so it is off.'}
+                    </span>
+                  </span>
+                  <select
+                    value={searchEngine}
+                    onChange={e => setToolsField('webSearchEngine', e.target.value as WebSearchEngine)}
+                    className="flex-shrink-0 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-orange-500">
+                    <option value="none">Off</option>
+                    <option value="searxng">SearXNG (self-hosted)</option>
+                    <option value="brave">Brave Search API</option>
+                  </select>
+                </div>
+
+                {searchEngine !== 'none' && (
+                  <div className="px-3 py-2 rounded text-xs border bg-yellow-900/30 border-yellow-700 text-yellow-300">
+                    ⚠ Every web search the model makes is sent to this engine{searchEngine === 'searxng' ? ', which forwards it to the public search engines it is configured to use' : ', a hosted service outside your network'}. Result snippets come from unreviewed pages.
+                    {restrictOn && ' With sources restricted, results are filtered to the approved sources.'}
+                  </div>
+                )}
+
+                {searchEngine === 'searxng' && (
+                  <div className="flex gap-2">
+                    <input value={searxngUrl} onChange={e => setSearxngUrl(e.target.value)}
+                      placeholder="SearXNG URL, e.g. http://search.lan:8080/" className={inputCls.dark} />
+                    <button onClick={saveWebSearchConfig} className={btnCls.secondary}>Save</button>
+                  </div>
+                )}
+                {searchEngine === 'searxng' && (
+                  <p className="text-xs text-zinc-600">The instance must allow JSON results (settings.yml → search.formats: json). Shared by every profile.</p>
+                )}
+
+                {searchEngine === 'brave' && (
+                  <div className="flex gap-2">
+                    <input type="password" value={braveApiKey} onChange={e => setBraveApiKey(e.target.value)}
+                      placeholder={capabilityConfig?.web_search?.hasBraveApiKey ? 'API key saved (enter a new one to replace)' : 'Brave Search API key'}
+                      className={inputCls.dark} />
+                    <button onClick={saveWebSearchConfig} className={btnCls.secondary}>Save</button>
+                    {capabilityConfig?.web_search?.hasBraveApiKey && (
+                      <button onClick={clearBraveApiKey} className={btnCls.secondary}>Remove</button>
+                    )}
+                  </div>
+                )}
+                {webSearchError && <p className="text-xs text-red-400">{webSearchError}</p>}
+              </div>
+
               <div className="flex items-center gap-3 pt-2 border-t border-zinc-700/50">
                 <label className="text-xs text-zinc-400 whitespace-nowrap">Max tokens per fetch</label>
                 <input
@@ -463,6 +538,47 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
               {...card}
             />
           ))}
+
+          <PythonCapabilityCard
+            status={capabilityConfig?.python ?? null}
+            documentsConfigured={!!capabilityConfig?.documents.outputDir}
+            active={isActive('python')}
+            onToggle={() => toggleTool('python')}
+            onChanged={caps.loadCapabilities}
+          />
+
+          {/* ---- Document search ---- */}
+          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-zinc-200">Document search</span>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`text-xs ${isActive('document_search') ? (capabilityConfig?.documents.outputDir ? 'text-green-400' : 'text-amber-400') : 'text-zinc-500'}`}>
+                  {isActive('document_search') ? (capabilityConfig?.documents.outputDir ? 'Enabled' : 'Enabled, not ready') : 'Disabled'}
+                </span>
+                <button onClick={() => toggleTool('document_search')} className={btnCls.chip}>
+                  {isActive('document_search') ? 'Disable' : 'Enable'}
+                </button>
+              </div>
+            </div>
+            {!capabilityConfig?.documents.outputDir && <p className="text-xs text-amber-400 mb-1.5">Choose a Documents folder first: this searches each user's files there.</p>}
+            <p className="text-xs text-zinc-600 mt-1.5">Gives the assistant search_documents: it finds the passages in a user's own files (uploads, chat attachments, conversation workspaces, created documents) that answer a question, and cites them. Private per account; nothing leaves the machine. The index is kept in Redstart's config folder and catches up on each search. Ranking uses the embedding model when it runs (it starts with tool retrieval) and word matching otherwise. Shared folders come with resource grants.</p>
+          </div>
+
+          {/* ---- Memory ---- */}
+          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-zinc-200">Memory</span>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`text-xs ${isActive('memory') ? 'text-green-400' : 'text-zinc-500'}`}>
+                  {isActive('memory') ? 'Enabled' : 'Disabled'}
+                </span>
+                <button onClick={() => toggleTool('memory')} className={btnCls.chip}>
+                  {isActive('memory') ? 'Disable' : 'Enable'}
+                </button>
+              </div>
+            </div>
+            <p className="text-xs text-zinc-600 mt-1.5">Lets the assistant remember durable facts each user tells it about themselves (their tools, preferences, role) across chats. Private per account; the newest (about 300 tokens' worth) ride along with every request. Every save appears in the chat with Undo, users see, edit and delete all of theirs under Settings → Memory, and a save made while the assistant was reading the web is flagged. Withhold it from a role with the capability list.</p>
+          </div>
 
           {/* ---- Scholar ---- */}
           <div className="bg-zinc-800/40 rounded px-3 py-2.5">

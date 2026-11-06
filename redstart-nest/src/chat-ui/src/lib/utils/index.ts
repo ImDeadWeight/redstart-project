@@ -163,6 +163,7 @@ export {
 	deriveAgenticSections,
 	parseToolResultWithImages,
 	downloadFile,
+	fetchFileBlob,
 	hasAgenticContent,
 	type AgenticSection,
 	type ToolResultLine

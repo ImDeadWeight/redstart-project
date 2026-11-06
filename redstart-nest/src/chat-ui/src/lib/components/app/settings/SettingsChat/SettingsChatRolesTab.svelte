@@ -10,6 +10,7 @@
 		capabilities?: string[] | null;
 		webSourceIds?: string[] | null;
 		allowWhitelistBypass?: boolean | null;
+		allowWebSearchEngine?: boolean | null;
 		maxFetchTokens?: number | null;
 		fileSystem?: { allowWrite?: boolean; allowDestructive?: boolean } | null;
 		surfaces?: string[] | null;
@@ -81,6 +82,7 @@
 				capabilities: null,
 				webSourceIds: null,
 				allowWhitelistBypass: null,
+				allowWebSearchEngine: null,
 				maxFetchTokens: null,
 				fileSystem: null,
 				surfaces: null,
@@ -185,6 +187,7 @@
 					: 'no web sources'
 				: 'all web sources'
 		);
+		if (p.allowWebSearchEngine === false) parts.push('no web search engine');
 		if (p.fileSystem?.allowWrite === false) parts.push('no writes');
 		if (p.fileSystem?.allowDestructive === false) parts.push('no deletes');
 		if (Array.isArray(p.surfaces)) parts.push(`apps: ${p.surfaces.join(', ') || 'none'}`);
@@ -361,6 +364,21 @@
 					{:else}
 						<p class="pl-6 text-xs text-muted-foreground">Every source the profile has active.</p>
 					{/if}
+					<label class="flex items-center gap-2 text-sm">
+						<input
+							type="checkbox"
+							checked={draft.permissions.allowWebSearchEngine === false}
+							onchange={(e) => {
+								if (!draft) return;
+								draft.permissions.allowWebSearchEngine = e.currentTarget.checked ? false : null;
+							}}
+						/>
+						Block the general web search engine
+					</label>
+					<p class="pl-6 text-xs text-muted-foreground">
+						Removes web_search's "web" source (SearXNG or Brave) for this role even when the profile
+						has one. A role can only turn it off, never on.
+					</p>
 				</div>
 
 				<!-- File system policy -->

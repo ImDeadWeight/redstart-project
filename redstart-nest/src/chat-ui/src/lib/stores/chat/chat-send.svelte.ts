@@ -15,6 +15,7 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
+import { uploadToWorkspace } from '$lib/utils/workspace-upload';
 import { isRouterMode } from '$lib/stores/server.svelte';
 import { selectedModelName, modelsStore } from '$lib/stores/models.svelte';
 import {
@@ -47,8 +48,12 @@ export class ChatSendController {
 		private readonly ui: ChatUiState
 	) {}
 
-	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
-		if (!content.trim() && (!extras || extras.length === 0)) return;
+	async sendMessage(
+		content: string,
+		extras?: DatabaseMessageExtra[],
+		workspaceFiles?: File[]
+	): Promise<void> {
+		if (!content.trim() && (!extras || extras.length === 0) && !workspaceFiles?.length) return;
 		const activeConv = conversationsStore.activeConversation;
 
 		// If agentic loop is running, inject as a steering message instead of starting a new flow
@@ -109,9 +114,18 @@ export class ChatSendController {
 					});
 				}
 			}
+			// Attachments into this conversation's workspace, for run_python. Only
+			// now, because a new conversation has no id until just above. The
+			// note goes into the message the model reads; the title below is
+			// still made from what the user typed.
+			const workspaceNote = workspaceFiles?.length
+				? await uploadToWorkspace(currentConv.id, workspaceFiles)
+				: null;
 			const userMessage = await messageRepo.addMessage(
 				MessageRole.USER,
-				content,
+				workspaceNote ? (content ? `${content}
+
+${workspaceNote}` : workspaceNote) : content,
 				MessageType.TEXT,
 				parentIdForUserMessage ?? '-1',
 				allExtras

@@ -49,7 +49,8 @@ export enum HealthCheckStatus {
 export enum MCPContentType {
 	TEXT = 'text',
 	IMAGE = 'image',
-	RESOURCE = 'resource'
+	RESOURCE = 'resource',
+	RESOURCE_LINK = 'resource_link'
 }
 
 /**

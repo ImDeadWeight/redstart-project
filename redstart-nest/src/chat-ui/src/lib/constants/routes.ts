@@ -15,6 +15,7 @@ export const SETTINGS_SECTION_SLUGS = {
 	ROLES: 'roles',
 	SYSTEM_PROMPT: 'system-prompt',
 	CONNECTORS: 'connectors',
+	MEMORY: 'memory',
 	ADVANCED: 'advanced'
 } as const;
 

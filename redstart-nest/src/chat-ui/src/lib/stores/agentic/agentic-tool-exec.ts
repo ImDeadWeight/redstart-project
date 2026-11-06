@@ -45,6 +45,39 @@ import { twigFsApi } from '$lib/utils/twig';
 import { permissionsStore } from '$lib/stores/permissions.svelte';
 import { isAbortError } from '$lib/utils';
 import { extractBase64Attachments } from './agentic-attachments';
+import { parseResourceLine, resourceKind } from '$lib/utils/resource-links';
+import { fetchFileBlob } from '$lib/utils/agentic';
+
+// Images a tool returned BY REFERENCE (Phase 2 resource lines) reach a vision
+// model the way base64 attachments always did: fetched now, for this request
+// only, and never written into the stored message. Capped so one result with
+// twenty charts cannot fill the context with pixels.
+const MAX_LINKED_IMAGES_FOR_VISION = 4;
+const MAX_LINKED_IMAGE_BYTES = 4 * 1024 * 1024;
+
+async function linkedImagesAsDataUrls(result: string): Promise<string[]> {
+	const urls: string[] = [];
+	for (const line of result.split(/\r?\n/)) {
+		if (urls.length >= MAX_LINKED_IMAGES_FOR_VISION) break;
+		const resource = parseResourceLine(line);
+		if (!resource || resourceKind(resource.mimeType) !== 'image') continue;
+		try {
+			const blob = await fetchFileBlob(resource.path);
+			if (blob.size > MAX_LINKED_IMAGE_BYTES) continue;
+			urls.push(
+				await new Promise<string>((resolve, reject) => {
+					const reader = new FileReader();
+					reader.onload = () => resolve(reader.result as string);
+					reader.onerror = () => reject(reader.error);
+					reader.readAsDataURL(blob);
+				})
+			);
+		} catch {
+			/* the model still has the [file: ...] line; the picture is a bonus */
+		}
+	}
+	return urls;
+}
 import { buildFinalTimings } from './agentic-timings';
 import type { AgenticSessionState } from './agentic-session.svelte';
 import type { MCPToolCall, DatabaseMessageExtraImageFile } from '$lib/types';
@@ -248,7 +281,7 @@ export class AgenticToolExec {
 						id: toolCall.id,
 						function: { name: toolName, arguments: toolCall.function.arguments }
 					};
-					const executionResult = await mcpStore.executeTool(mcpCall, signal);
+					const executionResult = await mcpStore.executeTool(mcpCall, signal, { conversationId });
 
 					result = executionResult.content;
 
@@ -316,6 +349,12 @@ export class AgenticToolExec {
 						`[AgenticStore] Skipping image attachment (model "${effectiveModel}" does not support vision)`
 					);
 				}
+			}
+		}
+
+		if (modelsStore.modelSupportsVision(effectiveModel)) {
+			for (const url of await linkedImagesAsDataUrls(cleanedResult)) {
+				contentParts.push({ type: ContentPartType.IMAGE_URL, image_url: { url } });
 			}
 		}
 

@@ -14,7 +14,8 @@ import {
 	ShieldCheck,
 	ScrollText,
 	KeyRound,
-	SlidersHorizontal
+	SlidersHorizontal,
+	Brain
 } from '@lucide/svelte';
 import type { Component } from 'svelte';
 import type {
@@ -44,6 +45,7 @@ export const SETTINGS_SECTION_TITLES = {
 	ROLES: 'Roles',
 	SYSTEM_PROMPT: 'System Prompt',
 	CONNECTORS: 'Connectors',
+	MEMORY: 'Memory',
 	ADVANCED: 'Advanced'
 } as const;
 
@@ -75,7 +77,8 @@ const STANDALONE_SECTIONS: { title: SettingsSectionTitle; slug: string; icon: Co
 		title: SETTINGS_SECTION_TITLES.CONNECTORS,
 		slug: SETTINGS_SECTION_SLUGS.CONNECTORS,
 		icon: KeyRound
-	}
+	},
+	{ title: SETTINGS_SECTION_TITLES.MEMORY, slug: SETTINGS_SECTION_SLUGS.MEMORY, icon: Brain }
 ];
 
 const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {

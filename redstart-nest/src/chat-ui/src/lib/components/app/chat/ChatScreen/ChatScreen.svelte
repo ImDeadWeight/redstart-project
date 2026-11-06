@@ -38,6 +38,7 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
+	import { workspaceAvailable, isWorkspaceOnlyFile } from '$lib/utils/workspace-upload';
 	import { onMount } from 'svelte';
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
 
@@ -262,7 +263,14 @@
 	}
 
 	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
-		const plainFiles = files ? $state.snapshot(files) : undefined;
+		// With run_python served, every attachment also goes to the
+		// conversation's workspace (utils/workspace-upload.ts). Files only code
+		// can read (xlsx, parquet) go ONLY there: there is no text to extract.
+		const toWorkspace = workspaceAvailable()
+			? (files ?? []).map((f) => f.file).filter((f): f is File => f instanceof File)
+			: [];
+		const forMessage = files?.filter((f) => !(toWorkspace.length && isWorkspaceOnlyFile(f.name)));
+		const plainFiles = forMessage?.length ? $state.snapshot(forMessage) : undefined;
 		const result = plainFiles
 			? await parseFilesToMessageExtras(plainFiles, activeModelId ?? undefined)
 			: undefined;
@@ -282,7 +290,7 @@
 
 		// Enable autoscroll for user-initiated message sending
 		autoScroll.enable();
-		await chatStore.sendMessage(message, extras);
+		await chatStore.sendMessage(message, extras, toWorkspace.length ? toWorkspace : undefined);
 		autoScroll.scrollToBottom();
 
 		return true;
@@ -293,7 +301,10 @@
 		const generallyUnsupported: File[] = [];
 
 		for (const file of files) {
-			if (isFileTypeSupported(file.name, file.type)) {
+			if (
+				isFileTypeSupported(file.name, file.type) ||
+				(workspaceAvailable() && isWorkspaceOnlyFile(file.name))
+			) {
 				generallySupported.push(file);
 			} else {
 				generallyUnsupported.push(file);

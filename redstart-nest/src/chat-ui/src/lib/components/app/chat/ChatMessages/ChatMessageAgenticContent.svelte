@@ -37,6 +37,8 @@
 	} from '$lib/stores/agentic.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { toast } from 'svelte-sonner';
+	import ToolResultResource from './ToolResultResource.svelte';
+	import MemorySavedChip from './MemorySavedChip.svelte';
 
 	/**
 	 * Download a file a tool produced, reporting failures.
@@ -322,7 +324,8 @@
 						Waiting for result...
 					</div>
 				{:else if section.toolResult}
-					{@const filePaths = section.parsedLines.filter(l => l.filePath).map(l => l.filePath!)}
+					{@const resourcePaths = new Set(section.parsedLines.filter(l => l.resource).map(l => l.resource!.path))}
+					{@const filePaths = [...new Set(section.parsedLines.filter(l => l.filePath && !resourcePaths.has(l.filePath)).map(l => l.filePath!))]}
 					{#if filePaths.length > 0}
 						<div class="mb-2 flex flex-wrap gap-2">
 							{#each filePaths as fp (fp)}
@@ -338,9 +341,15 @@
 					{/if}
 					<div class="overflow-auto rounded-lg border border-border bg-muted p-4">
 						{#each section.parsedLines as line, i (i)}
-							<div class="font-mono text-xs leading-relaxed whitespace-pre-wrap">
-								{line.text}
-							</div>
+							{#if line.resource}
+								<ToolResultResource resource={line.resource} onDownload={handleDownload} />
+							{:else if line.memory}
+								<MemorySavedChip id={line.memory.id} text={line.memory.text} fromWeb={line.memory.fromWeb} />
+							{:else}
+								<div class="font-mono text-xs leading-relaxed whitespace-pre-wrap">
+									{line.text}
+								</div>
+							{/if}
 							{#if line.image}
 								<img
 									src={line.image.base64Url}

@@ -7,6 +7,7 @@ import { settingsStore } from '$lib/stores/settings.svelte';
 import { toast } from 'svelte-sonner';
 import { getFileTypeCategory } from '$lib/utils';
 import { convertPDFToText } from './pdf-processing';
+import { isWorkspaceOnlyFile } from './workspace-upload';
 
 /**
  * Read a file as a data URL (base64 encoded)
@@ -121,6 +122,10 @@ export async function processFilesToChatUploaded(
 				// Generate preview URL for video files
 				const preview = await readFileAsDataURL(file);
 				results.push({ ...base, preview });
+			} else if (isWorkspaceOnlyFile(file.name)) {
+				// A binary data file accepted for run_python's workspace: no
+				// text to show, and reading it as UTF-8 would only make noise.
+				results.push(base);
 			} else {
 				// Fallback: treat unknown files as text
 				try {

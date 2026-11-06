@@ -118,8 +118,18 @@ export class MCPToolOps {
 		return tools;
 	}
 
-	async executeTool(toolCall: MCPToolCall, signal?: AbortSignal): Promise<ToolExecutionResult> {
+	async executeTool(
+		toolCall: MCPToolCall,
+		signal?: AbortSignal,
+		context?: { conversationId?: string }
+	): Promise<ToolExecutionResult> {
 		const toolName = toolCall.function.name;
+		// Which chat this call belongs to, so Nest can give its files a home.
+		// Only the conversation id travels, never content; Nest checks it is
+		// the caller's before using it.
+		const _meta = context?.conversationId
+			? { 'redstart/conversationId': context.conversationId }
+			: undefined;
 
 		const serverName = this.tools.toolsIndex.get(toolName);
 		if (!serverName) throw new Error(`Unknown tool: ${toolName}`);
@@ -130,7 +140,7 @@ export class MCPToolOps {
 		const args = parseToolArguments(toolCall.function.arguments);
 
 		try {
-			return await MCPService.callTool(connection, { name: toolName, arguments: args }, signal);
+			return await MCPService.callTool(connection, { name: toolName, arguments: args, _meta }, signal);
 		} catch (error) {
 			// Session expired (server restarted) - reconnect and retry once
 			if (MCPService.isSessionExpiredError(error)) {
@@ -139,7 +149,7 @@ export class MCPToolOps {
 				const newConnection = this.conn.connections.get(serverName);
 				if (!newConnection) throw new Error(`Failed to reconnect to "${serverName}"`);
 
-				return MCPService.callTool(newConnection, { name: toolName, arguments: args }, signal);
+				return MCPService.callTool(newConnection, { name: toolName, arguments: args, _meta }, signal);
 			}
 
 			throw error;

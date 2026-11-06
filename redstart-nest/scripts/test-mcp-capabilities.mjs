@@ -993,7 +993,9 @@ async function main() {
 
     await test('🔍 buildGatewayConfig emits camelCase fileSystem (producer/consumer keys agree)', async () => {
       const cfg = buildGatewayConfig(fsProfile)
-      assert(cfg.fileSystem?.enabled === true, `expected cfg.fileSystem.enabled true; keys: ${JSON.stringify(Object.keys(cfg))}`)
+      // No dump of cfg in the message: it can carry decrypted secrets (the Brave
+      // key, the Postgres connection string), and CI logs are public.
+      assert(cfg.fileSystem?.enabled === true, 'expected cfg.fileSystem.enabled true (and no snake_case file_system key)')
       assert(cfg.file_system === undefined, 'must not emit snake_case file_system — the provider reads cfg.fileSystem')
     })
 

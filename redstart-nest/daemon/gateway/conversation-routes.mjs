@@ -19,6 +19,25 @@
 
 import { getConversations, getConversation as getConv, createConversation, updateConversation, deleteConversation, deleteConversationsWithForks } from '../conversations-storage.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
+import { getCapabilities } from '../tools-storage.mjs'
+import { trashWorkspace } from '../conversation-workspace.mjs'
+import { dropKernel } from '../python-tool.mjs'
+import { logEvent } from '../logger.mjs'
+
+// A deleted conversation's workspace (chat-tooling plan §2) goes to the trash
+// with it, and its Python kernel stops. Diffed from the caller's own list
+// rather than taken from the delete call: the fork walk in
+// deleteConversationsWithForks visits other accounts' forks too, and only
+// spares them at the end, so its id set is not the set that was deleted.
+async function retireWorkspaces(account, deletedIds) {
+  const documentsRoot = getCapabilities().documents?.outputDir
+  for (const id of deletedIds) {
+    dropKernel(account, id)
+    if (!documentsRoot) continue
+    const result = await trashWorkspace(documentsRoot, account, id)
+    if (!result.ok) logEvent('workspace', 'trash_failed', { reason: result.error })
+  }
+}
 
 export function isConversationRoute(urlPath) {
   return urlPath === '/conversations' || /^\/conversations\/[^/]+$/.test(urlPath)
@@ -26,7 +45,7 @@ export function isConversationRoute(urlPath) {
 
 // Returns true when the request was handled (a response has been written),
 // false when the path is not ours and the gateway should keep dispatching.
-export async function handleConversationRoute(req, res, urlPath, accountId) {
+export async function handleConversationRoute(req, res, urlPath, accountId, { account = null } = {}) {
   if (req.method === 'GET' && urlPath === '/conversations') {
     const convs = getConversations(accountId)
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
@@ -67,11 +86,14 @@ export async function handleConversationRoute(req, res, urlPath, accountId) {
     if (req.method === 'DELETE') {
       const url = new URL(req.url, 'http://x')
       const deleteWithForks = url.searchParams.get('deleteWithForks') === 'true'
+      const before = new Set(getConversations(accountId).map((c) => c.id))
       if (deleteWithForks) {
         deleteConversationsWithForks(accountId, convId)
       } else {
         deleteConversation(accountId, convId)
       }
+      const after = new Set(getConversations(accountId).map((c) => c.id))
+      await retireWorkspaces(account, [...before].filter((id) => !after.has(id)))
       sendJson(res, 204)
       return true
     }

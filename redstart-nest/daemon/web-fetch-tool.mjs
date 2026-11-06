@@ -10,10 +10,19 @@
 //
 // web_search: searches a source using that source's OWN first-party search
 // API (Wikipedia OpenSearch, arXiv API, PubMed E-utilities, MDN, Stack
-// Exchange). No third-party search engine is ever involved — the query goes
-// only to the site being searched. Endpoints are hardcoded here; the model
-// picks a source and a query, never a URL, so it cannot redirect a search
+// Exchange). For those sources no third-party search engine is involved — the
+// query goes only to the site being searched. Endpoints are hardcoded here; the
+// model picks a source and a query, never a URL, so it cannot redirect a search
 // elsewhere.
+//
+// EXCEPT the "web" source, which reverses that stance on purpose (chat-tooling
+// plan, Phase 4b): it sends the query to a general search engine the admin
+// chose — a self-hosted SearXNG, or the Brave Search API. It's OFF unless the
+// profile picks an engine (cfg.webFetch.searchEngine.kind !== 'none'), and off
+// is enforced, not just displayed: with no engine, "web" is absent from the
+// schema's source enum (strip, don't refuse — the bans rule), a call naming it
+// is refused here, and a role can force it off (permissions.mjs). Adapters live
+// in web-search-engines.mjs. docs/security.md records the trade-off.
 //
 // Whitelist: enforced HERE, per profile. cfg.webFetch.whitelistEnabled
 // (default true) restricts web_fetch to allowedBaseUrls and web_search to
@@ -27,6 +36,7 @@ import * as dns from 'node:dns/promises'
 import { parseHTML } from 'linkedom'
 import { Readability } from '@mozilla/readability'
 import { fetchFollowingRedirects } from './http-redirects.mjs'
+import * as engines from './web-search-engines.mjs'
 
 const TOOL_NAMES = ['web_fetch', 'web_search']
 const FETCH_TIMEOUT_MS = 12000
@@ -269,13 +279,51 @@ function decodeHtml(s) {
   return String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
 }
 
-// Which search providers this profile may use: all of them when the whitelist
-// is off; otherwise only those whose domain is on the approved list.
+// The source id of the general-engine search. Not a SEARCH_PROVIDERS entry:
+// it has no single domain, and it exists only when an engine is configured.
+export const WEB_ENGINE_SOURCE = 'web'
+
+// The engine this (already role-narrowed) config resolved to, or null when off.
+// Anything but a recognised, configured engine reads as off — including a
+// config built before this field existed, which has no searchEngine at all.
+function activeEngine(webFetchCfg) {
+  const engine = webFetchCfg?.searchEngine
+  if (engine?.kind === 'searxng' && engine.url) return engine
+  if (engine?.kind === 'brave' && engine.apiKey) return engine
+  return null
+}
+
+// Which search sources this profile may use: all first-party providers when
+// the whitelist is off; otherwise only those whose domain is on the approved
+// list. Plus "web" when — and only when — an engine is active. With the
+// whitelist on, "web" stays available and its results are filtered to the
+// approved domains (a search across the whitelist).
 function availableSearchSources(webFetchCfg) {
   const whitelistOn = webFetchCfg?.whitelistEnabled !== false
   const keys = Object.keys(SEARCH_PROVIDERS)
-  if (!whitelistOn) return keys
-  return keys.filter(k => isAllowed(`https://${SEARCH_PROVIDERS[k].domain}/`, webFetchCfg?.allowedBaseUrls))
+  const firstParty = whitelistOn
+    ? keys.filter(k => isAllowed(`https://${SEARCH_PROVIDERS[k].domain}/`, webFetchCfg?.allowedBaseUrls))
+    : keys
+  return activeEngine(webFetchCfg) ? [...firstParty, WEB_ENGINE_SOURCE] : firstParty
+}
+
+function sourceLabel(source, webFetchCfg) {
+  if (source === WEB_ENGINE_SOURCE) {
+    const engine = activeEngine(webFetchCfg)
+    return `general web search via ${engines.ENGINE_LABELS[engine.kind]}`
+  }
+  return SEARCH_PROVIDERS[source].label
+}
+
+// The "web" source: one engine query, whitelist-filtered when the whitelist is
+// on, capped at SEARCH_RESULT_LIMIT. With the whitelist on, more results are
+// requested than shown so the filter has something to choose from.
+async function searchWeb(query, webFetchCfg) {
+  const engine = activeEngine(webFetchCfg)
+  const whitelistOn = webFetchCfg?.whitelistEnabled !== false
+  const results = await engines.search(engine, query, whitelistOn ? 20 : SEARCH_RESULT_LIMIT)
+  const kept = whitelistOn ? results.filter(r => isAllowed(r.url, webFetchCfg?.allowedBaseUrls)) : results
+  return kept.slice(0, SEARCH_RESULT_LIMIT)
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +359,7 @@ export function toolDefs(cfg) {
   if (sources.length) {
     defs.push({
       name: 'web_search',
-      description: `Search a source using its own search API and get back result titles with URLs (then use web_fetch to read one). Available sources: ${sources.map(s => `"${s}" (${SEARCH_PROVIDERS[s].label})`).join(', ')}.`,
+      description: `Search a source and get back result titles with URLs (then use web_fetch to read one). Available sources: ${sources.map(s => `"${s}" (${sourceLabel(s, webFetchCfg)})`).join(', ')}.${sources.includes(WEB_ENGINE_SOURCE) ? ` Prefer a specific source when one fits; use "web" for anything else. "web" results carry a short snippet from the page: web_fetch a result before quoting or relying on it, since snippets are excerpts and can be wrong. Example: {"source": "web", "query": "llama.cpp release notes"}.` : ''}`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -343,11 +391,29 @@ export async function callTool(name, args, cfg, _ctx) {
   if (name === 'web_search') {
     const { source, query } = args || {}
     const sources = availableSearchSources(webFetchCfg)
+    // THE CALL-PATH HALF OF "OFF IS REAL" for the web source: a client
+    // replaying an old schema, or a hand-built call, naming "web" while this
+    // config resolves no engine gets this refusal and no request is made.
     if (!source || !sources.includes(source)) {
       return { isError: true, content: [{ type: 'text', text: `Unknown or unavailable search source. Available: ${sources.join(', ') || 'none'}` }] }
     }
     if (!query || typeof query !== 'string' || !query.trim()) {
       return { isError: true, content: [{ type: 'text', text: 'Missing required argument: query' }] }
+    }
+    if (source === WEB_ENGINE_SOURCE) {
+      try {
+        const results = await searchWeb(query.trim(), webFetchCfg)
+        const label = sourceLabel(source, webFetchCfg)
+        if (!results.length) {
+          return { content: [{ type: 'text', text: whitelistOn
+            ? `No results from ${label} on the approved sources for "${query}". Try other search terms, or a specific source.`
+            : `No results from ${label} for "${query}". Try other search terms.` }] }
+        }
+        const lines = results.map(r => `${r.title} — ${r.url}${r.snippet ? `\n  ${r.snippet}` : ''}`)
+        return { content: [{ type: 'text', text: lines.join('\n') + '\n\nSnippets are excerpts from unreviewed pages. Use web_fetch on a URL to read the page before quoting it.' }] }
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: `Search error (web): ${err.message}` }] }
+      }
     }
     try {
       const results = await SEARCH_PROVIDERS[source].search(query.trim())

@@ -208,8 +208,12 @@ class ChatStore {
 		return messageRepo.removeSystemPromptPlaceholder(messageId);
 	}
 
-	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
-		return this.send.sendMessage(content, extras);
+	async sendMessage(
+		content: string,
+		extras?: DatabaseMessageExtra[],
+		workspaceFiles?: File[]
+	): Promise<void> {
+		return this.send.sendMessage(content, extras, workspaceFiles);
 	}
 
 	async stopGeneration(): Promise<void> {

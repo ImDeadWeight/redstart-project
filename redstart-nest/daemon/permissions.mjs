@@ -21,6 +21,7 @@
 //     whitelistEnabled:  global || role forbids bypass     NOT  role ? … : global
 //     allowWrite:        global && role permits            NOT  global || role
 //     maxFetchTokens:    min(global, role)                 NOT  role ?? global
+//     searchEngine:      role === false ? none : global    NOT  role ?? global
 //
 // PURITY: this module imports nothing from electron and holds no state, so it
 // is directly testable under plain node and cannot accumulate a per-account
@@ -64,6 +65,7 @@ export function capabilityIds() {
 export const DENY_ALL = Object.freeze({
   capabilities: [],
   webSourceIds: [],
+  allowWebSearchEngine: false,
   fileSystem: { allowWrite: false, allowDestructive: false },
   surfaces: [],
   admin: {},
@@ -91,6 +93,9 @@ export const CAPABILITY_CONFIG_KEY = {
   git: 'git',
   file_system: 'fileSystem',
   scholar: 'scholar',
+  python: 'python',
+  memory: 'memory',
+  document_search: 'documentSearch',
 }
 
 /**
@@ -175,6 +180,12 @@ export function narrowConfig(config, permissions) {
 
     // Tighten-only: the role can force the whitelist back on, never off.
     if (p.allowWhitelistBypass === false) web.whitelistEnabled = true
+
+    // The general web search engine (web_search source "web"). Tighten-only,
+    // and there is deliberately no field that NAMES an engine: choosing one
+    // would be granting. A role can turn it off under a profile that has it
+    // on; it can never turn it on, or swap SearXNG for a hosted engine.
+    if (p.allowWebSearchEngine === false) web.searchEngine = { kind: 'none' }
 
     if (!inherits(p.maxFetchTokens)) {
       const current = typeof web.maxFetchTokens === 'number' ? web.maxFetchTokens : Infinity

@@ -1,5 +1,6 @@
 import { AgenticSectionType, ContinueIntentKind, MessageRole } from '$lib/enums';
 import { ATTACHMENT_SAVED_REGEX, FILE_PATH_REGEX, NEWLINE_SEPARATOR } from '$lib/constants';
+import { parseResourceLine, type ToolResultResource } from './resource-links';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type {
 	DatabaseMessage,
@@ -30,7 +31,14 @@ export type ToolResultLine = {
 	text: string;
 	image?: DatabaseMessageExtraImageFile;
 	filePath?: string;
+	/** A Phase 2 resource line: drawn as an image, a table or a download chip. */
+	resource?: ToolResultResource;
+	/** A Phase 3 memory_save line: drawn as a chip with Undo. */
+	memory?: { id: string; text: string; fromWeb: boolean };
 };
+
+/** memory_save's first result line (daemon/memory-tool.mjs). */
+export const MEMORY_LINE_REGEX = /^\[memory: ([A-Za-z0-9-]{8,64})( web)?\] (.+)$/;
 
 /**
  * Derives display sections from a single assistant message and its direct tool results.
@@ -187,10 +195,14 @@ export function parseToolResultWithImages(
 ): ToolResultLine[] {
 	const lines = toolResult.split(NEWLINE_SEPARATOR);
 	return lines.map((line) => {
+		const resource = parseResourceLine(line);
+		if (resource) return { text: line, resource, filePath: resource.path };
+		const mem = line.match(MEMORY_LINE_REGEX);
+		if (mem) return { text: line, memory: { id: mem[1], text: mem[3], fromWeb: !!mem[2] } };
 		const match = line.match(ATTACHMENT_SAVED_REGEX);
 		if (!match || !extras) {
 			const fileMatch = line.match(FILE_PATH_REGEX);
-			return { text: line, filePath: fileMatch?.[1] };
+			return { text: line, filePath: fileMatch?.[1]?.trim() };
 		}
 
 		const attachmentName = match[1];
@@ -291,6 +303,28 @@ export function classifyContinueIntent(messages: DatabaseMessage[], idx: number)
 	}
 
 	return { kind: ContinueIntentKind.RERUN_TURN, truncateAfter: idx - 1 };
+}
+
+/**
+ * Fetch a file a tool produced, with the session, as a Blob. An <img src> or
+ * a plain link would not carry the auth header, which is why every renderer of
+ * a tool's file goes through this (Phase 2: images, tables, downloads).
+ */
+export async function fetchFileBlob(relativePath: string): Promise<Blob> {
+	const base = getServerBaseUrl().replace(/\/$/, '');
+	const url = `${base}/files/download?path=${encodeURIComponent(relativePath)}`;
+	const response = await fetch(url, { headers: getAuthHeaders() });
+	if (!response.ok) {
+		let detail = '';
+		try {
+			const body = await response.json();
+			detail = body?.error?.message ? ` — ${body.error.message}` : '';
+		} catch {
+			/* non-JSON body */
+		}
+		throw new Error(`Download failed: ${response.status} ${response.statusText}${detail}`);
+	}
+	return response.blob();
 }
 
 /**

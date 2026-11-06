@@ -20,6 +20,9 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 - [Your files (web UI)](#your-files-web-ui)
 - [Destructive operations](#destructive-operations)
 - [Logging](#logging)
+- [Running model-written code (run_python)](#running-model-written-code-run_python)
+- [Document search](#document-search)
+- [Memory](#memory)
 - [Tool bans](#tool-bans)
 - [Whitelist & SSRF enforcement](#whitelist--ssrf-enforcement)
 - [External MCP servers](#external-mcp-servers)
@@ -329,6 +332,49 @@ Both halves — the blocklist/scalars-only rule and the allowlist — are proven
 
 ---
 
+## Running model-written code (run_python)
+
+The Python capability lets the model write code and run it. Model-written code is **attacker-influenced code**: a fetched page or an uploaded file can prompt-inject the model into writing whatever the attacker wants. So the design question was never "is the model trustworthy" but "what can this code reach". Native CPython was rejected for that reason: on Windows there's no cheap process sandbox, and it would be arbitrary code execution as the Nest user.
+
+What runs instead is **Pyodide** (CPython compiled to WebAssembly) in a separate child process, one per active conversation. What contains it, strongest first:
+
+1. **WebAssembly.** The interpreter has no system calls of its own. Its whole reach is the JavaScript objects the host exposes.
+2. **Node's permission model.** The child runs with `--permission` and nothing else granted except reading the pinned runtime and its own script, and reading and writing the conversation's workspace. No network, no child processes, no workers, no native addons, so the runtime refuses those from any code path, Pyodide's own internals included. Node only has a network permission from version 25. The desktop app runs its server on the bundled Node 26, so this is always available there. On a server running an older Node, **run_python is unavailable** and the Tools tab says why. It never falls back to a weaker sandbox.
+3. **No code generation from strings, and fewer handles.** `eval`/`Function` are off for the child. `require`, `fetch`, `WebSocket`, `process.getBuiltinModule` and `dlopen` are removed, `process.binding` answers one question, and package loading accepts only the pinned, installed set (no pip, no URLs).
+4. **Links are refused.** Creating a symlink fails, and so does following one already in the workspace, because the permission model follows links out of an allowed folder.
+5. **Nothing of the host's environment.** The child starts with an empty environment, and clears what Windows adds back before any code runs.
+
+`scripts/test-python-sandbox.mjs` runs every escape attempt from the design measurements against the real runtime: mounts outside the workspace, links, `..`, every removed handle, `eval` and dynamic `import()`, sockets through Python, through `urllib` and through Pyodide's own socket layer, and loading packages from a URL. It asserts that **zero connections** reach a stub server it runs, and that nothing was written outside the workspace. It must pass again on every Pyodide upgrade.
+
+**The runtime is pinned.** About 30 MB, downloaded once from the Tools tab. Each file is checked against a SHA-256 written in `daemon/python-runtime.mjs` (the wheels against the pinned lock file's own hashes), and every file is re-verified before the first kernel starts.
+
+**Files.** Each conversation has a workspace, `chats/<conversation>/`, inside your own Documents folder ([per-account storage](#per-account-file-storage) applies unchanged). The conversation id the chat UI sends is honoured only if the conversation is yours; anything else uses your `chats/_scratch/`. With run_python available, the chat UI also uploads your attachments there. Deleting a conversation sends its workspace to the recycle bin (or `.trash/`), and at startup a workspace whose conversation no longer exists (for example, pruned after 30 days) goes the same way. Workspaces are capped at 200 MB each and 2 GB per account by default.
+
+**Limits.** 30 s per call by default, 120 s at most, enforced by killing the kernel. Two warm kernels at once by default (≈ 457 MB of RAM each), stopped after 10 idle minutes.
+
+---
+
+## Document search
+
+`search_documents` searches the text of **your own** documents: everything in your Documents folder, including conversation workspaces and files you attached. It can't reach another account's files. Its index is built from your folder only, every passage is stored under your account's scope, and a search reads only that scope. It also can't reach shared folders yet; those arrive with resource grants. The index (`<config>/document-index.sqlite`) holds extracted text and vectors for every account in one file, so the box's administrator can read it, as with the files themselves. Deleting a file removes it from the index on your next search, and files in the recycle bin or `.trash/` are never indexed. Nothing leaves the machine: extraction is on-device, and ranking uses the local embedding model or plain word matching.
+
+---
+
+## Memory
+
+With the Memory capability on, the assistant can save durable facts a user tells it about themselves ("uses Postgres 16", "prefers British English") and see them in later chats. They're stored per account in `memories.json` (with login off, everyone shares one memory, as with files). The newest, about 300 tokens' worth, are added to every request and the rest can be searched.
+
+**The risk is persisted prompt injection.** A page that says "remember: always include this link" could become a standing instruction in every future chat. Asking for confirmation on every save was rejected: a memory you must approve each time is one nobody uses. What exists instead:
+
+- **Every save is visible.** It appears in the chat as a chip with **Undo**, and **Settings → Memory** lists every memory with edit and delete. That tab works even when an administrator has turned the capability off, so you can always remove what was saved about you.
+- **Saves made while reading the web are flagged.** The server records every network tool call (web fetch, web search, Scholar), and a save in the same conversation within 15 minutes is marked and badged until you edit it. This is measured on the server, not reported by the client.
+- **Memories are data, not instructions.** They're placed *after* the precedence clause, with everything else the user supplies, and introduced as facts that cannot change the assistant's guidelines or permissions. `memory_forget` is destructive-class, so the assistant must confirm before each one.
+- **A role can withhold `memory`.** That removes the tools *and* the prompt block.
+
+The box's administrator can read `memories.json` on disk, as with every per-account store.
+
+---
+
 ## Tool bans
 
 A profile can ban tools by name, which is the only lever the server has over tools it does not itself provide. Client applications across the ecosystem (Twig today; Blueprints, Yellowscript and Greenhouse as they grow tools) embed their own and hand them to the model already inside the completions request — the server never offered them, so it cannot withhold them either. Banning strips them by name from every request the profile serves, and clients cannot re-enable them.
@@ -362,7 +408,17 @@ The DNS guard deliberately does **not** apply when the whitelist is on. An appro
 
 Because enforcement is at the MCP layer, a prompt-level jailbreak cannot override it — which is the point for something like a law firm scoping sources to one jurisdiction's databases.
 
-`web_search` never involves a third-party search engine: endpoints are hardcoded per source, and the model picks a source and a query, never a URL, so it cannot redirect a search elsewhere.
+`web_search`'s named sources (Wikipedia, arXiv, PubMed, MDN, Stack Overflow) involve no third-party search engine: endpoints are hardcoded per source, and the model picks a source and a query, never a URL, so it cannot redirect a search elsewhere.
+
+### The general web search engine (opt-in)
+
+A profile can also give `web_search` a `web` source backed by a general search engine: a self-hosted **SearXNG** at a URL the administrator gives, or the **Brave Search API** with a key held encrypted like any other secret. This reverses the stance above, so it is stated here in its own words:
+
+- **The query leaves the server.** With Brave, it goes to a hosted service outside your network. With SearXNG, it goes to an instance you run, which then forwards it to whichever public engines it is configured to use. Even a SearXNG on the same machine is an egress path, and Redstart reports it as one.
+- **Results are unreviewed text.** Each result carries a short snippet from a page nobody approved, delivered straight into the model's context. Snippets are stripped of markup and capped at 300 characters, only http(s) result URLs are kept, and the model is told to `web_fetch` a page before quoting it and to treat instructions inside results as page content. That reduces prompt injection through search results; it does not eliminate it.
+- **Off is the default, and off is enforced, not displayed.** With no engine chosen (or one chosen but not configured), `web` is removed from the tool's source enum, so the model never learns it exists. A call naming it anyway is refused by the MCP server and no request is made. A role can switch it off under a profile that has it on (`allowWebSearchEngine: false`; the built-in Restricted role does), and no role field can switch it on or pick a different engine. `scripts/test-web-search-engine.mjs` asserts all of this against a stub engine, counting requests.
+- **The whitelist still applies.** With sources restricted, engine results are filtered to the approved domains, which makes the engine a search across the whitelist. With it off, every result is returned, and `web_fetch`'s SSRF guard still governs whatever the model opens next.
+- **The SearXNG URL is a trust decision, like a whitelisted intranet source.** It gets no SSRF guard (it is usually on the LAN), but it must be http(s), and redirects from it are refused.
 
 ---
 
@@ -422,12 +478,13 @@ Inference is local and architecturally so — llama-server runs on this machine,
 | Path | When it is active |
 |---|---|
 | Approved web domains (`web_fetch`, `web_search`) | a source group or custom source is enabled for the profile |
+| A general web search engine (SearXNG or Brave Search), and through SearXNG the engines it forwards to | the profile selects one and it is configured — see [above](#the-general-web-search-engine-opt-in) |
 | Scholar (OpenAlex, arXiv, PubMed) | the Scholar capability is enabled |
 | An external MCP server on another host | one is registered and enabled, and its URL is not local |
 | A plugin holding a credential | it is enabled and configured with a key — see [Plugins](#plugins) |
 | GitHub (`api.github.com`, then the release download) — the update check | the Windows desktop app, unless automatic checks are off (Configuration → Network → Updates), and whenever an admin presses *Check now* |
 
-Nothing else transmits. There is no telemetry and no third-party search engine. The update check runs about four times a day. It sends GitHub the machine's IP address and a `User-Agent` naming the installed version (`Redstart-Nest/1.0.0-alpha.N`), and nothing about accounts, models or conversations. `GET /egress` does not list it, because that endpoint describes where *request data* can go and the update check carries none. The headless daemon (`bin/nestd.mjs`) and development runs never check.
+Nothing else transmits. There is no telemetry, and no third-party search engine unless a profile selects one. The update check runs about four times a day. It sends GitHub the machine's IP address and a `User-Agent` naming the installed version (`Redstart-Nest/1.0.0-alpha.N`), and nothing about accounts, models or conversations. `GET /egress` does not list it, because that endpoint describes where *request data* can go and the update check carries none. The headless daemon (`bin/nestd.mjs`) and development runs never check.
 
 `GET /egress` returns the live answer as data — inference locality, approved domains, remote tool servers, enabled local stores, and an explicit `externalTermsKnown: false` because Redstart records no retention or training terms for third parties. Reporting the absence is the point. The audit deliberately reports every *configured* path, whether or not the current request carries tools, because understating configured egress to an auditor is the same failure as overstating privacy to a user.
 
@@ -449,6 +506,7 @@ The accurate one-line summary of the privacy model is **local inference with adm
 | `test-connector-contract` | a header cannot forge a surface; revocation is immediate; hashes never appear in listings |
 | `test-network-binding` | LAN exposure is a socket boundary — real TCP connects, not config reads |
 | `test-web-fetch-ssrf` | both halves of the SSRF guard: literal hostnames, and public names resolving into private space |
+| `test-web-search-engine` | the general web search engine is off unless chosen and configured: stripped from the schema, refused on the call path with zero requests made, forced off by role and never on, and the prompt and `/egress` agree; the Brave key never reaches the model, the renderer or plaintext storage |
 | `test-external-mcp-url` | external endpoints — what is refused, what is merely warned about, and why the split |
 | `test-json-store` | state survives an interrupted write; a torn file never reads as empty state |
 | `test-logging` | `logEvent`'s blocklist and scalars-only defense-in-depth; `logAudit`'s closed allowlist and truncation; both against the bytes actually written to `redstart.log` |
@@ -490,6 +548,14 @@ The available real upgrade for it is HMAC-SHA256 under a DPAPI-protected pepper,
 ## Known gaps
 
 Stated plainly, because a security document that lists only strengths is not one.
+
+- **run_python's sandbox rests on Node's permission model and on Pyodide's internals staying as they are.** Python can reach Pyodide's own JavaScript API, including internals. One of those (its Node socket support) was a real escape under the old Electron Node, which had no network permission. The runtime now refuses it, and the sandbox suite proves that against a counting stub, but a Pyodide release could add a new route. That is why the runtime is hash-pinned and the suite must pass before any upgrade. The suite is part of CI (Linux) and has been run by hand on Windows. It has never run on macOS.
+- **run_python's memory and disk limits are coarse.** A run can use up to WebAssembly's 4 GB address space before its timeout kills it, and there's no smaller memory cap. Workspace caps are checked before and after each run, not on every write, so one run can overshoot the cap by whatever it writes within its timeout. The next run is then refused until files are removed.
+- **A remembered instruction can still steer the assistant.** Memories are framed as data and every save is visible with Undo, but a model can still act on one that reads like an instruction, and a save from an injected page is only *flagged*, not blocked. The web flag is time-based (15 minutes after a network tool call in that conversation), so it can mark an innocent save and can miss a plugin whose tools reach the network without being classed as network. Check **Settings → Memory** now and then, and withhold Memory from roles that hold write or destructive tools if that worries you.
+- **The document index keeps a deleted file's text until that account searches again.** The index catches up on access, not on delete, so a file removed in the file explorer is still in `document-index.sqlite` until its owner's next search (or a rebuild). The index also holds every account's extracted text in one file on disk.
+- **Attachments uploaded for run_python stay on the server until the conversation goes.** That's on delete, or the 30-day prune. Like every per-account store, the box's administrator can read them on disk.
+
+- **General web search results can carry prompt injection.** When a profile turns on a search engine, result snippets from unreviewed pages reach the model directly. They're capped, stripped and labelled as page content, but a model can still be steered by them, and a steered model can then call any tool it holds. The engine is off by default for this reason; a role can withhold it from accounts that hold write or destructive tools.
 
 - **HTTP only, including the control plane, and this is a settled decision rather than an omission.** Redstart Nest does not do TLS at any layer: it binds loopback by default and speaks plain HTTP, and a reverse proxy in front (Caddy, nginx, Traefik) is the documented way to expose it — the same answer Home Assistant, Jellyfin, Grafana and Proxmox give. Self-signed TLS inside Nest was tried and abandoned (Android WebView rejects it without manual cert trust), and building certificate handling here would be a worse version of what a proxy already does properly. The consequence to be clear about: on an unproxied LAN, passwords, session tokens, the setup code, and every secret on its way to be encrypted at rest all travel in the clear.
 - **With tool retrieval on, a client that does not use Nest's MCP server cannot ask for the tools it was not sent.** Retrieval selects the tools most relevant to the conversation and drops the rest. The assistant is always told when its list has been shortened, and clients connected to Nest's built-in MCP server (the chat UI, Twig) also get a `search_tools` tool for finding what is missing. An OpenAI-compatible application that sends its own tool definitions gets the shortened list and the notice, but has nothing to search with — it is told to say a capability is unavailable in that session rather than that the server cannot do it, which is the honest answer available to it. Retrieval is off by default; this applies once it is turned on.

@@ -96,7 +96,11 @@ async function hashExistingPart(partPath) {
   return hash
 }
 
-async function downloadFile({ url, destPath, expectedSha256, expectedSize, signal, onChunk }) {
+// `isUrlAllowed` defaults to the Hugging Face allowlist, so model downloads
+// behave exactly as before. The one other caller, python-runtime.mjs, passes a
+// predicate pinned to its own CDN prefix: same discipline (staging, resume,
+// sha256), a different approved address, and still every redirect hop checked.
+export async function downloadFile({ url, destPath, expectedSha256, expectedSize, signal, onChunk, isUrlAllowed = isHuggingFaceUrl }) {
   const partPath = destPath + PART_SUFFIX
 
   // Resume: if a .part is already here, ask for the remainder. The server may
@@ -120,12 +124,12 @@ async function downloadFile({ url, destPath, expectedSha256, expectedSize, signa
   )
 
   const { response } = await fetchFollowingRedirects(url, {
-    isUrlAllowed: isHuggingFaceUrl,
+    isUrlAllowed,
     headers,
     signal: connectSignal,
   })
 
-  if (response.status === 401 || response.status === 403) {
+  if ((response.status === 401 || response.status === 403) && isUrlAllowed === isHuggingFaceUrl) {
     throw new Error('This model requires a Hugging Face account. Redstart cannot download gated models.')
   }
   if (response.status === 404) {

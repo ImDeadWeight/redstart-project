@@ -23,10 +23,13 @@ import { getMcpServerRunning } from './mcp-server.mjs'
 import { getExternalServers } from './tools-storage.mjs'
 import { CLIENT_APP_TOOL_NAMES } from './tools-definitions.mjs'
 import { handleFilesRequest } from './files-api.mjs'
+import { memoriesFor } from './memory-storage.mjs'
 import { composePrompt } from './system-prompt.mjs'
 import { getPromptBlocks } from './prompt-storage.mjs'
 import { handleAuthRoute } from './gateway/auth-routes.mjs'
 import { isConversationRoute, handleConversationRoute } from './gateway/conversation-routes.mjs'
+import { isMemoryRoute, handleMemoryRoute } from './gateway/memory-routes.mjs'
+import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/document-index-routes.mjs'
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
 import { filterRequestTools, estimateMessagesTokens, recordWireCost } from './tool-filter.mjs'
@@ -52,6 +55,7 @@ function buildSystemContext(config, facts) {
     config,
     externalServers: getExternalServers(),
     admin: getPromptBlocks(),
+    ...memoriesFor(config, facts.account),
     ...facts,
   })
   return prompt
@@ -381,8 +385,9 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
           // X-Redstart-Device-Id is sent by the chat-ui's DatabaseService on
           // every /conversations call; without it here, browsers block those
-          // cross-origin requests at preflight.
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Redstart-Device-Id',
+          // cross-origin requests at preflight. X-Redstart-Timezone rides on
+          // every completions call (the user's local date, session-time.mjs).
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Redstart-Device-Id, X-Redstart-Timezone',
           'Access-Control-Max-Age': '86400',
         })
         res.end()
@@ -451,7 +456,13 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
 
       if (await handlePromptRoute(req, res, urlPath, effectiveConfig, authResult.account)) return
 
-      if (await handleConversationRoute(req, res, urlPath, accountId)) return
+      if (await handleConversationRoute(req, res, urlPath, accountId, { account: authResult.account ?? null })) return
+
+      // The user's memories (Phase 3). authResult.account is null only with
+      // auth off (an auth-on null was refused above), which is the shared
+      // _local scope, the same posture as files.
+      if (isMemoryRoute(urlPath) && await handleMemoryRoute(req, res, urlPath, authResult.account ?? null)) return
+      if (isDocumentIndexRoute(urlPath) && await handleDocumentIndexRoute(req, res, urlPath, authResult.account ?? null)) return
 
       // MCP server discovery — the chat-ui fetches this at startup to
       // auto-configure its MCP connections, so servers are managed centrally
@@ -540,6 +551,15 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         const retrievalOptOut = parsed.redstart_retrieval === false
         delete parsed.redstart_retrieval
 
+        // The browser's IANA zone, so the prompt states the USER'S date rather
+        // than the UTC one. A header, not a body field, so every completions
+        // caller in chat-ui (chat, titles, compaction) sends it from one place.
+        // Unvalidated here: session-time.mjs validates it before it reaches
+        // the prompt, and an invalid value degrades to the server's zone.
+        const timeZone = typeof req.headers['x-redstart-timezone'] === 'string'
+          ? req.headers['x-redstart-timezone']
+          : null
+
         // BANS FIRST, PROMPT SECOND — and every value the prompt is derived
         // from is read AFTER this line. The capability claims must describe
         // what the model actually received this turn, which is the payload the
@@ -580,6 +600,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
               account: authResult.account,
               mode: requestedMode,
               surface: authResult.surface,
+              timeZone,
               clientToolNames: [],
               toolNames: [],
               toolsFiltered: false,
@@ -614,6 +635,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
           account: authResult.account,
           mode: requestedMode,
           surface: authResult.surface,
+          timeZone,
           clientToolNames: clientToolNamesIn(parsed),
           // Read here, after enforceToolAllowList and filterRequestTools have
           // both had their say, so the capability claims describe the payload
