@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { isCapacitorAndroid, isElectronLog } from '$lib/utils/server-url';
-	import { twigFsApi, twigMcpApi, type TwigMcpServerEntry } from '$lib/utils/twig';
+	import { twigFsApi, twigMcpApi, twigUpdatesApi, type TwigMcpServerEntry } from '$lib/utils/twig';
+	import TwigUpdatesSection from './TwigUpdatesSection.svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { toolsStore } from '$lib/stores/tools.svelte';
@@ -36,6 +37,7 @@
 	// mirrors it (mcpStore.syncLocalServersFromTwig) for the tool picker.
 
 	const twigMcp = twigMcpApi();
+	const twigUpdates = twigUpdatesApi();
 	let localMcpServers = $state<TwigMcpServerEntry[]>([]);
 	let mcpName = $state('');
 	let mcpCommand = $state('');
@@ -394,6 +396,11 @@
 				</Button>
 			</div>
 		</div>
+	{/if}
+
+	<!-- Updates (the Tauri Twig shell only) -->
+	{#if twigUpdates}
+		<TwigUpdatesSection api={twigUpdates} />
 	{/if}
 
 	<!-- Reload note -->

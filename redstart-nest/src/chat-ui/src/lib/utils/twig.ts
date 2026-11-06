@@ -110,10 +110,65 @@ export interface TwigShellApi {
 	setTheme: (theme: 'light' | 'dark' | 'system', background?: string) => Promise<void>;
 }
 
+/**
+ * The Tauri shell's window (redstart-twig/windows/shell/src/bridge.js). The
+ * window has no OS frame on Windows, so the page draws the title bar and its
+ * buttons. On macOS the native traffic lights stay and `drawsControls` is false.
+ */
+export interface TwigWindowApi {
+	drawsControls: boolean;
+	minimize: () => Promise<void>;
+	toggleMaximize: () => Promise<void>;
+	close: () => Promise<void>;
+	startDragging: () => Promise<void>;
+	isMaximized: () => Promise<boolean>;
+}
+
+/** What Settings → Updates shows. */
+export interface TwigUpdateStatus {
+	/** False on a dev run or a platform the shell does not update. */
+	supported: boolean;
+	/** Automatic checks (every 6 hours). Check now works either way. */
+	auto: boolean;
+	state: 'idle' | 'checking' | 'downloading' | 'ready' | 'error';
+	/** The version being downloaded, or ready to install. */
+	version: string | null;
+	error: string | null;
+	checkedAt: number | null;
+	/** The running version. */
+	current: string;
+}
+
+export interface TwigUpdatesApi {
+	status: () => Promise<TwigUpdateStatus>;
+	checkNow: () => Promise<TwigUpdateStatus>;
+	setAuto: (on: boolean) => Promise<TwigUpdateStatus>;
+	/** Restart to update: closes Twig, installs, starts it again. */
+	install: () => Promise<void>;
+	onStatus: (cb: (status: TwigUpdateStatus) => void) => () => void;
+}
+
 interface TwigApi {
 	fs?: TwigFsApi;
 	mcp?: TwigMcpApi;
 	shell?: TwigShellApi;
+	window?: TwigWindowApi;
+	updates?: TwigUpdatesApi;
+}
+
+function twigApi(): TwigApi | null {
+	if (typeof window === 'undefined') return null;
+	return (window as Window & { redstartTwigAPI?: TwigApi }).redstartTwigAPI ?? null;
+}
+
+/** The Twig window controls, or null outside the Tauri Twig shell. */
+export function twigWindowApi(): TwigWindowApi | null {
+	return twigApi()?.window ?? null;
+}
+
+/** Twig's updater, or null outside the Tauri Twig shell. */
+export function twigUpdatesApi(): TwigUpdatesApi | null {
+	return twigApi()?.updates ?? null;
 }
 
 /** The Twig fs bridge, or null when not running inside the Twig desktop shell. */
