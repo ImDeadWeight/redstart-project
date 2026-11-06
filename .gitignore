@@ -96,3 +96,8 @@ docs/notes/
 redstart-nest/shell/target/
 redstart-nest/shell/gen/
 redstart-nest/shell/bundle/
+
+# Twig's Tauri shell
+redstart-twig/windows/shell/target/
+redstart-twig/windows/shell/gen/
+redstart-twig/windows/shell/bundle/

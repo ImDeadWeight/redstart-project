@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Redstart Twig",
+  "version": "../package.json",
+  "identifier": "com.redstart.twig",
+  "app": {
+    "windows": [],
+    "withGlobalTauri": false,
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "../../../redstart-nest/build/icon.ico",
+      "../../../redstart-nest/build/icon.icns",
+      "../../../redstart-nest/build/icon.png"
+    ]
+  },
+  "mainBinaryName": "Redstart Twig",
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI1RjZERDRDRTM5MDdEQjkKUldTNWZaRGpUTjMydFR1L2grZkhYd1JORkVTbXF4RExiUEpsbmZmbWRGa1I0UDdGMzB1TEtqZUkK",
+      "endpoints": [],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

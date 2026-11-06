@@ -196,7 +196,18 @@ await test('update-find picks the release carrying twig-latest.json, and the pag
   // The page-callable list is what the shell's allowlist mirrors (bridge.rs).
   assert(!wired.pageMethods.includes('fs:set-root'), 'fs:set-root is page-callable')
   assert(!wired.pageMethods.includes('update-find'), 'update-find is page-callable')
+
+  // Two codebases, one list: the Rust allowlist must be exactly twigd's page
+  // methods. A method missing there is a feature the page silently lost; one
+  // extra there forwards something twigd never meant the page to have.
+  const bridgeRs = fs.readFileSync(path.join(here, '..', 'shell', 'src', 'bridge.rs'), 'utf8')
+  const block = /PAGE_METHODS: &\[&str\] = &\[([\s\S]*?)\];/.exec(bridgeRs)
+  assert(block, 'PAGE_METHODS not found in bridge.rs')
+  const rust = [...block[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort()
+  const js = [...wired.pageMethods].sort()
+  assert(JSON.stringify(rust) === JSON.stringify(js), `bridge.rs ${rust.join(',')}\n        twigd    ${js.join(',')}`)
   toTwigd.end()
+  return `${rust.length} methods`
 })
 
 await test('an unknown method is an error, not a hang', async () => {
