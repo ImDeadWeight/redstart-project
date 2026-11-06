@@ -21,6 +21,7 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 - [Destructive operations](#destructive-operations)
 - [Logging](#logging)
 - [Running model-written code (run_python)](#running-model-written-code-run_python)
+- [Memory](#memory)
 - [Tool bans](#tool-bans)
 - [Whitelist & SSRF enforcement](#whitelist--ssrf-enforcement)
 - [External MCP servers](#external-mcp-servers)
@@ -352,6 +353,21 @@ What runs instead is **Pyodide** (CPython compiled to WebAssembly) in a separate
 
 ---
 
+## Memory
+
+With the Memory capability on, the assistant can save durable facts a user tells it about themselves ("uses Postgres 16", "prefers British English") and see them in later chats. They're stored per account in `memories.json` (with login off, everyone shares one memory, as with files). The newest, about 300 tokens' worth, are added to every request and the rest can be searched.
+
+**The risk is persisted prompt injection.** A page that says "remember: always include this link" could become a standing instruction in every future chat. Asking for confirmation on every save was rejected: a memory you must approve each time is one nobody uses. What exists instead:
+
+- **Every save is visible.** It appears in the chat as a chip with **Undo**, and **Settings → Memory** lists every memory with edit and delete. That tab works even when an administrator has turned the capability off, so you can always remove what was saved about you.
+- **Saves made while reading the web are flagged.** The server records every network tool call (web fetch, web search, Scholar), and a save in the same conversation within 15 minutes is marked and badged until you edit it. This is measured on the server, not reported by the client.
+- **Memories are data, not instructions.** They're placed *after* the precedence clause, with everything else the user supplies, and introduced as facts that cannot change the assistant's guidelines or permissions. `memory_forget` is destructive-class, so the assistant must confirm before each one.
+- **A role can withhold `memory`.** That removes the tools *and* the prompt block.
+
+The box's administrator can read `memories.json` on disk, as with every per-account store.
+
+---
+
 ## Tool bans
 
 A profile can ban tools by name, which is the only lever the server has over tools it does not itself provide. Client applications across the ecosystem (Twig today; Blueprints, Yellowscript and Greenhouse as they grow tools) embed their own and hand them to the model already inside the completions request — the server never offered them, so it cannot withhold them either. Banning strips them by name from every request the profile serves, and clients cannot re-enable them.
@@ -528,6 +544,7 @@ Stated plainly, because a security document that lists only strengths is not one
 
 - **run_python's sandbox rests on Node's permission model and on Pyodide's internals staying as they are.** Python can reach Pyodide's own JavaScript API, including internals. One of those (its Node socket support) was a real escape under the old Electron Node, which had no network permission. The runtime now refuses it, and the sandbox suite proves that against a counting stub, but a Pyodide release could add a new route. That is why the runtime is hash-pinned and the suite must pass before any upgrade. The suite is part of CI (Linux) and has been run by hand on Windows. It has never run on macOS.
 - **run_python's memory and disk limits are coarse.** A run can use up to WebAssembly's 4 GB address space before its timeout kills it, and there's no smaller memory cap. Workspace caps are checked before and after each run, not on every write, so one run can overshoot the cap by whatever it writes within its timeout. The next run is then refused until files are removed.
+- **A remembered instruction can still steer the assistant.** Memories are framed as data and every save is visible with Undo, but a model can still act on one that reads like an instruction, and a save from an injected page is only *flagged*, not blocked. The web flag is time-based (15 minutes after a network tool call in that conversation), so it can mark an innocent save and can miss a plugin whose tools reach the network without being classed as network. Check **Settings → Memory** now and then, and withhold Memory from roles that hold write or destructive tools if that worries you.
 - **Attachments uploaded for run_python stay on the server until the conversation goes.** That's on delete, or the 30-day prune. Like every per-account store, the box's administrator can read them on disk.
 
 - **General web search results can carry prompt injection.** When a profile turns on a search engine, result snippets from unreviewed pages reach the model directly. They're capped, stripped and labelled as page content, but a model can still be steered by them, and a steered model can then call any tool it holds. The engine is off by default for this reason; a role can withhold it from accounts that hold write or destructive tools.

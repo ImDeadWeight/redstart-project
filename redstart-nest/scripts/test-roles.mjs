@@ -95,6 +95,7 @@ function randomConfig() {
     git: cap(),
     scholar: cap(),
     python: cap(),
+    memory: cap(),
     fileSystem: {
       enabled: chance(0.6),
       rootDir: 'C:/root',
@@ -122,7 +123,7 @@ function randomPermissions() {
  * on any field roles can touch? Returns a reason string, or null when fine.
  */
 function widenedAnywhere(base, narrowed) {
-  const capKeys = ['postgres', 'documents', 'sqlite', 'vault', 'git', 'scholar', 'python', 'fileSystem']
+  const capKeys = ['postgres', 'documents', 'sqlite', 'vault', 'git', 'scholar', 'python', 'memory', 'fileSystem']
   for (const key of capKeys) {
     if (!base[key]) continue
     if (narrowed[key].enabled === true && base[key].enabled !== true) {

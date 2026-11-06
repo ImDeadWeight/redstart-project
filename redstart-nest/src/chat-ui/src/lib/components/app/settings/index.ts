@@ -107,6 +107,7 @@ export { default as SettingsChatSystemPromptTab } from './SettingsChat/SettingsC
  * the server gates every write regardless of what this renders.
  */
 export { default as SettingsChatRolesTab } from './SettingsChat/SettingsChatRolesTab.svelte';
+export { default as SettingsChatMemoryTab } from './SettingsChat/SettingsChatMemoryTab.svelte';
 
 /**
  * **SettingsChatConnectorsTab** - Per-connector credentials (spec §8)

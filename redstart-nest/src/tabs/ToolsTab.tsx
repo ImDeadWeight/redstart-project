@@ -56,6 +56,7 @@ function isCapabilityReady(cc: CapabilityConfig, id: string): boolean {
     case 'postgres': return cc.postgres.hasConnectionString
     case 'documents': return !!cc.documents.outputDir
     case 'scholar': return true   // no setup required
+    case 'memory': return true   // nothing to configure
     case 'python': return !!cc.documents.outputDir && cc.python.runtimeInstalled && cc.python.sandboxAvailable
     case 'sqlite':
     case 'vault':
@@ -544,6 +545,22 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
             onToggle={() => toggleTool('python')}
             onChanged={caps.loadCapabilities}
           />
+
+          {/* ---- Memory ---- */}
+          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-zinc-200">Memory</span>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`text-xs ${isActive('memory') ? 'text-green-400' : 'text-zinc-500'}`}>
+                  {isActive('memory') ? 'Enabled' : 'Disabled'}
+                </span>
+                <button onClick={() => toggleTool('memory')} className={btnCls.chip}>
+                  {isActive('memory') ? 'Disable' : 'Enable'}
+                </button>
+              </div>
+            </div>
+            <p className="text-xs text-zinc-600 mt-1.5">Lets the assistant remember durable facts each user tells it about themselves (their tools, preferences, role) across chats. Private per account; the newest (about 300 tokens' worth) ride along with every request. Every save appears in the chat with Undo, users see, edit and delete all of theirs under Settings → Memory, and a save made while the assistant was reading the web is flagged. Withhold it from a role with the capability list.</p>
+          </div>
 
           {/* ---- Scholar ---- */}
           <div className="bg-zinc-800/40 rounded px-3 py-2.5">

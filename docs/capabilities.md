@@ -18,7 +18,7 @@ The server-side architecture — the provider model, the stdio child process, ce
 
 ## Local capabilities
 
-Eight local capabilities ship with the built-in MCP server. All are local I/O with no network egress except Scholar, which queries open academic indexes.
+Nine local capabilities ship with the built-in MCP server. All are local I/O with no network egress except Scholar, which queries open academic indexes.
 
 | Capability | Access | Notes |
 |---|---|---|
@@ -29,6 +29,7 @@ Eight local capabilities ship with the built-in MCP server. All are local I/O wi
 | **Documents** | Read + create | Creates `.docx`/`.pdf`/`.md` from markdown; pipe tables render as real Word/PDF tables with repeating headers. Reads `.pdf`/`.docx`/`.txt`/`.md`/`.xlsx`/`.csv`. Filenames are derived server-side — a model-supplied path is never honored. Created files appear in chat as an authenticated download. |
 | **File System** | Read/write | Served by the official [`@modelcontextprotocol/server-filesystem`](https://github.com/modelcontextprotocol/servers) as a stdio child, using ecosystem-standard tool names (`read_text_file`, `write_file`, `edit_file`, …) that local models call far more reliably than a bespoke schema. Every path argument is independently re-validated through Redstart's symlink-aware `resolveWithinRoot()` before reaching the child, so containment survives an upstream regression. |
 | **Python** | Runs code, writes the workspace | `run_python`: Python 3.14 with numpy, pandas and matplotlib, in Pyodide (WebAssembly) under Node's permission model. No network, no programs, no files outside the conversation's workspace (`Documents/user_files/<you>/chats/<conversation>/`). Charts come back as images. Needs Documents configured and a one-time ~30 MB runtime download from the Tools tab. See [Running model-written code](security.md#running-model-written-code-run_python). |
+| **Memory** | Per-account facts | `memory_save` / `memory_search` / `memory_forget`: durable facts each user tells the assistant about themselves. The newest (≈ 300 tokens) ride along with every request, framed as data; the rest are searchable. Every save shows in the chat with Undo, and Settings → Memory lists, edits and deletes them. See [Memory](security.md#memory). |
 | **Scholar** | Read-only, outbound | OpenAlex, arXiv and PubMed search; open-access PDFs save into Documents. Optional venue whitelist. The one capability that makes outbound requests. |
 
 The upstream filesystem server ships no delete tool, so `delete_file` is Redstart-owned and is the system's only **destructive-class** tool — off by default, refused at both `tools/list` and `tools/call`. See [Destructive operations](security.md#destructive-operations).

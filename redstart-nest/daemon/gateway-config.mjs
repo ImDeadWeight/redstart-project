@@ -94,6 +94,7 @@ export function buildGatewayConfig(llamaConfig) {
       git:       { enabled: false },
       scholar: { enabled: false },
       python: { enabled: false },
+      memory: { enabled: false },
       ...Object.fromEntries(listPlugins().map((p) => [p.id, { enabled: false, isPlugin: true }])),
     }
   }
@@ -212,6 +213,10 @@ export function buildGatewayConfig(llamaConfig) {
       timeoutS: capabilities.python.timeoutS,
       workspaceCapBytes: capabilities.python.workspaceCapMb * 1024 * 1024,
       accountCapBytes: capabilities.python.accountCapMb * 1024 * 1024,
+    },
+    memory: {
+      enabled: toolIdSet.has('memory'),
+      promptBudgetChars: capabilities.memory.promptBudgetChars,
     },
     scholar: {
       enabled: scholarWanted,

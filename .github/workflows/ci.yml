@@ -130,6 +130,9 @@ jobs:
       - name: "Output: tool results carry files as resource links, not bytes"
         run: node scripts/test-tool-result-links.mjs
 
+      - name: "Security: memory is per account, bounded, framed as data, web saves marked"
+        run: node scripts/test-memory.mjs
+
       - name: "Security: external MCP endpoint validation"
         run: node scripts/test-external-mcp-url.mjs
 

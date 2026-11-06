@@ -140,6 +140,12 @@ export const BUILTIN_CAPABILITIES = [
     description: 'Run model-written Python (numpy, pandas, matplotlib) in a sandbox with no network, against files in the conversation workspace. Needs Documents configured, and a one-time ~30 MB runtime download',
   },
   {
+    id: 'memory',
+    name: 'Memory',
+    kind: 'capability',
+    description: 'Lets the assistant remember durable facts about each user across chats (their tools, preferences, role). Per account; every save is shown with Undo, and users can edit or delete every memory in Settings',
+  },
+  {
     id: 'scholar',
     name: 'Scholar',
     kind: 'capability',
@@ -184,6 +190,7 @@ export const BUILTIN_CAPABILITY_TOOL_NAMES = {
   ],
   scholar: ['scholar_search', 'scholar_get', 'scholar_save_pdf'],
   python: ['run_python'],
+  memory: ['memory_save', 'memory_search', 'memory_forget'],
 }
 
 /**
@@ -385,6 +392,12 @@ export const TOOL_CLASSES = {
   // files, it has no network (python-child.mjs), and nothing it does reaches
   // outside the workspace.
   run_python: 'write',
+  // Memory — per-account facts. Saving writes; forgetting deletes with no
+  // recycle bin behind it, so it is destructive and goes under the prompt's
+  // confirm-every-time rule and chat-ui's always-prompt.
+  memory_save: 'write',
+  memory_search: 'read',
+  memory_forget: 'destructive',
 }
 
 // Classify a tool by its function name. Unknown names default to 'read' — see

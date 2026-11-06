@@ -94,6 +94,7 @@ export const CAPABILITY_CONFIG_KEY = {
   file_system: 'fileSystem',
   scholar: 'scholar',
   python: 'python',
+  memory: 'memory',
 }
 
 /**

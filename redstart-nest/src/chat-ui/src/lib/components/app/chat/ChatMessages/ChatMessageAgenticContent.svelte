@@ -38,6 +38,7 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import { toast } from 'svelte-sonner';
 	import ToolResultResource from './ToolResultResource.svelte';
+	import MemorySavedChip from './MemorySavedChip.svelte';
 
 	/**
 	 * Download a file a tool produced, reporting failures.
@@ -342,6 +343,8 @@
 						{#each section.parsedLines as line, i (i)}
 							{#if line.resource}
 								<ToolResultResource resource={line.resource} onDownload={handleDownload} />
+							{:else if line.memory}
+								<MemorySavedChip id={line.memory.id} text={line.memory.text} fromWeb={line.memory.fromWeb} />
 							{:else}
 								<div class="font-mono text-xs leading-relaxed whitespace-pre-wrap">
 									{line.text}

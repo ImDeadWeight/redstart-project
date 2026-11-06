@@ -113,6 +113,9 @@ const DEFAULT_CAPABILITIES = {
   // Documents capability's per-account chats/ tree. The runtime is not
   // recorded here; python-runtime.mjs checks the files themselves.
   python:      { enabled: false, maxKernels: 2, timeoutS: 30, workspaceCapMb: 200, accountCapMb: 2048 },
+  // Memory (chat-tooling Phase 3). Nothing to configure but the size of the
+  // prompt block: ≈300 tokens of the most recent memories (plan §3).
+  memory:      { enabled: false, promptBudgetChars: 1200 },
   // NOT a capability id: the global CONNECTION for Web Access's "web" search
   // source (chat-tooling Phase 4b). Which engine a profile uses is that
   // profile's tools.webSearchEngine; this only says where each engine is.

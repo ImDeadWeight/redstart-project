@@ -52,6 +52,18 @@ describe('resource links', () => {
 		expect(lines[0].resource).toBeUndefined();
 	});
 
+	it('a memory_save line becomes a memory chip (Phase 3), with the web mark', () => {
+		const id = '0b7c1e2a-9f3d-4c1a-8e2b-1234567890ab';
+		const [plain, web, other] = parseToolResultWithImages(
+			`[memory: ${id}] Uses Postgres 16
+[memory: ${id} web] Cites example.com
+Saved.`
+		);
+		expect(plain.memory).toEqual({ id, text: 'Uses Postgres 16', fromWeb: false });
+		expect(web.memory).toEqual({ id, text: 'Cites example.com', fromWeb: true });
+		expect(other.memory).toBeUndefined();
+	});
+
 	it('kinds: images inline, csv/tsv as a table, the rest as a chip', () => {
 		expect(resourceKind('image/png')).toBe('image');
 		expect(resourceKind('image/svg+xml')).toBe('file');

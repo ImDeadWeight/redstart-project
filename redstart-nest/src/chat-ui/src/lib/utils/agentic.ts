@@ -33,7 +33,12 @@ export type ToolResultLine = {
 	filePath?: string;
 	/** A Phase 2 resource line: drawn as an image, a table or a download chip. */
 	resource?: ToolResultResource;
+	/** A Phase 3 memory_save line: drawn as a chip with Undo. */
+	memory?: { id: string; text: string; fromWeb: boolean };
 };
+
+/** memory_save's first result line (daemon/memory-tool.mjs). */
+export const MEMORY_LINE_REGEX = /^\[memory: ([A-Za-z0-9-]{8,64})( web)?\] (.+)$/;
 
 /**
  * Derives display sections from a single assistant message and its direct tool results.
@@ -192,6 +197,8 @@ export function parseToolResultWithImages(
 	return lines.map((line) => {
 		const resource = parseResourceLine(line);
 		if (resource) return { text: line, resource, filePath: resource.path };
+		const mem = line.match(MEMORY_LINE_REGEX);
+		if (mem) return { text: line, memory: { id: mem[1], text: mem[3], fromWeb: !!mem[2] } };
 		const match = line.match(ATTACHMENT_SAVED_REGEX);
 		if (!match || !extras) {
 			const fileMatch = line.match(FILE_PATH_REGEX);

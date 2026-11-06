@@ -5,6 +5,7 @@
 		SettingsChatImportExportTab,
 		SettingsChatMobileHeader,
 		SettingsChatRolesTab,
+		SettingsChatMemoryTab,
 		SettingsChatConnectorsTab,
 		SettingsChatServerTab,
 		SettingsChatSystemPromptTab,
@@ -178,6 +179,8 @@
 						<SettingsChatSystemPromptTab />
 					{:else if currentSection.title === SETTINGS_SECTION_TITLES.CONNECTORS}
 						<SettingsChatConnectorsTab />
+					{:else if currentSection.title === SETTINGS_SECTION_TITLES.MEMORY}
+						<SettingsChatMemoryTab />
 					{:else if currentSection.fields}
 						<div class="space-y-6">
 							<SettingsChatFields

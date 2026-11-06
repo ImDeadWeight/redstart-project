@@ -32,6 +32,7 @@ import * as filesystemProvider from './filesystem-mcp-provider.mjs'
 import * as fsDeleteTool from './fs-delete-tool.mjs'
 import * as scholarTool from './scholar-tool.mjs'
 import * as pythonTool from './python-tool.mjs'
+import * as memoryTool from './memory-tool.mjs'
 import { getConversation } from './conversations-storage.mjs'
 import { isWellFormedConversationId } from './conversation-workspace.mjs'
 import * as searchToolsProvider from './search-tools-provider.mjs'
@@ -52,7 +53,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 // searchToolsProvider is LAST, and deliberately: it is the only provider whose
 // job is to describe the others, so it must never shadow one of them on a name
 // collision, and its own tool must never appear in the catalog it searches.
-const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, searchToolsProvider]
+const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, memoryTool, searchToolsProvider]
 
 // Resolved per call, never captured in a const: a plugin installed or removed
 // while Nest is running must take effect without a restart. Built-ins come
@@ -307,6 +308,10 @@ async function handleRpc(msg, send, ctx = { account: null }) {
           isError: !!result.isError,
           durationMs: Date.now() - startedAt,
         })
+        // Memory marks a save made soon after the web was read in the same
+        // conversation (memory-tool.mjs). Recorded for every network-class
+        // call, successful or not: an error page is web content too.
+        if (policy.cls === 'network') memoryTool.noteNetworkCall(callCtx)
         send({ jsonrpc: '2.0', id, result })
         return
       }

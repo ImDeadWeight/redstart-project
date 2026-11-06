@@ -23,10 +23,12 @@ import { getMcpServerRunning } from './mcp-server.mjs'
 import { getExternalServers } from './tools-storage.mjs'
 import { CLIENT_APP_TOOL_NAMES } from './tools-definitions.mjs'
 import { handleFilesRequest } from './files-api.mjs'
+import { memoriesFor } from './memory-storage.mjs'
 import { composePrompt } from './system-prompt.mjs'
 import { getPromptBlocks } from './prompt-storage.mjs'
 import { handleAuthRoute } from './gateway/auth-routes.mjs'
 import { isConversationRoute, handleConversationRoute } from './gateway/conversation-routes.mjs'
+import { isMemoryRoute, handleMemoryRoute } from './gateway/memory-routes.mjs'
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
 import { filterRequestTools, estimateMessagesTokens, recordWireCost } from './tool-filter.mjs'
@@ -52,6 +54,7 @@ function buildSystemContext(config, facts) {
     config,
     externalServers: getExternalServers(),
     admin: getPromptBlocks(),
+    ...memoriesFor(config, facts.account),
     ...facts,
   })
   return prompt
@@ -453,6 +456,11 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       if (await handlePromptRoute(req, res, urlPath, effectiveConfig, authResult.account)) return
 
       if (await handleConversationRoute(req, res, urlPath, accountId, { account: authResult.account ?? null })) return
+
+      // The user's memories (Phase 3). authResult.account is null only with
+      // auth off (an auth-on null was refused above), which is the shared
+      // _local scope, the same posture as files.
+      if (isMemoryRoute(urlPath) && await handleMemoryRoute(req, res, urlPath, authResult.account ?? null)) return
 
       // MCP server discovery — the chat-ui fetches this at startup to
       // auto-configure its MCP connections, so servers are managed centrally
