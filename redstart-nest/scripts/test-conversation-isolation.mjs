@@ -130,6 +130,33 @@ await test('deleteConversation removes the caller\'s own conversation', async ()
   assert(store.getConversation(ALICE, 'a1') === null, 'conversation survived its own owner\'s delete')
 })
 
+await test('deleteConversation moves its forks up to its parent', async () => {
+  reset()
+  store.createConversation(ALICE, { id: 'root', title: 'Root' })
+  store.createConversation(ALICE, { id: 'mid', title: 'Mid', forkedFromConversationId: 'root' })
+  store.createConversation(ALICE, { id: 'leaf', title: 'Leaf', forkedFromConversationId: 'mid' })
+  store.createConversation(ALICE, { id: 'top-fork', title: 'Fork of root', forkedFromConversationId: 'root' })
+
+  store.deleteConversation(ALICE, 'mid')
+  const leaf = store.getConversation(ALICE, 'leaf')
+  assert(leaf !== null, 'a fork was deleted along with its parent')
+  assert(leaf.forkedFromConversationId === 'root', `fork kept a dangling parent: ${leaf.forkedFromConversationId}`)
+
+  store.deleteConversation(ALICE, 'root')
+  assert(store.getConversation(ALICE, 'leaf').forkedFromConversationId === null, 'fork of a deleted top-level chat did not become top-level')
+  assert(store.getConversation(ALICE, 'top-fork').forkedFromConversationId === null, 'second fork of the deleted chat was not moved')
+})
+
+await test('🔍 deleteConversation does not rewrite another account\'s fork', async () => {
+  reset()
+  store.createConversation(ALICE, { id: 'root', title: 'Alice root', forkedFromConversationId: 'origin' })
+  store.createConversation(BOB, { id: 'bob-fork', title: 'Bob fork', forkedFromConversationId: 'root' })
+
+  store.deleteConversation(ALICE, 'root')
+  const bobs = store.getConversation(BOB, 'bob-fork')
+  assert(bobs.forkedFromConversationId === 'root', `Alice's delete rewrote Bob's fork: ${bobs.forkedFromConversationId}`)
+})
+
 await test('🔍 deleteConversationsWithForks only removes the caller\'s own tree, sparing cross-account forks', async () => {
   reset()
   // Alice owns a root; Bob forked it into his own account. Alice deleting her
