@@ -46,10 +46,10 @@ function searchEngineFor(toolSettings, capabilities) {
   const conn = capabilities?.web_search || {}
   let braveApiKey = null
   if (choice === 'brave' && conn.braveApiKeyEnc) {
-    try { braveApiKey = decryptSecret(conn.braveApiKeyEnc) } catch (err) {
-      // The error's text is never logged: a crypto failure message is derived
-      // from the ciphertext's handling, and this log is plaintext on disk.
-      console.warn('Failed to decrypt the Brave Search API key; web search engine is off.', err?.code ?? '')
+    try { braveApiKey = decryptSecret(conn.braveApiKeyEnc) } catch {
+      // Nothing from the error is logged, not even its code: a decrypt failure is
+      // derived from handling the ciphertext, and this log is plaintext on disk.
+      console.warn('Failed to decrypt the Brave Search API key; web search engine is off.')
     }
   }
   return resolveEngine(choice, { searxngUrl: conn.searxngUrl, braveApiKey })
@@ -135,9 +135,9 @@ export function buildGatewayConfig(llamaConfig) {
   if (postgresWanted) {
     try {
       postgresConnectionString = decryptSecret(capabilities.postgres.connectionStringEnc)
-    } catch (err) {
+    } catch {
       // Same rule as the Brave key above: no error text from a decrypt in the log.
-      console.warn('Failed to decrypt the Postgres connection string; Postgres is off.', err?.code ?? '')
+      console.warn('Failed to decrypt the Postgres connection string; Postgres is off.')
     }
   }
 
