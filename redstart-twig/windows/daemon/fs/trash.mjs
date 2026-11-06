@@ -57,10 +57,21 @@ export function isInTrash(rootDir, fullPath) {
 
 // Timestamped bucket, so two deletions of the same relative path never collide
 // and the original folder structure survives for a manual restore.
+//
+// The bucket must not already hold this path. Two deletes of the same path in
+// the same millisecond get the same timestamp, and on Linux and macOS rename()
+// silently REPLACES an existing file, which would destroy the first copy
+// inside the very mechanism that promises recoverability. (Windows refuses the
+// rename instead, which is why only CI's Ubuntu runner ever caught it.) So a
+// taken bucket gets -1, -2, … appended until one is free.
 function trashDestination(rootDir, fullPath) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   const relative = path.relative(path.resolve(rootDir), fullPath)
-  return path.join(path.resolve(rootDir), TRASH_DIR_NAME, stamp, relative)
+  const base = path.join(path.resolve(rootDir), TRASH_DIR_NAME)
+  for (let n = 0; ; n++) {
+    const candidate = path.join(base, n === 0 ? stamp : `${stamp}-${n}`, relative)
+    if (!fs.existsSync(candidate)) return candidate
+  }
 }
 
 /**
