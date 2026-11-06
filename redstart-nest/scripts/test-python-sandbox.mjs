@@ -94,6 +94,19 @@ await test('a tampered runtime file fails verification', () => {
   assert(!v.ok && /pyodide\.asm\.wasm/.test(v.reason), `expected a wasm mismatch, got ${JSON.stringify(v)}`)
 })
 
+await test('the runtime install may fetch only this version on the pinned CDN', () => {
+  const ok = `https://cdn.jsdelivr.net/pyodide/v${runtime.PYODIDE_VERSION}/full/pyodide.asm.wasm`
+  assert(runtime.isPyodideCdnUrl(ok), 'the real address was refused')
+  for (const bad of [
+    ok.replace('https:', 'http:'),
+    ok.replace('cdn.jsdelivr.net', 'cdn.jsdelivr.net.evil.example'),
+    ok.replace(runtime.PYODIDE_VERSION, '0.0.1'),
+    `https://cdn.jsdelivr.net/pyodide/v${runtime.PYODIDE_VERSION}/full/../../npm/x.js`,
+    'https://user:pw@cdn.jsdelivr.net/pyodide/v' + runtime.PYODIDE_VERSION + '/full/a',
+    'https://huggingface.co/x',
+  ]) assert(!runtime.isPyodideCdnUrl(bad), `allowed ${bad}`)
+})
+
 await test('a Node without the network permission is refused, never used', () => {
   const r = runtime.resolvePythonNode({ version: 'v24.14.1', staged: path.join(tmpDir, 'no-such-node'), refresh: true })
   assert(!r.ok && /Node 25 or newer/.test(r.reason), JSON.stringify(r))

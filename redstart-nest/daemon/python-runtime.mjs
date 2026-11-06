@@ -37,6 +37,19 @@ export const PYODIDE_VERSION = '314.0.7'
 export const PYTHON_VERSION = '3.14.2'
 const CDN_BASE = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`
 
+/**
+ * The only addresses the runtime install may fetch, redirect hops included:
+ * https, this host, this version's directory. Anything else is refused before
+ * a request is made (http-redirects.mjs), the same way model downloads are
+ * held to Hugging Face. Exported for the suite.
+ */
+export function isPyodideCdnUrl(url) {
+  let u
+  try { u = new URL(url) } catch { return false }
+  return u.protocol === 'https:' && u.hostname === 'cdn.jsdelivr.net' && !u.username && !u.password && !u.port
+    && u.pathname.startsWith(`/pyodide/v${PYODIDE_VERSION}/full/`) && !u.pathname.includes('..')
+}
+
 export const LOCK_FILE = { name: 'pyodide-lock.json', size: 119077, sha256: '5dc2fc119108bc148c7457dc86e7675b5c87e1cafd420b9c34c1eaef7b36c010' }
 
 export const CORE_FILES = [
@@ -128,13 +141,13 @@ export function runtimeReady(dir) {
  * model-download's .part staging, resume and sha256 check, so an interrupted
  * install resumes and a corrupted byte is refused rather than installed.
  */
-export async function installRuntime(dir, { signal, onProgress, fetchBase = CDN_BASE } = {}) {
+export async function installRuntime(dir, { signal, onProgress, fetchBase = CDN_BASE, isUrlAllowed = isPyodideCdnUrl } = {}) {
   await fsp.mkdir(dir, { recursive: true })
   logEvent('python', 'runtime_install_started', { version: PYODIDE_VERSION })
   const lockPath = path.join(dir, LOCK_FILE.name)
   if (!fs.existsSync(lockPath) || sha256File(lockPath) !== LOCK_FILE.sha256) {
     if (fs.existsSync(lockPath)) await fsp.rm(lockPath, { force: true })
-    await downloadFile({ url: fetchBase + LOCK_FILE.name, destPath: lockPath, expectedSha256: LOCK_FILE.sha256, expectedSize: LOCK_FILE.size, signal })
+    await downloadFile({ url: fetchBase + LOCK_FILE.name, destPath: lockPath, expectedSha256: LOCK_FILE.sha256, expectedSize: LOCK_FILE.size, signal, isUrlAllowed })
   }
   const files = expectedFiles(readVerifiedLock(dir))
   for (let i = 0; i < files.length; i++) {
@@ -145,7 +158,7 @@ export async function installRuntime(dir, { signal, onProgress, fetchBase = CDN_
       await fsp.rm(dest, { force: true })
     }
     onProgress?.({ fileIndex: i, fileCount: files.length, name: f.name })
-    await downloadFile({ url: fetchBase + f.name, destPath: dest, expectedSha256: f.sha256, expectedSize: f.size, signal })
+    await downloadFile({ url: fetchBase + f.name, destPath: dest, expectedSha256: f.sha256, expectedSize: f.size, signal, isUrlAllowed })
   }
   cachedRuntimeOk.delete(dir)
   const result = verifyRuntime(dir)
