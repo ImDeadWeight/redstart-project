@@ -126,7 +126,10 @@ await test('a Files-tab delete asks the shell for the recycle bin', async () => 
   fs.writeFileSync(path.join(grant, 'bin-me.txt'), 'x')
   const r = await t.peer.request('fs:trash', { path: 'bin-me.txt' })
   assert(r.recoverable === 'recycle-bin', JSON.stringify(r))
-  assert(t.trashCalls.at(-1) === path.join(grant, 'bin-me.txt'), `shell asked for ${t.trashCalls.at(-1)}`)
+  // Against the real path: containment resolves the grant (an 8.3 short temp
+  // path on CI's Windows runner, RUNNER~1, comes back long).
+  const expected = path.join(fs.realpathSync.native(grant), 'bin-me.txt')
+  assert(t.trashCalls.at(-1).toLowerCase() === expected.toLowerCase(), `shell asked for ${t.trashCalls.at(-1)}, expected ${expected}`)
   assert(r.hint === 'restore it from the Recycle Bin', `hint ${r.hint}`)
 })
 
