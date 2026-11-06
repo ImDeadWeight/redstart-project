@@ -350,11 +350,11 @@ jobs:
         with:
           node-version: 26
 
-      - name: Local file tools (containment, recoverable delete)
-        run: node scripts/test-fs-tool.mjs
-
-      - name: twigd over the shell pipe
-        run: node scripts/test-twigd.mjs
+      # npm test is the suite list (package.json), so CI and a local run
+      # cannot drift: test-fs-tool (containment, recoverable delete), then
+      # test-twigd (the shell pipe contract). No install: no dependencies run.
+      - name: Twig suites (npm test)
+        run: npm test
 
   twig-shell:
     # Twig's Tauri shell: the chat UI's protocol (containment, the 503 rule,
