@@ -82,7 +82,7 @@ window, tray, notifications, login item, updater and recycle-bin access are a
 Tauri app (`redstart-nest/shell/`, Rust). The daemon is a separate process: the
 shell starts `nestd --shell-pipe` on a Node 26 bundled in the install (pinned
 by version and SHA-256 in `scripts/stage-node.mjs`). They talk in JSON lines
-over the child's stdin and stdout (`daemon/shell-pipe.mjs` here,
+over the child's stdin and stdout (`shared/shell-pipe.mjs` here,
 `shell/src/pipe.rs` there):
 
 - the shell sends `hello` with the paths and the unwrapped secrets key, and

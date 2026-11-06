@@ -38,7 +38,7 @@ import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { UPDATE_REPO, feedUrlForTag } from '../daemon/update-feed.mjs'
+import { UPDATE_REPO, feedUrlForTag } from '../../shared/update-feed.mjs'
 
 export const MANIFEST = 'nest-latest.json'
 export const installerName = (version) => `Redstart-Nest-Setup-${version}.exe`

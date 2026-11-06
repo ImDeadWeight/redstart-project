@@ -37,7 +37,7 @@ import * as path from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { ADMIN_PORT, BEACON_PORT } from '../daemon/ports.mjs'
-import { createPeer } from '../daemon/shell-pipe.mjs'
+import { createPeer } from '../../shared/shell-pipe.mjs'
 import { startDaemonProcess } from '../daemon/daemon-host.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
