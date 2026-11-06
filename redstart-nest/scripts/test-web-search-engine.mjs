@@ -329,7 +329,10 @@ await test('🔍 absent choice is off even with a connection configured; a chose
   assert(buildGatewayConfig(base).webFetch.searchEngine.kind === 'none', 'an engine came on with no profile choice')
   assert(buildGatewayConfig({ tools: { ...base.tools, webSearchEngine: 'brave' } }).webFetch.searchEngine.kind === 'none', 'Brave on with no key')
   const on = buildGatewayConfig({ tools: { ...base.tools, webSearchEngine: 'searxng' } }).webFetch.searchEngine
-  assert(on.kind === 'searxng' && on.url === SEARXNG_URL, `SearXNG not resolved: ${JSON.stringify(on)}`)
+  // Failure messages in this suite never echo an object that came out of the
+  // secret store or the resolved config (it can carry the decrypted Brave key),
+  // because a failing CI run prints them to a public log.
+  assert(on.kind === 'searxng' && on.url === SEARXNG_URL, 'SearXNG not resolved to the configured URL')
   assert(buildGatewayConfig({ tools: { enabled: false, webSearchEngine: 'searxng' } }).webFetch.searchEngine.kind === 'none', 'tools-off profile had an engine')
 })
 
@@ -344,7 +347,7 @@ await test('🔍 the SearXNG URL must be http(s); the Brave key is stored encryp
   }
   assert(setWebSearchConfig({ searxngUrl: SEARXNG_URL, braveApiKey: BRAVE_KEY }, noRefresh).ok, 'valid config refused')
   const view = getCapabilitiesConfig().web_search
-  assert(view.searxngUrl === SEARXNG_URL && view.hasBraveApiKey === true, `unexpected view ${JSON.stringify(view)}`)
+  assert(view.searxngUrl === SEARXNG_URL && view.hasBraveApiKey === true, 'the renderer view lacks the SearXNG URL or the key-present flag')
   assert(!JSON.stringify(getCapabilitiesConfig()).includes(BRAVE_KEY), 'the key round-tripped to the renderer')
   const stored = fs.readFileSync(path.join(tmpDir, 'tools.json'), 'utf8')
   assert(!stored.includes(BRAVE_KEY), 'the key is stored in plaintext')
@@ -354,7 +357,7 @@ await test('🔍 the SearXNG URL must be http(s); the Brave key is stored encryp
   // cannot see is a key a provider change silently destroys.
   const { findSecrets } = await import('../daemon/secrets-migration.mjs')
   const found = JSON.stringify(findSecrets(tmpDir))
-  assert(found.includes('braveApiKeyEnc'), `the re-key walk does not see the Brave key: ${found.slice(0, 200)}`)
+  assert(found.includes('braveApiKeyEnc'), 'the re-key walk does not see the Brave key')
   assert(setWebSearchConfig({ clearBraveApiKey: true }, noRefresh).ok && getCapabilitiesConfig().web_search.hasBraveApiKey === false, 'key not cleared')
 })
 
