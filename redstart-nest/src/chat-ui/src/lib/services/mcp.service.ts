@@ -494,7 +494,7 @@ export class MCPService {
 
 		try {
 			const result = await connection.client.callTool(
-				{ name: params.name, arguments: params.arguments },
+				{ name: params.name, arguments: params.arguments, ...(params._meta ? { _meta: params._meta } : {}) },
 				undefined,
 				{ signal, timeout: connection.requestTimeoutMs }
 			);

@@ -262,6 +262,14 @@ function buildToolPolicy(config, hasTools, toolNames) {
     parts.push('In the documents folder, prefer read_document and list_documents over the file-system reads: they extract text from pdf, docx and xlsx, which the others return unusable.')
   }
 
+  // run_python. What its schema cannot say: WHEN to reach for it (the reason it
+  // exists is that a small model gets arithmetic and counting wrong in its
+  // head and does not know it), and which of two code tools to prefer.
+  if (has('run_python')) {
+    parts.push('Use run_python for any calculation, counting, sorting, date arithmetic or data analysis rather than working it out yourself, and report the number it printed, not one you estimated. Files the user attached are in its working directory.')
+    if (has('run_javascript')) parts.push('Prefer run_python over run_javascript: it has pandas and matplotlib, and its files persist with the conversation.')
+  }
+
   // The destructive class exists in tools-definitions.mjs and governs the
   // server's own gate; until now nothing carried it to the model.
   const destructive = names.filter(name => classifyTool(name) === 'destructive')
@@ -395,6 +403,10 @@ const LOCAL_STORES = [
   { label: 'SQLite database files', enabled: c => !!c?.sqlite?.enabled, perAccount: false },
   { label: 'a vault of markdown notes', enabled: c => !!c?.vault?.enabled, perAccount: false },
   { label: 'git repositories', enabled: c => !!c?.git?.enabled, perAccount: false },
+  // run_python's per-conversation folders. Inside the documents root, but the
+  // Documents capability can be off for a profile that has Python on, so it is
+  // its own entry rather than implied by the one above.
+  { label: 'per-conversation workspaces that Python code reads and writes', enabled: c => !!c?.python?.enabled, perAccount: true },
 ]
 
 // WHY THIS STAYS GATED ON `hasTools` AND NOT ON THE TOOL NAMES

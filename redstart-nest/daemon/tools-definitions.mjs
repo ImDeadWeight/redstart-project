@@ -134,6 +134,12 @@ export const BUILTIN_CAPABILITIES = [
     description: 'Read and write files within a configured local folder — read configs, write scripts, edit project files, create documents. Paths are contained to the chosen root.',
   },
   {
+    id: 'python',
+    name: 'Python',
+    kind: 'capability',
+    description: 'Run model-written Python (numpy, pandas, matplotlib) in a sandbox with no network, against files in the conversation workspace. Needs Documents configured, and a one-time ~30 MB runtime download',
+  },
+  {
     id: 'scholar',
     name: 'Scholar',
     kind: 'capability',
@@ -177,6 +183,7 @@ export const BUILTIN_CAPABILITY_TOOL_NAMES = {
     'delete_file',
   ],
   scholar: ['scholar_search', 'scholar_get', 'scholar_save_pdf'],
+  python: ['run_python'],
 }
 
 /**
@@ -373,6 +380,11 @@ export const TOOL_CLASSES = {
   scholar_search: 'network',
   scholar_get: 'network',
   scholar_save_pdf: 'write',
+  // Python — executes model-written code in the Pyodide sandbox and writes
+  // into the conversation workspace. 'write' is the honest class: it creates
+  // files, it has no network (python-child.mjs), and nothing it does reaches
+  // outside the workspace.
+  run_python: 'write',
 }
 
 // Classify a tool by its function name. Unknown names default to 'read' — see

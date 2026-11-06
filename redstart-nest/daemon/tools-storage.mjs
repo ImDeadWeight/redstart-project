@@ -109,6 +109,10 @@ const DEFAULT_CAPABILITIES = {
   // chokepoint (see mcp-server.mjs + tools-definitions classify).
   file_system: { enabled: false, rootDir: null, allowWrite: true, allowDestructive: false },
   scholar:     { enabled: false, venueFilter: null },
+  // run_python (chat-tooling Phase 1). No folder of its own: it works in the
+  // Documents capability's per-account chats/ tree. The runtime is not
+  // recorded here; python-runtime.mjs checks the files themselves.
+  python:      { enabled: false, maxKernels: 2, timeoutS: 30, workspaceCapMb: 200, accountCapMb: 2048 },
   // NOT a capability id: the global CONNECTION for Web Access's "web" search
   // source (chat-tooling Phase 4b). Which engine a profile uses is that
   // profile's tools.webSearchEngine; this only says where each engine is.

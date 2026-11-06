@@ -354,8 +354,12 @@ class MCPStore {
 		return this.toolOps.getToolDefinitionsForLLM();
 	}
 
-	async executeTool(toolCall: MCPToolCall, signal?: AbortSignal): Promise<ToolExecutionResult> {
-		return this.toolOps.executeTool(toolCall, signal);
+	async executeTool(
+		toolCall: MCPToolCall,
+		signal?: AbortSignal,
+		context?: { conversationId?: string }
+	): Promise<ToolExecutionResult> {
+		return this.toolOps.executeTool(toolCall, signal, context);
 	}
 
 	async executeToolByName(

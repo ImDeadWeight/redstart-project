@@ -31,6 +31,11 @@ export function cleanupOldConversations() {
   return removed
 }
 
+/** Every conversation id, across all accounts — for the workspace orphan sweep only. */
+export function allConversationIds() {
+  return new Set(read().conversations.map(c => c.id))
+}
+
 export function getConversations(accountId) {
   const data = read()
   return data.conversations

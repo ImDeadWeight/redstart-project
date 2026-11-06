@@ -177,6 +177,8 @@ export type RedstartAPI = {
     setFileSystem: (config: { rootDir?: string; enabled?: boolean; allowWrite?: boolean; allowDestructive?: boolean }) => Promise<{ ok: boolean }>
     setScholar: (config: { venueFilter?: string; enabled?: boolean }) => Promise<{ ok: boolean }>
     setWebSearch: (config: { searxngUrl?: string | null; braveApiKey?: string; clearBraveApiKey?: boolean }) => Promise<{ ok: boolean; error?: string }>
+    setPython: (config: { maxKernels?: number; timeoutS?: number; workspaceCapMb?: number; accountCapMb?: number }) => Promise<{ ok: boolean; error?: string }>
+    installPython: () => Promise<{ ok: boolean; error?: string }>
   }
   plugins: {
     list: () => Promise<PluginSummary[]>

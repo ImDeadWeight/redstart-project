@@ -24,6 +24,11 @@ import { testConnection as testPostgresConnection } from '../postgres-tool.mjs'
 import { isPlainObject, isAbsolutePath, optional } from './validate.mjs'
 import { isHttpUrl } from '../web-search-engines.mjs'
 import { logEvent } from '../logger.mjs'
+import { configDir } from '../platform-paths.mjs'
+import {
+  runtimeDir, verifyRuntime, installRuntime, resolvePythonNode,
+  PYODIDE_VERSION, PYTHON_VERSION, TOP_LEVEL_PACKAGES, APPROX_DOWNLOAD_BYTES, APPROX_KERNEL_RSS_BYTES,
+} from '../python-runtime.mjs'
 
 // Every setter below takes one config object and destructures it directly.
 // Destructuring a non-object throws a bare TypeError out through the IPC
@@ -88,7 +93,66 @@ export function getCapabilitiesConfig() {
       searxngUrl: caps.web_search.searxngUrl,
       hasBraveApiKey: !!caps.web_search.braveApiKeyEnc,
     },
+    python: pythonStatus(caps.python),
   }
+}
+
+// What the Tools tab needs to say about run_python: whether it CAN run here
+// (the Node check is the sandbox's network denial, see python-runtime.mjs),
+// whether the runtime is installed, and what a kernel costs.
+function pythonStatus(cfg) {
+  const node = resolvePythonNode()
+  const runtime = verifyRuntime(runtimeDir(configDir()))
+  return {
+    maxKernels: cfg.maxKernels,
+    timeoutS: cfg.timeoutS,
+    workspaceCapMb: cfg.workspaceCapMb,
+    accountCapMb: cfg.accountCapMb,
+    pyodideVersion: PYODIDE_VERSION,
+    pythonVersion: PYTHON_VERSION,
+    packages: TOP_LEVEL_PACKAGES,
+    runtimeInstalled: runtime.ok,
+    runtimeProblem: runtime.ok || runtime.reason === 'not installed' ? null : runtime.reason,
+    installing: pythonInstall !== null,
+    approxDownloadBytes: APPROX_DOWNLOAD_BYTES,
+    approxKernelBytes: APPROX_KERNEL_RSS_BYTES,
+    sandboxAvailable: node.ok,
+    sandboxProblem: node.ok ? null : node.reason,
+    sandboxNode: node.ok ? node.version : null,
+  }
+}
+
+// Settings for run_python. Bounds are the plan's: timeout ≤ 120 s, and a
+// kernel cap small enough that ≈457 MB each stays sane.
+export function setPythonConfig(config, { refreshLiveToolsConfig }) {
+  const channel = 'capabilities:set-python'
+  const bad = checkConfig(channel, config)
+  if (bad) return refuse(channel, bad)
+  const patch = {}
+  const int = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi
+  const { maxKernels, timeoutS, workspaceCapMb, accountCapMb } = config
+  if (maxKernels !== undefined) { if (!int(maxKernels, 1, 8)) return refuse(channel, 'maxKernels must be an integer from 1 to 8.'); patch.maxKernels = maxKernels }
+  if (timeoutS !== undefined) { if (!int(timeoutS, 1, 120)) return refuse(channel, 'timeoutS must be an integer from 1 to 120.'); patch.timeoutS = timeoutS }
+  if (workspaceCapMb !== undefined) { if (!int(workspaceCapMb, 1, 100000)) return refuse(channel, 'workspaceCapMb must be a positive integer.'); patch.workspaceCapMb = workspaceCapMb }
+  if (accountCapMb !== undefined) { if (!int(accountCapMb, 1, 1000000)) return refuse(channel, 'accountCapMb must be a positive integer.'); patch.accountCapMb = accountCapMb }
+  setCapabilityConfig('python', patch)
+  refreshLiveToolsConfig()
+  return { ok: true }
+}
+
+// One install at a time. A second click while one runs joins it.
+let pythonInstall = null
+
+export async function installPythonRuntime({ refreshLiveToolsConfig }) {
+  if (!resolvePythonNode().ok) return { ok: false, error: resolvePythonNode().reason }
+  if (!pythonInstall) {
+    pythonInstall = installRuntime(runtimeDir(configDir()))
+      .then(() => ({ ok: true }), (err) => ({ ok: false, error: err.message }))
+      .finally(() => { pythonInstall = null })
+  }
+  const result = await pythonInstall
+  if (result.ok) refreshLiveToolsConfig()
+  return result
 }
 
 export function setPostgresConfig(config, { refreshLiveToolsConfig }) {
@@ -232,6 +296,8 @@ export function capabilitiesHandlers(deps) {
     'capabilities:set-sqlite': (config) => setSqliteConfig(config, deps),
     'capabilities:set-scholar': (config) => setScholarConfig(config, deps),
     'capabilities:set-web-search': (config) => setWebSearchConfig(config, deps),
+    'capabilities:set-python': (config) => setPythonConfig(config, deps),
+    'capabilities:install-python': async () => installPythonRuntime(deps),
   }
 
   // Built in a loop, and that is exactly why the contract tests scan the real

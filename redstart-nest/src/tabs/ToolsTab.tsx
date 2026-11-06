@@ -6,6 +6,7 @@ import type { useExternalMcp } from '../hooks/useExternalMcp'
 import type { usePlugins } from '../hooks/usePlugins'
 import { SectionTitle, TogglePill, btnCls, inputCls } from '../components/ui'
 import { FolderPicker } from '../components/FolderPicker'
+import { PythonCapabilityCard } from '../components/PythonCapabilityCard'
 
 // ---------------------------------------------------------------------------
 // Folder-scoped capability card — one component for Documents/SQLite/Vault/
@@ -55,6 +56,7 @@ function isCapabilityReady(cc: CapabilityConfig, id: string): boolean {
     case 'postgres': return cc.postgres.hasConnectionString
     case 'documents': return !!cc.documents.outputDir
     case 'scholar': return true   // no setup required
+    case 'python': return !!cc.documents.outputDir && cc.python.runtimeInstalled && cc.python.sandboxAvailable
     case 'sqlite':
     case 'vault':
     case 'git':
@@ -534,6 +536,14 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
               {...card}
             />
           ))}
+
+          <PythonCapabilityCard
+            status={capabilityConfig?.python ?? null}
+            documentsConfigured={!!capabilityConfig?.documents.outputDir}
+            active={isActive('python')}
+            onToggle={() => toggleTool('python')}
+            onChanged={caps.loadCapabilities}
+          />
 
           {/* ---- Scholar ---- */}
           <div className="bg-zinc-800/40 rounded px-3 py-2.5">

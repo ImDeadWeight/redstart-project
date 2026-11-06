@@ -84,12 +84,13 @@ Two consequences worth being explicit about:
     "git":         { "enabled": false, "rootDir": "..." },
     "file_system": { "enabled": false, "rootDir": "...", "allowWrite": true, "allowDestructive": false },
     "scholar":     { "enabled": false, "venueFilter": null },
+    "python":      { "enabled": false, "maxKernels": 2, "timeoutS": 30, "workspaceCapMb": 200, "accountCapMb": 2048 },
     "web_search":  { "searxngUrl": null, "braveApiKeyEnc": null }
   }
 }
 ```
 
-`allowDestructive` is the switch that permits `delete_file` — off by default, meaning the tool is neither advertised nor executable. `web_search` is not a capability: it says where each general web search engine lives (a SearXNG base URL, a Brave Search API key). Which engine a profile uses, if any, is that profile's `tools.webSearchEngine` (`none` when absent). See [the general web search engine](security.md#the-general-web-search-engine-opt-in). The Postgres connection string and the Brave key are the secrets in the file, and they are encrypted through whichever provider the entrypoint wired up: Electron's `safeStorage` (DPAPI) on the desktop, an AES-256-GCM key file on a headless box. Stored values are tagged `v1.<provider>.<payload>` so a file records what wrote it, and a re-key driver re-encrypts an existing tree when the provider changes. Encryption being unavailable is a refusal to store, never a silent fallback to plaintext. Profiles are managed (save, load, delete) in the Redstart Nest UI.
+`python` holds run_python's limits: warm kernels (each ≈ 457 MB of RAM), the default wall-clock timeout (a call can ask for up to 120 s), and the per-conversation and per-account workspace caps. Its runtime lives in `<config>/runtimes/pyodide-<version>/` and is checked file by file against hashes pinned in `daemon/python-runtime.mjs`; nothing in `tools.json` records whether it is installed. `allowDestructive` is the switch that permits `delete_file` — off by default, meaning the tool is neither advertised nor executable. `web_search` is not a capability: it says where each general web search engine lives (a SearXNG base URL, a Brave Search API key). Which engine a profile uses, if any, is that profile's `tools.webSearchEngine` (`none` when absent). See [the general web search engine](security.md#the-general-web-search-engine-opt-in). The Postgres connection string and the Brave key are the secrets in the file, and they are encrypted through whichever provider the entrypoint wired up: Electron's `safeStorage` (DPAPI) on the desktop, an AES-256-GCM key file on a headless box. Stored values are tagged `v1.<provider>.<payload>` so a file records what wrote it, and a re-key driver re-encrypts an existing tree when the provider changes. Encryption being unavailable is a refusal to store, never a silent fallback to plaintext. Profiles are managed (save, load, delete) in the Redstart Nest UI.
 
 ---
 

@@ -177,6 +177,28 @@ export type CapabilityConfig = {
   file_system: { enabled: boolean; rootDir: string | null; allowWrite: boolean; allowDestructive: boolean }
   scholar: { enabled: boolean; venueFilter: string | null }
   web_search: { searxngUrl: string | null; hasBraveApiKey: boolean }
+  python: PythonCapabilityStatus
+}
+
+// run_python (chat-tooling Phase 1). Settings plus what the server can say
+// about running it: sandboxAvailable is false on a Node without the network
+// permission (daemon/python-runtime.mjs), and the tool is then never served.
+export type PythonCapabilityStatus = {
+  maxKernels: number
+  timeoutS: number
+  workspaceCapMb: number
+  accountCapMb: number
+  pyodideVersion: string
+  pythonVersion: string
+  packages: string[]
+  runtimeInstalled: boolean
+  runtimeProblem: string | null
+  installing: boolean
+  approxDownloadBytes: number
+  approxKernelBytes: number
+  sandboxAvailable: boolean
+  sandboxProblem: string | null
+  sandboxNode: string | null
 }
 
 export type ToolGroup = {

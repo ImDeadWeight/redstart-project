@@ -33,7 +33,7 @@ import { promisify } from 'util'
 import * as path from 'path'
 import * as fs from 'fs'
 import { fileURLToPath } from 'url'
-import { ensureDefaultCapabilityFolders } from './tools-storage.mjs'
+import { ensureDefaultCapabilityFolders, getCapabilities } from './tools-storage.mjs'
 import { stopGateway } from './tools-gateway.mjs'
 import { stopMcpServer } from './mcp-server.mjs'
 import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
@@ -44,7 +44,8 @@ import { buildAdminApi } from './admin/api-table.mjs'
 import { setAdminApi } from './admin/api-routes.mjs'
 import { ensureFirewallRule } from './firewall.mjs'
 import { getPrimaryLanIp } from './net-interfaces.mjs'
-import { cleanupOldConversations } from './conversations-storage.mjs'
+import { cleanupOldConversations, allConversationIds } from './conversations-storage.mjs'
+import { sweepOrphanWorkspaces } from './conversation-workspace.mjs'
 import { initLogger, closeLogger, logEvent } from './logger.mjs'
 import { initProcessLog } from './process-log.mjs'
 import { reapStaleProcess, deletePidFile } from './process-supervision.mjs'
@@ -458,6 +459,12 @@ export async function startDaemon(entrypoint = {}) {
   await reapStaleProcess(configDir())
   const cleanedConversations = cleanupOldConversations()
   if (cleanedConversations > 0) console.log(`Cleaned ${cleanedConversations} conversations older than 30 days`)
+  // A workspace whose conversation is gone (pruned just now, or deleted while
+  // its files could not be moved) is orphaned user data on a box nobody looks
+  // at. Trashed, never deleted. Best-effort: it must not block startup.
+  sweepOrphanWorkspaces(getCapabilities().documents?.outputDir, allConversationIds())
+    .then((moved) => { if (moved.length) logEvent('workspace', 'orphans_swept', { count: moved.length }) })
+    .catch((err) => console.warn('Workspace sweep failed:', err.message))
   // Retries any plugin folder an uninstall couldn't delete last session (a
   // Windows file lock, most likely) — best-effort, never blocks startup (P4-4).
   sweepPendingDeletions()

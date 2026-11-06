@@ -20,6 +20,7 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 - [Your files (web UI)](#your-files-web-ui)
 - [Destructive operations](#destructive-operations)
 - [Logging](#logging)
+- [Running model-written code (run_python)](#running-model-written-code-run_python)
 - [Tool bans](#tool-bans)
 - [Whitelist & SSRF enforcement](#whitelist--ssrf-enforcement)
 - [External MCP servers](#external-mcp-servers)
@@ -329,6 +330,28 @@ Both halves — the blocklist/scalars-only rule and the allowlist — are proven
 
 ---
 
+## Running model-written code (run_python)
+
+The Python capability lets the model write code and run it. Model-written code is **attacker-influenced code**: a fetched page or an uploaded file can prompt-inject the model into writing whatever the attacker wants. So the design question was never "is the model trustworthy" but "what can this code reach". Native CPython was rejected for that reason: on Windows there's no cheap process sandbox, and it would be arbitrary code execution as the Nest user.
+
+What runs instead is **Pyodide** (CPython compiled to WebAssembly) in a separate child process, one per active conversation. What contains it, strongest first:
+
+1. **WebAssembly.** The interpreter has no system calls of its own. Its whole reach is the JavaScript objects the host exposes.
+2. **Node's permission model.** The child runs with `--permission` and nothing else granted except reading the pinned runtime and its own script, and reading and writing the conversation's workspace. No network, no child processes, no workers, no native addons, so the runtime refuses those from any code path, Pyodide's own internals included. Node only has a network permission from version 25. The desktop app runs its server on the bundled Node 26, so this is always available there. On a server running an older Node, **run_python is unavailable** and the Tools tab says why. It never falls back to a weaker sandbox.
+3. **No code generation from strings, and fewer handles.** `eval`/`Function` are off for the child. `require`, `fetch`, `WebSocket`, `process.getBuiltinModule` and `dlopen` are removed, `process.binding` answers one question, and package loading accepts only the pinned, installed set (no pip, no URLs).
+4. **Links are refused.** Creating a symlink fails, and so does following one already in the workspace, because the permission model follows links out of an allowed folder.
+5. **Nothing of the host's environment.** The child starts with an empty environment, and clears what Windows adds back before any code runs.
+
+`scripts/test-python-sandbox.mjs` runs every escape attempt from the design measurements against the real runtime: mounts outside the workspace, links, `..`, every removed handle, `eval` and dynamic `import()`, sockets through Python, through `urllib` and through Pyodide's own socket layer, and loading packages from a URL. It asserts that **zero connections** reach a stub server it runs, and that nothing was written outside the workspace. It must pass again on every Pyodide upgrade.
+
+**The runtime is pinned.** About 30 MB, downloaded once from the Tools tab. Each file is checked against a SHA-256 written in `daemon/python-runtime.mjs` (the wheels against the pinned lock file's own hashes), and every file is re-verified before the first kernel starts.
+
+**Files.** Each conversation has a workspace, `chats/<conversation>/`, inside your own Documents folder ([per-account storage](#per-account-file-storage) applies unchanged). The conversation id the chat UI sends is honoured only if the conversation is yours; anything else uses your `chats/_scratch/`. With run_python available, the chat UI also uploads your attachments there. Deleting a conversation sends its workspace to the recycle bin (or `.trash/`), and at startup a workspace whose conversation no longer exists (for example, pruned after 30 days) goes the same way. Workspaces are capped at 200 MB each and 2 GB per account by default.
+
+**Limits.** 30 s per call by default, 120 s at most, enforced by killing the kernel. Two warm kernels at once by default (≈ 457 MB of RAM each), stopped after 10 idle minutes.
+
+---
+
 ## Tool bans
 
 A profile can ban tools by name, which is the only lever the server has over tools it does not itself provide. Client applications across the ecosystem (Twig today; Blueprints, Yellowscript and Greenhouse as they grow tools) embed their own and hand them to the model already inside the completions request — the server never offered them, so it cannot withhold them either. Banning strips them by name from every request the profile serves, and clients cannot re-enable them.
@@ -502,6 +525,10 @@ The available real upgrade for it is HMAC-SHA256 under a DPAPI-protected pepper,
 ## Known gaps
 
 Stated plainly, because a security document that lists only strengths is not one.
+
+- **run_python's sandbox rests on Node's permission model and on Pyodide's internals staying as they are.** Python can reach Pyodide's own JavaScript API, including internals. One of those (its Node socket support) was a real escape under the old Electron Node, which had no network permission. The runtime now refuses it, and the sandbox suite proves that against a counting stub, but a Pyodide release could add a new route. That is why the runtime is hash-pinned and the suite must pass before any upgrade. The suite is part of CI (Linux) and has been run by hand on Windows. It has never run on macOS.
+- **run_python's memory and disk limits are coarse.** A run can use up to WebAssembly's 4 GB address space before its timeout kills it, and there's no smaller memory cap. Workspace caps are checked before and after each run, not on every write, so one run can overshoot the cap by whatever it writes within its timeout. The next run is then refused until files are removed.
+- **Attachments uploaded for run_python stay on the server until the conversation goes.** That's on delete, or the 30-day prune. Like every per-account store, the box's administrator can read them on disk.
 
 - **General web search results can carry prompt injection.** When a profile turns on a search engine, result snippets from unreviewed pages reach the model directly. They're capped, stripped and labelled as page content, but a model can still be steered by them, and a steered model can then call any tool it holds. The engine is off by default for this reason; a role can withhold it from accounts that hold write or destructive tools.
 

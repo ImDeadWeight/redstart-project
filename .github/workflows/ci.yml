@@ -109,6 +109,24 @@ jobs:
       - name: "Security: open web search is off unless chosen (schema, call, role, prompt)"
         run: node scripts/test-web-search-engine.mjs
 
+      # Downloads the pinned Pyodide (~30 MB, every hash checked) on a cold
+      # cache, then runs every Phase 1.0 escape against the real sandbox. Must
+      # pass on every Pyodide bump. Linux is where a symlink can be created
+      # unprivileged, so this job is the one that proves the link refusal.
+      - name: Cache the pinned Pyodide runtime
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/pyodide
+          key: pyodide-314.0.7
+
+      - name: "Security: run_python sandbox (no network, no escape from the workspace)"
+        run: node scripts/test-python-sandbox.mjs
+        env:
+          REDSTART_PYODIDE_DIR: ${{ runner.temp }}/pyodide
+
+      - name: "Security: conversation workspaces (layout, ownership, caps, trash)"
+        run: node scripts/test-conversation-workspace.mjs
+
       - name: "Security: external MCP endpoint validation"
         run: node scripts/test-external-mcp-url.mjs
 

@@ -452,7 +452,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
 
       if (await handlePromptRoute(req, res, urlPath, effectiveConfig, authResult.account)) return
 
-      if (await handleConversationRoute(req, res, urlPath, accountId)) return
+      if (await handleConversationRoute(req, res, urlPath, accountId, { account: authResult.account ?? null })) return
 
       // MCP server discovery — the chat-ui fetches this at startup to
       // auto-configure its MCP connections, so servers are managed centrally

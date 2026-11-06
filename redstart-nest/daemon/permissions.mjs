@@ -93,6 +93,7 @@ export const CAPABILITY_CONFIG_KEY = {
   git: 'git',
   file_system: 'fileSystem',
   scholar: 'scholar',
+  python: 'python',
 }
 
 /**

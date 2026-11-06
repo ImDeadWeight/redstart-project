@@ -96,7 +96,7 @@ async function hashExistingPart(partPath) {
   return hash
 }
 
-async function downloadFile({ url, destPath, expectedSha256, expectedSize, signal, onChunk }) {
+export async function downloadFile({ url, destPath, expectedSha256, expectedSize, signal, onChunk }) {
   const partPath = destPath + PART_SUFFIX
 
   // Resume: if a .part is already here, ask for the remainder. The server may

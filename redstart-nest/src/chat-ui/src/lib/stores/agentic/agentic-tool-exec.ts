@@ -248,7 +248,7 @@ export class AgenticToolExec {
 						id: toolCall.id,
 						function: { name: toolName, arguments: toolCall.function.arguments }
 					};
-					const executionResult = await mcpStore.executeTool(mcpCall, signal);
+					const executionResult = await mcpStore.executeTool(mcpCall, signal, { conversationId });
 
 					result = executionResult.content;
 

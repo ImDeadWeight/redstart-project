@@ -264,6 +264,13 @@ export interface MCPServerConnectionConfig {
 export interface ToolCallParams {
 	name: string;
 	arguments: Record<string, unknown>;
+	/**
+	 * MCP's per-request metadata. Redstart Nest reads
+	 * 'redstart/conversationId' from it to put a tool's files in that chat's
+	 * workspace (daemon/mcp-server.mjs verifiedConversationId). Other servers
+	 * ignore it.
+	 */
+	_meta?: Record<string, unknown>;
 }
 
 export interface ToolExecutionResult {

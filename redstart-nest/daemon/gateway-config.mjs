@@ -12,7 +12,10 @@
 //
 // Note: tools-gateway.mjs RUNS the gateway (proxy, auth, allow-list, system
 // context) and CONSUMES this config; this module PRODUCES it. No overlap.
+import * as fs from 'fs'
 import * as path from 'path'
+import { configDir } from './platform-paths.mjs'
+import { runtimeDir } from './python-runtime.mjs'
 import { BUILTIN_TOOLS, BUILTIN_GROUPS, expandDisabledToolIds } from './tools-definitions.mjs'
 import { getUserTools, getUserGroups, getCapabilities } from './tools-storage.mjs'
 import { updateGatewayConfig, getGatewayPort } from './tools-gateway.mjs'
@@ -90,6 +93,7 @@ export function buildGatewayConfig(llamaConfig) {
       fileSystem: { enabled: false },
       git:       { enabled: false },
       scholar: { enabled: false },
+      python: { enabled: false },
       ...Object.fromEntries(listPlugins().map((p) => [p.id, { enabled: false, isPlugin: true }])),
     }
   }
@@ -138,6 +142,12 @@ export function buildGatewayConfig(llamaConfig) {
   const gitWanted = toolIdSet.has('git') && !!capabilities.git.rootDir
   const fileSystemWanted = toolIdSet.has('file_system') && !!capabilities.file_system.rootDir
   const scholarWanted = toolIdSet.has('scholar')
+  // Python needs Documents configured (its workspace lives there, plan §2) and
+  // the runtime installed. The runtime check is a cheap existence test here;
+  // python-tool.mjs verifies every hash before the first kernel starts.
+  const pythonRuntimeDir = runtimeDir(configDir())
+  const pythonWanted = toolIdSet.has('python') && !!capabilities.documents.outputDir
+    && fs.existsSync(path.join(pythonRuntimeDir, 'pyodide-lock.json'))
 
   return {
     disabledTools,
@@ -193,6 +203,15 @@ export function buildGatewayConfig(llamaConfig) {
       // writes on, deletes off (see DEFAULT_CAPABILITIES.file_system).
       allowWrite: capabilities.file_system.allowWrite !== false,
       allowDestructive: capabilities.file_system.allowDestructive === true,
+    },
+    python: {
+      enabled: pythonWanted,
+      runtimeDir: pythonRuntimeDir,
+      documentsRoot: capabilities.documents.outputDir,
+      maxKernels: capabilities.python.maxKernels,
+      timeoutS: capabilities.python.timeoutS,
+      workspaceCapBytes: capabilities.python.workspaceCapMb * 1024 * 1024,
+      accountCapBytes: capabilities.python.accountCapMb * 1024 * 1024,
     },
     scholar: {
       enabled: scholarWanted,
