@@ -321,6 +321,15 @@ await test('🔍 a legacy value is refused under the keyfile provider', async ()
   throws(() => decryptSecret(legacy), /safestorage/, 'did not attribute the legacy value')
 })
 
+await test('🔍 a decrypt error never quotes an unknown tag (it may be part of a secret)', async () => {
+  const { initSecrets, decryptSecret, describeProviderTag } = await freshSecrets()
+  initSecrets(keyfileProvider(newDir('unknown-tag')))
+  // Plaintext that happens to look tagged: the "tag" is secret text.
+  const err = throws(() => decryptSecret('v1.hunter2-password.rest'), /unrecognised provider/, 'unknown tag not described')
+  assert(!String(err?.message).includes('hunter2'), `the error quoted the value: ${err?.message}`)
+  assert(describeProviderTag('keyfile') === '"keyfile"' && describeProviderTag('safestorage') === '"safestorage"', 'known tags no longer named')
+})
+
 await test('activeSecretsTag reports what is wired', async () => {
   const s = await freshSecrets()
   assert(s.activeSecretsTag() === null, 'reported a provider before init')

@@ -51,7 +51,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { parseSecret } from './secrets.mjs'
+import { parseSecret, describeProviderTag } from './secrets.mjs'
 import { KEY_FILE_NAME } from './secrets-keyfile.mjs'
 
 // Nest's own state files. Only these are parsed as JSON looking for secrets;
@@ -159,7 +159,7 @@ export function findSecrets(dir) {
 function decryptWith(from, secret) {
   const { tag, payload } = parseSecret(secret.value)
   if (tag !== from.tag) {
-    throw new Error(`written by the "${tag}" provider, not "${from.tag}"`)
+    throw new Error(`written by ${describeProviderTag(tag)} provider, not "${from.tag}"`)
   }
   const plaintext = from.decrypt(payload)
   if (typeof plaintext !== 'string') throw new Error('decrypted to a non-string')

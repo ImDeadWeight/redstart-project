@@ -142,3 +142,37 @@ console.log(`✓ icon.ico → ${outPath}  (${SIZES.join(', ')}px, ${(ico.length 
 const pngPath = path.join(outDir, 'icon.png')
 fs.writeFileSync(pngPath, makePng(1024))
 console.log(`✓ icon.png → ${pngPath}  (1024px)`)
+
+// ── ICNS assembler (PNG-in-ICNS, macOS 10.7+) ────────────────────────────────
+// For the Tauri shell. Given only icon.png, tauri-bundler builds an .icns
+// itself and maps each PNG to an icns type by pixel size AND density, taking
+// density from an "@2x" file name. A plain 1024px PNG is 512@2x in icns terms,
+// so it matched no type and every macOS bundle failed with "No matching
+// IconType" (the alpha.7 and alpha.8 releases). Handed a real .icns, the
+// bundler copies it as-is. electron-builder (Twig) keeps using icon.png.
+//
+// Format: 'icns' + total length (big-endian), then per entry a 4-char type,
+// its length including the 8-byte header, and the PNG bytes.
+const ICNS_TYPES = [
+  ['icp4', 16], ['icp5', 32], ['ic11', 32],   // 16, 32, 16@2x
+  ['icp6', 64], ['ic12', 64],                 // 64, 32@2x
+  ['ic07', 128], ['ic08', 256], ['ic13', 256], // 128, 256, 128@2x
+  ['ic09', 512], ['ic14', 512],                // 512, 256@2x
+  ['ic10', 1024],                              // 512@2x
+]
+const icnsPngs = new Map()
+const icnsEntries = ICNS_TYPES.map(([type, size]) => {
+  if (!icnsPngs.has(size)) icnsPngs.set(size, makePng(size))
+  const png = icnsPngs.get(size)
+  const head = Buffer.alloc(8)
+  head.write(type, 0, 'ascii')
+  head.writeUInt32BE(png.length + 8, 4)
+  return Buffer.concat([head, png])
+})
+const icnsBody = Buffer.concat(icnsEntries)
+const icnsHead = Buffer.alloc(8)
+icnsHead.write('icns', 0, 'ascii')
+icnsHead.writeUInt32BE(icnsBody.length + 8, 4)
+const icnsPath = path.join(outDir, 'icon.icns')
+fs.writeFileSync(icnsPath, Buffer.concat([icnsHead, icnsBody]))
+console.log(`✓ icon.icns → ${icnsPath}  (${ICNS_TYPES.map(([t, s]) => `${t}:${s}`).join(', ')})`)

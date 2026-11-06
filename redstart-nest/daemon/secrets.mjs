@@ -113,6 +113,22 @@ export function parseSecret(ciphertext) {
   return { tag: rest.slice(0, dot), payload: rest.slice(dot + 1), tagged: true }
 }
 
+// Every provider tag this codebase writes. Kept as literals rather than
+// imported, because the provider modules import this one.
+const KNOWN_PROVIDER_TAGS = ['safestorage', 'keyfile']
+
+/**
+ * A provider tag safe to put in an error or a log: the known tag it equals,
+ * or a fixed description. The tag is whatever precedes the first dot of a
+ * stored value, and a malformed value (plaintext that happens to start
+ * "v1.something.") would otherwise have part of a secret quoted in the
+ * message. Returns a value from the fixed list, never the input itself.
+ */
+export function describeProviderTag(tag) {
+  const known = KNOWN_PROVIDER_TAGS.find((t) => t === tag)
+  return known ? `"${known}"` : 'an unrecognised'
+}
+
 export function encryptSecret(plaintext) {
   if (!plaintext) return null
   const p = requireProvider()
@@ -130,7 +146,7 @@ export function decryptSecret(ciphertextValue) {
     // provider wrote it and which is running, because that message is what an
     // admin needs in order to know whether the value is recoverable at all.
     throw new Error(
-      `This secret was written by the "${tag}" provider but "${p.tag}" is running; it cannot be decrypted here`
+      `This secret was written by ${describeProviderTag(tag)} provider but "${p.tag}" is running; it cannot be decrypted here`
     )
   }
   return p.decrypt(payload)
