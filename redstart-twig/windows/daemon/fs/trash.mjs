@@ -10,7 +10,8 @@
 // cannot, and it is what makes exposing a delete tool to a model defensible.
 //
 // Two tiers, in order:
-//   1. The OS recycle bin, via Electron's shell.trashItem().
+//   1. The OS recycle bin, which the Tauri shell owns (twigd asks it over the
+//      shell pipe; the shell uses the trash crate).
 //   2. A .trash/ folder inside the granted root, when tier 1 is unavailable
 //      (plain-node runs) or fails (network drive, permissions, some shells).
 //
@@ -20,11 +21,10 @@
 // would break that invariant belongs behind a separate, explicitly-named tool,
 // not in here.
 //
-// Electron is injected rather than imported: main.mjs calls setTrashImpl() at
-// startup with shell.trashItem. That keeps this module (and fs-tool.mjs, which
-// imports it) loadable under plain node for containment tests, and avoids a
-// dynamic import('electron') — see the ESM warning in main.mjs's header, that
-// crashes the app at startup.
+// The OS bin is injected rather than imported: bin/twigd.mjs calls
+// setTrashImpl() at startup with a pipe request to the shell. That keeps this
+// module (and fs-tool.mjs, which imports it) loadable under plain node for the
+// containment tests, with no shell at all.
 // =============================================================================
 
 import * as fs from 'fs'
@@ -32,11 +32,11 @@ import * as path from 'path'
 
 const TRASH_DIR_NAME = '.trash'
 
-// Set by main.mjs at startup. Left null under plain node, where tier 2 applies.
+// Set by bin/twigd.mjs at startup. Left null under plain node, where tier 2 applies.
 let trashItemImpl = null
 
 /**
- * Register the OS-level trash implementation (Electron's shell.trashItem).
+ * Register the OS-level trash implementation (the shell's recycle bin, over the pipe).
  * @param {(fullPath: string) => Promise<void|boolean>} fn
  */
 export function setTrashImpl(fn) {
@@ -86,8 +86,8 @@ export async function moveToTrash(rootDir, fullPath) {
   if (trashItemImpl) {
     try {
       const result = await trashItemImpl(fullPath)
-      // Electron <14 returned a boolean; current versions resolve void and
-      // reject on failure. Treat an explicit false as a failure either way.
+      // The shell answers true, or rejects with the reason. An explicit false
+      // is treated as a failure too (Electron <14 answered that way).
       if (result !== false) {
         return { ok: true, method: 'recycle-bin', restoreHint: 'restore it from the Recycle Bin' }
       }
