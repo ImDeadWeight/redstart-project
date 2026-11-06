@@ -188,13 +188,13 @@ export class DatabaseService {
     id: string,
     options?: { deleteWithForks?: boolean }
   ): Promise<void> {
-    const url = new URL(resolveApiPath(`/conversations/${id}`), 'http://x');
-    if (options?.deleteWithForks) url.searchParams.set('deleteWithForks', 'true');
-
-    await fetch(url.toString(), {
-      method: 'DELETE',
-      headers: { 'X-Redstart-Device-Id': getDeviceId() }
-    });
+    // Through apiFetch like every other route: it carries the session token
+    // (with auth on, a bare fetch was refused) and throws on a failed status,
+    // so a delete that did not happen is not shown as one. The query is
+    // appended by hand because resolveApiPath can return a relative path,
+    // which URL() would resolve against a placeholder host.
+    const query = options?.deleteWithForks ? '?deleteWithForks=true' : '';
+    await apiFetch(`/conversations/${encodeURIComponent(id)}${query}`, { method: 'DELETE' });
   }
 
   static async deleteMessage(messageId: string): Promise<void> {
