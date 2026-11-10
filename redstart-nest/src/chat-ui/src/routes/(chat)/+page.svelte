@@ -6,11 +6,12 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
-	import { APP_NAME, NEW_CHAT_PARAM } from '$lib/constants';
+	import { APP_NAME, NEW_CHAT_PARAM, NEW_CHAT_PROJECT_PARAM } from '$lib/constants';
 
 	let qParam = $derived(page.url.searchParams.get('q'));
 	let modelParam = $derived(page.url.searchParams.get('model'));
 	let newChatParam = $derived(page.url.searchParams.get(NEW_CHAT_PARAM));
+	let projectParam = $derived(page.url.searchParams.get(NEW_CHAT_PROJECT_PARAM));
 
 	// Dialog state for model not available error
 	let showModelNotAvailable = $state(false);
@@ -26,6 +27,7 @@
 		url.searchParams.delete('q');
 		url.searchParams.delete('model');
 		url.searchParams.delete(NEW_CHAT_PARAM);
+		url.searchParams.delete(NEW_CHAT_PROJECT_PARAM);
 
 		replaceState(url.toString(), {});
 	}
@@ -70,6 +72,9 @@
 
 		conversationsStore.clearActiveConversation();
 		chatStore.clearUIState();
+		// "New chat" on a project page: after the clear above, which resets it.
+		// Nest checks the id when the chat is created.
+		if (projectParam) conversationsStore.setPendingProject(projectParam);
 
 		await modelsStore.fetch();
 

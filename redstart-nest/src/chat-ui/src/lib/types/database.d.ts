@@ -36,6 +36,12 @@ export interface DatabaseConversation {
 	promptSnapshot?: PromptSnapshot;
 	forkedFromConversationId?: string;
 	pinned?: boolean;
+	/**
+	 * The project this chat is in (projects-plan Phase 2), or absent. Nest
+	 * accepts only one of the caller's own projects; null on an update moves
+	 * the chat out.
+	 */
+	projectId?: string | null;
 	contextSummary?: { text: string; upToMessageId: string };
 	messages?: DatabaseMessage[];
 }

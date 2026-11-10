@@ -259,6 +259,12 @@ export interface ApiChatCompletionRequest {
 	 * such parameter. See docs/connector-contract.md §3.
 	 */
 	redstart_mode?: string;
+	/**
+	 * Redstart-only: the id of one of the caller's own projects. The gateway
+	 * composes that project's instructions and memories and deletes the field
+	 * before forwarding; an id the caller cannot read adds nothing.
+	 */
+	redstart_project?: string;
 }
 
 export interface ApiChatCompletionToolCallFunctionDelta {

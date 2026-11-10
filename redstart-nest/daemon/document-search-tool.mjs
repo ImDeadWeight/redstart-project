@@ -31,6 +31,7 @@ import { embedTexts, embedServerStatus } from './embed-server.mjs'
 import { fileLink } from './tool-result-links.mjs'
 import { configDir } from './platform-paths.mjs'
 import { logEvent } from './logger.mjs'
+import { projectForConversation, projectFolder } from './projects-storage.mjs'
 
 export const TOOL_NAME = 'search_documents'
 const SNIPPET_CHARS = 900
@@ -67,6 +68,7 @@ export function toolDefs(cfg) {
       properties: {
         query: { type: 'string', description: 'What to look for, in words likely to appear in the documents.' },
         limit: { type: 'number', description: `How many passages (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}).` },
+        scope: { type: 'string', enum: ['project', 'all'], description: 'In a project chat, "project" (default) searches that project\'s files first; "all" searches every document.' },
       },
       required: ['query'],
     },
@@ -119,8 +121,22 @@ export async function callTool(name, args, cfg, ctx) {
     const v = await embed([query])
     if (Array.isArray(v) && v[0]) queryVector = v[0]
   }
-  const hits = await searchScope({ dir: indexDir(), scope, query, queryVector, limit })
-  const text = formatHits(hits, { query, status: { ...sync, semantic: !!queryVector } })
+  // A project chat searches the project's files first (projects-plan D14).
+  // The project comes from the VERIFIED conversation, never an argument; the
+  // model can only widen back to everything with scope "all". When the
+  // project's files have nothing, the whole folder is searched and the
+  // answer says so, so "nothing found" is never claimed too early.
+  const project = projectForConversation(ctx?.account ?? null, ctx?.conversationId ?? null)
+  const pathPrefix = project && args?.scope !== 'all' ? projectFolder(project) : null
+  let hits = await searchScope({ dir: indexDir(), scope, query, queryVector, limit, pathPrefix })
+  let where = pathPrefix ? 'project' : 'all'
+  if (pathPrefix && hits.length === 0) {
+    hits = await searchScope({ dir: indexDir(), scope, query, queryVector, limit })
+    where = 'fallback'
+  }
+  let text = formatHits(hits, { query, status: { ...sync, semantic: !!queryVector } })
+  if (where === 'project') text = `From the files of the project "${project.name}" (${pathPrefix}). Search with scope "all" for the rest of the user's documents.\n\n${text}`
+  if (where === 'fallback') text = `Nothing in the files of the project "${project.name}" matched, so this searched all of the user's documents.\n\n${text}`
 
   logEvent('documents', 'searched', { durationMs: Date.now() - started, files: sync.files, indexed: sync.indexed, pending: sync.pending, hits: hits.length, semantic: !!queryVector })
 

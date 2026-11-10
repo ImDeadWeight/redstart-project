@@ -344,7 +344,12 @@
 							{#if line.resource}
 								<ToolResultResource resource={line.resource} onDownload={handleDownload} />
 							{:else if line.memory}
-								<MemorySavedChip id={line.memory.id} text={line.memory.text} fromWeb={line.memory.fromWeb} />
+								<MemorySavedChip
+									id={line.memory.id}
+									text={line.memory.text}
+									fromWeb={line.memory.fromWeb}
+									projectId={line.memory.projectId}
+								/>
 							{:else}
 								<div class="font-mono text-xs leading-relaxed whitespace-pre-wrap">
 									{line.text}

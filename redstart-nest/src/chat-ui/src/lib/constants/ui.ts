@@ -1,4 +1,4 @@
-import { Settings, Search, SquarePen, CircleUser, Workflow } from '@lucide/svelte';
+import { Settings, Search, SquarePen, CircleUser, Workflow, FolderKanban } from '@lucide/svelte';
 import type { Component } from 'svelte';
 import { ROUTES } from './routes';
 
@@ -45,6 +45,14 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		tooltip: 'Workflows',
 		route: ROUTES.WORKFLOWS,
 		activeRoutePrefix: '/workflows'
+	},
+	// Projects hold chats (they are also listed in the sidebar with their chats
+	// nested); this opens the list and New project.
+	{
+		icon: FolderKanban,
+		tooltip: 'Projects',
+		route: ROUTES.PROJECTS,
+		activeRoutePrefix: '/projects'
 	},
 	{ icon: Search, tooltip: 'Search', keys: ['cmd', 'k'] },
 	{

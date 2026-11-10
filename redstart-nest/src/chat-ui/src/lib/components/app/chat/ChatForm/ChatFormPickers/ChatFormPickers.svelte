@@ -2,6 +2,7 @@
 	import ChatFormPickerMcpPrompts from './ChatFormPickerMcpPrompts/ChatFormPickerMcpPrompts.svelte';
 	import ChatFormPickerMcpResources from './ChatFormPickerMcpResources.svelte';
 	import type { GetPromptResult, MCPPromptInfo } from '$lib/types';
+	import type { SlashPickerItem } from '$lib/slash-commands';
 
 	interface Props {
 		isPromptPickerOpen?: boolean;
@@ -19,6 +20,9 @@
 		onPromptLoadComplete?: (placeholderId: string, result: GetPromptResult) => void;
 		onPromptLoadError?: (placeholderId: string, error: string) => void;
 		onInlineResourceBrowse?: () => void;
+		commandItems?: SlashPickerItem[];
+		showPrompts?: boolean;
+		onCommandPick?: (item: SlashPickerItem) => void;
 	}
 
 	let {
@@ -32,7 +36,10 @@
 		onPromptLoadStart,
 		onPromptLoadComplete,
 		onPromptLoadError,
-		onInlineResourceBrowse
+		onInlineResourceBrowse,
+		commandItems,
+		showPrompts,
+		onCommandPick
 	}: Props = $props();
 
 	let promptPickerRef: ChatFormPickerMcpPrompts | undefined = $state(undefined);
@@ -63,6 +70,9 @@
 	{onPromptLoadStart}
 	{onPromptLoadComplete}
 	{onPromptLoadError}
+	{commandItems}
+	{showPrompts}
+	{onCommandPick}
 />
 
 <ChatFormPickerMcpResources

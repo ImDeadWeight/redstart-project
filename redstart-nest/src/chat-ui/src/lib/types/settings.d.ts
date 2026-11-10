@@ -125,6 +125,8 @@ export interface SettingsChatServiceOptions {
 	continueFinalMessage?: boolean;
 	// Task mode ID for this request (spec §9). Resolved server-side.
 	promptMode?: string | null;
+	// The chat's project id (projects-plan Phase 2). Resolved server-side.
+	projectId?: string | null;
 	// Callbacks
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;
