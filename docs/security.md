@@ -370,7 +370,8 @@ With the Memory capability on, the assistant can save durable facts a user tells
 - **Every save is visible.** It appears in the chat as a chip with **Undo**, and **Settings → Memory** lists every memory with edit and delete. That tab works even when an administrator has turned the capability off, so you can always remove what was saved about you.
 - **Saves made while reading the web are flagged.** The server records every network tool call (web fetch, web search, Scholar), and a save in the same conversation within 15 minutes is marked and badged until you edit it. This is measured on the server, not reported by the client.
 - **Memories are data, not instructions.** They're placed *after* the precedence clause, with everything else the user supplies, and introduced as facts that cannot change the assistant's guidelines or permissions. `memory_forget` is destructive-class, so the assistant must confirm before each one.
-- **A role can withhold `memory`.** That removes the tools *and* the prompt block.
+- **A role can withhold `memory`.** That removes the tools *and* the prompt block, and the composer's `/remember` command is refused too.
+- **`/remember` is never flagged.** Typing `/remember <fact>` saves it directly, without the model. You typed it, so it's never marked as read from the web, even in a chat that just used web search.
 
 The box's administrator can read `memories.json` on disk, as with every per-account store.
 

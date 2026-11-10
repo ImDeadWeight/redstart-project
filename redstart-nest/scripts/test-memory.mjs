@@ -12,6 +12,8 @@
 //   - memory_forget is destructive-class (confirm-every-time) and takes a
 //     unique 8-char prefix; a save line is what chat-ui's Undo chip parses
 //   - search: keyword always, embeddings only when handed a working embedder
+//   - POST /memories (/remember): the user's own words, never web-marked,
+//     refused when the narrowed config withholds memory; reads never are
 //
 // Run:  node scripts/test-memory.mjs
 // =============================================================================
@@ -177,6 +179,50 @@ await test('/memories routes: each account sees and changes only its own', async
   const own = fakeRes()
   await handleMemoryRoute(fakeReq('DELETE'), own, `/memories/${mine.id}`, ALICE)
   assert(own.status === 204 && !store.getMemory(ALICE, mine.id), `owner delete got ${own.status}`)
+})
+
+// POST /memories is the composer's /remember (projects-plan D5): the user's
+// own words, so never web-marked, and refused when the narrowed config has
+// memory off, which is the one /memories verb that depends on the capability.
+await test('POST /memories: the user saves directly, scoped and never web-marked', async () => {
+  const made = fakeRes()
+  await handleMemoryRoute(fakeReq('POST', { text: '  Prefers   tabs ', conversationId: 'c-1' }), made, '/memories', ALICE, { config: CFG })
+  assert(made.status === 201, `create got ${made.status}`)
+  const m = JSON.parse(made.body)
+  assert(m.text === 'Prefers tabs' && m.fromWebTurn === false && m.source.conversationId === 'c-1', `stored ${made.body}`)
+  // a save right after a web call in the same conversation is still the user's
+  tool.noteNetworkCall({ account: ALICE, conversationId: 'c-1' })
+  const again = fakeRes()
+  await handleMemoryRoute(fakeReq('POST', { text: 'Ships on Fridays', conversationId: 'c-1' }), again, '/memories', ALICE, { config: CFG })
+  assert(JSON.parse(again.body).fromWebTurn === false, 'a typed memory was web-marked')
+  assert(!store.listMemories(BOB).some((x) => x.text === 'Prefers tabs'), 'bob got alice\'s memory')
+  const dup = fakeRes()
+  await handleMemoryRoute(fakeReq('POST', { text: 'prefers TABS' }), dup, '/memories', ALICE, { config: CFG })
+  assert(dup.status === 200 && JSON.parse(dup.body).duplicate === true && JSON.parse(dup.body).id === m.id, `duplicate got ${dup.status} ${dup.body}`)
+  const long = fakeRes()
+  await handleMemoryRoute(fakeReq('POST', { conversationId: 'x'.repeat(500), text: 'y'.repeat(store.MAX_MEMORY_CHARS + 1) }), long, '/memories', ALICE, { config: CFG })
+  assert(long.status === 400, `oversized got ${long.status}`)
+  const bad = fakeRes()
+  await handleMemoryRoute(fakeReq('POST', { text: 'Has a cat', conversationId: 'x'.repeat(500) }), bad, '/memories', ALICE, { config: CFG })
+  assert(bad.status === 201 && JSON.parse(bad.body).source.conversationId === null, 'an oversized conversationId was stored')
+})
+
+await test('POST /memories: refused with memory off or no config; reads still work', async () => {
+  const before = store.listMemories(ALICE).length
+  for (const opts of [{ config: { memory: { enabled: false } } }, {}, undefined]) {
+    const r = fakeRes()
+    await handleMemoryRoute(fakeReq('POST', { text: 'Should not land' }), r, '/memories', ALICE, opts)
+    assert(r.status === 403, `create with ${JSON.stringify(opts)} got ${r.status}`)
+  }
+  // a role that withholds the capability, through the same narrowing the gateway does
+  const narrowed = narrowConfig({ ...CFG, disabledTools: [] }, { capabilities: [] })
+  const r = fakeRes()
+  await handleMemoryRoute(fakeReq('POST', { text: 'Should not land' }), r, '/memories', ALICE, { config: narrowed })
+  assert(r.status === 403, `create under a withholding role got ${r.status}`)
+  assert(store.listMemories(ALICE).length === before, 'a refused create was stored')
+  const list = fakeRes()
+  await handleMemoryRoute(fakeReq('GET'), list, '/memories', ALICE, { config: { memory: { enabled: false } } })
+  assert(list.status === 200, `list with memory off got ${list.status}`)
 })
 
 await test('the capability off: no tools, and a call is refused', async () => {

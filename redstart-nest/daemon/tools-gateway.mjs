@@ -462,7 +462,8 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       // The user's memories (Phase 3). authResult.account is null only with
       // auth off (an auth-on null was refused above), which is the shared
       // _local scope, the same posture as files.
-      if (isMemoryRoute(urlPath) && await handleMemoryRoute(req, res, urlPath, authResult.account ?? null)) return
+      // Creating one (/remember) is checked against the narrowed config.
+      if (isMemoryRoute(urlPath) && await handleMemoryRoute(req, res, urlPath, authResult.account ?? null, { config: effectiveConfig })) return
       // Workflows (personal + org). Same account rule as memories; the org
       // write permission is checked inside the route module.
       if (isWorkflowRoute(urlPath) && await handleWorkflowRoute(req, res, urlPath, authResult.account ?? null)) return
