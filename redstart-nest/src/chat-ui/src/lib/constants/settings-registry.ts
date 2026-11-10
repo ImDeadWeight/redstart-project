@@ -15,7 +15,8 @@ import {
 	ScrollText,
 	KeyRound,
 	SlidersHorizontal,
-	Brain
+	Brain,
+	Workflow
 } from '@lucide/svelte';
 import type { Component } from 'svelte';
 import type {
@@ -46,6 +47,7 @@ export const SETTINGS_SECTION_TITLES = {
 	SYSTEM_PROMPT: 'System Prompt',
 	CONNECTORS: 'Connectors',
 	MEMORY: 'Memory',
+	WORKFLOWS: 'Workflows',
 	ADVANCED: 'Advanced'
 } as const;
 
@@ -78,7 +80,14 @@ const STANDALONE_SECTIONS: { title: SettingsSectionTitle; slug: string; icon: Co
 		slug: SETTINGS_SECTION_SLUGS.CONNECTORS,
 		icon: KeyRound
 	},
-	{ title: SETTINGS_SECTION_TITLES.MEMORY, slug: SETTINGS_SECTION_SLUGS.MEMORY, icon: Brain }
+	{ title: SETTINGS_SECTION_TITLES.MEMORY, slug: SETTINGS_SECTION_SLUGS.MEMORY, icon: Brain },
+	// Visible to everyone: anyone may keep personal workflows. The org half
+	// renders editable only for manageOrgWorkflows, and the server enforces it.
+	{
+		title: SETTINGS_SECTION_TITLES.WORKFLOWS,
+		slug: SETTINGS_SECTION_SLUGS.WORKFLOWS,
+		icon: Workflow
+	}
 ];
 
 const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {

@@ -280,7 +280,7 @@
 					<button type="button" class={sheetItemClass} onclick={onMcpPromptClick}>
 						<Zap class="h-4 w-4 shrink-0" />
 
-						<span>MCP Prompt</span>
+						<span>Workflow</span>
 					</button>
 				{/if}
 

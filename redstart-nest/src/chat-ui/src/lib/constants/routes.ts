@@ -16,6 +16,7 @@ export const SETTINGS_SECTION_SLUGS = {
 	SYSTEM_PROMPT: 'system-prompt',
 	CONNECTORS: 'connectors',
 	MEMORY: 'memory',
+	WORKFLOWS: 'workflows',
 	ADVANCED: 'advanced'
 } as const;
 

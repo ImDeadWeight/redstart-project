@@ -196,6 +196,27 @@ describe('attachments become content parts', () => {
 		expect(texts.some((t) => t.includes('srv-b') && t.includes('resource body'))).toBe(true);
 	});
 
+	it('labels a Nest-served prompt as a workflow, without the internal server id', async () => {
+		const result = await convertDbMessageToApiChatMessageData(
+			message({
+				content: '',
+				extra: [
+					{
+						type: AttachmentType.MCP_PROMPT,
+						name: 'work-notes',
+						content: 'workflow body',
+						serverName: 'redstart-builtin'
+					}
+				]
+			})
+		);
+
+		const text = partsOf(result).map((p) => p.text ?? '').join('');
+		expect(text).toContain('--- Workflow: work-notes ---');
+		expect(text).toContain('workflow body');
+		expect(text).not.toContain('redstart-builtin');
+	});
+
 	// Ordering is load-bearing and easy to break: the user's own text is placed
 	// *after* text/image/audio attachments but *before* video, PDF and MCP
 	// extras. Anything that reads the payload positionally depends on it.

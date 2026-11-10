@@ -398,7 +398,7 @@
 			bind:searchQuery={internalSearchQuery}
 			{showSearchInput}
 			searchPlaceholder="Search prompts..."
-			emptyMessage="No MCP prompts available"
+			emptyMessage="No workflows yet. Add one under Settings → Workflows."
 			itemKey={(prompt) => prompt.serverName + ':' + prompt.name}
 		>
 			{#snippet item(prompt, index, isSelected)}

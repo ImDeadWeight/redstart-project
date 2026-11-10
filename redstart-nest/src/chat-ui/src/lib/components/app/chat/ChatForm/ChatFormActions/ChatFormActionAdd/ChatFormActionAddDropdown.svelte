@@ -153,7 +153,7 @@
 				>
 					<Zap class="h-4 w-4" />
 
-					<span>MCP Prompt</span>
+					<span>Workflow</span>
 				</DropdownMenu.Item>
 			{/if}
 
