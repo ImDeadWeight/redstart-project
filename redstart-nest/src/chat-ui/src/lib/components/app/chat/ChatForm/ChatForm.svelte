@@ -34,6 +34,18 @@
 	import type { GetPromptResult, MCPPromptInfo, MCPResourceInfo, PromptMessage } from '$lib/types';
 	import { isIMEComposing, parseClipboardContent, uuid } from '$lib/utils';
 	import {
+		SLASH_COMMANDS,
+		commandForSubmit,
+		missingArgMessage,
+		pickAction,
+		pickerItems,
+		slashState,
+		type SlashCommand,
+		type SlashPickerItem,
+		type SlashState
+	} from '$lib/slash-commands';
+	import { toast } from 'svelte-sonner';
+	import {
 		AudioRecorder,
 		convertToWav,
 		createAudioFile,
@@ -105,6 +117,16 @@
 	let promptSearchQuery = $state('');
 	let isInlineResourcePickerOpen = $state(false);
 	let resourceSearchQuery = $state('');
+	const BROWSE_ALL = { kind: 'browse', query: '' } as const;
+	// Built-in command rows (projects-plan D2/D3), derived so a list that
+	// arrives late (task modes) appears without another keystroke. Text that
+	// is not a command (the picker opened by its button) lists every command.
+	// Prompts hide once a command name and a space are typed.
+	let slash = $derived<SlashState<SlashCommand>>(slashState(value, SLASH_COMMANDS));
+	let commandItems = $derived(
+		pickerItems(slash.kind === 'closed' ? BROWSE_ALL : slash, SLASH_COMMANDS, commandOptions)
+	);
+	let showPromptsInPicker = $derived(slash.kind !== 'command');
 
 	// Resource Dialog State
 	let isResourceDialogOpen = $state(false);
@@ -193,13 +215,28 @@
 		}
 	}
 
+	function commandOptions(command: SlashCommand) {
+		return command.options?.();
+	}
+
 	function handleInput() {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
 		const hasServers = mcpStore.hasEnabledServers(perChatOverrides);
+		// Computed here rather than read from the deriveds: they settle after
+		// this handler, and the open/closed decision needs this keystroke's.
+		const now = slashState(value, SLASH_COMMANDS);
+		const builtins = pickerItems(now, SLASH_COMMANDS, commandOptions);
 
-		if (value.startsWith(PROMPT_TRIGGER_PREFIX) && hasServers) {
+		// Built-in commands need no MCP server, so `/` opens the picker even
+		// with none; with no server and no matching command it stays shut and
+		// the text is an ordinary message.
+		if (
+			value.startsWith(PROMPT_TRIGGER_PREFIX) &&
+			now.kind !== 'closed' &&
+			(builtins.length > 0 || (now.kind === 'browse' && hasServers))
+		) {
 			isPromptPickerOpen = true;
-			promptSearchQuery = value.slice(1);
+			promptSearchQuery = now.kind === 'browse' ? now.query : '';
 			isInlineResourcePickerOpen = false;
 			resourceSearchQuery = '';
 		} else if (
@@ -217,6 +254,58 @@
 			isInlineResourcePickerOpen = false;
 			resourceSearchQuery = '';
 		}
+	}
+
+	function setComposer(next: string) {
+		value = next;
+		onValueChange?.(next);
+		handleInput();
+		textareaRef?.focus();
+	}
+
+	async function runCommand(command: SlashCommand, arg: string) {
+		if (command.arg === 'required' && !arg) {
+			toast.info(missingArgMessage(command));
+			return;
+		}
+		// Cleared first: a command that shows a sub-list (/help, /mode) sets
+		// the composer itself, and must not be overwritten afterwards.
+		setComposer('');
+		try {
+			await command.run({
+				arg,
+				setComposer,
+				openModelSelector: () => chatFormActionsRef?.openModelSelector(),
+				openSystemPrompt: () => onSystemPromptClick?.({ message: '', files: uploadedFiles })
+			});
+		} catch (error) {
+			console.error(`[slash] /${command.name} failed:`, error);
+			toast.error(`/${command.name} failed`);
+		}
+	}
+
+	function handleCommandPick(item: SlashPickerItem) {
+		const action = pickAction(item);
+		if (action.run) {
+			void runCommand(action.command as SlashCommand, action.arg);
+		} else {
+			setComposer(action.composer);
+		}
+	}
+
+	/**
+	 * Every submit path goes through here (D4): a built-in command typed in
+	 * full runs instead of being sent to the model as text, even when the
+	 * picker was closed (Escape, or the send button).
+	 */
+	function submit() {
+		const hit = commandForSubmit(value, SLASH_COMMANDS);
+		if (hit) {
+			void runCommand(hit.command, hit.arg);
+			return;
+		}
+		if (!canSubmit || disabled || hasLoadingAttachments) return;
+		onSubmit?.();
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
@@ -242,10 +331,7 @@
 
 			if (sendOnEnter || isModifier) {
 				event.preventDefault();
-
-				if (!canSubmit || disabled || hasLoadingAttachments) return;
-
-				onSubmit?.();
+				submit();
 			}
 		}
 	}
@@ -472,10 +558,7 @@
 	class="relative {className}"
 	onsubmit={(event) => {
 		event.preventDefault();
-
-		if (!canSubmit || disabled || hasLoadingAttachments) return;
-
-		onSubmit?.();
+		submit();
 	}}
 >
 	<ChatFormPickers
@@ -491,6 +574,9 @@
 		onPromptLoadComplete={handlePromptLoadComplete}
 		onPromptLoadError={handlePromptLoadError}
 		onInlineResourceBrowse={handleBrowseResources}
+		{commandItems}
+		showPrompts={showPromptsInPicker}
+		onCommandPick={handleCommandPick}
 	/>
 
 	<div

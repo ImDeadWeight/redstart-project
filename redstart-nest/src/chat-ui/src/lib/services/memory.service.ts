@@ -24,6 +24,21 @@ export class MemoryService {
 		return res.memories ?? [];
 	}
 
+	/**
+	 * The composer's /remember: a memory the user typed, never web-marked.
+	 * `duplicate` is true when an identical memory already existed and nothing
+	 * was created. Nest refuses this (403) when the user's role has memory off.
+	 */
+	static async create(
+		text: string,
+		conversationId?: string | null
+	): Promise<Memory & { duplicate: boolean }> {
+		return apiFetch<Memory & { duplicate: boolean }>('/memories', {
+			method: 'POST',
+			body: JSON.stringify({ text, conversationId: conversationId ?? null })
+		});
+	}
+
 	static async update(id: string, text: string): Promise<Memory> {
 		return apiFetch<Memory>(`/memories/${encodeURIComponent(id)}`, {
 			method: 'PUT',

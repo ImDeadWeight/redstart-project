@@ -1,4 +1,12 @@
 <script lang="ts">
+	/**
+	 * The `/` picker. Lists the client's built-in commands first (projects-plan
+	 * D2, rows built by ChatForm from $lib/slash-commands) and the MCP prompts
+	 * after them — Nest's workflows, plus any other server's prompts. The
+	 * prompt half came from llama.cpp's web UI; commands were added beside it,
+	 * so a command row is picked through `onCommandPick` and never loads a
+	 * prompt.
+	 */
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { debounce, uuid } from '$lib/utils';
@@ -14,6 +22,7 @@
 		ChatFormPromptPickerArgumentForm
 	} from '$lib/components/app/chat';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
+	import { usage, type SlashPickerItem } from '$lib/slash-commands';
 
 	interface Props {
 		class?: string;
@@ -27,7 +36,14 @@
 		) => void;
 		onPromptLoadComplete?: (placeholderId: string, result: GetPromptResult) => void;
 		onPromptLoadError?: (placeholderId: string, error: string) => void;
+		/** Built-in command rows, listed above the prompts. */
+		commandItems?: SlashPickerItem[];
+		/** False while a command is being typed (`/model gpt`): prompts hide. */
+		showPrompts?: boolean;
+		onCommandPick?: (item: SlashPickerItem) => void;
 	}
+
+	type Row = { kind: 'builtin'; item: SlashPickerItem } | { kind: 'prompt'; prompt: MCPPromptInfo };
 
 	let {
 		class: className = '',
@@ -36,7 +52,10 @@
 		onClose,
 		onPromptLoadStart,
 		onPromptLoadComplete,
-		onPromptLoadError
+		onPromptLoadError,
+		commandItems = [],
+		showPrompts = true,
+		onCommandPick
 	}: Props = $props();
 
 	let prompts = $state<MCPPromptInfo[]>([]);
@@ -76,7 +95,7 @@
 	});
 
 	$effect(() => {
-		if (filteredPrompts.length > 0 && selectedIndex >= filteredPrompts.length) {
+		if (rows.length > 0 && selectedIndex >= rows.length) {
 			selectedIndex = 0;
 		}
 	});
@@ -293,8 +312,8 @@
 
 		if (event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
-			if (filteredPrompts.length > 0) {
-				selectedIndex = (selectedIndex + 1) % filteredPrompts.length;
+			if (rows.length > 0) {
+				selectedIndex = (selectedIndex + 1) % rows.length;
 			}
 
 			return true;
@@ -302,18 +321,20 @@
 
 		if (event.key === KeyboardKey.ARROW_UP) {
 			event.preventDefault();
-			if (filteredPrompts.length > 0) {
-				selectedIndex = selectedIndex === 0 ? filteredPrompts.length - 1 : selectedIndex - 1;
+			if (rows.length > 0) {
+				selectedIndex = selectedIndex === 0 ? rows.length - 1 : selectedIndex - 1;
 			}
 
 			return true;
 		}
 
 		if (event.key === KeyboardKey.ENTER && !selectedPrompt) {
+			// Nothing listed: let Enter through, so `/something` that matches
+			// no command or prompt still sends as a message.
+			const row = rows[selectedIndex];
+			if (!row) return false;
 			event.preventDefault();
-			if (filteredPrompts[selectedIndex]) {
-				handlePromptClick(filteredPrompts[selectedIndex]);
-			}
+			handleRowClick(row);
 
 			return true;
 		}
@@ -342,7 +363,25 @@
 		);
 	});
 
-	let showSearchInput = $derived(prompts.length > 3);
+	let rows = $derived<Row[]>([
+		...commandItems.map((item) => ({ kind: 'builtin' as const, item })),
+		...(showPrompts ? filteredPrompts.map((prompt) => ({ kind: 'prompt' as const, prompt })) : [])
+	]);
+
+	function handleRowClick(row: Row) {
+		if (row.kind === 'builtin') onCommandPick?.(row.item);
+		else handlePromptClick(row.prompt);
+	}
+
+	function rowKey(row: Row): string {
+		if (row.kind === 'prompt') return 'prompt:' + row.prompt.serverName + ':' + row.prompt.name;
+		const { item } = row;
+		return item.kind === 'option'
+			? `option:${item.command.name}:${item.option.value}`
+			: `command:${item.command.name}`;
+	}
+
+	let showSearchInput = $derived(showPrompts && prompts.length > 3);
 </script>
 
 <ChatFormPickerPopover
@@ -392,39 +431,78 @@
 		</div>
 	{:else}
 		<ChatFormPickerList
-			items={filteredPrompts}
-			{isLoading}
+			items={rows}
+			isLoading={isLoading && showPrompts && commandItems.length === 0}
 			{selectedIndex}
 			bind:searchQuery={internalSearchQuery}
 			{showSearchInput}
 			searchPlaceholder="Search prompts..."
-			emptyMessage="No workflows yet. Add one from Workflows in the sidebar."
-			itemKey={(prompt) => prompt.serverName + ':' + prompt.name}
+			emptyMessage={showPrompts
+				? 'No matching command or workflow. Add workflows from Workflows in the sidebar.'
+				: 'No matching command.'}
+			itemKey={rowKey}
 		>
-			{#snippet item(prompt, index, isSelected)}
-				{@const server = serverSettingsMap.get(prompt.serverName)}
-				{@const serverLabel = server ? mcpStore.getServerLabel(server) : prompt.serverName}
-
-				<ChatFormPickerListItem
-					dataIndex={index}
-					{isSelected}
-					onclick={() => handlePromptClick(prompt)}
-				>
-					<ChatFormPickerItemHeader
-						{server}
-						{serverLabel}
-						title={prompt.title || prompt.name}
-						description={prompt.description}
+			{#snippet item(row, index, isSelected)}
+				{@const previous = index > 0 ? rows[index - 1] : undefined}
+				{#if row.kind === 'builtin' && index === 0}
+					<div class="px-3 pt-1 pb-1 text-xs font-medium text-muted-foreground">Commands</div>
+				{:else if row.kind === 'prompt' && (index === 0 || previous?.kind === 'builtin')}
+					<div class="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">Workflows</div>
+				{/if}
+				{#if row.kind === 'builtin'}
+					{@const builtin = row.item}
+					<ChatFormPickerListItem
+						dataIndex={index}
+						{isSelected}
+						onclick={() => handleRowClick(row)}
 					>
-						{#snippet titleExtra()}
-							{#if prompt.arguments?.length}
-								<Badge variant="secondary">
-									{prompt.arguments.length} arg{prompt.arguments.length > 1 ? 's' : ''}
-								</Badge>
+						<div class="min-w-0 flex-1">
+							{#if builtin.kind === 'option'}
+								<div class="flex items-center gap-2">
+									<span class="font-medium">{builtin.option.label}</span>
+									<span class="text-xs text-muted-foreground">/{builtin.command.name}</span>
+								</div>
+								{#if builtin.option.description}
+									<p class="mt-0.5 truncate text-sm text-muted-foreground">
+										{builtin.option.description}
+									</p>
+								{/if}
+							{:else}
+								<div class="flex items-center gap-2">
+									<span class="font-mono text-sm font-medium">{usage(builtin.command)}</span>
+								</div>
+								<p class="mt-0.5 truncate text-sm text-muted-foreground">
+									{builtin.command.summary}
+								</p>
 							{/if}
-						{/snippet}
-					</ChatFormPickerItemHeader>
-				</ChatFormPickerListItem>
+						</div>
+					</ChatFormPickerListItem>
+				{:else}
+					{@const prompt = row.prompt}
+					{@const server = serverSettingsMap.get(prompt.serverName)}
+					{@const serverLabel = server ? mcpStore.getServerLabel(server) : prompt.serverName}
+
+					<ChatFormPickerListItem
+						dataIndex={index}
+						{isSelected}
+						onclick={() => handleRowClick(row)}
+					>
+						<ChatFormPickerItemHeader
+							{server}
+							{serverLabel}
+							title={prompt.title || prompt.name}
+							description={prompt.description}
+						>
+							{#snippet titleExtra()}
+								{#if prompt.arguments?.length}
+									<Badge variant="secondary">
+										{prompt.arguments.length} arg{prompt.arguments.length > 1 ? 's' : ''}
+									</Badge>
+								{/if}
+							{/snippet}
+						</ChatFormPickerItemHeader>
+					</ChatFormPickerListItem>
+				{/if}
 			{/snippet}
 
 			{#snippet skeleton()}
