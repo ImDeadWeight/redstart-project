@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
 	import ChatFormTwigFolder from '$lib/components/app/chat/ChatForm/ChatFormTwigFolder.svelte';
+	import ChatFormProject from '$lib/components/app/chat/ChatForm/ChatFormProject.svelte';
 	import { onMount } from 'svelte';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 
@@ -124,6 +125,8 @@
 		onSystemPromptClick={handleSystemPromptClick}
 		onUploadedFileRemove={handleUploadedFileRemove}
 	/>
+	<!-- The chat's project, when it is in one (projects-plan Phase 2) -->
+	<ChatFormProject />
 	<!-- Twig desktop: current local-files folder + change button (no-op elsewhere) -->
 	<ChatFormTwigFolder />
 </div>

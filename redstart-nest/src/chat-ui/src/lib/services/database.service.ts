@@ -48,10 +48,14 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export class DatabaseService {
-  static async createConversation(name: string): Promise<DatabaseConversation> {
+  static async createConversation(
+    name: string,
+    { projectId = null }: { projectId?: string | null } = {}
+  ): Promise<DatabaseConversation> {
     const conv = await apiFetch<DatabaseConversation>('/conversations', {
       method: 'POST',
       body: JSON.stringify({
+        ...(projectId ? { projectId } : {}),
         id: uuid(),
         name,
         currNode: '',

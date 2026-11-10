@@ -1,4 +1,6 @@
 export const NEW_CHAT_PARAM = 'new_chat';
+/** On a new-chat URL: start the chat in this project (projects-plan Phase 2). */
+export const NEW_CHAT_PROJECT_PARAM = 'project';
 
 /** Settings section slugs — used for routes and navigation. */
 export const SETTINGS_SECTION_SLUGS = {
@@ -31,5 +33,7 @@ export const ROUTES = {
 	/** Account profile — full page, not a dropdown. */
 	PROFILE: '#/profile',
 	/** Workflows — full page, reached from the sidebar next to New chat. */
-	WORKFLOWS: '#/workflows'
+	WORKFLOWS: '#/workflows',
+	/** Projects — the list; one project is RouterService.project(id). */
+	PROJECTS: '#/projects'
 } as const;

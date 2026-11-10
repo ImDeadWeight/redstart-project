@@ -11,9 +11,9 @@
  * the composer instead of running; `options` makes the picker list choices
  * once the name and a space are typed.
  *
- * Commands deferred in the plan, and what each waits on: /project (Phase 2),
- * /temp (a non-persisted chat path), /search /docs /tools (per-turn tool
- * pinning). See docs/notes/projects-plan.md.
+ * Commands deferred in the plan, and what each waits on: /temp (a
+ * non-persisted chat path), /search /docs /tools (per-turn tool pinning).
+ * See docs/notes/projects-plan.md.
  */
 
 import { goto } from '$app/navigation';
@@ -27,6 +27,7 @@ import { chatStore } from '$lib/stores/chat.svelte';
 import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
 import { isRouterMode } from '$lib/stores/server.svelte';
 import { promptModesStore } from '$lib/stores/prompt-modes.svelte';
+import { projectsStore } from '$lib/stores/projects.svelte';
 import { copyToClipboard, formatMessageForClipboard } from '$lib/utils';
 import { filterOptions, usage, type SlashCommandSpec, type SlashOption } from './parse';
 
@@ -79,6 +80,20 @@ function modeChoices(): SlashOption[] {
 	return [
 		{ value: DEFAULT_MODE, label: 'Default', description: 'No task mode' },
 		...promptModesStore.modes.map((m) => ({ value: m.id, label: m.label, description: m.summary }))
+	];
+}
+
+const NO_PROJECT = 'none';
+
+function projectChoices(): SlashOption[] {
+	void projectsStore.ensureLoaded();
+	return [
+		{ value: NO_PROJECT, label: 'No project', description: 'Take this chat out of its project' },
+		...projectsStore.projects.map((p) => ({
+			value: p.id,
+			label: p.name,
+			description: p.instructions ? p.instructions.slice(0, 80) : undefined
+		}))
 	];
 }
 
@@ -170,6 +185,35 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 			}
 			await conversationsStore.setPromptMode(match.value === DEFAULT_MODE ? null : match.value);
 			toast.success(`Mode: ${match.label}`);
+		}
+	},
+	{
+		name: 'project',
+		summary: 'Put this chat in a project, or take it out',
+		arg: 'optional',
+		argHint: '[name]',
+		options: projectChoices,
+		async run(ctx) {
+			await projectsStore.ensureLoaded();
+			if (!ctx.arg) return ctx.setComposer('/project ');
+			const match = filterOptions(projectChoices(), ctx.arg)[0];
+			if (!match) {
+				toast.error(`No project matches "${ctx.arg}". Create one under Projects.`);
+				return;
+			}
+			const target = match.value === NO_PROJECT ? null : match.value;
+			const active = conversationsStore.activeConversation;
+			try {
+				if (active) {
+					await conversationsStore.moveToProject(active.id, target);
+				} else {
+					// Not started yet: the chat is created in the project on send.
+					conversationsStore.setPendingProject(target);
+				}
+				toast.success(target ? `In project: ${match.label}` : 'Not in a project');
+			} catch (e) {
+				toast.error(errorText(e, 'Could not move this chat'));
+			}
 		}
 	},
 	{
