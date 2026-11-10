@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * Settings → Workflows: saved instructions for one recurring task, run from
+	 * The Workflows page body: saved instructions for one recurring task, run from
 	 * the composer by typing `/` and the workflow's name.
 	 *
 	 * Two lists. Personal workflows are the signed-in account's own, and anyone

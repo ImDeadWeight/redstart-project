@@ -398,7 +398,7 @@
 			bind:searchQuery={internalSearchQuery}
 			{showSearchInput}
 			searchPlaceholder="Search prompts..."
-			emptyMessage="No workflows yet. Add one under Settings → Workflows."
+			emptyMessage="No workflows yet. Add one from Workflows in the sidebar."
 			itemKey={(prompt) => prompt.serverName + ':' + prompt.name}
 		>
 			{#snippet item(prompt, index, isSelected)}

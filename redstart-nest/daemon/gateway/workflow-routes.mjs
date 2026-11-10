@@ -3,7 +3,7 @@
 // =============================================================================
 // Redstart Nest — Gateway /workflows routes
 // =============================================================================
-// Backs chat-ui's Settings → Workflows tab.
+// Backs chat-ui's Workflows page (the sidebar entry beside New chat).
 //
 //   GET    /workflows                 { personal, org, canEditOrg, limits }
 //   POST   /workflows/personal        create one of the caller's own

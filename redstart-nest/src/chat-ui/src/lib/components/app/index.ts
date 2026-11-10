@@ -2,6 +2,7 @@ export * from './actions';
 export * from './auth';
 export * from './badges';
 export * from './profile';
+export * from './workflows';
 export * from './chat';
 export * from './content';
 export * from './dialogs';

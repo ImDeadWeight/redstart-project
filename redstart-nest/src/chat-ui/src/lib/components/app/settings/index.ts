@@ -110,14 +110,6 @@ export { default as SettingsChatRolesTab } from './SettingsChat/SettingsChatRole
 export { default as SettingsChatMemoryTab } from './SettingsChat/SettingsChatMemoryTab.svelte';
 
 /**
- * **SettingsChatWorkflowsTab** - Saved per-task instructions, run with `/`
- *
- * Personal workflows for anyone; organization workflows editable only with
- * manageOrgWorkflows (the server gates every write regardless).
- */
-export { default as SettingsChatWorkflowsTab } from './SettingsChat/SettingsChatWorkflowsTab.svelte';
-
-/**
  * **SettingsChatConnectorsTab** - Per-connector credentials (spec §8)
  *
  * Issues, lists, and revokes keys bound to a specific connector app, so the

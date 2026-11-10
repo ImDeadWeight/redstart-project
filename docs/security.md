@@ -385,7 +385,7 @@ A workflow is a saved instruction for one recurring task, run from the chat by t
 
 **Workflow text never enters the system prompt.** Nest serves workflows as MCP prompts. Running one sends a *user* message, so a workflow is user-supplied content: it sits below the administrator's prompt blocks and can't change the assistant's guidelines or permissions. The client sends only the workflow's name and input values; Nest holds the text and composes the message, so a client can't run a workflow that doesn't exist. Input values fill `{{placeholders}}` in one pass and are never re-read as template.
 
-Everyone can read an organization workflow's full text in **Settings → Workflows** before running it. The box's administrator can read `workflows.json` on disk.
+Everyone can read an organization workflow's full text on the **Workflows** page (in the sidebar, beside New chat) before running it. The box's administrator can read `workflows.json` on disk.
 
 ---
 

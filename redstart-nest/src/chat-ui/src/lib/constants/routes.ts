@@ -16,7 +16,6 @@ export const SETTINGS_SECTION_SLUGS = {
 	SYSTEM_PROMPT: 'system-prompt',
 	CONNECTORS: 'connectors',
 	MEMORY: 'memory',
-	WORKFLOWS: 'workflows',
 	ADVANCED: 'advanced'
 } as const;
 
@@ -30,5 +29,7 @@ export const ROUTES = {
 	/** Settings base — for dynamic settings URLs use RouterService. */
 	SETTINGS: '#/settings',
 	/** Account profile — full page, not a dropdown. */
-	PROFILE: '#/profile'
+	PROFILE: '#/profile',
+	/** Workflows — full page, reached from the sidebar next to New chat. */
+	WORKFLOWS: '#/workflows'
 } as const;
