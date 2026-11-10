@@ -92,7 +92,7 @@ export function getMemory(account, id, { projectId = null } = {}) {
  *
  * @returns {{ ok: true, memory: object, duplicate?: boolean } | { ok: false, error: string }}
  */
-export function saveMemory(account, text, { conversationId = null, fromWebTurn = false, projectId = null, now = Date.now() } = {}) {
+export function saveMemory(account, text, { conversationId = null, fromWebTurn = false, projectId = null, via = null, now = Date.now() } = {}) {
   const norm = normalizeText(text)
   if (norm.error) return { ok: false, error: norm.error }
   const data = read()
@@ -110,6 +110,9 @@ export function saveMemory(account, text, { conversationId = null, fromWebTurn =
     updatedAt: now,
     source: { conversationId: conversationId || null },
     fromWebTurn: fromWebTurn === true,
+    // How it got here when not by memory_save or the user: 'review' is the
+    // automatic memory pass (memory-review.mjs). Shown, never trusted.
+    ...(via ? { via } : {}),
   }
   data.accounts[key] = [...list, memory]
   write(data)

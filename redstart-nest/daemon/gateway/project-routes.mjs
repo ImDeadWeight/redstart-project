@@ -33,6 +33,7 @@ import {
 import { getCapabilities } from '../tools-storage.mjs'
 import { resolveUserPath } from '../user-scope.mjs'
 import { deleteProjectMemories } from '../memory-storage.mjs'
+import { dropSuggestions } from '../memory-review-store.mjs'
 import { detachProject } from '../conversations-storage.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
 import { logEvent } from '../logger.mjs'
@@ -124,6 +125,7 @@ export async function handleProjectRoute(req, res, urlPath, account) {
       // leave a live project with its chats silently moved out.
       const chatsMovedOut = detachProject(id)
       const memoriesDeleted = deleteProjectMemories(account, id)
+      dropSuggestions(account, (s) => s.projectId === id)
       logEvent('project', 'deleted', { account: account?.username ?? undefined, chatsMovedOut, memoriesDeleted })
       sendJson(res, 200, { deleted: true, chatsMovedOut, memoriesDeleted })
       return true

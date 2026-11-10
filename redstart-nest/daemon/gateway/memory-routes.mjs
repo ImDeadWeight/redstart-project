@@ -23,14 +23,97 @@
 
 import { listMemories, saveMemory, updateMemory, deleteMemory } from '../memory-storage.mjs'
 import { getProject } from '../projects-storage.mjs'
+import * as reviewStore from '../memory-review-store.mjs'
+import { reviewConversation, applyOp } from '../memory-review.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
 import { logEvent } from '../logger.mjs'
 
+const SUGGESTION = /^\/memories\/suggestions\/([A-Za-z0-9-]{1,64})(\/accept)?$/
+
 export function isMemoryRoute(urlPath) {
-  return urlPath === '/memories' || /^\/memories\/[A-Za-z0-9-]{1,64}$/.test(urlPath)
+  return urlPath === '/memories' || /^\/memories\/[A-Za-z0-9-]{1,64}$/.test(urlPath) || SUGGESTION.test(urlPath)
 }
 
 const NOT_FOUND = { error: { message: 'Not found', type: 'not_found' } }
+const MEMORY_OFF = { error: { message: 'Memory is turned off for your account', type: 'permission_error' } }
+
+/**
+ * Automatic memory (projects-plan Phase 3). Matched before the item routes,
+ * because "settings", "suggestions" and "review" also fit a memory id.
+ *
+ *   GET  /memories/settings                 { mode, available }
+ *   PUT  /memories/settings                 { mode: off | suggest | auto }
+ *   GET  /memories/suggestions[?conversationId=]
+ *   POST /memories/suggestions/:id/accept   saves it (403 with memory off)
+ *   DELETE /memories/suggestions/:id        dismisses it, for good
+ *   POST /memories/review { conversationId } runs the review if the model is idle
+ *
+ * Settings and the suggestion list stay readable with memory off, like the
+ * memories themselves; anything that writes a memory does not.
+ *
+ * @returns {Promise<boolean>} whether the request was one of these
+ */
+async function handleAutomatic(req, res, urlPath, account, config) {
+  const enabled = !!config?.memory?.enabled
+
+  if (urlPath === '/memories/settings') {
+    if (req.method === 'GET') {
+      sendJson(res, 200, { ...reviewStore.getSettings(account), available: enabled, modes: reviewStore.MODES })
+      return true
+    }
+    if (req.method === 'PUT') {
+      const r = reviewStore.setSettings(account, await readJsonBody(req))
+      if (!r.ok) { sendJson(res, 400, { error: { message: r.error, type: 'invalid_request_error' } }); return true }
+      logEvent('memory', 'mode_changed', { mode: r.settings.mode })
+      sendJson(res, 200, { ...r.settings, available: enabled, modes: reviewStore.MODES })
+      return true
+    }
+    return false
+  }
+
+  if (urlPath === '/memories/suggestions' && req.method === 'GET') {
+    let conversationId = null
+    try { conversationId = new URL(req.url ?? '/', 'http://x').searchParams.get('conversationId') } catch { /* none */ }
+    sendJson(res, 200, { suggestions: reviewStore.listSuggestions(account, { conversationId }) })
+    return true
+  }
+
+  const s = SUGGESTION.exec(urlPath)
+  if (s) {
+    const [, id, accept] = s
+    if (accept && req.method === 'POST') {
+      if (!enabled) { sendJson(res, 403, MEMORY_OFF); return true }
+      const suggestion = reviewStore.getSuggestion(account, id)
+      if (!suggestion) { sendJson(res, 404, NOT_FOUND); return true }
+      const saved = applyOp(account, suggestion, { conversationId: suggestion.conversationId, via: 'review' })
+      reviewStore.takeSuggestion(account, id)
+      if (!saved) {
+        // Its project or its target memory is gone, or it is now a duplicate.
+        sendJson(res, 409, { error: { message: 'That suggestion no longer applies', type: 'conflict' } })
+        return true
+      }
+      logEvent('memory', 'suggestion_accepted', { op: saved.op, project: !!saved.projectId })
+      sendJson(res, 200, saved)
+      return true
+    }
+    if (!accept && req.method === 'DELETE') {
+      const removed = reviewStore.dismissSuggestion(account, id)
+      if (removed) logEvent('memory', 'suggestion_dismissed', {})
+      sendJson(res, removed ? 204 : 404, removed ? undefined : NOT_FOUND)
+      return true
+    }
+    return false
+  }
+
+  if (urlPath === '/memories/review' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    const result = await reviewConversation({ account, conversationId: body?.conversationId, config })
+    sendJson(res, 200, result)
+    return true
+  }
+
+  return false
+}
 
 /**
  * `?projectId=` selects a project's memories instead of the user's own
@@ -49,6 +132,9 @@ function scopeOf(req, account) {
 
 export async function handleMemoryRoute(req, res, urlPath, account, { config } = {}) {
   try {
+    if (await handleAutomatic(req, res, urlPath, account, config)) return true
+    if (/^\/memories\/(settings|suggestions|review)$/.test(urlPath) || SUGGESTION.test(urlPath)) return false
+
     const isCollection = urlPath === '/memories'
     const m = isCollection ? null : /^\/memories\/([A-Za-z0-9-]{1,64})$/.exec(urlPath)
     if (!isCollection && !m) return false

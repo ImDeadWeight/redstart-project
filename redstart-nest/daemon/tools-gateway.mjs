@@ -32,6 +32,7 @@ import { isMemoryRoute, handleMemoryRoute } from './gateway/memory-routes.mjs'
 import { isWorkflowRoute, handleWorkflowRoute } from './gateway/workflow-routes.mjs'
 import { isProjectRoute, handleProjectRoute } from './gateway/project-routes.mjs'
 import { getProject } from './projects-storage.mjs'
+import { beginCompletion, setUpstreamPort } from './completion-activity.mjs'
 import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/document-index-routes.mjs'
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
@@ -260,6 +261,11 @@ export function annotateContextError(body, cost) {
 }
 
 function forwardModified(res, internalPort, parsed) {
+  // Every user completion passes through here, so this is where "is the model
+  // busy" is counted (completion-activity.mjs; the memory review waits for 0).
+  const done = beginCompletion()
+  res.on('close', done)
+  res.on('finish', done)
   const payload = JSON.stringify(parsed)
   const toolCost = toolCostOf(parsed)
   const options = {
@@ -389,6 +395,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
   stopGateway()
   activeConfig = config
   const internalPort = publicPort + 1
+  setUpstreamPort(internalPort)
 
   return new Promise((resolve, reject) => {
     const server = http.createServer(async (req, res) => {
@@ -724,6 +731,7 @@ export function stopGateway() {
     gatewayServer = null
   }
   activeConfig = null
+  setUpstreamPort(null)
 }
 
 export function updateGatewayConfig(config) {

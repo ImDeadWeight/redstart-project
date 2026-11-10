@@ -24,6 +24,7 @@ import { trashWorkspace } from '../conversation-workspace.mjs'
 import { dropKernel } from '../python-tool.mjs'
 import { logEvent } from '../logger.mjs'
 import { getProject } from '../projects-storage.mjs'
+import { dropSuggestions } from '../memory-review-store.mjs'
 
 // A conversation may name only one of the caller's own projects (projects-
 // plan D11), checked on every write that carries the field. null moves it
@@ -39,6 +40,9 @@ function projectFieldError(body, account) {
 // deleteConversationsWithForks visits other accounts' forks too, and only
 // spares them at the end, so its id set is not the set that was deleted.
 async function retireWorkspaces(account, deletedIds) {
+  // A deleted chat's pending memory suggestions go with it (projects-plan D19).
+  const gone = new Set(deletedIds)
+  try { dropSuggestions(account, (s) => gone.has(s.conversationId)) } catch { /* malformed account: nothing stored */ }
   const documentsRoot = getCapabilities().documents?.outputDir
   for (const id of deletedIds) {
     dropKernel(account, id)
