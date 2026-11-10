@@ -111,56 +111,6 @@ export function contentSquare(grid, margin = 0) {
   }
 }
 
-/**
- * A small app-icon frame (taskbar, title bar, Alt+Tab) at `size` px. The
- * full-detail rasterize() blurs at these sizes and the black bird all but
- * vanishes against a dark taskbar, so three things change:
- *  - the drawing is cropped to its own pixels, so it fills the frame;
- *  - the silhouette is snapped to fully opaque or fully clear, so its edge is
- *    a crisp pixel edge rather than a grey halo;
- *  - a 1px ring of `outline` (output pixels, not drawing pixels, so it survives
- *    the shrink) is drawn round the BLACK parts only (the `ringed` palette
- *    characters: the bird's feathers, and Twig's branch, drawn in the same
- *    black). Those are what disappear on a dark taskbar. The brown nest stays
- *    visible on its own; ringing it too made the icon look like a sticker, and
- *    the black strokes along the nest's base left broken dashes of ring there.
- *    So no ring pixel is placed next to nest brown (the `unringed` characters).
- *    On a light taskbar the pale ring is all but invisible, which is the intent.
- * One pixel of the frame is kept clear on every side for that ring.
- */
-export function smallIcon(grid, size, { outline = PALETTE.w, ringed = 'Kk', unringed = 'nmdeh', palette = PALETTE } = {}) {
-  const crop = contentSquare(grid)
-  const px = rasterize(grid, size, { pad: 1, palette, crop })
-  // How much of each output pixel is a given set of colours: the same sampling
-  // with every other colour transparent.
-  const coverage = chars => rasterize(grid, size, { pad: 1, crop, palette: Object.fromEntries([...chars].map(ch => [ch, '#000000'])) })
-  const black = coverage(ringed)
-  const brown = coverage(unringed)
-  // 0 = clear, 1 = opaque, 2 = mostly black (gets the ring), 3 = mostly brown (keeps it away).
-  const kind = new Uint8Array(size * size)
-  for (let i = 0; i < size * size; i++) {
-    const a = px[i * 4 + 3]
-    if (a >= 128) {
-      // Undo the coverage blend on edge pixels: colour comes from the drawing
-      // pixels the sample did hit, alpha becomes solid.
-      px[i * 4 + 3] = 255
-      kind[i] = black[i * 4 + 3] * 2 >= a ? 2 : brown[i * 4 + 3] * 2 >= a ? 3 : 1
-    } else {
-      px.fill(0, i * 4, i * 4 + 4)
-    }
-  }
-  const at = (x, y) => (x >= 0 && y >= 0 && x < size && y < size ? kind[y * size + x] : 0)
-  const [r, g, b] = hexRgb(outline)
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-    if (at(x, y)) continue
-    const nextToBlack = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => at(x + dx, y + dy) === 2)
-    let nextToBrown = false
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (at(x + dx, y + dy) === 3) nextToBrown = true
-    if (nextToBlack && !nextToBrown) px.set([r, g, b, 255], (y * size + x) * 4)
-  }
-  return px
-}
-
 /** Paints `rgba` (w×h) over a solid background colour into a w×h RGBA buffer. */
 export function flatten(rgba, background) {
   const [br, bg, bb] = hexRgb(background)
