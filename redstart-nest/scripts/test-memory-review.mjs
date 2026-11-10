@@ -178,6 +178,8 @@ await test('auto: saved at once with via "review"; updates apply in place', asyn
   const mine = memory.listMemories(BOB)
   assert(mine.find((m) => m.text === 'Deploys on Fridays')?.via === 'review', 'not marked via review')
   assert(mine.find((m) => m.id === old.id)?.text === 'Uses Postgres 16', 'update not applied')
+  const upd = r.saved.find((x) => x.op === 'update')
+  assert(upd?.previousText === 'Uses Postgres 15', 'an update did not report the text it replaced (Undo needs it)')
   assert(reviewStore.listSuggestions(BOB).length === 0, 'auto mode left suggestions')
 })
 

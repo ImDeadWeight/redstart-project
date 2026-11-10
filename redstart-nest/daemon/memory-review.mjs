@@ -330,8 +330,13 @@ export function applyOp(account, op, { conversationId = null, via = 'review' } =
     projectId = project.id
   }
   if (op.op === 'update') {
+    // The text it had, so the client's Undo can put it back rather than
+    // deleting a memory the user had before the review touched it.
+    const before = memory.getMemory(account, op.targetId, { projectId })
     const r = memory.updateMemory(account, op.targetId, op.text, { projectId })
-    return r.ok ? { op: 'update', memory: r.memory, scope: op.scope, ...(projectId ? { projectId } : {}) } : null
+    return r.ok
+      ? { op: 'update', memory: r.memory, scope: op.scope, previousText: before?.text ?? null, ...(projectId ? { projectId } : {}) }
+      : null
   }
   const r = memory.saveMemory(account, op.text, { conversationId, projectId, via })
   return r.ok && !r.duplicate ? { op: 'add', memory: r.memory, scope: op.scope, ...(projectId ? { projectId } : {}) } : null

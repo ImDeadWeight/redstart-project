@@ -20,7 +20,47 @@ export interface Memory {
 	source: { conversationId: string | null };
 	/** Saved in a turn that had read web content: shown with a warning. */
 	fromWebTurn: boolean;
+	/** 'review' when automatic memory saved it. */
+	via?: string;
 }
+
+/** Automatic memory (projects-plan Phase 3). */
+export type AutoMemoryMode = 'off' | 'suggest' | 'auto';
+
+export interface AutoMemorySettings {
+	mode: AutoMemoryMode;
+	/** False when the Memory capability is off for this account's role. */
+	available: boolean;
+}
+
+/** A memory the review proposed, waiting for Save or Dismiss. */
+export interface MemorySuggestion {
+	id: string;
+	op: 'add' | 'update';
+	text: string;
+	scope: 'user' | 'project';
+	projectId?: string;
+	/** For an update: the memory it replaces, and that memory's text. */
+	targetId?: string;
+	previousText?: string | null;
+	conversationId: string | null;
+	createdAt: number;
+}
+
+/** A memory the review saved (auto mode), or a suggestion once accepted. */
+export interface ReviewedMemory {
+	op: 'add' | 'update';
+	memory: Memory;
+	scope: 'user' | 'project';
+	projectId?: string;
+	/** For an update: the text it replaced, which Undo restores. */
+	previousText?: string | null;
+}
+
+export type ReviewResult =
+	| { status: 'off' | 'busy' | 'nothing' | 'failed'; mode?: AutoMemoryMode; error?: string }
+	| { status: 'done'; mode: 'suggest'; suggestions: MemorySuggestion[] }
+	| { status: 'done'; mode: 'auto'; saved: ReviewedMemory[] };
 
 function scoped(path: string, projectId?: string | null): string {
 	return projectId ? `${path}?projectId=${encodeURIComponent(projectId)}` : path;
@@ -66,5 +106,45 @@ export class MemoryService {
 			}
 		);
 		if (!res.ok && res.status !== 404) throw new Error(`Could not forget it (${res.status})`);
+	}
+
+	static async getSettings(): Promise<AutoMemorySettings> {
+		return apiFetch<AutoMemorySettings>('/memories/settings');
+	}
+
+	static async setMode(mode: AutoMemoryMode): Promise<AutoMemorySettings> {
+		return apiFetch<AutoMemorySettings>('/memories/settings', {
+			method: 'PUT',
+			body: JSON.stringify({ mode })
+		});
+	}
+
+	static async suggestions(conversationId?: string | null): Promise<MemorySuggestion[]> {
+		const q = conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : '';
+		const res = await apiFetch<{ suggestions: MemorySuggestion[] }>(`/memories/suggestions${q}`);
+		return res.suggestions ?? [];
+	}
+
+	static async acceptSuggestion(id: string): Promise<ReviewedMemory> {
+		return apiFetch<ReviewedMemory>(`/memories/suggestions/${encodeURIComponent(id)}/accept`, {
+			method: 'POST'
+		});
+	}
+
+	/** Dismissed for good: the review will not propose the same text again. */
+	static async dismissSuggestion(id: string): Promise<void> {
+		const res = await fetch(resolveApiPath(`/memories/suggestions/${encodeURIComponent(id)}`), {
+			method: 'DELETE',
+			headers: getAuthHeaders()
+		});
+		if (!res.ok && res.status !== 404) throw new Error(`Could not dismiss it (${res.status})`);
+	}
+
+	/** Ask Nest to review a chat now; it answers `busy` while a reply is being generated. */
+	static async review(conversationId: string): Promise<ReviewResult> {
+		return apiFetch<ReviewResult>('/memories/review', {
+			method: 'POST',
+			body: JSON.stringify({ conversationId })
+		});
 	}
 }

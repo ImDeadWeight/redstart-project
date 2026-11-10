@@ -24,6 +24,7 @@ import {
 } from '$lib/stores/chat/chat-options';
 import * as messageRepo from '$lib/stores/chat/chat-message-repo';
 import { ChatTitleService } from '$lib/services/chat-title.service';
+import { memoryReviewStore } from '$lib/stores/memory-review.svelte';
 import {
 	normalizeModelName,
 	isAbortError,
@@ -390,6 +391,8 @@ ${workspaceNote}` : workspaceNote) : content,
 				// Naming goes first: on a single-slot server its request replaces the
 				// slot's cached prompt, and the pre-encode below puts the
 				// conversation back. The other order would throw that work away.
+				// Automatic memory: reviewed once this chat goes quiet (or is left).
+				void memoryReviewStore.scheduleReview(convId);
 				void this.nameConversation(convId, effectiveModel).finally(() => {
 					// Pre-encode conversation in KV cache for faster next turn
 					if (config().preEncodeConversation) {
@@ -503,6 +506,7 @@ ${workspaceNote}` : workspaceNote) : content,
 					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
 					// Not awaited: a slow model must not hold up a queued message.
 					void this.nameConversation(convId, effectiveModel);
+					void memoryReviewStore.scheduleReview(convId);
 
 					// Check if there's a pending message queued during streaming
 					const pending = this.ui.consumePendingMessage(convId);
