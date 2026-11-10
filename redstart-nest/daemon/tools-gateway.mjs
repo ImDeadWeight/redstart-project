@@ -64,13 +64,26 @@ function resolveProject(account, claimed) {
   return project ? { id: project.id, name: project.name, instructions: project.instructions } : null
 }
 
-function buildSystemContext(config, facts) {
+// The latest user message's text, which picks the most relevant memories for
+// this turn (memory-storage selectForPrompt). Content may be a string or an
+// OpenAI parts array; only text parts count, and only the first 2000 chars.
+export function latestUserText(messages) {
+  const last = [...(messages || [])].reverse().find((m) => m?.role === 'user')
+  if (!last) return ''
+  const c = last.content
+  const text = typeof c === 'string'
+    ? c
+    : Array.isArray(c) ? c.filter((p) => p?.type === 'text' && typeof p.text === 'string').map((p) => p.text).join(' ') : ''
+  return text.slice(0, 2000)
+}
+
+function buildSystemContext(config, facts, query = '') {
   const { prompt } = composePrompt({
     config,
     externalServers: getExternalServers(),
     admin: getPromptBlocks(),
     // facts.project is already resolved against the caller (resolveProject).
-    ...memoriesFor(config, facts.account, { projectId: facts.project?.id ?? null }),
+    ...memoriesFor(config, facts.account, { projectId: facts.project?.id ?? null, query }),
     ...facts,
   })
   return prompt
@@ -115,7 +128,7 @@ function toolNamesIn(parsed) {
 // admin policy (spec §4). Phase 7 stops accepting client system prose
 // altogether; until then this ordering is what makes the floor hold.
 function injectSystemContext(messages, config, facts) {
-  const context = buildSystemContext(config, facts)
+  const context = buildSystemContext(config, facts, latestUserText(messages))
   const sysIdx = messages.findIndex(m => m.role === 'system')
   if (sysIdx >= 0) {
     messages[sysIdx] = { ...messages[sysIdx], content: `${context}\n\n${messages[sysIdx].content}` }

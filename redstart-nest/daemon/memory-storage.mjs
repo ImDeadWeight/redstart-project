@@ -213,19 +213,32 @@ function cosineSimilarity(a, b) {
 }
 
 // ---------------------------------------------------------------------------
-// The prompt block's selection: newest first, within a character budget
+// The prompt block's selection: relevant first, then newest, within a budget
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_PROMPT_BUDGET_CHARS = 1200   // ≈ 300 tokens (plan §3)
 
 /**
- * The memories that fit the budget, newest first, plus how many did not.
- * Pure over its input.
+ * The memories that fit the budget, plus how many did not. Pure over its
+ * input, which is newest first.
+ *
+ * With a `query` (the latest user message), memories sharing words with it
+ * come first, best match first, then the rest newest first (projects-plan
+ * D20). Recency alone dropped an old fact the moment it mattered: "what
+ * database do I use?" in a chat where twenty newer memories had pushed
+ * "Uses Postgres 16" out of the budget. Keyword scoring only, no embedding
+ * call: this runs on every request, and must never wait on a sidecar.
  */
-export function selectForPrompt(memories, budgetChars = DEFAULT_PROMPT_BUDGET_CHARS) {
+export function selectForPrompt(memories, budgetChars = DEFAULT_PROMPT_BUDGET_CHARS, { query = '' } = {}) {
+  let ordered = memories
+  if (typeof query === 'string' && query.trim()) {
+    const scored = memories.map((m, i) => ({ m, i, s: keywordScore(query, m.text) }))
+    const relevant = scored.filter((x) => x.s > 0).sort((a, b) => b.s - a.s || a.i - b.i)
+    ordered = [...relevant.map((x) => x.m), ...scored.filter((x) => x.s === 0).map((x) => x.m)]
+  }
   const chosen = []
   let used = 0
-  for (const m of memories) {
+  for (const m of ordered) {
     const cost = m.text.length + 3
     if (used + cost > budgetChars) break
     chosen.push(m)
@@ -240,16 +253,16 @@ export function selectForPrompt(memories, budgetChars = DEFAULT_PROMPT_BUDGET_CH
  * tools in the request: retrieval dropping memory_save this turn must not make
  * what is remembered vanish. Used by the completions path and the admin preview.
  */
-export function memoriesFor(config, account, { projectId = null } = {}) {
+export function memoriesFor(config, account, { projectId = null, query = '' } = {}) {
   if (!config?.memory?.enabled) return {}
   try {
-    const { chosen, omitted } = selectForPrompt(listMemories(account), config.memory.promptBudgetChars)
+    const { chosen, omitted } = selectForPrompt(listMemories(account), config.memory.promptBudgetChars, { query })
     const out = { memories: chosen, memoriesOmitted: omitted }
     // A project chat also carries the project's own memories (plan D13), on
     // their own budget so a busy project cannot crowd out who the user is.
     // projectId is one the caller already verified (getProject).
     if (projectId) {
-      const p = selectForPrompt(listMemories(account, { projectId }), config.memory.promptBudgetChars)
+      const p = selectForPrompt(listMemories(account, { projectId }), config.memory.promptBudgetChars, { query })
       out.projectMemories = p.chosen
       out.projectMemoriesOmitted = p.omitted
     }

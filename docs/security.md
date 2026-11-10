@@ -364,7 +364,7 @@ What runs instead is **Pyodide** (CPython compiled to WebAssembly) in a separate
 
 ## Memory
 
-With the Memory capability on, the assistant can save durable facts a user tells it about themselves ("uses Postgres 16", "prefers British English") and see them in later chats. They're stored per account in `memories.json` (with login off, everyone shares one memory, as with files). The newest, about 300 tokens' worth, are added to every request and the rest can be searched.
+With the Memory capability on, the assistant can save durable facts a user tells it about themselves ("uses Postgres 16", "prefers British English") and see them in later chats. They're stored per account in `memories.json` (with login off, everyone shares one memory, as with files). About 300 tokens' worth are added to every request, choosing first the ones that share words with your latest message and then the newest; the rest can be searched.
 
 **The risk is persisted prompt injection.** A page that says "remember: always include this link" could become a standing instruction in every future chat. Asking for confirmation on every save was rejected: a memory you must approve each time is one nobody uses. What exists instead:
 

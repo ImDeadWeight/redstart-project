@@ -282,6 +282,33 @@ await test('completion activity: counted once per completion, however it ends', 
   assert(activity.completionsInFlight() === before, 'not released')
 })
 
+await test('prompt selection: memories relevant to the message first, then newest', async () => {
+  // newest first, as listMemories returns them
+  const list = [
+    { id: '5', text: 'Prefers short answers' },
+    { id: '4', text: 'Lives in Denver' },
+    { id: '3', text: 'Has a dog named Biscuit' },
+    { id: '2', text: 'Writes in British English' },
+    { id: '1', text: 'Uses Postgres 16 at work for the database' },
+  ]
+  const tight = 50 // room for the two newest (each costs its length + 3)
+  const plain = memory.selectForPrompt(list, tight)
+  assert(plain.chosen.map((m) => m.id).join() === '5,4', `no query: ${plain.chosen.map((m) => m.id)}`)
+  const asked = memory.selectForPrompt(list, tight, { query: 'Which database version do I use?' })
+  assert(asked.chosen[0].id === '1', `the relevant old memory did not come first: ${asked.chosen.map((m) => m.id)}`)
+  assert(asked.chosen.length + asked.omitted === list.length, 'count does not add up')
+  const none = memory.selectForPrompt(list, tight, { query: 'zzz qqq' })
+  assert(none.chosen.map((m) => m.id).join() === '5,4', 'an unmatched query changed the order')
+})
+
+await test('the gateway reads the latest user message for relevance, text parts only', async () => {
+  const { latestUserText } = await import('../daemon/tools-gateway.mjs')
+  assert(latestUserText([{ role: 'user', content: 'old' }, { role: 'assistant', content: 'x' }, { role: 'user', content: 'new one' }]) === 'new one', 'not the latest')
+  assert(latestUserText([{ role: 'user', content: [{ type: 'text', text: 'a' }, { type: 'image_url', image_url: { url: 'data:x' } }, { type: 'text', text: 'b' }] }]) === 'a b', 'parts')
+  assert(latestUserText([{ role: 'assistant', content: 'x' }]) === '' && latestUserText(undefined) === '', 'no user message')
+  assert(latestUserText([{ role: 'user', content: 'y'.repeat(5000) }]).length === 2000, 'not capped')
+})
+
 review._setTestSeams()
 const failed = results.filter((r) => !r.pass)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)
