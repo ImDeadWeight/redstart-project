@@ -1,8 +1,10 @@
 // See https://svelte.dev/docs/kit/types#app.d.ts
 // for information about these interfaces
 
-import 'vite-plugin-pwa/pwa-assets';
-import 'vite-plugin-pwa/svelte';
+// Types for the virtual:pwa-* modules. @vite-pwa/sveltekit 2 no longer depends
+// on vite-plugin-pwa; the declarations moved to @unplugin-pwa/core.
+import '@unplugin-pwa/core/pwa-assets';
+import '@unplugin-pwa/core/svelte';
 
 // Import chat types from dedicated module
 

@@ -26,7 +26,9 @@ export const rehypeEnhanceLinks: Plugin<[], Root> = () => {
 			if (!props.href) return;
 
 			props.target = '_blank';
-			props.rel = 'noopener noreferrer';
+			// hast types rel as a token list; hast-util-to-html joins it with
+			// spaces, so the output is still rel="noopener noreferrer".
+			props.rel = ['noopener', 'noreferrer'];
 			node.properties = props;
 		});
 	};
