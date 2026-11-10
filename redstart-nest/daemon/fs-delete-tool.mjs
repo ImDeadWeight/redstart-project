@@ -4,8 +4,10 @@
 // Redstart Nest — MCP Provider: File System delete (destructive class)
 // =============================================================================
 // The one destructive tool in Redstart. @modelcontextprotocol/server-filesystem
-// exposes no delete at all (grep the pinned 2026.7.10 bundle for
-// delete|unlink|rmdir — zero matches), so there is no upstream flag to turn on:
+// exposes no delete tool. That held for 2026.7.10 (zero delete|unlink|rmdir
+// matches in the bundle) and still holds for 2.2.0, whose one unlinkSync sits
+// inside move_file, removing the source after a cross-device copy. So there is
+// no upstream flag to turn on:
 // a delete has to be Redstart-owned code, and this is it.
 //
 // Deliberately a SIBLING of filesystem-mcp-provider.mjs rather than an addition

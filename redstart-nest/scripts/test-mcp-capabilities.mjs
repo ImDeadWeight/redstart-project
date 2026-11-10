@@ -1045,6 +1045,28 @@ async function main() {
       }
     })
 
+    // The pin drift check. FILESYSTEM_TOOL_NAMES is the audited list — each
+    // name has a TOOL_CLASSES entry and its path arguments go through the
+    // containment gate. Moving the pin to 2.2.0 surfaced append_file and
+    // copy_file, two WRITE tools, which toolDefs() then advertised unfiltered;
+    // classifyTool() defaults an unknown name to 'read', so a writes-disabled
+    // policy left both of them in tools/list. Every pinned name must be live
+    // (an upstream rename would otherwise strand a gate entry), and nothing
+    // upstream adds may reach the model until it has been audited into the list.
+    await test('🔍 every pinned file-system tool is still served by the upstream server', async () => {
+      const live = new Set(fsProvider.getCachedFilesystemTools().map(t => t.name))
+      const missing = fsProvider.FILESYSTEM_TOOL_NAMES.filter(n => !live.has(n))
+      assert(missing.length === 0, `pinned but not served upstream (renamed or removed?): ${missing.join(', ')}`)
+    })
+
+    await test('🔍 an upstream tool not yet audited into FILESYSTEM_TOOL_NAMES is never advertised', async () => {
+      const pinned = new Set(fsProvider.FILESYSTEM_TOOL_NAMES)
+      const unaudited = fsProvider.getCachedFilesystemTools().map(t => t.name).filter(n => !pinned.has(n))
+      const advertised = new Set((await client.call('tools/list')).result.tools.map(t => t.name))
+      const leaked = unaudited.filter(n => advertised.has(n))
+      assert(leaked.length === 0, `unaudited upstream tools advertised: ${leaked.join(', ')}`)
+    })
+
     await test('read_text_file reads a file within the configured root', async () => {
       const res = await client.call('tools/call', { name: 'read_text_file', arguments: { path: 'note.txt' } })
       assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)

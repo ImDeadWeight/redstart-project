@@ -44,11 +44,19 @@ const FILESYSTEM_SERVER_ENTRY = path.join(
 )
 
 // The tool names @modelcontextprotocol/server-filesystem exposes (pinned
-// exactly in package.json — currently 2026.7.10; re-audit this list, the
+// exactly in package.json — currently 2.2.0; re-audit this list, the
 // TOOL_CLASSES entries, and the containment gate whenever the pin moves).
 // Hardcoded so callTool() can claim/route them deterministically even before
-// the first tools/list handshake completes. Kept in sync with the live server
-// by test-mcp-capabilities.mjs, which asserts the advertised set.
+// the first tools/list handshake completes. It is also the allowlist toolDefs()
+// advertises from. test-mcp-capabilities.mjs checks it both ways against the
+// live server: every name here is still served, and nothing upstream serves
+// beyond it reaches tools/list.
+//
+// Served upstream but deliberately NOT adopted yet (2.2.0): append_file
+// (path, content) and copy_file (source, destination). Both are writes. Adopting
+// one means adding it here, to BUILTIN_CAPABILITY_TOOL_NAMES.file_system and
+// TOOL_CLASSES ('write'), and to FILE_PRODUCING_TOOLS if it should get a
+// download marker. Their path arguments already use PATH_STRING_KEYS names.
 export const FILESYSTEM_TOOL_NAMES = [
   'read_file',
   'read_text_file',
@@ -68,7 +76,7 @@ export const FILESYSTEM_TOOL_NAMES = [
 const FILESYSTEM_TOOL_NAME_SET = new Set(FILESYSTEM_TOOL_NAMES)
 
 // Defense in depth. The upstream server already blocks "..", absolute,
-// drive-qualified, and real-symlink escapes (verified against v2026.7.10), but
+// drive-qualified, and real-symlink escapes (verified against 2.2.0, as against 2026.7.10 before it), but
 // this capability grants arbitrary file WRITES, so every path argument is also
 // re-validated here through our own symlink-aware containment (path-scope.mjs)
 // before the call reaches the child — a second, independently-audited gate that
@@ -372,7 +380,13 @@ export function toolDefs(cfg) {
   // mcp-server.mjs stamps every advertised tool with Redstart's own provenance
   // annotation, and stripping the field here just meant the merge loop had to
   // rebuild from nothing. Upstream's own hints are preserved underneath ours.
-  return getCachedFilesystemTools().map((t) => ({
+  //
+  // Filtered to FILESYSTEM_TOOL_NAMES, fail closed. Upstream adds tools between
+  // releases (2.2.0 added append_file and copy_file, both writes), and an
+  // unlisted name has no TOOL_CLASSES entry, so classifyTool() would call it
+  // 'read' and the writes-disabled policy would let it through. A new upstream
+  // tool stays invisible until someone audits it into the list.
+  return getCachedFilesystemTools().filter((t) => FILESYSTEM_TOOL_NAME_SET.has(t.name)).map((t) => ({
     name: t.name,
     description: t.description,
     inputSchema: t.inputSchema,

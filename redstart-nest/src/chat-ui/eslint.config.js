@@ -14,6 +14,11 @@ const gitignorePath = fileURLToPath(new URL('./.gitignore', import.meta.url));
 
 export default ts.config(
 	includeIgnoreFile(gitignorePath),
+	// Capacitor copies the built web bundle into the Android project on
+	// `cap sync`. android/.gitignore excludes it, but includeIgnoreFile reads
+	// only this directory's .gitignore, so lint was walking about 31,000
+	// findings in minified build output.
+	{ ignores: ['android/app/src/main/assets/**', 'android/app/build/**'] },
 	js.configs.recommended,
 	...ts.configs.recommended,
 	...svelte.configs.recommended,

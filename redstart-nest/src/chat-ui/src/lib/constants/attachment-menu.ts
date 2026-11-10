@@ -92,7 +92,8 @@ export const ATTACHMENT_PROMPT_ITEMS: AttachmentMenuItem[] = [
 	},
 	{
 		id: AttachmentMenuItemId.MCP_PROMPT,
-		label: 'MCP Prompt',
+		// Nest serves workflows as MCP prompts, so this is where they are run from.
+		label: 'Workflow',
 		icon: Zap,
 		enabledWhen: AttachmentItemEnabledWhen.ALWAYS,
 		action: AttachmentAction.MCP_PROMPT_CLICK,

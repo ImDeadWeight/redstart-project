@@ -1,6 +1,6 @@
 import tailwindcss from '@tailwindcss/vite';
-import { sveltekit } from '@sveltejs/kit/vite';
-import { SvelteKitPWA } from '@vite-pwa/sveltekit';
+import { withPwa } from '@vite-pwa/sveltekit';
+import svelteConfig from './svelte.config.js';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -42,8 +42,22 @@ export default defineConfig({
 
 	plugins: [
 		tailwindcss(),
-		sveltekit(),
-		SvelteKitPWA(SVELTEKIT_PWA_OPTIONS),
+		// @vite-pwa/sveltekit 2 replaced the SvelteKitPWA() plugin with withPwa(),
+		// which returns the sveltekit() plugin and the PWA plugins together and
+		// wraps the adapter so the service worker is built before adapt() runs.
+		// It hands its first argument to sveltekit() as inline config, and inline
+		// config makes SvelteKit ignore svelte.config.js entirely (the adapter,
+		// the $styles alias, mdsvex). So the file's settings are passed through
+		// here, flattened into the shape sveltekit() takes. svelte.config.js stays
+		// the one place they are defined, because svelte-check and editors read it.
+		...withPwa(
+			{
+				...svelteConfig.kit,
+				preprocess: svelteConfig.preprocess,
+				extensions: svelteConfig.extensions
+			},
+			SVELTEKIT_PWA_OPTIONS
+		),
 		splashScreenPlugin(),
 		buildInfoPlugin(),
 		relativizeBasePlugin()

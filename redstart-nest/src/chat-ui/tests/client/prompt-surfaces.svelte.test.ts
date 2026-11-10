@@ -23,7 +23,7 @@ import { setOverride, jsonResponse } from './mock-overrides';
 
 describe('System Prompt settings tab', () => {
 	it('mounts and shows the admin blocks it loaded, with editing available', async () => {
-		const screen = render(SystemPromptTabHarness);
+		const screen = await render(SystemPromptTabHarness);
 
 		await expect.element(screen.getByText('Behavioral Guidelines')).toBeInTheDocument();
 		await expect.element(screen.getByText('Context')).toBeInTheDocument();
@@ -36,7 +36,7 @@ describe('System Prompt settings tab', () => {
 	});
 
 	it('renders the derived data-handling panel, including unknown third-party terms', async () => {
-		const screen = render(SystemPromptTabHarness);
+		const screen = await render(SystemPromptTabHarness);
 
 		// The mock reports hasEgress: true with externalTermsKnown: false — the
 		// case where silence would read as reassurance (spec §7).
@@ -47,7 +47,7 @@ describe('System Prompt settings tab', () => {
 	});
 
 	it('shows the token budget indicator', async () => {
-		const screen = render(SystemPromptTabHarness);
+		const screen = await render(SystemPromptTabHarness);
 
 		await expect.element(screen.getByText(/Prompt size/)).toBeInTheDocument();
 	});
@@ -78,7 +78,7 @@ describe('System Prompt settings tab', () => {
 			})
 		);
 
-		const screen = render(SystemPromptTabHarness);
+		const screen = await render(SystemPromptTabHarness);
 
 		await expect.element(screen.getByText('Read-only')).toBeInTheDocument();
 
@@ -96,7 +96,7 @@ describe('System Prompt settings tab', () => {
 
 describe('Connectors settings tab', () => {
 	it('mounts and lists an existing connector key without leaking a hash', async () => {
-		const screen = render(ConnectorsTabHarness);
+		const screen = await render(ConnectorsTabHarness);
 
 		await expect.element(screen.getByText('Workbench laptop')).toBeInTheDocument();
 		// The key row, not the surface <option> in the issue form — both carry
@@ -105,7 +105,7 @@ describe('Connectors settings tab', () => {
 	});
 
 	it('offers the issue control', async () => {
-		const screen = render(ConnectorsTabHarness);
+		const screen = await render(ConnectorsTabHarness);
 
 		await expect.element(screen.getByText('Issue a key')).toBeInTheDocument();
 	});
@@ -138,7 +138,7 @@ describe('Connectors settings tab', () => {
 			});
 		});
 
-		const screen = render(ConnectorsTabHarness);
+		const screen = await render(ConnectorsTabHarness);
 
 		await screen.getByRole('button', { name: 'Issue' }).click();
 
@@ -150,7 +150,7 @@ describe('Connectors settings tab', () => {
 
 describe('Profile page', () => {
 	it('mounts and shows identity plus the stored key prefix', async () => {
-		const screen = render(ProfilePageHarness);
+		const screen = await render(ProfilePageHarness);
 
 		// The username appears twice by design (heading and details row), so
 		// target the heading rather than a bare text match.
@@ -179,7 +179,7 @@ describe('Profile page', () => {
 			})
 		);
 
-		const screen = render(ProfilePageHarness);
+		const screen = await render(ProfilePageHarness);
 
 		await screen.getByRole('button', { name: /Generate new key/ }).click();
 
@@ -202,7 +202,7 @@ describe('Startup loading screen', () => {
 	 */
 
 	it('says it is retrying instead of showing a bare spinner', async () => {
-		const screen = render(LoadingScreenHarness, { retrying: true });
+		const screen = await render(LoadingScreenHarness, { retrying: true });
 
 		await expect.element(screen.getByText(/Looking for your server/)).toBeInTheDocument();
 		await expect.element(screen.getByText(/Retrying every 10 seconds/)).toBeInTheDocument();
@@ -211,7 +211,7 @@ describe('Startup loading screen', () => {
 	it('🔍 offers Retry once the retry window ends, even with no error to report', async () => {
 		// showRetry without an error is exactly the state that used to hang: no
 		// request failed, because there was no server to send one to.
-		const screen = render(LoadingScreenHarness, { showRetry: true });
+		const screen = await render(LoadingScreenHarness, { showRetry: true });
 
 		await expect.element(screen.getByText('No server found')).toBeInTheDocument();
 		await expect.element(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
@@ -221,14 +221,14 @@ describe('Startup loading screen', () => {
 	});
 
 	it('does not claim an error when none occurred', async () => {
-		const screen = render(LoadingScreenHarness, { showRetry: true });
+		const screen = await render(LoadingScreenHarness, { showRetry: true });
 		// The red "Can't reach the server" box reports a failed request; nothing
 		// failed here, so saying so would be a lie the user has to debug.
 		expect(screen.container.textContent).not.toContain('Can’t reach the server');
 	});
 
 	it('still shows the error box when a request genuinely failed', async () => {
-		const screen = render(LoadingScreenHarness, { error: 'connect ECONNREFUSED' });
+		const screen = await render(LoadingScreenHarness, { error: 'connect ECONNREFUSED' });
 
 		await expect.element(screen.getByText('Can’t reach the server')).toBeInTheDocument();
 		await expect.element(screen.getByText(/ECONNREFUSED/)).toBeInTheDocument();
@@ -236,7 +236,7 @@ describe('Startup loading screen', () => {
 	});
 
 	it('Retry reaches its handler', async () => {
-		const screen = render(LoadingScreenHarness, { showRetry: true });
+		const screen = await render(LoadingScreenHarness, { showRetry: true });
 
 		await screen.getByRole('button', { name: 'Retry' }).click();
 		await expect.element(screen.getByTestId('retry-count')).toHaveTextContent('1');
@@ -245,7 +245,7 @@ describe('Startup loading screen', () => {
 	it('shows no retry affordance while the first attempt is still running', async () => {
 		// Plain startup: spinner only, no buttons to click before anything has
 		// had a chance to fail.
-		const screen = render(LoadingScreenHarness);
+		const screen = await render(LoadingScreenHarness);
 		expect(screen.container.querySelector('button')).toBeNull();
 	});
 });
@@ -255,7 +255,7 @@ describe('Collapsed sidebar rail', () => {
 		// The rail and the expanded sidebar render the same registry, so an action
 		// present in one and missing from the other is a bug — which is exactly
 		// what Profile was, having been a bespoke block in the sidebar only.
-		const screen = render(SidebarActionsHarness);
+		const screen = await render(SidebarActionsHarness);
 
 		await expect.element(screen.getByLabelText('Profile')).toBeInTheDocument();
 		await expect.element(screen.getByLabelText('New chat')).toBeInTheDocument();
@@ -268,7 +268,7 @@ describe('Collapsed sidebar rail', () => {
 	});
 
 	it('hides Profile when nobody is signed in', async () => {
-		const screen = render(SidebarActionsHarness, { signedIn: false });
+		const screen = await render(SidebarActionsHarness, { signedIn: false });
 
 		await expect.element(screen.getByLabelText('New chat')).toBeInTheDocument();
 		expect(screen.container.querySelector('[aria-label="Profile"]')).toBeNull();
@@ -277,7 +277,7 @@ describe('Collapsed sidebar rail', () => {
 
 describe('Profile page tabs', () => {
 	it('opens on Account and shows the tab strip', async () => {
-		const screen = render(ProfilePageHarness);
+		const screen = await render(ProfilePageHarness);
 
 		await expect.element(screen.getByRole('tab', { name: /Account/ })).toBeInTheDocument();
 		await expect.element(screen.getByRole('tab', { name: /Files/ })).toBeInTheDocument();
@@ -291,7 +291,7 @@ describe('Profile page tabs', () => {
 		// The reason this test exists: the explorer was built, type-checked and
 		// covered at the HTTP layer, but shipped in a bundle nobody rebuilt — so
 		// it had never actually been mounted. This is the check that it renders.
-		const screen = render(ProfilePageHarness);
+		const screen = await render(ProfilePageHarness);
 
 		await screen.getByRole('tab', { name: /Files/ }).click();
 
@@ -307,7 +307,7 @@ describe('Profile page tabs', () => {
 		// needs a real pointer, so this covers the half that can be asserted:
 		// selection state, the count, and the affordance telling you what a drag
 		// will now do.
-		const screen = render(ProfilePageHarness);
+		const screen = await render(ProfilePageHarness);
 		await screen.getByRole('tab', { name: /Files/ }).click();
 
 		await expect.element(screen.getByText('quarterly-report.md')).toBeInTheDocument();
@@ -325,7 +325,7 @@ describe('Profile page tabs', () => {
 	});
 
 	it('offers an Up control, disabled at the top of the storage', async () => {
-		const screen = render(ProfilePageHarness);
+		const screen = await render(ProfilePageHarness);
 		await screen.getByRole('tab', { name: /Files/ }).click();
 
 		// Present so there is a way back out of a folder without reaching for the
@@ -339,7 +339,7 @@ describe('Profile page tabs', () => {
 
 describe('Task mode picker', () => {
 	it('mounts and exposes the modes the server advertises', async () => {
-		const screen = render(ModeToggleHarness);
+		const screen = await render(ModeToggleHarness);
 
 		// The trigger's aria-label carries the current state; with no mode set
 		// it must read as "no task mode" rather than showing a stale label.

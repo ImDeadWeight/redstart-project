@@ -1,121 +1,54 @@
 /**
- * Generates the app icons from the American Redstart pixel art
- * (placeholder design — a graphic artist will replace this).
- * No external dependencies — only Node.js built-ins.
- * Output: build/icon.ico (Windows) and build/icon.png (macOS — electron-builder
- *         converts it to .icns, and refuses anything under 512px), both
- *         referenced by both electron-builder configs
+ * Generates an app's icons from its Redstart mascot drawing (see mascot.mjs).
+ *
+ *   node make-icon.mjs                   Nest's icons → redstart-nest/build/
+ *   node make-icon.mjs --variant twig    Twig's icons → redstart-twig/windows/build/
+ *
+ * Output: icon.ico (Windows), icon.icns (macOS) and icon.png (1024px), which
+ * the app's Tauri config embeds at compile time. build/ is gitignored.
  */
 
 import * as fs from 'fs'
 import * as path from 'path'
-import * as zlib from 'zlib'
 import { fileURLToPath } from 'url'
+import { loadMascot, rasterize, encodePng } from './mascot.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const repo = path.join(__dirname, '..', '..')
 
-// ── Pixel art palette and 32×32 grid (matches the runtime icon in main.mjs) ──
-
-const _ = [0,0,0,0], K = [28,25,23,255], O = [249,115,22,255]
-const R = [194,65,12,255], W = [250,250,249,255], Y = [217,119,6,255]
-
-const PIXELS = [
-  [_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,K,K,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,K,K,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,_,_,_,_,_,K,K,K,K,K,K,_,_,_,_,_,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,_,_,_,_,K,K,K,K,K,K,K,K,_,_,_,_,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,_,_,_,K,K,K,K,K,K,K,K,K,K,_,_,_,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,_,_,K,K,K,K,K,K,K,K,K,K,K,K,_,_,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,_,_,K,K,K,K,K,K,K,K,K,K,K,K,_,_,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,_,_,K,K,W,W,K,K,K,K,W,W,K,K,_,_,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,_,_,K,K,W,W,K,K,K,K,W,W,K,K,_,_,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,_,_,K,K,K,K,K,K,K,K,K,K,K,K,_,_,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,_,_,K,K,K,K,K,K,K,K,K,K,K,K,_,_,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,O,O,O,_,_,_,K,K,K,K,K,K,K,K,K,K,_,_,_,O,O,O,_,_,_,_,_],
-  [_,_,_,_,O,O,O,O,O,_,_,_,K,K,K,Y,Y,K,K,K,_,_,_,O,O,O,O,O,_,_,_,_],
-  [_,_,_,_,O,O,O,O,O,O,_,K,K,K,K,Y,Y,K,K,K,K,_,O,O,O,O,O,O,_,_,_,_],
-  [_,_,_,_,O,O,O,O,O,O,_,_,K,K,K,K,K,K,K,K,_,_,O,O,O,O,O,O,_,_,_,_],
-  [_,_,_,_,O,O,O,O,O,O,_,K,K,K,K,K,K,K,K,K,K,_,O,O,O,O,O,O,_,_,_,_],
-  [_,_,_,_,O,O,O,O,O,O,K,K,K,W,K,K,K,K,W,K,K,K,O,O,O,O,O,O,_,_,_,_],
-  [_,_,_,_,O,O,O,O,O,O,O,K,W,W,W,W,W,W,W,W,K,O,O,O,O,O,O,O,_,_,_,_],
-  [_,_,_,_,O,R,R,O,O,O,O,W,W,W,W,W,W,W,W,W,W,O,O,O,O,R,R,O,_,_,_,_],
-  [_,_,_,_,R,R,R,R,O,O,O,W,W,W,W,W,W,W,W,W,W,O,O,O,R,R,R,R,_,_,_,_],
-  [_,_,_,_,R,R,R,R,R,O,K,W,W,W,W,W,W,W,W,W,W,K,O,R,R,R,R,R,_,_,_,_],
-  [_,_,_,_,R,R,R,R,R,O,K,W,W,W,W,W,W,W,W,W,W,K,O,R,R,R,R,R,_,_,_,_],
-  [_,_,_,_,R,R,R,R,R,O,K,W,W,W,W,W,W,W,W,W,W,K,O,R,R,R,R,R,_,_,_,_],
-  [_,_,_,_,R,R,R,R,K,K,K,W,W,W,W,W,W,W,W,W,W,K,K,K,R,R,R,R,_,_,_,_],
-  [_,_,_,_,_,_,R,K,K,K,K,K,W,W,W,W,W,W,W,W,K,K,K,K,K,R,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,K,K,K,K,K,W,W,W,W,W,W,K,K,K,K,K,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,K,K,K,K,K,K,K,K,K,K,K,K,K,K,K,K,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,_,_,K,K,K,K,K,K,K,K,K,K,K,K,_,_,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,_,_,_,K,K,K,K,K,K,K,K,K,K,_,_,_,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_],
-  [_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_],
-]
-
-// ── PNG encoder ──────────────────────────────────────────────────────────────
-
-function makePng(size) {
-  const scale = size / 32
-
-  function crc32(buf) {
-    const t = new Uint32Array(256)
-    for (let i = 0; i < 256; i++) {
-      let c = i
-      for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1)
-      t[i] = c
-    }
-    let v = 0xFFFFFFFF
-    for (let i = 0; i < buf.length; i++) v = t[(v ^ buf[i]) & 0xFF] ^ (v >>> 8)
-    return (v ^ 0xFFFFFFFF) >>> 0
-  }
-
-  function chunk(type, data) {
-    const tb = Buffer.from(type, 'ascii')
-    const lb = Buffer.allocUnsafe(4); lb.writeUInt32BE(data.length, 0)
-    const cb = Buffer.allocUnsafe(4); cb.writeUInt32BE(crc32(Buffer.concat([tb, data])), 0)
-    return Buffer.concat([lb, tb, data, cb])
-  }
-
-  const ihdr = Buffer.allocUnsafe(13)
-  ihdr.writeUInt32BE(size, 0); ihdr.writeUInt32BE(size, 4)
-  ihdr[8] = 8; ihdr[9] = 6; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0
-
-  const rows = []
-  for (let y = 0; y < size; y++) {
-    rows.push(0) // PNG filter byte: None
-    for (let x = 0; x < size; x++) {
-      const [r, g, b, a] = PIXELS[Math.floor(y / scale)][Math.floor(x / scale)]
-      rows.push(r, g, b, a)
-    }
-  }
-
-  return Buffer.concat([
-    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), // PNG signature
-    chunk('IHDR', ihdr),
-    chunk('IDAT', zlib.deflateSync(Buffer.from(rows))),
-    chunk('IEND', Buffer.alloc(0)),
-  ])
+const flag = process.argv.indexOf('--variant')
+const variant = flag === -1 ? 'nest' : process.argv[flag + 1]
+const OUT_DIRS = {
+  nest: path.join(repo, 'redstart-nest', 'build'),
+  twig: path.join(repo, 'redstart-twig', 'windows', 'build'),
 }
+if (!OUT_DIRS[variant]) {
+  console.error(`make-icon: unknown --variant "${variant}" (expected nest or twig)`)
+  process.exit(1)
+}
+
+const grid = loadMascot(variant)
+const pngCache = new Map()
+const makePng = size => {
+  if (!pngCache.has(size)) pngCache.set(size, encodePng(rasterize(grid, size), size))
+  return pngCache.get(size)
+}
+
+const outDir = OUT_DIRS[variant]
+fs.mkdirSync(outDir, { recursive: true })
 
 // ── ICO assembler (PNG-in-ICO, Windows Vista+) ───────────────────────────────
 // Format: 6-byte ICONDIR header, N×16-byte ICONDIRENTRY, then raw PNG blobs.
 
-const SIZES = [16, 32, 48, 64, 128, 256]
-const pngs  = SIZES.map(makePng)
-
-const dirOffset = 6 + SIZES.length * 16
-const offsets   = pngs.reduce((acc, png) => {
-  acc.push(acc.at(-1) + pngs[acc.length - 1]?.length ?? 0)
-  return acc
-}, [dirOffset])
+const SIZES = [16, 24, 32, 48, 64, 128, 256]
+const pngs = SIZES.map(makePng)
 
 const header = Buffer.alloc(6)
 header.writeUInt16LE(0, 0)           // reserved
 header.writeUInt16LE(1, 2)           // type: 1 = icon
 header.writeUInt16LE(SIZES.length, 4)
 
+let offset = 6 + SIZES.length * 16
 const entries = SIZES.map((size, i) => {
   const e = Buffer.alloc(16)
   e.writeUInt8(size === 256 ? 0 : size, 0) // 0 encodes 256 in ICO spec
@@ -125,31 +58,28 @@ const entries = SIZES.map((size, i) => {
   e.writeUInt16LE(1, 4)   // planes
   e.writeUInt16LE(32, 6)  // bits per pixel
   e.writeUInt32LE(pngs[i].length, 8)
-  e.writeUInt32LE(offsets[i], 12)
+  e.writeUInt32LE(offset, 12)
+  offset += pngs[i].length
   return e
 })
 
 const ico = Buffer.concat([header, ...entries, ...pngs])
+const icoPath = path.join(outDir, 'icon.ico')
+fs.writeFileSync(icoPath, ico)
+console.log(`✓ icon.ico → ${icoPath}  (${variant}; ${SIZES.join(', ')}px, ${(ico.length / 1024).toFixed(1)} KB)`)
 
-const outDir = path.join(__dirname, '..', 'build')
-fs.mkdirSync(outDir, { recursive: true })
-const outPath = path.join(outDir, 'icon.ico')
-fs.writeFileSync(outPath, ico)
-console.log(`✓ icon.ico → ${outPath}  (${SIZES.join(', ')}px, ${(ico.length / 1024).toFixed(1)} KB)`)
-
-// 1024 is an exact multiple of the 32px grid, so every source pixel stays a
-// crisp square rather than being resampled.
+// 1024 is an exact multiple of the 128px drawing, so every source pixel stays
+// a crisp square rather than being resampled.
 const pngPath = path.join(outDir, 'icon.png')
 fs.writeFileSync(pngPath, makePng(1024))
 console.log(`✓ icon.png → ${pngPath}  (1024px)`)
 
 // ── ICNS assembler (PNG-in-ICNS, macOS 10.7+) ────────────────────────────────
-// For the Tauri shell. Given only icon.png, tauri-bundler builds an .icns
-// itself and maps each PNG to an icns type by pixel size AND density, taking
-// density from an "@2x" file name. A plain 1024px PNG is 512@2x in icns terms,
-// so it matched no type and every macOS bundle failed with "No matching
-// IconType" (the alpha.7 and alpha.8 releases). Handed a real .icns, the
-// bundler copies it as-is. electron-builder (Twig) keeps using icon.png.
+// Given only icon.png, tauri-bundler builds an .icns itself and maps each PNG
+// to an icns type by pixel size AND density, taking density from an "@2x" file
+// name. A plain 1024px PNG is 512@2x in icns terms, so it matched no type and
+// every macOS bundle failed with "No matching IconType" (the alpha.7 and
+// alpha.8 releases). Handed a real .icns, the bundler copies it as-is.
 //
 // Format: 'icns' + total length (big-endian), then per entry a 4-char type,
 // its length including the 8-byte header, and the PNG bytes.
@@ -160,16 +90,13 @@ const ICNS_TYPES = [
   ['ic09', 512], ['ic14', 512],                // 512, 256@2x
   ['ic10', 1024],                              // 512@2x
 ]
-const icnsPngs = new Map()
-const icnsEntries = ICNS_TYPES.map(([type, size]) => {
-  if (!icnsPngs.has(size)) icnsPngs.set(size, makePng(size))
-  const png = icnsPngs.get(size)
+const icnsBody = Buffer.concat(ICNS_TYPES.map(([type, size]) => {
+  const png = makePng(size)
   const head = Buffer.alloc(8)
   head.write(type, 0, 'ascii')
   head.writeUInt32BE(png.length + 8, 4)
   return Buffer.concat([head, png])
-})
-const icnsBody = Buffer.concat(icnsEntries)
+}))
 const icnsHead = Buffer.alloc(8)
 icnsHead.write('icns', 0, 'ascii')
 icnsHead.writeUInt32BE(icnsBody.length + 8, 4)

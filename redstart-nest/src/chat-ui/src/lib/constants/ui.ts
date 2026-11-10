@@ -1,4 +1,4 @@
-import { Settings, Search, SquarePen, CircleUser } from '@lucide/svelte';
+import { Settings, Search, SquarePen, CircleUser, Workflow } from '@lucide/svelte';
 import type { Component } from 'svelte';
 import { ROUTES } from './routes';
 
@@ -38,6 +38,14 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		requiresAuth: true
 	},
 	{ icon: SquarePen, tooltip: 'New chat', route: ROUTES.NEW_CHAT, keys: ['shift', 'cmd', 'o'] },
+	// Beside New chat rather than inside Settings: a workflow is something you
+	// run, not something you configure once.
+	{
+		icon: Workflow,
+		tooltip: 'Workflows',
+		route: ROUTES.WORKFLOWS,
+		activeRoutePrefix: '/workflows'
+	},
 	{ icon: Search, tooltip: 'Search', keys: ['cmd', 'k'] },
 	{
 		icon: Settings,

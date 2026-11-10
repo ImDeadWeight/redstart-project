@@ -73,16 +73,30 @@ describe('PWA Build Output', () => {
 	});
 
 	describe('Service worker content', () => {
-		it('service worker has minified self.define format', () => {
+		// @vite-pwa/sveltekit 2 emits a classic worker that loads Workbox with
+		// importScripts(), where 1.x emitted an AMD self.define() wrapper. It is
+		// built unminified (minify: false in SVELTEKIT_PWA_OPTIONS), which is
+		// what keeps the strategy names below visible to these checks.
+		it('service worker loads the hashed workbox file with importScripts', () => {
 			expect(swContent).toBeTruthy();
-			// SvelteKit's workbox-plugin-sveltekit produces a minified SW with self.define
-			expect(swContent).toMatch(/if\(!self.define\)/);
+			expect(swContent).toMatch(/importScripts\("\.\/workbox-[a-zA-Z0-9]+\.js"\)/);
 		});
 
-		it('references hashed workbox file (SvelteKit build output)', () => {
+		it('service worker is not minified (strategy names stay readable)', () => {
 			expect(swContent).toBeTruthy();
-			// SvelteKit's workbox-plugin-sveltekit references hashed workbox files
-			expect(swContent).toMatch(/define\(\["\.\/workbox-[a-zA-Z0-9]+"\]/);
+			expect(swContent).not.toMatch(/^var \{ a: \w, i: \w/m);
+		});
+
+		// Regression: an unscoped '**/*' glob pattern matched the client output
+		// a second time under @vite-pwa/sveltekit 2 (it globs from
+		// .svelte-kit/output and adds its own client/** pattern), listing every
+		// precache URL twice. See GLOB_PATTERNS in src/lib/constants/pwa.ts.
+		it('precache lists every URL exactly once', () => {
+			expect(swContent).toBeTruthy();
+			const urls = [...swContent.matchAll(/url:\s*["`]([^"`]+)["`]/g)].map((m) => m[1]);
+			expect(urls.length).toBeGreaterThan(0);
+			const duplicates = urls.filter((url, i) => urls.indexOf(url) !== i);
+			expect(duplicates).toEqual([]);
 		});
 
 		it('precache contains SvelteKit bundle.js with content hash', () => {

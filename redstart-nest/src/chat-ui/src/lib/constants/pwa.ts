@@ -243,8 +243,15 @@ export const CACHE_SETTINGS = {
 	MAX_FILE_SIZE_BYTES: 10 * 1024 * 1024
 } as const;
 
+// Scoped to client/ on purpose. @vite-pwa/sveltekit 2 globs from
+// .svelte-kit/output and appends its own client/** pattern unless one of ours
+// already starts with "client/"; an unscoped '**/*' matched the same files a
+// second time and doubled the precache (128 entries, 18.9 MB, every URL twice).
+// No json here: the only json in client/ is _app/version.json, which the plugin
+// adds itself because kit.includeVersionFile is on. Prerendered pages (the
+// index.html fallback) come from the plugin's own prerendered/** pattern.
 export const GLOB_PATTERNS: string[] = [
-	'**/*.{js,css,html,ico,svg,png,webp,woff,woff2,json,webmanifest}'
+	'client/**/*.{js,css,html,ico,svg,png,webp,woff,woff2,webmanifest}'
 ];
 
 // loading.html is the model loading page served by llama-server itself.
@@ -294,7 +301,11 @@ export const SPLASH_LINK = {
 } as const;
 
 // SvelteKit PWA plugin configuration — used by @vite.config.ts
-import type { SvelteKitPWAOptions } from '@vite-pwa/sveltekit';
+import type { withPwa } from '@vite-pwa/sveltekit';
+
+// @vite-pwa/sveltekit 2 no longer exports its options type by name, so it is
+// read off withPwa's second parameter.
+type SvelteKitPWAOptions = NonNullable<Parameters<typeof withPwa>[1]>;
 
 export const SVELTEKIT_PWA_OPTIONS: SvelteKitPWAOptions = {
 	// Strategy: generateSW - the plugin generates a service worker automatically
@@ -302,14 +313,27 @@ export const SVELTEKIT_PWA_OPTIONS: SvelteKitPWAOptions = {
 	// Manifest configuration
 	manifest: PWA_MANIFEST,
 
-	// Workbox configuration for generateSW strategy
-	workbox: {
+	// The single-bundle build is one file of about 8.5 MiB, over the plugin's
+	// 2 MiB default. A top-level option since @vite-pwa/sveltekit 2: the plugin
+	// now omits it from the generateSW options' type, so set inside that block
+	// it was no longer applied and the build failed on the default.
+	maximumFileSizeToCacheInBytes: CACHE_SETTINGS.MAX_FILE_SIZE_BYTES,
+
+	// Ship the service worker unminified. @vite-pwa/sveltekit 2 minifies it with
+	// mangling, which renames Workbox's classes (NetworkFirst, NavigationRoute),
+	// so tests/unit/pwa.spec.ts could no longer see which strategy guards the
+	// API routes. The worker is small and fetched once per update; readable is
+	// worth more than the bytes, for those tests and for debugging a stuck SW.
+	minify: false,
+
+	// Workbox configuration for the generateSW strategy (named `workbox` before
+	// @vite-pwa/sveltekit 2, which deprecated that name).
+	generateSW: {
 		// Match all static assets in the build output.
 		// Uses '**/' because SvelteKit outputs files under _app/immutable/
 		// subdirectories.
 		globPatterns: GLOB_PATTERNS,
 		globIgnores: GLOB_IGNORES,
-		maximumFileSizeToCacheInBytes: CACHE_SETTINGS.MAX_FILE_SIZE_BYTES,
 
 		// Runtime caching for API calls - use NetworkFirst so APIs are always fresh
 		runtimeCaching: [

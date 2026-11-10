@@ -221,24 +221,28 @@ the license elected here.** No package in the shipped tree is copyleft-only.
 
 ### Direct runtime dependencies
 
+Taken from `redstart-nest/package.json` `dependencies` and the installed versions
+on 2026-11-10. This table is maintained by hand; the generated appendix below is
+the authority for the full tree.
+
 | Package | Version | License |
 |---|---|---|
-| `@modelcontextprotocol/server-filesystem` | 2026.7.10 | MIT (stated in the package's own LICENSE file) |
+| `@modelcontextprotocol/sdk` | 1.32.2 | MIT |
+| `@modelcontextprotocol/server-filesystem` | 2.2.0 | MIT (stated in the package README; its package.json says "SEE LICENSE IN LICENSE", but the 2.2.0 tarball ships no LICENSE file) |
 | `@mozilla/readability` | 0.6.0 | Apache-2.0 |
+| `@tauri-apps/api` | 2.12.4 | Apache-2.0 OR MIT |
 | `@types/qrcode` | 1.5.6 | MIT |
-| `bonjour-service` | 1.4.3 | MIT |
-| `docx` | 9.7.1 | MIT |
-| `electron-updater` | 6.8.9 | MIT |
+| `docx` | 9.15.3 | MIT |
 | `exceljs` | 4.4.0 | MIT |
-| `linkedom` | 0.18.13 | ISC |
-| `mammoth` | 1.12.0 | BSD-2-Clause |
+| `linkedom` | 0.18.15 | ISC |
+| `mammoth` | 1.13.0 | BSD-2-Clause |
 | `pdf-parse` | 2.4.5 | Apache-2.0 |
-| `pdfkit` | 0.15.2 | MIT |
-| `pg` | 8.22.0 | MIT |
+| `pdfkit` | 0.20.2 | MIT |
+| `pg` | 8.23.1 | MIT |
 | `qrcode` | 1.5.4 | MIT |
-| `react` | 19.2.7 | MIT |
-| `react-dom` | 19.2.7 | MIT |
-| `sql.js` | 1.14.1 | MIT |
+| `react` | 19.3.1 | MIT |
+| `react-dom` | 19.3.1 | MIT |
+| `sql.js` | 1.16.0 | MIT |
 
 ### Apache-2.0 packages
 

@@ -11,6 +11,8 @@ import {
 	ATTACHMENT_LABEL_PDF_FILE,
 	ATTACHMENT_LABEL_MCP_PROMPT,
 	ATTACHMENT_LABEL_MCP_RESOURCE,
+	ATTACHMENT_LABEL_WORKFLOW,
+	NEST_MCP_SERVER_ID_PREFIX,
 	LEGACY_AGENTIC_REGEX
 } from '$lib/constants';
 import {
@@ -204,13 +206,16 @@ export async function convertDbMessageToApiChatMessageData(
 	);
 
 	for (const mcpPrompt of mcpPrompts) {
+		// Nest serves workflows as MCP prompts. To the model that is a workflow,
+		// and Nest's internal server id is noise, so it is left out of the header.
+		const isWorkflow = mcpPrompt.serverName?.startsWith(NEST_MCP_SERVER_ID_PREFIX) === true;
 		contentParts.push({
 			type: ContentPartType.TEXT,
 			text: formatAttachmentText(
-				ATTACHMENT_LABEL_MCP_PROMPT,
+				isWorkflow ? ATTACHMENT_LABEL_WORKFLOW : ATTACHMENT_LABEL_MCP_PROMPT,
 				mcpPrompt.name,
 				mcpPrompt.content,
-				mcpPrompt.serverName
+				isWorkflow ? undefined : mcpPrompt.serverName
 			)
 		});
 	}
