@@ -225,7 +225,10 @@ function buildDocx(title, blocks) {
   return new Document({ sections: [{ children }] })
 }
 
-// pdfkit 0.15 has no table primitive, so the grid is drawn by hand: column
+// The grid is drawn by hand because pdfkit had no table primitive when this was
+// written (0.15). pdfkit 0.17 added doc.table(); moving to it is optional, and
+// the hand-drawn grid renders the same text layout under 0.20 as under 0.15.
+// The drawing logic: column
 // widths weighted by content length, per-row height from the tallest wrapped
 // cell, an explicit page break before any row that would overflow, and the
 // header repeated at the top of each new page.
