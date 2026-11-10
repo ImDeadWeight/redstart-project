@@ -30,6 +30,7 @@ import { handleAuthRoute } from './gateway/auth-routes.mjs'
 import { isConversationRoute, handleConversationRoute } from './gateway/conversation-routes.mjs'
 import { isMemoryRoute, handleMemoryRoute } from './gateway/memory-routes.mjs'
 import { isWorkflowRoute, handleWorkflowRoute } from './gateway/workflow-routes.mjs'
+import { isProjectRoute, handleProjectRoute } from './gateway/project-routes.mjs'
 import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/document-index-routes.mjs'
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
@@ -467,6 +468,8 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       // Workflows (personal + org). Same account rule as memories; the org
       // write permission is checked inside the route module.
       if (isWorkflowRoute(urlPath) && await handleWorkflowRoute(req, res, urlPath, authResult.account ?? null)) return
+      // Projects (personal; sharing is projects-plan D7). Same account rule.
+      if (isProjectRoute(urlPath) && await handleProjectRoute(req, res, urlPath, authResult.account ?? null)) return
       if (isDocumentIndexRoute(urlPath) && await handleDocumentIndexRoute(req, res, urlPath, authResult.account ?? null)) return
 
       // MCP server discovery — the chat-ui fetches this at startup to

@@ -58,14 +58,32 @@ export function normalizeText(text) {
   return { text: t }
 }
 
+/**
+ * The storage key for one memory scope: the account's own memories, or one of
+ * its projects' (projects-plan D13), `<account key>#project:<id>`. The '#'
+ * cannot occur in an account id or in '_local', so the two never collide.
+ *
+ * THE CALLER VERIFIES THE PROJECT. This module trusts `projectId` the way it
+ * trusts `account`: routes and tools pass only an id that getProject()
+ * returned for this account, never a raw client value.
+ */
+export function scopeKey(account, projectId = null) {
+  const base = memoryKey(account)
+  if (projectId === null || projectId === undefined) return base
+  if (typeof projectId !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(projectId)) {
+    throw new Error('Cannot resolve a memory scope: malformed project id')
+  }
+  return `${base}#project:${projectId}`
+}
+
 /** Newest first. */
-export function listMemories(account) {
-  const list = read().accounts[memoryKey(account)] || []
+export function listMemories(account, { projectId = null } = {}) {
+  const list = read().accounts[scopeKey(account, projectId)] || []
   return [...list].sort((a, b) => b.createdAt - a.createdAt)
 }
 
-export function getMemory(account, id) {
-  return (read().accounts[memoryKey(account)] || []).find((m) => m.id === id) || null
+export function getMemory(account, id, { projectId = null } = {}) {
+  return (read().accounts[scopeKey(account, projectId)] || []).find((m) => m.id === id) || null
 }
 
 /**
@@ -74,11 +92,11 @@ export function getMemory(account, id) {
  *
  * @returns {{ ok: true, memory: object, duplicate?: boolean } | { ok: false, error: string }}
  */
-export function saveMemory(account, text, { conversationId = null, fromWebTurn = false, now = Date.now() } = {}) {
+export function saveMemory(account, text, { conversationId = null, fromWebTurn = false, projectId = null, now = Date.now() } = {}) {
   const norm = normalizeText(text)
   if (norm.error) return { ok: false, error: norm.error }
   const data = read()
-  const key = memoryKey(account)
+  const key = scopeKey(account, projectId)
   const list = data.accounts[key] || []
   const existing = list.find((m) => m.text.toLowerCase() === norm.text.toLowerCase())
   if (existing) return { ok: true, memory: existing, duplicate: true }
@@ -99,11 +117,11 @@ export function saveMemory(account, text, { conversationId = null, fromWebTurn =
 }
 
 /** Edit by the user (Settings). A user edit clears the web badge: they have now read it. */
-export function updateMemory(account, id, text, { now = Date.now() } = {}) {
+export function updateMemory(account, id, text, { projectId = null, now = Date.now() } = {}) {
   const norm = normalizeText(text)
   if (norm.error) return { ok: false, error: norm.error }
   const data = read()
-  const key = memoryKey(account)
+  const key = scopeKey(account, projectId)
   const list = data.accounts[key] || []
   const idx = list.findIndex((m) => m.id === id)
   if (idx === -1) return { ok: false, error: 'not found' }
@@ -113,15 +131,26 @@ export function updateMemory(account, id, text, { now = Date.now() } = {}) {
   return { ok: true, memory: list[idx] }
 }
 
-export function deleteMemory(account, id) {
+export function deleteMemory(account, id, { projectId = null } = {}) {
   const data = read()
-  const key = memoryKey(account)
+  const key = scopeKey(account, projectId)
   const list = data.accounts[key] || []
   const next = list.filter((m) => m.id !== id)
   if (next.length === list.length) return false
   data.accounts[key] = next
   write(data)
   return true
+}
+
+/** A deleted project's memories go with it (plan D13). Returns how many. */
+export function deleteProjectMemories(account, projectId) {
+  const data = read()
+  const key = scopeKey(account, projectId)
+  const count = (data.accounts[key] || []).length
+  if (!(key in data.accounts)) return 0
+  delete data.accounts[key]
+  write(data)
+  return count
 }
 
 // ---------------------------------------------------------------------------

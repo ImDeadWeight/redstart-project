@@ -69,6 +69,29 @@ export function updateConversation(accountId, convId, updates) {
   return data.conversations[idx]
 }
 
+/**
+ * A deleted project's chats move out to the ordinary list (projects-plan,
+ * user decision): the reference is cleared, the chat is kept. Across every
+ * record, not just the caller's: with auth off, chats are keyed by device id
+ * while the project belongs to the shared scope, and a project id is a UUID,
+ * so a match can only be a chat that pointed at THIS project. lastModified is
+ * left alone, so moving out does not reorder anyone's list.
+ *
+ * @returns {number} how many chats moved out
+ */
+export function detachProject(projectId) {
+  const data = read()
+  let moved = 0
+  for (const c of data.conversations) {
+    if (c.projectId === projectId) {
+      delete c.projectId
+      moved++
+    }
+  }
+  if (moved > 0) write(data)
+  return moved
+}
+
 export function deleteConversation(accountId, convId) {
   const data = read()
   const idx = data.conversations.findIndex(c => c.id === convId && c.accountId === accountId)
