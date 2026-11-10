@@ -70,6 +70,10 @@ The gateway rewrites the request before forwarding:
   retrieval. For a connector that sends its own short, curated tool list and
   has no `search_tools` to recover a dropped tool. Bans still apply. Only the
   literal `false` counts; the field is consumed and never forwarded
+- `redstart_project` — the **id** of one of the caller's own projects (from
+  `GET /projects`). Nest adds that project's instructions and memories to the
+  prompt. An id the caller can't read adds nothing; the field is consumed and
+  never forwarded
 - unknown extra fields are tolerated and ignored, so a newer connector can
   talk to an older Nest
 

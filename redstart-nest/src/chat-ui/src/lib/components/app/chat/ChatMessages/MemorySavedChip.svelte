@@ -13,16 +13,18 @@
 		id: string;
 		text: string;
 		fromWeb: boolean;
+		/** Saved to a project's memory: Undo deletes it from there. */
+		projectId?: string;
 	}
 
-	let { id, text, fromWeb }: Props = $props();
+	let { id, text, fromWeb, projectId }: Props = $props();
 	let undone = $state(false);
 	let busy = $state(false);
 
 	async function undo() {
 		busy = true;
 		try {
-			await MemoryService.remove(id);
+			await MemoryService.remove(id, projectId);
 			undone = true;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Could not undo');
@@ -32,18 +34,29 @@
 	}
 </script>
 
-<div class="my-1 inline-flex max-w-full flex-wrap items-center gap-2 rounded bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-400">
+<div
+	class="my-1 inline-flex max-w-full flex-wrap items-center gap-2 rounded bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-400"
+>
 	<Brain class="h-3.5 w-3.5 flex-shrink-0" />
-	<span class={undone ? 'line-through opacity-60' : ''}>Remembered: {text}</span>
+	<span class={undone ? 'line-through opacity-60' : ''}
+		>{projectId ? 'Remembered for this project' : 'Remembered'}: {text}</span
+	>
 	{#if fromWeb && !undone}
-		<span class="inline-flex items-center gap-1 text-amber-500" title="Saved while the assistant was reading web content. Check it is something you actually said.">
+		<span
+			class="inline-flex items-center gap-1 text-amber-500"
+			title="Saved while the assistant was reading web content. Check it is something you actually said."
+		>
 			<AlertTriangle class="h-3 w-3" /> while reading the web
 		</span>
 	{/if}
 	{#if undone}
 		<span class="opacity-70">forgotten</span>
 	{:else}
-		<button onclick={undo} disabled={busy} class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-sky-500/20">
+		<button
+			onclick={undo}
+			disabled={busy}
+			class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-sky-500/20"
+		>
 			<Undo2 class="h-3 w-3" /> Undo
 		</button>
 	{/if}

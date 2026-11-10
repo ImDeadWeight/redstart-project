@@ -22,6 +22,7 @@
 // =============================================================================
 
 import { listMemories, saveMemory, updateMemory, deleteMemory } from '../memory-storage.mjs'
+import { getProject } from '../projects-storage.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
 import { logEvent } from '../logger.mjs'
 
@@ -29,13 +30,38 @@ export function isMemoryRoute(urlPath) {
   return urlPath === '/memories' || /^\/memories\/[A-Za-z0-9-]{1,64}$/.test(urlPath)
 }
 
+const NOT_FOUND = { error: { message: 'Not found', type: 'not_found' } }
+
+/**
+ * `?projectId=` selects a project's memories instead of the user's own
+ * (projects-plan D13). Resolved through getProject, so only a project the
+ * caller may read is reachable; anything else is 404, the same answer as an
+ * unknown memory, so project ids cannot be probed.
+ *
+ * @returns {{ projectId: string | null } | { missing: true }}
+ */
+function scopeOf(req, account) {
+  let claimed = null
+  try { claimed = new URL(req.url ?? '/', 'http://x').searchParams.get('projectId') } catch { /* no query */ }
+  if (!claimed) return { projectId: null }
+  return getProject(account, claimed) ? { projectId: claimed } : { missing: true }
+}
+
 export async function handleMemoryRoute(req, res, urlPath, account, { config } = {}) {
   try {
-    if (urlPath === '/memories' && req.method === 'GET') {
-      sendJson(res, 200, { memories: listMemories(account) })
+    const isCollection = urlPath === '/memories'
+    const m = isCollection ? null : /^\/memories\/([A-Za-z0-9-]{1,64})$/.exec(urlPath)
+    if (!isCollection && !m) return false
+
+    const scope = scopeOf(req, account)
+    if (scope.missing) { sendJson(res, 404, NOT_FOUND); return true }
+    const { projectId } = scope
+
+    if (isCollection && req.method === 'GET') {
+      sendJson(res, 200, { memories: listMemories(account, { projectId }) })
       return true
     }
-    if (urlPath === '/memories' && req.method === 'POST') {
+    if (isCollection && req.method === 'POST') {
       if (!config?.memory?.enabled) {
         sendJson(res, 403, { error: { message: 'Memory is turned off for your account', type: 'permission_error' } })
         return true
@@ -43,29 +69,28 @@ export async function handleMemoryRoute(req, res, urlPath, account, { config } =
       const body = await readJsonBody(req)
       const conversationId = typeof body?.conversationId === 'string' && body.conversationId.length <= 128
         ? body.conversationId : null
-      const r = saveMemory(account, body?.text, { conversationId, fromWebTurn: false })
+      const r = saveMemory(account, body?.text, { conversationId, fromWebTurn: false, projectId })
       if (!r.ok) {
         sendJson(res, 400, { error: { message: r.error, type: 'invalid_request_error' } })
         return true
       }
-      if (!r.duplicate) logEvent('memory', 'saved_by_user', {})
+      if (!r.duplicate) logEvent('memory', 'saved_by_user', { project: !!projectId })
       // 200 for a duplicate: nothing was created, and the client shows the
       // same "remembered" toast either way.
       sendJson(res, r.duplicate ? 200 : 201, { ...r.memory, duplicate: r.duplicate === true })
       return true
     }
-    const m = /^\/memories\/([A-Za-z0-9-]{1,64})$/.exec(urlPath)
     if (m) {
       const id = m[1]
       if (req.method === 'DELETE') {
-        const removed = deleteMemory(account, id)
-        if (removed) logEvent('memory', 'deleted_by_user', {})
-        sendJson(res, removed ? 204 : 404, removed ? undefined : { error: { message: 'Not found', type: 'not_found' } })
+        const removed = deleteMemory(account, id, { projectId })
+        if (removed) logEvent('memory', 'deleted_by_user', { project: !!projectId })
+        sendJson(res, removed ? 204 : 404, removed ? undefined : NOT_FOUND)
         return true
       }
       if (req.method === 'PUT') {
         const body = await readJsonBody(req)
-        const r = updateMemory(account, id, body?.text)
+        const r = updateMemory(account, id, body?.text, { projectId })
         if (!r.ok) {
           sendJson(res, r.error === 'not found' ? 404 : 400, { error: { message: r.error, type: r.error === 'not found' ? 'not_found' : 'invalid_request_error' } })
           return true

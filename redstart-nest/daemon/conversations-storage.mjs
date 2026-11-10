@@ -51,6 +51,15 @@ export function getConversation(accountId, convId) {
   return c || null
 }
 
+/**
+ * By id alone, for the auth-off case only (projects-storage
+ * projectForConversation), where every caller shares one scope and the MCP
+ * connection carries no device id. Never call this with auth on.
+ */
+export function getConversationAnyAccount(convId) {
+  return read().conversations.find(c => c.id === convId) || null
+}
+
 export function createConversation(accountId, conv) {
   const data = read()
   const record = {

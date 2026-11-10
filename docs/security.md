@@ -24,6 +24,7 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 - [Document search](#document-search)
 - [Memory](#memory)
 - [Workflows](#workflows)
+- [Projects](#projects)
 - [Tool bans](#tool-bans)
 - [Whitelist & SSRF enforcement](#whitelist--ssrf-enforcement)
 - [External MCP servers](#external-mcp-servers)
@@ -390,6 +391,18 @@ Everyone can read an organization workflow's full text on the **Workflows** page
 
 ---
 
+## Projects
+
+A project groups related chats. It has instructions that apply to every chat in it, its own memory, and a files folder (`Projects/<name>/` in your Documents). Projects are stored per account in `projects.json`. With login off, everyone shares one list, as with memories and workflows.
+
+- **Projects are personal.** Only the account that made a project can list, open, edit or delete it, use it in a chat, or read and write its memory. Any other account gets *not found*, the same as for an id that doesn't exist, so project ids can't be probed. Sharing a project with other people is planned but not built (see [Known gaps](#known-gaps)).
+- **Project instructions are user-tier, like workflows.** They're added after the precedence clause, said to be the user's own, and can't change the assistant's guidelines or permissions. The client sends only a project id. Nest looks up the text, so naming another account's project or sending text in that field adds nothing.
+- **A chat can only be put in your own project.** Moving a chat into a project you can't read is refused. The assistant's memory and document-search tools find the project through the chat itself, after checking the chat is yours, never from a value the model or client supplies.
+- **Deleting a project keeps its chats.** They move back to your ordinary chat list. The project's memories are deleted with it. Its files folder is left on disk.
+- **Chats in a project are kept past the 30-day clean-up.** Moving a chat out of its project makes it eligible again.
+
+---
+
 ## Tool bans
 
 A profile can ban tools by name, which is the only lever the server has over tools it does not itself provide. Client applications across the ecosystem (Twig today; Blueprints, Yellowscript and Greenhouse as they grow tools) embed their own and hand them to the model already inside the completions request — the server never offered them, so it cannot withhold them either. Banning strips them by name from every request the profile serves, and clients cannot re-enable them.
@@ -595,6 +608,8 @@ Stated plainly, because a security document that lists only strengths is not one
 - **The clean-URL (port 80) proxy is Windows-only.** On any other platform Redstart does not attempt it: port 80 is privileged, and the alternative — granting the daemon the capability to bind it — would hand back privileges the unprivileged service account exists to shed, on a process that spawns a configurable binary and runs third-party plugin code. A reverse proxy in front is the answer there, and it is the same reverse proxy that terminates TLS.
 - **Tool retrieval ships off, and has never run end to end outside a test.** When a profile enables `tools.retrieval.enabled`, Redstart runs a second, localhost-only llama-server (a 67 MB embedding model on the CPU, port 19084) and uses it to narrow the tool list on each completion to what the conversation plausibly needs. It is an **optimization, never a boundary**: it runs strictly after the ban filter and can only remove from what that left, so a banned tool cannot come back by scoring well, by being pinned, or by having been sent on an earlier turn — and `search_tools` searches the same post-ban catalog, so no tool can be found by describing it that the policy gate withheld. Every failure — no model downloaded, sidecar down, embedding call timing out — forwards the full list unchanged. Be clear about what is unproven: the pieces are tested against stub embedding servers, and the model was chosen by measurement, but the shipped path has never been exercised with the real model on a real conversation. It stays **off by default** until it has been. The switch is on the Tools tab, under the tool-cost readout; turning it on downloads the model once (67 MB) and starts the sidecar, and the switch reports the setting, the model and the sidecar separately, because a control reading “on” for a server doing no retrieval would be worse than one reading “off”.
 - **What the Tools tab estimates and what a request costs are different numbers, and both are now shown.** The estimate describes the tools *that profile* would serve over MCP; the completions payload is composed by the client (its live MCP connections, its own local tools) and the gateway then adds a system prompt on top, so the estimate has always under-counted a real request. The tab now also reports what the last completion actually forwarded, and how many tools policy and retrieval each removed. That observation is server-wide and overwritten by every request, so on a multi-user daemon it describes whoever asked last — deliberately, because a per-account series would be a log of one user's tool usage.
+- **Projects can't be shared yet.** The plan is that a project's owner adds people and sets what each may do, as with a shared document. Today a project is visible only to its owner. Records already carry an owner and an (empty) member list, and every access check goes through one function, so sharing is an addition rather than a migration. Until then, use an organization workflow for instructions many people should share.
+- **A project's files folder is not protected from the rest of your Documents.** It's an ordinary folder in your own storage: the file explorer, and any of your chats with file tools, can read or change it. Project chats search it first and say so, but nothing stops a chat outside the project from searching it too.
 - **Shared capabilities are all-or-nothing.** Vault, Git, SQLite and Postgres are shared across every account with no per-account grants yet.
 - **Twig's local MCP servers are unmoderated.** Twig can run local stdio MCP servers from a file on the user's own machine — arbitrary command execution by design, with the local disk as the trust boundary. Tool bans can strip their tools by name, but the server never sees them registered.
 - **The filesystem containment check is not atomic with the operation.** The File System capability re-validates every path argument through `resolveWithinRoot()` before handing the call to the upstream stdio child, but the child is a separate process, so a check-then-operate window exists in principle. The upstream server re-validates independently, which makes this degraded defense-in-depth rather than a hole.

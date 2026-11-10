@@ -13,6 +13,9 @@
 //   DELETE /projects/:id    its chats MOVE OUT (user decision), its memories
 //                           go with it, its files folder is left on disk
 //
+// Every project in a response carries `folder` ("Projects/<slug>/"), relative
+// to the user's Documents space; POST and GET make sure it exists.
+//
 // Scoped to the authenticated account (or the shared auth-off scope), never to
 // an id the client names, the same rule as /memories and /workflows. Access is
 // decided only by projects-storage canRead / canWrite (owner-only until
@@ -22,10 +25,13 @@
 // Not gated by a capability or role: anyone may organise their own chats.
 // =============================================================================
 
+import * as fs from 'fs'
 import {
-  listProjects, getProject, createProject, updateProject, deleteProject,
+  listProjects, getProject, createProject, updateProject, deleteProject, projectFolder,
   MAX_NAME_CHARS, MAX_INSTRUCTIONS_CHARS, MAX_PROJECTS_PER_ACCOUNT,
 } from '../projects-storage.mjs'
+import { getCapabilities } from '../tools-storage.mjs'
+import { resolveUserPath } from '../user-scope.mjs'
 import { deleteProjectMemories } from '../memory-storage.mjs'
 import { detachProject } from '../conversations-storage.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
@@ -39,6 +45,28 @@ export function isProjectRoute(urlPath) {
 
 const NOT_FOUND = { error: { message: 'Not found', type: 'not_found' } }
 
+// What the client sees: the record plus its files folder, relative to the
+// user's Documents space (plan D14), so the UI never builds the path itself.
+function view(project) {
+  return { ...project, folder: projectFolder(project) }
+}
+
+// The files folder, made when the project is. Best effort: with no Documents
+// folder configured there is nowhere to put it, and a project without files is
+// still a project. Through resolveUserPath, so it lands in the caller's own
+// storage and nowhere else. Never removed by us (plan D14).
+function ensureFolder(account, project) {
+  const root = getCapabilities().documents?.outputDir
+  if (!root) return false
+  try {
+    fs.mkdirSync(resolveUserPath(root, account, projectFolder(project), { create: true }), { recursive: true })
+    return true
+  } catch (err) {
+    logEvent('project', 'folder_failed', { reason: err.message })
+    return false
+  }
+}
+
 function fail(res, r) {
   const status = r.code === 'not_found' ? 404 : r.code === 'conflict' ? 409 : 400
   const type = r.code === 'not_found' ? 'not_found' : r.code === 'conflict' ? 'conflict' : 'invalid_request_error'
@@ -49,7 +77,7 @@ export async function handleProjectRoute(req, res, urlPath, account) {
   try {
     if (urlPath === '/projects' && req.method === 'GET') {
       sendJson(res, 200, {
-        projects: listProjects(account),
+        projects: listProjects(account).map(view),
         limits: {
           maxNameChars: MAX_NAME_CHARS,
           maxInstructionsChars: MAX_INSTRUCTIONS_CHARS,
@@ -62,8 +90,9 @@ export async function handleProjectRoute(req, res, urlPath, account) {
     if (urlPath === '/projects' && req.method === 'POST') {
       const r = createProject(account, await readJsonBody(req))
       if (!r.ok) { fail(res, r); return true }
-      logEvent('project', 'created', { account: account?.username ?? undefined })
-      sendJson(res, 201, r.project)
+      const folderReady = ensureFolder(account, r.project)
+      logEvent('project', 'created', { account: account?.username ?? undefined, folderReady })
+      sendJson(res, 201, view(r.project))
       return true
     }
 
@@ -73,7 +102,8 @@ export async function handleProjectRoute(req, res, urlPath, account) {
 
     if (req.method === 'GET') {
       const project = getProject(account, id)
-      sendJson(res, project ? 200 : 404, project ?? NOT_FOUND)
+      if (project) ensureFolder(account, project)
+      sendJson(res, project ? 200 : 404, project ? view(project) : NOT_FOUND)
       return true
     }
 
@@ -81,7 +111,7 @@ export async function handleProjectRoute(req, res, urlPath, account) {
       const r = updateProject(account, id, await readJsonBody(req))
       if (!r.ok) { fail(res, r); return true }
       logEvent('project', 'updated', { account: account?.username ?? undefined })
-      sendJson(res, 200, r.project)
+      sendJson(res, 200, view(r.project))
       return true
     }
 

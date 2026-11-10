@@ -31,6 +31,7 @@ import * as path from 'path'
 import { configDir } from './platform-paths.mjs'
 import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
 import { memoryKey } from './memory-storage.mjs'
+import { getConversation, getConversationAnyAccount } from './conversations-storage.mjs'
 
 export const MAX_NAME_CHARS = 80
 export const MAX_INSTRUCTIONS_CHARS = 8000
@@ -193,6 +194,27 @@ export function updateProject(account, id, body, { now = Date.now() } = {}) {
   list[idx] = { ...list[idx], ...v.fields, updatedAt: now }
   write(data)
   return { ok: true, project: list[idx] }
+}
+
+/** Where the folder lives under the user's Documents root, posix, with a trailing slash. */
+export const PROJECTS_DIR = 'Projects'
+export function projectFolder(project) {
+  return `${PROJECTS_DIR}/${project.slug}/`
+}
+
+/**
+ * The project a tool call's conversation is in, or null (plan D10). The
+ * conversation id must already be VERIFIED for this caller
+ * (mcp-server verifiedConversationId); the project is then resolved through
+ * getProject, so a chat pointing at a project the caller may not read
+ * resolves to none. With auth off, conversations are keyed by a device id
+ * the MCP connection does not carry, so the record is found by id alone —
+ * the shared auth-off posture verifiedConversationId already takes.
+ */
+export function projectForConversation(account, conversationId) {
+  if (!conversationId) return null
+  const conv = account ? getConversation(account.id, conversationId) : getConversationAnyAccount(conversationId)
+  return conv?.projectId ? getProject(account, conv.projectId) : null
 }
 
 /** Removes the record only. The route detaches chats and drops project memory. */

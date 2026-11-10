@@ -34,11 +34,16 @@ export type ToolResultLine = {
 	/** A Phase 2 resource line: drawn as an image, a table or a download chip. */
 	resource?: ToolResultResource;
 	/** A Phase 3 memory_save line: drawn as a chip with Undo. */
-	memory?: { id: string; text: string; fromWeb: boolean };
+	memory?: { id: string; text: string; fromWeb: boolean; projectId?: string };
 };
 
-/** memory_save's first result line (daemon/memory-tool.mjs). */
-export const MEMORY_LINE_REGEX = /^\[memory: ([A-Za-z0-9-]{8,64})( web)?\] (.+)$/;
+/**
+ * memory_save's first result line (daemon/memory-tool.mjs):
+ * `[memory: <id>[ web][ project:<projectId>]] <text>`. A project save names
+ * its project so Undo deletes from that project's memory.
+ */
+export const MEMORY_LINE_REGEX =
+	/^\[memory: ([A-Za-z0-9-]{8,64})( web)?(?: project:([A-Za-z0-9-]{1,64}))?\] (.+)$/;
 
 /**
  * Derives display sections from a single assistant message and its direct tool results.
@@ -198,7 +203,12 @@ export function parseToolResultWithImages(
 		const resource = parseResourceLine(line);
 		if (resource) return { text: line, resource, filePath: resource.path };
 		const mem = line.match(MEMORY_LINE_REGEX);
-		if (mem) return { text: line, memory: { id: mem[1], text: mem[3], fromWeb: !!mem[2] } };
+		if (mem) {
+			return {
+				text: line,
+				memory: { id: mem[1], text: mem[4], fromWeb: !!mem[2], projectId: mem[3] || undefined }
+			};
+		}
 		const match = line.match(ATTACHMENT_SAVED_REGEX);
 		if (!match || !extras) {
 			const fileMatch = line.match(FILE_PATH_REGEX);
@@ -336,7 +346,7 @@ export async function downloadFile(relativePath: string, fileName?: string): Pro
 	const base = getServerBaseUrl().replace(/\/$/, '');
 	const url = `${base}/files/download?path=${encodeURIComponent(relativePath)}`;
 	const response = await fetch(url, {
-		headers: getAuthHeaders(),
+		headers: getAuthHeaders()
 	});
 	if (!response.ok) {
 		// The endpoint explains itself in the body ("outside the configured file

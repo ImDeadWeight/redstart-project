@@ -31,6 +31,7 @@ import { isConversationRoute, handleConversationRoute } from './gateway/conversa
 import { isMemoryRoute, handleMemoryRoute } from './gateway/memory-routes.mjs'
 import { isWorkflowRoute, handleWorkflowRoute } from './gateway/workflow-routes.mjs'
 import { isProjectRoute, handleProjectRoute } from './gateway/project-routes.mjs'
+import { getProject } from './projects-storage.mjs'
 import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/document-index-routes.mjs'
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
@@ -52,12 +53,23 @@ let activeConfig = null
 //
 // `hasTools` = the request actually carries tool definitions, and gates every
 // capability claim; see the substantiation rule in system-prompt.mjs.
+// The request's `redstart_project`, as a project this caller may read, or
+// null. Only name, id and instructions travel on: the composer has no use
+// for the owner or members, and a smaller object is a smaller surface.
+function resolveProject(account, claimed) {
+  if (typeof claimed !== 'string' || !claimed) return null
+  let project = null
+  try { project = getProject(account, claimed) } catch { return null }
+  return project ? { id: project.id, name: project.name, instructions: project.instructions } : null
+}
+
 function buildSystemContext(config, facts) {
   const { prompt } = composePrompt({
     config,
     externalServers: getExternalServers(),
     admin: getPromptBlocks(),
-    ...memoriesFor(config, facts.account),
+    // facts.project is already resolved against the caller (resolveProject).
+    ...memoriesFor(config, facts.account, { projectId: facts.project?.id ?? null }),
     ...facts,
   })
   return prompt
@@ -546,6 +558,13 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         const requestedMode = parsed.redstart_mode
         delete parsed.redstart_mode
 
+        // Redstart-specific request field: a PROJECT ID, never project text
+        // (projects-plan D10). Resolved against the caller's own projects, so
+        // a foreign or unknown id composes nothing — the same rule as modes.
+        // Deleted before forwarding.
+        const project = resolveProject(authResult.account ?? null, parsed.redstart_project)
+        delete parsed.redstart_project
+
         // Redstart-specific request field: `redstart_retrieval: false` asks the
         // gateway not to narrow THIS request's tools. For a connector that sends
         // its own small, curated tool list (Dungeon Books sends ~25 notes tools)
@@ -606,7 +625,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
             {
               hasTools: true,
               account: authResult.account,
-              mode: requestedMode,
+              mode: requestedMode, project,
               surface: authResult.surface,
               timeZone,
               clientToolNames: [],
@@ -641,7 +660,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         parsed.messages = injectSystemContext([...(parsed.messages || [])], effectiveConfig, {
           hasTools: requestHasTools,
           account: authResult.account,
-          mode: requestedMode,
+          mode: requestedMode, project,
           surface: authResult.surface,
           timeZone,
           clientToolNames: clientToolNamesIn(parsed),

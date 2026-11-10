@@ -237,11 +237,20 @@ export function selectForPrompt(memories, budgetChars = DEFAULT_PROMPT_BUDGET_CH
  * tools in the request: retrieval dropping memory_save this turn must not make
  * what is remembered vanish. Used by the completions path and the admin preview.
  */
-export function memoriesFor(config, account) {
+export function memoriesFor(config, account, { projectId = null } = {}) {
   if (!config?.memory?.enabled) return {}
   try {
     const { chosen, omitted } = selectForPrompt(listMemories(account), config.memory.promptBudgetChars)
-    return { memories: chosen, memoriesOmitted: omitted }
+    const out = { memories: chosen, memoriesOmitted: omitted }
+    // A project chat also carries the project's own memories (plan D13), on
+    // their own budget so a busy project cannot crowd out who the user is.
+    // projectId is one the caller already verified (getProject).
+    if (projectId) {
+      const p = selectForPrompt(listMemories(account, { projectId }), config.memory.promptBudgetChars)
+      out.projectMemories = p.chosen
+      out.projectMemoriesOmitted = p.omitted
+    }
+    return out
   } catch {
     return {} // a malformed account gets no memories rather than someone else's
   }
