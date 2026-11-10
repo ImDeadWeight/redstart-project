@@ -7,8 +7,8 @@
   "type": "module",
   "scripts": {
     "build:chat": "npm --prefix ../../redstart-nest/src/chat-ui run build",
-    "build": "npm run build:chat && node ../../redstart-nest/scripts/make-icon.mjs && node ../../redstart-nest/scripts/stage-node.mjs && node ../../redstart-nest/scripts/rust-licenses.mjs --shell shell --out licenses/rust-licenses.json && node scripts/stage-shell-bundle.mjs && node scripts/build-shell.mjs",
-    "dev": "cargo run --manifest-path shell/Cargo.toml",
+    "build": "npm run build:chat && node ../../redstart-nest/scripts/make-icon.mjs --variant twig && node ../../redstart-nest/scripts/stage-node.mjs && node ../../redstart-nest/scripts/rust-licenses.mjs --shell shell --out licenses/rust-licenses.json && node scripts/stage-shell-bundle.mjs && node scripts/build-shell.mjs",
+    "dev": "node ../../redstart-nest/scripts/make-icon.mjs --variant twig && cargo run --manifest-path shell/Cargo.toml",
     "test": "node scripts/test-fs-tool.mjs && node scripts/test-twigd.mjs"
   },
   "devDependencies": {
