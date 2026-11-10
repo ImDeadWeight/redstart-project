@@ -380,9 +380,10 @@ jobs:
             redstart-twig/windows/shell/target
           key: twig-shell-${{ runner.os }}-${{ hashFiles('redstart-twig/windows/shell/Cargo.lock') }}
 
-      # generate_context!() embeds the icons, which Nest's make-icon generates.
+      # generate_context!() embeds the icons, which Nest's make-icon generates
+      # into this app's own build/ (the perched-bird drawing).
       - name: Generate the app icons
-        run: node ../../../redstart-nest/scripts/make-icon.mjs
+        run: node ../../../redstart-nest/scripts/make-icon.mjs --variant twig
 
       - name: Build
         run: cargo build --locked

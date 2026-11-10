@@ -4,6 +4,14 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ---
 
+## 2026-11-10
+
+- **A new Redstart mascot, and Twig gets its own icon.** The 32×32 placeholder became two 128×128 pixel-art drawings in the original palette (black, warm white, orange, rust, amber beak), with outlines, dithered shading and the American Redstart's real markings. Nest's bird sits in its nest, and Twig's is perched on a twig. Twig used to embed Nest's icon. Now it has its own `redstart-twig/windows/build/`, and its `npm run dev` generates the icons first.
+  - **One source.** The drawings are `redstart-nest/assets/mascot/redstart-{nest,twig}.txt`, one character per pixel, keyed by the palette in `scripts/mascot.mjs`. `make-icon.mjs [--variant twig]` builds each app's `.ico`/`.icns`/`.png` at build time. `make-mascot-assets.mjs` regenerates the committed SVGs, favicons and Android assets after a drawing changes.
+  - **Android shows the bird now.** The legacy launcher icons and the splash screens were still Capacitor's default placeholder. The adaptive icon is now a PNG foreground on a warm-white background instead of a hand-written vector.
+  - **Known gap: Twig's chat UI shows the nest bird.** The greeting, login and loading-screen images come from the chat UI, which is one build shared by both apps. Showing the perched bird inside Twig needs the chat UI to know which app it's running in.
+  - **Small sizes on dark taskbars.** The bird is mostly black, so at 16–32px on a dark taskbar it's low-contrast, as the old icon was. The dark favicon gets a light outline for this, but the app icons don't.
+
 ## 2026-11-05
 
 - **Redstart Twig is a Tauri app now, and updates itself.** Same shape as Nest's move: a small Rust shell (window, the chat UI's origin, folder dialog, recycle bin, updater) around `twigd`, Twig's Node half, on the bundled Node 26 over the shell pipe. The Windows installer is about 32 MB (Electron's was about 80). Updates download in the background, are checked against the same minisign key as Nest's, and install when Twig is closed or from **Settings → Server → Updates**, which also has the automatic-check switch. Electron Twig never updated itself, so the first Tauri release is installed by hand; its installer removes the Electron install first and keeps the folder grant and `twig-mcp.json` (`%APPDATA%\redstart-twig-windows`). macOS builds are Apple Silicon only now. See [Architecture](docs/architecture.md#the-daemon-and-the-control-plane).

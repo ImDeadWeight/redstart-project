@@ -271,7 +271,7 @@ jobs:
         run: |
           set -euo pipefail
           npm run build:chat
-          node ../../redstart-nest/scripts/make-icon.mjs
+          node ../../redstart-nest/scripts/make-icon.mjs --variant twig
           node ../../redstart-nest/scripts/rust-licenses.mjs --shell shell --out licenses/rust-licenses.json
           node scripts/stage-shell-bundle.mjs
           manifests=../../redstart-nest/scripts/make-shell-manifests.mjs

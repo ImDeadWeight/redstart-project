@@ -17,7 +17,7 @@
       },
       "nsis": {
         "installMode": "currentUser",
-        "installerIcon": "../../../redstart-nest/build/icon.ico",
+        "installerIcon": "../build/icon.ico",
         "installerHooks": "nsis/hooks.nsh"
       }
     },

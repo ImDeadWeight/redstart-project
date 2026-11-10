@@ -13,9 +13,9 @@
   "bundle": {
     "active": false,
     "icon": [
-      "../../../redstart-nest/build/icon.ico",
-      "../../../redstart-nest/build/icon.icns",
-      "../../../redstart-nest/build/icon.png"
+      "../build/icon.ico",
+      "../build/icon.icns",
+      "../build/icon.png"
     ]
   },
   "mainBinaryName": "Redstart Twig",
