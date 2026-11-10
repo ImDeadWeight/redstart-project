@@ -8,7 +8,9 @@
 // correct as the transport evolves.
 // =============================================================================
 
-export async function connectMcpClient(baseUrl) {
+// `extraHeaders` (e.g. an Authorization bearer) is sent on every request, so a
+// suite can drive the server as a specific account with auth on.
+export async function connectMcpClient(baseUrl, { headers: extraHeaders = {} } = {}) {
   const base = baseUrl.replace(/\/$/, '')
   let sessionId = null
   let nextId = 0
@@ -26,6 +28,7 @@ export async function connectMcpClient(baseUrl) {
     const headers = {
       'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream',
+      ...extraHeaders,
     }
     if (sessionId) {
       headers['Mcp-Session-Id'] = sessionId

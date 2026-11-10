@@ -23,6 +23,7 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 - [Running model-written code (run_python)](#running-model-written-code-run_python)
 - [Document search](#document-search)
 - [Memory](#memory)
+- [Workflows](#workflows)
 - [Tool bans](#tool-bans)
 - [Whitelist & SSRF enforcement](#whitelist--ssrf-enforcement)
 - [External MCP servers](#external-mcp-servers)
@@ -220,7 +221,7 @@ A role can withhold:
 | **Web sources** | Which approved sources the account may fetch, its per-fetch token budget, and whether it may fetch off-whitelist. Naming sources also forces the whitelist on, since otherwise `web_fetch` still takes any URL and the narrowed list would govern nothing. |
 | **File-system policy** | `Allow writes` / `Allow destructive` withdrawn per account. Applies to Redstart's own file tools *and* the web file explorer. |
 | **Client surfaces** | Which apps the account may connect from. |
-| **Administration** | For admin-tier accounts: `manageAccounts`, `manageRoles`, `managePromptBlocks` individually. Tier remains the ceiling — no role can make a User an admin. |
+| **Administration** | For admin-tier accounts: `manageAccounts`, `manageRoles`, `managePromptBlocks`, `manageOrgWorkflows` individually. Tier remains the ceiling — no role can make a User an admin. |
 
 Enforcement is per request at both chokepoints (the completions proxy and the MCP server's `tools/list` + `tools/call`), so a role edit takes effect on the next call rather than at next login.
 
@@ -372,6 +373,19 @@ With the Memory capability on, the assistant can save durable facts a user tells
 - **A role can withhold `memory`.** That removes the tools *and* the prompt block.
 
 The box's administrator can read `memories.json` on disk, as with every per-account store.
+
+---
+
+## Workflows
+
+A workflow is a saved instruction for one recurring task, run from the chat by typing `/`. They're stored in `workflows.json`, in two scopes:
+
+- **Personal** workflows belong to one account. Anyone may create them, and no capability or role turns that off. Another account can't list, edit, delete or run them: every route and MCP call resolves the account from the credential, never from a name the client sends. With login off, everyone shares one personal list, as with memories.
+- **Organization** workflows are listed for every account. Creating, editing or deleting one takes `manageOrgWorkflows`, an admin permission: admin-tier accounts have it unless their role withholds it, and no role can give it to a User-tier account. To let someone edit org workflows and nothing else, make them admin-tier with a role that limits administration to `manageOrgWorkflows`. With login off there is no account to hold the permission, so org workflows can't be written.
+
+**Workflow text never enters the system prompt.** Nest serves workflows as MCP prompts. Running one sends a *user* message, so a workflow is user-supplied content: it sits below the administrator's prompt blocks and can't change the assistant's guidelines or permissions. The client sends only the workflow's name and input values; Nest holds the text and composes the message, so a client can't run a workflow that doesn't exist. Input values fill `{{placeholders}}` in one pass and are never re-read as template.
+
+Everyone can read an organization workflow's full text in **Settings → Workflows** before running it. The box's administrator can read `workflows.json` on disk.
 
 ---
 
@@ -549,6 +563,7 @@ The available real upgrade for it is HMAC-SHA256 under a DPAPI-protected pepper,
 
 Stated plainly, because a security document that lists only strengths is not one.
 
+- **An organization workflow steers what everyone who runs it gets.** Its text is user-tier, so it can't override policy, but whoever holds `manageOrgWorkflows` decides what a commonly used workflow asks the model to do, and nothing reviews an edit. Edits are logged (`workflow` events) with the editor's username, but the store keeps no history of previous text. Grant `manageOrgWorkflows` the way you would grant `managePromptBlocks`.
 - **run_python's sandbox rests on Node's permission model and on Pyodide's internals staying as they are.** Python can reach Pyodide's own JavaScript API, including internals. One of those (its Node socket support) was a real escape under the old Electron Node, which had no network permission. The runtime now refuses it, and the sandbox suite proves that against a counting stub, but a Pyodide release could add a new route. That is why the runtime is hash-pinned and the suite must pass before any upgrade. The suite is part of CI (Linux) and has been run by hand on Windows. It has never run on macOS.
 - **run_python's memory and disk limits are coarse.** A run can use up to WebAssembly's 4 GB address space before its timeout kills it, and there's no smaller memory cap. Workspace caps are checked before and after each run, not on every write, so one run can overshoot the cap by whatever it writes within its timeout. The next run is then refused until files are removed.
 - **A remembered instruction can still steer the assistant.** Memories are framed as data and every save is visible with Undo, but a model can still act on one that reads like an instruction, and a save from an injected page is only *flagged*, not blocked. The web flag is time-based (15 minutes after a network tool call in that conversation), so it can mark an innocent save and can miss a plugin whose tools reach the network without being classed as network. Check **Settings → Memory** now and then, and withhold Memory from roles that hold write or destructive tools if that worries you.

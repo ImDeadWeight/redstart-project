@@ -37,6 +37,7 @@ import * as documentSearchTool from './document-search-tool.mjs'
 import { getConversation } from './conversations-storage.mjs'
 import { isWellFormedConversationId } from './conversation-workspace.mjs'
 import * as searchToolsProvider from './search-tools-provider.mjs'
+import { promptsFor, getPromptFor } from './workflows-storage.mjs'
 import { pluginProviders, stopAllPlugins } from './plugin-provider.mjs'
 import {
   classifyTool,
@@ -261,7 +262,9 @@ async function handleRpc(msg, send, ctx = { account: null }) {
   if (method === 'initialize') {
     send({ jsonrpc: '2.0', id, result: {
       protocolVersion: '2024-11-05',
-      capabilities: { tools: {} },
+      // prompts = the account's workflows (workflows-storage.mjs). chat-ui's
+      // `/` picker appears only for a server that advertises this.
+      capabilities: { tools: {}, prompts: {} },
       serverInfo: { name: 'redstart-fetch', version: '1.0.0' },
     }})
     return
@@ -277,6 +280,31 @@ async function handleRpc(msg, send, ctx = { account: null }) {
 
   if (method === 'tools/list') {
     send({ jsonrpc: '2.0', id, result: { tools: activeToolCatalog(cfg).map(annotateTool) } })
+    return
+  }
+
+  // Workflows as MCP prompts (workflows plan D1). The account resolves the
+  // scope; a name never reaches another account's personal workflows. An
+  // auth-on null account is a broken identity path, not the auth-off posture,
+  // and gets nothing — the same split as `cfg` above, for the same reason.
+  if (method === 'prompts/list') {
+    const identityLost = !ctx.account && getAuthRequired()
+    send({ jsonrpc: '2.0', id, result: { prompts: identityLost ? [] : promptsFor(ctx.account ?? null) } })
+    return
+  }
+
+  if (method === 'prompts/get') {
+    if (!ctx.account && getAuthRequired()) {
+      send({ jsonrpc: '2.0', id, error: { code: -32602, message: 'No workflow is available to this connection' } })
+      return
+    }
+    const r = getPromptFor(ctx.account ?? null, params?.name, params?.arguments ?? {})
+    if (!r.ok) {
+      send({ jsonrpc: '2.0', id, error: { code: -32602, message: r.error } })
+      return
+    }
+    logEvent('workflow', 'run', { name: params.name, account: ctx?.account?.username ?? undefined })
+    send({ jsonrpc: '2.0', id, result: r.result })
     return
   }
 
