@@ -74,13 +74,18 @@ export const DENY_ALL = Object.freeze({
 /**
  * Admin abilities a role can withhold from an admin-tier account.
  *
- * Deliberately only the three that exist as HTTP surfaces today. Server, model
+ * Deliberately only the ones that exist as HTTP surfaces. Server, model
  * and capability configuration are reachable over IPC from the Nest desktop app
  * only — physical access to the host machine, no account attached — so they are
  * not account-governed and are not listed here. That is also the permanent
  * escape hatch if a role edit goes wrong.
+ *
+ * manageOrgWorkflows writes the workflows every account sees (workflow-routes
+ * .mjs). It is an ADMIN permission rather than one a role hands to a user for
+ * the same reason as the rest: roles only tighten. A "workflow editor" is an
+ * admin-tier account whose role limits administration to this one.
  */
-export const ADMIN_PERMISSIONS = ['manageAccounts', 'manageRoles', 'managePromptBlocks']
+export const ADMIN_PERMISSIONS = ['manageAccounts', 'manageRoles', 'managePromptBlocks', 'manageOrgWorkflows']
 
 // Capability id → the config key its provider reads. file_system is camelCase
 // (see the note in gateway-config.mjs — emitting snake_case there once disabled

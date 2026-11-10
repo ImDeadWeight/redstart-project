@@ -29,6 +29,7 @@ import { getPromptBlocks } from './prompt-storage.mjs'
 import { handleAuthRoute } from './gateway/auth-routes.mjs'
 import { isConversationRoute, handleConversationRoute } from './gateway/conversation-routes.mjs'
 import { isMemoryRoute, handleMemoryRoute } from './gateway/memory-routes.mjs'
+import { isWorkflowRoute, handleWorkflowRoute } from './gateway/workflow-routes.mjs'
 import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/document-index-routes.mjs'
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
@@ -462,6 +463,9 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       // auth off (an auth-on null was refused above), which is the shared
       // _local scope, the same posture as files.
       if (isMemoryRoute(urlPath) && await handleMemoryRoute(req, res, urlPath, authResult.account ?? null)) return
+      // Workflows (personal + org). Same account rule as memories; the org
+      // write permission is checked inside the route module.
+      if (isWorkflowRoute(urlPath) && await handleWorkflowRoute(req, res, urlPath, authResult.account ?? null)) return
       if (isDocumentIndexRoute(urlPath) && await handleDocumentIndexRoute(req, res, urlPath, authResult.account ?? null)) return
 
       // MCP server discovery — the chat-ui fetches this at startup to
