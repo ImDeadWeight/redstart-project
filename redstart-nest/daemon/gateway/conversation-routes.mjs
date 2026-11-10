@@ -23,6 +23,15 @@ import { getCapabilities } from '../tools-storage.mjs'
 import { trashWorkspace } from '../conversation-workspace.mjs'
 import { dropKernel } from '../python-tool.mjs'
 import { logEvent } from '../logger.mjs'
+import { getProject } from '../projects-storage.mjs'
+
+// A conversation may name only one of the caller's own projects (projects-
+// plan D11), checked on every write that carries the field. null moves it
+// out. A foreign or unknown id gets the same answer, so ids cannot be probed.
+function projectFieldError(body, account) {
+  if (!body || !('projectId' in body) || body.projectId === null) return null
+  return getProject(account, body.projectId) ? null : 'projectId does not name one of your projects'
+}
 
 // A deleted conversation's workspace (chat-tooling plan §2) goes to the trash
 // with it, and its Python kernel stops. Diffed from the caller's own list
@@ -74,6 +83,11 @@ export async function handleConversationRoute(req, res, urlPath, accountId, { ac
         sendJson(res, 400, { error: { message: 'Bad request', type: 'invalid_request_error' } })
         return true
       }
+      const projectError = projectFieldError(body, account)
+      if (projectError) {
+        sendJson(res, 400, { error: { message: projectError, type: 'invalid_request_error' } })
+        return true
+      }
       const updated = updateConversation(accountId, convId, body)
       if (!updated) {
         sendJson(res, 404, { error: { message: 'Not found', type: 'not_found' } })
@@ -105,6 +119,11 @@ export async function handleConversationRoute(req, res, urlPath, accountId, { ac
       sendJson(res, 400, { error: { message: 'Name required', type: 'invalid_request_error' } })
       return true
     }
+    const projectError = projectFieldError(body, account)
+    if (projectError) {
+      sendJson(res, 400, { error: { message: projectError, type: 'invalid_request_error' } })
+      return true
+    }
     const conv = createConversation(accountId, {
       id: body.id || crypto.randomUUID(),
       name: body.name,
@@ -116,6 +135,7 @@ export async function handleConversationRoute(req, res, urlPath, accountId, { ac
       forkedFromConversationId: body.forkedFromConversationId,
       pinned: body.pinned,
       contextSummary: body.contextSummary,
+      projectId: body.projectId || undefined,
       messages: body.messages || []
     })
     sendJson(res, 201, conv)

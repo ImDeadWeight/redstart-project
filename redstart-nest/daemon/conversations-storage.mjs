@@ -21,11 +21,14 @@ function write(data) {
   writeJsonAtomic(getPath(), data)
 }
 
+// A chat in a project is exempt (projects-plan D12): putting it there is the
+// user saying "keep this", and a project that silently empties after a month
+// reads as data loss. Moving it out of the project makes it eligible again.
 export function cleanupOldConversations() {
   const data = read()
   const cutoff = Date.now() - CLEANUP_DAYS * 24 * 60 * 60 * 1000
   const before = data.conversations.length
-  data.conversations = data.conversations.filter(c => c.lastModified >= cutoff)
+  data.conversations = data.conversations.filter(c => c.lastModified >= cutoff || !!c.projectId)
   const removed = before - data.conversations.length
   if (removed > 0) write(data)
   return removed
@@ -60,13 +63,23 @@ export function createConversation(accountId, conv) {
   return record
 }
 
+// Fields a client body may never set: the record's identity and owner. Before
+// this list existed, a PUT carrying `accountId` moved the record into another
+// account's list (found while planning projects, plan D11). `projectId: null`
+// means "move out of its project" and removes the field.
+const PROTECTED_FIELDS = ['id', 'accountId']
+
 export function updateConversation(accountId, convId, updates) {
   const data = read()
   const idx = data.conversations.findIndex(c => c.id === convId && c.accountId === accountId)
   if (idx === -1) return null
-  data.conversations[idx] = { ...data.conversations[idx], ...updates, lastModified: Date.now() }
+  const safe = { ...updates }
+  for (const k of PROTECTED_FIELDS) delete safe[k]
+  const next = { ...data.conversations[idx], ...safe, lastModified: Date.now() }
+  if (next.projectId === null) delete next.projectId
+  data.conversations[idx] = next
   write(data)
-  return data.conversations[idx]
+  return next
 }
 
 /**

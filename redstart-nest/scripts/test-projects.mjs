@@ -13,6 +13,10 @@
 //     cleared, lastModified untouched), its memories go, other projects'
 //     chats and memories are untouched
 //   - project memory is its own scope: never listed with the account's own
+//   - conversations: projectId must name one of the caller's projects (on
+//     create and on edit), null moves a chat out, and a PUT can never rewrite
+//     a record's accountId or id (plan D11)
+//   - the 30-day cleanup keeps chats that are in a project (plan D12)
 //
 // Run:  node scripts/test-projects.mjs
 // =============================================================================
@@ -32,6 +36,7 @@ const store = await import('../daemon/projects-storage.mjs')
 const memory = await import('../daemon/memory-storage.mjs')
 const convs = await import('../daemon/conversations-storage.mjs')
 const { handleProjectRoute, isProjectRoute } = await import('../daemon/gateway/project-routes.mjs')
+const { handleConversationRoute } = await import('../daemon/gateway/conversation-routes.mjs')
 
 const results = []
 async function test(name, fn) {
@@ -181,6 +186,67 @@ await test('auth off: the shared scope owns its projects', () => {
   try { store.listProjects({ username: 'no-id' }) } catch { threw = true }
   assert(threw || store.listProjects({ username: 'no-id' }).length === 0, 'an account with no id fell into a scope')
 })
+
+async function convRoute(method, urlPath, accountId, account, body) {
+  const res = fakeRes()
+  await handleConversationRoute(fakeReq(method, body), res, urlPath, accountId, { account })
+  return { status: res.status, json: res.body ? JSON.parse(res.body) : null }
+}
+
+await test("conversations: projectId names only the caller's own project", async () => {
+  const mine = store.createProject(ALICE, { name: 'Mine for chats' }).project
+  const bobs = store.createProject(BOB, { name: 'Bob for chats' }).project
+  const made = await convRoute('POST', '/conversations', 'alice-1', ALICE, { id: 'p-1', name: 'x', projectId: mine.id })
+  assert(made.status === 201 && made.json.projectId === mine.id, `create in own project got ${made.status}`)
+  const foreign = await convRoute('POST', '/conversations', 'alice-1', ALICE, { id: 'p-2', name: 'x', projectId: bobs.id })
+  const unknown = await convRoute('POST', '/conversations', 'alice-1', ALICE, { id: 'p-3', name: 'x', projectId: 'nope' })
+  assert(foreign.status === 400 && unknown.status === 400, `foreign ${foreign.status}, unknown ${unknown.status}`)
+  assert(foreign.json.error.message === unknown.json.error.message, 'a foreign id is distinguishable from an unknown one')
+  assert(!convs.getConversation('alice-1', 'p-2'), 'refused create was stored')
+
+  const moveForeign = await convRoute('PUT', '/conversations/p-1', 'alice-1', ALICE, { projectId: bobs.id })
+  assert(moveForeign.status === 400 && convs.getConversation('alice-1', 'p-1').projectId === mine.id, "moved into bob's project")
+  const out = await convRoute('PUT', '/conversations/p-1', 'alice-1', ALICE, { projectId: null })
+  assert(out.status === 200 && !('projectId' in convs.getConversation('alice-1', 'p-1')), 'null did not move it out')
+  const back = await convRoute('PUT', '/conversations/p-1', 'alice-1', ALICE, { projectId: mine.id })
+  assert(back.status === 200 && back.json.projectId === mine.id, 'could not move it back in')
+  const rename = await convRoute('PUT', '/conversations/p-1', 'alice-1', ALICE, { name: 'renamed' })
+  assert(rename.status === 200 && rename.json.projectId === mine.id, 'an edit without the field changed the project')
+})
+
+await test('conversations: a PUT never rewrites accountId or id', async () => {
+  convs.createConversation('alice-1', { id: 'own-1', name: "alice's", messages: [] })
+  const r = await convRoute('PUT', '/conversations/own-1', 'alice-1', ALICE, { accountId: 'bob-2', id: 'hijack', name: 'pushed' })
+  assert(r.status === 200, `put got ${r.status}`)
+  assert(convs.getConversation('alice-1', 'own-1')?.name === 'pushed', 'the legitimate field was not applied')
+  assert(!convs.getConversations('bob-2').some((c) => c.id === 'own-1' || c.id === 'hijack'), "the chat landed in bob's list")
+  assert(!convs.getConversation('alice-1', 'hijack'), 'the id was rewritten')
+})
+
+await test('the 30-day cleanup keeps chats in a project', () => {
+  const p = store.createProject(ALICE, { name: 'Old but kept' }).project
+  const old = Date.now() - 60 * 24 * 60 * 60 * 1000
+  convs.createConversation('alice-1', { id: 'old-in', name: 'old', projectId: p.id, messages: [] })
+  convs.createConversation('alice-1', { id: 'old-out', name: 'old', messages: [] })
+  // createConversation stamps now; age both records directly in the file
+  const file = path.join(tmpDir, 'config', 'conversations.json')
+  const target = fs.existsSync(file) ? file : findFile(tmpDir, 'conversations.json')
+  const data = JSON.parse(fs.readFileSync(target, 'utf8'))
+  for (const c of data.conversations) if (c.id === 'old-in' || c.id === 'old-out') c.lastModified = old
+  fs.writeFileSync(target, JSON.stringify(data))
+  convs.cleanupOldConversations()
+  assert(convs.getConversation('alice-1', 'old-in'), 'a project chat was cleaned up')
+  assert(!convs.getConversation('alice-1', 'old-out'), 'an ordinary old chat was kept')
+})
+
+function findFile(dir, name) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name)
+    if (e.isFile() && e.name === name) return p
+    if (e.isDirectory()) { const f = findFile(p, name); if (f) return f }
+  }
+  return null
+}
 
 const failed = results.filter((r) => !r.pass)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)
