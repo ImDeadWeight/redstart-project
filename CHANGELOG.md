@@ -6,11 +6,14 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ## 2026-11-10
 
+- **The taskbar shows the new icon, and it reads on a dark taskbar.** Two fixes after alpha.11.
+  - **Stale icon after an update.** Each installer lands at the same exe path (on purpose, so pins and shortcuts survive), and Windows caches icons by path, so alpha.11's installed exe carried the mascot while the taskbar kept the old icon. Both apps' NSIS post-install hooks now call `SHChangeNotify(SHCNE_ASSOCCHANGED)`, which tells Explorer to drop its cached icons. An install that already has the stale icon is fixed by the next update, or now by signing out and back in.
+  - **Small sizes.** The `.ico` frames up to 48px are drawn for their size (`smallIcon` in `scripts/mascot.mjs`): cropped to the drawing, crisp-edged instead of averaged into a halo, and with a 1px warm-grey ring round the black parts (the bird, and Twig's branch) so they show against Windows 11's dark taskbar. The brown nest isn't ringed. On a light taskbar the ring is all but invisible. 20px and 40px frames are new, so 125% scaling gets a frame of its own instead of a resized one. Tauri loads the window icon from the exe's icon resource at the system icon size, so these are the frames the taskbar and title bar use. 64px and up, and the macOS `.icns`, are unchanged.
 - **A new Redstart mascot, and Twig gets its own icon.** The 32×32 placeholder became two 128×128 pixel-art drawings in the original palette (black, warm white, orange, rust, amber beak), with outlines, dithered shading and the American Redstart's real markings. Nest's bird sits in its nest, and Twig's is perched on a twig. Twig used to embed Nest's icon. Now it has its own `redstart-twig/windows/build/`, and its `npm run dev` generates the icons first.
   - **One source.** The drawings are `redstart-nest/assets/mascot/redstart-{nest,twig}.txt`, one character per pixel, keyed by the palette in `scripts/mascot.mjs`. `make-icon.mjs [--variant twig]` builds each app's `.ico`/`.icns`/`.png` at build time. `make-mascot-assets.mjs` regenerates the committed SVGs, favicons and Android assets after a drawing changes.
   - **Android shows the bird now.** The legacy launcher icons and the splash screens were still Capacitor's default placeholder. The adaptive icon is now a PNG foreground on a warm-white background instead of a hand-written vector.
   - **Known gap: Twig's chat UI shows the nest bird.** The greeting, login and loading-screen images come from the chat UI, which is one build shared by both apps. Showing the perched bird inside Twig needs the chat UI to know which app it's running in.
-  - **Small sizes on dark taskbars.** The bird is mostly black, so at 16–32px on a dark taskbar it's low-contrast, as the old icon was. The dark favicon gets a light outline for this, but the app icons don't.
+  - **Small sizes on dark taskbars.** The bird is mostly black, so at 16–32px on a dark taskbar it's low-contrast, as the old icon was. The dark favicon gets a light outline for this, but the app icons don't. *(Fixed in the entry above.)*
 
 ## 2026-11-05
 

@@ -71,20 +71,22 @@ export function withOutline(grid, ch) {
  * square; otherwise each output pixel averages the source pixels it covers
  * (premultiplied, so transparent edges don't darken).
  */
-export function rasterize(grid, size, { pad = 0, palette = PALETTE } = {}) {
+export function rasterize(grid, size, { pad = 0, palette = PALETTE, crop = { x: 0, y: 0, side: SIZE } } = {}) {
   const rgb = Object.fromEntries(Object.entries(palette).map(([k, v]) => [k, hexRgb(v)]))
   const inner = size - pad * 2
   const out = Buffer.alloc(size * size * 4)
-  const whole = inner % SIZE === 0
+  // `crop` is the square of the drawing to show; cells outside it read as transparent.
+  const cell = (sy, sx) => grid[crop.y + sy]?.[crop.x + sx] ?? '_'
+  const whole = inner % crop.side === 0
   const SS = 8 // samples per axis when averaging
   for (let y = 0; y < inner; y++) for (let x = 0; x < inner; x++) {
     let r = 0, g = 0, b = 0, a = 0
     if (whole) {
-      const c = rgb[grid[Math.floor(y * SIZE / inner)][Math.floor(x * SIZE / inner)]]
+      const c = rgb[cell(Math.floor(y * crop.side / inner), Math.floor(x * crop.side / inner))]
       if (c) { [r, g, b] = c; a = 1 }
     } else {
       for (let j = 0; j < SS; j++) for (let i = 0; i < SS; i++) {
-        const c = rgb[grid[Math.floor((y + (j + 0.5) / SS) * SIZE / inner)][Math.floor((x + (i + 0.5) / SS) * SIZE / inner)]]
+        const c = rgb[cell(Math.floor((y + (j + 0.5) / SS) * crop.side / inner), Math.floor((x + (i + 0.5) / SS) * crop.side / inner))]
         if (c) { r += c[0]; g += c[1]; b += c[2]; a++ }
       }
       if (a) { r /= a; g /= a; b /= a; a /= SS * SS }
@@ -92,6 +94,71 @@ export function rasterize(grid, size, { pad = 0, palette = PALETTE } = {}) {
     out.set([Math.round(r), Math.round(g), Math.round(b), Math.round(a * 255)], ((y + pad) * size + x + pad) * 4)
   }
   return out
+}
+
+/** The smallest square around the drawing's pixels, plus `margin`, centred on them. */
+export function contentSquare(grid, margin = 0) {
+  let x0 = SIZE, y0 = SIZE, x1 = -1, y1 = -1
+  grid.forEach((row, y) => [...row].forEach((ch, x) => {
+    if (ch === '_') return
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y)
+  }))
+  const side = Math.max(x1 - x0, y1 - y0) + 1 + margin * 2
+  return {
+    x: Math.round((x0 + x1 + 1) / 2 - side / 2),
+    y: Math.round((y0 + y1 + 1) / 2 - side / 2),
+    side,
+  }
+}
+
+/**
+ * A small app-icon frame (taskbar, title bar, Alt+Tab) at `size` px. The
+ * full-detail rasterize() blurs at these sizes and the black bird all but
+ * vanishes against a dark taskbar, so three things change:
+ *  - the drawing is cropped to its own pixels, so it fills the frame;
+ *  - the silhouette is snapped to fully opaque or fully clear, so its edge is
+ *    a crisp pixel edge rather than a grey halo;
+ *  - a 1px ring of `outline` (output pixels, not drawing pixels, so it survives
+ *    the shrink) is drawn round the BLACK parts only (the `ringed` palette
+ *    characters: the bird's feathers, and Twig's branch, drawn in the same
+ *    black). Those are what disappear on a dark taskbar. The brown nest stays
+ *    visible on its own; ringing it too made the icon look like a sticker, and
+ *    the black strokes along the nest's base left broken dashes of ring there.
+ *    So no ring pixel is placed next to nest brown (the `unringed` characters).
+ *    On a light taskbar the pale ring is all but invisible, which is the intent.
+ * One pixel of the frame is kept clear on every side for that ring.
+ */
+export function smallIcon(grid, size, { outline = PALETTE.w, ringed = 'Kk', unringed = 'nmdeh', palette = PALETTE } = {}) {
+  const crop = contentSquare(grid)
+  const px = rasterize(grid, size, { pad: 1, palette, crop })
+  // How much of each output pixel is a given set of colours: the same sampling
+  // with every other colour transparent.
+  const coverage = chars => rasterize(grid, size, { pad: 1, crop, palette: Object.fromEntries([...chars].map(ch => [ch, '#000000'])) })
+  const black = coverage(ringed)
+  const brown = coverage(unringed)
+  // 0 = clear, 1 = opaque, 2 = mostly black (gets the ring), 3 = mostly brown (keeps it away).
+  const kind = new Uint8Array(size * size)
+  for (let i = 0; i < size * size; i++) {
+    const a = px[i * 4 + 3]
+    if (a >= 128) {
+      // Undo the coverage blend on edge pixels: colour comes from the drawing
+      // pixels the sample did hit, alpha becomes solid.
+      px[i * 4 + 3] = 255
+      kind[i] = black[i * 4 + 3] * 2 >= a ? 2 : brown[i * 4 + 3] * 2 >= a ? 3 : 1
+    } else {
+      px.fill(0, i * 4, i * 4 + 4)
+    }
+  }
+  const at = (x, y) => (x >= 0 && y >= 0 && x < size && y < size ? kind[y * size + x] : 0)
+  const [r, g, b] = hexRgb(outline)
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    if (at(x, y)) continue
+    const nextToBlack = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => at(x + dx, y + dy) === 2)
+    let nextToBrown = false
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (at(x + dx, y + dy) === 3) nextToBrown = true
+    if (nextToBlack && !nextToBrown) px.set([r, g, b, 255], (y * size + x) * 4)
+  }
+  return px
 }
 
 /** Paints `rgba` (w×h) over a solid background colour into a w×h RGBA buffer. */
