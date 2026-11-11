@@ -25,6 +25,7 @@ import {
   CAPABILITY_TOOL_NAMES,
   CLIENT_APPS,
   CLIENT_APP_TOOL_NAMES,
+  HOST_RESOLVED_TOOL_NAMES,
   TOOL_CLASSES,
   capabilityForTool,
   capabilityToolNames,
@@ -89,6 +90,19 @@ await test('no Nest capability tool takes a reserved app prefix', async () => {
       `Nest tool "${name}" uses the client-app prefix "${stolen}" — that prefix is reserved so bans stay targetable`,
     )
   }
+})
+
+await test('🔍 host-resolved tools are classified, unprefixed, and collide with nothing', async () => {
+  // ask_user belongs to no capability, so the capability walks above never
+  // see it. It is still a Nest name a ban targets, so the same rules apply.
+  for (const name of HOST_RESOLVED_TOOL_NAMES) {
+    assert(TOOL_CLASSES[name], `"${name}" has no entry in TOOL_CLASSES`)
+    assert(!APP_PREFIXES.some((p) => name.startsWith(p)), `"${name}" takes a reserved app prefix`)
+    assert(!nestToolNames.has(name), `"${name}" is also a capability tool`)
+    assert(!clientToolNames.includes(name), `"${name}" collides with a client-app tool`)
+    assert(capabilityForTool(name) === null, `"${name}" resolves to capability ${capabilityForTool(name)}`)
+  }
+  return `${HOST_RESOLVED_TOOL_NAMES.length} host-resolved`
 })
 
 await test('client-app tool names are unique across apps', async () => {

@@ -215,6 +215,22 @@ export function capabilityToolNames() {
   return out
 }
 
+// Tools Nest DEFINES but never runs: the client's own agent loop answers them
+// (agent-runtime plan D4). ask_user needs a person, so only a host with one can
+// answer it — chat-ui shows a card, the agent bench answers from the task file.
+//
+// They belong to no capability (like search_tools): there is nothing for an
+// admin to switch on, only a name to ban. They are served by
+// interaction-tools.mjs, and only on an MCP session whose client declared it can
+// answer them at initialize — so Yellowscript, Twig or a third-party MCP client
+// is never offered a tool that can only fail. They are always pinned through
+// retrieval (tool-filter.mjs), since a dropped ask_user would read to the model
+// as "you may not ask".
+//
+// The namespacing contract applies to them like any Nest tool
+// (scripts/test-tool-namespacing.mjs).
+export const HOST_RESOLVED_TOOL_NAMES = ['ask_user']
+
 // Back-compat alias for call sites that only need the built-ins (the file-system
 // policy set in mcp-server.mjs). Plugins are deliberately absent here.
 export const CAPABILITY_TOOL_NAMES = BUILTIN_CAPABILITY_TOOL_NAMES
@@ -339,6 +355,10 @@ export const TOOL_CLASSES = {
   // policy gate has already filtered, touches nothing, and leaves the machine
   // it runs on alone — 'read' is the honest class, stated rather than defaulted.
   search_tools: 'read',
+  // Host-resolved (HOST_RESOLVED_TOOL_NAMES below). Nothing runs on this
+  // machine: the client answers them in its own loop. 'read' is the honest
+  // class, stated rather than defaulted, as for search_tools.
+  ask_user: 'read',
   // Web (egress governed by the whitelist/SSRF guard, tagged network here)
   web_fetch: 'network',
   web_search: 'network',

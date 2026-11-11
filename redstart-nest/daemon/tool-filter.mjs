@@ -14,6 +14,7 @@ import {
   selectTools,
   toolName,
 } from './tool-retrieval.mjs'
+import { HOST_RESOLVED_TOOL_NAMES } from './tools-definitions.mjs'
 
 // =============================================================================
 // Redstart Nest — applying tool retrieval to a request
@@ -123,7 +124,12 @@ export async function filterRequestTools({
 
     const { selected, dropped, reason } = selectTools({
       scored,
-      pins: pinsFromMessages(messages),
+      // Host-resolved tools are always kept (tools-definitions.mjs,
+      // HOST_RESOLVED_TOOL_NAMES): asking scores against no task in
+      // particular, and a dropped ask_user reads as "you may not ask". A pin
+      // only keeps a tool the request carries, so this adds nothing a client
+      // did not send.
+      pins: new Set([...pinsFromMessages(messages), ...HOST_RESOLVED_TOOL_NAMES]),
       previous: memory.get(key),
       budgetTokens,
       floor: config.floor,

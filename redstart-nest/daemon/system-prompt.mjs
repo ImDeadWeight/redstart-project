@@ -276,6 +276,13 @@ function buildToolPolicy(config, hasTools, toolNames) {
     parts.push('When an answer comes from search_documents, cite each claim with its passage number and file name, and if no passage covers the question, say so instead of answering from general knowledge.')
   }
 
+  // ask_user (agent-runtime plan §4, 1.1). What the schema cannot say is WHEN.
+  // A small model given a way to ask asks instead of retrying a failed tool,
+  // and asks for permission it already has; both cost the user a round trip.
+  if (has('ask_user')) {
+    parts.push('Call ask_user only when the request can be read two ways that lead to different work and nothing in the conversation settles it. Do not use it to ask permission, to confirm a plan you can simply carry out, or for anything a tool can find out — try the tool first.')
+  }
+
   // The destructive class exists in tools-definitions.mjs and governs the
   // server's own gate; until now nothing carried it to the model.
   const destructive = names.filter(name => classifyTool(name) === 'destructive')

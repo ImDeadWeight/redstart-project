@@ -281,6 +281,17 @@ await test('🔒 hasTools with no toolNames states no tool-specific constraint',
   return 'failure handling only'
 })
 
+await test('🔍 ask_user gets its when-to-ask line only when the request carries it', async () => {
+  // The schema says how to ask; only the prompt can say when. Without the
+  // line a small model asks instead of retrying a tool (agent-runtime plan
+  // §4, 1.1). Without the tool, the line would describe a tool it lacks.
+  const withTool = composePrompt({ config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query', 'ask_user'], now: NOW })
+  assert(withTool.prompt.includes('Call ask_user only when'), 'no when-to-ask line with ask_user offered')
+  assert(withTool.prompt.includes('anything a tool can find out'), 'the "try the tool first" rule is missing')
+  const without = composePrompt({ config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query'], now: NOW })
+  assert(!without.prompt.includes('ask_user'), 'named ask_user to a request that does not carry it')
+})
+
 await test('🔒 a narrowed tool list says so, and points at the way out', async () => {
   // Every other block here stops the model claiming what the request does not
   // support. This one stops the opposite error: with retrieval on, an absent

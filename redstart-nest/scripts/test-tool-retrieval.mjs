@@ -911,6 +911,23 @@ await test('🔒 a tool the model has already called is never dropped', async ()
   assert(out.map(toolName).includes('web_fetch'), 'a tool already called mid-task was filtered away')
 })
 
+await test('🔒 ask_user is never dropped, though it matches no task', async () => {
+  // Host-resolved tools score against nothing in particular. Dropped, the
+  // model reads its absence as "you may not ask" (agent-runtime plan §4, 1.1).
+  resetToolFilterState()
+  const ask_user = fnTool('ask_user', 'Ask the user a question and wait for the answer')
+  const out = await filterRequestTools({ tools: [...allTools, ask_user], messages: ask, settings: { enabled: true }, embed })
+  const names = out.map(toolName)
+  assert(names.includes('ask_user'), `ask_user was filtered away: ${names.join(',')}`)
+  assert(!names.includes('web_fetch'), `the pin widened the selection: ${names.join(',')}`)
+})
+
+await test('🔒 the ask_user pin adds nothing the request did not carry', async () => {
+  resetToolFilterState()
+  const out = await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: true }, embed })
+  assert(!out.map(toolName).includes('ask_user'), 'a pin invented a tool the client never sent')
+})
+
 await test('🔒 an empty selection falls back to the full list rather than stripping everything', async () => {
   resetToolFilterState()
   // An embedder that answers with vectors of the wrong length: every cosine is

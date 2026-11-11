@@ -11,8 +11,10 @@
 // `extraHeaders` (e.g. an Authorization bearer) is sent on every request, so a
 // suite can drive the server as a specific account with auth on. `timeoutMs`
 // bounds each request; the agent benchmark raises it, since a real run_python
-// call can take longer than a test fixture's.
-export async function connectMcpClient(baseUrl, { headers: extraHeaders = {}, timeoutMs = 8000 } = {}) {
+// call can take longer than a test fixture's. `capabilities` is the client
+// capability declaration sent at initialize (the bench and chat-ui declare
+// the host-resolved tools they answer; see daemon/interaction-tools.mjs).
+export async function connectMcpClient(baseUrl, { headers: extraHeaders = {}, timeoutMs = 8000, capabilities = {} } = {}) {
   const base = baseUrl.replace(/\/$/, '')
   let sessionId = null
   let nextId = 0
@@ -127,7 +129,7 @@ export async function connectMcpClient(baseUrl, { headers: extraHeaders = {}, ti
   // a caller to unknowingly re-trigger.
   const initResponse = await call('initialize', {
     protocolVersion: '2024-11-05',
-    capabilities: {},
+    capabilities,
     clientInfo: { name: 'redstart-test', version: '1.0.0' },
   })
 

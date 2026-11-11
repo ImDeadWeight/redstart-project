@@ -37,6 +37,7 @@ import * as documentSearchTool from './document-search-tool.mjs'
 import { getConversation } from './conversations-storage.mjs'
 import { isWellFormedConversationId } from './conversation-workspace.mjs'
 import * as searchToolsProvider from './search-tools-provider.mjs'
+import * as interactionTools from './interaction-tools.mjs'
 import { promptsFor, getPromptFor } from './workflows-storage.mjs'
 import { pluginProviders, stopAllPlugins } from './plugin-provider.mjs'
 import {
@@ -55,7 +56,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 // searchToolsProvider is LAST, and deliberately: it is the only provider whose
 // job is to describe the others, so it must never shadow one of them on a name
 // collision, and its own tool must never appear in the catalog it searches.
-const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, memoryTool, documentSearchTool, searchToolsProvider]
+const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, memoryTool, documentSearchTool, interactionTools, searchToolsProvider]
 
 // Resolved per call, never captured in a const: a plugin installed or removed
 // while Nest is running must take effect without a restart. Built-ins come
@@ -75,14 +76,19 @@ function resolveProviders() {
  * offered a tool tools/list withholds, which is precisely the ban-as-speed-bump
  * failure D5 exists to prevent.
  *
+ * `ctx` is the MCP session's state, and only tools/list passes it: the
+ * host-resolved tools (interaction-tools.mjs) are served per client, so the
+ * other two consumers, which have no client, never see them.
+ *
  * @param {any} cfg
+ * @param {{ session?: { hostTools?: string[] } }} [ctx]
  * @returns {any[]}
  */
-export function activeToolCatalog(cfg) {
+export function activeToolCatalog(cfg, ctx) {
   const tools = []
   const seen = new Set()
   for (const provider of resolveProviders()) {
-    for (const tool of provider.toolDefs(cfg)) {
+    for (const tool of provider.toolDefs(cfg, ctx)) {
       if (seen.has(tool.name)) {
         console.warn(`MCP: duplicate tool name "${tool.name}" — keeping the first provider's definition. Namespace your tool names.`)
         continue
@@ -260,6 +266,10 @@ async function handleRpc(msg, send, ctx = { account: null }) {
       : activeToolsConfig
 
   if (method === 'initialize') {
+    // What this client's own loop can answer (interaction-tools.mjs). Kept on
+    // the session, which outlives this request; a client that declares nothing
+    // is never offered a host-resolved tool.
+    if (ctx.session) ctx.session.hostTools = interactionTools.hostToolsDeclared(params)
     send({ jsonrpc: '2.0', id, result: {
       protocolVersion: '2024-11-05',
       // prompts = the account's workflows (workflows-storage.mjs). chat-ui's
@@ -279,7 +289,7 @@ async function handleRpc(msg, send, ctx = { account: null }) {
   }
 
   if (method === 'tools/list') {
-    send({ jsonrpc: '2.0', id, result: { tools: activeToolCatalog(cfg).map(annotateTool) } })
+    send({ jsonrpc: '2.0', id, result: { tools: activeToolCatalog(cfg, ctx).map(annotateTool) } })
     return
   }
 
@@ -452,8 +462,12 @@ export function startMcpServer(port, config, { bindHost = '127.0.0.1' } = {}) {
         console.error('MCP transport error:', err)
       }
 
+      // Per-session state, set at initialize (see handleRpc). One object per
+      // transport, so it lives exactly as long as the session does.
+      const session = { hostTools: [] }
+
       transport.onmessage = async (message, extra) => {
-        const ctx = { account: extra.authInfo?.account ?? null }
+        const ctx = { account: extra.authInfo?.account ?? null, session }
         await handleRpc(message, (response) => {
           transport.send(response).catch((err) => {
             console.error('MCP response send error:', err)

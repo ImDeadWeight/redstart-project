@@ -22,6 +22,35 @@ export const MAX_OPTIONS = 4;
 export const DISMISSED_RESULT =
 	'The user did not answer. Continue with your best judgement and say what you assumed.';
 
+/**
+ * The definition as an MCP tools/list entry. Nest serves it
+ * (daemon/interaction-tools.mjs) only to a client that declared it can answer;
+ * kept here so the schema and the parser below cannot drift apart.
+ */
+export const ASK_USER_DEFINITION = Object.freeze({
+	name: ASK_USER_TOOL,
+	description:
+		'Ask the user a question and wait for the answer. Use it only when the request can be read two ways that lead to different work, and you cannot tell which from the conversation or from a tool. Not for permission, and not for anything a tool can find out. Offer 2 to 4 short options when the answers are predictable; the user can always type their own.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			question: { type: 'string', description: 'The question, in one or two sentences' },
+			options: {
+				type: 'array',
+				items: { type: 'string' },
+				minItems: MIN_OPTIONS,
+				maxItems: MAX_OPTIONS,
+				description: 'Optional: 2 to 4 short answers the user can pick from'
+			},
+			multi_select: {
+				type: 'boolean',
+				description: 'Optional: true if the user may pick more than one option'
+			}
+		},
+		required: ['question']
+	}
+});
+
 const USAGE =
 	'ask_user takes {"question": "...", "options": ["...", "..."] (optional, 2 to 4), "multi_select": false (optional)}.';
 
