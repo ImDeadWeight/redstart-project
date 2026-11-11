@@ -95,7 +95,18 @@ export function asked(events) {
 
 /** Did the answer say plainly that something could not be found? */
 export function saysNotFound(text) {
-  return /\b(not|no|couldn'?t|could not|cannot|can'?t|unable to|doesn'?t|does not|isn'?t|is not|there is no|wasn'?t|was not)\b[^.]{0,60}\b(find|found|exist|exists|locate|located|present|available|there|mention|mentioned|listed|included)\b/i.test(text ?? '')
+  const t = text ?? ''
+  // The gap between the negation and the verb may hold a file name: a dot
+  // followed by a letter (".xlsx") is not the end of a sentence. Until
+  // 2026-11-11 it was, and the 35B's "there is no `quarterly-forecast.xlsx`
+  // on this server" failed docs-missing-file.
+  const negThenVerb = /\b(not|no|couldn'?t|could not|cannot|can'?t|unable to|doesn'?t|does not|isn'?t|is not|there is no|wasn'?t|was not)\b(?:[^.]|\.(?=\w)){0,60}\b(find|found|exist|exists|locate|located|present|available|there|mention|mentioned|listed|included)\b/i
+  // "there is no <file>": absence said without a verb. Needs a file-like
+  // object, so "there is no doubt the forecast ..." does not count.
+  const thereIsNoFile = /\bthere(?: is|'s) no (?:such )?(?:file|document|spreadsheet|[`'"]?[\w-]+\.[A-Za-z]{2,5}\b)/i
+  // "<file> is not in your documents folder": a file name as the subject.
+  const fileIsNotIn = /[\w-]+\.[A-Za-z]{2,5}[`'"]?\s+(?:is not|isn'?t|was not|wasn'?t)\s+(?:in|on|among)\b/i
+  return negThenVerb.test(t) || thereIsNoFile.test(t) || fileIsNotIn.test(t)
 }
 
 /** Sum a CSV column grouped by another column. */

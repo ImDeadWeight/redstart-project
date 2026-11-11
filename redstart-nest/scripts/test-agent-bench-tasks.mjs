@@ -218,6 +218,21 @@ for (const task of tasks) {
   })
 }
 
+await test('saysNotFound: absence stated around a file name, and not a figure of speech', async () => {
+  const { saysNotFound } = await import('./agent-bench/tasks/checks/lib.mjs')
+  for (const yes of [
+    // The 35B's own answer, 2026-11-11 (results T20-24-08), judged wrong then.
+    'It looks like the only files available are `policy.md` and `sales.csv` — there is no `quarterly-forecast.xlsx` on this server.',
+    'quarterly-forecast.xlsx is not in your documents folder.',
+    "There's no such file here.",
+    "I couldn't find quarterly-forecast.xlsx anywhere.",
+  ]) assert(saysNotFound(yes), `missed: ${yes}`)
+  for (const no of [
+    'There is no doubt the forecast shows strong growth.',
+    'The quarterly forecast shows revenue growing 12% to $4.2M.',
+  ]) assert(!saysNotFound(no), `took for "not found": ${no}`)
+})
+
 const passed = results.filter((r) => r.pass).length
 console.log(`\n${passed}/${results.length} passed\n`)
 if (passed !== results.length) process.exit(1)
