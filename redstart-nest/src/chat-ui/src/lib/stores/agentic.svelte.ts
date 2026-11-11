@@ -304,6 +304,19 @@ class AgenticStore {
 				...this.toolExec.ports(conversationId, effectiveModel),
 				limit: { askContinue: (s) => this.requestContinue(conversationId, s) },
 				steering: { pending: () => this.session.steeringMessages.has(conversationId) },
+				fallbackParser: () => {
+					const settings = config();
+					if (!settings.toolCallFallbackParserEnabled) return null;
+					return {
+						patterns: String(settings.toolCallFallbackParserPatterns || '')
+							.split(',')
+							.map((p: string) => p.trim())
+							.filter(Boolean),
+						availableTools: toolsStore.allTools.map((t) => ({
+							name: t.definition.function.name
+						}))
+					};
+				},
 				progress: (patch) => this.session.updateSession(conversationId, patch),
 				log: (message) => console.log(`[AgenticStore] ${message}`)
 			}

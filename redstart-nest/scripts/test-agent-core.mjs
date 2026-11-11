@@ -18,7 +18,9 @@
 //     turn
 // plus what only the core can be asked directly: deny and error results,
 // steering mid-tools, the turn limit, attachments, progress, normalisation,
-// and that the core imports nothing a host would have to provide.
+// the fallback parser as the loop applies it, MCP results as text, the SSE
+// stream reader, and that the core imports nothing a host would have to
+// provide.
 //
 // Run:  node scripts/test-agent-core.mjs
 // =============================================================================
@@ -26,7 +28,10 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runAgentLoop } from '../../shared/agent-core/loop.mjs'
+import { runAgentLoop, createTurnAccumulator } from '../../shared/agent-core/loop.mjs'
+import { readChatStream, mergeToolCallDeltas } from '../../shared/agent-core/chat-stream.mjs'
+import { parseToolCallsFromTurn } from '../../shared/agent-core/tool-call-parser.mjs'
+import { formatMcpToolResult } from '../../shared/agent-core/tool-result.mjs'
 import { buildFinalTimings } from '../../shared/agent-core/timings.mjs'
 import {
   DENIED_RESULT,
@@ -427,11 +432,129 @@ await test('buildFinalTimings passes captured timings through when no tool ran, 
   }, 'folded')
 })
 
+console.log('\n-- the fallback parser (a call the model wrote out as text) --')
+
+const parserOn = () => ({ patterns: ['braces', 'xml', 'fn', 'json'], availableTools: [{ name: 'run_python' }] })
+
+await test('a narrated call is recovered and run when the port returns a config', async () => {
+  // harness() has no fallbackParser port; this loop has one.
+  const calls = []
+  const ports = {
+    model: { streamTurn: async ({ acc }) => { if (calls.length === 0) acc.content += 'run_python({"code": "1+1"})'; else acc.content += 'two' } },
+    tools: { execute: async (c) => { calls.push(c.function); return { text: '2', isError: false } } },
+    gate: { approve: async () => true },
+    limit: { askContinue: async () => false },
+    steering: { pending: () => false },
+    fallbackParser: parserOn,
+    yield: async () => {},
+  }
+  await runAgentLoop({ messages: [{ role: 'user', content: 'x' }], maxTurns: 4, ports, callbacks: {} })
+  eq(calls, [{ name: 'run_python', arguments: '{"code": "1+1"}' }], 'recovered call')
+})
+
+await test('the parser is not asked when the turn already has structured calls, or when it is off', async () => {
+  let asked = 0
+  const mk = (fallbackParser, structured) => ({
+    model: { streamTurn: async ({ acc }) => {
+      acc.content += 'run_python{"code": "1"}'
+      if (structured) acc.toolCalls = [call('s1', 'other')]
+    } },
+    tools: { execute: async () => ({ text: 'ok', isError: false }) },
+    gate: { approve: async () => true },
+    limit: { askContinue: async () => false },
+    steering: { pending: () => false },
+    fallbackParser,
+    yield: async () => {},
+  })
+  const executed = []
+  const p1 = mk(() => { asked++; return parserOn() }, true)
+  p1.tools.execute = async (c) => { executed.push(c.function.name); return { text: 'ok', isError: false } }
+  await runAgentLoop({ messages: [], maxTurns: 1, ports: p1, callbacks: {} })
+  eq(executed, ['other'], 'the structured call runs, the narrated one is ignored')
+  eq(asked, 0, 'parser asked despite structured calls')
+  const saved = []
+  const p2 = mk(() => null, false)
+  await runAgentLoop({ messages: [], maxTurns: 4, ports: p2, callbacks: { onAssistantTurnComplete: async (c, r, t, tc) => { saved.push(tc) } } })
+  eq(saved, [undefined], 'off: the text stays an answer')
+})
+
+await test('the parser only recognises tools the config names', async () => {
+  eq(parseToolCallsFromTurn('delete_everything{}', undefined, parserOn()), [], 'unknown tool')
+  eq(parseToolCallsFromTurn('ok', 'I will call run_python({"code": "2"})', parserOn()),
+    [{ name: 'run_python', arguments: '{"code": "2"}' }], 'from reasoning when the answer has none')
+})
+
+console.log('\n-- tool results as text --')
+
+await test('an MCP result becomes the text chat-ui gives the model', async () => {
+  eq(formatMcpToolResult({ content: [
+    { type: 'text', text: 'done' },
+    { type: 'resource_link', uri: '/files/download?path=chats%2Fc1%2Ffig.png', name: 'fig.png', mimeType: 'image/png', size: 41984 },
+    { type: 'resource_link', uri: 'https://elsewhere/x', name: 'x' },
+    { type: 'image', data: 'AAA' },
+  ] }), [
+    'done',
+    '[file: chats/c1/fig.png, image/png, 41 KB]',
+    '[resource: x (https://elsewhere/x)]',
+    'data:image/png;base64,AAA',
+  ].join('\n'), 'formatted')
+  eq(formatMcpToolResult({}), '', 'no content')
+})
+
+console.log('\n-- reading a completion stream --')
+
+function sse(events) {
+  const body = events.map((e) => `data: ${typeof e === 'string' ? e : JSON.stringify(e)}\n\n`).join('')
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+}
+const chunk = (delta, extra = {}) => ({ choices: [{ delta }], ...extra })
+
+await test('content, reasoning, tool-call deltas and timings land in the accumulator', async () => {
+  const acc = createTurnAccumulator(undefined)
+  const r = await readChatStream(sse([
+    chunk({ reasoning_content: 'think' }, { model: 'm1' }),
+    chunk({ content: 'Hi ' }),
+    chunk({ tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'run_python', arguments: '{"co' } }] }),
+    chunk({ tool_calls: [{ index: 0, function: { arguments: 'de":1}' } }] }),
+    chunk({}, { timings: { predicted_n: 9 } }),
+    '[DONE]',
+  ]), acc)
+  eq([acc.content, acc.reasoning, acc.timings?.predicted_n, acc.captured?.predicted_n], ['Hi ', 'think', 9, 9], 'text and timings')
+  eq(acc.toolCalls, [{ function: { name: 'run_python', arguments: '{"code":1}' }, id: 'c1', type: 'function' }], 'merged call')
+  eq(r, { finished: true, model: 'm1' }, 'result')
+})
+
+await test('content between two tool-call batches starts a new call at index 0', async () => {
+  const acc = createTurnAccumulator(undefined)
+  await readChatStream(sse([
+    chunk({ tool_calls: [{ index: 0, id: 'a', function: { name: 'x', arguments: '{}' } }] }),
+    chunk({ content: 'and then' }),
+    chunk({ tool_calls: [{ index: 0, id: 'b', function: { name: 'y', arguments: '{}' } }] }),
+    '[DONE]',
+  ]), acc)
+  eq(acc.toolCalls.map((c) => c.id), ['a', 'b'], 'two calls, not one overwritten')
+})
+
+await test('mergeToolCallDeltas does not modify its input', async () => {
+  const before = [{ id: 'a', function: { name: 'x', arguments: '{' } }]
+  const snapshot = JSON.stringify(before)
+  mergeToolCallDeltas(before, [{ index: 0, function: { arguments: '}' } }])
+  eq(JSON.stringify(before), snapshot, 'input unchanged')
+})
+
+await test('a non-OK response throws with the status; a stream without [DONE] reports unfinished', async () => {
+  let err = null
+  try { await readChatStream(new Response('nope', { status: 503 }), createTurnAccumulator(undefined)) } catch (e) { err = e }
+  assert(/HTTP 503: nope/.test(err?.message ?? ''), `got ${err?.message}`)
+  const r = await readChatStream(sse([chunk({ content: 'cut' })]), createTurnAccumulator(undefined))
+  eq(r.finished, false, 'finished')
+})
+
 console.log('\n-- the core is host-agnostic --')
 
 await test('the core imports only its own files: no Svelte, no DOM, no node: built-ins', async () => {
   const files = fs.readdirSync(coreDir).filter((f) => f.endsWith('.mjs'))
-  assert(files.length >= 3, `expected loop, tool-calls, timings; found ${files}`)
+  assert(files.length >= 6, `expected loop, tool-calls, timings, tool-call-parser, tool-result, chat-stream; found ${files}`)
   for (const f of files) {
     const src = fs.readFileSync(path.join(coreDir, f), 'utf8')
     const specs = [...src.matchAll(/\bfrom\s+['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]/g)].map((m) => m[1] ?? m[2])

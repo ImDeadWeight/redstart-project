@@ -3,9 +3,10 @@
  *
  * Sends the conversation through ChatService, and fills the loop core's
  * accumulator with the answer, the reasoning stream and any tool calls as they
- * arrive. When the model narrated a call instead of emitting one, it runs the
- * fallback parser over what it said (a chat-ui setting, so it stays here). The
- * core folds this turn's timings into the flow totals afterwards.
+ * arrive. The core folds this turn's timings into the flow totals afterwards,
+ * and runs the fallback parser when the model narrated a call instead of
+ * emitting one (the browser's settings reach it through the store's
+ * `fallbackParser` port).
  *
  * **Why an accumulator rather than a return value.** This can throw: the stream
  * can fail or be aborted mid-turn. The core's catch block then saves whatever
@@ -18,9 +19,7 @@
  */
 
 import { ChatService } from '$lib/services/chat.service';
-import { config } from '$lib/stores/settings.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
-import { parseToolCallsFromTurn, createApiToolCalls } from '$lib/utils/tool-call-parser';
 import type { AgenticSessionState } from './agentic-session.svelte';
 import type { AgenticFlowCallbacks, AgenticFlowOptions } from '$lib/types/agentic';
 import type { TurnAccumulator } from '$lib/agent-core';
@@ -110,23 +109,5 @@ export class AgenticTurn {
 		);
 
 		this.session.updateSession(conversationId, { streamingToolCall: null });
-
-		if (acc.toolCalls.length === 0 && config().toolCallFallbackParserEnabled) {
-			const patternList: string[] = (config().toolCallFallbackParserPatterns || '')
-				.split(',')
-				.map((p: string) => p.trim())
-				.filter(Boolean);
-			// Scans the visible answer, then the reasoning stream — a reasoning
-			// model often writes the call in its thinking block and only
-			// narrates it in the answer, which would otherwise drop it silently.
-			const parsed = parseToolCallsFromTurn(acc.content, acc.reasoning, {
-				patterns: patternList,
-				availableTools: toolsStore.allTools.map((t) => ({ name: t.definition.function.name }))
-			});
-
-			if (parsed.length > 0) {
-				acc.toolCalls = createApiToolCalls(parsed);
-			}
-		}
 	}
 }

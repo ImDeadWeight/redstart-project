@@ -17,12 +17,25 @@
  * The line IS the stored reference, so a message never holds the file
  * itself. Old messages with base64 attachments still render as before.
  *
+ * The line format itself (sizeLabel, linkPath, resourceLinkText) lives in the
+ * shared loop core, shared/agent-core/tool-result.mjs, so every host gives the
+ * model the same text; it is re-exported below. Parsing it back for the UI
+ * stays here.
+ *
  * Pure: no I/O. The format is pinned on both sides by
  * scripts/test-tool-result-links.mjs (server) and
  * tests/unit/resource-links.test.ts (here).
  */
 
-export const DOWNLOAD_ROUTE = '/files/download';
+import {
+	DOWNLOAD_ROUTE,
+	sizeLabel as coreSizeLabel,
+	linkPath as coreLinkPath,
+	resourceLinkText as coreResourceLinkText
+} from '$lib/agent-core';
+
+export { DOWNLOAD_ROUTE };
+
 
 export const RESOURCE_LINE_REGEX = /^\[file: ([^,\]]+), ([^,\]]+), ([^\]]+)\]$/;
 
@@ -40,29 +53,13 @@ export interface ToolResultResource {
 	sizeLabel: string;
 }
 
-export function sizeLabel(bytes?: number): string {
-	if (typeof bytes !== 'number' || !Number.isFinite(bytes)) return 'size unknown';
-	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1048576) return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`;
-	return `${(bytes / 1048576).toFixed(1)} MB`;
-}
+export const sizeLabel: (bytes?: number) => string = coreSizeLabel;
 
 /** The documents-relative path of one of Nest's links, or null for any other link. */
-export function linkPath(item: ResourceLinkItem): string | null {
-	if (item.type !== 'resource_link' || typeof item.uri !== 'string') return null;
-	if (!item.uri.startsWith(`${DOWNLOAD_ROUTE}?`)) return null;
-	const p = new URLSearchParams(item.uri.slice(DOWNLOAD_ROUTE.length + 1)).get('path');
-	// A path is one line of plain text, or it is not ours to render.
-	if (!p || /[\r\n,\]]/.test(p)) return null;
-	return p;
-}
+export const linkPath: (item: ResourceLinkItem) => string | null = coreLinkPath;
 
 /** The single line a resource_link becomes. Another server's link is named, never rendered. */
-export function resourceLinkText(item: ResourceLinkItem): string {
-	const p = linkPath(item);
-	if (!p) return `[resource: ${item.name ?? 'unnamed'} (${item.uri ?? 'no uri'})]`;
-	return `[file: ${p}, ${item.mimeType || 'application/octet-stream'}, ${sizeLabel(item.size)}]`;
-}
+export const resourceLinkText: (item: ResourceLinkItem) => string = coreResourceLinkText;
 
 export function parseResourceLine(line: string): ToolResultResource | undefined {
 	const m = line.trim().match(RESOURCE_LINE_REGEX);

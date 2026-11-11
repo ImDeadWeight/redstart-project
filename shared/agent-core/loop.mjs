@@ -25,6 +25,7 @@ import {
 	foldTurnTimings
 } from './timings.mjs';
 import { normalizeToolCalls, runToolCalls } from './tool-calls.mjs';
+import { createApiToolCalls, parseToolCallsFromTurn } from './tool-call-parser.mjs';
 
 /** @typedef {import('./types').Timings} Timings */
 /** @typedef {import('./types').TurnAccumulator} TurnAccumulator */
@@ -105,6 +106,17 @@ export async function runAgentLoop(params) {
 
 		try {
 			await ports.model.streamTurn({ acc, messages, signal });
+
+			// The model narrated a call instead of emitting one: recover it from
+			// the answer, then the reasoning. Inside the try because it ran inside
+			// the browser's turn before it moved here.
+			if (acc.toolCalls.length === 0) {
+				const parserConfig = ports.fallbackParser?.() ?? null;
+				if (parserConfig) {
+					const parsed = parseToolCallsFromTurn(acc.content, acc.reasoning, parserConfig);
+					if (parsed.length > 0) acc.toolCalls = createApiToolCalls(parsed);
+				}
+			}
 		} catch (error) {
 			if (signal?.aborted) {
 				await onAssistantTurnComplete?.(

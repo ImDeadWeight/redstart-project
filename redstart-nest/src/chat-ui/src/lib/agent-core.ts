@@ -25,7 +25,22 @@ export {
 	DENIED_RESULT,
 	INTERRUPTED_RESULT
 } from '../../../../../shared/agent-core/tool-calls.mjs';
+export {
+	parseToolCallsFromText,
+	parseToolCallsFromTurn,
+	createApiToolCalls
+} from '../../../../../shared/agent-core/tool-call-parser.mjs';
+export {
+	formatMcpToolResult,
+	sizeLabel,
+	linkPath,
+	resourceLinkText,
+	DOWNLOAD_ROUTE
+} from '../../../../../shared/agent-core/tool-result.mjs';
+export { mergeToolCallDeltas } from '../../../../../shared/agent-core/chat-stream.mjs';
 export type {
+	ToolCallParserConfig,
+	ParsedToolCall,
 	AgentPorts,
 	AgentLoopParams,
 	AgentMessage,

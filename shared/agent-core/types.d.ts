@@ -113,6 +113,18 @@ export interface AgentStoreCallbacks<A = unknown> {
 	onTurnComplete?: (intermediateTimings: Timings) => void;
 }
 
+export interface ToolCallParserConfig {
+	/** Any of 'braces', 'xml', 'fn', 'json', tried in order. */
+	patterns: string[];
+	/** Only these names are recognised as calls. */
+	availableTools: Array<{ name: string }>;
+}
+
+export interface ParsedToolCall {
+	name: string;
+	arguments: string;
+}
+
 export interface ToolExecution {
 	text: string;
 	isError: boolean;
@@ -156,6 +168,12 @@ export interface AgentPorts<A = unknown> {
 		/** True while a user message typed mid-flow is waiting to be sent. */
 		pending(): boolean;
 	};
+	/**
+	 * The fallback parser's settings for this turn, or null when it is off.
+	 * Asked once per turn that ends with no structured tool_calls; the loop
+	 * then looks for a call the model wrote out as text. Omitted: off.
+	 */
+	fallbackParser?(): ToolCallParserConfig | null;
 	/** Turn and call counters, for a host that shows them live. */
 	progress?(patch: { currentTurn?: number; totalToolCalls?: number }): void;
 	/** Wall clock for tool timings, in ms. Default: performance.now. */
