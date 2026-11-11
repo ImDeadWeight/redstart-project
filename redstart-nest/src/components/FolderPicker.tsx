@@ -71,6 +71,18 @@ export function FolderPicker({
 // not from anything the browser can work out. They are what makes "the picker
 // refuses a folder it cannot use" possible at all.
 type Entry = { name: string; kind: 'directory'; readable?: boolean; writable?: boolean }
+
+// In file mode the caller's startPath is the CURRENT FILE (e.g. the selected
+// .gguf), which browse:list cannot open — it answered ENOTDIR. Split it into
+// the folder to browse and the name to pre-fill. Either separator, since the
+// path is the daemon's and may be Windows or POSIX. A root-level file keeps
+// its trailing separator ("C:\"), which is the form browse:list expects.
+export function splitFilePath(p: string): { dir: string; name: string } {
+  const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'))
+  if (i < 0) return { dir: '', name: p }
+  const dir = p.slice(0, i)
+  return { dir: dir === '' || /^[A-Za-z]:$/.test(dir) ? p.slice(0, i + 1) : dir, name: p.slice(i + 1) }
+}
 type Root = { path: string; label: string }
 
 function BrowserModal({
@@ -127,6 +139,12 @@ function BrowserModal({
   // navigates to the containing folder and confirms it; there is no remote
   // file-level picker. Directory mode's confirm target is wherever they are.
   useEffect(() => {
+    if (mode === 'file' && startPath) {
+      const { dir, name } = splitFilePath(startPath)
+      setFileName(name)
+      load(dir || null)
+      return
+    }
     load(startPath ?? null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
