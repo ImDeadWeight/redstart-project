@@ -128,6 +128,20 @@ export function accountWarning(who) {
     'the bench removes what they create, but cannot undo a change to a file that was already there. Make a dedicated bench account (role user) and use its key.'
 }
 
+/**
+ * A task expects to be asked, but Nest did not offer ask_user: a Nest from
+ * before Phase 1 (not restarted), or an admin ban on the name. Those tasks
+ * then measure nothing, and the row would read as the model not asking.
+ *
+ * @param {Array<{ answers: Record<string, string> }>} tasks
+ * @param {Array<{ name: string }>} mcpTools
+ */
+export function askWarning(tasks, mcpTools) {
+  const expectsAsking = tasks.filter((t) => Object.keys(t.answers ?? {}).length > 0).length
+  if (expectsAsking === 0 || mcpTools.some((t) => t.name === 'ask_user')) return null
+  return `warning: Nest did not offer ask_user, so the ${expectsAsking} task(s) with answers cannot ask. Restart Nest on a Phase 1 build, and check ask_user is not banned.`
+}
+
 // Above this share of recovered calls, the model and its chat template most
 // likely disagree on the tool-call format. 0% for both models on their own
 // templates, 69% for the 4B under the 35B's (2026-11-11).
@@ -155,6 +169,10 @@ export function summaryMarkdown(meta, summary) {
     '| pass | tool success | invalid args | fallback | retries/task | turns/task | tokens/task | s/task | hit a limit |',
     '|---|---|---|---|---|---|---|---|---|',
     `| ${pct(summary.passRate)} | ${pct(summary.toolSuccessRate)} | ${pct(summary.invalidArgRate)} | ${pct(summary.fallbackRate)} | ${num(summary.retriesPerTask)} | ${num(summary.turnsPerTask)} | ${num(summary.predictedTokensPerTask, 0)} | ${num(summary.wallMsPerTask == null ? null : summary.wallMsPerTask / 1000)} | ${summary.hitLimitRuns} |`,
+    '',
+    // Phase 1: a dismissed question is one the task had no answer for, so on
+    // the tasks that should never ask it is an unneeded one.
+    `ask_user: ${summary.askCalls ?? 0} call(s) in ${summary.runsThatAsked ?? 0} run(s), ${summary.dismissedAsks ?? 0} unanswered (the task had no answer for it)`,
     '',
     '| task | group | passes |',
     '|---|---|---|',
@@ -194,6 +212,8 @@ export async function main(argv, io = {}) {
   const warnings = []
   const lw = labelWarning(opts.modelLabel, model?.modelFile)
   if (lw) { warnings.push(lw); log(lw) }
+  const asw = askWarning(tasks, mcpTools)
+  if (asw) { warnings.push(asw); log(asw) }
   const who = await nest.whoami()
   const aw = accountWarning(who)
   if (aw) { warnings.push(aw); log(aw) }

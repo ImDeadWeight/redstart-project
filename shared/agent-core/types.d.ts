@@ -187,7 +187,13 @@ export interface AgentPorts<A = unknown> {
 		 * with it as `text` and consume it, so the steering check that follows
 		 * does not also treat it as an interruption.
 		 */
-		user(request: AskRequest, signal?: AbortSignal): Promise<AskAnswer | null>;
+		user(request: AskRequest, signal?: AbortSignal, call?: AgentToolCall): Promise<AskAnswer | null>;
+		/**
+		 * An ask_user call whose arguments were malformed: the loop answered it
+		 * with `error` and asked nobody. For a host that records every call
+		 * (the bench). Optional.
+		 */
+		invalid?(call: AgentToolCall, error: string): void;
 	};
 	limit: {
 		/** The turn limit was reached: may the flow go on? Resolve `false` on abort. */

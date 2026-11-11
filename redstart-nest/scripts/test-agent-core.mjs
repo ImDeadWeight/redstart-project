@@ -159,7 +159,10 @@ function harness(opts = {}) {
       },
     },
     steering: { pending: () => steering() },
-    ...(ask ? { ask: { user: async (req, s) => { calls.push('ask'); return ask(req, s) } } } : {}),
+    ...(ask ? { ask: {
+      user: async (req, s, c) => { calls.push(`ask:${c?.id}`); return ask(req, s) },
+      invalid: (c) => { calls.push(`ask-invalid:${c.id}`) },
+    } } : {}),
     progress: (patch) => progress.push(patch),
     now: () => clock,
     yield: async () => {},
@@ -378,6 +381,7 @@ await test('ask_user goes to the ask port, not the gate or the executor, and the
   eq(seen, [{ question: 'Which unit are the readings in?', multiSelect: false }], 'the request the host got')
   eq(h.toolResults.map((r) => [r.id, r.content]), [['q1', 'The user answered: Celsius']], 'result')
   assert(!h.calls.some((c) => c.startsWith('approve:') || c.startsWith('execute:')), `gate or executor ran: ${h.calls}`)
+  assert(h.calls.includes('ask:q1'), `the port was not handed the call: ${h.calls}`)
   eq(count(h.calls, 'streamTurn'), 2, 'the model got the answer in a next turn')
   eq(h.sentMessages[1].find((m) => m.role === 'tool')?.content, 'The user answered: Celsius', 'the answer in the next request')
 })
@@ -414,7 +418,9 @@ await test('a malformed ask_user is answered with how to call it, and never reac
     }],
   })
   await h.done
-  eq(count(h.calls, 'ask'), 0, 'the person was asked')
+  eq(h.calls.filter((c) => c.startsWith('ask:')).length, 0, 'the person was asked')
+  // The host still hears of each one (the bench counts them as calls).
+  eq(h.calls.filter((c) => c.startsWith('ask-invalid:')), ['ask-invalid:x1', 'ask-invalid:x2', 'ask-invalid:x3'], 'invalid hook')
   for (const r of h.toolResults) assert(/^Error: .*ask_user takes \{"question"/.test(r.content), r.content)
 })
 

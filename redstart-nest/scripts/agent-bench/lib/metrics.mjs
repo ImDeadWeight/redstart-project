@@ -16,6 +16,9 @@
 //   retries         a call to a tool whose previous call errored
 //   turns, promptTokens, predictedTokens, wallMs
 //   hitLimit        'turns' | 'seconds' | null
+//   askCalls        ask_user calls (Phase 1), malformed ones included
+//   dismissedAsks   questions the task had no answer for: on a task that
+//                   should never ask, every one is an unneeded question
 //
 // The schema check is deliberately shallow: an object, every `required` key
 // present, each present key's top-level JSON type matching the schema's
@@ -93,6 +96,8 @@ export function computeMetrics(events, verdict) {
   let promptTokens = 0
   let predictedTokens = 0
   let hitLimit = null
+  let askCalls = 0
+  let dismissedAsks = 0
   const lastErroredByTool = new Map()
 
   for (const e of events) {
@@ -106,9 +111,11 @@ export function computeMetrics(events, verdict) {
       if (e.argsProblem) invalidArgs++
       if (typeof e.id === 'string' && e.id.startsWith(FALLBACK_ID_PREFIX)) fallbackCalls++
       if (lastErroredByTool.get(e.name)) retries++
+      if (e.name === 'ask_user') askCalls++
     }
     if (e.type === 'tool_result') {
       if (e.isError) toolErrors++
+      if (e.name === 'ask_user' && e.dismissed) dismissedAsks++
       lastErroredByTool.set(e.name, !!e.isError)
     }
     if (e.type === 'limit') hitLimit = e.which
@@ -131,6 +138,8 @@ export function computeMetrics(events, verdict) {
     predictedTokens,
     wallMs: start != null && end != null ? end - start : null,
     hitLimit,
+    askCalls,
+    dismissedAsks,
   }
 }
 
@@ -171,6 +180,10 @@ export function summarize(runs) {
     wallMsPerTask: mean(all.map((m) => m.wallMs).filter((x) => x != null)),
     hitLimitRuns: all.filter((m) => m.hitLimit).length,
     runsWithToolCalls: withCalls.length,
+    // `?? 0`: runs saved before Phase 1 re-summarize as 0.
+    askCalls: all.reduce((a, m) => a + (m.askCalls ?? 0), 0),
+    dismissedAsks: all.reduce((a, m) => a + (m.dismissedAsks ?? 0), 0),
+    runsThatAsked: all.filter((m) => (m.askCalls ?? 0) > 0).length,
     tasks,
   }
 }

@@ -1,0 +1,1 @@
+{ "id": "asks", "group": "asking", "phase": 1, "prompt": "[script:ask] Fix the typos in the draft.", "answers": { "which draft": "draft_b.md" }, "approve": "reads", "check": "checks.mjs#choseDraftB" }

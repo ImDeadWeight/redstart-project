@@ -13,6 +13,10 @@
 //                      formatted by the core as chat-ui formats it; argument
 //                      errors thrown with chat-ui's messages
 //   gate.approve       the task's `approve` policy, decided without asking
+//   ask.user           ask_user answered from the task's `answers`
+//                      (lib/ask.mjs); no match is a dismissal. Logged as the
+//                      tool_call/tool_result pair it is, so the metrics count
+//                      it and checks see it (checks/lib.mjs asked())
 //   limit.askContinue  "no": reaching maxTurns ends the run, recorded
 //   steering           never
 //   fallbackParser     on, chat-ui's default patterns, Nest's tool names
@@ -26,7 +30,9 @@ import { runAgentLoop } from '../../../../shared/agent-core/loop.mjs'
 import { readChatStream } from '../../../../shared/agent-core/chat-stream.mjs'
 import { wireSafeToolCalls, MAX_TOOL_CALLS_PER_REPLY } from '../../../../shared/agent-core/tool-calls.mjs'
 import { attachmentNote } from '../../../../shared/agent-core/attachment-note.mjs'
+import { formatAskAnswer } from '../../../../shared/agent-core/ask-user.mjs'
 import { argumentProblem, computeMetrics } from './metrics.mjs'
+import { answerFromTask } from './ask.mjs'
 import { META_CLASS_KEY } from './nest-client.mjs'
 
 export const DEFAULT_PARSER_PATTERNS = ['braces', 'xml', 'fn', 'json']
@@ -267,6 +273,23 @@ export async function runTask(nest, task, opts) {
                 log({ type: 'tool_result', id: call.id, name, isError: true, denied: true, text: 'Tool execution was denied by the user.', ms: 0 })
               }
               return ok
+            },
+          },
+          ask: {
+            user: async (request, _signal, call) => {
+              const id = call?.id
+              log({
+                type: 'tool_call', id, name: 'ask_user', arguments: call?.function.arguments,
+                argsProblem: argumentProblem(call?.function.arguments, toolsByName.get('ask_user')?.inputSchema),
+                question: request.question, options: request.options,
+              })
+              const answer = answerFromTask(task.answers, request)
+              log({ type: 'tool_result', id, name: 'ask_user', isError: false, dismissed: answer === null, text: formatAskAnswer(answer), ms: 0 })
+              return answer
+            },
+            invalid: (call, problem) => {
+              log({ type: 'tool_call', id: call.id, name: 'ask_user', arguments: call.function.arguments, argsProblem: problem })
+              log({ type: 'tool_result', id: call.id, name: 'ask_user', isError: true, text: problem, ms: 0 })
             },
           },
           limit: {

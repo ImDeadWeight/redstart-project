@@ -23,6 +23,8 @@ import { formatMcpToolResult } from '../../../../shared/agent-core/tool-result.m
 
 export const META_CONVERSATION_KEY = 'redstart/conversationId'
 export const META_CLASS_KEY = 'redstart/class'
+// Mirrors daemon/interaction-tools.mjs; no daemon module is imported here.
+export const HOST_TOOLS_CAPABILITY = 'redstart/hostTools'
 const DOCS_SPACE = 'documents'
 const MAX_READBACK_BYTES = 1024 * 1024
 // A bench account's File System folder holds what runs leave there: a few
@@ -50,7 +52,13 @@ export async function connectNest(opts) {
     return res
   }
 
-  const mcp = await connectMcpClient(opts.mcp, { headers: auth, timeoutMs: opts.mcpTimeoutMs ?? 300_000 })
+  // The bench answers ask_user itself (lib/ask.mjs), as chat-ui does, so it
+  // declares so and Nest offers the tool (daemon/interaction-tools.mjs).
+  const mcp = await connectMcpClient(opts.mcp, {
+    headers: auth,
+    timeoutMs: opts.mcpTimeoutMs ?? 300_000,
+    capabilities: { experimental: { [HOST_TOOLS_CAPABILITY]: { names: ['ask_user'] } } },
+  })
 
   return {
     /** The account's tools, as MCP lists them (bans and role narrowing already applied). */

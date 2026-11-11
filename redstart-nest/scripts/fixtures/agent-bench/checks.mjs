@@ -26,3 +26,10 @@ export function briefCreated(_text, _files, _events, ctx) {
     ? { pass: true, reason: `${entry[0]} created` }
     : { pass: false, reason: `no brief.md among ${JSON.stringify(Object.keys(ctx.createdFiles))}` }
 }
+
+// Phase 1: the answer the bench gave reached the model as a choice.
+export function choseDraftB(text) {
+  return text.includes('The user chose: draft_b.md')
+    ? { pass: true, reason: 'the choice reached the model' }
+    : { pass: false, reason: `no choice in ${JSON.stringify(text)}` }
+}

@@ -33,8 +33,10 @@ import * as net from 'node:net'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { main, parseArgs, labelWarning, fallbackWarning, accountWarning } from './agent-bench/run.mjs'
+import { main, parseArgs, labelWarning, fallbackWarning, accountWarning, askWarning } from './agent-bench/run.mjs'
 import { approves, maxReplyTokens } from './agent-bench/lib/bench.mjs'
+import { answerFromTask } from './agent-bench/lib/ask.mjs'
+import { ASK_USER_DEFINITION, DISMISSED_RESULT } from '../../shared/agent-core/ask-user.mjs'
 import { argumentProblem, computeMetrics } from './agent-bench/lib/metrics.mjs'
 import { findTaskFiles, loadTask } from './agent-bench/lib/task-file.mjs'
 
@@ -104,6 +106,8 @@ const TOOLS = [
   },
 ]
 
+const ASK_USER_TOOL_DEF = { ...ASK_USER_DEFINITION, _meta: { 'redstart/class': 'read' } }
+
 const chunk = (delta, extra = {}) => ({ choices: [{ index: 0, delta }], ...extra })
 const toolCallChunk = (id, name, args) => chunk({ tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: args } }] })
 const lastToolResult = (messages) => [...messages].reverse().find((m) => m.role === 'tool')?.content ?? ''
@@ -141,6 +145,15 @@ const SCRIPTS = {
   flood: (turn) => (turn === 0
     ? [chunk({ tool_calls: Array.from({ length: 12 }, (_, i) => ({ index: i, id: `m${i}`, type: 'function', function: { name: 'read_file', arguments: '{"path": "data.txt"}' } })) })]
     : [chunk({ content: 'It says 7.' })]),
+  // Phase 1: a question the task answers (a choice), one it does not (a
+  // dismissal), and a malformed one (answered by the core, nobody asked).
+  ask: (turn, messages) => (turn === 0
+    ? [chunk({ tool_calls: [
+      { index: 0, id: 'q1', type: 'function', function: { name: 'ask_user', arguments: JSON.stringify({ question: 'Which draft should I fix?', options: ['draft_a.md', 'draft_b.md'] }) } },
+      { index: 1, id: 'q2', type: 'function', function: { name: 'ask_user', arguments: JSON.stringify({ question: 'Anything else?' }) } },
+      { index: 2, id: 'q3', type: 'function', function: { name: 'ask_user', arguments: '{"question": ""}' } },
+    ] })]
+    : [chunk({ content: messages.filter((m) => m.role === 'tool').map((m) => m.content).join(' | ') })]),
   forever: () => [toolCallChunk(`c${Math.random().toString(36).slice(2, 8)}`, 'read_file', '{"path": "data.txt"}')],
   hang: () => 'hang',
 }
@@ -306,8 +319,15 @@ function startFakeNest(gatewayPort) {
     if (!authed(req)) return json(res, 401, {})
     const msg = JSON.parse((await readBody(req)).toString())
     const reply = (result) => json(res, 200, { jsonrpc: '2.0', id: msg.id, result })
-    if (msg.method === 'initialize') return reply({ protocolVersion: '2024-11-05', capabilities: { tools: {} } })
-    if (msg.method === 'tools/list') return reply({ tools: TOOLS })
+    // As daemon/interaction-tools.mjs: ask_user only for a client that said
+    // it answers it. One flag for the fake, since the bench opens one session.
+    if (msg.method === 'initialize') {
+      state.declaredHostTools = msg.params?.capabilities?.experimental?.['redstart/hostTools']?.names ?? []
+      return reply({ protocolVersion: '2024-11-05', capabilities: { tools: {} } })
+    }
+    if (msg.method === 'tools/list') {
+      return reply({ tools: state.declaredHostTools?.includes('ask_user') ? [...TOOLS, ASK_USER_TOOL_DEF] : TOOLS })
+    }
     if (msg.method === 'tools/call') {
       const { name, arguments: args, _meta } = msg.params
       const conv = _meta?.['redstart/conversationId']
@@ -415,7 +435,7 @@ await test('a task file with a problem fails at load, naming the file and the fi
 })
 
 await test('task patterns: a folder, a glob, a single file', async () => {
-  eq(findTaskFiles(FIXTURES).map((f) => path.basename(f)).length, 11, 'folder (fs-leak, cited-doc and flood added 2026-11-11)')
+  eq(findTaskFiles(FIXTURES).map((f) => path.basename(f)).length, 12, 'folder (fs-leak, cited-doc and flood added 2026-11-11; asks for Phase 1)')
   eq(findTaskFiles(path.join(FIXTURES, '*-limit.json')).map((f) => path.basename(f)), ['time-limit.json', 'turn-limit.json'], 'glob')
   eq(findTaskFiles(path.join(FIXTURES, 'denied.json')).length, 1, 'file')
 })
@@ -433,6 +453,23 @@ await test('an owner or admin API key is warned about', async () => {
     assert(/dedicated bench account/.test(accountWarning({ user: { username: 'pat', role } }) ?? ''), `${role} not flagged`)
   }
   eq([accountWarning({ user: { username: 'bench', role: 'user' } }), accountWarning(null), accountWarning({ authRequired: false, user: null })], [null, null, null], 'user role, no answer, login off')
+})
+
+await test('ask_user answers: substring match in file order, "" matches any, an option comes back as a choice, no match dismisses', async () => {
+  const answers = { 'which draft': 'Draft_B.md', unit: 'Celsius', '': 'fallback' }
+  eq(answerFromTask(answers, { question: 'Which DRAFT do you mean?', options: ['draft_a.md', 'draft_b.md'] }), { chosen: ['draft_b.md'] }, 'choice')
+  eq(answerFromTask(answers, { question: 'Which draft?' }), { text: 'Draft_B.md' }, 'no options: text')
+  eq(answerFromTask(answers, { question: 'What unit?', options: ['C', 'F'] }), { text: 'Celsius' }, 'not an option: text')
+  eq(answerFromTask(answers, { question: 'Anything else?' }), { text: 'fallback' }, '"" matches any')
+  eq(answerFromTask({ unit: 'Celsius' }, { question: 'Anything else?' }), null, 'no match: dismissed')
+  eq(answerFromTask({}, { question: 'Anything?' }), null, 'no answers: dismissed')
+})
+
+await test('a task with answers but no ask_user on offer is warned about', async () => {
+  const asking = [{ answers: { '': 'yes' } }, { answers: {} }]
+  assert(/did not offer ask_user.*1 task/.test(askWarning(asking, [{ name: 'read_file' }]) ?? ''), 'no warning')
+  eq(askWarning(asking, [{ name: 'ask_user' }]), null, 'offered')
+  eq(askWarning([{ answers: {} }], []), null, 'no task expects to ask')
 })
 
 await test('a high fallback rate is warned about, with where to look', async () => {
@@ -496,7 +533,7 @@ if (bench) {
 
   await test('the model got the tool list and its tool results; thinking off, streaming on', async () => {
     const body = nest.state.completionBodies.find((b) => b.messages.some((m) => m.role === 'tool'))
-    eq(body.tools.map((t) => t.function.name), ['read_file', 'make_doc', 'write_file', 'search_docs', 'fs_write'], 'tools')
+    eq(body.tools.map((t) => t.function.name), ['read_file', 'make_doc', 'write_file', 'search_docs', 'fs_write', 'ask_user'], 'tools')
     eq([body.stream, body.chat_template_kwargs.enable_thinking, body.reasoning_format], [true, false, 'auto'], 'flags')
     const asst = body.messages.find((m) => m.role === 'assistant' && m.tool_calls)
     assert(asst && body.messages.some((m) => m.role === 'tool' && m.tool_call_id === asst.tool_calls[0].id), 'tool result paired with its call')
@@ -602,6 +639,20 @@ if (bench) {
     eq(sent.messages.filter((m) => m.role === 'tool').length, 12, 'every call was answered to the model')
   })
 
+  await test('ask_user: offered because the bench declared it, answered from the task, logged as calls', async () => {
+    eq(nest.state.declaredHostTools, ['ask_user'], 'the bench declared it answers ask_user')
+    const r = run('asks')
+    eq(r.verdict.pass, true, `the choice reached the model: ${r.verdict.reason}`)
+    eq(r.finalText, `The user chose: draft_b.md | ${DISMISSED_RESULT} | ${r.events.find((e) => e.type === 'tool_result' && e.id === 'q3').text}`, 'what the model read')
+    eq([r.metrics.toolCalls, r.metrics.askCalls, r.metrics.dismissedAsks, r.metrics.toolErrors, r.metrics.invalidArgs], [3, 3, 1, 1, 1],
+      'calls, asks, dismissed, errors (the malformed one), invalid args')
+    const q1 = r.events.find((e) => e.type === 'tool_call' && e.id === 'q1')
+    eq([q1.question, q1.options], ['Which draft should I fix?', ['draft_a.md', 'draft_b.md']], 'the question is in the log')
+    assert(!nest.state.toolCalls.some((c) => c.name === 'ask_user'), 'ask_user reached tools/call')
+    eq([bench.summary.askCalls, bench.summary.dismissedAsks, bench.summary.runsThatAsked], [3, 1, 1], 'summary counts')
+    assert(fs.readFileSync(path.join(outDir, 'summary.md'), 'utf8').includes('ask_user: 3 call(s) in 1 run(s), 1 unanswered'), 'summary.md line')
+  })
+
   await test('the turn limit ends the run and is recorded', async () => {
     const r = run('turn-limit')
     eq([r.metrics.hitLimit, r.metrics.turns, r.verdict.pass], ['turns', 2, false], 'limit, turns, pass')
@@ -636,19 +687,19 @@ if (bench) {
 
   await test('summary: pass rate and per-task passes', async () => {
     const s = bench.summary
-    eq([s.runs, s.tasks.reduce((a, t) => a + t.passes, 0)], [11, 8], 'runs, passes')
-    eq(s.passRate, 8 / 11, 'pass rate')
+    eq([s.runs, s.tasks.reduce((a, t) => a + t.passes, 0)], [12, 9], 'runs, passes')
+    eq(s.passRate, 9 / 12, 'pass rate')
     eq(s.hitLimitRuns, 3, 'limit runs')
   })
 
   await test('output files: runs.jsonl (one line per run), summary.json, summary.md with the results row', async () => {
     const lines = fs.readFileSync(path.join(outDir, 'runs.jsonl'), 'utf8').trim().split('\n')
-    eq(lines.length, 11, 'runs.jsonl lines')
+    eq(lines.length, 12, 'runs.jsonl lines')
     assert(JSON.parse(lines[0]).events.length > 0, 'events saved')
     const sj = JSON.parse(fs.readFileSync(path.join(outDir, 'summary.json'), 'utf8'))
-    eq([sj.meta.modelLabel, sj.meta.toolCount, sj.meta.tools], ['fake model', 5, ['read_file', 'make_doc', 'write_file', 'search_docs', 'fs_write']], 'meta')
+    eq([sj.meta.modelLabel, sj.meta.toolCount, sj.meta.tools], ['fake model', 6, ['read_file', 'make_doc', 'write_file', 'search_docs', 'fs_write', 'ask_user']], 'meta')
     const md = fs.readFileSync(path.join(outDir, 'summary.md'), 'utf8')
-    assert(/\| \d{4}-\d{2}-\d{2} \| fake model \| [0-9a-f]+(\+dirty)? \| 11×1 \| 73% \|/.test(md), md)
+    assert(/\| \d{4}-\d{2}-\d{2} \| fake model \| [0-9a-f]+(\+dirty)? \| 12×1 \| 75% \|/.test(md), md)
     assert(md.includes("> warning: runs changed 1 file(s) that were already in the account's File System folder"), 'the warning is in summary.md')
   })
 }

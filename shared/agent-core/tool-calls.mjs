@@ -226,14 +226,14 @@ export async function runToolCalls(params) {
 
 		if (asking) {
 			const parsed = parseAskArguments(toolCall.function.arguments);
+			const ask = /** @type {NonNullable<typeof ports.ask>} */ (ports.ask);
 			if (!parsed.ok) {
 				result = parsed.error;
 				toolSuccess = false;
+				// Nobody was asked, but the host may still record the attempt.
+				ask.invalid?.(toolCall, parsed.error);
 			} else {
-				const answer = await /** @type {NonNullable<typeof ports.ask>} */ (ports.ask).user(
-					parsed.request,
-					signal
-				);
+				const answer = await ask.user(parsed.request, signal, toolCall);
 				// Let the host repaint (the browser hides the question card here).
 				await yieldToHost();
 				if (signal?.aborted) {
