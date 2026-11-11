@@ -70,6 +70,11 @@ async function test(name, fn) {
 function assert(cond, message) {
   if (!cond) throw new Error(message)
 }
+function eq(actual, expected, message) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`${message}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+  }
+}
 
 // Two ordinary accounts, plus one whose username is chosen to try to reach the
 // other's folder if the scope were ever built from the username alone.
@@ -220,6 +225,45 @@ await test('🔍 the conversation fallback never reaches another account\'s work
     const out = await documentsTool.callTool('read_document', { path: attempt }, docsCfg, { account: ALICE, conversationId: 'conv-alice-2' })
     assert(out?.isError, `"${attempt}" climbed out of the workspace: ${textOf(out)}`)
   }
+})
+
+await test('a File System "no such file" on an attached file says where the file is and which tool reaches it', async () => {
+  // Agent bench, 2026-11-11: read_text_file("budget.csv") came back as a bare
+  // ENOENT and the model told the user the file was never attached.
+  const { attachmentHint, withAttachmentHint } = await import('../daemon/filesystem-mcp-provider.mjs')
+  const cfg = { ...docsCfg, python: { enabled: true } }
+  const inConv = { account: ALICE, conversationId: 'conv-alice-1' } // holds readings.csv (above)
+  const enoent = (p) => `ENOENT: no such file or directory, open '${p}'`
+
+  const hint = attachmentHint(enoent('readings.csv'), { path: 'readings.csv' }, cfg, inConv)
+  assert(/^\("readings\.csv" is a file in this conversation's workspace/.test(hint ?? ''), `no hint: ${hint}`)
+  assert(hint.includes('read_document("readings.csv")') && hint.includes('run_python'), `tools not named: ${hint}`)
+  // move_file's arguments, and read_multiple_files' list
+  assert(attachmentHint(enoent('readings.csv'), { source: 'readings.csv', destination: 'r.csv' }, cfg, inConv), 'source not checked')
+  assert(attachmentHint(enoent('x'), { paths: ['nope.txt', 'sub/notes.txt'] }, cfg, inConv)?.includes('"sub/notes.txt"'), 'paths not checked')
+  // The path list_documents prints, given to a File System tool
+  const viaPrefix = attachmentHint(enoent('x'), { path: 'chats/conv-alice-1/new.txt', content: 'x' }, cfg, inConv)
+  assert(viaPrefix?.startsWith("(chats/conv-alice-1/ is this conversation's workspace"), `prefix: ${viaPrefix}`)
+  // Python off: not named
+  assert(!attachmentHint(enoent('readings.csv'), { path: 'readings.csv' }, docsCfg, inConv).includes('run_python'), 'named a tool that is off')
+
+  // Silent when it would be wrong: a name that is not attached, another error,
+  // no conversation, another conversation, another account, Documents off.
+  eq(attachmentHint(enoent('typo.csv'), { path: 'typo.csv' }, cfg, inConv), null, 'a name that is nowhere')
+  eq(attachmentHint('EACCES: permission denied', { path: 'readings.csv' }, cfg, inConv), null, 'not a missing file')
+  eq(attachmentHint(enoent('readings.csv'), { path: 'readings.csv' }, cfg, ctx(ALICE)), null, 'no conversation')
+  eq(attachmentHint(enoent('readings.csv'), { path: 'readings.csv' }, cfg, { account: ALICE, conversationId: 'conv-alice-2' }), null, 'another conversation')
+  eq(attachmentHint(enoent('readings.csv'), { path: 'readings.csv' }, cfg, { account: BOB, conversationId: 'conv-alice-1' }), null, 'another account')
+  eq(attachmentHint(enoent('readings.csv'), { path: 'readings.csv' }, { python: { enabled: true } }, inConv), null, 'Documents off')
+  eq(attachmentHint(enoent('x'), { path: '../../../etc/passwd' }, cfg, inConv), null, 'a path that climbs out')
+
+  // On the result: added to an error, never to a success.
+  const err = { isError: true, content: [{ type: 'text', text: enoent('readings.csv') }] }
+  const out = withAttachmentHint(err, { path: 'readings.csv' }, cfg, inConv)
+  eq(textOf(out).split('\n').length, 2, 'the error, then the hint')
+  assert(textOf(out).startsWith(enoent('readings.csv')), 'the original error was changed')
+  const fine = { content: [{ type: 'text', text: 'ENOENT appears in this file' }] }
+  assert(withAttachmentHint(fine, { path: 'readings.csv' }, cfg, inConv) === fine, 'a success was touched')
 })
 
 await test('two accounts can hold the same filename without collision', async () => {

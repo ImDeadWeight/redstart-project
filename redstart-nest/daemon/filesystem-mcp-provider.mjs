@@ -23,10 +23,12 @@
 // =============================================================================
 
 import { createRequire } from 'node:module'
+import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { createStdioProcessManager } from '../../shared/mcp-stdio-process.mjs'
 import { resolveWithinRoot } from './path-scope.mjs'
 import { resolveUserRoot } from './user-scope.mjs'
+import { isWellFormedConversationId, workspaceRelative } from './conversation-workspace.mjs'
 
 const SERVER_ID = 'filesystem'
 
@@ -422,6 +424,80 @@ function withDownloadMarker(result, rootDir, requestedPath) {
   }
 }
 
+const NOT_FOUND_RE = /ENOENT|no such file or directory/i
+
+/**
+ * One line for a "no such file" error whose path is in this conversation's
+ * workspace, or null.
+ *
+ * Attachments are saved to chats/<conversationId>/ in the caller's DOCUMENTS
+ * folder; these tools work on the File System folder, a different root. The
+ * attachment note says so, and models reach for read_text_file and move_file
+ * anyway: in the agent bench of 2026-11-11 the 4B's docs-two-sources and
+ * multi-chain ended on a bare ENOENT ("the file was not attached?"), and
+ * docs-rename spent its ten turns between move_file and write_file. The bare
+ * error cannot tell "wrong name" from "wrong tool". This can, because it
+ * looks: a path argument that is a file in the workspace, or that starts
+ * with the workspace's own chats/<id>/ prefix.
+ *
+ * Names only tools that are enabled. Reads nothing but whether the file
+ * exists, in the caller's own verified conversation.
+ *
+ * @param {string} errorText
+ * @param {object} args the call's arguments
+ * @param {object} cfg tools config
+ * @param {{ account?: object | null, conversationId?: string | null }} ctx
+ * @returns {string | null}
+ */
+export function attachmentHint(errorText, args, cfg, ctx) {
+  const conversationId = ctx?.conversationId
+  const docsRoot = cfg?.documents?.enabled ? cfg.documents.outputDir : null
+  if (!NOT_FOUND_RE.test(errorText ?? '') || !docsRoot || !conversationId || !isWellFormedConversationId(conversationId)) return null
+  if (!args || typeof args !== 'object') return null
+
+  const prefix = `${workspaceRelative(conversationId)}/`
+  const candidates = []
+  for (const [key, value] of Object.entries(args)) {
+    if (PATH_STRING_KEYS.has(key) && typeof value === 'string') candidates.push(value)
+    else if (PATH_ARRAY_KEYS.has(key) && Array.isArray(value)) candidates.push(...value.filter((v) => typeof v === 'string'))
+  }
+  let found = null
+  let usedPrefix = false
+  for (const raw of candidates) {
+    const given = raw.split('\\').join('/').replace(/^\.\//, '')
+    const name = given.startsWith(prefix) ? given.slice(prefix.length) : given
+    if (given.startsWith(prefix)) usedPrefix = true
+    if (!name || found) continue
+    try {
+      const userRoot = resolveUserRoot(docsRoot, ctx?.account)
+      const full = resolveWithinRoot(userRoot, `${prefix}${name}`)
+      if (fs.existsSync(full) && fs.statSync(full).isFile()) found = name
+    } catch {
+      // not contained, or no such folder: not an attachment
+    }
+  }
+  if (!found && !usedPrefix) return null
+
+  const python = !!cfg?.python?.enabled
+  const cannot = 'The File System tools work on a different folder and cannot reach it'
+  if (found) {
+    const ways = [`read it with read_document(${JSON.stringify(found)})`]
+    if (python) ways.push('use run_python to read, rename or delete it by name')
+    return `("${found}" is a file in this conversation's workspace, where attachments are saved. ${cannot}: ${ways.join(', or ')}.)`
+  }
+  return `(${prefix} is this conversation's workspace, in the documents folder. ${cannot}${python ? ': use run_python to write, rename or delete files there by name' : ''}.)`
+}
+
+/** The result with attachmentHint's line added to its text, when there is one. */
+export function withAttachmentHint(result, args, cfg, ctx) {
+  if (!result?.isError || !Array.isArray(result.content)) return result
+  const first = result.content.find((p) => p?.type === 'text' && typeof p.text === 'string')
+  if (!first) return result
+  const hint = attachmentHint(first.text, args, cfg, ctx)
+  if (!hint) return result
+  return { ...result, content: result.content.map((p) => (p === first ? { ...p, text: [p.text, hint].join('\n') } : p)) }
+}
+
 // Provider interface: callTool(name, args, cfg, ctx). `ctx.account` is the
 // authenticated caller (null when auth is off).
 //
@@ -461,9 +537,9 @@ export async function callTool(name, args, cfg, ctx) {
 
   try {
     const result = await callFilesystemTool(name, args ?? {}, userRoot)
-    if (FILE_PRODUCING_TOOLS.has(name)) return withDownloadMarker(result, userRoot, args?.path)
-    return result
+    if (FILE_PRODUCING_TOOLS.has(name)) return withAttachmentHint(withDownloadMarker(result, userRoot, args?.path), args, cfg, ctx)
+    return withAttachmentHint(result, args, cfg, ctx)
   } catch (err) {
-    return { isError: true, content: [{ type: 'text', text: `File system error: ${err.message}` }] }
+    return withAttachmentHint({ isError: true, content: [{ type: 'text', text: `File system error: ${err.message}` }] }, args, cfg, ctx)
   }
 }
