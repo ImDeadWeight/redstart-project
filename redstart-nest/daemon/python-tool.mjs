@@ -106,6 +106,81 @@ export const NO_OUTPUT_TEXT =
   'a value inside try, if, for, with or a function is not. Run it again with print(...) around the value you need.)'
 
 /**
+ * The hint for code whose line breaks arrived as the two characters "\n",
+ * or null.
+ *
+ * Qwen3-4B sometimes escapes its JSON arguments twice, so the code reaches
+ * Python as one line with literal backslash-n in it. Python's error, "unexpected
+ * character after line continuation character", names the symptom and not
+ * the cause; in the agent bench of 2026-11-11 (results T20-08-45, p4-fix-test)
+ * the 4B sent the same shape eleven times and every call failed.
+ *
+ * Only when that SyntaxError is what happened AND the code has no real line
+ * break but does have "\n": a one-liner using "\n" inside a string is fine
+ * and never gets this error.
+ *
+ * @param {string} errorText @param {string | undefined} code
+ */
+export function escapedNewlineHint(errorText, code) {
+  if (!/unexpected character after line continuation character/.test(errorText ?? '')) return null
+  const src = code ?? ''
+  if (src.includes('\n') || !src.includes('\\n')) return null
+  return '(The code arrived as one line containing the two characters \\n where the line breaks should be: the argument was escaped twice. ' +
+    'Send the code with real line breaks, written once in the JSON as \\n, not \\\\n.)'
+}
+
+// Python statements that are a bare word and have no value to show.
+const PY_BARE_KEYWORDS = new Set(['pass', 'break', 'continue', 'return', 'raise', 'None', 'True', 'False', 'Ellipsis'])
+
+/**
+ * The hint for values the code computed on a line of their own, not the
+ * last, which run_python therefore never showed; or null.
+ *
+ * Only the last line's value comes back. Code that ends in two values on two
+ * lines gets the second one only. In the agent bench of 2026-11-11 (results
+ * T20-08-45, compute-dates) the 4B put `days_difference` on its own line
+ * mid-script, got back only the weekday, and then stated a day count it had
+ * never seen (1031; the answer is 1000).
+ *
+ * Looks only at top-level lines (no indentation) that are a bare name or
+ * attribute, outside brackets and triple-quoted strings. A heuristic over
+ * the source, not a parse: it can miss a case, and says nothing then.
+ *
+ * @param {string | undefined} code
+ * @returns {string | null}
+ */
+export function unshownValuesHint(code) {
+  const lines = (code ?? '').split('\n')
+  let lastIdx = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].trim()
+    if (t && !t.startsWith('#')) { lastIdx = i; break }
+  }
+  const unshown = []
+  let depth = 0
+  let inTriple = false
+  for (let i = 0; i < lastIdx; i++) {
+    const line = lines[i]
+    const triples = (line.match(/"""|'''/g) ?? []).length
+    const wasInTriple = inTriple
+    if (triples % 2 === 1) inTriple = !inTriple
+    if (wasInTriple || triples > 0) continue
+    const bare = line.replace(/(['"])(?:\\.|(?!\1).)*\1/g, '""').replace(/#.*/, '')
+    const startDepth = depth
+    for (const ch of bare) {
+      if ('([{'.includes(ch)) depth++
+      else if (')]}'.includes(ch)) depth = Math.max(0, depth - 1)
+    }
+    if (startDepth > 0 || /^\s/.test(line)) continue
+    const t = bare.trim()
+    if (/^[A-Za-z_][\w.]*$/.test(t) && !PY_BARE_KEYWORDS.has(t)) unshown.push({ line: i + 1, name: t })
+  }
+  if (unshown.length === 0) return null
+  const named = unshown.slice(0, 3).map((u) => `${u.name} (line ${u.line})`).join(', ')
+  return `(Not shown: ${named}. A value on a line of its own is returned only when it is the last line. print() each value you need.)`
+}
+
+/**
  * Word a child reply for the model. Pure; exported for the suite.
  */
 export function formatResult({ reply, error, timedOut, fresh, ranBefore, files, wsRel, capWarning, code }) {
@@ -119,8 +194,11 @@ export function formatResult({ reply, error, timedOut, fresh, ranBefore, files, 
     if (reply.result !== null && reply.result !== undefined) parts.push(`Result: ${reply.result}`)
     if (reply.error) {
       parts.push(clip(reply.error.trimEnd(), 4000))
-      const hint = workspacePrefixHint(reply.error, code, wsRel)
+      const hint = workspacePrefixHint(reply.error, code, wsRel) ?? escapedNewlineHint(reply.error, code)
       if (hint) parts.push(hint)
+    } else {
+      const unshown = unshownValuesHint(code)
+      if (unshown) parts.push(unshown)
     }
     const stderr = clip(reply.stderr?.trim(), 2000)
     if (stderr) parts.push(`stderr:\n${stderr}`)
