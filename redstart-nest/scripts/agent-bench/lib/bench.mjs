@@ -31,6 +31,8 @@ import { META_CLASS_KEY } from './nest-client.mjs'
 
 export const DEFAULT_PARSER_PATTERNS = ['braces', 'xml', 'fn', 'json']
 const MAX_LOGGED_RESULT_CHARS = 4000
+// Where the documents space keeps every conversation's workspace.
+const CHATS_DIR = 'chats'
 
 /** MCP tools → the OpenAI tool list chat-ui sends. */
 export function toLlmTools(mcpTools) {
@@ -163,12 +165,17 @@ export async function runTask(nest, task, opts) {
   let fsBefore = null
   /** @type {{ created: string[], modified: string[] } | null} */
   let fileSystemWrites = null
+  /** @type {Map<string, string> | null} the documents folder (conversations aside) before the run */
+  let docsBefore = null
 
   try {
     // The File System tools write to the account's own folder ('files'
     // space), which no conversation owns. Snapshot it so what this run adds
     // there can be removed after (see the finally below).
     fsBefore = opts.fileSystemSnapshot === false ? null : ((await nest.snapshotFiles('files').catch(() => null)) || null)
+    // The documents folder too, so a file that was already there is never
+    // taken for one the run made (see `outside` below).
+    docsBefore = (await nest.snapshotFiles('documents', undefined, [CHATS_DIR]).catch(() => null)) || null
     await nest.ensureWorkspace(conversationId)
     for (const fx of task.fixtures) await nest.seedFile(conversationId, fx.path, fx.content)
 
@@ -285,15 +292,27 @@ export async function runTask(nest, task, opts) {
     // the account's documents root, not chats/<id>/. Named by the results'
     // file lines, read back for the check, and removed below like the
     // conversation, so one run's output is never another run's input.
-    const ownPrefix = `chats/${conversationId}/`
-    const outside = new Set()
+    //
+    // A file line is not proof the run made the file. search_documents puts
+    // one under every passage it cites, so on 2026-11-11 a run that searched
+    // was credited with the owner's own sum-of-odds-py.py, and the cleanup
+    // below moved it to the trash. So: only a path that was NOT in the
+    // documents folder before the run, and never another conversation's.
+    // With no snapshot (folder too big, or the listing failed) nothing can be
+    // told apart, so nothing is claimed and nothing is removed.
+    const named = new Set()
     for (const e of events) {
       if (e.type !== 'tool_result') continue
-      for (const p of filePathsIn(e.fullText ?? e.text)) if (!p.startsWith(ownPrefix)) outside.add(p)
+      for (const p of filePathsIn(e.fullText ?? e.text)) if (!p.startsWith(`${CHATS_DIR}/`)) named.add(p)
     }
-    for (const p of outside) {
-      const text = await nest.readDocument(p).catch(() => null)
-      if (text !== null) createdFiles[p] = text
+    if (docsBefore) {
+      for (const p of named) {
+        if (docsBefore.has(p)) continue
+        const text = await nest.readDocument(p).catch(() => null)
+        if (text !== null) createdFiles[p] = text
+      }
+    } else if (named.size > 0) {
+      log({ type: 'documents_not_checked', named: [...named].sort() })
     }
   } finally {
     // Files the run wrote with the File System tools. Before 2026-11-11 they

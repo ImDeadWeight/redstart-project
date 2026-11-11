@@ -151,9 +151,11 @@ export async function connectNest(opts) {
      * every task: the caller says so once rather than slowing every run).
      *
      * @param {string} space 'files' is the File System tools' folder
+     * @param {number} [limit]
+     * @param {string[]} [skip] folders (space-relative paths) not walked
      * @returns {Promise<Map<string, string> | null | false>}
      */
-    async snapshotFiles(space, limit = FILES_SNAPSHOT_LIMIT) {
+    async snapshotFiles(space, limit = FILES_SNAPSHOT_LIMIT, skip = []) {
       const out = new Map()
       let seen = 0
       let tooBig = false
@@ -166,6 +168,7 @@ export async function connectNest(opts) {
         for (const e of entries) {
           if (++seen > limit) { tooBig = true; return false }
           if (e.type === 'folder') {
+            if (skip.includes(e.path)) continue
             if (!(await walk(e.path))) return false
             continue
           }

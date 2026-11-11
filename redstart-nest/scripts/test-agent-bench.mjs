@@ -87,6 +87,14 @@ const TOOLS = [
     _meta: { 'redstart/class': 'write' },
   },
   {
+    // Cites a document the account already had, with the [file: ...] line
+    // search_documents puts under each passage.
+    name: 'search_docs',
+    description: 'Search the documents folder (like search_documents).',
+    inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+    _meta: { 'redstart/class': 'read' },
+  },
+  {
     // Writes to the account's File System folder ('files' space), which no
     // conversation owns: what the real File System tools do.
     name: 'fs_write',
@@ -126,6 +134,9 @@ const SCRIPTS = {
   makedoc: (turn) => (turn === 0
     ? [toolCallChunk('c1', 'make_doc', JSON.stringify({ title: 'brief', content: '# Brief\n\nShort.' }))]
     : [chunk({ content: 'Saved the brief.' })]),
+  search: (turn) => (turn === 0
+    ? [toolCallChunk('s1', 'search_docs', JSON.stringify({ query: 'seven' }))]
+    : [chunk({ content: 'It says 7.' })]),
   forever: () => [toolCallChunk(`c${Math.random().toString(36).slice(2, 8)}`, 'read_file', '{"path": "data.txt"}')],
   hang: () => 'hang',
 }
@@ -151,7 +162,9 @@ async function readBody(req) {
 
 function startFakeNest(gatewayPort) {
   const state = {
-    files: new Map(), // 'chats/<id>/<path>' -> Buffer
+    // The documents space: 'chats/<id>/<path>' -> Buffer, plus one document
+    // the account already had before any run.
+    files: new Map([['owned.md', Buffer.from('the owner wrote seven: 7')]]),
     // The 'files' space (File System folder): path -> { content, modified }.
     // Two files the account already had before any run.
     fsFiles: new Map([
@@ -163,6 +176,7 @@ function startFakeNest(gatewayPort) {
     conversations: new Set(),
     deleted: [],
     docDeletes: [],
+    docLists: [],
     authSeen: new Set(),
     completionBodies: [],
     toolCalls: [],
@@ -229,13 +243,15 @@ function startFakeNest(gatewayPort) {
     }
     if (req.method === 'GET' && url.pathname === '/files/list') {
       const dir = url.searchParams.get('path')
+      const prefix = dir === '.' ? '' : `${dir}/`
+      state.docLists.push(dir)
       const entries = new Map()
       for (const [k, v] of state.files) {
-        if (!k.startsWith(`${dir}/`)) continue
-        const rest = k.slice(dir.length + 1)
+        if (!k.startsWith(prefix)) continue
+        const rest = k.slice(prefix.length)
         const first = rest.split('/')[0]
-        if (rest.includes('/')) entries.set(first, { name: first, path: `${dir}/${first}`, type: 'folder', size: null })
-        else entries.set(first, { name: first, path: k, type: 'file', size: v.length })
+        if (rest.includes('/')) entries.set(first, { name: first, path: `${prefix}${first}`, type: 'folder', size: null })
+        else entries.set(first, { name: first, path: k, type: 'file', size: v.length, modified: '2026-01-01T00:00:00.000Z' })
       }
       return json(res, 200, { space: 'documents', path: dir, entries: [...entries.values()] })
     }
@@ -308,6 +324,9 @@ function startFakeNest(gatewayPort) {
 Created "${rel}" in the documents folder.` },
           { type: 'resource_link', uri: `/files/download?path=${encodeURIComponent(rel)}`, name: rel, mimeType: 'text/markdown', size: args.content.length },
         ] })
+      }
+      if (name === 'search_docs') {
+        return reply({ content: [{ type: 'text', text: ['[1] owned.md (part 1)', 'the owner wrote seven: 7', '', 'Searched 1 file.', '[file: owned.md, text/markdown, size unknown]'].join('\n') }] })
       }
       if (name === 'fs_write') {
         state.fsFiles.set(args.path, { content: args.content, modified: new Date(Date.now() + state.fsFiles.size).toISOString() })
@@ -392,7 +411,7 @@ await test('a task file with a problem fails at load, naming the file and the fi
 })
 
 await test('task patterns: a folder, a glob, a single file', async () => {
-  eq(findTaskFiles(FIXTURES).map((f) => path.basename(f)).length, 9, 'folder (fs-leak added 2026-11-11)')
+  eq(findTaskFiles(FIXTURES).map((f) => path.basename(f)).length, 10, 'folder (fs-leak and cited-doc added 2026-11-11)')
   eq(findTaskFiles(path.join(FIXTURES, '*-limit.json')).map((f) => path.basename(f)), ['time-limit.json', 'turn-limit.json'], 'glob')
   eq(findTaskFiles(path.join(FIXTURES, 'denied.json')).length, 1, 'file')
 })
@@ -473,7 +492,7 @@ if (bench) {
 
   await test('the model got the tool list and its tool results; thinking off, streaming on', async () => {
     const body = nest.state.completionBodies.find((b) => b.messages.some((m) => m.role === 'tool'))
-    eq(body.tools.map((t) => t.function.name), ['read_file', 'make_doc', 'write_file', 'fs_write'], 'tools')
+    eq(body.tools.map((t) => t.function.name), ['read_file', 'make_doc', 'write_file', 'search_docs', 'fs_write'], 'tools')
     eq([body.stream, body.chat_template_kwargs.enable_thinking, body.reasoning_format], [true, false, 'auto'], 'flags')
     const asst = body.messages.find((m) => m.role === 'assistant' && m.tool_calls)
     assert(asst && body.messages.some((m) => m.role === 'tool' && m.tool_call_id === asst.tool_calls[0].id), 'tool result paired with its call')
@@ -495,6 +514,16 @@ if (bench) {
     eq([r.verdict.pass, r.createdFiles], [true, ['notes/brief.md']], 'pass, created')
     eq(nest.state.docDeletes, [{ space: 'documents', path: 'notes/brief.md' }], 'deleted once, in the documents space')
     assert(!nest.state.files.has('notes/brief.md'), 'still there')
+  })
+
+  await test('a document that was already there is not taken for one the run made, and is not deleted', async () => {
+    // 2026-11-11: search_documents cited the owner's sum-of-odds-py.py with a
+    // [file: ...] line; the bench called it created and moved it to the trash.
+    const r = run('cited-doc')
+    eq([r.verdict.pass, r.createdFiles], [true, []], 'pass, nothing claimed')
+    assert(nest.state.files.has('owned.md'), 'the document the owner already had was deleted')
+    assert(!nest.state.docDeletes.some((d) => d.path === 'owned.md'), 'a delete was sent for it')
+    assert(!nest.state.docLists.some((d) => d === 'chats'), 'the snapshot walked other conversations')
   })
 
   await test('a write task passes: the file is in the workspace and the check saw it', async () => {
@@ -595,19 +624,19 @@ if (bench) {
 
   await test('summary: pass rate and per-task passes', async () => {
     const s = bench.summary
-    eq([s.runs, s.tasks.reduce((a, t) => a + t.passes, 0)], [9, 6], 'runs, passes')
-    eq(s.passRate, 6 / 9, 'pass rate')
+    eq([s.runs, s.tasks.reduce((a, t) => a + t.passes, 0)], [10, 7], 'runs, passes')
+    eq(s.passRate, 7 / 10, 'pass rate')
     eq(s.hitLimitRuns, 2, 'limit runs')
   })
 
   await test('output files: runs.jsonl (one line per run), summary.json, summary.md with the results row', async () => {
     const lines = fs.readFileSync(path.join(outDir, 'runs.jsonl'), 'utf8').trim().split('\n')
-    eq(lines.length, 9, 'runs.jsonl lines')
+    eq(lines.length, 10, 'runs.jsonl lines')
     assert(JSON.parse(lines[0]).events.length > 0, 'events saved')
     const sj = JSON.parse(fs.readFileSync(path.join(outDir, 'summary.json'), 'utf8'))
-    eq([sj.meta.modelLabel, sj.meta.toolCount, sj.meta.tools], ['fake model', 4, ['read_file', 'make_doc', 'write_file', 'fs_write']], 'meta')
+    eq([sj.meta.modelLabel, sj.meta.toolCount, sj.meta.tools], ['fake model', 5, ['read_file', 'make_doc', 'write_file', 'search_docs', 'fs_write']], 'meta')
     const md = fs.readFileSync(path.join(outDir, 'summary.md'), 'utf8')
-    assert(/\| \d{4}-\d{2}-\d{2} \| fake model \| [0-9a-f]+(\+dirty)? \| 9×1 \| 67% \|/.test(md), md)
+    assert(/\| \d{4}-\d{2}-\d{2} \| fake model \| [0-9a-f]+(\+dirty)? \| 10×1 | 70% \| 67% \|/.test(md), md)
     assert(md.includes("> warning: runs changed 1 file(s) that were already in the account's File System folder"), 'the warning is in summary.md')
   })
 }

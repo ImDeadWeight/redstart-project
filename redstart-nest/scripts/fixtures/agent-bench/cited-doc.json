@@ -1,0 +1,1 @@
+{ "id": "cited-doc", "group": "files", "prompt": "[script:search] What number did I write down?", "approve": "all", "check": "checks.mjs#saysSeven" }

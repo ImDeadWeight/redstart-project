@@ -237,6 +237,10 @@ export async function main(argv, io = {}) {
   if (changed.length) {
     warnings.push(`warning: runs changed ${changed.length} file(s) that were already in the account's File System folder, which cannot be undone: ${changed.join(', ')}`)
   }
+  const unchecked = runs.filter((r) => r.events.some((e) => e.type === 'documents_not_checked')).map((r) => r.taskId)
+  if (unchecked.length) {
+    warnings.push(`warning: the account's documents folder could not be listed (over ${FILES_SNAPSHOT_LIMIT} entries, or the listing failed), so documents these runs may have created were neither given to their checks nor removed: ${[...new Set(unchecked)].join(', ')}. Use a dedicated bench account.`)
+  }
   const meta = {
     modelLabel: opts.modelLabel,
     date: new Date().toISOString().slice(0, 10),
