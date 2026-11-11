@@ -12,6 +12,8 @@
 //     [--max-tokens 4096]   (per reply; default 4096, 16384 with --thinking)
 //     [--plan full|tool|off]  (update_plan with its completion check, the
 //                              tool alone, or none; default full; plan U5)
+//     [--request-timeout 180]  (seconds Nest gets for a setup or read-back
+//                              call; a stuck one fails that task, named)
 //
 // Login on: put the bench account's API key in REDSTART_BENCH_API_KEY (or
 // pass --api-key, which then sits in your shell history). Use a dedicated
@@ -40,6 +42,7 @@ const FLAGS = {
   '--model-label': 'modelLabel', '--tasks': 'tasks', '--repeat': 'repeat', '--out': 'out',
   '--gateway': 'gateway', '--mcp': 'mcp', '--api-key': 'apiKey', '--temperature': 'temperature',
   '--model': 'model', '--max-tokens': 'maxTokens', '--plan': 'plan',
+  '--request-timeout': 'requestTimeout',
 }
 export const PLAN_MODES = ['full', 'tool', 'off']
 const SWITCHES = { '--thinking': 'thinking', '--keep': 'keep', '--quiet': 'quiet' }
@@ -73,6 +76,12 @@ export function parseArgs(argv) {
   }
   // The plan variants plan U5 compares: full = update_plan plus the one
   // completion check; tool = update_plan alone; off = no update_plan.
+  // Seconds Nest gets to answer a setup or read-back call (not the model's
+  // reply, which has the task's time limit). Default 180.
+  if (opts.requestTimeout !== undefined) {
+    opts.requestTimeout = Number(opts.requestTimeout)
+    if (!(opts.requestTimeout > 0)) throw new Error('--request-timeout must be a positive number of seconds')
+  }
   opts.plan = opts.plan ?? 'full'
   if (!PLAN_MODES.includes(opts.plan)) throw new Error(`--plan must be one of ${PLAN_MODES.join(', ')}`)
   opts.apiKey = opts.apiKey ?? process.env.REDSTART_BENCH_API_KEY ?? null
@@ -213,6 +222,7 @@ export async function main(argv, io = {}) {
   try {
     nest = await connectNest({
       gateway: opts.gateway, mcp: opts.mcp, apiKey: opts.apiKey,
+      ...(opts.requestTimeout ? { requestTimeoutMs: opts.requestTimeout * 1000 } : {}),
       hostTools: opts.plan === 'off' ? ['ask_user'] : ['ask_user', 'update_plan'],
     })
     mcpTools = await nest.listTools()
@@ -268,6 +278,10 @@ export async function main(argv, io = {}) {
   const changed = [...new Set(runs.flatMap((r) => r.fileSystemWrites?.modified ?? []))].sort()
   if (changed.length) {
     warnings.push(`warning: runs changed ${changed.length} file(s) that were already in the account's File System folder, which cannot be undone: ${changed.join(', ')}`)
+  }
+  const broken = runs.filter((r) => r.events.some((e) => e.type === 'bench_error'))
+  if (broken.length) {
+    warnings.push(`warning: ${broken.length} run(s) failed because Nest did not answer a setup or read-back call, not because of the model: ${broken.map((r) => `${r.taskId} (${r.events.find((e) => e.type === 'bench_error').message})`).join('; ')}. Do not compare this row.`)
   }
   const unchecked = runs.filter((r) => r.events.some((e) => e.type === 'documents_not_checked')).map((r) => r.taskId)
   if (unchecked.length) {

@@ -35,19 +35,32 @@ export const FILES_SNAPSHOT_LIMIT = 2000
  * `hostTools`: the host-resolved tools this run answers itself (default
  * ask_user and update_plan); Nest offers only those.
  *
- * @param {{ gateway: string, mcp: string, apiKey?: string | null, fetch?: typeof fetch, mcpTimeoutMs?: number, hostTools?: string[] }} opts
+ * @param {{ gateway: string, mcp: string, apiKey?: string | null, fetch?: typeof fetch, mcpTimeoutMs?: number, requestTimeoutMs?: number, hostTools?: string[] }} opts
  */
 export async function connectNest(opts) {
   const gateway = opts.gateway.replace(/\/$/, '')
   const doFetch = opts.fetch ?? fetch
   const auth = opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {}
 
+  // Every call but the model's reply (which has the task's time limit) gets a
+  // deadline. Without one, a call Nest never answered hung the whole bench
+  // with every slot idle (2026-11-11, the 35B run T22-00-58: stuck in a
+  // task's setup for five minutes, then "fetch failed" and nothing else).
+  // Longer than the shell's 120 s recycle-bin timeout, which a delete may wait on.
+  const requestTimeoutMs = opts.requestTimeoutMs ?? 180_000
   async function req(method, route, { json, body, headers = {}, ok = [200, 201, 204] } = {}) {
-    const res = await doFetch(`${gateway}${route}`, {
-      method,
-      headers: { ...auth, ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}), ...headers },
-      body: json !== undefined ? JSON.stringify(json) : body,
-    })
+    let res
+    try {
+      res = await doFetch(`${gateway}${route}`, {
+        method,
+        headers: { ...auth, ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}), ...headers },
+        body: json !== undefined ? JSON.stringify(json) : body,
+        signal: AbortSignal.timeout(requestTimeoutMs),
+      })
+    } catch (err) {
+      const why = err?.name === 'TimeoutError' ? `no answer in ${Math.round(requestTimeoutMs / 1000)} s` : (err?.cause?.message ?? err?.message ?? String(err))
+      throw new Error(`${method} ${route.split('?')[0]}: ${why}`)
+    }
     if (!ok.includes(res.status)) {
       const text = await res.text().catch(() => '')
       throw new Error(`${method} ${route}: HTTP ${res.status} ${text.slice(0, 300)}`)

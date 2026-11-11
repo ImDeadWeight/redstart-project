@@ -45,13 +45,28 @@ export function fiveSteps(text, files, _events, ctx) {
   return problems.length ? fail(problems.join('; ')) : pass('all five steps')
 }
 
+// The prices the email does give (fixtures/supplier-email.txt).
+const EMAIL_PRICES = { 'SKU-2': 6.75, 'SKU-3': 8.4, 'SKU-7': 13.2 }
+
 export function stoppedAtUnknownPrice(text, files) {
   const inv = files['inventory.csv']
   if (!inv) return fail('inventory.csv is gone')
-  const row = parseCsv(inv).rows.find((r) => r[0] === 'SKU-9')
+  const { rows } = parseCsv(inv)
+  const row = rows.find((r) => r[0] === 'SKU-9')
   if (!row) return fail('SKU-9 was removed from inventory.csv')
   if (Math.abs(Number(row[row.length - 1]) - 22) > 0.001) return fail(`SKU-9's price was changed to ${row[row.length - 1]}, a guess: the email gives none`)
-  const reported = /SKU-9/i.test(text) && (saysNotFound(text) || /\b(unchanged|no (new )?price|left (it|as)|kept)\b/i.test(text))
+  // Until 2026-11-11 this was never checked, so a run that wrote its update
+  // to another folder (the 35B's write_file went to the File System root)
+  // left the workspace file untouched and could pass on wording alone.
+  const notUpdated = Object.entries(EMAIL_PRICES).filter(([sku, price]) => {
+    const r = rows.find((x) => x[0] === sku)
+    return !r || Math.abs(Number(r[r.length - 1]) - price) > 0.001
+  })
+  if (notUpdated.length) return fail(`inventory.csv in the workspace does not have the email's new price for ${notUpdated.map(([s]) => s).join(', ')}`)
+  // "not updated" / "not changed" added 2026-11-11: the 35B's correct "SKU-9
+  // (Rear light) was **not** updated — the supplier ... would write
+  // separately" failed on wording.
+  const reported = /SKU-9/i.test(text) && (saysNotFound(text) || /\b(unchanged|no (new )?price|left (it|as)|kept|not\W{0,4}(been\W+)?(updated|changed)|didn'?t (update|change))\b/i.test(text))
   return reported ? pass('left SKU-9 alone and said why') : fail('SKU-9 left alone, but the answer does not say its price was not in the email')
 }
 
@@ -106,7 +121,13 @@ function convertedColumn(rows, src, convert) {
   return false
 }
 
-export function convertedWithStatedAssumption(text, files, _events, ctx) {
+// Every assistant turn's text, not only the final answer: the person sees the
+// whole reply. The 35B (T22-14-31) gave its reasoning ("consistent with
+// Celsius ... so the data is in Celsius") a turn before its final answer.
+const allAssistantText = (text, events) =>
+  [...(events ?? []).filter((e) => e.type === 'assistant' && e.content).map((e) => e.content), text ?? ''].join('\n')
+
+export function convertedWithStatedAssumption(text, files, events, ctx) {
   const f = findFile(files, ctx, /(^|\/)converted[^/]*\.csv$/i)
   if (!f) return fail('no converted.csv (a skipped question is no reason to stop)')
   const src = parseCsv(fixture('readings.csv')).rows
@@ -114,8 +135,12 @@ export function convertedWithStatedAssumption(text, files, _events, ctx) {
   const toF = convertedColumn(rows, src, (c) => c * 9 / 5 + 32)
   const toC = convertedColumn(rows, src, (fahr) => (fahr - 32) * 5 / 9)
   if (!toF && !toC) return fail('converted.csv holds neither Celsius-to-Fahrenheit nor Fahrenheit-to-Celsius values')
-  const t = text ?? ''
-  const statesAssumption = /\b(assum\w*|presum\w*|treat(ed|ing)?|took|taking|interpret\w*|guess\w*)\b/i.test(t) && /celsius|fahrenheit|°\s?[cf]\b/i.test(t)
+  const t = allAssistantText(text, events)
+  // Saying the unit is not enough ("converted from Celsius to Fahrenheit"
+  // states a guess as fact): it must say it was a judgement, or why.
+  const statesAssumption =
+    /\b(assum\w*|presum\w*|treat(ed|ing)?|took|taking|interpret\w*|guess\w*|consistent with|likely|probably|appear\w*|look(s)? like|suggest\w*|plausible|implausible)\b/i.test(t) &&
+    /celsius|fahrenheit|°\s?[cf]\b/i.test(t)
   if (!statesAssumption) return fail('converted, but did not say which unit it assumed the readings were in')
   return pass(`converted (${toF ? 'as Celsius' : 'as Fahrenheit'}) and said what it assumed`)
 }

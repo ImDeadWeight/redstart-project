@@ -165,9 +165,10 @@ export async function runTask(nest, task, opts) {
   const conversationId = `bench-${task.id}-${crypto.randomBytes(4).toString('hex')}`
 
   log({ type: 'start', taskId: task.id, conversationId, tools: llmTools.length })
-  await nest.createConversation(conversationId, `agent-bench ${task.id}`)
   let finalText = ''
   let error = null
+  /** A setup or read-back call that failed: the run says so and the bench goes on. */
+  let benchError = null
   let workspace = {}
   /** documents-relative path → text, for files the run made outside its workspace */
   const createdFiles = {}
@@ -179,6 +180,7 @@ export async function runTask(nest, task, opts) {
   let docsBefore = null
 
   try {
+    await nest.createConversation(conversationId, `agent-bench ${task.id}`)
     // The File System tools write to the account's own folder ('files'
     // space), which no conversation owns. Snapshot it so what this run adds
     // there can be removed after (see the finally below).
@@ -370,6 +372,13 @@ export async function runTask(nest, task, opts) {
     } else if (named.size > 0) {
       log({ type: 'documents_not_checked', named: [...named].sort() })
     }
+  } catch (err) {
+    // A call to Nest outside the model's turns failed or timed out (each one
+    // has a deadline: nest-client.mjs). Until 2026-11-11 this escaped and
+    // ended the whole bench with a bare "fetch failed"; now it fails only
+    // this run, naming the call.
+    benchError = err instanceof Error ? err.message : String(err)
+    log({ type: 'bench_error', message: benchError })
   } finally {
     // Files the run wrote with the File System tools. Before 2026-11-11 they
     // outlived the run: a 4B run left an inventory.csv there, the 35B's
@@ -396,7 +405,10 @@ export async function runTask(nest, task, opts) {
   log({ type: 'end', finalText })
 
   let verdict
-  try {
+  if (benchError) {
+    error = error ?? benchError
+    verdict = { pass: false, reason: `the bench could not run this task: ${benchError}` }
+  } else try {
     verdict = await task.check(finalText, workspace, events, { createdFiles, conversationId })
     if (!verdict || typeof verdict.pass !== 'boolean') {
       verdict = { pass: false, reason: `check ${task.checkName} returned no { pass, reason }` }

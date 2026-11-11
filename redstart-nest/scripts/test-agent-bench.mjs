@@ -240,6 +240,12 @@ function startFakeNest(gatewayPort) {
     }
     if (req.method === 'POST' && url.pathname === '/files/upload') {
       assert(url.searchParams.get('space') === 'documents', 'upload space')
+      // A call Nest never answers (the 2026-11-11 hang in a task's setup).
+      if (url.searchParams.get('name') === 'never-answers.txt') {
+        state.hungUploads = (state.hungUploads ?? 0) + 1
+        req.on('close', () => res.destroy())
+        return
+      }
       const key = `${url.searchParams.get('path')}/${url.searchParams.get('name')}`
       state.files.set(key, await readBody(req))
       return json(res, 201, {})
@@ -691,6 +697,28 @@ if (bench) {
     let bad = null
     try { parseArgs(['--model-label', 'm', '--plan', 'sometimes']) } catch (e) { bad = e }
     assert(/--plan must be one of full, tool, off/.test(bad?.message ?? ''), 'a bad --plan was accepted')
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  await test('a setup call Nest never answers fails that run, named, and the bench goes on', async () => {
+    // 2026-11-11, the 35B run T22-00-58: stuck five minutes in a task's
+    // setup with every slot idle, then "fetch failed" ended the whole bench.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-hang-'))
+    fs.writeFileSync(path.join(dir, 'a-hung.json'), JSON.stringify({ id: 'hung-setup', prompt: '[script:write] Put 42 in out/answer.txt.', fixtures: [{ path: 'never-answers.txt', content: 'x' }], check: `${path.join(FIXTURES, 'checks.mjs').replace(/\\/g, '/')}#answerFile` }))
+    fs.copyFileSync(path.join(FIXTURES, 'write-answer.json'), path.join(dir, 'b-write.json'))
+    const checks = fs.readFileSync(path.join(dir, 'b-write.json'), 'utf8').replace('"checks.mjs#', `"${path.join(FIXTURES, 'checks.mjs').replace(/\\/g, '/')}#`)
+    fs.writeFileSync(path.join(dir, 'b-write.json'), checks)
+    const out = path.join(dir, 'out')
+    const started = Date.now()
+    const r = await main(['--model-label', 'fake model', '--tasks', dir, '--gateway', `http://127.0.0.1:${port}`, '--out', out, '--quiet', '--request-timeout', '1'], { log: () => {} })
+    assert(Date.now() - started < 20000, 'the bench waited far past the deadline')
+    const hung = r.runs.find((x) => x.taskId === 'hung-setup')
+    eq(hung.verdict.pass, false, 'the hung run passed')
+    assert(/^the bench could not run this task: POST \/files\/upload: no answer in 1 s$/.test(hung.verdict.reason), hung.verdict.reason)
+    eq(r.runs.find((x) => x.taskId === 'write-answer')?.verdict.pass, true, 'the next task did not run, or failed')
+    assert(nest.state.deleted.includes(hung.conversationId), 'the hung run\'s conversation was not cleaned up')
+    const { meta } = JSON.parse(fs.readFileSync(path.join(out, 'summary.json'), 'utf8'))
+    assert(meta.warnings.some((w) => /1 run\(s\) failed because Nest did not answer.*hung-setup.*Do not compare/.test(w)), JSON.stringify(meta.warnings))
     fs.rmSync(dir, { recursive: true, force: true })
   })
 

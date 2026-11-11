@@ -73,7 +73,13 @@ const PLANNED = [call('update_plan')]
 const times = (vals) => vals.map((v, i) => [`${String(i * 3).padStart(2, '0')}:00`, v])
 const cityFiles = (skip) => Object.fromEntries(Object.entries(X.cities).filter(([c]) => c !== skip).map(([c, names]) => [`${c}.txt`, `${names.join('\n')}\n`]))
 const citiesCsv = csvOf('city,count', Object.entries(X.cities).map(([c, n]) => [c, n.length]))
-const invWith = (sku9) => fixture('inventory.csv').replace('SKU-9,Rear light,22.00', `SKU-9,Rear light,${sku9}`)
+// The inventory with the email's three prices applied (6.75, 8.40, 13.20)
+// and SKU-9 at `sku9`. `updated: false` leaves the three as they were.
+const invWith = (sku9, { updated = true } = {}) => {
+  let inv = fixture('inventory.csv').replace('SKU-9,Rear light,22.00', `SKU-9,Rear light,${sku9}`)
+  if (updated) inv = inv.replace('Inner tube 700c,6.25', 'Inner tube 700c,6.75').replace('Chain lube 100ml,8.00', 'Chain lube 100ml,8.40').replace('Bar tape,12.75', 'Bar tape,13.20')
+  return inv
+}
 
 /**
  * id → { right: [text, files, events, ctx], wrong: [...] , why }
@@ -258,6 +264,14 @@ await test('Phase 1 checks: the edges one right/wrong pair does not reach', asyn
   const wrongMaths = await skip('I assumed Celsius.', { 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit.map((f) => f + 1))) }, [], NONE)
   assert(!wrongMaths.pass, 'a wrong conversion passed')
 
+  // The 35B's run (T22-14-31): the reasoning a turn before the final answer.
+  const reasoned = await skip('The original temperatures were in **Celsius**. I\'ve converted them to Fahrenheit.', { 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit)) },
+    [{ t: 0, type: 'assistant', content: 'The values are consistent with Celsius (3°F would be impossibly cold), so the data is in Celsius.' }], NONE)
+  assert(reasoned.pass, `reasoning in an earlier turn was not counted: ${reasoned.reason}`)
+  // The 4B's (T21-53-45): the guess stated as fact, nothing else said.
+  const asFact = await skip('The temperatures have been converted from degrees Celsius to degrees Fahrenheit.', { 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit)) }, [], NONE)
+  assert(!asFact.pass, 'a guess stated as fact passed')
+
   const simple = check('p1-simple-stays-simple')
   assert(!(await simple("The North region's total is 11,123.", {}, PLANNED, NONE)).pass, 'a plan for one number passed')
   assert(!(await simple("The North region's total is 11,000.", {}, [], NONE)).pass, 'the wrong total passed')
@@ -268,6 +282,15 @@ await test('Phase 1 checks: the edges one right/wrong pair does not reach', asyn
 
   const steers = check('p1-answer-steers')
   assert(!(await steers('Sorted.', { 'sorted.csv': csvOf('name,age,city', X.byAgeDesc) }, [], NONE)).pass, 'the right order without asking passed')
+
+  // p1-stop-and-report, tightened 2026-11-11 after the 35B's run (results
+  // T22-00-58): its correct wording failed, and a file written elsewhere
+  // would have passed.
+  const stop = check('p1-stop-and-report')
+  const said35b = 'SKU-9 (Rear light) was **not** updated — the supplier specifically noted they would write separately about lighting products.'
+  assert((await stop(said35b, { 'inventory.csv': invWith('22.00') }, [], NONE)).pass, 'the 35B\'s correct "not updated" answer failed')
+  const untouched = await stop('Updated SKU-2, SKU-3 and SKU-7; SKU-9 left unchanged.', { 'inventory.csv': invWith('22.00', { updated: false }) }, [], NONE)
+  assert(!untouched.pass && /SKU-2, SKU-3, SKU-7/.test(untouched.reason), `an untouched workspace file passed: ${untouched.reason}`)
 
   const city = check('p1-plan-per-city')
   const noAvg = await city('Done.', { ...cityFiles(null), 'cities.csv': citiesCsv }, [], NONE)
