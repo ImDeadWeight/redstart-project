@@ -29,6 +29,7 @@
  */
 
 import { buildFinalTimings } from './timings.mjs';
+import { ASK_USER_TOOL, formatAskAnswer, parseAskArguments } from './ask-user.mjs';
 
 /** @typedef {import('./types').AgentToolCall} AgentToolCall */
 /** @typedef {import('./types').RawToolCall} RawToolCall */
@@ -202,23 +203,48 @@ export async function runToolCalls(params) {
 			break;
 		}
 
-		const allowed = await ports.gate.approve(toolCall, signal);
+		// ask_user, when the host can ask: answered by the person through the
+		// ask port, not the gate or the executor. Asking needs no approval, and
+		// nothing on a server could answer it.
+		const asking = !!ports.ask && toolCall.function.name === ASK_USER_TOOL;
+
+		const allowed = asking ? true : await ports.gate.approve(toolCall, signal);
 
 		// Let the host repaint (the browser hides the permission card here).
-		await yieldToHost();
+		if (!asking) await yieldToHost();
 
 		if (signal?.aborted) {
 			onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 			return 'stopped';
 		}
 
-		const toolStartTime = now();
+		let toolStartTime = now();
 
 		/** @type {string} */
 		let result;
 		let toolSuccess = true;
 
-		if (!allowed) {
+		if (asking) {
+			const parsed = parseAskArguments(toolCall.function.arguments);
+			if (!parsed.ok) {
+				result = parsed.error;
+				toolSuccess = false;
+			} else {
+				const answer = await /** @type {NonNullable<typeof ports.ask>} */ (ports.ask).user(
+					parsed.request,
+					signal
+				);
+				// Let the host repaint (the browser hides the question card here).
+				await yieldToHost();
+				if (signal?.aborted) {
+					onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
+					return 'stopped';
+				}
+				result = formatAskAnswer(answer);
+				// The time the person took to answer is not tool time.
+				toolStartTime = now();
+			}
+		} else if (!allowed) {
 			result = DENIED_RESULT;
 			toolSuccess = false;
 		} else {

@@ -113,6 +113,20 @@ export interface AgentStoreCallbacks<A = unknown> {
 	onTurnComplete?: (intermediateTimings: Timings) => void;
 }
 
+/** An ask_user call, checked (ask-user.mjs parseAskArguments). */
+export interface AskRequest {
+	question: string;
+	/** 2 to 4, distinct. Absent: a free-text question. */
+	options?: string[];
+	multiSelect: boolean;
+}
+
+/** What the person said. Both may be set: a choice plus a note. */
+export interface AskAnswer {
+	chosen?: string[];
+	text?: string;
+}
+
 export interface ToolCallParserConfig {
 	/** Any of 'braces', 'xml', 'fn', 'json', tried in order. */
 	patterns: string[];
@@ -159,6 +173,21 @@ export interface AgentPorts<A = unknown> {
 	gate: {
 		/** Authorise one call. `false` means denied. Resolve `false` on abort. */
 		approve(call: AgentToolCall, signal?: AbortSignal): Promise<boolean>;
+	};
+	/**
+	 * The person behind the flow, for `ask_user` (ask-user.mjs). Omitted: the
+	 * call goes through the gate and the executor like any other tool (Nest
+	 * answers it with an error, since only a host can ask).
+	 */
+	ask?: {
+		/**
+		 * Put the question to the person and resolve with their answer, or
+		 * null when they dismiss it. Resolve null on abort. A message the
+		 * person types while the question is open is their answer: resolve
+		 * with it as `text` and consume it, so the steering check that follows
+		 * does not also treat it as an interruption.
+		 */
+		user(request: AskRequest, signal?: AbortSignal): Promise<AskAnswer | null>;
 	};
 	limit: {
 		/** The turn limit was reached: may the flow go on? Resolve `false` on abort. */

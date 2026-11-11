@@ -42,6 +42,7 @@ import {
   normalizeToolCalls,
   wireSafeToolCalls,
 } from '../../shared/agent-core/tool-calls.mjs'
+import { DISMISSED_RESULT, formatAskAnswer, parseAskArguments } from '../../shared/agent-core/ask-user.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const coreDir = path.join(here, '..', '..', 'shared', 'agent-core')
@@ -88,6 +89,7 @@ function harness(opts = {}) {
     extraParts,
     signal,
     createToolResultMessage = async (id) => ({ id: `msg-${id}` }),
+    ask,
   } = opts
 
   const calls = []
@@ -157,6 +159,7 @@ function harness(opts = {}) {
       },
     },
     steering: { pending: () => steering() },
+    ...(ask ? { ask: { user: async (req, s) => { calls.push('ask'); return ask(req, s) } } } : {}),
     progress: (patch) => progress.push(patch),
     now: () => clock,
     yield: async () => {},
@@ -359,6 +362,103 @@ await test('a reply with more tool calls than the limit runs the first ones and 
   const exact = harness({ turns: [async (acc) => { acc.toolCalls = many.slice(0, MAX_TOOL_CALLS_PER_REPLY) }] })
   await exact.done
   assert(exact.toolResults.every((r) => r.content === 'ran t'), 'a reply at the limit was cut')
+})
+
+console.log('\n-- ask_user (Phase 1.1) --')
+
+const askCall = (id, args) => call(id, 'ask_user', JSON.stringify(args))
+
+await test('ask_user goes to the ask port, not the gate or the executor, and the flow goes on', async () => {
+  const seen = []
+  const h = harness({
+    ask: async (req) => { seen.push(req); return { text: 'Celsius' } },
+    turns: [async (acc) => { acc.toolCalls = [askCall('q1', { question: 'Which unit are the readings in?' })] }],
+  })
+  await h.done
+  eq(seen, [{ question: 'Which unit are the readings in?', multiSelect: false }], 'the request the host got')
+  eq(h.toolResults.map((r) => [r.id, r.content]), [['q1', 'The user answered: Celsius']], 'result')
+  assert(!h.calls.some((c) => c.startsWith('approve:') || c.startsWith('execute:')), `gate or executor ran: ${h.calls}`)
+  eq(count(h.calls, 'streamTurn'), 2, 'the model got the answer in a next turn')
+  eq(h.sentMessages[1].find((m) => m.role === 'tool')?.content, 'The user answered: Celsius', 'the answer in the next request')
+})
+
+await test('ask_user with options: a choice, a choice plus a note, and a dismissal', async () => {
+  const answers = [{ chosen: ['draft_b.md'] }, { chosen: ['A', 'B'], text: 'and keep the title' }, null]
+  const h = harness({
+    ask: async () => answers.shift(),
+    turns: [async (acc) => {
+      acc.toolCalls = [
+        askCall('a', { question: 'Which draft?', options: ['draft_a.md', 'draft_b.md'] }),
+        askCall('b', { question: 'Which parts?', options: ['A', 'B', 'C'], multi_select: true }),
+        askCall('c', { question: 'Anything else?' }),
+      ]
+    }],
+  })
+  await h.done
+  eq(h.toolResults.map((r) => r.content), [
+    'The user chose: draft_b.md',
+    'The user chose: A, B. They added: and keep the title',
+    DISMISSED_RESULT,
+  ], 'results')
+})
+
+await test('a malformed ask_user is answered with how to call it, and never reaches the person', async () => {
+  const h = harness({
+    ask: async () => ({ text: 'should not be asked' }),
+    turns: [async (acc) => {
+      acc.toolCalls = [
+        call('x1', 'ask_user', '{"question": ""}'),
+        askCall('x2', { question: 'Pick', options: ['1', '2', '3', '4', '5'] }),
+        call('x3', 'ask_user', 'not json'),
+      ]
+    }],
+  })
+  await h.done
+  eq(count(h.calls, 'ask'), 0, 'the person was asked')
+  for (const r of h.toolResults) assert(/^Error: .*ask_user takes \{"question"/.test(r.content), r.content)
+})
+
+await test('aborted while the question is open: the flow stops, completed once, no next turn', async () => {
+  const controller = new AbortController()
+  const h = harness({
+    signal: controller.signal,
+    ask: async () => { controller.abort(); return null },
+    turns: [async (acc) => { acc.toolCalls = [askCall('q', { question: 'Which?' }), call('after')] }],
+  })
+  await h.done
+  eq(count(h.calls, 'onFlowComplete'), 1, 'completed once')
+  eq(count(h.calls, 'streamTurn'), 1, 'no next turn')
+  assert(!h.calls.includes('execute:after'), 'a later call ran after the abort')
+})
+
+await test('a message typed while the question is open is the answer, not an interruption', async () => {
+  // The host resolves the question with the typed message and consumes it
+  // (types.d.ts, ask.user), so the next call still runs.
+  let queued = false
+  const h = harness({
+    steering: () => queued,
+    ask: async () => { queued = true; const text = 'use Fahrenheit'; queued = false; return { text } },
+    turns: [async (acc) => { acc.toolCalls = [askCall('q', { question: 'Which unit?' }), call('next')] }],
+  })
+  await h.done
+  eq(h.toolResults.map((r) => r.content), ['The user answered: use Fahrenheit', 'ran t'], 'results')
+  assert(!h.toolResults.some((r) => r.content === INTERRUPTED_RESULT), 'treated as an interruption')
+})
+
+await test('with no ask port, ask_user is an ordinary call: gate, then executor', async () => {
+  const h = harness({ turns: [async (acc) => { acc.toolCalls = [askCall('q', { question: 'Which?' })] }] })
+  await h.done
+  assert(h.calls.includes('approve:q') && h.calls.includes('execute:q'), h.calls.join(','))
+})
+
+await test('parseAskArguments and formatAskAnswer: trimming, duplicates, multi_select', async () => {
+  eq(parseAskArguments('{"question": "  Which?  ", "options": [" a ", "b", "a"]}'),
+    { ok: true, request: { question: 'Which?', options: ['a', 'b'], multiSelect: false } }, 'trimmed, deduplicated')
+  assert(!parseAskArguments('{"question": "Q", "options": ["only"]}').ok, 'one option accepted')
+  assert(!parseAskArguments('{"question": "Q", "multi_select": "yes"}').ok, 'a string multi_select accepted')
+  eq(parseAskArguments('{"question": "Q", "options": null}'), { ok: true, request: { question: 'Q', multiSelect: false } }, 'null options = free text')
+  eq(formatAskAnswer({ text: '   ' }), DISMISSED_RESULT, 'blank text is a dismissal')
+  eq(formatAskAnswer({ chosen: [] }), DISMISSED_RESULT, 'no choice is a dismissal')
 })
 
 await test('steering during tools answers the remaining calls as interrupted and ends the flow', async () => {
