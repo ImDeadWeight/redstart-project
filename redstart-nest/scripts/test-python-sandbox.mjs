@@ -293,6 +293,16 @@ await test('run_python writes a figure and a CSV into the conversation workspace
   assert(ws.includes(path.join('user_files', 'pat-')) && ws.endsWith(path.join('chats', 'conv-abc')), ws)
 })
 
+await test('pandas .plot() without importing matplotlib loads it and saves the figure', async () => {
+  // The agent bench's Qwen3-4B wrote exactly this shape (2026-11-11) and got
+  // "matplotlib is required for plotting": find_imports sees only pandas.
+  // A conversation of its own, so its kernel has never loaded matplotlib.
+  const res = await pythonTool.callTool('run_python', { code: "import pandas as pd\ndf = pd.DataFrame({'region':['North','South'],'total':[3,5]})\ndf.plot(kind='bar', x='region', y='total')\n'drawn'" }, cfg, { account, conversationId: 'conv-plot' })
+  const text = res.content[0].text
+  assert(!res.isError, text)
+  assert(/drawn/.test(text) && /fig-1\.png/.test(text), text)
+})
+
 await test('a Python exception comes back as an error with only the user\'s frames', async () => {
   const res = await pythonTool.callTool('run_python', { code: 'def f():\n    return 1/0\nf()' }, cfg, ctx)
   const text = res.content[0].text
