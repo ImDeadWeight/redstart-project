@@ -159,8 +159,16 @@ export async function runTask(nest, task, opts) {
   let workspace = {}
   /** documents-relative path → text, for files the run made outside its workspace */
   const createdFiles = {}
+  /** @type {Map<string, string> | null} the File System folder before the run */
+  let fsBefore = null
+  /** @type {{ created: string[], modified: string[] } | null} */
+  let fileSystemWrites = null
 
   try {
+    // The File System tools write to the account's own folder ('files'
+    // space), which no conversation owns. Snapshot it so what this run adds
+    // there can be removed after (see the finally below).
+    fsBefore = opts.fileSystemSnapshot === false ? null : ((await nest.snapshotFiles('files').catch(() => null)) || null)
     await nest.ensureWorkspace(conversationId)
     for (const fx of task.fixtures) await nest.seedFile(conversationId, fx.path, fx.content)
 
@@ -288,6 +296,22 @@ export async function runTask(nest, task, opts) {
       if (text !== null) createdFiles[p] = text
     }
   } finally {
+    // Files the run wrote with the File System tools. Before 2026-11-11 they
+    // outlived the run: a 4B run left an inventory.csv there, the 35B's
+    // p1-stop-and-report later found it with read_file, invented a supplier
+    // email next to it, and spent its turns reconciling the two. New files
+    // go to the account's trash (recoverable). A file that already existed
+    // and changed cannot be put back; it is recorded, and run.mjs warns.
+    if (fsBefore) {
+      const after = (await nest.snapshotFiles('files').catch(() => null)) || null
+      if (after) {
+        const created = [...after.keys()].filter((p) => !fsBefore.has(p)).sort()
+        const modified = [...after.keys()].filter((p) => fsBefore.has(p) && fsBefore.get(p) !== after.get(p)).sort()
+        fileSystemWrites = { created, modified }
+        if (created.length || modified.length) log({ type: 'file_system_writes', created, modified, removed: !opts.keep })
+        if (!opts.keep) for (const p of created) await nest.deleteFile('files', p).catch(() => {})
+      }
+    }
     if (!opts.keep) {
       for (const p of Object.keys(createdFiles)) await nest.deleteDocument(p).catch(() => {})
       await nest.deleteConversation(conversationId).catch(() => {})
@@ -318,6 +342,7 @@ export async function runTask(nest, task, opts) {
     finalText,
     workspaceFiles: Object.keys(workspace).sort(),
     createdFiles: Object.keys(createdFiles).sort(),
+    fileSystemWrites,
     events,
   }
 }

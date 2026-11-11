@@ -1,0 +1,1 @@
+{ "id": "fs-leak", "group": "files", "prompt": "[script:fswrite] Save a note in the File System folder and update existing.txt.", "approve": "all", "check": "checks.mjs#saysSeven" }

@@ -27,7 +27,7 @@ import { execFileSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { connectNest } from './lib/nest-client.mjs'
+import { connectNest, FILES_SNAPSHOT_LIMIT } from './lib/nest-client.mjs'
 import { findTaskFiles, loadTask } from './lib/task-file.mjs'
 import { runTask, maxReplyTokens } from './lib/bench.mjs'
 import { summarize } from './lib/metrics.mjs'
@@ -114,6 +114,20 @@ export function labelWarning(label, modelFile) {
   return `warning: the label "${label}" does not name the loaded model file, ${modelFile}. The results row will carry the label; check it.`
 }
 
+/**
+ * A warning when the API key belongs to an owner or admin account, or null.
+ * The bench ran as the owner on 2026-11-11, so files a model wrote with the
+ * File System tools landed in the owner's real folder.
+ *
+ * @param {{ user?: { username?: string, role?: string } | null } | null} who /auth/me
+ */
+export function accountWarning(who) {
+  const role = who?.user?.role
+  if (role !== 'owner' && role !== 'admin') return null
+  return `warning: the API key belongs to the ${role} account "${who.user.username}". Runs use that account's real files and tools; ` +
+    'the bench removes what they create, but cannot undo a change to a file that was already there. Make a dedicated bench account (role user) and use its key.'
+}
+
 // Above this share of recovered calls, the model and its chat template most
 // likely disagree on the tool-call format. 0% for both models on their own
 // templates, 69% for the 4B under the 35B's (2026-11-11).
@@ -180,6 +194,18 @@ export async function main(argv, io = {}) {
   const warnings = []
   const lw = labelWarning(opts.modelLabel, model?.modelFile)
   if (lw) { warnings.push(lw); log(lw) }
+  const who = await nest.whoami()
+  const aw = accountWarning(who)
+  if (aw) { warnings.push(aw); log(aw) }
+  // One probe of the File System folder: too big to snapshot before every
+  // task means no cleanup there, said once.
+  let fileSystemSnapshot = true
+  if ((await nest.snapshotFiles('files').catch(() => null)) === false) {
+    fileSystemSnapshot = false
+    const w = `warning: this account's File System folder holds more than ${FILES_SNAPSHOT_LIMIT} entries, so files a model writes there will not be cleaned up after each task. Use a dedicated bench account.`
+    warnings.push(w)
+    log(w)
+  }
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   const outDir = path.resolve(opts.out ?? path.join(here, 'results', `${stamp}-${opts.modelLabel.replace(/[^A-Za-z0-9_.-]+/g, '_')}`))
@@ -192,7 +218,7 @@ export async function main(argv, io = {}) {
   for (let r = 0; r < opts.repeat; r++) {
     for (const task of tasks) {
       const result = await runTask(nest, task, {
-        mcpTools, thinking: opts.thinking, temperature: opts.temperature, model: opts.model, maxTokens: opts.maxTokens,
+        mcpTools, thinking: opts.thinking, temperature: opts.temperature, model: opts.model, maxTokens: opts.maxTokens, fileSystemSnapshot,
         keep: opts.keep, runIndex: r,
       })
       runs.push(result)
@@ -207,6 +233,10 @@ export async function main(argv, io = {}) {
   const summary = summarize(runs)
   const fw = fallbackWarning(summary)
   if (fw) warnings.push(fw)
+  const changed = [...new Set(runs.flatMap((r) => r.fileSystemWrites?.modified ?? []))].sort()
+  if (changed.length) {
+    warnings.push(`warning: runs changed ${changed.length} file(s) that were already in the account's File System folder, which cannot be undone: ${changed.join(', ')}`)
+  }
   const meta = {
     modelLabel: opts.modelLabel,
     date: new Date().toISOString().slice(0, 10),
@@ -221,6 +251,7 @@ export async function main(argv, io = {}) {
     gateway: opts.gateway,
     // From llama-server's /props, not from the label. null when unavailable.
     model,
+    account: who?.user ? { username: who.user.username ?? null, role: who.user.role ?? null } : null,
     warnings,
   }
   fs.writeFileSync(path.join(outDir, 'summary.json'), `${JSON.stringify({ meta, summary }, null, 2)}\n`)

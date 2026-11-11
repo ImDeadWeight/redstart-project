@@ -25,6 +25,9 @@ export const META_CONVERSATION_KEY = 'redstart/conversationId'
 export const META_CLASS_KEY = 'redstart/class'
 const DOCS_SPACE = 'documents'
 const MAX_READBACK_BYTES = 1024 * 1024
+// A bench account's File System folder holds what runs leave there: a few
+// files. More than this is someone's real folder.
+export const FILES_SNAPSHOT_LIMIT = 2000
 
 /**
  * @param {{ gateway: string, mcp: string, apiKey?: string | null, fetch?: typeof fetch, mcpTimeoutMs?: number }} opts
@@ -133,7 +136,55 @@ export async function connectNest(opts) {
 
     /** Move one documents-relative file to the account's trash (recoverable). */
     async deleteDocument(relPath) {
-      await req('POST', '/files/delete', { json: { space: DOCS_SPACE, path: relPath }, ok: [200, 204, 404] })
+      await this.deleteFile(DOCS_SPACE, relPath)
+    },
+
+    /** Move one file in a storage space to the account's trash (recoverable). */
+    async deleteFile(space, relPath) {
+      await req('POST', '/files/delete', { json: { space, path: relPath }, ok: [200, 204, 404] })
+    },
+
+    /**
+     * Every file in a storage space, recursively: path → "size|modified".
+     * null when the space is not configured for this account; false when it
+     * holds more than `limit` entries (a real folder, too big to walk before
+     * every task: the caller says so once rather than slowing every run).
+     *
+     * @param {string} space 'files' is the File System tools' folder
+     * @returns {Promise<Map<string, string> | null | false>}
+     */
+    async snapshotFiles(space, limit = FILES_SNAPSHOT_LIMIT) {
+      const out = new Map()
+      let seen = 0
+      let tooBig = false
+      /** @returns {Promise<boolean>} false: stop (root unavailable, or too big) */
+      const walk = async (dir) => {
+        const q = new URLSearchParams({ space, path: dir })
+        const res = await req('GET', `/files/list?${q}`, { ok: [200, 400, 403, 404] })
+        if (res.status !== 200) return dir !== '.'
+        const { entries } = await res.json()
+        for (const e of entries) {
+          if (++seen > limit) { tooBig = true; return false }
+          if (e.type === 'folder') {
+            if (!(await walk(e.path))) return false
+            continue
+          }
+          out.set(e.path, `${e.size}|${e.modified}`)
+        }
+        return true
+      }
+      if (await walk('.')) return out
+      return tooBig ? false : null
+    },
+
+    /** Who the API key belongs to: { authRequired, user: { username, role } | null }, or null. */
+    async whoami() {
+      try {
+        const res = await req('GET', '/auth/me')
+        return await res.json()
+      } catch {
+        return null
+      }
     },
 
     /**

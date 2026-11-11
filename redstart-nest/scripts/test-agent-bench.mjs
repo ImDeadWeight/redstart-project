@@ -33,7 +33,7 @@ import * as net from 'node:net'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { main, parseArgs, labelWarning, fallbackWarning } from './agent-bench/run.mjs'
+import { main, parseArgs, labelWarning, fallbackWarning, accountWarning } from './agent-bench/run.mjs'
 import { approves, maxReplyTokens } from './agent-bench/lib/bench.mjs'
 import { argumentProblem, computeMetrics } from './agent-bench/lib/metrics.mjs'
 import { findTaskFiles, loadTask } from './agent-bench/lib/task-file.mjs'
@@ -86,6 +86,14 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
     _meta: { 'redstart/class': 'write' },
   },
+  {
+    // Writes to the account's File System folder ('files' space), which no
+    // conversation owns: what the real File System tools do.
+    name: 'fs_write',
+    description: 'Write a file into the File System folder.',
+    inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
+    _meta: { 'redstart/class': 'write' },
+  },
 ]
 
 const chunk = (delta, extra = {}) => ({ choices: [{ index: 0, delta }], ...extra })
@@ -94,6 +102,12 @@ const lastToolResult = (messages) => [...messages].reverse().find((m) => m.role 
 
 /** turn index (0-based), messages → SSE chunk list, or 'hang'. */
 const SCRIPTS = {
+  // One new file and one change to a file that was already there.
+  fswrite: (turn) => (turn === 0
+    ? [toolCallChunk('f1', 'fs_write', JSON.stringify({ path: 'notes/made-here.txt', content: 'new' }))]
+    : turn === 1
+      ? [toolCallChunk('f2', 'fs_write', JSON.stringify({ path: 'existing.txt', content: 'v2' }))]
+      : [chunk({ content: 'Saved, 7.' })]),
   write: (turn) => (turn === 0
     ? [toolCallChunk('c1', 'write_file', JSON.stringify({ path: 'out/answer.txt', content: '42' }))]
     : [chunk({ content: 'Done.' })]),
@@ -138,6 +152,14 @@ async function readBody(req) {
 function startFakeNest(gatewayPort) {
   const state = {
     files: new Map(), // 'chats/<id>/<path>' -> Buffer
+    // The 'files' space (File System folder): path -> { content, modified }.
+    // Two files the account already had before any run.
+    fsFiles: new Map([
+      ['keep.txt', { content: 'the owner file', modified: '2026-01-01T00:00:00.000Z' }],
+      ['existing.txt', { content: 'v1', modified: '2026-01-01T00:00:00.000Z' }],
+    ]),
+    fsDeletes: [],
+    whoami: { authRequired: true, user: { username: 'bench', role: 'user' } },
     conversations: new Set(),
     deleted: [],
     docDeletes: [],
@@ -180,8 +202,27 @@ function startFakeNest(gatewayPort) {
       state.files.set(key, await readBody(req))
       return json(res, 201, {})
     }
+    if (req.method === 'GET' && url.pathname === '/auth/me') return json(res, 200, state.whoami)
+    if (req.method === 'GET' && url.pathname === '/files/list' && url.searchParams.get('space') === 'files') {
+      const dir = url.searchParams.get('path')
+      const prefix = dir === '.' ? '' : `${dir}/`
+      const entries = new Map()
+      for (const [k, v] of state.fsFiles) {
+        if (!k.startsWith(prefix)) continue
+        const rest = k.slice(prefix.length)
+        const first = rest.split('/')[0]
+        if (rest.includes('/')) entries.set(first, { name: first, path: `${prefix}${first}`, type: 'folder', size: null })
+        else entries.set(first, { name: first, path: k, type: 'file', size: v.content.length, modified: v.modified })
+      }
+      return json(res, 200, { space: 'files', path: dir, entries: [...entries.values()] })
+    }
     if (req.method === 'POST' && url.pathname === '/files/delete') {
       const body = JSON.parse((await readBody(req)).toString())
+      if (body.space === 'files') {
+        state.fsDeletes.push(body.path)
+        state.fsFiles.delete(body.path)
+        return json(res, 200, {})
+      }
       state.docDeletes.push(body)
       state.files.delete(body.path)
       return json(res, 200, {})
@@ -268,6 +309,10 @@ Created "${rel}" in the documents folder.` },
           { type: 'resource_link', uri: `/files/download?path=${encodeURIComponent(rel)}`, name: rel, mimeType: 'text/markdown', size: args.content.length },
         ] })
       }
+      if (name === 'fs_write') {
+        state.fsFiles.set(args.path, { content: args.content, modified: new Date(Date.now() + state.fsFiles.size).toISOString() })
+        return reply({ content: [{ type: 'text', text: `[FILE: ${args.path}] Successfully wrote to ${args.path}` }] })
+      }
       if (name === 'write_file') {
         state.files.set(`chats/${conv}/${args.path}`, Buffer.from(args.content))
         return reply({ content: [{ type: 'resource_link', uri: `/files/download?path=${encodeURIComponent(`chats/${conv}/${args.path}`)}`, name: args.path, mimeType: 'text/plain', size: args.content.length }] })
@@ -347,7 +392,7 @@ await test('a task file with a problem fails at load, naming the file and the fi
 })
 
 await test('task patterns: a folder, a glob, a single file', async () => {
-  eq(findTaskFiles(FIXTURES).map((f) => path.basename(f)).length, 8, 'folder')
+  eq(findTaskFiles(FIXTURES).map((f) => path.basename(f)).length, 9, 'folder (fs-leak added 2026-11-11)')
   eq(findTaskFiles(path.join(FIXTURES, '*-limit.json')).map((f) => path.basename(f)), ['time-limit.json', 'turn-limit.json'], 'glob')
   eq(findTaskFiles(path.join(FIXTURES, 'denied.json')).length, 1, 'file')
 })
@@ -357,6 +402,14 @@ await test('a label that does not name the loaded file is warned about', async (
   assert(labelWarning('Qwen3-4B-Instruct-2507-Q4_K_M', 'Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf'), 'wrong quant not flagged')
   eq(labelWarning('Qwen3-4B-Instruct-2507-UD-Q4_K_XL, embedded template', 'Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf'), null, 'label containing the file name')
   eq(labelWarning('anything', null), null, 'no /props, no warning')
+})
+
+await test('an owner or admin API key is warned about', async () => {
+  // The bench ran as the owner on 2026-11-11.
+  for (const role of ['owner', 'admin']) {
+    assert(/dedicated bench account/.test(accountWarning({ user: { username: 'pat', role } }) ?? ''), `${role} not flagged`)
+  }
+  eq([accountWarning({ user: { username: 'bench', role: 'user' } }), accountWarning(null), accountWarning({ authRequired: false, user: null })], [null, null, null], 'user role, no answer, login off')
 })
 
 await test('a high fallback rate is warned about, with where to look', async () => {
@@ -420,7 +473,7 @@ if (bench) {
 
   await test('the model got the tool list and its tool results; thinking off, streaming on', async () => {
     const body = nest.state.completionBodies.find((b) => b.messages.some((m) => m.role === 'tool'))
-    eq(body.tools.map((t) => t.function.name), ['read_file', 'make_doc', 'write_file'], 'tools')
+    eq(body.tools.map((t) => t.function.name), ['read_file', 'make_doc', 'write_file', 'fs_write'], 'tools')
     eq([body.stream, body.chat_template_kwargs.enable_thinking, body.reasoning_format], [true, false, 'auto'], 'flags')
     const asst = body.messages.find((m) => m.role === 'assistant' && m.tool_calls)
     assert(asst && body.messages.some((m) => m.role === 'tool' && m.tool_call_id === asst.tool_calls[0].id), 'tool result paired with its call')
@@ -486,11 +539,26 @@ if (bench) {
     const { meta, summary } = JSON.parse(fs.readFileSync(path.join(outDir, 'summary.json'), 'utf8'))
     eq(meta.model.modelFile, 'fake-model.gguf', 'model file from /props, not the label')
     eq(meta.model.chatTemplateSha, crypto.createHash('sha256').update(FAKE_TEMPLATE).digest('hex').slice(0, 12), 'template hash')
-    eq(meta.warnings, [], 'label names the file, and fallback is under the threshold')
+    // Only fs-leak's changed file: the label names the file, fallback is
+    // under the threshold, and the key is not an admin's.
+    eq(meta.warnings.length, 1, 'one warning')
+    assert(/changed 1 file\(s\) that were already in the account.s File System folder.*existing\.txt/.test(meta.warnings[0]), meta.warnings[0])
+    eq(meta.account, { username: 'bench', role: 'user' }, 'account recorded')
     const totalCalls = bench.runs.reduce((a, r) => a + r.metrics.toolCalls, 0)
     eq(summary.fallbackRate, 1 / totalCalls, 'one fallback call over all calls')
     const md = fs.readFileSync(path.join(outDir, 'summary.md'), 'utf8')
     assert(md.includes('| invalid args | fallback |') && md.includes('Model file: fake-model.gguf'), 'summary.md columns and model line')
+  })
+
+  await test('a file written in the File System folder is removed after the run; an existing one it changed is reported', async () => {
+    // 2026-11-11: runs left inventory.csv and an invented supplier-email.txt in
+    // the owner's folder, and a later run read them as if they were the task's.
+    const r = run('fs-leak')
+    eq(r.fileSystemWrites, { created: ['notes/made-here.txt'], modified: ['existing.txt'] }, 'what the run wrote')
+    eq(nest.state.fsDeletes, ['notes/made-here.txt'], 'only the new file was removed (to trash), once')
+    eq([...nest.state.fsFiles.keys()].sort(), ['existing.txt', 'keep.txt'], 'the owner\'s files are still there')
+    assert(r.events.some((e) => e.type === 'file_system_writes' && e.removed), 'not in the event log')
+    eq(run('read-fixture').fileSystemWrites, { created: [], modified: [] }, 'a run that wrote nothing there')
   })
 
   await test('the turn limit ends the run and is recorded', async () => {
@@ -527,19 +595,20 @@ if (bench) {
 
   await test('summary: pass rate and per-task passes', async () => {
     const s = bench.summary
-    eq([s.runs, s.tasks.reduce((a, t) => a + t.passes, 0)], [8, 5], 'runs, passes')
-    eq(s.passRate, 5 / 8, 'pass rate')
+    eq([s.runs, s.tasks.reduce((a, t) => a + t.passes, 0)], [9, 6], 'runs, passes')
+    eq(s.passRate, 6 / 9, 'pass rate')
     eq(s.hitLimitRuns, 2, 'limit runs')
   })
 
   await test('output files: runs.jsonl (one line per run), summary.json, summary.md with the results row', async () => {
     const lines = fs.readFileSync(path.join(outDir, 'runs.jsonl'), 'utf8').trim().split('\n')
-    eq(lines.length, 8, 'runs.jsonl lines')
+    eq(lines.length, 9, 'runs.jsonl lines')
     assert(JSON.parse(lines[0]).events.length > 0, 'events saved')
     const sj = JSON.parse(fs.readFileSync(path.join(outDir, 'summary.json'), 'utf8'))
-    eq([sj.meta.modelLabel, sj.meta.toolCount, sj.meta.tools], ['fake model', 3, ['read_file', 'make_doc', 'write_file']], 'meta')
+    eq([sj.meta.modelLabel, sj.meta.toolCount, sj.meta.tools], ['fake model', 4, ['read_file', 'make_doc', 'write_file', 'fs_write']], 'meta')
     const md = fs.readFileSync(path.join(outDir, 'summary.md'), 'utf8')
-    assert(/\| \d{4}-\d{2}-\d{2} \| fake model \| [0-9a-f]+(\+dirty)? \| 8×1 \| 63% \|/.test(md), md)
+    assert(/\| \d{4}-\d{2}-\d{2} \| fake model \| [0-9a-f]+(\+dirty)? \| 9×1 \| 67% \|/.test(md), md)
+    assert(md.includes("> warning: runs changed 1 file(s) that were already in the account's File System folder"), 'the warning is in summary.md')
   })
 }
 
