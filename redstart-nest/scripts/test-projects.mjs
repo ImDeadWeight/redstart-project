@@ -229,6 +229,29 @@ await test('conversations: a PUT never rewrites accountId or id', async () => {
   assert(!convs.getConversation('alice-1', 'hijack'), 'the id was rewritten')
 })
 
+await test('🔍 conversations: the plan is checked like the model\'s update_plan call, stamped, and cleared by null', async () => {
+  // Agent-runtime plan §4, 1.2: a stored plan is always one the loop could
+  // have produced, whatever a client PUTs.
+  convs.createConversation('alice-1', { id: 'plan-1', name: 'plan', messages: [] })
+  const steps = [{ text: ' read ', status: 'done' }, { text: 'write', status: 'pending', note: 'next' }]
+  const ok = await convRoute('PUT', '/conversations/plan-1', 'alice-1', ALICE, { plan: { steps, updatedAt: 1 } })
+  assert(ok.status === 200, `put got ${ok.status}`)
+  const stored = convs.getConversation('alice-1', 'plan-1').plan
+  assert(JSON.stringify(stored.steps) === JSON.stringify([{ text: 'read', status: 'done' }, { text: 'write', status: 'pending', note: 'next' }]), JSON.stringify(stored))
+  assert(stored.updatedAt > 1, 'the client chose updatedAt')
+
+  for (const bad of [{ steps: [] }, { steps: [{ text: 'x', status: 'started' }] }, { steps: 'x' }, {}, 'a plan']) {
+    const r = await convRoute('PUT', '/conversations/plan-1', 'alice-1', ALICE, { plan: bad, name: 'renamed' })
+    assert(r.status === 400 && /^plan: /.test(r.json.error.message), `${JSON.stringify(bad)} got ${r.status}`)
+  }
+  assert(convs.getConversation('alice-1', 'plan-1').name === 'plan', 'a refused PUT applied its other fields')
+
+  const edit = await convRoute('PUT', '/conversations/plan-1', 'alice-1', ALICE, { name: 'kept' })
+  assert(edit.status === 200 && edit.json.plan?.steps.length === 2, 'an edit without the field lost the plan')
+  const cleared = await convRoute('PUT', '/conversations/plan-1', 'alice-1', ALICE, { plan: null })
+  assert(cleared.status === 200 && !('plan' in convs.getConversation('alice-1', 'plan-1')), 'null did not clear it')
+})
+
 await test('the 30-day cleanup keeps chats in a project', () => {
   const p = store.createProject(ALICE, { name: 'Old but kept' }).project
   const old = Date.now() - 60 * 24 * 60 * 60 * 1000

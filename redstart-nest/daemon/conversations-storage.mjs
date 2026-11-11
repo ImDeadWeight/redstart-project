@@ -86,6 +86,8 @@ export function updateConversation(accountId, convId, updates) {
   for (const k of PROTECTED_FIELDS) delete safe[k]
   const next = { ...data.conversations[idx], ...safe, lastModified: Date.now() }
   if (next.projectId === null) delete next.projectId
+  // `plan: null` clears the update_plan checklist (conversation-routes.mjs).
+  if (next.plan === null) delete next.plan
   data.conversations[idx] = next
   write(data)
   return next
