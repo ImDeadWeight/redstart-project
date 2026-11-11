@@ -303,6 +303,20 @@ await test('pandas .plot() without importing matplotlib loads it and saves the f
   assert(/drawn/.test(text) && /fig-1\.png/.test(text), text)
 })
 
+await test('a missing file opened with the chats/<id>/ prefix says to use the bare name', async () => {
+  // list_documents shows "chats/conv-abc/report_jan.txt"; run_python already
+  // runs in that folder. Qwen3-4B spent docs-rename's 10 turns on this
+  // (agent bench, 2026-11-11) because the error never said why.
+  const res = await pythonTool.callTool('run_python', { code: "open('chats/conv-abc/report_jan.txt').read()" }, cfg, ctx)
+  const text = res.content[0].text
+  assert(res.isError && /FileNotFoundError/.test(text), text)
+  assert(text.includes('run_python already runs inside chats/conv-abc/, so open a file there by its bare name: "report_jan.txt", not "chats/conv-abc/report_jan.txt".'), text)
+  const plain = await pythonTool.callTool('run_python', { code: "open('nowhere.txt').read()" }, cfg, ctx)
+  assert(plain.isError && !/already runs inside/.test(plain.content[0].text), 'hint on a missing file that had no prefix')
+  const { workspacePrefixHint } = pythonTool
+  assert(workspacePrefixHint('ZeroDivisionError', "x = 'chats/conv-abc/a'", 'chats/conv-abc') === null, 'hint on an unrelated error')
+})
+
 await test('a Python exception comes back as an error with only the user\'s frames', async () => {
   const res = await pythonTool.callTool('run_python', { code: 'def f():\n    return 1/0\nf()' }, cfg, ctx)
   const text = res.content[0].text

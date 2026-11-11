@@ -621,7 +621,7 @@ await test('the note says how each offered tool reaches the files', async () => 
   })
   eq(note, [
     "[Attached files saved to this chat's workspace: sales.csv, notes.txt",
-    '- run_python runs in that folder: open them by name, e.g. open("sales.csv"). To rename, move or delete them, use run_python (os.rename, os.remove).',
+    '- run_python runs in that folder: open them by name, e.g. open("sales.csv"), not open("chats/abc123/sales.csv"). To rename, move or delete them, use run_python (os.rename, os.remove).',
     '- read_document needs the folder in the path: "chats/abc123/sales.csv".',
     '- The File System tools (read_text_file, list_directory, move_file, ...) work on a different folder and cannot see these files.]',
   ].join('\n'), 'full note')
@@ -629,7 +629,7 @@ await test('the note says how each offered tool reaches the files', async () => 
 
 await test('tools that are not offered are not named', async () => {
   const note = attachmentNote({ saved: ['a.csv'], conversationId: 'c', hasTool: offered('run_python') })
-  eq(note, "[Attached file saved to this chat's workspace: a.csv\n- run_python runs in that folder: open it by name, e.g. open(\"a.csv\"). To rename, move or delete it, use run_python (os.rename, os.remove).]", 'run_python only')
+  eq(note, "[Attached file saved to this chat's workspace: a.csv\n- run_python runs in that folder: open it by name, e.g. open(\"a.csv\"), not open(\"chats/c/a.csv\"). To rename, move or delete it, use run_python (os.rename, os.remove).]", 'run_python only')
   assert(!/read_document|File System/.test(note), 'named a tool that is not offered')
   eq(attachmentNote({ saved: ['a.csv'], conversationId: 'c', hasTool: () => false }), "[Attached file saved to this chat's workspace: a.csv]", 'no tools: the bare line')
 })

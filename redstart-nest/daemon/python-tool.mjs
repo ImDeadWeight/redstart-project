@@ -73,9 +73,32 @@ function clip(s, cap) {
 function kb(n) { return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB` }
 
 /**
+ * The hint for a missing file whose path started with the workspace's own
+ * documents-relative folder, or null.
+ *
+ * list_documents and read_document name a chat's files as
+ * `chats/<conversationId>/<name>`, but run_python already runs inside that
+ * folder, so the same path is not found there. Qwen3-4B copied the prefix
+ * into run_python three times in one run and spent all of docs-rename's turns
+ * on it (agent bench, 2026-11-11), because the error never said why.
+ *
+ * @param {string} errorText the Python traceback
+ * @param {string | undefined} code the code that ran
+ * @param {string | undefined} wsRel e.g. "chats/abc"
+ */
+export function workspacePrefixHint(errorText, code, wsRel) {
+  if (!wsRel || !/FileNotFoundError|No such file or directory/.test(errorText ?? '')) return null
+  const prefix = `${wsRel}/`
+  if (!(code ?? '').includes(prefix) && !(errorText ?? '').includes(prefix)) return null
+  const named = new RegExp(`${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^'"\\s]+)`).exec(`${errorText}\n${code}`)
+  const example = named ? named[1] : '<name>'
+  return `(run_python already runs inside ${wsRel}/, so open a file there by its bare name: "${example}", not "${prefix}${example}".)`
+}
+
+/**
  * Word a child reply for the model. Pure; exported for the suite.
  */
-export function formatResult({ reply, error, timedOut, fresh, ranBefore, files, wsRel, capWarning }) {
+export function formatResult({ reply, error, timedOut, fresh, ranBefore, files, wsRel, capWarning, code }) {
   const parts = []
   if (fresh && ranBefore) parts.push('[A new Python kernel was started, so variables from earlier runs are gone. Files in the workspace are still there.]')
   if (timedOut) parts.push(`Error: the code ${error}. The kernel was stopped and will restart on the next call.`)
@@ -84,7 +107,11 @@ export function formatResult({ reply, error, timedOut, fresh, ranBefore, files, 
     const stdout = clip(reply.stdout?.replace(/\n$/, ''), OUTPUT_CAP)
     if (stdout) parts.push(stdout)
     if (reply.result !== null && reply.result !== undefined) parts.push(`Result: ${reply.result}`)
-    if (reply.error) parts.push(clip(reply.error.trimEnd(), 4000))
+    if (reply.error) {
+      parts.push(clip(reply.error.trimEnd(), 4000))
+      const hint = workspacePrefixHint(reply.error, code, wsRel)
+      if (hint) parts.push(hint)
+    }
     const stderr = clip(reply.stderr?.trim(), 2000)
     if (stderr) parts.push(`stderr:\n${stderr}`)
   }
@@ -139,7 +166,7 @@ export async function callTool(name, args, cfg, ctx) {
   const files = changedFiles(ws, startedAt)
   const after = checkCaps(pyCfg.documentsRoot, account, conversationId, caps)
   const wsRel = workspaceRelative(conversationId)
-  const text = formatResult({ ...outcome, ranBefore, files, wsRel, capWarning: after.ok ? null : `Warning: ${after.reason}` })
+  const text = formatResult({ ...outcome, ranBefore, files, wsRel, code, capWarning: after.ok ? null : `Warning: ${after.reason}` })
 
   // Every changed file, figures included, as a resource link (Phase 2): the
   // chat UI draws images inline, CSVs as a table and the rest as a download,

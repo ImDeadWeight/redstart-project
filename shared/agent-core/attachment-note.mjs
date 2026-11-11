@@ -56,7 +56,10 @@ export function attachmentNote({ saved, failed = [], conversationId, hasTool }) 
 		const lines = [`[Attached file${plural ? 's' : ''} saved to this chat's workspace: ${saved.join(', ')}`];
 		if (hasTool('run_python')) {
 			lines.push(
-				`- run_python runs in that folder: open ${plural ? 'them' : 'it'} by name, e.g. open(${JSON.stringify(first)}). To rename, move or delete ${plural ? 'them' : 'it'}, use run_python (os.rename, os.remove).`
+				// The explicit "not chats/..." is for small models: shown the
+				// read_document path below, Qwen3-4B copied it into run_python
+				// (agent bench, 2026-11-11).
+				`- run_python runs in that folder: open ${plural ? 'them' : 'it'} by name, e.g. open(${JSON.stringify(first)}), not open(${JSON.stringify(`chats/${conversationId}/${first}`)}). To rename, move or delete ${plural ? 'them' : 'it'}, use run_python (os.rename, os.remove).`
 			);
 		}
 		if (hasTool('read_document')) {
