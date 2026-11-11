@@ -43,7 +43,15 @@ export {
 	streamErrorMessage
 } from '../../../../../shared/agent-core/chat-stream.mjs';
 export { attachmentNote } from '../../../../../shared/agent-core/attachment-note.mjs';
+export {
+	ASK_USER_TOOL,
+	DISMISSED_RESULT,
+	parseAskArguments,
+	formatAskAnswer
+} from '../../../../../shared/agent-core/ask-user.mjs';
 export type {
+	AskRequest,
+	AskAnswer,
 	ToolCallParserConfig,
 	ParsedToolCall,
 	AgentPorts,

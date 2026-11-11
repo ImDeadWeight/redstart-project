@@ -28,7 +28,13 @@ export const MCP_PROTOCOL_VERSION = '2025-06-18';
 
 export const DEFAULT_MCP_CONFIG = {
 	protocolVersion: MCP_PROTOCOL_VERSION,
-	capabilities: { tools: { listChanged: true } } as ClientCapabilities,
+	// experimental['redstart/hostTools']: the tools this client's own loop
+	// answers (the ask_user card), so Nest offers them on this session
+	// (redstart-nest/daemon/interaction-tools.mjs). Other servers ignore it.
+	capabilities: {
+		tools: { listChanged: true },
+		experimental: { 'redstart/hostTools': { names: ['ask_user'] } }
+	} as ClientCapabilities,
 	clientInfo: { name: MCP_CLIENT_NAME, version: DEFAULT_CLIENT_VERSION } as Implementation,
 	requestTimeoutSeconds: 300, // 5 minutes for long-running tools
 	connectionTimeoutMs: 10_000 // 10 seconds for connection establishment

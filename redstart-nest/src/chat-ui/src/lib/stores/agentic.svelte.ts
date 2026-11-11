@@ -99,6 +99,7 @@ import { AgenticSessionState } from '$lib/stores/agentic/agentic-session.svelte'
 import { AgenticToolExec } from '$lib/stores/agentic/agentic-tool-exec';
 import { AgenticTurn } from '$lib/stores/agentic/agentic-turn';
 import { runAgentLoop } from '$lib/agent-core';
+import type { AskAnswer } from '$lib/agent-core';
 
 class AgenticStore {
 	/**
@@ -172,6 +173,8 @@ class AgenticStore {
 		this.session.permissionResolvers.delete(conversationId);
 		this.session.pendingContinueRequests.set(conversationId, false);
 		this.session.continueResolvers.delete(conversationId);
+		this.session.pendingQuestions.set(conversationId, null);
+		this.session.questionResolvers.delete(conversationId);
 		this.session.steeringMessages.delete(conversationId);
 
 		// Ensure built-in tools are fetched before checking if agentic is enabled
@@ -302,6 +305,9 @@ class AgenticStore {
 						})
 				},
 				...this.toolExec.ports(conversationId, effectiveModel),
+				// ask_user (plan §4, 1.1): the question card. Nest offers the tool
+				// because chat-ui declares it answers it (constants/mcp.ts).
+				ask: { user: (request, s) => this.session.requestAnswer(conversationId, request, s) },
 				limit: { askContinue: (s) => this.requestContinue(conversationId, s) },
 				steering: { pending: () => this.session.steeringMessages.has(conversationId) },
 				fallbackParser: () => {
@@ -352,6 +358,14 @@ export function agenticPendingPermissionRequest(conversationId: string) {
 
 export function agenticResolvePermission(conversationId: string, decision: ToolPermissionDecision) {
 	agenticStore.session.resolvePermission(conversationId, decision);
+}
+
+export function agenticPendingQuestion(conversationId: string) {
+	return agenticStore.session.pendingQuestion(conversationId);
+}
+
+export function agenticResolveQuestion(conversationId: string, answer: AskAnswer | null) {
+	agenticStore.session.resolveQuestion(conversationId, answer);
 }
 
 export function agenticPendingContinueRequest(conversationId: string) {

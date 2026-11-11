@@ -10,6 +10,8 @@ import type {
 import { AttachmentType } from '$lib/enums';
 import { getServerBaseUrl } from './server-url';
 import { getAuthHeaders } from './api-headers';
+import { ASK_USER_TOOL, formatAskAnswer, parseAskArguments } from '$lib/agent-core';
+import type { AskAnswer, AskRequest } from '$lib/agent-core';
 
 /**
  * Represents a parsed section of agentic content for display
@@ -313,6 +315,91 @@ export function classifyContinueIntent(messages: DatabaseMessage[], idx: number)
 	}
 
 	return { kind: ContinueIntentKind.RERUN_TURN, truncateAfter: idx - 1 };
+}
+
+/**
+ * An ask_user question the conversation is still waiting on (plan §4, 1.1).
+ *
+ * The assistant message carrying the call is saved before the flow pauses, so
+ * a question survives a refresh with no storage of its own: the active path
+ * ends on an assistant message (or its trailing tool results) with an
+ * ask_user call that has no result. Only the last assistant turn counts, and
+ * only a call whose arguments parse (a malformed one was answered by the
+ * core with an error, which would have been saved).
+ */
+export interface OpenQuestion {
+	assistantId: string;
+	toolCallId: string;
+	request: AskRequest;
+	/** Every call of that turn with no result yet, in order, the question included. */
+	unanswered: Array<{ id: string; name: string }>;
+	/** The message the new results chain from: the assistant, or its last trailing result. */
+	anchorId: string;
+}
+
+export function findOpenQuestion(messages: readonly DatabaseMessage[]): OpenQuestion | null {
+	let idx = messages.length - 1;
+	while (idx >= 0 && messages[idx].role === MessageRole.TOOL) idx--;
+	const assistant = messages[idx];
+	if (!assistant || assistant.role !== MessageRole.ASSISTANT) return null;
+
+	const calls = parseToolCalls(assistant.toolCalls).filter(
+		(c): c is ApiChatCompletionToolCall & { id: string } => typeof c.id === 'string' && !!c.id
+	);
+	const answered = new Set(
+		messages
+			.slice(idx + 1)
+			.map((m) => m.toolCallId)
+			.filter(Boolean)
+	);
+	const unanswered = calls
+		.filter((c) => !answered.has(c.id))
+		.map((c) => ({ id: c.id, name: c.function?.name ?? '' }));
+
+	for (const call of calls) {
+		if (answered.has(call.id) || call.function?.name !== ASK_USER_TOOL) continue;
+		const parsed = parseAskArguments(call.function?.arguments);
+		if (!parsed.ok) continue;
+		return {
+			assistantId: assistant.id,
+			toolCallId: call.id,
+			request: parsed.request,
+			unanswered,
+			anchorId: messages[messages.length - 1].id
+		};
+	}
+	return null;
+}
+
+/**
+ * The question card's answer from what is picked and typed, or null when
+ * there is nothing to send yet (Skip is the dismissal, not an empty Send).
+ */
+export function buildAskAnswer(selected: readonly string[], text: string): AskAnswer | null {
+	const chosen = selected.filter((s) => s.trim());
+	const typed = text.trim();
+	if (chosen.length === 0 && !typed) return null;
+	return { ...(chosen.length ? { chosen: [...chosen] } : {}), ...(typed ? { text: typed } : {}) };
+}
+
+/** What a call left unrun by a reload gets as its result. */
+export const NOT_RUN_AFTER_RELOAD_RESULT =
+	'This call was not run: the chat was reloaded while a question was open. Call it again if you still need it.';
+
+/**
+ * The tool results that close an open question's turn, in the order to write
+ * them: the answer for the question, and the not-run text for every other call
+ * that never got a result (a call has to have one, or the transcript is
+ * malformed).
+ */
+export function resultsForAnsweredQuestion(
+	open: OpenQuestion,
+	answer: AskAnswer | null
+): Array<{ toolCallId: string; content: string }> {
+	return open.unanswered.map((c) => ({
+		toolCallId: c.id,
+		content: c.id === open.toolCallId ? formatAskAnswer(answer) : NOT_RUN_AFTER_RELOAD_RESULT
+	}));
 }
 
 /**

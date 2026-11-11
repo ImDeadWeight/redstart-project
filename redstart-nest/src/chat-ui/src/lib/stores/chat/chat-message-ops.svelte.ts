@@ -20,7 +20,12 @@ import {
 	isAbortError,
 	generateConversationTitle
 } from '$lib/utils';
-import { classifyContinueIntent } from '$lib/utils/agentic';
+import {
+	classifyContinueIntent,
+	findOpenQuestion,
+	resultsForAnsweredQuestion
+} from '$lib/utils/agentic';
+import type { AskAnswer } from '$lib/agent-core';
 import { ContinueIntentKind, ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
 import type { ChatMessageTimings, ChatMessagePromptProgress } from '$lib/types/chat';
 import type { DatabaseMessage, DatabaseMessageExtra } from '$lib/types';
@@ -298,6 +303,48 @@ export class ChatMessageOps {
 			if (!isAbortError(error)) console.error('Failed to continue agentic turn:', error);
 			this.runtime.setChatLoading(activeConv.id, false);
 		}
+	}
+
+	/**
+	 * Answer an ask_user question the conversation is still waiting on after a
+	 * refresh (plan §4, 1.1). No flow is running any more, so the answer is
+	 * written as the tool result here — with the not-run text for any other
+	 * call of that turn that never got one — and the flow resumes through the
+	 * same next-turn path Continue uses. `answer` null: the person skipped it.
+	 *
+	 * Returns false when there is no open question (it was answered in another
+	 * tab, or a flow is running): nothing is written.
+	 */
+	async answerOpenQuestion(answer: AskAnswer | null): Promise<boolean> {
+		const activeConv = conversationsStore.activeConversation;
+		if (!activeConv || this.runtime.isChatLoadingInternal(activeConv.id)) return false;
+		const open = findOpenQuestion(conversationsStore.activeMessages);
+		if (!open) return false;
+
+		let parentId = open.anchorId;
+		for (const result of resultsForAnsweredQuestion(open, answer)) {
+			const msg = await DatabaseService.createMessageBranch(
+				{
+					convId: activeConv.id,
+					type: MessageType.TEXT,
+					role: MessageRole.TOOL,
+					content: result.content,
+					toolCallId: result.toolCallId,
+					timestamp: Date.now(),
+					toolCalls: '',
+					children: []
+				},
+				parentId
+			);
+			conversationsStore.addMessageToActive(msg);
+			parentId = msg.id;
+		}
+		await conversationsStore.updateCurrentNode(parentId);
+
+		const anchorIndex = conversationsStore.findMessageIndex(parentId);
+		if (anchorIndex === -1) return true;
+		await this.continueAsNextAgenticTurn(anchorIndex);
+		return true;
 	}
 
 	async continueAssistantMessage(messageId: string): Promise<void> {
