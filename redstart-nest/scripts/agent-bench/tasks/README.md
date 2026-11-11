@@ -23,7 +23,7 @@ refusal), never how many calls it took. `scripts/test-agent-bench-tasks.mjs`
 | docs-missing-file | documents | — | says the file is not there, invents nothing |
 | multi-three-deliverables | multi | run_python | totals.csv, a chart, and the overall total |
 | multi-recover | multi | run_python | the average without the malformed rows (the first read errors) |
-| multi-chain | multi | run_python | the end of a 13-file chain (one file per turn exceeds 10 turns) |
+| multi-chain | multi | run_python or read_document | the end of a 13-file chain (one file per turn takes 14 turns; the limit was 10 until 2026-11-11, now 30) |
 | multi-find-tool | multi | list_documents | counts the files without running code |
 | multi-distractor | multi | read_document | the codename, despite the File System tools' different root |
 | p1-ambiguous-units | phase 1 | ask_user | asked which unit, then converted |

@@ -36,7 +36,10 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-export const DEFAULT_LIMITS = Object.freeze({ maxTurns: 10, maxSeconds: 600 })
+// 30 turns since 2026-11-11 (it was 10): the owner's call, 10 cut off runs that
+// were still making progress. Rows in agent-bench-results.md before that date
+// ran at 10, so their "hit limit" counts are not comparable with later ones.
+export const DEFAULT_LIMITS = Object.freeze({ maxTurns: 30, maxSeconds: 600 })
 
 const ID_RE = /^[A-Za-z0-9_-]{1,40}$/
 
