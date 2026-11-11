@@ -11,7 +11,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
-import { loadMascot, rasterize, encodePng } from './mascot.mjs'
+import { loadMascot, rasterize, contentSquare, encodePng } from './mascot.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repo = path.join(__dirname, '..', '..')
@@ -40,8 +40,25 @@ fs.mkdirSync(outDir, { recursive: true })
 // ── ICO assembler (PNG-in-ICO, Windows Vista+) ───────────────────────────────
 // Format: 6-byte ICONDIR header, N×16-byte ICONDIRENTRY, then raw PNG blobs.
 
-const SIZES = [16, 24, 32, 48, 64, 128, 256]
-const pngs = SIZES.map(makePng)
+//
+// Windows picks the frame nearest the size it draws at rather than shrinking a
+// large one: the taskbar draws at 24px (100% scaling), the window icon Tauri
+// loads from this resource is SM_CXICON (32px at 100%, 40 at 125%, 48 at
+// 150%), and the title bar uses 16/20. So those sizes all get a frame of their
+// own. Up to 48px each frame is cropped to the drawing so the bird fills it,
+// and keeps its anti-aliased edges. An earlier version snapped the edges to
+// solid and ringed the black bird in light grey for dark taskbars; on a real
+// taskbar the ring read as a white sticker outline and the snapped edges as
+// low resolution, so both went. The orange, beak and nest carry the bird on a
+// dark taskbar without it. 64px and up are Explorer's larger views, where the
+// full drawing reads as it is. 256 is the largest frame an ICO holds; a
+// bigger source would not change the taskbar, which only ever draws 24-48.
+const SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256]
+const SMALL_MAX = 48
+const smallCrop = contentSquare(grid)
+const pngs = SIZES.map(size => (size <= SMALL_MAX
+  ? encodePng(rasterize(grid, size, { pad: 1, crop: smallCrop }), size)
+  : makePng(size)))
 
 const header = Buffer.alloc(6)
 header.writeUInt16LE(0, 0)           // reserved

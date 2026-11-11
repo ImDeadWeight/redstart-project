@@ -117,6 +117,12 @@ export function getApiOptions(): Record<string, unknown> {
 	const promptMode = conversationsStore.getPromptMode();
 	if (promptMode) apiOptions.promptMode = promptMode;
 
+	// The chat's project (projects-plan D10): only the id; the gateway checks
+	// it is the caller's, composes its instructions and memories, and strips
+	// the field before llama-server sees it.
+	const projectId = conversationsStore.getProjectId();
+	if (projectId) apiOptions.projectId = projectId;
+
 	if (hasValue(currentConfig.temperature))
 		apiOptions.temperature = Number(currentConfig.temperature);
 

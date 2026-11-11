@@ -72,6 +72,13 @@
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
+  ; Have Explorer drop its cached icons. Every install lands at the same
+  ; "Redstart Nest.exe" path (deliberately, so pins and shortcuts survive), and
+  ; Windows caches icons by path, so a release that changes the icon (alpha.11's
+  ; mascot) otherwise kept showing the old one on the taskbar and in Start.
+  ; SHCNE_ASSOCCHANGED (0x08000000) with SHCNF_IDLIST (0) is the documented way.
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+
   ; electron-updater's "start it again when you're done".
   ClearErrors
   ${GetOptions} $CMDLINE "--force-run" $R0

@@ -1,7 +1,19 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { Trash2, Pencil, Pin, X, LogOut } from '@lucide/svelte';
+	import {
+		Trash2,
+		Pencil,
+		Pin,
+		X,
+		LogOut,
+		FolderKanban,
+		FolderInput,
+		ChevronRight,
+		Plus
+	} from '@lucide/svelte';
+	import { toast } from 'svelte-sonner';
+	import { projectsStore } from '$lib/stores/projects.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { DialogConfirmation } from '$lib/components/app';
 	import SidebarNavigationActions from './SidebarNavigationActions.svelte';
@@ -57,9 +69,72 @@
 		return conversationTree.filter(({ conversation }) => conversation.pinned);
 	});
 
+	// A chat in a known project is listed under that project, not in Recent,
+	// so nothing appears twice (projects-plan Phase 2). One pointing at a
+	// project this client does not know (deleted elsewhere, list not loaded
+	// yet) stays in Recent rather than vanishing. Pinned wins over both.
+	function inKnownProject(c: DatabaseConversation): boolean {
+		return !!c.projectId && !!projectsStore.byId(c.projectId);
+	}
+
 	let unpinnedConversations = $derived.by(() => {
-		return conversationTree.filter(({ conversation }) => !conversation.pinned);
+		return conversationTree.filter(
+			({ conversation }) => !conversation.pinned && !inKnownProject(conversation)
+		);
 	});
+
+	let projectGroups = $derived.by(() =>
+		projectsStore.projects.map((project) => ({
+			project,
+			chats: buildConversationTree(
+				conversations().filter((c) => c.projectId === project.id && !c.pinned)
+			)
+		}))
+	);
+
+	// Which projects are open in the sidebar. The one holding the open chat
+	// opens itself; the rest stay as the user left them.
+	let expandedProjects = $state<Record<string, boolean>>({});
+	$effect(() => {
+		const active = conversations().find((c) => c.id === currentChatId);
+		if (active?.projectId && expandedProjects[active.projectId] === undefined) {
+			expandedProjects[active.projectId] = true;
+		}
+	});
+
+	$effect(() => {
+		void projectsStore.ensureLoaded();
+	});
+
+	// The move-to-project chooser.
+	let showMoveDialog = $state(false);
+	let moveTarget = $state<string>('');
+
+	function handleMoveConversation(id: string) {
+		const conversation = conversations().find((conv) => conv.id === id);
+		if (!conversation) return;
+		selectedConversation = conversation;
+		moveTarget = conversation.projectId ?? '';
+		showMoveDialog = true;
+	}
+
+	async function handleConfirmMove() {
+		const conversation = selectedConversation;
+		showMoveDialog = false;
+		if (!conversation) return;
+		const target = moveTarget || null;
+		if ((conversation.projectId ?? null) === target) return;
+		try {
+			await conversationsStore.moveToProject(conversation.id, target);
+			const name = target ? projectsStore.byId(target)?.name : null;
+			toast.success(name ? `Moved to ${name}` : 'Moved out of its project');
+			if (target) expandedProjects[target] = true;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Could not move the chat');
+		} finally {
+			selectedConversation = null;
+		}
+	}
 
 	let selectedConversationHasDescendants = $derived.by(() => {
 		if (!selectedConversation) return false;
@@ -183,6 +258,27 @@
 	}
 </script>
 
+{#snippet conversationRow(conversation: DatabaseConversation, depth: number)}
+	<SidebarNavigationConversationItem
+		conversation={{
+			id: conversation.id,
+			name: conversation.name,
+			lastModified: conversation.lastModified,
+			currNode: conversation.currNode,
+			forkedFromConversationId: conversation.forkedFromConversationId,
+			pinned: conversation.pinned,
+			projectId: conversation.projectId
+		}}
+		{depth}
+		isActive={currentChatId === conversation.id}
+		onSelect={selectConversation}
+		onEdit={handleEditConversation}
+		onDelete={handleDeleteConversation}
+		onStop={handleStopGeneration}
+		onMove={handleMoveConversation}
+	/>
+{/snippet}
+
 <div class="flex h-full flex-col">
 	<ScrollArea class="h-full flex-1">
 		<Sidebar.Header class="gap-4 bg-sidebar/50 p-3 backdrop-blur-lg md:pt-4 md:pb-2">
@@ -227,23 +323,71 @@
 					<Sidebar.Menu>
 						{#each pinnedConversations as { conversation, depth } (conversation.id)}
 							<Sidebar.MenuItem class="mb-1 p-0">
-								<SidebarNavigationConversationItem
-									conversation={{
-										id: conversation.id,
-										name: conversation.name,
-										lastModified: conversation.lastModified,
-										currNode: conversation.currNode,
-										forkedFromConversationId: conversation.forkedFromConversationId,
-										pinned: conversation.pinned
-									}}
-									{depth}
-									isActive={currentChatId === conversation.id}
-									onSelect={selectConversation}
-									onEdit={handleEditConversation}
-									onDelete={handleDeleteConversation}
-									onStop={handleStopGeneration}
-								/>
+								{@render conversationRow(conversation, depth)}
 							</Sidebar.MenuItem>
+						{/each}
+					</Sidebar.Menu>
+				</Sidebar.GroupContent>
+			</Sidebar.Group>
+		{/if}
+
+		{#if !isSearchModeActive && projectGroups.length > 0}
+			<Sidebar.Group class="mt-2 p-0 px-3">
+				<Sidebar.GroupLabel>
+					<div class="flex w-full items-center justify-between gap-1">
+						<a href={ROUTES.PROJECTS} class="flex items-center gap-1 hover:text-foreground">
+							<FolderKanban class="h-3.5 w-3.5" />
+							<span>Projects</span>
+						</a>
+					</div>
+				</Sidebar.GroupLabel>
+				<Sidebar.GroupContent>
+					<Sidebar.Menu>
+						{#each projectGroups as { project, chats } (project.id)}
+							{@const open = !!expandedProjects[project.id]}
+							<Sidebar.MenuItem class="p-0">
+								<div
+									class="group/project flex min-h-8 items-center gap-1 rounded-lg px-1 hover:bg-foreground/10"
+								>
+									<button
+										class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+										onclick={() => (expandedProjects[project.id] = !open)}
+										aria-label={open ? `Collapse ${project.name}` : `Expand ${project.name}`}
+										aria-expanded={open}
+									>
+										<ChevronRight
+											class="h-3.5 w-3.5 transition-transform {open ? 'rotate-90' : ''}"
+										/>
+									</button>
+									<a
+										href={RouterService.project(project.id)}
+										onclick={handleMobileSidebarItemClick}
+										class="min-w-0 flex-1 truncate py-1 text-sm font-medium"
+										title={project.name}
+									>
+										{project.name}
+									</a>
+									<a
+										href={RouterService.newChatInProject(project.id)}
+										onclick={handleMobileSidebarItemClick}
+										class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 group-hover/project:opacity-100 hover:text-foreground focus:opacity-100 max-md:opacity-100"
+										aria-label={`New chat in ${project.name}`}
+										title="New chat in this project"
+									>
+										<Plus class="h-3.5 w-3.5" />
+									</a>
+								</div>
+							</Sidebar.MenuItem>
+							{#if open}
+								{#each chats as { conversation, depth } (conversation.id)}
+									<Sidebar.MenuItem class="mb-1 p-0 pl-5">
+										{@render conversationRow(conversation, depth)}
+									</Sidebar.MenuItem>
+								{/each}
+								{#if chats.length === 0}
+									<div class="py-1 pl-8 text-xs text-muted-foreground italic">No chats yet</div>
+								{/if}
+							{/if}
 						{/each}
 					</Sidebar.Menu>
 				</Sidebar.GroupContent>
@@ -261,22 +405,7 @@
 				<Sidebar.Menu>
 					{#each isSearchModeActive ? conversationTree : unpinnedConversations as { conversation, depth } (conversation.id)}
 						<Sidebar.MenuItem class="mb-1 p-0">
-							<SidebarNavigationConversationItem
-								conversation={{
-									id: conversation.id,
-									name: conversation.name,
-									lastModified: conversation.lastModified,
-									currNode: conversation.currNode,
-									forkedFromConversationId: conversation.forkedFromConversationId,
-									pinned: conversation.pinned
-								}}
-								{depth}
-								isActive={currentChatId === conversation.id}
-								onSelect={selectConversation}
-								onEdit={handleEditConversation}
-								onDelete={handleDeleteConversation}
-								onStop={handleStopGeneration}
-							/>
+							{@render conversationRow(conversation, depth)}
 						</Sidebar.MenuItem>
 					{/each}
 
@@ -337,6 +466,39 @@
 			<Label for="delete-with-forks" class="text-sm">Also delete all forked conversations</Label>
 		</div>
 	{/if}
+</DialogConfirmation>
+
+<DialogConfirmation
+	bind:open={showMoveDialog}
+	title="Move to project"
+	description={selectedConversation ? `Where should "${selectedConversationNamePreview}" go?` : ''}
+	confirmText="Move"
+	cancelText="Cancel"
+	icon={FolderInput}
+	onConfirm={handleConfirmMove}
+	onCancel={() => {
+		showMoveDialog = false;
+		selectedConversation = null;
+	}}
+>
+	<div class="max-h-64 space-y-1 overflow-y-auto py-1" role="radiogroup">
+		<label class="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-accent/50">
+			<input type="radio" name="move-target" value="" bind:group={moveTarget} />
+			<span class="text-sm">No project</span>
+		</label>
+		{#each projectsStore.projects as project (project.id)}
+			<label class="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-accent/50">
+				<input type="radio" name="move-target" value={project.id} bind:group={moveTarget} />
+				<FolderKanban class="h-3.5 w-3.5 text-muted-foreground" />
+				<span class="truncate text-sm">{project.name}</span>
+			</label>
+		{/each}
+		{#if projectsStore.projects.length === 0}
+			<p class="px-2 py-1 text-sm text-muted-foreground">
+				No projects yet. <a class="underline" href={ROUTES.PROJECTS}>Create one</a>.
+			</p>
+		{/if}
+	</div>
 </DialogConfirmation>
 
 <DialogConfirmation

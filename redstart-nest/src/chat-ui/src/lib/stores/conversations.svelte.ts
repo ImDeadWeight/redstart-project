@@ -126,6 +126,41 @@ class ConversationsStore {
 		this.prefs.pendingReasoningEffort = value;
 	}
 
+	/**
+	 * The project a not-yet-created chat will be in (projects-plan Phase 2):
+	 * set by "New chat" on a project page (the `project` URL param) or by
+	 * `/project` before the first message. Cleared with the rest of the
+	 * pending state when another chat opens or a new one starts.
+	 */
+	pendingProjectId = $state<string | null>(null);
+
+	setPendingProject(projectId: string | null): void {
+		this.pendingProjectId = projectId;
+	}
+
+	/** The project of the open chat, or of the chat about to be created. */
+	getProjectId(): string | null {
+		if (this.activeConversation) return this.activeConversation.projectId ?? null;
+		return this.pendingProjectId;
+	}
+
+	/**
+	 * Move a chat into a project, or out of one with null. Nest refuses a
+	 * project the caller may not read, and the error propagates.
+	 */
+	async moveToProject(convId: string, projectId: string | null): Promise<void> {
+		await DatabaseService.updateConversation(convId, { projectId });
+		const apply = (c: DatabaseConversation): DatabaseConversation => {
+			const next = { ...c, projectId };
+			if (!projectId) delete next.projectId;
+			return next;
+		};
+		this.conversations = this.conversations.map((c) => (c.id === convId ? apply(c) : c));
+		if (this.activeConversation?.id === convId) {
+			this.activeConversation = apply(this.activeConversation);
+		}
+	}
+
 	get pendingPromptMode(): string | null {
 		return this.prefs.pendingPromptMode;
 	}
@@ -162,8 +197,7 @@ class ConversationsStore {
 	 * a getter *and* a setter — consumers assign to it directly.
 	 */
 	get titleUpdateConfirmationCallback():
-		| ((currentTitle: string, newTitle: string) => Promise<boolean>)
-		| undefined {
+		((currentTitle: string, newTitle: string) => Promise<boolean>) | undefined {
 		return this.title.titleUpdateConfirmationCallback;
 	}
 	set titleUpdateConfirmationCallback(
@@ -320,7 +354,18 @@ class ConversationsStore {
 	 */
 	async createConversation(name?: string): Promise<string> {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
-		const conversation = await DatabaseService.createConversation(conversationName);
+		const projectId = this.pendingProjectId;
+		this.pendingProjectId = null;
+		let conversation: DatabaseConversation;
+		try {
+			conversation = await DatabaseService.createConversation(conversationName, { projectId });
+		} catch (error) {
+			// A project deleted from another device since it was chosen: start
+			// the chat outside it rather than losing the message.
+			if (!projectId) throw error;
+			toast.error('That project no longer exists; this chat was started outside it.');
+			conversation = await DatabaseService.createConversation(conversationName);
+		}
 
 		if (this.pendingMcpServerOverrides.length > 0) {
 			// Deep clone to plain objects (Svelte 5 $state uses Proxies which can't be cloned to IndexedDB)
@@ -365,6 +410,7 @@ class ConversationsStore {
 
 			this.pendingMcpServerOverrides = [];
 			this.pendingThinkingEnabled = false;
+			this.pendingProjectId = null;
 			this.activeConversation = conversation;
 
 			if (conversation.currNode) {
@@ -396,6 +442,7 @@ class ConversationsStore {
 		// reload defaults so new chats inherit persisted state
 		this.pendingMcpServerOverrides = ConversationMcpOverrides.loadMcpDefaults();
 		this.pendingThinkingEnabled = ConversationPrefs.loadThinkingDefaults();
+		this.pendingProjectId = null;
 	}
 
 	/**

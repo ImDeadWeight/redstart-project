@@ -302,11 +302,18 @@ export async function syncScope({ dir, scope, root, extract, embed, budgetMs = 2
   return { files: onDisk.length, indexed, removed, pending: stale.length - indexed, embedded, unembedded, errors }
 }
 
-/** Search one scope's chunks. A query vector is used when given. */
-export async function searchScope({ dir, scope, query, queryVector = null, limit = 6 }) {
+/**
+ * Search one scope's chunks. A query vector is used when given.
+ * `pathPrefix` (e.g. "Projects/billing/") keeps only files under that folder
+ * of the scope's root, for a project chat (projects-plan D14). Filtered in JS
+ * rather than with LIKE, so a "%" or "_" in a folder name is not a wildcard.
+ * It narrows inside the scope and can never widen it.
+ */
+export async function searchScope({ dir, scope, query, queryVector = null, limit = 6, pathPrefix = null }) {
   const { db: h } = await db(dir)
-  const all = rows(h, 'SELECT path, ord, text, vector FROM chunks WHERE scope = ? AND grant_id IS NULL', [scope])
+  let all = rows(h, 'SELECT path, ord, text, vector FROM chunks WHERE scope = ? AND grant_id IS NULL', [scope])
     .map((r) => ({ path: r.path, ord: r.ord, text: r.text, vector: fromBlob(r.vector) }))
+  if (pathPrefix) all = all.filter((c) => c.path.startsWith(pathPrefix))
   return rankChunks(all, query, queryVector).slice(0, limit)
 }
 

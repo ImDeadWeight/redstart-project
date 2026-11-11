@@ -138,7 +138,8 @@ export class ChatService {
 			enableThinking,
 			reasoningEffort,
 			continueFinalMessage,
-			promptMode
+			promptMode,
+			projectId
 		} = options;
 
 		const normalizedMessages: ApiChatMessageData[] = (
@@ -242,6 +243,12 @@ export class ChatService {
 		// parameter it has no concept of. See docs/connector-contract.md §3.
 		if (promptMode) {
 			requestBody.redstart_mode = promptMode;
+		}
+
+		// Redstart-only field, the same rule as the mode: an id the gateway
+		// resolves against the caller's own projects, then strips.
+		if (projectId) {
+			requestBody.redstart_project = projectId;
 		}
 
 		if (temperature !== undefined) requestBody.temperature = temperature;

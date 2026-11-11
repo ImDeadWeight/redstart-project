@@ -18,7 +18,18 @@ import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 // The shell embeds build/icon.* at compile time, and build/ is generated.
-if (!fs.existsSync(path.join(here, '..', 'build', 'icon.png'))) {
+// Regenerated when missing OR older than what it is made from (the drawing,
+// or the scripts that render it): checking only for a missing file kept a
+// stale icon in every dev build after the drawing or its rendering changed.
+// shell/build.rs then makes cargo rebuild when build/icon.* changes.
+const built = path.join(here, '..', 'build', 'icon.png')
+const sources = [
+  path.join(here, '..', 'assets', 'mascot', 'redstart-nest.txt'),
+  path.join(here, 'mascot.mjs'),
+  path.join(here, 'make-icon.mjs'),
+]
+const mtime = (f) => { try { return fs.statSync(f).mtimeMs } catch { return 0 } }
+if (!fs.existsSync(built) || sources.some((f) => mtime(f) > mtime(built))) {
   execFileSync(process.execPath, [path.join(here, 'make-icon.mjs')], { stdio: 'inherit' })
 }
 const child = spawn('cargo', ['run', '--', ...process.argv.slice(2)], {

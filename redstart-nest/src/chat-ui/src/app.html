@@ -4,10 +4,13 @@
 <html lang="en" class="dark">
 	<head>
 		<meta charset="utf-8" />
-		<link rel="icon" href="favicon.ico" sizes="48x48" />
-		<link rel="icon" href="favicon.svg" sizes="any" type="image/svg+xml" />
+		<!-- ?v= busts browsers' favicon cache, which survives reloads and keeps
+		     showing a replaced icon. Bump it, and FAVICON_VERSION in
+		     src/lib/constants/pwa.ts, whenever the mascot drawing changes. -->
+		<link rel="icon" href="favicon.ico?v=mascot2" sizes="48x48" />
+		<link rel="icon" href="favicon.svg?v=mascot2" sizes="any" type="image/svg+xml" />
 
-		<link rel="apple-touch-icon" href="apple-touch-icon-180x180.png" />
+		<link rel="apple-touch-icon" href="apple-touch-icon-180x180.png?v=mascot2" />
 
 		<link rel="manifest" href="./manifest.webmanifest" />
 

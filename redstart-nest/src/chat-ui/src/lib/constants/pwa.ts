@@ -27,11 +27,18 @@ export const THEME_COLORS = {
 	}
 } as const;
 
+/**
+ * Appended to every favicon URL. Browsers cache favicons by URL and keep
+ * showing a replaced one through reloads, so a new drawing needs a new URL.
+ * Bump it (and the matching ?v= in src/app.html) when the mascot changes.
+ */
+export const FAVICON_VERSION = 'mascot2';
+
 export const FAVICON_PATHS = {
-	ICO_LIGHT: 'favicon.ico',
-	ICO_DARK: 'favicon-dark.ico',
-	SVG_LIGHT: 'favicon.svg',
-	SVG_DARK: 'favicon-dark.svg'
+	ICO_LIGHT: `favicon.ico?v=${FAVICON_VERSION}`,
+	ICO_DARK: `favicon-dark.ico?v=${FAVICON_VERSION}`,
+	SVG_LIGHT: `favicon.svg?v=${FAVICON_VERSION}`,
+	SVG_DARK: `favicon-dark.svg?v=${FAVICON_VERSION}`
 } as const;
 
 export const FAVICON_SELECTORS = {

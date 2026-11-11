@@ -8,7 +8,8 @@
 		Square,
 		GitBranch,
 		Pin,
-		PinOff
+		PinOff,
+		FolderInput
 	} from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -27,6 +28,8 @@
 		onEdit?: (id: string) => void;
 		onSelect?: (id: string) => void;
 		onStop?: (id: string) => void;
+		/** Opens the move-to-project chooser (SidebarNavigation owns the dialog). */
+		onMove?: (id: string) => void;
 	}
 
 	let {
@@ -35,6 +38,7 @@
 		onEdit,
 		onSelect,
 		onStop,
+		onMove,
 		isActive = false,
 		depth = 0
 	}: Props = $props();
@@ -184,6 +188,18 @@
 							handleTogglePin();
 						}
 					},
+					...(onMove
+						? [
+								{
+									icon: FolderInput,
+									label: conversation.projectId ? 'Move to another project' : 'Move to project',
+									onclick: (e: Event) => {
+										e.stopPropagation();
+										onMove(conversation.id);
+									}
+								}
+							]
+						: []),
 					{
 						icon: Pencil,
 						label: 'Edit',

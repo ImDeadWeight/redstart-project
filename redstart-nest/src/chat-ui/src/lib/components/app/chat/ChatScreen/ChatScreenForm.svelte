@@ -3,6 +3,8 @@
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
 	import ChatFormTwigFolder from '$lib/components/app/chat/ChatForm/ChatFormTwigFolder.svelte';
+	import ChatFormProject from '$lib/components/app/chat/ChatForm/ChatFormProject.svelte';
+	import ChatFormMemorySuggestions from '$lib/components/app/chat/ChatForm/ChatFormMemorySuggestions.svelte';
 	import { onMount } from 'svelte';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 
@@ -110,6 +112,8 @@
 </script>
 
 <div class="relative mx-auto max-w-3xl">
+	<!-- What automatic memory found in this chat (projects-plan Phase 3) -->
+	<ChatFormMemorySuggestions />
 	<ChatForm
 		bind:this={chatFormRef}
 		bind:value={message}
@@ -124,6 +128,8 @@
 		onSystemPromptClick={handleSystemPromptClick}
 		onUploadedFileRemove={handleUploadedFileRemove}
 	/>
+	<!-- The chat's project, when it is in one (projects-plan Phase 2) -->
+	<ChatFormProject />
 	<!-- Twig desktop: current local-files folder + change button (no-op elsewhere) -->
 	<ChatFormTwigFolder />
 </div>

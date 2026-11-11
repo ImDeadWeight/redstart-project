@@ -133,8 +133,14 @@ jobs:
       - name: "Security: memory is per account, bounded, framed as data, web saves marked"
         run: node scripts/test-memory.mjs
 
+      - name: "Security: automatic memory reviews only the user's own words; per account"
+        run: node scripts/test-memory-review.mjs
+
       - name: "Security: workflows are per account; org writes need manageOrgWorkflows"
         run: node scripts/test-workflows.mjs
+
+      - name: "Security: projects are per account and owner-only; deleting one keeps its chats"
+        run: node scripts/test-projects.mjs
 
       - name: "Security: document search is per account; index, citations, sync"
         run: node scripts/test-document-search.mjs

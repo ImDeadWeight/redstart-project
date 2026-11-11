@@ -71,20 +71,22 @@ export function withOutline(grid, ch) {
  * square; otherwise each output pixel averages the source pixels it covers
  * (premultiplied, so transparent edges don't darken).
  */
-export function rasterize(grid, size, { pad = 0, palette = PALETTE } = {}) {
+export function rasterize(grid, size, { pad = 0, palette = PALETTE, crop = { x: 0, y: 0, side: SIZE } } = {}) {
   const rgb = Object.fromEntries(Object.entries(palette).map(([k, v]) => [k, hexRgb(v)]))
   const inner = size - pad * 2
   const out = Buffer.alloc(size * size * 4)
-  const whole = inner % SIZE === 0
+  // `crop` is the square of the drawing to show; cells outside it read as transparent.
+  const cell = (sy, sx) => grid[crop.y + sy]?.[crop.x + sx] ?? '_'
+  const whole = inner % crop.side === 0
   const SS = 8 // samples per axis when averaging
   for (let y = 0; y < inner; y++) for (let x = 0; x < inner; x++) {
     let r = 0, g = 0, b = 0, a = 0
     if (whole) {
-      const c = rgb[grid[Math.floor(y * SIZE / inner)][Math.floor(x * SIZE / inner)]]
+      const c = rgb[cell(Math.floor(y * crop.side / inner), Math.floor(x * crop.side / inner))]
       if (c) { [r, g, b] = c; a = 1 }
     } else {
       for (let j = 0; j < SS; j++) for (let i = 0; i < SS; i++) {
-        const c = rgb[grid[Math.floor((y + (j + 0.5) / SS) * SIZE / inner)][Math.floor((x + (i + 0.5) / SS) * SIZE / inner)]]
+        const c = rgb[cell(Math.floor((y + (j + 0.5) / SS) * crop.side / inner), Math.floor((x + (i + 0.5) / SS) * crop.side / inner))]
         if (c) { r += c[0]; g += c[1]; b += c[2]; a++ }
       }
       if (a) { r /= a; g /= a; b /= a; a /= SS * SS }
@@ -92,6 +94,21 @@ export function rasterize(grid, size, { pad = 0, palette = PALETTE } = {}) {
     out.set([Math.round(r), Math.round(g), Math.round(b), Math.round(a * 255)], ((y + pad) * size + x + pad) * 4)
   }
   return out
+}
+
+/** The smallest square around the drawing's pixels, plus `margin`, centred on them. */
+export function contentSquare(grid, margin = 0) {
+  let x0 = SIZE, y0 = SIZE, x1 = -1, y1 = -1
+  grid.forEach((row, y) => [...row].forEach((ch, x) => {
+    if (ch === '_') return
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y)
+  }))
+  const side = Math.max(x1 - x0, y1 - y0) + 1 + margin * 2
+  return {
+    x: Math.round((x0 + x1 + 1) / 2 - side / 2),
+    y: Math.round((y0 + y1 + 1) / 2 - side / 2),
+    side,
+  }
 }
 
 /** Paints `rgba` (w×h) over a solid background colour into a w×h RGBA buffer. */

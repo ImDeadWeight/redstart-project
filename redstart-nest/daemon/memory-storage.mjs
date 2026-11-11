@@ -58,14 +58,32 @@ export function normalizeText(text) {
   return { text: t }
 }
 
+/**
+ * The storage key for one memory scope: the account's own memories, or one of
+ * its projects' (projects-plan D13), `<account key>#project:<id>`. The '#'
+ * cannot occur in an account id or in '_local', so the two never collide.
+ *
+ * THE CALLER VERIFIES THE PROJECT. This module trusts `projectId` the way it
+ * trusts `account`: routes and tools pass only an id that getProject()
+ * returned for this account, never a raw client value.
+ */
+export function scopeKey(account, projectId = null) {
+  const base = memoryKey(account)
+  if (projectId === null || projectId === undefined) return base
+  if (typeof projectId !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(projectId)) {
+    throw new Error('Cannot resolve a memory scope: malformed project id')
+  }
+  return `${base}#project:${projectId}`
+}
+
 /** Newest first. */
-export function listMemories(account) {
-  const list = read().accounts[memoryKey(account)] || []
+export function listMemories(account, { projectId = null } = {}) {
+  const list = read().accounts[scopeKey(account, projectId)] || []
   return [...list].sort((a, b) => b.createdAt - a.createdAt)
 }
 
-export function getMemory(account, id) {
-  return (read().accounts[memoryKey(account)] || []).find((m) => m.id === id) || null
+export function getMemory(account, id, { projectId = null } = {}) {
+  return (read().accounts[scopeKey(account, projectId)] || []).find((m) => m.id === id) || null
 }
 
 /**
@@ -74,11 +92,11 @@ export function getMemory(account, id) {
  *
  * @returns {{ ok: true, memory: object, duplicate?: boolean } | { ok: false, error: string }}
  */
-export function saveMemory(account, text, { conversationId = null, fromWebTurn = false, now = Date.now() } = {}) {
+export function saveMemory(account, text, { conversationId = null, fromWebTurn = false, projectId = null, via = null, now = Date.now() } = {}) {
   const norm = normalizeText(text)
   if (norm.error) return { ok: false, error: norm.error }
   const data = read()
-  const key = memoryKey(account)
+  const key = scopeKey(account, projectId)
   const list = data.accounts[key] || []
   const existing = list.find((m) => m.text.toLowerCase() === norm.text.toLowerCase())
   if (existing) return { ok: true, memory: existing, duplicate: true }
@@ -92,6 +110,9 @@ export function saveMemory(account, text, { conversationId = null, fromWebTurn =
     updatedAt: now,
     source: { conversationId: conversationId || null },
     fromWebTurn: fromWebTurn === true,
+    // How it got here when not by memory_save or the user: 'review' is the
+    // automatic memory pass (memory-review.mjs). Shown, never trusted.
+    ...(via ? { via } : {}),
   }
   data.accounts[key] = [...list, memory]
   write(data)
@@ -99,11 +120,11 @@ export function saveMemory(account, text, { conversationId = null, fromWebTurn =
 }
 
 /** Edit by the user (Settings). A user edit clears the web badge: they have now read it. */
-export function updateMemory(account, id, text, { now = Date.now() } = {}) {
+export function updateMemory(account, id, text, { projectId = null, now = Date.now() } = {}) {
   const norm = normalizeText(text)
   if (norm.error) return { ok: false, error: norm.error }
   const data = read()
-  const key = memoryKey(account)
+  const key = scopeKey(account, projectId)
   const list = data.accounts[key] || []
   const idx = list.findIndex((m) => m.id === id)
   if (idx === -1) return { ok: false, error: 'not found' }
@@ -113,15 +134,26 @@ export function updateMemory(account, id, text, { now = Date.now() } = {}) {
   return { ok: true, memory: list[idx] }
 }
 
-export function deleteMemory(account, id) {
+export function deleteMemory(account, id, { projectId = null } = {}) {
   const data = read()
-  const key = memoryKey(account)
+  const key = scopeKey(account, projectId)
   const list = data.accounts[key] || []
   const next = list.filter((m) => m.id !== id)
   if (next.length === list.length) return false
   data.accounts[key] = next
   write(data)
   return true
+}
+
+/** A deleted project's memories go with it (plan D13). Returns how many. */
+export function deleteProjectMemories(account, projectId) {
+  const data = read()
+  const key = scopeKey(account, projectId)
+  const count = (data.accounts[key] || []).length
+  if (!(key in data.accounts)) return 0
+  delete data.accounts[key]
+  write(data)
+  return count
 }
 
 // ---------------------------------------------------------------------------
@@ -181,19 +213,32 @@ function cosineSimilarity(a, b) {
 }
 
 // ---------------------------------------------------------------------------
-// The prompt block's selection: newest first, within a character budget
+// The prompt block's selection: relevant first, then newest, within a budget
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_PROMPT_BUDGET_CHARS = 1200   // ≈ 300 tokens (plan §3)
 
 /**
- * The memories that fit the budget, newest first, plus how many did not.
- * Pure over its input.
+ * The memories that fit the budget, plus how many did not. Pure over its
+ * input, which is newest first.
+ *
+ * With a `query` (the latest user message), memories sharing words with it
+ * come first, best match first, then the rest newest first (projects-plan
+ * D20). Recency alone dropped an old fact the moment it mattered: "what
+ * database do I use?" in a chat where twenty newer memories had pushed
+ * "Uses Postgres 16" out of the budget. Keyword scoring only, no embedding
+ * call: this runs on every request, and must never wait on a sidecar.
  */
-export function selectForPrompt(memories, budgetChars = DEFAULT_PROMPT_BUDGET_CHARS) {
+export function selectForPrompt(memories, budgetChars = DEFAULT_PROMPT_BUDGET_CHARS, { query = '' } = {}) {
+  let ordered = memories
+  if (typeof query === 'string' && query.trim()) {
+    const scored = memories.map((m, i) => ({ m, i, s: keywordScore(query, m.text) }))
+    const relevant = scored.filter((x) => x.s > 0).sort((a, b) => b.s - a.s || a.i - b.i)
+    ordered = [...relevant.map((x) => x.m), ...scored.filter((x) => x.s === 0).map((x) => x.m)]
+  }
   const chosen = []
   let used = 0
-  for (const m of memories) {
+  for (const m of ordered) {
     const cost = m.text.length + 3
     if (used + cost > budgetChars) break
     chosen.push(m)
@@ -208,11 +253,20 @@ export function selectForPrompt(memories, budgetChars = DEFAULT_PROMPT_BUDGET_CH
  * tools in the request: retrieval dropping memory_save this turn must not make
  * what is remembered vanish. Used by the completions path and the admin preview.
  */
-export function memoriesFor(config, account) {
+export function memoriesFor(config, account, { projectId = null, query = '' } = {}) {
   if (!config?.memory?.enabled) return {}
   try {
-    const { chosen, omitted } = selectForPrompt(listMemories(account), config.memory.promptBudgetChars)
-    return { memories: chosen, memoriesOmitted: omitted }
+    const { chosen, omitted } = selectForPrompt(listMemories(account), config.memory.promptBudgetChars, { query })
+    const out = { memories: chosen, memoriesOmitted: omitted }
+    // A project chat also carries the project's own memories (plan D13), on
+    // their own budget so a busy project cannot crowd out who the user is.
+    // projectId is one the caller already verified (getProject).
+    if (projectId) {
+      const p = selectForPrompt(listMemories(account, { projectId }), config.memory.promptBudgetChars, { query })
+      out.projectMemories = p.chosen
+      out.projectMemoriesOmitted = p.omitted
+    }
+    return out
   } catch {
     return {} // a malformed account gets no memories rather than someone else's
   }
