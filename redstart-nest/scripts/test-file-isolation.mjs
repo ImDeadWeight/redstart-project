@@ -266,6 +266,24 @@ await test('a File System "no such file" on an attached file says where the file
   assert(withAttachmentHint(fine, { path: 'readings.csv' }, cfg, inConv) === fine, 'a success was touched')
 })
 
+await test('🔍 a File System error never names a folder outside the caller\'s own', async () => {
+  // Agent bench, 2026-11-11, write_file under a folder that did not exist:
+  // "ENOENT: no such file or directory, chdir 'E:\...\redstart-nest\shell' -> 'chats\x'".
+  const { pathsToRelative } = await import('../daemon/filesystem-mcp-provider.mjs')
+  const root = resolveUserRoot(dirs.fs, ALICE, { create: true })
+  const err = (text) => textOf(pathsToRelative({ isError: true, content: [{ type: 'text', text }] }, root))
+  for (const leaked of ['E:\\redstart-project\\redstart-nest\\shell', '/opt/redstart/nest', '\\\\server\\share\\nest']) {
+    const out = err(`ENOENT: no such file or directory, chdir '${leaked}' -> 'chats\\conv-1'`)
+    assert(!out.includes(leaked), `LEAK — the server's folder reached the model: ${out}`)
+    assert(out.includes("-> 'chats\\conv-1'") && out.startsWith('ENOENT'), `the rest of the error was lost: ${out}`)
+  }
+  // The caller's own paths stay, relative as before.
+  eq(err(`ENOENT: no such file or directory, open '${path.join(root, 'notes', 'a.txt')}'`), `ENOENT: no such file or directory, open 'notes${path.sep}a.txt'`, 'own path')
+  // A success is the user's own content: left alone.
+  const fine = pathsToRelative({ content: [{ type: 'text', text: "see '/etc/hosts' and 'C:\\Windows'" }] }, root)
+  eq(textOf(fine), "see '/etc/hosts' and 'C:\\Windows'", 'a successful result was rewritten')
+})
+
 await test('two accounts can hold the same filename without collision', async () => {
   await createDoc(ALICE, 'Shared Title', 'alice-version')
   await createDoc(BOB, 'Shared Title', 'bob-version')

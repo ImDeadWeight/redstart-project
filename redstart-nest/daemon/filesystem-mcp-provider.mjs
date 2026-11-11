@@ -341,15 +341,27 @@ export function pathsToRelative(result, userRoot) {
   const variants = [userRoot, userRoot.split(path.sep).join('/')]
   const escaped = variants.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
   const pattern = new RegExp(`(${escaped.join('|')})[\\\\/]?`, 'gi')
+  const clean = (text) => {
+    const relative = text.replace(pattern, '') || '.'
+    return result.isError ? relative.replace(OTHER_ABSOLUTE_PATH_RE, "'<a folder on the server>'") : relative
+  }
   return {
     ...result,
     content: result.content.map((part) =>
-      part?.type === 'text' && typeof part.text === 'string'
-        ? { ...part, text: part.text.replace(pattern, '') || '.' }
-        : part,
+      part?.type === 'text' && typeof part.text === 'string' ? { ...part, text: clean(part.text) } : part,
     ),
   }
 }
+
+// An absolute path, quoted the way Node's fs errors quote one, that is still
+// in an ERROR after the caller's own root was stripped: somewhere else on the
+// server. The upstream server pins a directory by chdir()ing into it, so a
+// write under a folder that does not exist fails with
+//   ENOENT: no such file or directory, chdir '<the daemon's working directory>' -> 'chats\x'
+// which told the model (agent bench, 2026-11-11) where Nest is installed.
+// Errors only: a successful read returns the user's own file contents, which
+// may quote any path they like.
+const OTHER_ABSOLUTE_PATH_RE = /'(?:[A-Za-z]:[\\/]|\\\\|\/)[^'\n]*'/g
 
 /**
  * @param {string} name @param {object} args
