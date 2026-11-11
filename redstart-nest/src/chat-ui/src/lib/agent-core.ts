@@ -49,9 +49,15 @@ export {
 	parseAskArguments,
 	formatAskAnswer
 } from '../../../../../shared/agent-core/ask-user.mjs';
+export {
+	UPDATE_PLAN_TOOL,
+	openSteps,
+	planTailNote
+} from '../../../../../shared/agent-core/update-plan.mjs';
 export type {
 	AskRequest,
 	AskAnswer,
+	PlanStep,
 	ToolCallParserConfig,
 	ParsedToolCall,
 	AgentPorts,

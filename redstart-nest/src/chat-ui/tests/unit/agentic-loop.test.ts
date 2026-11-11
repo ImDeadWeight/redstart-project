@@ -473,3 +473,64 @@ describe('ask_user through the browser ask port', () => {
 		expect(rec.callbacks.onFlowComplete).toHaveBeenCalledTimes(1);
 	});
 });
+
+/**
+ * update_plan through the browser plan port (plan §4, 1.2): saved on the
+ * conversation through conversationsStore, the open steps at the tail of each
+ * request, one completion nudge. The store's persistence is spied: what is
+ * pinned here is the loop's use of it.
+ */
+describe('update_plan through the browser plan port', () => {
+	it('saves the steps on the conversation, sends them at the tail, and nudges once', async () => {
+		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
+		let stored: unknown[] | null = null;
+		const save = vi
+			.spyOn(conversationsStore, 'setConversationPlan')
+			.mockImplementation(async (_id, steps) => void (stored = steps));
+		const get = vi.spyOn(conversationsStore, 'getPlanSteps').mockImplementation(() => stored as never);
+
+		const sent: Array<Array<{ role: string; content: unknown }>> = [];
+		let turn = 0;
+		sendMessage.mockImplementation(
+			async (messages: Array<{ role: string; content: unknown }>, opts: Record<string, (s: string) => void>) => {
+				sent.push(structuredClone(messages));
+				turn += 1;
+				if (turn === 1) {
+					opts.onToolCallChunk?.(
+						JSON.stringify([
+							{
+								id: 'p1',
+								type: 'function',
+								function: {
+									name: 'update_plan',
+									arguments: JSON.stringify({ steps: [{ text: 'read', status: 'done' }, { text: 'write', status: 'pending' }] })
+								}
+							}
+						])
+					);
+					return undefined;
+				}
+				opts.onChunk?.(turn === 2 ? 'Read it.' : 'Wrote it.');
+				return undefined;
+			}
+		);
+
+		try {
+			const { rec, done } = runLoop();
+			await done;
+
+			expect(save).toHaveBeenCalledWith('conv-loop', [
+				{ text: 'read', status: 'done' },
+				{ text: 'write', status: 'pending' }
+			]);
+			expect(agenticStore.session.pendingPermissionRequest('conv-loop')).toBeNull();
+			expect(sent).toHaveLength(3);
+			expect(String(sent[1].at(-1)?.content)).toContain('Current plan');
+			expect(String(sent[2].at(-1)?.content)).toMatch(/^\[Automatic note, not from the user\] These steps are still open:\n- write/);
+			expect(rec.callbacks.onFlowComplete).toHaveBeenCalledTimes(1);
+		} finally {
+			save.mockRestore();
+			get.mockRestore();
+		}
+	});
+});

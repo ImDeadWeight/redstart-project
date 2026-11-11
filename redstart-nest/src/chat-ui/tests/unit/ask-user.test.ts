@@ -210,3 +210,12 @@ describe('answerOpenQuestion (reload, then answer)', () => {
 		expect(send.streamChatCompletion).not.toHaveBeenCalled();
 	});
 });
+
+describe('planProgress (the checklist summary)', () => {
+	it('counts done of all while steps are open; says done, with skips, when none are', async () => {
+		const { planProgress } = await import('$lib/utils/agentic');
+		expect(planProgress([{ text: 'a', status: 'done' }, { text: 'b', status: 'in_progress' }, { text: 'c', status: 'pending' }])).toEqual({ open: 2, label: '1 of 3 done' });
+		expect(planProgress([{ text: 'a', status: 'done' }, { text: 'b', status: 'skipped' }])).toEqual({ open: 0, label: 'done (1 skipped)' });
+		expect(planProgress([{ text: 'a', status: 'done' }])).toEqual({ open: 0, label: 'done' });
+	});
+});

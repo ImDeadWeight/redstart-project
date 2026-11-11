@@ -28,6 +28,7 @@ import { config } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
+import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { ToolPermissionDecision } from '$lib/enums';
 import { DEFAULT_AGENTIC_CONFIG } from '$lib/constants';
 import {
@@ -308,6 +309,13 @@ class AgenticStore {
 				// ask_user (plan §4, 1.1): the question card. Nest offers the tool
 				// because chat-ui declares it answers it (constants/mcp.ts).
 				ask: { user: (request, s) => this.session.requestAnswer(conversationId, request, s) },
+				// update_plan (plan §4, 1.2): kept on the conversation record and
+				// shown above the composer (ChatFormPlan). The core sends the open
+				// steps at the tail of each request and nudges once at the end.
+				plan: {
+					get: () => conversationsStore.getPlanSteps(conversationId),
+					save: (steps) => conversationsStore.setConversationPlan(conversationId, steps)
+				},
 				limit: { askContinue: (s) => this.requestContinue(conversationId, s) },
 				steering: { pending: () => this.session.steeringMessages.has(conversationId) },
 				fallbackParser: () => {

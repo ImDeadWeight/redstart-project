@@ -25,6 +25,7 @@ import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
 import { filterByLeafNodeId } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
+import type { PlanStep } from '$lib/agent-core';
 import { ReasoningEffort } from '$lib/enums';
 
 import { ROUTES } from '$lib/constants/routes';
@@ -532,6 +533,33 @@ class ConversationsStore {
 	 *
 	 *
 	 */
+
+	/** A conversation's update_plan steps, or null (agent-runtime plan §4, 1.2). */
+	getPlanSteps(convId: string): readonly PlanStep[] | null {
+		const conv =
+			this.activeConversation?.id === convId
+				? this.activeConversation
+				: this.conversations.find((c) => c.id === convId);
+		return conv?.plan?.steps ?? null;
+	}
+
+	/**
+	 * Save a conversation's plan (null clears it), then mirror it in memory so
+	 * the loop's next read and the checklist both see it. Throws on a failed
+	 * save: the loop turns that into the tool's error result.
+	 */
+	async setConversationPlan(convId: string, steps: PlanStep[] | null): Promise<void> {
+		const plan = steps ? { steps, updatedAt: Date.now() } : null;
+		await DatabaseService.updateConversation(convId, { plan });
+		const convIndex = this.conversations.findIndex((c) => c.id === convId);
+		if (convIndex !== -1) {
+			this.conversations[convIndex] = { ...this.conversations[convIndex], plan };
+			this.conversations = [...this.conversations];
+		}
+		if (this.activeConversation?.id === convId) {
+			this.activeConversation = { ...this.activeConversation, plan };
+		}
+	}
 
 	/**
 	 * Toggles the pinned status of a conversation.

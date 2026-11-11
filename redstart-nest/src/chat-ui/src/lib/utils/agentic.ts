@@ -11,7 +11,7 @@ import { AttachmentType } from '$lib/enums';
 import { getServerBaseUrl } from './server-url';
 import { getAuthHeaders } from './api-headers';
 import { ASK_USER_TOOL, formatAskAnswer, parseAskArguments } from '$lib/agent-core';
-import type { AskAnswer, AskRequest } from '$lib/agent-core';
+import type { AskAnswer, AskRequest, PlanStep } from '$lib/agent-core';
 
 /**
  * Represents a parsed section of agentic content for display
@@ -380,6 +380,15 @@ export function buildAskAnswer(selected: readonly string[], text: string): AskAn
 	const typed = text.trim();
 	if (chosen.length === 0 && !typed) return null;
 	return { ...(chosen.length ? { chosen: [...chosen] } : {}), ...(typed ? { text: typed } : {}) };
+}
+
+/** The plan checklist's one-line summary: "1 of 3 done", or "done" when nothing is open. */
+export function planProgress(steps: readonly PlanStep[]): { open: number; label: string } {
+	const done = steps.filter((s) => s.status === 'done').length;
+	const skipped = steps.filter((s) => s.status === 'skipped').length;
+	const open = steps.length - done - skipped;
+	if (open > 0) return { open, label: `${done} of ${steps.length} done` };
+	return { open, label: skipped > 0 ? `done (${skipped} skipped)` : 'done' };
 }
 
 /** What a call left unrun by a reload gets as its result. */
