@@ -57,7 +57,7 @@ export function toolDefs(cfg) {
     inputSchema: {
       type: 'object',
       properties: {
-        code: { type: 'string', description: 'Python source. The value of the last line, if it is an expression, is returned.' },
+        code: { type: 'string', description: 'Python source. The value of the last line is returned if it is an expression at the top level (not inside try, if, for or with). Otherwise print() what you need.' },
         timeout_s: { type: 'number', description: `Wall-clock limit in seconds (default ${DEFAULT_TIMEOUT_S}, max ${MAX_TIMEOUT_S}). The kernel is restarted if it is exceeded.` },
       },
       required: ['code'],
@@ -95,6 +95,16 @@ export function workspacePrefixHint(errorText, code, wsRel) {
   return `(run_python already runs inside ${wsRel}/, so open a file there by its bare name: "${example}", not "${prefix}${example}".)`
 }
 
+// What the model reads when its code produced nothing at all. It has to say
+// what to do next. The first wording only described the state ("printed
+// nothing, and its last line was not an expression"); in the agent bench of
+// 2026-11-11 Qwen3-4B got it seven times in one task (multi-recover) and
+// rewrote the same code each time. Its value was the last line of a `try:`
+// block, which looks like "the last line" and is not a top-level expression.
+export const NO_OUTPUT_TEXT =
+  '(No output. The code ran without an error but showed nothing. Only an expression on the last line, at the top level, is returned: ' +
+  'a value inside try, if, for, with or a function is not. Run it again with print(...) around the value you need.)'
+
 /**
  * Word a child reply for the model. Pure; exported for the suite.
  */
@@ -120,7 +130,7 @@ export function formatResult({ reply, error, timedOut, fresh, ranBefore, files, 
     parts.push(`(These are in this conversation's workspace, ${wsRel}/. read_document opens them as "${wsRel}/<name>".)`)
   }
   if (capWarning) parts.push(capWarning)
-  if (!parts.length) parts.push('(no output: the code ran, printed nothing, and its last line was not an expression)')
+  if (!parts.length) parts.push(NO_OUTPUT_TEXT)
   return parts.join('\n')
 }
 

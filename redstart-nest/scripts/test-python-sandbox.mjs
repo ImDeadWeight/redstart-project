@@ -317,6 +317,19 @@ await test('a missing file opened with the chats/<id>/ prefix says to use the ba
   assert(workspacePrefixHint('ZeroDivisionError', "x = 'chats/conv-abc/a'", 'chats/conv-abc') === null, 'hint on an unrelated error')
 })
 
+await test('code that shows nothing is told to print, and the same value at the top level is returned', async () => {
+  // Qwen3-4B's multi-recover code (agent bench, 2026-11-11): the value is the
+  // last line of a try block. Seven runs, seven "no output", no print added.
+  const inTry = "try:\n    total = sum([64, 78, 65])\n    total\nexcept Exception as e:\n    print(f'Error: {e}')"
+  const res = await pythonTool.callTool('run_python', { code: inTry }, cfg, ctx)
+  const text = res.content[0].text
+  assert(!res.isError, text)
+  assert(text === pythonTool.NO_OUTPUT_TEXT, text)
+  assert(/print\(/.test(text) && /inside try/.test(text), `does not say what to do: ${text}`)
+  const top = await pythonTool.callTool('run_python', { code: 'total = sum([64, 78, 65])\ntotal' }, cfg, ctx)
+  assert(/Result: 207/.test(top.content[0].text) && !top.content[0].text.includes('No output'), top.content[0].text)
+})
+
 await test('a Python exception comes back as an error with only the user\'s frames', async () => {
   const res = await pythonTool.callTool('run_python', { code: 'def f():\n    return 1/0\nf()' }, cfg, ctx)
   const text = res.content[0].text
