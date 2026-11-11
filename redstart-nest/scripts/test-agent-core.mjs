@@ -33,6 +33,7 @@ import { readChatStream, mergeToolCallDeltas } from '../../shared/agent-core/cha
 import { parseToolCallsFromTurn } from '../../shared/agent-core/tool-call-parser.mjs'
 import { formatMcpToolResult } from '../../shared/agent-core/tool-result.mjs'
 import { buildFinalTimings } from '../../shared/agent-core/timings.mjs'
+import { attachmentNote } from '../../shared/agent-core/attachment-note.mjs'
 import {
   DENIED_RESULT,
   INTERRUPTED_RESULT,
@@ -569,6 +570,39 @@ await test('arguments that are not a JSON object go back as "{}"; good ones and 
   eq(calls[1].function.arguments, '<parameter=code> 1+1 </parameter>', 'the input is not modified (the UI keeps what the model wrote)')
   eq(out[1].id, 'b', 'id kept')
   eq(wireSafeToolCalls(undefined), undefined, 'undefined passes through')
+})
+
+console.log('\n-- the attachment note --')
+
+const offered = (...names) => (n) => names.includes(n)
+
+await test('the note says how each offered tool reaches the files', async () => {
+  const note = attachmentNote({
+    saved: ['sales.csv', 'notes.txt'],
+    conversationId: 'abc123',
+    hasTool: offered('run_python', 'read_document', 'read_text_file', 'list_directory', 'move_file', 'write_file'),
+  })
+  eq(note, [
+    "[Attached files saved to this chat's workspace: sales.csv, notes.txt",
+    '- run_python runs in that folder: open them by name, e.g. open("sales.csv"). To rename, move or delete them, use run_python (os.rename, os.remove).',
+    '- read_document needs the folder in the path: "chats/abc123/sales.csv".',
+    '- The File System tools (read_text_file, list_directory, move_file, ...) work on a different folder and cannot see these files.]',
+  ].join('\n'), 'full note')
+})
+
+await test('tools that are not offered are not named', async () => {
+  const note = attachmentNote({ saved: ['a.csv'], conversationId: 'c', hasTool: offered('run_python') })
+  eq(note, "[Attached file saved to this chat's workspace: a.csv\n- run_python runs in that folder: open it by name, e.g. open(\"a.csv\"). To rename, move or delete it, use run_python (os.rename, os.remove).]", 'run_python only')
+  assert(!/read_document|File System/.test(note), 'named a tool that is not offered')
+  eq(attachmentNote({ saved: ['a.csv'], conversationId: 'c', hasTool: () => false }), "[Attached file saved to this chat's workspace: a.csv]", 'no tools: the bare line')
+})
+
+await test('failed uploads are reported, and nothing at all is null', async () => {
+  eq(attachmentNote({ saved: [], failed: ['big.bin (too large)'], conversationId: 'c', hasTool: () => true }),
+    "[Could not save to this chat's workspace: big.bin (too large)]", 'failure only')
+  eq(attachmentNote({ saved: [], conversationId: 'c', hasTool: () => true }), null, 'nothing to say')
+  const both = attachmentNote({ saved: ['a.csv'], failed: ['b.csv (quota)'], conversationId: 'c', hasTool: () => false })
+  eq(both.split('\n'), ["[Attached file saved to this chat's workspace: a.csv]", "[Could not save to this chat's workspace: b.csv (quota)]"], 'saved then failed')
 })
 
 console.log('\n-- the core is host-agnostic --')

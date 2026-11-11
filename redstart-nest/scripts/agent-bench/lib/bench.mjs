@@ -25,6 +25,7 @@ import * as crypto from 'node:crypto'
 import { runAgentLoop } from '../../../../shared/agent-core/loop.mjs'
 import { readChatStream } from '../../../../shared/agent-core/chat-stream.mjs'
 import { wireSafeToolCalls } from '../../../../shared/agent-core/tool-calls.mjs'
+import { attachmentNote } from '../../../../shared/agent-core/attachment-note.mjs'
 import { argumentProblem, computeMetrics } from './metrics.mjs'
 import { META_CLASS_KEY } from './nest-client.mjs'
 
@@ -80,18 +81,17 @@ function parseArgs(text) {
 }
 
 /**
- * The note chat-ui appends to a message whose attachments it saved to the
- * workspace (utils/workspace-upload.ts), word for word, so a fixture task is
- * exactly as hard as attaching the files in the chat.
+ * The prompt as the model receives it: the task's words, then the note
+ * chat-ui appends to a message whose attachments it saved to the workspace.
+ * The note comes from the core (attachment-note.mjs), the builder chat-ui's
+ * utils/workspace-upload.ts also uses, so a fixture task is exactly as hard
+ * as attaching the files in the chat.
+ *
+ * @param {{ prompt: string, fixtures: Array<{ path: string }> }} task
+ * @param {{ conversationId: string, hasTool: (name: string) => boolean }} ctx
  */
-export function attachmentNote(paths) {
-  if (paths.length === 0) return null
-  return `[Attached file${paths.length > 1 ? 's' : ''} saved to the Python workspace (run_python's working directory): ${paths.join(', ')}]`
-}
-
-/** The prompt as the model receives it: the task's words, then the note. */
-export function userMessage(task) {
-  const note = attachmentNote(task.fixtures.map((f) => f.path))
+export function userMessage(task, ctx) {
+  const note = attachmentNote({ saved: task.fixtures.map((f) => f.path), ...ctx })
   return note ? `${task.prompt}\n\n${note}` : task.prompt
 }
 
@@ -151,7 +151,7 @@ export async function runTask(nest, task, opts) {
       controller.abort()
     }, task.limits.maxSeconds * 1000)
 
-    const messages = [{ role: 'user', content: userMessage(task) }]
+    const messages = [{ role: 'user', content: userMessage(task, { conversationId, hasTool: (n) => toolsByName.has(n) }) }]
     let turn = 0
 
     try {

@@ -39,6 +39,7 @@ export {
 	DOWNLOAD_ROUTE
 } from '../../../../../shared/agent-core/tool-result.mjs';
 export { mergeToolCallDeltas } from '../../../../../shared/agent-core/chat-stream.mjs';
+export { attachmentNote } from '../../../../../shared/agent-core/attachment-note.mjs';
 export type {
 	ToolCallParserConfig,
 	ParsedToolCall,
