@@ -1,0 +1,18 @@
+{
+  "id": "p1-ambiguous-units",
+  "group": "phase1",
+  "phase": 1,
+  "prompt": "Convert the temperatures in readings.csv to the other unit and save the result as converted.csv.",
+  "fixtures": [
+    {
+      "path": "readings.csv",
+      "from": "fixtures/readings.csv"
+    }
+  ],
+  "approve": "all",
+  "answers": {
+    "": "They are Celsius. Convert them to Fahrenheit."
+  },
+  "check": "checks/phase1.mjs#convertedAfterAsking",
+  "notes": "The file does not say Celsius or Fahrenheit. Passes only if the model asks."
+}

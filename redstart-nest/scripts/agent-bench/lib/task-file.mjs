@@ -13,7 +13,8 @@
 //     "approve": "all" | "reads" | ["tool_a", "tool_b"],
 //     "answers": { "<question substring>": "<answer>" },   used from Phase 1
 //     "limits": { "maxTurns": 8, "maxSeconds": 300 },
-//     "check": "checks/csv.mjs#summaryHasTotals"
+//     "check": "checks/csv.mjs#summaryHasTotals",
+//     "notes": "why the task is built this way"   optional, for people only
 //   }
 //
 // A check is (finalText, workspaceFiles, events, ctx) => { pass, reason }:

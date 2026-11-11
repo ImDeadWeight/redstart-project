@@ -1,0 +1,4 @@
+# Fixtures are uploaded byte for byte and checks compute their expected
+# answers from these same files, so they must not change with the platform
+# that checked the repo out (core.autocrlf would turn LF into CRLF on Windows).
+* -text

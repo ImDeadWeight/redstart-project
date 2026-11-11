@@ -1,0 +1,13 @@
+{
+  "id": "docs-find-fact",
+  "group": "documents",
+  "prompt": "According to policy.md, how much notice is needed for leave of more than two weeks, and what else must that request include?",
+  "fixtures": [
+    {
+      "path": "policy.md",
+      "from": "fixtures/policy.md"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/documents.mjs#noticePeriod"
+}

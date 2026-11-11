@@ -1,0 +1,14 @@
+{
+  "id": "multi-distractor",
+  "group": "multi",
+  "prompt": "What is the internal codename mentioned in project-notes.md?",
+  "fixtures": [
+    {
+      "path": "project-notes.md",
+      "from": "fixtures/project-notes.md"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/multi.mjs#codename",
+  "notes": "The File System tools (read_text_file and friends) look right and point at a different root."
+}

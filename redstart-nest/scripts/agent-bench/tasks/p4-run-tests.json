@@ -1,0 +1,19 @@
+{
+  "id": "p4-run-tests",
+  "group": "phase4",
+  "phase": 4,
+  "prompt": "Run `node --test` in the node-project folder and tell me which test fails and why.",
+  "fixtures": [
+    {
+      "path": "node-project/math.mjs",
+      "from": "fixtures/node-project/math.mjs"
+    },
+    {
+      "path": "node-project/math.test.mjs",
+      "from": "fixtures/node-project/math.test.mjs"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/phase4.mjs#namesFailingTest",
+  "notes": "Needs run_command. Reading the code can also find it, so this can pass early."
+}

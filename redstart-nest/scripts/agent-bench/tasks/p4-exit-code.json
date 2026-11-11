@@ -1,0 +1,14 @@
+{
+  "id": "p4-exit-code",
+  "group": "phase4",
+  "phase": 4,
+  "prompt": "Run `node check-config.mjs` in the workspace and tell me whether it succeeded, including its exit code.",
+  "fixtures": [
+    {
+      "path": "check-config.mjs",
+      "from": "fixtures/check-config.mjs"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/phase4.mjs#reportsExitCode"
+}

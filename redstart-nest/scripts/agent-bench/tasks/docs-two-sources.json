@@ -1,0 +1,17 @@
+{
+  "id": "docs-two-sources",
+  "group": "documents",
+  "prompt": "Using meeting-notes.txt and budget.csv, write a short markdown brief for the committee covering the site, the number of raised beds, and the total budget. Save it as a document called \"Garden project brief\".",
+  "fixtures": [
+    {
+      "path": "meeting-notes.txt",
+      "from": "fixtures/meeting-notes.txt"
+    },
+    {
+      "path": "budget.csv",
+      "from": "fixtures/budget.csv"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/documents.mjs#gardenBrief"
+}

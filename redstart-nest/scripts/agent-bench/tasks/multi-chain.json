@@ -1,0 +1,62 @@
+{
+  "id": "multi-chain",
+  "group": "multi",
+  "prompt": "Start with start.txt and follow its instructions through every file it leads to. What number do you end up with?",
+  "fixtures": [
+    {
+      "path": "start.txt",
+      "from": "fixtures/start.txt"
+    },
+    {
+      "path": "link-a.txt",
+      "from": "fixtures/link-a.txt"
+    },
+    {
+      "path": "link-e.txt",
+      "from": "fixtures/link-e.txt"
+    },
+    {
+      "path": "link-i.txt",
+      "from": "fixtures/link-i.txt"
+    },
+    {
+      "path": "link-o.txt",
+      "from": "fixtures/link-o.txt"
+    },
+    {
+      "path": "link-p.txt",
+      "from": "fixtures/link-p.txt"
+    },
+    {
+      "path": "link-q.txt",
+      "from": "fixtures/link-q.txt"
+    },
+    {
+      "path": "link-r.txt",
+      "from": "fixtures/link-r.txt"
+    },
+    {
+      "path": "link-s.txt",
+      "from": "fixtures/link-s.txt"
+    },
+    {
+      "path": "link-t.txt",
+      "from": "fixtures/link-t.txt"
+    },
+    {
+      "path": "link-u.txt",
+      "from": "fixtures/link-u.txt"
+    },
+    {
+      "path": "link-w.txt",
+      "from": "fixtures/link-w.txt"
+    },
+    {
+      "path": "link-y.txt",
+      "from": "fixtures/link-y.txt"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/multi.mjs#chainResult",
+  "notes": "Thirteen files. Reading them one call per turn exceeds the default 10-turn limit; one Python loop does not."
+}

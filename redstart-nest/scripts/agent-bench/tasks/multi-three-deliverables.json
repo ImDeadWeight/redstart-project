@@ -1,0 +1,13 @@
+{
+  "id": "multi-three-deliverables",
+  "group": "multi",
+  "prompt": "From sales.csv: save the total amount per region to totals.csv, save a bar chart of those totals as a PNG, and tell me the overall total across all regions.",
+  "fixtures": [
+    {
+      "path": "sales.csv",
+      "from": "fixtures/sales.csv"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/multi.mjs#threeDeliverables"
+}

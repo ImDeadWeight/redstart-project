@@ -1,0 +1,21 @@
+{
+  "id": "docs-rename",
+  "group": "documents",
+  "prompt": "Rename the monthly reports so that report_jan.txt becomes 2026-01-report.txt, report_feb.txt becomes 2026-02-report.txt and report_mar.txt becomes 2026-03-report.txt. Keep their contents unchanged.",
+  "fixtures": [
+    {
+      "path": "report_jan.txt",
+      "from": "fixtures/report_jan.txt"
+    },
+    {
+      "path": "report_feb.txt",
+      "from": "fixtures/report_feb.txt"
+    },
+    {
+      "path": "report_mar.txt",
+      "from": "fixtures/report_mar.txt"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/documents.mjs#renamedReports"
+}

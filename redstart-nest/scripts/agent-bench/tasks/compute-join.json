@@ -1,0 +1,17 @@
+{
+  "id": "compute-join",
+  "group": "compute",
+  "prompt": "customers.csv lists our customers and orders.csv their orders. Which customer has the highest total order amount, and what is that total?",
+  "fixtures": [
+    {
+      "path": "customers.csv",
+      "from": "fixtures/customers.csv"
+    },
+    {
+      "path": "orders.csv",
+      "from": "fixtures/orders.csv"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/compute.mjs#topCustomer"
+}

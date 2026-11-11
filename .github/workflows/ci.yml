@@ -88,6 +88,9 @@ jobs:
       - name: "Agent benchmark harness (fake Nest, scripted model)"
         run: node scripts/test-agent-bench.mjs
 
+      - name: "Agent benchmark task set (every check tells right from wrong)"
+        run: node scripts/test-agent-bench-tasks.mjs
+
       - name: "Security: per-account storage scope (path traversal)"
         run: node scripts/test-user-scope.mjs
 

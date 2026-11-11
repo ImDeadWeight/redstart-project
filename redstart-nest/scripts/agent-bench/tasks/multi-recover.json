@@ -1,0 +1,14 @@
+{
+  "id": "multi-recover",
+  "group": "multi",
+  "prompt": "What is the average score in scores.csv? A few rows are malformed; leave those out.",
+  "fixtures": [
+    {
+      "path": "scores.csv",
+      "from": "fixtures/scores.csv"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/multi.mjs#averageScore",
+  "notes": "The malformed rows make a plain pandas read_csv fail: the first call errors, and the run measures recovery."
+}
