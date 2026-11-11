@@ -480,7 +480,28 @@ if (bench) {
   })
 }
 
+console.log('\n-- first-run failures say what to fix --')
+
+await test('a wrong API key: the error names the key and where to get a real one', async () => {
+  process.env.REDSTART_BENCH_API_KEY = '<bench account API key>'
+  let err = null
+  try {
+    await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', outDir, '--quiet'], { log: () => {} })
+  } catch (e) { err = e }
+  process.env.REDSTART_BENCH_API_KEY = API_KEY
+  assert(/rejected the API key \(HTTP 401\)/.test(err?.message ?? '') && /Generate key/.test(err.message), `got ${err?.message}`)
+})
+
 await nest.close()
+
+await test('nothing listening: the error says Nest is not reachable and why that usually is', async () => {
+  let err = null
+  try {
+    await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', outDir, '--quiet'], { log: () => {} })
+  } catch (e) { err = e }
+  assert(/could not reach Nest at/.test(err?.message ?? '') && /model loaded/.test(err.message), `got ${err?.message}`)
+})
+
 fs.rmSync(outDir, { recursive: true, force: true })
 
 const passed = results.filter((r) => r.pass).length

@@ -77,6 +77,24 @@ function commitInfo() {
   }
 }
 
+/**
+ * The two ways a first run usually fails, said in words that point at the
+ * fix: nothing listening (Nest not running, or no model loaded: the gateway
+ * and MCP server only exist while a model runs), and a rejected key.
+ */
+export function explainConnectError(err, opts) {
+  const msg = String(err?.message ?? err)
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH/i.test(msg) || /fetch failed/i.test(String(err?.cause?.message ?? ''))) {
+    return `could not reach Nest at ${opts.mcp} (MCP) / ${opts.gateway} (gateway). Is Redstart running with a model loaded? The gateway and MCP server only run while a model does.`
+  }
+  if (/HTTP 401/.test(msg)) {
+    return opts.apiKey
+      ? 'Nest rejected the API key (HTTP 401). Use the bench account\'s real key: an admin sees it once when creating the account (chat Settings → Accounts), or the account can make one under Profile → Account → Generate key. Put it in REDSTART_BENCH_API_KEY.'
+      : 'Nest requires a login (HTTP 401) and no API key was given. Set REDSTART_BENCH_API_KEY to the bench account\'s key (chat Settings → Accounts, or Profile → Account → Generate key).'
+  }
+  return msg
+}
+
 const pct = (x) => (x == null ? '—' : `${(x * 100).toFixed(0)}%`)
 const num = (x, d = 1) => (x == null ? '—' : x.toFixed(d))
 
@@ -115,8 +133,14 @@ export async function main(argv, io = {}) {
   const tasks = []
   for (const f of files) tasks.push(await loadTask(f))
 
-  const nest = await connectNest({ gateway: opts.gateway, mcp: opts.mcp, apiKey: opts.apiKey })
-  const mcpTools = await nest.listTools()
+  let nest
+  let mcpTools
+  try {
+    nest = await connectNest({ gateway: opts.gateway, mcp: opts.mcp, apiKey: opts.apiKey })
+    mcpTools = await nest.listTools()
+  } catch (err) {
+    throw new Error(explainConnectError(err, opts))
+  }
   if (mcpTools.length === 0) log('warning: Nest offers this account no tools; every tool task will fail')
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
