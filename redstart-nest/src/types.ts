@@ -79,6 +79,10 @@ export type LocalModelFile = {
   size: number
   modified: number
   partial: boolean
+  /** The document-search embedding model — not a chat model. Absent from an older daemon. */
+  embedding?: boolean
+  /** Shard 2..N of a split GGUF — not a loadable path on its own. Absent from an older daemon. */
+  extraShard?: boolean
 }
 
 export type DownloadProgress = {
