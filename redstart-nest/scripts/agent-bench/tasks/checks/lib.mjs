@@ -93,6 +93,11 @@ export function asked(events) {
   return toolCallsNamed(events, 'ask_user').length > 0
 }
 
+/** Did the model call update_plan (Phase 1)? */
+export function planned(events) {
+  return toolCallsNamed(events, 'update_plan').length > 0
+}
+
 /** Did the answer say plainly that something could not be found? */
 export function saysNotFound(text) {
   const t = text ?? ''

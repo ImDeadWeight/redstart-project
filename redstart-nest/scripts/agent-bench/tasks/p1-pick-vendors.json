@@ -1,0 +1,26 @@
+{
+  "id": "p1-pick-vendors",
+  "group": "phase1",
+  "phase": 1,
+  "prompt": "Make a table of the termination notice periods for the vendor contracts I care about, and save it as notice.csv with the columns vendor, notice_days.",
+  "fixtures": [
+    {
+      "path": "vendor-alder.md",
+      "from": "fixtures/vendor-alder.md"
+    },
+    {
+      "path": "vendor-kestrel.md",
+      "from": "fixtures/vendor-kestrel.md"
+    },
+    {
+      "path": "vendor-osprey.md",
+      "from": "fixtures/vendor-osprey.md"
+    }
+  ],
+  "approve": "all",
+  "answers": {
+    "": "Only Kestrel and Osprey."
+  },
+  "check": "checks/phase1.mjs#onlyTheChosenVendors",
+  "notes": "Three contracts, the user wants two. Passes only if the model asks, then leaves Alder out. Doing all three without asking fails."
+}

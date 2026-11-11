@@ -1,0 +1,15 @@
+{
+  "id": "p1-simple-stays-simple",
+  "group": "phase1",
+  "phase": 1,
+  "prompt": "What is the total amount for the North region in sales.csv?",
+  "fixtures": [
+    {
+      "path": "sales.csv",
+      "from": "fixtures/sales.csv"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/phase1.mjs#answeredWithoutAskingOrPlanning",
+  "notes": "A guard: one clear question with one answer. Fails if the model calls ask_user or update_plan, which would mean the Phase 1 tools cost a turn where they add nothing."
+}

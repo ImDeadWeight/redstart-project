@@ -3,7 +3,7 @@
 // a right answer from a wrong one
 // =============================================================================
 // Agent-runtime plan Phase 0.3. A check that passes everything inflates the
-// baseline; one that fails everything hides a real gain. So each of the 24
+// baseline; one that fails everything hides a real gain. So each of the 29
 // tasks gets two cases here: a correct outcome, which must pass, and the
 // plausible wrong outcome a small model actually produces (a near-miss
 // number, the wrong file, a guess, a skipped step), which must fail.
@@ -54,6 +54,11 @@ const X = {
   chain: 368,
   budget: 4011,
   fahrenheit: [69.8, 84.2, 37.4, 42.8, 39.2, 62.6, 42.8, 60.8],
+  // Phase 1 additions (2026-11-11), by hand from the fixtures.
+  byAgeDesc: [['Ada Okafor', 71, 'Osaka'], ['Chen Wei', 67, 'Porto'], ['Farah Haddad', 57, 'Porto'], ['Bruno Silva', 46, 'Belgrade'], ['Emeka Obi', 34, 'Beirut'], ['Dana Kowalski', 26, 'Beirut']],
+  celsiusIfFahrenheit: [-6.1, -1.7, -16.1, -14.4, -15.6, -8.3, -14.4, -8.9],
+  cities: { Osaka: ['Ada Okafor'], Belgrade: ['Bruno Silva'], Porto: ['Chen Wei', 'Farah Haddad'], Beirut: ['Dana Kowalski', 'Emeka Obi'] },
+  averageAge: 50.2,
 }
 
 const call = (name) => ({ t: 0, type: 'tool_call', name })
@@ -64,6 +69,10 @@ const PNG = '\u0089PNG...'
 const NONE = { createdFiles: {} }
 const created = (files) => ({ createdFiles: files })
 const fixedB = fixture('draft_b.md').replace('recieve', 'receive').replace('seperate', 'separate').replace('commitee', 'committee')
+const PLANNED = [call('update_plan')]
+const times = (vals) => vals.map((v, i) => [`${String(i * 3).padStart(2, '0')}:00`, v])
+const cityFiles = (skip) => Object.fromEntries(Object.entries(X.cities).filter(([c]) => c !== skip).map(([c, names]) => [`${c}.txt`, `${names.join('\n')}\n`]))
+const citiesCsv = csvOf('city,count', Object.entries(X.cities).map(([c, n]) => [c, n.length]))
 const invWith = (sku9) => fixture('inventory.csv').replace('SKU-9,Rear light,22.00', `SKU-9,Rear light,${sku9}`)
 
 /**
@@ -151,6 +160,26 @@ const CASES = {
     right: ['Updated SKU-2, SKU-3 and SKU-7. The email has no new price for SKU-9, so I left it unchanged.', { 'inventory.csv': invWith('22.00') }, [], NONE],
     wrong: ['Updated all four, setting SKU-9 to 23.00.', { 'inventory.csv': invWith('23.00') }, [], NONE], why: 'guessed a price',
   },
+  'p1-answer-steers': {
+    right: ['Sorted by age, oldest first.', { 'people.json': 'x', 'sorted.csv': csvOf('name,age,city', X.byAgeDesc) }, ASKED, NONE],
+    wrong: ['Sorted.', { 'people.json': 'x', 'sorted.csv': csvOf('name,age,city', X.people) }, ASKED, NONE], why: 'asked, then sorted by name anyway',
+  },
+  'p1-pick-vendors': {
+    right: ['Saved notice.csv for Kestrel and Osprey.', { 'notice.csv': csvOf('vendor,notice_days', [['Kestrel Analytics', 60], ['Osprey Building Services', 30]]) }, ASKED, NONE],
+    wrong: ['Saved notice.csv.', { 'notice.csv': csvOf('vendor,notice_days', [['Alder Logistics', 90], ['Kestrel Analytics', 60], ['Osprey Building Services', 30]]) }, [], NONE], why: 'did all three without asking',
+  },
+  'p1-assume-on-skip': {
+    right: ['I assumed the readings are in Celsius and converted them to Fahrenheit.', { 'readings.csv': 'x', 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit)) }, ASKED, NONE],
+    wrong: ['Converted and saved converted.csv.', { 'readings.csv': 'x', 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit)) }, ASKED, NONE], why: 'converted without saying what it assumed',
+  },
+  'p1-plan-per-city': {
+    right: [`Done. The average age is ${X.averageAge}.`, { 'people.json': 'x', ...cityFiles(null), 'cities.csv': citiesCsv }, PLANNED, NONE],
+    wrong: [`Done. The average age is ${X.averageAge}.`, { 'people.json': 'x', ...cityFiles('Belgrade'), 'cities.csv': citiesCsv }, PLANNED, NONE], why: 'lost track of one city',
+  },
+  'p1-simple-stays-simple': {
+    right: ['The North region\'s total is 11,123.'],
+    wrong: ['The North region\'s total is 11,123.', {}, ASKED, NONE], why: 'asked a question the request answers',
+  },
   'p4-run-tests': {
     right: ['One test fails: "adds negative numbers". add() takes Math.abs of both arguments, so add(-2, -3) returns 5.'],
     wrong: ['All tests pass.'], why: 'did not run them',
@@ -175,12 +204,12 @@ console.log('\n-- the task set --')
 
 const files = findTaskFiles(TASKS)
 const tasks = []
-await test('every task file loads, and there are 24 in the plan\'s five groups', async () => {
+await test('every task file loads, and there are 29 in the plan\'s five groups (24, plus 5 Phase 1 added 2026-11-11)', async () => {
   for (const f of files) tasks.push(await loadTask(f))
   const groups = {}
   for (const t of tasks) groups[t.group] = (groups[t.group] ?? 0) + 1
-  assert(tasks.length === 24, `${tasks.length} tasks`)
-  const want = { compute: 6, documents: 5, multi: 5, phase1: 4, phase4: 4 }
+  assert(tasks.length === 29, `${tasks.length} tasks`)
+  const want = { compute: 6, documents: 5, multi: 5, phase1: 9, phase4: 4 }
   assert(JSON.stringify(groups, Object.keys(want)) === JSON.stringify(want), `groups ${JSON.stringify(groups)}`)
   return JSON.stringify(groups)
 })
@@ -217,6 +246,37 @@ for (const task of tasks) {
     return wrong.reason
   })
 }
+
+await test('Phase 1 checks: the edges one right/wrong pair does not reach', async () => {
+  const check = (id) => tasks.find((t) => t.id === id).check
+  const skip = check('p1-assume-on-skip')
+  // Either direction is a fair assumption, as long as it is said.
+  const asF = await skip('I treated them as Fahrenheit and converted to Celsius.', { 'converted.csv': csvOf('time,temp_c', times(X.celsiusIfFahrenheit)) }, [], NONE)
+  assert(asF.pass, `Fahrenheit-to-Celsius refused: ${asF.reason}`)
+  const stopped = await skip('You did not say which unit, so I stopped.', {}, ASKED, NONE)
+  assert(!stopped.pass, 'stopping at the skipped question passed')
+  const wrongMaths = await skip('I assumed Celsius.', { 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit.map((f) => f + 1))) }, [], NONE)
+  assert(!wrongMaths.pass, 'a wrong conversion passed')
+
+  const simple = check('p1-simple-stays-simple')
+  assert(!(await simple("The North region's total is 11,123.", {}, PLANNED, NONE)).pass, 'a plan for one number passed')
+  assert(!(await simple("The North region's total is 11,000.", {}, [], NONE)).pass, 'the wrong total passed')
+
+  const vendors = check('p1-pick-vendors')
+  const wrongDays = await vendors('Saved.', { 'notice.csv': csvOf('vendor,notice_days', [['Kestrel', 30], ['Osprey', 60]]) }, ASKED, NONE)
+  assert(!wrongDays.pass, 'swapped notice periods passed')
+
+  const steers = check('p1-answer-steers')
+  assert(!(await steers('Sorted.', { 'sorted.csv': csvOf('name,age,city', X.byAgeDesc) }, [], NONE)).pass, 'the right order without asking passed')
+
+  const city = check('p1-plan-per-city')
+  const noAvg = await city('Done.', { ...cityFiles(null), 'cities.csv': citiesCsv }, [], NONE)
+  assert(!noAvg.pass && /average age/.test(noAvg.reason), `missing average: ${noAvg.reason}`)
+  const bulleted = await city(`Average ${X.averageAge}.`, { ...Object.fromEntries(Object.entries(X.cities).map(([c, n]) => [`${c}.txt`, n.map((x) => `- ${x}`).join('\n')])), 'cities.csv': citiesCsv }, [], NONE)
+  assert(bulleted.pass, `a bulleted list was refused: ${bulleted.reason}`)
+  // The task does not require a plan: solvable without one.
+  return 'either unit, stop, maths, plan on a simple task, swapped days, unasked order, missing average, bullets'
+})
 
 await test('saysNotFound: absence stated around a file name, and not a figure of speech', async () => {
   const { saysNotFound } = await import('./agent-bench/tasks/checks/lib.mjs')
