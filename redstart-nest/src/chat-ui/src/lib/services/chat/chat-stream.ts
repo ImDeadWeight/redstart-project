@@ -13,7 +13,7 @@ import type {
 	ApiChatCompletionToolCallDelta
 } from '$lib/types/api';
 import { extractModelName } from './chat-errors';
-import { mergeToolCallDeltas as coreMergeToolCallDeltas } from '$lib/agent-core';
+import { mergeToolCallDeltas as coreMergeToolCallDeltas, streamErrorMessage } from '$lib/agent-core';
 
 /**
  * Fold one chunk's tool-call deltas into the calls so far. One implementation,
@@ -139,8 +139,15 @@ export async function handleStreamResponse(
 						continue;
 					}
 
+					// A server error mid-reply (see streamErrorMessage). Recorded
+					// here and thrown below, outside the try that swallows a chunk
+					// that fails to parse: the outer catch reports it through onError.
+					let streamError: string | null = null;
 					try {
 						const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
+						// An error chunk has no choices, so the rest of this block
+						// does nothing with it.
+						streamError = streamErrorMessage(parsed);
 						const choice = parsed.choices?.[0];
 						const content = choice?.delta?.content;
 						const reasoningContent = choice?.delta?.reasoning_content;
@@ -188,6 +195,7 @@ export async function handleStreamResponse(
 					} catch (e) {
 						console.error('Error parsing JSON chunk:', e);
 					}
+					if (streamError) throw new Error(streamError);
 				}
 			}
 

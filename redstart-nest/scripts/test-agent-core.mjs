@@ -29,7 +29,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runAgentLoop, createTurnAccumulator } from '../../shared/agent-core/loop.mjs'
-import { readChatStream, mergeToolCallDeltas } from '../../shared/agent-core/chat-stream.mjs'
+import { readChatStream, mergeToolCallDeltas, streamErrorMessage } from '../../shared/agent-core/chat-stream.mjs'
 import { parseToolCallsFromTurn } from '../../shared/agent-core/tool-call-parser.mjs'
 import { formatMcpToolResult } from '../../shared/agent-core/tool-result.mjs'
 import { buildFinalTimings } from '../../shared/agent-core/timings.mjs'
@@ -550,6 +550,43 @@ await test('a non-OK response throws with the status; a stream without [DONE] re
   assert(/HTTP 503: nope/.test(err?.message ?? ''), `got ${err?.message}`)
   const r = await readChatStream(sse([chunk({ content: 'cut' })]), createTurnAccumulator(undefined))
   eq(r.finished, false, 'finished')
+})
+
+await test('an error event mid-stream throws its message, and the partial answer is kept', async () => {
+  // llama-server's real shape, from the 2026-11-11 bench run that scored an
+  // empty answer instead of an error.
+  const acc = createTurnAccumulator(undefined)
+  let err = null
+  try {
+    await readChatStream(sse([
+      chunk({ content: 'Partial ' }),
+      { error: { code: 500, message: 'Context size has been exceeded.', type: 'server_error' } },
+    ]), acc)
+  } catch (e) { err = e }
+  eq(err?.message, 'The server stopped this reply: Context size has been exceeded.', 'thrown message')
+  eq(acc.content, 'Partial ', 'partial answer kept')
+  eq([streamErrorMessage({ choices: [] }), streamErrorMessage({ error: 'boom' })], [null, 'The server stopped this reply: boom'], 'helper shapes')
+})
+
+await test('through the loop, a mid-stream error ends the flow with the error, not an empty answer', async () => {
+  let completed = null
+  let err = null
+  try {
+    await runAgentLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      maxTurns: 3,
+      ports: {
+        model: { streamTurn: async ({ acc }) => { await readChatStream(sse([{ error: { message: 'Context size has been exceeded.' } }]), acc) } },
+        gate: { approve: async () => true },
+        tools: { execute: async () => ({ text: '', isError: false }) },
+        limit: { askContinue: async () => false },
+        steering: { pending: () => false },
+      },
+      callbacks: { onAssistantTurnComplete: async (content) => { completed = content } },
+    })
+  } catch (e) { err = e }
+  assert(/Context size has been exceeded/.test(err?.message ?? ''), `the flow did not fail: ${err?.message}`)
+  eq(completed, '', 'the (empty) partial answer is still stored once')
 })
 
 console.log('\n-- tool calls as sent back to the model --')

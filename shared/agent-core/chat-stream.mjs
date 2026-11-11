@@ -65,9 +65,31 @@ export function mergeToolCallDeltas(existing, deltas, indexOffset = 0) {
 }
 
 /**
+ * The message of an error event inside a completion stream, or null.
+ *
+ * llama-server reports a failure that happens after the reply has started as
+ * an SSE event `data: {"error": {"code": 500, "message": "...", "type":
+ * "server_error"}}` and then closes the stream with no [DONE]. Both readers
+ * used to skip it, so the reply simply ended: the agent bench scored an empty
+ * answer with no error (docs-two-sources, 2026-11-11: "Context size has been
+ * exceeded"), and chat-ui showed nothing at all. Shared so chat-ui's reader
+ * and readChatStream recognise the same shapes.
+ *
+ * @param {any} parsed one parsed `data:` payload
+ * @returns {string | null}
+ */
+export function streamErrorMessage(parsed) {
+	const err = parsed?.error;
+	if (!err) return null;
+	const text = typeof err === 'string' ? err : typeof err.message === 'string' ? err.message : JSON.stringify(err);
+	return `The server stopped this reply: ${text}`;
+}
+
+/**
  * Read a streaming chat completion into `acc`. Resolves at end of stream
  * (or when `signal` aborts, as chat-ui's reader does: the loop checks the
- * signal itself). Throws if the response is not OK or has no body.
+ * signal itself). Throws if the response is not OK, has no body, or carries an
+ * error event mid-stream.
  *
  * @param {Response} response
  * @param {TurnAccumulator} acc
@@ -128,6 +150,10 @@ export async function readChatStream(response, acc, hooks = {}) {
 				} catch {
 					continue;
 				}
+				// Thrown, not skipped: the loop keeps the partial answer and the
+				// host reports the error (see streamErrorMessage).
+				const streamError = streamErrorMessage(parsed);
+				if (streamError) throw new Error(streamError);
 				if (!model && typeof parsed?.model === 'string') model = parsed.model;
 				const delta = parsed?.choices?.[0]?.delta;
 				if (parsed?.timings) {
