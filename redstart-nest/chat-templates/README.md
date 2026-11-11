@@ -24,6 +24,20 @@ calling under llama.cpp: it iterates tool-call arguments with the `| items`
   format the model was trained on (so llama.cpp's parser recognizes it), and
   guards every optional template variable with an `is defined` default.
 
+### Only for the models it was written for
+
+Every template here must have an entry in `BUNDLED_TEMPLATES`
+(`daemon/chat-template-choice.mjs`) listing the GGUF `general.architecture`
+values it is for (`qwen3.6-tools.jinja`: `qwen35`, `qwen35moe`). At launch
+Nest reads the model's header. If the architecture is not on the list, it
+skips the override, uses the model's embedded template, and says so in the
+run's log (`[redstart] chat template: ...`). This matters because the override
+lives on the profile, and picking a different model keeps it: Qwen3-4B
+(`qwen3`) under this template wrote a broken tool-call format (agent bench,
+2026-11-11). A template file not listed there is treated as your own and
+applied unchecked. `scripts/test-chat-template-choice.mjs` fails if a
+`.jinja` here has no entry.
+
 ### Use it
 Point a profile at it. Either set `chatTemplateFile` in the profile config
 (handles paths with spaces), or add to the profile's **Additional Arguments**:

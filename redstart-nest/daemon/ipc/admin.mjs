@@ -39,6 +39,10 @@ export function getFullStatus({ serverState }) {
     startedAt: serverState.startedAt ?? null,
     uptimeMs: running && serverState.startedAt ? Date.now() - serverState.startedAt : null,
     lastError: serverState.lastError ?? null,
+    // Which chat template the running server got: 'embedded', 'override',
+    // 'skipped' (a bundled override that did not fit the model) or
+    // 'user-override'. No path. See chat-template-choice.mjs.
+    chatTemplate: running ? (serverState.chatTemplate ?? null) : null,
     port: config?.port ?? null,
     networkMode: config ? !!config.networkMode : null,
     gateway: { port: config ? getGatewayPort(config.port) : null },
