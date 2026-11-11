@@ -17,6 +17,7 @@
 // No daemon module is imported: the bench must see what a client sees.
 // =============================================================================
 
+import * as crypto from 'node:crypto'
 import { connectMcpClient } from '../../lib/mcp-test-client.mjs'
 import { formatMcpToolResult } from '../../../../shared/agent-core/tool-result.mjs'
 
@@ -133,6 +134,32 @@ export async function connectNest(opts) {
     /** Move one documents-relative file to the account's trash (recoverable). */
     async deleteDocument(relPath) {
       await req('POST', '/files/delete', { json: { space: DOCS_SPACE, path: relPath }, ok: [200, 204, 404] })
+    },
+
+    /**
+     * What llama-server says about the loaded model (the gateway passes
+     * /props through): the model file and its chat template. The bench
+     * records these because a --model-label is only what someone typed, and
+     * a template override can survive a model swap (2026-11-11: the 4B ran
+     * under the 35B's template, labelled with the wrong quantization). Null
+     * when unavailable: diagnostics must never stop a run.
+     *
+     * @returns {Promise<{ modelFile: string | null, chatTemplateSha: string | null, chatTemplateChars: number | null } | null>}
+     */
+    async modelInfo() {
+      try {
+        const res = await req('GET', '/props')
+        const props = await res.json()
+        const modelPath = typeof props?.model_path === 'string' ? props.model_path : null
+        const template = typeof props?.chat_template === 'string' ? props.chat_template : null
+        return {
+          modelFile: modelPath ? modelPath.split(/[\\/]/).pop() : null,
+          chatTemplateSha: template ? crypto.createHash('sha256').update(template).digest('hex').slice(0, 12) : null,
+          chatTemplateChars: template ? template.length : null,
+        }
+      } catch {
+        return null
+      }
     },
 
     /** The raw completions call; the model port reads the stream. */

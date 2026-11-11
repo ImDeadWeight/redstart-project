@@ -26,13 +26,14 @@
 // Run:  node scripts/test-agent-bench.mjs
 // =============================================================================
 
+import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as http from 'node:http'
 import * as net from 'node:net'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { main, parseArgs } from './agent-bench/run.mjs'
+import { main, parseArgs, labelWarning, fallbackWarning } from './agent-bench/run.mjs'
 import { approves } from './agent-bench/lib/bench.mjs'
 import { argumentProblem, computeMetrics } from './agent-bench/lib/metrics.mjs'
 import { findTaskFiles, loadTask } from './agent-bench/lib/task-file.mjs'
@@ -40,6 +41,7 @@ import { findTaskFiles, loadTask } from './agent-bench/lib/task-file.mjs'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.join(here, 'fixtures', 'agent-bench')
 const API_KEY = 'rsk_bench_test_key'
+const FAKE_TEMPLATE = '{% for m in messages %}<|im_start|>{{ m.role }}{% endfor %}'
 
 const results = []
 async function test(name, fn) {
@@ -202,6 +204,11 @@ function startFakeNest(gatewayPort) {
       res.writeHead(200, { 'Content-Type': 'application/octet-stream' })
       return res.end(buf)
     }
+    // llama-server's /props, passed through by the gateway. Fields as
+    // chat-ui's api.d.ts types them.
+    if (req.method === 'GET' && url.pathname === '/props') {
+      return json(res, 200, { model_path: 'C:\\models\\fake-model.gguf', chat_template: FAKE_TEMPLATE })
+    }
     if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
       const body = JSON.parse((await readBody(req)).toString())
       state.completionBodies.push(body)
@@ -345,6 +352,18 @@ await test('task patterns: a folder, a glob, a single file', async () => {
   eq(findTaskFiles(path.join(FIXTURES, 'denied.json')).length, 1, 'file')
 })
 
+await test('a label that does not name the loaded file is warned about', async () => {
+  // The 2026-11-11 case: labelled Q4_K_M, the file was UD-Q4_K_XL.
+  assert(labelWarning('Qwen3-4B-Instruct-2507-Q4_K_M', 'Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf'), 'wrong quant not flagged')
+  eq(labelWarning('Qwen3-4B-Instruct-2507-UD-Q4_K_XL, embedded template', 'Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf'), null, 'label containing the file name')
+  eq(labelWarning('anything', null), null, 'no /props, no warning')
+})
+
+await test('a high fallback rate is warned about, with where to look', async () => {
+  assert(/chat template/.test(fallbackWarning({ fallbackRate: 0.69 }) ?? ''), '69% not flagged')
+  eq([fallbackWarning({ fallbackRate: 0 }), fallbackWarning({ fallbackRate: 0.2 }), fallbackWarning({ fallbackRate: null })], [null, null, null], 'at or under the threshold')
+})
+
 await test('arguments: --model-label required, MCP defaults to the gateway port + 2', async () => {
   let err = null
   try { parseArgs([]) } catch (e) { err = e }
@@ -451,7 +470,19 @@ if (bench) {
 
   await test('a narrated call is recovered by the fallback parser and run', async () => {
     const r = run('narrated')
-    eq([r.verdict.pass, r.metrics.toolCalls], [true, 1], 'pass, calls')
+    eq([r.verdict.pass, r.metrics.toolCalls, r.metrics.fallbackCalls], [true, 1, 1], 'pass, calls, fallback calls')
+    eq(run('read-fixture').metrics.fallbackCalls, 0, 'a structured call is not counted as fallback')
+  })
+
+  await test('the summary records the loaded model file and template hash, and the fallback rate', async () => {
+    const { meta, summary } = JSON.parse(fs.readFileSync(path.join(outDir, 'summary.json'), 'utf8'))
+    eq(meta.model.modelFile, 'fake-model.gguf', 'model file from /props, not the label')
+    eq(meta.model.chatTemplateSha, crypto.createHash('sha256').update(FAKE_TEMPLATE).digest('hex').slice(0, 12), 'template hash')
+    eq(meta.warnings, [], 'label names the file, and fallback is under the threshold')
+    const totalCalls = bench.runs.reduce((a, r) => a + r.metrics.toolCalls, 0)
+    eq(summary.fallbackRate, 1 / totalCalls, 'one fallback call over all calls')
+    const md = fs.readFileSync(path.join(outDir, 'summary.md'), 'utf8')
+    assert(md.includes('| invalid args | fallback |') && md.includes('Model file: fake-model.gguf'), 'summary.md columns and model line')
   })
 
   await test('the turn limit ends the run and is recorded', async () => {

@@ -9,6 +9,10 @@
 //   toolErrors      results that came back isError (denials included)
 //   toolSuccessRate (toolCalls - toolErrors) / toolCalls, null with no calls
 //   invalidArgs     arguments that fail JSON.parse or the tool's schema
+//   fallbackCalls   calls recovered from text by the fallback parser rather
+//                   than parsed by llama-server. Near 0 on a model whose chat
+//                   template fits; 69% for Qwen3-4B under the Qwen3.6
+//                   template (2026-11-11), which is what it is here to catch
 //   retries         a call to a tool whose previous call errored
 //   turns, promptTokens, predictedTokens, wallMs
 //   hitLimit        'turns' | 'seconds' | null
@@ -19,6 +23,8 @@
 // what small models get wrong (missing keys, a string for a number, invented
 // keys) without a validator dependency.
 // =============================================================================
+
+import { FALLBACK_ID_PREFIX } from '../../../../shared/agent-core/tool-call-parser.mjs'
 
 /** @param {unknown} v */
 function jsonType(v) {
@@ -81,6 +87,7 @@ export function computeMetrics(events, verdict) {
   let toolCalls = 0
   let toolErrors = 0
   let invalidArgs = 0
+  let fallbackCalls = 0
   let retries = 0
   let turns = 0
   let promptTokens = 0
@@ -97,6 +104,7 @@ export function computeMetrics(events, verdict) {
     if (e.type === 'tool_call') {
       toolCalls++
       if (e.argsProblem) invalidArgs++
+      if (typeof e.id === 'string' && e.id.startsWith(FALLBACK_ID_PREFIX)) fallbackCalls++
       if (lastErroredByTool.get(e.name)) retries++
     }
     if (e.type === 'tool_result') {
@@ -116,6 +124,7 @@ export function computeMetrics(events, verdict) {
     toolSuccessRate: toolCalls ? (toolCalls - toolErrors) / toolCalls : null,
     invalidArgs,
     invalidArgRate: toolCalls ? invalidArgs / toolCalls : null,
+    fallbackCalls,
     retries,
     turns,
     promptTokens,
@@ -154,6 +163,8 @@ export function summarize(runs) {
     passRate: all.length ? all.filter((m) => m.pass).length / all.length : null,
     toolSuccessRate: totalCalls ? all.reduce((a, m) => a + (m.toolCalls - m.toolErrors), 0) / totalCalls : null,
     invalidArgRate: totalCalls ? all.reduce((a, m) => a + m.invalidArgs, 0) / totalCalls : null,
+    // `?? 0`: a runs.jsonl written before fallbackCalls existed re-summarizes as 0.
+    fallbackRate: totalCalls ? all.reduce((a, m) => a + (m.fallbackCalls ?? 0), 0) / totalCalls : null,
     retriesPerTask: mean(all.map((m) => m.retries)),
     turnsPerTask: mean(all.map((m) => m.turns)),
     predictedTokensPerTask: mean(all.map((m) => m.predictedTokens)),

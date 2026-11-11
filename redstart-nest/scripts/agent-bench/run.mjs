@@ -95,6 +95,32 @@ export function explainConnectError(err, opts) {
   return msg
 }
 
+/**
+ * A warning when the label does not name the loaded model file, or null.
+ * Both 2026-11-11 4B rows were labelled Q4_K_M; the file was UD-Q4_K_XL.
+ *
+ * @param {string} label
+ * @param {string | null | undefined} modelFile
+ */
+export function labelWarning(label, modelFile) {
+  if (!modelFile) return null
+  const norm = (s) => s.toLowerCase().replace(/\.gguf$/, '').replace(/[^a-z0-9]+/g, '')
+  if (norm(label).includes(norm(modelFile))) return null
+  return `warning: the label "${label}" does not name the loaded model file, ${modelFile}. The results row will carry the label; check it.`
+}
+
+// Above this share of recovered calls, the model and its chat template most
+// likely disagree on the tool-call format. 0% for both models on their own
+// templates, 69% for the 4B under the 35B's (2026-11-11).
+export const FALLBACK_WARN_RATE = 0.2
+
+/** @param {{ fallbackRate: number | null }} summary */
+export function fallbackWarning(summary) {
+  if (summary.fallbackRate == null || summary.fallbackRate <= FALLBACK_WARN_RATE) return null
+  return `warning: ${(summary.fallbackRate * 100).toFixed(0)}% of tool calls were recovered by the fallback parser, not parsed by llama-server. ` +
+    'The chat template probably does not fit this model; check the "[redstart] chat template" line in the server log before reading these numbers.'
+}
+
 const pct = (x) => (x == null ? '—' : `${(x * 100).toFixed(0)}%`)
 const num = (x, d = 1) => (x == null ? '—' : x.toFixed(d))
 
@@ -104,9 +130,12 @@ export function summaryMarkdown(meta, summary) {
     '',
     `${meta.date} · commit ${meta.commit} · ${summary.runs} runs (${meta.taskCount} tasks × ${meta.repeat}) · ${meta.toolCount} tools offered · thinking ${meta.thinking ? 'on' : 'off'}`,
     '',
-    '| pass | tool success | invalid args | retries/task | turns/task | tokens/task | s/task | hit a limit |',
-    '|---|---|---|---|---|---|---|---|',
-    `| ${pct(summary.passRate)} | ${pct(summary.toolSuccessRate)} | ${pct(summary.invalidArgRate)} | ${num(summary.retriesPerTask)} | ${num(summary.turnsPerTask)} | ${num(summary.predictedTokensPerTask, 0)} | ${num(summary.wallMsPerTask == null ? null : summary.wallMsPerTask / 1000)} | ${summary.hitLimitRuns} |`,
+    `Model file: ${meta.model?.modelFile ?? 'unknown'} · chat template sha256 ${meta.model?.chatTemplateSha ?? 'unknown'}`,
+    '',
+    ...meta.warnings.flatMap((w) => [`> ${w}`, '']),
+    '| pass | tool success | invalid args | fallback | retries/task | turns/task | tokens/task | s/task | hit a limit |',
+    '|---|---|---|---|---|---|---|---|---|',
+    `| ${pct(summary.passRate)} | ${pct(summary.toolSuccessRate)} | ${pct(summary.invalidArgRate)} | ${pct(summary.fallbackRate)} | ${num(summary.retriesPerTask)} | ${num(summary.turnsPerTask)} | ${num(summary.predictedTokensPerTask, 0)} | ${num(summary.wallMsPerTask == null ? null : summary.wallMsPerTask / 1000)} | ${summary.hitLimitRuns} |`,
     '',
     '| task | group | passes |',
     '|---|---|---|',
@@ -114,7 +143,7 @@ export function summaryMarkdown(meta, summary) {
     '',
     'Row for docs/notes/agent-bench-results.md:',
     '',
-    `| ${meta.date} | ${meta.modelLabel} | ${meta.commit} | ${meta.taskCount}×${meta.repeat} | ${pct(summary.passRate)} | ${pct(summary.toolSuccessRate)} | ${pct(summary.invalidArgRate)} | ${num(summary.retriesPerTask)} | ${num(summary.turnsPerTask)} | ${summary.hitLimitRuns} |`,
+    `| ${meta.date} | ${meta.modelLabel} | ${meta.commit} | ${meta.taskCount}×${meta.repeat} | ${pct(summary.passRate)} | ${pct(summary.toolSuccessRate)} | ${pct(summary.invalidArgRate)} | ${pct(summary.fallbackRate)} | ${num(summary.retriesPerTask)} | ${num(summary.turnsPerTask)} | ${summary.hitLimitRuns} |`,
     '',
   ]
   return lines.join('\n')
@@ -142,6 +171,10 @@ export async function main(argv, io = {}) {
     throw new Error(explainConnectError(err, opts))
   }
   if (mcpTools.length === 0) log('warning: Nest offers this account no tools; every tool task will fail')
+  const model = await nest.modelInfo()
+  const warnings = []
+  const lw = labelWarning(opts.modelLabel, model?.modelFile)
+  if (lw) { warnings.push(lw); log(lw) }
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   const outDir = path.resolve(opts.out ?? path.join(here, 'results', `${stamp}-${opts.modelLabel.replace(/[^A-Za-z0-9_.-]+/g, '_')}`))
@@ -167,6 +200,8 @@ export async function main(argv, io = {}) {
   }
 
   const summary = summarize(runs)
+  const fw = fallbackWarning(summary)
+  if (fw) warnings.push(fw)
   const meta = {
     modelLabel: opts.modelLabel,
     date: new Date().toISOString().slice(0, 10),
@@ -178,6 +213,9 @@ export async function main(argv, io = {}) {
     thinking: !!opts.thinking,
     temperature: opts.temperature ?? null,
     gateway: opts.gateway,
+    // From llama-server's /props, not from the label. null when unavailable.
+    model,
+    warnings,
   }
   fs.writeFileSync(path.join(outDir, 'summary.json'), `${JSON.stringify({ meta, summary }, null, 2)}\n`)
   const md = summaryMarkdown(meta, summary)

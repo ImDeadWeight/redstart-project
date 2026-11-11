@@ -354,12 +354,20 @@ export function parseToolCallsFromTurn(content, reasoningContent, config) {
 }
 
 /**
+ * Every call this parser recovers has an id starting with this, which is how
+ * the agent bench tells a recovered call from one llama-server parsed. A high
+ * share of recovered calls means the model and its chat template disagree on
+ * the tool-call format (agent-bench-results, 2026-11-11).
+ */
+export const FALLBACK_ID_PREFIX = 'fallback_tool_';
+
+/**
  * @param {ParsedToolCall[]} parsed
  * @returns {Array<RawToolCall & { id: string, type: 'function', function: { name: string, arguments: string } }>}
  */
 export function createApiToolCalls(parsed) {
 	return parsed.map((tc, i) => ({
-		id: `fallback_tool_${Date.now()}_${i}`,
+		id: `${FALLBACK_ID_PREFIX}${Date.now()}_${i}`,
 		type: /** @type {const} */ ('function'),
 		function: {
 			name: tc.name,
