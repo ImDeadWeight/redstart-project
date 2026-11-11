@@ -191,7 +191,12 @@ The `tool_policy` block carries only what schemas cannot express:
 - failure handling (*report tool errors verbatim; do not retry destructive calls*)
 - when to reach for a tool at all (*use `run_python` for arithmetic*; *call `ask_user`
   only when two readings lead to different work, never for permission or for what a
-  tool can find out*). Each line is emitted only when the request carries the tool.
+  tool can find out*; *use `update_plan` only for three or more distinct steps*). Each line
+  is emitted only when the request carries the tool.
+
+The `update_plan` checklist itself is never in the system prompt: a step changing would
+rewrite the prompt's head and lose the KV cache. The agent loop sends the open steps as a
+note at the end of each request instead (`shared/agent-core/update-plan.mjs`).
 
 Code contributes the invariants; admins append deployment-specific preferences.
 

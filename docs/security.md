@@ -25,6 +25,7 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 - [Memory](#memory)
 - [Workflows](#workflows)
 - [Projects](#projects)
+- [Asking and planning](#asking-and-planning)
 - [Tool bans](#tool-bans)
 - [Whitelist & SSRF enforcement](#whitelist--ssrf-enforcement)
 - [External MCP servers](#external-mcp-servers)
@@ -404,6 +405,17 @@ A project groups related chats. It has instructions that apply to every chat in 
 
 ---
 
+## Asking and planning
+
+Two tools are defined by Nest but answered by the chat app itself: `ask_user` (the assistant asks you a question, shown as a card with options, a text field and Skip) and `update_plan` (a checklist the assistant keeps for a task with several steps, shown above the message box). Nothing runs on the server for either.
+
+- **Offered only to an app that answers them.** An MCP client gets them only if it says, when it connects, that it handles them. The chat UI and the agent benchmark do. Any other client (Yellowscript, Twig's own loop, a third-party MCP client) never sees them. A direct call is answered with an error. An admin can ban either one by name like any other tool.
+- **Neither needs a permission prompt.** A question changes nothing. The plan is part of the chat record, which the server checks on every save: up to 20 steps, each a short text with one of four states.
+- **A message you type while a question is open is the answer.** A message with attachments is sent as an ordinary message instead, and the question counts as skipped.
+- **The plan is sent with every request while steps are open.** It goes after the last message, not into the system prompt. If the assistant answers while steps are still open, it gets one reminder to finish them or mark them skipped, once per reply. Clearing the plan (the × on the checklist) stops both.
+
+---
+
 ## Tool bans
 
 A profile can ban tools by name, which is the only lever the server has over tools it does not itself provide. Client applications across the ecosystem (Twig today; Blueprints, Yellowscript and Greenhouse as they grow tools) embed their own and hand them to the model already inside the completions request — the server never offered them, so it cannot withhold them either. Banning strips them by name from every request the profile serves, and clients cannot re-enable them.
@@ -577,6 +589,10 @@ The available real upgrade for it is HMAC-SHA256 under a DPAPI-protected pepper,
 ## Known gaps
 
 Stated plainly, because a security document that lists only strengths is not one.
+
+- **A plan you've moved on from keeps steering the chat until it's cleared.** While steps are open, every request carries them and each reply that ends with steps still open gets one reminder to finish them. If you change topic, clear the plan with the × on the checklist. Steps don't expire on their own.
+- **After a reload, a reply that ran several tools keeps only its last result.** The chat stores each tool result as a separate branch off the reply, and reloading follows only the last one, so the earlier results are no longer shown or sent to the model. This predates `ask_user`, which is not affected: answering a question left open by a reload writes its results in order. The fix is planned.
+- **`ask_user` and `update_plan` have not been tried in the running app yet.** They're covered by tests, including mounting the question card and the checklist in a browser, but a real chat with a model calling them hasn't been run.
 
 - **An organization workflow steers what everyone who runs it gets.** Its text is user-tier, so it can't override policy, but whoever holds `manageOrgWorkflows` decides what a commonly used workflow asks the model to do, and nothing reviews an edit. Edits are logged (`workflow` events) with the editor's username, but the store keeps no history of previous text. Grant `manageOrgWorkflows` the way you would grant `managePromptBlocks`.
 - **run_python's sandbox rests on Node's permission model and on Pyodide's internals staying as they are.** Python can reach Pyodide's own JavaScript API, including internals. One of those (its Node socket support) was a real escape under the old Electron Node, which had no network permission. The runtime now refuses it, and the sandbox suite proves that against a counting stub, but a Pyodide release could add a new route. That is why the runtime is hash-pinned and the suite must pass before any upgrade. The suite is part of CI (Linux) and has been run by hand on Windows. It has never run on macOS.
