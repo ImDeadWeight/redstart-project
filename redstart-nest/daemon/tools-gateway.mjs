@@ -325,13 +325,42 @@ function forwardModified(res, internalPort, parsed) {
   })
 
   proxyReq.on('error', err => {
+    if (res.destroyed) return // the client left; cancelUpstreamOnHangUp destroyed us
     if (!res.headersSent) {
       res.writeHead(502, { 'Content-Type': 'text/plain' })
       res.end(`Gateway error: ${err.message}`)
     }
   })
+  cancelUpstreamOnHangUp(res, proxyReq)
   proxyReq.write(payload)
   proxyReq.end()
+}
+
+/**
+ * When the client goes away before the reply is finished, close our own
+ * request to llama-server too.
+ *
+ * llama-server cancels a task only when ITS connection closes. Without this,
+ * a client that disconnected (Stop in the chat UI, a closed tab, a script
+ * interrupted, the agent bench's time limit) stopped receiving the reply, but
+ * the generation behind it ran on to the end or until the context filled.
+ * Found by the agent bench, 2026-11-11: two stopped runs left a small model
+ * looping for 8 minutes (12k and 10k tokens). That filled the shared KV cache
+ * ("failed to find a memory slot"), slowed every other request about
+ * threefold, and finally failed all live requests with "Context size has
+ * been exceeded".
+ *
+ * `close` after `finish` is the normal end of a reply and leaves the request
+ * alone: by then the upstream response has been fully piped.
+ *
+ * @param {import('http').ServerResponse} res
+ * @param {import('http').ClientRequest} proxyReq
+ */
+export function cancelUpstreamOnHangUp(res, proxyReq) {
+  res.on('close', () => {
+    if (res.writableFinished) return
+    proxyReq.destroy()
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -356,7 +385,11 @@ function passthrough(req, res, internalPort) {
   })
 
   req.pipe(proxyReq)
+  // The same leak as completions: llama-server's own /completion and
+  // /v1/completions stream through here.
+  cancelUpstreamOnHangUp(res, proxyReq)
   proxyReq.on('error', err => {
+    if (res.destroyed) return
     if (!res.headersSent) {
       res.writeHead(502, { 'Content-Type': 'text/plain' })
       res.end(`Gateway error: ${err.message}`)
