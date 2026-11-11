@@ -12,9 +12,12 @@
  * - One tool result message per tool call execution
  *
  * **Architecture & Relationships:**
+ * - **shared/agent-core** (via $lib/agent-core): the loop itself, host-agnostic,
+ *   also run by the benchmark under Node and later by the daemon
  * - **ChatService**: Stateless API layer (sendMessage, streaming)
  * - **mcpStore**: MCP connection management and tool execution
- * - **agenticStore** (this): Reactive state + business logic
+ * - **agenticStore** (this): Reactive state, the setup around a flow, and the
+ *   browser's ports into the core
  *
  * @see ChatService in services/chat.service.ts for API operations
  * @see mcpStore in stores/mcp.svelte.ts for MCP operations
@@ -40,20 +43,10 @@ import type {
 } from '$lib/types';
 import type {
 	AgenticMessage,
-	AgenticToolCallList,
 	AgenticFlowCallbacks,
 	AgenticFlowOptions
 } from '$lib/types/agentic';
-import type {
-	ApiChatCompletionToolCall,
-	ApiChatMessageData,
-	ApiChatMessageContentPart
-} from '$lib/types/api';
-import type {
-	ChatMessageTimings,
-	ChatMessageAgenticTimings,
-	ChatMessageAgenticTurnStats
-} from '$lib/types/chat';
+import type { ApiChatMessageData, ApiChatMessageContentPart } from '$lib/types/api';
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra
@@ -104,8 +97,8 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 
 import { AgenticSessionState } from '$lib/stores/agentic/agentic-session.svelte';
 import { AgenticToolExec } from '$lib/stores/agentic/agentic-tool-exec';
-import { AgenticTurn, createTurnAccumulator } from '$lib/stores/agentic/agentic-turn';
-import { buildFinalTimings } from '$lib/stores/agentic/agentic-timings';
+import { AgenticTurn } from '$lib/stores/agentic/agentic-turn';
+import { runAgentLoop } from '$lib/agent-core';
 
 class AgenticStore {
 	/**
@@ -117,13 +110,10 @@ class AgenticStore {
 	 */
 	readonly session = new AgenticSessionState();
 
-	/**
-	 * One turn's tool calls. Returns 'stopped' when it has already completed the
-	 * flow and the loop must return immediately — see the header there.
-	 */
+	/** The browser's tool executors and permission gate (the core's tools/gate ports). */
 	private readonly toolExec = new AgenticToolExec(this.session);
 
-	/** One streaming LLM turn. Fills the caller's accumulator; never ends the flow. */
+	/** The browser's model port: one streaming LLM turn into the core's accumulator. */
 	private readonly turnRunner = new AgenticTurn(this.session);
 
 	get isReady(): boolean {
@@ -275,6 +265,12 @@ class AgenticStore {
 		}
 	}
 
+	/**
+	 * The browser host of the shared loop core (shared/agent-core/loop.mjs).
+	 * Everything the loop does is there; this builds its ports from the stores.
+	 * Kept as a method of this name and shape because tests/unit/agentic-loop.test.ts
+	 * drives the loop through it.
+	 */
 	private async executeAgenticLoop(params: {
 		conversationId: string;
 		messages: ApiChatMessageData[];
@@ -285,235 +281,34 @@ class AgenticStore {
 		signal?: AbortSignal;
 	}): Promise<void> {
 		const { conversationId, messages, options, tools, agenticConfig, callbacks, signal } = params;
-		const {
-			onChunk,
-			onReasoningChunk,
-			onToolCallsStreaming,
-			onAttachments,
-			onModel,
-			onCompletionId,
-			onAssistantTurnComplete,
-			createToolResultMessage,
-			createAssistantMessage,
-			onFlowComplete,
-			onTimings,
-			onTurnComplete
-		} = callbacks;
-
-		const sessionMessages: AgenticMessage[] = toAgenticMessages(messages);
-		let capturedTimings: ChatMessageTimings | undefined;
-		let totalToolCallCount = 0;
-
-		const agenticTimings: ChatMessageAgenticTimings = {
-			turns: 0,
-			toolCallsCount: 0,
-			toolsMs: 0,
-			toolCalls: [],
-			perTurn: [],
-			llm: { predicted_n: 0, predicted_ms: 0, prompt_n: 0, prompt_ms: 0 }
-		};
-		const maxTurns = agenticConfig.maxTurns;
-
 		const effectiveModel = options.model || modelsStore.models[0]?.model || '';
 
-		let turn = 0;
-		while (true) {
-			if (turn >= maxTurns) {
-				// Turn limit reached - ask user whether to continue
-				const shouldContinue = await this.requestContinue(conversationId, signal);
-
-				// Yield to allow Svelte to flush the UI update
-				await new Promise((r) => setTimeout(r, 0));
-
-				if (!shouldContinue || signal?.aborted) {
-					onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-					return;
-				}
-
-				// User chose to continue - extend the limit
-				turn = 0;
+		await runAgentLoop({
+			messages: toAgenticMessages(messages),
+			maxTurns: agenticConfig.maxTurns,
+			callbacks,
+			signal,
+			ports: {
+				model: {
+					streamTurn: ({ acc, messages: sessionMessages, signal: turnSignal }) =>
+						this.turnRunner.runTurn({
+							acc,
+							conversationId,
+							sessionMessages: sessionMessages as ApiChatMessageData[],
+							options,
+							tools,
+							callbacks,
+							signal: turnSignal
+						})
+				},
+				...this.toolExec.ports(conversationId, effectiveModel),
+				limit: { askContinue: (s) => this.requestContinue(conversationId, s) },
+				steering: { pending: () => this.session.steeringMessages.has(conversationId) },
+				progress: (patch) => this.session.updateSession(conversationId, patch),
+				log: (message) => console.log(`[AgenticStore] ${message}`)
 			}
-
-			this.session.updateSession(conversationId, { currentTurn: turn + 1 });
-			agenticTimings.turns = turn + 1;
-
-			if (signal?.aborted) {
-				onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-				return;
-			}
-
-			// For turns > 0, create a new assistant message via callback
-			if (turn > 0 && createAssistantMessage) {
-				await createAssistantMessage();
-			}
-
-			// One mutable object rather than six `let`s: runTurn fills it as chunks
-			// arrive, so the catch below still sees the partial answer if the stream
-			// throws. Copies read out afterwards would be stale on exactly that path.
-			const acc = createTurnAccumulator(capturedTimings);
-
-			const turnStats: ChatMessageAgenticTurnStats = {
-				turn: turn + 1,
-				llm: { predicted_n: 0, predicted_ms: 0, prompt_n: 0, prompt_ms: 0 },
-				toolCalls: [],
-				toolsMs: 0
-			};
-
-			try {
-				await this.turnRunner.runTurn({
-					acc,
-					conversationId,
-					sessionMessages: sessionMessages as ApiChatMessageData[],
-					options,
-					tools,
-					agenticTimings,
-					turnStats,
-					callbacks,
-					signal
-				});
-			} catch (error) {
-				if (signal?.aborted) {
-					// Save whatever we have for this turn before exiting
-					await onAssistantTurnComplete?.(
-						acc.content,
-						acc.reasoning || undefined,
-						buildFinalTimings(acc.captured, agenticTimings),
-						undefined
-					);
-					onFlowComplete?.(buildFinalTimings(acc.captured, agenticTimings));
-					return;
-				}
-				const normalizedError = error instanceof Error ? error : new Error('LLM stream error');
-				// preserve partial output as is, the outer error dialog informs the user separately
-				await onAssistantTurnComplete?.(
-					acc.content,
-					acc.reasoning || undefined,
-					buildFinalTimings(acc.captured, agenticTimings),
-					undefined
-				);
-				onFlowComplete?.(buildFinalTimings(acc.captured, agenticTimings));
-				throw normalizedError;
-			}
-
-			// runTurn writes captured timings into the accumulator; carry them to the
-			// next turn, which seeds a fresh accumulator from this variable.
-			capturedTimings = acc.captured;
-
-			// === Steering check: if a user message was queued during this turn, exit the flow.
-			// The caller (chatStore) will consume the pending message and re-send it normally.
-			if (this.session.steeringMessages.has(conversationId)) {
-				console.log('[AgenticStore] Steering message detected after turn, exiting agentic flow');
-				await onAssistantTurnComplete?.(
-					acc.content,
-					acc.reasoning || undefined,
-					buildFinalTimings(capturedTimings, agenticTimings),
-					acc.toolCalls.length > 0 ? this.normalizeToolCalls(acc.toolCalls) : undefined
-				);
-				onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-				return;
-			}
-
-			// No tool calls = final turn, save and complete
-			if (acc.toolCalls.length === 0) {
-				agenticTimings.perTurn!.push(turnStats);
-
-				const finalTimings = buildFinalTimings(capturedTimings, agenticTimings);
-
-				await onAssistantTurnComplete?.(
-					acc.content,
-					acc.reasoning || undefined,
-					finalTimings,
-					undefined
-				);
-
-				if (finalTimings) onTurnComplete?.(finalTimings);
-
-				onFlowComplete?.(finalTimings);
-
-				return;
-			}
-
-			// Normalize and save assistant turn with tool calls
-			const normalizedCalls = this.normalizeToolCalls(acc.toolCalls);
-			if (normalizedCalls.length === 0) {
-				await onAssistantTurnComplete?.(
-					acc.content,
-					acc.reasoning || undefined,
-					buildFinalTimings(capturedTimings, agenticTimings),
-					undefined
-				);
-				onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-				return;
-			}
-
-			totalToolCallCount += normalizedCalls.length;
-			this.session.updateSession(conversationId, { totalToolCalls: totalToolCallCount });
-
-			// Save the assistant message with its tool calls
-			await onAssistantTurnComplete?.(
-				acc.content,
-				acc.reasoning || undefined,
-				acc.timings,
-				normalizedCalls
-			);
-
-			// Add assistant message to session history
-			sessionMessages.push({
-				role: MessageRole.ASSISTANT,
-				content: acc.content || undefined,
-				reasoning_content: acc.reasoning || undefined,
-				tool_calls: normalizedCalls
-			});
-
-			const toolOutcome = await this.toolExec.runToolCalls({
-				normalizedCalls,
-				conversationId,
-				sessionMessages,
-				agenticTimings,
-				turnStats,
-				capturedTimings,
-				effectiveModel,
-				callbacks,
-				signal
-			});
-
-			// 'stopped' means runToolCalls already called onFlowComplete. Returning
-			// here is what the four inline `return`s used to do; completing again
-			// would fire the callback twice.
-			if (toolOutcome === 'stopped') return;
-
-			if (turnStats.toolCalls.length > 0) {
-				agenticTimings.perTurn!.push(turnStats);
-
-				const intermediateTimings = buildFinalTimings(capturedTimings, agenticTimings);
-				if (intermediateTimings) onTurnComplete?.(intermediateTimings);
-			}
-
-			// If tools were interrupted by a steering message, exit now instead of starting another LLM turn
-			if (this.session.steeringMessages.has(conversationId)) {
-				console.log(
-					'[AgenticStore] Steering message detected after tool execution, exiting agentic flow'
-				);
-				onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-				return;
-			}
-
-			turn++;
-		}
+		});
 	}
-
-	private normalizeToolCalls(toolCalls: ApiChatCompletionToolCall[]): AgenticToolCallList {
-		if (!toolCalls) return [];
-		return toolCalls.map((call, index) => ({
-			id: call?.id ?? `tool_${index}`,
-			type: (call?.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION,
-			function: {
-				name: call?.function?.name ?? '',
-				arguments: call?.function?.arguments ?? ''
-			}
-		}));
-	}
-
 }
 
 export const agenticStore = new AgenticStore();

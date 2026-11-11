@@ -172,7 +172,7 @@ Providers need not run in-process. File System is spawned as a stdio child and w
 
 Every provider must pass the same invariant battery — `scripts/test-provider-conformance.mjs` drives each one over a real MCP connection and asserts that a disabled provider advertises nothing, refuses a direct `tools/call` anyway, and turns malformed input into an error result rather than a crash. Adding a provider to that registry gives it those guarantees for free.
 
-The chat-ui's agentic loop runs the full cycle — model emits a tool call, the chat-ui executes it through the MCP server, the result feeds the next turn — with streaming preserved throughout.
+The chat-ui's agentic loop runs the full cycle — model emits a tool call, the chat-ui executes it through the MCP server, the result feeds the next turn — with streaming preserved throughout. The loop itself is host-agnostic code in `shared/agent-core/` (plain ESM, no DOM, no Node built-ins); chat-ui hosts it by supplying ports for the model stream, the tool executors, the permission prompt, the turn-limit prompt and steering, so a second host (a Node benchmark, and later the daemon) runs the same loop rather than a copy.
 
 ### Centralized MCP management
 

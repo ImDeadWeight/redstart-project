@@ -1,0 +1,18 @@
+{
+  // The agent loop core (../shared/agent-core) is plain ESM with JSDoc types.
+  // chat-ui bundles it but has checkJs off, so its bodies are checked here.
+  // Node-flavoured libs, no DOM: the core may use only what every host has.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "types": [],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["../shared/agent-core/**/*"]
+}
