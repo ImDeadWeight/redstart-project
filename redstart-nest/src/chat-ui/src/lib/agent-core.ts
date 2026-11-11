@@ -23,7 +23,8 @@ export {
 	normalizeToolCalls,
 	isAbortError,
 	DENIED_RESULT,
-	INTERRUPTED_RESULT
+	INTERRUPTED_RESULT,
+	wireSafeToolCalls
 } from '../../../../../shared/agent-core/tool-calls.mjs';
 export {
 	parseToolCallsFromText,

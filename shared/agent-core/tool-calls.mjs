@@ -80,6 +80,44 @@ export function normalizeToolCalls(toolCalls) {
 	}));
 }
 
+/**
+ * Earlier tool calls as they may be SENT back to the model: any whose
+ * arguments are not a JSON object go as "{}".
+ *
+ * llama-server parses the `arguments` string of every tool call in the
+ * request history (common/chat.cpp, func_args_not_string) to render the chat
+ * template, and fails the WHOLE request with HTTP 500 when one does not
+ * parse. So one malformed call (a small model writing
+ * `<parameter=code>...</parameter>` or a bare string) used to kill the
+ * conversation: that turn's call errored, as it should, and then every later
+ * request carried it and was refused. Found by the agent bench, 2026-11-11
+ * (Qwen3-4B: 15 of 24 runs died on turn 2). The call's own error result
+ * already tells the model what was wrong, so nothing it needs is lost.
+ *
+ * Applied where a host builds the request, not to stored messages: the UI
+ * still shows what the model actually wrote.
+ *
+ * @template {{ function?: { name?: string, arguments?: string } }} T
+ * @param {T[] | undefined} toolCalls
+ * @returns {T[] | undefined}
+ */
+export function wireSafeToolCalls(toolCalls) {
+	if (!Array.isArray(toolCalls)) return toolCalls;
+	return toolCalls.map((call) => {
+		const args = call?.function?.arguments;
+		if (typeof args !== 'string') return call;
+		let ok = false;
+		try {
+			const parsed = JSON.parse(args.trim() === '' ? '{}' : args);
+			ok = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed);
+		} catch {
+			ok = false;
+		}
+		if (ok && args.trim() !== '') return call;
+		return { ...call, function: { ...call.function, arguments: '{}' } };
+	});
+}
+
 /** @returns {Promise<void>} */
 function macrotask() {
 	return new Promise((r) => setTimeout(r, 0));

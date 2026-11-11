@@ -25,6 +25,7 @@ import {
 	stripReasoningContent
 } from './chat/chat-message-convert';
 import { parseErrorResponse } from './chat/chat-errors';
+import { wireSafeToolCalls } from '$lib/agent-core';
 
 export class ChatService {
 	/**
@@ -197,7 +198,9 @@ export class ChatService {
 				const mapped: ApiChatCompletionRequest['messages'][0] = {
 					role: msg.role,
 					content: msg.content,
-					tool_calls: msg.tool_calls,
+					// A malformed earlier call would make llama-server refuse the whole
+					// request (see wireSafeToolCalls in shared/agent-core).
+					tool_calls: wireSafeToolCalls(msg.tool_calls),
 					tool_call_id: msg.tool_call_id
 				};
 				// Include reasoning_content from the dedicated field

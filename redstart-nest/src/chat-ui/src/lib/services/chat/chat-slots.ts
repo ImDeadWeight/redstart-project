@@ -15,6 +15,7 @@ import {
 	CONTROL_ACTION
 } from '$lib/constants';
 import { convertDbMessageToApiChatMessageData, stripReasoningContent } from './chat-message-convert';
+import { wireSafeToolCalls } from '$lib/agent-core';
 
 export async function areAllSlotsIdle(model?: string | null, signal?: AbortSignal): Promise<boolean> {
 	try {
@@ -100,7 +101,9 @@ export async function preEncode(
 			const mapped: Record<string, unknown> = {
 				role: msg.role,
 				content: excludeReasoning ? stripReasoningContent(msg.content) : msg.content,
-				tool_calls: msg.tool_calls,
+				// Same request history as a completion, so the same rule: see
+				// wireSafeToolCalls in shared/agent-core.
+				tool_calls: wireSafeToolCalls(msg.tool_calls),
 				tool_call_id: msg.tool_call_id
 			};
 

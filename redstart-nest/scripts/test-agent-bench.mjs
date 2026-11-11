@@ -205,6 +205,15 @@ function startFakeNest(gatewayPort) {
     if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
       const body = JSON.parse((await readBody(req)).toString())
       state.completionBodies.push(body)
+      // As llama-server does (common/chat.cpp, func_args_not_string): every
+      // earlier tool call's arguments must parse, or the whole request fails.
+      for (const m of body.messages) {
+        for (const tc of m.tool_calls ?? []) {
+          try { JSON.parse(tc.function.arguments) } catch (e) {
+            return json(res, 500, { error: { code: 500, message: `Failed to parse tool call arguments as JSON: ${e.message}`, type: 'server_error' } })
+          }
+        }
+      }
       const prompt = body.messages.find((m) => m.role === 'user')?.content ?? ''
       const scriptName = /\[script:(\w+)\]/.exec(prompt)?.[1]
       // The turn is how many assistant messages the request already carries:

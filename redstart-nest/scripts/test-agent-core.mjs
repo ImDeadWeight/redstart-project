@@ -37,6 +37,7 @@ import {
   DENIED_RESULT,
   INTERRUPTED_RESULT,
   normalizeToolCalls,
+  wireSafeToolCalls,
 } from '../../shared/agent-core/tool-calls.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -548,6 +549,26 @@ await test('a non-OK response throws with the status; a stream without [DONE] re
   assert(/HTTP 503: nope/.test(err?.message ?? ''), `got ${err?.message}`)
   const r = await readChatStream(sse([chunk({ content: 'cut' })]), createTurnAccumulator(undefined))
   eq(r.finished, false, 'finished')
+})
+
+console.log('\n-- tool calls as sent back to the model --')
+
+await test('arguments that are not a JSON object go back as "{}"; good ones and other fields untouched', async () => {
+  const good = { id: 'a', type: 'function', function: { name: 't', arguments: '{"x": 1}' } }
+  const calls = [
+    good,
+    { id: 'b', function: { name: 't', arguments: '<parameter=code> 1+1 </parameter>' } },
+    { id: 'c', function: { name: 't', arguments: '"just a string"' } },
+    { id: 'd', function: { name: 't', arguments: '[1, 2]' } },
+    { id: 'e', function: { name: 't', arguments: '' } },
+    { id: 'f', function: { name: 't', arguments: '{"x": 1' } },
+  ]
+  const out = wireSafeToolCalls(calls)
+  eq(out.map((c) => c.function.arguments), ['{"x": 1}', '{}', '{}', '{}', '{}', '{}'], 'arguments')
+  assert(out[0] === good, 'a good call is passed through by identity')
+  eq(calls[1].function.arguments, '<parameter=code> 1+1 </parameter>', 'the input is not modified (the UI keeps what the model wrote)')
+  eq(out[1].id, 'b', 'id kept')
+  eq(wireSafeToolCalls(undefined), undefined, 'undefined passes through')
 })
 
 console.log('\n-- the core is host-agnostic --')

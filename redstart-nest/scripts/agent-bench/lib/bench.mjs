@@ -24,6 +24,7 @@
 import * as crypto from 'node:crypto'
 import { runAgentLoop } from '../../../../shared/agent-core/loop.mjs'
 import { readChatStream } from '../../../../shared/agent-core/chat-stream.mjs'
+import { wireSafeToolCalls } from '../../../../shared/agent-core/tool-calls.mjs'
 import { argumentProblem, computeMetrics } from './metrics.mjs'
 import { META_CLASS_KEY } from './nest-client.mjs'
 
@@ -53,7 +54,9 @@ export function approves(policy, toolName, toolClass) {
 function toWire(messages) {
   return messages.map((m) => {
     const out = { role: m.role, content: m.content ?? '' }
-    if (m.tool_calls) out.tool_calls = m.tool_calls
+    // As chat-ui's ChatService does: a malformed earlier call goes as "{}",
+    // or llama-server refuses the whole request (wireSafeToolCalls).
+    if (m.tool_calls) out.tool_calls = wireSafeToolCalls(m.tool_calls)
     if (m.tool_call_id) out.tool_call_id = m.tool_call_id
     if (m.reasoning_content) out.reasoning_content = m.reasoning_content
     return out
