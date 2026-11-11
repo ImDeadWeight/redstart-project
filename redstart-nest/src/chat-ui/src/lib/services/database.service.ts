@@ -47,6 +47,45 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
+/**
+ * One write at a time, in the order they were asked for.
+ *
+ * Every write below is a read-modify-write of a WHOLE conversation: GET it,
+ * change its message list, PUT the list back. Two in flight at once lose the
+ * first one's change, silently. That happened (2026-11-10): a steered agentic
+ * flow saves its final timings with an un-awaited updateMessage while the
+ * steering re-send adds the user's new message; the timings save read before
+ * the message existed and wrote after, erasing it, and the reply then failed
+ * with "Parent message not found". tests/unit/database-write-order.test.ts.
+ *
+ * Queued here, so each write reads what the previous one wrote. Reads are not
+ * queued. This covers one tab; two tabs or two devices writing the same
+ * conversation can still collide (the server takes whole records), which is
+ * the daemon-as-sole-writer design in the agent-runtime plan (D25).
+ *
+ * Not reentrant: a queued function must not call another queued method, or
+ * it waits for itself. Use the unqueued helpers (putConversation) inside.
+ */
+let writeChain: Promise<unknown> = Promise.resolve();
+
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(fn, fn);
+  // The chain carries on whether this write succeeds or fails.
+  writeChain = run.catch(() => undefined);
+  return run;
+}
+
+async function putConversation(
+  id: string,
+  updates: Partial<Omit<DatabaseConversation, 'id'>>
+): Promise<void> {
+  await apiFetch(`/conversations/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+    headers: { 'X-Redstart-Device-Id': getDeviceId() }
+  });
+}
+
 export class DatabaseService {
   static async createConversation(
     name: string,
@@ -298,11 +337,7 @@ export class DatabaseService {
     id: string,
     updates: Partial<Omit<DatabaseConversation, 'id'>>
   ): Promise<void> {
-    await apiFetch(`/conversations/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(updates),
-      headers: { 'X-Redstart-Device-Id': getDeviceId() }
-    });
+    await putConversation(id, updates);
   }
 
   static async toggleConversationPin(id: string): Promise<boolean> {
@@ -312,7 +347,9 @@ export class DatabaseService {
     });
     if (!conv) throw new Error(`Conversation ${id} not found`);
     const newPinnedState = !conv.pinned;
-    await this.updateConversation(id, { pinned: newPinnedState });
+    // putConversation, not updateConversation: this already holds the write
+    // queue, and the queued updateConversation would wait for it forever.
+    await putConversation(id, { pinned: newPinnedState });
     return newPinnedState;
   }
 
@@ -443,4 +480,26 @@ export class DatabaseService {
 
     return newConv;
   }
+}
+
+// Every method that changes a stored conversation goes through the write
+// queue (see `serialized` above). Wrapped here, once, rather than inside each
+// body, so the list of queued writes is one line to read. None of these may
+// call another of them; toggleConversationPin uses putConversation for that.
+const QUEUED_WRITES = [
+  'createMessageBranch',
+  'createRootMessage',
+  'createSystemMessage',
+  'deleteConversation',
+  'deleteMessage',
+  'deleteMessageCascading',
+  'updateConversation',
+  'toggleConversationPin',
+  'updateMessage'
+] as const;
+
+for (const name of QUEUED_WRITES) {
+  const original = DatabaseService[name] as (...args: unknown[]) => Promise<unknown>;
+  (DatabaseService as unknown as Record<string, unknown>)[name] = (...args: unknown[]) =>
+    serialized(() => original.apply(DatabaseService, args));
 }
