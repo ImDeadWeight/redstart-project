@@ -20,9 +20,17 @@ export async function connectMcpClient(baseUrl, { headers: extraHeaders = {}, ti
 
   async function call(method, params) {
     const id = ++nextId
+    // The timer is cleared however the request settles. Left running, it kept
+    // the process alive for the whole timeout after a success, and after a
+    // fetch that threw it fired into a promise nobody awaited any more: an
+    // unhandled rejection that crashed the process minutes later.
+    let timer
     const promise = new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject })
-      setTimeout(() => {
+      pending.set(id, {
+        resolve: (v) => { clearTimeout(timer); resolve(v) },
+        reject: (e) => { clearTimeout(timer); reject(e) },
+      })
+      timer = setTimeout(() => {
         if (pending.has(id)) { pending.delete(id); reject(new Error(`Timed out waiting for response to ${method}`)) }
       }, timeoutMs)
     })
@@ -36,11 +44,20 @@ export async function connectMcpClient(baseUrl, { headers: extraHeaders = {}, ti
       headers['Mcp-Session-Id'] = sessionId
     }
 
-    const res = await fetch(`${base}/mcp`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
-    })
+    let res
+    try {
+      res = await fetch(`${base}/mcp`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+      })
+    } catch (err) {
+      // Nothing listening, or the connection dropped: settle this request now.
+      const entry = pending.get(id)
+      pending.delete(id)
+      entry?.reject(err)
+      return promise
+    }
 
     if (!res.ok) {
       const text = await res.text().catch(() => '')
