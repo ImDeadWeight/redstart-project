@@ -510,6 +510,51 @@ export function withAttachmentHint(result, args, cfg, ctx) {
   return { ...result, content: result.content.map((p) => (p === first ? { ...p, text: [p.text, hint].join('\n') } : p)) }
 }
 
+// The tools a model uses to look for files, and what each answers when it
+// found none (after pathsToRelative: an empty listing arrives as '.').
+const LOOKING_TOOLS = new Set(['search_files', 'list_directory', 'list_directory_with_sizes', 'directory_tree'])
+const FOUND_NOTHING = new Set(['', '.', '[]', 'No matches found'])
+const MAX_NAMED_ATTACHMENTS = 8
+
+/**
+ * The result of a search or listing that found nothing, with one line added
+ * when this conversation has attached files; otherwise the result unchanged.
+ *
+ * attachmentHint covers a read of a file that is not here. A model that
+ * LOOKS first gets a success, "No matches found", and no error to hang a
+ * hint on: in the agent bench of 2026-11-11 (results T19-49-58, docs-rename)
+ * Qwen3-4B ran search_files("*.txt"), got exactly that, and told the user
+ * the three attached reports could not be found. Nothing is added when the
+ * search found something: the user's File System folder has its own files,
+ * and a listing of them is a complete answer.
+ */
+export function withEmptyLookHint(name, result, cfg, ctx) {
+  if (!LOOKING_TOOLS.has(name) || result?.isError || !Array.isArray(result?.content)) return result
+  const first = result.content.find((p) => p?.type === 'text' && typeof p.text === 'string')
+  if (!first || !FOUND_NOTHING.has(first.text.trim())) return result
+  const conversationId = ctx?.conversationId
+  const docsRoot = cfg?.documents?.enabled ? cfg.documents.outputDir : null
+  if (!docsRoot || !conversationId || !isWellFormedConversationId(conversationId)) return result
+
+  let names
+  try {
+    const ws = resolveWithinRoot(resolveUserRoot(docsRoot, ctx?.account), workspaceRelative(conversationId))
+    names = fs.readdirSync(ws, { recursive: true, withFileTypes: true })
+      .filter((d) => d.isFile())
+      .map((d) => path.relative(ws, path.join(d.parentPath ?? d.path, d.name)).split(path.sep).join('/'))
+      .sort()
+  } catch {
+    return result // no workspace: nothing attached
+  }
+  if (names.length === 0) return result
+
+  const shown = names.slice(0, MAX_NAMED_ATTACHMENTS).join(', ') + (names.length > MAX_NAMED_ATTACHMENTS ? `, and ${names.length - MAX_NAMED_ATTACHMENTS} more` : '')
+  const ways = [`read one with read_document(${JSON.stringify(names[0])})`]
+  if (cfg?.python?.enabled) ways.push('use run_python to read, rename or delete them by name')
+  const hint = `(The files attached to this conversation are not in this folder. They are in the conversation's workspace, which the File System tools cannot reach: ${shown}. To work with them, ${ways.join(', or ')}.)`
+  return { ...result, content: result.content.map((p) => (p === first ? { ...p, text: [p.text, hint].join('\n') } : p)) }
+}
+
 // Provider interface: callTool(name, args, cfg, ctx). `ctx.account` is the
 // authenticated caller (null when auth is off).
 //
@@ -550,7 +595,7 @@ export async function callTool(name, args, cfg, ctx) {
   try {
     const result = await callFilesystemTool(name, args ?? {}, userRoot)
     if (FILE_PRODUCING_TOOLS.has(name)) return withAttachmentHint(withDownloadMarker(result, userRoot, args?.path), args, cfg, ctx)
-    return withAttachmentHint(result, args, cfg, ctx)
+    return withEmptyLookHint(name, withAttachmentHint(result, args, cfg, ctx), cfg, ctx)
   } catch (err) {
     return withAttachmentHint({ isError: true, content: [{ type: 'text', text: `File system error: ${err.message}` }] }, args, cfg, ctx)
   }

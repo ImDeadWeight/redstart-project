@@ -274,6 +274,34 @@ await test('a File System "no such file" on an attached file says where the file
   assert(withAttachmentHint(fine, { path: 'readings.csv' }, cfg, inConv) === fine, 'a success was touched')
 })
 
+await test('a File System search that finds nothing names the conversation\'s attached files', async () => {
+  // Agent bench, 2026-11-11: search_files("*.txt") answered "No matches
+  // found", a success, and the model reported the attachments missing.
+  const { withEmptyLookHint } = await import('../daemon/filesystem-mcp-provider.mjs')
+  const cfg = { ...docsCfg, python: { enabled: true } }
+  const inConv = { account: ALICE, conversationId: 'conv-alice-1' } // readings.csv, sub/notes.txt, alice-secret-plan.md
+  const ok = (text) => ({ content: [{ type: 'text', text }] })
+
+  const out = textOf(withEmptyLookHint('search_files', ok('No matches found'), cfg, inConv))
+  assert(out.startsWith('No matches found\n(The files attached to this conversation are not in this folder.'), out)
+  assert(out.includes('alice-secret-plan.md, readings.csv, sub/notes.txt'), `names: ${out}`)
+  assert(out.includes('read_document("alice-secret-plan.md")') && out.includes('run_python'), `tools: ${out}`)
+  // An empty listing and an empty tree, as they arrive.
+  for (const [name, empty] of [['list_directory', '.'], ['list_directory_with_sizes', ''], ['directory_tree', '[]']]) {
+    assert(textOf(withEmptyLookHint(name, ok(empty), cfg, inConv)).includes('readings.csv'), `${name} "${empty}" got no hint`)
+  }
+
+  // Unchanged: something was found, another tool, an error, no attachments,
+  // no conversation, another account's id.
+  const same = (name, result, c, why) => assert(withEmptyLookHint(name, result, cfg, c) === result, why)
+  same('search_files', ok('notes/a.txt'), inConv, 'a search that found something')
+  same('read_text_file', ok(''), inConv, 'a tool that does not look for files')
+  same('search_files', { isError: true, content: [{ type: 'text', text: 'No matches found' }] }, inConv, 'an error')
+  same('search_files', ok('No matches found'), { account: ALICE, conversationId: 'conv-alice-2' }, 'a conversation with no attachments')
+  same('search_files', ok('No matches found'), ctx(ALICE), 'no conversation')
+  same('search_files', ok('No matches found'), { account: BOB, conversationId: 'conv-alice-1' }, 'LEAK — bob was told the names of alice\'s attachments')
+})
+
 await test('🔍 a File System error never names a folder outside the caller\'s own', async () => {
   // Agent bench, 2026-11-11, write_file under a folder that did not exist:
   // "ENOENT: no such file or directory, chdir 'E:\...\redstart-nest\shell' -> 'chats\x'".
