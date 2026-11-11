@@ -79,12 +79,16 @@ const VARIANTS = {
   V4_pos_invited: { desc: POSITIVE_DESC, line: POSITIVE_LINE, invite: true },
 }
 
-// The bench's must-ask tasks, cut at the point where the files have been read.
+// The bench's asking tasks, cut at the point where the files have been read
+// (a task with no files starts at the request). `guard` is the one that
+// should NOT ask: the file settles it. Updated 2026-11-11 with the task set:
+// the old units and drafts points could be settled without asking.
 const TASKS = {
-  units: { prompt: 'Convert the temperatures in readings.csv to the other unit and save the result as converted.csv.', files: ['readings.csv'] },
-  drafts: { prompt: 'Fix the spelling mistakes in the draft.', files: ['draft_a.md', 'draft_b.md'] },
+  name: { prompt: "Write a short thank-you note to the volunteers who ran Saturday's bike repair stall, sign it with my name, and save it as thanks.md.", files: [] },
+  discount: { prompt: 'Apply our standard customer discount to every price in quote.csv and save the result as quote_discounted.csv, with the same columns.', files: ['quote.csv'] },
   vendors: { prompt: 'Make a table of the termination notice periods for the vendor contracts I care about, and save it as notice.csv with the columns vendor, notice_days.', files: ['vendor-alder.md', 'vendor-kestrel.md', 'vendor-osprey.md'] },
   order: { prompt: 'Sort the people in people.json and save them as sorted.csv with the columns name, age, city. I have a particular order in mind.', files: ['people.json'] },
+  guard: { prompt: 'Convert the temperatures in readings_c.csv to the other unit and save the result as converted.csv.', files: ['readings_c.csv'] },
 }
 
 function messages(task, v) {
@@ -97,7 +101,7 @@ function messages(task, v) {
   return [
     { role: 'system', content: system },
     { role: 'user', content: user },
-    { role: 'assistant', content: 'Let me read the files first.', tool_calls: calls },
+    ...(calls.length ? [{ role: 'assistant', content: 'Let me read the files first.', tool_calls: calls }] : []),
     ...task.files.map((f, i) => ({ role: 'tool', tool_call_id: `r${i}`, content: fs.readFileSync(path.join(FX, f), 'utf8') })),
   ]
 }

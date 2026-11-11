@@ -88,9 +88,14 @@ export function toolCallsNamed(events, name) {
   return events.filter((e) => e.type === 'tool_call' && e.name === name)
 }
 
-/** Did the model call ask_user (Phase 1)? */
+/**
+ * Did the model ask the user (Phase 1)? Through ask_user, or, only when the
+ * bench runs with --text-asks answer, a reply ending in a question that the
+ * bench answered. With the default (--text-asks end) the second never
+ * happens, so this means the tool, as before 2026-11-11.
+ */
 export function asked(events) {
-  return toolCallsNamed(events, 'ask_user').length > 0
+  return toolCallsNamed(events, 'ask_user').length > 0 || (events ?? []).some((e) => e.type === 'text_ask')
 }
 
 /** Did the model call update_plan (Phase 1)? */

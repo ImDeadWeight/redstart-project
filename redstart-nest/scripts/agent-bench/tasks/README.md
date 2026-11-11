@@ -1,7 +1,7 @@
 # Agent benchmark tasks
 
-The 24 tasks of agent-runtime plan Phase 0.3, plus five Phase 1 tasks added
-once ask_user and update_plan existed (2026-11-11): 29 in five groups. Run them with
+The 24 tasks of agent-runtime plan Phase 0.3, with the Phase 1 group revised
+once ask_user and update_plan existed (2026-11-11): 31 in five groups. Run them with
 `node scripts/agent-bench/run.mjs --model-label "<model> <quant>"` against a
 Nest with a model loaded (see the header of `run.mjs`).
 
@@ -27,30 +27,52 @@ refusal), never how many calls it took. `scripts/test-agent-bench-tasks.mjs`
 | multi-chain | multi | run_python or read_document | the end of a 13-file chain (one file per turn takes 14 turns; the limit was 10 until 2026-11-11, now 30) |
 | multi-find-tool | multi | list_documents | counts the files without running code |
 | multi-distractor | multi | read_document | the codename, despite the File System tools' different root |
-| p1-ambiguous-units | phase 1 | ask_user | asked which unit, then converted |
-| p1-which-draft | phase 1 | ask_user | asked which draft, fixed only that one |
-| p1-five-steps | phase 1 | update_plan helps | all five steps, including the easy-to-forget fourth |
-| p1-stop-and-report | phase 1 | — | did not guess SKU-9's price, and said so |
-| p1-answer-steers | phase 1 | ask_user | asked the order, then sorted by the answer (age, oldest first), not by name |
+| p1-sign-off-name | phase 1 | ask_user | thanks.md signed "Priya Natarajan", a name in no file |
+| p1-standard-discount | phase 1 | ask_user | every price in quote.csv cut by the 12% it was told, not a guessed rate |
 | p1-pick-vendors | phase 1 | ask_user | asked which contracts, then only Kestrel (60 days) and Osprey (30), no Alder |
-| p1-assume-on-skip | phase 1 | — (a question is skipped) | converted anyway, either direction, and said which unit it assumed |
-| p1-plan-per-city | phase 1 | update_plan helps | four city files, cities.csv, and the average age (50.2) |
+| p1-answer-steers | phase 1 | ask_user | asked the order, then sorted by the answer (age, oldest first), not by name |
+| p1-skip-no-invent | phase 1 | — (a question is skipped) | the note written with a placeholder for the name (or says it is needed), no made-up name |
+| p1-resolved-in-file | phase 1 | — (a guard) | converted without asking: the column is temp_c |
 | p1-simple-stays-simple | phase 1 | — (a guard) | 11,123 for North, with no ask_user and no update_plan |
+| p1-five-steps | phase 1 | update_plan helps | all five steps, including the easy-to-forget fourth |
+| p1-plan-eight-deliverables | phase 1 | update_plan helps | eight outputs over two files, ending with a manifest of every file made |
+| p1-plan-missing-input | phase 1 | update_plan helps | steps 1 and 3 done, no net.csv made up, and says returns.csv is missing |
+| p1-stop-and-report | phase 1 | — | the three new prices applied, SKU-9 left alone, and said so |
 | p4-run-tests | phase 4 | run_command | names the failing test |
 | p4-fix-test | phase 4 | run_command helps | math.mjs fixed, the test untouched |
 | p4-git-log | phase 4 | run_command | the third most recent commit's author and message |
 | p4-exit-code | phase 4 | run_command | reports failure, exit code 3, and why |
 
 Phase 1 and Phase 4 tasks are expected to fail until those phases land; that
-is how a phase shows it helped. Of the five added later, p1-assume-on-skip,
-p1-plan-per-city and p1-simple-stays-simple can pass with no Phase 1 tool at
-all. The last is the guard the other way: it fails if the tools are used
-where they add nothing, so a Phase 1 change that makes the model ask or plan
-on everything shows up as a regression there (and in the summary's
-`ask_user: ... unanswered` and `update_plan` counts across the 20 tasks that
-never need either). Three can pass early, and the results say so
-when they do: p1-five-steps and p1-stop-and-report are solvable today, and
-p4-fix-test can be done by editing the file with run_python.
+is how a phase shows it helped. p4-fix-test can pass early, by editing the
+file with run_python.
+
+**The Phase 1 group was revised on 2026-11-11**, after the first runs and the
+ask_user probe (`probe-ask.mjs`). Four tasks went because a model could pass
+or fail them for the wrong reason: p1-ambiguous-units (the value range settles
+Celsius, so guessing was fair), p1-which-draft (fixing both drafts is a
+defensible reading), p1-assume-on-skip (judged on how the reply was worded)
+and p1-plan-per-city (both models passed it with no plan). Their results from
+before then do not carry over. The rules the group now follows:
+
+- **Must-ask tasks need a fact that is in no file and cannot be guessed** (a
+  name, a rate, a preference). A guess gives a wrong file, so passing means
+  the model asked.
+- **Two guards fail on a question that was not needed**: p1-resolved-in-file
+  (the file settles it) and p1-simple-stays-simple (also fails on a plan). A
+  change that makes the model ask or plan on everything shows up there.
+- **A skipped question must not become an invention** (p1-skip-no-invent),
+  judged on the file, not the reply's wording.
+- **Planning tasks are long, or contain a step that cannot be done**, so a plan
+  and the completion check have something to do. p1-five-steps,
+  p1-plan-eight-deliverables and p1-plan-missing-input can all pass without a
+  plan; what `--plan off` against `--plan full` shows is whether it helps.
+
+A model often asks in its reply text instead of calling ask_user. By default
+that ends the run, and the must-ask tasks fail. `--text-asks answer` has the
+bench answer such a question from the task's `answers`, as a chat user would,
+and the checks count it as asking. The summary reports tool asks and text asks
+separately, so the two can be compared.
 
 `fixtures/` is byte-stable (`.gitattributes`: `-text`). The data files were
 generated with a fixed seed. Checks compute their expected answers from these

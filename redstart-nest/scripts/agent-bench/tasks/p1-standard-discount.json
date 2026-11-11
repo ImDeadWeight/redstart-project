@@ -1,0 +1,18 @@
+{
+  "id": "p1-standard-discount",
+  "group": "phase1",
+  "phase": 1,
+  "prompt": "Apply our standard customer discount to every price in quote.csv and save the result as quote_discounted.csv, with the same columns.",
+  "fixtures": [
+    {
+      "path": "quote.csv",
+      "from": "fixtures/quote.csv"
+    }
+  ],
+  "approve": "all",
+  "answers": {
+    "": "Our standard discount is 12%."
+  },
+  "check": "checks/phase1.mjs#discountedByTheAnswer",
+  "notes": "Replaces p1-ambiguous-units (2026-11-11). The rate is in no file; any guessed rate (10%, 15%) gives wrong prices. The units task could be settled from the value range, so a model that guessed Celsius was not wrong to."
+}

@@ -1,0 +1,19 @@
+{
+  "id": "p1-plan-eight-deliverables",
+  "group": "phase1",
+  "phase": 1,
+  "prompt": "Using sales.csv and people.json, please: (1) save the total amount per region to totals.csv; (2) save a bar chart of those totals as a PNG; (3) save the number of people per city to cities.csv with the columns city, count; (4) write the oldest person's name, and nothing else, to oldest.txt; (5) write the North region's total, and nothing else, to north.txt; (6) write summary.md stating the overall sales total; (7) tell me the age of the youngest person; (8) finally, write manifest.txt listing the name of every file you created, one per line.",
+  "fixtures": [
+    {
+      "path": "sales.csv",
+      "from": "fixtures/sales.csv"
+    },
+    {
+      "path": "people.json",
+      "from": "fixtures/people.json"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/phase1.mjs#eightDeliverables",
+  "notes": "Replaces p1-plan-per-city (2026-11-11), which both models passed without a plan. Eight deliverables over two files; step 8 depends on remembering every earlier one. The task update_plan and the completion check should most help."
+}

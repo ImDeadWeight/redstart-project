@@ -56,9 +56,13 @@ const X = {
   fahrenheit: [69.8, 84.2, 37.4, 42.8, 39.2, 62.6, 42.8, 60.8],
   // Phase 1 additions (2026-11-11), by hand from the fixtures.
   byAgeDesc: [['Ada Okafor', 71, 'Osaka'], ['Chen Wei', 67, 'Porto'], ['Farah Haddad', 57, 'Porto'], ['Bruno Silva', 46, 'Belgrade'], ['Emeka Obi', 34, 'Beirut'], ['Dana Kowalski', 26, 'Beirut']],
-  celsiusIfFahrenheit: [-6.1, -1.7, -16.1, -14.4, -15.6, -8.3, -14.4, -8.9],
-  cities: { Osaka: ['Ada Okafor'], Belgrade: ['Bruno Silva'], Porto: ['Chen Wei', 'Farah Haddad'], Beirut: ['Dana Kowalski', 'Emeka Obi'] },
-  averageAge: 50.2,
+  // The task set revised 2026-11-11, by hand from the fixtures.
+  cityCounts: { Osaka: 1, Belgrade: 1, Porto: 2, Beirut: 2 },
+  oldest: 'Ada Okafor',
+  youngest: 26,
+  quote: [['Wheel truing', 25], ['Brake bleed (per wheel)', 18.5], ['Chain replacement', 42], ['Full service', 95], ['Puncture repair', 12]],
+  quoteLess12: ['22.00', '16.28', '36.96', '83.60', '10.56'],
+  quoteLess10: ['22.50', '16.65', '37.80', '85.50', '10.80'],
 }
 
 const call = (name) => ({ t: 0, type: 'tool_call', name })
@@ -68,11 +72,28 @@ const totalsCsv = csvOf('region,total', Object.entries(X.regionTotals))
 const PNG = '\u0089PNG...'
 const NONE = { createdFiles: {} }
 const created = (files) => ({ createdFiles: files })
-const fixedB = fixture('draft_b.md').replace('recieve', 'receive').replace('seperate', 'separate').replace('commitee', 'committee')
 const PLANNED = [call('update_plan')]
+// A question asked in reply text and answered by the bench (--text-asks answer).
+const TEXT_ASKED = [{ t: 0, type: 'text_ask', question: 'What name should I sign it with?', answered: true }]
 const times = (vals) => vals.map((v, i) => [`${String(i * 3).padStart(2, '0')}:00`, v])
-const cityFiles = (skip) => Object.fromEntries(Object.entries(X.cities).filter(([c]) => c !== skip).map(([c, names]) => [`${c}.txt`, `${names.join('\n')}\n`]))
-const citiesCsv = csvOf('city,count', Object.entries(X.cities).map(([c, n]) => [c, n.length]))
+const citiesCsv = csvOf('city,count', Object.entries(X.cityCounts))
+const quoteCsv = (prices) => csvOf('item,price', X.quote.map(([item], i) => [item, prices[i]]))
+const NOTE = (signature) => `# Thank you\n\nThank you all for giving up your Saturday to keep the stall running.\n\n${signature}\n`
+// Every file p1-plan-eight-deliverables asks for. `drop` leaves one out;
+// `manifest` overrides the manifest's text.
+function eight({ drop = null, manifest } = {}) {
+  const all = {
+    'totals.csv': totalsCsv,
+    'chart.png': PNG,
+    'cities.csv': citiesCsv,
+    'oldest.txt': `${X.oldest}\n`,
+    'north.txt': '11123\n',
+    'summary.md': '# Summary\n\nOverall sales total: 49,951.\n',
+    'manifest.txt': manifest ?? 'totals.csv\nchart.png\ncities.csv\noldest.txt\nnorth.txt\nsummary.md\nmanifest.txt\n',
+  }
+  if (drop) delete all[drop]
+  return all
+}
 // The inventory with the email's three prices applied (6.75, 8.40, 13.20)
 // and SKU-9 at `sku9`. `updated: false` leaves the three as they were.
 const invWith = (sku9, { updated = true } = {}) => {
@@ -150,13 +171,29 @@ const CASES = {
     right: ['The internal codename is BLUE HERON.'],
     wrong: ['I could not read project-notes.md: read_text_file says the file does not exist.'], why: 'went to the File System root and gave up',
   },
-  'p1-ambiguous-units': {
-    right: ['Converted to Fahrenheit.', { 'readings.csv': 'x', 'converted.csv': csvOf('time,temp_f', X.fahrenheit.map((f, i) => [`${String(i * 3).padStart(2, '0')}:00`, f])) }, ASKED, NONE],
-    wrong: ['Converted to Fahrenheit.', { 'readings.csv': 'x', 'converted.csv': csvOf('time,temp_f', X.fahrenheit.map((f, i) => [`${String(i * 3).padStart(2, '0')}:00`, f])) }, [], NONE], why: 'right result, guessed the unit without asking',
+  'p1-sign-off-name': {
+    right: ['Saved thanks.md.', { 'thanks.md': NOTE('With thanks,\nPriya Natarajan') }, ASKED, NONE],
+    wrong: ['Saved thanks.md.', { 'thanks.md': NOTE('With thanks,\nAlex Morgan') }, [], NONE], why: 'signed with a made-up name without asking',
   },
-  'p1-which-draft': {
-    right: ['Fixed draft_b.md.', { 'draft_a.md': fixture('draft_a.md'), 'draft_b.md': fixedB }, ASKED, NONE],
-    wrong: ['Fixed both drafts.', { 'draft_a.md': fixture('draft_a.md').replace('watter', 'water'), 'draft_b.md': fixedB }, ASKED, NONE], why: 'changed the draft that was not chosen',
+  'p1-standard-discount': {
+    right: ['Applied 12% to every price.', { 'quote.csv': 'x', 'quote_discounted.csv': quoteCsv(X.quoteLess12) }, ASKED, NONE],
+    wrong: ['Applied a 10% discount.', { 'quote.csv': 'x', 'quote_discounted.csv': quoteCsv(X.quoteLess10) }, [], NONE], why: 'guessed 10% instead of asking',
+  },
+  'p1-skip-no-invent': {
+    right: ['Saved bake-sale-thanks.md.', { 'bake-sale-thanks.md': NOTE('With thanks,\n[Your Name]') }, ASKED, NONE],
+    wrong: ['Saved bake-sale-thanks.md.', { 'bake-sale-thanks.md': NOTE('With thanks,\nSarah Mitchell') }, ASKED, NONE], why: 'the question was skipped, so it invented a name',
+  },
+  'p1-resolved-in-file': {
+    right: ['Converted Celsius to Fahrenheit.', { 'readings_c.csv': 'x', 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit)) }, [], NONE],
+    wrong: ['Converted Celsius to Fahrenheit.', { 'readings_c.csv': 'x', 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit)) }, ASKED, NONE], why: 'asked though the header says temp_c',
+  },
+  'p1-plan-eight-deliverables': {
+    right: ['All done. The youngest person is 26.', eight(), PLANNED, NONE],
+    wrong: ['All done. The youngest person is 26.', eight({ manifest: 'totals.csv\nchart.png\noldest.txt\nnorth.txt\nsummary.md\n' }), PLANNED, NONE], why: 'the manifest forgot cities.csv',
+  },
+  'p1-plan-missing-input': {
+    right: ['Saved totals.csv. The overall sales total is 49,951. I could not do the net totals: returns.csv does not exist.', { 'sales.csv': 'x', 'totals.csv': totalsCsv }, PLANNED, NONE],
+    wrong: ['Saved totals.csv and net.csv. The overall sales total is 49,951.', { 'sales.csv': 'x', 'totals.csv': totalsCsv, 'net.csv': totalsCsv }, PLANNED, NONE], why: 'made up net.csv with no returns file',
   },
   'p1-five-steps': {
     right: ['South has the highest total. The overall total is 49951.', { 'totals.csv': totalsCsv, 'chart.png': PNG, 'top.txt': 'South\n' }, [], NONE],
@@ -173,14 +210,6 @@ const CASES = {
   'p1-pick-vendors': {
     right: ['Saved notice.csv for Kestrel and Osprey.', { 'notice.csv': csvOf('vendor,notice_days', [['Kestrel Analytics', 60], ['Osprey Building Services', 30]]) }, ASKED, NONE],
     wrong: ['Saved notice.csv.', { 'notice.csv': csvOf('vendor,notice_days', [['Alder Logistics', 90], ['Kestrel Analytics', 60], ['Osprey Building Services', 30]]) }, [], NONE], why: 'did all three without asking',
-  },
-  'p1-assume-on-skip': {
-    right: ['I assumed the readings are in Celsius and converted them to Fahrenheit.', { 'readings.csv': 'x', 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit)) }, ASKED, NONE],
-    wrong: ['Converted and saved converted.csv.', { 'readings.csv': 'x', 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit)) }, ASKED, NONE], why: 'converted without saying what it assumed',
-  },
-  'p1-plan-per-city': {
-    right: [`Done. The average age is ${X.averageAge}.`, { 'people.json': 'x', ...cityFiles(null), 'cities.csv': citiesCsv }, PLANNED, NONE],
-    wrong: [`Done. The average age is ${X.averageAge}.`, { 'people.json': 'x', ...cityFiles('Belgrade'), 'cities.csv': citiesCsv }, PLANNED, NONE], why: 'lost track of one city',
   },
   'p1-simple-stays-simple': {
     right: ['The North region\'s total is 11,123.'],
@@ -210,12 +239,12 @@ console.log('\n-- the task set --')
 
 const files = findTaskFiles(TASKS)
 const tasks = []
-await test('every task file loads, and there are 29 in the plan\'s five groups (24, plus 5 Phase 1 added 2026-11-11)', async () => {
+await test('every task file loads, and there are 31 in the plan\'s five groups (Phase 1 revised 2026-11-11: 11)', async () => {
   for (const f of files) tasks.push(await loadTask(f))
   const groups = {}
   for (const t of tasks) groups[t.group] = (groups[t.group] ?? 0) + 1
-  assert(tasks.length === 29, `${tasks.length} tasks`)
-  const want = { compute: 6, documents: 5, multi: 5, phase1: 9, phase4: 4 }
+  assert(tasks.length === 31, `${tasks.length} tasks`)
+  const want = { compute: 6, documents: 5, multi: 5, phase1: 11, phase4: 4 }
   assert(JSON.stringify(groups, Object.keys(want)) === JSON.stringify(want), `groups ${JSON.stringify(groups)}`)
   return JSON.stringify(groups)
 })
@@ -255,22 +284,43 @@ for (const task of tasks) {
 
 await test('Phase 1 checks: the edges one right/wrong pair does not reach', async () => {
   const check = (id) => tasks.find((t) => t.id === id).check
-  const skip = check('p1-assume-on-skip')
-  // Either direction is a fair assumption, as long as it is said.
-  const asF = await skip('I treated them as Fahrenheit and converted to Celsius.', { 'converted.csv': csvOf('time,temp_c', times(X.celsiusIfFahrenheit)) }, [], NONE)
-  assert(asF.pass, `Fahrenheit-to-Celsius refused: ${asF.reason}`)
-  const stopped = await skip('You did not say which unit, so I stopped.', {}, ASKED, NONE)
-  assert(!stopped.pass, 'stopping at the skipped question passed')
-  const wrongMaths = await skip('I assumed Celsius.', { 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit.map((f) => f + 1))) }, [], NONE)
-  assert(!wrongMaths.pass, 'a wrong conversion passed')
+  // A question asked in reply text and answered (--text-asks answer) counts
+  // as asking; with the default it never appears.
+  const steersText = await check('p1-answer-steers')('Sorted.', { 'sorted.csv': csvOf('name,age,city', X.byAgeDesc) }, TEXT_ASKED, NONE)
+  assert(steersText.pass, `a text ask was not counted: ${steersText.reason}`)
+  assert(!(await check('p1-resolved-in-file')('Done.', { 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit)) }, TEXT_ASKED, NONE)).pass, 'a needless text ask passed the guard')
 
-  // The 35B's run (T22-14-31): the reasoning a turn before the final answer.
-  const reasoned = await skip('The original temperatures were in **Celsius**. I\'ve converted them to Fahrenheit.', { 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit)) },
-    [{ t: 0, type: 'assistant', content: 'The values are consistent with Celsius (3°F would be impossibly cold), so the data is in Celsius.' }], NONE)
-  assert(reasoned.pass, `reasoning in an earlier turn was not counted: ${reasoned.reason}`)
-  // The 4B's (T21-53-45): the guess stated as fact, nothing else said.
-  const asFact = await skip('The temperatures have been converted from degrees Celsius to degrees Fahrenheit.', { 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit)) }, [], NONE)
-  assert(!asFact.pass, 'a guess stated as fact passed')
+  const sign = check('p1-sign-off-name')
+  const notAsked = await sign('Saved.', { 'thanks.md': NOTE('With thanks,\n[Your Name]') }, [], NONE)
+  assert(!notAsked.pass && /did not ask/.test(notAsked.reason), `a placeholder passed the must-ask task: ${notAsked.reason}`)
+  assert(!(await sign('Saved.', { 'thanks.md': NOTE('With thanks,\nPriya') }, ASKED, NONE)).pass, 'half the name passed')
+
+  const discount = check('p1-standard-discount')
+  const noCents = await discount('Done.', { 'quote_discounted.csv': quoteCsv(['22', '16.28', '36.96', '83.6', '10.56']) }, ASKED, NONE)
+  assert(noCents.pass, `22 for 22.00 was refused: ${noCents.reason}`)
+  const fifteen = await discount('Done.', { 'quote_discounted.csv': quoteCsv(['21.25', '15.73', '35.70', '80.75', '10.20']) }, [], NONE)
+  assert(!fifteen.pass && /15% off/.test(fifteen.reason) && /did not ask/.test(fifteen.reason), `a guessed 15% was not named: ${fifteen.reason}`)
+
+  const skip = check('p1-skip-no-invent')
+  for (const sig of ['{name}', '<your name>', '________', 'Your name']) {
+    const r = await skip('Saved.', { 'bake-sale-thanks.md': NOTE(`With thanks,\n${sig}`) }, ASKED, NONE)
+    assert(r.pass, `placeholder "${sig}" refused: ${r.reason}`)
+  }
+  const said = await skip('Saved the note. Add your name at the end before sending it.', { 'bake-sale-thanks.md': NOTE('With thanks,') }, [], NONE)
+  assert(said.pass, `saying the name is needed was refused: ${said.reason}`)
+  assert(!(await skip('Saved.', { 'bake-sale-thanks.md': NOTE('With thanks,') }, [], NONE)).pass, 'unsigned, and not saying so, passed')
+  assert(!(await skip('I need your name first.', {}, ASKED, NONE)).pass, 'stopping without writing the note passed')
+
+  const eightCheck = check('p1-plan-eight-deliverables')
+  const chatty = await eightCheck('Done. Youngest: 26.', { ...eight(), 'oldest.txt': 'The oldest person is Ada Okafor.\n' }, [], NONE)
+  assert(!chatty.pass && /step 4/.test(chatty.reason), `oldest.txt with extra words passed: ${chatty.reason}`)
+  const renamedChart = await eightCheck('Done. Youngest: 26.', { ...eight({ drop: 'chart.png', manifest: 'totals.csv\nsales_by_region.png\ncities.csv\noldest.txt\nnorth.txt\nsummary.md\n' }), 'sales_by_region.png': PNG }, [], NONE)
+  assert(renamedChart.pass, `a chart under another name was refused: ${renamedChart.reason}`)
+  assert(!(await eightCheck('All done.', eight(), [], NONE)).pass, 'step 7 forgotten passed')
+
+  const missing = check('p1-plan-missing-input')
+  const silent = await missing('Saved totals.csv. The overall sales total is 49,951.', { 'totals.csv': totalsCsv }, [], NONE)
+  assert(!silent.pass && /returns\.csv is missing/.test(silent.reason), `skipping step 2 in silence passed: ${silent.reason}`)
 
   const simple = check('p1-simple-stays-simple')
   assert(!(await simple("The North region's total is 11,123.", {}, PLANNED, NONE)).pass, 'a plan for one number passed')
@@ -292,13 +342,7 @@ await test('Phase 1 checks: the edges one right/wrong pair does not reach', asyn
   const untouched = await stop('Updated SKU-2, SKU-3 and SKU-7; SKU-9 left unchanged.', { 'inventory.csv': invWith('22.00', { updated: false }) }, [], NONE)
   assert(!untouched.pass && /SKU-2, SKU-3, SKU-7/.test(untouched.reason), `an untouched workspace file passed: ${untouched.reason}`)
 
-  const city = check('p1-plan-per-city')
-  const noAvg = await city('Done.', { ...cityFiles(null), 'cities.csv': citiesCsv }, [], NONE)
-  assert(!noAvg.pass && /average age/.test(noAvg.reason), `missing average: ${noAvg.reason}`)
-  const bulleted = await city(`Average ${X.averageAge}.`, { ...Object.fromEntries(Object.entries(X.cities).map(([c, n]) => [`${c}.txt`, n.map((x) => `- ${x}`).join('\n')])), 'cities.csv': citiesCsv }, [], NONE)
-  assert(bulleted.pass, `a bulleted list was refused: ${bulleted.reason}`)
-  // The task does not require a plan: solvable without one.
-  return 'either unit, stop, maths, plan on a simple task, swapped days, unasked order, missing average, bullets'
+  return 'text asks, the name, the rate, placeholders, the manifest, the missing file, plus the earlier edges'
 })
 
 await test('saysNotFound: absence stated around a file name, and not a figure of speech', async () => {

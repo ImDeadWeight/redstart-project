@@ -34,7 +34,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { main, parseArgs, labelWarning, fallbackWarning, accountWarning, askWarning } from './agent-bench/run.mjs'
-import { approves, maxReplyTokens } from './agent-bench/lib/bench.mjs'
+import { approves, maxReplyTokens, endsInQuestion, TEXT_ASK_NO_ANSWER } from './agent-bench/lib/bench.mjs'
 import { answerFromTask } from './agent-bench/lib/ask.mjs'
 import { ASK_USER_DEFINITION, DISMISSED_RESULT } from '../../shared/agent-core/ask-user.mjs'
 import { UPDATE_PLAN_DEFINITION } from '../../shared/agent-core/update-plan.mjs'
@@ -165,6 +165,10 @@ const SCRIPTS = {
     if (turn === 2) return [toolCallChunk('p2', 'update_plan', steps('done', 'skipped'))]
     return [chunk({ content: 'All done.' })]
   },
+  // Asks in its reply text, not through ask_user; then says what it was told.
+  textask: (turn, messages) => (turn === 0
+    ? [chunk({ content: 'Happy to. What name should I sign it with?' })]
+    : [chunk({ content: `Signed it: ${[...messages].reverse().find((m) => m.role === 'user')?.content}` })]),
   forever: () => [toolCallChunk(`c${Math.random().toString(36).slice(2, 8)}`, 'read_file', '{"path": "data.txt"}')],
   hang: () => 'hang',
 }
@@ -675,6 +679,7 @@ if (bench) {
     const r = run('plans')
     eq(r.verdict.pass, true, r.verdict.reason)
     eq([r.metrics.planCalls, r.metrics.planNudges, r.metrics.turns, r.metrics.toolErrors], [2, 1, 4, 0], 'plan calls, nudges, turns, errors')
+    eq([r.metrics.planLeftOpen, run('write-answer').metrics.planLeftOpen, bench.summary.plansLeftOpen], [false, null, 0], 'the plan was closed; a run with none has no value')
     const bodies = nest.state.completionBodies.filter((b) => b.messages[0].content.startsWith('[script:plan]'))
     assert(bodies[1].messages.at(-1).content.startsWith('[Automatic note, not from the user] Current plan'), 'no plan note at the tail')
     // Both steps are open: in_progress counts.
@@ -697,6 +702,32 @@ if (bench) {
     let bad = null
     try { parseArgs(['--model-label', 'm', '--plan', 'sometimes']) } catch (e) { bad = e }
     assert(/--plan must be one of full, tool, off/.test(bad?.message ?? ''), 'a bad --plan was accepted')
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  await test('--text-asks: a question in the reply ends the run by default; with answer it is answered and counted', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-textask-'))
+    const checks = path.join(FIXTURES, 'checks.mjs').replace(/\\/g, '/')
+    fs.writeFileSync(path.join(dir, 'ask.json'), JSON.stringify({ id: 'text-ask', prompt: '[script:textask] Sign the note with my name.', answers: { name: 'Priya Natarajan' }, check: `${checks}#neverPasses` }))
+    fs.writeFileSync(path.join(dir, 'skip.json'), JSON.stringify({ id: 'text-ask-unanswered', prompt: '[script:textask] Sign the note with my name.', check: `${checks}#neverPasses` }))
+    const run = (extra) => main(['--model-label', 'fake model', '--tasks', dir, '--gateway', `http://127.0.0.1:${port}`, '--out', path.join(dir, `out${extra.length}`), '--quiet', ...extra], { log: () => {} })
+    const ended = await run([])
+    const byId = (r, id) => r.runs.find((x) => x.taskId === id)
+    eq([byId(ended, 'text-ask').finalText, byId(ended, 'text-ask').metrics.textAsks], ['Happy to. What name should I sign it with?', 0], 'default: the run ends on the question')
+    const answered = await run(['--text-asks', 'answer'])
+    const a = byId(answered, 'text-ask')
+    eq([a.finalText, a.metrics.textAsks], ['Signed it: Priya Natarajan', 1], 'answer: the bench replied from the task and the run went on')
+    eq(a.events.find((e) => e.type === 'text_ask')?.answered, true, 'logged as answered')
+    const { asked } = await import('./agent-bench/tasks/checks/lib.mjs')
+    assert(asked(a.events) && !asked(byId(ended, 'text-ask').events), 'asked() counts the text ask only when it was answered')
+    eq(byId(answered, 'text-ask-unanswered').finalText, `Signed it: ${TEXT_ASK_NO_ANSWER}`, 'no answer in the task: the "I don\'t know" reply')
+    eq([answered.summary.textAsks, answered.summary.runsThatAskedInText], [2, 2], 'summary counts')
+    const md = fs.readFileSync(path.join(dir, 'out2', 'summary.md'), 'utf8')
+    assert(md.includes('text asks answer') && md.includes('questions in reply text (--text-asks answer): 2 answered in 2 run(s)'), 'summary.md lines')
+    let bad = null
+    try { parseArgs(['--model-label', 'm', '--text-asks', 'sometimes']) } catch (e) { bad = e }
+    assert(/--text-asks must be end or answer/.test(bad?.message ?? ''), 'a bad --text-asks was accepted')
+    eq([endsInQuestion('Done.'), endsInQuestion('Which one?\n'), endsInQuestion('Which one do you mean?**'), endsInQuestion('Is it ok? Then I saved it.')], [false, true, true, false], 'endsInQuestion')
     fs.rmSync(dir, { recursive: true, force: true })
   })
 

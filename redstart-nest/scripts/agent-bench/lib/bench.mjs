@@ -34,12 +34,22 @@ import { readChatStream } from '../../../../shared/agent-core/chat-stream.mjs'
 import { wireSafeToolCalls, MAX_TOOL_CALLS_PER_REPLY } from '../../../../shared/agent-core/tool-calls.mjs'
 import { attachmentNote } from '../../../../shared/agent-core/attachment-note.mjs'
 import { formatAskAnswer } from '../../../../shared/agent-core/ask-user.mjs'
-import { NUDGE_PREFIX, formatPlanResult } from '../../../../shared/agent-core/update-plan.mjs'
+import { NUDGE_PREFIX, formatPlanResult, openSteps } from '../../../../shared/agent-core/update-plan.mjs'
 import { argumentProblem, computeMetrics } from './metrics.mjs'
 import { answerFromTask } from './ask.mjs'
 import { META_CLASS_KEY } from './nest-client.mjs'
 
 export const DEFAULT_PARSER_PATTERNS = ['braces', 'xml', 'fn', 'json']
+// --text-asks answer: at most this many questions in reply text get answered.
+const MAX_TEXT_ASKS = 2
+// What the "user" says to a question in text the task has no answer for.
+export const TEXT_ASK_NO_ANSWER = "I don't know. Use your best judgement and say what you assumed."
+
+/** Does a reply end by asking the user something? (its last line has a "?") */
+export function endsInQuestion(text) {
+  const lines = String(text ?? '').trim().split('\n').map((l) => l.trim()).filter(Boolean)
+  return lines.length > 0 && /\?[*_)"'\s]*$/.test(lines.at(-1))
+}
 const MAX_LOGGED_RESULT_CHARS = 4000
 // Where the documents space keeps every conversation's workspace.
 const CHATS_DIR = 'chats'
@@ -204,7 +214,7 @@ export async function runTask(nest, task, opts) {
     let planSteps = null
 
     try {
-      await runAgentLoop({
+      const loopParams = {
         messages,
         maxTurns: task.limits.maxTurns,
         signal: controller.signal,
@@ -336,12 +346,29 @@ export async function runTask(nest, task, opts) {
             availableTools: opts.mcpTools.map((t) => ({ name: t.name })),
           }),
         },
-      })
+      }
+      await runAgentLoop(loopParams)
+      // --text-asks answer: a reply that ends in a question to the user is
+      // answered like a chat user would, from the task's `answers`, and the
+      // run goes on. Off by default (it ends the run, as before). The probe
+      // (probe-ask.mjs, 2026-11-11) found the 35B asks this way, not through
+      // ask_user, whenever the user invites questions.
+      for (let round = 0; opts.textAsks === 'answer' && round < MAX_TEXT_ASKS && !controller.signal.aborted; round++) {
+        if (!endsInQuestion(finalText)) break
+        const answer = answerFromTask(task.answers, { question: finalText })
+        const reply = answer ? formatAskAnswer(answer).replace(/^The user (answered|chose): /, '') : TEXT_ASK_NO_ANSWER
+        log({ type: 'text_ask', question: finalText.slice(-400), answered: !!answer, reply })
+        messages.push({ role: 'assistant', content: finalText }, { role: 'user', content: reply })
+        finalText = ''
+        await runAgentLoop(loopParams)
+      }
     } catch (err) {
       error = err.message
       log({ type: 'error', message: err.message })
     } finally {
       clearTimeout(timer)
+      // Whether the model closed its plan (a metric, never a pass criterion).
+      if (planSteps) log({ type: 'plan_final', steps: planSteps.length, open: openSteps(planSteps).length })
     }
 
     workspace = await nest.readWorkspace(conversationId)

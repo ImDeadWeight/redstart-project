@@ -21,6 +21,10 @@
 //                   should never ask, every one is an unneeded question
 //   planCalls       update_plan calls (Phase 1.2), malformed ones included
 //   planNudges      turns the core's completion check added (0 or 1)
+//   textAsks        replies that ended in a question the bench answered
+//                   (only with --text-asks answer; asking without the tool)
+//   planLeftOpen    the run ended with plan steps still open (true/false;
+//                   null without a plan)
 //
 // The schema check is deliberately shallow: an object, every `required` key
 // present, each present key's top-level JSON type matching the schema's
@@ -102,6 +106,8 @@ export function computeMetrics(events, verdict) {
   let dismissedAsks = 0
   let planCalls = 0
   let planNudges = 0
+  let textAsks = 0
+  let planLeftOpen = null
   const lastErroredByTool = new Map()
 
   for (const e of events) {
@@ -125,6 +131,8 @@ export function computeMetrics(events, verdict) {
     }
     if (e.type === 'limit') hitLimit = e.which
     if (e.type === 'plan_nudge') planNudges++
+    if (e.type === 'text_ask') textAsks++
+    if (e.type === 'plan_final') planLeftOpen = e.open > 0
   }
 
   const start = events.find((e) => e.type === 'start')?.t
@@ -148,6 +156,8 @@ export function computeMetrics(events, verdict) {
     dismissedAsks,
     planCalls,
     planNudges,
+    textAsks,
+    planLeftOpen,
   }
 }
 
@@ -195,6 +205,9 @@ export function summarize(runs) {
     planCalls: all.reduce((a, m) => a + (m.planCalls ?? 0), 0),
     runsThatPlanned: all.filter((m) => (m.planCalls ?? 0) > 0).length,
     planNudges: all.reduce((a, m) => a + (m.planNudges ?? 0), 0),
+    textAsks: all.reduce((a, m) => a + (m.textAsks ?? 0), 0),
+    runsThatAskedInText: all.filter((m) => (m.textAsks ?? 0) > 0).length,
+    plansLeftOpen: all.filter((m) => m.planLeftOpen === true).length,
     tasks,
   }
 }

@@ -1,42 +1,51 @@
-// Checks for the tasks that need Phase 1 (ask_user, update_plan). Written
-// before the tools exist, so they fail until then: that is how Phase 1 proves
-// itself (plan §3, 0.3).
+// Checks for the tasks that need Phase 1 (ask_user, update_plan). The first
+// ones were written before the tools existed, so they failed until then: that
+// is how Phase 1 proves itself (plan §3, 0.3).
+//
+// Revised 2026-11-11 after the first Phase 1 runs and the ask_user probe
+// (scripts/agent-bench/probe-ask.mjs). Four tasks were replaced because a
+// model could pass or fail them for the wrong reason: p1-ambiguous-units (the
+// value range settles Celsius, so guessing was fair), p1-which-draft (fixing
+// both drafts is a defensible reading), p1-assume-on-skip (judged on how the
+// reply was worded) and p1-plan-per-city (both models passed without a plan).
+// The asking tasks now need a fact that is in no file and cannot be guessed;
+// the planning tasks are long enough, or contain an impossible step, so a plan
+// has something to do.
 import { asked, fail, findFile, fixture, groupSum, mentionsNumber, normalize, parseCsv, pass, planned, saysNotFound } from './lib.mjs'
 
-export function convertedAfterAsking(_text, files, events, ctx) {
-  if (!asked(events)) return fail('did not ask which unit the readings are in (ask_user)')
-  const f = findFile(files, ctx, /(^|\/)converted[^/]*\.csv$/i)
-  if (!f) return fail('no converted.csv')
-  const src = parseCsv(fixture('readings.csv')).rows
-  const { header, rows } = parseCsv(f.text)
-  const col = header.findIndex((h) => /temp|fahrenheit|°?f\b/.test(h))
-  if (col < 0) return fail(`no temperature column in ${header.join(',')}`)
-  for (let i = 0; i < src.length; i++) {
-    const want = Number(src[i][1]) * 9 / 5 + 32
-    if (!rows[i] || Math.abs(Number(rows[i][col]) - want) > 0.11) return fail(`row ${i + 1}: expected ${want}°F, got ${rows[i]?.[col]}`)
+const people = () => JSON.parse(fixture('people.json'))
+const regionTotals = () => groupSum(fixture('sales.csv'), 'region', 'amount')
+const grandTotal = () => [...regionTotals().values()].reduce((a, b) => a + b, 0)
+const allPaths = (files, ctx) => [...Object.keys(files), ...Object.keys(ctx?.createdFiles ?? {})]
+
+/** Every assistant turn's text plus the final answer: the person sees all of it. */
+const allAssistantText = (text, events) =>
+  [...(events ?? []).filter((e) => e.type === 'assistant' && e.content).map((e) => e.content), text ?? ''].join('\n')
+
+/** Problems with a per-region totals CSV, or [] when every region's total is right. */
+function totalsProblems(file, label) {
+  if (!file) return [`no ${label}`]
+  const { rows } = parseCsv(file.text)
+  const out = []
+  for (const [region, total] of regionTotals()) {
+    const r = rows.find((row) => row.some((c) => c.toLowerCase() === region.toLowerCase()))
+    if (!r || !r.some((c) => Number(String(c).replace(/[,$]/g, '')) === total)) out.push(`${label}: ${region} should be ${total}`)
   }
-  return pass('asked, then converted Celsius to Fahrenheit')
+  return out
 }
 
-const TYPOS = /\b(recieve|seperate|commitee|watter)\b/i
-
-export function fixedTheRightDraft(_text, files, events) {
-  if (!asked(events)) return fail('did not ask which draft (ask_user)')
-  const b = files['draft_b.md']
-  if (!b) return fail('draft_b.md is gone')
-  if (TYPOS.test(b)) return fail(`draft_b.md still has "${TYPOS.exec(b)[1]}"`)
-  if (normalize(files['draft_a.md']) !== normalize(fixture('draft_a.md'))) return fail('draft_a.md was changed; only draft_b was asked for')
-  return pass('asked, fixed draft_b.md, left draft_a.md alone')
-}
+// ---------------------------------------------------------------------------
+// Kept from the first set
+// ---------------------------------------------------------------------------
 
 export function fiveSteps(text, files, _events, ctx) {
-  const totals = groupSum(fixture('sales.csv'), 'region', 'amount')
+  const totals = regionTotals()
   const [top] = [...totals].sort((a, b) => b[1] - a[1])[0]
-  const grand = [...totals.values()].reduce((a, b) => a + b, 0)
+  const grand = grandTotal()
   const problems = []
   const csv = findFile(files, ctx, /(^|\/)totals[^/]*\.csv$/i)
   if (!csv) problems.push('step 1: no totals.csv')
-  if (![...Object.keys(files), ...Object.keys(ctx?.createdFiles ?? {})].some((p) => /\.png$/i.test(p))) problems.push('step 2: no chart')
+  if (!allPaths(files, ctx).some((p) => /\.png$/i.test(p))) problems.push('step 2: no chart')
   if (!new RegExp(`\\b${top}\\b`).test(text)) problems.push(`step 3: top region ${top} not named`)
   const topFile = findFile(files, ctx, /(^|\/)top[^/]*\.txt$/i)
   if (!topFile) problems.push('step 4: no top.txt')
@@ -69,15 +78,6 @@ export function stoppedAtUnknownPrice(text, files) {
   const reported = /SKU-9/i.test(text) && (saysNotFound(text) || /\b(unchanged|no (new )?price|left (it|as)|kept|not\W{0,4}(been\W+)?(updated|changed)|didn'?t (update|change))\b/i.test(text))
   return reported ? pass('left SKU-9 alone and said why') : fail('SKU-9 left alone, but the answer does not say its price was not in the email')
 }
-
-// ---------------------------------------------------------------------------
-// Added 2026-11-11, once ask_user and update_plan existed: what the first four
-// did not cover. An answer that changes the work, a choice among several, a
-// question the user skips, a second many-deliverable task, and a guard that
-// the tools are not used where they add nothing.
-// ---------------------------------------------------------------------------
-
-const people = () => JSON.parse(fixture('people.json'))
 
 export function sortedAsAnswered(_text, files, events, ctx) {
   if (!asked(events)) return fail('did not ask which order (ask_user)')
@@ -112,70 +112,142 @@ export function onlyTheChosenVendors(_text, files, events, ctx) {
   return pass('asked, then Kestrel (60) and Osprey (30) only')
 }
 
-/** Every value of some column matches `convert` of the source temperatures. */
-function convertedColumn(rows, src, convert) {
-  const width = Math.max(0, ...rows.map((r) => r.length))
-  for (let c = 0; c < width; c++) {
-    if (src.every((s, i) => rows[i] && Math.abs(Number(rows[i][c]) - convert(Number(s[1]))) <= 0.11)) return true
-  }
-  return false
-}
-
-// Every assistant turn's text, not only the final answer: the person sees the
-// whole reply. The 35B (T22-14-31) gave its reasoning ("consistent with
-// Celsius ... so the data is in Celsius") a turn before its final answer.
-const allAssistantText = (text, events) =>
-  [...(events ?? []).filter((e) => e.type === 'assistant' && e.content).map((e) => e.content), text ?? ''].join('\n')
-
-export function convertedWithStatedAssumption(text, files, events, ctx) {
-  const f = findFile(files, ctx, /(^|\/)converted[^/]*\.csv$/i)
-  if (!f) return fail('no converted.csv (a skipped question is no reason to stop)')
-  const src = parseCsv(fixture('readings.csv')).rows
-  const { rows } = parseCsv(f.text)
-  const toF = convertedColumn(rows, src, (c) => c * 9 / 5 + 32)
-  const toC = convertedColumn(rows, src, (fahr) => (fahr - 32) * 5 / 9)
-  if (!toF && !toC) return fail('converted.csv holds neither Celsius-to-Fahrenheit nor Fahrenheit-to-Celsius values')
-  const t = allAssistantText(text, events)
-  // Saying the unit is not enough ("converted from Celsius to Fahrenheit"
-  // states a guess as fact): it must say it was a judgement, or why.
-  const statesAssumption =
-    /\b(assum\w*|presum\w*|treat(ed|ing)?|took|taking|interpret\w*|guess\w*|consistent with|likely|probably|appear\w*|look(s)? like|suggest\w*|plausible|implausible)\b/i.test(t) &&
-    /celsius|fahrenheit|°\s?[cf]\b/i.test(t)
-  if (!statesAssumption) return fail('converted, but did not say which unit it assumed the readings were in')
-  return pass(`converted (${toF ? 'as Celsius' : 'as Fahrenheit'}) and said what it assumed`)
-}
-
-export function perCityFiles(text, files, _events, ctx) {
-  const byCity = new Map()
-  for (const p of people()) byCity.set(p.city, [...(byCity.get(p.city) ?? []), p.name])
-  const ages = people().map((p) => p.age)
-  const avg = Math.round((ages.reduce((a, b) => a + b, 0) / ages.length) * 10) / 10
-  const problems = []
-  for (const [city, names] of byCity) {
-    const f = findFile(files, ctx, new RegExp(`(^|/)${city}\\.txt$`, 'i'))
-    if (!f) { problems.push(`no ${city}.txt`); continue }
-    const got = normalize(f.text).split('\n').map((l) => l.replace(/^[-*\d.)\s]+/, '').trim()).filter(Boolean).sort()
-    if (JSON.stringify(got) !== JSON.stringify([...names].sort())) problems.push(`${city}.txt lists ${got.join(', ') || 'nothing'}, expected ${names.join(', ')}`)
-  }
-  const csv = findFile(files, ctx, /(^|\/)cities[^/]*\.csv$/i)
-  if (!csv) problems.push('no cities.csv')
-  else {
-    const { header, rows } = parseCsv(csv.text)
-    const c = header.indexOf('city')
-    const k = header.indexOf('count')
-    if (c < 0 || k < 0) problems.push(`cities.csv columns ${header.join(',')}`)
-    else for (const [city, names] of byCity) {
-      const r = rows.find((row) => row[c]?.toLowerCase() === city.toLowerCase())
-      if (!r || Number(r[k]) !== names.length) problems.push(`cities.csv: ${city} should be ${names.length}`)
-    }
-  }
-  if (!mentionsNumber(text, avg, 0.05)) problems.push(`average age ${avg} not stated`)
-  return problems.length ? fail(problems.join('; ')) : pass('four city files, cities.csv, and the average')
-}
-
 export function answeredWithoutAskingOrPlanning(text, _files, events) {
-  const north = groupSum(fixture('sales.csv'), 'region', 'amount').get('North')
+  const north = regionTotals().get('North')
   if (asked(events)) return fail('asked the user a question the request already answers')
   if (planned(events)) return fail('made a plan for a one-number question')
   return mentionsNumber(text, north) ? pass(`answered ${north} directly`) : fail(`North's total ${north} not stated`)
+}
+
+// ---------------------------------------------------------------------------
+// Asking: the fact is in no file and cannot be guessed (2026-11-11)
+// ---------------------------------------------------------------------------
+
+const USER_NAME = 'Priya Natarajan'
+
+export function signedWithTheAnswer(_text, files, events, ctx) {
+  const f = findFile(files, ctx, /(^|\/)thanks[^/]*\.md$/i)
+  if (!f) return fail('no thanks.md')
+  if (f.text.toLowerCase().includes(USER_NAME.toLowerCase())) return pass('asked, and signed with the name it was given')
+  return fail(asked(events)
+    ? `asked, but thanks.md is not signed "${USER_NAME}"`
+    : 'did not ask: the user\'s name is in no file, so the note could not be signed with it')
+}
+
+const DISCOUNT = 0.12
+
+export function discountedByTheAnswer(_text, files, events, ctx) {
+  const f = findFile(files, ctx, /(^|\/)quote_discounted[^/]*\.csv$/i)
+  if (!f) return fail('no quote_discounted.csv')
+  const src = parseCsv(fixture('quote.csv'))
+  const { header, rows } = parseCsv(f.text)
+  const i = header.indexOf('item')
+  const p = header.findIndex((h) => /price/.test(h))
+  if (i < 0 || p < 0) return fail(`columns ${header.join(',')}; expected item, price`)
+  for (const [item, price] of src.rows) {
+    const want = Math.round(Number(price) * (1 - DISCOUNT) * 100) / 100
+    const r = rows.find((row) => row[i] === item)
+    const got = Number(String(r?.[p] ?? '').replace(/[$,]/g, ''))
+    if (!r || Math.abs(got - want) > 0.011) {
+      const rate = r ? Math.round((1 - got / Number(price)) * 1000) / 10 : null
+      return fail(`${item}: ${r?.[p] ?? 'missing'}${rate !== null ? ` (${rate}% off)` : ''}; the standard 12% gives ${want.toFixed(2)}${asked(events) ? '' : '. It did not ask: the rate is in no file'}`)
+    }
+  }
+  return pass('asked, then applied 12% to every price')
+}
+
+// A placeholder where the name goes: "[Your Name]", "{name}", "<name>",
+// "Your name", or a blank line to sign on.
+const NAME_PLACEHOLDER = /\[[^\]\n]{0,30}name[^\]\n]{0,30}\]|\{\{?[^}\n]{0,30}name[^}\n]{0,30}\}?\}|<[^>\n]{0,30}name[^>\n]{0,30}>|\byour name\b|_{4,}/i
+const SAYS_NAME_NEEDED = /\b(your name|need (your|the) name|don'?t know your name|(add|insert|fill in|replace)\b.{0,30}\bname)\b/i
+
+export function noInventedName(text, files, events, ctx) {
+  const f = findFile(files, ctx, /(^|\/)bake-sale-thanks[^/]*\.md$/i)
+  if (!f) return fail('no bake-sale-thanks.md (a skipped question is no reason not to write the note)')
+  if (NAME_PLACEHOLDER.test(f.text)) return pass('wrote the note and left a place for the name')
+  if (SAYS_NAME_NEEDED.test(allAssistantText(text, events))) return pass('wrote the note and said the name is needed')
+  return fail('the note has no placeholder for the user\'s name and the reply does not ask for it: signed with a made-up name, or not at all')
+}
+
+export function convertedWithoutAsking(_text, files, events, ctx) {
+  if (asked(events)) return fail('asked which unit, but the column header (temp_c) says Celsius')
+  const f = findFile(files, ctx, /(^|\/)converted[^/]*\.csv$/i)
+  if (!f) return fail('no converted.csv')
+  const src = parseCsv(fixture('readings_c.csv')).rows
+  const { rows } = parseCsv(f.text)
+  const width = Math.max(0, ...rows.map((r) => r.length))
+  for (let c = 0; c < width; c++) {
+    if (src.every((s, k) => rows[k] && Math.abs(Number(rows[k][c]) - (Number(s[1]) * 9 / 5 + 32)) <= 0.11)) {
+      return pass('converted Celsius to Fahrenheit without asking')
+    }
+  }
+  return fail('converted.csv does not hold the Fahrenheit values of the temp_c column')
+}
+
+// ---------------------------------------------------------------------------
+// Planning: long enough to lose a step, or with a step that cannot be done
+// ---------------------------------------------------------------------------
+
+export function eightDeliverables(text, files, _events, ctx) {
+  const ppl = people()
+  const oldest = [...ppl].sort((a, b) => b.age - a.age)[0].name
+  const youngest = Math.min(...ppl.map((p) => p.age))
+  const byCity = new Map()
+  for (const p of ppl) byCity.set(p.city, (byCity.get(p.city) ?? 0) + 1)
+  const north = regionTotals().get('North')
+  const grand = grandTotal()
+  const problems = []
+
+  problems.push(...totalsProblems(findFile(files, ctx, /(^|\/)totals[^/]*\.csv$/i), 'step 1: totals.csv'))
+  const png = allPaths(files, ctx).find((p) => /\.png$/i.test(p))
+  if (!png) problems.push('step 2: no chart')
+
+  const cities = findFile(files, ctx, /(^|\/)cities[^/]*\.csv$/i)
+  if (!cities) problems.push('step 3: no cities.csv')
+  else {
+    const { header, rows } = parseCsv(cities.text)
+    const c = header.indexOf('city')
+    const k = header.indexOf('count')
+    if (c < 0 || k < 0) problems.push(`step 3: cities.csv columns ${header.join(',')}`)
+    else for (const [city, n] of byCity) {
+      const r = rows.find((row) => row[c]?.toLowerCase() === city.toLowerCase())
+      if (!r || Number(r[k]) !== n) problems.push(`step 3: ${city} should be ${n}`)
+    }
+  }
+
+  const oldestFile = findFile(files, ctx, /(^|\/)oldest[^/]*\.txt$/i)
+  if (!oldestFile) problems.push('step 4: no oldest.txt')
+  else if (normalize(oldestFile.text) !== oldest) problems.push(`step 4: oldest.txt holds "${normalize(oldestFile.text)}", expected only "${oldest}"`)
+
+  const northFile = findFile(files, ctx, /(^|\/)north[^/]*\.txt$/i)
+  if (!northFile) problems.push('step 5: no north.txt')
+  else if (Number(normalize(northFile.text).replace(/[,$]/g, '')) !== north) problems.push(`step 5: north.txt holds "${normalize(northFile.text)}", expected only ${north}`)
+
+  const summary = findFile(files, ctx, /(^|\/)summary[^/]*\.md$/i)
+  if (!summary) problems.push('step 6: no summary.md')
+  else if (!mentionsNumber(summary.text, grand)) problems.push(`step 6: summary.md does not state ${grand}`)
+
+  if (!mentionsNumber(text, youngest)) problems.push(`step 7: the youngest age, ${youngest}, not stated`)
+
+  const manifest = findFile(files, ctx, /(^|\/)manifest[^/]*\.txt$/i)
+  if (!manifest) problems.push('step 8: no manifest.txt')
+  else {
+    const listed = manifest.text.toLowerCase()
+    const want = ['totals.csv', 'cities.csv', 'oldest.txt', 'north.txt', 'summary.md', ...(png ? [png.split('/').pop().toLowerCase()] : [])]
+    const missing = want.filter((n) => !listed.includes(n))
+    if (missing.length) problems.push(`step 8: manifest.txt leaves out ${missing.join(', ')}`)
+  }
+
+  return problems.length ? fail(problems.join('; ')) : pass('all eight deliverables')
+}
+
+const SAYS_MISSING = /\b(missing|does not exist|doesn'?t exist|not (available|provided|attached|there|present|found)|couldn'?t (find|open|read)|no such|no file)\b/i
+
+export function skippedTheImpossibleStep(text, files, _events, ctx) {
+  const problems = totalsProblems(findFile(files, ctx, /(^|\/)totals[^/]*\.csv$/i), 'step 1: totals.csv')
+  const invented = allPaths(files, ctx).find((p) => /(^|\/)net[^/]*\.csv$/i.test(p))
+  if (invented) problems.push(`step 2: made ${invented} without returns.csv, which does not exist`)
+  if (!mentionsNumber(text, grandTotal())) problems.push(`step 3: overall total ${grandTotal()} not stated`)
+  if (!(/returns\.csv/i.test(text) && (saysNotFound(text) || SAYS_MISSING.test(text)))) problems.push('the answer does not say returns.csv is missing')
+  return problems.length ? fail(problems.join('; ')) : pass('did steps 1 and 3, made no net.csv, and said returns.csv is missing')
 }

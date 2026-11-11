@@ -12,6 +12,9 @@
 //     [--max-tokens 4096]   (per reply; default 4096, 16384 with --thinking)
 //     [--plan full|tool|off]  (update_plan with its completion check, the
 //                              tool alone, or none; default full; plan U5)
+//     [--text-asks end|answer] (a reply ending in a question: ends the run,
+//                              the default, or is answered from the task's
+//                              answers and the run goes on)
 //     [--request-timeout 180]  (seconds Nest gets for a setup or read-back
 //                              call; a stuck one fails that task, named)
 //
@@ -42,7 +45,7 @@ const FLAGS = {
   '--model-label': 'modelLabel', '--tasks': 'tasks', '--repeat': 'repeat', '--out': 'out',
   '--gateway': 'gateway', '--mcp': 'mcp', '--api-key': 'apiKey', '--temperature': 'temperature',
   '--model': 'model', '--max-tokens': 'maxTokens', '--plan': 'plan',
-  '--request-timeout': 'requestTimeout',
+  '--request-timeout': 'requestTimeout', '--text-asks': 'textAsks',
 }
 export const PLAN_MODES = ['full', 'tool', 'off']
 const SWITCHES = { '--thinking': 'thinking', '--keep': 'keep', '--quiet': 'quiet' }
@@ -82,6 +85,11 @@ export function parseArgs(argv) {
     opts.requestTimeout = Number(opts.requestTimeout)
     if (!(opts.requestTimeout > 0)) throw new Error('--request-timeout must be a positive number of seconds')
   }
+  // What a reply that ends in a question gets: end (the run ends there, as
+  // in every run before 2026-11-11) or answer (answered from the task's
+  // answers, like a chat user would; counted as a text ask).
+  opts.textAsks = opts.textAsks ?? 'end'
+  if (!['end', 'answer'].includes(opts.textAsks)) throw new Error('--text-asks must be end or answer')
   opts.plan = opts.plan ?? 'full'
   if (!PLAN_MODES.includes(opts.plan)) throw new Error(`--plan must be one of ${PLAN_MODES.join(', ')}`)
   opts.apiKey = opts.apiKey ?? process.env.REDSTART_BENCH_API_KEY ?? null
@@ -177,7 +185,7 @@ export function summaryMarkdown(meta, summary) {
   const lines = [
     `# Agent bench — ${meta.modelLabel}`,
     '',
-    `${meta.date} · commit ${meta.commit} · ${summary.runs} runs (${meta.taskCount} tasks × ${meta.repeat}) · ${meta.toolCount} tools offered · thinking ${meta.thinking ? 'on' : 'off'} · plan ${meta.plan ?? 'full'}`,
+    `${meta.date} · commit ${meta.commit} · ${summary.runs} runs (${meta.taskCount} tasks × ${meta.repeat}) · ${meta.toolCount} tools offered · thinking ${meta.thinking ? 'on' : 'off'} · plan ${meta.plan ?? 'full'} · text asks ${meta.textAsks ?? 'end'}`,
     '',
     `Model file: ${meta.model?.modelFile ?? 'unknown'} · chat template sha256 ${meta.model?.chatTemplateSha ?? 'unknown'}`,
     '',
@@ -190,7 +198,9 @@ export function summaryMarkdown(meta, summary) {
     // the tasks that should never ask it is an unneeded one.
     `ask_user: ${summary.askCalls ?? 0} call(s) in ${summary.runsThatAsked ?? 0} run(s), ${summary.dismissedAsks ?? 0} unanswered (the task had no answer for it)`,
     '',
-    `update_plan (--plan ${meta.plan ?? 'full'}): ${summary.planCalls ?? 0} call(s) in ${summary.runsThatPlanned ?? 0} run(s), ${summary.planNudges ?? 0} completion nudge(s)`,
+    `update_plan (--plan ${meta.plan ?? 'full'}): ${summary.planCalls ?? 0} call(s) in ${summary.runsThatPlanned ?? 0} run(s), ${summary.planNudges ?? 0} completion nudge(s), ${summary.plansLeftOpen ?? 0} plan(s) left with open steps`,
+    '',
+    `questions in reply text (--text-asks ${meta.textAsks ?? 'end'}): ${summary.textAsks ?? 0} answered in ${summary.runsThatAskedInText ?? 0} run(s)`,
     '',
     '| task | group | passes |',
     '|---|---|---|',
@@ -260,7 +270,7 @@ export async function main(argv, io = {}) {
   for (let r = 0; r < opts.repeat; r++) {
     for (const task of tasks) {
       const result = await runTask(nest, task, {
-        mcpTools, thinking: opts.thinking, temperature: opts.temperature, model: opts.model, maxTokens: opts.maxTokens, fileSystemSnapshot, plan: opts.plan,
+        mcpTools, thinking: opts.thinking, temperature: opts.temperature, model: opts.model, maxTokens: opts.maxTokens, fileSystemSnapshot, plan: opts.plan, textAsks: opts.textAsks,
         keep: opts.keep, runIndex: r,
       })
       runs.push(result)
@@ -297,6 +307,7 @@ export async function main(argv, io = {}) {
     tools: mcpTools.map((t) => t.name),
     thinking: !!opts.thinking,
     plan: opts.plan,
+    textAsks: opts.textAsks,
     temperature: opts.temperature ?? null,
     maxTokens: maxReplyTokens(opts),
     gateway: opts.gateway,
