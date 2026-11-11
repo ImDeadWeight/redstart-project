@@ -1,0 +1,135 @@
+// =============================================================================
+// Agent bench — talking to a running Nest as an ordinary client
+// =============================================================================
+// Everything goes through the routes any client uses, as the account whose
+// API key the bench holds (or the anonymous scope when login is off):
+//
+//   gateway  POST/DELETE /conversations     a real conversation per run, so
+//                                           its workspace is a real one
+//            POST /files/mkdir, /files/upload  seed the fixtures
+//            GET  /files/list, /files/download read the workspace back
+//            POST /v1/chat/completions      the model, through the gateway's
+//                                           prompt, bans and tool retrieval
+//   MCP      tools/list, tools/call         Nest's tools, with the run's
+//                                           conversation id in _meta exactly
+//                                           as chat-ui sends it
+//
+// No daemon module is imported: the bench must see what a client sees.
+// =============================================================================
+
+import { connectMcpClient } from '../../lib/mcp-test-client.mjs'
+import { formatMcpToolResult } from '../../../../shared/agent-core/tool-result.mjs'
+
+export const META_CONVERSATION_KEY = 'redstart/conversationId'
+export const META_CLASS_KEY = 'redstart/class'
+const DOCS_SPACE = 'documents'
+const MAX_READBACK_BYTES = 1024 * 1024
+
+/**
+ * @param {{ gateway: string, mcp: string, apiKey?: string | null, fetch?: typeof fetch, mcpTimeoutMs?: number }} opts
+ */
+export async function connectNest(opts) {
+  const gateway = opts.gateway.replace(/\/$/, '')
+  const doFetch = opts.fetch ?? fetch
+  const auth = opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {}
+
+  async function req(method, route, { json, body, headers = {}, ok = [200, 201, 204] } = {}) {
+    const res = await doFetch(`${gateway}${route}`, {
+      method,
+      headers: { ...auth, ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}), ...headers },
+      body: json !== undefined ? JSON.stringify(json) : body,
+    })
+    if (!ok.includes(res.status)) {
+      const text = await res.text().catch(() => '')
+      throw new Error(`${method} ${route}: HTTP ${res.status} ${text.slice(0, 300)}`)
+    }
+    return res
+  }
+
+  const mcp = await connectMcpClient(opts.mcp, { headers: auth, timeoutMs: opts.mcpTimeoutMs ?? 300_000 })
+
+  return {
+    /** The account's tools, as MCP lists them (bans and role narrowing already applied). */
+    async listTools() {
+      const r = await mcp.call('tools/list', {})
+      if (r.error) throw new Error(`tools/list: ${r.error.message}`)
+      return r.result?.tools ?? []
+    },
+
+    /**
+     * One tools/call, as chat-ui makes it, and its result as the text
+     * chat-ui gives the model.
+     */
+    async callTool(name, args, conversationId) {
+      const r = await mcp.call('tools/call', {
+        name,
+        arguments: args,
+        _meta: { [META_CONVERSATION_KEY]: conversationId },
+      })
+      if (r.error) return { text: `Error: ${r.error.message}`, isError: true }
+      return { text: formatMcpToolResult(r.result), isError: !!r.result?.isError }
+    },
+
+    async createConversation(id, name) {
+      await req('POST', '/conversations', { json: { id, name } })
+    },
+
+    async deleteConversation(id) {
+      await req('DELETE', `/conversations/${encodeURIComponent(id)}`, { ok: [200, 204, 404] })
+    },
+
+    /** Write one file into the run's workspace, creating folders as needed. */
+    async seedFile(conversationId, relPath, content) {
+      const parts = relPath.split('/')
+      const name = parts.pop()
+      const dir = ['chats', conversationId, ...parts].join('/')
+      const q = new URLSearchParams({ space: DOCS_SPACE, path: dir, name })
+      await req('POST', `/files/upload?${q}`, { body: content, headers: { 'Content-Type': 'application/octet-stream' } })
+    },
+
+    /** Make sure the workspace folder exists even with no fixtures. */
+    async ensureWorkspace(conversationId) {
+      await req('POST', '/files/mkdir', { json: { space: DOCS_SPACE, path: `chats/${conversationId}` }, ok: [200, 201, 409] })
+    },
+
+    /**
+     * Every file in the workspace, recursively: workspace-relative path →
+     * UTF-8 text (files over 1 MB are listed with content null).
+     */
+    async readWorkspace(conversationId) {
+      const root = `chats/${conversationId}`
+      const out = {}
+      const walk = async (dir) => {
+        const q = new URLSearchParams({ space: DOCS_SPACE, path: dir })
+        const res = await req('GET', `/files/list?${q}`, { ok: [200, 404] })
+        if (res.status === 404) return
+        const { entries } = await res.json()
+        for (const e of entries) {
+          if (e.type === 'folder') {
+            await walk(e.path)
+            continue
+          }
+          const rel = e.path.slice(root.length + 1)
+          if (e.size > MAX_READBACK_BYTES) {
+            out[rel] = null
+            continue
+          }
+          const dl = await req('GET', `/files/download?${new URLSearchParams({ path: e.path })}`)
+          out[rel] = await dl.text()
+        }
+      }
+      await walk(root)
+      return out
+    },
+
+    /** The raw completions call; the model port reads the stream. */
+    async completion(body, signal) {
+      return doFetch(`${gateway}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal,
+      })
+    },
+  }
+}

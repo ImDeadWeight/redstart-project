@@ -9,8 +9,10 @@
 // =============================================================================
 
 // `extraHeaders` (e.g. an Authorization bearer) is sent on every request, so a
-// suite can drive the server as a specific account with auth on.
-export async function connectMcpClient(baseUrl, { headers: extraHeaders = {} } = {}) {
+// suite can drive the server as a specific account with auth on. `timeoutMs`
+// bounds each request; the agent benchmark raises it, since a real run_python
+// call can take longer than a test fixture's.
+export async function connectMcpClient(baseUrl, { headers: extraHeaders = {}, timeoutMs = 8000 } = {}) {
   const base = baseUrl.replace(/\/$/, '')
   let sessionId = null
   let nextId = 0
@@ -22,7 +24,7 @@ export async function connectMcpClient(baseUrl, { headers: extraHeaders = {} } =
       pending.set(id, { resolve, reject })
       setTimeout(() => {
         if (pending.has(id)) { pending.delete(id); reject(new Error(`Timed out waiting for response to ${method}`)) }
-      }, 8000)
+      }, timeoutMs)
     })
 
     const headers = {

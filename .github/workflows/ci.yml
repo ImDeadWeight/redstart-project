@@ -85,6 +85,9 @@ jobs:
       - name: "Agent loop core (exit paths, under plain Node)"
         run: node scripts/test-agent-core.mjs
 
+      - name: "Agent benchmark harness (fake Nest, scripted model)"
+        run: node scripts/test-agent-bench.mjs
+
       - name: "Security: per-account storage scope (path traversal)"
         run: node scripts/test-user-scope.mjs
 
