@@ -146,6 +146,14 @@ await test('a document created by one account lands in that account\'s folder', 
   assert(!fs.existsSync(path.join(dirs.docs, 'alice-secret-plan.md')), 'the file was written to the SHARED root')
 })
 
+await test('🔍 create_document does not tell the model where the server keeps files', async () => {
+  const res = await createDoc(BOB, 'Path Check', 'x')
+  const text = textOf(res)
+  assert(text.startsWith('[FILE: path-check.md]'), `no relative file line: ${text}`)
+  assert(!text.includes(dirs.docs) && !text.includes(resolveUserScope(BOB)), `LEAK — an absolute path or the account folder: ${text}`)
+  assert(!/[A-Za-z]:\\|user_files/.test(text), `LEAK — server layout: ${text}`)
+})
+
 await test('🔍 list_documents shows only the caller\'s own files', async () => {
   const res = await documentsTool.callTool('list_documents', {}, docsCfg, ctx(BOB))
   const listing = textOf(res)

@@ -42,6 +42,15 @@ const tmpFsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-fs-'))
 const scopedDocsDir = path.join(tmpDocsDir, 'user_files', '_local')
 const scopedFsDir = path.join(tmpFsDir, 'user_files', '_local')
 fs.mkdirSync(scopedDocsDir, { recursive: true })
+
+// Where create_document put a file, from its [FILE: <relative path>] line.
+// Shaped like a regex match ([whole, absolute path]) because the result used
+// to carry the absolute path itself ("Document created: C:\..."), which told
+// every model where the server keeps its files, and these tests read it.
+const createdMatch = (text) => {
+  const m = /^\[FILE: ([^\]]+)\]/m.exec(text ?? '')
+  return m ? [m[0], path.join(scopedDocsDir, ...m[1].split('/'))] : null
+}
 fs.mkdirSync(scopedFsDir, { recursive: true })
 process.env.REDSTART_TEST_USERDATA_DIR = tmpUserDataDir
 
@@ -364,7 +373,7 @@ async function main() {
       })
       assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
       const text = res.result.content[0].text
-      const match = text.match(/Document created: (.+)$/)
+      const match = createdMatch(text)
       assert(match, `unexpected result text: ${text}`)
       const filePath = match[1]
       assert(fs.existsSync(filePath), `file does not exist: ${filePath}`)
@@ -389,7 +398,7 @@ async function main() {
       arguments: { title: 'Echo Arg', content: source, format: 'python' },
     })
     assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
-    const filePath = res.result.content[0].text.match(/Document created: (.+)$/)[1]
+    const filePath = createdMatch(res.result.content[0].text)[1]
     assert(filePath.endsWith('.py'), `expected a .py file, got ${filePath}`)
     const written = fs.readFileSync(filePath, 'utf8')
     assert(written === source, `script was not written verbatim:\n${JSON.stringify(written)}`)
@@ -402,7 +411,7 @@ async function main() {
       name: 'create_document',
       arguments: { title: 'Fenced Script', content: '```python\nprint("hi")\n```', format: 'python' },
     })
-    const filePath = res.result.content[0].text.match(/Document created: (.+)$/)[1]
+    const filePath = createdMatch(res.result.content[0].text)[1]
     const written = fs.readFileSync(filePath, 'utf8')
     assert(!written.includes('```'), `fence survived into the script: ${JSON.stringify(written)}`)
     assert(written.trim() === 'print("hi")', `unexpected script body: ${JSON.stringify(written)}`)
@@ -426,7 +435,7 @@ async function main() {
       arguments: { filename: 'batch_rename.py', content: 'print("renamed")' },
     })
     assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
-    const filePath = res.result.content[0].text.match(/Document created: (.+)$/)[1]
+    const filePath = createdMatch(res.result.content[0].text)[1]
     assert(filePath.endsWith('.py'), `expected a .py file, got ${filePath}`)
     assert(fs.readFileSync(filePath, 'utf8').trim() === 'print("renamed")', 'script body was altered')
   })
@@ -441,7 +450,7 @@ async function main() {
       arguments: { title: 'sum_of_odds.py', content: 'print(sum(range(1, 100, 2)))', format: 'python' },
     })
     assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
-    const filePath = res.result.content[0].text.match(/Document created: (.+)$/)[1]
+    const filePath = createdMatch(res.result.content[0].text)[1]
     const name = path.basename(filePath)
     assert(name === 'sum-of-odds.py', `expected 'sum-of-odds.py', got '${name}'`)
   })
@@ -453,7 +462,7 @@ async function main() {
       name: 'create_document',
       arguments: { title: 'Q3 Report v1.2', content: 'body', format: 'markdown' },
     })
-    const name = path.basename(res.result.content[0].text.match(/Document created: (.+)$/)[1])
+    const name = path.basename(createdMatch(res.result.content[0].text)[1])
     assert(name === 'q3-report-v1-2.md', `expected the '.2' to survive as part of the title, got '${name}'`)
   })
 
@@ -475,7 +484,7 @@ async function main() {
       name: 'create_document',
       arguments: { title: 'Readable Script', content: 'THRESHOLD = 4417\nprint(THRESHOLD)', format: 'python' },
     })
-    const filename = path.basename(created.result.content[0].text.match(/Document created: (.+)$/)[1])
+    const filename = path.basename(createdMatch(created.result.content[0].text)[1])
     const read = await client.call('tools/call', { name: 'read_document', arguments: { path: filename } })
     assert(!read.result?.isError, `read failed: ${JSON.stringify(read.result)}`)
     assert(read.result.content[0].text.includes('THRESHOLD = 4417'), `source missing: ${read.result.content[0].text}`)
@@ -484,8 +493,8 @@ async function main() {
   await test('a second create_document with the same title gets a distinct filename, not an overwrite', async () => {
     const first = await client.call('tools/call', { name: 'create_document', arguments: { title: 'Duplicate Title', content: 'first', format: 'markdown' } })
     const second = await client.call('tools/call', { name: 'create_document', arguments: { title: 'Duplicate Title', content: 'second', format: 'markdown' } })
-    const firstPath = first.result.content[0].text.match(/Document created: (.+)$/)[1]
-    const secondPath = second.result.content[0].text.match(/Document created: (.+)$/)[1]
+    const firstPath = createdMatch(first.result.content[0].text)[1]
+    const secondPath = createdMatch(second.result.content[0].text)[1]
     assert(firstPath !== secondPath, `expected distinct paths, both were ${firstPath}`)
     assert(fs.readFileSync(firstPath, 'utf8').includes('first'), 'first file was overwritten')
     assert(fs.readFileSync(secondPath, 'utf8').includes('second'), 'second file has wrong content')
@@ -494,7 +503,7 @@ async function main() {
   await test('🔍 a title containing path-traversal segments cannot escape the configured output directory', async () => {
     const res = await client.call('tools/call', { name: 'create_document', arguments: { title: '../../../../evil', content: 'x', format: 'markdown' } })
     assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
-    const filePath = res.result.content[0].text.match(/Document created: (.+)$/)[1]
+    const filePath = createdMatch(res.result.content[0].text)[1]
     const resolvedDocsDir = path.resolve(scopedDocsDir)
     const resolvedFile = path.resolve(filePath)
     assert(resolvedFile === resolvedDocsDir || resolvedFile.startsWith(resolvedDocsDir + path.sep),
@@ -522,7 +531,7 @@ async function main() {
   await test('round trip: create_document (.md) then read_document returns the content', async () => {
     const created = await client.call('tools/call', { name: 'create_document', arguments: { title: 'Round Trip', content: 'The quarterly summary mentions Maple Street.', format: 'markdown' } })
     assert(!created.result?.isError, `create failed: ${JSON.stringify(created.result)}`)
-    const filename = path.basename(created.result.content[0].text.match(/Document created: (.+)$/)[1])
+    const filename = path.basename(createdMatch(created.result.content[0].text)[1])
     const read = await client.call('tools/call', { name: 'read_document', arguments: { path: filename } })
     assert(!read.result?.isError, `read failed: ${JSON.stringify(read.result)}`)
     assert(read.result.content[0].text.includes('Maple Street'), `content missing: ${read.result.content[0].text}`)
@@ -530,7 +539,7 @@ async function main() {
 
   await test('round trip: create_document (.docx) then read_document extracts the text', async () => {
     const created = await client.call('tools/call', { name: 'create_document', arguments: { title: 'Docx Round Trip', content: 'Intake notes reference case 4417.', format: 'docx' } })
-    const filename = path.basename(created.result.content[0].text.match(/Document created: (.+)$/)[1])
+    const filename = path.basename(createdMatch(created.result.content[0].text)[1])
     const read = await client.call('tools/call', { name: 'read_document', arguments: { path: filename } })
     assert(!read.result?.isError, `read failed: ${JSON.stringify(read.result)}`)
     assert(read.result.content[0].text.includes('case 4417'), `content missing: ${read.result.content[0].text}`)
@@ -538,7 +547,7 @@ async function main() {
 
   await test('round trip: create_document (.pdf) then read_document extracts the text', async () => {
     const created = await client.call('tools/call', { name: 'create_document', arguments: { title: 'Pdf Round Trip', content: 'The policy manual covers reimbursement.', format: 'pdf' } })
-    const filename = path.basename(created.result.content[0].text.match(/Document created: (.+)$/)[1])
+    const filename = path.basename(createdMatch(created.result.content[0].text)[1])
     const read = await client.call('tools/call', { name: 'read_document', arguments: { path: filename } })
     assert(!read.result?.isError, `read failed: ${JSON.stringify(read.result)}`)
     assert(read.result.content[0].text.includes('reimbursement'), `content missing: ${read.result.content[0].text}`)

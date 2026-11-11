@@ -692,8 +692,12 @@ export async function callTool(name, args, cfg, ctx) {
           `[FILE: ${relativePath}]\n` +
           `Created "${relativePath}" in the documents folder. To read it back, use read_document ` +
           `with path "${relativePath}" — the File System tools (read_text_file, list_directory) ` +
-          `use a different root and cannot see documents.\n` +
-          `Document created: ${outputPath}`,
+          // No absolute path. This text used to end "Document created:
+          // <outputPath>", which gave every account's model the server's
+          // folder layout and the owner's OS user name (seen in the agent
+          // bench, 2026-11-11, run as a role-user account). The File System
+          // provider strips the same thing from its results.
+          `use a different root and cannot see documents.`,
       },
       // Phase 2: the same file as an MCP resource link, which the chat UI
       // draws as a download chip. The [FILE:] line above stays for clients
