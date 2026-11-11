@@ -1,0 +1,1 @@
+{ "id": "flood", "group": "limits", "prompt": "[script:flood] Read data.txt.", "fixtures": [{ "path": "data.txt", "from": "data.txt" }], "approve": "all", "check": "checks.mjs#saysSeven" }

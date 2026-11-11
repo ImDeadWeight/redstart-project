@@ -24,7 +24,7 @@
 import * as crypto from 'node:crypto'
 import { runAgentLoop } from '../../../../shared/agent-core/loop.mjs'
 import { readChatStream } from '../../../../shared/agent-core/chat-stream.mjs'
-import { wireSafeToolCalls } from '../../../../shared/agent-core/tool-calls.mjs'
+import { wireSafeToolCalls, MAX_TOOL_CALLS_PER_REPLY } from '../../../../shared/agent-core/tool-calls.mjs'
 import { attachmentNote } from '../../../../shared/agent-core/attachment-note.mjs'
 import { argumentProblem, computeMetrics } from './metrics.mjs'
 import { META_CLASS_KEY } from './nest-client.mjs'
@@ -203,6 +203,9 @@ export async function runTask(nest, task, opts) {
               timings: timings ? { prompt_n: timings.prompt_n, predicted_n: timings.predicted_n } : undefined,
             })
             if (!toolCalls) finalText = content
+            // The core runs only the first few calls of such a reply. A limit,
+            // like the others: it shows in the summary's "hit a limit" count.
+            if ((toolCalls?.length ?? 0) > MAX_TOOL_CALLS_PER_REPLY) log({ type: 'limit', which: 'tool-calls', asked: toolCalls.length })
           },
         },
         ports: {

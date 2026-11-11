@@ -137,6 +137,10 @@ const SCRIPTS = {
   search: (turn) => (turn === 0
     ? [toolCallChunk('s1', 'search_docs', JSON.stringify({ query: 'seven' }))]
     : [chunk({ content: 'It says 7.' })]),
+  // Twelve calls in one reply: two more than the core runs.
+  flood: (turn) => (turn === 0
+    ? [chunk({ tool_calls: Array.from({ length: 12 }, (_, i) => ({ index: i, id: `m${i}`, type: 'function', function: { name: 'read_file', arguments: '{"path": "data.txt"}' } })) })]
+    : [chunk({ content: 'It says 7.' })]),
   forever: () => [toolCallChunk(`c${Math.random().toString(36).slice(2, 8)}`, 'read_file', '{"path": "data.txt"}')],
   hang: () => 'hang',
 }
@@ -411,7 +415,7 @@ await test('a task file with a problem fails at load, naming the file and the fi
 })
 
 await test('task patterns: a folder, a glob, a single file', async () => {
-  eq(findTaskFiles(FIXTURES).map((f) => path.basename(f)).length, 10, 'folder (fs-leak and cited-doc added 2026-11-11)')
+  eq(findTaskFiles(FIXTURES).map((f) => path.basename(f)).length, 11, 'folder (fs-leak, cited-doc and flood added 2026-11-11)')
   eq(findTaskFiles(path.join(FIXTURES, '*-limit.json')).map((f) => path.basename(f)), ['time-limit.json', 'turn-limit.json'], 'glob')
   eq(findTaskFiles(path.join(FIXTURES, 'denied.json')).length, 1, 'file')
 })
@@ -590,6 +594,14 @@ if (bench) {
     eq(run('read-fixture').fileSystemWrites, { created: [], modified: [] }, 'a run that wrote nothing there')
   })
 
+  await test('a reply with too many tool calls: the first ten run, and it is recorded as a limit', async () => {
+    const r = run('flood')
+    eq([r.verdict.pass, r.metrics.toolCalls, r.metrics.hitLimit, r.metrics.turns], [true, 10, 'tool-calls', 2], 'pass, calls run, limit, turns')
+    eq(nest.state.toolCalls.filter((c) => c.conv === r.conversationId).length, 10, 'calls that reached Nest')
+    const sent = nest.state.completionBodies.find((b) => b.messages[0].content.startsWith('[script:flood]') && b.messages.some((m) => m.role === 'tool'))
+    eq(sent.messages.filter((m) => m.role === 'tool').length, 12, 'every call was answered to the model')
+  })
+
   await test('the turn limit ends the run and is recorded', async () => {
     const r = run('turn-limit')
     eq([r.metrics.hitLimit, r.metrics.turns, r.verdict.pass], ['turns', 2, false], 'limit, turns, pass')
@@ -624,19 +636,19 @@ if (bench) {
 
   await test('summary: pass rate and per-task passes', async () => {
     const s = bench.summary
-    eq([s.runs, s.tasks.reduce((a, t) => a + t.passes, 0)], [10, 7], 'runs, passes')
-    eq(s.passRate, 7 / 10, 'pass rate')
-    eq(s.hitLimitRuns, 2, 'limit runs')
+    eq([s.runs, s.tasks.reduce((a, t) => a + t.passes, 0)], [11, 8], 'runs, passes')
+    eq(s.passRate, 8 / 11, 'pass rate')
+    eq(s.hitLimitRuns, 3, 'limit runs')
   })
 
   await test('output files: runs.jsonl (one line per run), summary.json, summary.md with the results row', async () => {
     const lines = fs.readFileSync(path.join(outDir, 'runs.jsonl'), 'utf8').trim().split('\n')
-    eq(lines.length, 10, 'runs.jsonl lines')
+    eq(lines.length, 11, 'runs.jsonl lines')
     assert(JSON.parse(lines[0]).events.length > 0, 'events saved')
     const sj = JSON.parse(fs.readFileSync(path.join(outDir, 'summary.json'), 'utf8'))
     eq([sj.meta.modelLabel, sj.meta.toolCount, sj.meta.tools], ['fake model', 5, ['read_file', 'make_doc', 'write_file', 'search_docs', 'fs_write']], 'meta')
     const md = fs.readFileSync(path.join(outDir, 'summary.md'), 'utf8')
-    assert(/\| \d{4}-\d{2}-\d{2} \| fake model \| [0-9a-f]+(\+dirty)? \| 10×1 | 70% \| 67% \|/.test(md), md)
+    assert(/\| \d{4}-\d{2}-\d{2} \| fake model \| [0-9a-f]+(\+dirty)? \| 11×1 \| 73% \|/.test(md), md)
     assert(md.includes("> warning: runs changed 1 file(s) that were already in the account's File System folder"), 'the warning is in summary.md')
   })
 }

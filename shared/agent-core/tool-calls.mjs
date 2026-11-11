@@ -44,6 +44,24 @@ export const INTERRUPTED_RESULT = 'Tool execution was interrupted by a new user 
 export const DENIED_RESULT = 'Tool execution was denied by the user.';
 
 /**
+ * The most tool calls one reply may have run. The rest are answered, not run.
+ *
+ * A model can fall into a loop INSIDE one reply: Qwen3-4B answered
+ * multi-recover with 58 calls in a single turn (agent bench, 2026-11-11,
+ * results T19-49-58): 40 create_document calls with "[INSERT_RESULT_HERE]"
+ * bodies, sqlite queries on a database it invented, and a delete_file, all
+ * written before it had seen one result, and all run. The turn limit counts
+ * replies, so it never saw them. The most any other reply made, across every
+ * saved run of both models, was 4.
+ */
+export const MAX_TOOL_CALLS_PER_REPLY = 10;
+
+/** @param {number} asked @param {number} limit */
+export function overLimitResult(asked, limit) {
+	return `Not run. This reply asked for ${asked} tool calls and only the first ${limit} are run. Read their results, then call what is still needed, a few calls at a time.`;
+}
+
+/**
  * Same test as chat-ui's isAbortError: an Error (or DOMException) named
  * AbortError. Duplicated rather than imported because the core cannot reach
  * into chat-ui.
@@ -133,8 +151,9 @@ function macrotask() {
  *   capturedTimings: Timings | undefined,
  *   ports: import('./types').AgentPorts<A>,
  *   callbacks: import('./types').AgentStoreCallbacks<A>,
- *   signal?: AbortSignal
- * }} params
+ *   signal?: AbortSignal,
+ *   maxToolCalls?: number
+ * }} params `maxToolCalls`: default MAX_TOOL_CALLS_PER_REPLY
  * @returns {Promise<ToolCallsOutcome>}
  */
 export async function runToolCalls(params) {
@@ -144,12 +163,27 @@ export async function runToolCalls(params) {
 	const now = ports.now ?? (() => performance.now());
 	const yieldToHost = ports.yield ?? macrotask;
 
+	const limit = params.maxToolCalls ?? MAX_TOOL_CALLS_PER_REPLY;
+
 	for (let i = 0; i < calls.length; i++) {
 		const toolCall = calls[i];
 
 		if (signal?.aborted) {
 			onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 			return 'stopped';
+		}
+
+		// Past the limit: answer every remaining call (a call with no result is
+		// a malformed transcript) and go on to the next turn, where the model
+		// sees what the first ones returned.
+		if (i >= limit) {
+			ports.log?.(`Reply asked for ${calls.length} tool calls; ${calls.length - i} not run`);
+			const text = overLimitResult(calls.length, limit);
+			for (let j = i; j < calls.length; j++) {
+				if (createToolResultMessage) await createToolResultMessage(calls[j].id, text);
+				messages.push({ role: 'tool', tool_call_id: calls[j].id, content: text });
+			}
+			break;
 		}
 
 		// A user message is waiting: skip the remaining calls, but answer each

@@ -37,6 +37,8 @@ import { attachmentNote } from '../../shared/agent-core/attachment-note.mjs'
 import {
   DENIED_RESULT,
   INTERRUPTED_RESULT,
+  MAX_TOOL_CALLS_PER_REPLY,
+  overLimitResult,
   normalizeToolCalls,
   wireSafeToolCalls,
 } from '../../shared/agent-core/tool-calls.mjs'
@@ -333,6 +335,30 @@ await test('an isError result is stored as-is and timed as a failure', async () 
   await h.done
   eq(h.toolResults[0].content, 'no such file', 'result text')
   eq(h.flowCompletions.at(-1).agentic.toolCalls[0].success, false, 'timed as a failure')
+})
+
+await test('a reply with more tool calls than the limit runs the first ones and answers the rest', async () => {
+  // Agent bench, 2026-11-11: one Qwen3-4B reply held 58 calls (40 of them
+  // create_document, one delete_file) and every one ran.
+  const many = Array.from({ length: MAX_TOOL_CALLS_PER_REPLY + 3 }, (_, i) => call(`c${i}`))
+  const h = harness({ turns: [async (acc) => { acc.toolCalls = many }] })
+  await h.done
+  const ran = h.calls.filter((c) => c.startsWith('execute:'))
+  eq(ran, many.slice(0, MAX_TOOL_CALLS_PER_REPLY).map((c) => `execute:${c.id}`), 'only the first ones ran, in order')
+  eq(h.calls.filter((c) => c.startsWith('approve:')).length, MAX_TOOL_CALLS_PER_REPLY, 'the rest never reached the gate')
+  const skipped = h.toolResults.slice(MAX_TOOL_CALLS_PER_REPLY)
+  eq(skipped.map((r) => r.id), ['c10', 'c11', 'c12'], 'the rest were answered')
+  assert(skipped.every((r) => r.content === overLimitResult(many.length, MAX_TOOL_CALLS_PER_REPLY)), `wording: ${skipped[0]?.content}`)
+  assert(/^Not run\./.test(skipped[0].content) && skipped[0].content.includes('13 tool calls'), skipped[0].content)
+  eq(h.messages.filter((m) => m.role === 'tool').length, many.length, 'every call has a result in the history')
+  // Unlike a steering exit, the flow goes on: the model sees the results.
+  eq(count(h.calls, 'streamTurn'), 2, 'the next turn ran')
+  eq(h.sentMessages[1].filter((m) => m.role === 'tool').length, many.length, 'and was sent all the results')
+
+  // At the limit exactly, nothing is skipped.
+  const exact = harness({ turns: [async (acc) => { acc.toolCalls = many.slice(0, MAX_TOOL_CALLS_PER_REPLY) }] })
+  await exact.done
+  assert(exact.toolResults.every((r) => r.content === 'ran t'), 'a reply at the limit was cut')
 })
 
 await test('steering during tools answers the remaining calls as interrupted and ends the flow', async () => {
