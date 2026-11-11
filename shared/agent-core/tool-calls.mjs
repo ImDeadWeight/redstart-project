@@ -30,6 +30,7 @@
 
 import { buildFinalTimings } from './timings.mjs';
 import { ASK_USER_TOOL, formatAskAnswer, parseAskArguments } from './ask-user.mjs';
+import { UPDATE_PLAN_TOOL, formatPlanResult, parsePlanArguments } from './update-plan.mjs';
 
 /** @typedef {import('./types').AgentToolCall} AgentToolCall */
 /** @typedef {import('./types').RawToolCall} RawToolCall */
@@ -207,11 +208,15 @@ export async function runToolCalls(params) {
 		// ask port, not the gate or the executor. Asking needs no approval, and
 		// nothing on a server could answer it.
 		const asking = !!ports.ask && toolCall.function.name === ASK_USER_TOOL;
+		// update_plan, when the host keeps a plan: stored by the host, no
+		// approval (it changes nothing outside the conversation).
+		const planning = !!ports.plan && toolCall.function.name === UPDATE_PLAN_TOOL;
+		const hostResolved = asking || planning;
 
-		const allowed = asking ? true : await ports.gate.approve(toolCall, signal);
+		const allowed = hostResolved ? true : await ports.gate.approve(toolCall, signal);
 
 		// Let the host repaint (the browser hides the permission card here).
-		if (!asking) await yieldToHost();
+		if (!hostResolved) await yieldToHost();
 
 		if (signal?.aborted) {
 			onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
@@ -243,6 +248,22 @@ export async function runToolCalls(params) {
 				result = formatAskAnswer(answer);
 				// The time the person took to answer is not tool time.
 				toolStartTime = now();
+			}
+		} else if (planning) {
+			const plan = /** @type {NonNullable<typeof ports.plan>} */ (ports.plan);
+			const parsed = parsePlanArguments(toolCall.function.arguments);
+			if (!parsed.ok) {
+				result = parsed.error;
+				toolSuccess = false;
+				plan.invalid?.(toolCall, parsed.error);
+			} else {
+				try {
+					await plan.save(parsed.steps, toolCall);
+					result = formatPlanResult(parsed.steps);
+				} catch (error) {
+					result = `Error: the plan could not be saved: ${error instanceof Error ? error.message : String(error)}`;
+					toolSuccess = false;
+				}
 			}
 		} else if (!allowed) {
 			result = DENIED_RESULT;

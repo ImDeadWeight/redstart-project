@@ -3,11 +3,13 @@
 // =============================================================================
 // Redstart Nest — host-resolved tools (agent-runtime plan §4, decision D4)
 // =============================================================================
-// ask_user is DEFINED here and ANSWERED elsewhere. Only the client running the
-// agent loop has a person to ask: chat-ui puts a card in the chat, the agent
-// bench answers from the task file, and the daemon's task runtime (Phase 3)
-// will park the task. The loop core (shared/agent-core/tool-calls.mjs) routes
-// the call to the host's `ask` port before it ever reaches tools/call.
+// ask_user and update_plan are DEFINED here and ANSWERED elsewhere. Only the
+// client running the agent loop has a person to ask: chat-ui puts a card in
+// the chat, the agent bench answers from the task file, and the daemon's task
+// runtime (Phase 3) will park the task. The plan is conversation state the
+// same loop keeps (it rides at the tail of each request). The loop core
+// (shared/agent-core/tool-calls.mjs) routes both to the host's `ask` and
+// `plan` ports before they ever reach tools/call.
 //
 // OFFERED ONLY TO A CLIENT THAT SAID IT CAN ANSWER. A client declares it at
 // initialize, as an MCP experimental capability:
@@ -30,6 +32,7 @@
 // =============================================================================
 
 import { ASK_USER_DEFINITION } from '../../shared/agent-core/ask-user.mjs'
+import { UPDATE_PLAN_DEFINITION } from '../../shared/agent-core/update-plan.mjs'
 import { HOST_RESOLVED_TOOL_NAMES } from './tools-definitions.mjs'
 
 /** The MCP experimental capability a client declares at initialize. */
@@ -37,7 +40,10 @@ export const HOST_TOOLS_CAPABILITY = 'redstart/hostTools'
 
 export const TOOL_NAMES = [...HOST_RESOLVED_TOOL_NAMES]
 
-const DEFINITIONS = new Map([[ASK_USER_DEFINITION.name, ASK_USER_DEFINITION]])
+const DEFINITIONS = new Map([
+  [ASK_USER_DEFINITION.name, ASK_USER_DEFINITION],
+  [UPDATE_PLAN_DEFINITION.name, UPDATE_PLAN_DEFINITION],
+])
 
 /**
  * The host-resolved tool names an initialize request's client can answer.

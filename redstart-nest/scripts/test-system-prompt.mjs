@@ -292,6 +292,15 @@ await test('🔍 ask_user gets its when-to-ask line only when the request carrie
   assert(!without.prompt.includes('ask_user'), 'named ask_user to a request that does not carry it')
 })
 
+await test('🔍 update_plan gets its when-to-plan line only when the request carries it', async () => {
+  // Plan §4, 1.2: three or more distinct steps, so a trivial question does
+  // not spend a turn on a checklist.
+  const withTool = composePrompt({ config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['update_plan'], now: NOW })
+  assert(withTool.prompt.includes('three or more distinct steps'), 'no when-to-plan line with update_plan offered')
+  const without = composePrompt({ config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query'], now: NOW })
+  assert(!without.prompt.includes('update_plan'), 'named update_plan to a request that does not carry it')
+})
+
 await test('🔒 a narrowed tool list says so, and points at the way out', async () => {
   // Every other block here stops the model claiming what the request does not
   // support. This one stops the opposite error: with retrieval on, an absent

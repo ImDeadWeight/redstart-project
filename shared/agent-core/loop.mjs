@@ -26,6 +26,7 @@ import {
 } from './timings.mjs';
 import { normalizeToolCalls, runToolCalls } from './tool-calls.mjs';
 import { createApiToolCalls, parseToolCallsFromTurn } from './tool-call-parser.mjs';
+import { completionNudge, openSteps, planTailNote } from './update-plan.mjs';
 
 /** @typedef {import('./types').Timings} Timings */
 /** @typedef {import('./types').TurnAccumulator} TurnAccumulator */
@@ -67,6 +68,11 @@ export async function runAgentLoop(params) {
 	let totalToolCallCount = 0;
 	const agenticTimings = createAgenticTimings();
 
+	/** The completion check has fired in this flow (it fires at most once). */
+	let nudged = false;
+	/** @type {string | null} the nudge owed to the next request */
+	let pendingNudge = null;
+
 	let turn = 0;
 	while (true) {
 		if (turn >= maxTurns) {
@@ -104,8 +110,16 @@ export async function runAgentLoop(params) {
 		const acc = createTurnAccumulator(capturedTimings);
 		const turnStats = createTurnStats(turn + 1);
 
+		// The plan's note rides at the tail of THIS request only (update-plan.mjs):
+		// never pushed into `messages`, so the history, and the prompt prefix the
+		// server has cached, stay as they were. A pending completion nudge takes
+		// its place for the one turn it is owed.
+		const tailNote = pendingNudge ?? (ports.plan ? planTailNote(ports.plan.get()) : null);
+		pendingNudge = null;
+		const sent = tailNote ? [...messages, { role: 'user', content: tailNote }] : messages;
+
 		try {
-			await ports.model.streamTurn({ acc, messages, signal });
+			await ports.model.streamTurn({ acc, messages: sent, signal });
 
 			// The model narrated a call instead of emitting one: recover it from
 			// the answer, then the reasoning. Inside the try because it ran inside
@@ -158,6 +172,34 @@ export async function runAgentLoop(params) {
 			);
 			onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 			return;
+		}
+
+		// The one completion check (update-plan.mjs): the model answered with
+		// plan steps still open. Save this turn, then give it one more with the
+		// nudge at the tail. Once per flow, so it can never become a loop.
+		const planSteps = acc.toolCalls.length === 0 && ports.plan && ports.plan.completionCheck !== false && !nudged
+			? ports.plan.get()
+			: null;
+		if (planSteps && openSteps(planSteps).length > 0) {
+			nudged = true;
+			ports.log?.('Plan steps still open after an answer: one more turn');
+			agenticTimings.perTurn?.push(turnStats);
+			await onAssistantTurnComplete?.(
+				acc.content,
+				acc.reasoning || undefined,
+				buildFinalTimings(capturedTimings, agenticTimings),
+				undefined
+			);
+			const intermediateTimings = buildFinalTimings(capturedTimings, agenticTimings);
+			if (intermediateTimings) onTurnComplete?.(intermediateTimings);
+			messages.push({
+				role: 'assistant',
+				content: acc.content || undefined,
+				reasoning_content: acc.reasoning || undefined
+			});
+			pendingNudge = completionNudge(planSteps);
+			turn++;
+			continue;
 		}
 
 		// No tool calls: this is the answer.

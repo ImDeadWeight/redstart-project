@@ -43,6 +43,7 @@ import {
   wireSafeToolCalls,
 } from '../../shared/agent-core/tool-calls.mjs'
 import { DISMISSED_RESULT, formatAskAnswer, parseAskArguments } from '../../shared/agent-core/ask-user.mjs'
+import { formatPlanResult, parsePlanArguments, planTailNote } from '../../shared/agent-core/update-plan.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const coreDir = path.join(here, '..', '..', 'shared', 'agent-core')
@@ -90,6 +91,8 @@ function harness(opts = {}) {
     signal,
     createToolResultMessage = async (id) => ({ id: `msg-${id}` }),
     ask,
+    // { steps?, completionCheck?, save? }: a plan port over an in-memory list.
+    plan,
   } = opts
 
   const calls = []
@@ -162,6 +165,16 @@ function harness(opts = {}) {
     ...(ask ? { ask: {
       user: async (req, s, c) => { calls.push(`ask:${c?.id}`); return ask(req, s) },
       invalid: (c) => { calls.push(`ask-invalid:${c.id}`) },
+    } } : {}),
+    ...(plan ? { plan: {
+      get: () => plan.steps ?? null,
+      save: async (steps, c) => {
+        calls.push(`plan-save:${c?.id}`)
+        if (plan.save) await plan.save(steps)
+        plan.steps = steps
+      },
+      invalid: (c) => { calls.push(`plan-invalid:${c.id}`) },
+      ...(plan.completionCheck === false ? { completionCheck: false } : {}),
     } } : {}),
     progress: (patch) => progress.push(patch),
     now: () => clock,
@@ -495,6 +508,129 @@ await test('tool timings and per-turn stats are recorded', async () => {
   const t = h.flowCompletions.at(-1).agentic
   eq([t.turns, t.toolCallsCount, t.toolsMs, t.perTurn.length], [2, 2, 20, 2], 'turns, calls, ms, perTurn')
   eq(t.perTurn[0].toolCalls.map((c) => c.name), ['t', 't'], 'first turn\'s calls')
+})
+
+console.log('\n-- update_plan (Phase 1.2) --')
+
+const planCall = (id, steps) => call(id, 'update_plan', JSON.stringify({ steps }))
+const S = (text, status, note) => ({ text, status, ...(note ? { note } : {}) })
+const lastSent = (h, i) => h.sentMessages[i].at(-1)
+
+await test('update_plan goes to the plan port, not the gate or the executor; the result names the next step', async () => {
+  const plan = {}
+  const h = harness({
+    plan,
+    turns: [async (acc) => { acc.toolCalls = [planCall('p1', [S('read the file', 'done'), S('write the summary', 'pending')])] }],
+  })
+  await h.done
+  eq(plan.steps, [S('read the file', 'done'), S('write the summary', 'pending')], 'saved')
+  eq(h.toolResults.map((r) => r.content), ['Plan saved. Next open step: write the summary.'], 'result')
+  assert(h.calls.includes('plan-save:p1'), 'the port was not handed the call')
+  assert(!h.calls.some((c) => c.startsWith('approve:') || c.startsWith('execute:')), `gate or executor ran: ${h.calls}`)
+})
+
+await test('a malformed update_plan is answered with how to call it, and nothing is saved', async () => {
+  const plan = {}
+  const h = harness({
+    plan,
+    turns: [async (acc) => {
+      acc.toolCalls = [
+        call('x1', 'update_plan', '{"steps": []}'),
+        planCall('x2', [S('a', 'started')]),
+        call('x3', 'update_plan', 'nope'),
+      ]
+    }],
+  })
+  await h.done
+  eq(plan.steps, undefined, 'saved anyway')
+  for (const r of h.toolResults) assert(/^Error: .*update_plan takes \{"steps"/.test(r.content), r.content)
+  eq(h.calls.filter((c) => c.startsWith('plan-invalid:')), ['plan-invalid:x1', 'plan-invalid:x2', 'plan-invalid:x3'], 'invalid hook')
+})
+
+await test('a save that throws becomes an error result and the flow goes on', async () => {
+  const h = harness({
+    plan: { save: async () => { throw new Error('disk full') } },
+    turns: [async (acc) => { acc.toolCalls = [planCall('p1', [S('a', 'done')])] }],
+  })
+  await h.done
+  eq(h.toolResults[0].content, 'Error: the plan could not be saved: disk full', 'result')
+  eq(count(h.calls, 'streamTurn'), 2, 'the flow went on')
+})
+
+await test('while steps are open, each request ends with the plan note; the history never gets it', async () => {
+  const plan = { steps: [S('read', 'done'), S('write', 'in_progress'), S('check', 'pending')], completionCheck: false }
+  const h = harness({ plan, turns: [async (acc) => { acc.toolCalls = [call('a')] }] })
+  await h.done
+  for (const i of [0, 1]) {
+    const m = lastSent(h, i)
+    eq(m.role, 'user', `request ${i}: the note's role`)
+    assert(m.content.startsWith('[Automatic note, not from the user] Current plan'), m.content)
+    assert(m.content.includes('1. [x] read\n2. [>] write\n3. [ ] check'), m.content)
+  }
+  assert(!h.messages.some((m) => typeof m.content === 'string' && m.content.includes('Current plan')), 'the note entered the history')
+  // The request before the note is the history as it was, so the cached prefix holds.
+  eq(h.sentMessages[1].slice(0, -1), h.messages.slice(0, h.sentMessages[1].length - 1), 'prefix unchanged')
+})
+
+await test('no note with no plan, or once every step is done or skipped', async () => {
+  const none = harness({ plan: {} })
+  await none.done
+  eq(lastSent(none, 0), { role: 'user', content: 'hello' }, 'no plan')
+  const finished = harness({ plan: { steps: [S('a', 'done'), S('b', 'skipped', 'not needed')] } })
+  await finished.done
+  eq(lastSent(finished, 0), { role: 'user', content: 'hello' }, 'all done')
+  eq(count(finished.calls, 'streamTurn'), 1, 'no nudge with nothing open')
+})
+
+await test('the completion check: an answer with steps open gets one more turn, saved first, with the nudge at the tail', async () => {
+  const plan = { steps: [S('read', 'done'), S('write', 'pending')] }
+  const h = harness({
+    plan,
+    turns: [
+      async (acc) => { acc.content = 'Here is what I found.' },
+      async (acc) => { acc.toolCalls = [planCall('p1', [S('read', 'done'), S('write', 'done')])] },
+      async (acc) => { acc.content = 'Written.' },
+    ],
+  })
+  await h.done
+  eq(count(h.calls, 'streamTurn'), 3, 'turns')
+  eq(h.saved.map((s) => s.content), ['Here is what I found.', '', 'Written.'], 'every turn saved, the first before the nudge')
+  const nudge = lastSent(h, 1)
+  assert(nudge.content.startsWith('[Automatic note, not from the user] These steps are still open:\n- write\n'), nudge.content)
+  eq(h.sentMessages[1].at(-2), { role: 'assistant', content: 'Here is what I found.' }, 'the answer is in the history before the nudge')
+  eq(count(h.calls, 'onFlowComplete'), 1, 'completed once')
+  eq(count(h.calls, 'createAssistantMessage'), 2, 'a new assistant message for each later turn')
+})
+
+await test('the completion check fires once per flow, never again', async () => {
+  const plan = { steps: [S('write', 'pending')] }
+  const h = harness({ plan, turns: [async (acc) => { acc.content = 'first' }, async (acc) => { acc.content = 'still not done' }] })
+  await h.done
+  eq(count(h.calls, 'streamTurn'), 2, 'one nudge, then the answer stands')
+  eq(h.saved.at(-1).content, 'still not done', 'final answer')
+  eq(count(h.calls, 'onFlowComplete'), 1, 'completed once')
+})
+
+await test('completionCheck: false keeps the note but never nudges', async () => {
+  const h = harness({ plan: { steps: [S('write', 'pending')], completionCheck: false } })
+  await h.done
+  eq(count(h.calls, 'streamTurn'), 1, 'no nudge')
+  assert(lastSent(h, 0).content.includes('Current plan'), 'the note is still sent')
+})
+
+await test('with no plan port, update_plan is an ordinary call (gate, then executor)', async () => {
+  const h = harness({ turns: [async (acc) => { acc.toolCalls = [planCall('p1', [S('a', 'pending')])] }] })
+  await h.done
+  assert(h.calls.includes('approve:p1') && h.calls.includes('execute:p1'), `${h.calls}`)
+})
+
+await test('plan argument checks and result wording', () => {
+  eq(parsePlanArguments('{"steps":[{"text":" a ","status":"done","note":" ok "}]}'), { ok: true, steps: [S('a', 'done', 'ok')] }, 'trimmed')
+  eq(parsePlanArguments(JSON.stringify({ steps: Array.from({ length: 21 }, () => S('x', 'pending')) })).ok, false, 'too many steps')
+  eq(parsePlanArguments('{"steps":[{"text":"a","status":"done","note":3}]}').ok, false, 'a non-text note')
+  eq(formatPlanResult([S('a', 'done'), S('b', 'pending'), S('c', 'in_progress')]), 'Plan saved. Next open step: c.', 'in_progress wins')
+  eq(formatPlanResult([S('a', 'done'), S('b', 'skipped')]), 'All steps are done or skipped.', 'all closed')
+  eq(planTailNote([S('a', 'done')]), null, 'nothing open, no note')
 })
 
 console.log('\n-- the turn limit --')

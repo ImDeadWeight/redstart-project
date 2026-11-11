@@ -283,6 +283,12 @@ function buildToolPolicy(config, hasTools, toolNames) {
     parts.push('Call ask_user only when the request can be read two ways that lead to different work and nothing in the conversation settles it. Do not use it to ask permission, to confirm a plan you can simply carry out, or for anything a tool can find out — try the tool first.')
   }
 
+  // update_plan (plan §4, 1.2). When a plan is worth making, so a one-line
+  // question does not get a checklist (and the turn it costs).
+  if (has('update_plan')) {
+    parts.push('Use update_plan only when the task has three or more distinct steps or deliverables; skip it for a simple question. Once you make a plan, keep it current, and before your final answer mark every step done, or skipped with a reason.')
+  }
+
   // The destructive class exists in tools-definitions.mjs and governs the
   // server's own gate; until now nothing carried it to the model.
   const destructive = names.filter(name => classifyTool(name) === 'destructive')

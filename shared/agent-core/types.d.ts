@@ -127,6 +127,13 @@ export interface AskAnswer {
 	text?: string;
 }
 
+/** One update_plan step (update-plan.mjs). */
+export interface PlanStep {
+	text: string;
+	status: 'pending' | 'in_progress' | 'done' | 'skipped';
+	note?: string;
+}
+
 export interface ToolCallParserConfig {
 	/** Any of 'braces', 'xml', 'fn', 'json', tried in order. */
 	patterns: string[];
@@ -194,6 +201,25 @@ export interface AgentPorts<A = unknown> {
 		 * (the bench). Optional.
 		 */
 		invalid?(call: AgentToolCall, error: string): void;
+	};
+	/**
+	 * Where the conversation's plan lives, for `update_plan` (update-plan.mjs).
+	 * Omitted: the call goes through the gate and the executor like any other
+	 * tool, there is no tail note and no completion check.
+	 */
+	plan?: {
+		/** The current steps, or null with no plan. Read before every turn. */
+		get(): readonly PlanStep[] | null;
+		/** Store the whole new list. A throw becomes an error result. */
+		save(steps: PlanStep[], call?: AgentToolCall): Promise<void> | void;
+		/** A malformed update_plan the loop answered with `error`. Optional. */
+		invalid?(call: AgentToolCall, error: string): void;
+		/**
+		 * The one completion check (a turn that answers with steps open gets
+		 * one more). Default on; the bench turns it off to measure the tool
+		 * alone (plan U5).
+		 */
+		completionCheck?: boolean;
 	};
 	limit: {
 		/** The turn limit was reached: may the flow go on? Resolve `false` on abort. */

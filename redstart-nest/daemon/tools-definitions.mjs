@@ -218,6 +218,7 @@ export function capabilityToolNames() {
 // Tools Nest DEFINES but never runs: the client's own agent loop answers them
 // (agent-runtime plan D4). ask_user needs a person, so only a host with one can
 // answer it — chat-ui shows a card, the agent bench answers from the task file.
+// update_plan is conversation state the same loop keeps and sends back.
 //
 // They belong to no capability (like search_tools): there is nothing for an
 // admin to switch on, only a name to ban. They are served by
@@ -229,7 +230,7 @@ export function capabilityToolNames() {
 //
 // The namespacing contract applies to them like any Nest tool
 // (scripts/test-tool-namespacing.mjs).
-export const HOST_RESOLVED_TOOL_NAMES = ['ask_user']
+export const HOST_RESOLVED_TOOL_NAMES = ['ask_user', 'update_plan']
 
 // Back-compat alias for call sites that only need the built-ins (the file-system
 // policy set in mcp-server.mjs). Plugins are deliberately absent here.
@@ -359,6 +360,8 @@ export const TOOL_CLASSES = {
   // machine: the client answers them in its own loop. 'read' is the honest
   // class, stated rather than defaulted, as for search_tools.
   ask_user: 'read',
+  // Writes only the conversation's own plan, which the client stores.
+  update_plan: 'read',
   // Web (egress governed by the whitelist/SSRF guard, tagged network here)
   web_fetch: 'network',
   web_search: 'network',

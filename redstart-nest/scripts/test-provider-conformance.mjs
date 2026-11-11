@@ -236,10 +236,10 @@ const PROVIDERS = [
     // other than chat-ui and the bench is in. A direct call is an error either
     // way: nothing on the server can answer a question.
     name: 'interaction',
-    tools: ['ask_user'],
+    tools: ['ask_user', 'update_plan'],
     enable: () => ({}),
-    clientCapabilities: { experimental: { 'redstart/hostTools': { names: ['ask_user'] } } },
-    advertised: ['ask_user'],
+    clientCapabilities: { experimental: { 'redstart/hostTools': { names: ['ask_user', 'update_plan'] } } },
+    advertised: ['ask_user', 'update_plan'],
     badCall: { name: 'ask_user', arguments: {} },
   },
   {
