@@ -32,7 +32,10 @@ const MAX_READBACK_BYTES = 1024 * 1024
 export const FILES_SNAPSHOT_LIMIT = 2000
 
 /**
- * @param {{ gateway: string, mcp: string, apiKey?: string | null, fetch?: typeof fetch, mcpTimeoutMs?: number }} opts
+ * `hostTools`: the host-resolved tools this run answers itself (default
+ * ask_user and update_plan); Nest offers only those.
+ *
+ * @param {{ gateway: string, mcp: string, apiKey?: string | null, fetch?: typeof fetch, mcpTimeoutMs?: number, hostTools?: string[] }} opts
  */
 export async function connectNest(opts) {
   const gateway = opts.gateway.replace(/\/$/, '')
@@ -52,12 +55,13 @@ export async function connectNest(opts) {
     return res
   }
 
-  // The bench answers ask_user itself (lib/ask.mjs), as chat-ui does, so it
-  // declares so and Nest offers the tool (daemon/interaction-tools.mjs).
+  // The bench answers ask_user (lib/ask.mjs) and keeps the plan itself, as
+  // chat-ui does, so it declares so and Nest offers the tools
+  // (daemon/interaction-tools.mjs). --plan off leaves update_plan out.
   const mcp = await connectMcpClient(opts.mcp, {
     headers: auth,
     timeoutMs: opts.mcpTimeoutMs ?? 300_000,
-    capabilities: { experimental: { [HOST_TOOLS_CAPABILITY]: { names: ['ask_user'] } } },
+    capabilities: { experimental: { [HOST_TOOLS_CAPABILITY]: { names: opts.hostTools ?? ['ask_user', 'update_plan'] } } },
   })
 
   return {

@@ -19,6 +19,8 @@
 //   askCalls        ask_user calls (Phase 1), malformed ones included
 //   dismissedAsks   questions the task had no answer for: on a task that
 //                   should never ask, every one is an unneeded question
+//   planCalls       update_plan calls (Phase 1.2), malformed ones included
+//   planNudges      turns the core's completion check added (0 or 1)
 //
 // The schema check is deliberately shallow: an object, every `required` key
 // present, each present key's top-level JSON type matching the schema's
@@ -98,6 +100,8 @@ export function computeMetrics(events, verdict) {
   let hitLimit = null
   let askCalls = 0
   let dismissedAsks = 0
+  let planCalls = 0
+  let planNudges = 0
   const lastErroredByTool = new Map()
 
   for (const e of events) {
@@ -112,6 +116,7 @@ export function computeMetrics(events, verdict) {
       if (typeof e.id === 'string' && e.id.startsWith(FALLBACK_ID_PREFIX)) fallbackCalls++
       if (lastErroredByTool.get(e.name)) retries++
       if (e.name === 'ask_user') askCalls++
+      if (e.name === 'update_plan') planCalls++
     }
     if (e.type === 'tool_result') {
       if (e.isError) toolErrors++
@@ -119,6 +124,7 @@ export function computeMetrics(events, verdict) {
       lastErroredByTool.set(e.name, !!e.isError)
     }
     if (e.type === 'limit') hitLimit = e.which
+    if (e.type === 'plan_nudge') planNudges++
   }
 
   const start = events.find((e) => e.type === 'start')?.t
@@ -140,6 +146,8 @@ export function computeMetrics(events, verdict) {
     hitLimit,
     askCalls,
     dismissedAsks,
+    planCalls,
+    planNudges,
   }
 }
 
@@ -184,6 +192,9 @@ export function summarize(runs) {
     askCalls: all.reduce((a, m) => a + (m.askCalls ?? 0), 0),
     dismissedAsks: all.reduce((a, m) => a + (m.dismissedAsks ?? 0), 0),
     runsThatAsked: all.filter((m) => (m.askCalls ?? 0) > 0).length,
+    planCalls: all.reduce((a, m) => a + (m.planCalls ?? 0), 0),
+    runsThatPlanned: all.filter((m) => (m.planCalls ?? 0) > 0).length,
+    planNudges: all.reduce((a, m) => a + (m.planNudges ?? 0), 0),
     tasks,
   }
 }

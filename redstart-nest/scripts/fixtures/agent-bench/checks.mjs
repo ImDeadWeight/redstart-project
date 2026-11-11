@@ -33,3 +33,10 @@ export function choseDraftB(text) {
     ? { pass: true, reason: 'the choice reached the model' }
     : { pass: false, reason: `no choice in ${JSON.stringify(text)}` }
 }
+
+// Phase 1.2: the model finished after the completion nudge.
+export function finishedThePlan(text) {
+  return text === 'All done.'
+    ? { pass: true, reason: 'answered after closing the plan' }
+    : { pass: false, reason: `final answer ${JSON.stringify(text)}` }
+}

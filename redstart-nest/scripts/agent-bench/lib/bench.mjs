@@ -17,6 +17,9 @@
 //                      (lib/ask.mjs); no match is a dismissal. Logged as the
 //                      tool_call/tool_result pair it is, so the metrics count
 //                      it and checks see it (checks/lib.mjs asked())
+//   plan               update_plan kept in memory for the run, logged as
+//                      calls; the completion check per --plan (full: on,
+//                      tool: off, off: no port and no tool)
 //   limit.askContinue  "no": reaching maxTurns ends the run, recorded
 //   steering           never
 //   fallbackParser     on, chat-ui's default patterns, Nest's tool names
@@ -31,6 +34,7 @@ import { readChatStream } from '../../../../shared/agent-core/chat-stream.mjs'
 import { wireSafeToolCalls, MAX_TOOL_CALLS_PER_REPLY } from '../../../../shared/agent-core/tool-calls.mjs'
 import { attachmentNote } from '../../../../shared/agent-core/attachment-note.mjs'
 import { formatAskAnswer } from '../../../../shared/agent-core/ask-user.mjs'
+import { NUDGE_PREFIX, formatPlanResult } from '../../../../shared/agent-core/update-plan.mjs'
 import { argumentProblem, computeMetrics } from './metrics.mjs'
 import { answerFromTask } from './ask.mjs'
 import { META_CLASS_KEY } from './nest-client.mjs'
@@ -193,6 +197,9 @@ export async function runTask(nest, task, opts) {
 
     const messages = [{ role: 'user', content: userMessage(task, { conversationId, hasTool: (n) => toolsByName.has(n) }) }]
     let turn = 0
+    const planMode = opts.plan ?? 'full'
+    /** @type {import('../../../../shared/agent-core/types').PlanStep[] | null} */
+    let planSteps = null
 
     try {
       await runAgentLoop({
@@ -218,6 +225,10 @@ export async function runTask(nest, task, opts) {
           model: {
             streamTurn: async ({ acc, messages: msgs, signal }) => {
               log({ type: 'turn', turn: ++turn })
+              // The core's completion check (update-plan.mjs): this turn exists
+              // because the model answered with plan steps still open.
+              const tail = msgs.at(-1)
+              if (typeof tail?.content === 'string' && tail.content.startsWith(NUDGE_PREFIX)) log({ type: 'plan_nudge' })
               const body = {
                 messages: toWire(msgs),
                 stream: true,
@@ -292,6 +303,25 @@ export async function runTask(nest, task, opts) {
               log({ type: 'tool_result', id: call.id, name: 'ask_user', isError: true, text: problem, ms: 0 })
             },
           },
+          // update_plan (plan §4, 1.2): the plan lives in the run, nothing is
+          // stored. --plan tool keeps the tool and drops the completion check;
+          // --plan off has no port (and Nest was not asked for the tool).
+          ...(planMode === 'off' ? {} : {
+            plan: {
+              get: () => planSteps,
+              save: (steps, call) => {
+                planSteps = steps
+                log({ type: 'tool_call', id: call?.id, name: 'update_plan', arguments: call?.function.arguments,
+                  argsProblem: argumentProblem(call?.function.arguments, toolsByName.get('update_plan')?.inputSchema) })
+                log({ type: 'tool_result', id: call?.id, name: 'update_plan', isError: false, text: formatPlanResult(steps), steps, ms: 0 })
+              },
+              invalid: (call, problem) => {
+                log({ type: 'tool_call', id: call.id, name: 'update_plan', arguments: call.function.arguments, argsProblem: problem })
+                log({ type: 'tool_result', id: call.id, name: 'update_plan', isError: true, text: problem, ms: 0 })
+              },
+              completionCheck: planMode === 'full',
+            },
+          }),
           limit: {
             askContinue: async () => {
               log({ type: 'limit', which: 'turns' })

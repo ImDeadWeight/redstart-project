@@ -10,6 +10,8 @@
 //     [--gateway http://127.0.0.1:19080] [--mcp http://127.0.0.1:19082]
 //     [--thinking] [--temperature 0.2] [--model <id>] [--keep]
 //     [--max-tokens 4096]   (per reply; default 4096, 16384 with --thinking)
+//     [--plan full|tool|off]  (update_plan with its completion check, the
+//                              tool alone, or none; default full; plan U5)
 //
 // Login on: put the bench account's API key in REDSTART_BENCH_API_KEY (or
 // pass --api-key, which then sits in your shell history). Use a dedicated
@@ -37,8 +39,9 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const FLAGS = {
   '--model-label': 'modelLabel', '--tasks': 'tasks', '--repeat': 'repeat', '--out': 'out',
   '--gateway': 'gateway', '--mcp': 'mcp', '--api-key': 'apiKey', '--temperature': 'temperature',
-  '--model': 'model', '--max-tokens': 'maxTokens',
+  '--model': 'model', '--max-tokens': 'maxTokens', '--plan': 'plan',
 }
+export const PLAN_MODES = ['full', 'tool', 'off']
 const SWITCHES = { '--thinking': 'thinking', '--keep': 'keep', '--quiet': 'quiet' }
 
 export function parseArgs(argv) {
@@ -68,6 +71,10 @@ export function parseArgs(argv) {
     opts.maxTokens = Number(opts.maxTokens)
     if (!Number.isInteger(opts.maxTokens) || opts.maxTokens < 1) throw new Error('--max-tokens must be a positive integer')
   }
+  // The plan variants plan U5 compares: full = update_plan plus the one
+  // completion check; tool = update_plan alone; off = no update_plan.
+  opts.plan = opts.plan ?? 'full'
+  if (!PLAN_MODES.includes(opts.plan)) throw new Error(`--plan must be one of ${PLAN_MODES.join(', ')}`)
   opts.apiKey = opts.apiKey ?? process.env.REDSTART_BENCH_API_KEY ?? null
   return opts
 }
@@ -161,7 +168,7 @@ export function summaryMarkdown(meta, summary) {
   const lines = [
     `# Agent bench — ${meta.modelLabel}`,
     '',
-    `${meta.date} · commit ${meta.commit} · ${summary.runs} runs (${meta.taskCount} tasks × ${meta.repeat}) · ${meta.toolCount} tools offered · thinking ${meta.thinking ? 'on' : 'off'}`,
+    `${meta.date} · commit ${meta.commit} · ${summary.runs} runs (${meta.taskCount} tasks × ${meta.repeat}) · ${meta.toolCount} tools offered · thinking ${meta.thinking ? 'on' : 'off'} · plan ${meta.plan ?? 'full'}`,
     '',
     `Model file: ${meta.model?.modelFile ?? 'unknown'} · chat template sha256 ${meta.model?.chatTemplateSha ?? 'unknown'}`,
     '',
@@ -173,6 +180,8 @@ export function summaryMarkdown(meta, summary) {
     // Phase 1: a dismissed question is one the task had no answer for, so on
     // the tasks that should never ask it is an unneeded one.
     `ask_user: ${summary.askCalls ?? 0} call(s) in ${summary.runsThatAsked ?? 0} run(s), ${summary.dismissedAsks ?? 0} unanswered (the task had no answer for it)`,
+    '',
+    `update_plan (--plan ${meta.plan ?? 'full'}): ${summary.planCalls ?? 0} call(s) in ${summary.runsThatPlanned ?? 0} run(s), ${summary.planNudges ?? 0} completion nudge(s)`,
     '',
     '| task | group | passes |',
     '|---|---|---|',
@@ -202,7 +211,10 @@ export async function main(argv, io = {}) {
   let nest
   let mcpTools
   try {
-    nest = await connectNest({ gateway: opts.gateway, mcp: opts.mcp, apiKey: opts.apiKey })
+    nest = await connectNest({
+      gateway: opts.gateway, mcp: opts.mcp, apiKey: opts.apiKey,
+      hostTools: opts.plan === 'off' ? ['ask_user'] : ['ask_user', 'update_plan'],
+    })
     mcpTools = await nest.listTools()
   } catch (err) {
     throw new Error(explainConnectError(err, opts))
@@ -238,7 +250,7 @@ export async function main(argv, io = {}) {
   for (let r = 0; r < opts.repeat; r++) {
     for (const task of tasks) {
       const result = await runTask(nest, task, {
-        mcpTools, thinking: opts.thinking, temperature: opts.temperature, model: opts.model, maxTokens: opts.maxTokens, fileSystemSnapshot,
+        mcpTools, thinking: opts.thinking, temperature: opts.temperature, model: opts.model, maxTokens: opts.maxTokens, fileSystemSnapshot, plan: opts.plan,
         keep: opts.keep, runIndex: r,
       })
       runs.push(result)
@@ -270,6 +282,7 @@ export async function main(argv, io = {}) {
     toolCount: mcpTools.length,
     tools: mcpTools.map((t) => t.name),
     thinking: !!opts.thinking,
+    plan: opts.plan,
     temperature: opts.temperature ?? null,
     maxTokens: maxReplyTokens(opts),
     gateway: opts.gateway,

@@ -37,6 +37,7 @@ import { main, parseArgs, labelWarning, fallbackWarning, accountWarning, askWarn
 import { approves, maxReplyTokens } from './agent-bench/lib/bench.mjs'
 import { answerFromTask } from './agent-bench/lib/ask.mjs'
 import { ASK_USER_DEFINITION, DISMISSED_RESULT } from '../../shared/agent-core/ask-user.mjs'
+import { UPDATE_PLAN_DEFINITION } from '../../shared/agent-core/update-plan.mjs'
 import { argumentProblem, computeMetrics } from './agent-bench/lib/metrics.mjs'
 import { findTaskFiles, loadTask } from './agent-bench/lib/task-file.mjs'
 
@@ -107,6 +108,7 @@ const TOOLS = [
 ]
 
 const ASK_USER_TOOL_DEF = { ...ASK_USER_DEFINITION, _meta: { 'redstart/class': 'read' } }
+const UPDATE_PLAN_TOOL_DEF = { ...UPDATE_PLAN_DEFINITION, _meta: { 'redstart/class': 'read' } }
 
 const chunk = (delta, extra = {}) => ({ choices: [{ index: 0, delta }], ...extra })
 const toolCallChunk = (id, name, args) => chunk({ tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: args } }] })
@@ -154,6 +156,15 @@ const SCRIPTS = {
       { index: 2, id: 'q3', type: 'function', function: { name: 'ask_user', arguments: '{"question": ""}' } },
     ] })]
     : [chunk({ content: messages.filter((m) => m.role === 'tool').map((m) => m.content).join(' | ') })]),
+  // Phase 1.2: plan two steps, answer with one still open (the core nudges
+  // once), close the plan, answer.
+  plan: (turn) => {
+    const steps = (a, b) => JSON.stringify({ steps: [{ text: 'read the notes', status: a }, { text: 'write the summary', status: b, ...(b === 'skipped' ? { note: 'no notes' } : {}) }] })
+    if (turn === 0) return [toolCallChunk('p1', 'update_plan', steps('in_progress', 'pending'))]
+    if (turn === 1) return [chunk({ content: 'Read them.' })]
+    if (turn === 2) return [toolCallChunk('p2', 'update_plan', steps('done', 'skipped'))]
+    return [chunk({ content: 'All done.' })]
+  },
   forever: () => [toolCallChunk(`c${Math.random().toString(36).slice(2, 8)}`, 'read_file', '{"path": "data.txt"}')],
   hang: () => 'hang',
 }
@@ -326,7 +337,8 @@ function startFakeNest(gatewayPort) {
       return reply({ protocolVersion: '2024-11-05', capabilities: { tools: {} } })
     }
     if (msg.method === 'tools/list') {
-      return reply({ tools: state.declaredHostTools?.includes('ask_user') ? [...TOOLS, ASK_USER_TOOL_DEF] : TOOLS })
+      const hostTools = [ASK_USER_TOOL_DEF, UPDATE_PLAN_TOOL_DEF].filter((t) => state.declaredHostTools?.includes(t.name))
+      return reply({ tools: [...TOOLS, ...hostTools] })
     }
     if (msg.method === 'tools/call') {
       const { name, arguments: args, _meta } = msg.params
@@ -435,7 +447,7 @@ await test('a task file with a problem fails at load, naming the file and the fi
 })
 
 await test('task patterns: a folder, a glob, a single file', async () => {
-  eq(findTaskFiles(FIXTURES).map((f) => path.basename(f)).length, 12, 'folder (fs-leak, cited-doc and flood added 2026-11-11; asks for Phase 1)')
+  eq(findTaskFiles(FIXTURES).map((f) => path.basename(f)).length, 13, 'folder (fs-leak, cited-doc and flood added 2026-11-11; asks and plans for Phase 1)')
   eq(findTaskFiles(path.join(FIXTURES, '*-limit.json')).map((f) => path.basename(f)), ['time-limit.json', 'turn-limit.json'], 'glob')
   eq(findTaskFiles(path.join(FIXTURES, 'denied.json')).length, 1, 'file')
 })
@@ -533,7 +545,7 @@ if (bench) {
 
   await test('the model got the tool list and its tool results; thinking off, streaming on', async () => {
     const body = nest.state.completionBodies.find((b) => b.messages.some((m) => m.role === 'tool'))
-    eq(body.tools.map((t) => t.function.name), ['read_file', 'make_doc', 'write_file', 'search_docs', 'fs_write', 'ask_user'], 'tools')
+    eq(body.tools.map((t) => t.function.name), ['read_file', 'make_doc', 'write_file', 'search_docs', 'fs_write', 'ask_user', 'update_plan'], 'tools')
     eq([body.stream, body.chat_template_kwargs.enable_thinking, body.reasoning_format], [true, false, 'auto'], 'flags')
     const asst = body.messages.find((m) => m.role === 'assistant' && m.tool_calls)
     assert(asst && body.messages.some((m) => m.role === 'tool' && m.tool_call_id === asst.tool_calls[0].id), 'tool result paired with its call')
@@ -640,7 +652,7 @@ if (bench) {
   })
 
   await test('ask_user: offered because the bench declared it, answered from the task, logged as calls', async () => {
-    eq(nest.state.declaredHostTools, ['ask_user'], 'the bench declared it answers ask_user')
+    eq(nest.state.declaredHostTools, ['ask_user', 'update_plan'], 'the bench declared the host-resolved tools it answers')
     const r = run('asks')
     eq(r.verdict.pass, true, `the choice reached the model: ${r.verdict.reason}`)
     eq(r.finalText, `The user chose: draft_b.md | ${DISMISSED_RESULT} | ${r.events.find((e) => e.type === 'tool_result' && e.id === 'q3').text}`, 'what the model read')
@@ -651,6 +663,35 @@ if (bench) {
     assert(!nest.state.toolCalls.some((c) => c.name === 'ask_user'), 'ask_user reached tools/call')
     eq([bench.summary.askCalls, bench.summary.dismissedAsks, bench.summary.runsThatAsked], [3, 1, 1], 'summary counts')
     assert(fs.readFileSync(path.join(outDir, 'summary.md'), 'utf8').includes('ask_user: 3 call(s) in 1 run(s), 1 unanswered'), 'summary.md line')
+  })
+
+  await test('update_plan: kept in the run, the plan note at the tail, one completion nudge, logged as calls', async () => {
+    const r = run('plans')
+    eq(r.verdict.pass, true, r.verdict.reason)
+    eq([r.metrics.planCalls, r.metrics.planNudges, r.metrics.turns, r.metrics.toolErrors], [2, 1, 4, 0], 'plan calls, nudges, turns, errors')
+    const bodies = nest.state.completionBodies.filter((b) => b.messages[0].content.startsWith('[script:plan]'))
+    assert(bodies[1].messages.at(-1).content.startsWith('[Automatic note, not from the user] Current plan'), 'no plan note at the tail')
+    // Both steps are open: in_progress counts.
+    assert(bodies[2].messages.at(-1).content.startsWith('[Automatic note, not from the user] These steps are still open:\n- read the notes\n- write the summary\n'), 'no nudge')
+    eq(r.events.find((e) => e.type === 'tool_result' && e.id === 'p1').text, 'Plan saved. Next open step: read the notes.', 'result')
+    assert(!nest.state.toolCalls.some((c) => c.name === 'update_plan'), 'update_plan reached tools/call')
+    eq([bench.summary.planCalls, bench.summary.runsThatPlanned, bench.summary.planNudges], [2, 1, 1], 'summary counts')
+  })
+
+  await test('--plan tool keeps the tool and drops the nudge; --plan off does not ask Nest for it', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-plan-'))
+    const args = (mode) => ['--model-label', 'fake model', '--tasks', path.join(FIXTURES, 'plans.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', path.join(dir, mode), '--quiet', '--plan', mode]
+    const tool = await main(args('tool'), { log: () => {} })
+    eq([tool.runs[0].metrics.planCalls, tool.runs[0].metrics.planNudges, tool.runs[0].finalText], [1, 0, 'Read them.'], 'tool: no nudge, the early answer stands')
+    const off = await main(args('off'), { log: () => {} })
+    eq(nest.state.declaredHostTools, ['ask_user'], 'off: update_plan not declared')
+    eq(off.runs[0].metrics.planNudges, 0, 'off: no nudge')
+    assert(!JSON.parse(fs.readFileSync(path.join(dir, 'off', 'summary.json'), 'utf8')).meta.tools.includes('update_plan'), 'off: Nest offered it anyway')
+    assert(fs.readFileSync(path.join(dir, 'tool', 'summary.md'), 'utf8').includes('plan tool'), 'the mode is in summary.md')
+    let bad = null
+    try { parseArgs(['--model-label', 'm', '--plan', 'sometimes']) } catch (e) { bad = e }
+    assert(/--plan must be one of full, tool, off/.test(bad?.message ?? ''), 'a bad --plan was accepted')
+    fs.rmSync(dir, { recursive: true, force: true })
   })
 
   await test('the turn limit ends the run and is recorded', async () => {
@@ -687,19 +728,19 @@ if (bench) {
 
   await test('summary: pass rate and per-task passes', async () => {
     const s = bench.summary
-    eq([s.runs, s.tasks.reduce((a, t) => a + t.passes, 0)], [12, 9], 'runs, passes')
-    eq(s.passRate, 9 / 12, 'pass rate')
+    eq([s.runs, s.tasks.reduce((a, t) => a + t.passes, 0)], [13, 10], 'runs, passes')
+    eq(s.passRate, 10 / 13, 'pass rate')
     eq(s.hitLimitRuns, 3, 'limit runs')
   })
 
   await test('output files: runs.jsonl (one line per run), summary.json, summary.md with the results row', async () => {
     const lines = fs.readFileSync(path.join(outDir, 'runs.jsonl'), 'utf8').trim().split('\n')
-    eq(lines.length, 12, 'runs.jsonl lines')
+    eq(lines.length, 13, 'runs.jsonl lines')
     assert(JSON.parse(lines[0]).events.length > 0, 'events saved')
     const sj = JSON.parse(fs.readFileSync(path.join(outDir, 'summary.json'), 'utf8'))
-    eq([sj.meta.modelLabel, sj.meta.toolCount, sj.meta.tools], ['fake model', 6, ['read_file', 'make_doc', 'write_file', 'search_docs', 'fs_write', 'ask_user']], 'meta')
+    eq([sj.meta.modelLabel, sj.meta.toolCount, sj.meta.tools], ['fake model', 7, ['read_file', 'make_doc', 'write_file', 'search_docs', 'fs_write', 'ask_user', 'update_plan']], 'meta')
     const md = fs.readFileSync(path.join(outDir, 'summary.md'), 'utf8')
-    assert(/\| \d{4}-\d{2}-\d{2} \| fake model \| [0-9a-f]+(\+dirty)? \| 12×1 \| 75% \|/.test(md), md)
+    assert(/\| \d{4}-\d{2}-\d{2} \| fake model \| [0-9a-f]+(\+dirty)? \| 13×1 \| 77% \|/.test(md), md)
     assert(md.includes("> warning: runs changed 1 file(s) that were already in the account's File System folder"), 'the warning is in summary.md')
   })
 }
