@@ -414,7 +414,7 @@ const isFile = (p) => fs.existsSync(p) && fs.statSync(p).isFile()
  * A file attached to a chat is saved as chats/<conversationId>/<name> in the
  * caller's documents folder, and the user (and so the model) calls it by its
  * name. In the agent bench of 2026-11-11 read_document by bare name was the
- * most common tool error on both models: 9 of the 4B's 25 errors, in 8 of 24
+ * most common tool error on both models: 9 of the 4B's 25 errors, in 7 of 24
  * tasks, although the attachment note spells the full path out. Two tasks
  * ended there, with the model telling the user the file was never attached.
  * So a path that is not in the documents folder is looked for in the
