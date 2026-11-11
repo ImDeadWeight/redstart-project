@@ -30,18 +30,36 @@ import { createHash } from 'crypto'
 import { once } from 'events'
 
 import { fetchFollowingRedirects } from './http-redirects.mjs'
+import { nodeFetch } from './node-fetch-transport.mjs'
 import { resolveWithinRoot } from './path-scope.mjs'
 import { isHuggingFaceUrl, buildDownloadUrl } from './hf-catalog.mjs'
 
 const USER_AGENT = 'Redstart/1.0 (local AI assistant)'
-// Applies to establishing the response only. It is deliberately NOT applied to
-// the body: a 20 GB transfer legitimately outlives any request timeout, and a
-// signal that fires mid-body would corrupt an otherwise healthy download.
+// Two bounds, never a total-duration one: a 20 GB transfer legitimately
+// outlives any request timeout.
+//   CONNECT — until the response headers arrive.
+//   STALL   — the longest gap between body chunks before the connection is
+//             treated as dead. Without it a silently dropped socket hangs the
+//             download forever; with it a slow-but-moving one is never cut.
+// Both run on ONE AbortController whose timer is re-armed, not on
+// AbortSignal.timeout(): fetch keeps its request signal attached to the
+// response BODY, so a fixed timer passed to fetch aborts the stream mid-file
+// — which is exactly the "aborted due to timeout" failure this replaced.
 const CONNECT_TIMEOUT_MS = 30000
+const STALL_TIMEOUT_MS = 60000
 // Headroom over the artifact size so a download cannot fill the volume to zero.
 const DISK_HEADROOM_BYTES = 1024 * 1024 * 1024
+// Window for the displayed transfer rate — long enough to smooth chunk
+// jitter, short enough that the number visibly tracks the link.
+const SPEED_WINDOW_MS = 3000
 
 export const PART_SUFFIX = '.part'
+
+// The transport for the transfer itself: node:https, not global fetch, because
+// Node 26's fetch caps a body at ~3.4 MB/s — see node-fetch-transport.mjs.
+// Swappable only so the suite can serve canned responses with no network.
+let transport = nodeFetch
+export function setDownloadTransportForTests(fn) { transport = fn ?? nodeFetch }
 
 // ---------------------------------------------------------------------------
 // Destination naming
@@ -100,7 +118,12 @@ async function hashExistingPart(partPath) {
 // behave exactly as before. The one other caller, python-runtime.mjs, passes a
 // predicate pinned to its own CDN prefix: same discipline (staging, resume,
 // sha256), a different approved address, and still every redirect hop checked.
-export async function downloadFile({ url, destPath, expectedSha256, expectedSize, signal, onChunk, isUrlAllowed = isHuggingFaceUrl }) {
+//
+// The timeout options exist for the test suite, which cannot wait a minute.
+export async function downloadFile({
+  url, destPath, expectedSha256, expectedSize, signal, onChunk, isUrlAllowed = isHuggingFaceUrl,
+  connectTimeoutMs = CONNECT_TIMEOUT_MS, stallTimeoutMs = STALL_TIMEOUT_MS,
+}) {
   const partPath = destPath + PART_SUFFIX
 
   // Resume: if a .part is already here, ask for the remainder. The server may
@@ -116,18 +139,31 @@ export async function downloadFile({ url, destPath, expectedSha256, expectedSize
   const headers = { 'User-Agent': USER_AGENT }
   if (resumeFrom > 0) headers.Range = `bytes=${resumeFrom}-`
 
-  // The connect timeout bounds establishing the response only — see the
-  // constant. AbortSignal.any rejects undefined members, so the caller's signal
-  // is included only when there is one.
-  const connectSignal = AbortSignal.any(
-    [signal, AbortSignal.timeout(CONNECT_TIMEOUT_MS)].filter(Boolean),
-  )
+  // See the constants. `arm` (re)starts the one timer; the caller's cancel
+  // signal is merged in so cancellation still reaches fetch and the body.
+  // AbortSignal.any rejects undefined members, hence the filter. The timer is
+  // unref'd: on an early-return error path it may outlive this call, and
+  // firing then only aborts a request nobody is reading.
+  const watchdog = new AbortController()
+  let timer = null
+  const arm = (ms, message) => {
+    clearTimeout(timer)
+    timer = setTimeout(() => watchdog.abort(new Error(message)), ms)
+    timer.unref?.()
+  }
+  const fetchSignal = AbortSignal.any([signal, watchdog.signal].filter(Boolean))
+
+  arm(connectTimeoutMs, `Hugging Face did not respond within ${Math.round(connectTimeoutMs / 1000)} s.`)
+  const stallMessage = `The download stalled — no data for ${Math.round(stallTimeoutMs / 1000)} s. Retry to resume.`
 
   const { response } = await fetchFollowingRedirects(url, {
     isUrlAllowed,
     headers,
-    signal: connectSignal,
+    signal: fetchSignal,
+    fetchImpl: transport,
   })
+  // Headers are in: from here the timer measures silence, not elapsed time.
+  arm(stallTimeoutMs, stallMessage)
 
   if ((response.status === 401 || response.status === 403) && isUrlAllowed === isHuggingFaceUrl) {
     throw new Error('This model requires a Hugging Face account. Redstart cannot download gated models.')
@@ -174,6 +210,7 @@ export async function downloadFile({ url, destPath, expectedSha256, expectedSize
       const { done, value } = await reader.read()
       if (done) break
       if (signal?.aborted) throw new Error('Download cancelled')
+      arm(stallTimeoutMs, stallMessage)
       const chunk = Buffer.from(value.buffer, value.byteOffset, value.byteLength)
       hash.update(chunk)
       received += chunk.length
@@ -181,6 +218,7 @@ export async function downloadFile({ url, destPath, expectedSha256, expectedSize
       if (!out.write(chunk)) await once(out, 'drain')
     }
   } finally {
+    clearTimeout(timer)
     await new Promise((resolve, reject) => out.end(err => (err ? reject(err) : resolve())))
   }
 
@@ -276,7 +314,12 @@ export async function downloadArtifact({
       continue
     }
 
-    const started = Date.now()
+    // Speed is a rolling rate over the last few seconds, not a lifetime
+    // average: an average stops moving after a minute and hides a slowdown,
+    // and on a resume it also counted the bytes already on disk as if they
+    // had just arrived. Samples are (time, bytes) pairs; the first chunk seeds
+    // the window, so resumed bytes never enter the rate.
+    const samples = []
     const res = await downloadFile({
       url: t.url,
       destPath: t.destPath,
@@ -284,13 +327,17 @@ export async function downloadArtifact({
       expectedSize: t.size,
       signal,
       onChunk: (fileReceived) => {
-        const elapsed = (Date.now() - started) / 1000
+        const now = Date.now()
+        samples.push([now, fileReceived])
+        while (samples.length > 2 && now - samples[0][0] > SPEED_WINDOW_MS) samples.shift()
+        const [t0, b0] = samples[0]
+        const elapsed = (now - t0) / 1000
         onProgress?.({
           fileIndex: i,
           fileCount: targets.length,
           receivedBytes: completedBytes + fileReceived,
           totalBytes,
-          bytesPerSec: elapsed > 0 ? Math.round(fileReceived / elapsed) : 0,
+          bytesPerSec: elapsed > 0 ? Math.round((fileReceived - b0) / elapsed) : 0,
           state: 'downloading',
         })
       },
