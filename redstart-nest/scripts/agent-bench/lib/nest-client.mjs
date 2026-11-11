@@ -122,6 +122,19 @@ export async function connectNest(opts) {
       return out
     },
 
+    /** One file by its documents-relative path (what a [file: ...] line names), as text; null if gone or too big. */
+    async readDocument(relPath) {
+      const res = await req('GET', `/files/download?${new URLSearchParams({ path: relPath })}`, { ok: [200, 404] })
+      if (res.status === 404) return null
+      const buf = Buffer.from(await res.arrayBuffer())
+      return buf.length > MAX_READBACK_BYTES ? null : buf.toString('utf8')
+    },
+
+    /** Move one documents-relative file to the account's trash (recoverable). */
+    async deleteDocument(relPath) {
+      await req('POST', '/files/delete', { json: { space: DOCS_SPACE, path: relPath }, ok: [200, 204, 404] })
+    },
+
     /** The raw completions call; the model port reads the stream. */
     async completion(body, signal) {
       return doFetch(`${gateway}/v1/chat/completions`, {

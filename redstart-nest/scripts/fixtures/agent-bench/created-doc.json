@@ -1,0 +1,1 @@
+{ "id": "created-doc", "group": "files", "prompt": "[script:makedoc] Write a brief.", "approve": "all", "check": "checks.mjs#briefCreated" }

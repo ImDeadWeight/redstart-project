@@ -73,6 +73,12 @@ const TOOLS = [
     _meta: { 'redstart/class': 'read' },
   },
   {
+    name: 'make_doc',
+    description: 'Create a document in the documents root (like create_document).',
+    inputSchema: { type: 'object', properties: { title: { type: 'string' }, content: { type: 'string' } }, required: ['title', 'content'] },
+    _meta: { 'redstart/class': 'write' },
+  },
+  {
     name: 'write_file',
     description: 'Write a file into the conversation workspace.',
     inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
@@ -101,6 +107,9 @@ const SCRIPTS = {
   narrated: (turn, messages) => (turn === 0
     ? [chunk({ content: 'Calling read_file({"path": "data.txt"}) now.' })]
     : [chunk({ content: `Found ${/secret: (\d+)/.exec(lastToolResult(messages))?.[1]}.` })]),
+  makedoc: (turn) => (turn === 0
+    ? [toolCallChunk('c1', 'make_doc', JSON.stringify({ title: 'brief', content: '# Brief\n\nShort.' }))]
+    : [chunk({ content: 'Saved the brief.' })]),
   forever: () => [toolCallChunk(`c${Math.random().toString(36).slice(2, 8)}`, 'read_file', '{"path": "data.txt"}')],
   hang: () => 'hang',
 }
@@ -129,6 +138,7 @@ function startFakeNest(gatewayPort) {
     files: new Map(), // 'chats/<id>/<path>' -> Buffer
     conversations: new Set(),
     deleted: [],
+    docDeletes: [],
     authSeen: new Set(),
     completionBodies: [],
     toolCalls: [],
@@ -167,6 +177,12 @@ function startFakeNest(gatewayPort) {
       const key = `${url.searchParams.get('path')}/${url.searchParams.get('name')}`
       state.files.set(key, await readBody(req))
       return json(res, 201, {})
+    }
+    if (req.method === 'POST' && url.pathname === '/files/delete') {
+      const body = JSON.parse((await readBody(req)).toString())
+      state.docDeletes.push(body)
+      state.files.delete(body.path)
+      return json(res, 200, {})
     }
     if (req.method === 'GET' && url.pathname === '/files/list') {
       const dir = url.searchParams.get('path')
@@ -226,6 +242,15 @@ function startFakeNest(gatewayPort) {
         return buf
           ? reply({ content: [{ type: 'text', text: buf.toString() }] })
           : reply({ isError: true, content: [{ type: 'text', text: `No such file: ${args.path}` }] })
+      }
+      if (name === 'make_doc') {
+        const rel = `notes/${args.title}.md`
+        state.files.set(rel, Buffer.from(args.content))
+        return reply({ content: [
+          { type: 'text', text: `[FILE: ${rel}]
+Created "${rel}" in the documents folder.` },
+          { type: 'resource_link', uri: `/files/download?path=${encodeURIComponent(rel)}`, name: rel, mimeType: 'text/markdown', size: args.content.length },
+        ] })
       }
       if (name === 'write_file') {
         state.files.set(`chats/${conv}/${args.path}`, Buffer.from(args.content))
@@ -306,7 +331,7 @@ await test('a task file with a problem fails at load, naming the file and the fi
 })
 
 await test('task patterns: a folder, a glob, a single file', async () => {
-  eq(findTaskFiles(FIXTURES).map((f) => path.basename(f)).length, 7, 'folder')
+  eq(findTaskFiles(FIXTURES).map((f) => path.basename(f)).length, 8, 'folder')
   eq(findTaskFiles(path.join(FIXTURES, '*-limit.json')).map((f) => path.basename(f)), ['time-limit.json', 'turn-limit.json'], 'glob')
   eq(findTaskFiles(path.join(FIXTURES, 'denied.json')).length, 1, 'file')
 })
@@ -361,10 +386,26 @@ if (bench) {
 
   await test('the model got the tool list and its tool results; thinking off, streaming on', async () => {
     const body = nest.state.completionBodies.find((b) => b.messages.some((m) => m.role === 'tool'))
-    eq(body.tools.map((t) => t.function.name), ['read_file', 'write_file'], 'tools')
+    eq(body.tools.map((t) => t.function.name), ['read_file', 'make_doc', 'write_file'], 'tools')
     eq([body.stream, body.chat_template_kwargs.enable_thinking, body.reasoning_format], [true, false, 'auto'], 'flags')
     const asst = body.messages.find((m) => m.role === 'assistant' && m.tool_calls)
     assert(asst && body.messages.some((m) => m.role === 'tool' && m.tool_call_id === asst.tool_calls[0].id), 'tool result paired with its call')
+  })
+
+  await test("fixtures are announced with chat-ui's attachment note; no note without fixtures", async () => {
+    const withFx = nest.state.completionBodies.find((b) => b.messages[0].content.startsWith('[script:read]'))
+    eq(withFx.messages[0].content,
+      "[script:read] What is the secret in data.txt?\n\n[Attached files saved to the Python workspace (run_python's working directory): data.txt, nested/inline.txt]",
+      'user message')
+    const without = nest.state.completionBodies.find((b) => b.messages[0].content.startsWith('[script:write]'))
+    eq(without.messages[0].content, '[script:write] Put 42 in out/answer.txt.', 'no note')
+  })
+
+  await test('a file made outside the workspace reaches the check through ctx, then is deleted', async () => {
+    const r = run('created-doc')
+    eq([r.verdict.pass, r.createdFiles], [true, ['notes/brief.md']], 'pass, created')
+    eq(nest.state.docDeletes, [{ space: 'documents', path: 'notes/brief.md' }], 'deleted once, in the documents space')
+    assert(!nest.state.files.has('notes/brief.md'), 'still there')
   })
 
   await test('a write task passes: the file is in the workspace and the check saw it', async () => {
@@ -423,19 +464,19 @@ if (bench) {
 
   await test('summary: pass rate and per-task passes', async () => {
     const s = bench.summary
-    eq([s.runs, s.passes ?? s.tasks.reduce((a, t) => a + t.passes, 0)], [7, 4], 'runs, passes')
-    eq(s.passRate, 4 / 7, 'pass rate')
+    eq([s.runs, s.tasks.reduce((a, t) => a + t.passes, 0)], [8, 5], 'runs, passes')
+    eq(s.passRate, 5 / 8, 'pass rate')
     eq(s.hitLimitRuns, 2, 'limit runs')
   })
 
   await test('output files: runs.jsonl (one line per run), summary.json, summary.md with the results row', async () => {
     const lines = fs.readFileSync(path.join(outDir, 'runs.jsonl'), 'utf8').trim().split('\n')
-    eq(lines.length, 7, 'runs.jsonl lines')
+    eq(lines.length, 8, 'runs.jsonl lines')
     assert(JSON.parse(lines[0]).events.length > 0, 'events saved')
     const sj = JSON.parse(fs.readFileSync(path.join(outDir, 'summary.json'), 'utf8'))
-    eq([sj.meta.modelLabel, sj.meta.toolCount, sj.meta.tools], ['fake model', 2, ['read_file', 'write_file']], 'meta')
+    eq([sj.meta.modelLabel, sj.meta.toolCount, sj.meta.tools], ['fake model', 3, ['read_file', 'make_doc', 'write_file']], 'meta')
     const md = fs.readFileSync(path.join(outDir, 'summary.md'), 'utf8')
-    assert(/\| \d{4}-\d{2}-\d{2} \| fake model \| [0-9a-f]+(\+dirty)? \| 7×1 \| 57% \|/.test(md), md)
+    assert(/\| \d{4}-\d{2}-\d{2} \| fake model \| [0-9a-f]+(\+dirty)? \| 8×1 \| 63% \|/.test(md), md)
   })
 }
 

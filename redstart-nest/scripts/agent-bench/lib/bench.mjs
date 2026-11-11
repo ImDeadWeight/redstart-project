@@ -76,6 +76,39 @@ function parseArgs(text) {
   return parsed
 }
 
+/**
+ * The note chat-ui appends to a message whose attachments it saved to the
+ * workspace (utils/workspace-upload.ts), word for word, so a fixture task is
+ * exactly as hard as attaching the files in the chat.
+ */
+export function attachmentNote(paths) {
+  if (paths.length === 0) return null
+  return `[Attached file${paths.length > 1 ? 's' : ''} saved to the Python workspace (run_python's working directory): ${paths.join(', ')}]`
+}
+
+/** The prompt as the model receives it: the task's words, then the note. */
+export function userMessage(task) {
+  const note = attachmentNote(task.fixtures.map((f) => f.path))
+  return note ? `${task.prompt}\n\n${note}` : task.prompt
+}
+
+// The documents-relative paths a tool result names: the Phase 2 [file: ...]
+// line and create_document's older [FILE: ...] marker.
+const FILE_LINE_RES = [/^\[file: ([^,\]]+), [^\]]*\]$/, /^\[FILE: ([^\]]+)\]$/]
+
+/** @param {string} text */
+export function filePathsIn(text) {
+  const out = []
+  // split on LF; trim() below drops a CR
+  for (const line of (text ?? '').split('\n')) {
+    for (const re of FILE_LINE_RES) {
+      const m = re.exec(line.trim())
+      if (m) out.push(m[1].trim())
+    }
+  }
+  return out
+}
+
 const clip = (s) => (typeof s === 'string' && s.length > MAX_LOGGED_RESULT_CHARS
   ? `${s.slice(0, MAX_LOGGED_RESULT_CHARS)}… [${s.length - MAX_LOGGED_RESULT_CHARS} more chars]`
   : s)
@@ -102,6 +135,8 @@ export async function runTask(nest, task, opts) {
   let finalText = ''
   let error = null
   let workspace = {}
+  /** documents-relative path → text, for files the run made outside its workspace */
+  const createdFiles = {}
 
   try {
     await nest.ensureWorkspace(conversationId)
@@ -113,7 +148,7 @@ export async function runTask(nest, task, opts) {
       controller.abort()
     }, task.limits.maxSeconds * 1000)
 
-    const messages = [{ role: 'user', content: task.prompt }]
+    const messages = [{ role: 'user', content: userMessage(task) }]
     let turn = 0
 
     try {
@@ -170,7 +205,9 @@ export async function runTask(nest, task, opts) {
                 log({ type: 'tool_result', id: call.id, name, isError: true, text: `Error: ${err.message}`, ms: now() - started })
                 throw err
               }
-              log({ type: 'tool_result', id: call.id, name, isError: result.isError, text: clip(result.text), ms: now() - started })
+              const clipped = clip(result.text)
+              log({ type: 'tool_result', id: call.id, name, isError: result.isError, text: clipped,
+                ...(clipped !== result.text ? { fullText: result.text } : {}), ms: now() - started })
               return result
             },
           },
@@ -209,15 +246,33 @@ export async function runTask(nest, task, opts) {
     }
 
     workspace = await nest.readWorkspace(conversationId)
+
+    // Files the run created OUTSIDE its workspace: create_document writes to
+    // the account's documents root, not chats/<id>/. Named by the results'
+    // file lines, read back for the check, and removed below like the
+    // conversation, so one run's output is never another run's input.
+    const ownPrefix = `chats/${conversationId}/`
+    const outside = new Set()
+    for (const e of events) {
+      if (e.type !== 'tool_result') continue
+      for (const p of filePathsIn(e.fullText ?? e.text)) if (!p.startsWith(ownPrefix)) outside.add(p)
+    }
+    for (const p of outside) {
+      const text = await nest.readDocument(p).catch(() => null)
+      if (text !== null) createdFiles[p] = text
+    }
   } finally {
-    if (!opts.keep) await nest.deleteConversation(conversationId).catch(() => {})
+    if (!opts.keep) {
+      for (const p of Object.keys(createdFiles)) await nest.deleteDocument(p).catch(() => {})
+      await nest.deleteConversation(conversationId).catch(() => {})
+    }
   }
 
   log({ type: 'end', finalText })
 
   let verdict
   try {
-    verdict = await task.check(finalText, workspace, events)
+    verdict = await task.check(finalText, workspace, events, { createdFiles, conversationId })
     if (!verdict || typeof verdict.pass !== 'boolean') {
       verdict = { pass: false, reason: `check ${task.checkName} returned no { pass, reason }` }
     }
@@ -236,6 +291,7 @@ export async function runTask(nest, task, opts) {
     metrics: computeMetrics(events, verdict),
     finalText,
     workspaceFiles: Object.keys(workspace).sort(),
+    createdFiles: Object.keys(createdFiles).sort(),
     events,
   }
 }

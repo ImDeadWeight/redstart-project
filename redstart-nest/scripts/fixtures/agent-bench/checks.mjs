@@ -18,3 +18,11 @@ export function neverPasses() {
 export function throws() {
   throw new Error('check exploded')
 }
+
+// ctx.createdFiles: files the run made outside its workspace (create_document).
+export function briefCreated(_text, _files, _events, ctx) {
+  const entry = Object.entries(ctx.createdFiles).find(([p]) => /brief\.md$/.test(p))
+  return entry && entry[1].includes('# Brief')
+    ? { pass: true, reason: `${entry[0]} created` }
+    : { pass: false, reason: `no brief.md among ${JSON.stringify(Object.keys(ctx.createdFiles))}` }
+}

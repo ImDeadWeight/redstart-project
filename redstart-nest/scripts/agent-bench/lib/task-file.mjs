@@ -16,6 +16,15 @@
 //     "check": "checks/csv.mjs#summaryHasTotals"
 //   }
 //
+// A check is (finalText, workspaceFiles, events, ctx) => { pass, reason }:
+// workspaceFiles maps workspace-relative paths to text; ctx.createdFiles maps
+// documents-relative paths to text for files the run made outside its
+// workspace (create_document writes to the documents root).
+//
+// Fixtures are attached the way chat-ui attaches files: uploaded to the
+// workspace, and the prompt gets chat-ui's "[Attached files saved to the
+// Python workspace ...]" note listing them.
+//
 // `from` and the check module resolve against the task file's folder. A
 // fixture path is relative to the conversation workspace and may not climb
 // out of it. Everything is validated before any run starts, so a typo fails
