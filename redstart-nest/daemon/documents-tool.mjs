@@ -31,6 +31,7 @@ import ExcelJS from 'exceljs'
 import { resolveWithinRoot } from './path-scope.mjs'
 import { resolveUserRoot } from './user-scope.mjs'
 import { fileLink } from './tool-result-links.mjs'
+import { isWellFormedConversationId, workspaceRelative } from './conversation-workspace.mjs'
 
 const FORMATS = [
   'markdown', 'docx', 'pdf',
@@ -404,7 +405,35 @@ export async function extractText(filePath) {
   throw new Error(`Unsupported file type "${extension}" — readable types: ${READABLE_EXTENSIONS.join(', ')}`)
 }
 
-async function readDocument(docCfg, args) {
+const isFile = (p) => fs.existsSync(p) && fs.statSync(p).isFile()
+
+/**
+ * The same path inside this conversation's workspace, when a file is there;
+ * otherwise null.
+ *
+ * A file attached to a chat is saved as chats/<conversationId>/<name> in the
+ * caller's documents folder, and the user (and so the model) calls it by its
+ * name. In the agent bench of 2026-11-11 read_document by bare name was the
+ * most common tool error on both models: 9 of the 4B's 25 errors, in 8 of 24
+ * tasks, although the attachment note spells the full path out. Two tasks
+ * ended there, with the model telling the user the file was never attached.
+ * So a path that is not in the documents folder is looked for in the
+ * conversation's own workspace before it is reported missing.
+ *
+ * Only ever the caller's own conversation: mcp-server.mjs has checked that
+ * the id belongs to this account, and the path is contained like any other.
+ */
+function inConversationWorkspace(docCfg, docPath, conversationId) {
+  if (!conversationId || !isWellFormedConversationId(conversationId)) return null
+  try {
+    const candidate = resolveWithinRoot(docCfg.outputDir, `${workspaceRelative(conversationId)}/${docPath}`)
+    return isFile(candidate) ? candidate : null
+  } catch {
+    return null
+  }
+}
+
+async function readDocument(docCfg, args, conversationId) {
   const { path: docPath, offset } = args || {}
   if (!docPath || typeof docPath !== 'string') {
     return { isError: true, content: [{ type: 'text', text: 'Missing required argument: path' }] }
@@ -416,7 +445,10 @@ async function readDocument(docCfg, args) {
   } catch {
     return { isError: true, content: [{ type: 'text', text: 'Path is outside the configured documents folder' }] }
   }
-  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+  // The documents folder wins: a path that exists there means what it always
+  // meant.
+  if (!isFile(filePath)) filePath = inConversationWorkspace(docCfg, docPath, conversationId)
+  if (!filePath) {
     return { isError: true, content: [{ type: 'text', text: `File not found: ${docPath}. Use list_documents to see available files.` }] }
   }
   if (fs.statSync(filePath).size > MAX_READ_FILE_BYTES) {
@@ -492,7 +524,7 @@ export function toolDefs(cfg) {
       inputSchema: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'File path relative to the documents folder (e.g. "brief.pdf" or "cases/intake-notes.docx")' },
+          path: { type: 'string', description: 'File path relative to the documents folder (e.g. "brief.pdf" or "cases/intake-notes.docx"). A file attached to this conversation can be given by its name alone.' },
           offset: { type: 'number', description: 'Character position to continue reading from (from a previous truncated read)' },
         },
         required: ['path'],
@@ -551,7 +583,7 @@ export async function callTool(name, args, cfg, ctx) {
 
   if (name === 'read_document') {
     try {
-      return await readDocument(docCfg, args)
+      return await readDocument(docCfg, args, ctx?.conversationId)
     } catch (err) {
       return { isError: true, content: [{ type: 'text', text: `Failed to read document: ${err.message}` }] }
     }

@@ -11,7 +11,8 @@
  * workspace (run_python's working directory)". In the 2026-11-11 baseline both
  * models then went looking with the File System tools, which work on a
  * different folder that never holds attachments, or called read_document with
- * the bare name, which needs `chats/<id>/<name>`. About 45 of the 35B's 57
+ * the bare name, which then needed `chats/<id>/<name>` (read_document has
+ * since learned to look in the conversation's workspace). About 45 of the 35B's 57
  * tool errors were that, and it cost the 4B docs-rename and multi-chain. So
  * the note now says, for each tool family that is OFFERED, how it reaches the
  * files, and says outright that the File System tools cannot. Tools that are
@@ -63,7 +64,11 @@ export function attachmentNote({ saved, failed = [], conversationId, hasTool }) 
 			);
 		}
 		if (hasTool('read_document')) {
-			lines.push(`- read_document needs the folder in the path: "chats/${conversationId}/${first}".`);
+			// By name alone: read_document looks in the conversation's
+			// workspace when the documents folder has no such path. Until
+			// 2026-11-11 this line gave the full "chats/<id>/<name>" path;
+			// both bench models called it with the bare name anyway.
+			lines.push(`- read_document opens ${plural ? 'them' : 'it'} by name too: read_document(${JSON.stringify(first)}).`);
 		}
 		const fsOffered = FILE_SYSTEM_TOOLS.filter((t) => hasTool(t));
 		if (fsOffered.length > 0) {

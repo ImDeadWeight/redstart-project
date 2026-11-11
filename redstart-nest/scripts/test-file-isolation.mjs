@@ -187,6 +187,41 @@ await test('an account can still read its OWN documents', async () => {
   assert(textOf(res).includes('alice-confidential'), `unexpected contents: ${textOf(res)}`)
 })
 
+await test('read_document opens a file attached to the caller\'s conversation by its name alone', async () => {
+  // Agent bench, 2026-11-11: the most common tool error on both models, and
+  // two tasks ended with "the file was never attached".
+  const ws = path.join(resolveUserRoot(dirs.docs, ALICE, { create: true }), 'chats', 'conv-alice-1')
+  fs.mkdirSync(path.join(ws, 'sub'), { recursive: true })
+  fs.writeFileSync(path.join(ws, 'readings.csv'), 'attached-to-conv-1')
+  fs.writeFileSync(path.join(ws, 'sub', 'notes.txt'), 'nested-in-conv-1')
+  fs.writeFileSync(path.join(ws, 'alice-secret-plan.md'), 'the-workspace-copy')
+  const inConv = { account: ALICE, conversationId: 'conv-alice-1' }
+  const read = async (p, c) => documentsTool.callTool('read_document', { path: p }, docsCfg, c)
+
+  assert(textOf(await read('readings.csv', inConv)).includes('attached-to-conv-1'), 'bare name not found')
+  assert(textOf(await read('sub/notes.txt', inConv)).includes('nested-in-conv-1'), 'nested path not found')
+  assert(textOf(await read('chats/conv-alice-1/readings.csv', inConv)).includes('attached-to-conv-1'), 'the full path stopped working')
+  // A path that exists in the documents folder still means that file.
+  assert(textOf(await read('alice-secret-plan.md', inConv)).includes('alice-confidential'), 'the workspace copy shadowed the document')
+  // No conversation, another conversation, a malformed id: not found, as before.
+  for (const c of [ctx(ALICE), { account: ALICE, conversationId: 'conv-alice-2' }, { account: ALICE, conversationId: '../conv-alice-1' }]) {
+    const res = await read('readings.csv', c)
+    assert(res?.isError && textOf(res).includes('File not found: readings.csv'), `found without its conversation (${c.conversationId}): ${textOf(res)}`)
+  }
+})
+
+await test('🔍 the conversation fallback never reaches another account\'s workspace', async () => {
+  // Bob sends Alice's conversation id. mcp-server.mjs would have refused it
+  // (verifiedConversationId); even past that check, the path is resolved in
+  // BOB's folder, where no such workspace exists.
+  const res = await documentsTool.callTool('read_document', { path: 'readings.csv' }, docsCfg, { account: BOB, conversationId: 'conv-alice-1' })
+  assert(res?.isError, `LEAK — bob read alice's attachment: ${textOf(res)}`)
+  for (const attempt of ['../conv-alice-1/readings.csv', '../../alice-secret-plan.md']) {
+    const out = await documentsTool.callTool('read_document', { path: attempt }, docsCfg, { account: ALICE, conversationId: 'conv-alice-2' })
+    assert(out?.isError, `"${attempt}" climbed out of the workspace: ${textOf(out)}`)
+  }
+})
+
 await test('two accounts can hold the same filename without collision', async () => {
   await createDoc(ALICE, 'Shared Title', 'alice-version')
   await createDoc(BOB, 'Shared Title', 'bob-version')
