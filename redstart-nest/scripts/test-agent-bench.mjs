@@ -34,7 +34,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { main, parseArgs, labelWarning, fallbackWarning } from './agent-bench/run.mjs'
-import { approves } from './agent-bench/lib/bench.mjs'
+import { approves, maxReplyTokens } from './agent-bench/lib/bench.mjs'
 import { argumentProblem, computeMetrics } from './agent-bench/lib/metrics.mjs'
 import { findTaskFiles, loadTask } from './agent-bench/lib/task-file.mjs'
 
@@ -369,6 +369,12 @@ await test('arguments: --model-label required, MCP defaults to the gateway port 
   try { parseArgs([]) } catch (e) { err = e }
   assert(/--model-label is required/.test(err?.message ?? ''), 'no label accepted')
   eq(parseArgs(['--model-label', 'm', '--gateway', 'http://127.0.0.1:19080']).mcp, 'http://127.0.0.1:19082', 'mcp default')
+  eq(parseArgs(['--model-label', 'm', '--max-tokens', '2048']).maxTokens, 2048, '--max-tokens parsed')
+  for (const bad of ['0', '-5', '1.5', 'lots']) {
+    let e2 = null
+    try { parseArgs(['--model-label', 'm', '--max-tokens', bad]) } catch (e) { e2 = e }
+    assert(/--max-tokens must be a positive integer/.test(e2?.message ?? ''), `--max-tokens ${bad} accepted`)
+  }
 })
 
 console.log('\n-- the harness against a fake Nest --')
@@ -502,6 +508,21 @@ if (bench) {
   await test('tokens are summed from the turns\' timings', async () => {
     const r = run('write-answer')
     eq([r.metrics.promptTokens, r.metrics.predictedTokens], [200, 20], 'two turns of 100/10')
+  })
+
+  await test('every request caps the reply length (4096 by default), and a capped reply is a limit', async () => {
+    // The 2026-11-11 runaway: one 4B reply ran to 12k tokens.
+    assert(nest.state.completionBodies.every((b) => b.max_tokens === 4096), 'a request without the default cap')
+    eq([maxReplyTokens({}), maxReplyTokens({ thinking: true }), maxReplyTokens({ maxTokens: 50, thinking: true })], [4096, 16384, 50], 'defaults and override')
+    eq(run('write-answer').metrics.hitLimit, null, '10 tokens under a 4096 cap is not a limit')
+    // The fake generates 10 tokens a turn, so a cap of 10 is hit.
+    const capDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-cap-'))
+    const before = nest.state.completionBodies.length
+    const capped = await main(['--model-label', 'fake model', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', capDir, '--quiet', '--max-tokens', '10'], { log: () => {} })
+    eq(nest.state.completionBodies.slice(before).map((b) => b.max_tokens)[0], 10, '--max-tokens reaches the request')
+    eq(capped.runs[0].metrics.hitLimit, 'reply-length', 'the capped reply is recorded as a limit')
+    eq(JSON.parse(fs.readFileSync(path.join(capDir, 'summary.json'), 'utf8')).meta.maxTokens, 10, 'recorded in summary.json')
+    fs.rmSync(capDir, { recursive: true, force: true })
   })
 
   await test('summary: pass rate and per-task passes', async () => {

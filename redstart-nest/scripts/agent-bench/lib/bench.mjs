@@ -81,6 +81,25 @@ function parseArgs(text) {
 }
 
 /**
+ * The most tokens one reply may generate. A model that falls into a loop
+ * otherwise runs until the context is full: Qwen3-4B produced 12k tokens on
+ * one compute-chart turn (2026-11-11). Across all 664 real turns saved that
+ * day the longest reply was 1,308 tokens (median 82, p99 800), so 4,096
+ * leaves three times that and still stops a loop early. Thinking counts
+ * reasoning against the same budget, hence the larger default. --max-tokens
+ * overrides both.
+ *
+ * Bench only, on purpose: a chat user's own max_tokens setting governs their
+ * replies, and since c8ba6b0 their Stop button really stops the model.
+ *
+ * @param {{ maxTokens?: number, thinking?: boolean }} opts
+ */
+export function maxReplyTokens(opts) {
+  if (opts.maxTokens !== undefined) return opts.maxTokens
+  return opts.thinking ? 16384 : 4096
+}
+
+/**
  * The prompt as the model receives it: the task's words, then the note
  * chat-ui appends to a message whose attachments it saved to the workspace.
  * The note comes from the core (attachment-note.mjs), the builder chat-ui's
@@ -121,7 +140,7 @@ const clip = (s) => (typeof s === 'string' && s.length > MAX_LOGGED_RESULT_CHARS
  *
  * @param {Awaited<ReturnType<import('./nest-client.mjs').connectNest>>} nest
  * @param {Awaited<ReturnType<import('./task-file.mjs').loadTask>>} task
- * @param {{ mcpTools: any[], thinking?: boolean, temperature?: number, model?: string,
+ * @param {{ mcpTools: any[], thinking?: boolean, temperature?: number, model?: string, maxTokens?: number,
  *           keep?: boolean, now?: () => number, runIndex?: number }} opts
  */
 export async function runTask(nest, task, opts) {
@@ -183,9 +202,13 @@ export async function runTask(nest, task, opts) {
                 chat_template_kwargs: { enable_thinking: !!opts.thinking },
                 ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
                 ...(opts.model ? { model: opts.model } : {}),
+                max_tokens: maxReplyTokens(opts),
               }
               const res = await nest.completion(body, signal)
               await readChatStream(res, acc, { signal })
+              // Hitting the cap is a limit like the turn and time limits:
+              // logged, so it shows in the summary's "hit a limit" count.
+              if ((acc.timings?.predicted_n ?? 0) >= body.max_tokens) log({ type: 'limit', which: 'reply-length' })
             },
           },
           tools: {

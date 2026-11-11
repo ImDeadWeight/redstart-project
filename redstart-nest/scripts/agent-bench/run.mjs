@@ -9,6 +9,7 @@
 //     [--tasks scripts/agent-bench/tasks] [--repeat 3] [--out <dir>]
 //     [--gateway http://127.0.0.1:19080] [--mcp http://127.0.0.1:19082]
 //     [--thinking] [--temperature 0.2] [--model <id>] [--keep]
+//     [--max-tokens 4096]   (per reply; default 4096, 16384 with --thinking)
 //
 // Login on: put the bench account's API key in REDSTART_BENCH_API_KEY (or
 // pass --api-key, which then sits in your shell history). Use a dedicated
@@ -28,7 +29,7 @@ import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { connectNest } from './lib/nest-client.mjs'
 import { findTaskFiles, loadTask } from './lib/task-file.mjs'
-import { runTask } from './lib/bench.mjs'
+import { runTask, maxReplyTokens } from './lib/bench.mjs'
 import { summarize } from './lib/metrics.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -36,7 +37,7 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const FLAGS = {
   '--model-label': 'modelLabel', '--tasks': 'tasks', '--repeat': 'repeat', '--out': 'out',
   '--gateway': 'gateway', '--mcp': 'mcp', '--api-key': 'apiKey', '--temperature': 'temperature',
-  '--model': 'model',
+  '--model': 'model', '--max-tokens': 'maxTokens',
 }
 const SWITCHES = { '--thinking': 'thinking', '--keep': 'keep', '--quiet': 'quiet' }
 
@@ -62,6 +63,10 @@ export function parseArgs(argv) {
     const u = new URL(opts.gateway)
     u.port = String(Number(u.port || 80) + 2)
     opts.mcp = u.origin
+  }
+  if (opts.maxTokens !== undefined) {
+    opts.maxTokens = Number(opts.maxTokens)
+    if (!Number.isInteger(opts.maxTokens) || opts.maxTokens < 1) throw new Error('--max-tokens must be a positive integer')
   }
   opts.apiKey = opts.apiKey ?? process.env.REDSTART_BENCH_API_KEY ?? null
   return opts
@@ -187,7 +192,7 @@ export async function main(argv, io = {}) {
   for (let r = 0; r < opts.repeat; r++) {
     for (const task of tasks) {
       const result = await runTask(nest, task, {
-        mcpTools, thinking: opts.thinking, temperature: opts.temperature, model: opts.model,
+        mcpTools, thinking: opts.thinking, temperature: opts.temperature, model: opts.model, maxTokens: opts.maxTokens,
         keep: opts.keep, runIndex: r,
       })
       runs.push(result)
@@ -212,6 +217,7 @@ export async function main(argv, io = {}) {
     tools: mcpTools.map((t) => t.name),
     thinking: !!opts.thinking,
     temperature: opts.temperature ?? null,
+    maxTokens: maxReplyTokens(opts),
     gateway: opts.gateway,
     // From llama-server's /props, not from the label. null when unavailable.
     model,
