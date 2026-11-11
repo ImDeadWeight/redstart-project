@@ -591,7 +591,6 @@ The available real upgrade for it is HMAC-SHA256 under a DPAPI-protected pepper,
 Stated plainly, because a security document that lists only strengths is not one.
 
 - **A plan you've moved on from keeps steering the chat until it's cleared.** While steps are open, every request carries them and each reply that ends with steps still open gets one reminder to finish them. If you change topic, clear the plan with the × on the checklist. Steps don't expire on their own.
-- **After a reload, a reply that ran several tools keeps only its last result.** The chat stores each tool result as a separate branch off the reply, and reloading follows only the last one, so the earlier results are no longer shown or sent to the model. This predates `ask_user`, which is not affected: answering a question left open by a reload writes its results in order. The fix is planned.
 - **`ask_user` and `update_plan` have not been tried in the running app yet.** They're covered by tests, including mounting the question card and the checklist in a browser, but a real chat with a model calling them hasn't been run.
 
 - **An organization workflow steers what everyone who runs it gets.** Its text is user-tier, so it can't override policy, but whoever holds `manageOrgWorkflows` decides what a commonly used workflow asks the model to do, and nothing reviews an edit. Edits are logged (`workflow` events) with the editor's username, but the store keeps no history of previous text. Grant `manageOrgWorkflows` the way you would grant `managePromptBlocks`.

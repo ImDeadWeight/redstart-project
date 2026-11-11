@@ -31,6 +31,7 @@ import {
 	generateConversationTitle,
 	filterByLeafNodeId
 } from '$lib/utils';
+import { createToolResultChain } from '$lib/utils/branching';
 import { ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
 import type {
 	ChatMessageTimings,
@@ -201,6 +202,9 @@ ${workspaceNote}` : workspaceNote) : content,
 		let resolvedModel: string | null = null;
 		let modelPersisted = false;
 		const convId = assistantMessage.convId;
+		// Each tool result hangs off the one before it, so every result of a
+		// reply stays on the path after a reload (utils/branching).
+		const toolResultChain = createToolResultChain();
 
 		const recordModel = (modelName: string | null | undefined, persistImmediately = true): void => {
 			if (!modelName) return;
@@ -343,8 +347,9 @@ ${workspaceNote}` : workspaceNote) : content,
 						children: [],
 						extra: extras
 					},
-					currentMessageId
+					toolResultChain.parentFor(currentMessageId)
 				);
+				toolResultChain.advance(currentMessageId, msg.id);
 				conversationsStore.addMessageToActive(msg);
 				await conversationsStore.updateCurrentNode(msg.id);
 				return msg;
