@@ -283,21 +283,114 @@ let activeToolsConfig = null   // { webFetch: {...}, postgres: {...}, documents:
 // transport generates during initialize.
 const transports = new Map()
 
-async function handleRpc(msg, send, ctx = { account: null }) {
-  const { id, method, params } = msg
-
-  //
-  // The null-account branch is split deliberately. A null account means "auth is
-  // off" — the documented, unnarrowed posture — but ONLY when auth is actually
-  // off. With auth on, a null account here means identity failed to reach this
-  // function, and treating that as the auth-off posture would hand a broken
-  // plumbing path the full tool set. That is not hypothetical: it is exactly
-  // what the missing `req.auth` assignment in the transport above produced.
-  const cfg = ctx.account
-    ? resolveEffectiveConfig(ctx.account, activeToolsConfig, roleFor(ctx.account))
+// The tool config one account sees: the server's, narrowed by its role.
+//
+// The null-account branch is split deliberately. A null account means "auth is
+// off" — the documented, unnarrowed posture — but ONLY when auth is actually
+// off. With auth on, a null account here means identity failed to reach this
+// function, and treating that as the auth-off posture would hand a broken
+// plumbing path the full tool set. That is not hypothetical: it is exactly
+// what the missing `req.auth` assignment in the transport below produced.
+function configFor(account) {
+  return account
+    ? resolveEffectiveConfig(account, activeToolsConfig, roleFor(account))
     : getAuthRequired()
       ? narrowConfig(activeToolsConfig, DENY_ALL)
       : activeToolsConfig
+}
+
+/**
+ * The tools one account is served, annotated, as tools/list returns them
+ * (agent-runtime D27). Exported for the daemon's task loop, which is a
+ * client with no MCP session: it says which host-resolved tools it answers
+ * itself (ask_user, update_plan) instead of declaring them at initialize.
+ *
+ * Twig's tools, the browser's in-page sandbox and any MCP server the browser
+ * holds never appear here: they are never on this server (D28).
+ *
+ * @param {any} account
+ * @param {{ hostTools?: string[] }} [opts]
+ */
+export function toolCatalogFor(account, { hostTools = [] } = {}) {
+  return activeToolCatalog(configFor(account), { session: { hostTools } }).map(annotateTool)
+}
+
+/**
+ * One tool call as an account, with every check tools/call makes (agent-runtime
+ * D27): policy (bans, capability switches, role narrowing), the approval gate,
+ * the verified conversation, provider dispatch and logging. tools/call is this
+ * plus the JSON-RPC wrapping; the daemon's task loop calls it directly, so a
+ * task can do nothing a chat could not.
+ *
+ * Returns the MCP result (refusals included, as isError results), or null when
+ * no provider knows the tool.
+ *
+ * @param {any} account null only with auth off
+ * @param {string} toolName
+ * @param {any} args
+ * @param {{ conversationId?: string, approvalId?: string, session?: object }} [opts]
+ *   conversationId is a claim, verified against the account here.
+ */
+export async function callToolAs(account, toolName, args, { conversationId, approvalId, session } = {}) {
+  const cfg = configFor(account)
+  const ctx = { account, session }
+
+  const policy = evaluateToolPolicy(toolName, cfg)
+  if (!policy.allowed) {
+    logEvent('tool', 'denied', { tool: toolName, class: policy.cls })
+    return { isError: true, content: [{ type: 'text', text: policy.reason }] }
+  }
+
+  // The approval (agent-runtime Phase 2, D11/D12). After the policy above,
+  // so an approval never beats a ban, a disabled capability or role
+  // narrowing: those refuse first, approved or not. Only tools that opt in
+  // are enforced (every destructive tool in Phase 2), and for every client,
+  // an API key included (decided 2026-11-12). A standing grant covers a
+  // 'prompt' tool; an 'always' tool needs a consumed approval each call.
+  if (isApprovalEnforced(toolName)) {
+    const gate = approvalGate(toolName, args, approvalId, ctx)
+    if (!gate.ok) {
+      logEvent('tool', 'approval_needed', { tool: toolName, class: policy.cls })
+      return {
+        isError: true,
+        content: [{ type: 'text', text: APPROVAL_NEEDED_TEXT }],
+        _meta: { [APPROVAL_META_KEY]: gate.pending },
+      }
+    }
+  }
+
+  const callCtx = { ...ctx, conversationId: verifiedConversationId(account, conversationId) }
+
+  const startedAt = Date.now()
+  for (const provider of resolveProviders()) {
+    const result = await provider.callTool(toolName, args, cfg, callCtx)
+    if (result !== null && result !== undefined) {
+      // `plugin` and `account` are recorded now so the deferred per-account
+      // permission work reads an existing field instead of re-plumbing this
+      // call path. Pass the USERNAME, not the account — logger.mjs redact()
+      // drops objects entirely and the field would vanish silently.
+      logEvent('tool', 'called', {
+        tool: toolName,
+        class: policy.cls,
+        plugin: capabilityForTool(toolName) ?? undefined,
+        account: account?.username ?? undefined,
+        isError: !!result.isError,
+        durationMs: Date.now() - startedAt,
+      })
+      // Memory marks a save made soon after the web was read in the same
+      // conversation (memory-tool.mjs). Recorded for every network-class
+      // call, successful or not: an error page is web content too.
+      if (policy.cls === 'network') memoryTool.noteNetworkCall(callCtx)
+      return result
+    }
+  }
+
+  logEvent('tool', 'unknown', { tool: toolName })
+  return null
+}
+
+async function handleRpc(msg, send, ctx = { account: null }) {
+  const { id, method, params } = msg
 
   if (method === 'initialize') {
     // What this client's own loop can answer (interaction-tools.mjs). Kept on
@@ -323,14 +416,14 @@ async function handleRpc(msg, send, ctx = { account: null }) {
   }
 
   if (method === 'tools/list') {
-    send({ jsonrpc: '2.0', id, result: { tools: activeToolCatalog(cfg, ctx).map(annotateTool) } })
+    send({ jsonrpc: '2.0', id, result: { tools: toolCatalogFor(ctx.account, { hostTools: ctx.session?.hostTools }) } })
     return
   }
 
   // Workflows as MCP prompts (workflows plan D1). The account resolves the
   // scope; a name never reaches another account's personal workflows. An
   // auth-on null account is a broken identity path, not the auth-off posture,
-  // and gets nothing — the same split as `cfg` above, for the same reason.
+  // and gets nothing — the same split as configFor, for the same reason.
   if (method === 'prompts/list') {
     const identityLost = !ctx.account && getAuthRequired()
     send({ jsonrpc: '2.0', id, result: { prompts: identityLost ? [] : promptsFor(ctx.account ?? null) } })
@@ -354,63 +447,14 @@ async function handleRpc(msg, send, ctx = { account: null }) {
 
   if (method === 'tools/call') {
     const toolName = params?.name
-    const args = params?.arguments ?? {}
-
-    const policy = evaluateToolPolicy(toolName, cfg)
-    if (!policy.allowed) {
-      logEvent('tool', 'denied', { tool: toolName, class: policy.cls })
-      send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: policy.reason }] } })
-      return
-    }
-
-    // The approval (agent-runtime Phase 2, D11/D12). After the policy above,
-    // so an approval never beats a ban, a disabled capability or role
-    // narrowing: those refuse first, approved or not. Only tools that opt in
-    // are enforced (every destructive tool in Phase 2), and for every client,
-    // an API key included (decided 2026-11-12). A standing grant covers a
-    // 'prompt' tool; an 'always' tool needs a consumed approval each call.
-    if (isApprovalEnforced(toolName)) {
-      const gate = approvalGate(toolName, args, params?._meta?.[APPROVAL_ID_META_KEY], ctx)
-      if (!gate.ok) {
-        logEvent('tool', 'approval_needed', { tool: toolName, class: policy.cls })
-        send({ jsonrpc: '2.0', id, result: {
-          isError: true,
-          content: [{ type: 'text', text: APPROVAL_NEEDED_TEXT }],
-          _meta: { [APPROVAL_META_KEY]: gate.pending },
-        } })
-        return
-      }
-    }
-
-    const callCtx = { ...ctx, conversationId: verifiedConversationId(ctx.account, params?._meta?.[META_CONVERSATION_KEY]) }
-
-    const startedAt = Date.now()
-    for (const provider of resolveProviders()) {
-      const result = await provider.callTool(toolName, args, cfg, callCtx)
-      if (result !== null && result !== undefined) {
-        // `plugin` and `account` are recorded now so the deferred per-account
-        // permission work reads an existing field instead of re-plumbing this
-        // call path. Pass the USERNAME, not ctx.account — logger.mjs redact()
-        // drops objects entirely and the field would vanish silently.
-        logEvent('tool', 'called', {
-          tool: toolName,
-          class: policy.cls,
-          plugin: capabilityForTool(toolName) ?? undefined,
-          account: ctx?.account?.username ?? undefined,
-          isError: !!result.isError,
-          durationMs: Date.now() - startedAt,
-        })
-        // Memory marks a save made soon after the web was read in the same
-        // conversation (memory-tool.mjs). Recorded for every network-class
-        // call, successful or not: an error page is web content too.
-        if (policy.cls === 'network') memoryTool.noteNetworkCall(callCtx)
-        send({ jsonrpc: '2.0', id, result })
-        return
-      }
-    }
-
-    logEvent('tool', 'unknown', { tool: toolName })
-    send({ jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown tool: ${toolName}` }})
+    const result = await callToolAs(ctx.account, toolName, params?.arguments ?? {}, {
+      conversationId: params?._meta?.[META_CONVERSATION_KEY],
+      approvalId: params?._meta?.[APPROVAL_ID_META_KEY],
+      session: ctx.session,
+    })
+    send(result === null
+      ? { jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown tool: ${toolName}` } }
+      : { jsonrpc: '2.0', id, result })
     return
   }
 
