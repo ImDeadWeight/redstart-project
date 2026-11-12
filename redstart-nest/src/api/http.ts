@@ -78,7 +78,7 @@ const EVENT_NAMESPACE = 'events'
 const NAMESPACES = [
   'hardware', 'llama', 'server', 'profiles', 'tools', 'mcp',
   'capabilities', 'settings', 'models', 'github', 'auth', 'admin', 'plugins',
-  'browse',
+  'browse', 'audit', 'approvals',
 ] as const
 
 // preload/index.mjs's `on<Event>` method name -> the broker channel it
