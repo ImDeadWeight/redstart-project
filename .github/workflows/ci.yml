@@ -76,6 +76,9 @@ jobs:
       - name: "Security: approvals (one decision, one exact call) and standing grants"
         run: node scripts/test-approvals.mjs
 
+      - name: "Security: task runtime (store, server-owned writes, runner, routes)"
+        run: node scripts/test-task-runtime.mjs
+
       - name: "Security: role narrowing (restrict-only law)"
         run: node scripts/test-roles.mjs
 
