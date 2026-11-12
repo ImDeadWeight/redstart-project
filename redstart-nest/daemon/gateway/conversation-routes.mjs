@@ -17,7 +17,7 @@
 // It talks only to conversations-storage.mjs.
 // =============================================================================
 
-import { getConversations, getConversation as getConv, createConversation, updateConversation, deleteConversation, deleteConversationsWithForks } from '../conversations-storage.mjs'
+import { getConversations, getConversation as getConv, createConversation, updateConversation, deleteConversation, deleteConversationsWithForks, LOCKED_BY_TASK } from '../conversations-storage.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
 import { getCapabilities } from '../tools-storage.mjs'
 import { trashWorkspace } from '../conversation-workspace.mjs'
@@ -107,6 +107,12 @@ export async function handleConversationRoute(req, res, urlPath, accountId, { ac
         return true
       }
       const updated = updateConversation(accountId, convId, body)
+      // A background task holds this conversation's messages (D25). 409 is
+      // chat-ui's cue to reload the conversation rather than fail.
+      if (updated === LOCKED_BY_TASK) {
+        sendJson(res, 409, { error: { message: 'A background task is writing this conversation. Reload it, or cancel the task.', type: 'conflict', code: 'task_active' } })
+        return true
+      }
       if (!updated) {
         sendJson(res, 404, { error: { message: 'Not found', type: 'not_found' } })
         return true

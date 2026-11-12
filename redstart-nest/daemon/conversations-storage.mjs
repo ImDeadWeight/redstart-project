@@ -76,12 +76,25 @@ export function createConversation(accountId, conv) {
 // this list existed, a PUT carrying `accountId` moved the record into another
 // account's list (found while planning projects, plan D11). `projectId: null`
 // means "move out of its project" and removes the field.
-const PROTECTED_FIELDS = ['id', 'accountId']
+// `activeTaskId` is the daemon's (setActiveTask): a client cannot claim a
+// conversation for a task, nor free one a task holds.
+const PROTECTED_FIELDS = ['id', 'accountId', 'activeTaskId']
+
+// While a task holds a conversation (agent-runtime D25) the daemon is its only
+// writer of these. chat-ui PUTs a conversation's WHOLE message array on every
+// add, edit and delete, so a client holding the array from before the task's
+// last turn would overwrite what the task appended. Title, project, pinned,
+// plan and the rest are still accepted.
+export const TASK_OWNED_FIELDS = Object.freeze(['messages', 'currNode'])
+
+/** updateConversation's answer when a task holds the conversation and the update touches TASK_OWNED_FIELDS. */
+export const LOCKED_BY_TASK = Symbol('locked by task')
 
 export function updateConversation(accountId, convId, updates) {
   const data = read()
   const idx = data.conversations.findIndex(c => c.id === convId && c.accountId === accountId)
   if (idx === -1) return null
+  if (data.conversations[idx].activeTaskId && TASK_OWNED_FIELDS.some((k) => k in (updates ?? {}))) return LOCKED_BY_TASK
   const safe = { ...updates }
   for (const k of PROTECTED_FIELDS) delete safe[k]
   const next = { ...data.conversations[idx], ...safe, lastModified: Date.now() }
@@ -91,6 +104,77 @@ export function updateConversation(accountId, convId, updates) {
   data.conversations[idx] = next
   write(data)
   return next
+}
+
+// ---------------------------------------------------------------------------
+// The daemon's own writes (agent-runtime Phase 3, D25): the task runner adds
+// messages one at a time instead of PUTting an array, so it never overwrites
+// what someone else wrote, and a client never overwrites it (TASK_OWNED_FIELDS).
+// ---------------------------------------------------------------------------
+
+/**
+ * Claim the conversation for a task, or free it (null). Only the daemon calls
+ * this; a client cannot set the field (PROTECTED_FIELDS).
+ *
+ * @returns {boolean} false: no such conversation
+ */
+export function setActiveTask(accountId, convId, taskId) {
+  const data = read()
+  const c = data.conversations.find(c => c.id === convId && c.accountId === accountId)
+  if (!c) return false
+  if (taskId) c.activeTaskId = taskId
+  else delete c.activeTaskId
+  write(data)
+  return true
+}
+
+/**
+ * Add one message under its parent and make it the current node. The parent
+ * must exist (or be null for a root); `children` is set here, never taken
+ * from the caller.
+ *
+ * @param {string} accountId the conversations scope
+ * @param {string} convId
+ * @param {{ id: string, parent: string | null } & Record<string, unknown>} message
+ * @returns {object | null} the stored message; null: no such conversation or parent
+ */
+export function appendMessage(accountId, convId, message) {
+  const data = read()
+  const c = data.conversations.find(c => c.id === convId && c.accountId === accountId)
+  if (!c || typeof message?.id !== 'string' || !message.id) return null
+  if (!Array.isArray(c.messages)) c.messages = []
+  if (c.messages.some((m) => m.id === message.id)) return null
+  let parent = null
+  if (message.parent !== null) {
+    parent = c.messages.find((m) => m.id === message.parent)
+    if (!parent) return null
+  }
+  const stored = { ...message, convId, children: [] }
+  if (parent) parent.children = [...(parent.children ?? []), stored.id]
+  c.messages.push(stored)
+  c.currNode = stored.id
+  c.lastModified = Date.now()
+  write(data)
+  return stored
+}
+
+/**
+ * Change fields of one message. `id`, `parent`, `children` and `convId` are
+ * the tree's and stay as they are.
+ *
+ * @returns {object | null} the message after; null: no such conversation or message
+ */
+export function patchMessage(accountId, convId, messageId, patch) {
+  const data = read()
+  const c = data.conversations.find(c => c.id === convId && c.accountId === accountId)
+  const m = c?.messages?.find((m) => m.id === messageId)
+  if (!m) return null
+  const safe = { ...patch }
+  for (const k of ['id', 'parent', 'children', 'convId']) delete safe[k]
+  Object.assign(m, safe)
+  c.lastModified = Date.now()
+  write(data)
+  return m
 }
 
 /**

@@ -146,6 +146,76 @@ await test('finished tasks past the cap are pruned, oldest first; live ones neve
   eq(store.listTasks(key).filter((t) => t.status === 'done').length, store.MAX_FINISHED_PER_ACCOUNT, 'cap')
 })
 
+console.log('\n-- server-owned conversation writes (3.4, D25) --')
+
+const convs = await import('../daemon/conversations-storage.mjs')
+const { handleConversationRoute } = await import('../daemon/gateway/conversation-routes.mjs')
+const { Readable } = await import('node:stream')
+
+function fakeReq(method, body, url = '/') {
+  const req = Readable.from(body ? [Buffer.from(JSON.stringify(body))] : [])
+  req.method = method; req.headers = {}; req.url = url
+  return req
+}
+function fakeRes() {
+  return { status: 0, body: '', headersSent: false, writeHead(s) { this.status = s; this.headersSent = true; return this }, setHeader() {}, end(b) { this.body = b ?? '' } }
+}
+async function convRoute(method, urlPath, accountId, body) {
+  const res = fakeRes()
+  const handled = await handleConversationRoute(fakeReq(method, body, urlPath), res, urlPath, accountId, { account: null })
+  return { handled, status: res.status, json: res.body ? JSON.parse(res.body) : null }
+}
+
+function seedConversation(accountId, id) {
+  convs.createConversation(accountId, { id, name: 'seed', currNode: 'root', messages: [
+    { id: 'root', convId: id, type: 'root', role: 'system', content: '', parent: null, children: ['u1'], timestamp: 1 },
+    { id: 'u1', convId: id, type: 'text', role: 'user', content: 'hi', parent: 'root', children: [], timestamp: 2 },
+  ] })
+}
+
+await test('appendMessage links the parent, sets currNode, and ignores a caller-supplied children list', () => {
+  seedConversation('alice-1', 'c-append')
+  const m = convs.appendMessage('alice-1', 'c-append', { id: 'a1', parent: 'u1', role: 'assistant', content: 'yo', children: ['forged'] })
+  eq(m.children, [], 'children set here')
+  const c = convs.getConversation('alice-1', 'c-append')
+  eq([c.currNode, c.messages.find((x) => x.id === 'u1').children], ['a1', ['a1']], 'linked')
+})
+
+await test('appendMessage refuses an unknown parent, a duplicate id, and another account\'s conversation', () => {
+  eq(convs.appendMessage('alice-1', 'c-append', { id: 'a2', parent: 'nope' }), null, 'unknown parent')
+  eq(convs.appendMessage('alice-1', 'c-append', { id: 'a1', parent: 'u1' }), null, 'duplicate')
+  eq(convs.appendMessage('bob-2', 'c-append', { id: 'a3', parent: 'u1' }), null, 'other account')
+})
+
+await test('patchMessage changes content but never the tree', () => {
+  const m = convs.patchMessage('alice-1', 'c-append', 'a1', { content: 'changed', parent: 'root', children: ['x'] })
+  eq([m.content, m.parent, m.children], ['changed', 'u1', []], 'patched')
+})
+
+await test('while a task holds it, a PUT with messages or currNode is 409; title and pin still land', async () => {
+  seedConversation('alice-1', 'c-lock')
+  assert(convs.setActiveTask('alice-1', 'c-lock', 'task-1'), 'claimed')
+  const r1 = await convRoute('PUT', '/conversations/c-lock', 'alice-1', { messages: [] })
+  eq([r1.status, r1.json.error.code], [409, 'task_active'], 'messages')
+  eq((await convRoute('PUT', '/conversations/c-lock', 'alice-1', { currNode: 'root' })).status, 409, 'currNode')
+  eq((await convRoute('PUT', '/conversations/c-lock', 'alice-1', { name: 'New title', pinned: true })).status, 200, 'title')
+  const c = convs.getConversation('alice-1', 'c-lock')
+  eq([c.name, c.pinned, c.messages.length, c.currNode], ['New title', true, 2, 'root'], 'messages untouched')
+  convs.setActiveTask('alice-1', 'c-lock', null)
+  eq((await convRoute('PUT', '/conversations/c-lock', 'alice-1', { currNode: 'u1' })).status, 200, 'freed')
+})
+
+await test('a client can neither set nor clear activeTaskId', async () => {
+  seedConversation('alice-1', 'c-protect')
+  await convRoute('PUT', '/conversations/c-protect', 'alice-1', { activeTaskId: 'forged' })
+  eq(convs.getConversation('alice-1', 'c-protect').activeTaskId, undefined, 'set')
+  convs.setActiveTask('alice-1', 'c-protect', 'task-2')
+  await convRoute('PUT', '/conversations/c-protect', 'alice-1', { activeTaskId: null, name: 'x' })
+  eq(convs.getConversation('alice-1', 'c-protect').activeTaskId, 'task-2', 'cleared')
+  const created = await convRoute('POST', '/conversations', 'alice-1', { id: 'c-new', name: 'n', activeTaskId: 'forged' })
+  eq(created.json.activeTaskId, undefined, 'on create')
+})
+
 const failed = results.filter((r) => !r.pass)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)
 try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
