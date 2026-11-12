@@ -371,6 +371,25 @@ export function _liveRuns() {
   return [...live.values()].map((l) => l.done)
 }
 
+/**
+ * The daemon is stopping (stopDaemon): stop every run where it is WITHOUT
+ * ending it. Records keep their state and the conversation stays claimed, so
+ * the next start resumes each one (resumeTasks), as after a crash. A call
+ * that was running when this landed has no stored result, and is closed as
+ * interrupted at resume.
+ *
+ * @returns {Promise<void>} once every run has stopped
+ */
+export function suspendAllTasks() {
+  const runs = []
+  for (const l of live.values()) {
+    l.suspended = true
+    l.controller.abort()
+    runs.push(l.done)
+  }
+  return Promise.allSettled(runs).then(() => undefined)
+}
+
 // ---------------------------------------------------------------------------
 // The run
 // ---------------------------------------------------------------------------
@@ -378,7 +397,7 @@ export function _liveRuns() {
 function launch(id, { recovered = false } = {}) {
   if (live.has(id)) return
   /** @type {Live} */
-  const l = { controller: new AbortController(), steering: [], answer: null, waitingKind: null, heldApprovals: new Set(), done: Promise.resolve(), cancelledBy: null }
+  const l = { controller: new AbortController(), steering: [], answer: null, waitingKind: null, heldApprovals: new Set(), done: Promise.resolve(), cancelledBy: null, suspended: false }
   live.set(id, l)
   l.done = run(id, l, { recovered }).catch((err) => {
     // run() handles its own failures; this is a bug in it, and the task must still end.
@@ -389,6 +408,9 @@ function launch(id, { recovered = false } = {}) {
 }
 
 function finish(task, status, error) {
+  // Suspended by an orderly daemon stop: leave the record as it is, so the
+  // next start resumes it (resumeTasks).
+  if (live.get(task.id)?.suspended) return
   store.updateTask(task.id, { status, error, inFlight: null })
   conversations.setActiveTask(task.storeAccountId, task.conversationId, null)
   const l = live.get(task.id)
@@ -486,8 +508,12 @@ async function runOnce(task, l, conv, generation, { resume }) {
     return m
   }
 
-  /** Before every turn: who, what config, which tools (D22). */
-  async function refresh() {
+  /**
+   * Before every turn: who, what config, which tools (D22). With
+   * `needModel: false` (re-asking a restart's open calls), the account and
+   * the tools only: a question or an approval needs no model.
+   */
+  async function refresh({ needModel = true } = {}) {
     const t = store.getTask(task.id)
     const who = accountForTask(t.accountId)
     if (!who.ok) throw new TaskEnded('failed', who.reason)
@@ -495,6 +521,10 @@ async function runOnce(task, l, conv, generation, { resume }) {
       throw new TaskEnded('failed', 'This account may no longer connect from the app that started the task.')
     }
     turnCtx.account = who.account
+    if (!needModel) {
+      await loadTools(who.account)
+      return null
+    }
     // No model, or the gateway is down: wait for one.
     let config = await seams.effectiveConfigFor(who.account)
     let port = seams.upstreamPort()
@@ -505,10 +535,14 @@ async function runOnce(task, l, conv, generation, { resume }) {
       config = await seams.effectiveConfigFor(who.account)
       port = seams.upstreamPort()
     }
-    const tools = await seams.toolCatalogFor(who.account, { hostTools: TASK_HOST_TOOLS })
+    await loadTools(who.account)
+    return { config, port }
+  }
+
+  async function loadTools(account) {
+    const tools = await seams.toolCatalogFor(account, { hostTools: TASK_HOST_TOOLS })
     turnCtx.mcpTools = tools
     turnCtx.toolNames = new Set(tools.map((x) => x.name))
-    return { config, port }
   }
 
   function setRunning() {
@@ -586,13 +620,12 @@ async function runOnce(task, l, conv, generation, { resume }) {
         const args = parseArgs(call.function.arguments)
         store.updateTask(task.id, { inFlight: { callId: call.id, name } })
         store.appendEvent(task.id, { type: 'tool_call', callId: call.id, name })
-        let result
-        try {
-          const t = store.getTask(task.id)
-          result = await seams.callToolAs(turnCtx.account, name, args, { conversationId: t.conversationId, approvalId: approved.get(call.id) })
-        } finally {
-          store.updateTask(task.id, { inFlight: null })
-        }
+        // inFlight stays set until the RESULT is stored (createToolResultMessage
+        // clears it), not merely until the tool returns: a stop or crash in
+        // between would otherwise leave a call with no result and no marker,
+        // and the restart would run it a second time.
+        const t = store.getTask(task.id)
+        const result = await seams.callToolAs(turnCtx.account, name, args, { conversationId: t.conversationId, approvalId: approved.get(call.id) })
         const out = result === null || result === undefined
           ? { text: `Error: Unknown tool: ${name}`, isError: true }
           : { text: formatMcpToolResult(result), isError: !!result.isError }
@@ -685,6 +718,7 @@ async function runOnce(task, l, conv, generation, { resume }) {
     },
     createToolResultMessage: async (toolCallId, content) => {
       const m = write({ id: crypto.randomUUID(), parent: tip, type: 'text', role: 'tool', content, toolCallId, timestamp: Date.now(), toolCalls: '', model: null })
+      if (store.getTask(task.id)?.inFlight?.callId === toolCallId) store.updateTask(task.id, { inFlight: null })
       return { id: m.id }
     },
   }
@@ -712,7 +746,7 @@ async function runOnce(task, l, conv, generation, { resume }) {
       }
       store.updateTask(task.id, { inFlight: null })
       if (toRun.length > 0) {
-        await refresh()
+        await refresh({ needModel: false })
         const outcome = await runToolCalls({
           calls: toRun, messages, agenticTimings: createAgenticTimings(), turnStats: createTurnStats(0), capturedTimings: undefined,
           ports, callbacks, signal,
@@ -758,6 +792,10 @@ export function resumeTasks() {
       continue
     }
     if (conv.activeTaskId !== t.id) conversations.setActiveTask(t.storeAccountId, t.conversationId, t.id)
+    // What a waiting task waited on died with the process: an approval id the
+    // fresh ledger has never heard of, a question no run is holding. Cleared,
+    // so no client acts on it; the resumed run asks again within moments.
+    if (t.status === 'waiting_user' || t.status === 'waiting_approval') store.updateTask(t.id, { status: 'queued', waiting: null })
     store.appendEvent(t.id, { type: 'resumed' })
     launch(t.id, { recovered: true })
     n++

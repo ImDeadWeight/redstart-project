@@ -679,6 +679,100 @@ await test('control plane: tasks:list carries the record, never the question or 
   eq(h['tasks:cancel']('').ok, false, 'no id')
 })
 
+console.log('\n-- restart recovery, across a real process kill (3.7) --')
+
+const { spawn } = await import('node:child_process')
+const { fileURLToPath } = await import('node:url')
+const CHILD = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib', 'task-restart-child.mjs')
+
+/** Run the child; resolve with the first line tagged with one of `tags`. */
+function child(args, dataDir, tags, { kill = false, noModel = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env, REDSTART_TEST_USERDATA_DIR: dataDir, ...(noModel ? { TASK_CHILD_NO_MODEL: '1' } : {}) }
+    const p = spawn(process.execPath, [CHILD, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    let err = ''
+    const timer = setTimeout(() => { p.kill('SIGKILL'); reject(new Error(`child ${args.join(' ')} timed out\n${out}\n${err}`)) }, 20000)
+    p.stderr.on('data', (d) => { err += d })
+    p.stdout.on('data', (d) => {
+      out += d
+      for (const line of out.split('\n')) {
+        const tag = tags.find((t) => line.startsWith(`${t} `))
+        if (!tag) continue
+        clearTimeout(timer)
+        const rest = line.slice(tag.length + 1)
+        if (kill) {
+          // No exit handlers, no flush: as a power cut or Task Manager would.
+          p.kill('SIGKILL')
+          p.on('exit', () => resolve({ tag, rest }))
+        } else {
+          resolve({ tag, rest: rest.startsWith('{') ? JSON.parse(rest) : rest })
+        }
+        return
+      }
+    })
+    p.on('exit', (code) => { if (code && code !== 0) { clearTimeout(timer); reject(new Error(`child exited ${code}\n${err}`)) } })
+  })
+}
+
+await test('killed with a tool running: that call is closed as interrupted, the next one runs once, the task finishes', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-restart-'))
+  try {
+    await child(['start', 'in-flight'], dir, ['READY'], { kill: true })
+    const { tag, rest } = await child(['resume', 'in-flight'], dir, ['RESULT', 'WAITING'])
+    eq([tag, rest.resumed, rest.status], ['RESULT', 1, 'done'], 'resumed and done')
+    const tools = rest.branch.filter((m) => m.role === 'tool')
+    eq(tools.map((m) => [m.toolCallId, m.content]), [['c1', runner.INTERRUPTED_BY_RESTART], ['c2', 'read_document two ran']], 'results')
+    eq(rest.calls, [{ name: 'read_document', path: 'two' }], 'the interrupted call was NOT run again')
+    eq(rest.branch.at(-1).content, 'Finished after the restart.', 'went on')
+    eq(rest.activeTaskId, null, 'the chat is freed')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await test('killed while a question was open: after the restart it is asked again, with no model loaded yet', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-restart-'))
+  try {
+    await child(['start', 'question'], dir, ['READY'], { kill: true })
+    // The daemon comes back with no model: the question needs none.
+    const waiting = await child(['resume', 'question'], dir, ['RESULT', 'WAITING'], { noModel: true })
+    eq([waiting.tag, waiting.rest.status, waiting.rest.waiting?.question], ['WAITING', 'waiting_user', 'Which colour?'], 'waiting again')
+    // A second restart, answering this time.
+    const done = await child(['resume', 'question', 'Blue'], dir, ['RESULT'])
+    eq(done.rest.status, 'done', 'done')
+    assert(/Blue/.test(done.rest.branch.find((m) => m.role === 'tool').content), 'the answer is the result')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await test('an orderly stop (suspendAllTasks) leaves the task unended, and a resume finishes it', async () => {
+  ledger._reset()
+  fakeWorld([call('c1', 'delete_file', {}), say('after resume')])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'waiting_approval', 'parked')
+  const before = store.getTask(t.id).waiting.approval.id
+  await runner.suspendAllTasks()
+  eq(statusOf(t.id), 'waiting_approval', 'not ended')
+  eq(convs.getConversation(SCOPE, conv).activeTaskId, t.id, 'still claimed')
+  ledger._reset() // a restart drops the ledger
+  assert(runner.resumeTasks() >= 1, 'resumed')
+  // The record shows the old approval until the resumed run asks again.
+  await waitFor(() => { const id = store.getTask(t.id).waiting?.approval?.id; return id && id !== before }, 'asked again')
+  ledger.decide(store.getTask(t.id).waiting.approval.id, ANON_KEY, 'once')
+  await waitFor(() => ended(t.id), 'end')
+  eq([statusOf(t.id), branchOf(conv).at(-1).content], ['done', 'after resume'], 'finished')
+})
+
+await test('resume cancels a task whose conversation is gone', async () => {
+  const t = store.createTask({ accountKey: ANON_KEY, storeAccountId: SCOPE, conversationId: 'gone-conv' })
+  store.updateTask(t.id, { status: 'running' })
+  runner.resumeTasks()
+  eq(statusOf(t.id), 'cancelled', 'cancelled')
+})
+
 /** fakeWorld's seams with the gateway's own prepareCompletion left in place. */
 function seamsWithoutPrepare(w) {
   return {
