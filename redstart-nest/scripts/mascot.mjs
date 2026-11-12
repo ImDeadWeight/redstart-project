@@ -1,9 +1,12 @@
 /**
- * The Redstart mascot: two 128×128 pixel-art drawings and the code that turns
- * them into icons. No external dependencies, only Node.js built-ins.
+ * The Redstart mascot: one 128×128 pixel-art drawing per app, and the code that
+ * turns them into icons. No external dependencies, only Node.js built-ins.
  *
- *   nest  the bird settled in its nest (Redstart Nest)
- *   twig  the bird perched on a twig (Redstart Twig)
+ *   nest          the bird settled in its nest (Redstart Nest)
+ *   twig          the bird perched on a twig (Redstart Twig)
+ *   yellowscript  the bird perched on a yellow pencil (Redstart Yellowscript,
+ *                 the VS Code extension; its icons come from
+ *                 make-yellowscript-icons.mjs)
  *
  * The drawings live in ../assets/mascot/redstart-<variant>.txt: 128 lines of
  * 128 characters, one character per pixel, keyed by PALETTE below ('_' is
@@ -20,7 +23,7 @@ import { fileURLToPath } from 'url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export const SIZE = 128
-export const VARIANTS = ['nest', 'twig']
+export const VARIANTS = ['nest', 'twig', 'yellowscript']
 
 // The original icon's palette (stone black, warm white, orange, rust, amber)
 // plus the in-between tones the larger drawing shades with.
@@ -193,4 +196,30 @@ export function toSvg(grid) {
   const paths = [`<path fill="${PALETTE.K}" d="${silhouette.join('')}"/>`]
   for (const [ch, d] of runs) if (ch !== 'K') paths.push(`<path fill="${PALETTE[ch]}" d="${d.join('')}"/>`)
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${SIZE}">\n${paths.join('\n')}\n</svg>\n`
+}
+
+/**
+ * A one-colour silhouette as an SVG on an `n`×`n` grid, cropped to the
+ * drawing: for places that draw an icon as a mask, where only its shape counts
+ * (VS Code's activity bar). A grid cell is solid when at least `threshold` of
+ * the drawing pixels it covers are; `hole` names pixels that count as empty
+ * (the eye, so the head reads as the bird). Fill is currentColor.
+ */
+export function toSilhouetteSvg(grid, n, { threshold = 0.45, margin = 2, hole = () => false } = {}) {
+  const c = contentSquare(grid, margin)
+  const cell = c.side / n
+  let d = ''
+  for (let gy = 0; gy < n; gy++) for (let gx = 0; gx < n; gx++) {
+    let hit = 0, total = 0
+    for (let y = Math.floor(gy * cell); y < Math.floor((gy + 1) * cell); y++) {
+      for (let x = Math.floor(gx * cell); x < Math.floor((gx + 1) * cell); x++) {
+        total++
+        const sx = c.x + x, sy = c.y + y
+        const ch = grid[sy]?.[sx] ?? '_'
+        if (ch !== '_' && !hole(sx, sy, ch)) hit++
+      }
+    }
+    if (total && hit / total >= threshold) d += `M${gx} ${gy}h1v1h-1z`
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n} ${n}" shape-rendering="crispEdges"><path fill="currentColor" d="${d}"/></svg>\n`
 }

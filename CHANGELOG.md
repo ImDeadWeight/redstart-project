@@ -4,6 +4,10 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ---
 
+## 2026-11-12
+
+- **Yellowscript joins the mascot family: the bird on a yellow pencil.** `redstart-nest/assets/mascot/redstart-yellowscript.txt` is the Twig drawing with the twig redrawn as a pencil (amber body, bare-wood cone, graphite point) and the sprig removed; the bird is unchanged. Yellowscript is its own repository, so its icons are written there by `node redstart-nest/scripts/make-yellowscript-icons.mjs <yellowscript>/media`: the extension icon, a full-colour SVG, and a 24-cell one-colour silhouette for VS Code's activity bar (`toSilhouetteSvg` in `scripts/mascot.mjs`, with the eye left open so the head reads as the bird).
+
 ## 2026-11-10
 
 - **The taskbar shows the new icon, and it reads on a dark taskbar.** Two fixes after alpha.11.
