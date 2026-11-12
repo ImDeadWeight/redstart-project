@@ -38,6 +38,7 @@ import { serverHandlers } from '../ipc/server.mjs'
 import { modelsHandlers } from '../ipc/models.mjs'
 import { pluginsHandlers } from '../ipc/plugins.mjs'
 import { browseRouteHandlers } from './browse-routes.mjs'
+import { approvalsHandlers } from '../ipc/approvals.mjs'
 
 /**
  * Every control-plane method, keyed by channel.
@@ -62,5 +63,8 @@ export function buildAdminApi(deps) {
     // used to be given.
     ...pluginsHandlers({ refreshLiveToolsConfig: deps.refreshLiveToolsConfig }),
     ...browseRouteHandlers(),
+    // Table-only too (the decision log and every account's standing grants,
+    // agent-runtime Phase 2): owner-only by the listener's gate.
+    ...approvalsHandlers(),
   }
 }

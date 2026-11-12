@@ -226,6 +226,74 @@ await test('approvalRequired reads a pending approval off an error result, and n
   eq(shared.APPROVAL_DECISIONS, ['once', 'always', 'deny'], 'decisions')
 })
 
+console.log('\n-- the decision log (D14) and the owner\'s view --')
+
+const logger = await import('../daemon/logger.mjs')
+const adminApprovals = await import('../daemon/ipc/approvals.mjs')
+const logDir = path.join(tmpDir, 'logs')
+logger.initLogger(logDir)
+const policyLines = () => fs.readFileSync(path.join(logDir, 'policy.jsonl'), 'utf8').trim().split('\n')
+  .flatMap((l) => { try { return [JSON.parse(l)] } catch { return [] } })
+
+await test('logPolicy keeps only its allowlist: never arguments, a path or a summary', () => {
+  logger.logPolicy('approval.denied', {
+    account: 'alice', tool: 'delete_file', decision: 'deny',
+    args: { path: 'secret/plans.md' }, path: 'secret/plans.md', summary: 'delete_file {"path":"secret/plans.md"}', nested: { a: 1 },
+  })
+  const last = policyLines().at(-1)
+  eq(Object.keys(last).sort(), ['account', 'decision', 'event', 't', 'tool'], 'fields written')
+  assert(!JSON.stringify(last).includes('secret'), 'the path reached the log')
+})
+
+await test('an unknown event is a programming error, not a silent line', () => {
+  let threw = false
+  try { logger.logPolicy('tool.called', { tool: 'x' }) } catch { threw = true }
+  assert(threw, 'an unknown event was written')
+})
+
+await test('readPolicyLog: newest first, paged by the last t, more when there is more', async () => {
+  for (let i = 0; i < 5; i++) {
+    logger.logPolicy('grant.added', { account: 'alice', tool: `t${i}`, grantId: `g${i}` })
+    await new Promise((r) => setTimeout(r, 2))
+  }
+  const page1 = logger.readPolicyLog({ limit: 2 })
+  eq(page1.records.map((r) => r.tool), ['t4', 't3'], 'page 1')
+  assert(page1.more, 'more not set')
+  const page2 = logger.readPolicyLog({ limit: 2, before: page1.records.at(-1).t })
+  eq(page2.records.map((r) => r.tool), ['t2', 't1'], 'page 2')
+  fs.appendFileSync(path.join(logDir, 'policy.jsonl'), 'not json\n{"t":"x","event":"made.up"}\n')
+  assert(logger.readPolicyLog({ limit: 1 }).records[0].tool === 't4', 'a bad line was returned')
+})
+
+await test('the owner lists an account\'s grants by username, and revokes one, which is logged as by: owner', () => {
+  const store = path.join(configDir(), 'accounts.json')
+  const before = fs.existsSync(store) ? fs.readFileSync(store, 'utf8') : null
+  const accounts = JSON.parse(before ?? '{"accounts":[]}')
+  accounts.accounts = [...(accounts.accounts ?? []), { id: 'carol-3', username: 'carol', tier: 'user' }]
+  fs.writeFileSync(store, JSON.stringify(accounts))
+  try {
+    const carol = memoryKey({ id: 'carol-3', username: 'carol' })
+    const g = grants.addGrant(carol, 'run_python')
+    const listed = adminApprovals.listAccountGrants('Carol')
+    assert(listed.ok && listed.grants.some((x) => x.id === g.grant.id), `listing: ${JSON.stringify(listed)}`)
+    eq(adminApprovals.listAccountGrants('nobody'), { ok: false, error: 'no such account' }, 'unknown user')
+    eq(adminApprovals.revokeAccountGrant(g.grant.id), { ok: true, tool: 'run_python' }, 'revoke')
+    const last = policyLines().at(-1)
+    eq([last.event, last.account, last.tool, last.by], ['grant.revoked', 'carol', 'run_python', 'owner'], 'logged')
+    eq(adminApprovals.revokeAccountGrant(g.grant.id), { ok: false, error: 'no such grant' }, 'second revoke')
+  } finally {
+    if (before === null) fs.rmSync(store, { force: true }); else fs.writeFileSync(store, before)
+  }
+})
+
+await test('the three owner methods are in the control-plane table', async () => {
+  const { buildAdminApi } = await import('../daemon/admin/api-table.mjs')
+  const api = buildAdminApi({})
+  for (const c of ['audit:list', 'approvals:list-grants', 'approvals:revoke-grant']) assert(typeof api[c] === 'function', `${c} missing`)
+})
+
+logger.closeLogger()
+
 const failed = results.filter((r) => !r.pass)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)
 try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
