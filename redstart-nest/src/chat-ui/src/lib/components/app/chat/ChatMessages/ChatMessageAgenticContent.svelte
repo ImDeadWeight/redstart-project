@@ -6,13 +6,8 @@
 		MarkdownContent,
 		SyntaxHighlightedCode,
 		ChatMessageActionCardPermissionRequest,
-		ChatMessageActionCardContinueRequest,
-		ChatMessageActionCardQuestion
+		ChatMessageActionCardContinueRequest
 	} from '$lib/components/app';
-	import { findOpenQuestion } from '$lib/utils/agentic';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import type { AskAnswer } from '$lib/agent-core';
 
 	import {
 		AgenticSectionType,
@@ -38,9 +33,6 @@
 		agenticResolvePermission,
 		agenticPendingContinueRequest,
 		agenticResolveContinue,
-		agenticPendingQuestion,
-		agenticResolveQuestion,
-		agenticIsRunning,
 		agenticLastError
 	} from '$lib/stores/agentic.svelte';
 	import { config } from '$lib/stores/settings.svelte';
@@ -135,50 +127,8 @@
 		agenticResolveContinue(message.convId, shouldContinue);
 	}
 
-	// ask_user (plan §4, 1.1). While the flow runs, the question comes from the
-	// session. After a refresh no flow is running, but the call is still in the
-	// saved transcript with no result: the same card, answered through
-	// chatStore.answerOpenQuestion, which writes the result and resumes.
-	const liveQuestion = $derived(
-		isStreaming && isLastAssistantMessage ? agenticPendingQuestion(message.convId) : null
-	);
-	const reloadedQuestion = $derived(
-		!isStreaming && isLastAssistantMessage && !agenticIsRunning(message.convId)
-			? findOpenQuestion(conversationsStore.activeMessages)
-			: null
-	);
-	// Stable across re-derivations: findOpenQuestion builds a new object every
-	// time the messages change, and keying on that would remount the card.
-	const questionKey = $derived(liveQuestion ?? reloadedQuestion?.toolCallId ?? null);
-	let questionAnswered = $state(false);
-	let prevQuestionRef: unknown = null;
-	$effect(() => {
-		const current = questionKey;
-		if (current !== prevQuestionRef) {
-			prevQuestionRef = current;
-			if (current) questionAnswered = false;
-		}
-	});
-
-	function handleAnswer(answer: AskAnswer | null) {
-		questionAnswered = true;
-		if (liveQuestion) {
-			agenticResolveQuestion(message.convId, answer);
-			return;
-		}
-		chatStore
-			.answerOpenQuestion(answer)
-			.then((done) => {
-				if (!done) questionAnswered = false;
-			})
-			.catch((err) => {
-				questionAnswered = false;
-				console.error('[ask_user] Could not answer the question:', err);
-				toast.error('Could not send your answer', {
-					description: err instanceof Error ? err.message : String(err)
-				});
-			});
-	}
+	// ask_user questions are shown with the composer (ChatFormQuestion.svelte),
+	// for this chat's own flow and for a background task alike.
 
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
 
@@ -528,13 +478,6 @@
 			serverLabel={pendingPermission.serverLabel}
 			onDecision={handlePermission}
 		/>
-	{/if}
-
-	{#if (liveQuestion || reloadedQuestion) && !questionAnswered}
-		{@const request = liveQuestion ?? reloadedQuestion!.request}
-		{#key questionKey}
-			<ChatMessageActionCardQuestion {request} onAnswer={handleAnswer} />
-		{/key}
 	{/if}
 
 	{#if pendingContinue && !continueDismissed}

@@ -3,19 +3,18 @@
 	import { Button } from '$lib/components/ui/button';
 	import {
 		ChatMessageActionCardContinueRequest,
-		ChatMessageActionCardPermissionRequest,
-		ChatMessageActionCardQuestion
+		ChatMessageActionCardPermissionRequest
 	} from '$lib/components/app';
 	import { tasksStore } from '$lib/stores/tasks.svelte';
 	import { approvalDecisionFor, taskStatusLabel } from '$lib/services/task.service';
-	import type { AskAnswer } from '$lib/agent-core';
 	import type { ToolPermissionDecision } from '$lib/enums';
 
 	/**
 	 * The background task holding this chat (agent-runtime Phase 3.9, U-b):
 	 * its state and Cancel, and — when it waits on the user — the same
-	 * question, approval and continue cards a chat shows, answered through
-	 * the task routes instead of the browser loop. Nothing renders for a chat
+	 * approval and continue cards a chat shows, answered through the task
+	 * routes instead of the browser loop. Its questions are shown with the
+	 * composer like every chat's (ChatFormQuestion.svelte). Nothing renders for a chat
 	 * with no live task.
 	 */
 	interface Props {
@@ -28,7 +27,7 @@
 	const waiting = $derived(task?.waiting ?? null);
 	let busy = $state(false);
 
-	async function run(fn: () => Promise<void>) {
+	async function run(fn: () => Promise<unknown>) {
 		if (busy || !conversationId) return;
 		busy = true;
 		try {
@@ -36,12 +35,6 @@
 		} finally {
 			busy = false;
 		}
-	}
-
-	function onAnswer(answer: AskAnswer | null) {
-		const id = conversationId;
-		if (!id) return;
-		void run(() => tasksStore.answer(id, answer ?? { dismissed: true }));
 	}
 
 	function onPermission(decision: ToolPermissionDecision) {
@@ -64,7 +57,7 @@
 </script>
 
 {#if task}
-	<div class="mx-auto mb-2 flex w-full max-w-[48rem] flex-col gap-2" data-testid="task-bar">
+	<div class="mx-auto mb-2 flex w-full max-w-3xl flex-col gap-2" data-testid="task-bar">
 		<div
 			class="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/40 px-3 py-2 text-sm"
 		>
@@ -81,14 +74,8 @@
 			</Button>
 		</div>
 
-		{#if waiting?.kind === 'question'}
-			{#key `${task.id}:${waiting.callId ?? waiting.question}`}
-				<ChatMessageActionCardQuestion
-					request={{ question: waiting.question, options: waiting.options, multiSelect: !!waiting.multiSelect }}
-					{onAnswer}
-				/>
-			{/key}
-		{:else if waiting?.kind === 'approval'}
+		<!-- A question is shown with the composer (ChatFormQuestion.svelte). -->
+		{#if waiting?.kind === 'approval'}
 			{#key waiting.approval.id}
 				<ChatMessageActionCardPermissionRequest
 					toolName={waiting.tool}

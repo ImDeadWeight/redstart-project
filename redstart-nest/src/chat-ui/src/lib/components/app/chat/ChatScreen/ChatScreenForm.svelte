@@ -6,6 +6,7 @@
 	import ChatFormProject from '$lib/components/app/chat/ChatForm/ChatFormProject.svelte';
 	import ChatFormMemorySuggestions from '$lib/components/app/chat/ChatForm/ChatFormMemorySuggestions.svelte';
 	import ChatFormPlan from '$lib/components/app/chat/ChatForm/ChatFormPlan.svelte';
+	import ChatFormQuestion from '$lib/components/app/chat/ChatForm/ChatFormQuestion.svelte';
 	import { onMount } from 'svelte';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 
@@ -117,6 +118,8 @@
 	<ChatFormMemorySuggestions />
 	<!-- The model's update_plan checklist (agent-runtime plan §4, 1.2) -->
 	<ChatFormPlan />
+	<!-- The question the assistant is waiting on, from this chat or its background task -->
+	<ChatFormQuestion />
 	<ChatForm
 		bind:this={chatFormRef}
 		bind:value={message}

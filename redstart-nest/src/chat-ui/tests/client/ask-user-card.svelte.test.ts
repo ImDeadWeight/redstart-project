@@ -4,36 +4,46 @@ import { userEvent } from 'vitest/browser';
 import ChatMessageActionCardQuestion from '$lib/components/app/chat/ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardQuestion.svelte';
 
 /**
- * The ask_user question card (plan §4, 1.1): options as buttons, a text field
- * that is always there, and Skip. What it hands back is what the model reads,
- * so each way of answering is pinned here.
+ * The ask_user question card (plan §4, 1.1), shown with the composer: one row
+ * per option, radio bubbles when one may be picked and checkboxes when any
+ * number may, a text field that is always there, Send and Skip. What it hands
+ * back is what the model reads, so each way of answering is pinned here.
  */
 
 describe('ask_user question card', () => {
-	it('a single-choice option answers at once, with what was typed as a note', async () => {
+	it('one choice: the rows are radios; picking another moves the pick; Send answers with the note', async () => {
 		const onAnswer = vi.fn();
 		const screen = await render(ChatMessageActionCardQuestion, {
 			request: { question: 'Which draft?', options: ['draft_a.md', 'draft_b.md'], multiSelect: false },
 			onAnswer
 		});
 		await expect.element(screen.getByText('Which draft?')).toBeInTheDocument();
+		await expect.element(screen.getByText('Choose one')).toBeInTheDocument();
+		const send = screen.getByRole('button', { name: 'Send' });
+		await expect.element(send).toBeDisabled();
+		await screen.getByRole('radio', { name: 'draft_a.md' }).click();
+		await screen.getByRole('radio', { name: 'draft_b.md' }).click();
+		await expect.element(screen.getByRole('radio', { name: 'draft_a.md' })).not.toBeChecked();
+		await expect.element(screen.getByRole('radio', { name: 'draft_b.md' })).toBeChecked();
+		expect(onAnswer).not.toHaveBeenCalled();
 		await userEvent.fill(screen.getByLabelText('Your answer'), 'the newer one');
-		await screen.getByRole('button', { name: 'draft_b.md' }).click();
+		await send.click();
 		expect(onAnswer).toHaveBeenCalledWith({ chosen: ['draft_b.md'], text: 'the newer one' });
 	});
 
-	it('multi-select toggles, and Send answers with every pick', async () => {
+	it('select all that apply: the rows are checkboxes, and Send answers with every pick in order', async () => {
 		const onAnswer = vi.fn();
 		const screen = await render(ChatMessageActionCardQuestion, {
 			request: { question: 'Which parts?', options: ['A', 'B', 'C'], multiSelect: true },
 			onAnswer
 		});
+		await expect.element(screen.getByText('Select all that apply')).toBeInTheDocument();
 		const send = screen.getByRole('button', { name: 'Send' });
 		await expect.element(send).toBeDisabled();
-		await screen.getByRole('button', { name: 'A' }).click();
-		await screen.getByRole('button', { name: 'C' }).click();
-		await screen.getByRole('button', { name: 'A' }).click();
-		await screen.getByRole('button', { name: 'B' }).click();
+		await screen.getByRole('checkbox', { name: 'A' }).click();
+		await screen.getByRole('checkbox', { name: 'C' }).click();
+		await screen.getByRole('checkbox', { name: 'A' }).click();
+		await screen.getByRole('checkbox', { name: 'B' }).click();
 		expect(onAnswer).not.toHaveBeenCalled();
 		await send.click();
 		expect(onAnswer).toHaveBeenCalledWith({ chosen: ['C', 'B'] });
@@ -50,5 +60,17 @@ describe('ask_user question card', () => {
 		expect(onAnswer).toHaveBeenLastCalledWith({ text: 'Celsius' });
 		await screen.getByRole('button', { name: 'Skip' }).click();
 		expect(onAnswer).toHaveBeenLastCalledWith(null);
+	});
+
+	it('while an answer is on its way, nothing can be sent twice', async () => {
+		const onAnswer = vi.fn();
+		const screen = await render(ChatMessageActionCardQuestion, {
+			request: { question: 'Which?', options: ['x', 'y'], multiSelect: false },
+			onAnswer,
+			busy: true
+		});
+		await expect.element(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+		await expect.element(screen.getByRole('button', { name: 'Skip' })).toBeDisabled();
+		await expect.element(screen.getByRole('radio', { name: 'x' })).toBeDisabled();
 	});
 });

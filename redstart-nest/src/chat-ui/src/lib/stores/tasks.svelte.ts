@@ -131,10 +131,11 @@ class TasksStore {
 		}
 	}
 
-	async answer(conversationId: string, answer: TaskAnswer): Promise<void> {
+	/** True when the task took the answer. */
+	async answer(conversationId: string, answer: TaskAnswer): Promise<boolean> {
 		const record = this.activeFor(conversationId);
-		if (!record) return;
-		await this.act(() => TaskService.answer(record.id, answer), 'The answer did not reach the task.');
+		if (!record) return false;
+		return this.act(() => TaskService.answer(record.id, answer), 'The answer did not reach the task.');
 	}
 
 	async decideApproval(conversationId: string, decision: ApprovalDecision): Promise<void> {
@@ -153,11 +154,13 @@ class TasksStore {
 		await this.act(() => TaskService.cancel(record.id), 'The task could not be cancelled.');
 	}
 
-	private async act(fn: () => Promise<unknown>, failure: string): Promise<void> {
+	private async act(fn: () => Promise<unknown>, failure: string): Promise<boolean> {
 		try {
 			await fn();
+			return true;
 		} catch (error) {
 			toast.error(error instanceof Error && error.message ? error.message : failure);
+			return false;
 		}
 	}
 

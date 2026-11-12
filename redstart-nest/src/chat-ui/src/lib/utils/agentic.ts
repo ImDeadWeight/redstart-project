@@ -12,6 +12,7 @@ import { getServerBaseUrl } from './server-url';
 import { getAuthHeaders } from './api-headers';
 import { ASK_USER_TOOL, formatAskAnswer, parseAskArguments } from '$lib/agent-core';
 import type { AskAnswer, AskRequest, PlanStep } from '$lib/agent-core';
+import type { TaskRecord } from '$lib/services/task.service';
 
 /**
  * Represents a parsed section of agentic content for display
@@ -380,6 +381,42 @@ export function buildAskAnswer(selected: readonly string[], text: string): AskAn
 	const typed = text.trim();
 	if (chosen.length === 0 && !typed) return null;
 	return { ...(chosen.length ? { chosen: [...chosen] } : {}), ...(typed ? { text: typed } : {}) };
+}
+
+/** Where the composer's question card comes from (ChatFormQuestion.svelte). */
+export type QuestionSource =
+	| { kind: 'task'; key: string; request: AskRequest }
+	| { kind: 'live'; key: unknown; request: AskRequest }
+	| { kind: 'reloaded'; key: string; request: AskRequest };
+
+/**
+ * The one question the composer shows, or null. A background task holding
+ * the chat (a followed task, or the record's activeTaskId before the follow
+ * has loaded) answers only through the task: the same ask_user call sits in
+ * the stored transcript with no result, and offering it as a reloaded
+ * question would send the answer to a browser loop that is not running.
+ */
+export function pickQuestionSource(input: {
+	task: Pick<TaskRecord, 'id' | 'waiting'> | null;
+	activeTaskId: string | null | undefined;
+	live: AskRequest | null;
+	flowBusy: boolean;
+	open: () => OpenQuestion | null;
+}): QuestionSource | null {
+	const { task, activeTaskId, live, flowBusy, open } = input;
+	if (task || activeTaskId) {
+		const w = task?.waiting;
+		if (!task || w?.kind !== 'question') return null;
+		return {
+			kind: 'task',
+			key: `task:${task.id}:${w.callId ?? w.question}`,
+			request: { question: w.question, options: w.options, multiSelect: !!w.multiSelect }
+		};
+	}
+	if (live) return { kind: 'live', key: live, request: live };
+	if (flowBusy) return null;
+	const found = open();
+	return found ? { kind: 'reloaded', key: `reloaded:${found.toolCallId}`, request: found.request } : null;
 }
 
 /** The plan checklist's one-line summary: "1 of 3 done", or "done" when nothing is open. */
