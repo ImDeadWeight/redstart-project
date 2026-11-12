@@ -29,7 +29,7 @@ import { decide } from '../approval-ledger.mjs'
 import { listGrants, addGrant, revokeGrant } from '../approval-grants.mjs'
 import { approvalRule } from '../tools-definitions.mjs'
 import { memoryKey } from '../memory-storage.mjs'
-import { logPolicy } from '../logger.mjs'
+import { logPolicy, logEvent } from '../logger.mjs'
 import { APPROVAL_DECISIONS } from '../../../shared/agent-core/approval.mjs'
 
 const NOT_FOUND = { error: { message: 'Not found', type: 'not_found' } }
@@ -108,6 +108,9 @@ export async function handleApprovalRoute(req, res, urlPath, account) {
       const decision = body?.decision
       if (!APPROVAL_DECISIONS.includes(decision)) { sendJson(res, 400, bad(`decision must be one of ${APPROVAL_DECISIONS.join(', ')}`)); return true }
       const r = decide(d[1], key, decision)
+      // The operational log (not the decision log): every decision a client
+      // posts, so "did the chat app ever answer?" has an answer. Scalars only.
+      logEvent('approval', r.ok ? 'decided' : 'decide_failed', { tool: r.ok ? r.tool : undefined, decision, reason: r.ok ? undefined : r.error })
       // 'not found' covers another account's id and an expired one: a prober
       // learns nothing from the difference.
       if (!r.ok) { sendJson(res, r.error === 'not found' ? 404 : 409, r.error === 'not found' ? NOT_FOUND : bad(r.error)); return true }

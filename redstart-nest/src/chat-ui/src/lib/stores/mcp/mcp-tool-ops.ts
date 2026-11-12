@@ -151,12 +151,18 @@ export class MCPToolOps {
 		// behalf, and the model reads Nest's "nothing was done" instead.
 		// Nest's own server only: the decision goes to Nest's gateway, and
 		// another MCP server's "_meta" is that server's word, not Nest's.
-		if (!first.approval || !context?.approvedByPerson || !serverName.startsWith(NEST_MCP_SERVER_ID_PREFIX)) {
+		if (!first.approval) return first;
+		if (!context?.approvedByPerson || !serverName.startsWith(NEST_MCP_SERVER_ID_PREFIX)) {
+			console.warn(
+				`[approvals] Nest asked for an approval for "${toolName}", not answered: ` +
+					(context?.approvedByPerson ? `server "${serverName}" is not Nest's` : 'the card was not approved for this call')
+			);
 			return first;
 		}
 		try {
 			await apiPost(`/approvals/${encodeURIComponent(first.approval.id)}`, { decision: 'once' });
-		} catch {
+		} catch (err) {
+			console.warn(`[approvals] could not record the approval for "${toolName}":`, err);
 			return first;
 		}
 		return this.callOnce(

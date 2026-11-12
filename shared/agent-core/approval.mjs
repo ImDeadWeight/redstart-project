@@ -28,9 +28,15 @@ export const APPROVAL_ID_META_KEY = 'redstart/approvalId';
 /** The decisions a client posts (POST /approvals/:id { decision }). */
 export const APPROVAL_DECISIONS = Object.freeze(['once', 'always', 'deny']);
 
-/** What the model reads when its client cannot do the handshake. */
+/**
+ * What the model reads when the handshake did not happen. Says what not to
+ * do as well: on 2026-11-12 the 35B, told only "this client did not ask",
+ * asked the user in chat with ask_user, got "yes", and tried again, three
+ * times. An answer in the chat is not an approval.
+ */
 export const APPROVAL_NEEDED_TEXT =
-	"This call needs the user's approval, and this client did not ask for it. Nothing was done.";
+	"Not done: this call needs the user's approval on the app's approval card, and it was not given. " +
+	'Asking in the chat cannot approve it, so do not ask; tell the user it was not done.';
 
 /**
  * @typedef {{ id: string, tool: string, summary: string, argsDigest: string, expiresAt: number }} PendingApproval
