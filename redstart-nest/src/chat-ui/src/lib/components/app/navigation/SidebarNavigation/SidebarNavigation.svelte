@@ -15,8 +15,7 @@
 	import { toast } from 'svelte-sonner';
 	import { projectsStore } from '$lib/stores/projects.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { ActionIcon, DialogConfirmation } from '$lib/components/app';
-	import { TooltipSide } from '$lib/enums';
+	import { DialogConfirmation } from '$lib/components/app';
 	import SidebarNavigationActions from './SidebarNavigationActions.svelte';
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
@@ -437,21 +436,21 @@
 		end, so it stays put however long the list grows. Sits outside
 		ScrollArea deliberately, and shrink-0 with the scroller's min-h-0 so
 		the list can never push it below the window (it was full-width and
-		easy to lose there until 2026-11-12). The icon matches the icon rail.
+		easy to lose there until 2026-11-12). The button matches the actions above.
 	-->
 	{#if authStore.user}
-		<div
-			class="flex h-11 shrink-0 items-center border-t border-sidebar-border/50 bg-sidebar/50 px-2 backdrop-blur-lg"
-		>
-			<ActionIcon
-				icon={LogOut}
-				tooltip="Log out"
-				tooltipSide={TooltipSide.TOP}
-				size="lg"
-				iconSize="h-4 w-4"
-				class="h-8 w-8 rounded-full hover:bg-accent!"
+		<div class="shrink-0 border-t border-sidebar-border/50 bg-sidebar/50 p-3 backdrop-blur-lg">
+			<!-- The same button as the actions above (SidebarNavigationActions). -->
+			<Button
+				class="w-full justify-between px-2 backdrop-blur-none!"
+				variant="ghost"
 				onclick={handleLogout}
-			/>
+			>
+				<div class="flex items-center gap-2">
+					<LogOut class="h-4 w-4" />
+					Log out
+				</div>
+			</Button>
 		</div>
 	{/if}
 </div>
