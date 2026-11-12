@@ -14,6 +14,8 @@
 
 import { NEST_MCP_SERVER_ID_PREFIX } from '$lib/constants';
 import { MCPService } from '$lib/services/mcp.service';
+import { apiPost } from '$lib/utils/api-fetch';
+import { APPROVAL_ID_META_KEY } from '$lib/agent-core';
 import { JsonSchemaType, ToolCallType } from '$lib/enums';
 import type { MCPToolCall, OpenAIToolDefinition, ToolExecutionResult } from '$lib/types';
 import { normalizeSchemaProperties, parseToolArguments } from './mcp-schema';
@@ -121,24 +123,61 @@ export class MCPToolOps {
 	async executeTool(
 		toolCall: MCPToolCall,
 		signal?: AbortSignal,
-		context?: { conversationId?: string }
+		context?: { conversationId?: string; approvedByPerson?: boolean }
 	): Promise<ToolExecutionResult> {
 		const toolName = toolCall.function.name;
 		// Which chat this call belongs to, so Nest can give its files a home.
 		// Only the conversation id travels, never content; Nest checks it is
 		// the caller's before using it.
-		const _meta = context?.conversationId
+		const _meta: Record<string, unknown> | undefined = context?.conversationId
 			? { 'redstart/conversationId': context.conversationId }
 			: undefined;
 
 		const serverName = this.tools.toolsIndex.get(toolName);
 		if (!serverName) throw new Error(`Unknown tool: ${toolName}`);
 
-		const connection = this.conn.connections.get(serverName);
-		if (!connection) throw new Error(`Server "${serverName}" is not connected`);
+		if (!this.conn.connections.get(serverName)) throw new Error(`Server "${serverName}" is not connected`);
 
 		const args = parseToolArguments(toolCall.function.arguments);
 
+		const first = await this.callOnce(serverName, toolName, args, _meta, signal);
+
+		// The approval handshake (agent-runtime Phase 2, D12). Nest refuses an
+		// enforced tool (every destructive one) until the person's decision
+		// reaches it: post it, then repeat the call with the approval's id,
+		// which Nest accepts once, for these exact arguments. Only when the
+		// person approved THIS call on the card (approvedByPerson): a call that
+		// got past the gate without a card is never approved on anyone's
+		// behalf, and the model reads Nest's "nothing was done" instead.
+		// Nest's own server only: the decision goes to Nest's gateway, and
+		// another MCP server's "_meta" is that server's word, not Nest's.
+		if (!first.approval || !context?.approvedByPerson || !serverName.startsWith(NEST_MCP_SERVER_ID_PREFIX)) {
+			return first;
+		}
+		try {
+			await apiPost(`/approvals/${encodeURIComponent(first.approval.id)}`, { decision: 'once' });
+		} catch {
+			return first;
+		}
+		return this.callOnce(
+			serverName,
+			toolName,
+			args,
+			{ ...(_meta ?? {}), [APPROVAL_ID_META_KEY]: first.approval.id },
+			signal
+		);
+	}
+
+	/** One tools/call, reconnecting and retrying once if the session expired. */
+	private async callOnce(
+		serverName: string,
+		toolName: string,
+		args: Record<string, unknown>,
+		_meta: Record<string, unknown> | undefined,
+		signal?: AbortSignal
+	): Promise<ToolExecutionResult> {
+		const connection = this.conn.connections.get(serverName);
+		if (!connection) throw new Error(`Server "${serverName}" is not connected`);
 		try {
 			return await MCPService.callTool(connection, { name: toolName, arguments: args, _meta }, signal);
 		} catch (error) {

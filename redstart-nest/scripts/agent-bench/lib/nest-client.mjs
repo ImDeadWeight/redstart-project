@@ -20,6 +20,7 @@
 import * as crypto from 'node:crypto'
 import { connectMcpClient } from '../../lib/mcp-test-client.mjs'
 import { formatMcpToolResult } from '../../../../shared/agent-core/tool-result.mjs'
+import { approvalRequired, APPROVAL_ID_META_KEY } from '../../../../shared/agent-core/approval.mjs'
 
 export const META_CONVERSATION_KEY = 'redstart/conversationId'
 export const META_CLASS_KEY = 'redstart/class'
@@ -88,15 +89,29 @@ export async function connectNest(opts) {
     /**
      * One tools/call, as chat-ui makes it, and its result as the text
      * chat-ui gives the model.
+     *
+     * The approval handshake (agent-runtime Phase 2), as chat-ui does it: when
+     * Nest refuses an enforced tool for want of an approval, decide it
+     * 'once' and repeat the call with its id. Only called for a call the
+     * task's approve policy already allowed (the bench's gate), so this is the
+     * policy answering, as the person answers the card in chat-ui.
+     * `approval` says it happened, for the run log.
      */
     async callTool(name, args, conversationId) {
-      const r = await mcp.call('tools/call', {
-        name,
-        arguments: args,
-        _meta: { [META_CONVERSATION_KEY]: conversationId },
-      })
-      if (r.error) return { text: `Error: ${r.error.message}`, isError: true }
-      return { text: formatMcpToolResult(r.result), isError: !!r.result?.isError }
+      const meta = { [META_CONVERSATION_KEY]: conversationId }
+      let r = await mcp.call('tools/call', { name, arguments: args, _meta: meta })
+      let approval = null
+      const pending = r.error ? null : approvalRequired(r.result)
+      if (pending) {
+        approval = { id: pending.id, decided: false }
+        const d = await req('POST', `/approvals/${encodeURIComponent(pending.id)}`, { json: { decision: 'once' }, ok: [200, 404, 409] })
+        if (d.status === 200) {
+          approval.decided = true
+          r = await mcp.call('tools/call', { name, arguments: args, _meta: { ...meta, [APPROVAL_ID_META_KEY]: pending.id } })
+        }
+      }
+      if (r.error) return { text: `Error: ${r.error.message}`, isError: true, approval }
+      return { text: formatMcpToolResult(r.result), isError: !!r.result?.isError, approval }
     },
 
     async createConversation(id, name) {

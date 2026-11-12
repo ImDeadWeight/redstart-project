@@ -54,6 +54,12 @@ export {
 	openSteps,
 	planTailNote
 } from '../../../../../shared/agent-core/update-plan.mjs';
+export {
+	APPROVAL_ID_META_KEY,
+	APPROVAL_RULE_META_KEY,
+	APPROVAL_ENFORCED_META_KEY,
+	approvalRequired
+} from '../../../../../shared/agent-core/approval.mjs';
 export type {
 	AskRequest,
 	AskAnswer,

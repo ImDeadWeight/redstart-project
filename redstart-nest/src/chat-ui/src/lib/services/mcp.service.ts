@@ -61,7 +61,7 @@ import {
 	createDiagnosticFetch
 } from './mcp/mcp-diagnostics';
 import { createTransport } from './mcp/mcp-transport';
-import { formatMcpToolResult } from '$lib/agent-core';
+import { formatMcpToolResult, approvalRequired } from '$lib/agent-core';
 
 interface ToolResultContentItem {
 	type: string;
@@ -506,7 +506,8 @@ export class MCPService {
 
 			return {
 				content: this.formatToolResult(result as ToolCallResult),
-				isError: (result as ToolCallResult).isError ?? false
+				isError: (result as ToolCallResult).isError ?? false,
+				approval: approvalRequired(result)
 			};
 		} catch (error) {
 			if (isAbortError(error)) {

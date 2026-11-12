@@ -29,6 +29,7 @@ import { getPromptBlocks } from './prompt-storage.mjs'
 import { handleAuthRoute } from './gateway/auth-routes.mjs'
 import { isConversationRoute, handleConversationRoute } from './gateway/conversation-routes.mjs'
 import { isMemoryRoute, handleMemoryRoute } from './gateway/memory-routes.mjs'
+import { isApprovalRoute, handleApprovalRoute } from './gateway/approval-routes.mjs'
 import { isWorkflowRoute, handleWorkflowRoute } from './gateway/workflow-routes.mjs'
 import { isProjectRoute, handleProjectRoute } from './gateway/project-routes.mjs'
 import { getProject } from './projects-storage.mjs'
@@ -530,6 +531,9 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       // _local scope, the same posture as files.
       // Creating one (/remember) is checked against the narrowed config.
       if (isMemoryRoute(urlPath) && await handleMemoryRoute(req, res, urlPath, authResult.account ?? null, { config: effectiveConfig })) return
+      // Approvals and standing grants (agent-runtime Phase 2). Same account
+      // rule as memories: the caller's own scope, _local with auth off.
+      if (isApprovalRoute(urlPath) && await handleApprovalRoute(req, res, urlPath, authResult.account ?? null)) return
       // Workflows (personal + org). Same account rule as memories; the org
       // write permission is checked inside the route module.
       if (isWorkflowRoute(urlPath) && await handleWorkflowRoute(req, res, urlPath, authResult.account ?? null)) return

@@ -292,6 +292,108 @@ await test('the three owner methods are in the control-plane table', async () =>
   for (const c of ['audit:list', 'approvals:list-grants', 'approvals:revoke-grant']) assert(typeof api[c] === 'function', `${c} missing`)
 })
 
+console.log('\n-- enforcement at tools/call (D11/D12) --')
+
+const { approvalGate } = await import('../daemon/mcp-server.mjs')
+const { handleApprovalRoute, isApprovalRoute } = await import('../daemon/gateway/approval-routes.mjs')
+const { Readable } = await import('node:stream')
+const ALICE_ACCOUNT = { id: 'alice-1', username: 'alice' }
+const BOB_ACCOUNT = { id: 'bob-2', username: 'bob' }
+
+await test('no approval: the gate refuses and opens a pending approval for exactly that call', () => {
+  ledger._reset()
+  const g = approvalGate('delete_file', { path: 'a.md' }, undefined, { account: ALICE_ACCOUNT })
+  assert(!g.ok && g.pending.tool === 'delete_file' && g.pending.argsDigest === ledger.argsDigest({ path: 'a.md' }), JSON.stringify(g))
+})
+
+await test('a decided approval passes once; a standing grant never covers an "always" tool', () => {
+  ledger._reset()
+  const g = approvalGate('delete_file', { path: 'a.md' }, undefined, { account: ALICE_ACCOUNT })
+  ledger.decide(g.pending.id, ALICE, 'once')
+  assert(approvalGate('delete_file', { path: 'a.md' }, g.pending.id, { account: ALICE_ACCOUNT }).ok, 'the approved call was refused')
+  assert(!approvalGate('delete_file', { path: 'a.md' }, g.pending.id, { account: ALICE_ACCOUNT }).ok, 'the approval was used twice')
+  // A grant written straight into the file (it cannot be made through addGrant).
+  const f = path.join(configDir(), 'approvals.json')
+  const data = JSON.parse(fs.readFileSync(f, 'utf8'))
+  data.accounts[ALICE] = [...(data.accounts[ALICE] ?? []), { id: 'forged', tool: 'delete_file', scope: null, createdAt: 1, source: 'card' }]
+  fs.writeFileSync(f, JSON.stringify(data))
+  assert(!approvalGate('delete_file', { path: 'a.md' }, undefined, { account: ALICE_ACCOUNT }).ok, 'a forged grant let a delete through')
+})
+
+await test('an approval presented by another account, or for other arguments, is refused and logged as refused', () => {
+  ledger._reset()
+  const g = approvalGate('delete_file', { path: 'a.md' }, undefined, { account: ALICE_ACCOUNT })
+  ledger.decide(g.pending.id, ALICE, 'once')
+  assert(!approvalGate('delete_file', { path: 'a.md' }, g.pending.id, { account: BOB_ACCOUNT }).ok, "bob used alice's approval")
+  const last = policyLines().at(-1)
+  eq([last.event, last.account, last.tool], ['approval.refused', 'bob', 'delete_file'], 'logged')
+  assert(!JSON.stringify(last).includes('a.md'), 'the path reached the log')
+  assert(approvalGate('delete_file', { path: 'a.md' }, g.pending.id, { account: ALICE_ACCOUNT }).ok, "bob's attempt burned alice's approval")
+})
+
+await test('auth off: the gate uses the shared anonymous scope', () => {
+  ledger._reset()
+  const g = approvalGate('memory_forget', { id: 'm1' }, undefined, { account: null })
+  eq(ledger.decide(g.pending.id, '_local', 'once'), { ok: true, tool: 'memory_forget' }, 'decided in _local')
+  assert(approvalGate('memory_forget', { id: 'm1' }, g.pending.id, { account: null }).ok, 'refused')
+})
+
+console.log('\n-- the gateway routes (2.5) --')
+
+function fakeReq(method, body) {
+  const req = Readable.from(body ? [Buffer.from(JSON.stringify(body))] : [])
+  req.method = method; req.headers = {}
+  return req
+}
+function fakeRes() {
+  return { status: 0, body: '', writeHead(s) { this.status = s; return this }, setHeader() {}, end(b) { this.body = b ?? '' } }
+}
+async function route(method, urlPath, account, body) {
+  const res = fakeRes()
+  const handled = await handleApprovalRoute(fakeReq(method, body), res, urlPath, account)
+  return { handled, status: res.status, json: res.body ? JSON.parse(res.body) : null }
+}
+
+await test('which paths are ours', () => {
+  eq(['/approvals/grants', '/approvals/grants/import', '/approvals/grants/abc-1', '/approvals/abc-1', '/approvals', '/approvals/a/b'].map(isApprovalRoute),
+    [true, true, true, true, false, false], 'isApprovalRoute')
+})
+
+await test('POST /approvals/:id decides for its own account only; deny is logged; a bad decision is 400', async () => {
+  ledger._reset()
+  const g = approvalGate('delete_file', { path: 'x' }, undefined, { account: ALICE_ACCOUNT })
+  eq((await route('POST', `/approvals/${g.pending.id}`, BOB_ACCOUNT, { decision: 'once' })).status, 404, "bob deciding alice's")
+  eq((await route('POST', `/approvals/${g.pending.id}`, ALICE_ACCOUNT, { decision: 'maybe' })).status, 400, 'bad decision')
+  const ok = await route('POST', `/approvals/${g.pending.id}`, ALICE_ACCOUNT, { decision: 'deny' })
+  eq([ok.status, ok.json.tool, ok.json.grant], [200, 'delete_file', null], 'deny')
+  eq(policyLines().at(-1).event, 'approval.denied', 'logged')
+  eq((await route('POST', `/approvals/${g.pending.id}`, ALICE_ACCOUNT, { decision: 'once' })).status, 404, 'decided after a deny')
+})
+
+await test('"always" on a delete counts as once: it passes this call and grants nothing', async () => {
+  ledger._reset()
+  const g = approvalGate('delete_file', { path: 'x' }, undefined, { account: ALICE_ACCOUNT })
+  const r = await route('POST', `/approvals/${g.pending.id}`, ALICE_ACCOUNT, { decision: 'always' })
+  eq([r.status, r.json.grant], [200, null], 'always on delete')
+  assert(approvalGate('delete_file', { path: 'x' }, g.pending.id, { account: ALICE_ACCOUNT }).ok, 'this call was refused')
+  assert(!grants.listGrants(ALICE).some((x) => x.tool === 'delete_file' && x.id !== 'forged'), 'a grant for delete_file was made')
+})
+
+await test('grants routes: list, add (logged), revoke own only, and the import drops destructive tools', async () => {
+  const add = await route('POST', '/approvals/grants', BOB_ACCOUNT, { tool: 'create_document' })
+  eq([add.status, add.json.tool], [201, 'create_document'], 'add')
+  eq(policyLines().at(-1).event, 'grant.added', 'logged')
+  eq((await route('POST', '/approvals/grants', BOB_ACCOUNT, { tool: 'create_document' })).status, 200, 'add again')
+  eq((await route('POST', '/approvals/grants', BOB_ACCOUNT, { tool: 'delete_file' })).status, 400, 'add a delete')
+  const list = await route('GET', '/approvals/grants', BOB_ACCOUNT)
+  assert(list.json.grants.some((x) => x.tool === 'create_document'), 'not listed')
+  eq((await route('DELETE', `/approvals/grants/${add.json.id}`, ALICE_ACCOUNT)).status, 404, "alice revoking bob's")
+  eq((await route('DELETE', `/approvals/grants/${add.json.id}`, BOB_ACCOUNT)).status, 204, 'bob revoking his own')
+  const imp = await route('POST', '/approvals/grants/import', BOB_ACCOUNT, { tools: ['write_file', 'delete_file', 'memory_forget', 'read_document', 'write_file', 42] })
+  eq([imp.json.imported, imp.json.dropped.sort()], [['write_file'], ['delete_file', 'memory_forget', 'read_document']], 'import')
+  eq((await route('POST', '/approvals/grants/import', BOB_ACCOUNT, { nope: 1 })).status, 400, 'a malformed import')
+})
+
 logger.closeLogger()
 
 const failed = results.filter((r) => !r.pass)

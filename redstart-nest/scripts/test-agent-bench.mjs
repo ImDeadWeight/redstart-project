@@ -216,6 +216,12 @@ function startFakeNest(gatewayPort) {
     // write_file also saves one, as a model calling memory_save would.
     memories: [],
     saveMemoryOnWrite: false,
+    // The approval handshake (agent-runtime Phase 2). With approvalFor set,
+    // tools/call on that tool is refused until a decided approval's id comes
+    // with the call, as Nest does for a destructive tool.
+    approvalFor: null,
+    approvals: new Map(),
+    approvalPosts: [],
   }
   const json = (res, status, body) => {
     res.writeHead(status, { 'Content-Type': 'application/json' })
@@ -239,6 +245,15 @@ function startFakeNest(gatewayPort) {
       return json(res, 200, [...state.conversations].map((id) => ({ id, name: id })))
     }
     if (req.method === 'GET' && url.pathname === '/memories') return json(res, 200, { memories: state.memories })
+    const decide = /^\/approvals\/([^/]+)$/.exec(url.pathname)
+    if (req.method === 'POST' && decide && decide[1] !== 'grants') {
+      const id = decodeURIComponent(decide[1])
+      const body = JSON.parse((await readBody(req)).toString())
+      state.approvalPosts.push({ id, decision: body.decision })
+      if (!state.approvals.has(id)) return json(res, 404, {})
+      state.approvals.set(id, body.decision)
+      return json(res, 200, { ok: true })
+    }
     const mem = /^\/memories\/([^/]+)$/.exec(url.pathname)
     if (req.method === 'DELETE' && mem) {
       const before = state.memories.length
@@ -369,6 +384,16 @@ function startFakeNest(gatewayPort) {
       const conv = _meta?.['redstart/conversationId']
       state.toolCalls.push({ name, args, conv })
       if (!state.conversations.has(conv)) return reply({ isError: true, content: [{ type: 'text', text: 'unknown conversation' }] })
+      if (name === state.approvalFor) {
+        const aid = _meta?.['redstart/approvalId']
+        if (!aid || state.approvals.get(aid) !== 'once') {
+          const id = 'ap-' + (state.approvals.size + 1)
+          state.approvals.set(id, null)
+          return reply({ isError: true, content: [{ type: 'text', text: "This call needs the user's approval." }],
+            _meta: { 'redstart/approval': { id, tool: name, summary: name, argsDigest: 'd', expiresAt: Date.now() + 60000 } } })
+        }
+        state.approvals.delete(aid)
+      }
       if (name === 'read_file') {
         if (typeof args.path !== 'string') return reply({ isError: true, content: [{ type: 'text', text: 'path is required' }] })
         const buf = state.files.get(`chats/${conv}/${args.path}`)
@@ -818,6 +843,36 @@ if (bench) {
     assert(md.includes("> warning: runs changed 1 file(s) that were already in the account's File System folder"), 'the warning is in summary.md')
   })
 }
+
+console.log('\n-- the approval handshake (agent-runtime Phase 2) --')
+
+await test('Nest asks for an approval: the bench decides it once, as the policy allowed, and repeats the call', async () => {
+  nest.state.approvalFor = 'write_file'
+  nest.state.approvals = new Map()
+  nest.state.approvalPosts = []
+  try {
+    const r = await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', 'http://127.0.0.1:' + port, '--out', outDir, '--quiet'], { log: () => {} })
+    eq(r.runs[0].verdict.pass, true, 'the approved write did not happen')
+    eq(nest.state.approvalPosts, [{ id: 'ap-1', decision: 'once' }], 'posts')
+    const ev = r.runs[0].events.find((e) => e.type === 'approval')
+    eq([ev?.name, ev?.decided], ['write_file', true], 'the approval is in the run log')
+  } finally {
+    nest.state.approvalFor = null
+  }
+})
+
+await test('a call the task policy refuses never reaches Nest, so nothing is ever approved for it', async () => {
+  nest.state.approvalFor = 'write_file'
+  nest.state.approvals = new Map()
+  nest.state.approvalPosts = []
+  try {
+    const r = await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'denied.json'), '--gateway', 'http://127.0.0.1:' + port, '--out', outDir, '--quiet'], { log: () => {} })
+    eq(nest.state.approvalPosts, [], 'a refused call was approved')
+    assert(!r.runs[0].events.some((e) => e.type === 'approval'), 'an approval was logged')
+  } finally {
+    nest.state.approvalFor = null
+  }
+})
 
 console.log('\n-- one run does not change the next --')
 

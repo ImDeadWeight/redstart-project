@@ -46,8 +46,16 @@ import {
   CAPABILITY_TOOL_NAMES,
   META_CAPABILITY_KEY,
   META_CLASS_KEY,
+  approvalRule,
+  isApprovalEnforced,
 } from './tools-definitions.mjs'
-import { logEvent } from './logger.mjs'
+import { logEvent, logPolicy } from './logger.mjs'
+import { memoryKey } from './memory-storage.mjs'
+import { requestApproval, consume as consumeApproval } from './approval-ledger.mjs'
+import { covers as grantCovers } from './approval-grants.mjs'
+import {
+  APPROVAL_RULE_META_KEY, APPROVAL_ENFORCED_META_KEY, APPROVAL_META_KEY, APPROVAL_ID_META_KEY, APPROVAL_NEEDED_TEXT,
+} from '../../shared/agent-core/approval.mjs'
 import {
   StreamableHTTPServerTransport
 } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
@@ -176,6 +184,28 @@ function evaluateToolPolicy(toolName, config) {
 }
 
 // ---------------------------------------------------------------------------
+// The approval gate for one enforced call (agent-runtime Phase 2). Pure apart
+// from the ledger and the grants file; exported for scripts/test-approvals.mjs.
+//
+// Passes when a standing grant covers a 'prompt' tool, or when the call
+// carries an approval id the ledger accepts for this account, tool and
+// arguments. Otherwise opens a pending approval for the client to decide.
+// An id that was presented and did NOT match (other arguments, expired,
+// another account's, already spent) is the one refusal worth an owner's
+// attention, and goes to the decision log; the plain first call of the
+// handshake does not, or every delete would log a refusal.
+// ---------------------------------------------------------------------------
+export function approvalGate(toolName, args, approvalId, ctx) {
+  const accountKey = memoryKey(ctx?.account ?? null)
+  if (approvalRule(toolName) === 'prompt' && grantCovers(accountKey, toolName)) return { ok: true }
+  if (typeof approvalId === 'string' && approvalId) {
+    if (consumeApproval(approvalId, { accountKey, tool: toolName, args })) return { ok: true }
+    logPolicy('approval.refused', { account: ctx?.account?.username ?? '(auth off)', tool: toolName })
+  }
+  return { ok: false, pending: requestApproval({ accountKey, tool: toolName, args }) }
+}
+
+// ---------------------------------------------------------------------------
 // Tool provenance annotation.
 //
 // Stamped centrally on every advertised tool rather than asked of each
@@ -212,6 +242,10 @@ function annotateTool(tool) {
       ...(tool._meta || {}),
       [META_CAPABILITY_KEY]: capabilityForTool(tool.name),
       [META_CLASS_KEY]: cls,
+      // Approvals (agent-runtime Phase 2): the rule, and whether this server
+      // refuses an unapproved call, so a client can show its card first.
+      [APPROVAL_RULE_META_KEY]: approvalRule(tool.name),
+      [APPROVAL_ENFORCED_META_KEY]: isApprovalEnforced(tool.name),
     },
   }
 }
@@ -327,6 +361,25 @@ async function handleRpc(msg, send, ctx = { account: null }) {
       logEvent('tool', 'denied', { tool: toolName, class: policy.cls })
       send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: policy.reason }] } })
       return
+    }
+
+    // The approval (agent-runtime Phase 2, D11/D12). After the policy above,
+    // so an approval never beats a ban, a disabled capability or role
+    // narrowing: those refuse first, approved or not. Only tools that opt in
+    // are enforced (every destructive tool in Phase 2), and for every client,
+    // an API key included (decided 2026-11-12). A standing grant covers a
+    // 'prompt' tool; an 'always' tool needs a consumed approval each call.
+    if (isApprovalEnforced(toolName)) {
+      const gate = approvalGate(toolName, args, params?._meta?.[APPROVAL_ID_META_KEY], ctx)
+      if (!gate.ok) {
+        logEvent('tool', 'approval_needed', { tool: toolName, class: policy.cls })
+        send({ jsonrpc: '2.0', id, result: {
+          isError: true,
+          content: [{ type: 'text', text: APPROVAL_NEEDED_TEXT }],
+          _meta: { [APPROVAL_META_KEY]: gate.pending },
+        } })
+        return
+      }
     }
 
     const callCtx = { ...ctx, conversationId: verifiedConversationId(ctx.account, params?._meta?.[META_CONVERSATION_KEY]) }

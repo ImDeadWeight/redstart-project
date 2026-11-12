@@ -66,6 +66,8 @@ registerElectronStub()
 await import('./electron-stub.mjs')
 
 const { startMcpServer, stopMcpServer } = await import('../daemon/mcp-server.mjs')
+const approvalLedger = await import('../daemon/approval-ledger.mjs')
+const { approvalRequired, APPROVAL_ID_META_KEY, APPROVAL_RULE_META_KEY, APPROVAL_ENFORCED_META_KEY } = await import('../../shared/agent-core/approval.mjs')
 const { setAuthRequired } = await import('../daemon/auth.mjs')
 const { capabilityForTool, classifyTool, expandDisabledToolIds, setPluginCapabilityProvider } = await import('../daemon/tools-definitions.mjs')
 const { addPlugin, removePlugin, pluginCapabilities } = await import('../daemon/plugin-registry.mjs')
@@ -1187,6 +1189,20 @@ async function main() {
     // as the tool.
     console.log('\n-- file system: destructive class (delete) --')
 
+    // delete_file is approval-enforced (agent-runtime Phase 2): a call with no
+    // approval does nothing. This is the handshake a client does: decide as
+    // the person would ('_local' is the auth-off scope this suite runs in),
+    // then repeat with the approval's id. Every delete below the policy test
+    // goes through it, so a refusal it sees is the tool's own, not "needs
+    // approval".
+    const approvedDelete = async (args) => {
+      const first = await client.call('tools/call', { name: 'delete_file', arguments: args })
+      const pending = approvalRequired(first.result)
+      if (!pending) return first
+      approvalLedger.decide(pending.id, '_local', 'once')
+      return client.call('tools/call', { name: 'delete_file', arguments: args, _meta: { [APPROVAL_ID_META_KEY]: pending.id } })
+    }
+
     {
       storageFs.setCapabilityConfig('file_system', { allowWrite: true, allowDestructive: false })
       updateMcpConfig(buildGatewayConfig(fsProfile))
@@ -1212,6 +1228,7 @@ async function main() {
         assert(tool._meta['redstart/class'] === 'destructive', `class is ${tool._meta['redstart/class']}`)
         assert(tool.annotations.destructiveHint === true, 'destructiveHint not set')
         assert(tool._meta['redstart/capability'] === 'file_system', 'not attributed to the file_system capability')
+        assert(tool._meta[APPROVAL_RULE_META_KEY] === 'always' && tool._meta[APPROVAL_ENFORCED_META_KEY] === true, 'not marked as asking on every call')
       })
 
       await test('🔍 a deleted file is RECOVERABLE, not destroyed', async () => {
@@ -1219,7 +1236,7 @@ async function main() {
         // Under the test stub there is no OS recycle bin, so this exercises the
         // .trash/ fallback — the tier that must never degrade to a real delete.
         fs.writeFileSync(path.join(scopedFsDir, 'doomed.txt'), 'recover me')
-        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'doomed.txt' } })
+        const res = await approvedDelete({ path: 'doomed.txt' })
         assert(!res.result?.isError, `delete failed: ${JSON.stringify(res.result)}`)
         assert(!fs.existsSync(path.join(scopedFsDir, 'doomed.txt')), 'the file is still at its original path')
 
@@ -1244,7 +1261,7 @@ async function main() {
         const outside = path.join(tmpFsDir, 'outside-victim.txt')
         fs.writeFileSync(outside, 'not yours')
         for (const attempt of ['../outside-victim.txt', '../../outside-victim.txt', outside]) {
-          const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: attempt } })
+          const res = await approvedDelete({ path: attempt })
           assert(res.result?.isError === true, `escape allowed via "${attempt}": ${JSON.stringify(res.result)}`)
         }
         assert(fs.existsSync(outside), 'A FILE OUTSIDE THE CALLER\'S STORAGE WAS DELETED')
@@ -1252,7 +1269,7 @@ async function main() {
 
       await test('🔍 the storage root itself cannot be deleted', async () => {
         for (const attempt of ['.', '', './']) {
-          const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: attempt } })
+          const res = await approvedDelete({ path: attempt })
           assert(res.result?.isError === true, `root delete allowed via "${attempt}"`)
         }
         assert(fs.existsSync(scopedFsDir), 'THE STORAGE ROOT WAS DELETED')
@@ -1261,14 +1278,27 @@ async function main() {
       await test('🔍 a non-empty directory is refused and its contents survive', async () => {
         fs.mkdirSync(path.join(scopedFsDir, 'keepdir'), { recursive: true })
         fs.writeFileSync(path.join(scopedFsDir, 'keepdir', 'inner.txt'), 'inner')
-        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'keepdir' } })
+        const res = await approvedDelete({ path: 'keepdir' })
         assert(res.result?.isError === true, `non-empty directory was deleted: ${JSON.stringify(res.result)}`)
         assert(fs.existsSync(path.join(scopedFsDir, 'keepdir', 'inner.txt')), 'directory contents were removed')
       })
 
+      await test('🔍 a delete with no approval does nothing, and hands back a pending approval bound to that call', async () => {
+        fs.writeFileSync(path.join(scopedFsDir, 'kept.txt'), 'not yet')
+        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'kept.txt' } })
+        const pending = approvalRequired(res.result)
+        assert(pending && pending.tool === 'delete_file', 'no pending approval: ' + JSON.stringify(res.result))
+        assert(fs.existsSync(path.join(scopedFsDir, 'kept.txt')), 'the file was deleted without an approval')
+        approvalLedger.decide(pending.id, '_local', 'once')
+        const other = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'doomed-other.txt' }, _meta: { [APPROVAL_ID_META_KEY]: pending.id } })
+        assert(approvalRequired(other.result), 'an approval for kept.txt was spent on another path')
+        const again = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'kept.txt' }, _meta: { [APPROVAL_ID_META_KEY]: pending.id } })
+        assert(approvalRequired(again.result) && fs.existsSync(path.join(scopedFsDir, 'kept.txt')), 'a refused approval could be retried')
+      })
+
       await test('an empty directory is accepted', async () => {
         fs.mkdirSync(path.join(scopedFsDir, 'emptydir'), { recursive: true })
-        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'emptydir' } })
+        const res = await approvedDelete({ path: 'emptydir' })
         assert(!res.result?.isError, `empty directory delete failed: ${JSON.stringify(res.result)}`)
         assert(!fs.existsSync(path.join(scopedFsDir, 'emptydir')), 'the empty directory is still there')
       })
@@ -1280,13 +1310,13 @@ async function main() {
         fs.mkdirSync(path.join(scopedFsDir, '.trash', 'bucket'), { recursive: true })
         const trashed = path.join(scopedFsDir, '.trash', 'bucket', 'gone.txt')
         fs.writeFileSync(trashed, 'already trashed')
-        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: '.trash/bucket/gone.txt' } })
+        const res = await approvedDelete({ path: '.trash/bucket/gone.txt' })
         assert(res.result?.isError === true, `trash emptying was allowed: ${JSON.stringify(res.result)}`)
         assert(fs.existsSync(trashed), 'a trashed file was PERMANENTLY removed')
       })
 
       await test('a missing path reports not-found rather than succeeding silently', async () => {
-        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'no-such-file.txt' } })
+        const res = await approvedDelete({ path: 'no-such-file.txt' })
         assert(res.result?.isError === true, `expected an error: ${JSON.stringify(res.result)}`)
       })
 

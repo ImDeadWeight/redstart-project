@@ -278,6 +278,7 @@ export async function runTask(nest, task, opts) {
               try {
                 if (!tool) throw new Error(`Unknown tool: ${name}`)
                 result = await nest.callTool(name, parseArgs(call.function.arguments), conversationId)
+                if (result.approval) log({ type: 'approval', id: call.id, name, decided: result.approval.decided })
               } catch (err) {
                 log({ type: 'tool_result', id: call.id, name, isError: true, text: `Error: ${err.message}`, ms: now() - started })
                 throw err

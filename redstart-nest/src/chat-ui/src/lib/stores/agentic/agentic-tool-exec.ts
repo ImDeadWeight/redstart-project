@@ -72,6 +72,21 @@ export class AgenticToolExec {
 		return JSON.parse(trimmed) as Record<string, unknown>;
 	}
 
+	/**
+	 * Will this call put the card in front of the person, or does a standing
+	 * grant let it through? A destructive tool always prompts, even if it
+	 * somehow acquired a persisted grant — an allow-list entry written before
+	 * the tool was classified, or one swept in by "always allow all tools from
+	 * this server". Checked before the short-circuit rather than only at the
+	 * point of granting, so a stale entry cannot silently authorise unattended
+	 * deletion.
+	 */
+	asksPerson(toolName: string): boolean {
+		const permissionKey = toolsStore.getPermissionKey(toolName);
+		const destructive = toolsStore.isDestructiveTool(toolName);
+		return destructive || !permissionKey || !permissionsStore.hasTool(permissionKey);
+	}
+
 	async requestPermission(
 		conversationId: string,
 		toolName: string,
@@ -79,14 +94,8 @@ export class AgenticToolExec {
 		signal?: AbortSignal
 	): Promise<ToolPermissionDecision> {
 		const permissionKey = toolsStore.getPermissionKey(toolName);
-		// A destructive tool always prompts, even if it somehow acquired a
-		// persisted grant — an allow-list entry written before the tool was
-		// classified, or one swept in by "always allow all tools from this
-		// server". Checked before the short-circuit rather than only at the point
-		// of granting, so a stale entry in localStorage cannot silently authorise
-		// unattended deletion.
 		const destructive = toolsStore.isDestructiveTool(toolName);
-		if (!destructive && permissionKey && permissionsStore.hasTool(permissionKey)) {
+		if (!this.asksPerson(toolName)) {
 			return ToolPermissionDecision.ONCE;
 		}
 
@@ -147,21 +156,33 @@ export class AgenticToolExec {
 		conversationId: string,
 		effectiveModel: string
 	): Pick<AgentPorts<DatabaseMessageExtra>, 'tools' | 'gate'> {
+		// Calls the person approved on the card in this flow, by call id. Nest
+		// enforces an approval on some tools (agent-runtime Phase 2): the MCP
+		// executor answers Nest's request for one only for these, so a call that
+		// passed the gate on a standing grant is never approved on anyone's
+		// behalf. Each id is used once.
+		const approvedByPerson = new Set<string>();
 		return {
 			gate: {
 				approve: async (call, signal) => {
 					const toolName = call.function.name;
+					const asked = this.asksPerson(toolName);
 					const decision = await this.requestPermission(
 						conversationId,
 						toolName,
 						toolsStore.getToolServerLabel(toolName),
 						signal
 					);
-					return decision !== ToolPermissionDecision.DENY;
+					const allowed = decision !== ToolPermissionDecision.DENY;
+					if (allowed && asked && call.id) approvedByPerson.add(call.id);
+					return allowed;
 				}
 			},
 			tools: {
-				execute: (call, signal) => this.execute(conversationId, call, signal),
+				execute: (call, signal) => {
+					const approved = !!call.id && approvedByPerson.delete(call.id);
+					return this.execute(conversationId, call, signal, approved);
+				},
 				extractAttachments: (text) => {
 					const { cleanedResult, attachments } = extractBase64Attachments(text);
 					return { text: cleanedResult, attachments };
@@ -175,7 +196,8 @@ export class AgenticToolExec {
 	private async execute(
 		conversationId: string,
 		toolCall: AgentToolCall,
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		approvedByPerson = false
 	): Promise<ToolExecution> {
 		const toolName = toolCall.function.name;
 		const toolSource = toolsStore.getToolSource(toolName);
@@ -209,7 +231,10 @@ export class AgenticToolExec {
 			id: toolCall.id,
 			function: { name: toolName, arguments: toolCall.function.arguments }
 		};
-		const executionResult = await mcpStore.executeTool(mcpCall, signal, { conversationId });
+		const executionResult = await mcpStore.executeTool(mcpCall, signal, {
+			conversationId,
+			approvedByPerson
+		});
 		return { text: executionResult.content, isError: !!executionResult.isError };
 	}
 

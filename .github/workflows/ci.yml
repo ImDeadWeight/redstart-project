@@ -73,6 +73,9 @@ jobs:
       - name: "Security: tool policy classification"
         run: node scripts/test-tool-policy.mjs
 
+      - name: "Security: approvals (one decision, one exact call) and standing grants"
+        run: node scripts/test-approvals.mjs
+
       - name: "Security: role narrowing (restrict-only law)"
         run: node scripts/test-roles.mjs
 

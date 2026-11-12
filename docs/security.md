@@ -314,6 +314,19 @@ Twig needs its own version, since its local file tools never travel over MCP and
 
 Deletions go to the OS recycle bin, falling back to a `.trash/` folder in the caller's own storage. Nothing in Redstart permanently destroys data — a delete that cannot be made recoverable fails and leaves the file alone. It refuses the storage root, refuses non-empty directories (there is deliberately no `recursive` option), and deletes a symlink as a link rather than following it.
 
+---
+
+## Approvals
+
+Each tool has an approval rule that follows from its class: reads and web fetches need none, writes ask unless you've chosen **Always allow**, and destructive tools (`delete_file`, `memory_forget`, and any plugin tool an admin hasn't reclassified) ask on every call.
+
+- **Nest refuses an unapproved destructive call, from any client.** A call with no approval does nothing and comes back as "needs the user's approval", with a pending approval for the client to decide. The chat app shows its card, sends your decision to Nest, and repeats the call. This applies to every client, including Yellowscript and anything on an API key: a client that doesn't do this exchange can't delete or forget anything through Nest.
+- **An approval is for one exact call.** It's tied to your account, the tool, and the exact arguments, works once, and expires after 60 seconds. An approval for deleting one file can't be used to delete another, by another account, or twice.
+- **What this protects, said plainly:** it protects you from the model, not the server from you. A client holding your account's key is your account, and could approve its own calls. What it adds is that the decision is bound to the call, it's on the server rather than in one browser, and it's recorded.
+- **Always allow is per account and kept on the server** for Nest's tools. It follows you to every browser and client, and you can revoke it from the chat settings. A destructive tool can never be always allowed: Nest refuses the grant, and a grant written before a tool became destructive stops counting. Tools that live in the client (Twig's local files, llama-server's built-ins, the in-page sandbox, other MCP servers) keep their always-allow in the browser, as before. Your old browser list was imported once, with anything destructive dropped.
+- **With login off, everyone shares one set of standing grants**, as they share memories and files.
+- **The decision log.** A denial, an approval presented for the wrong call, and every standing grant added or revoked are written to `policy.jsonl` beside the main log, and the owner can read them over the control plane. It records the account, the tool and the decision, never arguments or paths. An owner can list and revoke any account's standing grants.
+
 **Tool class is decided server-side from a static map**, never read from the tool's own annotations. MCP annotations are advisory and, on a normal connection, attacker-controlled; the spec is explicit that clients must not make trust decisions from them. Redstart publishes them for third-party clients but its own gate classifies from `TOOL_CLASSES`.
 
 ---
@@ -592,6 +605,10 @@ Stated plainly, because a security document that lists only strengths is not one
 
 - **A plan you've moved on from keeps steering the chat until it's cleared.** While steps are open, every request carries them and each reply that ends with steps still open gets one reminder to finish them. If you change topic, clear the plan with the × on the checklist. Steps don't expire on their own.
 - **`ask_user` and `update_plan` have not been tried in the running app yet.** They're covered by tests, including mounting the question card and the checklist in a browser, but a real chat with a model calling them hasn't been run.
+- **An approval is tied to the arguments, not to what's on disk.** If a file changes between your decision and the call (seconds later), the call still runs. The window is the 60-second expiry at most.
+- **Yellowscript can't use Nest's destructive tools yet.** It doesn't do the approval exchange, so Nest refuses its deletes and memory removals. Its own approval prompt will learn to answer Nest's.
+- **The approval flow hasn't been tried in the running app yet.** It's covered by tests on both sides (Nest's enforcement and routes, the chat app's exchange and the import), but no delete has been approved through the real card.
+- **The decision log has no viewer in the launcher yet.** The owner can read it through the control plane's `audit:list` method.
 
 - **An organization workflow steers what everyone who runs it gets.** Its text is user-tier, so it can't override policy, but whoever holds `manageOrgWorkflows` decides what a commonly used workflow asks the model to do, and nothing reviews an edit. Edits are logged (`workflow` events) with the editor's username, but the store keeps no history of previous text. Grant `manageOrgWorkflows` the way you would grant `managePromptBlocks`.
 - **run_python's sandbox rests on Node's permission model and on Pyodide's internals staying as they are.** Python can reach Pyodide's own JavaScript API, including internals. One of those (its Node socket support) was a real escape under the old Electron Node, which had no network permission. The runtime now refuses it, and the sandbox suite proves that against a counting stub, but a Pyodide release could add a new route. That is why the runtime is hash-pinned and the suite must pass before any upgrade. The suite is part of CI (Linux) and has been run by hand on Windows. It has never run on macOS.

@@ -276,6 +276,12 @@ export interface ToolCallParams {
 export interface ToolExecutionResult {
 	content: string;
 	isError: boolean;
+	/**
+	 * Set when Nest refused the call for want of an approval (agent-runtime
+	 * Phase 2): the pending approval to decide and repeat with
+	 * (shared/agent-core/approval.mjs). Nothing ran.
+	 */
+	approval?: { id: string; tool: string; summary: string; argsDigest: string; expiresAt: number } | null;
 }
 
 export interface ServerBuiltinToolInfo {
