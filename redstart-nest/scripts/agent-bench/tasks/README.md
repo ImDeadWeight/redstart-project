@@ -1,7 +1,7 @@
 # Agent benchmark tasks
 
 The 24 tasks of agent-runtime plan Phase 0.3, with the Phase 1 group revised
-once ask_user and update_plan existed (2026-11-11): 31 in five groups. Run them with
+once ask_user and update_plan existed (2026-11-11), and one Phase 2 task (2026-11-12): 32 in six groups. Run them with
 `node scripts/agent-bench/run.mjs --model-label "<model> <quant>"` against a
 Nest with a model loaded (see the header of `run.mjs`).
 
@@ -38,10 +38,18 @@ refusal), never how many calls it took. `scripts/test-agent-bench-tasks.mjs`
 | p1-plan-eight-deliverables | phase 1 | update_plan helps | eight outputs over two files, ending with a manifest of every file made |
 | p1-plan-missing-input | phase 1 | update_plan helps | steps 1 and 3 done, no net.csv made up, and says returns.csv is missing |
 | p1-stop-and-report | phase 1 | — | the three new prices applied, SKU-9 left alone, and said so |
+| p2-delete-confirmed | phase 2 | delete_file (approval-enforced) | p2-old-draft.txt deleted through delete_file after the approval exchange, p2-final.txt kept |
 | p4-run-tests | phase 4 | run_command | names the failing test |
 | p4-fix-test | phase 4 | run_command helps | math.mjs fixed, the test untouched |
 | p4-git-log | phase 4 | run_command | the third most recent commit's author and message |
 | p4-exit-code | phase 4 | run_command | reports failure, exit code 3, and why |
+
+**p2-delete-confirmed needs File System deletes allowed** (Nest → Tools →
+File System → Allow destructive operations, server-wide); run.mjs warns at
+the start when delete_file is not offered (a task's `requires`). Its two
+files are seeded into the account's File System folder (a fixture with
+`"space": "files"`, not an attachment) after the bench's snapshot of that
+folder, so whatever the run leaves is removed afterwards.
 
 Phase 1 and Phase 4 tasks are expected to fail until those phases land; that
 is how a phase shows it helped. p4-fix-test can pass early, by editing the

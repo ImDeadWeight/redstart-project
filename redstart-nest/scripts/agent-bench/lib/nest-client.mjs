@@ -154,6 +154,14 @@ export async function connectNest(opts) {
       await req('POST', `/files/upload?${q}`, { body: content, headers: { 'Content-Type': 'application/octet-stream' } })
     },
 
+    /** Write one file into the account's File System folder ('files' space). */
+    async seedFsFile(relPath, content) {
+      const parts = relPath.split('/')
+      const name = parts.pop()
+      const q = new URLSearchParams({ space: 'files', path: parts.join('/') || '.', name })
+      await req('POST', `/files/upload?${q}`, { body: content, headers: { 'Content-Type': 'application/octet-stream' } })
+    },
+
     /** Make sure the workspace folder exists even with no fixtures. */
     async ensureWorkspace(conversationId) {
       await req('POST', '/files/mkdir', { json: { space: DOCS_SPACE, path: `chats/${conversationId}` }, ok: [200, 201, 409] })

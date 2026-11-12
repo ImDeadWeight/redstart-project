@@ -132,7 +132,8 @@ export function maxReplyTokens(opts) {
  * @param {{ conversationId: string, hasTool: (name: string) => boolean }} ctx
  */
 export function userMessage(task, ctx) {
-  const note = attachmentNote({ saved: task.fixtures.map((f) => f.path), ...ctx })
+  // Only workspace fixtures are attachments; a files-space one is named by the prompt.
+  const note = attachmentNote({ saved: task.fixtures.filter((f) => f.space !== 'files').map((f) => f.path), ...ctx })
   return note ? `${task.prompt}\n\n${note}` : task.prompt
 }
 
@@ -186,6 +187,8 @@ export async function runTask(nest, task, opts) {
   let fsBefore = null
   /** @type {{ created: string[], modified: string[] } | null} */
   let fileSystemWrites = null
+  /** @type {string[] | null} the File System folder's paths when the run ended, for checks */
+  let fileSystemAfter = null
   /** @type {Map<string, string> | null} the documents folder (conversations aside) before the run */
   let docsBefore = null
   /** @type {Set<string> | null} the ids of the account's memories before the run */
@@ -203,7 +206,13 @@ export async function runTask(nest, task, opts) {
     // taken for one the run made (see `outside` below).
     docsBefore = (await nest.snapshotFiles('documents', undefined, [CHATS_DIR]).catch(() => null)) || null
     await nest.ensureWorkspace(conversationId)
-    for (const fx of task.fixtures) await nest.seedFile(conversationId, fx.path, fx.content)
+    // Seeded after the File System snapshot above, so a files-space fixture
+    // counts as the run's own and the finally below removes it like any file
+    // the run made.
+    for (const fx of task.fixtures) {
+      if (fx.space === 'files') await nest.seedFsFile(fx.path, fx.content)
+      else await nest.seedFile(conversationId, fx.path, fx.content)
+    }
 
     const controller = new AbortController()
     const timer = setTimeout(() => {
@@ -421,6 +430,7 @@ export async function runTask(nest, task, opts) {
     if (fsBefore) {
       const after = (await nest.snapshotFiles('files').catch(() => null)) || null
       if (after) {
+        fileSystemAfter = [...after.keys()].sort()
         const created = [...after.keys()].filter((p) => !fsBefore.has(p)).sort()
         const modified = [...after.keys()].filter((p) => fsBefore.has(p) && fsBefore.get(p) !== after.get(p)).sort()
         fileSystemWrites = { created, modified }
@@ -454,7 +464,7 @@ export async function runTask(nest, task, opts) {
     error = error ?? benchError
     verdict = { pass: false, reason: `the bench could not run this task: ${benchError}` }
   } else try {
-    verdict = await task.check(finalText, workspace, events, { createdFiles, conversationId })
+    verdict = await task.check(finalText, workspace, events, { createdFiles, conversationId, fileSystemAfter })
     if (!verdict || typeof verdict.pass !== 'boolean') {
       verdict = { pass: false, reason: `check ${task.checkName} returned no { pass, reason }` }
     }

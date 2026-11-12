@@ -81,7 +81,13 @@ export async function loadTask(file) {
     const content = typeof fx.content === 'string'
       ? Buffer.from(fx.content, 'utf8')
       : fs.readFileSync(path.resolve(dir, fx.from))
-    fixtures.push({ path: fx.path, content })
+    // Where it goes: the conversation's workspace (the default, as an
+    // attachment), or the account's File System folder, for a task about the
+    // File System tools (p2-delete-confirmed). A files-space fixture is not
+    // an attachment: the prompt names it.
+    const space = fx.space ?? 'workspace'
+    if (space !== 'workspace' && space !== 'files') fail(file, `fixture ${fx.path}: space must be "workspace" or "files"`)
+    fixtures.push({ path: fx.path, content, space })
   }
 
   const approve = raw.approve ?? 'reads'
@@ -101,6 +107,12 @@ export async function loadTask(file) {
     if (!Number.isInteger(limits[k]) || limits[k] < 1) fail(file, `limits.${k} must be a positive integer`)
   }
 
+  // Tools the task cannot pass without, so run.mjs can say when Nest does not
+  // offer them (delete_file needs File System deletes allowed) rather than
+  // reporting a model failure.
+  const requires = raw.requires ?? []
+  if (!Array.isArray(requires) || !requires.every((n) => typeof n === 'string')) fail(file, 'requires must be an array of tool names')
+
   if (typeof raw.check !== 'string' || !raw.check.includes('#')) fail(file, 'check must be "<module>#<export>"')
   const [modPath, exportName] = raw.check.split('#')
   const mod = await import(pathToFileURL(path.resolve(dir, modPath)).href)
@@ -115,6 +127,7 @@ export async function loadTask(file) {
     fixtures,
     approve,
     answers,
+    requires,
     limits,
     checkName: raw.check,
     check,

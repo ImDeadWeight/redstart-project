@@ -136,7 +136,7 @@ function FolderCapabilityCard({ caps, cap, title, emptyText, description, active
           <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
             <span className="min-w-0">
               <span className="text-xs text-zinc-300">Allow destructive operations</span>
-              <span className="block text-xs text-zinc-600">Lets the model delete files in its own storage. Deletions go to the Recycle Bin and can be recovered, and the model must ask before every single one — "always allow" is never offered for deletion.</span>
+              <span className="block text-xs text-zinc-600">Lets the model delete files in its own storage. Deletions go to the Recycle Bin and can be recovered, and the user approves every single one on the chat's approval card — "always allow" is never offered for deletion.</span>
             </span>
             <TogglePill
               checked={!!caps.capabilityConfig.file_system.allowDestructive}

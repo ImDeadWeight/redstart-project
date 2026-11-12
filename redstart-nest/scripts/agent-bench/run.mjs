@@ -169,6 +169,25 @@ export function memoryWarning(memories) {
     'Delete them (chat Settings → Memory, signed in as the bench account) so runs start alike; runs from 2026-11-12 on remove what they save.'
 }
 
+/**
+ * Tasks that need a tool Nest did not offer this account (a task's
+ * `requires`). p2-delete-confirmed needs delete_file, which Nest offers only
+ * where File System deletes are allowed; without it the task measures
+ * nothing, and the row would read as the model failing.
+ *
+ * @param {Array<{ id: string, requires?: string[] }>} tasks
+ * @param {Array<{ name: string }>} mcpTools
+ */
+export function requiresWarning(tasks, mcpTools) {
+  const offered = new Set(mcpTools.map((t) => t.name))
+  const missing = tasks
+    .map((t) => ({ id: t.id, absent: (t.requires ?? []).filter((n) => !offered.has(n)) }))
+    .filter((t) => t.absent.length > 0)
+  if (missing.length === 0) return null
+  return `warning: Nest does not offer this account ${[...new Set(missing.flatMap((m) => m.absent))].join(', ')}, so ${missing.map((m) => m.id).join(', ')} cannot pass. ` +
+    'For delete_file: turn on Nest → Tools → File System → Allow destructive operations (server-wide).'
+}
+
 /** Conversations an earlier bench left behind: it was stopped mid-task. */
 export const LEFTOVER_CONVERSATION = /^bench-[a-z0-9-]+-[0-9a-f]{8}$/
 
@@ -266,6 +285,8 @@ export async function main(argv, io = {}) {
   if (lw) { warnings.push(lw); log(lw) }
   const asw = askWarning(tasks, mcpTools)
   if (asw) { warnings.push(asw); log(asw) }
+  const rqw = requiresWarning(tasks, mcpTools)
+  if (rqw) { warnings.push(rqw); log(rqw) }
   const who = await nest.whoami()
   const aw = accountWarning(who)
   if (aw) { warnings.push(aw); log(aw) }

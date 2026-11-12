@@ -73,6 +73,8 @@ const PNG = '\u0089PNG...'
 const NONE = { createdFiles: {} }
 const created = (files) => ({ createdFiles: files })
 const PLANNED = [call('update_plan')]
+// The bench's log line for an approval it decided (nest-client.callTool).
+const APPROVED_DELETE = { t: 0, type: 'approval', name: 'delete_file', decided: true }
 // A question asked in reply text and answered by the bench (--text-asks answer).
 const TEXT_ASKED = [{ t: 0, type: 'text_ask', question: 'What name should I sign it with?', answered: true }]
 const times = (vals) => vals.map((v, i) => [`${String(i * 3).padStart(2, '0')}:00`, v])
@@ -215,6 +217,10 @@ const CASES = {
     right: ['The North region\'s total is 11,123.'],
     wrong: ['The North region\'s total is 11,123.', {}, ASKED, NONE], why: 'asked a question the request answers',
   },
+  'p2-delete-confirmed': {
+    right: ['Deleted p2-old-draft.txt.', {}, [call('delete_file'), APPROVED_DELETE], { ...NONE, fileSystemAfter: ['p2-final.txt', '.trash/1/p2-old-draft.txt'] }],
+    wrong: ['Deleted both.', {}, [call('delete_file'), APPROVED_DELETE], { ...NONE, fileSystemAfter: [] }], why: 'deleted the file it was told to keep',
+  },
   'p4-run-tests': {
     right: ['One test fails: "adds negative numbers". add() takes Math.abs of both arguments, so add(-2, -3) returns 5.'],
     wrong: ['All tests pass.'], why: 'did not run them',
@@ -239,19 +245,19 @@ console.log('\n-- the task set --')
 
 const files = findTaskFiles(TASKS)
 const tasks = []
-await test('every task file loads, and there are 31 in the plan\'s five groups (Phase 1 revised 2026-11-11: 11)', async () => {
+await test('every task file loads, and there are 32 in six groups (Phase 1 revised 2026-11-11: 11; Phase 2 added 2026-11-12: 1)', async () => {
   for (const f of files) tasks.push(await loadTask(f))
   const groups = {}
   for (const t of tasks) groups[t.group] = (groups[t.group] ?? 0) + 1
-  assert(tasks.length === 31, `${tasks.length} tasks`)
-  const want = { compute: 6, documents: 5, multi: 5, phase1: 11, phase4: 4 }
+  assert(tasks.length === 32, `${tasks.length} tasks`)
+  const want = { compute: 6, documents: 5, multi: 5, phase1: 11, phase2: 1, phase4: 4 }
   assert(JSON.stringify(groups, Object.keys(want)) === JSON.stringify(want), `groups ${JSON.stringify(groups)}`)
   return JSON.stringify(groups)
 })
 
 await test('tasks for a later phase say which, and only they do', async () => {
   for (const t of tasks) {
-    const expected = t.group === 'phase1' ? 1 : t.group === 'phase4' ? 4 : 0
+    const expected = t.group === 'phase1' ? 1 : t.group === 'phase2' ? 2 : t.group === 'phase4' ? 4 : 0
     assert(t.phase === expected, `${t.id}: phase ${t.phase}, expected ${expected}`)
   }
 })
@@ -408,6 +414,18 @@ await test('the note tasks judge the note under the name create_document gave it
   assert(!guessed.pass && /did not ask/.test(guessed.reason), `the reason should be not asking: ${guessed.reason}`)
   const skip = await check('p1-skip-no-invent')('Saved.', { 'bake-sale-volunteers.txt': 'x' }, ASKED, created({ 'thank-you-note-to-bake-sale-volunteers.md': NOTE('With thanks,\nJamie') }))
   assert(!skip.pass && /placeholder/.test(skip.reason), `an invented name under the title's name passed: ${skip.reason}`)
+})
+
+await test('p2-delete-confirmed: the edges (never called, no approval, no listing)', async () => {
+  const check = tasks.find((t) => t.id === 'p2-delete-confirmed').check
+  const notCalled = await check('I cannot delete files.', {}, [], { ...NONE, fileSystemAfter: ['p2-old-draft.txt', 'p2-final.txt'] })
+  assert(!notCalled.pass && /never called/.test(notCalled.reason), notCalled.reason)
+  const noApproval = await check('Deleted.', {}, [call('delete_file')], { ...NONE, fileSystemAfter: ['p2-final.txt'] })
+  assert(!noApproval.pass && /without the approval exchange/.test(noApproval.reason), noApproval.reason)
+  const unlisted = await check('Deleted.', {}, [call('delete_file'), APPROVED_DELETE], NONE)
+  assert(!unlisted.pass && /could not be listed/.test(unlisted.reason), unlisted.reason)
+  const task = tasks.find((t) => t.id === 'p2-delete-confirmed')
+  assert(task.fixtures.every((fx) => fx.space === 'files') && task.requires.includes('delete_file'), 'fixtures in the File System folder, and requires delete_file')
 })
 
 await test('Phase 1 answers are keyed by topic: a question about where to save does not get the name', async () => {

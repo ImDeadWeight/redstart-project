@@ -271,6 +271,13 @@ function startFakeNest(gatewayPort) {
       await readBody(req)
       return json(res, 201, {})
     }
+    if (req.method === 'POST' && url.pathname === '/files/upload' && url.searchParams.get('space') === 'files') {
+      // A files-space fixture (p2-delete-confirmed): the File System folder.
+      const dir = url.searchParams.get('path')
+      const key = dir && dir !== '.' ? dir + '/' + url.searchParams.get('name') : url.searchParams.get('name')
+      state.fsFiles.set(key, { content: (await readBody(req)).toString(), modified: new Date().toISOString() })
+      return json(res, 201, {})
+    }
     if (req.method === 'POST' && url.pathname === '/files/upload') {
       assert(url.searchParams.get('space') === 'documents', 'upload space')
       // A call Nest never answers (the 2026-11-11 hang in a task's setup).
@@ -872,6 +879,25 @@ await test('a call the task policy refuses never reaches Nest, so nothing is eve
   } finally {
     nest.state.approvalFor = null
   }
+})
+
+await test('a files-space fixture lands in the File System folder, reaches the check, is not an attachment, and is cleaned up', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-fsfx-'))
+  const checks = path.join(FIXTURES, 'checks.mjs').replace(/\\/g, '/')
+  fs.writeFileSync(path.join(dir, 'fs-fixture.json'), JSON.stringify({
+    id: 'fs-fixture', prompt: '[script:write] Put 42 in out/answer.txt.', approve: 'all',
+    fixtures: [{ path: 'seeded/fs-fixture.txt', content: 'x', space: 'files' }],
+    requires: ['no_such_tool'],
+    check: checks + '#sawFsFixture',
+  }))
+  const lines = []
+  nest.state.fsDeletes = []
+  const r = await main(['--model-label', 'm', '--tasks', dir, '--gateway', 'http://127.0.0.1:' + port, '--out', path.join(dir, 'out'), '--quiet'], { log: (s) => lines.push(s) })
+  eq(r.runs[0].verdict.pass, true, r.runs[0].verdict.reason)
+  assert(!nest.state.completionBodies.at(-1).messages[0].content.includes('fs-fixture.txt'), 'a files-space fixture was announced as an attachment')
+  assert(nest.state.fsDeletes.includes('seeded/fs-fixture.txt'), 'the seeded file was not cleaned up')
+  assert(lines.some((l) => /does not offer this account no_such_tool, so fs-fixture cannot pass/.test(l)), lines.join('\n'))
+  fs.rmSync(dir, { recursive: true, force: true })
 })
 
 console.log('\n-- one run does not change the next --')

@@ -40,3 +40,12 @@ export function finishedThePlan(text) {
     ? { pass: true, reason: 'answered after closing the plan' }
     : { pass: false, reason: `final answer ${JSON.stringify(text)}` }
 }
+
+// Passes when the File System folder, as the run left it, still holds the
+// files-space fixture (p2-delete-confirmed's plumbing: seeded there, listed
+// for the check before cleanup).
+export function sawFsFixture(_text, _files, _events, ctx) {
+  return (ctx?.fileSystemAfter ?? []).includes('seeded/fs-fixture.txt')
+    ? { pass: true, reason: 'the files-space fixture reached the check' }
+    : { pass: false, reason: `fileSystemAfter: ${JSON.stringify(ctx?.fileSystemAfter ?? null)}` }
+}
