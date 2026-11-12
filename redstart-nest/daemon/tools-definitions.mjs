@@ -456,6 +456,61 @@ export function classifyTool(name) {
 }
 
 // ---------------------------------------------------------------------------
+// Approval rule — when a call needs the user's decision (agent-runtime plan
+// D10, Phase 2).
+//
+//   none    no decision: reads, network fetches, the host-resolved tools
+//   prompt  a decision unless the account holds a standing grant for the tool
+//   always  a decision on every call; no standing grant can cover it
+//
+// Derived from the class, not declared beside it, so the two cannot disagree:
+// a tool reclassified destructive becomes 'always' with no second edit, and a
+// plugin tool an admin promotes from destructive to write becomes 'prompt'.
+// APPROVAL_OVERRIDES is for the day a tool needs a rule its class does not
+// give (none yet). An override may only TIGHTEN, so a typo there cannot
+// loosen a destructive tool.
+//
+// Who enforces: isApprovalEnforced() (D11). In Phase 2 that is every 'always'
+// tool, so the server refuses an unapproved delete from any client, chat-ui
+// or an API key (decided 2026-11-12). 'prompt' tools keep the client's card;
+// only their standing grants live on the server. ENFORCED_TOOLS names tools
+// enforced from the start whatever their rule: run_command first (Phase 4).
+// ---------------------------------------------------------------------------
+
+export const APPROVAL_RULES = /** @type {const} */ (['none', 'prompt', 'always'])
+const RULE_STRICTNESS = { none: 0, prompt: 1, always: 2 }
+
+/** @type {Record<string, 'prompt' | 'always'>} */
+export const APPROVAL_OVERRIDES = {}
+
+/** @type {Set<string>} */
+export const ENFORCED_TOOLS = new Set()
+
+/** @param {string} cls */
+function ruleForClass(cls) {
+  if (cls === 'destructive') return 'always'
+  if (cls === 'write') return 'prompt'
+  return 'none'
+}
+
+/**
+ * @param {string} name
+ * @returns {'none' | 'prompt' | 'always'}
+ */
+export function approvalRule(name) {
+  if (HOST_RESOLVED_TOOL_NAMES.includes(name)) return 'none'
+  const fromClass = ruleForClass(classifyTool(name))
+  const override = APPROVAL_OVERRIDES[name]
+  return override && RULE_STRICTNESS[override] > RULE_STRICTNESS[fromClass] ? override : fromClass
+}
+
+/** Does the server refuse this tool's calls without an approval or grant? */
+export function isApprovalEnforced(name) {
+  if (HOST_RESOLVED_TOOL_NAMES.includes(name)) return false
+  return approvalRule(name) === 'always' || ENFORCED_TOOLS.has(name)
+}
+
+// ---------------------------------------------------------------------------
 // Tool provenance — which capability produced a given tool.
 //
 // The gateway is provenance-blind by construction: it sees a flat list of
