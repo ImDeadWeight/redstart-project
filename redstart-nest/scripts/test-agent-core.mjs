@@ -44,6 +44,7 @@ import {
 } from '../../shared/agent-core/tool-calls.mjs'
 import { DISMISSED_RESULT, formatAskAnswer, parseAskArguments } from '../../shared/agent-core/ask-user.mjs'
 import { formatPlanResult, parsePlanArguments, planTailNote } from '../../shared/agent-core/update-plan.mjs'
+import * as compaction from '../../shared/agent-core/compaction.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const coreDir = path.join(here, '..', '..', 'shared', 'agent-core')
@@ -946,6 +947,103 @@ await test('failed uploads are reported, and nothing at all is null', async () =
   eq(attachmentNote({ saved: [], conversationId: 'c', hasTool: () => true }), null, 'nothing to say')
   const both = attachmentNote({ saved: ['a.csv'], failed: ['b.csv (quota)'], conversationId: 'c', hasTool: () => false })
   eq(both.split('\n'), ["[Attached file saved to this chat's workspace: a.csv]", "[Could not save to this chat's workspace: b.csv (quota)]"], 'saved then failed')
+})
+
+console.log('\n-- compaction (Phase 3.8, D32) --')
+
+// chat-ui's ContextCompactionService and the daemon's task runner both run
+// this algorithm; neither host's tests pin it on its own, so it is pinned here.
+const msg = (id, role = 'user', content = id) => ({ id, role, content })
+const chat = (n) => [msg('sys', 'system'), ...Array.from({ length: n }, (_, i) => msg(`m${i}`, i % 2 ? 'assistant' : 'user'))]
+
+await test('the budget: n_ctx less max_tokens, or the default reserve; nothing usable is null', async () => {
+  eq(compaction.compactionBudget(4096, 0), { nCtx: 4096, usable: 4096 - compaction.DEFAULT_RESERVE_TOKENS }, 'unlimited max_tokens')
+  eq(compaction.compactionBudget(4096, 1000), { nCtx: 4096, usable: 3096 }, 'a set max_tokens')
+  eq([compaction.compactionBudget(null, 0), compaction.compactionBudget(500, 1000)], [null, null], 'unknown, or no room')
+})
+
+await test('counts: one /tokenize total apportioned by length plus overhead; chars/3 without one', async () => {
+  const o = compaction.PER_MESSAGE_OVERHEAD_TOKENS
+  eq(compaction.countsFromTotal(['aaa', 'aaaaaa'], 9), [3 + o, 6 + o], 'apportioned')
+  eq(compaction.countsFromTotal(['aaa', 'aaaaaa'], undefined), [1 + o, 2 + o], 'estimated')
+})
+
+await test('under the threshold: the same array back, uncompacted', async () => {
+  const messages = chat(3)
+  const plan = compaction.planCompaction({ messages, counts: [10, 10, 10, 10], usable: 1000, stored: null })
+  assert(plan.action === 'send' && plan.messages === messages && plan.compacted === false, 'passthrough by identity')
+})
+
+await test('a stored summary on this branch replaces its span; one off the branch is ignored', async () => {
+  const messages = chat(3) // sys, m0, m1, m2
+  const counts = [10, 10, 10, 10]
+  const plan = compaction.planCompaction({ messages, counts, usable: 1000, stored: { text: 'S', upToMessageId: 'm1' } })
+  eq(plan.messages.map((m) => m.id), ['sys', 'compaction-m1', 'm2'], 'span replaced')
+  eq([plan.messages[1].role, plan.messages[1].content, plan.compacted], ['system', compaction.SUMMARY_PREFIX + 'S', true], 'the summary message')
+  const off = compaction.planCompaction({ messages, counts, usable: 1000, stored: { text: 'S', upToMessageId: 'other-branch' } })
+  assert(off.messages === messages && !off.compacted, 'not on this branch: untouched')
+})
+
+await test('over the threshold: the oldest turns are summarized, the tail kept up to KEEP_RATIO', async () => {
+  const messages = chat(10) // 11 messages at 100 each = 1100 > 850 of 1000
+  const counts = messages.map(() => 100)
+  const plan = compaction.planCompaction({ messages, counts, usable: 1000, stored: null })
+  eq(plan.action, 'summarize', 'summarize')
+  eq(plan.head.map((m) => m.id), ['sys'], 'leading system kept')
+  eq(plan.pruned.map((m) => m.id), ['m0', 'm1', 'm2', 'm3', 'm4'], 'oldest five folded')
+  eq(plan.cappedTail.map((m) => m.id), ['m5', 'm6', 'm7', 'm8', 'm9'], 'tail of 500 tokens')
+  eq([plan.existingSummary, plan.toSummarize.length], ['', 5], 'nothing stored yet')
+  const done = compaction.finishCompaction(plan, 'new summary')
+  eq(done.messages.map((m) => m.id), ['sys', 'compaction-m4', 'm5', 'm6', 'm7', 'm8', 'm9'], 'summary then tail')
+  eq(done.contextSummary, { text: 'new summary', upToMessageId: 'm4' }, 'keyed to the last folded message')
+  const failed = compaction.finishCompaction(plan, null)
+  eq([failed.messages.map((m) => m.id), failed.contextSummary], [['sys', 'm5', 'm6', 'm7', 'm8', 'm9'], null], 'a failed summarizer truncates')
+})
+
+await test('a stored summary inside the folded span is extended, not rebuilt', async () => {
+  const messages = chat(10)
+  const plan = compaction.planCompaction({ messages, counts: messages.map(() => 100), usable: 1000, stored: { text: 'old', upToMessageId: 'm1' } })
+  eq([plan.existingSummary, plan.toSummarize.map((m) => m.id)], ['old', ['m2', 'm3', 'm4']], 'only what follows it')
+  const prompt = compaction.summaryPrompt(plan.existingSummary, plan.toSummarize)
+  assert(prompt.includes('Current summary:\nold') && prompt.includes('user: m2'), 'the prompt carries both')
+})
+
+await test('the tail is never fewer than two messages, however large', async () => {
+  const messages = [msg('u0'), msg('u1'), msg('u2')]
+  const plan = compaction.planCompaction({ messages, counts: [600, 600, 600], usable: 1000, stored: null })
+  // Both are over the per-message cap (0.4 of 1000) too, so the tail is kept but elided.
+  eq([plan.pruned.map((m) => m.id), plan.cappedTail.map((m) => m.id)], [['u0'], ['elided-u1', 'elided-u2']], 'two kept, capped')
+})
+
+await test('one oversized message is elided head and tail; its tool call list stays whole; the original untouched', async () => {
+  const toolCalls = JSON.stringify([call('c1', 'run_python', 'y'.repeat(3000))])
+  const original = { id: 'big', role: 'assistant', content: 'x'.repeat(3000), toolCalls }
+  const snapshot = JSON.stringify(original)
+  const capped = compaction.capOversizedMessage(original, 2000, 400)
+  eq(JSON.stringify(original), snapshot, 'not mutated')
+  assert(capped.id === 'elided-big' && capped.content.includes(compaction.ELISION_MARKER), 'elided')
+  assert(capped.content.length < 3000, `shorter (${capped.content.length})`)
+  const calls = JSON.parse(capped.toolCalls)
+  eq([calls.length, calls[0].id], [1, 'c1'], 'the call a result points at survives')
+  assert(calls[0].function.arguments.includes(compaction.ELISION_MARKER), 'its arguments trimmed')
+  const small = [msg('a'), msg('b')]
+  assert(compaction.capPayload(small, new Map([['a', 5], ['b', 5]]), 400) === small, 'nothing to cap: same array')
+})
+
+await test('manual compaction: nothing when it fits, nothing new after a summary, else the span', async () => {
+  const few = chat(1)
+  eq(compaction.planManualCompaction({ messages: few, counts: [10, 10], usable: 1000, stored: null }), { nothing: 'fits' }, 'fits')
+  const messages = chat(10)
+  const counts = messages.map(() => 100)
+  eq(compaction.planManualCompaction({ messages, counts, usable: 1000, stored: { text: 's', upToMessageId: 'm4' } }), { nothing: 'already' }, 'already')
+  const span = compaction.planManualCompaction({ messages, counts, usable: 1000, stored: null })
+  eq(span.pruned.map((m) => m.id), ['m0', 'm1', 'm2', 'm3', 'm4'], 'the keep-tail rule, below the threshold too')
+})
+
+await test('the summarizer input is clipped', async () => {
+  const prompt = compaction.summaryPrompt('', [msg('long', 'user', 'z'.repeat(compaction.SUMMARIZER_INPUT_CHARS * 2))])
+  assert(prompt.includes('Current summary:\n(none)'), 'no summary yet')
+  assert(prompt.length < compaction.SUMMARIZER_INPUT_CHARS + 1000, `clipped (${prompt.length})`)
 })
 
 console.log('\n-- the core is host-agnostic --')

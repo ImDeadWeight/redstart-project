@@ -60,6 +60,18 @@ export {
 	APPROVAL_ENFORCED_META_KEY,
 	approvalRequired
 } from '../../../../../shared/agent-core/approval.mjs';
+export {
+	SUMMARY_MAX_TOKENS,
+	TRIGGER_RATIO,
+	applyStoredSummary,
+	compactionBudget,
+	countsFromTotal,
+	finishCompaction,
+	messageText,
+	planCompaction,
+	planManualCompaction,
+	summaryPrompt
+} from '../../../../../shared/agent-core/compaction.mjs';
 export type {
 	AskRequest,
 	AskAnswer,

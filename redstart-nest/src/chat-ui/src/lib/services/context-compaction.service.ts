@@ -6,6 +6,18 @@ import { ChatService } from './chat.service';
 import { DatabaseService } from './database.service';
 import { MessageRole } from '$lib/enums';
 import type { DatabaseMessage } from '$lib/types/database';
+import {
+	SUMMARY_MAX_TOKENS,
+	TRIGGER_RATIO,
+	applyStoredSummary,
+	compactionBudget,
+	countsFromTotal,
+	finishCompaction,
+	messageText,
+	planCompaction,
+	planManualCompaction,
+	summaryPrompt
+} from '$lib/agent-core';
 
 /**
  * ContextCompactionService — proactive summary-buffer compaction.
@@ -20,62 +32,23 @@ import type { DatabaseMessage } from '$lib/types/database';
  * natively). Recent turns stay verbatim; the summary rides along as a system
  * message. Everything runs against the local server — no data leaves the box.
  *
- * The running summary is persisted on the conversation record (Dexie ignores
- * undeclared fields for indexing, so no schema migration), keyed to the last
- * message id it covers. Because conversations are trees (branch switching,
- * regenerate), the stored summary is only reused when that message id is
- * present in the branch being sent; otherwise it is discarded and rebuilt.
+ * The algorithm itself (thresholds, tail selection, the per-message cap, the
+ * summary prompt) lives in shared/agent-core/compaction.mjs since agent-runtime
+ * Phase 3 (D32), so the daemon's background tasks compact exactly as a chat
+ * does. What stays here is the browser's I/O: n_ctx and max_tokens from the
+ * stores, /tokenize, the summarizer call, and the stored summary.
  *
- * Summarizing old turns cannot, on its own, bound the payload: the newest
- * turns are always kept verbatim, so one huge tool result among them would
- * still overflow n_ctx no matter how much history was folded away. Two
- * guarantees close that gap — every returned payload has each message capped
- * at MAX_SINGLE_MESSAGE_TOKENS_RATIO of the budget, and a failed summarizer
- * falls back to hard truncation rather than resending the oversized original.
+ * The running summary is persisted on the conversation record, keyed to the
+ * last message id it covers. Because conversations are trees (branch
+ * switching, regenerate), the stored summary is only reused when that message
+ * id is present in the branch being sent; otherwise it is discarded and
+ * rebuilt.
  *
  * Costs to be aware of: each compaction is one extra (non-streamed) model
  * call, and rewriting the front of the prompt invalidates llama-server's KV
  * prefix cache, forcing a full reprocess on the next turn. Both are why
  * compaction triggers rarely (threshold + hysteresis) rather than per-turn.
  */
-
-// Compact when the estimated prompt exceeds this fraction of the usable
-// context (n_ctx minus generation headroom). 0.85 leaves room for the model's
-// reply plus estimation error without triggering constantly.
-const TRIGGER_RATIO = 0.85;
-// After compaction, keep verbatim tail messages up to this fraction of the
-// usable context — the gap between the two ratios is the hysteresis that
-// stops compaction from firing again on the very next turn.
-const KEEP_RATIO = 0.5;
-// Headroom reserved for the generated reply when max_tokens is unlimited.
-const DEFAULT_RESERVE_TOKENS = 1024;
-// Hard cap on the summary the model is asked to produce.
-const SUMMARY_MAX_TOKENS = 400;
-// Per-message chat-template overhead (role headers, separators) that
-// /tokenize on raw text does not see.
-const PER_MESSAGE_OVERHEAD_TOKENS = 6;
-// Hard per-message ceiling for the payload, as a fraction of `usable` —
-// independent of history length. Compaction only ever removes or summarizes
-// OLD turns, so it has no way to shrink an oversized RECENT one: the
-// tail-selection loop below never breaks below the last two messages, and a
-// single huge tool result (a full file read, a large diff) inside that floor
-// would otherwise go out verbatim even when it alone overflows n_ctx.
-const MAX_SINGLE_MESSAGE_TOKENS_RATIO = 0.4;
-
-const SUMMARY_PREFIX = '[Conversation summary — earlier messages were compacted to fit the context window]\n';
-const ELISION_MARKER = '\n…[truncated — message exceeded the per-turn context budget]…\n';
-
-// Progressive summarizer prompt (ported from LangChain's SUMMARY_PROMPT):
-// folds new lines into the existing summary instead of re-summarizing from
-// scratch, keeping each compaction call small and bounded.
-function buildSummaryPrompt(existingSummary: string, newLines: string): string {
-	return (
-		'Progressively summarize the lines of conversation provided, adding onto the previous summary and returning a new summary. ' +
-		'Keep concrete facts, names, dates, numbers, decisions, and open questions. Reply with the new summary only.\n\n' +
-		`Current summary:\n${existingSummary || '(none)'}\n\n` +
-		`New lines of conversation:\n${newLines}\n\nNew summary:`
-	);
-}
 
 export interface CompactionResult {
 	messages: DatabaseMessage[];
@@ -99,149 +72,11 @@ export interface ManualCompactionResult {
 export class ContextCompactionService {
 	/** n_ctx and the send budget (n_ctx minus generation headroom), or null when unknown. */
 	private static budget(): { nCtx: number; usable: number } | null {
-		const nCtx = serverStore.contextSize;
-		if (!nCtx || nCtx <= 0) return null;
-		const maxTokens = Number(config().max_tokens);
-		const reserve = maxTokens > 0 ? maxTokens : DEFAULT_RESERVE_TOKENS;
-		const usable = nCtx - reserve;
-		return usable > 0 ? { nCtx, usable } : null;
+		return compactionBudget(serverStore.contextSize, config().max_tokens);
 	}
 
-	private static makeSummaryMessage(template: DatabaseMessage, summaryText: string): DatabaseMessage {
-		return {
-			...template,
-			id: `compaction-${template.id}`,
-			role: MessageRole.SYSTEM,
-			content: SUMMARY_PREFIX + summaryText,
-			reasoningContent: undefined,
-			toolCalls: '',
-			extra: undefined
-		} as DatabaseMessage;
-	}
-
-	/**
-	 * Trims each tool call's `arguments` while keeping the call list
-	 * structurally intact. The calls themselves are load-bearing — a following
-	 * tool result's `tool_call_id` has to resolve against them — so only the
-	 * argument payload (which is where a `write_file` call's bulk lives) is cut.
-	 */
-	private static capToolCallArguments(
-		toolCalls: string | undefined,
-		keepChars: number
-	): string | undefined {
-		if (!toolCalls || toolCalls.length <= keepChars) return toolCalls;
-		try {
-			const parsed: unknown = JSON.parse(toolCalls);
-			if (!Array.isArray(parsed) || parsed.length === 0) return toolCalls;
-			const perCall = Math.max(120, Math.floor(keepChars / parsed.length));
-			return JSON.stringify(
-				parsed.map((call) => {
-					const args = (call as { function?: { arguments?: unknown } })?.function?.arguments;
-					if (typeof args !== 'string' || args.length <= perCall) return call;
-					const fn = (call as { function: Record<string, unknown> }).function;
-					return {
-						...call,
-						function: { ...fn, arguments: args.slice(0, perCall) + ELISION_MARKER }
-					};
-				})
-			);
-		} catch {
-			// Malformed tool-call JSON: leave it alone rather than risk breaking
-			// linkage. The converter already tolerates unparseable values.
-			return toolCalls;
-		}
-	}
-
-	/**
-	 * Payload-only elision of a single oversized message. Clones the record the
-	 * same way makeSummaryMessage does — the stored message is never mutated,
-	 * so the visible conversation stays complete.
-	 */
-	private static capOversizedMessage(
-		message: DatabaseMessage,
-		tokenCount: number,
-		limitTokens: number
-	): DatabaseMessage {
-		if (limitTokens <= 0 || tokenCount <= limitTokens) return message;
-
-		// messageText() is exactly what countTokensPerMessage measured, so
-		// eliding against it is what actually brings the count under the limit.
-		// Its `role: ` prefix gets re-added by the next measurement — strip it
-		// here so it is not baked into the content twice.
-		const measured = this.messageText(message);
-		const text = measured.slice(`${message.role}: `.length);
-		// Budget the surviving text against this message's own observed token
-		// density rather than a global chars-per-token guess.
-		const approxCharsPerToken = Math.max(1, measured.length / Math.max(1, tokenCount));
-		// Keep head + tail and elide the middle: the head usually carries the
-		// instruction or file path, the tail the result or conclusion. 0.45 each
-		// leaves room for the marker and the per-message template overhead.
-		const keepChars = Math.max(200, Math.floor(limitTokens * approxCharsPerToken * 0.45));
-
-		return {
-			...message,
-			id: `elided-${message.id}`,
-			content:
-				text.length <= keepChars * 2
-					? text
-					: text.slice(0, keepChars) + ELISION_MARKER + text.slice(-keepChars),
-			reasoningContent: undefined,
-			// Tool RESULT messages link back via toolCallId, which the spread
-			// preserves untouched.
-			toolCalls: this.capToolCallArguments(message.toolCalls, keepChars),
-			extra: undefined
-		} as DatabaseMessage;
-	}
-
-	/**
-	 * Applies the per-message cap across a payload. Returns the SAME array
-	 * reference when nothing needed eliding — callers use identity to tell an
-	 * untouched payload from a rewritten one. Counts are looked up by message
-	 * id, not position, because a payload may already have had a span collapsed
-	 * into a summary message, which shifts every index after it.
-	 */
-	private static capPayload(
-		messages: DatabaseMessage[],
-		countById: Map<string, number>,
-		limitTokens: number
-	): DatabaseMessage[] {
-		let capped = false;
-		const out = messages.map((message) => {
-			const count = countById.get(message.id);
-			if (count === undefined) return message;
-			const next = this.capOversizedMessage(message, count, limitTokens);
-			if (next !== message) capped = true;
-			return next;
-		});
-		return capped ? out : messages;
-	}
-
-	private static leadingSystemCount(messages: DatabaseMessage[]): number {
-		let n = 0;
-		while (n < messages.length && messages[n].role === MessageRole.SYSTEM) n++;
-		return n;
-	}
-
-	/**
-	 * If this conversation has a stored summary whose coverage boundary is on
-	 * the given branch, returns the payload with the covered span replaced by
-	 * the summary message — no model call involved. Otherwise returns the
-	 * input array unchanged (same reference).
-	 */
-	private static async applyStoredSummary(
-		convId: string,
-		messages: DatabaseMessage[]
-	): Promise<{ messages: DatabaseMessage[]; applied: boolean }> {
-		const stored = (await DatabaseService.getConversation(convId))?.contextSummary;
-		if (!stored?.text || !stored.upToMessageId) return { messages, applied: false };
-		const boundary = messages.findIndex((m) => m.id === stored.upToMessageId);
-		const firstChat = this.leadingSystemCount(messages);
-		if (boundary < firstChat) return { messages, applied: false };
-		const summaryMessage = this.makeSummaryMessage(messages[boundary], stored.text);
-		return {
-			messages: [...messages.slice(0, firstChat), summaryMessage, ...messages.slice(boundary + 1)],
-			applied: true
-		};
+	private static async storedSummary(convId: string) {
+		return (await DatabaseService.getConversation(convId))?.contextSummary;
 	}
 
 	/**
@@ -253,8 +88,8 @@ export class ContextCompactionService {
 		try {
 			const budget = this.budget();
 			if (!budget) return null;
-			const effective = await this.applyStoredSummary(convId, messages);
-			const counts = await this.countTokensPerMessage(effective.messages);
+			const effective = applyStoredSummary(messages, await this.storedSummary(convId));
+			const counts = await this.countTokensPerMessage(effective.messages as DatabaseMessage[]);
 			if (!counts) return null;
 			const usedTokens = counts.reduce((a, b) => a + b, 0);
 			return {
@@ -272,8 +107,8 @@ export class ContextCompactionService {
 	/**
 	 * User-initiated compaction (the indicator click): summarizes everything
 	 * older than the keep-tail immediately, regardless of the automatic
-	 * threshold. The stored summary then shrinks every subsequent send via
-	 * applyStoredSummary. Returns a human-readable outcome either way.
+	 * threshold. The stored summary then shrinks every subsequent send.
+	 * Returns a human-readable outcome either way.
 	 */
 	static async compactNow(convId: string, messages: DatabaseMessage[]): Promise<ManualCompactionResult> {
 		try {
@@ -283,39 +118,19 @@ export class ContextCompactionService {
 			const counts = await this.countTokensPerMessage(messages);
 			if (!counts) return { compacted: false, message: 'Could not measure the conversation.' };
 
-			const firstChat = this.leadingSystemCount(messages);
-			const keepBudget = budget.usable * KEEP_RATIO;
-			let tailStart = messages.length;
-			let tailTokens = 0;
-			while (tailStart > firstChat) {
-				const next = tailTokens + counts[tailStart - 1];
-				if (next > keepBudget && messages.length - tailStart >= 2) break;
-				tailTokens = next;
-				tailStart--;
+			const plan = planManualCompaction({ messages, counts, usable: budget.usable, stored: await this.storedSummary(convId) });
+			if ('nothing' in plan) {
+				return plan.nothing === 'fits'
+					? { compacted: false, message: 'Nothing to compact — the conversation still fits comfortably.' }
+					: { compacted: false, message: 'Already compacted — no new messages to fold in.' };
 			}
 
-			const pruned = messages.slice(firstChat, tailStart);
-			if (pruned.length === 0) {
-				return { compacted: false, message: 'Nothing to compact — the conversation still fits comfortably.' };
-			}
-
-			const stored = (await DatabaseService.getConversation(convId))?.contextSummary;
-			let existingSummary = '';
-			let toSummarize = pruned;
-			if (stored?.text && stored.upToMessageId) {
-				const boundary = pruned.findIndex((m) => m.id === stored.upToMessageId);
-				if (boundary !== -1) {
-					existingSummary = stored.text;
-					toSummarize = pruned.slice(boundary + 1);
-				}
-			}
-			if (toSummarize.length === 0 && existingSummary) {
-				return { compacted: false, message: 'Already compacted — no new messages to fold in.' };
-			}
-
-			const summary = toSummarize.length ? await this.summarize(existingSummary, toSummarize) : existingSummary;
+			const summary = plan.toSummarize.length
+				? await this.summarize(plan.existingSummary, plan.toSummarize as DatabaseMessage[])
+				: plan.existingSummary;
 			if (!summary) return { compacted: false, message: 'The model did not produce a summary. Try again.' };
 
+			const pruned = plan.pruned;
 			await DatabaseService.updateConversation(convId, {
 				contextSummary: { text: summary, upToMessageId: pruned[pruned.length - 1].id }
 			});
@@ -326,6 +141,7 @@ export class ContextCompactionService {
 			return { compacted: false, message: 'Compaction failed — see the console for details.' };
 		}
 	}
+
 	/**
 	 * Token-counts `messages` against the server's context window and, when
 	 * over threshold, returns a rewritten list with the oldest turns replaced
@@ -337,10 +153,7 @@ export class ContextCompactionService {
 	 * the one exception: it hard-truncates rather than passing the oversized
 	 * original through to a certain 400.
 	 */
-	static async maybeCompact(
-		convId: string,
-		messages: DatabaseMessage[]
-	): Promise<CompactionResult> {
+	static async maybeCompact(convId: string, messages: DatabaseMessage[]): Promise<CompactionResult> {
 		const passthrough: CompactionResult = { messages, compacted: false };
 		try {
 			if (config().contextCompaction === false) return passthrough;
@@ -351,70 +164,17 @@ export class ContextCompactionService {
 
 			const counts = await this.countTokensPerMessage(messages);
 			if (!counts) return passthrough;
-			const total = counts.reduce((a, b) => a + b, 0);
-			const countById = new Map(messages.map((m, i) => [m.id, counts[i]]));
-			const perMessageLimit = usable * MAX_SINGLE_MESSAGE_TOKENS_RATIO;
 
-			if (total <= usable * TRIGGER_RATIO) {
-				// Under threshold, but a stored summary (e.g. from a manual
-				// compaction) still shrinks the payload — apply it at zero cost.
-				const effective = await this.applyStoredSummary(convId, messages);
-				// The per-message cap still applies here: on a short history a
-				// single giant tool result can sit under the overall trigger
-				// while individually overflowing what one turn may occupy.
-				const capped = this.capPayload(effective.messages, countById, perMessageLimit);
-				return { messages: capped, compacted: effective.applied || capped !== effective.messages };
+			const plan = planCompaction({ messages, counts, usable, stored: await this.storedSummary(convId) });
+			if (plan.action === 'send') {
+				return { messages: plan.messages as DatabaseMessage[], compacted: plan.compacted };
 			}
-
-			// Leading system messages are never summarized away.
-			const firstChat = this.leadingSystemCount(messages);
-
-			// Keep the newest tail within the keep budget. The last message pair
-			// (current user turn + any tool results) is always kept regardless.
-			const keepBudget = usable * KEEP_RATIO;
-			let tailStart = messages.length;
-			let tailTokens = 0;
-			while (tailStart > firstChat) {
-				const next = tailTokens + counts[tailStart - 1];
-				if (next > keepBudget && messages.length - tailStart >= 2) break;
-				tailTokens = next;
-				tailStart--;
-			}
-
-			const pruned = messages.slice(firstChat, tailStart);
-			if (pruned.length === 0) {
-				// Nothing old enough to summarize — the tail loop swallowed the
-				// whole history to honour its keep-the-last-two floor. Capping is
-				// the only lever left, and this is precisely the case that needs
-				// it: a short conversation whose bulk is one oversized recent
-				// message, which no amount of summarizing could have shrunk.
-				const capped = this.capPayload(messages, countById, perMessageLimit);
-				return { messages: capped, compacted: capped !== messages };
-			}
-
-			// Reuse the stored running summary when its coverage boundary is part
-			// of the pruned span of THIS branch; otherwise rebuild from scratch.
-			const conv = await DatabaseService.getConversation(convId);
-			const stored = conv?.contextSummary;
-			let existingSummary = '';
-			let toSummarize = pruned;
-			if (stored?.text && stored.upToMessageId) {
-				const boundary = pruned.findIndex((m) => m.id === stored.upToMessageId);
-				if (boundary !== -1) {
-					existingSummary = stored.text;
-					toSummarize = pruned.slice(boundary + 1);
-				}
-			}
-
-			// The kept tail is capped whichever way the summarization goes: no
-			// path out of here may return a payload holding an oversized message.
-			const cappedTail = this.capPayload(messages.slice(tailStart), countById, perMessageLimit);
 
 			let summary: string | null;
 			try {
-				summary = toSummarize.length
-					? await this.summarize(existingSummary, toSummarize)
-					: existingSummary;
+				summary = plan.toSummarize.length
+					? await this.summarize(plan.existingSummary, plan.toSummarize as DatabaseMessage[])
+					: plan.existingSummary;
 			} catch (error) {
 				// summarize() rejects on a busy server or when its own prompt
 				// does not fit; that is the same outcome as an empty summary.
@@ -422,34 +182,18 @@ export class ContextCompactionService {
 				summary = null;
 			}
 
-			if (!summary) {
-				// Resending the oversized original here would be a guaranteed 400
-				// — the dead end this service exists to prevent. Degrade instead:
-				// drop the old turns outright and send the capped tail. That
-				// loses context, but it sends.
+			const done = finishCompaction(plan, summary);
+			if (!done.contextSummary) {
 				console.warn('[ContextCompaction] Summarizer failed — falling back to hard truncation');
-				return {
-					messages: [...messages.slice(0, firstChat), ...cappedTail],
-					compacted: true
-				};
+				return { messages: done.messages as DatabaseMessage[], compacted: true };
 			}
 
-			await DatabaseService.updateConversation(convId, {
-				contextSummary: { text: summary, upToMessageId: pruned[pruned.length - 1].id }
-			});
-
-			// Synthetic system message carrying the summary. It is API-payload
-			// only — never written to the message tree — so the visible
-			// conversation history stays complete.
-			const summaryMessage = this.makeSummaryMessage(pruned[pruned.length - 1], summary);
-
+			await DatabaseService.updateConversation(convId, { contextSummary: done.contextSummary });
+			const total = counts.reduce((a, b) => a + b, 0);
 			console.info(
-				`[ContextCompaction] Compacted ${pruned.length} message(s) (~${total} tokens > ${Math.round(usable * TRIGGER_RATIO)} threshold, n_ctx ${nCtx})`
+				`[ContextCompaction] Compacted ${plan.pruned.length} message(s) (~${total} tokens > ${Math.round(usable * TRIGGER_RATIO)} threshold, n_ctx ${nCtx})`
 			);
-			return {
-				messages: [...messages.slice(0, firstChat), summaryMessage, ...cappedTail],
-				compacted: true
-			};
+			return { messages: done.messages as DatabaseMessage[], compacted: true };
 		} catch (error) {
 			console.warn('[ContextCompaction] Skipping compaction due to error:', error);
 			return passthrough;
@@ -460,12 +204,11 @@ export class ContextCompactionService {
 	 * Exact-ish token counts per message: one /tokenize call on the
 	 * concatenated text (real tokenizer, no prompt processing) apportioned per
 	 * message, plus fixed per-message template overhead. Falls back to a
-	 * chars/3 estimate if /tokenize is unavailable (conservative — favors
-	 * compacting slightly early over a hard 400).
+	 * chars/3 estimate if /tokenize is unavailable.
 	 */
 	private static async countTokensPerMessage(messages: DatabaseMessage[]): Promise<number[] | null> {
-		const texts = messages.map((m) => this.messageText(m));
-
+		const texts = messages.map((m) => messageText(m));
+		let totalTokens: number | undefined;
 		try {
 			const res = await fetch(resolveApiPath('./tokenize'), {
 				method: 'POST',
@@ -474,47 +217,18 @@ export class ContextCompactionService {
 			});
 			if (res.ok) {
 				const data = await res.json();
-				const totalTokens: number | undefined = Array.isArray(data?.tokens)
-					? data.tokens.length
-					: undefined;
-				if (totalTokens !== undefined) {
-					const totalChars = Math.max(1, texts.reduce((a, t) => a + t.length, 0));
-					return texts.map(
-						(t) => Math.ceil((t.length / totalChars) * totalTokens) + PER_MESSAGE_OVERHEAD_TOKENS
-					);
-				}
+				totalTokens = Array.isArray(data?.tokens) ? data.tokens.length : undefined;
 			}
 		} catch {
 			/* fall through to estimate */
 		}
-		return texts.map((t) => Math.ceil(t.length / 3) + PER_MESSAGE_OVERHEAD_TOKENS);
-	}
-
-	private static messageText(message: DatabaseMessage): string {
-		let text = typeof message.content === 'string' ? message.content : '';
-		if (message.reasoningContent) text += '\n' + message.reasoningContent;
-		if (message.toolCalls) text += '\n' + message.toolCalls;
-		if (message.extra?.length) {
-			for (const extra of message.extra) {
-				if ('content' in extra && typeof extra.content === 'string') text += '\n' + extra.content;
-			}
-		}
-		return `${message.role}: ${text}`;
+		return countsFromTotal(texts, totalTokens);
 	}
 
 	/** One non-streamed call to the local model with the progressive prompt. */
-	private static async summarize(
-		existingSummary: string,
-		messages: DatabaseMessage[]
-	): Promise<string | null> {
-		const newLines = messages
-			.map((m) => this.messageText(m))
-			.join('\n')
-			// The summarizer input itself must fit comfortably — clip defensively.
-			.slice(0, 24000);
-
+	private static async summarize(existingSummary: string, messages: DatabaseMessage[]): Promise<string | null> {
 		const result = await ChatService.sendMessage(
-			[{ role: MessageRole.USER, content: buildSummaryPrompt(existingSummary, newLines) }],
+			[{ role: MessageRole.USER, content: summaryPrompt(existingSummary, messages) }],
 			{
 				stream: false,
 				temperature: 0.2,

@@ -556,6 +556,53 @@ await test('the real prepareCompletion runs on a task\'s request: the prompt is 
   assert(/Redstart/i.test(b.messages[0].content), 'the composed prompt')
 })
 
+console.log('\n-- compaction in the core, used by the runner (3.8, D32) --')
+
+await test('a long history is folded into a stored summary, as chat-ui does; the tail stays verbatim', async () => {
+  const { SUMMARY_PREFIX } = await import('../../shared/agent-core/compaction.mjs')
+  let summaries = 0
+  const w = fakeWorld([say('answered with a compacted history')], {
+    effectiveConfigFor: async () => ({ ctxSize: 4096 }),
+    // Every character a token: the seeded history is far over budget.
+    tokenize: async (_port, content) => content.length,
+    fetchCompletion: async (_port, body) => {
+      if (body.stream === false) {
+        summaries++
+        assert(/Progressively summarize/.test(body.messages[0].content), 'the summary prompt')
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'They discussed the plan.' } }] }))
+      }
+      w.bodies.push(body)
+      return sse(say('answered with a compacted history'))
+    },
+  })
+  const conv = newConversation()
+  // Twenty long turns, then the task's own message.
+  let parent = convs.appendMessage(SCOPE, conv, { id: 'root-c', parent: null, type: 'root', role: 'system', content: '' }).id
+  for (let i = 0; i < 20; i++) {
+    parent = convs.appendMessage(SCOPE, conv, { id: `h${i}`, parent, type: 'text', role: i % 2 ? 'assistant' : 'user', content: `turn ${i} ${'x'.repeat(400)}` }).id
+  }
+  const t = start(conv, 'and now?')
+  await waitFor(() => ended(t.id), 'end')
+  eq([statusOf(t.id), summaries], ['done', 1], 'one summary')
+  const sent = w.bodies[0].messages
+  assert(sent[0].role === 'system' && sent[0].content.startsWith(SUMMARY_PREFIX), 'the summary leads')
+  eq(sent.at(-1).content, 'and now?', 'the newest message is verbatim')
+  assert(sent.length < 22, `history shrank (${sent.length} messages)`)
+  const stored = convs.getConversation(SCOPE, conv).contextSummary
+  eq(stored.text, 'They discussed the plan.', 'stored on the conversation')
+  assert(store.readEvents(t.id).some((e) => e.type === 'compacted' && e.summarized), 'logged')
+})
+
+await test('compaction off (the client\'s setting) sends the history whole', async () => {
+  const w = fakeWorld([say('ok')], { effectiveConfigFor: async () => ({ ctxSize: 4096 }), tokenize: async (_p, c) => c.length })
+  const conv = newConversation()
+  let parent = convs.appendMessage(SCOPE, conv, { id: 'root-d', parent: null, type: 'root', role: 'system', content: '' }).id
+  for (let i = 0; i < 10; i++) parent = convs.appendMessage(SCOPE, conv, { id: `d${i}`, parent, type: 'text', role: 'user', content: 'y'.repeat(800) }).id
+  const t = start(conv, 'go', { generation: { contextCompaction: false } })
+  await waitFor(() => ended(t.id), 'end')
+  eq(w.bodies[0].messages.length, 11, 'all of it')
+})
+
 console.log('\n-- the routes (3.6, D31) --')
 
 const { handleTaskRoute, isTaskRoute } = await import('../daemon/gateway/task-routes.mjs')

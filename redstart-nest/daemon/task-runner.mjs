@@ -49,6 +49,9 @@ import { runToolCalls, wireSafeToolCalls, isAbortError } from '../../shared/agen
 import { createAgenticTimings, createTurnStats } from '../../shared/agent-core/timings.mjs'
 import { formatMcpToolResult } from '../../shared/agent-core/tool-result.mjs'
 import { currentBranch, branchToWire } from '../../shared/agent-core/stored-messages.mjs'
+import {
+  SUMMARY_MAX_TOKENS, compactionBudget, countsFromTotal, finishCompaction, messageText, planCompaction, summaryPrompt,
+} from '../../shared/agent-core/compaction.mjs'
 import { ASK_USER_TOOL } from '../../shared/agent-core/ask-user.mjs'
 import { UPDATE_PLAN_TOOL } from '../../shared/agent-core/update-plan.mjs'
 import * as store from './task-store.mjs'
@@ -114,6 +117,21 @@ const defaults = {
       body: JSON.stringify(body),
       signal,
     })
+  },
+  /** Tokens in `content` by llama-server's own tokenizer, or undefined (the core then estimates). */
+  async tokenize(port, content) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/tokenize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      })
+      if (!res.ok) return undefined
+      const data = await res.json()
+      return Array.isArray(data?.tokens) ? data.tokens.length : undefined
+    } catch {
+      return undefined
+    }
   },
   modelPollMs: MODEL_POLL_MS,
   busyPollMs: BUSY_POLL_MS,
@@ -220,6 +238,8 @@ function pickGeneration(gen) {
   if (typeof gen.enableThinking === 'boolean') out.enableThinking = gen.enableThinking
   if (typeof gen.vision === 'boolean') out.vision = gen.vision
   if (typeof gen.excludeReasoning === 'boolean') out.excludeReasoning = gen.excludeReasoning
+  // chat-ui's "context compaction" setting (D32): off means the task never folds history.
+  if (typeof gen.contextCompaction === 'boolean') out.contextCompaction = gen.contextCompaction
   return out
 }
 
@@ -568,6 +588,75 @@ async function runOnce(task, l, conv, generation, { resume }) {
     })
   }
 
+  /**
+   * One request's messages, built as chat-ui builds them: the conversation's
+   * current branch AS STORED, compacted (shared/agent-core/compaction.mjs,
+   * D32), converted (stored-messages.mjs), then the loop's tail note when it
+   * added one this turn. Every message the loop adds is also written by the
+   * callbacks below, so storage holds the same history the loop does, with the
+   * ids a stored summary is keyed to.
+   */
+  async function payloadFor(msgs, ready, t) {
+    const tail = msgs.length > messages.length ? msgs[msgs.length - 1] : null
+    const current = conversations.getConversation(t.storeAccountId, t.conversationId)
+    if (!current) throw new TaskEnded('cancelled', 'The conversation was deleted.')
+    const stored = currentBranch(current).filter((m) => m.type !== 'root')
+    const compacted = await compact(stored, current, ready, t)
+    const wire = branchToWire(compacted, wireOpts)
+    return toWire(tail ? [...wire, tail] : wire)
+  }
+
+  /** chat-ui's maybeCompact, with the daemon's I/O. Never blocks a send. */
+  async function compact(stored, current, ready, t) {
+    if (generation.contextCompaction === false) return stored
+    const budget = compactionBudget(ready.config?.ctxSize, generation.max_tokens)
+    if (!budget) return stored
+    try {
+      const texts = stored.map((m) => messageText(m))
+      const counts = countsFromTotal(texts, await seams.tokenize(ready.port, texts.join('\n')))
+      const plan = planCompaction({ messages: stored, counts, usable: budget.usable, stored: current.contextSummary })
+      if (plan.action === 'send') return plan.messages
+      let summary = plan.existingSummary
+      if (plan.toSummarize.length) {
+        try {
+          summary = await summarize(summaryPrompt(plan.existingSummary, plan.toSummarize), ready, t)
+        } catch {
+          summary = null
+        }
+      }
+      const done = finishCompaction(plan, summary)
+      if (done.contextSummary) {
+        conversations.updateConversation(t.storeAccountId, t.conversationId, { contextSummary: done.contextSummary })
+      }
+      store.appendEvent(task.id, { type: 'compacted', folded: plan.pruned.length, summarized: !!done.contextSummary })
+      return done.messages
+    } catch {
+      return stored
+    }
+  }
+
+  /** The one non-streamed summarizer call, through the gateway's path like chat-ui's. */
+  async function summarize(prompt, ready, t) {
+    const { parsed } = await seams.prepareCompletion({
+      messages: [{ role: 'user', content: prompt }],
+      stream: false,
+      temperature: 0.2,
+      max_tokens: SUMMARY_MAX_TOKENS,
+      reasoning_format: 'auto',
+      chat_template_kwargs: { enable_thinking: false },
+    }, { account: turnCtx.account, surface: t.surface, effectiveConfig: ready.config, accountId: t.storeAccountId, timeZone: t.timeZone })
+    const done = beginCompletion()
+    try {
+      const res = await seams.fetchCompletion(ready.port, parsed, signal)
+      if (!res.ok) return null
+      const data = await res.json()
+      const text = data?.choices?.[0]?.message?.content
+      return typeof text === 'string' && text.trim() ? text.trim() : null
+    } finally {
+      done()
+    }
+  }
+
   const ports = {
     model: {
       streamTurn: async ({ acc, messages: msgs, signal: sig }) => {
@@ -580,7 +669,7 @@ async function runOnce(task, l, conv, generation, { resume }) {
           setRunning()
           const t = store.getTask(task.id)
           const body = {
-            messages: toWire(msgs),
+            messages: await payloadFor(msgs, ready, t),
             stream: true,
             tools: turnCtx.mcpTools.length > 0 ? toLlmTools(turnCtx.mcpTools) : undefined,
             reasoning_format: 'auto',
