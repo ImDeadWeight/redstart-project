@@ -255,10 +255,18 @@ export function scoreTools({ tools, query, store }) {
  *   floor?: number,
  *   relativeFloor?: number,
  *   margin?: number,
+ *   families?: Iterable<Iterable<string>>,
  * }} args
+ *   `families`: tools that only make sense together. Once any member is
+ *   selected, every other member the request carries comes with it, past
+ *   the floor, the margin and the budget (a family is a few small tools).
+ *   Like a pin it only keeps what the client sent, so this stays a subset.
+ *   Added 2026-11-12: memory_save was selected for "remember X, then forget
+ *   Y" and memory_forget was dropped, so the model said it had no way to
+ *   forget and told the user it had, with the memory still saved.
  * @returns {{ selected: any[], dropped: any[], reason: string }}
  */
-export function selectTools({ scored, pins, previous, budgetTokens = Infinity, floor = 0, relativeFloor = 0, margin = 0 }) {
+export function selectTools({ scored, pins, previous, budgetTokens = Infinity, floor = 0, relativeFloor = 0, margin = 0, families = [] }) {
   const entries = Array.isArray(scored) ? scored : []
   const pinned = new Set(pins ?? [])
   const carried = new Set(previous ?? [])
@@ -302,6 +310,14 @@ export function selectTools({ scored, pins, previous, budgetTokens = Infinity, f
     if (spent + cost > budgetTokens) { budgetBit = true; break }
     included.set(entry.name, entry)
     spent += cost
+  }
+
+  for (const family of families ?? []) {
+    const members = [...family]
+    if (!members.some((n) => included.has(n))) continue
+    for (const entry of entries) {
+      if (members.includes(entry.name) && !included.has(entry.name)) included.set(entry.name, entry)
+    }
   }
 
   const byName = (a, b) => (toolName(a) < toolName(b) ? -1 : toolName(a) > toolName(b) ? 1 : 0)

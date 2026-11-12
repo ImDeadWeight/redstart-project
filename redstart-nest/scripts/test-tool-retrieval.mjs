@@ -270,6 +270,22 @@ await test('🔒 selected is always a subset of the tools offered', () => {
   }
 })
 
+await test('a family comes together: one member selected brings the rest past the floor (memory, 2026-11-12)', () => {
+  const MEM = ['memory_save', 'memory_search', 'memory_forget']
+  const scored = scoredList([['memory_save', 0.9], ['read_document', 0.8], ['memory_search', 0.2], ['memory_forget', 0.1]])
+  const names = selectTools({ scored, floor: 0.5, families: [MEM] }).selected.map(toolName)
+  assert(MEM.every((n) => names.includes(n)), `the family was split: ${names}`)
+  const none = selectTools({ scored: scoredList([['read_document', 0.9], ['memory_forget', 0.1]]), floor: 0.5, families: [MEM] }).selected.map(toolName)
+  assert(!none.includes('memory_forget'), 'a family member came in with no member selected')
+  const partial = selectTools({ scored: scoredList([['memory_save', 0.9]]), floor: 0.5, families: [MEM] }).selected.map(toolName)
+  assert(partial.join() === 'memory_save', `a family member that was never offered appeared: ${partial}`)
+})
+
+await test('🔒 the tool filter keeps the memory tools together', async () => {
+  const { TOOL_FAMILIES } = await import('../daemon/tool-filter.mjs')
+  assert(TOOL_FAMILIES.some((f) => ['memory_save', 'memory_search', 'memory_forget'].every((n) => f.includes(n))), JSON.stringify(TOOL_FAMILIES))
+})
+
 await test('a pin below the floor is still included', () => {
   const scored = scoredList([['high', 0.9], ['pinned', 0.01]])
   const names = selectTools({ scored, pins: ['pinned'], floor: 0.5 }).selected.map(toolName)
