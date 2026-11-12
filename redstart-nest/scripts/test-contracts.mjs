@@ -245,7 +245,10 @@ async function main() {
       headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'Mcp-Session-Id': 'not-a-real-session' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }),
     })
-    assert(res.status === 400, `expected 400 for an unrecognised session, got ${res.status}`)
+    // 404 (the MCP spec; until 2026-11-12, 400): refused, and the client's cue to
+    // start a new session through initialize. No session is handed out.
+    assert(res.status === 404, `expected 404 for an unrecognised session, got ${res.status}`)
+    assert(!res.headers.get('mcp-session-id'), 'an unknown session was given a new session id')
   })
 
   // connectMcpClient performs the initialize handshake itself as part of

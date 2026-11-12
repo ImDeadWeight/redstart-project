@@ -486,7 +486,20 @@ async function main() {
       headers: { ...mcpInitHeaders, Authorization: `Bearer ${ownerToken ?? ownerApiKey}`, 'Mcp-Session-Id': 'not-a-real-session' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
     })
-    assert(res.status === 400, `expected 400 for an unrecognised session, got ${res.status}`)
+    // 404, the MCP spec's answer for a session the server does not know, and
+    // the client's cue to start a NEW one through initialize. Until
+    // 2026-11-12 it was 400, which chat-ui does not take as an expired
+    // session: after a Nest restart an open chat page failed every tool call
+    // until it was reloaded. Either way the request is refused and no session
+    // is handed out.
+    assert(res.status === 404, `expected 404 for an unrecognised session, got ${res.status}`)
+    assert(!res.headers.get('mcp-session-id'), 'an unknown session was given a new session id')
+    const none = await fetch(`${mcp('127.0.0.1')}/mcp`, {
+      method: 'POST',
+      headers: { ...mcpInitHeaders, Authorization: `Bearer ${ownerToken ?? ownerApiKey}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }),
+    })
+    assert(none.status === 400, `expected 400 for no session and no initialize, got ${none.status}`)
   })
 
   console.log('\n-- toggling auth back off --')

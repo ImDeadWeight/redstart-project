@@ -498,6 +498,17 @@ export function startMcpServer(port, config, { bindHost = '127.0.0.1' } = {}) {
 
     if (sessionId && transports.has(sessionId)) {
       transport = transports.get(sessionId)
+    } else if (sessionId) {
+      // A session this server does not know: it ended, or Nest restarted
+      // (sessions live in memory). The MCP spec says 404, which is the
+      // client's cue to start a new session; chat-ui reconnects and retries
+      // on exactly that (MCPService.isSessionExpiredError). Until 2026-11-12
+      // this fell through to the 400 below, so after every Nest restart an
+      // open chat page failed every tool call with "No valid session ID
+      // provided" until it was reloaded.
+      res.writeHead(404, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32001, message: 'Session not found' } }))
+      return
     } else if (!sessionId && isInitializeRequest(parsed)) {
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => crypto.randomUUID(),
