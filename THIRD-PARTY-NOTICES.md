@@ -331,6 +331,25 @@ The MIT license text applying to the above:
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
 
+### Libraries compiled into the chat UI
+
+The chat UI's build compiles code from its own npm dependencies into
+`chat-ui/`, which both Nest and Twig ship. These are all MIT, under the same
+license text quoted above:
+
+- Svelte / SvelteKit — Copyright (c) 2016-2023 Svelte contributors —
+  <https://github.com/sveltejs/svelte>
+- Tailwind CSS — Copyright (c) Tailwind Labs, Inc. —
+  <https://github.com/tailwindlabs/tailwindcss>
+- Vite — Copyright (c) 2019-present, VoidZero Inc. and Vite contributors —
+  <https://github.com/vitejs/vite>
+
+**Known gap:** this list was carried over by hand from Twig's old
+`LICENSE.txt` and isn't complete. The npm appendix in section 2 is generated
+from Nest's `package.json` only, so the chat UI's other runtime dependencies
+aren't enumerated anywhere. Closing this means running `license:gen` against
+`redstart-nest/src/chat-ui` as well and shipping its output in `licenses/`.
+
 ---
 
 ## Verifying this file is accurate
