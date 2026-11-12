@@ -31,7 +31,7 @@
 import * as crypto from 'node:crypto'
 import { runAgentLoop } from '../../../../shared/agent-core/loop.mjs'
 import { readChatStream } from '../../../../shared/agent-core/chat-stream.mjs'
-import { wireSafeToolCalls, MAX_TOOL_CALLS_PER_REPLY } from '../../../../shared/agent-core/tool-calls.mjs'
+import { wireSafeToolCalls, MAX_TOOL_CALLS_PER_REPLY, DENIED_RESULT } from '../../../../shared/agent-core/tool-calls.mjs'
 import { attachmentNote } from '../../../../shared/agent-core/attachment-note.mjs'
 import { formatAskAnswer } from '../../../../shared/agent-core/ask-user.mjs'
 import { NUDGE_PREFIX, formatPlanResult, openSteps } from '../../../../shared/agent-core/update-plan.mjs'
@@ -298,7 +298,7 @@ export async function runTask(nest, task, opts) {
                 // The core answers a denial itself; record it as the call and
                 // the error result it is, so the metrics count it.
                 log({ type: 'tool_call', id: call.id, name, arguments: call.function.arguments, argsProblem: null, denied: true })
-                log({ type: 'tool_result', id: call.id, name, isError: true, denied: true, text: 'Tool execution was denied by the user.', ms: 0 })
+                log({ type: 'tool_result', id: call.id, name, isError: true, denied: true, text: DENIED_RESULT, ms: 0 })
               }
               return ok
             },

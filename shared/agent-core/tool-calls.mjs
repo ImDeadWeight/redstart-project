@@ -43,7 +43,12 @@ import { UPDATE_PLAN_TOOL, formatPlanResult, parsePlanArguments } from './update
 /** @typedef {import('./types').ToolCallsOutcome} ToolCallsOutcome */
 
 export const INTERRUPTED_RESULT = 'Tool execution was interrupted by a new user message.';
-export const DENIED_RESULT = 'Tool execution was denied by the user.';
+// Says what a denial means for the rest of the task, not only that it
+// happened. Until 2026-11-12 it was "Tool execution was denied by the user."
+// and in the live test Ornith, denied one of three deletes, skipped the third
+// and told the user the denied file was "recoverable from the Recycle Bin".
+export const DENIED_RESULT =
+	'The user refused this call, so it was not run. Do not try it again. Carry on with any other steps that do not depend on it, and say in your answer what was not done.';
 
 /**
  * The most tool calls one reply may have run. The rest are answered, not run.

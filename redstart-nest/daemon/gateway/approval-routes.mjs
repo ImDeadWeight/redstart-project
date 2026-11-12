@@ -16,6 +16,8 @@
 //   GET    /approvals/grants         the caller's standing grants
 //   POST   /approvals/grants         { tool }  "Always allow" from a card
 //   DELETE /approvals/grants/:id     revoke one
+//   POST   /approvals/denied         { tool }  a Deny the card decided alone;
+//          logged, nothing runs
 //   POST   /approvals/grants/import  { tools: string[] }  chat-ui's one-time
 //          import of its old localStorage set; anything not 'prompt' is
 //          dropped, so a stale "always" for a delete cannot come back.
@@ -27,7 +29,7 @@
 import { sendJson, readJsonBody } from './http-json.mjs'
 import { decide } from '../approval-ledger.mjs'
 import { listGrants, addGrant, revokeGrant } from '../approval-grants.mjs'
-import { approvalRule } from '../tools-definitions.mjs'
+import { approvalRule, isApprovalEnforced } from '../tools-definitions.mjs'
 import { memoryKey } from '../memory-storage.mjs'
 import { logPolicy, logEvent } from '../logger.mjs'
 import { APPROVAL_DECISIONS } from '../../../shared/agent-core/approval.mjs'
@@ -97,6 +99,21 @@ export async function handleApprovalRoute(req, res, urlPath, account) {
       const removed = revokeGrant(key, g[1])
       if (!removed) { sendJson(res, 404, NOT_FOUND); return true }
       logPolicy('grant.revoked', { account: who(account), tool: removed.tool, grantId: removed.id, by: who(account) })
+      sendJson(res, 204)
+      return true
+    }
+
+    // A Deny the client's card decided by itself, before any call reached
+    // Nest (chat-ui's gate stops the call). It runs nothing and only records:
+    // without it the decision log missed every denial made on the card (live
+    // test, 2026-11-12). Only for tools Nest enforces, so it cannot fill the
+    // log with lines about tools policy does not govern.
+    if (urlPath === '/approvals/denied') {
+      if (req.method !== 'POST') return false
+      const body = await readJsonBody(req)
+      const tool = typeof body?.tool === 'string' ? body.tool : ''
+      if (!tool || !isApprovalEnforced(tool)) { sendJson(res, 400, bad('not a tool that needs approval')); return true }
+      logPolicy('approval.denied', { account: who(account), tool, decision: 'deny', source: 'card' })
       sendJson(res, 204)
       return true
     }

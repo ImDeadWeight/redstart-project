@@ -394,6 +394,16 @@ await test('grants routes: list, add (logged), revoke own only, and the import d
   eq((await route('POST', '/approvals/grants/import', BOB_ACCOUNT, { nope: 1 })).status, 400, 'a malformed import')
 })
 
+await test('POST /approvals/denied logs a card denial for an enforced tool only, and runs nothing', async () => {
+  const r = await route('POST', '/approvals/denied', ALICE_ACCOUNT, { tool: 'delete_file' })
+  eq(r.status, 204, 'denied delete_file')
+  const last = policyLines().at(-1)
+  eq([last.event, last.account, last.tool, last.decision, last.source], ['approval.denied', 'alice', 'delete_file', 'deny', 'card'], 'logged')
+  eq((await route('POST', '/approvals/denied', ALICE_ACCOUNT, { tool: 'create_document' })).status, 400, 'a tool Nest does not enforce')
+  eq((await route('POST', '/approvals/denied', ALICE_ACCOUNT, {})).status, 400, 'no tool')
+  eq((await route('GET', '/approvals/denied', ALICE_ACCOUNT)).handled, false, 'GET is not ours')
+})
+
 logger.closeLogger()
 
 const failed = results.filter((r) => !r.pass)

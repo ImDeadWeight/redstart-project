@@ -27,6 +27,7 @@ import { permissionsStore } from '$lib/stores/permissions.svelte';
 import { extractBase64Attachments } from './agentic-attachments';
 import { parseResourceLine, resourceKind } from '$lib/utils/resource-links';
 import { fetchFileBlob } from '$lib/utils/agentic';
+import { apiPost } from '$lib/utils/api-fetch';
 import type { AgentPorts, AgentToolCall, AgentContentPart, ToolExecution } from '$lib/agent-core';
 import type { AgenticSessionState } from './agentic-session.svelte';
 import type { MCPToolCall, DatabaseMessageExtraImageFile } from '$lib/types';
@@ -175,6 +176,13 @@ export class AgenticToolExec {
 					);
 					const allowed = decision !== ToolPermissionDecision.DENY;
 					if (allowed && asked && call.id) approvedByPerson.add(call.id);
+					// A Deny on the card stops the call here, so it never reaches Nest.
+					// Tell Nest for its decision log, for its own destructive tools only
+					// (getNestToolMeta has no class for anyone else's). Fire and forget:
+					// a lost log line must not hold up the flow (live test, 2026-11-12).
+					if (!allowed && asked && mcpStore.getNestToolMeta(toolName).toolClass === 'destructive') {
+						void apiPost('/approvals/denied', { tool: toolName }).catch(() => {});
+					}
 					return allowed;
 				}
 			},
