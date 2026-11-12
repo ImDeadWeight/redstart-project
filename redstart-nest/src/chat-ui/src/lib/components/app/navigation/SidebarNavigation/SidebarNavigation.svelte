@@ -15,7 +15,8 @@
 	import { toast } from 'svelte-sonner';
 	import { projectsStore } from '$lib/stores/projects.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { DialogConfirmation } from '$lib/components/app';
+	import { ActionIcon, DialogConfirmation } from '$lib/components/app';
+	import { TooltipSide } from '$lib/enums';
 	import SidebarNavigationActions from './SidebarNavigationActions.svelte';
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
@@ -279,38 +280,44 @@
 	/>
 {/snippet}
 
+<!--
+	Three bands: the header (name, page buttons, Search) and the logout ribbon
+	stay put; only the lists between them (Pinned, Projects, Recent) scroll.
+	min-h-0 lets the scroller shrink inside the column, and shrink-0 keeps the
+	two fixed bands from being squeezed by a long list.
+-->
 <div class="flex h-full flex-col">
-	<ScrollArea class="h-full flex-1">
-		<Sidebar.Header class="gap-4 bg-sidebar/50 p-3 backdrop-blur-lg md:pt-4 md:pb-2">
-			<div class="flex items-center justify-between gap-2">
-				<a href={ROUTES.START} onclick={handleMobileSidebarItemClick}>
-					<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">
-						{APP_NAME}
-					</h1>
-				</a>
+	<Sidebar.Header class="shrink-0 gap-4 bg-sidebar/50 p-3 backdrop-blur-lg md:pt-4 md:pb-2">
+		<div class="flex items-center justify-between gap-2">
+			<a href={ROUTES.START} onclick={handleMobileSidebarItemClick}>
+				<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">
+					{APP_NAME}
+				</h1>
+			</a>
 
-				<div class="flex items-center gap-1">
-					<Button
-						class="rounded-full md:hidden"
-						variant="ghost"
-						size="icon"
-						onclick={() => sidebar.toggle()}
-					>
-						<X class="h-4 w-4" />
-						<span class="sr-only">Close sidebar</span>
-					</Button>
-				</div>
+			<div class="flex items-center gap-1">
+				<Button
+					class="rounded-full md:hidden"
+					variant="ghost"
+					size="icon"
+					onclick={() => sidebar.toggle()}
+				>
+					<X class="h-4 w-4" />
+					<span class="sr-only">Close sidebar</span>
+				</Button>
 			</div>
+		</div>
 
-			<SidebarNavigationActions
-				bind:this={chatSidebarActions}
-				{handleMobileSidebarItemClick}
-				bind:isSearchModeActive
-				bind:searchQuery
-				onSearchDeactivated={handleSearchDeactivated}
-			/>
-		</Sidebar.Header>
+		<SidebarNavigationActions
+			bind:this={chatSidebarActions}
+			{handleMobileSidebarItemClick}
+			bind:isSearchModeActive
+			bind:searchQuery
+			onSearchDeactivated={handleSearchDeactivated}
+		/>
+	</Sidebar.Header>
 
+	<ScrollArea class="min-h-0 flex-1 border-t border-sidebar-border/50">
 		{#if !isSearchModeActive && pinnedConversations.length > 0}
 			<Sidebar.Group class="p-0 px-4">
 				<Sidebar.GroupLabel>
@@ -394,7 +401,7 @@
 			</Sidebar.Group>
 		{/if}
 
-		<Sidebar.Group class="mt-2 h-[calc(100vh-21rem)] space-y-2 p-0 px-3">
+		<Sidebar.Group class="mt-2 space-y-2 p-0 px-3 pb-2">
 			{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
 				<Sidebar.GroupLabel>
 					{isSearchModeActive ? 'Search results' : 'Recent conversations'}
@@ -426,19 +433,25 @@
 	</ScrollArea>
 
 	<!--
-		Pinned below the scroll area, so it stays put however long the
-		conversation list grows. Sits outside ScrollArea deliberately.
+		A ribbon under the scroll area, bounding the conversation list's bottom
+		end, so it stays put however long the list grows. Sits outside
+		ScrollArea deliberately, and shrink-0 with the scroller's min-h-0 so
+		the list can never push it below the window (it was full-width and
+		easy to lose there until 2026-11-12). The icon matches the icon rail.
 	-->
 	{#if authStore.user}
-		<div class="border-t border-sidebar-border/50 bg-sidebar/50 p-3 backdrop-blur-lg">
-			<Button
-				class="w-full justify-start gap-2 px-2 backdrop-blur-none!"
-				variant="ghost"
+		<div
+			class="flex h-11 shrink-0 items-center border-t border-sidebar-border/50 bg-sidebar/50 px-2 backdrop-blur-lg"
+		>
+			<ActionIcon
+				icon={LogOut}
+				tooltip="Log out"
+				tooltipSide={TooltipSide.TOP}
+				size="lg"
+				iconSize="h-4 w-4"
+				class="h-8 w-8 rounded-full hover:bg-accent!"
 				onclick={handleLogout}
-			>
-				<LogOut class="h-4 w-4 shrink-0" />
-				<span>Log out</span>
-			</Button>
+			/>
 		</div>
 	{/if}
 </div>
