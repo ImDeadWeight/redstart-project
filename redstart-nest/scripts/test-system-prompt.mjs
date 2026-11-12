@@ -206,9 +206,11 @@ await test('🔒 the destructive-confirmation clause names only what was sent', 
     toolNames: ['read_file', 'write_file', 'delete_file'],
     now: NOW,
   })
-  assert(prompt.includes('Confirm with the user before calling delete_file'), 'delete_file not named')
+  assert(prompt.includes('Every call to delete_file needs the user\'s approval'), 'delete_file not named')
   assert(!prompt.includes('write_file,'), 'a write-class tool was pulled into the destructive clause')
-  assert(prompt.includes('covers one call, not a session'), 'confirmation is not scoped per call')
+  assert(prompt.includes('the app asks them on each call'), 'approval is not said to be per call')
+  assert(prompt.includes('do not ask in the chat as well'), 'the model is not told the app asks (2026-11-12: it asked twice)')
+  assert(!/Confirm with the user before calling/.test(prompt), 'the old line, which made models ask in chat too, is back')
   return 'delete_file only'
 })
 
@@ -227,7 +229,7 @@ await test('🔒 the Twig fs_delete_file reaches the confirmation clause', async
     clientToolNames: ['fs_read_file', 'fs_write_file', 'fs_delete_file'],
     now: NOW,
   })
-  assert(prompt.includes('Confirm with the user before calling fs_delete_file'), 'fs_delete_file is not in the confirmation clause')
+  assert(prompt.includes('Every call to fs_delete_file needs the user\'s approval'), 'fs_delete_file is not in the approval clause')
   return 'the one delete no server policy can reach is covered'
 })
 

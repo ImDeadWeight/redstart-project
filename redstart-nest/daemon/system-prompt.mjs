@@ -291,9 +291,19 @@ function buildToolPolicy(config, hasTools, toolNames) {
 
   // The destructive class exists in tools-definitions.mjs and governs the
   // server's own gate; until now nothing carried it to the model.
+  //
+  // Until 2026-11-12 this said "Confirm with the user before calling ...,
+  // every time". That was written when the chat app's permission card was the
+  // only check and the model was the one to ask. Since agent-runtime Phase 2
+  // the app asks on every destructive call (chat-ui's card for Nest's tools,
+  // enforced by Nest; Twig's card for fs_delete_file), so the old line had
+  // models ask in the chat as well: in the live test the 35B and Ornith asked
+  // with ask_user before a delete, then the card asked again. Telling the
+  // model the app asks is what stops the second question; "never batch"
+  // stays, since one card covers one call.
   const destructive = names.filter(name => classifyTool(name) === 'destructive')
   if (destructive.length > 0) {
-    parts.push(`Confirm with the user before calling ${andList(destructive.sort())}, every time — a confirmation covers one call, not a session. Never batch them.`)
+    parts.push(`Every call to ${andList(destructive.sort())} needs the user's approval, and the app asks them on each call, so do not ask in the chat as well. Never batch them.`)
   }
 
   // No schema has a field for what to do when the call comes back wrong, and

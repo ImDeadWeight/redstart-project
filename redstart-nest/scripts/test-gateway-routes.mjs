@@ -563,7 +563,7 @@ async function main() {
       tools: [toolDef('delete_file'), toolDef('fs_read_file')],
     })
     const system = systemOf()
-    assert(/Confirm with the user before calling delete_file/.test(system), 'a permitted capability lost its claim')
+    assert(/Every call to delete_file needs the user's approval/.test(system), 'a permitted capability lost its claim')
     assert(/Two different computers/.test(system), 'a permitted client tool lost its locality block')
     updateGatewayConfig(baseConfig)
   })
@@ -654,7 +654,7 @@ async function main() {
       tools: [toolDef('delete_file')],
     })
     const names = (lastForwarded.tools || []).map(t => t.function.name)
-    const claimed = /Confirm with the user before calling delete_file/.test(systemOf())
+    const claimed = /Every call to delete_file needs the user's approval/.test(systemOf())
     assert(claimed === names.includes('delete_file'),
       `the prompt ${claimed ? 'claimed' : 'did not claim'} a tool the payload ${names.includes('delete_file') ? 'carried' : 'did not carry'}`)
     updateGatewayConfig(baseConfig)
