@@ -113,12 +113,37 @@ export function openSteps(steps) {
 }
 
 /**
+ * Are two plans the same steps, in the same order, with the same states and notes?
+ *
+ * @param {readonly import('./types').PlanStep[] | null | undefined} a
+ * @param {readonly import('./types').PlanStep[] | null | undefined} b
+ */
+export function samePlan(a, b) {
+	if (!a || !b || a.length !== b.length) return false;
+	return a.every(
+		(s, i) => s.text === b[i].text && s.status === b[i].status && (s.note ?? '') === (b[i].note ?? '')
+	);
+}
+
+/**
  * The tool result the model reads after saving.
  *
+ * `unchanged`: the call repeated the plan it already had. Said plainly, with
+ * the step to do instead: in the live test (2026-11-12) Ornith, read
+ * "Plan saved. Next open step: Delete test-a.txt." after each identical
+ * update_plan and called it again, two per turn, for three minutes, never
+ * deleting anything.
+ *
  * @param {readonly import('./types').PlanStep[]} steps
+ * @param {{ unchanged?: boolean }} [opts]
  */
-export function formatPlanResult(steps) {
+export function formatPlanResult(steps, { unchanged = false } = {}) {
 	const next = steps.find((s) => s.status === 'in_progress') ?? steps.find((s) => s.status === 'pending');
+	if (unchanged) {
+		return next
+			? `Nothing changed: the plan already says this. Do the next open step now ("${next.text}") with the tool it needs, and call update_plan again only when a step's status changes.`
+			: 'Nothing changed: every step was already done or skipped. Give your answer.';
+	}
 	return next ? `Plan saved. Next open step: ${next.text}.` : 'All steps are done or skipped.';
 }
 
@@ -141,7 +166,10 @@ function planLines(steps) {
  */
 export function planTailNote(steps) {
 	if (!steps || openSteps(steps).length === 0) return null;
-	return `[Automatic note, not from the user] Current plan ([x] done, [>] in progress, [ ] pending, [-] skipped):\n${planLines(steps)}\nKeep it current with update_plan.`;
+	// "when a step's status changes", not "keep it current": the bare
+	// instruction, sent with every request, read to Ornith as "call
+	// update_plan now", after every update (live test, 2026-11-12).
+	return `[Automatic note, not from the user] Current plan ([x] done, [>] in progress, [ ] pending, [-] skipped):\n${planLines(steps)}\nCall update_plan only when a step's status changes.`;
 }
 
 /** How the completion nudge starts, so a host can tell it from the plan note. */

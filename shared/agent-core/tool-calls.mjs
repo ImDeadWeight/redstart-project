@@ -30,7 +30,7 @@
 
 import { buildFinalTimings } from './timings.mjs';
 import { ASK_USER_TOOL, formatAskAnswer, parseAskArguments } from './ask-user.mjs';
-import { UPDATE_PLAN_TOOL, formatPlanResult, parsePlanArguments } from './update-plan.mjs';
+import { UPDATE_PLAN_TOOL, formatPlanResult, parsePlanArguments, samePlan } from './update-plan.mjs';
 
 /** @typedef {import('./types').AgentToolCall} AgentToolCall */
 /** @typedef {import('./types').RawToolCall} RawToolCall */
@@ -263,8 +263,9 @@ export async function runToolCalls(params) {
 				plan.invalid?.(toolCall, parsed.error);
 			} else {
 				try {
-					await plan.save(parsed.steps, toolCall);
-					result = formatPlanResult(parsed.steps);
+					const unchanged = samePlan(plan.get(), parsed.steps);
+					if (!unchanged) await plan.save(parsed.steps, toolCall);
+					result = formatPlanResult(parsed.steps, { unchanged });
 				} catch (error) {
 					result = `Error: the plan could not be saved: ${error instanceof Error ? error.message : String(error)}`;
 					toolSuccess = false;

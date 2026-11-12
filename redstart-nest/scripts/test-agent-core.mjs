@@ -516,6 +516,34 @@ const planCall = (id, steps) => call(id, 'update_plan', JSON.stringify({ steps }
 const S = (text, status, note) => ({ text, status, ...(note ? { note } : {}) })
 const lastSent = (h, i) => h.sentMessages[i].at(-1)
 
+await test('an update_plan that changes nothing is not saved again, and says to do the next step (live test, 2026-11-12)', async () => {
+  // Ornith repeated the same update_plan two per turn for three minutes,
+  // each answered "Plan saved. Next open step: ...", and never deleted.
+  const same = [S('Delete test-a.txt', 'in_progress'), S('Delete test-b.txt', 'pending')]
+  const plan = { steps: same }
+  const h = harness({
+    plan,
+    turns: [
+      async (acc) => { acc.toolCalls = [planCall('p1', same)] },
+      async (acc) => { acc.content = 'Done.' },
+    ],
+  })
+  await h.done
+  assert(!h.calls.includes('plan-save:p1'), 'an unchanged plan was saved again')
+  const r = h.toolResults[0].content
+  assert(r.startsWith('Nothing changed: the plan already says this. Do the next open step now ("Delete test-a.txt")'), r)
+  const changed = harness({ plan: { steps: same }, turns: [async (acc) => { acc.toolCalls = [planCall('p2', [S('Delete test-a.txt', 'done'), S('Delete test-b.txt', 'in_progress')])] }] })
+  await changed.done
+  assert(changed.calls.includes('plan-save:p2'), 'a changed plan was not saved')
+})
+
+await test('the plan note asks for update_plan only when a step changes', async () => {
+  const { planTailNote } = await import('../../shared/agent-core/update-plan.mjs')
+  const note = planTailNote([S('a', 'pending')])
+  assert(note.endsWith("Call update_plan only when a step's status changes."), note)
+  assert(!/Keep it current/.test(note), 'the old wording, which read as "call it now", is back')
+})
+
 await test('update_plan goes to the plan port, not the gate or the executor; the result names the next step', async () => {
   const plan = {}
   const h = harness({
