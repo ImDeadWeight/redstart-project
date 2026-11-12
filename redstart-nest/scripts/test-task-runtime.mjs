@@ -216,6 +216,359 @@ await test('a client can neither set nor clear activeTaskId', async () => {
   eq(created.json.activeTaskId, undefined, 'on create')
 })
 
+console.log('\n-- the runner, against a fake model and fake tools (3.5) --')
+
+const runner = await import('../daemon/task-runner.mjs')
+const ledger = await import('../daemon/approval-ledger.mjs')
+const grantsMod = await import('../daemon/approval-grants.mjs')
+const { memoryKey } = await import('../daemon/memory-storage.mjs')
+const { DENIED_RESULT } = await import('../../shared/agent-core/tool-calls.mjs')
+
+// Auth off for this section (a fresh data folder requires login): every task
+// runs as the null account, the auth-off posture. The account checks have
+// their own test at the end.
+const accountsStore = await import('../daemon/accounts-storage.mjs')
+accountsStore.setAuthRequired(false)
+const ANON_KEY = memoryKey(null)
+const SCOPE = 'device-1' // the conversations scope (a device id, auth off)
+
+function sse(chunks) {
+  const lines = chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('') + 'data: [DONE]\n\n'
+  return new Response(lines, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+}
+const say = (text) => [{ choices: [{ delta: { content: text } }], model: 'fake-model' }]
+const call = (id, name, args = {}) => [{ choices: [{ delta: { tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] } }] }]
+
+const TOOLS = ['read_document', 'create_document', 'delete_file', 'ask_user', 'update_plan']
+  .map((name) => ({ name, description: name, inputSchema: { type: 'object', properties: {} } }))
+
+/**
+ * A scripted model: each entry answers one completion, given its messages.
+ * `calls` records every tool call the runner made; `bodies` every request.
+ */
+function fakeWorld(script, extra = {}) {
+  const world = { bodies: [], calls: [], turn: 0 }
+  runner._setTestSeams({
+    prepareCompletion: async (parsed) => ({ parsed, wire: {} }),
+    effectiveConfigFor: async () => ({}),
+    toolCatalogFor: async () => TOOLS,
+    callToolAs: async (account, name, args, opts) => {
+      world.calls.push({ name, args, opts })
+      return { content: [{ type: 'text', text: `${name} ran` }] }
+    },
+    upstreamPort: () => 9999,
+    completionsInFlight: () => 0,
+    fetchCompletion: async (_port, body) => {
+      world.bodies.push(body)
+      const step = script[world.turn++]
+      if (!step) return sse(say('(script ran out)'))
+      return typeof step === 'function' ? step(body) : sse(step)
+    },
+    modelPollMs: 20,
+    busyPollMs: 10,
+    ...extra,
+  })
+  return world
+}
+
+async function waitFor(cond, what, ms = 3000) {
+  const end = Date.now() + ms
+  while (Date.now() < end) {
+    const v = cond()
+    if (v) return v
+    await new Promise((r) => setTimeout(r, 10))
+  }
+  throw new Error(`timed out waiting for ${what}`)
+}
+const statusOf = (id) => store.getTask(id)?.status
+const ended = (id) => store.TERMINAL_STATES.includes(statusOf(id))
+let convCounter = 0
+function newConversation() {
+  const id = `conv-run-${++convCounter}`
+  convs.createConversation(SCOPE, { id, name: 'run', currNode: '', messages: [] })
+  return id
+}
+function branchOf(convId) {
+  const { currentBranch } = runnerHelpers
+  return currentBranch(convs.getConversation(SCOPE, convId))
+}
+const runnerHelpers = await import('../../shared/agent-core/stored-messages.mjs')
+function start(convId, content = 'do it', extra = {}) {
+  const r = runner.startTask({ account: null, storeAccountId: SCOPE, conversationId: convId, content, ...extra })
+  assert(r.ok, `startTask: ${r.error}`)
+  return r.task
+}
+
+await test('a task answers: the user message and the reply are written, the task is done, the chat is freed', async () => {
+  fakeWorld([say('All done.')])
+  const conv = newConversation()
+  const t = start(conv, 'hello there')
+  eq(convs.getConversation(SCOPE, conv).activeTaskId, t.id, 'claimed while running')
+  await waitFor(() => ended(t.id), 'end')
+  eq(statusOf(t.id), 'done', 'status')
+  const b = branchOf(conv)
+  eq(b.map((m) => [m.role, m.content]), [['system', ''], ['user', 'hello there'], ['assistant', 'All done.']], 'branch')
+  eq(b.at(-1).model, 'fake-model', 'model recorded')
+  eq(convs.getConversation(SCOPE, conv).activeTaskId, undefined, 'freed')
+  const types = store.readEvents(t.id).map((e) => e.type)
+  assert(types.includes('message') && types.includes('turn'), `events: ${types}`)
+})
+
+await test('a read tool runs without asking; results chain under the call; the conversation id travels', async () => {
+  const w = fakeWorld([call('c1', 'read_document', { path: 'a.md' }), say('It says hi.')])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => ended(t.id), 'end')
+  eq(w.calls.map((c) => [c.name, c.args.path, c.opts.conversationId, c.opts.approvalId]), [['read_document', 'a.md', conv, undefined]], 'call')
+  eq(branchOf(conv).slice(1).map((m) => m.role), ['user', 'assistant', 'tool', 'assistant'], 'chain')
+  eq(branchOf(conv)[3].content, 'read_document ran', 'result text')
+  // The second request carried the call and its result back to the model.
+  eq(w.bodies[1].messages.slice(-2).map((m) => m.role), ['assistant', 'tool'], 'history sent')
+})
+
+await test('a write parks on an approval the task holds; "once" runs it, and the approval is not left behind', async () => {
+  ledger._reset()
+  const w = fakeWorld([call('c1', 'create_document', { name: 'x.md' }), say('Saved.')])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'waiting_approval', 'waiting_approval')
+  const waiting = store.getTask(t.id).waiting
+  eq([waiting.kind, waiting.tool, waiting.rule], ['approval', 'create_document', 'prompt'], 'waiting')
+  eq(w.calls.length, 0, 'nothing ran yet')
+  assert(ledger.decide(waiting.approval.id, ANON_KEY, 'once').ok, 'decided')
+  await waitFor(() => ended(t.id), 'end')
+  eq([statusOf(t.id), w.calls.map((c) => c.name)], ['done', ['create_document']], 'ran')
+  eq(ledger.pendingCount(), 0, 'nothing pending')
+})
+
+await test('a delete (enforced) carries the approval id to callToolAs, which spends it', async () => {
+  ledger._reset()
+  const w = fakeWorld([call('c1', 'delete_file', { path: 'old.txt' }), say('Deleted.')])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'waiting_approval', 'waiting_approval')
+  const id = store.getTask(t.id).waiting.approval.id
+  ledger.decide(id, ANON_KEY, 'once')
+  await waitFor(() => ended(t.id), 'end')
+  eq(w.calls[0].opts.approvalId, id, 'approval id passed')
+})
+
+await test('a denied call gets the denial as its result, and the task goes on', async () => {
+  ledger._reset()
+  const w = fakeWorld([call('c1', 'delete_file', { path: 'x' }), say('OK, I left it.')])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'waiting_approval', 'waiting_approval')
+  ledger.decide(store.getTask(t.id).waiting.approval.id, ANON_KEY, 'deny')
+  await waitFor(() => ended(t.id), 'end')
+  eq([statusOf(t.id), w.calls.length], ['done', 0], 'nothing ran')
+  eq(branchOf(conv).find((m) => m.role === 'tool').content, DENIED_RESULT, 'denial')
+})
+
+await test('a standing grant runs a write without parking; it never covers a delete', async () => {
+  ledger._reset()
+  grantsMod.addGrant(ANON_KEY, 'create_document')
+  const w = fakeWorld([call('c1', 'create_document', {}), call('c2', 'delete_file', {}), say('done')])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'waiting_approval', 'delete parks')
+  eq(w.calls.map((c) => c.name), ['create_document'], 'the write ran unasked')
+  eq(store.getTask(t.id).waiting.tool, 'delete_file', 'the delete waits')
+  runner.cancelTask(t.id)
+  await waitFor(() => ended(t.id), 'end')
+  for (const g of grantsMod.listGrants(ANON_KEY)) grantsMod.revokeGrant(ANON_KEY, g.id)
+})
+
+await test('ask_user waits for an answer, which becomes the call\'s result', async () => {
+  fakeWorld([call('q1', 'ask_user', { question: 'Which city?', options: ['Oslo', 'Rome'] }), say('Rome it is.')])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'waiting_user', 'waiting_user')
+  const waiting = store.getTask(t.id).waiting
+  eq([waiting.kind, waiting.question, waiting.options], ['question', 'Which city?', ['Oslo', 'Rome']], 'waiting')
+  eq(runner.answerTask(t.id, { continue: true }).status, 400, 'a continue answer to a question')
+  assert(runner.answerTask(t.id, { chosen: ['Rome'] }).ok, 'answered')
+  await waitFor(() => ended(t.id), 'end')
+  assert(/Rome/.test(branchOf(conv).find((m) => m.role === 'tool').content), 'answer in the result')
+})
+
+await test('a message typed while a question is open is its answer', async () => {
+  fakeWorld([call('q1', 'ask_user', { question: 'Name?' }), say('Thanks.')])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'waiting_user', 'waiting_user')
+  eq(runner.steerTask(t.id, 'Priya').as, 'answer', 'taken as the answer')
+  await waitFor(() => ended(t.id), 'end')
+  assert(/Priya/.test(branchOf(conv).find((m) => m.role === 'tool').content), 'answer in the result')
+})
+
+await test('the turn limit asks whether to go on (D30); "no" ends the task', async () => {
+  fakeWorld([call('c1', 'read_document', {}), call('c2', 'read_document', {}), say('never reached')])
+  const conv = newConversation()
+  const t = start(conv, 'go', { maxTurns: 1 })
+  await waitFor(() => statusOf(t.id) === 'waiting_user', 'continue prompt')
+  eq(store.getTask(t.id).waiting.kind, 'continue', 'kind')
+  assert(runner.answerTask(t.id, { continue: false }).ok, 'answered')
+  await waitFor(() => ended(t.id), 'end')
+  eq(statusOf(t.id), 'done', 'status')
+})
+
+await test('steering: the turn ends, the message is added, the loop goes on', async () => {
+  let release
+  const gate = new Promise((r) => { release = r })
+  const w = fakeWorld([async () => { await gate; return sse(say('first answer')) }, say('second answer')])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => w.bodies.length === 1, 'first turn started')
+  eq(runner.steerTask(t.id, 'also do this').as, 'steer', 'queued')
+  release()
+  await waitFor(() => ended(t.id), 'end')
+  eq(branchOf(conv).slice(1).map((m) => [m.role, m.content]),
+    [['user', 'do it'], ['assistant', 'first answer'], ['user', 'also do this'], ['assistant', 'second answer']], 'branch')
+})
+
+await test('cancel while parked: cancelled, the approval withdrawn, the chat freed', async () => {
+  ledger._reset()
+  fakeWorld([call('c1', 'delete_file', {})])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'waiting_approval', 'parked')
+  assert(runner.cancelTask(t.id).ok, 'cancel')
+  await waitFor(() => ended(t.id), 'end')
+  eq([statusOf(t.id), ledger.pendingCount(), convs.getConversation(SCOPE, conv).activeTaskId], ['cancelled', 0, undefined], 'after')
+})
+
+await test('no model: waiting_model, then it runs once one is loaded', async () => {
+  let port = null
+  fakeWorld([say('back')], { upstreamPort: () => port })
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'waiting_model', 'waiting_model')
+  port = 9999
+  await waitFor(() => ended(t.id), 'end')
+  eq(statusOf(t.id), 'done', 'done')
+})
+
+await test('the model goes away mid-task: waiting_model, then the task goes on from where it was', async () => {
+  let gone = true
+  const w = fakeWorld([
+    call('c1', 'read_document', {}),
+    async () => { if (gone) { gone = false; throw new TypeError('fetch failed') } return sse(say('unused')) },
+    say('finished after the restart'),
+  ])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => ended(t.id), 'end')
+  eq(statusOf(t.id), 'done', 'done')
+  assert(store.readEvents(t.id).some((e) => e.status === 'waiting_model'), 'was waiting_model')
+  eq(branchOf(conv).at(-1).content, 'finished after the restart', 'went on')
+  eq(w.calls.length, 1, 'the tool ran once, not again')
+})
+
+await test('a chat\'s completion in flight goes first (D29)', async () => {
+  let busy = 1
+  const w = fakeWorld([say('after the chat')], { completionsInFlight: () => busy })
+  const conv = newConversation()
+  const t = start(conv)
+  await new Promise((r) => setTimeout(r, 80))
+  eq(w.bodies.length, 0, 'held while a chat generates')
+  busy = 0
+  await waitFor(() => ended(t.id), 'end')
+})
+
+await test('a second task on a conversation that has one is refused; an unknown conversation is 404', async () => {
+  ledger._reset()
+  fakeWorld([call('c1', 'delete_file', {})])
+  const conv = newConversation()
+  const t = start(conv)
+  const again = runner.startTask({ account: null, storeAccountId: SCOPE, conversationId: conv, content: 'x' })
+  eq([again.ok, again.status], [false, 409], 'second')
+  eq(runner.startTask({ account: null, storeAccountId: SCOPE, conversationId: 'nope', content: 'x' }).status, 404, 'unknown')
+  eq(runner.startTask({ account: null, storeAccountId: 'other-device', conversationId: conv, content: 'x' }).status, 404, 'another scope')
+  runner.cancelTask(t.id)
+  await waitFor(() => ended(t.id), 'end')
+})
+
+await test('a deleted conversation cancels its task at the next write', async () => {
+  let release
+  const gate = new Promise((r) => { release = r })
+  fakeWorld([async () => { await gate; return sse(say('too late')) }])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'running', 'running')
+  convs.deleteConversation(SCOPE, conv)
+  release()
+  await waitFor(() => ended(t.id), 'end')
+  eq(statusOf(t.id), 'cancelled', 'cancelled')
+})
+
+await test('sampling settings travel; unknown fields are dropped; the project and mode ride as ids', async () => {
+  const w = fakeWorld([say('ok')])
+  const conv = newConversation()
+  convs.updateConversation(SCOPE, conv, { promptMode: 'research', projectId: 'p-1', thinkingEnabled: true })
+  const t = start(conv, 'go', { generation: { temperature: 0.3, max_tokens: 512, evil: 'x', model: 'other' } })
+  await waitFor(() => ended(t.id), 'end')
+  const b = w.bodies[0]
+  eq([b.temperature, b.max_tokens, b.evil, b.model, b.redstart_mode, b.redstart_project, b.chat_template_kwargs.enable_thinking],
+    [0.3, 512, undefined, undefined, 'research', 'p-1', true], 'body')
+})
+
+await test('auth turned on after an auth-off task started: the task fails at its next turn', async () => {
+  const accounts = await import('../daemon/accounts-storage.mjs')
+  fakeWorld([say('never')])
+  const conv = newConversation()
+  accounts.setAuthRequired(true)
+  try {
+    const t = start(conv)
+    await waitFor(() => ended(t.id), 'end')
+    eq(statusOf(t.id), 'failed', 'failed')
+    assert(/Login was turned on/.test(store.getTask(t.id).error), store.getTask(t.id).error)
+  } finally {
+    accounts.setAuthRequired(false)
+  }
+})
+
+await test('accountForTask: a disabled or deleted account stops its task; an active one runs as itself', async () => {
+  const { accountForTask } = await import('../daemon/auth.mjs')
+  accountsStore.setAuthRequired(true)
+  try {
+    accountsStore.insertAccount({ id: 'acct-on', username: 'onn', tier: 'user', status: 'active' })
+    accountsStore.insertAccount({ id: 'acct-off', username: 'offf', tier: 'user', status: 'disabled' })
+    const on = accountForTask('acct-on')
+    eq([on.ok, on.account?.username], [true, 'onn'], 'active')
+    assert(/disabled/.test(accountForTask('acct-off').reason), 'disabled')
+    assert(/no longer exists/.test(accountForTask('acct-gone').reason), 'deleted')
+  } finally {
+    accountsStore.setAuthRequired(false)
+  }
+})
+
+await test('the real prepareCompletion runs on a task\'s request: the prompt is composed, redstart_* fields stripped', async () => {
+  const w = fakeWorld([say('ok')])
+  runner._setTestSeams({ ...seamsWithoutPrepare(w) })
+  const conv = newConversation()
+  convs.updateConversation(SCOPE, conv, { promptMode: 'research' })
+  const t = start(conv)
+  await waitFor(() => ended(t.id), 'end')
+  eq(statusOf(t.id), 'done', `status (${store.getTask(t.id).error})`)
+  const b = w.bodies[0]
+  eq([b.messages[0].role, 'redstart_mode' in b, 'redstart_project' in b], ['system', false, false], 'body')
+  assert(/Redstart/i.test(b.messages[0].content), 'the composed prompt')
+})
+
+/** fakeWorld's seams with the gateway's own prepareCompletion left in place. */
+function seamsWithoutPrepare(w) {
+  return {
+    effectiveConfigFor: async () => ({}),
+    toolCatalogFor: async () => TOOLS,
+    callToolAs: async () => ({ content: [{ type: 'text', text: 'ran' }] }),
+    upstreamPort: () => 9999,
+    completionsInFlight: () => 0,
+    fetchCompletion: async (_port, body) => { w.bodies.push(body); return sse(say('ok')) },
+    modelPollMs: 20,
+  }
+}
+
 const failed = results.filter((r) => !r.pass)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)
 try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}

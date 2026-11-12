@@ -61,7 +61,7 @@ export function approvalSummary(tool, args) {
 
 /**
  * @typedef {{ id: string, accountKey: string, tool: string, argsDigest: string,
- *   summary: string, expiresAt: number, decision: 'once' | 'always' | 'deny' | null }} Pending
+ *   summary: string, expiresAt: number, decision: 'once' | 'always' | 'deny' | null, holder?: string | null }} Pending
  */
 
 /** id → Pending */
@@ -85,16 +85,41 @@ function sweep() {
 }
 
 /**
+ * A pending approval a background task holds (task-runner.mjs) lives this
+ * long: nobody may look at the chat for days. The task withdraws it when it
+ * ends (withdraw), and a restart drops it like any other.
+ */
+export const HELD_APPROVAL_TTL_MS = 30 * 24 * 60 * 60 * 1000
+
+/** Called with (id, decision, pending) after every decision. */
+const decidedListeners = new Set()
+
+/**
+ * Hear every decision (the task runner resumes a parked call on it).
+ *
+ * @param {(id: string, decision: 'once' | 'always' | 'deny', p: { accountKey: string, tool: string, holder: string | null }) => void} fn
+ * @returns {() => void} stop listening
+ */
+export function onDecided(fn) {
+  decidedListeners.add(fn)
+  return () => decidedListeners.delete(fn)
+}
+
+/**
  * Open a pending approval for one call.
  *
- * @param {{ accountKey: string, tool: string, args: unknown }} call
+ * `holder` (a task id) marks one a background task is parked on: it lives
+ * HELD_APPROVAL_TTL_MS, and the per-account cap never evicts it. A chat
+ * opening its twenty-first card must not silently strand a task.
+ *
+ * @param {{ accountKey: string, tool: string, args: unknown, holder?: string | null }} call
  * @returns {{ id: string, tool: string, summary: string, argsDigest: string, expiresAt: number }}
  */
-export function requestApproval({ accountKey, tool, args }) {
+export function requestApproval({ accountKey, tool, args, holder = null }) {
   if (typeof accountKey !== 'string' || !accountKey) throw new Error('requestApproval: accountKey is required')
   sweep()
-  const mine = [...pending.values()].filter((p) => p.accountKey === accountKey)
-  if (mine.length >= MAX_PENDING_PER_ACCOUNT) {
+  const mine = [...pending.values()].filter((p) => p.accountKey === accountKey && !p.holder)
+  if (!holder && mine.length >= MAX_PENDING_PER_ACCOUNT) {
     // Map iteration is insertion order: the first of mine is the oldest.
     pending.delete(mine[0].id)
   }
@@ -104,11 +129,17 @@ export function requestApproval({ accountKey, tool, args }) {
     tool,
     argsDigest: argsDigest(args),
     summary: approvalSummary(tool, args),
-    expiresAt: now() + APPROVAL_TTL_MS,
+    expiresAt: now() + (holder ? HELD_APPROVAL_TTL_MS : APPROVAL_TTL_MS),
     decision: null,
+    holder: typeof holder === 'string' && holder ? holder : null,
   }
   pending.set(p.id, p)
   return { id: p.id, tool: p.tool, summary: p.summary, argsDigest: p.argsDigest, expiresAt: p.expiresAt }
+}
+
+/** Remove a pending approval its holder no longer waits on (the task ended). */
+export function withdraw(id) {
+  return pending.delete(id)
 }
 
 /**
@@ -128,6 +159,9 @@ export function decide(id, accountKey, decision) {
   if (p.decision !== null) return { ok: false, error: 'already decided' }
   p.decision = decision
   if (decision === 'deny') pending.delete(id)
+  for (const fn of decidedListeners) {
+    try { fn(id, decision, { accountKey: p.accountKey, tool: p.tool, holder: p.holder ?? null }) } catch { /* a listener's failure is its own */ }
+  }
   return { ok: true, tool: p.tool }
 }
 

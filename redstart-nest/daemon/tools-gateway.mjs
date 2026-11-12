@@ -821,6 +821,19 @@ export function updateGatewayConfig(config) {
 }
 
 /**
+ * The config one account sees, as a request from it would resolve it: the
+ * running gateway's, narrowed by its role. For the daemon's task loop, which
+ * has no request (agent-runtime Phase 3). Null when the gateway is not running
+ * (no model loaded): there is nothing to send a completion to.
+ *
+ * @param {any} account null only with auth off
+ */
+export function effectiveConfigFor(account) {
+  if (!activeConfig) return null
+  return resolveEffectiveConfig(account, activeConfig, roleFor(account))
+}
+
+/**
  * Is the RUNNING gateway filtering tools?
  *
  * Deliberately distinct from what the profile says. A profile field only
