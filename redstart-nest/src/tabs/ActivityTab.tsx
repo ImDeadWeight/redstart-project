@@ -1,6 +1,8 @@
-// Activity tab — what approval policy decided, and who always allows what
-// (agent-runtime plan Phase 2, D13/D14).
+// Activity tab — background tasks, what approval policy decided, and who
+// always allows what (agent-runtime plan Phase 2, D13/D14; Phase 3).
 //
+//   Background tasks — every account's tasks (daemon/ipc/tasks.mjs): state
+//                   and owner only, and Cancel.
 //   Decision log  — logger.mjs logPolicy() lines, newest first: a denial (on
 //                   the chat app's card or sent by a client), an approval
 //                   presented for the wrong call, a standing grant added or
@@ -14,7 +16,7 @@
 
 import { useEffect, useState } from 'react'
 import { api } from '../api/redstart'
-import type { PolicyRecord, StandingGrant } from '../api/redstart'
+import type { PolicyRecord, StandingGrant, TaskSummary } from '../api/redstart'
 import { SectionTitle, btnCls, inputCls } from '../components/ui'
 
 const PAGE = 50
@@ -46,6 +48,127 @@ function detail(r: PolicyRecord): string {
   if (r.event === 'grant.added' && r.source === 'import') bits.push('imported from the browser')
   if (r.by && r.by !== r.account) bits.push(`by ${r.by}`)
   return bits.join(' · ')
+}
+
+const TASK_LABEL: Record<TaskSummary['status'], string> = {
+  queued: 'Queued',
+  running: 'Running',
+  waiting_user: 'Waiting for an answer',
+  waiting_approval: 'Waiting for approval',
+  waiting_model: 'Waiting for a model',
+  done: 'Done',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+}
+
+const TASK_TONE: Record<TaskSummary['status'], string> = {
+  queued: 'text-zinc-300',
+  running: 'text-sky-400',
+  waiting_user: 'text-amber-400',
+  waiting_approval: 'text-amber-400',
+  waiting_model: 'text-amber-400',
+  done: 'text-green-400',
+  failed: 'text-red-400',
+  cancelled: 'text-zinc-500',
+}
+
+const LIVE = new Set<TaskSummary['status']>(['queued', 'running', 'waiting_user', 'waiting_approval', 'waiting_model'])
+
+/**
+ * Background tasks (agent-runtime Phase 3): what is running for whom, and a
+ * way to stop one. The record only: never the conversation, the question or
+ * what an approval is for, which are the account's own.
+ */
+function TasksSection() {
+  const [tasks, setTasks] = useState<TaskSummary[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [cancelling, setCancelling] = useState<string | null>(null)
+
+  async function load() {
+    setLoading(true)
+    setError(null)
+    try {
+      setTasks((await api().tasks.list()).tasks)
+    } catch {
+      setError('Could not read the task list.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void load()
+  }, [])
+
+  async function cancel(t: TaskSummary) {
+    setCancelling(t.id)
+    try {
+      const r = await api().tasks.cancel(t.id)
+      if (!r.ok) setError(r.error)
+      // The run stops at its next step; give it a moment before re-reading.
+      setTimeout(() => void load(), 500)
+    } finally {
+      setCancelling(null)
+    }
+  }
+
+  return (
+    <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+      <div className="flex items-center justify-between mb-2">
+        <SectionTitle className="">Background tasks</SectionTitle>
+        <button className={btnCls.subtle} onClick={() => void load()} disabled={loading}>
+          Refresh
+        </button>
+      </div>
+      <p className="text-xs text-zinc-500 mb-3">
+        Chats running in the background on this server, newest first. The list shows who and in what state, never
+        what the chat is about. Cancelling keeps what the task wrote so far.
+      </p>
+
+      {error && <div className="text-xs text-red-400 mb-2">{error}</div>}
+
+      {!error && tasks.length === 0 && !loading && (
+        <div className="text-xs text-zinc-500 italic">No background tasks.</div>
+      )}
+
+      {tasks.length > 0 && (
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-left text-zinc-500">
+              <th className="font-normal py-1 pr-3">Started</th>
+              <th className="font-normal py-1 pr-3">Account</th>
+              <th className="font-normal py-1 pr-3">State</th>
+              <th className="font-normal py-1 pr-3">Details</th>
+              <th className="font-normal py-1" />
+            </tr>
+          </thead>
+          <tbody>
+            {tasks.map((t) => (
+              <tr key={t.id} className="border-t border-zinc-800 align-top">
+                <td className="py-1.5 pr-3 text-zinc-400 whitespace-nowrap">{new Date(t.createdAt).toLocaleString()}</td>
+                <td className="py-1.5 pr-3 text-zinc-300">{t.account ?? '(login off)'}</td>
+                <td className={`py-1.5 pr-3 whitespace-nowrap ${TASK_TONE[t.status] ?? 'text-zinc-300'}`}>
+                  {TASK_LABEL[t.status] ?? t.status}
+                </td>
+                <td className="py-1.5 pr-3 text-zinc-500">
+                  {t.tool ? <span className="font-mono text-zinc-300">{t.tool}</span> : null}
+                  {t.error ? <span>{t.error}</span> : null}
+                </td>
+                <td className="py-1.5 text-right">
+                  {LIVE.has(t.status) && (
+                    <button className={btnCls.subtle} disabled={cancelling === t.id} onClick={() => void cancel(t)}>
+                      {cancelling === t.id ? 'Cancelling…' : 'Cancel'}
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  )
 }
 
 export function ActivityTab() {
@@ -108,6 +231,8 @@ export function ActivityTab() {
 
   return (
     <div className="flex flex-col gap-5">
+      <TasksSection />
+
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
         <div className="flex items-center justify-between mb-2">
           <SectionTitle className="">Decision log</SectionTitle>

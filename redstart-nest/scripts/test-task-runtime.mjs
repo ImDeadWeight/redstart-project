@@ -556,6 +556,129 @@ await test('the real prepareCompletion runs on a task\'s request: the prompt is 
   assert(/Redstart/i.test(b.messages[0].content), 'the composed prompt')
 })
 
+console.log('\n-- the routes (3.6, D31) --')
+
+const { handleTaskRoute, isTaskRoute } = await import('../daemon/gateway/task-routes.mjs')
+
+/** A response that also records SSE writes and can be told the client left. */
+function sseRes() {
+  const res = fakeRes()
+  res.chunks = []
+  res.writableEnded = false
+  res.write = (c) => { res.chunks.push(c); return true }
+  res.end = (b) => { if (b) res.chunks.push(b); res.body = b ?? res.body; res.writableEnded = true }
+  return res
+}
+async function taskRoute(method, urlPath, body, { scope = SCOPE, headers = {} } = {}) {
+  const req = fakeReq(method, body, urlPath)
+  req.headers = headers
+  const res = sseRes()
+  const handled = await handleTaskRoute(req, res, urlPath.split('?')[0], { account: null, storeAccountId: scope, surface: null, timeZone: null })
+  let json = null
+  try { json = res.body ? JSON.parse(res.body) : null } catch { /* SSE */ }
+  return { handled, status: res.status, json, res, req }
+}
+function sseEvents(res) {
+  return res.chunks.join('').split('\n\n').filter((b) => b.startsWith('id: ')).map((b) => JSON.parse(b.split('\ndata: ')[1]))
+}
+
+await test('which paths are ours', () => {
+  const id = '0f8fad5b-d9cb-469f-a165-70867728950e'
+  eq(['/tasks', `/tasks/${id}`, `/tasks/${id}/events`, `/tasks/${id}/answer`, `/tasks/${id}/nope`, '/tasks/abc', '/tasksx'].map(isTaskRoute),
+    [true, true, true, true, false, false, false], 'isTaskRoute')
+})
+
+await test('POST /tasks starts one (201, no storage scope in the body); bad input is 400, an unknown chat 404', async () => {
+  fakeWorld([say('route answer')])
+  const conv = newConversation()
+  const r = await taskRoute('POST', '/tasks', { conversationId: conv, content: 'via route' })
+  eq(r.status, 201, 'status')
+  assert(r.json.id && !('storeAccountId' in r.json) && !('accountKey' in r.json), 'public shape')
+  await waitFor(() => ended(r.json.id), 'end')
+  eq((await taskRoute('POST', '/tasks', { conversationId: conv })).status, 400, 'no content')
+  eq((await taskRoute('POST', '/tasks', { content: 'x' })).status, 400, 'no conversation')
+  eq((await taskRoute('POST', '/tasks', { conversationId: 'nope', content: 'x' })).status, 404, 'unknown')
+})
+
+await test('another scope sees none of it: GET, events and every action are 404', async () => {
+  fakeWorld([say('x')])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => ended(t.id), 'end')
+  const other = { scope: 'device-2' }
+  eq((await taskRoute('GET', `/tasks/${t.id}`, null, other)).status, 404, 'get')
+  eq((await taskRoute('GET', `/tasks/${t.id}/events`, null, other)).status, 404, 'events')
+  for (const a of ['steer', 'answer', 'cancel']) eq((await taskRoute('POST', `/tasks/${t.id}/${a}`, {}, other)).status, 404, a)
+  assert(!(await taskRoute('GET', '/tasks', null, other)).json.tasks.some((x) => x.id === t.id), 'listed')
+  assert((await taskRoute('GET', `/tasks?conversationId=${conv}`)).json.tasks.every((x) => x.conversationId === conv), 'filter')
+})
+
+await test('events: replay after Last-Event-ID, then live, and the stream ends with the task', async () => {
+  ledger._reset()
+  fakeWorld([call('c1', 'delete_file', {}), say('finished')])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'waiting_approval', 'parked')
+  const r = await taskRoute('GET', `/tasks/${t.id}/events`, null, { headers: { 'last-event-id': '2' } })
+  eq(r.status, 200, 'status')
+  const replayed = sseEvents(r.res)
+  assert(replayed.length > 0 && replayed.every((e) => e.seq > 2), `replay starts after 2: ${replayed.map((e) => e.seq)}`)
+  assert(!r.res.writableEnded, 'still open while the task waits')
+  ledger.decide(store.getTask(t.id).waiting.approval.id, ANON_KEY, 'once')
+  await waitFor(() => r.res.writableEnded, 'stream ended')
+  const all = sseEvents(r.res)
+  eq(all.at(-1).status, 'done', 'last event')
+  const seqs = all.map((e) => e.seq)
+  eq(seqs, [...new Set(seqs)].sort((a, b) => a - b), 'in order, no duplicates')
+})
+
+await test('events for an ended task: the replay, then closed; ?after= works like the header', async () => {
+  fakeWorld([say('x')])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => ended(t.id), 'end')
+  const r = await taskRoute('GET', `/tasks/${t.id}/events?after=1`)
+  assert(r.res.writableEnded, 'closed')
+  assert(sseEvents(r.res).every((e) => e.seq > 1), 'after 1')
+})
+
+await test('answer, steer and cancel through the routes', async () => {
+  fakeWorld([call('q1', 'ask_user', { question: 'Go?' }), say('went')])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'waiting_user', 'asked')
+  eq((await taskRoute('POST', `/tasks/${t.id}/answer`, {})).status, 400, 'empty answer')
+  eq((await taskRoute('POST', `/tasks/${t.id}/answer`, { text: 'yes' })).status, 200, 'answered')
+  await waitFor(() => ended(t.id), 'end')
+  eq((await taskRoute('POST', `/tasks/${t.id}/steer`, { content: 'more' })).status, 409, 'steer an ended task')
+  eq((await taskRoute('POST', `/tasks/${t.id}/cancel`)).json.ok, true, 'cancel an ended task is a no-op')
+
+  ledger._reset()
+  fakeWorld([call('c1', 'delete_file', {})])
+  const conv2 = newConversation()
+  const t2 = start(conv2)
+  await waitFor(() => statusOf(t2.id) === 'waiting_approval', 'parked')
+  eq((await taskRoute('POST', `/tasks/${t2.id}/cancel`)).status, 200, 'cancel')
+  await waitFor(() => ended(t2.id), 'end')
+  eq(statusOf(t2.id), 'cancelled', 'cancelled')
+})
+
+await test('control plane: tasks:list carries the record, never the question or an approval summary; tasks:cancel stops one', async () => {
+  const { tasksHandlers } = await import('../daemon/ipc/tasks.mjs')
+  const h = tasksHandlers()
+  fakeWorld([call('q1', 'ask_user', { question: 'A private question about Priya?' })])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'waiting_user', 'asked')
+  const row = h['tasks:list']().tasks.find((x) => x.id === t.id)
+  eq([row.status, row.waitingFor], ['waiting_user', 'question'], 'row')
+  assert(!JSON.stringify(row).includes('Priya') && !('waiting' in row) && !('conversationId' in row), 'no content')
+  eq(h['tasks:cancel'](t.id).ok, true, 'cancel')
+  await waitFor(() => ended(t.id), 'end')
+  eq(statusOf(t.id), 'cancelled', 'cancelled')
+  eq(h['tasks:cancel']('').ok, false, 'no id')
+})
+
 /** fakeWorld's seams with the gateway's own prepareCompletion left in place. */
 function seamsWithoutPrepare(w) {
   return {

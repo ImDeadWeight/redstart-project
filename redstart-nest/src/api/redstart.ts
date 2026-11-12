@@ -100,6 +100,11 @@ export type RedstartAPI = {
     listGrants: (username: string | null) => Promise<{ ok: true; grants: StandingGrant[] } | { ok: false; error: string }>
     revokeGrant: (id: string) => Promise<{ ok: true; tool: string } | { ok: false; error: string }>
   }
+  // Every account's background tasks (agent-runtime Phase 3; daemon/ipc/tasks.mjs).
+  tasks: {
+    list: () => Promise<{ tasks: TaskSummary[] }>
+    cancel: (id: string) => Promise<{ ok: true } | { ok: false; error: string }>
+  }
   browse: {
     roots: () => Promise<{ path: string; label: string }[]>
     // readable/writable are the daemon's own access() probe on
@@ -289,6 +294,19 @@ export type PolicyRecord = {
   role?: string
   by?: string
   source?: string
+}
+
+/** One background task as the owner sees it (daemon/ipc/tasks.mjs): the record, never its content. */
+export type TaskSummary = {
+  id: string
+  account: string | null
+  status: 'queued' | 'running' | 'waiting_user' | 'waiting_approval' | 'waiting_model' | 'done' | 'failed' | 'cancelled'
+  waitingFor: 'question' | 'continue' | 'approval' | 'model' | null
+  tool: string | null
+  error: string | null
+  createdAt: number
+  updatedAt: number
+  endedAt: number | null
 }
 
 /** A standing grant ("Always allow") on the server (approval-grants.mjs). */
