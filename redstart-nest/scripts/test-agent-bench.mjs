@@ -559,6 +559,15 @@ await test('arguments: --model-label required, MCP defaults to the gateway port 
   }
 })
 
+await test('--runtime: on with the default plan; refused with --plan tool|off or --model (a task cannot honour them)', async () => {
+  eq([parseArgs(['--model-label', 'm', '--runtime']).runtime, parseArgs(['--model-label', 'm']).runtime], [true, undefined], 'the switch')
+  for (const extra of [['--plan', 'off'], ['--plan', 'tool'], ['--model', 'x']]) {
+    let e = null
+    try { parseArgs(['--model-label', 'm', '--runtime', ...extra]) } catch (err) { e = err }
+    assert(/--runtime/.test(e?.message ?? ''), `--runtime with ${extra.join(' ')} accepted`)
+  }
+})
+
 console.log('\n-- the harness against a fake Nest --')
 
 const port = await freePortPair()

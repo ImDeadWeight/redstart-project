@@ -17,6 +17,10 @@
 //                              answers and the run goes on)
 //     [--request-timeout 180]  (seconds Nest gets for a setup or read-back
 //                              call; a stuck one fails that task, named)
+//     [--runtime]              (each run is a background task: the daemon
+//                              hosts the loop, the bench answers through
+//                              /tasks; lib/runtime.mjs. Plan is always full;
+//                              --model does not apply)
 //
 // Login on: put the bench account's API key in REDSTART_BENCH_API_KEY (or
 // pass --api-key, which then sits in your shell history). Use a dedicated
@@ -48,7 +52,7 @@ const FLAGS = {
   '--request-timeout': 'requestTimeout', '--text-asks': 'textAsks',
 }
 export const PLAN_MODES = ['full', 'tool', 'off']
-const SWITCHES = { '--thinking': 'thinking', '--keep': 'keep', '--quiet': 'quiet' }
+const SWITCHES = { '--thinking': 'thinking', '--keep': 'keep', '--quiet': 'quiet', '--runtime': 'runtime' }
 
 export function parseArgs(argv) {
   const opts = { tasks: path.join(here, 'tasks'), repeat: 1, gateway: 'http://127.0.0.1:19080' }
@@ -92,6 +96,10 @@ export function parseArgs(argv) {
   if (!['end', 'answer'].includes(opts.textAsks)) throw new Error('--text-asks must be end or answer')
   opts.plan = opts.plan ?? 'full'
   if (!PLAN_MODES.includes(opts.plan)) throw new Error(`--plan must be one of ${PLAN_MODES.join(', ')}`)
+  // A background task always has update_plan and its completion check (what
+  // chat-ui ships), and runs on the loaded model.
+  if (opts.runtime && opts.plan !== 'full') throw new Error('--runtime runs with --plan full only: a task always has update_plan and its completion check')
+  if (opts.runtime && opts.model) throw new Error('--runtime cannot pick a model (--model): a task uses the loaded one')
   opts.apiKey = opts.apiKey ?? process.env.REDSTART_BENCH_API_KEY ?? null
   return opts
 }
@@ -224,7 +232,7 @@ export function summaryMarkdown(meta, summary) {
   const lines = [
     `# Agent bench — ${meta.modelLabel}`,
     '',
-    `${meta.date} · commit ${meta.commit} · ${summary.runs} runs (${meta.taskCount} tasks × ${meta.repeat}) · ${meta.toolCount} tools offered · thinking ${meta.thinking ? 'on' : 'off'} · plan ${meta.plan ?? 'full'} · text asks ${meta.textAsks ?? 'end'}`,
+    `${meta.date} · commit ${meta.commit} · ${summary.runs} runs (${meta.taskCount} tasks × ${meta.repeat}) · ${meta.toolCount} tools offered · thinking ${meta.thinking ? 'on' : 'off'} · plan ${meta.plan ?? 'full'} · text asks ${meta.textAsks ?? 'end'} · loop hosted by ${meta.host ?? 'bench'}`,
     '',
     `Model file: ${meta.model?.modelFile ?? 'unknown'} · chat template sha256 ${meta.model?.chatTemplateSha ?? 'unknown'}`,
     '',
@@ -323,7 +331,7 @@ export async function main(argv, io = {}) {
   for (let r = 0; r < opts.repeat; r++) {
     for (const task of tasks) {
       const result = await runTask(nest, task, {
-        mcpTools, thinking: opts.thinking, temperature: opts.temperature, model: opts.model, maxTokens: opts.maxTokens, fileSystemSnapshot, plan: opts.plan, textAsks: opts.textAsks,
+        mcpTools, thinking: opts.thinking, temperature: opts.temperature, model: opts.model, maxTokens: opts.maxTokens, fileSystemSnapshot, plan: opts.plan, textAsks: opts.textAsks, runtime: !!opts.runtime,
         keep: opts.keep, runIndex: r,
       })
       runs.push(result)
@@ -360,6 +368,8 @@ export async function main(argv, io = {}) {
     tools: mcpTools.map((t) => t.name),
     thinking: !!opts.thinking,
     plan: opts.plan,
+    // Who hosted the loop: 'bench' (this process) or 'runtime' (the daemon's tasks).
+    host: opts.runtime ? 'runtime' : 'bench',
     textAsks: opts.textAsks,
     temperature: opts.temperature ?? null,
     maxTokens: maxReplyTokens(opts),

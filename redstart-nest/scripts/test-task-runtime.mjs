@@ -726,6 +726,126 @@ await test('control plane: tasks:list carries the record, never the question or 
   eq(h['tasks:cancel']('').ok, false, 'no id')
 })
 
+console.log('\n-- the bench\'s --runtime: the daemon hosts the loop (3.10) --')
+
+// The bench's runtime client (scripts/agent-bench/lib/runtime.mjs) against the
+// REAL task routes, runner and approval routes over HTTP; only the model and
+// the tools are scripted (fakeWorld). This is the path `run.mjs --runtime`
+// takes against a real Nest, minus llama-server.
+const http = await import('node:http')
+const { handleApprovalRoute, isApprovalRoute } = await import('../daemon/gateway/approval-routes.mjs')
+const { runViaRuntime } = await import('./agent-bench/lib/runtime.mjs')
+const { makeRequester, taskRoutesClient, parseSseFrames } = await import('./agent-bench/lib/nest-client.mjs')
+const { computeMetrics } = await import('./agent-bench/lib/metrics.mjs')
+
+async function benchServer() {
+  const server = http.createServer(async (req, res) => {
+    const p = new URL(req.url, 'http://x').pathname
+    if (isTaskRoute(p) && await handleTaskRoute(req, res, p, { account: null, storeAccountId: SCOPE, surface: null, timeZone: null })) return
+    if (isApprovalRoute(p) && await handleApprovalRoute(req, res, p, null)) return
+    const m = /^\/conversations\/([^/]+)$/.exec(p)
+    if (m && req.method === 'GET') {
+      const c = convs.getConversation(SCOPE, decodeURIComponent(m[1]))
+      res.writeHead(c ? 200 : 404, { 'Content-Type': 'application/json' })
+      return res.end(JSON.stringify(c ?? {}))
+    }
+    res.writeHead(404)
+    res.end()
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  const gateway = `http://127.0.0.1:${server.address().port}`
+  const req = makeRequester({ gateway, auth: {}, doFetch: fetch, requestTimeoutMs: 10_000 })
+  return {
+    nest: taskRoutesClient({ gateway, auth: {}, doFetch: fetch, req }),
+    close: () => { server.closeAllConnections?.(); server.close() },
+  }
+}
+
+const BENCH_TOOLS = new Map(TOOLS.map((t) => [t.name, t]))
+const benchTask = (over = {}) => ({
+  id: 'rt', prompt: 'Do the thing.', fixtures: [], limits: { maxTurns: 8, maxSeconds: 20 }, approve: 'all', answers: {}, ...over,
+})
+async function runtimeRun(task, opts = {}) {
+  const { nest, close } = await benchServer()
+  const events = []
+  try {
+    const conversationId = newConversation()
+    const r = await runViaRuntime({ nest, task, opts, log: (e) => events.push({ t: Date.now(), ...e }), conversationId, toolsByName: BENCH_TOOLS })
+    return { ...r, events, conversationId }
+  } finally {
+    close()
+  }
+}
+const named = (events, type) => events.filter((e) => e.type === type)
+
+await test('parseSseFrames: whole frames out, the torn tail kept, heartbeats skipped', () => {
+  const { events, rest } = parseSseFrames('id: 1\ndata: {"seq":1,"type":"turn"}\n\n: keep-alive\n\nid: 2\ndata: {"seq":2,')
+  eq([events.map((e) => e.seq), rest], [[1], 'id: 2\ndata: {"seq":2,'], 'frames')
+})
+
+await test('a question is answered from the task file, an approval decided by its policy; the log matches the hosted bench\'s', async () => {
+  ledger._reset()
+  fakeWorld([
+    call('q1', 'ask_user', { question: 'What name should I sign with?' }),
+    call('d1', 'delete_file', { path: 'old.txt' }),
+    say('Signed as Priya, and the file is gone.'),
+  ])
+  const r = await runtimeRun(benchTask({ answers: { name: 'Priya' } }), { thinking: false })
+  eq([r.error, r.finalText], [null, 'Signed as Priya, and the file is gone.'], 'ended with the answer')
+  eq(named(r.events, 'tool_call').map((e) => e.name), ['ask_user', 'delete_file'], 'calls, in order')
+  const ask = named(r.events, 'tool_result').find((e) => e.name === 'ask_user')
+  assert(/Priya/.test(ask.text) && ask.dismissed === false, `the answer reached the model: ${ask.text}`)
+  eq(named(r.events, 'approval').map((e) => [e.name, e.decided]), [['delete_file', true]], 'approved once')
+  eq(named(r.events, 'tool_result').find((e) => e.name === 'delete_file').text, 'delete_file ran', 'it ran')
+  eq(named(r.events, 'turn').length, 3, 'turns from the stream')
+  eq(named(r.events, 'assistant').length, 3, 'one assistant event per stored turn')
+  const m = computeMetrics(r.events, { pass: true })
+  assert(m.turns === 3 && m.toolCalls === 2, `metrics read the rebuilt log: ${JSON.stringify(m)}`)
+})
+
+await test('a policy that refuses: the approval is denied, the call is logged as a refused error, nothing ran', async () => {
+  ledger._reset()
+  const w = fakeWorld([call('d2', 'delete_file', { path: 'x' }), say('I could not delete it.')])
+  const r = await runtimeRun(benchTask({ approve: ['ask_user'] }))
+  eq(named(r.events, 'approval').map((e) => [e.decided, e.denied]), [[false, true]], 'denied')
+  const res = named(r.events, 'tool_result')[0]
+  eq([res.text, res.isError, res.denied], [DENIED_RESULT, true, true], 'the refusal')
+  eq(w.calls.length, 0, 'the tool never ran')
+})
+
+await test('an unmatched question is a dismissal; the turn limit is answered no and logged', async () => {
+  fakeWorld([
+    call('q2', 'ask_user', { question: 'Which colour?' }),
+    call('a1', 'read_document', { name: 'a' }),
+    call('a2', 'read_document', { name: 'b' }),
+  ])
+  const r = await runtimeRun(benchTask({ limits: { maxTurns: 3, maxSeconds: 20 } }))
+  eq(named(r.events, 'tool_result').find((e) => e.name === 'ask_user').dismissed, true, 'dismissed')
+  eq(named(r.events, 'limit').map((e) => e.which), ['turns'], 'the limit')
+  eq(r.finalText, '', 'no final answer')
+})
+
+await test('--text-asks answer: a reply ending in a question gets the task file\'s answer as a second task', async () => {
+  fakeWorld([say('Which colour do you want?'), say('Blue it is.')])
+  const r = await runtimeRun(benchTask({ answers: { colour: 'blue' } }), { textAsks: 'answer' })
+  eq(named(r.events, 'runtime_task').length, 2, 'two tasks')
+  eq(named(r.events, 'text_ask').map((e) => [e.answered, e.reply]), [[true, 'blue']], 'answered')
+  eq(r.finalText, 'Blue it is.', 'the second reply is the answer')
+})
+
+await test('a plan nudge is a stream event, so the metric counts it', async () => {
+  fakeWorld([
+    call('p1', 'update_plan', { steps: [{ text: 'one', status: 'in_progress' }, { text: 'two', status: 'pending' }] }),
+    say('Done.'),
+    call('p2', 'update_plan', { steps: [{ text: 'one', status: 'done' }, { text: 'two', status: 'done' }] }),
+    say('Both done.'),
+  ])
+  const r = await runtimeRun(benchTask())
+  eq(named(r.events, 'plan_nudge').length, 1, 'nudged once')
+  eq(named(r.events, 'plan_final').map((e) => [e.steps, e.open]), [[2, 0]], 'the stored plan, closed')
+  eq(r.finalText, 'Both done.', 'final')
+})
+
 console.log('\n-- restart recovery, across a real process kill (3.7) --')
 
 const { spawn } = await import('node:child_process')

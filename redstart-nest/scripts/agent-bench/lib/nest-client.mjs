@@ -33,23 +33,36 @@ const MAX_READBACK_BYTES = 1024 * 1024
 export const FILES_SNAPSHOT_LIMIT = 2000
 
 /**
- * `hostTools`: the host-resolved tools this run answers itself (default
- * ask_user and update_plan); Nest offers only those.
+ * Complete SSE frames out of a buffer, and the unfinished tail. Comment lines
+ * (the daemon's heartbeat) and frames that are not a numbered event are
+ * skipped. The task stream's frames are `id: <seq>` + `data: <json>`.
  *
- * @param {{ gateway: string, mcp: string, apiKey?: string | null, fetch?: typeof fetch, mcpTimeoutMs?: number, requestTimeoutMs?: number, hostTools?: string[] }} opts
+ * @param {string} buffer
+ * @returns {{ events: Array<{ seq: number, type: string, [k: string]: any }>, rest: string }}
  */
-export async function connectNest(opts) {
-  const gateway = opts.gateway.replace(/\/$/, '')
-  const doFetch = opts.fetch ?? fetch
-  const auth = opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {}
+export function parseSseFrames(buffer) {
+  const parts = buffer.replace(/\r\n/g, '\n').split('\n\n')
+  const rest = parts.pop() ?? ''
+  const events = []
+  for (const part of parts) {
+    const data = part.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).replace(/^ /, '')).join('\n')
+    if (!data) continue
+    try {
+      const e = JSON.parse(data)
+      if (e && typeof e.seq === 'number' && typeof e.type === 'string') events.push(e)
+    } catch { /* a torn or foreign frame */ }
+  }
+  return { events, rest }
+}
 
-  // Every call but the model's reply (which has the task's time limit) gets a
-  // deadline. Without one, a call Nest never answered hung the whole bench
-  // with every slot idle (2026-11-11, the 35B run T22-00-58: stuck in a
-  // task's setup for five minutes, then "fetch failed" and nothing else).
-  // Longer than the shell's 120 s recycle-bin timeout, which a delete may wait on.
-  const requestTimeoutMs = opts.requestTimeoutMs ?? 180_000
-  async function req(method, route, { json, body, headers = {}, ok = [200, 201, 204] } = {}) {
+/**
+ * The gateway request helper: auth on every call, a deadline, and an error
+ * that names the call when the status is not one of `ok`.
+ *
+ * @param {{ gateway: string, auth: Record<string, string>, doFetch: typeof fetch, requestTimeoutMs: number }} ctx
+ */
+export function makeRequester({ gateway, auth, doFetch, requestTimeoutMs }) {
+  return async function req(method, route, { json, body, headers = {}, ok = [200, 201, 204] } = {}) {
     let res
     try {
       res = await doFetch(`${gateway}${route}`, {
@@ -68,6 +81,94 @@ export async function connectNest(opts) {
     }
     return res
   }
+}
+
+/**
+ * The background-task routes (agent-runtime Phase 3, the bench's --runtime),
+ * on their own so a test can drive the real routes without an MCP server.
+ * `req` is connectNest's request helper (deadline, auth, status check).
+ *
+ * @param {{ gateway: string, auth: Record<string, string>, doFetch: typeof fetch,
+ *           req: (method: string, route: string, o?: object) => Promise<Response> }} ctx
+ */
+export function taskRoutesClient({ gateway, auth, doFetch, req }) {
+  return {
+    /** POST /tasks: the daemon runs the loop for this conversation. */
+    async startTask(conversationId, content, generation, maxTurns) {
+      const res = await req('POST', '/tasks', { json: { conversationId, content, generation, maxTurns } })
+      return res.json()
+    },
+
+    async getTask(id) {
+      const res = await req('GET', `/tasks/${encodeURIComponent(id)}`)
+      return res.json()
+    },
+
+    /** Answer what the task waits on. False when it no longer waits (409). */
+    async answerTask(id, body) {
+      const res = await req('POST', `/tasks/${encodeURIComponent(id)}/answer`, { json: body, ok: [200, 409] })
+      return res.status === 200
+    },
+
+    async cancelTask(id) {
+      await req('POST', `/tasks/${encodeURIComponent(id)}/cancel`, { ok: [200, 404] })
+    },
+
+    /** Decide an approval a task is parked on. False when it was gone. */
+    async decideApproval(approvalId, decision) {
+      const res = await req('POST', `/approvals/${encodeURIComponent(approvalId)}`, { json: { decision }, ok: [200, 404, 409] })
+      return res.status === 200
+    },
+
+    /** The conversation as stored (record and messages). */
+    async getConversation(id) {
+      const res = await req('GET', `/conversations/${encodeURIComponent(id)}`)
+      return res.json()
+    },
+
+    /**
+     * The task's events after `afterSeq`, then live, until the daemon closes
+     * the stream (the task ended) or `signal` aborts. `onEvent` is awaited,
+     * so an answer is posted before the next event is read. No request
+     * deadline: the stream lasts as long as the task.
+     */
+    async taskEvents(id, afterSeq, onEvent, signal) {
+      const res = await doFetch(`${gateway}/tasks/${encodeURIComponent(id)}/events?after=${afterSeq}`, {
+        headers: { ...auth, Accept: 'text/event-stream' },
+        signal,
+      })
+      if (!res.ok || !res.body) throw new Error(`GET /tasks/${id}/events: HTTP ${res.status}`)
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for await (const chunk of res.body) {
+        buffer += decoder.decode(chunk, { stream: true })
+        const { events, rest } = parseSseFrames(buffer)
+        buffer = rest
+        for (const e of events) await onEvent(e)
+      }
+      for (const e of parseSseFrames(buffer + '\n\n').events) await onEvent(e)
+    },
+  }
+}
+
+/**
+ * `hostTools`: the host-resolved tools this run answers itself (default
+ * ask_user and update_plan); Nest offers only those.
+ *
+ * @param {{ gateway: string, mcp: string, apiKey?: string | null, fetch?: typeof fetch, mcpTimeoutMs?: number, requestTimeoutMs?: number, hostTools?: string[] }} opts
+ */
+export async function connectNest(opts) {
+  const gateway = opts.gateway.replace(/\/$/, '')
+  const doFetch = opts.fetch ?? fetch
+  const auth = opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {}
+
+  // Every call but the model's reply (which has the task's time limit) gets a
+  // deadline. Without one, a call Nest never answered hung the whole bench
+  // with every slot idle (2026-11-11, the 35B run T22-00-58: stuck in a
+  // task's setup for five minutes, then "fetch failed" and nothing else).
+  // Longer than the shell's 120 s recycle-bin timeout, which a delete may wait on.
+  const requestTimeoutMs = opts.requestTimeoutMs ?? 180_000
+  const req = makeRequester({ gateway, auth, doFetch, requestTimeoutMs })
 
   // The bench answers ask_user (lib/ask.mjs) and keeps the plan itself, as
   // chat-ui does, so it declares so and Nest offers the tools
@@ -286,6 +387,8 @@ export async function connectNest(opts) {
         return null
       }
     },
+
+    ...taskRoutesClient({ gateway, auth, doFetch, req }),
 
     /** The raw completions call; the model port reads the stream. */
     async completion(body, signal) {

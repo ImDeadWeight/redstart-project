@@ -38,12 +38,18 @@ import { NUDGE_PREFIX, formatPlanResult, openSteps } from '../../../../shared/ag
 import { argumentProblem, computeMetrics } from './metrics.mjs'
 import { answerFromTask } from './ask.mjs'
 import { META_CLASS_KEY } from './nest-client.mjs'
+import { runViaRuntime } from './runtime.mjs'
 
 export const DEFAULT_PARSER_PATTERNS = ['braces', 'xml', 'fn', 'json']
 // --text-asks answer: at most this many questions in reply text get answered.
-const MAX_TEXT_ASKS = 2
+export const MAX_TEXT_ASKS = 2
 // What the "user" says to a question in text the task has no answer for.
 export const TEXT_ASK_NO_ANSWER = "I don't know. Use your best judgement and say what you assumed."
+
+/** What the "user" replies to a question asked in reply text (--text-asks answer). */
+export function formatTextAskReply(answer) {
+  return answer ? formatAskAnswer(answer).replace(/^The user (answered|chose): /, '') : TEXT_ASK_NO_ANSWER
+}
 
 /** Does a reply end by asking the user something? (its last line has a "?") */
 // The core's test (shared/agent-core/update-plan.mjs), so the bench and the
@@ -154,7 +160,7 @@ export function filePathsIn(text) {
   return out
 }
 
-const clip = (s) => (typeof s === 'string' && s.length > MAX_LOGGED_RESULT_CHARS
+export const clip = (s) => (typeof s === 'string' && s.length > MAX_LOGGED_RESULT_CHARS
   ? `${s.slice(0, MAX_LOGGED_RESULT_CHARS)}… [${s.length - MAX_LOGGED_RESULT_CHARS} more chars]`
   : s)
 
@@ -214,175 +220,183 @@ export async function runTask(nest, task, opts) {
       else await nest.seedFile(conversationId, fx.path, fx.content)
     }
 
-    const controller = new AbortController()
-    const timer = setTimeout(() => {
-      log({ type: 'limit', which: 'seconds' })
-      controller.abort()
-    }, task.limits.maxSeconds * 1000)
+    if (opts.runtime) {
+      // --runtime (agent-runtime 3.10): the daemon hosts the loop; see runtime.mjs.
+      const r = await runViaRuntime({ nest, task, opts, log, conversationId, toolsByName })
+      finalText = r.finalText
+      error = r.error
+    } else {
+      const controller = new AbortController()
+      const timer = setTimeout(() => {
+        log({ type: 'limit', which: 'seconds' })
+        controller.abort()
+      }, task.limits.maxSeconds * 1000)
 
-    const messages = [{ role: 'user', content: userMessage(task, { conversationId, hasTool: (n) => toolsByName.has(n) }) }]
-    let turn = 0
-    const planMode = opts.plan ?? 'full'
-    /** @type {import('../../../../shared/agent-core/types').PlanStep[] | null} */
-    let planSteps = null
+      const messages = [{ role: 'user', content: userMessage(task, { conversationId, hasTool: (n) => toolsByName.has(n) }) }]
+      let turn = 0
+      const planMode = opts.plan ?? 'full'
+      /** @type {import('../../../../shared/agent-core/types').PlanStep[] | null} */
+      let planSteps = null
 
-    try {
-      const loopParams = {
-        messages,
-        maxTurns: task.limits.maxTurns,
-        signal: controller.signal,
-        callbacks: {
-          onAssistantTurnComplete: async (content, reasoning, timings, toolCalls) => {
-            log({
-              type: 'assistant',
-              content,
-              reasoningChars: reasoning?.length ?? 0,
-              toolCalls: toolCalls?.map((c) => ({ id: c.id, name: c.function.name, arguments: c.function.arguments })),
-              timings: timings ? { prompt_n: timings.prompt_n, predicted_n: timings.predicted_n } : undefined,
-            })
-            if (!toolCalls) finalText = content
-            // The core runs only the first few calls of such a reply. A limit,
-            // like the others: it shows in the summary's "hit a limit" count.
-            if ((toolCalls?.length ?? 0) > MAX_TOOL_CALLS_PER_REPLY) log({ type: 'limit', which: 'tool-calls', asked: toolCalls.length })
-          },
-        },
-        ports: {
-          model: {
-            streamTurn: async ({ acc, messages: msgs, signal }) => {
-              log({ type: 'turn', turn: ++turn })
-              // The core's completion check (update-plan.mjs): this turn exists
-              // because the model answered with plan steps still open.
-              const tail = msgs.at(-1)
-              if (typeof tail?.content === 'string' && tail.content.startsWith(NUDGE_PREFIX)) log({ type: 'plan_nudge' })
-              const body = {
-                messages: toWire(msgs),
-                stream: true,
-                tools: llmTools.length > 0 ? llmTools : undefined,
-                reasoning_format: 'auto',
-                chat_template_kwargs: { enable_thinking: !!opts.thinking },
-                ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
-                ...(opts.model ? { model: opts.model } : {}),
-                max_tokens: maxReplyTokens(opts),
-              }
-              const res = await nest.completion(body, signal)
-              await readChatStream(res, acc, { signal })
-              // Hitting the cap is a limit like the turn and time limits:
-              // logged, so it shows in the summary's "hit a limit" count.
-              if ((acc.timings?.predicted_n ?? 0) >= body.max_tokens) log({ type: 'limit', which: 'reply-length' })
-            },
-          },
-          tools: {
-            execute: async (call) => {
-              const name = call.function.name
-              const tool = toolsByName.get(name)
+      try {
+        const loopParams = {
+          messages,
+          maxTurns: task.limits.maxTurns,
+          signal: controller.signal,
+          callbacks: {
+            onAssistantTurnComplete: async (content, reasoning, timings, toolCalls) => {
               log({
-                type: 'tool_call',
-                id: call.id,
-                name,
-                arguments: call.function.arguments,
-                argsProblem: tool ? argumentProblem(call.function.arguments, tool.inputSchema) : 'unknown tool',
+                type: 'assistant',
+                content,
+                reasoningChars: reasoning?.length ?? 0,
+                toolCalls: toolCalls?.map((c) => ({ id: c.id, name: c.function.name, arguments: c.function.arguments })),
+                timings: timings ? { prompt_n: timings.prompt_n, predicted_n: timings.predicted_n } : undefined,
               })
-              const started = now()
-              let result
-              try {
-                if (!tool) throw new Error(`Unknown tool: ${name}`)
-                result = await nest.callTool(name, parseArgs(call.function.arguments), conversationId)
-                if (result.approval) log({ type: 'approval', id: call.id, name, decided: result.approval.decided })
-              } catch (err) {
-                log({ type: 'tool_result', id: call.id, name, isError: true, text: `Error: ${err.message}`, ms: now() - started })
-                throw err
-              }
-              const clipped = clip(result.text)
-              log({ type: 'tool_result', id: call.id, name, isError: result.isError, text: clipped,
-                ...(clipped !== result.text ? { fullText: result.text } : {}), ms: now() - started })
-              return result
+              if (!toolCalls) finalText = content
+              // The core runs only the first few calls of such a reply. A limit,
+              // like the others: it shows in the summary's "hit a limit" count.
+              if ((toolCalls?.length ?? 0) > MAX_TOOL_CALLS_PER_REPLY) log({ type: 'limit', which: 'tool-calls', asked: toolCalls.length })
             },
           },
-          gate: {
-            approve: async (call) => {
-              const name = call.function.name
-              const cls = toolsByName.get(name)?._meta?.[META_CLASS_KEY]
-              const ok = approves(task.approve, name, cls)
-              if (!ok) {
-                // The core answers a denial itself; record it as the call and
-                // the error result it is, so the metrics count it.
-                log({ type: 'tool_call', id: call.id, name, arguments: call.function.arguments, argsProblem: null, denied: true })
-                log({ type: 'tool_result', id: call.id, name, isError: true, denied: true, text: DENIED_RESULT, ms: 0 })
-              }
-              return ok
+          ports: {
+            model: {
+              streamTurn: async ({ acc, messages: msgs, signal }) => {
+                log({ type: 'turn', turn: ++turn })
+                // The core's completion check (update-plan.mjs): this turn exists
+                // because the model answered with plan steps still open.
+                const tail = msgs.at(-1)
+                if (typeof tail?.content === 'string' && tail.content.startsWith(NUDGE_PREFIX)) log({ type: 'plan_nudge' })
+                const body = {
+                  messages: toWire(msgs),
+                  stream: true,
+                  tools: llmTools.length > 0 ? llmTools : undefined,
+                  reasoning_format: 'auto',
+                  chat_template_kwargs: { enable_thinking: !!opts.thinking },
+                  ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
+                  ...(opts.model ? { model: opts.model } : {}),
+                  max_tokens: maxReplyTokens(opts),
+                }
+                const res = await nest.completion(body, signal)
+                await readChatStream(res, acc, { signal })
+                // Hitting the cap is a limit like the turn and time limits:
+                // logged, so it shows in the summary's "hit a limit" count.
+                if ((acc.timings?.predicted_n ?? 0) >= body.max_tokens) log({ type: 'limit', which: 'reply-length' })
+              },
             },
-          },
-          ask: {
-            user: async (request, _signal, call) => {
-              const id = call?.id
-              log({
-                type: 'tool_call', id, name: 'ask_user', arguments: call?.function.arguments,
-                argsProblem: argumentProblem(call?.function.arguments, toolsByName.get('ask_user')?.inputSchema),
-                question: request.question, options: request.options,
-              })
-              const answer = answerFromTask(task.answers, request)
-              log({ type: 'tool_result', id, name: 'ask_user', isError: false, dismissed: answer === null, text: formatAskAnswer(answer), ms: 0 })
-              return answer
+            tools: {
+              execute: async (call) => {
+                const name = call.function.name
+                const tool = toolsByName.get(name)
+                log({
+                  type: 'tool_call',
+                  id: call.id,
+                  name,
+                  arguments: call.function.arguments,
+                  argsProblem: tool ? argumentProblem(call.function.arguments, tool.inputSchema) : 'unknown tool',
+                })
+                const started = now()
+                let result
+                try {
+                  if (!tool) throw new Error(`Unknown tool: ${name}`)
+                  result = await nest.callTool(name, parseArgs(call.function.arguments), conversationId)
+                  if (result.approval) log({ type: 'approval', id: call.id, name, decided: result.approval.decided })
+                } catch (err) {
+                  log({ type: 'tool_result', id: call.id, name, isError: true, text: `Error: ${err.message}`, ms: now() - started })
+                  throw err
+                }
+                const clipped = clip(result.text)
+                log({ type: 'tool_result', id: call.id, name, isError: result.isError, text: clipped,
+                  ...(clipped !== result.text ? { fullText: result.text } : {}), ms: now() - started })
+                return result
+              },
             },
-            invalid: (call, problem) => {
-              log({ type: 'tool_call', id: call.id, name: 'ask_user', arguments: call.function.arguments, argsProblem: problem })
-              log({ type: 'tool_result', id: call.id, name: 'ask_user', isError: true, text: problem, ms: 0 })
+            gate: {
+              approve: async (call) => {
+                const name = call.function.name
+                const cls = toolsByName.get(name)?._meta?.[META_CLASS_KEY]
+                const ok = approves(task.approve, name, cls)
+                if (!ok) {
+                  // The core answers a denial itself; record it as the call and
+                  // the error result it is, so the metrics count it.
+                  log({ type: 'tool_call', id: call.id, name, arguments: call.function.arguments, argsProblem: null, denied: true })
+                  log({ type: 'tool_result', id: call.id, name, isError: true, denied: true, text: DENIED_RESULT, ms: 0 })
+                }
+                return ok
+              },
             },
-          },
-          // update_plan (plan §4, 1.2): the plan lives in the run, nothing is
-          // stored. --plan tool keeps the tool and drops the completion check;
-          // --plan off has no port (and Nest was not asked for the tool).
-          ...(planMode === 'off' ? {} : {
-            plan: {
-              get: () => planSteps,
-              save: (steps, call) => {
-                planSteps = steps
-                log({ type: 'tool_call', id: call?.id, name: 'update_plan', arguments: call?.function.arguments,
-                  argsProblem: argumentProblem(call?.function.arguments, toolsByName.get('update_plan')?.inputSchema) })
-                log({ type: 'tool_result', id: call?.id, name: 'update_plan', isError: false, text: formatPlanResult(steps), steps, ms: 0 })
+            ask: {
+              user: async (request, _signal, call) => {
+                const id = call?.id
+                log({
+                  type: 'tool_call', id, name: 'ask_user', arguments: call?.function.arguments,
+                  argsProblem: argumentProblem(call?.function.arguments, toolsByName.get('ask_user')?.inputSchema),
+                  question: request.question, options: request.options,
+                })
+                const answer = answerFromTask(task.answers, request)
+                log({ type: 'tool_result', id, name: 'ask_user', isError: false, dismissed: answer === null, text: formatAskAnswer(answer), ms: 0 })
+                return answer
               },
               invalid: (call, problem) => {
-                log({ type: 'tool_call', id: call.id, name: 'update_plan', arguments: call.function.arguments, argsProblem: problem })
-                log({ type: 'tool_result', id: call.id, name: 'update_plan', isError: true, text: problem, ms: 0 })
+                log({ type: 'tool_call', id: call.id, name: 'ask_user', arguments: call.function.arguments, argsProblem: problem })
+                log({ type: 'tool_result', id: call.id, name: 'ask_user', isError: true, text: problem, ms: 0 })
               },
-              completionCheck: planMode === 'full',
             },
-          }),
-          limit: {
-            askContinue: async () => {
-              log({ type: 'limit', which: 'turns' })
-              return false
+            // update_plan (plan §4, 1.2): the plan lives in the run, nothing is
+            // stored. --plan tool keeps the tool and drops the completion check;
+            // --plan off has no port (and Nest was not asked for the tool).
+            ...(planMode === 'off' ? {} : {
+              plan: {
+                get: () => planSteps,
+                save: (steps, call) => {
+                  planSteps = steps
+                  log({ type: 'tool_call', id: call?.id, name: 'update_plan', arguments: call?.function.arguments,
+                    argsProblem: argumentProblem(call?.function.arguments, toolsByName.get('update_plan')?.inputSchema) })
+                  log({ type: 'tool_result', id: call?.id, name: 'update_plan', isError: false, text: formatPlanResult(steps), steps, ms: 0 })
+                },
+                invalid: (call, problem) => {
+                  log({ type: 'tool_call', id: call.id, name: 'update_plan', arguments: call.function.arguments, argsProblem: problem })
+                  log({ type: 'tool_result', id: call.id, name: 'update_plan', isError: true, text: problem, ms: 0 })
+                },
+                completionCheck: planMode === 'full',
+              },
+            }),
+            limit: {
+              askContinue: async () => {
+                log({ type: 'limit', which: 'turns' })
+                return false
+              },
             },
+            steering: { pending: () => false },
+            fallbackParser: () => ({
+              patterns: DEFAULT_PARSER_PATTERNS,
+              availableTools: opts.mcpTools.map((t) => ({ name: t.name })),
+            }),
           },
-          steering: { pending: () => false },
-          fallbackParser: () => ({
-            patterns: DEFAULT_PARSER_PATTERNS,
-            availableTools: opts.mcpTools.map((t) => ({ name: t.name })),
-          }),
-        },
-      }
-      await runAgentLoop(loopParams)
-      // --text-asks answer: a reply that ends in a question to the user is
-      // answered like a chat user would, from the task's `answers`, and the
-      // run goes on. Off by default (it ends the run, as before). The probe
-      // (probe-ask.mjs, 2026-11-11) found the 35B asks this way, not through
-      // ask_user, whenever the user invites questions.
-      for (let round = 0; opts.textAsks === 'answer' && round < MAX_TEXT_ASKS && !controller.signal.aborted; round++) {
-        if (!endsInQuestion(finalText)) break
-        const answer = answerFromTask(task.answers, { question: finalText })
-        const reply = answer ? formatAskAnswer(answer).replace(/^The user (answered|chose): /, '') : TEXT_ASK_NO_ANSWER
-        log({ type: 'text_ask', question: finalText.slice(-400), answered: !!answer, reply })
-        messages.push({ role: 'assistant', content: finalText }, { role: 'user', content: reply })
-        finalText = ''
+        }
         await runAgentLoop(loopParams)
+        // --text-asks answer: a reply that ends in a question to the user is
+        // answered like a chat user would, from the task's `answers`, and the
+        // run goes on. Off by default (it ends the run, as before). The probe
+        // (probe-ask.mjs, 2026-11-11) found the 35B asks this way, not through
+        // ask_user, whenever the user invites questions.
+        for (let round = 0; opts.textAsks === 'answer' && round < MAX_TEXT_ASKS && !controller.signal.aborted; round++) {
+          if (!endsInQuestion(finalText)) break
+          const answer = answerFromTask(task.answers, { question: finalText })
+          const reply = formatTextAskReply(answer)
+          log({ type: 'text_ask', question: finalText.slice(-400), answered: !!answer, reply })
+          messages.push({ role: 'assistant', content: finalText }, { role: 'user', content: reply })
+          finalText = ''
+          await runAgentLoop(loopParams)
+        }
+      } catch (err) {
+        error = err.message
+        log({ type: 'error', message: err.message })
+      } finally {
+        clearTimeout(timer)
+        // Whether the model closed its plan (a metric, never a pass criterion).
+        if (planSteps) log({ type: 'plan_final', steps: planSteps.length, open: openSteps(planSteps).length })
       }
-    } catch (err) {
-      error = err.message
-      log({ type: 'error', message: err.message })
-    } finally {
-      clearTimeout(timer)
-      // Whether the model closed its plan (a metric, never a pass criterion).
-      if (planSteps) log({ type: 'plan_final', steps: planSteps.length, open: openSteps(planSteps).length })
+
     }
 
     workspace = await nest.readWorkspace(conversationId)

@@ -53,7 +53,7 @@ import {
   SUMMARY_MAX_TOKENS, compactionBudget, countsFromTotal, finishCompaction, messageText, planCompaction, summaryPrompt,
 } from '../../shared/agent-core/compaction.mjs'
 import { ASK_USER_TOOL } from '../../shared/agent-core/ask-user.mjs'
-import { UPDATE_PLAN_TOOL } from '../../shared/agent-core/update-plan.mjs'
+import { UPDATE_PLAN_TOOL, NUDGE_PREFIX } from '../../shared/agent-core/update-plan.mjs'
 import * as store from './task-store.mjs'
 import * as conversations from './conversations-storage.mjs'
 import { accountForTask, surfacePermitted } from './auth.mjs'
@@ -686,6 +686,10 @@ async function runOnce(task, l, conv, generation, { resume }) {
             timeZone: t.timeZone,
           })
           store.appendEvent(task.id, { type: 'turn' })
+          // This turn exists because the model answered with plan steps still
+          // open (the core's completion check): the bench's --runtime counts it.
+          const tail = msgs.at(-1)
+          if (typeof tail?.content === 'string' && tail.content.startsWith(NUDGE_PREFIX)) store.appendEvent(task.id, { type: 'plan_nudge' })
           const done = beginCompletion()
           try {
             let res
