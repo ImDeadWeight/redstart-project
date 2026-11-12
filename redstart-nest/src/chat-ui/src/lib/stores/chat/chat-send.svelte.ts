@@ -25,6 +25,8 @@ import {
 import * as messageRepo from '$lib/stores/chat/chat-message-repo';
 import { ChatTitleService } from '$lib/services/chat-title.service';
 import { memoryReviewStore } from '$lib/stores/memory-review.svelte';
+import { tasksStore } from '$lib/stores/tasks.svelte';
+import { toast } from 'svelte-sonner';
 import {
 	normalizeModelName,
 	isAbortError,
@@ -57,6 +59,18 @@ export class ChatSendController {
 	): Promise<void> {
 		if (!content.trim() && (!extras || extras.length === 0) && !workspaceFiles?.length) return;
 		const activeConv = conversationsStore.activeConversation;
+
+		// A background task holds this chat (agent-runtime Phase 3.9): the
+		// daemon is its only writer, so a message goes to the task, as
+		// steering or as the answer to its open question. Files cannot ride
+		// along: the steer route takes text.
+		if (activeConv && tasksStore.activeFor(activeConv.id)) {
+			if (extras?.length || workspaceFiles?.length) {
+				toast.info('Files cannot be sent to a background task. Send text, or cancel the task first.');
+			}
+			if (content.trim()) await tasksStore.steer(activeConv.id, content.trim());
+			return;
+		}
 
 		// If agentic loop is running, inject as a steering message instead of starting a new flow
 		if (activeConv && agenticStore.session.isRunning(activeConv.id)) {

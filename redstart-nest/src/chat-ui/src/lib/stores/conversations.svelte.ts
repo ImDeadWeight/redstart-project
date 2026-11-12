@@ -435,6 +435,26 @@ class ConversationsStore {
 	}
 
 	/**
+	 * Re-read the active conversation from the server, record and messages,
+	 * when something else wrote it: a background task (agent-runtime Phase
+	 * 3.9), which appends messages, moves currNode and keeps the plan. Unlike
+	 * loadConversation it leaves the new-chat defaults alone, and it does
+	 * nothing if the user has moved to another chat meanwhile.
+	 */
+	async reloadActiveFromServer(convId: string): Promise<void> {
+		if (this.activeConversation?.id !== convId) return;
+		const conversation = await DatabaseService.getConversation(convId);
+		if (!conversation || this.activeConversation?.id !== convId) return;
+		this.activeConversation = conversation;
+		const index = this.conversations.findIndex((c) => c.id === convId);
+		if (index !== -1) {
+			this.conversations[index] = conversation;
+			this.conversations = [...this.conversations];
+		}
+		await this.refreshActiveMessages();
+	}
+
+	/**
 	 * Clears the active conversation and messages.
 	 */
 	clearActiveConversation(): void {

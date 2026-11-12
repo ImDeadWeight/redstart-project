@@ -41,10 +41,21 @@
 	import { workspaceAvailable, isWorkspaceOnlyFile } from '$lib/utils/workspace-upload';
 	import { onMount } from 'svelte';
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
+	import ChatScreenTaskBar from './ChatScreenTaskBar.svelte';
+	import { tasksStore } from '$lib/stores/tasks.svelte';
 
 	let { showCenteredEmpty = false } = $props();
 
 	const autoScroll = createAutoScrollController();
+
+	// Follow the background task holding the open chat, if any (agent-runtime
+	// Phase 3.9). Re-runs on every reload of the record; watch() is a no-op
+	// while it already follows that chat's task.
+	$effect(() => {
+		const conv = activeConversation();
+		void conv?.activeTaskId;
+		void tasksStore.watch(conv?.id ?? null);
+	});
 
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
@@ -445,6 +456,8 @@
 			<ChatScreenProcessingInfo onVisibilityChange={handleProcessingInfoVisibility} />
 
 			<ChatScreenServerError />
+
+			<ChatScreenTaskBar conversationId={activeConversation()?.id} />
 
 			<div class="conversation-chat-form rounded-t-3xl">
 				<ChatScreenForm

@@ -29,18 +29,49 @@ function getDeviceId(): string {
   return id;
 }
 
+/**
+ * The headers every conversation-scoped route takes: the session, and the
+ * device id that is the conversations scope with auth off. The task routes
+ * (task.service.ts) use the same scope, so they share this.
+ */
+export function conversationHeaders(): Record<string, string> {
+  return { 'Content-Type': 'application/json', 'X-Redstart-Device-Id': getDeviceId(), ...getAuthHeader() };
+}
+
+/**
+ * A conversation write refused because a background task holds the
+ * conversation (agent-runtime Phase 3.4, D25: the daemon is its only writer
+ * then). The client's copy is stale by definition: reload it.
+ */
+export class TaskActiveError extends Error {
+  constructor(readonly conversationId: string | null) {
+    super('A background task is writing this conversation. It was reloaded; cancel the task to edit it.');
+    this.name = 'TaskActiveError';
+  }
+}
+
+let taskActiveHandler: ((conversationId: string | null) => void) | null = null;
+
+/** Registered once by the tasks store: reload and say why. */
+export function setTaskActiveHandler(handler: ((conversationId: string | null) => void) | null): void {
+  taskActiveHandler = handler;
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(resolveApiPath(path), {
     ...init,
     headers: {
-      'Content-Type': 'application/json',
-      'X-Redstart-Device-Id': getDeviceId(),
-      ...getAuthHeader(),
+      ...conversationHeaders(),
       ...(init?.headers || {})
     }
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
+    if (res.status === 409 && /"task_active"/.test(text)) {
+      const conversationId = /^\/conversations\/([^/?]+)/.exec(path)?.[1] ?? null;
+      taskActiveHandler?.(conversationId);
+      throw new TaskActiveError(conversationId);
+    }
     throw new Error(`API error ${res.status}: ${text || res.statusText}`);
   }
   if (res.status === 204) return undefined as T;

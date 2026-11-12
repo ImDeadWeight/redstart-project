@@ -50,6 +50,12 @@ export interface DatabaseConversation {
 	 * stamps updatedAt; null on an update clears it.
 	 */
 	plan?: ConversationPlan | null;
+	/**
+	 * The background task holding this chat (agent-runtime Phase 3.4), set
+	 * and cleared by Nest only. While set, a write of messages or currNode is
+	 * refused with 409 task_active.
+	 */
+	activeTaskId?: string;
 	messages?: DatabaseMessage[];
 }
 
