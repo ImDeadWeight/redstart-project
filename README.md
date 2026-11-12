@@ -280,6 +280,16 @@ terms of the [GNU Affero General Public License, version 3](LICENSE)
 over a network, you must make its complete source code available to them under
 the same license.
 
+- **Apps that connect to Redstart aren't covered.** A program that works with
+  Nest through its interfaces, such as a [connector](docs/connector-contract.md)
+  over HTTP, an MCP server, or a [plugin](docs/capabilities.md#plugins) Nest
+  runs as a separate process, is a separate work. It can use any license you
+  like, including a proprietary one. The AGPL applies to Redstart's own code
+  and to modified versions of it, not to the software that talks to it. The
+  copyright holder states this as a permission, not only as a reading of the
+  license, so integrators can rely on it.
+- **What you make with it is yours.** Conversations, documents, code and other
+  output you produce using Redstart aren't covered by Redstart's license.
 - **Earlier releases.** Releases up to and including `1.0.0-alpha.12` were
   published under the MIT License, and those copies stay under MIT.
 - **Commercial licenses.** To use Redstart in a product without the AGPL's

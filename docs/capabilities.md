@@ -87,6 +87,8 @@ Redstart Nest can also install a **third-party stdio MCP server** — an admin p
 
 This is a different mechanism from [External MCP servers](#external-mcp-servers) above — a plugin **runs on this machine**, spawned and supervised by Nest, where an external server runs somewhere else entirely. Read [Plugins](security.md#plugins) before installing one; it runs with the same OS permissions as Nest itself.
 
+A plugin is a separate program that talks to Nest over MCP, so Nest's AGPL-3.0 license doesn't apply to it. Plugins can use any license, including a proprietary one. See the [README's License section](../README.md#license).
+
 **Sources.** A pinned npm package by name, a pinned pypi package (installed via [`uv`](https://docs.astral.sh/uv/)), a local folder already on the machine, or a raw command for anything else — the admin never has to hand-write JSON. Browsing the official registry pre-fills the form, including which environment variables a server needs, when that metadata is available.
 
 **Two switches, not one.** A plugin obeys the exact same two-key model as every built-in capability above: the **Plugins tab**'s `enabled` toggle is the install-level, server-wide master switch; the **Tools tab**'s card activates it per profile. Both must be on for its tools to reach the model. This is deliberate, not an oversight — installing a plugin and deciding whether *this profile* gets it are different acts of judgment, made at different times.
