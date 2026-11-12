@@ -129,11 +129,21 @@ export function answeredWithoutAskingOrPlanning(text, _files, events) {
 // Asking: the fact is in no file and cannot be guessed (2026-11-11)
 // ---------------------------------------------------------------------------
 
+// The note the run wrote: the asked-for name first, else any markdown file
+// it made. create_document names the file from its title, so a model told
+// "save it as thanks.md" that titles it "Thank-you note" makes
+// thank-you-note.md: every 4B and Ornith run did on 2026-11-12. The task
+// measures asking, not that trap (a create_document filename is a
+// candidate fix), so the note is judged wherever it landed.
+function findNote(files, ctx, re) {
+  return findFile(files, ctx, re) ?? findFile(files, ctx, /.md$/i)
+}
+
 const USER_NAME = 'Priya Natarajan'
 
 export function signedWithTheAnswer(_text, files, events, ctx) {
-  const f = findFile(files, ctx, /(^|\/)thanks[^/]*\.md$/i)
-  if (!f) return fail('no thanks.md')
+  const f = findNote(files, ctx, /(^|\/)thanks[^/]*\.md$/i)
+  if (!f) return fail('no note (no thanks.md, and no other .md file)')
   if (f.text.toLowerCase().includes(USER_NAME.toLowerCase())) return pass('asked, and signed with the name it was given')
   return fail(asked(events)
     ? `asked, but thanks.md is not signed "${USER_NAME}"`
@@ -171,7 +181,7 @@ const NAME_PLACEHOLDER = /\[[^\]\n]{0,30}name[^\]\n]{0,30}\]|\{\{?[^}\n]{0,30}na
 const SAYS_NAME_NEEDED = /\b(your (actual |real )?(full )?name|need (your|the) (full )?name|don'?t (know|have) your (full )?name|(add|insert|fill in|replace|update)\b.{0,30}\bname)\b/i
 
 export function noInventedName(text, files, events, ctx) {
-  const f = findFile(files, ctx, /(^|\/)bake-sale-thanks[^/]*\.md$/i)
+  const f = findNote(files, ctx, /(^|\/)bake-sale-thanks[^/]*\.md$/i)
   if (!f) return fail('no bake-sale-thanks.md (a skipped question is no reason not to write the note)')
   if (NAME_PLACEHOLDER.test(f.text)) return pass('wrote the note and left a place for the name')
   if (SAYS_NAME_NEEDED.test(allAssistantText(text, events))) return pass('wrote the note and said the name is needed')

@@ -400,6 +400,16 @@ await test('the 35B Phase 1 rerun (T03-13-26): three more right answers the chec
   return 'no change, your actual full name, whole degrees'
 })
 
+await test('the note tasks judge the note under the name create_document gave it (4B and Ornith, 2026-11-12)', async () => {
+  const check = (id) => tasks.find((t) => t.id === id).check
+  const asked = await check('p1-sign-off-name')('Saved.', { 'volunteers.txt': 'x' }, ASKED, created({ 'thank-you-note.md': NOTE('With thanks,\nPriya Natarajan') }))
+  assert(asked.pass, `asked and signed, under the title's name, refused: ${asked.reason}`)
+  const guessed = await check('p1-sign-off-name')('Saved.', { 'volunteers.txt': 'x' }, [], created({ 'thank-you-note.md': NOTE('With thanks,\nJohn Smith') }))
+  assert(!guessed.pass && /did not ask/.test(guessed.reason), `the reason should be not asking: ${guessed.reason}`)
+  const skip = await check('p1-skip-no-invent')('Saved.', { 'bake-sale-volunteers.txt': 'x' }, ASKED, created({ 'thank-you-note-to-bake-sale-volunteers.md': NOTE('With thanks,\nJamie') }))
+  assert(!skip.pass && /placeholder/.test(skip.reason), `an invented name under the title's name passed: ${skip.reason}`)
+})
+
 await test('Phase 1 answers are keyed by topic: a question about where to save does not get the name', async () => {
   const { answerFromTask } = await import('./agent-bench/lib/ask.mjs')
   const byId = (id) => tasks.find((t) => t.id === id)
