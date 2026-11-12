@@ -15,7 +15,10 @@
 // The key is memory-storage's: the account id, or '_local' with auth off,
 // when every caller shares one set, as they share memories (security.md).
 //
-// A grant only ever covers a tool whose approval rule is 'prompt'. An
+// A grant may name any tool but a destructive one. For a 'none' tool (a
+// read) it only tells chat-ui not to show its card; Nest never asks about
+// those. What Nest itself enforces: a grant only ever covers a tool whose
+// approval rule is 'prompt'. An
 // 'always' tool (destructive: delete_file, memory_forget) asks on every call,
 // and addGrant refuses it, so neither a card's "always" nor the one-time
 // import of an old localStorage set can make a delete unattended. covers()
@@ -69,7 +72,11 @@ export function addGrant(accountKey, tool, { source = 'card' } = {}) {
   if (!isToolName(tool)) return { ok: false, error: 'not a tool name' }
   const rule = approvalRule(tool)
   if (rule === 'always') return { ok: false, error: 'this tool asks on every call and cannot be always allowed' }
-  if (rule === 'none') return { ok: false, error: 'this tool needs no approval' }
+  // A 'none' tool (a read, a web fetch) is granted too. Nest never asks for
+  // one, but chat-ui's card does, for every tool not always allowed, so the
+  // grant is what stops the card. Until 2026-11-12 these were refused:
+  // "Allow all tools from redstart-fetch" never stuck (the card kept asking),
+  // and the one-time import dropped every read tool's old "Always allow".
   const data = read()
   const list = Array.isArray(data.accounts[accountKey]) ? data.accounts[accountKey] : []
   const existing = list.find((g) => g.tool === tool && g.scope === null)

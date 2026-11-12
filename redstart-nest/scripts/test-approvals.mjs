@@ -173,11 +173,13 @@ await test('per account, idempotent, newest first, and a revoke is the owner\'s 
   assert(!grants.covers(ALICE, 'create_document'), 'a revoked grant still covers')
 })
 
-await test('a destructive tool can never be always allowed, and a read needs no grant', () => {
+await test('a destructive tool can never be always allowed; a read can (the chat card asks for reads too)', () => {
   const del = grants.addGrant(ALICE, 'delete_file')
   assert(!del.ok && /every call/.test(del.error), `delete_file granted: ${JSON.stringify(del)}`)
   assert(!grants.addGrant(ALICE, 'memory_forget', { source: 'import' }).ok, 'memory_forget imported')
-  assert(!grants.addGrant(ALICE, 'read_document').ok, 'a read tool granted')
+  // Allowed from 2026-11-12: "Allow all tools from redstart-fetch" did not stick.
+  assert(grants.addGrant(ALICE, 'read_document').ok && grants.addGrant(ALICE, 'web_fetch').ok, 'a read or network tool was refused')
+  assert(!grants.covers(ALICE, 'web_fetch'), 'a grant for a tool Nest never asks about changed what Nest enforces')
   assert(!grants.addGrant(ALICE, '../../etc').ok, 'a path accepted as a tool name')
 })
 
@@ -390,7 +392,7 @@ await test('grants routes: list, add (logged), revoke own only, and the import d
   eq((await route('DELETE', `/approvals/grants/${add.json.id}`, ALICE_ACCOUNT)).status, 404, "alice revoking bob's")
   eq((await route('DELETE', `/approvals/grants/${add.json.id}`, BOB_ACCOUNT)).status, 204, 'bob revoking his own')
   const imp = await route('POST', '/approvals/grants/import', BOB_ACCOUNT, { tools: ['write_file', 'delete_file', 'memory_forget', 'read_document', 'write_file', 42] })
-  eq([imp.json.imported, imp.json.dropped.sort()], [['write_file'], ['delete_file', 'memory_forget', 'read_document']], 'import')
+  eq([imp.json.imported.sort(), imp.json.dropped.sort()], [['read_document', 'write_file'], ['delete_file', 'memory_forget']], 'import keeps reads, drops destructive')
   eq((await route('POST', '/approvals/grants/import', BOB_ACCOUNT, { nope: 1 })).status, 400, 'a malformed import')
 })
 
