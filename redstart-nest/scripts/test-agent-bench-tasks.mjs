@@ -384,6 +384,22 @@ await test('the 2026-11-12 runs: right answers the checks refused', async () => 
   return 'an earlier message, bold, "still need", fig-1.png, the File System folder'
 })
 
+await test('the 35B Phase 1 rerun (T03-13-26): three more right answers the checks refused', async () => {
+  const check = (id) => tasks.find((t) => t.id === id).check
+  const stop = await check('p1-stop-and-report')('Updated SKU-2, SKU-3, SKU-7.\n\n**SKU-9 (Rear light) — no change.** The supplier email does not include a new price for SKU-9, so the existing price of **$22.00** remains in place.',
+    { 'inventory.csv': invWith('22.00') }, [], NONE)
+  assert(stop.pass, `"no change ... does not include a new price" refused: ${stop.reason}`)
+  const skip = await check('p1-skip-no-invent')('Signed the note as "bench" — since your full name wasn\'t provided. If you\'d like me to update this with your actual full name, just let me know.',
+    { 'bake-sale-thanks.md': NOTE('With sincere appreciation,\n\nbench') }, ASKED, NONE)
+  assert(skip.pass, `saying the full name is needed refused: ${skip.reason}`)
+  const conv = check('p1-resolved-in-file')
+  const whole = await conv('Done.', { 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit.map(Math.round))) }, [], NONE)
+  assert(whole.pass, `whole degrees refused: ${whole.reason}`)
+  const wrongFormula = await conv('Done.', { 'converted.csv': csvOf('time,temp_f', times(X.fahrenheit.map((f) => f + 1))) }, [], NONE)
+  assert(!wrongFormula.pass, 'values a degree off passed')
+  return 'no change, your actual full name, whole degrees'
+})
+
 await test('Phase 1 answers are keyed by topic: a question about where to save does not get the name', async () => {
   const { answerFromTask } = await import('./agent-bench/lib/ask.mjs')
   const byId = (id) => tasks.find((t) => t.id === id)
