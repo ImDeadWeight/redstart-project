@@ -272,7 +272,26 @@ server. See [Architecture](docs/architecture.md) for the full picture.
 
 ## License
 
-See [LICENSE.txt](redstart-nest/LICENSE.txt).
+Copyright (C) 2025-2026 Patrick Carswell.
+
+Redstart is free software: you can redistribute it and/or modify it under the
+terms of the [GNU Affero General Public License, version 3](LICENSE)
+(`AGPL-3.0-only`). If you distribute a modified version, or let people use one
+over a network, you must make its complete source code available to them under
+the same license.
+
+- **Earlier releases.** Releases up to and including `1.0.0-alpha.12` were
+  published under the MIT License, and those copies stay under MIT.
+- **Commercial licenses.** To use Redstart in a product without the AGPL's
+  source-sharing terms, open an issue to ask about a commercial license.
+- **Name and mascot.** "Redstart", "Redstart Nest", "Redstart Twig" and the
+  mascot artwork are trademarks and aren't covered by the AGPL. A distributed
+  fork needs its own name and mascot. See [TRADEMARKS.md](TRADEMARKS.md).
+- **Contributing.** Contributors sign a [CLA](CLA.md). See
+  [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Third-party components keep their own licenses. See
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ---
 

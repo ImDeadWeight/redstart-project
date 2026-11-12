@@ -3,6 +3,7 @@
   "version": "1.0.0-alpha.12",
   "description": "Local LLM host and launcher — wraps llama.cpp/TurboQuant into a managed server with multi-device network access, chat UI, and coding agent support.",
   "author": "Patrick Carswell",
+  "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
   "scripts": {

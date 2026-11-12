@@ -11,7 +11,8 @@
 //   app/twigd/bin, app/twigd/daemon  twigd, three levels below resources/ as in
 //   shared/*.mjs                     the checkout, so `../../../shared` resolves
 //   chat-ui/                         what the shell's `twig` protocol serves
-//   LICENSE.txt, THIRD-PARTY-NOTICES.md, licenses/rust-licenses.json
+//   LICENSE.txt (the repo's LICENSE), THIRD-PARTY-NOTICES.md,
+//   TRADEMARKS.md, licenses/rust-licenses.json
 //
 // twigd has no npm dependencies: everything it imports is in this repo.
 // Anything missing is an error, so an installer never silently lacks a part.
@@ -82,8 +83,9 @@ export function stage() {
   copyDir(path.join(REPO, 'redstart-nest', 'src', 'chat-ui', 'dist'), out('chat-ui'))
   need(out('chat-ui', 'index.html'))
 
-  fs.copyFileSync(need(path.join(TWIG, 'LICENSE.txt')), out('LICENSE.txt'))
+  fs.copyFileSync(need(path.join(REPO, 'LICENSE')), out('LICENSE.txt'))
   fs.copyFileSync(need(path.join(REPO, 'THIRD-PARTY-NOTICES.md')), out('THIRD-PARTY-NOTICES.md'))
+  fs.copyFileSync(need(path.join(REPO, 'TRADEMARKS.md')), out('TRADEMARKS.md'))
   fs.mkdirSync(out('licenses'))
   fs.copyFileSync(need(path.join(TWIG, 'licenses', 'rust-licenses.json')), out('licenses', 'rust-licenses.json'))
 
