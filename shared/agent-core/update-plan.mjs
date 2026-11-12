@@ -148,6 +148,26 @@ export function planTailNote(steps) {
 export const NUDGE_PREFIX = '[Automatic note, not from the user] These steps are still open:';
 
 /**
+ * Does the reply end by asking the person something? Its last non-empty line
+ * ends in a question mark (markdown emphasis or a closing bracket after it
+ * allowed). The completion check skips such a reply: it is waiting for the
+ * person, and nudging it to "finish the steps" pushes it to answer its own
+ * question (live test D, 2026-11-12: Ornith asked for the rule in text, was
+ * nudged, and recovered only by asking again with ask_user). The bench uses
+ * the same test for --text-asks.
+ *
+ * @param {string | null | undefined} text
+ */
+export function endsInQuestion(text) {
+	const lines = String(text ?? '')
+		.trim()
+		.split('\n')
+		.map((l) => l.trim())
+		.filter(Boolean);
+	return lines.length > 0 && /\?[*_)"'\s]*$/.test(lines.at(-1) ?? '');
+}
+
+/**
  * The one completion check: the turn answered, but steps are still open.
  *
  * @param {readonly import('./types').PlanStep[]} steps

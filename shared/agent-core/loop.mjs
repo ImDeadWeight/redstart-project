@@ -26,7 +26,7 @@ import {
 } from './timings.mjs';
 import { normalizeToolCalls, runToolCalls } from './tool-calls.mjs';
 import { createApiToolCalls, parseToolCallsFromTurn } from './tool-call-parser.mjs';
-import { completionNudge, openSteps, planTailNote } from './update-plan.mjs';
+import { completionNudge, endsInQuestion, openSteps, planTailNote } from './update-plan.mjs';
 
 /** @typedef {import('./types').Timings} Timings */
 /** @typedef {import('./types').TurnAccumulator} TurnAccumulator */
@@ -176,10 +176,17 @@ export async function runAgentLoop(params) {
 
 		// The one completion check (update-plan.mjs): the model answered with
 		// plan steps still open. Save this turn, then give it one more with the
-		// nudge at the tail. Once per flow, so it can never become a loop.
-		const planSteps = acc.toolCalls.length === 0 && ports.plan && ports.plan.completionCheck !== false && !nudged
-			? ports.plan.get()
-			: null;
+		// nudge at the tail. Once per flow, so it can never become a loop. Not
+		// when the reply ends in a question: it is waiting for the person, who
+		// answers in the next message (endsInQuestion).
+		const planSteps =
+			acc.toolCalls.length === 0 &&
+			ports.plan &&
+			ports.plan.completionCheck !== false &&
+			!nudged &&
+			!endsInQuestion(acc.content)
+				? ports.plan.get()
+				: null;
 		if (planSteps && openSteps(planSteps).length > 0) {
 			nudged = true;
 			ports.log?.('Plan steps still open after an answer: one more turn');

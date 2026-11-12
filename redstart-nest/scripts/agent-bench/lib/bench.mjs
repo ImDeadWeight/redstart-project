@@ -46,10 +46,10 @@ const MAX_TEXT_ASKS = 2
 export const TEXT_ASK_NO_ANSWER = "I don't know. Use your best judgement and say what you assumed."
 
 /** Does a reply end by asking the user something? (its last line has a "?") */
-export function endsInQuestion(text) {
-  const lines = String(text ?? '').trim().split('\n').map((l) => l.trim()).filter(Boolean)
-  return lines.length > 0 && /\?[*_)"'\s]*$/.test(lines.at(-1))
-}
+// The core's test (shared/agent-core/update-plan.mjs), so the bench and the
+// loop's completion check agree on what a question looks like.
+import { endsInQuestion } from '../../../../shared/agent-core/update-plan.mjs'
+export { endsInQuestion }
 const MAX_LOGGED_RESULT_CHARS = 4000
 // Where the documents space keeps every conversation's workspace.
 const CHATS_DIR = 'chats'

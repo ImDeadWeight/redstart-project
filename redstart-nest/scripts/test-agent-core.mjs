@@ -582,6 +582,16 @@ await test('no note with no plan, or once every step is done or skipped', async 
   eq(count(finished.calls, 'streamTurn'), 1, 'no nudge with nothing open')
 })
 
+await test('no completion nudge when the reply ends in a question: it is waiting for the person (live test D, 2026-11-12)', async () => {
+  const h = harness({
+    plan: { steps: [S('ask the rule', 'done'), S('apply it', 'pending')] },
+    turns: [async (acc) => { acc.content = 'I found two files.\n\nWhat rule should decide which to keep?**' }],
+  })
+  await h.done
+  eq(count(h.calls, 'streamTurn'), 1, 'a question with steps open was nudged')
+  eq(count(h.calls, 'onFlowComplete'), 1, 'the flow did not end on the question')
+})
+
 await test('the completion check: an answer with steps open gets one more turn, saved first, with the nudge at the tail', async () => {
   const plan = { steps: [S('read', 'done'), S('write', 'pending')] }
   const h = harness({
