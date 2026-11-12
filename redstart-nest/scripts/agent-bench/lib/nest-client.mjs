@@ -107,6 +107,29 @@ export async function connectNest(opts) {
       await req('DELETE', `/conversations/${encodeURIComponent(id)}`, { ok: [200, 204, 404] })
     },
 
+    /** The ids of the account's conversations. */
+    async listConversationIds() {
+      const res = await req('GET', '/conversations')
+      const list = await res.json()
+      return Array.isArray(list) ? list.map((c) => c?.id).filter((id) => typeof id === 'string') : []
+    },
+
+    /**
+     * The account's saved memories (outside any project), as { id, text }.
+     * A model can call memory_save during a run, and what it saves is shown
+     * to every later run: the 2026-11-12 runs found "Wrote thank-you note to
+     * school bake sale volunteers" from an earlier one.
+     */
+    async listMemories() {
+      const res = await req('GET', '/memories')
+      const { memories } = await res.json()
+      return Array.isArray(memories) ? memories.map((m) => ({ id: m.id, text: m.text })) : []
+    },
+
+    async deleteMemory(id) {
+      await req('DELETE', `/memories/${encodeURIComponent(id)}`, { ok: [200, 204, 404] })
+    },
+
     /** Write one file into the run's workspace, creating folders as needed. */
     async seedFile(conversationId, relPath, content) {
       const parts = relPath.split('/')

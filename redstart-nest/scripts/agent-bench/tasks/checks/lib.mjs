@@ -103,14 +103,26 @@ export function planned(events) {
   return toolCallsNamed(events, 'update_plan').length > 0
 }
 
+/**
+ * Everything the model said in the run, not only its last message. A chat
+ * shows every message, so "the file isn't there" in the first one has been
+ * said even when the last one goes on to something else (2026-11-12: the 35B
+ * said quarterly-forecast.xlsx "doesn't exist in the workspace", then
+ * summarised sales.csv, and docs-missing-file read only the summary).
+ */
+export const allAssistantText = (text, events) =>
+  [...(events ?? []).filter((e) => e.type === 'assistant' && e.content).map((e) => e.content), text ?? ''].join('\n')
+
 /** Did the answer say plainly that something could not be found? */
 export function saysNotFound(text) {
-  const t = text ?? ''
+  // Markdown emphasis out first: Ornith's "There is **no `quarterly-
+  // forecast.xlsx`** anywhere" failed until 2026-11-12.
+  const t = (text ?? '').replace(/\*+/g, '')
   // The gap between the negation and the verb may hold a file name: a dot
   // followed by a letter (".xlsx") is not the end of a sentence. Until
   // 2026-11-11 it was, and the 35B's "there is no `quarterly-forecast.xlsx`
   // on this server" failed docs-missing-file.
-  const negThenVerb = /\b(not|no|couldn'?t|could not|cannot|can'?t|unable to|doesn'?t|does not|isn'?t|is not|there is no|wasn'?t|was not)\b(?:[^.]|\.(?=\w)){0,60}\b(find|found|exist|exists|locate|located|present|available|there|mention|mentioned|listed|included)\b/i
+  const negThenVerb = /\b(not|no|couldn'?t|could not|cannot|can'?t|unable to|doesn'?t|does not|isn'?t|is not|there is no|wasn'?t|was not)\b(?:[^.]|\.(?=\w)){0,60}\b(find|found|exist|exists|locate|located|present|available|there|mention|mentioned|listed|included|attached|uploaded|provided|shared)\b/i
   // "there is no <file>": absence said without a verb. Needs a file-like
   // object, so "there is no doubt the forecast ..." does not count.
   const thereIsNoFile = /\bthere(?: is|'s) no (?:such )?(?:file|document|spreadsheet|[`'"]?[\w-]+\.[A-Za-z]{2,5}\b)/i

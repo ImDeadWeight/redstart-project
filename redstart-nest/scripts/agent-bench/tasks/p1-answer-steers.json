@@ -11,8 +11,14 @@
   ],
   "approve": "all",
   "answers": {
-    "": "By age, oldest first."
+    "order": "By age, oldest first.",
+    "sort": "By age, oldest first.",
+    "column": "By age, oldest first.",
+    "field": "By age, oldest first.",
+    "arrange": "By age, oldest first.",
+    "criteri": "By age, oldest first.",
+    "by ": "By age, oldest first."
   },
   "check": "checks/phase1.mjs#sortedAsAnswered",
-  "notes": "The order is only in the answer. Passes only if the model asks and then follows what it was told (age, descending), not a default sort by name."
+  "notes": "The order is only in the answer. Passes only if the model asks and then follows what it was told (age, descending), not a default sort by name. Answers keyed by topic from 2026-11-12 (they were one catch-all)."
 }

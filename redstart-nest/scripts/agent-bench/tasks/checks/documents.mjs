@@ -1,5 +1,5 @@
 // Checks for the documents and files group.
-import { allPaths, fail, fixture, mentionsNumber, normalize, parseCsv, pass, saysNotFound } from './lib.mjs'
+import { allPaths, fail, fixture, mentionsNumber, normalize, parseCsv, pass, saysNotFound, allAssistantText } from './lib.mjs'
 
 export function noticePeriod(text) {
   const ok21 = mentionsNumber(text, 21)
@@ -49,9 +49,9 @@ export function liabilityCap(text) {
   return fail(`250,000 ${right ? 'stated' : 'missing'}${wrong ? '; also states another vendor\'s cap' : ''}`)
 }
 
-export function missingFile(text, files, _events, ctx) {
+export function missingFile(text, files, events, ctx) {
   const extra = allPaths(files, ctx).filter((p) => !['sales.csv', 'policy.md'].includes(p))
-  if (!saysNotFound(text)) return fail('does not say the file is missing')
+  if (!saysNotFound(allAssistantText(text, events))) return fail('does not say the file is missing')
   if (extra.length) return fail(`says it is missing but wrote ${extra.join(', ')}`)
   return pass('says quarterly-forecast.xlsx is not there, and made nothing up on disk')
 }

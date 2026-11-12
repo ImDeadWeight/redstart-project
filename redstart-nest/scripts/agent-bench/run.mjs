@@ -153,6 +153,26 @@ export function accountWarning(who) {
 }
 
 /**
+ * The account already holds memories. Every run is shown them, so a run's
+ * outcome depends on what is there (2026-11-12: an earlier run's memory_save
+ * of "Wrote thank-you note to school bake sale volunteers" was found by
+ * p1-skip-no-invent). The bench deletes what its own runs save; these came
+ * from before that, or from someone using the account. Not deleted: they may
+ * be someone's.
+ *
+ * @param {Array<{ id: string, text: string }> | null} memories
+ */
+export function memoryWarning(memories) {
+  if (!memories?.length) return null
+  const shown = memories.slice(0, 3).map((m) => `"${String(m.text).slice(0, 80)}"`).join(', ')
+  return `warning: the bench account has ${memories.length} saved memor${memories.length === 1 ? 'y' : 'ies'} (${shown}${memories.length > 3 ? ', …' : ''}), which every run is shown. ` +
+    'Delete them (chat Settings → Memory, signed in as the bench account) so runs start alike; runs from 2026-11-12 on remove what they save.'
+}
+
+/** Conversations an earlier bench left behind: it was stopped mid-task. */
+export const LEFTOVER_CONVERSATION = /^bench-[a-z0-9-]+-[0-9a-f]{8}$/
+
+/**
  * A task expects to be asked, but Nest did not offer ask_user: a Nest from
  * before Phase 1 (not restarted), or an admin ban on the name. Those tasks
  * then measure nothing, and the row would read as the model not asking.
@@ -249,6 +269,18 @@ export async function main(argv, io = {}) {
   const who = await nest.whoami()
   const aw = accountWarning(who)
   if (aw) { warnings.push(aw); log(aw) }
+  const mw = memoryWarning(await nest.listMemories().catch(() => null))
+  if (mw) { warnings.push(mw); log(mw) }
+  // A bench stopped mid-task (Ctrl+C, or the 2026-11-11 hang) never deleted
+  // its conversation, and the workspace files stay searchable: a later
+  // p1-plan-missing-input's search_documents found a leftover sales.csv in
+  // chats/bench-compute-chart-…/. Deleting the conversation moves its
+  // workspace to the trash (recoverable).
+  if (!opts.keep) {
+    const leftovers = (await nest.listConversationIds().catch(() => [])).filter((id) => LEFTOVER_CONVERSATION.test(id))
+    for (const id of leftovers) await nest.deleteConversation(id).catch(() => {})
+    if (leftovers.length) log(`removed ${leftovers.length} conversation(s) an earlier bench left behind (to the trash): ${leftovers.join(', ')}`)
+  }
   // One probe of the File System folder: too big to snapshot before every
   // task means no cleanup there, said once.
   let fileSystemSnapshot = true

@@ -188,8 +188,12 @@ export async function runTask(nest, task, opts) {
   let fileSystemWrites = null
   /** @type {Map<string, string> | null} the documents folder (conversations aside) before the run */
   let docsBefore = null
+  /** @type {Set<string> | null} the ids of the account's memories before the run */
+  let memoriesBefore = null
 
   try {
+    // Before the conversation exists, so nothing this run does is in it.
+    memoriesBefore = await nest.listMemories?.().then((ms) => new Set(ms.map((m) => m.id))).catch(() => null) ?? null
     await nest.createConversation(conversationId, `agent-bench ${task.id}`)
     // The File System tools write to the account's own folder ('files'
     // space), which no conversation owns. Snapshot it so what this run adds
@@ -421,6 +425,19 @@ export async function runTask(nest, task, opts) {
         fileSystemWrites = { created, modified }
         if (created.length || modified.length) log({ type: 'file_system_writes', created, modified, removed: !opts.keep })
         if (!opts.keep) for (const p of created) await nest.deleteFile('files', p).catch(() => {})
+      }
+    }
+    // Memories the run saved (memory_save). Every later run is shown the
+    // account's memories, so one left behind changes the next task: on
+    // 2026-11-12 p1-skip-no-invent found an earlier run's "Wrote thank-you
+    // note to school bake sale volunteers". Deleted even with --keep: they
+    // are in the log, and keeping them taints every run after.
+    if (memoriesBefore) {
+      const after = await nest.listMemories().catch(() => null)
+      const saved = (after ?? []).filter((m) => !memoriesBefore.has(m.id))
+      if (saved.length) {
+        log({ type: 'memories_saved', texts: saved.map((m) => clip(m.text)) })
+        for (const m of saved) await nest.deleteMemory(m.id).catch(() => {})
       }
     }
     if (!opts.keep) {

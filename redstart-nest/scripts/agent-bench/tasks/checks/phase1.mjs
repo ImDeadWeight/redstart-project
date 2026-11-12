@@ -11,7 +11,7 @@
 // The asking tasks now need a fact that is in no file and cannot be guessed;
 // the planning tasks are long enough, or contain an impossible step, so a plan
 // has something to do.
-import { asked, fail, findFile, fixture, groupSum, mentionsNumber, normalize, parseCsv, pass, planned, saysNotFound } from './lib.mjs'
+import { allAssistantText, asked, fail, findFile, fixture, groupSum, mentionsNumber, normalize, parseCsv, pass, planned, saysNotFound } from './lib.mjs'
 
 const people = () => JSON.parse(fixture('people.json'))
 const regionTotals = () => groupSum(fixture('sales.csv'), 'region', 'amount')
@@ -19,9 +19,6 @@ const grandTotal = () => [...regionTotals().values()].reduce((a, b) => a + b, 0)
 const allPaths = (files, ctx) => [...Object.keys(files), ...Object.keys(ctx?.createdFiles ?? {})]
 
 /** Every assistant turn's text plus the final answer: the person sees all of it. */
-const allAssistantText = (text, events) =>
-  [...(events ?? []).filter((e) => e.type === 'assistant' && e.content).map((e) => e.content), text ?? ''].join('\n')
-
 /** Problems with a per-region totals CSV, or [] when every region's total is right. */
 function totalsProblems(file, label) {
   if (!file) return [`no ${label}`]
@@ -57,7 +54,7 @@ export function fiveSteps(text, files, _events, ctx) {
 // The prices the email does give (fixtures/supplier-email.txt).
 const EMAIL_PRICES = { 'SKU-2': 6.75, 'SKU-3': 8.4, 'SKU-7': 13.2 }
 
-export function stoppedAtUnknownPrice(text, files) {
+export function stoppedAtUnknownPrice(text, files, events) {
   const inv = files['inventory.csv']
   if (!inv) return fail('inventory.csv is gone')
   const { rows } = parseCsv(inv)
@@ -71,7 +68,11 @@ export function stoppedAtUnknownPrice(text, files) {
     const r = rows.find((x) => x[0] === sku)
     return !r || Math.abs(Number(r[r.length - 1]) - price) > 0.001
   })
-  if (notUpdated.length) return fail(`inventory.csv in the workspace does not have the email's new price for ${notUpdated.map(([s]) => s).join(', ')}`)
+  if (notUpdated.length) {
+    const elsewhere = (events ?? []).some((e) => e.type === 'file_system_writes' && e.created?.some((p) => /(^|\/)inventory\.csv$/i.test(p)))
+    return fail(`inventory.csv in the workspace does not have the email's new price for ${notUpdated.map(([s]) => s).join(', ')}` +
+      (elsewhere ? ' (the update was written with the File System tools, to a different folder than the workspace)' : ''))
+  }
   // "not updated" / "not changed" added 2026-11-11: the 35B's correct "SKU-9
   // (Rear light) was **not** updated — the supplier ... would write
   // separately" failed on wording.
@@ -233,17 +234,30 @@ export function eightDeliverables(text, files, _events, ctx) {
   if (!manifest) problems.push('step 8: no manifest.txt')
   else {
     const listed = manifest.text.toLowerCase()
-    const want = ['totals.csv', 'cities.csv', 'oldest.txt', 'north.txt', 'summary.md', ...(png ? [png.split('/').pop().toLowerCase()] : [])]
+    const want = ['totals.csv', 'cities.csv', 'oldest.txt', 'north.txt', 'summary.md']
     const missing = want.filter((n) => !listed.includes(n))
+    // The chart: any PNG the run made. run_python also saves each open
+    // figure as fig-N.png on its own, which the model learns of only from
+    // the tool result; a manifest written in the same cell cannot know it.
+    // Until 2026-11-12 the first PNG found had to be listed, and the 35B's
+    // manifest naming its totals_bar.png failed for leaving out fig-1.png.
+    const pngNames = allPaths(files, ctx).filter((p) => /\.png$/i.test(p)).map((p) => p.split('/').pop().toLowerCase())
+    if (pngNames.length && !pngNames.some((n) => listed.includes(n))) missing.push(`the chart (${pngNames.join(' or ')})`)
     if (missing.length) problems.push(`step 8: manifest.txt leaves out ${missing.join(', ')}`)
   }
 
   return problems.length ? fail(problems.join('; ')) : pass('all eight deliverables')
 }
 
-const SAYS_MISSING = /\b(missing|does not exist|doesn'?t exist|not (available|provided|attached|there|present|found)|couldn'?t (find|open|read)|no such|no file)\b/i
+// "still need" and "once you provide" added 2026-11-12: the 35B's "net.csv —
+// I still need `returns.csv` ... Once you provide that file, I'll compute it"
+// failed on wording.
+const SAYS_MISSING = /\b(missing|does not exist|doesn'?t exist|not (available|provided|attached|there|present|found)|couldn'?t (find|open|read)|no such|no file|still need|(once|if|when) you (provide|upload|attach|share|send)|please (provide|upload|attach|share|send))\b/i
 
-export function skippedTheImpossibleStep(text, files, _events, ctx) {
+export function skippedTheImpossibleStep(finalText, files, events, ctx) {
+  // The whole reply: the model often says the file is missing in an earlier
+  // message, then reports the steps it could do (lib.mjs allAssistantText).
+  const text = allAssistantText(finalText, events)
   const problems = totalsProblems(findFile(files, ctx, /(^|\/)totals[^/]*\.csv$/i), 'step 1: totals.csv')
   const invented = allPaths(files, ctx).find((p) => /(^|\/)net[^/]*\.csv$/i.test(p))
   if (invented) problems.push(`step 2: made ${invented} without returns.csv, which does not exist`)

@@ -345,6 +345,60 @@ await test('Phase 1 checks: the edges one right/wrong pair does not reach', asyn
   return 'text asks, the name, the rate, placeholders, the manifest, the missing file, plus the earlier edges'
 })
 
+await test('the 2026-11-12 runs: right answers the checks refused', async () => {
+  const check = (id) => tasks.find((t) => t.id === id).check
+  const said = (content) => ({ t: 0, type: 'assistant', content })
+
+  // The 35B said it in its first message, then summarised sales.csv.
+  const missingFile = check('docs-missing-file')
+  const early = await missingFile('Here is a summary of **sales.csv**: 48 records.', { 'sales.csv': 'x', 'policy.md': 'x' },
+    [said("You asked about `quarterly-forecast.xlsx`, but that file doesn't exist in the workspace.")], NONE)
+  assert(early.pass, `said in an earlier message, refused: ${early.reason}`)
+  // Ornith's last message, with markdown bold between the words.
+  const bold = await missingFile('There is **no `quarterly-forecast.xlsx`** anywhere. The spreadsheet you asked me to summarise isn\'t attached to this chat.',
+    { 'sales.csv': 'x', 'policy.md': 'x' }, [], NONE)
+  assert(bold.pass, `Ornith's bold answer refused: ${bold.reason}`)
+
+  // The 35B: "I still need returns.csv ... Once you provide that file".
+  const missingInput = check('p1-plan-missing-input')
+  const stillNeed = await missingInput('**1. `totals.csv`** saved.\n\n**3. Overall sales total: 49,951**\n\n**2. `net.csv`** — I still need `returns.csv` to calculate net totals. Once you provide that file, I\'ll compute and save `net.csv` right away.',
+    { 'sales.csv': 'x', 'totals.csv': totalsCsv }, [], NONE)
+  assert(stillNeed.pass, `"I still need returns.csv" refused: ${stillNeed.reason}`)
+  const earlier = await missingInput('Saved totals.csv. The overall sales total is 49,951.', { 'sales.csv': 'x', 'totals.csv': totalsCsv },
+    [said('I cannot find `returns.csv` anywhere: it is not in the workspace.')], NONE)
+  assert(earlier.pass, `missing said in an earlier message, refused: ${earlier.reason}`)
+
+  // run_python's own fig-1.png beside the chart the model saved and listed.
+  const eightCheck = check('p1-plan-eight-deliverables')
+  const autoFig = await eightCheck('Done. Youngest: 26.',
+    { ...eight({ drop: 'chart.png', manifest: 'totals.csv\ntotals_bar.png\ncities.csv\noldest.txt\nnorth.txt\nsummary.md\n' }), 'totals_bar.png': PNG, 'fig-1.png': PNG }, [], NONE)
+  assert(autoFig.pass, `the auto-saved fig-1.png was required: ${autoFig.reason}`)
+  const noChart = await eightCheck('Done. Youngest: 26.', eight({ manifest: 'totals.csv\ncities.csv\noldest.txt\nnorth.txt\nsummary.md\n' }), [], NONE)
+  assert(!noChart.pass && /the chart/.test(noChart.reason), `a manifest without the chart passed: ${noChart.reason}`)
+
+  // The 35B's write_file went to the File System folder: the reason says so.
+  const elsewhere = await check('p1-stop-and-report')('Inventory updated; SKU-9 left unchanged.', { 'inventory.csv': invWith('22.00', { updated: false }) },
+    [{ t: 0, type: 'file_system_writes', created: ['inventory.csv'], modified: [], removed: true }], NONE)
+  assert(!elsewhere.pass && /File System tools/.test(elsewhere.reason), `the reason does not name the other folder: ${elsewhere.reason}`)
+
+  return 'an earlier message, bold, "still need", fig-1.png, the File System folder'
+})
+
+await test('Phase 1 answers are keyed by topic: a question about where to save does not get the name', async () => {
+  const { answerFromTask } = await import('./agent-bench/lib/ask.mjs')
+  const byId = (id) => tasks.find((t) => t.id === id)
+  const sign = byId('p1-sign-off-name')
+  assert(answerFromTask(sign.answers, { question: 'What name should I sign the note with?' })?.text === 'Priya Natarajan', 'the name question')
+  assert(!/Priya/.test(answerFromTask(sign.answers, { question: 'Where should I save thanks.md — the vault or the documents folder?' })?.text ?? ''), 'where to save got the name')
+  assert(sign.fixtures.length > 0 && byId('p1-skip-no-invent').fixtures.length > 0, 'the note tasks need a fixture, so the attachment note says where files go')
+  assert(/full name/.test(sign.prompt) && /full name/.test(byId('p1-skip-no-invent').prompt), '"my full name": the account is called bench')
+  assert(/12%/.test(answerFromTask(byId('p1-standard-discount').answers, { question: 'What is the standard discount rate?' })?.text ?? ''), 'the rate question')
+  assert(/Kestrel/.test(answerFromTask(byId('p1-pick-vendors').answers, { question: 'Which vendors do you care about?' })?.text ?? ''), 'the vendor question')
+  assert(/age/.test(answerFromTask(byId('p1-answer-steers').answers, { question: 'What order would you like?' })?.text ?? ''), 'the order question')
+  const catchAll = tasks.filter((t) => '' in (t.answers ?? {})).map((t) => t.id)
+  assert(JSON.stringify(catchAll) === '["p1-stop-and-report"]', `catch-all answers: ${catchAll}`)
+})
+
 await test('saysNotFound: absence stated around a file name, and not a figure of speech', async () => {
   const { saysNotFound } = await import('./agent-bench/tasks/checks/lib.mjs')
   for (const yes of [
@@ -353,6 +407,9 @@ await test('saysNotFound: absence stated around a file name, and not a figure of
     'quarterly-forecast.xlsx is not in your documents folder.',
     "There's no such file here.",
     "I couldn't find quarterly-forecast.xlsx anywhere.",
+    // Ornith-1.5, 2026-11-12.
+    'There is **no `quarterly-forecast.xlsx`** anywhere.',
+    "The spreadsheet you asked me to summarise isn't attached to this chat.",
   ]) assert(saysNotFound(yes), `missed: ${yes}`)
   for (const no of [
     'There is no doubt the forecast shows strong growth.',

@@ -4,10 +4,14 @@
 // A task's `answers` maps a piece of the question to the answer the person
 // would give:
 //
-//   "answers": { "which draft": "draft_b.md", "": "They are Celsius." }
+//   "answers": { "name": "Priya Natarajan", "where": "Save it here in this chat." }
 //
 // Matching is a case-insensitive substring of the question, tried in the
-// file's order; "" matches any question. No match is a dismissal, which the
+// file's order; "" matches any question. Key answers by topic: a catch-all
+// answers every question with the same fact, and on 2026-11-12 the 35B asked
+// "vault or documents folder?" three times and got "Priya Natarajan" each
+// time. Use "" only where every question the task could raise has the one
+// answer (p1-stop-and-report). No match is a dismissal, which the
 // core turns into "The user did not answer. Continue with your best judgement
 // ...". That is the right answer for the tasks that should never ask: an
 // unneeded question costs the run a turn, and shows in the summary's count.

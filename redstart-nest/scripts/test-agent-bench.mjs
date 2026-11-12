@@ -212,6 +212,10 @@ function startFakeNest(gatewayPort) {
     authSeen: new Set(),
     completionBodies: [],
     toolCalls: [],
+    // The account's memories (GET/DELETE /memories). With saveMemoryOnWrite,
+    // write_file also saves one, as a model calling memory_save would.
+    memories: [],
+    saveMemoryOnWrite: false,
   }
   const json = (res, status, body) => {
     res.writeHead(status, { 'Content-Type': 'application/json' })
@@ -230,6 +234,16 @@ function startFakeNest(gatewayPort) {
       const body = JSON.parse((await readBody(req)).toString())
       state.conversations.add(body.id)
       return json(res, 201, { id: body.id, name: body.name })
+    }
+    if (req.method === 'GET' && url.pathname === '/conversations') {
+      return json(res, 200, [...state.conversations].map((id) => ({ id, name: id })))
+    }
+    if (req.method === 'GET' && url.pathname === '/memories') return json(res, 200, { memories: state.memories })
+    const mem = /^\/memories\/([^/]+)$/.exec(url.pathname)
+    if (req.method === 'DELETE' && mem) {
+      const before = state.memories.length
+      state.memories = state.memories.filter((m) => m.id !== decodeURIComponent(mem[1]))
+      return json(res, state.memories.length < before ? 204 : 404)
     }
     const del = /^\/conversations\/([^/]+)$/.exec(url.pathname)
     if (req.method === 'DELETE' && del) {
@@ -380,6 +394,7 @@ Created "${rel}" in the documents folder.` },
       }
       if (name === 'write_file') {
         state.files.set(`chats/${conv}/${args.path}`, Buffer.from(args.content))
+        if (state.saveMemoryOnWrite) state.memories.push({ id: `m-${state.memories.length + 1}-new`, text: `Wrote ${args.path}` })
         return reply({ content: [{ type: 'resource_link', uri: `/files/download?path=${encodeURIComponent(`chats/${conv}/${args.path}`)}`, name: args.path, mimeType: 'text/plain', size: args.content.length }] })
       }
     }
@@ -803,6 +818,41 @@ if (bench) {
     assert(md.includes("> warning: runs changed 1 file(s) that were already in the account's File System folder"), 'the warning is in summary.md')
   })
 }
+
+console.log('\n-- one run does not change the next --')
+
+await test('a memory a run saves is removed after it; ones already there are warned about, not deleted', async () => {
+  // 2026-11-12: p1-skip-no-invent's memory_search found an earlier run's
+  // "Wrote thank-you note to school bake sale volunteers".
+  nest.state.memories = [{ id: 'm-old', text: 'Someone saved this before the bench ran' }]
+  nest.state.saveMemoryOnWrite = true
+  const lines = []
+  try {
+    const r = await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', outDir, '--quiet'], { log: (s) => lines.push(s) })
+    eq(nest.state.memories.map((m) => m.id), ['m-old'], 'memories after the run')
+    const saved = r.runs[0].events.find((e) => e.type === 'memories_saved')
+    eq(saved?.texts, ['Wrote out/answer.txt'], 'the saved memory is logged')
+    const { meta } = JSON.parse(fs.readFileSync(path.join(r.outDir, "summary.json"), "utf8"))
+    assert(meta.warnings.some((w) => /1 saved memory \("Someone saved this/.test(w)), JSON.stringify(meta.warnings))
+  } finally {
+    nest.state.memories = []
+    nest.state.saveMemoryOnWrite = false
+  }
+})
+
+await test('a conversation an earlier, stopped bench left behind is deleted at the start; other conversations are not', async () => {
+  nest.state.conversations.add('bench-compute-chart-bd2a9ff4')
+  nest.state.conversations.add('my-own-chat')
+  const lines = []
+  try {
+    await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', outDir, '--quiet'], { log: (s) => lines.push(s) })
+    assert(nest.state.deleted.includes('bench-compute-chart-bd2a9ff4'), 'the leftover was kept')
+    assert(nest.state.conversations.has('my-own-chat'), 'a conversation the bench did not make was deleted')
+    assert(lines.some((l) => /removed 1 conversation\(s\) an earlier bench left behind/.test(l)), lines.join('\n'))
+  } finally {
+    nest.state.conversations.delete('my-own-chat')
+  }
+})
 
 console.log('\n-- first-run failures say what to fix --')
 

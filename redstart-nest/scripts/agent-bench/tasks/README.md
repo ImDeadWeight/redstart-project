@@ -27,11 +27,11 @@ refusal), never how many calls it took. `scripts/test-agent-bench-tasks.mjs`
 | multi-chain | multi | run_python or read_document | the end of a 13-file chain (one file per turn takes 14 turns; the limit was 10 until 2026-11-11, now 30) |
 | multi-find-tool | multi | list_documents | counts the files without running code |
 | multi-distractor | multi | read_document | the codename, despite the File System tools' different root |
-| p1-sign-off-name | phase 1 | ask_user | thanks.md signed "Priya Natarajan", a name in no file |
+| p1-sign-off-name | phase 1 | ask_user | thanks.md signed "Priya Natarajan", a full name in no file |
 | p1-standard-discount | phase 1 | ask_user | every price in quote.csv cut by the 12% it was told, not a guessed rate |
 | p1-pick-vendors | phase 1 | ask_user | asked which contracts, then only Kestrel (60 days) and Osprey (30), no Alder |
 | p1-answer-steers | phase 1 | ask_user | asked the order, then sorted by the answer (age, oldest first), not by name |
-| p1-skip-no-invent | phase 1 | — (a question is skipped) | the note written with a placeholder for the name (or says it is needed), no made-up name |
+| p1-skip-no-invent | phase 1 | — (a question is skipped) | the note written with a placeholder for the full name (or says it is needed), no made-up name |
 | p1-resolved-in-file | phase 1 | — (a guard) | converted without asking: the column is temp_c |
 | p1-simple-stays-simple | phase 1 | — (a guard) | 11,123 for North, with no ask_user and no update_plan |
 | p1-five-steps | phase 1 | update_plan helps | all five steps, including the easy-to-forget fourth |
@@ -67,6 +67,26 @@ before then do not carry over. The rules the group now follows:
   and the completion check have something to do. p1-five-steps,
   p1-plan-eight-deliverables and p1-plan-missing-input can all pass without a
   plan; what `--plan off` against `--plan full` shows is whether it helps.
+
+**Revised again on 2026-11-12**, after the first runs of the set (results in
+`docs/notes/agent-bench-results.md`), whose Phase 1 rows are void:
+
+- **Answers are keyed by topic** (`"name"`, `"where"`, `"discount"`...).
+  A catch-all `""` answered every question with the same fact: asked where to
+  save, the 35B got "Priya Natarajan". Keep `""` for a task whose every
+  possible question has the one answer (p1-stop-and-report only).
+- **A task that saves a file attaches one**, so the attachment note tells the
+  model where files go. The two note tasks had none, and two models spent 30
+  turns looking for somewhere to save.
+- **Nothing the user could be called is guessable**: the bench account is
+  named bench, so the note tasks ask for "my full name".
+- **Checks read every assistant message**, as the chat shows them, where the
+  task is about saying something (a missing file).
+- **The bench removes what a run saves with memory_save**, and deletes
+  conversations an earlier, stopped bench left behind. Memories already on
+  the account are warned about, not deleted: clear them by hand.
+
+To run only this group: `--tasks "scripts/agent-bench/tasks/p1-*.json"`.
 
 A model often asks in its reply text instead of calling ask_user. By default
 that ends the run, and the must-ask tasks fail. `--text-asks answer` has the
