@@ -113,6 +113,9 @@ export function activeToolCatalog(cfg, ctx) {
 // it IS one of the entries in it. Handed in here instead, the same way
 // tools-definitions.mjs receives its plugin capability provider.
 searchToolsProvider.setToolCatalogProvider(activeToolCatalog)
+// call_tool (tool retrieval second pass, 5.5) dispatches through callToolAs,
+// below, so a call by name passes every check a direct call does.
+searchToolsProvider.setToolCaller((...args) => callToolAs(...args))
 
 export const ALLOWED_CORS_HEADERS =
   'Content-Type, Authorization, mcp-protocol-version, mcp-session-id, last-event-id'

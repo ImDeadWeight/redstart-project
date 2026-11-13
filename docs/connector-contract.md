@@ -79,13 +79,24 @@ The gateway rewrites the request before forwarding:
   retrieval. For a connector that sends its own short, curated tool list and
   has no `search_tools` to recover a dropped tool. Bans still apply. Only the
   literal `false` counts; the field is consumed and never forwarded
+- `redstart_conversation_id` — your id for this conversation (a printable
+  ASCII string of at most 128 characters; anything else is ignored). Tool
+  retrieval keys the tool set it chose for the conversation on it, under your
+  account, so the set survives your client compacting or trimming the opening
+  message. Without it the key is a hash of the first user message. Consumed and
+  never forwarded
 - `redstart_retrieval_report: true` — report which tools were actually
   forwarded, after bans and retrieval. The response carries
   `x-redstart-tools-sent` (the tool names, comma-separated, each one
   percent-encoded), `x-redstart-tools-filtered` (`1` when retrieval removed
   any tool, otherwise `0`) and `x-redstart-retrieval` (`on` when retrieval ran
   on this request, even if it kept every tool; `off` when it is disabled or the
-  request opted out); all three are listed in
+  request opted out), `x-redstart-tools-origin` (for each tool sent, when it
+  came into this conversation and why, as `name=turn:why` comma-separated;
+  `turn` counts user messages, `why` is `first`, `scored`, `called`,
+  `search`, `describe`, `always` or `family`; empty when retrieval did not
+  select) and `x-redstart-tools-would-add` (how many tools a frozen tool set
+  left out this turn); all five are listed in
   `Access-Control-Expose-Headers`. Only the literal `true` asks; the field is
   consumed and never forwarded. The names go to the caller only, never to the
   log

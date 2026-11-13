@@ -38,6 +38,45 @@ export const FILE_SYSTEM_TOOLS = [
 ];
 
 /**
+ * How each block of the note opens. Exported so tool retrieval can leave the
+ * note out of its query (tool-retrieval.mjs conversationQueryText): the note
+ * names tools, and on attachment prompts it pulled the File System tools up
+ * the ranking it then told the model not to use (tool retrieval second pass,
+ * 1.2, P3). Built from the same strings attachmentNote() writes, so the two
+ * cannot drift apart.
+ */
+export const ATTACHMENT_NOTE_MARKERS = Object.freeze([
+	"[Attached file saved to this chat's workspace:",
+	"[Attached files saved to this chat's workspace:",
+	"[Could not save to this chat's workspace:"
+]);
+
+/**
+ * A message's text without the attachment note chat-ui appended to it. Only a
+ * note that runs to the end of the text, starting on a line of its own, is
+ * removed: that is where chat-ui and the bench put it, and anything else is
+ * the user's own words.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function stripAttachmentNote(text) {
+	if (typeof text !== 'string' || !text.includes('[')) return text;
+	let cut = -1;
+	for (const marker of ATTACHMENT_NOTE_MARKERS) {
+		let at = text.indexOf(marker);
+		while (at >= 0) {
+			if ((at === 0 || text[at - 1] === '\n') && (cut < 0 || at < cut)) {
+				if (text.trimEnd().endsWith(']')) cut = at;
+				break;
+			}
+			at = text.indexOf(marker, at + 1);
+		}
+	}
+	return cut < 0 ? text : text.slice(0, cut).trimEnd();
+}
+
+/**
  * @param {{
  *   saved: string[],
  *   failed?: string[],
@@ -54,7 +93,7 @@ export function attachmentNote({ saved, failed = [], conversationId, hasTool }) 
 	if (saved.length > 0) {
 		const plural = saved.length > 1;
 		const first = saved[0];
-		const lines = [`[Attached file${plural ? 's' : ''} saved to this chat's workspace: ${saved.join(', ')}`];
+		const lines = [`${ATTACHMENT_NOTE_MARKERS[plural ? 1 : 0]} ${saved.join(', ')}`];
 		if (hasTool('run_python')) {
 			lines.push(
 				// The explicit "not chats/..." is for small models: shown the
@@ -77,6 +116,6 @@ export function attachmentNote({ saved, failed = [], conversationId, hasTool }) 
 		}
 		parts.push(`${lines.join('\n')}]`);
 	}
-	if (failed.length > 0) parts.push(`[Could not save to this chat's workspace: ${failed.join('; ')}]`);
+	if (failed.length > 0) parts.push(`${ATTACHMENT_NOTE_MARKERS[2]} ${failed.join('; ')}]`);
 	return parts.length > 0 ? parts.join('\n') : null;
 }

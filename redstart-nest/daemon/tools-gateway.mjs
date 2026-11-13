@@ -39,6 +39,7 @@ import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/docume
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
 import { filterRequestTools, estimateMessagesTokens, recordWireCost } from './tool-filter.mjs'
+import { isConversationId } from './tool-retrieval.mjs'
 
 let gatewayServer = null
 
@@ -273,6 +274,16 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   const reportRequested = parsed.redstart_retrieval_report === true
   delete parsed.redstart_retrieval_report
 
+  // Redstart-specific request field: `redstart_conversation_id`, the client's
+  // id for this conversation. Retrieval keys the set it applied last turn on
+  // it (tool-retrieval.mjs conversationKey), under the caller's account, so
+  // an id can only ever name the caller's own entry; without it the key is a
+  // hash of the first user message, which compaction replaces (second pass
+  // 4.3). Anything but a short printable string is ignored. Consumed either
+  // way so llama-server never sees it.
+  const conversationId = isConversationId(parsed.redstart_conversation_id) ? parsed.redstart_conversation_id : null
+  delete parsed.redstart_conversation_id
+
   // BANS FIRST, PROMPT SECOND — and every value the prompt is derived
   // from is read AFTER this line. The capability claims must describe
   // what the model actually received this turn, which is the payload the
@@ -305,6 +316,10 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   // bound on the non-tool cost, which is what breaks the circularity of
   // budgeting for a prompt that does not exist yet.
   const toolsAfterBans = Array.isArray(parsed.tools) ? parsed.tools.length : 0
+  // Filled by retrieval: this conversation's record (6.1) and what a frozen
+  // set left out (4.1). The record reaches only a caller who asked for it.
+  /** @type {{ origins?: Record<string, { turn: number, why: string }>, wouldAdd?: number }} */
+  const retrievalRecord = {}
   if (!retrievalOptOut && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
     const pinsOnlyPrompt = injectSystemContext(
       [...(parsed.messages || [])], effectiveConfig,
@@ -323,9 +338,11 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
       tools: parsed.tools,
       messages: parsed.messages || [],
       accountId,
+      conversationId,
       settings: effectiveConfig.toolRetrieval,
       ctxSize: effectiveConfig.ctxSize,
       reservedTokens: estimateMessagesTokens(pinsOnlyPrompt),
+      record: retrievalRecord,
     })
   }
 
@@ -369,6 +386,8 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
     report: reportRequested,
     toolNamesSent: toolNamesIn(parsed),
     toolsRemoved: toolsFiltered,
+    toolOrigins: retrievalRecord.origins ?? null,
+    wouldAdd: retrievalRecord.wouldAdd ?? 0,
   }
   recordWireCost(wire)
 
@@ -382,6 +401,8 @@ export const RETRIEVAL_REPORT_HEADERS = Object.freeze({
   sent: 'x-redstart-tools-sent',
   filtered: 'x-redstart-tools-filtered',
   retrieval: 'x-redstart-retrieval',
+  origins: 'x-redstart-tools-origin',
+  wouldAdd: 'x-redstart-tools-would-add',
 })
 
 /**
@@ -399,7 +420,7 @@ export const RETRIEVAL_REPORT_HEADERS = Object.freeze({
  * Only `wire` is read, which prepareCompletion builds after bans and
  * retrieval, so a banned tool can never appear here.
  *
- * @param {{ report?: boolean, toolNamesSent?: string[], toolsRemoved?: boolean, filtered?: boolean }|null|undefined} wire
+ * @param {{ report?: boolean, toolNamesSent?: string[], toolsRemoved?: boolean, filtered?: boolean, toolOrigins?: Record<string, { turn: number, why: string }>|null, wouldAdd?: number }|null|undefined} wire
  * @returns {Record<string, string>}
  */
 export function retrievalReportHeaders(wire) {
@@ -409,6 +430,15 @@ export function retrievalReportHeaders(wire) {
     [RETRIEVAL_REPORT_HEADERS.sent]: names.map(encodeURIComponent).join(','),
     [RETRIEVAL_REPORT_HEADERS.filtered]: wire.toolsRemoved ? '1' : '0',
     [RETRIEVAL_REPORT_HEADERS.retrieval]: wire.filtered ? 'on' : 'off',
+    // The conversation's record (second pass 6.1): for each tool sent, the
+    // turn it came in and why, as name=turn:why, comma-separated, the name
+    // percent-encoded as in the sent list. Empty when retrieval did not
+    // select (off, opted out, or failed open).
+    [RETRIEVAL_REPORT_HEADERS.origins]: names
+      .filter((n) => wire.toolOrigins?.[n])
+      .map((n) => `${encodeURIComponent(n)}=${wire.toolOrigins[n].turn}:${wire.toolOrigins[n].why}`)
+      .join(','),
+    [RETRIEVAL_REPORT_HEADERS.wouldAdd]: String(Number.isInteger(wire.wouldAdd) ? wire.wouldAdd : 0),
     'Access-Control-Expose-Headers': Object.values(RETRIEVAL_REPORT_HEADERS).join(', '),
   }
 }

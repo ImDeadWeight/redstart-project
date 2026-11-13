@@ -740,6 +740,9 @@ async function runOnce(task, l, conv, generation, { resume }) {
             ...Object.fromEntries(GENERATION_KEYS.filter((k) => generation[k] !== undefined).map((k) => [k, generation[k]])),
             ...(conv.promptMode ? { redstart_mode: conv.promptMode } : {}),
             ...(conv.projectId ? { redstart_project: conv.projectId } : {}),
+            // As chat-ui sends it: retrieval keeps this conversation's set
+            // across compaction (tool retrieval second pass, 4.3).
+            ...(t.conversationId ? { redstart_conversation_id: t.conversationId } : {}),
           }
           const { parsed } = await seams.prepareCompletion(body, {
             account: turnCtx.account,

@@ -22,49 +22,103 @@ This file is the plan for 2G now.
 Branch: `feat/tool-retrieval-fixes`, from main @ 49941fa (alpha.14). Agent
 runtime Phase 4 comes after it.
 
-## Where we left off (2026-11-13)
+## Where we left off (2026-11-13, second session)
 
-Branch `feat/tool-retrieval-fixes` (off main @ 49941fa), not pushed. Phase 0's
-code is done, one commit per piece, each through the full verification loop
-(69 suites):
+Phases 0 to 6.2 are in code, one commit per piece, each through the
+verification loop: typecheck, check:mjs and test:security, 70 suites. Two
+suites fail **only in the cloud container this was done in**, both before
+and after these changes:
+- `test-python-sandbox` needs Node 25 or newer, and the container had 22.
+- `test-browse-routes` checks unreadable directories, which do not exist
+  when everything runs as root.
+
+The container could not reach Hugging Face either. So every number below
+comes from the **frozen bge vectors** (frozen.json holds one for every case
+query and every tool), and anything that changes the embedded text is
+unmeasured and stays off.
 
 | Step | Commit | What |
 |---|---|---|
-| 0.5 | 5f43735 | The embedding tests own their port (`setEmbedPortForTests`); no more skips on a machine running Redstart |
-| 0.1 | cfa5cdf | `redstart_retrieval_report: true` → `x-redstart-tools-sent`, `x-redstart-tools-filtered` |
-| 0.2 | 29025fe | The bench records the report and `cache_n`/`prompt_ms` per turn; per-run and per-task retrieval metrics; `--retrieval server\|off`; adds `x-redstart-retrieval: on\|off` (deviation below) |
-| 0.2 data | 9cd9dd2 | `expectTools` on all 32 tasks (workspace tools on attachment tasks, never File System) |
-| 0.3 | c1d85cd | `scripts/measure-tool-cache.mjs` (through the real gateway; variants server and off) |
-| 0.4 | 83eb420 | `scripts/retrieval-eval/` (catalog, 61 cases + 32 bench tasks, runner, `--freeze`) and `test-retrieval-eval.mjs` in CI |
+| 1.1 | 46a4a25 | The memory tools are always pinned when carried (`ALWAYS_PINNED_TOOL_NAMES`) |
+| 1.2 | b3dbf4f | `stripAttachmentNote`, `conversationQueryText({ dropAttachmentNote })`. Behind a new setting, `textVersion` (default 1). Version 2 changes the embedded text |
+| 2.1-2.3 | c577894 | `daemon/tool-metadata.mjs`: category, store, tags and useWhen for every built-in tool. Plugins can declare them under `_meta['redstart/retrieval']`. One builder for the views (`toolEmbeddingText` versioned, `toolSearchDocument`, `toolSearchResult`). The lint is `test-tool-metadata.mjs` (in test:security and CI) |
+| 3.1, 3.2 | 9317385 | BM25 plus RRF (`rescore`), with a scorer setting (`cosine`, `bm25` or `fused`), each with its own floors. **Fused is the default**; refrozen |
+| 4.1-4.3 | 75fe54a | `growth: 'scored' \| 'pins-only'` (default `'scored'`), `would_add`, `minTools` (default 0), and `redstart_conversation_id` (chat-ui and the task runner send it) |
+| 5.1-5.4 | ee63f60 | search_tools widening (close, nearest, keyword, categories); `describe_tool`; `call_tool` (off unless `tools.retrieval.callTool`); an example call in block 6b; discovery tools never scored. **Fix:** search pins now resolve through `tool_call_id` |
+| 6.1, 6.2 | 75c386d | `x-redstart-tools-origin` and `x-redstart-tools-would-add` in the report; the bench reads them; the Tools tab shows would-add |
 
-**0.6, the eval part, is done.** The current scorer on the 93 cases (bge-small
-f16 on a sidecar started by hand on port 19184):
+### Measured (offline, frozen vectors, text version 1, 93 cases)
 
-| source | cases | MRR | R@1 | R@3 | R@10 | sel. recall | sel. size |
-|---|---|---|---|---|---|---|---|
-| all | 93 | 0.706 | 55.9% | 76.9% | 96.2% | 93.4% | 12.5 |
-| attachment | 7 | 0.518 | 28.6% | 57.1% | 100% | 100% | 16.9 |
-| bench-attachment | 29 | 0.723 | 55.2% | 86.2% | 100% | 96.6% | 13.7 |
-| transcript | 15 | 0.693 | 60.0% | 73.3% | 80.0% | — | — |
-| small-model | 17 | 0.830 | 76.5% | 88.2% | 100% | — | — |
-| user-phrasing | 22 | 0.638 | 45.5% | 61.4% | 97.7% | 86.4% | 10.1 |
+| scorer | MRR | R@1 | R@3 | R@10 | sel. recall | sel. size |
+|---|---|---|---|---|---|---|
+| cosine, before this session | 0.706 | 55.9% | 76.9% | 96.2% | 93.4% | 12.5 |
+| cosine, now (pins: memory, discovery) | 0.713 | 57.0% | 76.9% | 98.9% | 98.4% | 17.4 |
+| bm25 | 0.796 | 68.8% | 86.6% | 94.6% | 95.9% | 12.3 |
+| **fused (default)** | **0.816** | **67.7%** | **91.9%** | **97.8%** | **100%** | **15.2** |
 
-The 10 misses: git bundles → run_python at rank 11 to 14 (three transcript
-queries); "config file" (read tools at rank 6); "notes" (rank 9); git_status
-below git_diff/git_log; "latest news" → web_fetch over web_search; compound
-interest → memory_save first, run_python at 7; "standard customer discount
-policy" → memory_save; docs-find-fact selects the memory tools and not
-read_document. The memory tools score high on many unrelated queries. That
-is worth a look in Phase 2.
+- Small-model search R@3 went from 88.2% to 100%.
+- Fused misses only the three git-bundle transcripts (run_python at rank
+  8 to 14), and cosine misses those too. The freeze holds 90 of 93 cases
+  (it held 83).
+- **The fused relative floor stays 0.85.** At 0.8, 16.2 tools are sent for
+  the same recall; at 0.9, two cases are lost.
+- **P3 proxy:** on attachment prompts, a File System tool ranks above every
+  right tool in 2 of 36 cases (cosine: 6 of 36). The real P3 number is the
+  bench's first-call count, which is still owed.
+- **minTools:** 8 adds about one tool (15.2 to 16.2) for no change in
+  recall. Its case is a frozen conversation's later turns, which only the
+  bench shows.
+- The selection size went up because the pins are always sent: three memory
+  tools, search_tools and describe_tool.
 
-**Owed by the user (0.6, needs a loaded model):**
-- the bench on the 4B and on Ornith, `--retrieval server` and `--retrieval off`;
-- `node scripts/measure-tool-cache.mjs` on Ornith (bench account key in
-  `REDSTART_BENCH_API_KEY`);
-- the rows into `agent-bench-results.md` under "Tool retrieval, second pass"
-  (summary.md prints the row).
+### Held: needs a model, a real embedder or a decision
 
-Then Phase 1 (or Phase 1 first, if the user wants it out before the baseline).
+| What | Why held | To do |
+|---|---|---|
+| 0.6 baseline | Model | As before: the bench on the 4B and Ornith, with `--retrieval server` and `off`; `measure-tool-cache.mjs` on Ornith |
+| `textVersion: 2` (1.2 + 2.2's metadata in the embedding) | Needs real embeddings; the frozen vectors only cover version 1 | `run.mjs --text-version 2` against version 1. If it wins: set the default to 2, then `run.mjs --freeze` |
+| 3.3 attachment prior | Fused may already fix P3 (2 of 36 above) | Bench: "File System first on attachment tasks" (it was 35B 8/22, 4B 4/22). Build the prior only if it is still high |
+| U1 / U5: `growth: 'pins-only'` default | Discovery rate | Bench with `growth: 'pins-only'`; cache numbers from `measure-tool-cache.mjs` |
+| U2: `minTools` | Decision | See the numbers above |
+| U4: pin (a), call_tool (b) or both | Decision, after 5.5 | Bench `multi-find-tool` plus new p5 tasks, with `callTool` off and on |
+| 5.4 wording | Must be measured before the next wording change | The 4B's "said unavailable without searching" count, before and after |
+| 6.3, 6.4 (D8 default) | Data | After the above |
+
+### Test cases to run once a model is loaded
+
+Live, in chat-ui, with retrieval on:
+1. "Remember that my codename is Kestrel" on a turn about something else.
+   memory_save is called. Then "forget it": memory_forget goes through the
+   approval card (1.1). This also closes agent-runtime Phase 2's "approval
+   path untested live".
+2. Attach a CSV, then "average the second column". The first call is
+   run_python or read_document, never a File System tool (P3). Compare
+   `textVersion` 1 and 2.
+3. Ask for something whose tool was not selected, e.g. "what tags are in my
+   notes" when the vault tools are left out. The model calls search_tools,
+   and the next turn's `x-redstart-tools-origin` shows `vault_tags=N:search`.
+   This is the pin fix: before it, this never worked from chat-ui.
+4. The same with describe_tool: `...=N:describe`.
+5. With `tools.retrieval.callTool: true`: a read tool through call_tool
+   answers in the same turn. A write tool through call_tool is refused and
+   the model retries it directly the next turn. Check that the approval
+   card appears for that direct call.
+6. With `growth: 'pins-only'`: a long conversation that drifts topic keeps
+   `x-redstart-tools-sent` byte-identical except on search/describe turns,
+   and `would-add` goes above 0. Ornith's `cache_n` stays high (P2).
+7. A conversation long enough to compact: `x-redstart-tools-origin` keeps
+   the turn-1 entries after compaction (4.3).
+8. Embedder stopped mid-chat: completions keep every tool, and search_tools
+   answers `"match": "keyword"` or `"categories"`.
+
+Bench runs (they feed the held rows above):
+- The 4B and Ornith with `scorer: cosine` and `scorer: fused`: the first-tool
+  hit rate, and "File System first" on attachment tasks.
+- `growth: 'pins-only'` against `'scored'`: prefill ms, cache-miss turns,
+  task completion.
+- p5 tasks (to write): the needed tool deliberately left out of the first
+  selection. Discovery rate with `callTool` off and on; invalid-argument
+  calls through call_tool.
 
 ---
 
@@ -412,6 +466,27 @@ removed in its own commit, along with updates to `docs/configuration.md` and
   a fixed 2,000 tokens for the system prompt** (lib.mjs). The gateway reserves
   a composed pins-only prompt, which the eval has no composer for.
 
+- **1.2 and the embedding half of 2.2 ship behind `textVersion`**, default 1,
+  because they change the embedded text and could not be measured here.
+- **2.1's metadata lives in one name-keyed table** (`tool-metadata.mjs`), not
+  beside each definition. The gateway only ever sees the client's OpenAI tool
+  list, so a lookup has to go by name anyway, and the File System tools come
+  from a server Redstart does not write.
+- **The discovery tools are never embedded or scored** (5.x). They are always
+  pinned, and their scores only moved the relative floor. This also lets
+  describe_tool and call_tool land without a refreeze.
+- **search_tools is always pinned** (in 3.2, ahead of Phase 5): fused dropped
+  it in the gateway test.
+- **Fused with an embedder that scores nothing above 0 fails open**, as cosine
+  does. Keywords alone are the `bm25` scorer, chosen explicitly.
+- **search_tools' reply is now an object** (`{ match, note?, tools }` or
+  `{ match: 'categories', categories }`). pinsFromMessages reads `tools`; a
+  categories reply pins nothing.
+- **call_tool refuses any tool that needs approval**, not only the
+  destructive ones. Chat-ui asks the user by the name it sees, which would be
+  call_tool.
+- **6.2 shows no cache cost**: the gateway never sees timings.
+
 ## Gaps carried forward
 
 - **Already open, more important now:** search_tools and describe_tool cannot
@@ -435,3 +510,12 @@ removed in its own commit, along with updates to `docs/configuration.md` and
   does), and say so in the commit.
 - **Not in this pass:** mid-generation context exhaustion, and persisting the
   embedding cache (both open from the first pass).
+- **Found 2026-11-13, fixed in ee63f60:** search_tools pins never fired from
+  chat-ui or the task runner, because their tool messages carry no `name`.
+  Every earlier bench number on search_tools (P5: the 4B made 0 calls, the 35B
+  made 2) was measured without the pin. Read them with that in mind.
+- **Open:** a Twig `fs_*` tool still cannot be found again by search or
+  describe (the client-tool gap above). Ask before 5.6.
+- **Open:** plugin retrieval metadata is read from plugins.json on each lookup,
+  as pluginCapabilities is. That is fine at today's plugin counts; cache it if
+  that changes.

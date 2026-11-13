@@ -32,6 +32,10 @@ import {
   createSelectionMemory,
   truncateForEmbedding,
   CHARS_PER_TOKEN,
+  tokenize,
+  createBm25Index,
+  rescore,
+  RRF_K,
 } from '../daemon/tool-retrieval.mjs'
 import * as searchProvider from '../daemon/search-tools-provider.mjs'
 const { retrievalStatus, syncRetrieval, applyToolsConfig, resetRetrievalState } = await import('../daemon/ipc/tools.mjs')
@@ -43,6 +47,9 @@ import {
   resetToolFilterState,
   setEmbedPortForTests,
   CONTEXT_BUDGET_FRACTION,
+  resolveRetrievalSettings,
+  RETRIEVAL_DEFAULTS,
+  SCORER_DEFAULTS,
 } from '../daemon/tool-filter.mjs'
 import {
   EMBED_PID_FILE,
@@ -246,6 +253,76 @@ await test('a null query scores everything 0 instead of throwing', () => {
   store.setMany([[toolContentHash(tool), axis(4, 0)]])
   const scored = scoreTools({ tools: [tool], query: null, store })
   assert(scored[0].score === 0, `null query scored ${scored[0].score}`)
+})
+
+console.log('\n-- keywords and fusion (second pass 3.1, 3.2) --')
+
+await test('the tokenizer splits names, drops stopwords and numbers, and stems', () => {
+  const got = tokenize('Show me the recent commits of read_text_file-configs: 48271 running studies')
+  const want = ['recent', 'commit', 'read', 'text', 'file', 'config', 'run', 'study']
+  assert(JSON.stringify(got) === JSON.stringify(want), JSON.stringify(got))
+  assert(tokenize('').length === 0 && tokenize(null).length === 0, 'empty input')
+})
+
+await test('🔍 BM25 finds a tool by a word in its name, and scores only what matches', () => {
+  const tools = [fnTool('read_text_file', 'Read a file'), fnTool('web_fetch', 'Fetch a page'), fnTool('git_log', 'Show commits')]
+  const index = createBm25Index(tools)
+  const s = index.score('text file please')
+  assert(s.has('read_text_file') && !s.has('web_fetch'), JSON.stringify([...s]))
+  assert(index.score('nothing matches xyzzy').size === 0, 'a miss scored something')
+  assert(createBm25Index(tools).key === index.key, 'the same catalog gave a different key')
+  assert(createBm25Index([tools[0], fnTool('web_fetch', 'Fetch a web page')]).key !== index.key, 'a changed catalog kept its key')
+})
+
+await test('🔍 a rarer term outweighs a common one', () => {
+  const tools = [fnTool('a_tool', 'file file vault'), fnTool('b_tool', 'file'), fnTool('c_tool', 'file')]
+  const s = createBm25Index(tools).score('file vault')
+  assert(s.get('a_tool') > s.get('b_tool'), JSON.stringify([...s]))
+})
+
+await test('fusion keeps the shape: every tool, sorted, normalised so 1 is first by both', () => {
+  const scored = scoredList([['a', 0.9], ['b', 0.8], ['c', 0.7]])
+  const fused = rescore({ scored, keyword: new Map([['a', 5], ['c', 9]]), scorer: 'fused' })
+  assert(fused.length === 3, 'a tool went missing')
+  assert(fused.every((e, i) => i === 0 || fused[i - 1].score >= e.score), 'not sorted')
+  const a = fused.find((e) => e.name === 'a').score
+  const expectA = (1 / (RRF_K + 1) + 1 / (RRF_K + 2)) / (2 / (RRF_K + 1))
+  assert(Math.abs(a - expectA) < 1e-12, `a scored ${a}, expected ${expectA}`)
+  const top = rescore({ scored, keyword: new Map([['a', 5]]), scorer: 'fused' })[0]
+  assert(top.name === 'a' && Math.abs(top.score - 1) < 1e-12, 'first by both is not 1')
+})
+
+await test('🔍 a keyword match lifts a tool the embedding ranked low', () => {
+  const scored = scoredList([['web', 0.9], ['git', 0.85], ['vault', 0.3]])
+  const fused = rescore({ scored, keyword: new Map([['vault', 4]]), scorer: 'fused' }).map((e) => e.name)
+  assert(fused[0] === 'vault', `vault did not rise: ${fused}`)
+})
+
+await test('ties share a rank, so the alphabet does not decide between equal scores', () => {
+  const scored = scoredList([['b', 1], ['z', 1], ['c', 0]])
+  const fused = rescore({ scored, keyword: new Map(), scorer: 'fused' })
+  assert(fused.find((e) => e.name === 'b').score === fused.find((e) => e.name === 'z').score, 'a tie was split')
+})
+
+await test('🔒 with no usable cosine score, fused leaves everything at 0, so the filter fails open', () => {
+  const scored = scoredList([['a', 0], ['b', 0]])
+  const fused = rescore({ scored, keyword: new Map([['a', 3]]), scorer: 'fused' })
+  assert(fused.every((e) => e.score === 0), JSON.stringify(fused.map((e) => [e.name, e.score])))
+})
+
+await test('bm25 alone scores a non-match 0 and the best match 1; cosine is untouched', () => {
+  const scored = scoredList([['a', 0.9], ['b', 0.1]])
+  const kw = rescore({ scored, keyword: new Map([['b', 2]]), scorer: 'bm25' })
+  assert(kw[0].name === 'b' && kw[0].score === 1 && kw[1].score === 0, JSON.stringify(kw.map((e) => [e.name, e.score])))
+  assert(rescore({ scored, keyword: new Map([['b', 2]]), scorer: 'cosine' }) === scored, 'cosine was rescored')
+})
+
+await test('settings: the scorer brings its floors, an admin floor wins, an unknown scorer is the default', () => {
+  const fused = resolveRetrievalSettings({ scorer: 'bm25' })
+  assert(fused.relativeFloor === SCORER_DEFAULTS.bm25.relativeFloor, 'the scorer floors were not applied')
+  assert(resolveRetrievalSettings({ scorer: 'bm25', relativeFloor: 0.5 }).relativeFloor === 0.5, 'an admin floor was overridden')
+  assert(resolveRetrievalSettings({ scorer: 'nonsense' }).scorer === RETRIEVAL_DEFAULTS.scorer, 'an unknown scorer survived')
+  assert(resolveRetrievalSettings(undefined).enabled === false, 'retrieval came on by default')
 })
 
 console.log('\n-- selection --')
@@ -741,6 +818,30 @@ await test('the query is the WHOLE conversation, not the last turn', () => {
   assert(/vault_search/.test(text), 'the name of a tool already called is part of the query')
 })
 
+await test('🔍 with dropAttachmentNote, a message with a note queries like the message without it (1.2, P3)', async () => {
+  const { attachmentNote } = await import('../../shared/agent-core/attachment-note.mjs')
+  const note = attachmentNote({ saved: ['sales.csv'], failed: ['big.zip (too large)'], conversationId: 'c1', hasTool: () => true })
+  assert(note && note.includes('read_text_file'), 'setup: the note should name the File System tools')
+  const bare = [{ role: 'user', content: 'total the sales by region' }]
+  const withNote = [{ role: 'user', content: `total the sales by region\n\n${note}` }]
+  const a = conversationQueryText(bare, { dropAttachmentNote: true })
+  const b = conversationQueryText(withNote, { dropAttachmentNote: true })
+  assert(a === b, `the note leaked into the query: ${JSON.stringify(b)}`)
+  // Off (text version 1), the query is what it always was.
+  assert(conversationQueryText(withNote).includes('read_text_file'), 'version 1 changed the query')
+  // A message that is only the note queries as nothing at all.
+  assert(conversationQueryText([{ role: 'user', content: note }], { dropAttachmentNote: true }) === '', 'a note-only message left text')
+})
+
+await test('stripAttachmentNote leaves the user\'s own words alone', async () => {
+  const { stripAttachmentNote } = await import('../../shared/agent-core/attachment-note.mjs')
+  const inline = 'I typed [Attached file saved to this chat\'s workspace: x] in the middle and kept going'
+  assert(stripAttachmentNote(inline) === inline, 'a marker mid-line was cut')
+  const unclosed = "hello\n[Attached file saved to this chat's workspace: x and then more words"
+  assert(stripAttachmentNote(unclosed) === unclosed, 'an unclosed marker was cut')
+  assert(stripAttachmentNote('plain') === 'plain', 'plain text changed')
+})
+
 await test('tool RESULTS are not part of the query', () => {
   // A search result or a file read can be tens of kilobytes and says nothing
   // about what the user wants next; it would swamp the sentence that does.
@@ -804,6 +905,48 @@ await test('a tool result from something OTHER than search_tools pins nothing', 
     { role: 'tool', name: 'read_document', content: JSON.stringify([{ name: 'delete_everything' }]) },
   ])
   assert(!pins.has('delete_everything'), 'a tool result could name its own pins — content is not authority')
+})
+
+console.log('\n-- freezing and the minimum (second pass 4.1, 4.2) --')
+
+await test('🔒 a frozen set stays byte-identical while the query drifts, and counts what it left out', () => {
+  const previous = ['a', 'b']
+  const turn1 = scoredList([['a', 0.9], ['b', 0.8], ['c', 0.1], ['d', 0.1]])
+  const turn2 = scoredList([['c', 0.95], ['d', 0.9], ['a', 0.2], ['b', 0.1]])
+  const one = selectTools({ scored: turn1, previous, growth: 'pins-only', relativeFloor: 0.85 })
+  const two = selectTools({ scored: turn2, previous, growth: 'pins-only', relativeFloor: 0.85 })
+  assert(JSON.stringify(one.selected) === JSON.stringify(two.selected), 'the frozen set changed with the query')
+  assert(two.selected.map(toolName).join() === 'a,b', `got ${two.selected.map(toolName)}`)
+  assert(two.wouldAdd === 2 && two.reason === 'frozen', `wouldAdd ${two.wouldAdd}, reason ${two.reason}`)
+  const scoredGrowth = selectTools({ scored: turn2, previous, relativeFloor: 0.85 })
+  assert(scoredGrowth.selected.length === 4 && scoredGrowth.wouldAdd === 0, 'setup: scored growth should add c and d')
+})
+
+await test('🔍 a frozen set still takes a pin (a search hit, a call) and its family', () => {
+  const scored = scoredList([['a', 0.9], ['found', 0.1], ['memory_save', 0.1], ['memory_forget', 0.1]])
+  const out = selectTools({ scored, previous: ['a'], pins: ['found', 'memory_save'], growth: 'pins-only', families: [['memory_save', 'memory_forget']] })
+  assert(out.selected.map(toolName).join() === 'a,found,memory_forget,memory_save', `got ${out.selected.map(toolName)}`)
+})
+
+await test('🔒 a frozen set loses a tool the request no longer carries', () => {
+  const out = selectTools({ scored: scoredList([['a', 0.9]]), previous: ['a', 'banned_since'], growth: 'pins-only' })
+  assert(out.selected.map(toolName).join() === 'a', `a tool not offered survived: ${out.selected.map(toolName)}`)
+})
+
+await test('a first selection is never frozen: pins-only with no previous selects by score', () => {
+  const out = selectTools({ scored: scoredList([['a', 0.9], ['b', 0.85], ['c', 0.1]]), growth: 'pins-only', relativeFloor: 0.85 })
+  assert(out.selected.map(toolName).join() === 'a,b', `got ${out.selected.map(toolName)}`)
+})
+
+await test('🔍 minTools tops up a first selection by score, pins not counted, inside the budget', () => {
+  const scored = scoredList([['a', 0.9], ['b', 0.5], ['c', 0.4], ['d', 0.3], ['p', 0.0]])
+  const out = selectTools({ scored, pins: ['p'], relativeFloor: 0.85, minTools: 3 })
+  assert(out.selected.map(toolName).join() === 'a,b,c,p', `got ${out.selected.map(toolName)}`)
+  const cost = estimateToolTokens(scored[0].tool)
+  const tight = selectTools({ scored, relativeFloor: 0.85, minTools: 3, budgetTokens: cost * 2 })
+  assert(tight.selected.length === 2 && tight.reason === 'budget', `the minimum broke the budget: ${tight.selected.map(toolName)}`)
+  const later = selectTools({ scored, previous: ['a'], relativeFloor: 0.85, minTools: 3 })
+  assert(later.selected.map(toolName).join() === 'a', `the minimum applied to a later turn: ${later.selected.map(toolName)}`)
 })
 
 console.log('\n-- the selection memory --')
@@ -942,6 +1085,106 @@ await test('🔒 the ask_user pin adds nothing the request did not carry', async
   resetToolFilterState()
   const out = await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: true }, embed })
   assert(!out.map(toolName).includes('ask_user'), 'a pin invented a tool the client never sent')
+})
+
+await test('🔒 the memory tools are kept on a turn whose query scores them low (second pass 1.1, P1)', async () => {
+  resetToolFilterState()
+  const mem = ['memory_save', 'memory_search', 'memory_forget'].map((n) => fnTool(n, 'zzz'))
+  const out = await filterRequestTools({ tools: [...allTools, ...mem], messages: ask, settings: { enabled: true }, embed })
+  const names = out.map(toolName)
+  for (const n of ['memory_save', 'memory_search', 'memory_forget']) assert(names.includes(n), `${n} was dropped: ${names.join(',')}`)
+  assert(!names.includes('web_fetch'), `the pin widened the selection: ${names.join(',')}`)
+})
+
+await test('🔒 a request with no memory tools gets none, and a banned (absent) memory_forget stays out', async () => {
+  resetToolFilterState()
+  const none = await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: true }, embed })
+  assert(!none.map(toolName).some((n) => n.startsWith('memory_')), 'a pin invented a memory tool')
+  resetToolFilterState()
+  // A ban runs before retrieval, so a banned tool is simply not in the list.
+  const two = ['memory_save', 'memory_search'].map((n) => fnTool(n, 'zzz'))
+  const out = (await filterRequestTools({ tools: [...allTools, ...two], messages: ask, settings: { enabled: true }, embed })).map(toolName)
+  assert(out.includes('memory_save') && !out.includes('memory_forget'), `got ${out.join(',')}`)
+})
+
+await test('🔍 text version 2 scores the request without its attachment note; version 1 as before', async () => {
+  const messages = [{ role: 'user', content: "what changed in the repo\n\n[Attached file saved to this chat's workspace: web.txt]" }]
+  resetToolFilterState()
+  const v1 = (await filterRequestTools({ tools: allTools, messages, settings: { enabled: true }, embed })).map(toolName)
+  resetToolFilterState()
+  const v2 = (await filterRequestTools({ tools: allTools, messages, settings: { enabled: true, textVersion: 2 }, embed })).map(toolName)
+  assert(v1.includes('web_fetch'), `setup: version 1 should read the note: ${v1}`)
+  assert(!v2.includes('web_fetch') && v2.includes('git_status'), `version 2 read the note: ${v2}`)
+})
+
+await test('🔍 the fused scorer, end to end: a keyword the embedding misses still selects its tool', async () => {
+  // The query embeds along "repo" alone; "document" is a keyword match only.
+  // Three axes, as the tools' cached vectors have (the store is shared).
+  const messages = [{ role: 'user', content: 'what changed in the repo, and read the document' }]
+  const onlyRepo = keywordEmbed(['repo', 'zzz', 'yyy'])
+  resetToolFilterState()
+  const cos = (await filterRequestTools({ tools: allTools, messages, settings: { enabled: true, scorer: 'cosine' }, embed: onlyRepo })).map(toolName)
+  resetToolFilterState()
+  const fused = (await filterRequestTools({ tools: allTools, messages, settings: { enabled: true, scorer: 'fused', relativeFloor: 0.7 }, embed: onlyRepo })).map(toolName)
+  assert(!cos.includes('read_document'), `setup: cosine should miss it: ${cos}`)
+  assert(fused.includes('read_document') && fused.includes('git_status'), `fused missed it: ${fused}`)
+})
+
+await test('🔒 search_tools is pinned when the request carries it', async () => {
+  resetToolFilterState()
+  const st = fnTool('search_tools', 'zzz')
+  const out = (await filterRequestTools({ tools: [...allTools, st], messages: ask, settings: { enabled: true }, embed })).map(toolName)
+  assert(out.includes('search_tools'), `search_tools was dropped: ${out}`)
+})
+
+await test('the filter freezes with growth pins-only and passes minTools through', async () => {
+  resetToolFilterState()
+  const settings = { enabled: true, growth: 'pins-only', scorer: 'cosine' }
+  const first = (await filterRequestTools({ tools: allTools, messages: ask, settings, embed })).map(toolName)
+  const turn2 = [...ask, { role: 'assistant', content: 'ok' }, { role: 'user', content: 'now read a document' }]
+  const second = (await filterRequestTools({ tools: allTools, messages: turn2, settings: { ...settings, margin: 0 }, embed })).map(toolName)
+  assert(first.join() === second.join(), `the frozen set moved: ${first} -> ${second}`)
+  resetToolFilterState()
+  const min = (await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: true, minTools: 3, scorer: 'cosine' }, embed })).map(toolName)
+  assert(min.length === 3, `minTools did not top up: ${min}`)
+})
+
+await test('🔍 with a conversation id, the set survives the first message being compacted away (4.3)', async () => {
+  resetToolFilterState()
+  const settings = { enabled: true, growth: 'pins-only', scorer: 'cosine' }
+  const first = (await filterRequestTools({ tools: allTools, messages: ask, conversationId: 'conv-1', settings, embed })).map(toolName)
+  const compacted = [{ role: 'system', content: '[Conversation summary] the repo' }, { role: 'user', content: 'now read a document' }]
+  const kept = (await filterRequestTools({ tools: allTools, messages: compacted, conversationId: 'conv-1', settings: { ...settings, margin: 0 }, embed })).map(toolName)
+  assert(kept.join() === first.join(), `the id did not carry the set: ${first} -> ${kept}`)
+  const lost = (await filterRequestTools({ tools: allTools, messages: compacted, settings: { ...settings, margin: 0 }, embed })).map(toolName)
+  assert(lost.join() !== first.join(), 'setup: without the id the compacted conversation should select afresh')
+})
+
+await test('🔒 conversation ids are per account, and a malformed id falls back to the hash', () => {
+  assert(conversationKey(ask, 'alice', 'c1') !== conversationKey(ask, 'bob', 'c1'), 'two accounts shared an id key')
+  assert(conversationKey(ask, 'alice', 'c1') !== conversationKey(ask, 'alice'), 'the id was ignored')
+  for (const bad of ['', 'x'.repeat(129), 'has space', 'tab\t', 42, null, { id: 1 }]) {
+    assert(conversationKey(ask, 'alice', bad) === conversationKey(ask, 'alice'), `${JSON.stringify(bad)} was used as an id`)
+  }
+})
+
+await test('🔍 the record says when and why each tool came in, and keeps a tool\'s first reason (6.1)', async () => {
+  resetToolFilterState()
+  const tools = [...allTools, fnTool('search_tools', 'find tools')]
+  const settings = { enabled: true, scorer: 'cosine', margin: 0 }
+  const r1 = {}
+  await filterRequestTools({ tools, messages: ask, conversationId: 'rec', settings, embed, record: r1 })
+  assert(r1.origins.git_status.why === 'first' && r1.origins.git_status.turn === 1, JSON.stringify(r1.origins))
+  assert(r1.origins.search_tools.why === 'always', JSON.stringify(r1.origins))
+  const turn2 = [...ask,
+    { role: 'assistant', tool_calls: [{ id: 's1', function: { name: 'search_tools', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 's1', content: JSON.stringify({ match: 'close', tools: [{ name: 'web_fetch' }] }) },
+    { role: 'user', content: 'now read a document' }]
+  const r2 = {}
+  await filterRequestTools({ tools, messages: turn2, conversationId: 'rec', settings, embed, record: r2 })
+  assert(r2.origins.git_status.why === 'first' && r2.origins.git_status.turn === 1, `the first reason was lost: ${JSON.stringify(r2.origins)}`)
+  assert(r2.origins.web_fetch?.why === 'search' && r2.origins.web_fetch.turn === 2, JSON.stringify(r2.origins))
+  assert(r2.origins.read_document?.why === 'scored', JSON.stringify(r2.origins))
 })
 
 await test('🔒 an empty selection falls back to the full list rather than stripping everything', async () => {
@@ -1145,11 +1388,14 @@ await test('search_tools is advertised only while retrieval is on', () => {
   assert(searchProvider.toolDefs({}).length === 0, 'a server with retrieval off advertised search_tools')
   assert(searchProvider.toolDefs({ toolRetrieval: { enabled: false } }).length === 0, 'an explicit off still advertised it')
   const defs = searchProvider.toolDefs(catalogConfig())
-  assert(defs.length === 1 && defs[0].name === 'search_tools', 'retrieval on did not advertise it')
+  assert(defs.map((d) => d.name).join() === 'search_tools,describe_tool', `retrieval on advertised ${defs.map((d) => d.name)}`)
   assert(defs[0].inputSchema.required.includes('query'), 'query is not required')
+  // call_tool only when an admin turns it on (5.5, U4).
+  const withCall = searchProvider.toolDefs(catalogConfig({ toolRetrieval: { enabled: true, callTool: true } }))
+  assert(withCall.map((d) => d.name).includes('call_tool'), 'callTool on did not advertise call_tool')
 })
 
-await test('🔒 a result carries names and descriptions, never schemas', async () => {
+await test('🔒 a result carries names, descriptions, category and store, never schemas', async () => {
   searchProvider.setToolCatalogProvider(() => catalog.map(t => ({
     ...t,
     inputSchema: { type: 'object', properties: { secret_parameter: { type: 'string' } } },
@@ -1158,8 +1404,8 @@ await test('🔒 a result carries names and descriptions, never schemas', async 
   const text = result.content[0].text
   assert(!/secret_parameter/.test(text), `a schema was returned: ${text}`)
   assert(!/inputSchema/.test(text), `a schema field was returned: ${text}`)
-  const rows = JSON.parse(text)
-  assert(rows.every(r => Object.keys(r).sort().join(',') === 'description,name'), `unexpected row shape: ${text}`)
+  const rows = JSON.parse(text).tools
+  assert(rows.every(r => Object.keys(r).sort().join(',') === 'category,description,name,store'), `unexpected row shape: ${text}`)
 })
 
 await test('🔒 the catalog it searches is the one the policy gate produced', async () => {
@@ -1227,6 +1473,123 @@ await test('🔍 results are ranked, best first', async () => {
   })
   const ranked = await searchTools({ tools: catalog, query: 'look at recent commits in the repo', embed })
   assert(ranked[0].name === 'git_status', `wrong first result: ${ranked.map(r => r.name).join(',')}`)
+})
+
+console.log('\n-- discovery: widening, describe_tool, call_tool (second pass 5.x) --')
+
+const stubPort = /** @type {import('net').AddressInfo} */ (embedStub.address()).port
+const deadPort = await new Promise((resolve) => {
+  const probe = http.createServer()
+  probe.listen(0, '127.0.0.1', () => { const port = probe.address().port; probe.close(() => resolve(port)) })
+})
+async function withEmbedderDown(fn) {
+  setEmbedPortForTests(deadPort)
+  resetEmbedFailureLog()
+  // A store warmed by the tests above would still rank; a fresh tool text
+  // has no vector, so ranking needs the (dead) embedder.
+  try { return await fn() } finally { setEmbedPortForTests(stubPort) }
+}
+const searchJson = (result) => JSON.parse(result.content[0].text)
+
+await test('🔍 step 1: a search that matches answers "close", with rows the scorer ranked', async () => {
+  searchProvider.setToolCatalogProvider(() => catalog)
+  const body = searchJson(await searchProvider.callTool('search_tools', { query: 'look at recent commits in the repo' }, catalogConfig()))
+  assert(body.match === 'close' && body.tools[0].name === 'git_status', JSON.stringify(body))
+})
+
+await test('🔍 step 2: nothing above the floors answers "nearest" and says so', async () => {
+  searchProvider.setToolCatalogProvider(() => catalog)
+  // The stub gives a query with no keyword a vector along the web axis at
+  // 0.01; with an absolute floor above every score, nothing is close.
+  const cfg = { toolRetrieval: { enabled: true, scorer: 'cosine', floor: 2 } }
+  const body = searchJson(await searchProvider.callTool('search_tools', { query: 'zzz' }, cfg))
+  assert(body.match === 'nearest' && /nearest/.test(body.note) && body.tools.length > 0, JSON.stringify(body))
+})
+
+await test('🔍 step 3: with the embedder down, keywords on names and tags still answer', async () => {
+  const fresh = [{ name: 'read_text_file', description: 'Read one file (fresh text, never embedded)' }, { name: 'git_log', description: 'Commits (fresh)' }]
+  searchProvider.setToolCatalogProvider(() => fresh)
+  const body = await withEmbedderDown(async () => searchJson(await searchProvider.callTool('search_tools', { query: 'config' }, catalogConfig())))
+  assert(body.match === 'keyword' && body.tools[0].name === 'read_text_file' && /unavailable/.test(body.note), JSON.stringify(body))
+})
+
+await test('🔍 step 4: no keyword either lists every tool by category, and names the client-tool gap', async () => {
+  const fresh = [{ name: 'read_text_file', description: 'Read one file (fresher)' }, { name: 'git_log', description: 'Commits (fresher)' }]
+  searchProvider.setToolCatalogProvider(() => fresh)
+  const body = await withEmbedderDown(async () => searchJson(await searchProvider.callTool('search_tools', { query: 'xyzzy plugh' }, catalogConfig())))
+  assert(body.match === 'categories', JSON.stringify(body))
+  const names = body.categories.flatMap((c) => c.tools)
+  assert(names.sort().join() === 'git_log,read_text_file', JSON.stringify(body))
+  assert(/application provides itself/.test(body.note), 'the client-tool gap was not named')
+})
+
+await test('🔒 the discovery tools are never search results, at any step', async () => {
+  searchProvider.setToolCatalogProvider(() => [...catalog, { name: 'describe_tool', description: 'describe a tool' }, { name: 'call_tool', description: 'call a tool' }])
+  const text = (await searchProvider.callTool('search_tools', { query: 'describe a tool, call a tool' }, catalogConfig())).content[0].text
+  assert(!/describe_tool|call_tool|search_tools/.test(text), text)
+})
+
+await test('🔒 describe_tool returns the schema of a catalog tool, and the same words for banned and unknown', async () => {
+  searchProvider.setToolCatalogProvider(() => catalog.map((t) => ({ ...t, inputSchema: { type: 'object', properties: { path: { type: 'string' } } } })))
+  const ok = searchJson(await searchProvider.callTool('describe_tool', { name: 'read_document' }, catalogConfig()))
+  assert(ok.name === 'read_document' && ok.inputSchema.properties.path && ok.category === 'documents', JSON.stringify(ok))
+  // A ban is absence from the post-policy catalog.
+  searchProvider.setToolCatalogProvider(() => catalog.filter((t) => t.name !== 'read_document'))
+  const banned = await searchProvider.callTool('describe_tool', { name: 'read_document' }, catalogConfig())
+  const unknown = await searchProvider.callTool('describe_tool', { name: 'no_such_tool' }, catalogConfig())
+  assert(banned.isError && unknown.isError, 'not refused')
+  assert(banned.content[0].text.replace('read_document', 'X') === unknown.content[0].text.replace('no_such_tool', 'X'), 'a ban reads differently from absence')
+  const self = await searchProvider.callTool('describe_tool', { name: 'search_tools' }, catalogConfig())
+  assert(self.isError, 'a discovery tool was describable')
+})
+
+await test('🔍 a described tool, and search hits, become pins through tool_call_id (no name on the message)', () => {
+  const pins = pinsFromMessages([
+    { role: 'assistant', tool_calls: [{ id: 'c1', function: { name: 'describe_tool' } }, { id: 'c2', function: { name: 'search_tools' } }] },
+    { role: 'tool', tool_call_id: 'c1', content: JSON.stringify({ name: 'vault_get', inputSchema: {} }) },
+    { role: 'tool', tool_call_id: 'c2', content: JSON.stringify({ match: 'close', tools: [{ name: 'git_log' }] }) },
+  ])
+  assert(pins.has('vault_get') && pins.has('git_log'), `pins: ${[...pins]}`)
+  const forged = pinsFromMessages([
+    { role: 'assistant', tool_calls: [{ id: 'c1', function: { name: 'web_fetch' } }] },
+    { role: 'tool', tool_call_id: 'c1', content: JSON.stringify({ name: 'delete_everything' }) },
+  ])
+  assert(!forged.has('delete_everything'), 'a result from another tool named a pin')
+})
+
+await test('🔒 call_tool is off by default, and then not even answered', async () => {
+  searchProvider.setToolCatalogProvider(() => catalog)
+  assert(!searchProvider.toolDefs(catalogConfig()).some((d) => d.name === 'call_tool'), 'advertised while off')
+  assert(await searchProvider.callTool('call_tool', { name: 'git_status' }, catalogConfig()) === null, 'answered while off')
+})
+
+await test('🔒 call_tool proxies a read through the policy-checked caller, and refuses what needs approval', async () => {
+  const cfg = { toolRetrieval: { enabled: true, callTool: true } }
+  const writes = [{ name: 'create_document', description: 'Create a document' }, { name: 'memory_forget', description: 'Forget' }, { name: 'ask_user', description: 'Ask' }]
+  searchProvider.setToolCatalogProvider(() => [...catalog, ...writes])
+  const calls = []
+  searchProvider.setToolCaller(async (account, name, args, opts) => { calls.push({ account, name, args, opts }); return { content: [{ type: 'text', text: 'ok' }] } })
+  const ok = await searchProvider.callTool('call_tool', { name: 'git_status', arguments: { repo: 'x' } }, cfg, { account: { username: 'u' }, conversationId: 'conv' })
+  assert(ok.content[0].text === 'ok' && calls.length === 1 && calls[0].name === 'git_status' && calls[0].args.repo === 'x', JSON.stringify(calls))
+  assert(calls[0].account.username === 'u' && calls[0].opts.conversationId === 'conv', 'the caller identity was not passed')
+  for (const name of ['create_document', 'memory_forget', 'ask_user', 'call_tool', 'search_tools']) {
+    const r = await searchProvider.callTool('call_tool', { name }, cfg, {})
+    assert(r.isError, `${name} went through call_tool`)
+  }
+  assert(calls.length === 1, `a refused call reached the caller: ${calls.map((c) => c.name)}`)
+  searchProvider.setToolCatalogProvider(() => catalog.filter((t) => t.name !== 'git_status'))
+  const banned = await searchProvider.callTool('call_tool', { name: 'git_status' }, cfg, {})
+  assert(banned.isError && calls.length === 1, 'a banned tool was called by name')
+})
+
+await test('🔒 the discovery tools are never embedded', async () => {
+  resetToolFilterState()
+  const seen = []
+  const watching = async (texts) => { seen.push(...texts); return embed(texts) }
+  const tools = [...allTools, fnTool('search_tools', 'find tools'), fnTool('describe_tool', 'describe one')]
+  const out = (await filterRequestTools({ tools, messages: ask, settings: { enabled: true }, embed: watching })).map(toolName)
+  assert(!seen.some((t) => /^(search_tools|describe_tool):/.test(t)), `embedded: ${seen.filter((t) => /_tool/.test(t))}`)
+  assert(out.includes('search_tools') && out.includes('describe_tool'), `the discovery tools were not pinned: ${out}`)
 })
 
 await new Promise(resolve => embedStub.close(resolve))

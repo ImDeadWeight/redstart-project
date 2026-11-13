@@ -356,6 +356,12 @@ export const TOOL_CLASSES = {
   // policy gate has already filtered, touches nothing, and leaves the machine
   // it runs on alone — 'read' is the honest class, stated rather than defaulted.
   search_tools: 'read',
+  // Its sibling: one tool's definition from the same post-policy catalog.
+  describe_tool: 'read',
+  // A dispatcher. The tool it calls is checked as itself by callToolAs
+  // (policy, then the approval gate), and call_tool refuses any tool whose
+  // approval rule is not 'none', so this class grants nothing of its own.
+  call_tool: 'read',
   // Host-resolved (HOST_RESOLVED_TOOL_NAMES below). Nothing runs on this
   // machine: the client answers them in its own loop. 'read' is the honest
   // class, stated rather than defaulted, as for search_tools.

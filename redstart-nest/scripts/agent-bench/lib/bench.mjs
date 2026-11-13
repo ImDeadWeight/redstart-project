@@ -167,16 +167,28 @@ export function filePathsIn(text) {
  * from before the report).
  *
  * @param {{ get(name: string): string | null } | undefined} headers
- * @returns {{ names: string[], filtered: boolean, retrieval: 'on' | 'off' | null } | null}
+ * Since second pass 6.1 also `origins`, each sent tool's turn and reason
+ * (x-redstart-tools-origin; {} from an older Nest), and `wouldAdd`.
+ *
+ * @returns {{ names: string[], filtered: boolean, retrieval: 'on' | 'off' | null, origins: Record<string, { turn: number, why: string }>, wouldAdd: number } | null}
  */
 export function toolsSentReport(headers) {
   const sent = headers?.get?.('x-redstart-tools-sent')
   if (sent == null) return null
   const state = headers.get('x-redstart-retrieval')
+  /** @type {Record<string, { turn: number, why: string }>} */
+  const origins = {}
+  for (const part of (headers.get('x-redstart-tools-origin') ?? '').split(',').filter(Boolean)) {
+    const m = /^([^=]+)=(\d+):([a-z]+)$/.exec(part)
+    if (m) origins[decodeURIComponent(m[1])] = { turn: Number(m[2]), why: m[3] }
+  }
+  const wouldAdd = Number(headers.get('x-redstart-tools-would-add'))
   return {
     names: sent.split(',').filter(Boolean).map((n) => decodeURIComponent(n)),
     filtered: headers.get('x-redstart-tools-filtered') === '1',
     retrieval: state === 'on' || state === 'off' ? state : null,
+    origins,
+    wouldAdd: Number.isInteger(wouldAdd) ? wouldAdd : 0,
   }
 }
 

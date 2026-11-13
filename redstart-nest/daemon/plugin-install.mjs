@@ -579,6 +579,12 @@ export async function probePlugin({ command, args, env, timeoutMs, logDir }) {
       description: typeof t.description === 'string' ? t.description : '',
       inputSchema: t.inputSchema && typeof t.inputSchema === 'object' ? t.inputSchema : {},
       class: 'destructive',
+      // Optional retrieval metadata the server declares for the tool, under
+      // _meta['redstart/retrieval'] (tool-metadata.mjs). Raw here, sanitised
+      // by validatePlugin on every read, as for title.
+      ...(t?._meta && typeof t._meta === 'object' && t._meta['redstart/retrieval'] !== undefined
+        ? { retrieval: t._meta['redstart/retrieval'] }
+        : {}),
     }))
 
     // The client is pure transport and does not surface the initialize

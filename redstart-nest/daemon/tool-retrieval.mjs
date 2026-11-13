@@ -1,12 +1,14 @@
 'use strict'
 
 import { createHash } from 'node:crypto'
+import { stripAttachmentNote } from '../../shared/agent-core/attachment-note.mjs'
+import { metadataText, toolMetadata } from './tool-metadata.mjs'
 
 // =============================================================================
 // Redstart Nest — tool retrieval: hashing, vectors, scoring, selection
 // =============================================================================
-// Pure. Imports node:crypto and nothing else — no electron, no network, no
-// process — so it runs under the headless daemon and under plain `node` in the
+// Pure. Imports node:crypto and two pure helpers and nothing else — no
+// electron, no network, no process — so it runs under the headless daemon and under plain `node` in the
 // test suite. Everything that talks to an embedding server lives elsewhere;
 // this module never learns where its vectors came from.
 //
@@ -81,17 +83,85 @@ export function toolContentHash(tool) {
 }
 
 /**
- * The text an embedding model sees for a tool. Name and description only: a
- * JSON schema is mostly type keywords, which crowd out the prose that actually
- * distinguishes one tool from another.
+ * The tools that find other tools (second pass 5.x). They are never embedded
+ * or scored: they are pinned whenever the request carries them, they are
+ * never a search result, and a score for them would only move the relative
+ * floor that everything else is measured against.
+ */
+export const DISCOVERY_TOOL_NAMES = Object.freeze(['search_tools', 'describe_tool', 'call_tool'])
+
+// ---------------------------------------------------------------------------
+// Every view of a tool retrieval uses (second pass 2.2)
+// ---------------------------------------------------------------------------
+// One place builds them all, from the tool and its registry metadata
+// (tool-metadata.mjs): the text embedded, the BM25 document, and the row a
+// search returns. The wire description is never rewritten here.
+
+function toolDescription(tool) {
+  const body = toolBody(tool)
+  return typeof body.description === 'string' ? body.description : ''
+}
+
+/**
+ * The text an embedding model sees for a tool.
+ *
+ * Version 1: name and description only. A JSON schema is mostly type
+ * keywords, which crowd out the prose that actually distinguishes one tool
+ * from another. Version 2 adds the registry metadata (category, where it
+ * acts, tags, when to use it), the part that tells the File System tools from
+ * the workspace ones.
+ *
+ * @param {any} tool
+ * @param {{ textVersion?: number }} [options]
+ * @returns {string}
+ */
+export function toolEmbeddingText(tool, { textVersion = 1 } = {}) {
+  const description = toolDescription(tool)
+  const base = description ? `${toolName(tool)}: ${description}` : toolName(tool)
+  if (textVersion < 2) return base
+  const meta = metadataText(toolName(tool))
+  return meta ? `${base}\n${meta}` : base
+}
+
+/**
+ * The BM25 document for a tool: its name with `_` and `-` read as spaces, its
+ * description, and every metadata field. Not versioned: BM25 has no stored
+ * vectors to keep in step.
  *
  * @param {any} tool
  * @returns {string}
  */
-export function toolEmbeddingText(tool) {
-  const body = toolBody(tool)
-  const description = typeof body.description === 'string' ? body.description : ''
-  return description ? `${toolName(tool)}: ${description}` : toolName(tool)
+export function toolSearchDocument(tool) {
+  const name = toolName(tool)
+  return [name, name.replace(/[_-]+/g, ' '), toolDescription(tool), metadataText(name)].filter(Boolean).join('\n')
+}
+
+/**
+ * The row search_tools returns for a tool: never a schema (a result is an
+ * index, not a definition).
+ *
+ * @param {any} tool
+ * @returns {{ name: string, category: string, store: string, description: string }}
+ */
+export function toolSearchResult(tool) {
+  const name = toolName(tool)
+  const m = toolMetadata(name)
+  return { name, category: m.category, store: m.store, description: toolDescription(tool) }
+}
+
+/**
+ * The vector-store key for a tool's embedding. Version 1 is the content hash,
+ * unchanged, so a store filled before version 2 existed stays valid. Later
+ * versions hash the embedded text with it: the metadata is not in the content
+ * hash, and a plugin's can change without its description changing.
+ *
+ * @param {any} tool
+ * @param {number} [textVersion]
+ */
+export function toolVectorKey(tool, textVersion = 1) {
+  const hash = toolContentHash(tool)
+  if (textVersion < 2) return hash
+  return createHash('sha256').update(`${hash}\u0000${textVersion}\u0000${toolEmbeddingText(tool, { textVersion })}`).digest('hex')
 }
 
 /**
@@ -128,7 +198,7 @@ export function estimateToolTokens(tool) {
  *   get(hash: string): Float32Array|undefined,
  *   has(hash: string): boolean,
  *   setMany(entries: Iterable<[string, ArrayLike<number>]>): void,
- *   missingHashes(tools: any[]): { hash: string, text: string }[],
+ *   missingHashes(tools: any[], options?: { textVersion?: number }): { hash: string, text: string }[],
  *   size: () => number,
  * }}
  */
@@ -147,15 +217,16 @@ export function createVectorStore() {
       }
     },
     // What a request would need embedded before it could be scored: deduped,
-    // in first-seen order so a batch is reproducible.
-    missingHashes(tools) {
+    // in first-seen order so a batch is reproducible. `hash` is the store key
+    // (toolVectorKey) for the text version asked for.
+    missingHashes(tools, { textVersion = 1 } = {}) {
       const seen = new Set()
       const out = []
       for (const tool of Array.isArray(tools) ? tools : []) {
-        const hash = toolContentHash(tool)
+        const hash = toolVectorKey(tool, textVersion)
         if (vectors.has(hash) || seen.has(hash)) continue
         seen.add(hash)
-        out.push({ hash, text: toolEmbeddingText(tool) })
+        out.push({ hash, text: toolEmbeddingText(tool, { textVersion }) })
       }
       return out
     },
@@ -200,12 +271,12 @@ export function cosine(a, b) {
  * A tool whose vector is not in the store scores 0 and is flagged `missing`; a
  * partially cold cache degrades to "these tools rank last", not to an error.
  *
- * @param {{ tools: any[], query: ArrayLike<number>|null|undefined, store: ReturnType<typeof createVectorStore> }} args
+ * @param {{ tools: any[], query: ArrayLike<number>|null|undefined, store: ReturnType<typeof createVectorStore>, textVersion?: number }} args
  * @returns {{ tool: any, name: string, hash: string, score: number, missing: boolean }[]}
  */
-export function scoreTools({ tools, query, store }) {
+export function scoreTools({ tools, query, store, textVersion = 1 }) {
   const scored = (Array.isArray(tools) ? tools : []).map(tool => {
-    const hash = toolContentHash(tool)
+    const hash = toolVectorKey(tool, textVersion)
     const vector = store?.get(hash)
     return {
       tool,
@@ -217,6 +288,192 @@ export function scoreTools({ tools, query, store }) {
   })
   scored.sort((a, b) => (b.score - a.score) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   return scored
+}
+
+// ---------------------------------------------------------------------------
+// Keyword search: BM25 (second pass 3.1)
+// ---------------------------------------------------------------------------
+// Pure, and small: a few hundred short documents, so a linear scan per query.
+// The documents are toolSearchDocument(): name (also as words), description
+// and registry metadata. A small model's search query is often one or two
+// words ("config", "notes") that an embedding places badly and a keyword
+// index finds at once.
+
+const STOPWORDS = new Set((
+  'a an and are as at be by can could do does for from get give has have how i if in into is it its me my ' +
+  'need of on or please show so some that the their them then there these this to tool tools use using ' +
+  'want was we what when where which who will with would you your'
+).split(' '))
+
+/**
+ * Lowercase, split on anything that is not a letter or digit (so `_` and `-`
+ * split, and `read_text_file` matches "text file"), drop stopwords and bare
+ * numbers, and strip
+ * a plural or verb ending so "commits" meets "commit".
+ *
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function tokenize(text) {
+  if (typeof text !== 'string' || !text) return []
+  const out = []
+  for (const raw of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+    // A bare number names no tool ("48271 × 9973"), and as a rare term it
+    // would hand its whole weight to whichever description has a digit.
+    if (!raw || STOPWORDS.has(raw) || /^\p{N}+$/u.test(raw)) continue
+    out.push(stem(raw))
+  }
+  return out
+}
+
+function stem(word) {
+  if (word.length > 4 && word.endsWith('ies')) return `${word.slice(0, -3)}y`
+  if (word.length > 5 && word.endsWith('ing')) return undouble(word.slice(0, -3))
+  if (word.length > 4 && word.endsWith('ed')) return undouble(word.slice(0, -2))
+  if (word.length > 3 && word.endsWith('s') && !word.endsWith('ss')) return word.slice(0, -1)
+  return word
+}
+
+// "running" → "runn" → "run"; "spelled" keeps its "ll".
+function undouble(word) {
+  const n = word.length
+  return n > 2 && word[n - 1] === word[n - 2] && !'lsz'.includes(word[n - 1]) ? word.slice(0, -1) : word
+}
+
+/** BM25's two constants, the usual ones. */
+export const BM25_K1 = 1.2
+export const BM25_B = 0.75
+
+/**
+ * An index over tools' search documents.
+ *
+ * `key` is a hash of every document, so a caller can keep one index while the
+ * catalog's content is unchanged and rebuild when it is not.
+ *
+ * `documentOf` picks the text indexed for a tool; toolSearchDocument() by
+ * default.
+ *
+ * @param {any[]} tools
+ * @param {(tool: any) => string} [documentOf]
+ * @returns {{ key: string, size: number, score(query: string): Map<string, number> }}
+ */
+export function createBm25Index(tools, documentOf = toolSearchDocument) {
+  const list = Array.isArray(tools) ? tools : []
+  /** @type {{ name: string, tf: Map<string, number>, length: number }[]} */
+  const docs = []
+  /** @type {Map<string, number>} */
+  const df = new Map()
+  const keyHash = createHash('sha256')
+  for (const tool of list) {
+    const name = toolName(tool)
+    const text = documentOf(tool)
+    keyHash.update(`${name}\u0000${text}\u0001`)
+    const tokens = tokenize(text)
+    const tf = new Map()
+    for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1)
+    for (const t of tf.keys()) df.set(t, (df.get(t) ?? 0) + 1)
+    docs.push({ name, tf, length: tokens.length })
+  }
+  const n = docs.length
+  const avg = n ? docs.reduce((a, d) => a + d.length, 0) / n : 0
+
+  return {
+    key: keyHash.digest('hex'),
+    size: n,
+    // Name to score, for the tools that match at least one query term. A tool
+    // that matches nothing is absent, not zero: it has no keyword rank.
+    score(query) {
+      const terms = [...new Set(tokenize(query))]
+      /** @type {Map<string, number>} */
+      const out = new Map()
+      if (!terms.length || !n) return out
+      for (const doc of docs) {
+        let score = 0
+        for (const term of terms) {
+          const f = doc.tf.get(term)
+          if (!f) continue
+          const d = df.get(term) ?? 0
+          const idf = Math.log(1 + (n - d + 0.5) / (d + 0.5))
+          score += idf * (f * (BM25_K1 + 1)) / (f + BM25_K1 * (1 - BM25_B + BM25_B * (avg ? doc.length / avg : 1)))
+        }
+        if (score > 0) out.set(doc.name, Math.max(out.get(doc.name) ?? 0, score))
+      }
+      return out
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fusion (second pass 3.2)
+// ---------------------------------------------------------------------------
+
+// 1-based ranks by descending score, ties sharing the better rank
+// ("1, 1, 3"), so two tools a scorer cannot tell apart are not split by
+// their names' alphabetical order.
+function ranksOf(rows) {
+  /** @type {Map<string, number>} */
+  const out = new Map()
+  const sorted = [...rows].sort((a, b) => b.score - a.score)
+  let rank = 0
+  let last = NaN
+  sorted.forEach((row, i) => {
+    if (row.score !== last) { rank = i + 1; last = row.score }
+    if (!out.has(row.name)) out.set(row.name, rank)
+  })
+  return out
+}
+
+/** Reciprocal rank fusion's constant: the usual 60. */
+export const RRF_K = 60
+
+/** The scorers a call can ask for. 'cosine' is the first pass's. */
+export const SCORERS = Object.freeze(['cosine', 'bm25', 'fused'])
+
+/**
+ * Re-score a cosine-scored list (scoreTools) with BM25 or with the reciprocal
+ * rank fusion of the two, keeping the shape: sorted by descending score, ties
+ * by name, every tool present.
+ *
+ * Rank based, so the narrow cosine band (0.57 to 0.82 on bge-small) does not
+ * matter. Each score is normalised so 1 is the best possible: for 'fused', a
+ * tool ranked first by both; for 'bm25', the best keyword match this query.
+ * A tool with no keyword match gets only its cosine share under 'fused' and
+ * 0 under 'bm25'. With no usable cosine score (no vectors, or none above 0),
+ * 'fused' returns the cosine list as it is, so a broken embedder fails open.
+ *
+ * @param {{ scored: { tool: any, name: string, hash?: string, score: number, missing?: boolean }[], keyword: Map<string, number>, scorer?: string, k?: number }} args
+ */
+export function rescore({ scored, keyword, scorer = 'cosine', k = RRF_K }) {
+  const entries = Array.isArray(scored) ? scored : []
+  if (scorer !== 'bm25' && scorer !== 'fused') return entries
+  const kw = keyword instanceof Map ? keyword : new Map()
+  const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+
+  if (scorer === 'bm25') {
+    const best = Math.max(0, ...kw.values())
+    return entries
+      .map((e) => ({ ...e, score: best > 0 ? (kw.get(e.name) ?? 0) / best : 0 }))
+      .sort((a, b) => (b.score - a.score) || byName(a, b))
+  }
+
+  // A cosine ranking where nothing scored above 0 (no vectors, or vectors
+  // that cannot be compared) is an embedder that is not working, and fused
+  // does not quietly become keywords-only on one: the scores stay 0, nothing
+  // clears a floor, and the caller fails open (tool-filter.mjs), exactly as
+  // the cosine scorer does. Keywords alone are the 'bm25' scorer, chosen.
+  if (!entries.some((e) => !e.missing && e.score > 0)) return entries
+  const cosineUsable = true
+  const kwRank = ranksOf([...kw.entries()].map(([name, score]) => ({ name, score })))
+  const cosRank = ranksOf(entries)
+  const max = (cosineUsable ? 1 : 0) / (k + 1) + 1 / (k + 1)
+  return entries
+    .map((e) => {
+      const fromCosine = cosineUsable ? 1 / (k + (cosRank.get(e.name) ?? entries.length)) : 0
+      const r = kwRank.get(e.name)
+      const fromKeyword = r ? 1 / (k + r) : 0
+      return { ...e, score: (fromCosine + fromKeyword) / max }
+    })
+    .sort((a, b) => (b.score - a.score) || byName(a, b))
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +513,21 @@ export function scoreTools({ tools, query, store }) {
  *   relativeFloor?: number,
  *   margin?: number,
  *   families?: Iterable<Iterable<string>>,
+ *   growth?: 'scored' | 'pins-only',
+ *   minTools?: number,
  * }} args
+ *   `growth` (second pass 4.1): with `previous` and 'pins-only', the set is
+ *   frozen after the first selection: `previous` plus the pins (and their
+ *   families), never a newly scored tool, so the prompt ahead of the chat
+ *   stays byte-identical (P2). Scoring still runs, and `wouldAdd` counts what
+ *   'scored' would have added, so the cost of freezing stays visible. A
+ *   previous tool the request no longer carries (banned since, or dropped by
+ *   the client) leaves, as it always did.
+ *   `minTools` (4.2): on a FIRST selection (no `previous`), keep adding by
+ *   score past the floors and the margin until this many tools were chosen by
+ *   score, pins not counted, inside the budget. A frozen set that starts at
+ *   two tools stays at two.
+ * @returns {{ selected: any[], dropped: any[], reason: string, wouldAdd: number }}
  *   `families`: tools that only make sense together. Once any member is
  *   selected, every other member the request carries comes with it, past
  *   the floor, the margin and the budget (a family is a few small tools).
@@ -264,12 +535,12 @@ export function scoreTools({ tools, query, store }) {
  *   Added 2026-11-12: memory_save was selected for "remember X, then forget
  *   Y" and memory_forget was dropped, so the model said it had no way to
  *   forget and told the user it had, with the memory still saved.
- * @returns {{ selected: any[], dropped: any[], reason: string }}
  */
-export function selectTools({ scored, pins, previous, budgetTokens = Infinity, floor = 0, relativeFloor = 0, margin = 0, families = [] }) {
+export function selectTools({ scored, pins, previous, budgetTokens = Infinity, floor = 0, relativeFloor = 0, margin = 0, families = [], growth = 'scored', minTools = 0 }) {
   const entries = Array.isArray(scored) ? scored : []
   const pinned = new Set(pins ?? [])
   const carried = new Set(previous ?? [])
+  const frozen = growth === 'pins-only' && carried.size > 0
 
   /** @type {Map<string, { tool: any, name: string, score: number }>} */
   const included = new Map()
@@ -298,9 +569,13 @@ export function selectTools({ scored, pins, previous, budgetTokens = Infinity, f
   const effectiveFloor = (relativeFloor > 0 && best > 0) ? Math.max(floor, best * relativeFloor) : floor
 
   let budgetBit = false, floorBit = false, marginBit = false
+  // Frozen, the scored pass runs on a copy: what it would add is counted and
+  // nothing is.
+  const target = frozen ? new Map(included) : included
+  let scoredCount = 0
 
   for (const entry of entries) {
-    if (included.has(entry.name)) continue
+    if (target.has(entry.name)) continue
     if (entry.score < effectiveFloor) { floorBit = true; continue }
     if (weakestIncluded !== null && entry.score < weakestIncluded + margin) { marginBit = true; continue }
     const cost = estimateToolTokens(entry.tool)
@@ -308,8 +583,25 @@ export function selectTools({ scored, pins, previous, budgetTokens = Infinity, f
     // trying smaller ones — "the next cheap thing squeezed in" is exactly the
     // kind of set that reshuffles between turns.
     if (spent + cost > budgetTokens) { budgetBit = true; break }
-    included.set(entry.name, entry)
+    target.set(entry.name, entry)
     spent += cost
+    scoredCount++
+  }
+  const wouldAdd = frozen ? target.size - included.size : 0
+
+  // The minimum (4.2): a first selection only, best score first, inside the
+  // budget, stopping at the first tool that does not fit as above.
+  const minimum = Number.isInteger(minTools) && minTools > 0 ? minTools : 0
+  if (!frozen && carried.size === 0 && scoredCount < minimum && !budgetBit) {
+    for (const entry of entries) {
+      if (scoredCount >= minimum) break
+      if (included.has(entry.name)) continue
+      const cost = estimateToolTokens(entry.tool)
+      if (spent + cost > budgetTokens) { budgetBit = true; break }
+      included.set(entry.name, entry)
+      spent += cost
+      scoredCount++
+    }
   }
 
   for (const family of families ?? []) {
@@ -326,9 +618,9 @@ export function selectTools({ scored, pins, previous, budgetTokens = Infinity, f
 
   const reason = dropped.length === 0
     ? 'all-selected'
-    : budgetBit ? 'budget' : marginBit ? 'margin' : floorBit ? 'floor' : 'all-selected'
+    : frozen ? 'frozen' : budgetBit ? 'budget' : marginBit ? 'margin' : floorBit ? 'floor' : 'all-selected'
 
-  return { selected, dropped, reason }
+  return { selected, dropped, reason, wouldAdd }
 }
 
 // ---------------------------------------------------------------------------
@@ -389,16 +681,23 @@ export function truncateForEmbedding(text, maxTokens) {
  * precisely because application is monotonic: a drifting query can add tools,
  * never take them away, so the cost of drift is bounded at one re-prefill.
  *
+ * `dropAttachmentNote` (text version 2, second pass 1.2): leave out the
+ * attachment note chat-ui appends to a message with files. The note names
+ * tools, the File System ones included ("cannot see these files"), and an
+ * embedding cannot read the "cannot": it ranked those tools up on exactly the
+ * prompts they are wrong for (P3).
+ *
  * @param {any[]} messages
- * @param {{ maxTokens?: number }} [options]
+ * @param {{ maxTokens?: number, dropAttachmentNote?: boolean }} [options]
  * @returns {string}
  */
-export function conversationQueryText(messages, { maxTokens = Infinity } = {}) {
+export function conversationQueryText(messages, { maxTokens = Infinity, dropAttachmentNote = false } = {}) {
   const userParts = []
   const toolNames = []
   for (const msg of Array.isArray(messages) ? messages : []) {
     if (msg?.role === 'user') {
-      const text = messageText(msg.content)
+      const raw = messageText(msg.content)
+      const text = dropAttachmentNote ? stripAttachmentNote(raw) : raw
       if (text) userParts.push(text)
     }
     for (const call of Array.isArray(msg?.tool_calls) ? msg.tool_calls : []) {
@@ -448,13 +747,33 @@ function messageText(content) {
  *
  * @param {any[]} messages
  * @param {string|null|undefined} accountId
+ * @param {string|null} [conversationId]
  * @returns {string}
  */
-export function conversationKey(messages, accountId) {
+export function conversationKey(messages, accountId, conversationId = null) {
+  // A conversation id the client sent (redstart_conversation_id, second pass
+  // 4.3) is the better key: compaction folds the first user message into a
+  // summary, after which the hash below names a different conversation and
+  // the frozen set would be chosen again. Still under the account, so an id
+  // can only ever name the caller's own entry.
+  if (isConversationId(conversationId)) {
+    return createHash('sha256').update(`${accountId ?? ''}\u0000id\u0000${conversationId}`).digest('hex')
+  }
   const first = (Array.isArray(messages) ? messages : []).find(m => m?.role === 'user')
   return createHash('sha256')
     .update(`${accountId ?? ''}\u0000${messageText(first?.content)}`)
     .digest('hex')
+}
+
+/**
+ * A usable client conversation id: a non-empty string of at most 128
+ * printable ASCII characters. Anything else is ignored, never an error.
+ *
+ * @param {unknown} id
+ * @returns {id is string}
+ */
+export function isConversationId(id) {
+  return typeof id === 'string' && id.length > 0 && id.length <= 128 && /^[\x21-\x7e]+$/.test(id)
 }
 
 /**
@@ -472,20 +791,74 @@ export function conversationKey(messages, accountId) {
  */
 export function pinsFromMessages(messages, { searchToolName = 'search_tools' } = {}) {
   const pins = new Set()
+  // Which tool a result answers. OpenAI tool messages carry tool_call_id and,
+  // from chat-ui and the agent core, no `name` (stored-messages.mjs,
+  // tool-calls.mjs), so the name is read off the assistant call it answers.
+  // Until 2026-11-13 only `name` was read, and a search hit never became a
+  // pin in a real chat (second pass, P5).
+  /** @type {Map<string, string>} */
+  const callNames = new Map()
   for (const msg of Array.isArray(messages) ? messages : []) {
     for (const call of Array.isArray(msg?.tool_calls) ? msg.tool_calls : []) {
       const name = call?.function?.name
       if (typeof name === 'string' && name) pins.add(name)
+      if (typeof call?.id === 'string' && typeof name === 'string') callNames.set(call.id, name)
     }
+    const answered = msg?.role === 'tool'
+      ? (typeof msg.name === 'string' && msg.name ? msg.name : callNames.get(msg.tool_call_id))
+      : undefined
     // A search result is a tool-role message whose body is the JSON this
     // gateway produced. Names it surfaced become pins on the next turn, which
     // is the entire mechanism behind search_tools — no new protocol, no server
     // state, just the transcript the client already sends back.
-    if (msg?.role === 'tool' && msg?.name === searchToolName) {
+    if (answered === searchToolName) {
       for (const name of searchResultNames(msg.content)) pins.add(name)
+    }
+    // describe_tool (second pass 5.2): the tool it described joins the list
+    // on the next turn, with its real schema, the same way.
+    if (answered === 'describe_tool') {
+      const name = describedName(msg.content)
+      if (name) pins.add(name)
     }
   }
   return pins
+}
+
+/**
+ * Why each pinned tool is pinned, from the transcript alone: 'called' (the
+ * model called it), 'search' (a search_tools result named it), 'describe'
+ * (describe_tool described it). The first reason seen wins, in transcript
+ * order. For the caller's retrieval record (second pass 6.1).
+ *
+ * @param {any[]} messages
+ * @returns {Map<string, 'called'|'search'|'describe'>}
+ */
+export function pinReasons(messages) {
+  /** @type {Map<string, 'called'|'search'|'describe'>} */
+  const out = new Map()
+  const add = (name, why) => { if (name && !out.has(name)) out.set(name, why) }
+  const callNames = new Map()
+  for (const msg of Array.isArray(messages) ? messages : []) {
+    for (const call of Array.isArray(msg?.tool_calls) ? msg.tool_calls : []) {
+      const name = call?.function?.name
+      if (typeof name === 'string' && name) add(name, 'called')
+      if (typeof call?.id === 'string' && typeof name === 'string') callNames.set(call.id, name)
+    }
+    if (msg?.role !== 'tool') continue
+    const answered = typeof msg.name === 'string' && msg.name ? msg.name : callNames.get(msg.tool_call_id)
+    if (answered === 'search_tools') for (const name of searchResultNames(msg.content)) add(name, 'search')
+    if (answered === 'describe_tool') add(describedName(msg.content), 'describe')
+  }
+  return out
+}
+
+function describedName(content) {
+  try {
+    const body = JSON.parse(messageText(content))
+    return body && typeof body === 'object' && !Array.isArray(body) && typeof body.name === 'string' && body.name ? body.name : null
+  } catch {
+    return null
+  }
 }
 
 function searchResultNames(content) {

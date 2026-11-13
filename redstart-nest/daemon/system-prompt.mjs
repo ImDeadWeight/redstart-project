@@ -351,6 +351,12 @@ function buildToolPolicy(config, hasTools, toolNames) {
 // conclude the capability does not exist — the failure this block exists for.
 // So it is told what happened and what to say instead, which is the part that
 // reaches the user either way.
+//
+// The example call (tool retrieval second pass, 5.4): the 4B made no
+// search_tools call at all in the 2026-11-11 bench, and a small model copies
+// a shape it is shown more readily than it follows an instruction. One
+// wording change, to be measured on the 4B's "said unavailable without
+// searching" count before the next.
 function buildRetrieval(toolNames, toolsFiltered) {
   if (!toolsFiltered) return null
   const names = Array.isArray(toolNames) ? toolNames : []
@@ -358,7 +364,7 @@ function buildRetrieval(toolNames, toolsFiltered) {
   const opening = 'The tools listed this turn are a subset chosen for this conversation, not everything this server can do.'
 
   return names.includes('search_tools')
-    ? `${opening} If what you need is missing, call search_tools before concluding it does not exist — never tell the user a capability is unavailable just because it is not in your list.`
+    ? `${opening} If what you need is missing, call search_tools before concluding it does not exist — for example search_tools({"query": "read a spreadsheet"}) — and never tell the user a capability is unavailable just because it is not in your list.`
     : `${opening} There is no way to search for the rest from here, so if what you need is missing, say it is not available in this session — never that this server cannot do it.`
 }
 

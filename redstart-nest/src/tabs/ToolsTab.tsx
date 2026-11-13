@@ -767,6 +767,9 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
               {o.toolsAfterBans > o.toolsSent
                 ? ` Tool retrieval left out ${o.toolsAfterBans - o.toolsSent} more.`
                 : ''}
+              {(o.wouldAdd ?? 0) > 0
+                ? ` The conversation's tool set is frozen; scoring would have added ${o.wouldAdd}.`
+                : ''}
             </p>
           )
         })()}

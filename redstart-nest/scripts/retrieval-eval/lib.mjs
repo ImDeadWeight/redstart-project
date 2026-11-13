@@ -197,8 +197,10 @@ export function caseMessages(c) {
  * filterRequestTools embeds (conversationQueryText, bounded to the model); for
  * a search case, the query as the model typed it.
  */
-export function caseQueryText(c) {
-  return c.kind === 'search' ? c.query : conversationQueryText(caseMessages(c), { maxTokens: EMBED_MODEL.maxTokens })
+export function caseQueryText(c, { textVersion = 1 } = {}) {
+  return c.kind === 'search'
+    ? c.query
+    : conversationQueryText(caseMessages(c), { maxTokens: EMBED_MODEL.maxTokens, dropAttachmentNote: textVersion >= 2 })
 }
 
 // ---------------------------------------------------------------------------
@@ -209,14 +211,17 @@ export function caseQueryText(c) {
  * Rank and (for a selection case) select, through the production functions.
  *
  * @param {any} c a case
- * @param {{ wire: any[], embed: (texts: string[]) => Promise<Float32Array[] | null>, ctxSize?: number }} ctx
+ * `settings` are the retrieval settings under test (tool-filter.mjs
+ * RETRIEVAL_DEFAULTS), the same for the ranking and the selection.
+ *
+ * @param {{ wire: any[], embed: (texts: string[]) => Promise<Float32Array[] | null>, ctxSize?: number, settings?: Record<string, any> }} ctx
  * @returns {Promise<{ ranking: string[], selected: string[] | null, ms: number }>}
  */
-export async function scoreCase(c, { wire, embed, ctxSize = EVAL_CTX_SIZE }) {
+export async function scoreCase(c, { wire, embed, ctxSize = EVAL_CTX_SIZE, settings = {} }) {
   // Each case is its own conversation: no selection carried from another.
   resetToolFilterState()
   const started = performance.now()
-  const ranked = await searchTools({ tools: wire, query: caseQueryText(c), limit: Infinity, embed })
+  const ranked = await searchTools({ tools: wire, query: caseQueryText(c, settings), limit: Infinity, embed, settings })
   const ms = performance.now() - started
   if (ranked === null) throw new Error(`case ${c.id}: the scorer could not rank (no vectors)`)
 
@@ -225,7 +230,7 @@ export async function scoreCase(c, { wire, embed, ctxSize = EVAL_CTX_SIZE }) {
     const messages = caseMessages(c)
     const reserved = Math.ceil(JSON.stringify(messages).length / 4) + SYSTEM_PROMPT_ALLOWANCE_TOKENS
     const sent = await filterRequestTools({
-      tools: wire, messages, accountId: 'eval', settings: { enabled: true }, ctxSize, reservedTokens: reserved, embed,
+      tools: wire, messages, accountId: 'eval', settings: { ...settings, enabled: true }, ctxSize, reservedTokens: reserved, embed,
     })
     // Fail-open returns the input by identity: that is not a selection.
     if (sent === wire) throw new Error(`case ${c.id}: retrieval failed open (no vectors)`)

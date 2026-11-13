@@ -254,6 +254,13 @@ export class ChatService {
 			requestBody.redstart_project = projectId;
 		}
 
+		// Redstart-only field: keys tool retrieval's per-conversation set, which
+		// otherwise keys on the first user message and is lost when compaction
+		// folds it into a summary (tool retrieval second pass, 4.3). Stripped.
+		if (conversationId) {
+			requestBody.redstart_conversation_id = conversationId;
+		}
+
 		if (temperature !== undefined) requestBody.temperature = temperature;
 		if (max_tokens !== undefined) {
 			// Set max_tokens to -1 (infinite) when explicitly configured as 0 or null
