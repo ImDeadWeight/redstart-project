@@ -22,6 +22,50 @@ This file is the plan for 2G now.
 Branch: `feat/tool-retrieval-fixes`, from main @ 49941fa (alpha.14). Agent
 runtime Phase 4 comes after it.
 
+## Where we left off (2026-11-13)
+
+Branch `feat/tool-retrieval-fixes` (off main @ 49941fa), not pushed. Phase 0's
+code is done, one commit per piece, each through the full verification loop
+(69 suites):
+
+| Step | Commit | What |
+|---|---|---|
+| 0.5 | 5f43735 | The embedding tests own their port (`setEmbedPortForTests`); no more skips on a machine running Redstart |
+| 0.1 | cfa5cdf | `redstart_retrieval_report: true` → `x-redstart-tools-sent`, `x-redstart-tools-filtered` |
+| 0.2 | 29025fe | The bench records the report and `cache_n`/`prompt_ms` per turn; per-run and per-task retrieval metrics; `--retrieval server\|off`; adds `x-redstart-retrieval: on\|off` (deviation below) |
+| 0.2 data | 9cd9dd2 | `expectTools` on all 32 tasks (workspace tools on attachment tasks, never File System) |
+| 0.3 | c1d85cd | `scripts/measure-tool-cache.mjs` (through the real gateway; variants server and off) |
+| 0.4 | 83eb420 | `scripts/retrieval-eval/` (catalog, 61 cases + 32 bench tasks, runner, `--freeze`) and `test-retrieval-eval.mjs` in CI |
+
+**0.6, the eval part, is done.** The current scorer on the 93 cases (bge-small
+f16 on a sidecar started by hand on port 19184):
+
+| source | cases | MRR | R@1 | R@3 | R@10 | sel. recall | sel. size |
+|---|---|---|---|---|---|---|---|
+| all | 93 | 0.706 | 55.9% | 76.9% | 96.2% | 93.4% | 12.5 |
+| attachment | 7 | 0.518 | 28.6% | 57.1% | 100% | 100% | 16.9 |
+| bench-attachment | 29 | 0.723 | 55.2% | 86.2% | 100% | 96.6% | 13.7 |
+| transcript | 15 | 0.693 | 60.0% | 73.3% | 80.0% | — | — |
+| small-model | 17 | 0.830 | 76.5% | 88.2% | 100% | — | — |
+| user-phrasing | 22 | 0.638 | 45.5% | 61.4% | 97.7% | 86.4% | 10.1 |
+
+The 10 misses: git bundles → run_python at rank 11 to 14 (three transcript
+queries); "config file" (read tools at rank 6); "notes" (rank 9); git_status
+below git_diff/git_log; "latest news" → web_fetch over web_search; compound
+interest → memory_save first, run_python at 7; "standard customer discount
+policy" → memory_save; docs-find-fact selects the memory tools and not
+read_document. The memory tools score high on many unrelated queries. That
+is worth a look in Phase 2.
+
+**Owed by the user (0.6, needs a loaded model):**
+- the bench on the 4B and on Ornith, `--retrieval server` and `--retrieval off`;
+- `node scripts/measure-tool-cache.mjs` on Ornith (bench account key in
+  `REDSTART_BENCH_API_KEY`);
+- the rows into `agent-bench-results.md` under "Tool retrieval, second pass"
+  (summary.md prints the row).
+
+Then Phase 1 (or Phase 1 first, if the user wants it out before the baseline).
+
 ---
 
 ## The seven components: what exists (checked at 49941fa) and what is missing
@@ -352,6 +396,21 @@ removed in its own commit, along with updates to `docs/configuration.md` and
 
 - The measuring tools come before the registry, against the 2026-11-11 order
   (see the ground rules). Diagnostics as a component stays last.
+- **0.1 has a third header, `x-redstart-retrieval: on|off`** (added in 0.2).
+  `filtered: 0` cannot tell "retrieval kept everything" (or failed open) from
+  "retrieval off", and the bench summary needs on/off. Taken from
+  `wire.filtered`, which the gateway already computed.
+- **0.2's bench switch is `--retrieval server|off`**, not just `off`: `server`
+  is "as Nest is configured". What happened is read back from the report,
+  never assumed from the flag.
+- **0.4's "the bge measurement's 21 queries" no longer exist.** The first pass
+  committed only the results (embed-model.mjs), so the user-phrasing cases are
+  new.
+- **0.4's frozen.json holds every case's query vector** (292 KB), not only the
+  frozen subset's, so a phase can see which misses it fixed without a model.
+- **The eval budgets selection at a 32k window and reserves the messages plus
+  a fixed 2,000 tokens for the system prompt** (lib.mjs). The gateway reserves
+  a composed pins-only prompt, which the eval has no composer for.
 
 ## Gaps carried forward
 
@@ -361,5 +420,18 @@ removed in its own commit, along with updates to `docs/configuration.md` and
   every request tool that is not in Nest's catalog (the product trade the
   first pass recorded and did not take). Ask the user before 5.6.
 - **Accepted (4.3):** a Nest restart selects each conversation again once.
+- **Phase 0, open:** `measure-tool-cache.mjs` has never run on a model; only
+  its plumbing is tested (against the bench's fake Nest). The first Ornith run
+  is the first real check.
+- **Phase 0, open:** the bench's retrieval metrics are null under `--runtime`
+  (the daemon makes the completions requests, so there is no report), and
+  `--retrieval off` is refused there. Closing it means the task runner
+  recording `wire` per turn into its events.
+- **Phase 0, open:** "first tool as expected" judges the first call only. A
+  run that starts with a File System call and recovers still counts as wrong,
+  which is the P3 count, but it says nothing about recovery.
+- **Every later phase:** rerun `retrieval-eval/run.mjs --freeze` when it moves
+  cases into passing, or changes catalog.json or the embedded text (Phase 2
+  does), and say so in the commit.
 - **Not in this pass:** mid-generation context exhaustion, and persisting the
   embedding cache (both open from the first pass).
