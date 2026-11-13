@@ -78,6 +78,9 @@ export async function loadVariant(name) {
     turnsFor: (conversation) => mod.branchForReview(conversation, new Set()).turns,
     buildReviewRequest: mod.buildReviewRequest,
     filterOps: mod.filterOps,
+    // The daemon's own ask-filter-repair round (the context rule's repair),
+    // so the bench scores what a review really keeps.
+    runReview: mod.runReview,
   }
 }
 
@@ -126,19 +129,40 @@ export async function runCase(variant, c, callModel, { think = 'off', thinkBudge
   let answer = null
   let error = null
   let tokens = null
-  try {
-    const r = await callModel(body)
-    answer = r.answer
-    tokens = r.tokens ?? null
-  } catch (err) {
-    error = err.message
-  }
   // The turns the reviewer was shown are what a quote may cite (v2, D36); v1 ignores them.
-  const filtered = variant.filterOps(answer, { userMemories: world.userMemories, projectMemories: world.projectMemories, project: world.project, turns })
+  const filterCtx = { userMemories: world.userMemories, projectMemories: world.projectMemories, project: world.project, turns }
+  let filtered = []
+  let repaired = 0
+  if (variant.runReview) {
+    // v2: every model answer (the first, and a repair's) counts as raw.
+    const answers = []
+    try {
+      const r = await variant.runReview(async (b) => {
+        const one = await callModel(b)
+        tokens = (tokens ?? 0) + (one.tokens ?? 0)
+        answers.push(one.answer)
+        return one.answer
+      }, body, filterCtx)
+      filtered = r.ops
+      repaired = r.repaired
+    } catch (err) {
+      error = err.message
+    }
+    answer = { ops: answers.flatMap((a) => (Array.isArray(a?.ops) ? a.ops : [])) }
+  } else {
+    try {
+      const r = await callModel(body)
+      answer = r.answer
+      tokens = r.tokens ?? null
+    } catch (err) {
+      error = err.message
+    }
+    filtered = variant.filterOps(answer, filterCtx)
+  }
   const rawOps = opsFromRaw(answer)
   const keptOps = opsFromFiltered(filtered)
   return {
-    caseId: c.id, group: c.group, run: runIndex, error, ms: Date.now() - started, tokens,
+    caseId: c.id, group: c.group, run: runIndex, error, ms: Date.now() - started, tokens, repaired,
     raw: scoreCase(c, rawOps), filtered: scoreCase(c, keptOps),
     rawOps, keptOps,
   }

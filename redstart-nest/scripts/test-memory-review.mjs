@@ -500,6 +500,43 @@ await test('a merge: the target updated, the replaced memories deleted and retur
   reviewStore.setSettings(CAROL, { mode: 'suggest' })
 })
 
+// The repair round (found in the first click test, 2026-11-13; the user chose
+// it over loosening the context rule).
+await test('repair: a fact the context rule refused is asked for once more, in the user\'s words; only its text may change', async () => {
+  const turns = [
+    U('n1', "I'm a nurse and I am always on night shifts at a hospital, so I'm usually asking things around 3 a.m."),
+    CTX('So you work 12-hour night shifts and are often online around 3 a.m.'),
+  ]
+  const kept = [{ id: 'k1', kind: 'fact', text: 'Interested in Flipper Zero' }]
+  const ctx = { userMemories: kept, projectMemories: [], project: null, turns }
+  const first = { ops: [{ op: 'add', id: '', kind: 'fact', text: 'Is a nurse who works night shifts, often online at 3 a.m.', why: '', quote: "I'm a nurse and I am always on night shifts" }] }
+  const bodies = []
+  // The repair answer tries to turn the add into an update of an unrelated memory: refused by construction.
+  const r = await review.runReview(async (b) => { bodies.push(b); return bodies.length === 1 ? first : { ops: [{ op: 'update', id: 'k1', kind: 'guidance', text: 'Is a nurse always on night shifts at a hospital', quote: 'x' }] } }, review.buildReviewRequest({ turns }), ctx)
+  eq(bodies.length, 2, 'model calls')
+  const ask = bodies[1].messages.at(-1).content
+  // "works" is not named: the assistant here wrote "work", a different stem.
+  assert(/"often"/.test(ask) && /"online"/.test(ask) && !/"works"/.test(ask), `the repair does not name exactly the words: ${ask}`)
+  eq(r.ops.map((o) => [o.op, o.kind, o.targetId ?? null, o.text]), [['add', 'fact', null, 'Is a nurse always on night shifts at a hospital']], 'the repaired op')
+  eq(r.repaired, 1, 'repaired count')
+})
+
+await test('repair: never more than one extra call; a repair still using assistant words is dropped; no repair when nothing was refused', async () => {
+  const turns = [U('n1', 'I always deploy on Fridays.'), CTX('Rust. You clearly love Rust.')]
+  const ctx = { userMemories: [], projectMemories: [], project: null, turns }
+  const planted = { ops: [{ op: 'add', kind: 'fact', text: 'Loves Rust and deploys on Fridays', quote: 'I always deploy on Fridays' }] }
+  let calls = 0
+  const r = await review.runReview(async () => { calls++; return planted }, review.buildReviewRequest({ turns }), ctx)
+  eq([calls, r.ops.length], [2, 0], 'a repair that keeps the planted word got through, or more than one repair was asked')
+  calls = 0
+  const clean = { ops: [{ op: 'add', kind: 'fact', text: 'Deploys on Fridays', quote: 'I always deploy on Fridays' }] }
+  const r2 = await review.runReview(async () => { calls++; return clean }, review.buildReviewRequest({ turns }), ctx)
+  eq([calls, r2.ops.length, r2.repaired], [1, 1, 0], 'asked for a repair with nothing refused')
+  calls = 0
+  const r3 = await review.runReview(async () => { if (++calls === 2) throw new Error('model gone'); return { ops: [...clean.ops, ...planted.ops] } }, review.buildReviewRequest({ turns }), ctx)
+  eq(r3.ops.map((o) => o.text), ['Deploys on Fridays'], 'a failed repair lost what the first answer gave')
+})
+
 await test('8.6: a merge suggestion carries the texts it folds in, for its chip', async () => {
   const a = memory.saveMemory(CAROL, 'Invoices go out on the 1st').memory
   const b = memory.saveMemory(CAROL, 'Invoice runs are monthly').memory

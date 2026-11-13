@@ -349,11 +349,16 @@ const stem = (w) => w.slice(0, 5)
  *
  * @returns {boolean} true when the text brings in a word only context said
  */
-export function restsOnContext(text, { userTexts, contextTexts, allowed = [] }) {
+export function restsOnContext(text, ctx) {
+  return contextOnlyWords(text, ctx).length > 0
+}
+
+/** The words of `text` that only the assistant or a tool said (the context rule's evidence). */
+export function contextOnlyWords(text, { userTexts, contextTexts, allowed = [] }) {
   const words = (t) => memory.tokens(t).filter((w) => w.length >= 4 && !FUNCTION_WORDS.has(w))
   const own = new Set([...userTexts, ...allowed].flatMap(words).map(stem))
   const ctx = new Set(contextTexts.flatMap(words).map(stem))
-  return words(text).some((w) => ctx.has(stem(w)) && !own.has(stem(w)))
+  return [...new Set(words(text).filter((w) => ctx.has(stem(w)) && !own.has(stem(w))))]
 }
 
 // Words that say nothing about what a memory claims. The first cut of the
@@ -383,10 +388,12 @@ const FUNCTION_WORDS = new Set([
  *
  * `turns` (branchForReview's) supplies the user messages a quote may come
  * from; `conversation` is accepted instead when turns are not at hand.
+ * `refused`, when given, collects each op the context rule alone threw out,
+ * with the words that did it, for one repair round (runReview).
  *
  * @returns {{ op, text, kind?, why?, scope, projectId?, targetId?, previousText?, replaces?, quote }[]}
  */
-export function filterOps(answer, { userMemories = [], projectMemories = [], project = null, isDismissed = () => false, turns = null, conversation = null } = {}) {
+export function filterOps(answer, { userMemories = [], projectMemories = [], project = null, isDismissed = () => false, turns = null, conversation = null, refused = null } = {}) {
   const ops = Array.isArray(answer?.ops) ? answer.ops : []
   const branchTurns = turns ?? (conversation ? branchForReview(conversation, new Set()).turns : [])
   const userTexts = branchTurns.filter((t) => t.role === 'user').map((t) => t.text)
@@ -430,7 +437,13 @@ export function filterOps(answer, { userMemories = [], projectMemories = [], pro
     if (remembered.has(lower) || seen.has(lower) || isDismissed(norm.text)) continue
     const quote = citedQuote(raw.quote, userTexts, `${norm.text} ${why}`)
     if (!quote) continue
-    if (kind !== 'guidance' && restsOnContext(norm.text, { userTexts, contextTexts, allowed: ownWords })) continue
+    if (kind !== 'guidance') {
+      const only = contextOnlyWords(norm.text, { userTexts, contextTexts, allowed: ownWords })
+      if (only.length) {
+        refused?.push({ op: raw, words: only })
+        continue
+      }
+    }
     const extra = { kind, ...(why ? { why } : {}), quote }
 
     if (raw.op === 'update') {
@@ -461,6 +474,80 @@ export function filterOps(answer, { userMemories = [], projectMemories = [], pro
     out.push({ op: 'add', text: norm.text, scope, ...scoped(scope), ...extra })
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// One review, with one repair round for the context rule
+// ---------------------------------------------------------------------------
+// The first click test (2026-11-13): Ornith proposed "Is a nurse who works
+// 12-hour night shifts ... often online around 3 a.m.", quoting the user
+// correctly, and the context rule threw it out for "works", "often" and
+// "online", words of the assistant's own summary. Telling the reviewer to use
+// the user's words did not help (0 of 4 replays). The user chose a repair
+// round over loosening the rule: when the rule alone refused something, the
+// model is asked once more, told which words it may not use. The rule stays
+// absolute: the repaired answer goes through the same filter. One extra model
+// call, only when the rule tripped.
+
+/** The follow-up request that asks for refused ops in the user's words. */
+export function buildRepairRequest(body, answer, refused) {
+  const lines = refused.map((r, i) => `${i + 1}. "${oneLine(String(r.op?.text ?? ''))}": only the assistant or a tool said ${r.words.map((w) => `"${w}"`).join(', ')}`)
+  return {
+    ...body,
+    messages: [
+      ...body.messages,
+      { role: 'assistant', content: JSON.stringify(answer ?? { ops: [] }) },
+      {
+        role: 'user',
+        content: [
+          'These were thrown away. A fact or a state must be written with the user\'s own words, and each of these uses words that only the assistant or a tool said:',
+          ...lines,
+          'Write each one again with words from the user\'s messages, dropping any detail the user did not give. Only its text changes. Answer with JSON only: {"ops": [...]}, the same ops in the same order, each with its new text ("" to leave one out).',
+        ].join('\n'),
+      },
+    ],
+  }
+}
+
+const opKey = (op) => `${op.op}:${op.targetId ?? ''}:${op.text.toLowerCase()}`
+
+/**
+ * Ask, filter, and repair once if the context rule refused anything.
+ * `call(body)` resolves to the parsed answer (and may throw: the first call's
+ * error is the caller's; a failed repair keeps what the first answer gave).
+ *
+ * @returns {Promise<{ ops: object[], answers: object[], repaired: number }>}
+ *   `answers` holds the first answer and, if one was asked for, the repair's.
+ */
+export async function runReview(call, body, filterCtx) {
+  const refused = []
+  const first = await call(body)
+  const ops = filterOps(first, { ...filterCtx, refused })
+  if (refused.length === 0 || ops.length >= MAX_OPS) return { ops, answers: [first], repaired: 0 }
+  let second
+  try {
+    second = await call(buildRepairRequest(body, first, refused))
+  } catch {
+    return { ops, answers: [first], repaired: 0 }
+  }
+  // Only the TEXT is taken from the repair, matched to the refused op by
+  // position; op, id, kind, quote and replaces stay the original's. Asked to
+  // "keep its op and id", Ornith still turned an add into an update of an
+  // unrelated kept memory in 2 of 4 replays (the nurse fact would have
+  // overwritten "Interested in Flipper Zero ..."), so this is code, not a
+  // request.
+  const rewritten = Array.isArray(second?.ops) ? second.ops : []
+  const retried = { ops: refused.map((r, i) => ({ ...r.op, text: typeof rewritten[i]?.text === 'string' ? rewritten[i].text : '' })) }
+  const have = new Set(ops.map(opKey))
+  let repaired = 0
+  for (const op of filterOps(retried, filterCtx)) {
+    if (ops.length >= MAX_OPS) break
+    if (have.has(opKey(op))) continue
+    have.add(opKey(op))
+    ops.push(op)
+    repaired++
+  }
+  return { ops, answers: [first, second], repaired }
 }
 
 // ---------------------------------------------------------------------------
@@ -543,18 +630,18 @@ export async function reviewConversation({ account, conversationId, config, now 
   running.add(key)
   const started = Date.now()
   try {
-    let answer
+    let ops
+    let repaired = 0
     try {
-      answer = await callModel(buildReviewRequest({ turns, userMemories, projectMemories, project, model, now, think }))
+      ({ ops, repaired } = await runReview(callModel, buildReviewRequest({ turns, userMemories, projectMemories, project, model, now, think }), {
+        userMemories, projectMemories, project, turns,
+        isDismissed: (text) => store.isDismissed(account, text),
+      }))
     } catch (err) {
       logEvent('memory', 'review_failed', { reason: err.message })
       // Not marked reviewed: the next trigger tries these messages again.
       return { status: 'failed', mode, error: err.message }
     }
-    const ops = filterOps(answer, {
-      userMemories, projectMemories, project, turns,
-      isDismissed: (text) => store.isDismissed(account, text),
-    })
     store.markReviewed(account, conversationId, turns.filter((t) => t.role === 'user' && t.fresh).map((t) => t.id))
 
     const web = readTheWebRecently({ account, conversationId }, now)
@@ -563,7 +650,7 @@ export async function reviewConversation({ account, conversationId, config, now 
     const suggestions = toSuggest.length ? store.addSuggestions(account, toSuggest, { conversationId, now }) : []
 
     if (mode === 'suggest') {
-      logEvent('memory', 'reviewed', { mode, think, proposed: ops.length, suggested: suggestions.length, durationMs: Date.now() - started })
+      logEvent('memory', 'reviewed', { mode, think, proposed: ops.length, repaired, suggested: suggestions.length, durationMs: Date.now() - started })
       return { status: 'done', mode, suggestions }
     }
 
@@ -572,7 +659,7 @@ export async function reviewConversation({ account, conversationId, config, now 
       const r = applyOp(account, op, { conversationId, via: 'review' })
       if (r) saved.push(r)
     }
-    logEvent('memory', 'reviewed', { mode, think, proposed: ops.length, saved: saved.length, suggested: suggestions.length, web, durationMs: Date.now() - started })
+    logEvent('memory', 'reviewed', { mode, think, proposed: ops.length, repaired, saved: saved.length, suggested: suggestions.length, web, durationMs: Date.now() - started })
     return { status: 'done', mode, saved, suggestions }
   } finally {
     running.delete(key)
