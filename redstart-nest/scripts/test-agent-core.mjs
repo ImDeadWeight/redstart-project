@@ -494,6 +494,10 @@ await test('parseAskArguments, list form: both forms, duplicates, limits, item e
   assert(!parseAskArguments('{"questions": "A?"}').ok, 'a string list accepted')
   const bad = parseAskArguments('{"questions": [{"question": "A?"}, {"question": "B?", "options": ["x"]}]}')
   assert(!bad.ok && bad.error.includes('questions[2]: '), `the item is not named: ${bad.error}`)
+  // Headers (D44): trimmed, cut, dropped when empty or not a string, and only in the list form.
+  eq(parseAskArguments(JSON.stringify({ questions: [{ header: '  Level  ', question: 'A?' }, { header: 7, question: 'B?' }, { header: 'x'.repeat(40), question: 'C?' }] }))
+    .request?.questions.map((q) => q.header), ['Level', undefined, 'x'.repeat(24)], 'headers')
+  eq(parseAskArguments('{"header": "Level", "question": "A?"}').request, { questions: [{ question: 'A?', multiSelect: false }] }, 'no header on the flat form')
   // One question in either form reads back exactly as it always has.
   eq(formatAskAnswer({ chosen: ['x'] }, { questions: [{ question: 'Q', multiSelect: false }] }), 'The user chose: x', 'one question, flat answer')
   eq(formatAskAnswer({ answers: [{ text: 'y' }] }, { questions: [{ question: 'Q', multiSelect: false }] }), 'The user answered: y', 'one question, list answer')

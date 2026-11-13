@@ -115,6 +115,8 @@ export interface AgentStoreCallbacks<A = unknown> {
 
 /** One question of an ask_user call. */
 export interface AskQuestion {
+	/** The tab label on a several-question card (D44). Absent: "Question N". */
+	header?: string;
 	question: string;
 	/** 2 to 4, distinct. Absent: a free-text question. */
 	options?: string[];

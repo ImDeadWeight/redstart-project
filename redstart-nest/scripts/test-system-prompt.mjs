@@ -289,6 +289,9 @@ await test('🔍 ask_user gets its when-to-ask line only when the request carrie
   // §4, 1.1). Without the tool, the line would describe a tool it lacks.
   const withTool = composePrompt({ config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query', 'ask_user'], now: NOW })
   assert(withTool.prompt.includes('Call ask_user only when'), 'no when-to-ask line with ask_user offered')
+  // D44: a preference only the user can state, or being asked to ask, also counts; the floor stays.
+  assert(withTool.prompt.includes('or the user asked you to ask'), 'the widened when-to-ask line was lost')
+  assert(withTool.prompt.includes('Do not use it to ask permission'), 'the do-not list was lost')
   assert(withTool.prompt.includes('anything a tool can find out'), 'the "try the tool first" rule is missing')
   const without = composePrompt({ config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query'], now: NOW })
   assert(!without.prompt.includes('ask_user'), 'named ask_user to a request that does not carry it')

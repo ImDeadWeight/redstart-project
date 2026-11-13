@@ -279,8 +279,12 @@ function buildToolPolicy(config, hasTools, toolNames) {
   // ask_user (agent-runtime plan §4, 1.1). What the schema cannot say is WHEN.
   // A small model given a way to ask asks instead of retrying a failed tool,
   // and asks for permission it already has; both cost the user a round trip.
+  // Widened 2026-11-13 (D44): a preference only the user can state also counts,
+  // and so does being asked to ask. Seen live: told "you can use ask_user"
+  // for a quiz, a model argued itself out of it under the ambiguity-only rule,
+  // then asked anyway, and the answers (level, focus) shaped the result.
   if (has('ask_user')) {
-    parts.push('Call ask_user only when the request can be read two ways that lead to different work and nothing in the conversation settles it. Do not use it to ask permission, to confirm a plan you can simply carry out, or for anything a tool can find out — try the tool first.')
+    parts.push('Call ask_user only when the answer would change what you produce: the request can be read two ways that lead to different work, a choice only the user can make is open (such as level, scope or format) and a sensible default could well be wrong, or the user asked you to ask. Put everything you need into one call. Do not use it to ask permission, to confirm a plan you can simply carry out, or for anything a tool can find out — try the tool first.')
   }
 
   // update_plan (plan §4, 1.2). When a plan is worth making, so a one-line

@@ -25,7 +25,8 @@ a PR, then the tool-retrieval cache fix on its own branch, then Phase 4
 
 **D43 landed (2026-11-13, beside Phase 8):** ask_user can carry up to 4
 questions in one call, on one card. Not measured, not clicked; revert if
-the bench shows a loss. See "D43" below.
+the bench shows a loss. See "D43" below. **D44** the same day: "when to
+ask" widened (preferences, being asked to ask) and the card uses tabs.
 
 **Handoff for a fresh session (written 2026-11-13).** Branch
 `feat/agent-core`, head b527c2c, clean. **Pushed only to 10ea361**: 17
@@ -1126,9 +1127,39 @@ One commit, so a revert is clean if it does not hold up.
 - **Never clicked.** The card is mounted in a browser test; nobody has
   answered a several-question card in the running app (build the chat page
   first: `npm run build:chat`).
-- Option labels shared by two questions on one card are fine for the inputs
-  (each question is its own radio group) but are ambiguous to a screen
-  reader's role lookup, which uses the option text only.
+- ~~Option labels shared by two questions on one card~~: moot since D44,
+  one question's options are on screen at a time.
+
+### D44 — when to ask widened; several questions as tabs (2026-11-13)
+
+From the user's first live several-question call (a 4-question JS quiz on
+Ornith, the user saying "you can use the ask_user tool"). The model's
+reasoning argued against asking under the ambiguity-only rule, then asked
+anyway (level, focus, TS relevance), and the answers shaped the quiz. The
+stacked card took a large part of the screen.
+
+- **When to ask** (tool description and the system prompt line): the answer
+  would change what is produced, which covers two readings, a choice only
+  the user can make (level, scope, format) where a sensible default could
+  well be wrong, and being asked to ask. The do-not list (permission,
+  confirming a plan, what a tool can find out) is unchanged. Risk: more
+  unneeded questions on the p1 "should not ask" tasks
+  (`p1-simple-stays-simple` and kin); that is the number to watch in the
+  owed D43 run.
+- **Tabs:** several questions show one at a time under a tab bar (a real
+  tablist: arrows, Home, End). Each tab is titled by the question's new
+  optional `header` (list form only, cut to 24 characters, dropped quietly
+  when bad) or "Question N", and shows a check once answered. Enter or Next
+  goes to the next tab; Enter on the last sends. "n of m answered" under it.
+  One question: no tabs, no Next, as before.
+- **Seen in the same call, not changed:** the model sent `question` as a
+  lead-in ("To make a useful quiz, I need to know...") beside `questions`.
+  The parser made it question 1, and the user's free-text answer to it ("I
+  am only at strings") was the most useful one, so it stays a question.
+
+**Flaky, not this change:** `tests/unit/memory-review-store.test.ts` (two
+timer tests) failed once in a full `--project=unit --project=client` run
+and passed alone and in the run before. Watch it.
 
 ## Phase 8 — memory that learns from the work (started 2026-11-12)
 

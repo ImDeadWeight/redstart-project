@@ -58,7 +58,7 @@ const QUESTION_PROPERTIES = Object.freeze({
 export const ASK_USER_DEFINITION = Object.freeze({
 	name: ASK_USER_TOOL,
 	description:
-		'Ask the user a question and wait for the answer. Use it only when the request can be read two ways that lead to different work, and you cannot tell which from the conversation or from a tool. Not for permission, and not for anything a tool can find out. Offer 2 to 4 short options when the answers are predictable; the user can always type their own. If several separate points are unclear, ask them together in one call with "questions" (up to 4) instead of one call after another.',
+		'Ask the user and wait for the answer. Use it when the answer would change what you produce: the request can be read two ways that lead to different work, a choice only the user can make is open (such as level, scope or format) and a sensible default could well be wrong, or the user asked you to ask. Not for permission, and not for anything the conversation or a tool already tells you. Offer 2 to 4 short options when the answers are predictable; the user can always type their own. If you need several things, ask them together in one call with "questions" (up to 4, each with a short "header") instead of one call after another.',
 	inputSchema: {
 		type: 'object',
 		properties: {
@@ -71,13 +71,22 @@ export const ASK_USER_DEFINITION = Object.freeze({
 					'Optional, instead of "question": up to 4 questions to ask together, each with its own options',
 				items: {
 					type: 'object',
-					properties: QUESTION_PROPERTIES,
+					properties: {
+						header: {
+							type: 'string',
+							description: 'Optional: a one to three word label for this question, such as "Level"'
+						},
+						...QUESTION_PROPERTIES
+					},
 					required: ['question']
 				}
 			}
 		}
 	}
 });
+
+/** A tab label longer than this is cut (the card's tab bar has to fit a phone). */
+export const MAX_HEADER_CHARS = 24;
 
 const USAGE =
 	'ask_user takes {"question": "...", "options": ["...", "..."] (optional, 2 to 4), "multi_select": false (optional)}, or {"questions": [ ...up to 4 objects of that shape... ]}.';
@@ -119,7 +128,19 @@ function parseQuestion(item, where) {
 	if (item.multi_select !== undefined && typeof item.multi_select !== 'boolean') {
 		return { ok: false, error: `Error: ${where}"multi_select" must be true or false. ${USAGE}` };
 	}
-	return { ok: true, question: { question, ...(options ? { options } : {}), multiSelect: item.multi_select === true } };
+	// A label is a nicety: a wrong type or an empty one is dropped, not an
+	// error the model has to spend a turn on. Only the list form shows it.
+	const header =
+		typeof item.header === 'string' ? item.header.trim().replace(/\s+/g, ' ').slice(0, MAX_HEADER_CHARS).trim() : '';
+	return {
+		ok: true,
+		question: {
+			...(header && where ? { header } : {}),
+			question,
+			...(options ? { options } : {}),
+			multiSelect: item.multi_select === true
+		}
+	};
 }
 
 /**

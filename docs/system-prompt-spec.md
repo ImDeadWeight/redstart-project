@@ -219,7 +219,8 @@ The `tool_policy` block carries only what schemas cannot express:
 - confirmation requirements (*confirm before creating or overwriting*)
 - failure handling (*report tool errors verbatim; do not retry destructive calls*)
 - when to reach for a tool at all (*use `run_python` for arithmetic*; *call `ask_user`
-  only when two readings lead to different work, never for permission or for what a
+  only when the answer changes what is produced (two readings, a preference only the
+  user can state, or the user asked to be asked), never for permission or for what a
   tool can find out*; *use `update_plan` only for three or more distinct steps*). Each line
   is emitted only when the request carries the tool.
 

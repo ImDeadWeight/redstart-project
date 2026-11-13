@@ -74,39 +74,82 @@ describe('ask_user question card', () => {
 		await expect.element(screen.getByRole('radio', { name: 'x' })).toBeDisabled();
 	});
 
-	it('several questions (D43): one block each, one Send; a blank one goes back as null; Enter moves on', async () => {
+	it('one question has no tabs and no Next', async () => {
+		const screen = await render(ChatMessageActionCardQuestion, {
+			request: { questions: [{ question: 'Which?', options: ['x', 'y'], multiSelect: false }] },
+			onAnswer: vi.fn()
+		});
+		expect(screen.container.querySelector('[role="tablist"]')).toBeNull();
+		expect(screen.container.textContent).not.toContain('Next');
+		expect(screen.container.textContent).not.toContain('answered');
+	});
+
+	it('several questions (D43, D44): tabs of one panel; picks survive switching; blanks go back as null', async () => {
 		const onAnswer = vi.fn();
 		const screen = await render(ChatMessageActionCardQuestion, {
 			request: {
 				questions: [
-					{ question: 'Which format?', options: ['CSV', 'JSON'], multiSelect: false },
+					{ header: 'Format', question: 'Which format?', options: ['CSV', 'JSON'], multiSelect: false },
 					{ question: 'Which columns?', options: ['id', 'name', 'date'], multiSelect: true },
-					{ question: 'Anything else?', multiSelect: false }
+					{ header: 'Notes', question: 'Anything else?', multiSelect: false }
 				]
 			},
 			onAnswer
 		});
+		// The tabs carry the header, or "Question N" without one; one panel shows.
+		await expect.element(screen.getByRole('tab', { name: 'Format' })).toHaveAttribute('aria-selected', 'true');
+		await expect.element(screen.getByRole('tab', { name: 'Question 2' })).toBeInTheDocument();
 		await expect.element(screen.getByText('Which format?')).toBeInTheDocument();
-		await expect.element(screen.getByText('Anything else?')).toBeInTheDocument();
+		expect(screen.container.textContent).not.toContain('Which columns?');
 		const send = screen.getByRole('button', { name: 'Send' });
 		await expect.element(send).toBeDisabled();
 
-		// Same option names in two questions would collide; these are distinct,
-		// and each question's radios are their own group.
 		await screen.getByRole('radio', { name: 'JSON' }).click();
-		await screen.getByRole('checkbox', { name: 'date' }).click();
-		await screen.getByRole('checkbox', { name: 'id' }).click();
-		await expect.element(screen.getByRole('radio', { name: 'JSON' })).toBeChecked();
-
-		// Enter in the first field goes to the next, not Send.
-		await userEvent.fill(screen.getByLabelText('Your answer to question 1'), 'pretty-printed');
+		await userEvent.fill(screen.getByLabelText('Your answer'), 'pretty-printed');
+		// Enter goes to the next tab, not Send, and the field there is empty.
 		await userEvent.keyboard('{Enter}');
 		expect(onAnswer).not.toHaveBeenCalled();
-		await expect.element(screen.getByLabelText('Your answer to question 2')).toHaveFocus();
+		await expect.element(screen.getByText('Which columns?')).toBeInTheDocument();
+		await expect.element(screen.getByLabelText('Your answer')).toHaveValue('');
+		await expect.element(screen.getByLabelText('Your answer')).toHaveFocus();
+		await screen.getByRole('checkbox', { name: 'date' }).click();
+		await screen.getByRole('checkbox', { name: 'id' }).click();
+
+		// Back to the first tab: its pick and note are still there; answered tabs say so.
+		await screen.getByRole('tab', { name: /Format/ }).click();
+		await expect.element(screen.getByRole('radio', { name: 'JSON' })).toBeChecked();
+		await expect.element(screen.getByLabelText('Your answer')).toHaveValue('pretty-printed');
+		await expect.element(screen.getByRole('tab', { name: 'Format (answered)' })).toBeInTheDocument();
+		await expect.element(screen.getByText('2 of 3 answered; blanks are left to the assistant')).toBeInTheDocument();
+
+		// Next walks on; the last tab has none.
+		await screen.getByRole('button', { name: 'Next' }).click();
+		await screen.getByRole('button', { name: 'Next' }).click();
+		await expect.element(screen.getByText('Anything else?')).toBeInTheDocument();
+		expect(screen.container.textContent).not.toContain('Next');
 
 		await send.click();
 		expect(onAnswer).toHaveBeenCalledWith({
 			answers: [{ chosen: ['JSON'], text: 'pretty-printed' }, { chosen: ['date', 'id'] }, null]
 		});
+	});
+
+	it('arrow keys move between tabs', async () => {
+		const screen = await render(ChatMessageActionCardQuestion, {
+			request: {
+				questions: [
+					{ question: 'A?', multiSelect: false },
+					{ question: 'B?', multiSelect: false }
+				]
+			},
+			onAnswer: vi.fn()
+		});
+		await screen.getByRole('tab', { name: 'Question 1' }).click();
+		(document.getElementById(screen.getByRole('tab', { name: 'Question 1' }).element().id) as HTMLElement).focus();
+		await userEvent.keyboard('{ArrowRight}');
+		await expect.element(screen.getByRole('tab', { name: 'Question 2' })).toHaveFocus();
+		await expect.element(screen.getByText('B?')).toBeInTheDocument();
+		await userEvent.keyboard('{ArrowRight}');
+		await expect.element(screen.getByRole('tab', { name: 'Question 1' })).toHaveFocus();
 	});
 });

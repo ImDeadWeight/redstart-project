@@ -313,6 +313,12 @@ gets them in the same commit as the browser.
   before. Accepted risk: a nested list of objects is the shape this bullet
   warned against. Kept only if the bench shows no loss on a small model;
   otherwise revert (it is one commit) or gate it per profile.
+- **Amended again 2026-11-13 (D44, the user's call):** "when to ask" widened
+  from "two readings" to "the answer would change what you produce" (two
+  readings, a preference only the user can state where a default could well
+  be wrong, or the user asked to be asked); the do-not list unchanged. The
+  several-question card shows tabs, titled by an optional per-question
+  `header`, instead of a stack.
 - Result to the model: `The user answered: <text>` or, for options,
   `The user chose: <label>[, <label>]`. On dismissal: `The user did not answer.
   Continue with your best judgement and say what you assumed.`
