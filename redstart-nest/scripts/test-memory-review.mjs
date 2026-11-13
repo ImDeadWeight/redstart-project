@@ -237,6 +237,9 @@ await test('filter: forget and replaces name only memories that were shown, in t
   const f = run({ op: 'forget', id: 'm-1', quote: 'billing service in TypeScript' })
   eq([f[0]?.op, f[0]?.targetId, f[0]?.text, f[0]?.scope], ['forget', 'm-1', 'Works on billing in Go', 'user'], 'a forget carries the memory it forgets')
   assert(run({ op: 'forget', id: 'nope', quote: 'billing service in TypeScript' }).length === 0, 'forget of an unknown id')
+  // The request lists memories as "- [p1] ...", and the 35B copied the brackets.
+  eq(run({ op: 'forget', id: ' [m-1] ', quote: 'billing service in TypeScript' })[0]?.targetId, 'm-1', 'a bracketed id')
+  eq(run({ op: 'update', id: '[m-1]', replaces: ['[m-2]'], text: 'Works on billing in TypeScript', quote: 'billing service in TypeScript' })[0]?.replaces, ['m-2'], 'bracketed replaces')
   // A forget needs a real user span but no shared word ("it's all done now"):
   // it is only ever a suggestion (D38). An uncited forget is still refused.
   assert(run({ op: 'forget', id: 'p-1', quote: 'never on a Monday' }).length === 1, 'a forget citing an unrelated user span was refused')

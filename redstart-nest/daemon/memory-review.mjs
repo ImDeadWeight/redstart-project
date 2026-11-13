@@ -307,6 +307,15 @@ export function citedQuote(quote, userTexts, saying) {
   return quote.trim()
 }
 
+/**
+ * An id as the model wrote it, as the request shows it: "[p1]" is p1. The
+ * 35B copied the brackets the kept memories are listed with ("- [p1] ..."),
+ * and a right update of p1 was dropped as naming no shown memory.
+ */
+export function cleanId(id) {
+  return typeof id === 'string' ? id.trim().replace(/^\[\s*(.*?)\s*\]$/, '$1') : ''
+}
+
 /** A word's stem for the context rule: its first five letters, which joins "public" and "publicly". */
 const stem = (w) => w.slice(0, 5)
 
@@ -384,7 +393,7 @@ export function filterOps(answer, { userMemories = [], projectMemories = [], pro
     if (!raw || typeof raw !== 'object') continue
 
     if (raw.op === 'forget') {
-      const target = typeof raw.id === 'string' ? known.get(raw.id) : null
+      const target = known.get(cleanId(raw.id)) ?? null
       if (!target || (target.scope === 'project' && !project)) continue
       if (seen.has(`forget:${target.m.id}`)) continue
       const quote = citedQuote(raw.quote, userTexts, null)
@@ -409,12 +418,12 @@ export function filterOps(answer, { userMemories = [], projectMemories = [], pro
     const extra = { kind, ...(why ? { why } : {}), quote }
 
     if (raw.op === 'update') {
-      const target = typeof raw.id === 'string' ? known.get(raw.id) : null
+      const target = known.get(cleanId(raw.id)) ?? null
       if (!target || (target.scope === 'project' && !project)) continue
       let replaces = []
       if (raw.replaces !== undefined) {
         if (!Array.isArray(raw.replaces)) continue
-        replaces = [...new Set(raw.replaces.filter((x) => typeof x === 'string' && x !== target.m.id))]
+        replaces = [...new Set(raw.replaces.map(cleanId).filter((x) => x && x !== target.m.id))]
         if (replaces.some((id) => known.get(id)?.scope !== target.scope)) continue
       }
       seen.add(lower)
