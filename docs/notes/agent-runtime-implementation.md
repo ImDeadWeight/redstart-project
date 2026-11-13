@@ -1346,8 +1346,9 @@ is decided by the bench.
 3. The 35B `--think on --think-budget 8192` (8.3), which may also settle
    acceptance's one open item (35B facts 3/5 with think off).
 4. A background task ending with memory on: a suggestion appears (8.5).
-Then the acceptance check (plan section 9), a PR, the tool-retrieval cache
-fix on its own branch, Phase 4.
+Then the acceptance check (plan section 9). Recommended next (the user
+asked; not yet confirmed): a PR, the tool-retrieval cache fix on its own
+branch, then Phase 4.
 
 ---
 
