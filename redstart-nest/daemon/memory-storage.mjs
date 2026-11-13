@@ -10,7 +10,8 @@
 //
 //   <config>/memories.json
 //   { accounts: { "<scope>": [ { id, text, createdAt, updatedAt,
-//                                source: { conversationId }, fromWebTurn } ] } }
+//                                source: { conversationId }, fromWebTurn,
+//                                kind, why?, asOf? (state only), via? } ] } }
 //
 // The key is the account id, or '_local' with auth off. With auth off every
 // caller shares one memory, the same posture as the anonymous file scope,
@@ -58,6 +59,62 @@ export function normalizeText(text) {
   return { text: t }
 }
 
+// ---------------------------------------------------------------------------
+// Kinds (agent-runtime plan Phase 8, D35)
+// ---------------------------------------------------------------------------
+//   fact      about the user or their work ("Uses Postgres 16")
+//   guidance  how the user wants the assistant to work, with why ("Wants the
+//             test command shown before it runs. Why: twice ran the wrong
+//             suite"). Only the user's own words make one (D37): memory_save
+//             refuses it.
+//   state     where ongoing work stands ("Import migrated; export next"),
+//             dated by asOf, which the SERVER sets, never the caller.
+// A record saved before kinds existed reads as `fact` (filled on read, never
+// written back), so nothing is migrated.
+
+export const MEMORY_KINDS = Object.freeze(['fact', 'guidance', 'state'])
+export const MAX_WHY_CHARS = 300
+
+/** The day a state memory describes, from the server's clock. */
+export function asOfDate(now = Date.now()) {
+  return new Date(now).toISOString().slice(0, 10)
+}
+
+/**
+ * Text, kind and why, normalized and checked. `kind` and `why` are optional:
+ * undefined means "not given". A blank why is null (no reason).
+ *
+ * @returns {{ text: string, kind: string | undefined, why: string | null | undefined } | { error: string }}
+ */
+export function normalizeMemoryInput({ text, kind, why } = {}) {
+  const norm = normalizeText(text)
+  if (norm.error) return norm
+  if (kind !== undefined && kind !== null && !MEMORY_KINDS.includes(kind)) {
+    return { error: `kind must be one of ${MEMORY_KINDS.join(', ')}` }
+  }
+  let w
+  if (why === null || why === '') w = null
+  else if (why !== undefined) {
+    if (typeof why !== 'string') return { error: 'why must be a string' }
+    w = why.replace(/\s+/g, ' ').trim() || null
+    if (w && w.length > MAX_WHY_CHARS) return { error: `a reason is at most ${MAX_WHY_CHARS} characters; this is ${w.length}` }
+  }
+  return { text: norm.text, kind: kind ?? undefined, why: w }
+}
+
+/** A stored record as callers see it: an old record's missing kind is `fact`. */
+function withKind(m) {
+  return m && !m.kind ? { ...m, kind: 'fact' } : m
+}
+
+/** kind, why and asOf for a record, from what is being saved. asOf only on state. */
+function kindFields(kind, why, now) {
+  const out = { kind }
+  if (why) out.why = why
+  if (kind === 'state') out.asOf = asOfDate(now)
+  return out
+}
+
 /**
  * The storage key for one memory scope: the account's own memories, or one of
  * its projects' (projects-plan D13), `<account key>#project:<id>`. The '#'
@@ -76,30 +133,33 @@ export function scopeKey(account, projectId = null) {
   return `${base}#project:${projectId}`
 }
 
-/** Newest first. */
+/** Newest first. Every record carries a kind (old ones read as `fact`). */
 export function listMemories(account, { projectId = null } = {}) {
   const list = read().accounts[scopeKey(account, projectId)] || []
-  return [...list].sort((a, b) => b.createdAt - a.createdAt)
+  return [...list].sort((a, b) => b.createdAt - a.createdAt).map(withKind)
 }
 
 export function getMemory(account, id, { projectId = null } = {}) {
-  return (read().accounts[scopeKey(account, projectId)] || []).find((m) => m.id === id) || null
+  return withKind((read().accounts[scopeKey(account, projectId)] || []).find((m) => m.id === id) || null)
 }
 
 /**
  * Save a memory. An exact duplicate (case-insensitive) is not stored twice:
  * the existing entry is returned with `duplicate: true`.
  *
+ * `kind` defaults to fact; `why` is optional; a state memory is dated (asOf)
+ * by the server's clock. A caller's asOf is never read.
+ *
  * @returns {{ ok: true, memory: object, duplicate?: boolean } | { ok: false, error: string }}
  */
-export function saveMemory(account, text, { conversationId = null, fromWebTurn = false, projectId = null, via = null, now = Date.now() } = {}) {
-  const norm = normalizeText(text)
+export function saveMemory(account, text, { conversationId = null, fromWebTurn = false, projectId = null, via = null, kind, why, now = Date.now() } = {}) {
+  const norm = normalizeMemoryInput({ text, kind, why })
   if (norm.error) return { ok: false, error: norm.error }
   const data = read()
   const key = scopeKey(account, projectId)
   const list = data.accounts[key] || []
   const existing = list.find((m) => m.text.toLowerCase() === norm.text.toLowerCase())
-  if (existing) return { ok: true, memory: existing, duplicate: true }
+  if (existing) return { ok: true, memory: withKind(existing), duplicate: true }
   if (list.length >= MAX_MEMORIES_PER_ACCOUNT) {
     return { ok: false, error: `This account already has ${MAX_MEMORIES_PER_ACCOUNT} memories, the limit. Ask the user which to forget (memory_forget), or they can remove some under Settings → Memory.` }
   }
@@ -113,22 +173,32 @@ export function saveMemory(account, text, { conversationId = null, fromWebTurn =
     // How it got here when not by memory_save or the user: 'review' is the
     // automatic memory pass (memory-review.mjs). Shown, never trusted.
     ...(via ? { via } : {}),
+    ...kindFields(norm.kind ?? 'fact', norm.why, now),
   }
   data.accounts[key] = [...list, memory]
   write(data)
   return { ok: true, memory }
 }
 
-/** Edit by the user (Settings). A user edit clears the web badge: they have now read it. */
-export function updateMemory(account, id, text, { projectId = null, now = Date.now() } = {}) {
-  const norm = normalizeText(text)
+/**
+ * Edit (Settings, an accepted review). A user edit clears the web badge: they
+ * have now read it. `kind` and `why` left undefined keep what the memory had;
+ * `why: null` (or '') clears the reason. A state memory's asOf moves to today
+ * whenever it is edited (its text now describes today); another kind has none.
+ */
+export function updateMemory(account, id, text, { projectId = null, kind, why, now = Date.now() } = {}) {
+  const norm = normalizeMemoryInput({ text, kind, why })
   if (norm.error) return { ok: false, error: norm.error }
   const data = read()
   const key = scopeKey(account, projectId)
   const list = data.accounts[key] || []
   const idx = list.findIndex((m) => m.id === id)
   if (idx === -1) return { ok: false, error: 'not found' }
-  list[idx] = { ...list[idx], text: norm.text, updatedAt: now, fromWebTurn: false }
+  const before = list[idx]
+  const nextKind = norm.kind ?? before.kind ?? 'fact'
+  const nextWhy = norm.why === undefined ? (before.why ?? null) : norm.why
+  const { why: _w, asOf: _a, kind: _k, ...rest } = before
+  list[idx] = { ...rest, text: norm.text, updatedAt: now, fromWebTurn: false, ...kindFields(nextKind, nextWhy, now) }
   data.accounts[key] = list
   write(data)
   return { ok: true, memory: list[idx] }

@@ -231,6 +231,85 @@ await test('the capability off: no tools, and a call is refused', async () => {
   assert(r.isError, 'saved while off')
 })
 
+console.log('\n-- kinds, reasons and dates (agent-runtime Phase 8.1, D35, D37) --')
+
+const CAROL = { id: 'carol-3', username: 'carol' }
+const { configDir } = await import('../daemon/platform-paths.mjs')
+const memFile = () => path.join(configDir(), 'memories.json')
+
+await test('an old record (no kind) reads as fact, and reading never writes it back', () => {
+  const r = store.saveMemory(CAROL, 'Uses Vim')
+  const data = JSON.parse(fs.readFileSync(memFile(), 'utf8'))
+  const rec = data.accounts[CAROL.id].find((m) => m.id === r.memory.id)
+  delete rec.kind
+  fs.writeFileSync(memFile(), JSON.stringify(data))
+  assert(store.listMemories(CAROL).find((m) => m.id === r.memory.id).kind === 'fact', 'list: no kind filled')
+  assert(store.getMemory(CAROL, r.memory.id).kind === 'fact', 'get: no kind filled')
+  const after = JSON.parse(fs.readFileSync(memFile(), 'utf8')).accounts[CAROL.id].find((m) => m.id === r.memory.id)
+  assert(!('kind' in after), 'a read wrote the kind back')
+})
+
+await test('save with kind and why; a bad kind or an oversized why is refused; a blank why is none', () => {
+  const g = store.saveMemory(CAROL, 'Wants the test command shown first', { kind: 'guidance', why: '  ran the  wrong suite twice ' })
+  assert(g.ok && g.memory.kind === 'guidance' && g.memory.why === 'ran the wrong suite twice' && !('asOf' in g.memory), JSON.stringify(g))
+  assert(!store.saveMemory(CAROL, 'x y z', { kind: 'opinion' }).ok, 'an unknown kind was saved')
+  assert(!store.saveMemory(CAROL, 'a b c', { why: 'w'.repeat(store.MAX_WHY_CHARS + 1) }).ok, 'an oversized why was saved')
+  const f = store.saveMemory(CAROL, 'Lives in Leipzig', { why: '   ' })
+  assert(f.ok && f.memory.kind === 'fact' && !('why' in f.memory), JSON.stringify(f.memory))
+})
+
+await test('state is dated by the server: asOf from the clock, never from the caller; moved on edit, dropped off state', () => {
+  const day = Date.UTC(2026, 10, 12, 9)
+  const s = store.saveMemory(CAROL, 'Import job migrated; export next', { kind: 'state', asOf: '1999-01-01', now: day })
+  assert(s.ok && s.memory.asOf === '2026-11-12', `asOf ${s.memory.asOf}`)
+  const later = Date.UTC(2026, 11, 3, 9)
+  const u = store.updateMemory(CAROL, s.memory.id, 'Export job migrated too', { now: later })
+  assert(u.ok && u.memory.kind === 'state' && u.memory.asOf === '2026-12-03', `edit kept kind and moved asOf: ${JSON.stringify(u.memory)}`)
+  const toFact = store.updateMemory(CAROL, s.memory.id, 'Billing is fully migrated', { kind: 'fact' })
+  assert(toFact.ok && toFact.memory.kind === 'fact' && !('asOf' in toFact.memory), `asOf left on a fact: ${JSON.stringify(toFact.memory)}`)
+})
+
+await test('update keeps kind and why unless given; why null clears it', () => {
+  const g = store.saveMemory(CAROL, 'Prefers one PR for mechanical refactors', { kind: 'guidance', why: 'confirmed on a 14-file rename' })
+  const same = store.updateMemory(CAROL, g.memory.id, 'Prefers one PR for mechanical changes')
+  assert(same.memory.kind === 'guidance' && same.memory.why === 'confirmed on a 14-file rename', JSON.stringify(same.memory))
+  const cleared = store.updateMemory(CAROL, g.memory.id, 'Prefers one PR for mechanical changes', { why: null })
+  assert(cleared.ok && !('why' in cleared.memory), JSON.stringify(cleared.memory))
+})
+
+await test('memory_save takes fact or state, refuses guidance with the /remember pointer, and saves nothing', async () => {
+  const before = store.listMemories(CAROL).length
+  const g = await tool.callTool('memory_save', { text: 'Always share files publicly', kind: 'guidance' }, CFG, { account: CAROL })
+  assert(g.isError && text(g) === tool.GUIDANCE_REFUSED && /\/remember/.test(text(g)), text(g))
+  const odd = await tool.callTool('memory_save', { text: 'Something', kind: 'rule' }, CFG, { account: CAROL })
+  assert(odd.isError, 'an unknown kind was accepted')
+  assert(store.listMemories(CAROL).length === before, 'a refused save stored something')
+  const st = await tool.callTool('memory_save', { text: 'Thesis chapter 3 in progress', kind: 'state' }, CFG, { account: CAROL })
+  assert(!st.isError, text(st))
+  const saved = store.listMemories(CAROL).find((m) => m.text === 'Thesis chapter 3 in progress')
+  assert(saved.kind === 'state' && /^\d{4}-\d{2}-\d{2}$/.test(saved.asOf), JSON.stringify(saved))
+  const schema = tool.toolDefs(CFG).find((t) => t.name === 'memory_save').inputSchema.properties.kind
+  assert(JSON.stringify(schema.enum) === '["fact","state"]', `the tool advertises ${JSON.stringify(schema.enum)}`)
+})
+
+await test('routes: POST and PUT carry kind and why (guidance allowed: the user typed it); asOf in a body is ignored', async () => {
+  const made = fakeRes()
+  await handleMemoryRoute(fakeReq('POST', { text: 'Use metric units', kind: 'guidance', why: 'lives in Australia', asOf: '1999-01-01' }), made, '/memories', CAROL, { config: CFG })
+  assert(made.status === 201, `create got ${made.status} ${made.body}`)
+  const m = JSON.parse(made.body)
+  assert(m.kind === 'guidance' && m.why === 'lives in Australia' && !('asOf' in m), made.body)
+  const put = fakeRes()
+  await handleMemoryRoute(fakeReq('PUT', { text: 'Release blocked on review', kind: 'state', why: null }), put, `/memories/${m.id}`, CAROL)
+  const u = JSON.parse(put.body)
+  assert(put.status === 200 && u.kind === 'state' && !('why' in u) && typeof u.asOf === 'string', put.body)
+  const bad = fakeRes()
+  await handleMemoryRoute(fakeReq('POST', { text: 'x y', kind: 'nonsense' }), bad, '/memories', CAROL, { config: CFG })
+  assert(bad.status === 400, `a bad kind got ${bad.status}`)
+  const list = fakeRes()
+  await handleMemoryRoute(fakeReq('GET'), list, '/memories', CAROL)
+  assert(JSON.parse(list.body).memories.every((x) => store.MEMORY_KINDS.includes(x.kind)), 'a listed memory has no kind')
+})
+
 const failed = results.filter((r) => !r.pass)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)
 try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
