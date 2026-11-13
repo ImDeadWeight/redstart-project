@@ -1021,7 +1021,7 @@ review.
 
 Against the 8.0 v1 baseline (recorded 2026-11-13 at e61b652):
 - corrections, confirmations and state each rise from the baseline on the
-  9B and the 4B (together 8/14 and 3/14 at baseline), and on the 35B fall
+  9B and the 4B (together 7/14 and 3/14 at baseline, think off; first written as 8/14, a misreading of the 9B row), and on the 35B fall
   by at most one case in total. **Amended 2026-11-13 by the user:** as
   first written ("each rise, and together at least half on the 35B") it
   could not be met, since the 35B is already 5/5 on state and 12/14 across

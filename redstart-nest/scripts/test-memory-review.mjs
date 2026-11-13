@@ -165,7 +165,7 @@ await test('request: schema-bound, thinking off, kinds and ages of kept memories
   assert(p.messages[1].content.includes('project "Billing"'), 'project not named')
   // Every field an op is judged on is required: the schema becomes a grammar,
   // and an optional field is one a small model skips (the first v2 run).
-  eq(review.REVIEW_SCHEMA.properties.ops.items.required, ['op', 'kind', 'text', 'why', 'quote'], 'the judged fields are required by the schema')
+  eq(review.REVIEW_SCHEMA.properties.ops.items.required, ['op', 'id', 'kind', 'text', 'why', 'quote'], 'the judged fields are required by the schema')
   eq(review.REVIEW_SCHEMA.properties.ops.items.properties.quote.maxLength, review.MAX_QUOTE_CHARS, 'the quote is capped')
 })
 

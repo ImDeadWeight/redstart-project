@@ -1067,7 +1067,7 @@ is decided by the bench.
   5/5 on state under v1, so state cannot rise. And v2 rows are stricter
   than v1 rows (a v2 op carries a kind, so a wrong kind fails; v1's are
   judged on content only). Proposed reading: the rise is required on the
-  9B and the 4B (8/14 and 3/14 together now), and on the 35B those groups
+  9B and the 4B (7/14 and 3/14 together now; first written as 8/14 in error), and on the 35B those groups
   must not fall beyond one case. **Amended by the user, 2026-11-13** (plan
   section 9, Acceptance).
 - **8.2 The v2 reviewer.** `memory-review.mjs` rewritten per D34, D36 to D39:
