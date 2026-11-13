@@ -104,7 +104,7 @@ export const BUILTIN_TOOL_METADATA = Object.freeze({
   delete_file: { category: 'files', store: S.fileSystem, tags: ['delete', 'remove', 'rm', 'recycle bin', 'trash'], useWhen: 'deleting a file in the File System folder' },
 
   // code
-  run_python: { category: 'code', store: S.workspace, tags: ['python', 'calculate', 'compute', 'math', 'chart', 'plot', 'parse', 'csv', 'spreadsheet', 'script', 'unzip', 'rename attachment'], useWhen: 'computing, transforming data or working on attached files' },
+  run_python: { category: 'code', store: S.workspace, tags: ['python', 'calculate', 'compute', 'math', 'arithmetic', 'exact number', 'chart', 'plot', 'parse', 'csv', 'script', 'unzip'], useWhen: 'computing, transforming data or working on attached files' },
 
   // data
   postgres_query: { category: 'data', store: S.postgres, tags: ['sql', 'database', 'select', 'query'], useWhen: 'reading data from the Postgres database' },

@@ -283,6 +283,188 @@ export function scoreTools({ tools, query, store, textVersion = 1 }) {
 }
 
 // ---------------------------------------------------------------------------
+// Keyword search: BM25 (second pass 3.1)
+// ---------------------------------------------------------------------------
+// Pure, and small: a few hundred short documents, so a linear scan per query.
+// The documents are toolSearchDocument(): name (also as words), description
+// and registry metadata. A small model's search query is often one or two
+// words ("config", "notes") that an embedding places badly and a keyword
+// index finds at once.
+
+const STOPWORDS = new Set((
+  'a an and are as at be by can could do does for from get give has have how i if in into is it its me my ' +
+  'need of on or please show so some that the their them then there these this to tool tools use using ' +
+  'want was we what when where which who will with would you your'
+).split(' '))
+
+/**
+ * Lowercase, split on anything that is not a letter or digit (so `_` and `-`
+ * split, and `read_text_file` matches "text file"), drop stopwords and bare
+ * numbers, and strip
+ * a plural or verb ending so "commits" meets "commit".
+ *
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function tokenize(text) {
+  if (typeof text !== 'string' || !text) return []
+  const out = []
+  for (const raw of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+    // A bare number names no tool ("48271 × 9973"), and as a rare term it
+    // would hand its whole weight to whichever description has a digit.
+    if (!raw || STOPWORDS.has(raw) || /^\p{N}+$/u.test(raw)) continue
+    out.push(stem(raw))
+  }
+  return out
+}
+
+function stem(word) {
+  if (word.length > 4 && word.endsWith('ies')) return `${word.slice(0, -3)}y`
+  if (word.length > 5 && word.endsWith('ing')) return undouble(word.slice(0, -3))
+  if (word.length > 4 && word.endsWith('ed')) return undouble(word.slice(0, -2))
+  if (word.length > 3 && word.endsWith('s') && !word.endsWith('ss')) return word.slice(0, -1)
+  return word
+}
+
+// "running" → "runn" → "run"; "spelled" keeps its "ll".
+function undouble(word) {
+  const n = word.length
+  return n > 2 && word[n - 1] === word[n - 2] && !'lsz'.includes(word[n - 1]) ? word.slice(0, -1) : word
+}
+
+/** BM25's two constants, the usual ones. */
+export const BM25_K1 = 1.2
+export const BM25_B = 0.75
+
+/**
+ * An index over tools' search documents.
+ *
+ * `key` is a hash of every document, so a caller can keep one index while the
+ * catalog's content is unchanged and rebuild when it is not.
+ *
+ * @param {any[]} tools
+ * @returns {{ key: string, size: number, score(query: string): Map<string, number> }}
+ */
+export function createBm25Index(tools) {
+  const list = Array.isArray(tools) ? tools : []
+  /** @type {{ name: string, tf: Map<string, number>, length: number }[]} */
+  const docs = []
+  /** @type {Map<string, number>} */
+  const df = new Map()
+  const keyHash = createHash('sha256')
+  for (const tool of list) {
+    const name = toolName(tool)
+    const text = toolSearchDocument(tool)
+    keyHash.update(`${name}\u0000${text}\u0001`)
+    const tokens = tokenize(text)
+    const tf = new Map()
+    for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1)
+    for (const t of tf.keys()) df.set(t, (df.get(t) ?? 0) + 1)
+    docs.push({ name, tf, length: tokens.length })
+  }
+  const n = docs.length
+  const avg = n ? docs.reduce((a, d) => a + d.length, 0) / n : 0
+
+  return {
+    key: keyHash.digest('hex'),
+    size: n,
+    // Name to score, for the tools that match at least one query term. A tool
+    // that matches nothing is absent, not zero: it has no keyword rank.
+    score(query) {
+      const terms = [...new Set(tokenize(query))]
+      /** @type {Map<string, number>} */
+      const out = new Map()
+      if (!terms.length || !n) return out
+      for (const doc of docs) {
+        let score = 0
+        for (const term of terms) {
+          const f = doc.tf.get(term)
+          if (!f) continue
+          const d = df.get(term) ?? 0
+          const idf = Math.log(1 + (n - d + 0.5) / (d + 0.5))
+          score += idf * (f * (BM25_K1 + 1)) / (f + BM25_K1 * (1 - BM25_B + BM25_B * (avg ? doc.length / avg : 1)))
+        }
+        if (score > 0) out.set(doc.name, Math.max(out.get(doc.name) ?? 0, score))
+      }
+      return out
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fusion (second pass 3.2)
+// ---------------------------------------------------------------------------
+
+// 1-based ranks by descending score, ties sharing the better rank
+// ("1, 1, 3"), so two tools a scorer cannot tell apart are not split by
+// their names' alphabetical order.
+function ranksOf(rows) {
+  /** @type {Map<string, number>} */
+  const out = new Map()
+  const sorted = [...rows].sort((a, b) => b.score - a.score)
+  let rank = 0
+  let last = NaN
+  sorted.forEach((row, i) => {
+    if (row.score !== last) { rank = i + 1; last = row.score }
+    if (!out.has(row.name)) out.set(row.name, rank)
+  })
+  return out
+}
+
+/** Reciprocal rank fusion's constant: the usual 60. */
+export const RRF_K = 60
+
+/** The scorers a call can ask for. 'cosine' is the first pass's. */
+export const SCORERS = Object.freeze(['cosine', 'bm25', 'fused'])
+
+/**
+ * Re-score a cosine-scored list (scoreTools) with BM25 or with the reciprocal
+ * rank fusion of the two, keeping the shape: sorted by descending score, ties
+ * by name, every tool present.
+ *
+ * Rank based, so the narrow cosine band (0.57 to 0.82 on bge-small) does not
+ * matter. Each score is normalised so 1 is the best possible: for 'fused', a
+ * tool ranked first by both; for 'bm25', the best keyword match this query.
+ * A tool with no keyword match gets only its cosine share under 'fused' and
+ * 0 under 'bm25'. With no usable cosine score (no vectors, or none above 0),
+ * 'fused' returns the cosine list as it is, so a broken embedder fails open.
+ *
+ * @param {{ scored: { tool: any, name: string, hash?: string, score: number, missing?: boolean }[], keyword: Map<string, number>, scorer?: string, k?: number }} args
+ */
+export function rescore({ scored, keyword, scorer = 'cosine', k = RRF_K }) {
+  const entries = Array.isArray(scored) ? scored : []
+  if (scorer !== 'bm25' && scorer !== 'fused') return entries
+  const kw = keyword instanceof Map ? keyword : new Map()
+  const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+
+  if (scorer === 'bm25') {
+    const best = Math.max(0, ...kw.values())
+    return entries
+      .map((e) => ({ ...e, score: best > 0 ? (kw.get(e.name) ?? 0) / best : 0 }))
+      .sort((a, b) => (b.score - a.score) || byName(a, b))
+  }
+
+  // A cosine ranking where nothing scored above 0 (no vectors, or vectors
+  // that cannot be compared) is an embedder that is not working, and fused
+  // does not quietly become keywords-only on one: the scores stay 0, nothing
+  // clears a floor, and the caller fails open (tool-filter.mjs), exactly as
+  // the cosine scorer does. Keywords alone are the 'bm25' scorer, chosen.
+  if (!entries.some((e) => !e.missing && e.score > 0)) return entries
+  const cosineUsable = true
+  const kwRank = ranksOf([...kw.entries()].map(([name, score]) => ({ name, score })))
+  const cosRank = ranksOf(entries)
+  const max = (cosineUsable ? 1 : 0) / (k + 1) + 1 / (k + 1)
+  return entries
+    .map((e) => {
+      const fromCosine = cosineUsable ? 1 / (k + (cosRank.get(e.name) ?? entries.length)) : 0
+      const r = kwRank.get(e.name)
+      const fromKeyword = r ? 1 / (k + r) : 0
+      return { ...e, score: (fromCosine + fromKeyword) / max }
+    })
+    .sort((a, b) => (b.score - a.score) || byName(a, b))
+}
+
+// ---------------------------------------------------------------------------
 // Selection
 // ---------------------------------------------------------------------------
 

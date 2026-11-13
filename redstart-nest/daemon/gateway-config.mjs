@@ -12,6 +12,7 @@
 //
 // Note: tools-gateway.mjs RUNS the gateway (proxy, auth, allow-list, system
 // context) and CONSUMES this config; this module PRODUCES it. No overlap.
+import { SCORERS } from './tool-retrieval.mjs'
 import * as fs from 'fs'
 import * as path from 'path'
 import { configDir } from './platform-paths.mjs'
@@ -63,6 +64,7 @@ function retrievalSettings(llamaConfig) {
     ...(Number.isFinite(r?.floor) ? { floor: r.floor } : {}),
     ...(Number.isFinite(r?.margin) ? { margin: r.margin } : {}),
     ...(r?.textVersion === 1 || r?.textVersion === 2 ? { textVersion: r.textVersion } : {}),
+    ...(SCORERS.includes(r?.scorer) ? { scorer: r.scorer } : {}),
   }
 }
 

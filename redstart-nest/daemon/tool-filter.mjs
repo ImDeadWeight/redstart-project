@@ -3,8 +3,13 @@
 import { embedTexts } from './embed-server.mjs'
 import { EMBED_MODEL } from './embed-model.mjs'
 import { logEvent } from './logger.mjs'
+import { createHash } from 'node:crypto'
 import {
+  SCORERS,
   conversationKey,
+  createBm25Index,
+  rescore,
+  toolContentHash,
   conversationQueryText,
   createSelectionMemory,
   createVectorStore,
@@ -17,6 +22,10 @@ import {
 import { HOST_RESOLVED_TOOL_NAMES } from './tools-definitions.mjs'
 import { TOOL_NAMES as MEMORY_TOOL_NAMES } from './memory-tool.mjs'
 
+// search-tools-provider.mjs imports this module, so its TOOL_NAMES cannot be
+// imported back; the name is fixed by the contract (pinsFromMessages).
+const SEARCH_TOOL_NAMES = ['search_tools']
+
 // Tools retrieval keeps together (tool-retrieval.mjs selectTools, families).
 // Memory: saving without forgetting is the half that does damage, since a
 // model offered only memory_save says it has no way to forget, then says it
@@ -28,7 +37,12 @@ export const TOOL_FAMILIES = [MEMORY_TOOL_NAMES]
 // 1.1): a fact to remember arrives on a turn about something else, so the
 // query cannot be trusted to score them. Block 12's "you cannot save" line in
 // system-prompt.mjs stays as the fallback for a request that has none.
-export const ALWAYS_PINNED_TOOL_NAMES = Object.freeze([...HOST_RESOLVED_TOOL_NAMES, ...MEMORY_TOOL_NAMES])
+//
+// And search_tools (second pass 3.2, ahead of Phase 5): it is how the model
+// reaches what the selection left out, so a selection must never be the
+// thing that hides it. Under the cosine scorer it only survived because its
+// description is about tools in general and scores alike on everything.
+export const ALWAYS_PINNED_TOOL_NAMES = Object.freeze([...HOST_RESOLVED_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...SEARCH_TOOL_NAMES])
 
 // =============================================================================
 // Redstart Nest — applying tool retrieval to a request
@@ -113,7 +127,69 @@ export const RETRIEVAL_DEFAULTS = Object.freeze({
   // embedded, so 2 needs a refreeze of the eval with a real embedder and a
   // before/after on it; it stays 1 until that has been run.
   textVersion: 1,
+  // How tools are ranked (tool-retrieval.mjs SCORERS): 'cosine' (the
+  // embedding alone, the first pass), 'bm25' (keywords alone) or 'fused'
+  // (reciprocal rank fusion of the two, second pass 3.2). Fused by default
+  // since 3.2: on the 93-case eval it took MRR from 0.706 to 0.809, R@3 from
+  // 76.9% to 91.9% (the small-model queries from 88.2% to 100%) and selection
+  // recall from 98.4% to 100% with fewer tools sent (13.9 against 16.1), and
+  // every case it misses cosine misses too.
+  scorer: 'fused',
 })
+
+/**
+ * The floors and margin for a scorer other than cosine, applied unless the
+ * admin set their own. RETRIEVAL_DEFAULTS' were tuned on cosine scores; these
+ * are on the normalised rank scores rescore() returns (1 = ranked first by
+ * both), tuned on the eval set (tool-retrieval-fixes-implementation.md, 3.2).
+ */
+export const SCORER_DEFAULTS = Object.freeze({
+  cosine: Object.freeze({}),
+  bm25: Object.freeze({ relativeFloor: 0.5, floor: 0.05, margin: 0.02 }),
+  fused: Object.freeze({ relativeFloor: 0.85, floor: 0.2, margin: 0.02 }),
+})
+
+/**
+ * The settings a call runs with: the defaults, then the chosen scorer's
+ * floors, then what the admin set. An unknown scorer is cosine.
+ *
+ * @param {Record<string, any>|null|undefined} settings
+ */
+export function resolveRetrievalSettings(settings) {
+  const asked = settings ?? {}
+  const scorer = SCORERS.includes(asked.scorer) ? asked.scorer : RETRIEVAL_DEFAULTS.scorer
+  return { ...RETRIEVAL_DEFAULTS, ...SCORER_DEFAULTS[scorer], ...asked, scorer }
+}
+
+// The keyword index of the last few catalogs seen, by their content. A
+// request's tools are mostly the same from one turn to the next, so this is
+// rebuilt only when the set or a tool's text changes.
+/** @type {Map<string, ReturnType<typeof createBm25Index>>} */
+const keywordIndexes = new Map()
+const KEYWORD_INDEX_CACHE = 8
+
+function keywordIndexFor(tools) {
+  const key = createHash('sha256').update(tools.map((t) => toolContentHash(t)).join(',')).digest('hex')
+  let index = keywordIndexes.get(key)
+  if (!index) {
+    index = createBm25Index(tools)
+    keywordIndexes.set(key, index)
+    while (keywordIndexes.size > KEYWORD_INDEX_CACHE) keywordIndexes.delete(keywordIndexes.keys().next().value)
+  }
+  return index
+}
+
+/**
+ * Rank tools for a query with the configured scorer: cosine from the store,
+ * then rescore() for 'bm25' or 'fused'. Sorted, every tool present.
+ *
+ * @param {{ tools: any[], queryVector: any, queryText: string, config: ReturnType<typeof resolveRetrievalSettings> }} args
+ */
+function rankTools({ tools, queryVector, queryText, config }) {
+  const scored = scoreTools({ tools, query: queryVector, store, textVersion: config.textVersion })
+  if (config.scorer === 'cosine') return scored
+  return rescore({ scored, keyword: keywordIndexFor(tools).score(queryText), scorer: config.scorer })
+}
 
 /**
  * Filter a request's tools down to the ones this conversation plausibly needs.
@@ -126,7 +202,7 @@ export const RETRIEVAL_DEFAULTS = Object.freeze({
  *   tools: any[],
  *   messages: any[],
  *   accountId?: string|null,
- *   settings?: { enabled?: boolean, relativeFloor?: number, floor?: number, margin?: number, textVersion?: number },
+ *   settings?: { enabled?: boolean, relativeFloor?: number, floor?: number, margin?: number, textVersion?: number, scorer?: string },
  *   ctxSize?: number,
  *   reservedTokens?: number,
  *   embed?: typeof embedTexts,
@@ -136,7 +212,7 @@ export const RETRIEVAL_DEFAULTS = Object.freeze({
 export async function filterRequestTools({
   tools, messages, accountId, settings, ctxSize, reservedTokens = 0, embed = defaultEmbed,
 }) {
-  const config = { ...RETRIEVAL_DEFAULTS, ...(settings ?? {}) }
+  const config = resolveRetrievalSettings(settings)
   if (!config.enabled) return tools
   if (!Array.isArray(tools) || tools.length === 0) return tools
 
@@ -159,7 +235,7 @@ export async function filterRequestTools({
     if (!queryVectors) return unchanged(tools, 'no-embedding-server')
 
     const key = conversationKey(messages, accountId)
-    const scored = scoreTools({ tools, query: queryVectors[0], store, textVersion })
+    const scored = rankTools({ tools, queryVector: queryVectors[0], queryText, config })
     const budgetTokens = toolBudget(ctxSize, reservedTokens)
 
     const { selected, dropped, reason } = selectTools({
@@ -283,7 +359,7 @@ export const SEARCH_RESULT_LIMIT = 10
  * @returns {Promise<{ name: string, description: string }[]|null>}
  */
 export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, embed = defaultEmbed, settings = {} }) {
-  const config = { ...RETRIEVAL_DEFAULTS, ...(settings ?? {}) }
+  const config = resolveRetrievalSettings(settings)
   const textVersion = config.textVersion
   if (!Array.isArray(tools) || tools.length === 0) return []
   if (typeof query !== 'string' || !query.trim()) return null
@@ -298,7 +374,7 @@ export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, e
     const queryVectors = await embed([query])
     if (!queryVectors) return null
 
-    return scoreTools({ tools, query: queryVectors[0], store, textVersion })
+    return rankTools({ tools, queryVector: queryVectors[0], queryText: query, config })
       .slice(0, limit)
       .map(({ tool }) => ({
         name: toolName(tool),

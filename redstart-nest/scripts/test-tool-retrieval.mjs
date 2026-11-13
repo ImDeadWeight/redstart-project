@@ -32,6 +32,10 @@ import {
   createSelectionMemory,
   truncateForEmbedding,
   CHARS_PER_TOKEN,
+  tokenize,
+  createBm25Index,
+  rescore,
+  RRF_K,
 } from '../daemon/tool-retrieval.mjs'
 import * as searchProvider from '../daemon/search-tools-provider.mjs'
 const { retrievalStatus, syncRetrieval, applyToolsConfig, resetRetrievalState } = await import('../daemon/ipc/tools.mjs')
@@ -43,6 +47,9 @@ import {
   resetToolFilterState,
   setEmbedPortForTests,
   CONTEXT_BUDGET_FRACTION,
+  resolveRetrievalSettings,
+  RETRIEVAL_DEFAULTS,
+  SCORER_DEFAULTS,
 } from '../daemon/tool-filter.mjs'
 import {
   EMBED_PID_FILE,
@@ -246,6 +253,76 @@ await test('a null query scores everything 0 instead of throwing', () => {
   store.setMany([[toolContentHash(tool), axis(4, 0)]])
   const scored = scoreTools({ tools: [tool], query: null, store })
   assert(scored[0].score === 0, `null query scored ${scored[0].score}`)
+})
+
+console.log('\n-- keywords and fusion (second pass 3.1, 3.2) --')
+
+await test('the tokenizer splits names, drops stopwords and numbers, and stems', () => {
+  const got = tokenize('Show me the recent commits of read_text_file-configs: 48271 running studies')
+  const want = ['recent', 'commit', 'read', 'text', 'file', 'config', 'run', 'study']
+  assert(JSON.stringify(got) === JSON.stringify(want), JSON.stringify(got))
+  assert(tokenize('').length === 0 && tokenize(null).length === 0, 'empty input')
+})
+
+await test('🔍 BM25 finds a tool by a word in its name, and scores only what matches', () => {
+  const tools = [fnTool('read_text_file', 'Read a file'), fnTool('web_fetch', 'Fetch a page'), fnTool('git_log', 'Show commits')]
+  const index = createBm25Index(tools)
+  const s = index.score('text file please')
+  assert(s.has('read_text_file') && !s.has('web_fetch'), JSON.stringify([...s]))
+  assert(index.score('nothing matches xyzzy').size === 0, 'a miss scored something')
+  assert(createBm25Index(tools).key === index.key, 'the same catalog gave a different key')
+  assert(createBm25Index([tools[0], fnTool('web_fetch', 'Fetch a web page')]).key !== index.key, 'a changed catalog kept its key')
+})
+
+await test('🔍 a rarer term outweighs a common one', () => {
+  const tools = [fnTool('a_tool', 'file file vault'), fnTool('b_tool', 'file'), fnTool('c_tool', 'file')]
+  const s = createBm25Index(tools).score('file vault')
+  assert(s.get('a_tool') > s.get('b_tool'), JSON.stringify([...s]))
+})
+
+await test('fusion keeps the shape: every tool, sorted, normalised so 1 is first by both', () => {
+  const scored = scoredList([['a', 0.9], ['b', 0.8], ['c', 0.7]])
+  const fused = rescore({ scored, keyword: new Map([['a', 5], ['c', 9]]), scorer: 'fused' })
+  assert(fused.length === 3, 'a tool went missing')
+  assert(fused.every((e, i) => i === 0 || fused[i - 1].score >= e.score), 'not sorted')
+  const a = fused.find((e) => e.name === 'a').score
+  const expectA = (1 / (RRF_K + 1) + 1 / (RRF_K + 2)) / (2 / (RRF_K + 1))
+  assert(Math.abs(a - expectA) < 1e-12, `a scored ${a}, expected ${expectA}`)
+  const top = rescore({ scored, keyword: new Map([['a', 5]]), scorer: 'fused' })[0]
+  assert(top.name === 'a' && Math.abs(top.score - 1) < 1e-12, 'first by both is not 1')
+})
+
+await test('🔍 a keyword match lifts a tool the embedding ranked low', () => {
+  const scored = scoredList([['web', 0.9], ['git', 0.85], ['vault', 0.3]])
+  const fused = rescore({ scored, keyword: new Map([['vault', 4]]), scorer: 'fused' }).map((e) => e.name)
+  assert(fused[0] === 'vault', `vault did not rise: ${fused}`)
+})
+
+await test('ties share a rank, so the alphabet does not decide between equal scores', () => {
+  const scored = scoredList([['b', 1], ['z', 1], ['c', 0]])
+  const fused = rescore({ scored, keyword: new Map(), scorer: 'fused' })
+  assert(fused.find((e) => e.name === 'b').score === fused.find((e) => e.name === 'z').score, 'a tie was split')
+})
+
+await test('🔒 with no usable cosine score, fused leaves everything at 0, so the filter fails open', () => {
+  const scored = scoredList([['a', 0], ['b', 0]])
+  const fused = rescore({ scored, keyword: new Map([['a', 3]]), scorer: 'fused' })
+  assert(fused.every((e) => e.score === 0), JSON.stringify(fused.map((e) => [e.name, e.score])))
+})
+
+await test('bm25 alone scores a non-match 0 and the best match 1; cosine is untouched', () => {
+  const scored = scoredList([['a', 0.9], ['b', 0.1]])
+  const kw = rescore({ scored, keyword: new Map([['b', 2]]), scorer: 'bm25' })
+  assert(kw[0].name === 'b' && kw[0].score === 1 && kw[1].score === 0, JSON.stringify(kw.map((e) => [e.name, e.score])))
+  assert(rescore({ scored, keyword: new Map([['b', 2]]), scorer: 'cosine' }) === scored, 'cosine was rescored')
+})
+
+await test('settings: the scorer brings its floors, an admin floor wins, an unknown scorer is the default', () => {
+  const fused = resolveRetrievalSettings({ scorer: 'bm25' })
+  assert(fused.relativeFloor === SCORER_DEFAULTS.bm25.relativeFloor, 'the scorer floors were not applied')
+  assert(resolveRetrievalSettings({ scorer: 'bm25', relativeFloor: 0.5 }).relativeFloor === 0.5, 'an admin floor was overridden')
+  assert(resolveRetrievalSettings({ scorer: 'nonsense' }).scorer === RETRIEVAL_DEFAULTS.scorer, 'an unknown scorer survived')
+  assert(resolveRetrievalSettings(undefined).enabled === false, 'retrieval came on by default')
 })
 
 console.log('\n-- selection --')
@@ -996,6 +1073,26 @@ await test('🔍 text version 2 scores the request without its attachment note; 
   const v2 = (await filterRequestTools({ tools: allTools, messages, settings: { enabled: true, textVersion: 2 }, embed })).map(toolName)
   assert(v1.includes('web_fetch'), `setup: version 1 should read the note: ${v1}`)
   assert(!v2.includes('web_fetch') && v2.includes('git_status'), `version 2 read the note: ${v2}`)
+})
+
+await test('🔍 the fused scorer, end to end: a keyword the embedding misses still selects its tool', async () => {
+  // The query embeds along "repo" alone; "document" is a keyword match only.
+  // Three axes, as the tools' cached vectors have (the store is shared).
+  const messages = [{ role: 'user', content: 'what changed in the repo, and read the document' }]
+  const onlyRepo = keywordEmbed(['repo', 'zzz', 'yyy'])
+  resetToolFilterState()
+  const cos = (await filterRequestTools({ tools: allTools, messages, settings: { enabled: true, scorer: 'cosine' }, embed: onlyRepo })).map(toolName)
+  resetToolFilterState()
+  const fused = (await filterRequestTools({ tools: allTools, messages, settings: { enabled: true, scorer: 'fused', relativeFloor: 0.7 }, embed: onlyRepo })).map(toolName)
+  assert(!cos.includes('read_document'), `setup: cosine should miss it: ${cos}`)
+  assert(fused.includes('read_document') && fused.includes('git_status'), `fused missed it: ${fused}`)
+})
+
+await test('🔒 search_tools is pinned when the request carries it', async () => {
+  resetToolFilterState()
+  const st = fnTool('search_tools', 'zzz')
+  const out = (await filterRequestTools({ tools: [...allTools, st], messages: ask, settings: { enabled: true }, embed })).map(toolName)
+  assert(out.includes('search_tools'), `search_tools was dropped: ${out}`)
 })
 
 await test('🔒 an empty selection falls back to the full list rather than stripping everything', async () => {
