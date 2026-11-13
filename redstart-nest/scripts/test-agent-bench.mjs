@@ -169,6 +169,7 @@ const SCRIPTS = {
   textask: (turn, messages) => (turn === 0
     ? [chunk({ content: 'Happy to. What name should I sign it with?' })]
     : [chunk({ content: `Signed it: ${[...messages].reverse().find((m) => m.role === 'user')?.content}` })]),
+  chat: () => [chunk({ content: 'ok' })],
   forever: () => [toolCallChunk(`c${Math.random().toString(36).slice(2, 8)}`, 'read_file', '{"path": "data.txt"}')],
   hang: () => 'hang',
 }
@@ -357,7 +358,8 @@ function startFakeNest(gatewayPort) {
       // The turn is how many assistant messages the request already carries:
       // stateless, so two tasks with the same prompt cannot share a counter.
       const turn = body.messages.filter((m) => m.role === 'assistant').length
-      const out = SCRIPTS[scriptName](turn, body.messages)
+      // A non-streaming request (measure-tool-cache.mjs) needs no script.
+      const out = body.stream === false ? null : SCRIPTS[scriptName](turn, body.messages)
       // The gateway's retrieval report (tools-gateway.mjs retrievalReportHeaders):
       // every tool sent, nothing removed, on unless the request opted out.
       const report = body.redstart_retrieval_report === true ? {
@@ -365,6 +367,12 @@ function startFakeNest(gatewayPort) {
         'x-redstart-tools-filtered': '0',
         'x-redstart-retrieval': body.redstart_retrieval === false ? 'off' : 'on',
       } : {}
+      if (body.stream === false) {
+        // measure-tool-cache.mjs: one JSON reply, with the timings.
+        res.writeHead(200, { 'Content-Type': 'application/json', ...report })
+        return res.end(JSON.stringify({ choices: [{ index: 0, message: { role: 'assistant', content: 'ok' } }],
+          timings: { prompt_n: 100, predicted_n: 1, cache_n: turn === 0 ? 0 : turn * 110, prompt_ms: 50 } }))
+      }
       res.writeHead(200, { 'Content-Type': 'text/event-stream', ...report })
       if (out === 'hang') {
         res.write(`data: ${JSON.stringify(chunk({ reasoning_content: 'hmm' }))}\n\n`)
@@ -937,6 +945,34 @@ if (bench) {
     eq(capped.runs[0].metrics.hitLimit, 'reply-length', 'the capped reply is recorded as a limit')
     eq(JSON.parse(fs.readFileSync(path.join(capDir, 'summary.json'), 'utf8')).meta.maxTokens, 10, 'recorded in summary.json')
     fs.rmSync(capDir, { recursive: true, force: true })
+  })
+
+  await test('measure-tool-cache: both variants, the report and timings read per turn, off opts out', async () => {
+    const mtc = await import('./measure-tool-cache.mjs')
+    const before = nest.state.completionBodies.length
+    const lines = []
+    const results = await mtc.main(['--gateway', `http://127.0.0.1:${port}`, '--turns', '3'],
+      { log: (s) => lines.push(s), conversation: ['[script:chat] first', 'second', 'third'] })
+    eq(results.map((r) => r.variant), ['server', 'off'], 'variants, in order')
+    for (const r of results) {
+      eq(r.rows.map((x) => [x.names?.length, x.cached, x.prefilled]), [[5, 0, 100], [5, 110, 100], [5, 220, 100]], `${r.variant}: tools sent, cached, prefilled`)
+      eq([r.misses, r.prefilled, r.ms], [0, 200, 100], `${r.variant}: turns 2-3`)
+    }
+    eq([results[0].rows[0].retrieval, results[1].rows[0].retrieval], ['on', 'off'], 'read back from the gateway')
+    const bodies = nest.state.completionBodies.slice(before)
+    eq(bodies.length, 8, 'a slot reset and three turns per variant')
+    assert(bodies.every((b) => b.stream === false && b.id_slot === 0 && b.max_tokens === 1 && b.redstart_retrieval_report === true), 'request shape')
+    eq(bodies.filter((b) => b.redstart_retrieval === false).length, 5, 'the off turns and both resets opt out; the server turns do not')
+    eq(nest.state.declaredHostTools, [], 'no host-resolved tools asked for')
+    assert(lines.some((l) => l === 'turns 2-3: 0 cache miss(es), prefilled 200 tokens in 100 ms'), lines.join('\n'))
+    // A miss: the prefix falls under half the last prompt.
+    eq(mtc.summarizeRows([{ cached: 0, prefilled: 1000, ms: 1 }, { cached: 900, prefilled: 50, ms: 1 }, { cached: 3, prefilled: 1000, ms: 9 }]),
+      { misses: 1, prefilled: 1050, ms: 10 }, 'summarizeRows')
+    for (const bad of [['--turns', '1'], ['--variants', 'pins'], ['--nope', 'x']]) {
+      let e = null
+      try { mtc.parseArgs(bad) } catch (err) { e = err }
+      assert(e, `${bad.join(' ')} was accepted`)
+    }
   })
 
   await test('summary: pass rate and per-task passes', async () => {
