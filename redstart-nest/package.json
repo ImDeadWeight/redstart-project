@@ -1,6 +1,6 @@
 {
   "name": "redstart",
-  "version": "1.0.0-alpha.13",
+  "version": "1.0.0-alpha.14",
   "description": "Local LLM host and launcher — wraps llama.cpp/TurboQuant into a managed server with multi-device network access, chat UI, and coding agent support.",
   "author": "Patrick Carswell",
   "license": "AGPL-3.0-only",
