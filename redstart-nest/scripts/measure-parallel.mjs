@@ -69,9 +69,16 @@ async function generate(prompt, maxTokens) {
   }
 }
 
-const COUNT = 'Count upward from 1, one number per line, and do not stop until told.'
+// Every prompt starts with its own tag. Identical prompts let llama-server
+// reuse a slot's cached prefix: the first run of this script (2026-11-12)
+// sent the same long prompt three times, the second "at once" request
+// processed 4 new tokens instead of 17,501, and the script said "both fit"
+// while the server log showed the shared KV pool overflowing.
+let tagCounter = 0
+const tag = () => `[request ${++tagCounter}-${Math.random().toString(36).slice(2, 10)}]\n`
+const count = () => `${tag()}Count upward from 1, one number per line, and do not stop until told.`
 /** About `n` tokens of filler (llama tokenizers average ~4 characters a token for this). */
-const filler = (n) => `${'The quick brown fox jumps over the lazy dog. '.repeat(Math.ceil((n * 4) / 45))}\nIn one word: what animal jumps?`
+const filler = (n) => `${tag()}${'The quick brown fox jumps over the lazy dog. '.repeat(Math.ceil((n * 4) / 45))}\nIn one word: what animal jumps?`
 
 const fmt = (x, d = 1) => (typeof x === 'number' ? x.toFixed(d) : '?')
 const line = (label, r) => r.ok
@@ -91,9 +98,9 @@ console.log(`model ${model} · n_ctx ${nCtx ?? '?'} · slots ${slots ?? '?'}`)
 // Warm-up: the first request after a load pays for allocation.
 await generate('Say OK.', 4)
 
-const solo = await generate(COUNT, tokens)
+const solo = await generate(count(), tokens)
 console.log(line('alone      ', solo))
-const pair = await Promise.all([generate(COUNT, tokens), generate(COUNT, tokens)])
+const pair = await Promise.all([generate(count(), tokens), generate(count(), tokens)])
 console.log(line('pair, first ', pair[0]))
 console.log(line('pair, second', pair[1]))
 const pairWall = Math.max(pair[0].ms, pair[1].ms)
@@ -110,10 +117,16 @@ if (nCtx) {
   const two = await Promise.all([generate(filler(big), 8), generate(filler(big), 8)])
   console.log(line(`two ~${big}-token prompts at once`, two[0]) + (two[0].ok ? ` (prompt ${two[0].promptTokens})` : ''))
   console.log(line(`                                `, two[1]) + (two[1].ok ? ` (prompt ${two[1].promptTokens})` : ''))
-  const verdict = two.every((r) => r.ok)
-    ? 'both fit: the context is not split per slot for this load (or n_ctx is large enough)'
-    : 'a context failure with two at once: n_ctx is split between slots; a task beside a chat can overflow'
+  // A request only counts if it processed its whole prompt (no cache reuse).
+  const full = (r) => r.ok && one.ok && typeof r.promptTokens === 'number' && r.promptTokens >= 0.9 * (one.promptTokens ?? 0)
+  let verdict
+  if (!one.ok) verdict = 'inconclusive: the long prompt failed even alone'
+  else if (two.every(full)) verdict = 'both fit: two long prompts were processed in full at the same time'
+  else if (two.some((r) => !r.ok)) verdict = 'overflow: two long prompts at once did not fit (n_ctx is split, or one KV pool is shared); a task beside a long chat can fail'
+  else verdict = 'inconclusive: a request reused cached tokens instead of processing its prompt'
   console.log(`context: ${verdict}`)
+  console.log('  Also check the server log for "failed to find a memory slot" or "purging slot": with kv_unified = true the slots share')
+  console.log('  ONE pool of n_ctx tokens, and llama-server evicts another slot\'s cache to make room, which /props does not show.')
 } else {
   console.log('context: n_ctx unknown (/props did not say), not measured')
 }

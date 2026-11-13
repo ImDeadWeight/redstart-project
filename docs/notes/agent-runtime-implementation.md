@@ -1214,10 +1214,23 @@ consider `-np` explicitly.
   stop and start, and SIGKILL of nestd mid-turn: all three finish with one
   reply. 3/3 on the first run and again, no process left behind; in
   test:security and CI. Closes 3.7's gap.
-- **3.11 prepared, not measured:** `scripts/measure-parallel.mjs` (one
-  generation alone, two at once, two ~60%-of-n_ctx prompts at once). Needs
-  a real model; dry-run against the fake server only. Owed by the user;
-  until it is run, D29's one-at-a-time default stands.
+- **3.11, first run (the user, 2026-11-12, Ornith-1.5-9B-Q6_K, RTX 3060,
+  n_ctx 32768, 4 auto slots).** Throughput: alone 40.8 tok/s; two at once
+  36.0 and 35.8 (88% each), 1.75x in total. A second generation is nearly
+  free. Context: the script said "both fit", which was WRONG. The second
+  "at once" request reused the prefix the "alone" run cached (prompt 4
+  tokens, not 17,501), so only one long prompt was really processed. The
+  server log shows the real answer: `n_parallel = 4 and kv_unified = true`,
+  meaning the slots share ONE pool of 32,768 tokens. When the second
+  17.5k prompt passed ~15k, llama-server logged "failed to find a memory
+  slot" and purged slot 0's 17,502 cached tokens to make room. Slot 0 had
+  finished, so nothing broke, but two live long contexts cannot both fit.
+  **For D29:** parallel generation pays for short and medium contexts, and
+  a long task beside a long chat competes for one pool (an eviction, or a
+  failed request). The one-at-a-time default stands until the corrected
+  script's rerun says what happens with two live long prompts. The script
+  now tags every prompt (no cache reuse), says "both fit" only when both
+  processed their whole prompt, and points at the log lines.
 - **Gaps carried out of Phase 3:** compaction in a task never run against
   a real model, and the per-turn /tokenize cost on long tasks unmeasured
   (chat-ui pays the same per send); the bench's `--runtime` time-limit
