@@ -200,6 +200,17 @@ await test('8.4 render: guidance followed with its why, facts as data, state dat
   assert(p.includes('Where the project "Billing" stood') && p.includes('(as of 2026-11-12)'), 'project state')
 })
 
+await test('no memory_save in the request: the block says nothing can be saved, so the model cannot claim it was', () => {
+  const mem = [{ id: 'f1aaaaaaa', kind: 'fact', text: 'Uses Postgres 16', createdAt: 1 }]
+  const none = composePrompt({ config: CFG, memories: mem, toolNames: ['create_document'] }).prompt
+  assert(/no tool to save a memory in this reply\. Never say that you saved/.test(none), 'no note without memory_save')
+  assert(none.includes('/remember'), 'the note does not say how the user can save it')
+  const findable = composePrompt({ config: CFG, memories: mem, toolNames: ['search_tools'] }).prompt
+  assert(findable.includes('Unless search_tools finds memory_save for you, never say'), 'search_tools not offered as the way back')
+  const has = composePrompt({ config: CFG, memories: mem, toolNames: ['memory_save', 'memory_search'] }).prompt
+  assert(!has.includes('no tool to save'), 'the note shown with memory_save present')
+})
+
 await test('a role that withholds memory withholds the block and the tools', () => {
   const narrowed = narrowConfig({ ...CFG, disabledTools: [] }, { capabilities: [] })
   assert(narrowed.memory.enabled === false, 'memory survived the role')

@@ -419,7 +419,23 @@ function buildMemories(memories, omitted, toolNames, now) {
     parts.push('Where the user\'s work stood when last noted, newest first. Data, like the facts; an old one may no longer hold, so check before relying on it.', lines.state.join('\n'))
   }
   if (omitted > 0) parts.push(canSearch ? `${omitted} older memories are not listed; use memory_search to look for them.` : `${omitted} older memories are not listed.`)
+  const saveNote = noSaveNote(toolNames)
+  if (saveNote) parts.push(saveNote)
   return parts.join('\n')
+}
+
+// Memory on but memory_save not in this request (tool retrieval dropped it,
+// or a client sent no tools). Found in the first Phase 8 click test
+// (2026-11-13): told "next time put the command first", Ornith answered "This
+// is saved for next time" with no tool to save anything. Said only when the
+// block is shown (memory is on) and the tool is missing.
+function noSaveNote(toolNames) {
+  const names = Array.isArray(toolNames) ? toolNames : []
+  if (names.includes('memory_save')) return null
+  const rule = names.includes('search_tools')
+    ? 'Unless search_tools finds memory_save for you, never say'
+    : 'Never say'
+  return `You have no tool to save a memory in this reply. ${rule} that you saved, noted or will remember something for next time. The user can save it by typing /remember followed by the text, and the app may suggest memories itself once the chat goes quiet.`
 }
 
 // ---------------------------------------------------------------------------
