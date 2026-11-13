@@ -18,6 +18,7 @@ import {
   createVectorStore,
   estimateToolTokens,
   pinsFromMessages,
+  pinReasons,
   scoreTools,
   selectTools,
   toolName,
@@ -70,6 +71,10 @@ const isDiscovery = (tool) => DISCOVERY.has(toolName(tool))
 
 const store = createVectorStore()
 const memory = createSelectionMemory({ max: 200 })
+// Per conversation, when and why each applied tool came in (6.1), for the
+// caller's report only; the same keys and bound as `memory`, and as lossy.
+/** @type {Map<string, Record<string, { turn: number, why: string }>>} */
+const origins = new Map()
 
 // Test seam: the port the default embedder dials. Null is production
 // (EMBED_PORT). The suites set it to a port they own, either a closed one for
@@ -228,11 +233,17 @@ function rankTools({ tools, queryVector, queryText, config }) {
  *   ctxSize?: number,
  *   reservedTokens?: number,
  *   embed?: typeof embedTexts,
+ *   record?: { origins?: Record<string, { turn: number, why: string }>, wouldAdd?: number },
  * }} request
+ *   `record`, when given, is filled with this conversation's retrieval record
+ *   (6.1): for each tool sent, the turn it first came in (the count of user
+ *   messages then) and why ('first' selection, 'scored' later, 'called',
+ *   'search', 'describe', 'always' pinned, 'family'); and wouldAdd. Only the
+ *   caller who asked ever sees it (retrievalReportHeaders).
  * @returns {Promise<any[]>}
  */
 export async function filterRequestTools({
-  tools, messages, accountId, conversationId = null, settings, ctxSize, reservedTokens = 0, embed = defaultEmbed,
+  tools, messages, accountId, conversationId = null, settings, ctxSize, reservedTokens = 0, embed = defaultEmbed, record = undefined,
 }) {
   const config = resolveRetrievalSettings(settings)
   if (!config.enabled) return tools
@@ -286,7 +297,13 @@ export async function filterRequestTools({
     // model was told it has. Fall back rather than trust it.
     if (selected.length === 0) return unchanged(tools, 'empty-selection')
 
+    const previousNames = memory.get(key)
     memory.set(key, selected.map(toolName))
+    const origin = noteOrigins(key, selected.map(toolName), { messages, previous: previousNames })
+    if (record) {
+      record.origins = origin
+      record.wouldAdd = wouldAdd
+    }
 
     // COUNTS ONLY — never tool names, never query text, never message content.
     // The privacy contract in logger.mjs is about what a support log may
@@ -315,6 +332,27 @@ export async function filterRequestTools({
     // may become a failed completion.
     return unchanged(tools, err?.message ?? 'unknown-error')
   }
+}
+
+function noteOrigins(key, names, { messages, previous }) {
+  const turn = (Array.isArray(messages) ? messages : []).filter((m) => m?.role === 'user').length
+  const before = origins.get(key) ?? {}
+  const reasons = pinReasons(messages)
+  const always = new Set(ALWAYS_PINNED_TOOL_NAMES)
+  const family = new Set(TOOL_FAMILIES.flat())
+  const first = !previous || previous.length === 0
+  /** @type {Record<string, { turn: number, why: string }>} */
+  const out = {}
+  for (const name of names) {
+    out[name] = before[name] ?? {
+      turn,
+      why: reasons.get(name) ?? (always.has(name) ? 'always' : first ? 'first' : family.has(name) ? 'family' : 'scored'),
+    }
+  }
+  origins.delete(key)
+  origins.set(key, out)
+  while (origins.size > 200) origins.delete(origins.keys().next().value)
+  return out
 }
 
 function unchanged(tools, reason) {
@@ -353,6 +391,7 @@ export function estimateMessagesTokens(messages) {
 /** Test seam: forget everything cached between requests. */
 export function resetToolFilterState() {
   memory.clear()
+  origins.clear()
   lastWireCost = null
 }
 
@@ -460,7 +499,7 @@ export function keywordSearch({ tools, query }) {
 // and a history would be a log of one account's tool usage with a retention
 // policy to argue about.
 
-/** @type {{ at: number, toolsOffered: number, toolsAfterBans: number, toolsSent: number, toolTokens: number, promptTokens: number, ctxSize: number|null, filtered: boolean }|null} */
+/** @type {{ at: number, toolsOffered: number, toolsAfterBans: number, toolsSent: number, toolTokens: number, promptTokens: number, ctxSize: number|null, filtered: boolean, wouldAdd: number }|null} */
 let lastWireCost = null
 
 /**
@@ -473,7 +512,7 @@ let lastWireCost = null
  * shrunken list needs to know which did it. A ban is policy they set; a
  * retrieval drop is a judgement the scorer made.
  */
-export function recordWireCost({ toolsOffered, toolsAfterBans, tools, messages, ctxSize, filtered }) {
+export function recordWireCost({ toolsOffered, toolsAfterBans, tools, messages, ctxSize, filtered, wouldAdd = 0 }) {
   const sent = Array.isArray(tools) ? tools.length : 0
   lastWireCost = {
     at: Date.now(),
@@ -484,6 +523,9 @@ export function recordWireCost({ toolsOffered, toolsAfterBans, tools, messages, 
     promptTokens: estimateToolTokens(messages ?? []),
     ctxSize: Number.isFinite(ctxSize) && ctxSize > 0 ? ctxSize : null,
     filtered: !!filtered,
+    // Tools a frozen set (growth 'pins-only') left out that scoring would
+    // have added (6.2). 0 when retrieval did not run on this request.
+    wouldAdd: filtered && Number.isInteger(wouldAdd) ? wouldAdd : 0,
   }
 }
 

@@ -34,7 +34,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { main, parseArgs, labelWarning, fallbackWarning, accountWarning, askWarning } from './agent-bench/run.mjs'
-import { approves, maxReplyTokens, endsInQuestion, TEXT_ASK_NO_ANSWER } from './agent-bench/lib/bench.mjs'
+import { approves, maxReplyTokens, endsInQuestion, TEXT_ASK_NO_ANSWER, toolsSentReport } from './agent-bench/lib/bench.mjs'
 import { answerFromTask } from './agent-bench/lib/ask.mjs'
 import { ASK_USER_DEFINITION, DISMISSED_RESULT } from '../../shared/agent-core/ask-user.mjs'
 import { UPDATE_PLAN_DEFINITION } from '../../shared/agent-core/update-plan.mjs'
@@ -1098,6 +1098,14 @@ await test('nothing listening: the error says Nest is not reachable and why that
     await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', outDir, '--quiet'], { log: () => {} })
   } catch (e) { err = e }
   assert(/could not reach Nest at/.test(err?.message ?? '') && /model loaded/.test(err.message), `got ${err?.message}`)
+})
+
+await test('the retrieval report reads origins and would-add, and an older Nest gives {} and 0', async () => {
+  const h = (o) => ({ get: (k) => (k in o ? o[k] : null) })
+  const r = toolsSentReport(h({ 'x-redstart-tools-sent': 'git_log,a%2Cb', 'x-redstart-tools-origin': 'git_log=1:first,a%2Cb=3:search,bad', 'x-redstart-tools-would-add': '2' }))
+  assert(r.origins.git_log.why === 'first' && r.origins['a,b'].turn === 3 && r.wouldAdd === 2, JSON.stringify(r))
+  const old = toolsSentReport(h({ 'x-redstart-tools-sent': 'git_log' }))
+  assert(JSON.stringify(old.origins) === '{}' && old.wouldAdd === 0, JSON.stringify(old))
 })
 
 fs.rmSync(outDir, { recursive: true, force: true })

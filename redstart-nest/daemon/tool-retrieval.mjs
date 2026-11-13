@@ -824,6 +824,34 @@ export function pinsFromMessages(messages, { searchToolName = 'search_tools' } =
   return pins
 }
 
+/**
+ * Why each pinned tool is pinned, from the transcript alone: 'called' (the
+ * model called it), 'search' (a search_tools result named it), 'describe'
+ * (describe_tool described it). The first reason seen wins, in transcript
+ * order. For the caller's retrieval record (second pass 6.1).
+ *
+ * @param {any[]} messages
+ * @returns {Map<string, 'called'|'search'|'describe'>}
+ */
+export function pinReasons(messages) {
+  /** @type {Map<string, 'called'|'search'|'describe'>} */
+  const out = new Map()
+  const add = (name, why) => { if (name && !out.has(name)) out.set(name, why) }
+  const callNames = new Map()
+  for (const msg of Array.isArray(messages) ? messages : []) {
+    for (const call of Array.isArray(msg?.tool_calls) ? msg.tool_calls : []) {
+      const name = call?.function?.name
+      if (typeof name === 'string' && name) add(name, 'called')
+      if (typeof call?.id === 'string' && typeof name === 'string') callNames.set(call.id, name)
+    }
+    if (msg?.role !== 'tool') continue
+    const answered = typeof msg.name === 'string' && msg.name ? msg.name : callNames.get(msg.tool_call_id)
+    if (answered === 'search_tools') for (const name of searchResultNames(msg.content)) add(name, 'search')
+    if (answered === 'describe_tool') add(describedName(msg.content), 'describe')
+  }
+  return out
+}
+
 function describedName(content) {
   try {
     const body = JSON.parse(messageText(content))

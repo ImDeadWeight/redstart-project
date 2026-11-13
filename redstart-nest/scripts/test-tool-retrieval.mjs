@@ -1168,6 +1168,25 @@ await test('🔒 conversation ids are per account, and a malformed id falls back
   }
 })
 
+await test('🔍 the record says when and why each tool came in, and keeps a tool\'s first reason (6.1)', async () => {
+  resetToolFilterState()
+  const tools = [...allTools, fnTool('search_tools', 'find tools')]
+  const settings = { enabled: true, scorer: 'cosine', margin: 0 }
+  const r1 = {}
+  await filterRequestTools({ tools, messages: ask, conversationId: 'rec', settings, embed, record: r1 })
+  assert(r1.origins.git_status.why === 'first' && r1.origins.git_status.turn === 1, JSON.stringify(r1.origins))
+  assert(r1.origins.search_tools.why === 'always', JSON.stringify(r1.origins))
+  const turn2 = [...ask,
+    { role: 'assistant', tool_calls: [{ id: 's1', function: { name: 'search_tools', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 's1', content: JSON.stringify({ match: 'close', tools: [{ name: 'web_fetch' }] }) },
+    { role: 'user', content: 'now read a document' }]
+  const r2 = {}
+  await filterRequestTools({ tools, messages: turn2, conversationId: 'rec', settings, embed, record: r2 })
+  assert(r2.origins.git_status.why === 'first' && r2.origins.git_status.turn === 1, `the first reason was lost: ${JSON.stringify(r2.origins)}`)
+  assert(r2.origins.web_fetch?.why === 'search' && r2.origins.web_fetch.turn === 2, JSON.stringify(r2.origins))
+  assert(r2.origins.read_document?.why === 'scored', JSON.stringify(r2.origins))
+})
+
 await test('🔒 an empty selection falls back to the full list rather than stripping everything', async () => {
   resetToolFilterState()
   // An embedder that answers with vectors of the wrong length: every cosine is

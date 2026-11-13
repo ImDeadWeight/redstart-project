@@ -769,6 +769,25 @@ async function main() {
     }
   })
 
+  await test('🔍 the report carries each sent tool\'s turn and reason, and the would-add count (6.1)', async () => {
+    await withStubEmbedder(async () => {
+      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+      const res = await completions({
+        messages: [{ role: 'user', content: 'what changed in the git repo this week' }],
+        tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch'), toolDef('search_tools')],
+        redstart_retrieval_report: true,
+        redstart_conversation_id: 'origin-test',
+      })
+      const origin = res.headers.get('x-redstart-tools-origin') ?? ''
+      assert(/(^|,)git_status=1:first(,|$)/.test(origin), `origin: ${origin}`)
+      assert(/(^|,)search_tools=1:always(,|$)/.test(origin), `origin: ${origin}`)
+      assert(!/create_document/.test(origin), `a tool not sent has an origin: ${origin}`)
+      assert(res.headers.get('x-redstart-tools-would-add') === '0', 'would-add on a scored set')
+      const plain = await completions({ messages: [{ role: 'user', content: 'what changed in the git repo this week' }], tools: [toolDef('git_status')] })
+      assert(plain.headers.get('x-redstart-tools-origin') === null, 'the record went to a caller who did not ask')
+    })
+  })
+
   await test('🔍 only the literal false opts out of retrieval', async () => {
     await withStubEmbedder(async () => {
       updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })

@@ -91,7 +91,12 @@ The gateway rewrites the request before forwarding:
   percent-encoded), `x-redstart-tools-filtered` (`1` when retrieval removed
   any tool, otherwise `0`) and `x-redstart-retrieval` (`on` when retrieval ran
   on this request, even if it kept every tool; `off` when it is disabled or the
-  request opted out); all three are listed in
+  request opted out), `x-redstart-tools-origin` (for each tool sent, when it
+  came into this conversation and why, as `name=turn:why` comma-separated;
+  `turn` counts user messages, `why` is `first`, `scored`, `called`,
+  `search`, `describe`, `always` or `family`; empty when retrieval did not
+  select) and `x-redstart-tools-would-add` (how many tools a frozen tool set
+  left out this turn); all five are listed in
   `Access-Control-Expose-Headers`. Only the literal `true` asks; the field is
   consumed and never forwarded. The names go to the caller only, never to the
   log

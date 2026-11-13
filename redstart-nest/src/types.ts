@@ -169,6 +169,8 @@ export type ToolContextEstimate = {
     ctxSize: number | null
     /** Whether tool retrieval was switched on for that request. */
     filtered: boolean
+    /** Tools a frozen set (growth 'pins-only') left out that scoring would have added. */
+    wouldAdd?: number
   } | null
 }
 
