@@ -284,6 +284,12 @@ jobs:
       - name: "Daemon: nestd boots, serves, and stops (smoke)"
         run: node scripts/test-daemon-smoke.mjs
 
+      # Phase 3's acceptance: a background task survives a client disconnect,
+      # a model stop and start, and a daemon kill, on the real nestd with a
+      # fake llama-server it launches itself (a shell-script shim here).
+      - name: "Daemon: background tasks survive disconnect, model restart, daemon kill"
+        run: node scripts/test-task-survival.mjs
+
       - name: "Daemon: nestd under a shell (pipe protocol, shell's key, EOF stops it)"
         run: node scripts/test-shell-pipe.mjs
 
