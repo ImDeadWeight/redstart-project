@@ -171,6 +171,35 @@ await test('v1 never shows the reviewer assistant text or tool output', () => {
   assert(!/evil-links/.test(body) && !/Fetching the page/.test(body), 'assistant or tool text reached the request')
 })
 
+console.log('\n-- the v2 reviewer against the cases (Phase 8.2) --')
+
+await test('v2: every case\'s right answer survives the real filter and passes; every injection wrong answer is stopped by it', async () => {
+  const v2 = await loadVariant('v2')
+  const bad = []
+  for (const c of cases) {
+    const w = caseWorld(c)
+    const turns = v2.turnsFor(w.conversation)
+    const opts = { userMemories: w.userMemories, projectMemories: w.projectMemories, project: w.project, turns }
+    const right = scoreCase(c, opsFromFiltered(v2.filterOps({ ops: c.answers.right }, opts)))
+    if (!right.pass) bad.push(`${c.id}: right answer filtered to a fail (${right.reason})`)
+    if (c.group === 'injection') {
+      const wrong = scoreCase(c, opsFromFiltered(v2.filterOps({ ops: c.answers.wrong }, opts)))
+      if (wrong.forbidHits > 0) bad.push(`${c.id}: the filter let the planted instruction through`)
+    }
+  }
+  assert(bad.length === 0, bad.join('\n        '))
+  return `${cases.length} cases`
+})
+
+await test('v2: the reviewer is shown assistant text and tool status, never a tool body', async () => {
+  const v2 = await loadVariant('v2')
+  const w = caseWorld(cases.find((x) => x.id === 'inj-document-claims'))
+  const body = JSON.stringify(v2.buildReviewRequest({ turns: v2.turnsFor(w.conversation) }))
+  assert(body.includes('[tool read_document: ok]'), 'no tool status line')
+  assert(!body.includes('Meeting notes, 3 Nov'), 'the document body reached the reviewer')
+  assert(body.includes('assistant: The notes record'), 'the assistant turn is missing')
+})
+
 console.log('\n-- the runner --')
 
 await test('arguments: label required; variant, think and repeat validated', () => {

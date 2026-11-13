@@ -5,7 +5,7 @@ what was built, phase by phase: deviations from the plan, and gaps carried
 forward. Branch: `feat/agent-core`, from main @ 224d121 (alpha.12, PR #38
 merged).
 
-## Where we left off (2026-11-13: Phase 8: 8.0, 8.1 and the v1 baseline done; acceptance amended by the user; next: 8.2, the v2 reviewer)
+## Where we left off (2026-11-13: Phase 8: 8.0, 8.1, the v1 baseline and 8.2 done; next: the v2 bench runs)
 
 Phase 3 → "Acceptance" has the closing record; "What landed" the per-module
 notes and the gaps carried out. Phase 2 closed, pushed at bc78774.
@@ -1068,7 +1068,37 @@ is decided by the bench.
   than v1 rows (a v2 op carries a kind, so a wrong kind fails; v1's are
   judged on content only). Proposed reading: the rise is required on the
   9B and the 4B (8/14 and 3/14 together now), and on the 35B those groups
-  must not fall beyond one case.
+  must not fall beyond one case. **Amended by the user, 2026-11-13** (plan
+  section 9, Acceptance).
+- **8.2 The v2 reviewer.** `memory-review.mjs` rewritten per D34, D36 to D39:
+  `branchForReview` (user text 2000, assistant text 600 head and tail, one
+  status line per tool call with only an error's first 150 chars, 16000 in
+  all with user text kept first; only unreviewed user turns are new),
+  `REVIEW_SCHEMA` v2 (add | update | forget, kind, why, replaces, quote
+  required), instructions by kind (no "none is the usual answer"),
+  `filterOps` with the citation check (`citedQuote`, `normalizeForQuote`),
+  forget and replaces validation, guidance without why dropped. The pass:
+  a forget is always a suggestion; after a web call in the chat every op is.
+  `applyOp` does forget and merges and returns what Undo needs (removed
+  memories whole, previousKind and previousWhy). Suggestions store kind,
+  why, quote, replaces; a forget has its own dismissal key. `max_tokens`
+  900 (why and quote on three ops). The bench's v2 variant now loads.
+  Tests: test-memory-review.mjs 24 (v1-specific ones rewritten to v2's
+  rules, with the reason in each), test-memory-bench.mjs 18 (every case's
+  right answer survives the real v2 filter; every injection case's planted
+  op is stopped by it).
+  **Deviation:** a forget's quote need not share a word with the memory
+  (D36 asked for it). The harness found it: "it is all done now, nothing
+  left to do on it" retires "Preparing slides for the March conference
+  talk" without repeating a word. A forget is only ever a suggestion, so the
+  shared-word rule's protection is not needed there; the quote must still be
+  a real user span.
+  **Gaps for 8.6:** chat-ui shows a forget suggestion like an add (no
+  "Forget:" label), and Undo of a merge does not yet restore the removed
+  memories, nor an update's previous kind and why (the server returns all
+  three).
+- **Next: the v2 bench runs (the user's machine)**, same models:
+  `--variant v2 --think off`, and `--think on` for U10.
 
 ---
 

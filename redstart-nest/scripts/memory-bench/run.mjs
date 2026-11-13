@@ -30,7 +30,7 @@ import { execFileSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { findCaseFiles, loadCase, caseWorld, GROUPS } from './lib/case-file.mjs'
+import { findCaseFiles, loadCase, caseWorld, GROUPS, CASE_NOW } from './lib/case-file.mjs'
 import { opsFromRaw, opsFromFiltered, scoreCase } from './lib/score.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -67,7 +67,7 @@ export async function loadVariant(name) {
   }
   return {
     name: 'v2',
-    turnsFor: (conversation) => mod.branchForReview(conversation, new Set()),
+    turnsFor: (conversation) => mod.branchForReview(conversation, new Set()).turns,
     buildReviewRequest: mod.buildReviewRequest,
     filterOps: mod.filterOps,
   }
@@ -100,7 +100,7 @@ export function upstreamCaller(port) {
 export async function runCase(variant, c, callModel, { think = 'off', runIndex = 0 } = {}) {
   const world = caseWorld(c)
   const turns = variant.turnsFor(world.conversation)
-  const body = withThinking(variant.buildReviewRequest({ turns, userMemories: world.userMemories, projectMemories: world.projectMemories, project: world.project }), think)
+  const body = withThinking(variant.buildReviewRequest({ turns, userMemories: world.userMemories, projectMemories: world.projectMemories, project: world.project, now: CASE_NOW }), think)
   const started = Date.now()
   let answer = null
   let error = null
@@ -112,7 +112,8 @@ export async function runCase(variant, c, callModel, { think = 'off', runIndex =
   } catch (err) {
     error = err.message
   }
-  const filtered = variant.filterOps(answer, { userMemories: world.userMemories, projectMemories: world.projectMemories, project: world.project, conversation: world.conversation })
+  // The turns the reviewer was shown are what a quote may cite (v2, D36); v1 ignores them.
+  const filtered = variant.filterOps(answer, { userMemories: world.userMemories, projectMemories: world.projectMemories, project: world.project, turns })
   const rawOps = opsFromRaw(answer)
   const keptOps = opsFromFiltered(filtered)
   return {

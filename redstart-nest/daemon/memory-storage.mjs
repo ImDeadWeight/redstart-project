@@ -232,7 +232,8 @@ export function deleteProjectMemories(account, projectId) {
 
 const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'is', 'are', 'for', 'on', 'with', 'what', 'does', 'do', 'my', 'i', 'me', 'user', 'uses', 'use'])
 
-function tokens(s) {
+/** Content words (lower case, stop words and 1-letter words dropped). memory-review's citation check shares it. */
+export function tokens(s) {
   return String(s).toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 1 && !STOP.has(t))
 }
 
