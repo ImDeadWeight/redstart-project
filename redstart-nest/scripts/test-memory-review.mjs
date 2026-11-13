@@ -418,12 +418,32 @@ await test('prompt selection: memories relevant to the message first, then newes
   assert(none.chosen.map((m) => m.id).join() === '5,4', 'an unmatched query changed the order')
 })
 
-await test('the gateway reads the latest user message for relevance, text parts only', async () => {
-  const { latestUserText } = await import('../daemon/tools-gateway.mjs')
-  assert(latestUserText([{ role: 'user', content: 'old' }, { role: 'assistant', content: 'x' }, { role: 'user', content: 'new one' }]) === 'new one', 'not the latest')
-  assert(latestUserText([{ role: 'user', content: [{ type: 'text', text: 'a' }, { type: 'image_url', image_url: { url: 'data:x' } }, { type: 'text', text: 'b' }] }]) === 'a b', 'parts')
-  assert(latestUserText([{ role: 'assistant', content: 'x' }]) === '' && latestUserText(undefined) === '', 'no user message')
-  assert(latestUserText([{ role: 'user', content: 'y'.repeat(5000) }]).length === 2000, 'not capped')
+// D40: picking by the latest message changed the block on most turns, and
+// the block sits ahead of the whole chat, so llama-server prefilled the whole
+// conversation again each turn (measure-memory-cache.mjs). This test pinned
+// "the latest" before; it now pins the first, on purpose.
+await test('the gateway reads the FIRST user message for relevance, text parts only (D40)', async () => {
+  const { firstUserText } = await import('../daemon/tools-gateway.mjs')
+  assert(firstUserText([{ role: 'user', content: 'old' }, { role: 'assistant', content: 'x' }, { role: 'user', content: 'new one' }]) === 'old', 'not the first')
+  assert(firstUserText([{ role: 'system', content: 's' }, { role: 'user', content: [{ type: 'text', text: 'a' }, { type: 'image_url', image_url: { url: 'data:x' } }, { type: 'text', text: 'b' }] }]) === 'a b', 'parts')
+  assert(firstUserText([{ role: 'assistant', content: 'x' }]) === '' && firstUserText(undefined) === '', 'no user message')
+  assert(firstUserText([{ role: 'user', content: 'y'.repeat(5000) }]).length === 2000, 'not capped')
+})
+
+await test('the memory block is the same on every turn of a chat, and changes when a memory does (D40, the prompt cache)', async () => {
+  const { injectSystemContext } = await import('../daemon/tools-gateway.mjs')
+  const CAROL = { id: 'carol-3', username: 'carol' }
+  for (const t of ['Has a dog named Biscuit', 'Lives in Denver', 'Uses Postgres 16 at work for the database', 'Plays the cello on Wednesdays', 'Writes in British English']) memory.saveMemory(CAROL, t)
+  const tight = { memory: { enabled: true, promptBudgetChars: 60 } } // room for two, so the pick matters
+  const sys = (msgs) => injectSystemContext(msgs.map((m) => ({ ...m })), tight, { account: CAROL })[0].content
+  const turn1 = [{ role: 'user', content: 'Plan a walk for the dog this weekend.' }]
+  const turn2 = [...turn1, { role: 'assistant', content: 'Sure.' }, { role: 'user', content: 'Which database version do I use?' }]
+  const a = sys(turn1)
+  const b = sys(turn2)
+  assert(a.includes('Biscuit'), 'the first message did not pick its memory')
+  assert(a === b, 'the system prompt changed between two turns of one chat: the prompt cache is lost on every turn')
+  memory.saveMemory(CAROL, 'Dog walks happen at noon')
+  assert(sys(turn2) !== b, 'a new memory did not reach the block')
 })
 
 console.log('\n-- the v2 pass (agent-runtime Phase 8.2: D36 to D38) --')

@@ -293,7 +293,9 @@ export const DEFAULT_PROMPT_BUDGET_CHARS = 1200   // ≈ 300 tokens (plan §3)
  * The memories that fit the budget, plus how many did not. Pure over its
  * input, which is newest first.
  *
- * With a `query` (the latest user message), memories sharing words with it
+ * With a `query` (the chat's FIRST user message, so the block stays the same
+ * across turns and the prompt cache holds: agent-runtime D40, tools-gateway
+ * firstUserText), memories sharing words with it
  * come first, best match first, then the rest newest first (projects-plan
  * D20). Recency alone dropped an old fact the moment it mattered: "what
  * database do I use?" in a chat where twenty newer memories had pushed

@@ -14,6 +14,10 @@ Owed: the 35B with `--think on --think-budget 8192` decides its setting
 (and whether the budget must be per profile too); the user sets thinking
 on for the Ornith profile; nobody has clicked the switch yet. Details:
 Phase 8 → "8.3". Item 1 below is done; start at item 2 (8.4).
+**8.4's cache check is done:** the per-message pick broke the cache
+(0 tokens reused per turn on Ornith), so the gateway now picks by the
+chat's first user message (Phase 8 → "The D40 cache check"). Next: the
+8.4 prompt block itself.
 
 **Handoff for a fresh session (written 2026-11-13).** Branch
 `feat/agent-core`, head b527c2c, clean. **Pushed only to 10ea361**: 17
@@ -1210,7 +1214,34 @@ is decided by the bench.
   (a legacy profile reviews with thinking off; the setting survives
   narrowing). **Not clicked yet:** the Tools tab switch in the running
   launcher, and a thinking review through a real Nest (the bench calls
-  llama-server directly).
+  llama-server directly). (The user turned it on for the Ornith profile,
+  2026-11-13.)
+- **The D40 cache check, before 8.4 (2026-11-13): it broke the cache, so
+  the selection is pinned.** `scripts/measure-memory-cache.mjs` composes the
+  real system prompt (composePrompt + selectForPrompt) for the last five
+  turns of an 8k-token chat, sends them straight to llama-server on one
+  slot, and reads `timings.cache_n` / `prompt_n`. On Ornith 9B: picked by
+  the latest message, **0 tokens reused on every turn**, 7.8k prefilled,
+  5.5 s each; picked once, ~7700 reused, 100-300 prefilled, 0.2 s. Not even
+  the system prompt ahead of block 12 was reused: Ornith is a hybrid
+  model, and llama-server keeps no partial prefix for those, so any change
+  means a full prefill (at 100k tokens, over a minute a turn). The session
+  block holds only the date, so it was not a cause.
+  **Fix (its own commit, as the plan asks):** the gateway picks by the
+  chat's FIRST user message (`firstUserText`, was `latestUserText`). The
+  request carries the whole chat, so that is the same text every turn: the
+  block changes only when a memory does, and no state is kept. That is
+  D40's "pin at the first request, refresh when a memory changes" with
+  nothing to store. Cost: relevance to a later question is lost (projects
+  D20's "what database do I use?" case), and memory_search covers it, as
+  the block says when memories are left out. Tests: the old "latest
+  message" test rewritten to pin the first (on purpose, said in the test);
+  a new one composes two turns through `injectSystemContext` and requires
+  the same system prompt, and a changed one after a save. security.md →
+  Memory says "the chat's first message".
+  **Gap, not fixed here:** with tool retrieval on, the tool list changes
+  per turn too, which breaks the same cache (tools sit ahead of the chat
+  in the template). Not measured; for the retrieval work, not Phase 8.
 
 ---
 

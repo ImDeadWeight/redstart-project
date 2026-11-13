@@ -66,13 +66,24 @@ function resolveProject(account, claimed) {
   return project ? { id: project.id, name: project.name, instructions: project.instructions } : null
 }
 
-// The latest user message's text, which picks the most relevant memories for
-// this turn (memory-storage selectForPrompt). Content may be a string or an
+// The FIRST user message's text, which picks the most relevant memories for
+// the chat (memory-storage selectForPrompt). Content may be a string or an
 // OpenAI parts array; only text parts count, and only the first 2000 chars.
-export function latestUserText(messages) {
-  const last = [...(messages || [])].reverse().find((m) => m?.role === 'user')
-  if (!last) return ''
-  const c = last.content
+//
+// The first, not the latest (agent-runtime D40): the memory block sits in the
+// system prompt, ahead of the whole chat, and picking by the latest message
+// changed it on most turns. measure-memory-cache.mjs on Ornith 9B, an 8k-token
+// chat: 0 tokens reused from the cache on every turn and 5.5 s of prefill each
+// (a hybrid model reuses no partial prefix at all), against ~7700 reused and
+// 0.2 s with the selection pinned. The request carries the whole chat, so its
+// first user message is the same on every turn: the block now changes only
+// when a memory does, with no state kept here. What a later question needs
+// and the first did not pull in is one memory_search away (the block says so
+// when memories are left out).
+export function firstUserText(messages) {
+  const first = (messages || []).find((m) => m?.role === 'user')
+  if (!first) return ''
+  const c = first.content
   const text = typeof c === 'string'
     ? c
     : Array.isArray(c) ? c.filter((p) => p?.type === 'text' && typeof p.text === 'string').map((p) => p.text).join(' ') : ''
@@ -129,8 +140,8 @@ function toolNamesIn(parsed) {
 // client text lands after the precedence clause and is thereby subordinated to
 // admin policy (spec §4). Phase 7 stops accepting client system prose
 // altogether; until then this ordering is what makes the floor hold.
-function injectSystemContext(messages, config, facts) {
-  const context = buildSystemContext(config, facts, latestUserText(messages))
+export function injectSystemContext(messages, config, facts) {
+  const context = buildSystemContext(config, facts, firstUserText(messages))
   const sysIdx = messages.findIndex(m => m.role === 'system')
   if (sysIdx >= 0) {
     messages[sysIdx] = { ...messages[sysIdx], content: `${context}\n\n${messages[sysIdx].content}` }
