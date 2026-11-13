@@ -302,6 +302,12 @@ async function main() {
   client.close()
   stopMcpServer()
   stopGateway()
+  // Let the servers' handles finish closing before process.exit below. On
+  // Windows, exiting while one is mid-close aborts Node with libuv's
+  // "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)" (0xC0000409):
+  // every test passed, and the suite still failed, intermittently
+  // (2026-11-12: 4 of 4 runs on one checkout, 1 of 4 on the next).
+  await new Promise((resolve) => setTimeout(resolve, 250))
 
   // ---------------------------------------------------------------------------
   // Cleanup + summary
