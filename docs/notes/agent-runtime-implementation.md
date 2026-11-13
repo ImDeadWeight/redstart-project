@@ -8,7 +8,7 @@ merged).
 ## Where we left off (2026-11-13: Phase 8: 8.0, 8.1, 8.2 done and measured on three models; next: 8.3, then 8.4 to 8.6)
 
 **Handoff for a fresh session (written 2026-11-13).** Branch
-`feat/agent-core`, head b527c2c, clean. **Pushed only to 10ea361**: about 25
+`feat/agent-core`, head b527c2c, clean. **Pushed only to 10ea361**: 17
 commits since (all of Phase 8 so far, plus the 3.11 close) are local. Ask
 the user before pushing. Phases 0 to 3 are closed (Phase 3 → "Acceptance").
 
