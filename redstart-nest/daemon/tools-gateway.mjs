@@ -39,6 +39,7 @@ import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/docume
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
 import { filterRequestTools, estimateMessagesTokens, recordWireCost } from './tool-filter.mjs'
+import { isConversationId } from './tool-retrieval.mjs'
 
 let gatewayServer = null
 
@@ -273,6 +274,16 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   const reportRequested = parsed.redstart_retrieval_report === true
   delete parsed.redstart_retrieval_report
 
+  // Redstart-specific request field: `redstart_conversation_id`, the client's
+  // id for this conversation. Retrieval keys the set it applied last turn on
+  // it (tool-retrieval.mjs conversationKey), under the caller's account, so
+  // an id can only ever name the caller's own entry; without it the key is a
+  // hash of the first user message, which compaction replaces (second pass
+  // 4.3). Anything but a short printable string is ignored. Consumed either
+  // way so llama-server never sees it.
+  const conversationId = isConversationId(parsed.redstart_conversation_id) ? parsed.redstart_conversation_id : null
+  delete parsed.redstart_conversation_id
+
   // BANS FIRST, PROMPT SECOND — and every value the prompt is derived
   // from is read AFTER this line. The capability claims must describe
   // what the model actually received this turn, which is the payload the
@@ -323,6 +334,7 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
       tools: parsed.tools,
       messages: parsed.messages || [],
       accountId,
+      conversationId,
       settings: effectiveConfig.toolRetrieval,
       ctxSize: effectiveConfig.ctxSize,
       reservedTokens: estimateMessagesTokens(pinsOnlyPrompt),

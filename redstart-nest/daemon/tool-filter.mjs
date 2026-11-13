@@ -135,6 +135,16 @@ export const RETRIEVAL_DEFAULTS = Object.freeze({
   // recall from 98.4% to 100% with fewer tools sent (13.9 against 16.1), and
   // every case it misses cosine misses too.
   scorer: 'fused',
+  // After the first selection of a conversation (second pass 4.1): 'scored'
+  // keeps adding tools that score well as the conversation moves, which
+  // changes the prompt ahead of the chat each time (P2); 'pins-only' freezes
+  // the set, adding only what the model called or searched for. 'scored'
+  // until discovery (Phase 5) has been measured to bring back what freezing
+  // leaves out (U1, U5).
+  growth: 'scored',
+  // The fewest tools a first selection chooses by score, pins not counted
+  // (4.2). 0 is off; the plan proposed 8, the user's call (U2).
+  minTools: 0,
 })
 
 /**
@@ -202,7 +212,8 @@ function rankTools({ tools, queryVector, queryText, config }) {
  *   tools: any[],
  *   messages: any[],
  *   accountId?: string|null,
- *   settings?: { enabled?: boolean, relativeFloor?: number, floor?: number, margin?: number, textVersion?: number, scorer?: string },
+ *   conversationId?: string|null,
+ *   settings?: { enabled?: boolean, relativeFloor?: number, floor?: number, margin?: number, textVersion?: number, scorer?: string, growth?: 'scored'|'pins-only', minTools?: number },
  *   ctxSize?: number,
  *   reservedTokens?: number,
  *   embed?: typeof embedTexts,
@@ -210,7 +221,7 @@ function rankTools({ tools, queryVector, queryText, config }) {
  * @returns {Promise<any[]>}
  */
 export async function filterRequestTools({
-  tools, messages, accountId, settings, ctxSize, reservedTokens = 0, embed = defaultEmbed,
+  tools, messages, accountId, conversationId = null, settings, ctxSize, reservedTokens = 0, embed = defaultEmbed,
 }) {
   const config = resolveRetrievalSettings(settings)
   if (!config.enabled) return tools
@@ -234,11 +245,11 @@ export async function filterRequestTools({
     const queryVectors = await embed([queryText])
     if (!queryVectors) return unchanged(tools, 'no-embedding-server')
 
-    const key = conversationKey(messages, accountId)
+    const key = conversationKey(messages, accountId, conversationId)
     const scored = rankTools({ tools, queryVector: queryVectors[0], queryText, config })
     const budgetTokens = toolBudget(ctxSize, reservedTokens)
 
-    const { selected, dropped, reason } = selectTools({
+    const { selected, dropped, reason, wouldAdd } = selectTools({
       scored,
       // Host-resolved tools are always kept (tools-definitions.mjs,
       // HOST_RESOLVED_TOOL_NAMES): asking scores against no task in
@@ -255,6 +266,8 @@ export async function filterRequestTools({
       relativeFloor: config.relativeFloor,
       margin: config.margin,
       families: TOOL_FAMILIES,
+      growth: config.growth === 'pins-only' ? 'pins-only' : 'scored',
+      minTools: config.minTools,
     })
 
     // Nothing survived. That is a scorer that has gone wrong, not a request
@@ -281,6 +294,9 @@ export async function filterRequestTools({
       ms: Date.now() - startedAt,
       budgetTokens: Number.isFinite(budgetTokens) ? budgetTokens : null,
       sentTokens: estimateToolTokens(selected),
+      // What a frozen set left out this turn (4.1): 0 unless growth is
+      // 'pins-only'. A count, like everything here.
+      would_add: wouldAdd,
     })
     return selected
   } catch (err) {

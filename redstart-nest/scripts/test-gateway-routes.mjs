@@ -762,6 +762,13 @@ async function main() {
     })
   })
 
+  await test('🔒 redstart_conversation_id is consumed and never forwarded, valid or not', async () => {
+    for (const id of ['conv-123', 'bad id with spaces', 42]) {
+      await completions({ ...retrievalBody(), redstart_conversation_id: id })
+      assert(!('redstart_conversation_id' in lastForwarded), `the Redstart-only field was forwarded (${JSON.stringify(id)})`)
+    }
+  })
+
   await test('🔍 only the literal false opts out of retrieval', async () => {
     await withStubEmbedder(async () => {
       updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })

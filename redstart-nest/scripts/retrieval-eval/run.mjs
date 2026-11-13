@@ -24,7 +24,7 @@
 //
 //   node scripts/retrieval-eval/run.mjs [--port 19084] [--source <name>]
 //     [--json <file>] [--text-version 1|2] [--scorer cosine|bm25|fused]
-//     [--relative-floor x] [--floor x] [--margin x] [--freeze]
+//     [--relative-floor x] [--floor x] [--margin x] [--min-tools n] [--freeze]
 //
 // --text-version scores with that RETRIEVAL_DEFAULTS.textVersion (1: today's
 // embedded text; 2: the query without the attachment note, tools with their
@@ -72,6 +72,10 @@ export function parseArgs(argv) {
       const n = Number(v)
       if (!Number.isFinite(n)) throw new Error(`${a} needs a number`)
       opts.settings[a === '--relative-floor' ? 'relativeFloor' : a.slice(2)] = n
+    } else if (a === '--min-tools') {
+      const n = Number(v)
+      if (!Number.isInteger(n) || n < 0) throw new Error('--min-tools needs a whole number')
+      opts.settings.minTools = n
     } else if (a === '--text-version') {
       const n = Number(v)
       if (n !== 1 && n !== 2) throw new Error('--text-version is 1 or 2')

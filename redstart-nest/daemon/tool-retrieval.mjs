@@ -501,7 +501,21 @@ export function rescore({ scored, keyword, scorer = 'cosine', k = RRF_K }) {
  *   relativeFloor?: number,
  *   margin?: number,
  *   families?: Iterable<Iterable<string>>,
+ *   growth?: 'scored' | 'pins-only',
+ *   minTools?: number,
  * }} args
+ *   `growth` (second pass 4.1): with `previous` and 'pins-only', the set is
+ *   frozen after the first selection: `previous` plus the pins (and their
+ *   families), never a newly scored tool, so the prompt ahead of the chat
+ *   stays byte-identical (P2). Scoring still runs, and `wouldAdd` counts what
+ *   'scored' would have added, so the cost of freezing stays visible. A
+ *   previous tool the request no longer carries (banned since, or dropped by
+ *   the client) leaves, as it always did.
+ *   `minTools` (4.2): on a FIRST selection (no `previous`), keep adding by
+ *   score past the floors and the margin until this many tools were chosen by
+ *   score, pins not counted, inside the budget. A frozen set that starts at
+ *   two tools stays at two.
+ * @returns {{ selected: any[], dropped: any[], reason: string, wouldAdd: number }}
  *   `families`: tools that only make sense together. Once any member is
  *   selected, every other member the request carries comes with it, past
  *   the floor, the margin and the budget (a family is a few small tools).
@@ -509,12 +523,12 @@ export function rescore({ scored, keyword, scorer = 'cosine', k = RRF_K }) {
  *   Added 2026-11-12: memory_save was selected for "remember X, then forget
  *   Y" and memory_forget was dropped, so the model said it had no way to
  *   forget and told the user it had, with the memory still saved.
- * @returns {{ selected: any[], dropped: any[], reason: string }}
  */
-export function selectTools({ scored, pins, previous, budgetTokens = Infinity, floor = 0, relativeFloor = 0, margin = 0, families = [] }) {
+export function selectTools({ scored, pins, previous, budgetTokens = Infinity, floor = 0, relativeFloor = 0, margin = 0, families = [], growth = 'scored', minTools = 0 }) {
   const entries = Array.isArray(scored) ? scored : []
   const pinned = new Set(pins ?? [])
   const carried = new Set(previous ?? [])
+  const frozen = growth === 'pins-only' && carried.size > 0
 
   /** @type {Map<string, { tool: any, name: string, score: number }>} */
   const included = new Map()
@@ -543,9 +557,13 @@ export function selectTools({ scored, pins, previous, budgetTokens = Infinity, f
   const effectiveFloor = (relativeFloor > 0 && best > 0) ? Math.max(floor, best * relativeFloor) : floor
 
   let budgetBit = false, floorBit = false, marginBit = false
+  // Frozen, the scored pass runs on a copy: what it would add is counted and
+  // nothing is.
+  const target = frozen ? new Map(included) : included
+  let scoredCount = 0
 
   for (const entry of entries) {
-    if (included.has(entry.name)) continue
+    if (target.has(entry.name)) continue
     if (entry.score < effectiveFloor) { floorBit = true; continue }
     if (weakestIncluded !== null && entry.score < weakestIncluded + margin) { marginBit = true; continue }
     const cost = estimateToolTokens(entry.tool)
@@ -553,8 +571,25 @@ export function selectTools({ scored, pins, previous, budgetTokens = Infinity, f
     // trying smaller ones — "the next cheap thing squeezed in" is exactly the
     // kind of set that reshuffles between turns.
     if (spent + cost > budgetTokens) { budgetBit = true; break }
-    included.set(entry.name, entry)
+    target.set(entry.name, entry)
     spent += cost
+    scoredCount++
+  }
+  const wouldAdd = frozen ? target.size - included.size : 0
+
+  // The minimum (4.2): a first selection only, best score first, inside the
+  // budget, stopping at the first tool that does not fit as above.
+  const minimum = Number.isInteger(minTools) && minTools > 0 ? minTools : 0
+  if (!frozen && carried.size === 0 && scoredCount < minimum && !budgetBit) {
+    for (const entry of entries) {
+      if (scoredCount >= minimum) break
+      if (included.has(entry.name)) continue
+      const cost = estimateToolTokens(entry.tool)
+      if (spent + cost > budgetTokens) { budgetBit = true; break }
+      included.set(entry.name, entry)
+      spent += cost
+      scoredCount++
+    }
   }
 
   for (const family of families ?? []) {
@@ -571,9 +606,9 @@ export function selectTools({ scored, pins, previous, budgetTokens = Infinity, f
 
   const reason = dropped.length === 0
     ? 'all-selected'
-    : budgetBit ? 'budget' : marginBit ? 'margin' : floorBit ? 'floor' : 'all-selected'
+    : frozen ? 'frozen' : budgetBit ? 'budget' : marginBit ? 'margin' : floorBit ? 'floor' : 'all-selected'
 
-  return { selected, dropped, reason }
+  return { selected, dropped, reason, wouldAdd }
 }
 
 // ---------------------------------------------------------------------------
@@ -700,13 +735,33 @@ function messageText(content) {
  *
  * @param {any[]} messages
  * @param {string|null|undefined} accountId
+ * @param {string|null} [conversationId]
  * @returns {string}
  */
-export function conversationKey(messages, accountId) {
+export function conversationKey(messages, accountId, conversationId = null) {
+  // A conversation id the client sent (redstart_conversation_id, second pass
+  // 4.3) is the better key: compaction folds the first user message into a
+  // summary, after which the hash below names a different conversation and
+  // the frozen set would be chosen again. Still under the account, so an id
+  // can only ever name the caller's own entry.
+  if (isConversationId(conversationId)) {
+    return createHash('sha256').update(`${accountId ?? ''}\u0000id\u0000${conversationId}`).digest('hex')
+  }
   const first = (Array.isArray(messages) ? messages : []).find(m => m?.role === 'user')
   return createHash('sha256')
     .update(`${accountId ?? ''}\u0000${messageText(first?.content)}`)
     .digest('hex')
+}
+
+/**
+ * A usable client conversation id: a non-empty string of at most 128
+ * printable ASCII characters. Anything else is ignored, never an error.
+ *
+ * @param {unknown} id
+ * @returns {id is string}
+ */
+export function isConversationId(id) {
+  return typeof id === 'string' && id.length > 0 && id.length <= 128 && /^[\x21-\x7e]+$/.test(id)
 }
 
 /**

@@ -65,6 +65,8 @@ function retrievalSettings(llamaConfig) {
     ...(Number.isFinite(r?.margin) ? { margin: r.margin } : {}),
     ...(r?.textVersion === 1 || r?.textVersion === 2 ? { textVersion: r.textVersion } : {}),
     ...(SCORERS.includes(r?.scorer) ? { scorer: r.scorer } : {}),
+    ...(r?.growth === 'scored' || r?.growth === 'pins-only' ? { growth: r.growth } : {}),
+    ...(Number.isInteger(r?.minTools) && r.minTools >= 0 && r.minTools <= 64 ? { minTools: r.minTools } : {}),
   }
 }
 

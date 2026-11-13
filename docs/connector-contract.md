@@ -79,6 +79,12 @@ The gateway rewrites the request before forwarding:
   retrieval. For a connector that sends its own short, curated tool list and
   has no `search_tools` to recover a dropped tool. Bans still apply. Only the
   literal `false` counts; the field is consumed and never forwarded
+- `redstart_conversation_id` — your id for this conversation (a printable
+  ASCII string of at most 128 characters; anything else is ignored). Tool
+  retrieval keys the tool set it chose for the conversation on it, under your
+  account, so the set survives your client compacting or trimming the opening
+  message. Without it the key is a hash of the first user message. Consumed and
+  never forwarded
 - `redstart_retrieval_report: true` — report which tools were actually
   forwarded, after bans and retrieval. The response carries
   `x-redstart-tools-sent` (the tool names, comma-separated, each one

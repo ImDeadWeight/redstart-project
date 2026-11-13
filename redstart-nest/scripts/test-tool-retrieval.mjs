@@ -907,6 +907,48 @@ await test('a tool result from something OTHER than search_tools pins nothing', 
   assert(!pins.has('delete_everything'), 'a tool result could name its own pins — content is not authority')
 })
 
+console.log('\n-- freezing and the minimum (second pass 4.1, 4.2) --')
+
+await test('🔒 a frozen set stays byte-identical while the query drifts, and counts what it left out', () => {
+  const previous = ['a', 'b']
+  const turn1 = scoredList([['a', 0.9], ['b', 0.8], ['c', 0.1], ['d', 0.1]])
+  const turn2 = scoredList([['c', 0.95], ['d', 0.9], ['a', 0.2], ['b', 0.1]])
+  const one = selectTools({ scored: turn1, previous, growth: 'pins-only', relativeFloor: 0.85 })
+  const two = selectTools({ scored: turn2, previous, growth: 'pins-only', relativeFloor: 0.85 })
+  assert(JSON.stringify(one.selected) === JSON.stringify(two.selected), 'the frozen set changed with the query')
+  assert(two.selected.map(toolName).join() === 'a,b', `got ${two.selected.map(toolName)}`)
+  assert(two.wouldAdd === 2 && two.reason === 'frozen', `wouldAdd ${two.wouldAdd}, reason ${two.reason}`)
+  const scoredGrowth = selectTools({ scored: turn2, previous, relativeFloor: 0.85 })
+  assert(scoredGrowth.selected.length === 4 && scoredGrowth.wouldAdd === 0, 'setup: scored growth should add c and d')
+})
+
+await test('🔍 a frozen set still takes a pin (a search hit, a call) and its family', () => {
+  const scored = scoredList([['a', 0.9], ['found', 0.1], ['memory_save', 0.1], ['memory_forget', 0.1]])
+  const out = selectTools({ scored, previous: ['a'], pins: ['found', 'memory_save'], growth: 'pins-only', families: [['memory_save', 'memory_forget']] })
+  assert(out.selected.map(toolName).join() === 'a,found,memory_forget,memory_save', `got ${out.selected.map(toolName)}`)
+})
+
+await test('🔒 a frozen set loses a tool the request no longer carries', () => {
+  const out = selectTools({ scored: scoredList([['a', 0.9]]), previous: ['a', 'banned_since'], growth: 'pins-only' })
+  assert(out.selected.map(toolName).join() === 'a', `a tool not offered survived: ${out.selected.map(toolName)}`)
+})
+
+await test('a first selection is never frozen: pins-only with no previous selects by score', () => {
+  const out = selectTools({ scored: scoredList([['a', 0.9], ['b', 0.85], ['c', 0.1]]), growth: 'pins-only', relativeFloor: 0.85 })
+  assert(out.selected.map(toolName).join() === 'a,b', `got ${out.selected.map(toolName)}`)
+})
+
+await test('🔍 minTools tops up a first selection by score, pins not counted, inside the budget', () => {
+  const scored = scoredList([['a', 0.9], ['b', 0.5], ['c', 0.4], ['d', 0.3], ['p', 0.0]])
+  const out = selectTools({ scored, pins: ['p'], relativeFloor: 0.85, minTools: 3 })
+  assert(out.selected.map(toolName).join() === 'a,b,c,p', `got ${out.selected.map(toolName)}`)
+  const cost = estimateToolTokens(scored[0].tool)
+  const tight = selectTools({ scored, relativeFloor: 0.85, minTools: 3, budgetTokens: cost * 2 })
+  assert(tight.selected.length === 2 && tight.reason === 'budget', `the minimum broke the budget: ${tight.selected.map(toolName)}`)
+  const later = selectTools({ scored, previous: ['a'], relativeFloor: 0.85, minTools: 3 })
+  assert(later.selected.map(toolName).join() === 'a', `the minimum applied to a later turn: ${later.selected.map(toolName)}`)
+})
+
 console.log('\n-- the selection memory --')
 
 await test('the memory returns what was applied, and an empty list for a miss', () => {
@@ -1093,6 +1135,37 @@ await test('🔒 search_tools is pinned when the request carries it', async () =
   const st = fnTool('search_tools', 'zzz')
   const out = (await filterRequestTools({ tools: [...allTools, st], messages: ask, settings: { enabled: true }, embed })).map(toolName)
   assert(out.includes('search_tools'), `search_tools was dropped: ${out}`)
+})
+
+await test('the filter freezes with growth pins-only and passes minTools through', async () => {
+  resetToolFilterState()
+  const settings = { enabled: true, growth: 'pins-only', scorer: 'cosine' }
+  const first = (await filterRequestTools({ tools: allTools, messages: ask, settings, embed })).map(toolName)
+  const turn2 = [...ask, { role: 'assistant', content: 'ok' }, { role: 'user', content: 'now read a document' }]
+  const second = (await filterRequestTools({ tools: allTools, messages: turn2, settings: { ...settings, margin: 0 }, embed })).map(toolName)
+  assert(first.join() === second.join(), `the frozen set moved: ${first} -> ${second}`)
+  resetToolFilterState()
+  const min = (await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: true, minTools: 3, scorer: 'cosine' }, embed })).map(toolName)
+  assert(min.length === 3, `minTools did not top up: ${min}`)
+})
+
+await test('🔍 with a conversation id, the set survives the first message being compacted away (4.3)', async () => {
+  resetToolFilterState()
+  const settings = { enabled: true, growth: 'pins-only', scorer: 'cosine' }
+  const first = (await filterRequestTools({ tools: allTools, messages: ask, conversationId: 'conv-1', settings, embed })).map(toolName)
+  const compacted = [{ role: 'system', content: '[Conversation summary] the repo' }, { role: 'user', content: 'now read a document' }]
+  const kept = (await filterRequestTools({ tools: allTools, messages: compacted, conversationId: 'conv-1', settings: { ...settings, margin: 0 }, embed })).map(toolName)
+  assert(kept.join() === first.join(), `the id did not carry the set: ${first} -> ${kept}`)
+  const lost = (await filterRequestTools({ tools: allTools, messages: compacted, settings: { ...settings, margin: 0 }, embed })).map(toolName)
+  assert(lost.join() !== first.join(), 'setup: without the id the compacted conversation should select afresh')
+})
+
+await test('🔒 conversation ids are per account, and a malformed id falls back to the hash', () => {
+  assert(conversationKey(ask, 'alice', 'c1') !== conversationKey(ask, 'bob', 'c1'), 'two accounts shared an id key')
+  assert(conversationKey(ask, 'alice', 'c1') !== conversationKey(ask, 'alice'), 'the id was ignored')
+  for (const bad of ['', 'x'.repeat(129), 'has space', 'tab\t', 42, null, { id: 1 }]) {
+    assert(conversationKey(ask, 'alice', bad) === conversationKey(ask, 'alice'), `${JSON.stringify(bad)} was used as an id`)
+  }
 })
 
 await test('🔒 an empty selection falls back to the full list rather than stripping everything', async () => {
