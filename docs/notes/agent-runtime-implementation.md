@@ -5,7 +5,7 @@ what was built, phase by phase: deviations from the plan, and gaps carried
 forward. Branch: `feat/agent-core`, from main @ 224d121 (alpha.12, PR #38
 merged).
 
-## Where we left off (2026-11-12: Phase 3 CLOSED at ddb34a5; next: the user runs 3.11's measure-parallel.mjs, then decide U7: Phase 8 or Phase 4)
+## Where we left off (2026-11-12: Phase 3 CLOSED at ddb34a5, 3.11 measured and closed; next: decide U7, Phase 8 or Phase 4)
 
 Phase 3 → "Acceptance" has the closing record; "What landed" the per-module
 notes and the gaps carried out. Phase 2 closed, pushed at bc78774.
@@ -1225,12 +1225,29 @@ consider `-np` explicitly.
   17.5k prompt passed ~15k, llama-server logged "failed to find a memory
   slot" and purged slot 0's 17,502 cached tokens to make room. Slot 0 had
   finished, so nothing broke, but two live long contexts cannot both fit.
-  **For D29:** parallel generation pays for short and medium contexts, and
-  a long task beside a long chat competes for one pool (an eviction, or a
-  failed request). The one-at-a-time default stands until the corrected
-  script's rerun says what happens with two live long prompts. The script
-  now tags every prompt (no cache reuse), says "both fit" only when both
-  processed their whole prompt, and points at the log lines.
+  The script now tags every prompt (no cache reuse), says "both fit" only
+  when both processed their whole prompt, and points at the log lines.
+- **3.11, second run (the corrected script, same machine).** Throughput
+  repeated: 40.2 alone, 35.4 and 35.7 at once (88%). Both long prompts were
+  processed in full (17,515 and 17,513), but NOT side by side: the server
+  ran slot 1's prefill to the end (12.5 s), then slot 3's (the pair took
+  13.0 s and 26.2 s). At ~15k into slot 3 the log again shows "failed to
+  find a memory slot" and "purging slot 1 with 17516 tokens": the second
+  fit only because the first had finished and could be evicted. And while
+  one slot prefills a long prompt, the other slot's generation drops to
+  ~5 tok/s (4.86 here, 4.72 in run 1) from ~40.
+- **3.11 CLOSED: D29's answer.** (1) Two short generations at once cost
+  little: 88% each, 1.75x total. (2) Long contexts do not run in parallel
+  on this setup: the slots share one KV pool of n_ctx tokens (kv_unified),
+  an overflow evicts another slot's cache (a reprocess on its next turn),
+  and a long prefill starves the other slot's generation eightfold. So the
+  runner's default stays: one task generating at a time, a chat first
+  between turns. **Gaps carried:** a task turn already prefilling when a
+  chat message arrives still slows that chat's reply for the prefill's
+  length (the runner yields only between turns); allowing two at once when
+  both contexts are known to be short is a later optimisation, not Phase 3.
+  The script's verdict now says "serialized" for a pair run one after the
+  other.
 - **Gaps carried out of Phase 3:** compaction in a task never run against
   a real model, and the per-turn /tokenize cost on long tasks unmeasured
   (chat-ui pays the same per send); the bench's `--runtime` time-limit

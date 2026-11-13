@@ -119,8 +119,15 @@ if (nCtx) {
   console.log(line(`                                `, two[1]) + (two[1].ok ? ` (prompt ${two[1].promptTokens})` : ''))
   // A request only counts if it processed its whole prompt (no cache reuse).
   const full = (r) => r.ok && one.ok && typeof r.promptTokens === 'number' && r.promptTokens >= 0.9 * (one.promptTokens ?? 0)
+  // llama-server may process one slot's prompt after the other's (seen
+  // 2026-11-12: the pair took 13.0 s and 26.2 s against 12.5 s alone). Then
+  // the second only fits because the first has finished and its cache can be
+  // evicted: that is not two live contexts. Concurrent means the slower of
+  // the pair took well under two solo prompts' time.
+  const serialized = two.every((r) => r.ok) && Math.max(two[0].ms, two[1].ms) > 1.6 * one.ms
   let verdict
   if (!one.ok) verdict = 'inconclusive: the long prompt failed even alone'
+  else if (two.every(full) && serialized) verdict = 'serialized: the server processed one long prompt after the other; the second fit only once the first had finished (check the log for "purging slot")'
   else if (two.every(full)) verdict = 'both fit: two long prompts were processed in full at the same time'
   else if (two.some((r) => !r.ok)) verdict = 'overflow: two long prompts at once did not fit (n_ctx is split, or one KV pool is shared); a task beside a long chat can fail'
   else verdict = 'inconclusive: a request reused cached tokens instead of processing its prompt'
