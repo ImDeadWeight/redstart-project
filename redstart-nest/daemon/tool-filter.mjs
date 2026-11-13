@@ -45,6 +45,24 @@ export const TOOL_FAMILIES = [MEMORY_TOOL_NAMES]
 const store = createVectorStore()
 const memory = createSelectionMemory({ max: 200 })
 
+// Test seam: the port the default embedder dials. Null is production
+// (EMBED_PORT). The suites set it to a port they own, either a closed one for
+// "no embedding server" or a stub's ephemeral one, so they no longer depend on
+// what a running Redstart has on 19084. That dependency made "retrieval that
+// fails open discloses nothing" fail now and then (P6, 2026-10-26). The
+// production client still runs over a real socket; only its port changes.
+/** @type {number|null} */
+let embedPortOverride = null
+
+/** @param {number|null} port */
+export function setEmbedPortForTests(port) {
+  embedPortOverride = Number.isInteger(port) && port > 0 ? port : null
+}
+
+/** @type {typeof embedTexts} */
+const defaultEmbed = (texts, options) =>
+  embedTexts(texts, embedPortOverride === null ? options : { ...options, port: embedPortOverride })
+
 /**
  * How much of the context window the tool list may occupy.
  *
@@ -102,7 +120,7 @@ export const RETRIEVAL_DEFAULTS = Object.freeze({
  * @returns {Promise<any[]>}
  */
 export async function filterRequestTools({
-  tools, messages, accountId, settings, ctxSize, reservedTokens = 0, embed = embedTexts,
+  tools, messages, accountId, settings, ctxSize, reservedTokens = 0, embed = defaultEmbed,
 }) {
   const config = { ...RETRIEVAL_DEFAULTS, ...(settings ?? {}) }
   if (!config.enabled) return tools
@@ -243,7 +261,7 @@ export const SEARCH_RESULT_LIMIT = 10
  * @param {{ tools: any[], query: string, limit?: number, embed?: typeof embedTexts }} args
  * @returns {Promise<{ name: string, description: string }[]|null>}
  */
-export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, embed = embedTexts }) {
+export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, embed = defaultEmbed }) {
   if (!Array.isArray(tools) || tools.length === 0) return []
   if (typeof query !== 'string' || !query.trim()) return null
 

@@ -43,8 +43,7 @@ await import('./electron-stub.mjs')
 
 const { startGateway, stopGateway } = await import('../daemon/tools-gateway.mjs')
 const { updateGatewayConfig } = await import('../daemon/tools-gateway.mjs')
-const { observedWireCost } = await import('../daemon/tool-filter.mjs')
-const { EMBED_PORT } = await import('../daemon/ports.mjs')
+const { observedWireCost, setEmbedPortForTests } = await import('../daemon/tool-filter.mjs')
 const { setAuthRequired, createOwner, createAccount } = await import('../daemon/auth.mjs')
 
 const baseConfig = { allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 }
@@ -595,23 +594,21 @@ async function main() {
     assert(names.length === 3, `tools were filtered with retrieval off: ${names.join(',')}`)
   })
 
-  // This one test needs the ABSENCE of a server on a fixed production port, so
-  // it is the one thing in this suite a developer running Redstart can falsify.
-  // Probed rather than assumed: a real embedding server on 19084 makes the
-  // premise false, and a test that quietly measures something else is worse
-  // than one that says it did not run. The property itself is covered without a
-  // port in test-tool-retrieval.mjs ("a null from the embedder returns the same
-  // array"); what only this can show is the wiring end to end.
-  const embedPortBusy = await new Promise(resolve => {
+  // "No embedding server" is a port known to be closed: bound, read, released.
+  // It used to be the real EMBED_PORT, probed first, which a running Redstart
+  // could falsify, and once in a while did (P6). The production client still
+  // dials it over a real socket, so this is a real connection-refused, not a
+  // mocked one.
+  const closedPort = await new Promise(resolve => {
     const probe = net.createServer()
-    probe.once('error', () => resolve(true))
-    probe.listen(EMBED_PORT, '127.0.0.1', () => probe.close(() => resolve(false)))
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = /** @type {import('net').AddressInfo} */ (probe.address())
+      probe.close(() => resolve(port))
+    })
   })
-  if (embedPortBusy) {
-    console.log(`  SKIP - port ${EMBED_PORT} is in use; a real embedding server would answer, so "no embedding server" cannot be tested here`)
-  }
+  setEmbedPortForTests(closedPort)
 
-  if (!embedPortBusy) await test('🔒 with retrieval on and no embedding server, the request is byte-identical too', async () => {
+  await test('🔒 with retrieval on and no embedding server, the request is byte-identical too', async () => {
     // A real connection-refused, not a mocked one. It is the state every install
     // is in until the model is downloaded, so it is the one that has to be free.
     updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: false } })
@@ -661,7 +658,7 @@ async function main() {
   })
 
   // Same premise as above (no embedding server on the real port), same guard.
-  if (!embedPortBusy) await test('🔒 retrieval that fails open discloses nothing — "enabled" is not "narrowed"', async () => {
+  await test('🔒 retrieval that fails open discloses nothing — "enabled" is not "narrowed"', async () => {
     // No embedding server, so the filter forwards the full list. The block is
     // gated on tools having actually gone, not on the setting, so a request
     // that kept everything must not be told it is looking at a subset.
@@ -676,7 +673,7 @@ async function main() {
     updateGatewayConfig(baseConfig)
   })
 
-  // A stub embedding server on the real port, so the whole chain runs: embed
+  // A stub embedding server on an ephemeral port, so the whole chain runs: embed
   // the tools, embed the conversation, score, drop, compose. Vectors are
   // deterministic and orthogonal — anything matching the query's subject gets
   // [1,0] and everything else [0,1], so the relative floor (0.85 of the best
@@ -698,16 +695,18 @@ async function main() {
         }))
       })
     })
-    await new Promise(resolve => server.listen(EMBED_PORT, '127.0.0.1', resolve))
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+    setEmbedPortForTests(/** @type {import('net').AddressInfo} */ (server.address()).port)
     try {
       return await fn()
     } finally {
+      setEmbedPortForTests(closedPort)
       await new Promise(resolve => server.close(resolve))
       updateGatewayConfig(baseConfig)
     }
   }
 
-  if (!embedPortBusy) await test('🔒 a genuinely narrowed list is disclosed, and names search_tools when it survives', async () => {
+  await test('🔒 a genuinely narrowed list is disclosed, and names search_tools when it survives', async () => {
     await withStubEmbedder(async () => {
       updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
       await completions({
@@ -724,7 +723,7 @@ async function main() {
     })
   })
 
-  if (!embedPortBusy) await test('🔒 a narrowed list with no search_tools is told what to say instead', async () => {
+  await test('🔒 a narrowed list with no search_tools is told what to say instead', async () => {
     // The gap this closes: an OpenAI-compatible client that sends its own tools
     // and never connects to Nest's MCP server is filtered like any other and
     // has nothing to search with. It used to be told nothing at all.
@@ -744,7 +743,7 @@ async function main() {
     })
   })
 
-  if (!embedPortBusy) await test('🔒 redstart_retrieval: false keeps every post-ban tool and is never forwarded', async () => {
+  await test('🔒 redstart_retrieval: false keeps every post-ban tool and is never forwarded', async () => {
     // The same request that the stub scorer narrows above, opted out. A client
     // with its own curated list and no search_tools must be able to say "send
     // them all" — and that must still be bounded by the ban list.
@@ -763,7 +762,7 @@ async function main() {
     })
   })
 
-  if (!embedPortBusy) await test('🔍 only the literal false opts out of retrieval', async () => {
+  await test('🔍 only the literal false opts out of retrieval', async () => {
     await withStubEmbedder(async () => {
       updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
       await completions({

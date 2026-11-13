@@ -35,13 +35,13 @@ import {
 } from '../daemon/tool-retrieval.mjs'
 import * as searchProvider from '../daemon/search-tools-provider.mjs'
 const { retrievalStatus, syncRetrieval, applyToolsConfig, resetRetrievalState } = await import('../daemon/ipc/tools.mjs')
-import { EMBED_PORT } from '../daemon/ports.mjs'
 import { EMBED_MODEL } from '../daemon/embed-model.mjs'
 import {
   filterRequestTools,
   searchTools,
   toolBudget,
   resetToolFilterState,
+  setEmbedPortForTests,
   CONTEXT_BUDGET_FRACTION,
 } from '../daemon/tool-filter.mjs'
 import {
@@ -1105,7 +1105,7 @@ await test('🔒 embedTexts truncates before sending, so one long input cannot f
 
 console.log('\n-- search_tools --')
 
-// A stub embedding server on the real EMBED_PORT, so callTool() runs the whole
+// A stub embedding server on an ephemeral port, so callTool() runs the whole
 // production path — embedTexts over a socket, the shared vector store, the
 // scorer — rather than through a seam wired in for the test. Keyword axes make
 // the ranking exact.
@@ -1124,18 +1124,12 @@ const embedStub = http.createServer(async (req, res) => {
   res.setHeader('content-type', 'application/json')
   res.end(JSON.stringify({ data }))
 })
-// EMBED_PORT specifically, because these drive the provider's real callTool()
-// and it embeds through the production client, which knows one port. A running
-// Redstart owns that port, so this section skips rather than failing — the same
-// bargain test-daemon-smoke.mjs makes, and CI always has the port to itself.
-const embedPortFree = await new Promise(resolve => {
-  embedStub.once('error', () => resolve(false))
-  embedStub.listen(EMBED_PORT, '127.0.0.1', () => resolve(true))
-})
+// An ephemeral port, handed to the production client through
+// setEmbedPortForTests. It used to be EMBED_PORT itself, which a running
+// Redstart owns, so the whole section skipped on a developer's machine (P6).
+await new Promise(resolve => embedStub.listen(0, '127.0.0.1', resolve))
+setEmbedPortForTests(/** @type {import('net').AddressInfo} */ (embedStub.address()).port)
 resetEmbedFailureLog()
-if (!embedPortFree) {
-  console.log(`  SKIP - port ${EMBED_PORT} is in use; is a Redstart embedding server running?`)
-}
 
 const catalog = [
   { name: 'git_status', description: 'Show the working-tree status of a git repository' },
@@ -1147,7 +1141,7 @@ function catalogConfig(extra = {}) {
   return { toolRetrieval: { enabled: true }, ...extra }
 }
 
-if (embedPortFree) await test('search_tools is advertised only while retrieval is on', () => {
+await test('search_tools is advertised only while retrieval is on', () => {
   assert(searchProvider.toolDefs({}).length === 0, 'a server with retrieval off advertised search_tools')
   assert(searchProvider.toolDefs({ toolRetrieval: { enabled: false } }).length === 0, 'an explicit off still advertised it')
   const defs = searchProvider.toolDefs(catalogConfig())
@@ -1155,7 +1149,7 @@ if (embedPortFree) await test('search_tools is advertised only while retrieval i
   assert(defs[0].inputSchema.required.includes('query'), 'query is not required')
 })
 
-if (embedPortFree) await test('🔒 a result carries names and descriptions, never schemas', async () => {
+await test('🔒 a result carries names and descriptions, never schemas', async () => {
   searchProvider.setToolCatalogProvider(() => catalog.map(t => ({
     ...t,
     inputSchema: { type: 'object', properties: { secret_parameter: { type: 'string' } } },
@@ -1168,7 +1162,7 @@ if (embedPortFree) await test('🔒 a result carries names and descriptions, nev
   assert(rows.every(r => Object.keys(r).sort().join(',') === 'description,name'), `unexpected row shape: ${text}`)
 })
 
-if (embedPortFree) await test('🔒 the catalog it searches is the one the policy gate produced', async () => {
+await test('🔒 the catalog it searches is the one the policy gate produced', async () => {
   // The provider is handed a catalog rather than assembling one. This asserts
   // the consequence: whatever the gate withheld simply is not there to find, so
   // a ban cannot be walked around by describing the tool.
@@ -1184,7 +1178,7 @@ if (embedPortFree) await test('🔒 the catalog it searches is the one the polic
   assert(!/read_document/.test(result.content[0].text), 'a withheld tool was reachable by describing it')
 })
 
-if (embedPortFree) await test('🔍 search_tools never returns itself', async () => {
+await test('🔍 search_tools never returns itself', async () => {
   searchProvider.setToolCatalogProvider(() => [
     ...catalog,
     { name: 'search_tools', description: 'Find tools that are available but not currently listed' },
@@ -1193,7 +1187,7 @@ if (embedPortFree) await test('🔍 search_tools never returns itself', async ()
   assert(!/search_tools/.test(result.content[0].text), 'search_tools offered itself as a result')
 })
 
-if (embedPortFree) await test('🔍 a scorer that is down is reported as such, not as "no matches"', async () => {
+await test('🔍 a scorer that is down is reported as such, not as "no matches"', async () => {
   // Different answers. A model told nothing matched stops looking; one told the
   // search is unavailable keeps using what it can already see.
   searchProvider.setToolCatalogProvider(() => catalog)
@@ -1203,7 +1197,7 @@ if (embedPortFree) await test('🔍 a scorer that is down is reported as such, n
   assert(Array.isArray(empty) && empty.length === 0, 'an empty catalog is an empty result, not a failure')
 })
 
-if (embedPortFree) await test('a blank query is refused rather than scored', async () => {
+await test('a blank query is refused rather than scored', async () => {
   searchProvider.setToolCatalogProvider(() => catalog)
   for (const bad of [{}, { query: '' }, { query: '   ' }, { query: 42 }]) {
     const result = await searchProvider.callTool('search_tools', bad, catalogConfig())
@@ -1211,18 +1205,18 @@ if (embedPortFree) await test('a blank query is refused rather than scored', asy
   }
 })
 
-if (embedPortFree) await test('🔒 search_tools refuses to run when retrieval is off', async () => {
+await test('🔒 search_tools refuses to run when retrieval is off', async () => {
   searchProvider.setToolCatalogProvider(() => catalog)
   const result = await searchProvider.callTool('search_tools', { query: 'read a document' }, { toolRetrieval: { enabled: false } })
   assert(result.isError === true, 'a call succeeded on a server where retrieval is off')
 })
 
-if (embedPortFree) await test('search_tools declines a call that is not its own', async () => {
+await test('search_tools declines a call that is not its own', async () => {
   const result = await searchProvider.callTool('git_status', {}, catalogConfig())
   assert(result === null, 'the provider answered for a tool it does not own')
 })
 
-if (embedPortFree) await test('🔍 results are ranked, best first', async () => {
+await test('🔍 results are ranked, best first', async () => {
   const embed = async (texts) => texts.map(text => {
     const v = new Float32Array(3)
     if (/git|commit|repo/i.test(text)) v[0] = 1
@@ -1235,7 +1229,8 @@ if (embedPortFree) await test('🔍 results are ranked, best first', async () =>
   assert(ranked[0].name === 'git_status', `wrong first result: ${ranked.map(r => r.name).join(',')}`)
 })
 
-if (embedPortFree) await new Promise(resolve => embedStub.close(resolve))
+await new Promise(resolve => embedStub.close(resolve))
+setEmbedPortForTests(null)
 
 console.log('\n-- turning retrieval on --')
 
