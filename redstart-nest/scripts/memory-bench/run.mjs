@@ -92,7 +92,14 @@ export function upstreamCaller(port) {
     const json = await res.json()
     const content = json?.choices?.[0]?.message?.content
     if (typeof content !== 'string') throw new Error('the model returned no content')
-    return { answer: JSON.parse(content), tokens: json?.usage?.completion_tokens ?? json?.timings?.predicted_n ?? null }
+    const tokens = json?.usage?.completion_tokens ?? json?.timings?.predicted_n ?? null
+    try {
+      return { answer: JSON.parse(content), tokens }
+    } catch (err) {
+      // Keep enough to tell a token-cap truncation from a malformed answer.
+      const finish = json?.choices?.[0]?.finish_reason ?? '?'
+      throw new Error(`${err.message} (finish_reason ${finish}, ${tokens ?? '?'} tokens, ${content.length} chars; ends: ${JSON.stringify(content.slice(-160))})`)
+    }
   }
 }
 

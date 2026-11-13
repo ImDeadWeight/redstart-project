@@ -163,7 +163,10 @@ await test('request: schema-bound, thinking off, kinds and ages of kept memories
   assert(/scope "user"/.test(c) && !/project "/.test(c), 'project wording outside a project')
   const p = review.buildReviewRequest({ turns, project: { id: 'p', name: 'Billing' } })
   assert(p.messages[1].content.includes('project "Billing"'), 'project not named')
-  eq(review.REVIEW_SCHEMA.properties.ops.items.required, ['op', 'quote'], 'a quote is required by the schema')
+  // Every field an op is judged on is required: the schema becomes a grammar,
+  // and an optional field is one a small model skips (the first v2 run).
+  eq(review.REVIEW_SCHEMA.properties.ops.items.required, ['op', 'kind', 'text', 'why', 'quote'], 'the judged fields are required by the schema')
+  eq(review.REVIEW_SCHEMA.properties.ops.items.properties.quote.maxLength, review.MAX_QUOTE_CHARS, 'the quote is capped')
 })
 
 const U = (id, text) => ({ id, role: 'user', text, fresh: true })
