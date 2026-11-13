@@ -5,16 +5,73 @@ what was built, phase by phase: deviations from the plan, and gaps carried
 forward. Branch: `feat/agent-core`, from main @ 224d121 (alpha.12, PR #38
 merged).
 
-## Where we left off (2026-11-13: Phase 8: 8.0 to 8.2 done, v2 measured on Ornith (23 off, 28 on, v1 20); next: v2 on the 4B and 35B)
+## Where we left off (2026-11-13: Phase 8: 8.0, 8.1, 8.2 done and measured on three models; next: 8.3, then 8.4 to 8.6)
+
+**Handoff for a fresh session (written 2026-11-13).** Branch
+`feat/agent-core`, head b527c2c, clean. **Pushed only to 10ea361**: about 25
+commits since (all of Phase 8 so far, plus the 3.11 close) are local. Ask
+the user before pushing. Phases 0 to 3 are closed (Phase 3 → "Acceptance").
+
+**Phase 8 so far** (details: "Phase 8" section below; numbers:
+`agent-bench-results.md`, "Memory bench"; how to run the bench:
+`scripts/memory-bench/README.md`):
+- 8.0 memory bench (32 cases, frozen v1 reviewer in `lib/v1.mjs`), 8.1
+  kind/why/asOf, 8.2 the v2 reviewer, all landed.
+- **Final 8.2 numbers, think off (v1 → v2):** 4B 14 → 28, Ornith 9B 20 → 27
+  (30 with think on), 35B 28 → 30. Filtered injection hits 0 on every run.
+- **Acceptance so far** (plan section 9, amended by the user): corrections,
+  confirmations, state rise on the 9B and 4B ✓; the 35B rose ✓; injection 0
+  ✓; nothing on the 4B 2/3 vs v1 3/3 (Dana's allergy), **accepted by the
+  user as a small-model limitation** (Suggest is the default, so it is never
+  saved unasked); **facts on the 35B with think off 3/5 vs v1 5/5** (one is
+  the context rule's false refusal, below; one an empty answer; 5/5 with
+  think on): open, for 8.3. The agent-bench check after 8.4 is still owed.
+- **Fixes the runs forced, all with tests:** every judged field required in
+  `REVIEW_SCHEMA` (966f353, f8b6089: llama-server turns the schema into a
+  grammar, and an optional field is one a small model skips); instructions
+  naming facts said in passing, update vs forget, project progress as state
+  (6575ed1); state scope by rule (D35); the **context rule** (c666594: a
+  fact or state may not bring in a word only the assistant or a tool said;
+  guidance exempt; the project name and kept memories count as the user's);
+  bracketed ids (b527c2c). Decided by the user: a negated mention of a
+  planted thing is not an injection hit (ae1aec0, `unless` on forbids).
+- **Known gaps:** the context rule refused "Uses plain Excel for data
+  tasks…" because only the assistant said "Data" (1 false refusal in 6 runs,
+  against 3 leaks stopped); the 4B labels some guidance as fact; a think-on
+  35B answer can run past the bench's 4096-token think budget; the
+  instructions were tuned on the bench's own cases.
+
+**Next, in order:**
+1. **8.3, thinking and the op cap by the numbers (U10).** The evidence:
+   think on helps Ornith (+3, facts 2 → 4), does nothing for the 4B, and
+   costs the 35B one case overall (two answers hit the 4096 budget) while
+   fixing its facts (3 → 5). So a per-profile `memoryReview.think` setting
+   looks justified (on for the 9B; the 35B needs a larger think budget
+   before deciding; off for the 4B). Op cap: no case needed more than 3.
+   The daemon's reviewer currently sends thinking off and max_tokens 1500.
+2. **8.4 the prompt block** (D40, U8 decided: guidance FOLLOWED, user-tier):
+   first the prompt-cache check the plan asks for, then
+   `selectForPrompt` → `{ guidance, facts, state, omitted }`, blocks 12 and
+   13 by kind, `docs/system-prompt-spec.md` and `docs/security.md` → Memory
+   (kinds, the guidance trust rule, the citation and context rules, the
+   reviewer reads assistant text but never tool bodies), then an agent-bench
+   run with guidance memories (no regression beyond noise).
+3. **8.5 the daemon trigger** (D41): review a background task's conversation
+   when it ends.
+4. **8.6 chat-ui** (D42): chips showing kind and quote, "Forget:" label,
+   merge Undo restoring `removed` (and an update's previousKind/previousWhy),
+   `/remember guidance: … because …`, Settings → Memory by kind. Ends with
+   the user's click test.
+
+**Working with the user:** they run the bench on their machine (Nest up,
+model loaded; llama-server port 19081) or let the session run it directly
+when a model is loaded and no run is in progress. Think-off runs repeat
+exactly (temperature 0.2); think-on runs vary by about 3 cases.
 
 Phase 3 → "Acceptance" has the closing record; "What landed" the per-module
-notes and the gaps carried out. Phase 2 closed, pushed at bc78774.
-
-**Phase 8 (memory that learns from the work) was planned 2026-11-12**, plan
-section 9. Not started. Its slot is decision U7 (recommended: after Phase 3
-closes, before Phase 4). 8.0, the memory bench, needs no decision. This file
-and the plan are now tracked in git (the only two in `docs/notes/`; see
-`.gitignore`), so both can be edited away from the main machine.
+notes and the gaps carried out. Phase 2 closed, pushed at bc78774. This
+file and the plan are tracked in git (the only two in `docs/notes/`; see
+`.gitignore`).
 
 **State.** Phases 0.1 to 0.4 and Phase 1 (ask_user, update_plan) are built
 and pushed to `origin/feat/agent-core`. No PR yet. Phase 1's two measurement
