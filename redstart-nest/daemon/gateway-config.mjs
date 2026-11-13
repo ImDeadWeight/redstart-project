@@ -62,6 +62,7 @@ function retrievalSettings(llamaConfig) {
     ...(Number.isFinite(r?.relativeFloor) ? { relativeFloor: r.relativeFloor } : {}),
     ...(Number.isFinite(r?.floor) ? { floor: r.floor } : {}),
     ...(Number.isFinite(r?.margin) ? { margin: r.margin } : {}),
+    ...(r?.textVersion === 1 || r?.textVersion === 2 ? { textVersion: r.textVersion } : {}),
   }
 }
 

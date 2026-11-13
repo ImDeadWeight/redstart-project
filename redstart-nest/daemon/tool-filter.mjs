@@ -106,6 +106,13 @@ export const RETRIEVAL_DEFAULTS = Object.freeze({
   // Hysteresis against the weakest included tool, so a score jittering by a
   // hair does not toggle the set and re-prefill the conversation.
   margin: 0.02,
+  // Which text retrieval embeds (tool retrieval second pass). 1: the query is
+  // every user message as sent, and a tool is its name and description. 2:
+  // the query leaves out chat-ui's attachment note (1.2), and a tool is its
+  // name, description and registry metadata (2.2). Both change what is
+  // embedded, so 2 needs a refreeze of the eval with a real embedder and a
+  // before/after on it; it stays 1 until that has been run.
+  textVersion: 1,
 })
 
 /**
@@ -119,7 +126,7 @@ export const RETRIEVAL_DEFAULTS = Object.freeze({
  *   tools: any[],
  *   messages: any[],
  *   accountId?: string|null,
- *   settings?: { enabled?: boolean, relativeFloor?: number, floor?: number, margin?: number },
+ *   settings?: { enabled?: boolean, relativeFloor?: number, floor?: number, margin?: number, textVersion?: number },
  *   ctxSize?: number,
  *   reservedTokens?: number,
  *   embed?: typeof embedTexts,
@@ -145,7 +152,7 @@ export async function filterRequestTools({
       store.setMany(missing.map((m, i) => [m.hash, vectors[i]]))
     }
 
-    const queryText = conversationQueryText(messages, { maxTokens: EMBED_MODEL.maxTokens })
+    const queryText = conversationQueryText(messages, { maxTokens: EMBED_MODEL.maxTokens, dropAttachmentNote: config.textVersion >= 2 })
     if (!queryText.trim()) return unchanged(tools, 'no-query')
     const queryVectors = await embed([queryText])
     if (!queryVectors) return unchanged(tools, 'no-embedding-server')
@@ -268,10 +275,15 @@ export const SEARCH_RESULT_LIMIT = 10
  * than as an empty result: "no tools match" and "the scorer is down" are
  * different answers and the model should not confuse them.
  *
- * @param {{ tools: any[], query: string, limit?: number, embed?: typeof embedTexts }} args
+ * `settings` are the retrieval settings (RETRIEVAL_DEFAULTS), so a search
+ * ranks the way the filter does.
+ *
+ * @param {{ tools: any[], query: string, limit?: number, embed?: typeof embedTexts, settings?: Record<string, any> }} args
  * @returns {Promise<{ name: string, description: string }[]|null>}
  */
-export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, embed = defaultEmbed }) {
+export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, embed = defaultEmbed, settings = {} }) {
+  // eslint-disable-next-line no-unused-vars
+  const config = { ...RETRIEVAL_DEFAULTS, ...(settings ?? {}) }
   if (!Array.isArray(tools) || tools.length === 0) return []
   if (typeof query !== 'string' || !query.trim()) return null
 

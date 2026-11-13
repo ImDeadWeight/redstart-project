@@ -1,12 +1,13 @@
 'use strict'
 
 import { createHash } from 'node:crypto'
+import { stripAttachmentNote } from '../../shared/agent-core/attachment-note.mjs'
 
 // =============================================================================
 // Redstart Nest — tool retrieval: hashing, vectors, scoring, selection
 // =============================================================================
-// Pure. Imports node:crypto and nothing else — no electron, no network, no
-// process — so it runs under the headless daemon and under plain `node` in the
+// Pure. Imports node:crypto and one pure shared helper and nothing else — no
+// electron, no network, no process — so it runs under the headless daemon and under plain `node` in the
 // test suite. Everything that talks to an embedding server lives elsewhere;
 // this module never learns where its vectors came from.
 //
@@ -389,16 +390,23 @@ export function truncateForEmbedding(text, maxTokens) {
  * precisely because application is monotonic: a drifting query can add tools,
  * never take them away, so the cost of drift is bounded at one re-prefill.
  *
+ * `dropAttachmentNote` (text version 2, second pass 1.2): leave out the
+ * attachment note chat-ui appends to a message with files. The note names
+ * tools, the File System ones included ("cannot see these files"), and an
+ * embedding cannot read the "cannot": it ranked those tools up on exactly the
+ * prompts they are wrong for (P3).
+ *
  * @param {any[]} messages
- * @param {{ maxTokens?: number }} [options]
+ * @param {{ maxTokens?: number, dropAttachmentNote?: boolean }} [options]
  * @returns {string}
  */
-export function conversationQueryText(messages, { maxTokens = Infinity } = {}) {
+export function conversationQueryText(messages, { maxTokens = Infinity, dropAttachmentNote = false } = {}) {
   const userParts = []
   const toolNames = []
   for (const msg of Array.isArray(messages) ? messages : []) {
     if (msg?.role === 'user') {
-      const text = messageText(msg.content)
+      const raw = messageText(msg.content)
+      const text = dropAttachmentNote ? stripAttachmentNote(raw) : raw
       if (text) userParts.push(text)
     }
     for (const call of Array.isArray(msg?.tool_calls) ? msg.tool_calls : []) {

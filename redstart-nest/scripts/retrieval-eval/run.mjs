@@ -21,7 +21,12 @@
 //     --port 19184 -ngl 0 -c 512
 //
 //   node scripts/retrieval-eval/run.mjs [--port 19084] [--source <name>]
-//     [--json <file>] [--freeze]
+//     [--json <file>] [--text-version 1|2] [--freeze]
+//
+// --text-version scores with that RETRIEVAL_DEFAULTS.textVersion (1: today's
+// embedded text; 2: the query without the attachment note, tools with their
+// registry metadata). Version 2 changes the embedded text, so it needs the
+// real embedder; the frozen vectors only cover the default.
 //
 // --freeze rewrites frozen.json: the cases this scorer gets right (a search
 // case's right tool in the top 3; a selection case's selection holding what it
@@ -44,7 +49,7 @@ import {
 export const VARIANTS = ['cosine']
 
 export function parseArgs(argv) {
-  const opts = { port: EMBED_PORT, freeze: false }
+  const opts = { port: EMBED_PORT, freeze: false, settings: {} }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--freeze') { opts.freeze = true; continue }
@@ -53,10 +58,18 @@ export function parseArgs(argv) {
     if (a === '--port') opts.port = Number(v)
     else if (a === '--source') opts.source = v
     else if (a === '--json') opts.json = v
+    else if (a === '--text-version') {
+      const n = Number(v)
+      if (n !== 1 && n !== 2) throw new Error('--text-version is 1 or 2')
+      opts.settings.textVersion = n
+    }
     else throw new Error(`unknown argument ${a}`)
   }
   if (!Number.isInteger(opts.port) || opts.port < 1) throw new Error('--port must be a port number')
   if (opts.freeze && opts.source) throw new Error('--freeze runs every case; drop --source')
+  // CI scores the freeze with the production defaults, so a freeze is made
+  // with them too: change the default in tool-filter.mjs, then refreeze.
+  if (opts.freeze && Object.keys(opts.settings).length) throw new Error('--freeze uses the production defaults; drop the settings flags')
   return opts
 }
 
@@ -97,7 +110,7 @@ export async function main(argv, io = {}) {
   for (const variant of VARIANTS) {
     const rows = []
     for (const c of cases) {
-      const scored = await scoreCase(c, { wire, embed: recorder.embed })
+      const scored = await scoreCase(c, { wire, embed: recorder.embed, settings: opts.settings })
       rows.push({ case: c, scored, metrics: caseMetrics(c.expected, scored, c.need), ms: scored.ms })
     }
     // The first case pays for embedding the whole catalog; leave it out of ms.

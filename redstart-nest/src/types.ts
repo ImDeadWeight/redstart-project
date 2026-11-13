@@ -256,7 +256,7 @@ export type ProfileTools = {
   // embedding model. Off by default and absent on every profile saved before
   // it, which reads as off — the safe direction, since the whole feature is an
   // optimization the server works without.
-  retrieval?: { enabled?: boolean; relativeFloor?: number; floor?: number; margin?: number }
+  retrieval?: { enabled?: boolean; relativeFloor?: number; floor?: number; margin?: number; textVersion?: 1 | 2 }
   // The automatic memory review (agent-runtime 8.3). `think` lets the model
   // reason before it answers: measured to help some models (Ornith 9B) and not
   // others (Qwen3-4B), so it is per profile. Absent reads as off.

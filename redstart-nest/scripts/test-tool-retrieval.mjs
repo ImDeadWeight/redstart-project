@@ -741,6 +741,30 @@ await test('the query is the WHOLE conversation, not the last turn', () => {
   assert(/vault_search/.test(text), 'the name of a tool already called is part of the query')
 })
 
+await test('🔍 with dropAttachmentNote, a message with a note queries like the message without it (1.2, P3)', async () => {
+  const { attachmentNote } = await import('../../shared/agent-core/attachment-note.mjs')
+  const note = attachmentNote({ saved: ['sales.csv'], failed: ['big.zip (too large)'], conversationId: 'c1', hasTool: () => true })
+  assert(note && note.includes('read_text_file'), 'setup: the note should name the File System tools')
+  const bare = [{ role: 'user', content: 'total the sales by region' }]
+  const withNote = [{ role: 'user', content: `total the sales by region\n\n${note}` }]
+  const a = conversationQueryText(bare, { dropAttachmentNote: true })
+  const b = conversationQueryText(withNote, { dropAttachmentNote: true })
+  assert(a === b, `the note leaked into the query: ${JSON.stringify(b)}`)
+  // Off (text version 1), the query is what it always was.
+  assert(conversationQueryText(withNote).includes('read_text_file'), 'version 1 changed the query')
+  // A message that is only the note queries as nothing at all.
+  assert(conversationQueryText([{ role: 'user', content: note }], { dropAttachmentNote: true }) === '', 'a note-only message left text')
+})
+
+await test('stripAttachmentNote leaves the user\'s own words alone', async () => {
+  const { stripAttachmentNote } = await import('../../shared/agent-core/attachment-note.mjs')
+  const inline = 'I typed [Attached file saved to this chat\'s workspace: x] in the middle and kept going'
+  assert(stripAttachmentNote(inline) === inline, 'a marker mid-line was cut')
+  const unclosed = "hello\n[Attached file saved to this chat's workspace: x and then more words"
+  assert(stripAttachmentNote(unclosed) === unclosed, 'an unclosed marker was cut')
+  assert(stripAttachmentNote('plain') === 'plain', 'plain text changed')
+})
+
 await test('tool RESULTS are not part of the query', () => {
   // A search result or a file read can be tens of kilobytes and says nothing
   // about what the user wants next; it would swamp the sentence that does.
@@ -962,6 +986,16 @@ await test('🔒 a request with no memory tools gets none, and a banned (absent)
   const two = ['memory_save', 'memory_search'].map((n) => fnTool(n, 'zzz'))
   const out = (await filterRequestTools({ tools: [...allTools, ...two], messages: ask, settings: { enabled: true }, embed })).map(toolName)
   assert(out.includes('memory_save') && !out.includes('memory_forget'), `got ${out.join(',')}`)
+})
+
+await test('🔍 text version 2 scores the request without its attachment note; version 1 as before', async () => {
+  const messages = [{ role: 'user', content: "what changed in the repo\n\n[Attached file saved to this chat's workspace: web.txt]" }]
+  resetToolFilterState()
+  const v1 = (await filterRequestTools({ tools: allTools, messages, settings: { enabled: true }, embed })).map(toolName)
+  resetToolFilterState()
+  const v2 = (await filterRequestTools({ tools: allTools, messages, settings: { enabled: true, textVersion: 2 }, embed })).map(toolName)
+  assert(v1.includes('web_fetch'), `setup: version 1 should read the note: ${v1}`)
+  assert(!v2.includes('web_fetch') && v2.includes('git_status'), `version 2 read the note: ${v2}`)
 })
 
 await test('🔒 an empty selection falls back to the full list rather than stripping everything', async () => {
