@@ -57,6 +57,7 @@
     }
   ],
   "approve": "all",
+  "expectTools": ["run_python", "read_document"],
   "check": "checks/multi.mjs#chainResult",
   "notes": "Thirteen files. Reading them one call per turn takes 14 turns: over the 10-turn limit the task was written for, inside the 30-turn limit since 2026-11-11. One Python loop takes two."
 }

@@ -17,6 +17,7 @@
     }
   ],
   "approve": "all",
+  "expectTools": ["search_documents"],
   "check": "checks/documents.mjs#liabilityCap",
   "notes": "search_documents covers the whole account, so the other two vendors' caps are the distractors."
 }

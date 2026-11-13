@@ -17,5 +17,6 @@
     }
   ],
   "approve": "all",
+  "expectTools": ["run_python", "list_documents"],
   "check": "checks/documents.mjs#renamedReports"
 }

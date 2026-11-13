@@ -19,6 +19,7 @@
     "criteri": "By age, oldest first.",
     "by ": "By age, oldest first."
   },
+  "expectTools": ["run_python", "read_document"],
   "check": "checks/phase1.mjs#sortedAsAnswered",
   "notes": "The order is only in the answer. Passes only if the model asks and then follows what it was told (age, descending), not a default sort by name. Answers keyed by topic from 2026-11-12 (they were one catch-all)."
 }

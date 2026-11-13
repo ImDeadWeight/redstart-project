@@ -21,7 +21,7 @@
 
 // The File System capability's tool names (the reference filesystem MCP
 // server Nest wraps). Listed so the note can name the offered ones.
-const FILE_SYSTEM_TOOLS = [
+export const FILE_SYSTEM_TOOLS = [
 	'read_text_file',
 	'read_file',
 	'list_directory',

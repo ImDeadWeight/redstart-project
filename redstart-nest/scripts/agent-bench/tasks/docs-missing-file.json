@@ -13,6 +13,7 @@
     }
   ],
   "approve": "all",
+  "expectTools": ["list_documents", "read_document", "run_python", "search_documents"],
   "check": "checks/documents.mjs#missingFile",
   "notes": "The file does not exist. The right answer says so."
 }

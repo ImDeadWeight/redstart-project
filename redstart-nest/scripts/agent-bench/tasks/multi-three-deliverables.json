@@ -9,5 +9,6 @@
     }
   ],
   "approve": "all",
+  "expectTools": ["run_python", "read_document"],
   "check": "checks/multi.mjs#threeDeliverables"
 }

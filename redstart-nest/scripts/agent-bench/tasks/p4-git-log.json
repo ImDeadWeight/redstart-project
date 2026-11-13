@@ -10,5 +10,6 @@
     }
   ],
   "approve": "all",
+  "expectTools": ["run_command", "run_python"],
   "check": "checks/phase4.mjs#thirdCommit"
 }

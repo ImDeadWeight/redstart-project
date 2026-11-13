@@ -12,6 +12,7 @@
     "where": "Save it here in this chat, with the file I attached.",
     "folder": "Save it here in this chat, with the file I attached."
   },
+  "expectTools": ["read_document", "run_python"],
   "check": "checks/phase1.mjs#signedWithTheAnswer",
   "notes": "Replaces p1-which-draft (2026-11-11). The name is in no file and cannot be guessed, so the only way to pass is to ask. Unlike the drafts task, there is no defensible reading that skips the question. Revised 2026-11-12: \"my full name\" (the bench account is called bench, and a model took that for the name); a volunteers.txt fixture, so the workspace exists and the attachment note says where files go (with none, the 35B spent 30 turns looking for somewhere to save); answers keyed by topic, so \"where should I save it?\" no longer gets the name as its answer.",
   "fixtures": [

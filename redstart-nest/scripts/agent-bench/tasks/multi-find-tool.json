@@ -21,6 +21,7 @@
     }
   ],
   "approve": "all",
+  "expectTools": ["list_documents"],
   "check": "checks/multi.mjs#listedWithoutCode",
   "notes": "Needs list_documents. Exercises search_tools only when tool retrieval is on and defers list_documents."
 }
