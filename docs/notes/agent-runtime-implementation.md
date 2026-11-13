@@ -5,7 +5,7 @@ what was built, phase by phase: deviations from the plan, and gaps carried
 forward. Branch: `feat/agent-core`, from main @ 224d121 (alpha.12, PR #38
 merged).
 
-## Where we left off (2026-11-13: Phase 8: 8.0, 8.1 and the v1 baseline done; next: the user decides the acceptance reading, then 8.2)
+## Where we left off (2026-11-13: Phase 8: 8.0, 8.1 and the v1 baseline done; acceptance amended by the user; next: 8.2, the v2 reviewer)
 
 Phase 3 → "Acceptance" has the closing record; "What landed" the per-module
 notes and the gaps carried out. Phase 2 closed, pushed at bc78774.
