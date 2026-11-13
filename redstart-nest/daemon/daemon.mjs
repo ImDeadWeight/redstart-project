@@ -58,7 +58,8 @@ import { buildGatewayConfig, createRefreshLiveToolsConfig } from './gateway-conf
 import { buildArgs } from './llama-args.mjs'
 import { binaryPathRejection, serverBinaryName } from './ipc/validate.mjs'
 import { setPluginCapabilityProvider } from './tools-definitions.mjs'
-import { pluginCapabilities } from './plugin-registry.mjs'
+import { pluginCapabilities, pluginToolRetrievalMetadata } from './plugin-registry.mjs'
+import { setPluginMetadataProvider } from './tool-metadata.mjs'
 import { sweepPendingDeletions } from './plugin-install.mjs'
 import { describeCrash } from './crash-handler.mjs'
 
@@ -386,6 +387,8 @@ function setupAdminApi() {
   // before any tools/list or config build, or plugin tools resolve to no
   // capability and are neither classified nor bannable.
   setPluginCapabilityProvider(pluginCapabilities)
+  // And tool-metadata.mjs a read of their retrieval fields (second pass 2.1).
+  setPluginMetadataProvider(pluginToolRetrievalMetadata)
   const deps = {
     execFileAsync,
     readSettings,

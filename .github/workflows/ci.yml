@@ -88,6 +88,9 @@ jobs:
       - name: "Security: tool retrieval (subset-only selection)"
         run: node scripts/test-tool-retrieval.mjs
 
+      - name: "Tool metadata registry (lint, plugin fields, embedded text)"
+        run: node scripts/test-tool-metadata.mjs
+
       - name: "Tool retrieval eval (frozen subset, catalog snapshot)"
         run: node scripts/test-retrieval-eval.mjs
 

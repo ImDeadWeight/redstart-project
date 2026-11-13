@@ -31,6 +31,7 @@ import { configDir } from './platform-paths.mjs'
 import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
 import { logEvent } from './logger.mjs'
 import { BUILTIN_CAPABILITY_TOOL_NAMES, CLIENT_APPS, CLIENT_APP_TOOL_NAMES } from './tools-definitions.mjs'
+import { sanitizeRetrievalMetadata } from './tool-metadata.mjs'
 
 // Collision sets for validatePlugin's id check. Deliberately built from the
 // BUILTIN_* exports, not capabilityToolNames()/capabilityIds() — those already
@@ -263,6 +264,13 @@ export function validatePlugin(entry) {
       description: typeof t.description === 'string' ? t.description : '',
       inputSchema: t.inputSchema && typeof t.inputSchema === 'object' ? t.inputSchema : {},
       class: t.class,
+      // Optional retrieval metadata (tool-metadata.mjs): publisher text,
+      // dropped field by field when malformed rather than failing the plugin,
+      // since it only ever changes a ranking.
+      ...(() => {
+        const retrieval = sanitizeRetrievalMetadata(t.retrieval)
+        return retrieval ? { retrieval } : {}
+      })(),
     })
   }
 
@@ -442,6 +450,22 @@ export function removePlugin(id) {
  *
  * @returns {Record<string, { toolNames: string[], classes: Record<string, string> }>}
  */
+/**
+ * The validated retrieval metadata of a namespaced plugin tool, or null.
+ * Handed to tool-metadata.mjs through setPluginMetadataProvider.
+ *
+ * @param {string} name
+ */
+export function pluginToolRetrievalMetadata(name) {
+  if (typeof name !== 'string') return null
+  const sep = name.indexOf(NAMESPACE_SEPARATOR)
+  if (sep <= 0) return null
+  const id = name.slice(0, sep)
+  const toolName = name.slice(sep + NAMESPACE_SEPARATOR.length)
+  const plugin = listPlugins().find((p) => p.id === id)
+  return plugin?.tools.find((t) => t.name === toolName)?.retrieval ?? null
+}
+
 export function pluginCapabilities() {
   const out = {}
   for (const plugin of listPlugins()) {

@@ -145,7 +145,8 @@ export async function filterRequestTools({
     // Fill the cache before scoring. A tool is embedded once per content hash,
     // ever, so this is empty on all but the first request that sees a given
     // tool set — and a failure here is simply a colder cache, not an error.
-    const missing = store.missingHashes(tools)
+    const textVersion = config.textVersion
+    const missing = store.missingHashes(tools, { textVersion })
     if (missing.length > 0) {
       const vectors = await embed(missing.map(m => m.text))
       if (!vectors) return unchanged(tools, 'no-embedding-server')
@@ -158,7 +159,7 @@ export async function filterRequestTools({
     if (!queryVectors) return unchanged(tools, 'no-embedding-server')
 
     const key = conversationKey(messages, accountId)
-    const scored = scoreTools({ tools, query: queryVectors[0], store })
+    const scored = scoreTools({ tools, query: queryVectors[0], store, textVersion })
     const budgetTokens = toolBudget(ctxSize, reservedTokens)
 
     const { selected, dropped, reason } = selectTools({
@@ -282,13 +283,13 @@ export const SEARCH_RESULT_LIMIT = 10
  * @returns {Promise<{ name: string, description: string }[]|null>}
  */
 export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, embed = defaultEmbed, settings = {} }) {
-  // eslint-disable-next-line no-unused-vars
   const config = { ...RETRIEVAL_DEFAULTS, ...(settings ?? {}) }
+  const textVersion = config.textVersion
   if (!Array.isArray(tools) || tools.length === 0) return []
   if (typeof query !== 'string' || !query.trim()) return null
 
   try {
-    const missing = store.missingHashes(tools)
+    const missing = store.missingHashes(tools, { textVersion })
     if (missing.length > 0) {
       const vectors = await embed(missing.map(m => m.text))
       if (!vectors) return null
@@ -297,7 +298,7 @@ export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, e
     const queryVectors = await embed([query])
     if (!queryVectors) return null
 
-    return scoreTools({ tools, query: queryVectors[0], store })
+    return scoreTools({ tools, query: queryVectors[0], store, textVersion })
       .slice(0, limit)
       .map(({ tool }) => ({
         name: toolName(tool),

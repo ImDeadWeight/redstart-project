@@ -2,11 +2,12 @@
 
 import { createHash } from 'node:crypto'
 import { stripAttachmentNote } from '../../shared/agent-core/attachment-note.mjs'
+import { metadataText, toolMetadata } from './tool-metadata.mjs'
 
 // =============================================================================
 // Redstart Nest — tool retrieval: hashing, vectors, scoring, selection
 // =============================================================================
-// Pure. Imports node:crypto and one pure shared helper and nothing else — no
+// Pure. Imports node:crypto and two pure helpers and nothing else — no
 // electron, no network, no process — so it runs under the headless daemon and under plain `node` in the
 // test suite. Everything that talks to an embedding server lives elsewhere;
 // this module never learns where its vectors came from.
@@ -81,18 +82,78 @@ export function toolContentHash(tool) {
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex')
 }
 
+// ---------------------------------------------------------------------------
+// Every view of a tool retrieval uses (second pass 2.2)
+// ---------------------------------------------------------------------------
+// One place builds them all, from the tool and its registry metadata
+// (tool-metadata.mjs): the text embedded, the BM25 document, and the row a
+// search returns. The wire description is never rewritten here.
+
+function toolDescription(tool) {
+  const body = toolBody(tool)
+  return typeof body.description === 'string' ? body.description : ''
+}
+
 /**
- * The text an embedding model sees for a tool. Name and description only: a
- * JSON schema is mostly type keywords, which crowd out the prose that actually
- * distinguishes one tool from another.
+ * The text an embedding model sees for a tool.
+ *
+ * Version 1: name and description only. A JSON schema is mostly type
+ * keywords, which crowd out the prose that actually distinguishes one tool
+ * from another. Version 2 adds the registry metadata (category, where it
+ * acts, tags, when to use it), the part that tells the File System tools from
+ * the workspace ones.
+ *
+ * @param {any} tool
+ * @param {{ textVersion?: number }} [options]
+ * @returns {string}
+ */
+export function toolEmbeddingText(tool, { textVersion = 1 } = {}) {
+  const description = toolDescription(tool)
+  const base = description ? `${toolName(tool)}: ${description}` : toolName(tool)
+  if (textVersion < 2) return base
+  const meta = metadataText(toolName(tool))
+  return meta ? `${base}\n${meta}` : base
+}
+
+/**
+ * The BM25 document for a tool: its name with `_` and `-` read as spaces, its
+ * description, and every metadata field. Not versioned: BM25 has no stored
+ * vectors to keep in step.
  *
  * @param {any} tool
  * @returns {string}
  */
-export function toolEmbeddingText(tool) {
-  const body = toolBody(tool)
-  const description = typeof body.description === 'string' ? body.description : ''
-  return description ? `${toolName(tool)}: ${description}` : toolName(tool)
+export function toolSearchDocument(tool) {
+  const name = toolName(tool)
+  return [name, name.replace(/[_-]+/g, ' '), toolDescription(tool), metadataText(name)].filter(Boolean).join('\n')
+}
+
+/**
+ * The row search_tools returns for a tool: never a schema (a result is an
+ * index, not a definition).
+ *
+ * @param {any} tool
+ * @returns {{ name: string, category: string, store: string, description: string }}
+ */
+export function toolSearchResult(tool) {
+  const name = toolName(tool)
+  const m = toolMetadata(name)
+  return { name, category: m.category, store: m.store, description: toolDescription(tool) }
+}
+
+/**
+ * The vector-store key for a tool's embedding. Version 1 is the content hash,
+ * unchanged, so a store filled before version 2 existed stays valid. Later
+ * versions hash the embedded text with it: the metadata is not in the content
+ * hash, and a plugin's can change without its description changing.
+ *
+ * @param {any} tool
+ * @param {number} [textVersion]
+ */
+export function toolVectorKey(tool, textVersion = 1) {
+  const hash = toolContentHash(tool)
+  if (textVersion < 2) return hash
+  return createHash('sha256').update(`${hash}\u0000${textVersion}\u0000${toolEmbeddingText(tool, { textVersion })}`).digest('hex')
 }
 
 /**
@@ -129,7 +190,7 @@ export function estimateToolTokens(tool) {
  *   get(hash: string): Float32Array|undefined,
  *   has(hash: string): boolean,
  *   setMany(entries: Iterable<[string, ArrayLike<number>]>): void,
- *   missingHashes(tools: any[]): { hash: string, text: string }[],
+ *   missingHashes(tools: any[], options?: { textVersion?: number }): { hash: string, text: string }[],
  *   size: () => number,
  * }}
  */
@@ -148,15 +209,16 @@ export function createVectorStore() {
       }
     },
     // What a request would need embedded before it could be scored: deduped,
-    // in first-seen order so a batch is reproducible.
-    missingHashes(tools) {
+    // in first-seen order so a batch is reproducible. `hash` is the store key
+    // (toolVectorKey) for the text version asked for.
+    missingHashes(tools, { textVersion = 1 } = {}) {
       const seen = new Set()
       const out = []
       for (const tool of Array.isArray(tools) ? tools : []) {
-        const hash = toolContentHash(tool)
+        const hash = toolVectorKey(tool, textVersion)
         if (vectors.has(hash) || seen.has(hash)) continue
         seen.add(hash)
-        out.push({ hash, text: toolEmbeddingText(tool) })
+        out.push({ hash, text: toolEmbeddingText(tool, { textVersion }) })
       }
       return out
     },
@@ -201,12 +263,12 @@ export function cosine(a, b) {
  * A tool whose vector is not in the store scores 0 and is flagged `missing`; a
  * partially cold cache degrades to "these tools rank last", not to an error.
  *
- * @param {{ tools: any[], query: ArrayLike<number>|null|undefined, store: ReturnType<typeof createVectorStore> }} args
+ * @param {{ tools: any[], query: ArrayLike<number>|null|undefined, store: ReturnType<typeof createVectorStore>, textVersion?: number }} args
  * @returns {{ tool: any, name: string, hash: string, score: number, missing: boolean }[]}
  */
-export function scoreTools({ tools, query, store }) {
+export function scoreTools({ tools, query, store, textVersion = 1 }) {
   const scored = (Array.isArray(tools) ? tools : []).map(tool => {
-    const hash = toolContentHash(tool)
+    const hash = toolVectorKey(tool, textVersion)
     const vector = store?.get(hash)
     return {
       tool,
