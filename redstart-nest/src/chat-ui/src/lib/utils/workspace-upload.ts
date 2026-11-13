@@ -15,6 +15,7 @@
 
 import { FilesService } from '$lib/services/files.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
+import { attachmentNote } from '$lib/agent-core';
 
 export const PYTHON_TOOL = 'run_python';
 
@@ -54,12 +55,13 @@ export async function uploadToWorkspace(conversationId: string, files: File[]): 
 			else failed.push(`${file.name} (${message})`);
 		}
 	}
-	const parts: string[] = [];
-	if (saved.length) {
-		parts.push(
-			`[Attached file${saved.length > 1 ? 's' : ''} saved to the Python workspace (run_python's working directory): ${saved.join(', ')}]`
-		);
-	}
-	if (failed.length) parts.push(`[Could not save to the Python workspace: ${failed.join('; ')}]`);
-	return parts.length ? parts.join('\n') : null;
+	// The note is built by the shared core, which the agent bench also uses,
+	// so the bench measures exactly what a chat user's model is told. It
+	// names how each OFFERED tool reaches the files (see attachment-note.mjs).
+	return attachmentNote({
+		saved,
+		failed,
+		conversationId,
+		hasTool: (name) => mcpStore.hasTool(name)
+	});
 }

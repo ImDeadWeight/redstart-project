@@ -1,0 +1,49 @@
+{
+  "id": "conf-summary-first",
+  "group": "confirmations",
+  "about": "Approval of a layout.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Write up the quarterly numbers for the board."
+    },
+    {
+      "role": "assistant",
+      "content": "Summary: revenue up 8%, costs flat, two risks.\n\nDetails follow, by region, then the risks in full."
+    },
+    {
+      "role": "user",
+      "content": "That layout, summary at the top and details after, is great. Do reports like that."
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "kind": "guidance",
+      "terms": [
+        [
+          "summary"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "guidance",
+        "text": "Start reports with a summary, details after",
+        "why": "The user approved this layout for a board report",
+        "quote": "summary at the top and details after"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Reports quarterly numbers to a board",
+        "quote": "quarterly numbers for the board"
+      }
+    ]
+  }
+}

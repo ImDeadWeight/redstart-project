@@ -188,6 +188,21 @@ test('🔍 Nest stages bin/ and the daemon tree, where the shell spawns nestd', 
   }
 })
 
+// The agent loop core lives in shared/agent-core/, a SUBFOLDER of shared/.
+// chat-ui bundles its own copy, but the daemon's task runtime (agent-runtime
+// plan Phase 3) will import it from resources/shared/agent-core/. The
+// escaping-import test above checks only the top-level folder name, so this
+// pins that the shared/ copy recurses into subfolders.
+test('🔍 Nest stages shared/ recursively, so shared/agent-core reaches resources/', () => {
+  assert(/copyDir\(path\.join\(REPO, 'shared'\), out\('shared'\), \(p\) => p\.endsWith\('\.mjs'\)\)/.test(STAGE_SRC),
+    "stage-shell-bundle.mjs no longer copies shared/*.mjs with copyDir")
+  assert(/function copyDir[\s\S]{0,200}recursive: true[\s\S]{0,120}isDirectory\(\) \|\| filter\(src\)/.test(STAGE_SRC),
+    'copyDir no longer recurses into directories the .mjs filter would reject')
+  for (const f of ['loop.mjs', 'tool-calls.mjs', 'timings.mjs']) {
+    assert(fs.existsSync(path.join(REPO, 'shared', 'agent-core', f)), `shared/agent-core/${f} is missing`)
+  }
+})
+
 test('🔍 Nest stages the pinned Node runtime with its licence', () => {
   assert(/stagedBinaryPath\(process\.platform\)/.test(STAGE_SRC), 'the staged Node is not the one stage-node.mjs pinned')
   assert(STAGE_SRC.includes("out('node', 'LICENSE')"), "Node's LICENSE travels with the binary it covers")

@@ -1,0 +1,51 @@
+{
+  "id": "corr-units",
+  "group": "corrections",
+  "about": "A units correction: that the answer was in miles is only in the assistant turn (D34).",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What's a comfortable running pace for a beginner, and how far should a first run be?"
+    },
+    {
+      "role": "assistant",
+      "content": "Most beginners are comfortable around 11 to 12 minutes per mile, and a first run of 1 to 2 miles is plenty."
+    },
+    {
+      "role": "user",
+      "content": "Wrong units for me, I'm in Australia. Every time, please."
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "kind": "guidance",
+      "terms": [
+        [
+          "metric",
+          "kilomet",
+          "km"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "guidance",
+        "text": "Give distances and paces in metric units",
+        "why": "The user is in Australia and asked for metric every time",
+        "quote": "Wrong units for me, I'm in Australia"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Is a beginner runner",
+        "quote": "comfortable running pace for a beginner"
+      }
+    ]
+  }
+}

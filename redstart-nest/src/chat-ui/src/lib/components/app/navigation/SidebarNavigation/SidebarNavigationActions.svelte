@@ -61,6 +61,9 @@
 		/>
 	{:else}
 		{#each visibleActions as item (item.tooltip)}
+			{#if item.separatedAbove}
+				<div class="mx-2 my-1.5 border-t border-sidebar-border" role="separator"></div>
+			{/if}
 			{#if !item.route}
 				<Button
 					class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"

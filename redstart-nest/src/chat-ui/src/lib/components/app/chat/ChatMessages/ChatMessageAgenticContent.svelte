@@ -127,6 +127,9 @@
 		agenticResolveContinue(message.convId, shouldContinue);
 	}
 
+	// ask_user questions are shown with the composer (ChatFormQuestion.svelte),
+	// for this chat's own flow and for a background task alike.
+
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
 
 	// Parse tool results with images

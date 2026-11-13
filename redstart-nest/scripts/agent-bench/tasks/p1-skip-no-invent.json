@@ -1,0 +1,15 @@
+{
+  "id": "p1-skip-no-invent",
+  "group": "phase1",
+  "phase": 1,
+  "prompt": "Write a short thank-you note to the volunteers in bake-sale-volunteers.txt, who ran the school bake sale. Sign it with my full name, and save it as bake-sale-thanks.md.",
+  "approve": "all",
+  "check": "checks/phase1.mjs#noInventedName",
+  "notes": "Replaces p1-assume-on-skip (2026-11-11). No answers: a question is dismissed. Passes if the note is written with a placeholder for the name (or the reply says the name is needed). Fails if it is signed with a made-up name, or with nothing at all. Judged on the file, not on how the reply is worded. Revised 2026-11-12 as p1-sign-off-name was: \"my full name\" and a fixture, so the only open question is the name.",
+  "fixtures": [
+    {
+      "path": "bake-sale-volunteers.txt",
+      "from": "fixtures/bake-sale-volunteers.txt"
+    }
+  ]
+}

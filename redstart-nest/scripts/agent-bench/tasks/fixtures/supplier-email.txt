@@ -1,0 +1,16 @@
+From: orders@spokewholesale.example
+Subject: Price changes from 1 December
+
+Hello,
+
+Please note the following price changes, effective 1 December:
+
+  SKU-2  Inner tube 700c     6.75
+  SKU-3  Chain lube 100ml    8.40
+  SKU-7  Bar tape           13.20
+
+All other prices are unchanged for now. We will write separately about
+lighting products once our new range is confirmed.
+
+Regards,
+Spoke Wholesale

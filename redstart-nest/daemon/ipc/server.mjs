@@ -27,6 +27,7 @@ import { serverPortRejection, serverBinaryName } from './validate.mjs'
 import { writePidFile, deletePidFile } from '../process-supervision.mjs'
 import { publish } from '../event-broker.mjs'
 import { startRun, appendLine, endRun } from '../process-log.mjs'
+import { chooseChatTemplate } from '../chat-template-choice.mjs'
 
 // EMA smoothing factor for the tokens/sec readout (moved here with its sole
 // consumer, the launch handler's stdout parser).
@@ -49,8 +50,10 @@ function rememberDiscovery(config, { readSettings, writeSettings }) {
   }
 }
 
+// The preview applies the same chat-template choice as the launch, so a
+// skipped override is missing from the preview too.
 export function generateLlamaCommand(config, { buildArgs }) {
-  const args = buildArgs(config)
+  const args = buildArgs(chooseChatTemplate(config).config)
   return `${serverBinaryName()} ${args.join(' ')}`
 }
 
@@ -146,7 +149,11 @@ Place it in the build output directory or the project root, or set a custom path
   }
   const binaryDir = path.dirname(binaryPath)
 
-  const spawnArgs = buildArgs(config, true)
+  // A bundled template override is checked against the model before it is
+  // applied; see chat-template-choice.mjs. The decision goes into the run's
+  // log below, and into the status (source only, no paths).
+  const template = chooseChatTemplate(config)
+  const spawnArgs = buildArgs(template.config, true)
 
   try {
     // --- Piped mode (in-app log + token tracking) ---
@@ -166,6 +173,12 @@ Place it in the build output directory or the project root, or set a custom path
     // One file per launch — started here so even a launch that fails
     // before the first stdout line still leaves a file behind to look at.
     startRun()
+    // What llama-server does not say for itself: which template Redstart
+    // chose and why, and the exact argument list. The model path is already
+    // in this file (llama-server prints it), and this log is admin-only.
+    appendLine(template.logLine)
+    publish('server:log', template.logLine)
+    appendLine(`[redstart] args: ${spawnArgs.join(' ')}`)
 
     const forwardLines = (chunk) => {
       for (const line of chunk.toString().split('\n')) {
@@ -203,6 +216,7 @@ Place it in the build output directory or the project root, or set a custom path
       serverState.process = null
       serverState.ema = 0
       serverState.lastConfig = null
+      serverState.chatTemplate = null
       serverState.startedAt = null
       endRun()
       deletePidFile(userDataDir)
@@ -211,6 +225,11 @@ Place it in the build output directory or the project root, or set a custom path
 
     serverState.process = child
     serverState.lastConfig = config
+    serverState.chatTemplate = {
+      source: template.decision.source,
+      architecture: template.decision.architecture,
+      warning: template.decision.warning,
+    }
     serverState.startedAt = Date.now()
     // Recorded so a hard-killed Nest (Task Manager, power loss — anything
     // that skips the exit handler above) can be reaped by PID, not by name,

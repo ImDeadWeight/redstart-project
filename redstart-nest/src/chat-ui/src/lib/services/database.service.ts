@@ -29,22 +29,92 @@ function getDeviceId(): string {
   return id;
 }
 
+/**
+ * The headers every conversation-scoped route takes: the session, and the
+ * device id that is the conversations scope with auth off. The task routes
+ * (task.service.ts) use the same scope, so they share this.
+ */
+export function conversationHeaders(): Record<string, string> {
+  return { 'Content-Type': 'application/json', 'X-Redstart-Device-Id': getDeviceId(), ...getAuthHeader() };
+}
+
+/**
+ * A conversation write refused because a background task holds the
+ * conversation (agent-runtime Phase 3.4, D25: the daemon is its only writer
+ * then). The client's copy is stale by definition: reload it.
+ */
+export class TaskActiveError extends Error {
+  constructor(readonly conversationId: string | null) {
+    super('A background task is writing this conversation. It was reloaded; cancel the task to edit it.');
+    this.name = 'TaskActiveError';
+  }
+}
+
+let taskActiveHandler: ((conversationId: string | null) => void) | null = null;
+
+/** Registered once by the tasks store: reload and say why. */
+export function setTaskActiveHandler(handler: ((conversationId: string | null) => void) | null): void {
+  taskActiveHandler = handler;
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(resolveApiPath(path), {
     ...init,
     headers: {
-      'Content-Type': 'application/json',
-      'X-Redstart-Device-Id': getDeviceId(),
-      ...getAuthHeader(),
+      ...conversationHeaders(),
       ...(init?.headers || {})
     }
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
+    if (res.status === 409 && /"task_active"/.test(text)) {
+      const conversationId = /^\/conversations\/([^/?]+)/.exec(path)?.[1] ?? null;
+      taskActiveHandler?.(conversationId);
+      throw new TaskActiveError(conversationId);
+    }
     throw new Error(`API error ${res.status}: ${text || res.statusText}`);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
+}
+
+/**
+ * One write at a time, in the order they were asked for.
+ *
+ * Every write below is a read-modify-write of a WHOLE conversation: GET it,
+ * change its message list, PUT the list back. Two in flight at once lose the
+ * first one's change, silently. That happened (2026-11-10): a steered agentic
+ * flow saves its final timings with an un-awaited updateMessage while the
+ * steering re-send adds the user's new message; the timings save read before
+ * the message existed and wrote after, erasing it, and the reply then failed
+ * with "Parent message not found". tests/unit/database-write-order.test.ts.
+ *
+ * Queued here, so each write reads what the previous one wrote. Reads are not
+ * queued. This covers one tab; two tabs or two devices writing the same
+ * conversation can still collide (the server takes whole records), which is
+ * the daemon-as-sole-writer design in the agent-runtime plan (D25).
+ *
+ * Not reentrant: a queued function must not call another queued method, or
+ * it waits for itself. Use the unqueued helpers (putConversation) inside.
+ */
+let writeChain: Promise<unknown> = Promise.resolve();
+
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(fn, fn);
+  // The chain carries on whether this write succeeds or fails.
+  writeChain = run.catch(() => undefined);
+  return run;
+}
+
+async function putConversation(
+  id: string,
+  updates: Partial<Omit<DatabaseConversation, 'id'>>
+): Promise<void> {
+  await apiFetch(`/conversations/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+    headers: { 'X-Redstart-Device-Id': getDeviceId() }
+  });
 }
 
 export class DatabaseService {
@@ -192,13 +262,18 @@ export class DatabaseService {
     id: string,
     options?: { deleteWithForks?: boolean }
   ): Promise<void> {
-    // Through apiFetch like every other route: it carries the session token
-    // (with auth on, a bare fetch was refused) and throws on a failed status,
-    // so a delete that did not happen is not shown as one. The query is
-    // appended by hand because resolveApiPath can return a relative path,
-    // which URL() would resolve against a placeholder host.
+    // Through apiFetch like every other call: it resolves the path against the
+    // server base (relative in the web build, absolute in the app), carries
+    // the session token (with auth on, a bare fetch was refused) and throws on
+    // a failed status, so a delete that did not happen is not shown as one.
+    // This used to parse the path against a dummy origin and fetch the
+    // result, which in the web build sent the delete to http://x/…, without
+    // auth, and the chat never went away. (Fixed on this branch and on main
+    // in PR #39 alike; merged as one.)
     const query = options?.deleteWithForks ? '?deleteWithForks=true' : '';
-    await apiFetch(`/conversations/${encodeURIComponent(id)}${query}`, { method: 'DELETE' });
+    await apiFetch<void>(`/conversations/${encodeURIComponent(id)}${query}`, {
+      method: 'DELETE'
+    });
   }
 
   static async deleteMessage(messageId: string): Promise<void> {
@@ -298,11 +373,7 @@ export class DatabaseService {
     id: string,
     updates: Partial<Omit<DatabaseConversation, 'id'>>
   ): Promise<void> {
-    await apiFetch(`/conversations/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(updates),
-      headers: { 'X-Redstart-Device-Id': getDeviceId() }
-    });
+    await putConversation(id, updates);
   }
 
   static async toggleConversationPin(id: string): Promise<boolean> {
@@ -312,7 +383,9 @@ export class DatabaseService {
     });
     if (!conv) throw new Error(`Conversation ${id} not found`);
     const newPinnedState = !conv.pinned;
-    await this.updateConversation(id, { pinned: newPinnedState });
+    // putConversation, not updateConversation: this already holds the write
+    // queue, and the queued updateConversation would wait for it forever.
+    await putConversation(id, { pinned: newPinnedState });
     return newPinnedState;
   }
 
@@ -443,4 +516,26 @@ export class DatabaseService {
 
     return newConv;
   }
+}
+
+// Every method that changes a stored conversation goes through the write
+// queue (see `serialized` above). Wrapped here, once, rather than inside each
+// body, so the list of queued writes is one line to read. None of these may
+// call another of them; toggleConversationPin uses putConversation for that.
+const QUEUED_WRITES = [
+  'createMessageBranch',
+  'createRootMessage',
+  'createSystemMessage',
+  'deleteConversation',
+  'deleteMessage',
+  'deleteMessageCascading',
+  'updateConversation',
+  'toggleConversationPin',
+  'updateMessage'
+] as const;
+
+for (const name of QUEUED_WRITES) {
+  const original = DatabaseService[name] as (...args: unknown[]) => Promise<unknown>;
+  (DatabaseService as unknown as Record<string, unknown>)[name] = (...args: unknown[]) =>
+    serialized(() => original.apply(DatabaseService, args));
 }

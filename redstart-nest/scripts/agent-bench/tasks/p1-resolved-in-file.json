@@ -1,0 +1,15 @@
+{
+  "id": "p1-resolved-in-file",
+  "group": "phase1",
+  "phase": 1,
+  "prompt": "Convert the temperatures in readings_c.csv to the other unit and save the result as converted.csv.",
+  "fixtures": [
+    {
+      "path": "readings_c.csv",
+      "from": "fixtures/readings_c.csv"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/phase1.mjs#convertedWithoutAsking",
+  "notes": "A guard (2026-11-11): the same request as the old units task, but the column is temp_c, so the file settles it. Fails if the model asks, or converts the wrong way."
+}

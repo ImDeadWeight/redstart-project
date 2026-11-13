@@ -259,7 +259,7 @@ describe('Collapsed sidebar rail', () => {
 
 		await expect.element(screen.getByLabelText('Profile')).toBeInTheDocument();
 		await expect.element(screen.getByLabelText('New chat')).toBeInTheDocument();
-		await expect.element(screen.getByLabelText('Search')).toBeInTheDocument();
+		await expect.element(screen.getByLabelText('Search Conversations')).toBeInTheDocument();
 		await expect.element(screen.getByLabelText('Settings')).toBeInTheDocument();
 
 		// Labelled 'Profile', never the username: every neighbour says what it

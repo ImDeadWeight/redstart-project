@@ -44,7 +44,7 @@ This is an honest work-in-progress. The project started as a personal home tool 
 - [x] Built-in MCP server — provider-driven, in-process or supervised stdio children, whitelist enforced at the server level
 - [x] Centralized MCP management — configured once in Nest, auto-discovered by every client; per-device config removed
 - [x] Source groups, custom sources, and external MCP servers on other devices
-- [x] Seven local capabilities — Postgres, SQLite, Vault, Git, Documents, File System, Scholar
+- [x] Ten local capabilities — Postgres, SQLite, Vault, Git, Documents, File System, Python, Document search, Memory, Scholar
 - [x] MCP plugin system — install a third-party stdio MCP server (npm, pypi via `uv`, local path, or a raw command) and its tools appear namespaced alongside the built-ins, under the same fail-closed classification and per-plugin write/destructive policy every capability already uses; bulk-classify and an official-registry browser make the install/review workflow practical on a plugin with dozens of tools
 - [x] `web_search` over first-party APIs — no third-party search engine involved
 - [x] Three-tier accounts with login gate — Owner/Admin/User, session tokens, `rst_` API keys; on by default, localhost bypass removed
@@ -61,6 +61,12 @@ This is an honest work-in-progress. The project started as a personal home tool 
 - [x] **Headless daemon** — `bin/nestd.mjs` boots the whole server under plain Node with no Electron, behind seams for paths and secrets; `npm run daemon` / `daemon:stop` / `daemon:status`
 - [x] **Per-box setup code** — a printed-on-the-chassis recovery credential is the only door onto owner creation *and* owner reset, replacing the anonymous first-admin path that was safe only while IPC was its sole caller
 - [x] **Config and user content are separate subtrees**, refused at startup if they overlap, so a config reset cannot wander into someone's documents and a backup can treat the two as different questions
+- [x] **One agent loop for every host** — the browser, the benchmark and the daemon run the same core (`shared/agent-core/`), so behaviour measured on the bench is the behaviour users get
+- [x] **Asking and planning** — `ask_user` (up to four questions as one card) and `update_plan` (a checklist the chat shows)
+- [x] **Approvals enforced by the server** — writes and deletes wait for the user's decision on every client, with standing grants per account (never for deletion) and a decision log in the launcher's Activity tab
+- [x] **Background tasks** — `/task` runs a request in the daemon with no browser attached; it survives a restart and waits in the chat for answers and approvals
+- [x] **Memory that learns from the work** — facts, guidance and dated state; an automatic review that must quote the user and cannot be steered by a page or a file; full Undo
+- [x] **Agent and memory benchmarks** — `scripts/agent-bench/` and `scripts/memory-bench/`, run against a real model, with the results recorded per model
 
 ---
 

@@ -38,6 +38,7 @@ import { ToolsTab } from './tabs/ToolsTab'
 import { PluginsTab } from './tabs/PluginsTab'
 import { ModelsTab } from './tabs/ModelsTab'
 import { ServerTab, healthDisplay } from './tabs/ServerTab'
+import { ActivityTab } from './tabs/ActivityTab'
 import { LaunchControls } from './components/LaunchControls'
 
 export default function App() {
@@ -45,7 +46,7 @@ export default function App() {
   const [generatedCommand, setGeneratedCommand] = useState('')
   const [networkMode, setNetworkMode] = useState(true)
   const [localIp, setLocalIp] = useState('')
-  const [activeTab, setActiveTab] = useState<'config' | 'models' | 'tools' | 'plugins' | 'server'>('config')
+  const [activeTab, setActiveTab] = useState<'config' | 'models' | 'tools' | 'plugins' | 'activity' | 'server'>('config')
 
   const { statusMsg, show: showStatus, clear: clearStatus } = useStatusMessage()
 
@@ -157,6 +158,7 @@ export default function App() {
               ['models', 'Models'],
               ['plugins', 'Plugins'],
               ['tools', 'Tools'],
+              ['activity', 'Activity'],
               ['server', 'Server'],
             ] as const).map(([id, label]) => (
               <button
@@ -210,6 +212,8 @@ export default function App() {
           {activeTab === 'tools' && (
             <ToolsTab config={config} toolsCatalog={toolsCatalog} caps={caps} mcp={mcp} plugins={plugins} />
           )}
+
+          {activeTab === 'activity' && <ActivityTab />}
 
           {/* Status message */}
           {statusMsg && (

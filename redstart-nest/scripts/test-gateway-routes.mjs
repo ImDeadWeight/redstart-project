@@ -377,6 +377,16 @@ async function main() {
     }
     const reply = nextUpstreamReply
     nextUpstreamReply = null
+    if (reply?.holdOpen) {
+      // A generation that never ends on its own, like a model in a loop:
+      // one SSE chunk, then nothing, until the connection is closed.
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      res.write('data: {"choices":[{"delta":{"content":"again "}}]}\n\n')
+      const tick = setInterval(() => res.write('data: {"choices":[{"delta":{"content":"again "}}]}\n\n'), 50)
+      res.on('close', () => { clearInterval(tick); reply.onUpstreamClose?.() })
+      reply.held = res
+      return
+    }
     if (reply) {
       const body = typeof reply.body === 'string' ? reply.body : JSON.stringify(reply.body)
       res.writeHead(reply.status, {
@@ -409,6 +419,38 @@ async function main() {
     assert(res.status === 200, `expected 200, got ${res.status}`)
     assert(lastForwarded, 'nothing reached the upstream')
     assert(Array.isArray(lastForwarded.messages), 'messages did not survive the rewrite')
+  })
+
+  await test('a client that disconnects mid-reply cancels the generation upstream', async () => {
+    // The agent bench, 2026-11-11: stopped runs left llama-server generating
+    // for minutes, because the gateway kept its own request open.
+    let upstreamClosed = false
+    const reply = { holdOpen: true, onUpstreamClose: () => { upstreamClosed = true } }
+    nextUpstreamReply = reply
+    try {
+      const controller = new AbortController()
+      const res = await fetch(`${gw}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { ...bearer(ownerToken), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'loop' }], stream: true }),
+        signal: controller.signal,
+      })
+      const reader = res.body.getReader()
+      await reader.read() // the first chunk arrived: the generation is running
+      controller.abort()
+      const deadline = Date.now() + 2000
+      while (!upstreamClosed && Date.now() < deadline) await new Promise(r => setTimeout(r, 20))
+      assert(upstreamClosed, 'the upstream request was still open 2 s after the client left')
+    } finally {
+      // On a regression the fake stream would run forever and hang the suite
+      // at shutdown instead of failing it.
+      if (!upstreamClosed) reply.held?.destroy()
+    }
+  })
+
+  await test('a reply that completes normally is not cut short', async () => {
+    const res = await completions({ messages: [{ role: 'user', content: 'hi' }] })
+    assert(res.status === 200, `expected 200, got ${res.status}`)
   })
 
   // git_diff is banned for the next four tests; git_status stays allowed as the
@@ -521,7 +563,7 @@ async function main() {
       tools: [toolDef('delete_file'), toolDef('fs_read_file')],
     })
     const system = systemOf()
-    assert(/Confirm with the user before calling delete_file/.test(system), 'a permitted capability lost its claim')
+    assert(/Every call to delete_file needs the user's approval/.test(system), 'a permitted capability lost its claim')
     assert(/Two different computers/.test(system), 'a permitted client tool lost its locality block')
     updateGatewayConfig(baseConfig)
   })
@@ -612,7 +654,7 @@ async function main() {
       tools: [toolDef('delete_file')],
     })
     const names = (lastForwarded.tools || []).map(t => t.function.name)
-    const claimed = /Confirm with the user before calling delete_file/.test(systemOf())
+    const claimed = /Every call to delete_file needs the user's approval/.test(systemOf())
     assert(claimed === names.includes('delete_file'),
       `the prompt ${claimed ? 'claimed' : 'did not claim'} a tool the payload ${names.includes('delete_file') ? 'carried' : 'did not carry'}`)
     updateGatewayConfig(baseConfig)

@@ -1,0 +1,7 @@
+{
+  "id": "compute-arithmetic",
+  "group": "compute",
+  "prompt": "What is 48271 × 9973 − 123456? Give me the exact number.",
+  "approve": "all",
+  "check": "checks/compute.mjs#arithmetic"
+}

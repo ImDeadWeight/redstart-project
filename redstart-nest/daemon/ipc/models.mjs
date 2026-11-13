@@ -23,6 +23,12 @@ import * as path from 'path'
 
 import { searchModels, getModelDetail, getModelDescription, TRUSTED_PUBLISHERS } from '../hf-catalog.mjs'
 import { downloadArtifact, diskSpaceFor, discardPartials, PART_SUFFIX } from '../model-download.mjs'
+import { EMBED_MODEL } from '../embed-model.mjs'
+
+// Shard 2..N of a split GGUF ("-00002-of-00003.gguf"). Only shard 1 is a
+// loadable path — llama-server finds the rest itself — so the others must not
+// be offered as a model to select.
+const LATER_SHARD = /-(\d{5})-of-\d{5}\.gguf$/i
 import { isPlainObject, isNonEmptyString, optional } from './validate.mjs'
 
 // Progress fires per chunk, which is thousands of times a second on a fast
@@ -85,6 +91,12 @@ export async function listLocalModels({ resolveModelsDir, ensureModelsDir }) {
         size: st.size,
         modified: st.mtimeMs,
         partial: lower.endsWith(PART_SUFFIX),
+        // Flags for the model selector, decided here because the daemon is
+        // the authority on both: the embedding model is fetched by
+        // embed-model.mjs for document search and is not a chat model, and a
+        // later shard is not a loadable path.
+        embedding: e.name === EMBED_MODEL.rfilename,
+        extraShard: Number(LATER_SHARD.exec(e.name)?.[1] ?? 1) > 1,
       })
     }
     files.sort((a, b) => b.modified - a.modified)

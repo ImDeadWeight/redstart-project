@@ -293,6 +293,83 @@ await test('run_python writes a figure and a CSV into the conversation workspace
   assert(ws.includes(path.join('user_files', 'pat-')) && ws.endsWith(path.join('chats', 'conv-abc')), ws)
 })
 
+await test('pandas .plot() without importing matplotlib loads it and saves the figure', async () => {
+  // The agent bench's Qwen3-4B wrote exactly this shape (2026-11-11) and got
+  // "matplotlib is required for plotting": find_imports sees only pandas.
+  // A conversation of its own, so its kernel has never loaded matplotlib.
+  const res = await pythonTool.callTool('run_python', { code: "import pandas as pd\ndf = pd.DataFrame({'region':['North','South'],'total':[3,5]})\ndf.plot(kind='bar', x='region', y='total')\n'drawn'" }, cfg, { account, conversationId: 'conv-plot' })
+  const text = res.content[0].text
+  assert(!res.isError, text)
+  assert(/drawn/.test(text) && /fig-1\.png/.test(text), text)
+})
+
+await test('a missing file opened with the chats/<id>/ prefix says to use the bare name', async () => {
+  // list_documents shows "chats/conv-abc/report_jan.txt"; run_python already
+  // runs in that folder. Qwen3-4B spent docs-rename's 10 turns on this
+  // (agent bench, 2026-11-11) because the error never said why.
+  const res = await pythonTool.callTool('run_python', { code: "open('chats/conv-abc/report_jan.txt').read()" }, cfg, ctx)
+  const text = res.content[0].text
+  assert(res.isError && /FileNotFoundError/.test(text), text)
+  assert(text.includes('run_python already runs inside chats/conv-abc/, so open a file there by its bare name: "report_jan.txt", not "chats/conv-abc/report_jan.txt".'), text)
+  const plain = await pythonTool.callTool('run_python', { code: "open('nowhere.txt').read()" }, cfg, ctx)
+  assert(plain.isError && !/already runs inside/.test(plain.content[0].text), 'hint on a missing file that had no prefix')
+  const { workspacePrefixHint } = pythonTool
+  assert(workspacePrefixHint('ZeroDivisionError', "x = 'chats/conv-abc/a'", 'chats/conv-abc') === null, 'hint on an unrelated error')
+})
+
+await test('code that shows nothing is told to print, and the same value at the top level is returned', async () => {
+  // Qwen3-4B's multi-recover code (agent bench, 2026-11-11): the value is the
+  // last line of a try block. Seven runs, seven "no output", no print added.
+  const inTry = "try:\n    total = sum([64, 78, 65])\n    total\nexcept Exception as e:\n    print(f'Error: {e}')"
+  const res = await pythonTool.callTool('run_python', { code: inTry }, cfg, ctx)
+  const text = res.content[0].text
+  assert(!res.isError, text)
+  assert(text === pythonTool.NO_OUTPUT_TEXT, text)
+  assert(/print\(/.test(text) && /inside try/.test(text), `does not say what to do: ${text}`)
+  const top = await pythonTool.callTool('run_python', { code: 'total = sum([64, 78, 65])\ntotal' }, cfg, ctx)
+  assert(/Result: 207/.test(top.content[0].text) && !top.content[0].text.includes('No output'), top.content[0].text)
+})
+
+await test('a value computed mid-script and never shown is named, with print() as the fix', async () => {
+  // Qwen3-4B's compute-dates code (agent bench, 2026-11-11, T20-08-45): it
+  // got back only the weekday, then stated a day count it never saw.
+  const code = "from datetime import datetime\nstart_date = datetime(2024, 2, 14)\nend_date = datetime(2026, 11, 10)\ndays_difference = (end_date - start_date).days\n\ndays_difference\n\ntarget_date = datetime(2031, 7, 4)\nday_of_week = target_date.strftime('%A')\nday_of_week"
+  const res = await pythonTool.callTool('run_python', { code }, cfg, ctx)
+  const text = res.content[0].text
+  assert(!res.isError && /Result: 'Friday'/.test(text), text)
+  assert(text.includes('Not shown: days_difference (line 6).') && text.includes('print()'), text)
+
+  const { unshownValuesHint } = pythonTool
+  const quiet = [
+    'x = 1\nx',                                   // the only value is the last line
+    'items = [\n  a,\nb\n]\nlen(items)',           // a name inside brackets
+    'def f():\n    y\n    return 1\nf()',         // indented
+    '"""\nnotes\n"""\n1',                          // inside a docstring
+    'for i in range(3):\n    pass\nprint(i)',     // keywords
+    '# total\ntotal = 3\nprint(total)',
+  ]
+  for (const q of quiet) assert(unshownValuesHint(q) === null, `false alarm on ${JSON.stringify(q)}: ${unshownValuesHint(q)}`)
+  assert(unshownValuesHint('a = 1\na\nb = 2\nb') === '(Not shown: a (line 2). A value on a line of its own is returned only when it is the last line. print() each value you need.)', 'wording')
+})
+
+await test('code whose line breaks arrived as the two characters \\n says it was escaped twice', async () => {
+  // Qwen3-4B, p4-fix-test (agent bench, 2026-11-11, T20-08-45): eleven calls
+  // in this shape, every one a SyntaxError.
+  const code = "with open('notes.txt', 'w') as f:\\n    f.write('x')\\nprint('done')"
+  const res = await pythonTool.callTool('run_python', { code }, cfg, ctx)
+  const text = res.content[0].text
+  assert(res.isError && /line continuation character/.test(text), text)
+  assert(text.includes('the argument was escaped twice'), text)
+
+  const { escapedNewlineHint } = pythonTool
+  const err = 'SyntaxError: unexpected character after line continuation character'
+  assert(escapedNewlineHint(err, "print('a\\nb')\nx = 1") === null, 'code with real line breaks')
+  assert(escapedNewlineHint(err, 'x = 1 \\ 2') === null, 'no \\n in the code')
+  assert(escapedNewlineHint('NameError: x', "a\\nb") === null, 'another error')
+  const fine = await pythonTool.callTool('run_python', { code: "print('a\\nb')" }, cfg, ctx)
+  assert(!fine.isError && !fine.content[0].text.includes('escaped twice'), 'a one-liner with \\n in a string')
+})
+
 await test('a Python exception comes back as an error with only the user\'s frames', async () => {
   const res = await pythonTool.callTool('run_python', { code: 'def f():\n    return 1/0\nf()' }, cfg, ctx)
   const text = res.content[0].text

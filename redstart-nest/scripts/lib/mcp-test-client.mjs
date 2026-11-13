@@ -9,8 +9,12 @@
 // =============================================================================
 
 // `extraHeaders` (e.g. an Authorization bearer) is sent on every request, so a
-// suite can drive the server as a specific account with auth on.
-export async function connectMcpClient(baseUrl, { headers: extraHeaders = {} } = {}) {
+// suite can drive the server as a specific account with auth on. `timeoutMs`
+// bounds each request; the agent benchmark raises it, since a real run_python
+// call can take longer than a test fixture's. `capabilities` is the client
+// capability declaration sent at initialize (the bench and chat-ui declare
+// the host-resolved tools they answer; see daemon/interaction-tools.mjs).
+export async function connectMcpClient(baseUrl, { headers: extraHeaders = {}, timeoutMs = 8000, capabilities = {} } = {}) {
   const base = baseUrl.replace(/\/$/, '')
   let sessionId = null
   let nextId = 0
@@ -18,11 +22,19 @@ export async function connectMcpClient(baseUrl, { headers: extraHeaders = {} } =
 
   async function call(method, params) {
     const id = ++nextId
+    // The timer is cleared however the request settles. Left running, it kept
+    // the process alive for the whole timeout after a success, and after a
+    // fetch that threw it fired into a promise nobody awaited any more: an
+    // unhandled rejection that crashed the process minutes later.
+    let timer
     const promise = new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject })
-      setTimeout(() => {
+      pending.set(id, {
+        resolve: (v) => { clearTimeout(timer); resolve(v) },
+        reject: (e) => { clearTimeout(timer); reject(e) },
+      })
+      timer = setTimeout(() => {
         if (pending.has(id)) { pending.delete(id); reject(new Error(`Timed out waiting for response to ${method}`)) }
-      }, 8000)
+      }, timeoutMs)
     })
 
     const headers = {
@@ -34,11 +46,20 @@ export async function connectMcpClient(baseUrl, { headers: extraHeaders = {} } =
       headers['Mcp-Session-Id'] = sessionId
     }
 
-    const res = await fetch(`${base}/mcp`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
-    })
+    let res
+    try {
+      res = await fetch(`${base}/mcp`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+      })
+    } catch (err) {
+      // Nothing listening, or the connection dropped: settle this request now.
+      const entry = pending.get(id)
+      pending.delete(id)
+      entry?.reject(err)
+      return promise
+    }
 
     if (!res.ok) {
       const text = await res.text().catch(() => '')
@@ -108,7 +129,7 @@ export async function connectMcpClient(baseUrl, { headers: extraHeaders = {} } =
   // a caller to unknowingly re-trigger.
   const initResponse = await call('initialize', {
     protocolVersion: '2024-11-05',
-    capabilities: {},
+    capabilities,
     clientInfo: { name: 'redstart-test', version: '1.0.0' },
   })
 

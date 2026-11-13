@@ -1,7 +1,22 @@
 # Third-party notices
 
-Redstart is distributed under the MIT License (see
-[`redstart-nest/LICENSE.txt`](redstart-nest/LICENSE.txt)). The installers ship
+Redstart is distributed under the GNU Affero General Public License, version 3
+(`AGPL-3.0-only`, see [`LICENSE`](LICENSE)). Releases up to and including
+`1.0.0-alpha.12` were distributed under the MIT License. The third-party
+licenses below are compatible with that:
+
+- The permissive licenses (MIT, Apache-2.0, BSD, ISC and the rest) allow their
+  code inside a copyleft work. Those files keep their own notices, recorded
+  here.
+- MPL-2.0 is file-level copyleft and names the GPL family as compatible.
+- The CUDA runtime DLLs are loaded only by `llama-server.exe`, a separate
+  MIT-licensed program that Redstart runs as its own process and talks to over
+  HTTP. They ship *alongside* Redstart, an "aggregate" in AGPL section 5's
+  terms, and aren't combined with it.
+- The Visual C++ runtime is a component of the compiler, which AGPL section 1
+  treats as a System Library, outside the Corresponding Source.
+
+The installers ship
 third-party software alongside it. This file records what that software is and
 under what terms, as those licenses require.
 
@@ -149,7 +164,7 @@ Obligations that attach to redistributing these files, per that agreement:
   functionality beyond the redistributed component itself (Redstart's own
   inference stack, gateway, and UI satisfy this).
 - Downstream users must be bound by terms no less restrictive than NVIDIA's
-  agreement — Redstart's own MIT license does not itself grant broader rights
+  agreement — Redstart's own AGPL-3.0 license does not grant any rights
   to these specific files, so this file's notice is what carries that
   obligation forward.
 
@@ -279,11 +294,61 @@ those files are unmodified and their source is published on crates.io at
 the listed version. Node.js itself (MIT) ships its own `LICENSE` beside
 `resources/node/node.exe`.
 
-<!-- Add to electron-builder.json extraResources:
-     { "from": "licenses", "to": "licenses", "filter": ["**/*"] }
-     and add LICENSE.txt + THIRD-PARTY-NOTICES.md alongside it, so the
-     compliance files are present in an installed copy and not only in the
-     repository. -->
+---
+
+## 3. Source code adapted from other projects
+
+### Chat UI (llama.cpp web UI)
+
+[`redstart-nest/src/chat-ui/`](redstart-nest/src/chat-ui/) began as a fork of
+the llama.cpp server's web UI and has been heavily modified since. The code
+taken from upstream remains under its MIT license. Redstart's changes and
+additions to it are under AGPL-3.0, like the rest of Redstart.
+
+- Upstream project: llama.cpp —
+  <https://github.com/ggerganov/llama.cpp> (`tools/server/webui`, formerly
+  `examples/server/webui`)
+- License: MIT
+- Copyright (c) 2023-2026 The ggml authors
+
+The MIT license text applying to the above:
+
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in
+> all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
+
+### Libraries compiled into the chat UI
+
+The chat UI's build compiles code from its own npm dependencies into
+`chat-ui/`, which both Nest and Twig ship. These are all MIT, under the same
+license text quoted above:
+
+- Svelte / SvelteKit — Copyright (c) 2016-2023 Svelte contributors —
+  <https://github.com/sveltejs/svelte>
+- Tailwind CSS — Copyright (c) Tailwind Labs, Inc. —
+  <https://github.com/tailwindlabs/tailwindcss>
+- Vite — Copyright (c) 2019-present, VoidZero Inc. and Vite contributors —
+  <https://github.com/vitejs/vite>
+
+**Known gap:** this list was carried over by hand from Twig's old
+`LICENSE.txt` and isn't complete. The npm appendix in section 2 is generated
+from Nest's `package.json` only, so the chat UI's other runtime dependencies
+aren't enumerated anywhere. Closing this means running `license:gen` against
+`redstart-nest/src/chat-ui` as well and shipping its output in `licenses/`.
 
 ---
 
@@ -293,7 +358,8 @@ Attribution that lives only in the repository does not satisfy a distribution
 requirement — the notices have to be *in the artifact*. Add to the release
 checklist:
 
-- [ ] `THIRD-PARTY-NOTICES.md`, `LICENSE.txt`, and `licenses/` are present in
+- [ ] `LICENSE.txt` (the AGPL text), `THIRD-PARTY-NOTICES.md`, `TRADEMARKS.md`
+      and `licenses/` are present in
       the installed application directory after running the installer.
 - [ ] The npm license appendix was regenerated against the current lockfile,
       not carried over from a previous release.

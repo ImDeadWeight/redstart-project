@@ -1,0 +1,13 @@
+{
+  "id": "compute-convert",
+  "group": "compute",
+  "prompt": "Convert people.json into a CSV file named people.csv with the columns name, age, city, in that order, keeping the people in the same order.",
+  "fixtures": [
+    {
+      "path": "people.json",
+      "from": "fixtures/people.json"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/compute.mjs#peopleCsv"
+}

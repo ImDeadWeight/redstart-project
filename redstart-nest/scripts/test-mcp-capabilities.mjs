@@ -42,6 +42,15 @@ const tmpFsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-mcp-test-fs-'))
 const scopedDocsDir = path.join(tmpDocsDir, 'user_files', '_local')
 const scopedFsDir = path.join(tmpFsDir, 'user_files', '_local')
 fs.mkdirSync(scopedDocsDir, { recursive: true })
+
+// Where create_document put a file, from its [FILE: <relative path>] line.
+// Shaped like a regex match ([whole, absolute path]) because the result used
+// to carry the absolute path itself ("Document created: C:\..."), which told
+// every model where the server keeps its files, and these tests read it.
+const createdMatch = (text) => {
+  const m = /^\[FILE: ([^\]]+)\]/m.exec(text ?? '')
+  return m ? [m[0], path.join(scopedDocsDir, ...m[1].split('/'))] : null
+}
 fs.mkdirSync(scopedFsDir, { recursive: true })
 process.env.REDSTART_TEST_USERDATA_DIR = tmpUserDataDir
 
@@ -57,6 +66,8 @@ registerElectronStub()
 await import('./electron-stub.mjs')
 
 const { startMcpServer, stopMcpServer } = await import('../daemon/mcp-server.mjs')
+const approvalLedger = await import('../daemon/approval-ledger.mjs')
+const { approvalRequired, APPROVAL_ID_META_KEY, APPROVAL_RULE_META_KEY, APPROVAL_ENFORCED_META_KEY } = await import('../../shared/agent-core/approval.mjs')
 const { setAuthRequired } = await import('../daemon/auth.mjs')
 const { capabilityForTool, classifyTool, expandDisabledToolIds, setPluginCapabilityProvider } = await import('../daemon/tools-definitions.mjs')
 const { addPlugin, removePlugin, pluginCapabilities } = await import('../daemon/plugin-registry.mjs')
@@ -364,7 +375,7 @@ async function main() {
       })
       assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
       const text = res.result.content[0].text
-      const match = text.match(/Document created: (.+)$/)
+      const match = createdMatch(text)
       assert(match, `unexpected result text: ${text}`)
       const filePath = match[1]
       assert(fs.existsSync(filePath), `file does not exist: ${filePath}`)
@@ -389,7 +400,7 @@ async function main() {
       arguments: { title: 'Echo Arg', content: source, format: 'python' },
     })
     assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
-    const filePath = res.result.content[0].text.match(/Document created: (.+)$/)[1]
+    const filePath = createdMatch(res.result.content[0].text)[1]
     assert(filePath.endsWith('.py'), `expected a .py file, got ${filePath}`)
     const written = fs.readFileSync(filePath, 'utf8')
     assert(written === source, `script was not written verbatim:\n${JSON.stringify(written)}`)
@@ -402,7 +413,7 @@ async function main() {
       name: 'create_document',
       arguments: { title: 'Fenced Script', content: '```python\nprint("hi")\n```', format: 'python' },
     })
-    const filePath = res.result.content[0].text.match(/Document created: (.+)$/)[1]
+    const filePath = createdMatch(res.result.content[0].text)[1]
     const written = fs.readFileSync(filePath, 'utf8')
     assert(!written.includes('```'), `fence survived into the script: ${JSON.stringify(written)}`)
     assert(written.trim() === 'print("hi")', `unexpected script body: ${JSON.stringify(written)}`)
@@ -426,7 +437,7 @@ async function main() {
       arguments: { filename: 'batch_rename.py', content: 'print("renamed")' },
     })
     assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
-    const filePath = res.result.content[0].text.match(/Document created: (.+)$/)[1]
+    const filePath = createdMatch(res.result.content[0].text)[1]
     assert(filePath.endsWith('.py'), `expected a .py file, got ${filePath}`)
     assert(fs.readFileSync(filePath, 'utf8').trim() === 'print("renamed")', 'script body was altered')
   })
@@ -441,7 +452,7 @@ async function main() {
       arguments: { title: 'sum_of_odds.py', content: 'print(sum(range(1, 100, 2)))', format: 'python' },
     })
     assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
-    const filePath = res.result.content[0].text.match(/Document created: (.+)$/)[1]
+    const filePath = createdMatch(res.result.content[0].text)[1]
     const name = path.basename(filePath)
     assert(name === 'sum-of-odds.py', `expected 'sum-of-odds.py', got '${name}'`)
   })
@@ -453,7 +464,7 @@ async function main() {
       name: 'create_document',
       arguments: { title: 'Q3 Report v1.2', content: 'body', format: 'markdown' },
     })
-    const name = path.basename(res.result.content[0].text.match(/Document created: (.+)$/)[1])
+    const name = path.basename(createdMatch(res.result.content[0].text)[1])
     assert(name === 'q3-report-v1-2.md', `expected the '.2' to survive as part of the title, got '${name}'`)
   })
 
@@ -475,7 +486,7 @@ async function main() {
       name: 'create_document',
       arguments: { title: 'Readable Script', content: 'THRESHOLD = 4417\nprint(THRESHOLD)', format: 'python' },
     })
-    const filename = path.basename(created.result.content[0].text.match(/Document created: (.+)$/)[1])
+    const filename = path.basename(createdMatch(created.result.content[0].text)[1])
     const read = await client.call('tools/call', { name: 'read_document', arguments: { path: filename } })
     assert(!read.result?.isError, `read failed: ${JSON.stringify(read.result)}`)
     assert(read.result.content[0].text.includes('THRESHOLD = 4417'), `source missing: ${read.result.content[0].text}`)
@@ -484,8 +495,8 @@ async function main() {
   await test('a second create_document with the same title gets a distinct filename, not an overwrite', async () => {
     const first = await client.call('tools/call', { name: 'create_document', arguments: { title: 'Duplicate Title', content: 'first', format: 'markdown' } })
     const second = await client.call('tools/call', { name: 'create_document', arguments: { title: 'Duplicate Title', content: 'second', format: 'markdown' } })
-    const firstPath = first.result.content[0].text.match(/Document created: (.+)$/)[1]
-    const secondPath = second.result.content[0].text.match(/Document created: (.+)$/)[1]
+    const firstPath = createdMatch(first.result.content[0].text)[1]
+    const secondPath = createdMatch(second.result.content[0].text)[1]
     assert(firstPath !== secondPath, `expected distinct paths, both were ${firstPath}`)
     assert(fs.readFileSync(firstPath, 'utf8').includes('first'), 'first file was overwritten')
     assert(fs.readFileSync(secondPath, 'utf8').includes('second'), 'second file has wrong content')
@@ -494,7 +505,7 @@ async function main() {
   await test('🔍 a title containing path-traversal segments cannot escape the configured output directory', async () => {
     const res = await client.call('tools/call', { name: 'create_document', arguments: { title: '../../../../evil', content: 'x', format: 'markdown' } })
     assert(!res.result?.isError, `unexpected error: ${JSON.stringify(res.result)}`)
-    const filePath = res.result.content[0].text.match(/Document created: (.+)$/)[1]
+    const filePath = createdMatch(res.result.content[0].text)[1]
     const resolvedDocsDir = path.resolve(scopedDocsDir)
     const resolvedFile = path.resolve(filePath)
     assert(resolvedFile === resolvedDocsDir || resolvedFile.startsWith(resolvedDocsDir + path.sep),
@@ -522,7 +533,7 @@ async function main() {
   await test('round trip: create_document (.md) then read_document returns the content', async () => {
     const created = await client.call('tools/call', { name: 'create_document', arguments: { title: 'Round Trip', content: 'The quarterly summary mentions Maple Street.', format: 'markdown' } })
     assert(!created.result?.isError, `create failed: ${JSON.stringify(created.result)}`)
-    const filename = path.basename(created.result.content[0].text.match(/Document created: (.+)$/)[1])
+    const filename = path.basename(createdMatch(created.result.content[0].text)[1])
     const read = await client.call('tools/call', { name: 'read_document', arguments: { path: filename } })
     assert(!read.result?.isError, `read failed: ${JSON.stringify(read.result)}`)
     assert(read.result.content[0].text.includes('Maple Street'), `content missing: ${read.result.content[0].text}`)
@@ -530,7 +541,7 @@ async function main() {
 
   await test('round trip: create_document (.docx) then read_document extracts the text', async () => {
     const created = await client.call('tools/call', { name: 'create_document', arguments: { title: 'Docx Round Trip', content: 'Intake notes reference case 4417.', format: 'docx' } })
-    const filename = path.basename(created.result.content[0].text.match(/Document created: (.+)$/)[1])
+    const filename = path.basename(createdMatch(created.result.content[0].text)[1])
     const read = await client.call('tools/call', { name: 'read_document', arguments: { path: filename } })
     assert(!read.result?.isError, `read failed: ${JSON.stringify(read.result)}`)
     assert(read.result.content[0].text.includes('case 4417'), `content missing: ${read.result.content[0].text}`)
@@ -538,7 +549,7 @@ async function main() {
 
   await test('round trip: create_document (.pdf) then read_document extracts the text', async () => {
     const created = await client.call('tools/call', { name: 'create_document', arguments: { title: 'Pdf Round Trip', content: 'The policy manual covers reimbursement.', format: 'pdf' } })
-    const filename = path.basename(created.result.content[0].text.match(/Document created: (.+)$/)[1])
+    const filename = path.basename(createdMatch(created.result.content[0].text)[1])
     const read = await client.call('tools/call', { name: 'read_document', arguments: { path: filename } })
     assert(!read.result?.isError, `read failed: ${JSON.stringify(read.result)}`)
     assert(read.result.content[0].text.includes('reimbursement'), `content missing: ${read.result.content[0].text}`)
@@ -984,6 +995,7 @@ async function main() {
   // appear, since toolDefs() serves the cached tools/list from the live child.
   {
     const { buildGatewayConfig } = await import('../daemon/gateway-config.mjs')
+    const { narrowConfig } = await import('../daemon/permissions.mjs')
     const { expandDisabledToolIds } = await import('../daemon/tools-definitions.mjs')
     const storageFs = await import('../daemon/tools-storage.mjs')
     const fsProvider = await import('../daemon/filesystem-mcp-provider.mjs')
@@ -1008,6 +1020,16 @@ async function main() {
 
       const offProfile = { tools: { enabled: true, webAccessEnabled: false, activeToolIds: [] } }
       assert(buildGatewayConfig(offProfile).webFetch.enabled === false, 'webAccessEnabled:false not honoured')
+    })
+
+    // agent-runtime 8.3: the memory review's thinking follows the profile, and
+    // a profile saved before the setting existed reviews with thinking off.
+    await test('🔍 the memory review thinks only when the profile says so', async () => {
+      const legacy = { tools: { enabled: true, activeToolIds: ['memory'] } }
+      assert(buildGatewayConfig(legacy).memory.reviewThink === false, 'a profile with no memoryReview reviews with thinking on')
+      const on = { tools: { enabled: true, activeToolIds: ['memory'], memoryReview: { think: true } } }
+      assert(buildGatewayConfig(on).memory.reviewThink === true, 'memoryReview.think not carried to the gateway config')
+      assert(narrowConfig(buildGatewayConfig(on), { capabilities: ['memory'] }).memory.reviewThink === true, 'a role\'s narrowing dropped the setting')
     })
 
     await test('🔍 disabling Web Access serves no web tool even with whitelist ON and sources selected', async () => {
@@ -1178,6 +1200,20 @@ async function main() {
     // as the tool.
     console.log('\n-- file system: destructive class (delete) --')
 
+    // delete_file is approval-enforced (agent-runtime Phase 2): a call with no
+    // approval does nothing. This is the handshake a client does: decide as
+    // the person would ('_local' is the auth-off scope this suite runs in),
+    // then repeat with the approval's id. Every delete below the policy test
+    // goes through it, so a refusal it sees is the tool's own, not "needs
+    // approval".
+    const approvedDelete = async (args) => {
+      const first = await client.call('tools/call', { name: 'delete_file', arguments: args })
+      const pending = approvalRequired(first.result)
+      if (!pending) return first
+      approvalLedger.decide(pending.id, '_local', 'once')
+      return client.call('tools/call', { name: 'delete_file', arguments: args, _meta: { [APPROVAL_ID_META_KEY]: pending.id } })
+    }
+
     {
       storageFs.setCapabilityConfig('file_system', { allowWrite: true, allowDestructive: false })
       updateMcpConfig(buildGatewayConfig(fsProfile))
@@ -1203,6 +1239,7 @@ async function main() {
         assert(tool._meta['redstart/class'] === 'destructive', `class is ${tool._meta['redstart/class']}`)
         assert(tool.annotations.destructiveHint === true, 'destructiveHint not set')
         assert(tool._meta['redstart/capability'] === 'file_system', 'not attributed to the file_system capability')
+        assert(tool._meta[APPROVAL_RULE_META_KEY] === 'always' && tool._meta[APPROVAL_ENFORCED_META_KEY] === true, 'not marked as asking on every call')
       })
 
       await test('🔍 a deleted file is RECOVERABLE, not destroyed', async () => {
@@ -1210,7 +1247,7 @@ async function main() {
         // Under the test stub there is no OS recycle bin, so this exercises the
         // .trash/ fallback — the tier that must never degrade to a real delete.
         fs.writeFileSync(path.join(scopedFsDir, 'doomed.txt'), 'recover me')
-        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'doomed.txt' } })
+        const res = await approvedDelete({ path: 'doomed.txt' })
         assert(!res.result?.isError, `delete failed: ${JSON.stringify(res.result)}`)
         assert(!fs.existsSync(path.join(scopedFsDir, 'doomed.txt')), 'the file is still at its original path')
 
@@ -1235,7 +1272,7 @@ async function main() {
         const outside = path.join(tmpFsDir, 'outside-victim.txt')
         fs.writeFileSync(outside, 'not yours')
         for (const attempt of ['../outside-victim.txt', '../../outside-victim.txt', outside]) {
-          const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: attempt } })
+          const res = await approvedDelete({ path: attempt })
           assert(res.result?.isError === true, `escape allowed via "${attempt}": ${JSON.stringify(res.result)}`)
         }
         assert(fs.existsSync(outside), 'A FILE OUTSIDE THE CALLER\'S STORAGE WAS DELETED')
@@ -1243,7 +1280,7 @@ async function main() {
 
       await test('🔍 the storage root itself cannot be deleted', async () => {
         for (const attempt of ['.', '', './']) {
-          const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: attempt } })
+          const res = await approvedDelete({ path: attempt })
           assert(res.result?.isError === true, `root delete allowed via "${attempt}"`)
         }
         assert(fs.existsSync(scopedFsDir), 'THE STORAGE ROOT WAS DELETED')
@@ -1252,14 +1289,27 @@ async function main() {
       await test('🔍 a non-empty directory is refused and its contents survive', async () => {
         fs.mkdirSync(path.join(scopedFsDir, 'keepdir'), { recursive: true })
         fs.writeFileSync(path.join(scopedFsDir, 'keepdir', 'inner.txt'), 'inner')
-        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'keepdir' } })
+        const res = await approvedDelete({ path: 'keepdir' })
         assert(res.result?.isError === true, `non-empty directory was deleted: ${JSON.stringify(res.result)}`)
         assert(fs.existsSync(path.join(scopedFsDir, 'keepdir', 'inner.txt')), 'directory contents were removed')
       })
 
+      await test('🔍 a delete with no approval does nothing, and hands back a pending approval bound to that call', async () => {
+        fs.writeFileSync(path.join(scopedFsDir, 'kept.txt'), 'not yet')
+        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'kept.txt' } })
+        const pending = approvalRequired(res.result)
+        assert(pending && pending.tool === 'delete_file', 'no pending approval: ' + JSON.stringify(res.result))
+        assert(fs.existsSync(path.join(scopedFsDir, 'kept.txt')), 'the file was deleted without an approval')
+        approvalLedger.decide(pending.id, '_local', 'once')
+        const other = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'doomed-other.txt' }, _meta: { [APPROVAL_ID_META_KEY]: pending.id } })
+        assert(approvalRequired(other.result), 'an approval for kept.txt was spent on another path')
+        const again = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'kept.txt' }, _meta: { [APPROVAL_ID_META_KEY]: pending.id } })
+        assert(approvalRequired(again.result) && fs.existsSync(path.join(scopedFsDir, 'kept.txt')), 'a refused approval could be retried')
+      })
+
       await test('an empty directory is accepted', async () => {
         fs.mkdirSync(path.join(scopedFsDir, 'emptydir'), { recursive: true })
-        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'emptydir' } })
+        const res = await approvedDelete({ path: 'emptydir' })
         assert(!res.result?.isError, `empty directory delete failed: ${JSON.stringify(res.result)}`)
         assert(!fs.existsSync(path.join(scopedFsDir, 'emptydir')), 'the empty directory is still there')
       })
@@ -1271,13 +1321,13 @@ async function main() {
         fs.mkdirSync(path.join(scopedFsDir, '.trash', 'bucket'), { recursive: true })
         const trashed = path.join(scopedFsDir, '.trash', 'bucket', 'gone.txt')
         fs.writeFileSync(trashed, 'already trashed')
-        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: '.trash/bucket/gone.txt' } })
+        const res = await approvedDelete({ path: '.trash/bucket/gone.txt' })
         assert(res.result?.isError === true, `trash emptying was allowed: ${JSON.stringify(res.result)}`)
         assert(fs.existsSync(trashed), 'a trashed file was PERMANENTLY removed')
       })
 
       await test('a missing path reports not-found rather than succeeding silently', async () => {
-        const res = await client.call('tools/call', { name: 'delete_file', arguments: { path: 'no-such-file.txt' } })
+        const res = await approvedDelete({ path: 'no-such-file.txt' })
         assert(res.result?.isError === true, `expected an error: ${JSON.stringify(res.result)}`)
       })
 

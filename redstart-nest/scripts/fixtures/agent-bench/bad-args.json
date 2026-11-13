@@ -1,0 +1,1 @@
+{ "id": "bad-args", "group": "multi", "prompt": "[script:badargs] Read data.txt.", "fixtures": [{ "path": "data.txt", "from": "data.txt" }], "approve": "all", "check": "checks.mjs#saysSeven" }

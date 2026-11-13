@@ -187,7 +187,10 @@ describe('create_document — table rendering', () => {
 		const text = result.content[0].text;
 		// Must be the first thing on its own line — that is what FILE_PATH_REGEX anchors on.
 		expect(text.split('\n')[0]).toBe('[FILE: marker-doc.md]');
-		expect(text).toContain('Document created:');
+		// The relative marker is all the model gets: the absolute path this
+		// result used to end with told it where the server keeps its files.
+		expect(text).not.toContain('Document created:');
+		expect(text).not.toContain(writtenDir);
 	});
 
 	// A local model that guesses the signature will retry, so the error it sees

@@ -1,0 +1,24 @@
+{
+  "id": "p1-answer-steers",
+  "group": "phase1",
+  "phase": 1,
+  "prompt": "Sort the people in people.json and save them as sorted.csv with the columns name, age, city. I have a particular order in mind.",
+  "fixtures": [
+    {
+      "path": "people.json",
+      "from": "fixtures/people.json"
+    }
+  ],
+  "approve": "all",
+  "answers": {
+    "order": "By age, oldest first.",
+    "sort": "By age, oldest first.",
+    "column": "By age, oldest first.",
+    "field": "By age, oldest first.",
+    "arrange": "By age, oldest first.",
+    "criteri": "By age, oldest first.",
+    "by ": "By age, oldest first."
+  },
+  "check": "checks/phase1.mjs#sortedAsAnswered",
+  "notes": "The order is only in the answer. Passes only if the model asks and then follows what it was told (age, descending), not a default sort by name. Answers keyed by topic from 2026-11-12 (they were one catch-all)."
+}

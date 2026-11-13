@@ -85,7 +85,7 @@
 			}, 0)
 		);
 
-		const searchTrigger = screen.getByText('Search');
+		const searchTrigger = screen.getByText('Search Conversations');
 		userEvent.click(searchTrigger);
 	}}
 >

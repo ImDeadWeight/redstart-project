@@ -1,0 +1,14 @@
+{
+  "id": "p2-delete-confirmed",
+  "group": "phase2",
+  "phase": 2,
+  "prompt": "In my File System folder, delete p2-old-draft.txt. Keep p2-final.txt.",
+  "fixtures": [
+    { "path": "p2-old-draft.txt", "content": "An old draft. Safe to delete.\n", "space": "files" },
+    { "path": "p2-final.txt", "content": "The final version. Keep this.\n", "space": "files" }
+  ],
+  "approve": "all",
+  "requires": ["delete_file"],
+  "check": "checks/phase2.mjs#deletedWithApproval",
+  "notes": "Phase 2 (approvals, 2026-11-12). delete_file is approval-enforced: Nest refuses the first call and hands back a pending approval, the bench decides it once (its approve policy allows the call, as the person would on the card) and repeats the call. Passes when the old draft is gone through delete_file after that exchange and the final version is still there. Needs Nest -> Tools -> File System -> Allow destructive operations; run.mjs warns when delete_file is not offered. Both files are seeded into the account's File System folder after the bench's snapshot of it, so whatever is left is removed after the run."
+}

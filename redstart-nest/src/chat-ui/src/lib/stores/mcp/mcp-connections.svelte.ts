@@ -15,6 +15,7 @@
 
 import { browser } from '$app/environment';
 import { MCPService } from '$lib/services/mcp.service';
+import { permissionsStore } from '$lib/stores/permissions.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { MCPConnectionPhase } from '$lib/enums';
 import {
@@ -22,7 +23,8 @@ import {
 	MCP_RECONNECT_INITIAL_DELAY,
 	MCP_RECONNECT_BACKOFF_MULTIPLIER,
 	MCP_RECONNECT_MAX_DELAY,
-	MCP_RECONNECT_ATTEMPT_TIMEOUT_MS
+	MCP_RECONNECT_ATTEMPT_TIMEOUT_MS,
+	NEST_MCP_SERVER_ID_PREFIX
 } from '$lib/constants';
 import type {
 	ServerStatus,
@@ -184,6 +186,12 @@ export class MCPConnections {
 			} else {
 				console.error(`[MCPStore] Failed to connect:`, result.reason);
 			}
+		}
+
+		// Nest is connected: load the account's standing grants ("Always
+		// allow" lives on the server for Nest's tools, agent-runtime Phase 2).
+		if ([...this.connections.keys()].some((n) => n.startsWith(NEST_MCP_SERVER_ID_PREFIX))) {
+			void permissionsStore.refresh();
 		}
 
 		const successCount = this.connections.size;

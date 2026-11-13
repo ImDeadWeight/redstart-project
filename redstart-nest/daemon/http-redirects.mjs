@@ -31,6 +31,10 @@ export const MAX_REDIRECTS = 5
 //   headers       sent on each hop
 //   signal        abort signal, shared across hops
 //   maxRedirects  hop cap; exceeding it throws rather than returning a 3xx
+//   fetchImpl     the transport, (url, {headers, signal, redirect}) => Response.
+//                 Global fetch by default; the model downloader passes
+//                 node-fetch-transport.mjs (see why there). Resolved per call,
+//                 so a test shim on globalThis.fetch still applies.
 //   checkInitial  also validate the starting URL. Defaults true so a new caller
 //                 is safe by omission. web_fetch passes false: it already
 //                 validated, and owns a specific denial message that a generic
@@ -46,6 +50,7 @@ export async function fetchFollowingRedirects(url, {
   signal,
   maxRedirects = MAX_REDIRECTS,
   checkInitial = true,
+  fetchImpl = globalThis.fetch,
 } = {}) {
   if (typeof isUrlAllowed !== 'function') {
     throw new Error('fetchFollowingRedirects requires an isUrlAllowed policy')
@@ -57,7 +62,7 @@ export async function fetchFollowingRedirects(url, {
   let current = url
   let resp
   for (let hop = 0; ; hop++) {
-    resp = await fetch(current, { headers, signal, redirect: 'manual' })
+    resp = await fetchImpl(current, { headers, signal, redirect: 'manual' })
     if (resp.status < 300 || resp.status >= 400) break
     const location = resp.headers.get('location')
     if (!location) break

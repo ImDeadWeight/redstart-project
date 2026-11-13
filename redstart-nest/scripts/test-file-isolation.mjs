@@ -70,6 +70,11 @@ async function test(name, fn) {
 function assert(cond, message) {
   if (!cond) throw new Error(message)
 }
+function eq(actual, expected, message) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`${message}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+  }
+}
 
 // Two ordinary accounts, plus one whose username is chosen to try to reach the
 // other's folder if the scope were ever built from the username alone.
@@ -141,6 +146,14 @@ await test('a document created by one account lands in that account\'s folder', 
   assert(!fs.existsSync(path.join(dirs.docs, 'alice-secret-plan.md')), 'the file was written to the SHARED root')
 })
 
+await test('🔍 create_document does not tell the model where the server keeps files', async () => {
+  const res = await createDoc(BOB, 'Path Check', 'x')
+  const text = textOf(res)
+  assert(text.startsWith('[FILE: path-check.md]'), `no relative file line: ${text}`)
+  assert(!text.includes(dirs.docs) && !text.includes(resolveUserScope(BOB)), `LEAK — an absolute path or the account folder: ${text}`)
+  assert(!/[A-Za-z]:\\|user_files/.test(text), `LEAK — server layout: ${text}`)
+})
+
 await test('🔍 list_documents shows only the caller\'s own files', async () => {
   const res = await documentsTool.callTool('list_documents', {}, docsCfg, ctx(BOB))
   const listing = textOf(res)
@@ -185,6 +198,126 @@ await test('an account can still read its OWN documents', async () => {
   )
   assert(!res?.isError, `alice cannot read her own document: ${textOf(res)}`)
   assert(textOf(res).includes('alice-confidential'), `unexpected contents: ${textOf(res)}`)
+})
+
+await test('read_document opens a file attached to the caller\'s conversation by its name alone', async () => {
+  // Agent bench, 2026-11-11: the most common tool error on both models, and
+  // two tasks ended with "the file was never attached".
+  const ws = path.join(resolveUserRoot(dirs.docs, ALICE, { create: true }), 'chats', 'conv-alice-1')
+  fs.mkdirSync(path.join(ws, 'sub'), { recursive: true })
+  fs.writeFileSync(path.join(ws, 'readings.csv'), 'attached-to-conv-1')
+  fs.writeFileSync(path.join(ws, 'sub', 'notes.txt'), 'nested-in-conv-1')
+  fs.writeFileSync(path.join(ws, 'alice-secret-plan.md'), 'the-workspace-copy')
+  const inConv = { account: ALICE, conversationId: 'conv-alice-1' }
+  const read = async (p, c) => documentsTool.callTool('read_document', { path: p }, docsCfg, c)
+
+  assert(textOf(await read('readings.csv', inConv)).includes('attached-to-conv-1'), 'bare name not found')
+  assert(textOf(await read('sub/notes.txt', inConv)).includes('nested-in-conv-1'), 'nested path not found')
+  assert(textOf(await read('chats/conv-alice-1/readings.csv', inConv)).includes('attached-to-conv-1'), 'the full path stopped working')
+  // A path that exists in the documents folder still means that file.
+  assert(textOf(await read('alice-secret-plan.md', inConv)).includes('alice-confidential'), 'the workspace copy shadowed the document')
+  // No conversation, another conversation, a malformed id: not found, as before.
+  for (const c of [ctx(ALICE), { account: ALICE, conversationId: 'conv-alice-2' }, { account: ALICE, conversationId: '../conv-alice-1' }]) {
+    const res = await read('readings.csv', c)
+    assert(res?.isError && textOf(res).includes('File not found: readings.csv'), `found without its conversation (${c.conversationId}): ${textOf(res)}`)
+  }
+})
+
+await test('🔍 the conversation fallback never reaches another account\'s workspace', async () => {
+  // Bob sends Alice's conversation id. mcp-server.mjs would have refused it
+  // (verifiedConversationId); even past that check, the path is resolved in
+  // BOB's folder, where no such workspace exists.
+  const res = await documentsTool.callTool('read_document', { path: 'readings.csv' }, docsCfg, { account: BOB, conversationId: 'conv-alice-1' })
+  assert(res?.isError, `LEAK — bob read alice's attachment: ${textOf(res)}`)
+  for (const attempt of ['../conv-alice-1/readings.csv', '../../alice-secret-plan.md']) {
+    const out = await documentsTool.callTool('read_document', { path: attempt }, docsCfg, { account: ALICE, conversationId: 'conv-alice-2' })
+    assert(out?.isError, `"${attempt}" climbed out of the workspace: ${textOf(out)}`)
+  }
+})
+
+await test('a File System "no such file" on an attached file says where the file is and which tool reaches it', async () => {
+  // Agent bench, 2026-11-11: read_text_file("budget.csv") came back as a bare
+  // ENOENT and the model told the user the file was never attached.
+  const { attachmentHint, withAttachmentHint } = await import('../daemon/filesystem-mcp-provider.mjs')
+  const cfg = { ...docsCfg, python: { enabled: true } }
+  const inConv = { account: ALICE, conversationId: 'conv-alice-1' } // holds readings.csv (above)
+  const enoent = (p) => `ENOENT: no such file or directory, open '${p}'`
+
+  const hint = attachmentHint(enoent('readings.csv'), { path: 'readings.csv' }, cfg, inConv)
+  assert(/^\("readings\.csv" is a file in this conversation's workspace/.test(hint ?? ''), `no hint: ${hint}`)
+  assert(hint.includes('read_document("readings.csv")') && hint.includes('run_python'), `tools not named: ${hint}`)
+  // move_file's arguments, and read_multiple_files' list
+  assert(attachmentHint(enoent('readings.csv'), { source: 'readings.csv', destination: 'r.csv' }, cfg, inConv), 'source not checked')
+  assert(attachmentHint(enoent('x'), { paths: ['nope.txt', 'sub/notes.txt'] }, cfg, inConv)?.includes('"sub/notes.txt"'), 'paths not checked')
+  // The path list_documents prints, given to a File System tool
+  const viaPrefix = attachmentHint(enoent('x'), { path: 'chats/conv-alice-1/new.txt', content: 'x' }, cfg, inConv)
+  assert(viaPrefix?.startsWith("(chats/conv-alice-1/ is this conversation's workspace"), `prefix: ${viaPrefix}`)
+  // Python off: not named
+  assert(!attachmentHint(enoent('readings.csv'), { path: 'readings.csv' }, docsCfg, inConv).includes('run_python'), 'named a tool that is off')
+
+  // Silent when it would be wrong: a name that is not attached, another error,
+  // no conversation, another conversation, another account, Documents off.
+  eq(attachmentHint(enoent('typo.csv'), { path: 'typo.csv' }, cfg, inConv), null, 'a name that is nowhere')
+  eq(attachmentHint('EACCES: permission denied', { path: 'readings.csv' }, cfg, inConv), null, 'not a missing file')
+  eq(attachmentHint(enoent('readings.csv'), { path: 'readings.csv' }, cfg, ctx(ALICE)), null, 'no conversation')
+  eq(attachmentHint(enoent('readings.csv'), { path: 'readings.csv' }, cfg, { account: ALICE, conversationId: 'conv-alice-2' }), null, 'another conversation')
+  eq(attachmentHint(enoent('readings.csv'), { path: 'readings.csv' }, cfg, { account: BOB, conversationId: 'conv-alice-1' }), null, 'another account')
+  eq(attachmentHint(enoent('readings.csv'), { path: 'readings.csv' }, { python: { enabled: true } }, inConv), null, 'Documents off')
+  eq(attachmentHint(enoent('x'), { path: '../../../etc/passwd' }, cfg, inConv), null, 'a path that climbs out')
+
+  // On the result: added to an error, never to a success.
+  const err = { isError: true, content: [{ type: 'text', text: enoent('readings.csv') }] }
+  const out = withAttachmentHint(err, { path: 'readings.csv' }, cfg, inConv)
+  eq(textOf(out).split('\n').length, 2, 'the error, then the hint')
+  assert(textOf(out).startsWith(enoent('readings.csv')), 'the original error was changed')
+  const fine = { content: [{ type: 'text', text: 'ENOENT appears in this file' }] }
+  assert(withAttachmentHint(fine, { path: 'readings.csv' }, cfg, inConv) === fine, 'a success was touched')
+})
+
+await test('a File System search that finds nothing names the conversation\'s attached files', async () => {
+  // Agent bench, 2026-11-11: search_files("*.txt") answered "No matches
+  // found", a success, and the model reported the attachments missing.
+  const { withEmptyLookHint } = await import('../daemon/filesystem-mcp-provider.mjs')
+  const cfg = { ...docsCfg, python: { enabled: true } }
+  const inConv = { account: ALICE, conversationId: 'conv-alice-1' } // readings.csv, sub/notes.txt, alice-secret-plan.md
+  const ok = (text) => ({ content: [{ type: 'text', text }] })
+
+  const out = textOf(withEmptyLookHint('search_files', ok('No matches found'), cfg, inConv))
+  assert(out.startsWith('No matches found\n(The files attached to this conversation are not in this folder.'), out)
+  assert(out.includes('alice-secret-plan.md, readings.csv, sub/notes.txt'), `names: ${out}`)
+  assert(out.includes('read_document("alice-secret-plan.md")') && out.includes('run_python'), `tools: ${out}`)
+  // An empty listing and an empty tree, as they arrive.
+  for (const [name, empty] of [['list_directory', '.'], ['list_directory_with_sizes', ''], ['directory_tree', '[]']]) {
+    assert(textOf(withEmptyLookHint(name, ok(empty), cfg, inConv)).includes('readings.csv'), `${name} "${empty}" got no hint`)
+  }
+
+  // Unchanged: something was found, another tool, an error, no attachments,
+  // no conversation, another account's id.
+  const same = (name, result, c, why) => assert(withEmptyLookHint(name, result, cfg, c) === result, why)
+  same('search_files', ok('notes/a.txt'), inConv, 'a search that found something')
+  same('read_text_file', ok(''), inConv, 'a tool that does not look for files')
+  same('search_files', { isError: true, content: [{ type: 'text', text: 'No matches found' }] }, inConv, 'an error')
+  same('search_files', ok('No matches found'), { account: ALICE, conversationId: 'conv-alice-2' }, 'a conversation with no attachments')
+  same('search_files', ok('No matches found'), ctx(ALICE), 'no conversation')
+  same('search_files', ok('No matches found'), { account: BOB, conversationId: 'conv-alice-1' }, 'LEAK — bob was told the names of alice\'s attachments')
+})
+
+await test('🔍 a File System error never names a folder outside the caller\'s own', async () => {
+  // Agent bench, 2026-11-11, write_file under a folder that did not exist:
+  // "ENOENT: no such file or directory, chdir 'E:\...\redstart-nest\shell' -> 'chats\x'".
+  const { pathsToRelative } = await import('../daemon/filesystem-mcp-provider.mjs')
+  const root = resolveUserRoot(dirs.fs, ALICE, { create: true })
+  const err = (text) => textOf(pathsToRelative({ isError: true, content: [{ type: 'text', text }] }, root))
+  for (const leaked of ['E:\\redstart-project\\redstart-nest\\shell', '/opt/redstart/nest', '\\\\server\\share\\nest']) {
+    const out = err(`ENOENT: no such file or directory, chdir '${leaked}' -> 'chats\\conv-1'`)
+    assert(!out.includes(leaked), `LEAK — the server's folder reached the model: ${out}`)
+    assert(out.includes("-> 'chats\\conv-1'") && out.startsWith('ENOENT'), `the rest of the error was lost: ${out}`)
+  }
+  // The caller's own paths stay, relative as before.
+  eq(err(`ENOENT: no such file or directory, open '${path.join(root, 'notes', 'a.txt')}'`), `ENOENT: no such file or directory, open 'notes${path.sep}a.txt'`, 'own path')
+  // A success is the user's own content: left alone.
+  const fine = pathsToRelative({ content: [{ type: 'text', text: "see '/etc/hosts' and 'C:\\Windows'" }] }, root)
+  eq(textOf(fine), "see '/etc/hosts' and 'C:\\Windows'", 'a successful result was rewritten')
 })
 
 await test('two accounts can hold the same filename without collision', async () => {

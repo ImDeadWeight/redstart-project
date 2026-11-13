@@ -1,41 +1,22 @@
 /**
- * agentic-tool-exec - running one turn's tool calls
+ * agentic-tool-exec - the browser's tool executors and permission gate
  *
- * Phase 9 of the agentic loop: for each call the model asked for, check the
- * abort signal, honour a steering interrupt, ask permission, dispatch to the
- * right executor (local FS, built-in, sandboxed frontend, or MCP), record
- * timings, lift out base64 attachments, and append the result to the session
- * history the next turn will send.
+ * The loop core (shared/agent-core/tool-calls.mjs) runs one turn's tool calls:
+ * abort checks, the steering skip, the gate, dispatch, timings, the result
+ * message, and the 'done' | 'stopped' sentinel contract (documented there).
+ * This file is what the browser plugs into it:
  *
- * **Not a move-and-delegate extraction, and the contract is the subtle part.**
- * The original body sat inline in executeAgenticLoop and used `return` to end
- * the whole flow — four times. A function cannot return from its caller, so
- * those become the sentinel this returns:
+ *   gate.approve           the permission card, and the "always allow" list
+ *   tools.execute          the four executors: Twig's local FS, llama-server's
+ *                          built-ins, the in-page sandbox, and MCP
+ *   tools.extractAttachments  base64 images lifted out of a result
+ *   tools.extraParts       images sent to a vision model with this result
  *
- *   'stopped' - the flow is over. onFlowComplete has ALREADY been called here,
- *               on the same timings the inline code used. The caller must
- *               return immediately and must not complete the flow again.
- *   'done'    - carry on. Either every call ran, or a steering message cut the
- *               remaining ones short (the inline `break`, still a `break`).
- *               Either way the caller proceeds to its turn-stats block and its
- *               own post-loop steering check, exactly as before.
- *
- * The accumulators - agenticTimings, turnStats, sessionMessages - are mutated in
- * place through the params object, because the caller reads them afterwards.
- * capturedTimings is read but never reassigned in this phase, so it is passed
- * by value.
- *
- * Covered by tests/unit/agentic-loop.test.ts, which pins the callback ordering
- * this must not change.
+ * Covered by tests/unit/agentic-loop.test.ts (through agenticStore) and, for
+ * the core's half, redstart-nest/scripts/test-agent-core.mjs.
  */
 
-import {
-	MessageRole,
-	ContentPartType,
-	AttachmentType,
-	ToolSource,
-	ToolPermissionDecision
-} from '$lib/enums';
+import { ContentPartType, AttachmentType, ToolSource, ToolPermissionDecision } from '$lib/enums';
 import { ToolsService } from '$lib/services/tools.service';
 import { SandboxService } from '$lib/services/sandbox.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -43,10 +24,13 @@ import { toolsStore } from '$lib/stores/tools.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { twigFsApi } from '$lib/utils/twig';
 import { permissionsStore } from '$lib/stores/permissions.svelte';
-import { isAbortError } from '$lib/utils';
 import { extractBase64Attachments } from './agentic-attachments';
 import { parseResourceLine, resourceKind } from '$lib/utils/resource-links';
 import { fetchFileBlob } from '$lib/utils/agentic';
+import { apiPost } from '$lib/utils/api-fetch';
+import type { AgentPorts, AgentToolCall, AgentContentPart, ToolExecution } from '$lib/agent-core';
+import type { AgenticSessionState } from './agentic-session.svelte';
+import type { MCPToolCall, DatabaseMessageExtraImageFile } from '$lib/types';
 
 // Images a tool returned BY REFERENCE (Phase 2 resource lines) reach a vision
 // model the way base64 attachments always did: fetched now, for this request
@@ -78,19 +62,6 @@ async function linkedImagesAsDataUrls(result: string): Promise<string[]> {
 	}
 	return urls;
 }
-import { buildFinalTimings } from './agentic-timings';
-import type { AgenticSessionState } from './agentic-session.svelte';
-import type { MCPToolCall, DatabaseMessageExtraImageFile } from '$lib/types';
-// Trap 11: ChatMessageTimings and ApiChatMessageData are globalised in app.d.ts and
-// must stay unimported; these three sit beside them in types/chat.d.ts and are not.
-import type {
-	ChatMessageAgenticTimings,
-	ChatMessageAgenticTurnStats,
-	ChatMessageToolCallTiming
-} from '$lib/types';
-import type { AgenticToolCallList, AgenticFlowCallbacks } from '$lib/types/agentic';
-
-export type ToolCallsOutcome = 'done' | 'stopped';
 
 export class AgenticToolExec {
 	constructor(private readonly session: AgenticSessionState) {}
@@ -102,6 +73,21 @@ export class AgenticToolExec {
 		return JSON.parse(trimmed) as Record<string, unknown>;
 	}
 
+	/**
+	 * Will this call put the card in front of the person, or does a standing
+	 * grant let it through? A destructive tool always prompts, even if it
+	 * somehow acquired a persisted grant — an allow-list entry written before
+	 * the tool was classified, or one swept in by "always allow all tools from
+	 * this server". Checked before the short-circuit rather than only at the
+	 * point of granting, so a stale entry cannot silently authorise unattended
+	 * deletion.
+	 */
+	asksPerson(toolName: string): boolean {
+		const permissionKey = toolsStore.getPermissionKey(toolName);
+		const destructive = toolsStore.isDestructiveTool(toolName);
+		return destructive || !permissionKey || !permissionsStore.hasTool(permissionKey);
+	}
+
 	async requestPermission(
 		conversationId: string,
 		toolName: string,
@@ -109,14 +95,8 @@ export class AgenticToolExec {
 		signal?: AbortSignal
 	): Promise<ToolPermissionDecision> {
 		const permissionKey = toolsStore.getPermissionKey(toolName);
-		// A destructive tool always prompts, even if it somehow acquired a
-		// persisted grant — an allow-list entry written before the tool was
-		// classified, or one swept in by "always allow all tools from this
-		// server". Checked before the short-circuit rather than only at the point
-		// of granting, so a stale entry in localStorage cannot silently authorise
-		// unattended deletion.
 		const destructive = toolsStore.isDestructiveTool(toolName);
-		if (!destructive && permissionKey && permissionsStore.hasTool(permissionKey)) {
+		if (!this.asksPerson(toolName)) {
 			return ToolPermissionDecision.ONCE;
 		}
 
@@ -167,178 +147,121 @@ export class AgenticToolExec {
 		});
 	}
 
-	async runToolCalls(params: {
-		normalizedCalls: AgenticToolCallList;
-		conversationId: string;
-		sessionMessages: ApiChatMessageData[];
-		agenticTimings: ChatMessageAgenticTimings;
-		turnStats: ChatMessageAgenticTurnStats;
-		capturedTimings: ChatMessageTimings | undefined;
-		effectiveModel: string;
-		callbacks: AgenticFlowCallbacks;
-		signal?: AbortSignal;
-	}): Promise<ToolCallsOutcome> {
-		const {
-			normalizedCalls,
-			conversationId,
-			sessionMessages,
-			agenticTimings,
-			turnStats,
-			capturedTimings,
-			effectiveModel,
-			callbacks,
-			signal
-		} = params;
-		const { onFlowComplete, createToolResultMessage, onAttachments } = callbacks;
-
-	// Execute each tool call and create result messages
-	for (let i = 0; i < normalizedCalls.length; i++) {
-		const toolCall = normalizedCalls[i];
-
-		if (signal?.aborted) {
-			onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-			return 'stopped';
-		}
-
-		// Check for pending steering message - skip remaining tool calls
-		if (this.session.steeringMessages.has(conversationId)) {
-			console.log(
-				`[AgenticStore] Steering message detected, skipping ${normalizedCalls.length - i} remaining tool call(s)`
-			);
-			for (let j = i; j < normalizedCalls.length; j++) {
-				const remainingCall = normalizedCalls[j];
-				const interruptedContent = 'Tool execution was interrupted by a new user message.';
-				if (createToolResultMessage) {
-					await createToolResultMessage(remainingCall.id, interruptedContent);
+	/**
+	 * The browser's `tools` and `gate` ports for one flow. The loop core
+	 * (shared/agent-core/tool-calls.mjs) owns the order: abort checks, steering
+	 * skip, the gate, dispatch, timings, the result message. This supplies the
+	 * four executors, the permission card and the vision parts.
+	 */
+	ports(
+		conversationId: string,
+		effectiveModel: string
+	): Pick<AgentPorts<DatabaseMessageExtra>, 'tools' | 'gate'> {
+		// Calls the person approved on the card in this flow, by call id. Nest
+		// enforces an approval on some tools (agent-runtime Phase 2): the MCP
+		// executor answers Nest's request for one only for these, so a call that
+		// passed the gate on a standing grant is never approved on anyone's
+		// behalf. Each id is used once.
+		const approvedByPerson = new Set<string>();
+		return {
+			gate: {
+				approve: async (call, signal) => {
+					const toolName = call.function.name;
+					const asked = this.asksPerson(toolName);
+					const decision = await this.requestPermission(
+						conversationId,
+						toolName,
+						toolsStore.getToolServerLabel(toolName),
+						signal
+					);
+					const allowed = decision !== ToolPermissionDecision.DENY;
+					if (allowed && asked && call.id) approvedByPerson.add(call.id);
+					// A Deny on the card stops the call here, so it never reaches Nest.
+					// Tell Nest for its decision log, for its own destructive tools only
+					// (getNestToolMeta has no class for anyone else's). Fire and forget:
+					// a lost log line must not hold up the flow (live test, 2026-11-12).
+					if (!allowed && asked && mcpStore.getNestToolMeta(toolName).toolClass === 'destructive') {
+						void apiPost('/approvals/denied', { tool: toolName }).catch(() => {});
+					}
+					return allowed;
 				}
-				sessionMessages.push({
-					role: MessageRole.TOOL,
-					tool_call_id: remainingCall.id,
-					content: interruptedContent
-				});
+			},
+			tools: {
+				execute: (call, signal) => {
+					const approved = !!call.id && approvedByPerson.delete(call.id);
+					return this.execute(conversationId, call, signal, approved);
+				},
+				extractAttachments: (text) => {
+					const { cleanedResult, attachments } = extractBase64Attachments(text);
+					return { text: cleanedResult, attachments };
+				},
+				extraParts: (text, attachments) => this.visionParts(text, attachments, effectiveModel)
 			}
-			break;
-		}
+		};
+	}
 
+	/** Dispatch one call to the executor that owns it. Throws on abort. */
+	private async execute(
+		conversationId: string,
+		toolCall: AgentToolCall,
+		signal?: AbortSignal,
+		approvedByPerson = false
+	): Promise<ToolExecution> {
 		const toolName = toolCall.function.name;
-		const serverLabel = toolsStore.getToolServerLabel(toolName);
-
-		// Ask for permission before executing the tool
-		const permission = await this.requestPermission(
-			conversationId,
-			toolName,
-			serverLabel,
-			signal
-		);
-
-		// Yield to allow Svelte to flush the UI update (hide permission dialog)
-		await new Promise((r) => setTimeout(r, 0));
-
-		if (signal?.aborted) {
-			onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-			return 'stopped';
-		}
-
-		const toolStartTime = performance.now();
 		const toolSource = toolsStore.getToolSource(toolName);
 
-		let result: string;
-		let toolSuccess = true;
-
-		if (permission === ToolPermissionDecision.DENY) {
-			result = 'Tool execution was denied by the user.';
-			toolSuccess = false;
-		} else {
-			try {
-				if (toolSource === ToolSource.LOCAL_FS) {
-					const api = twigFsApi();
-					const args = this.parseToolArguments(toolCall.function.arguments);
-					if (!api) {
-						result =
-							'Local file system tools are only available in the Redstart Twig desktop app.';
-						toolSuccess = false;
-					} else {
-						const executionResult = await api.execute(toolName, args);
-						result = (executionResult.content ?? []).map((c) => c.text).join('\n');
-						if (executionResult.isError) toolSuccess = false;
-					}
-				} else if (toolSource === ToolSource.BUILTIN) {
-					const args = this.parseToolArguments(toolCall.function.arguments);
-					const executionResult = await ToolsService.executeTool(toolName, args, signal);
-
-					result = executionResult.content;
-
-					if (executionResult.isError) toolSuccess = false;
-				} else if (toolSource === ToolSource.FRONTEND) {
-					const args = this.parseToolArguments(toolCall.function.arguments);
-					const executionResult = await SandboxService.executeTool(toolName, args, signal);
-
-					result = executionResult.content;
-
-					if (executionResult.isError) toolSuccess = false;
-				} else {
-					const mcpCall: MCPToolCall = {
-						id: toolCall.id,
-						function: { name: toolName, arguments: toolCall.function.arguments }
-					};
-					const executionResult = await mcpStore.executeTool(mcpCall, signal, { conversationId });
-
-					result = executionResult.content;
-
-					if (executionResult.isError) toolSuccess = false;
-				}
-			} catch (error) {
-				if (isAbortError(error)) {
-					onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-					return 'stopped';
-				}
-				result = `Error: ${error instanceof Error ? error.message : String(error)}`;
-				toolSuccess = false;
+		if (toolSource === ToolSource.LOCAL_FS) {
+			const api = twigFsApi();
+			const args = this.parseToolArguments(toolCall.function.arguments);
+			if (!api) {
+				return {
+					text: 'Local file system tools are only available in the Redstart Twig desktop app.',
+					isError: true
+				};
 			}
+			const executionResult = await api.execute(toolName, args);
+			return {
+				text: (executionResult.content ?? []).map((c) => c.text).join('\n'),
+				isError: !!executionResult.isError
+			};
 		}
-
-		const toolDurationMs = performance.now() - toolStartTime;
-		const toolTiming: ChatMessageToolCallTiming = {
-			name: toolCall.function.name,
-			duration_ms: Math.round(toolDurationMs),
-			success: toolSuccess
+		if (toolSource === ToolSource.BUILTIN) {
+			const args = this.parseToolArguments(toolCall.function.arguments);
+			const executionResult = await ToolsService.executeTool(toolName, args, signal);
+			return { text: executionResult.content, isError: !!executionResult.isError };
+		}
+		if (toolSource === ToolSource.FRONTEND) {
+			const args = this.parseToolArguments(toolCall.function.arguments);
+			const executionResult = await SandboxService.executeTool(toolName, args, signal);
+			return { text: executionResult.content, isError: !!executionResult.isError };
+		}
+		const mcpCall: MCPToolCall = {
+			id: toolCall.id,
+			function: { name: toolName, arguments: toolCall.function.arguments }
 		};
+		const executionResult = await mcpStore.executeTool(mcpCall, signal, {
+			conversationId,
+			approvedByPerson
+		});
+		return { text: executionResult.content, isError: !!executionResult.isError };
+	}
 
-		agenticTimings.toolCalls!.push(toolTiming);
-		agenticTimings.toolCallsCount++;
-		agenticTimings.toolsMs += Math.round(toolDurationMs);
-		turnStats.toolCalls.push(toolTiming);
-		turnStats.toolsMs += Math.round(toolDurationMs);
-
-		if (signal?.aborted) {
-			onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-			return 'stopped';
-		}
-
-		const { cleanedResult, attachments } = extractBase64Attachments(result);
-
-		// Create the tool result message in the DB
-		let toolResultMessage: DatabaseMessage | undefined;
-		if (createToolResultMessage) {
-			toolResultMessage = await createToolResultMessage(
-				toolCall.id,
-				cleanedResult,
-				attachments.length > 0 ? attachments : undefined
-			);
-		}
-
-		if (attachments.length > 0 && toolResultMessage) {
-			onAttachments?.(toolResultMessage.id, attachments);
-		}
-
-		// Build content parts for session history (including images for vision models)
-		const contentParts: ApiChatMessageContentPart[] = [
-			{ type: ContentPartType.TEXT, text: cleanedResult }
-		];
+	/**
+	 * Images that go to a vision model with this result, for this request only:
+	 * base64 attachments lifted out of the text, then images the result linked
+	 * by reference. None for a model without vision.
+	 */
+	private async visionParts(
+		cleanedResult: string,
+		attachments: DatabaseMessageExtra[],
+		effectiveModel: string
+	): Promise<AgentContentPart[]> {
+		const parts: AgentContentPart[] = [];
+		const vision = modelsStore.modelSupportsVision(effectiveModel);
 		for (const attachment of attachments) {
 			if (attachment.type === AttachmentType.IMAGE) {
-				if (modelsStore.modelSupportsVision(effectiveModel)) {
-					contentParts.push({
+				if (vision) {
+					parts.push({
 						type: ContentPartType.IMAGE_URL,
 						image_url: {
 							url: (attachment as DatabaseMessageExtraImageFile).base64Url
@@ -352,19 +275,11 @@ export class AgenticToolExec {
 			}
 		}
 
-		if (modelsStore.modelSupportsVision(effectiveModel)) {
+		if (vision) {
 			for (const url of await linkedImagesAsDataUrls(cleanedResult)) {
-				contentParts.push({ type: ContentPartType.IMAGE_URL, image_url: { url } });
+				parts.push({ type: ContentPartType.IMAGE_URL, image_url: { url } });
 			}
 		}
-
-		sessionMessages.push({
-			role: MessageRole.TOOL,
-			tool_call_id: toolCall.id,
-			content: contentParts.length === 1 ? cleanedResult : contentParts
-		});
-	}
-
-		return 'done';
+		return parts;
 	}
 }

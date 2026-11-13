@@ -1,0 +1,1 @@
+{ "id": "turn-limit", "group": "limits", "prompt": "[script:forever] Keep reading.", "fixtures": [{ "path": "data.txt", "content": "x" }], "approve": "all", "limits": { "maxTurns": 2 }, "check": "checks.mjs#neverPasses" }

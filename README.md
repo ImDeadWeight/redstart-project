@@ -62,6 +62,39 @@ Since llama-server speaks the OpenAI API, [coding agents](#using-as-a-coding-age
 
 ---
 
+## What the assistant can do
+
+The chat is an agent, not just a text box: it works with tools on your own data, asks before it changes anything, and keeps going when the page is closed. Every capability is off until an admin turns it on, and a role can withhold any of them from an account.
+
+**Work with your data** ([Capabilities](docs/capabilities.md))
+- **Files and documents.** Read PDFs, Word, Excel, CSV and Markdown; create `.docx`, `.pdf` and `.md` files that appear in the chat as downloads. Each account's files are its own.
+- **Run Python.** `run_python` runs numpy, pandas and matplotlib in a WebAssembly sandbox with no network and no access outside the conversation's own folder. Charts come back as images.
+- **Search your own files with citations.** Hybrid word and embedding search over uploads, attachments and created documents, with numbered sources linked back to each file.
+- **Query databases and repositories, read-only.** Postgres and SQLite (enforced by a read-only transaction, not by inspecting the SQL), a folder of Markdown notes, local Git repositories.
+- **Reach the web, only where allowed.** Fetch from approved sources, search, and look up academic papers (OpenAlex, arXiv, PubMed).
+- **Add more.** Install a third-party MCP server as a [plugin](docs/capabilities.md#plugins); its tools get the same policy as the built-ins.
+
+**Work like an agent**
+- **Asks instead of guessing.** When a task depends on something only you know, it asks: up to four questions at once, as a card with choices.
+- **Plans longer work.** Multi-step tasks get a checklist in the chat that it ticks off as it goes.
+- **Asks before it changes anything.** Writes and deletes stop at an approval card in the chat, checked by the server for every client, not just this one. "Always allow" makes a standing grant for a tool (never for deletion), and the launcher's Activity tab shows every decision. Deletions go to the Recycle Bin.
+- **Runs in the background.** `/task <request>` hands a job to the server. It keeps going with the page closed, survives a restart, and waits for you in the chat when it needs an answer or an approval.
+- **Sends only the tools a chat needs** (optional). A small local embedding model picks the relevant tools for each turn, so a dozen capabilities don't crowd a small model's context.
+
+**Remember what matters** ([Memory](docs/security.md#memory))
+- **Three kinds of memory:** facts about you, how you want it to work (followed, with your reason), and where a piece of work stands (dated, and flagged when old).
+- **Automatic, under your control.** After a chat goes quiet it suggests what is worth keeping. Every suggestion quotes the words of yours it is based on, and nothing from a web page or file can become a memory. Suggest (the default) waits for you; Automatic saves with Undo; a "forget" is never applied on its own.
+- `/remember guidance: put the command first because I paste it straight into a terminal` saves one yourself. Settings → Memory shows, edits and deletes all of them.
+
+**Organise the work**
+- **Projects** group chats with their own instructions and their own memories.
+- **Workflows** are saved instructions for recurring tasks, personal or shared across the organisation, run by typing `/`.
+- **Slash commands** for the rest: `/new`, `/model`, `/mode`, `/project`, `/compact`, `/task`, `/remember`, `/memory`.
+
+**Measured, not assumed.** The repo carries an agent benchmark (32 tasks against a real Nest) and a memory benchmark (32 cases, including prompt-injection attempts), and the numbers on each model are recorded before a change ships.
+
+---
+
 ## How it works
 
 ```
@@ -70,7 +103,7 @@ Since llama-server speaks the OpenAI API, [coding agents](#using-as-a-coding-age
   ├─ Gateway     :19080 (LAN in network mode) ├─ Scans LAN on port 8765
   │   └─ Injects Redstart context      ├─ Finds Redstart Nest automatically
   ├─ llama-server :19081 (localhost)   └─ Connects to http://IP:19080
-  ├─ MCP server   :19082 (web_fetch, web_search, Postgres, Documents, SQLite, Vault, Git, File System, Scholar)
+  ├─ MCP server   :19082 (web, Documents, Python, document search, Memory, File System, SQLite, Postgres, Vault, Git, Scholar, plugins)
   ├─ Admin plane :19083 (the launcher UI, in a browser — owner only, loopback by default)
   └─ Beacon      :8765
 ```
@@ -272,7 +305,36 @@ server. See [Architecture](docs/architecture.md) for the full picture.
 
 ## License
 
-See [LICENSE.txt](redstart-nest/LICENSE.txt).
+Copyright (C) 2025-2026 Patrick Carswell.
+
+Redstart is free software: you can redistribute it and/or modify it under the
+terms of the [GNU Affero General Public License, version 3](LICENSE)
+(`AGPL-3.0-only`). If you distribute a modified version, or let people use one
+over a network, you must make its complete source code available to them under
+the same license.
+
+- **Apps that connect to Redstart aren't covered.** A program that works with
+  Nest through its interfaces, such as a [connector](docs/connector-contract.md)
+  over HTTP, an MCP server, or a [plugin](docs/capabilities.md#plugins) Nest
+  runs as a separate process, is a separate work. It can use any license you
+  like, including a proprietary one. The AGPL applies to Redstart's own code
+  and to modified versions of it, not to the software that talks to it. The
+  copyright holder states this as a permission, not only as a reading of the
+  license, so integrators can rely on it.
+- **What you make with it is yours.** Conversations, documents, code and other
+  output you produce using Redstart aren't covered by Redstart's license.
+- **Earlier releases.** Releases up to and including `1.0.0-alpha.12` were
+  published under the MIT License, and those copies stay under MIT.
+- **Commercial licenses.** To use Redstart in a product without the AGPL's
+  source-sharing terms, open an issue to ask about a commercial license.
+- **Name and mascot.** "Redstart", "Redstart Nest", "Redstart Twig" and the
+  mascot artwork are trademarks and aren't covered by the AGPL. A distributed
+  fork needs its own name and mascot. See [TRADEMARKS.md](TRADEMARKS.md).
+- **Contributing.** Contributors sign a [CLA](CLA.md). See
+  [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Third-party components keep their own licenses. See
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ---
 

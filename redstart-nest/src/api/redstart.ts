@@ -90,6 +90,21 @@ export type RedstartAPI = {
   // all nine former per-site pickers. Native picking (pickNative) is retired
   // along with IPC — roots/list/mkdir is the only picker there
   // is now, used identically by every caller.
+  // The decision log and every account's standing grants (agent-runtime
+  // Phase 2; daemon/ipc/approvals.mjs). Owner-only, like every method here.
+  audit: {
+    list: (opts?: { limit?: number; before?: string }) => Promise<{ records: PolicyRecord[]; more: boolean }>
+  }
+  approvals: {
+    // null: the shared set used while login is off.
+    listGrants: (username: string | null) => Promise<{ ok: true; grants: StandingGrant[] } | { ok: false; error: string }>
+    revokeGrant: (id: string) => Promise<{ ok: true; tool: string } | { ok: false; error: string }>
+  }
+  // Every account's background tasks (agent-runtime Phase 3; daemon/ipc/tasks.mjs).
+  tasks: {
+    list: () => Promise<{ tasks: TaskSummary[] }>
+    cancel: (id: string) => Promise<{ ok: true } | { ok: false; error: string }>
+  }
   browse: {
     roots: () => Promise<{ path: string; label: string }[]>
     // readable/writable are the daemon's own access() probe on
@@ -263,6 +278,45 @@ export type RedstartAPI = {
 // Kept here (not usePlugins.ts) so the IPC surface and its payload shapes live
 // in one place, the same way every other namespace above does. usePlugins.ts
 // re-exports these under its own names for tab/component call sites.
+
+/**
+ * One line of the decision log (logger.mjs logPolicy): what policy decided.
+ * Never arguments, paths or summaries; only these fields.
+ */
+export type PolicyRecord = {
+  t: string
+  event: 'approval.denied' | 'approval.refused' | 'grant.added' | 'grant.revoked'
+  account?: string
+  tool?: string
+  decision?: string
+  grantId?: string
+  capability?: string
+  role?: string
+  by?: string
+  source?: string
+}
+
+/** One background task as the owner sees it (daemon/ipc/tasks.mjs): the record, never its content. */
+export type TaskSummary = {
+  id: string
+  account: string | null
+  status: 'queued' | 'running' | 'waiting_user' | 'waiting_approval' | 'waiting_model' | 'done' | 'failed' | 'cancelled'
+  waitingFor: 'question' | 'continue' | 'approval' | 'model' | null
+  tool: string | null
+  error: string | null
+  createdAt: number
+  updatedAt: number
+  endedAt: number | null
+}
+
+/** A standing grant ("Always allow") on the server (approval-grants.mjs). */
+export type StandingGrant = {
+  id: string
+  tool: string
+  scope: null
+  createdAt: number
+  source: 'card' | 'import'
+}
 
 export type PluginSummary = {
   id: string

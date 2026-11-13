@@ -1,0 +1,1 @@
+{ "id": "narrated", "group": "multi", "prompt": "[script:narrated] Read data.txt.", "fixtures": [{ "path": "data.txt", "from": "data.txt" }], "approve": "all", "check": "checks.mjs#saysSeven" }

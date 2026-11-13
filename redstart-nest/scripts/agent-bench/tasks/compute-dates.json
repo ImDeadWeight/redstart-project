@@ -1,0 +1,7 @@
+{
+  "id": "compute-dates",
+  "group": "compute",
+  "prompt": "How many days are there from 14 February 2024 to 10 November 2026? And what day of the week is 4 July 2031?",
+  "approve": "all",
+  "check": "checks/compute.mjs#dates"
+}

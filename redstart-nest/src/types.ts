@@ -79,6 +79,10 @@ export type LocalModelFile = {
   size: number
   modified: number
   partial: boolean
+  /** The document-search embedding model — not a chat model. Absent from an older daemon. */
+  embedding?: boolean
+  /** Shard 2..N of a split GGUF — not a loadable path on its own. Absent from an older daemon. */
+  extraShard?: boolean
 }
 
 export type DownloadProgress = {
@@ -253,6 +257,10 @@ export type ProfileTools = {
   // it, which reads as off — the safe direction, since the whole feature is an
   // optimization the server works without.
   retrieval?: { enabled?: boolean; relativeFloor?: number; floor?: number; margin?: number }
+  // The automatic memory review (agent-runtime 8.3). `think` lets the model
+  // reason before it answers: measured to help some models (Ornith 9B) and not
+  // others (Qwen3-4B), so it is per profile. Absent reads as off.
+  memoryReview?: { think?: boolean }
 }
 
 export type LlamaConfig = {

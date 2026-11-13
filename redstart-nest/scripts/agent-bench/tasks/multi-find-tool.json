@@ -1,0 +1,26 @@
+{
+  "id": "multi-find-tool",
+  "group": "multi",
+  "prompt": "Without running any code, list the documents in my documents folder and tell me how many of them are in this conversation's workspace.",
+  "fixtures": [
+    {
+      "path": "report_jan.txt",
+      "from": "fixtures/report_jan.txt"
+    },
+    {
+      "path": "report_feb.txt",
+      "from": "fixtures/report_feb.txt"
+    },
+    {
+      "path": "report_mar.txt",
+      "from": "fixtures/report_mar.txt"
+    },
+    {
+      "path": "project-notes.md",
+      "from": "fixtures/project-notes.md"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/multi.mjs#listedWithoutCode",
+  "notes": "Needs list_documents. Exercises search_tools only when tool retrieval is on and defers list_documents."
+}

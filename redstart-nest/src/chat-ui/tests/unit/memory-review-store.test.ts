@@ -11,7 +11,8 @@ const svc = vi.hoisted(() => ({
 	acceptSuggestion: vi.fn(),
 	dismissSuggestion: vi.fn(),
 	remove: vi.fn(),
-	update: vi.fn()
+	update: vi.fn(),
+	create: vi.fn()
 }));
 vi.mock('$lib/services/memory.service', () => ({ MemoryService: svc }));
 
@@ -124,7 +125,51 @@ describe('undo of an automatic save', () => {
 		};
 		store.saved = [entry];
 		await store.undo(entry);
-		expect(svc.update).toHaveBeenCalledWith('m2', 'Uses Postgres 15', null);
+		// The fourth argument (kind and why) is empty: this entry, like one from
+		// a Nest before agent-runtime 8.2, carries no previous kind or why.
+		expect(svc.update).toHaveBeenCalledWith('m2', 'Uses Postgres 15', null, {});
+		expect(svc.remove).not.toHaveBeenCalled();
+	});
+
+	// agent-runtime 8.6 (D42): Undo brings back everything a review changed.
+	it('an update gets its old kind and why back, and a merge puts back what it folded in', async () => {
+		const { store } = await freshStore();
+		const entry = {
+			conversationId: 'c1',
+			item: {
+				op: 'update' as const,
+				scope: 'user' as const,
+				previousText: 'Prefers tabs',
+				previousKind: 'fact' as const,
+				previousWhy: null,
+				memory: { id: 'm3', text: 'Prefers 2-space indents', kind: 'guidance' } as never,
+				removed: [
+					{ id: 'm4', text: 'Uses spaces in YAML', kind: 'fact' },
+					{ id: 'm5', text: 'Indent with care', kind: 'guidance', why: 'linters' }
+				] as never
+			}
+		};
+		store.saved = [entry];
+		await store.undo(entry);
+		expect(svc.update).toHaveBeenCalledWith('m3', 'Prefers tabs', null, { kind: 'fact', why: null });
+		expect(svc.create).toHaveBeenCalledWith('Uses spaces in YAML', 'c1', null, { kind: 'fact', why: undefined });
+		expect(svc.create).toHaveBeenCalledWith('Indent with care', 'c1', null, { kind: 'guidance', why: 'linters' });
+		expect(store.saved).toEqual([]);
+	});
+
+	it('a forget is undone by putting the memory back, in its project', async () => {
+		const { store } = await freshStore();
+		const entry = {
+			conversationId: 'c1',
+			item: {
+				op: 'forget' as const,
+				scope: 'project' as const,
+				projectId: 'p1',
+				memory: { id: 'm6', text: 'Slides drafted', kind: 'state' } as never
+			}
+		};
+		await store.undo(entry);
+		expect(svc.create).toHaveBeenCalledWith('Slides drafted', 'c1', 'p1', { kind: 'state', why: undefined });
 		expect(svc.remove).not.toHaveBeenCalled();
 	});
 });

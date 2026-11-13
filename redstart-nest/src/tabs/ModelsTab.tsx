@@ -76,7 +76,7 @@ export function ModelsTab({ catalog, hw, modelPath, onGenerateDefaultProfiles }:
 
       {/* ── Hardware + selected model (moved in from the old sidebar) ── */}
       <HardwarePanel hw={hw} onGenerateDefaults={onGenerateDefaultProfiles} />
-      <ModelPanel modelPath={modelPath} onSelectModel={applyModelPath} />
+      <ModelPanel modelPath={modelPath} onSelectModel={applyModelPath} localFiles={localFiles} />
 
       {/* ── Storage ── */}
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
@@ -106,7 +106,7 @@ export function ModelsTab({ catalog, hw, modelPath, onGenerateDefaultProfiles }:
           {disk.freeBytes !== undefined
             ? <>{gb(disk.freeBytes)} free of {gb(disk.totalBytes)} on this drive.</>
             : 'Checking free space…'}
-          {' '}Downloaded models are selected with <span className="text-zinc-400">Select .gguf File</span> above.
+          {' '}Downloaded models appear under <span className="text-zinc-400">Selected model</span> above.
         </p>
 
         {localFiles.length > 0 && (

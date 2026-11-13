@@ -1,0 +1,55 @@
+{
+  "id": "retr-postgres-to-sqlite",
+  "group": "retractions",
+  "about": "A fact that changed: update it.",
+  "existing": {
+    "user": [
+      {
+        "id": "u1",
+        "kind": "fact",
+        "text": "Uses Postgres for side projects",
+        "ageDays": 90
+      }
+    ]
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "By the way, I've moved all my side projects off Postgres to SQLite now. How do I enable foreign keys in SQLite?"
+    },
+    {
+      "role": "assistant",
+      "content": "Run PRAGMA foreign_keys = ON; at the start of each connection."
+    }
+  ],
+  "expect": [
+    {
+      "op": "update",
+      "target": "u1",
+      "terms": [
+        [
+          "sqlite"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "update",
+        "id": "u1",
+        "kind": "fact",
+        "text": "Uses SQLite for side projects (moved off Postgres)",
+        "quote": "moved all my side projects off Postgres to SQLite"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Uses SQLite for side projects",
+        "quote": "moved all my side projects off Postgres to SQLite"
+      }
+    ]
+  }
+}

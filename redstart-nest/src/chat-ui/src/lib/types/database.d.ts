@@ -1,5 +1,6 @@
 import type { ChatMessageTimings, ChatRole, ChatMessageType } from '$lib/types/chat';
 import type { PromptSnapshot } from '$lib/types/prompt';
+import type { PlanStep } from '$lib/agent-core';
 import { AttachmentType, ReasoningEffort } from '$lib/enums';
 
 export interface McpServerOverride {
@@ -43,7 +44,24 @@ export interface DatabaseConversation {
 	 */
 	projectId?: string | null;
 	contextSummary?: { text: string; upToMessageId: string };
+	/**
+	 * The update_plan checklist (agent-runtime plan §4, 1.2), kept by the
+	 * agentic loop and shown above the composer. Nest checks the steps and
+	 * stamps updatedAt; null on an update clears it.
+	 */
+	plan?: ConversationPlan | null;
+	/**
+	 * The background task holding this chat (agent-runtime Phase 3.4), set
+	 * and cleared by Nest only. While set, a write of messages or currNode is
+	 * refused with 409 task_active.
+	 */
+	activeTaskId?: string;
 	messages?: DatabaseMessage[];
+}
+
+export interface ConversationPlan {
+	steps: PlanStep[];
+	updatedAt: number;
 }
 
 export interface DatabaseMessageExtraAudioFile {

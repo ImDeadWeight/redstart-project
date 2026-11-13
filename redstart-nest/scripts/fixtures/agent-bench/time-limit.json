@@ -1,0 +1,1 @@
+{ "id": "time-limit", "group": "limits", "prompt": "[script:hang] Think forever.", "approve": "all", "limits": { "maxSeconds": 1 }, "check": "checks.mjs#throws" }

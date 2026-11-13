@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Ada Okafor",
+    "age": 71,
+    "city": "Osaka"
+  },
+  {
+    "name": "Bruno Silva",
+    "age": 46,
+    "city": "Belgrade"
+  },
+  {
+    "name": "Chen Wei",
+    "age": 67,
+    "city": "Porto"
+  },
+  {
+    "name": "Dana Kowalski",
+    "age": 26,
+    "city": "Beirut"
+  },
+  {
+    "name": "Emeka Obi",
+    "age": 34,
+    "city": "Beirut"
+  },
+  {
+    "name": "Farah Haddad",
+    "age": 57,
+    "city": "Porto"
+  }
+]

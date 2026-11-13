@@ -61,7 +61,7 @@ import {
 	createDiagnosticFetch
 } from './mcp/mcp-diagnostics';
 import { createTransport } from './mcp/mcp-transport';
-import { resourceLinkText } from '$lib/utils/resource-links';
+import { formatMcpToolResult, approvalRequired } from '$lib/agent-core';
 
 interface ToolResultContentItem {
 	type: string;
@@ -506,7 +506,8 @@ export class MCPService {
 
 			return {
 				content: this.formatToolResult(result as ToolCallResult),
-				isError: (result as ToolCallResult).isError ?? false
+				isError: (result as ToolCallResult).isError ?? false,
+				approval: approvalRequired(result)
 			};
 		} catch (error) {
 			if (isAbortError(error)) {
@@ -528,51 +529,12 @@ export class MCPService {
 	}
 
 	/**
-	 * Format tool result content items to a single string.
-	 * Handles text, image (base64 data URL), and embedded resource content types.
-	 *
-	 * @param result - Raw tool call result from MCP SDK
-	 * @returns Concatenated string representation of all content items
+	 * Tool result content as the text the model reads. The format lives in the
+	 * shared loop core (shared/agent-core/tool-result.mjs) so every host gives
+	 * the model the same text for the same result.
 	 */
 	private static formatToolResult(result: ToolCallResult): string {
-		const content = result.content;
-		if (!Array.isArray(content)) return '';
-
-		return content
-			.map((item) => this.formatSingleContent(item))
-			.filter(Boolean)
-			.join('\n');
-	}
-
-	private static formatSingleContent(content: ToolResultContentItem): string {
-		if (content.type === MCPContentType.TEXT && content.text) {
-			return content.text;
-		}
-
-		if (content.type === MCPContentType.IMAGE && content.data) {
-			return createBase64DataUrl(content.mimeType ?? DEFAULT_IMAGE_MIME_TYPE, content.data);
-		}
-
-		// A file the tool wrote, by reference: one line for the model and the
-		// renderer both (utils/resource-links.ts). Never the bytes.
-		if (content.type === MCPContentType.RESOURCE_LINK) {
-			return resourceLinkText(content);
-		}
-
-		if (content.type === MCPContentType.RESOURCE && content.resource) {
-			const resource = content.resource;
-
-			if (resource.text) return resource.text;
-			if (resource.blob) return resource.blob;
-
-			return JSON.stringify(resource);
-		}
-
-		if (content.data && content.mimeType) {
-			return createBase64DataUrl(content.mimeType, content.data);
-		}
-
-		return JSON.stringify(content);
+		return formatMcpToolResult(result);
 	}
 
 	/**

@@ -1,0 +1,1 @@
+{ "id": "denied", "group": "policy", "prompt": "[script:write] Put 42 in out/answer.txt.", "approve": "reads", "check": "checks.mjs#answerFile" }

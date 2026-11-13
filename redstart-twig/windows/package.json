@@ -3,6 +3,7 @@
   "version": "1.0.0-alpha.13",
   "description": "Lightweight desktop chat client (Windows, macOS) for a Redstart Nest or llama.cpp-compatible server on your local network.",
   "author": "Patrick Carswell",
+  "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
   "scripts": {

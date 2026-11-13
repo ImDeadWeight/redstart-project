@@ -1,0 +1,1 @@
+{ "id": "plans", "group": "planning", "phase": 1, "prompt": "[script:plan] Read the notes, then write the summary.", "approve": "reads", "check": "checks.mjs#finishedThePlan" }

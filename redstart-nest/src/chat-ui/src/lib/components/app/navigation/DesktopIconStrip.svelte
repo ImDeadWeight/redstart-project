@@ -68,6 +68,9 @@
 				: item.activeRoutePrefix
 					? !!page.route.id?.startsWith(item.activeRoutePrefix)
 					: false}
+			{#if showIcons && item.separatedAbove}
+				<div class="my-1 w-6 border-t border-sidebar-border" role="separator"></div>
+			{/if}
 			{#if showIcons}
 				<div
 					in:fade={{

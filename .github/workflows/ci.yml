@@ -73,6 +73,12 @@ jobs:
       - name: "Security: tool policy classification"
         run: node scripts/test-tool-policy.mjs
 
+      - name: "Security: approvals (one decision, one exact call) and standing grants"
+        run: node scripts/test-approvals.mjs
+
+      - name: "Security: task runtime (store, server-owned writes, runner, routes)"
+        run: node scripts/test-task-runtime.mjs
+
       - name: "Security: role narrowing (restrict-only law)"
         run: node scripts/test-roles.mjs
 
@@ -82,6 +88,15 @@ jobs:
       - name: "Security: tool retrieval (subset-only selection)"
         run: node scripts/test-tool-retrieval.mjs
 
+      - name: "Agent loop core (exit paths, under plain Node)"
+        run: node scripts/test-agent-core.mjs
+
+      - name: "Agent benchmark harness (fake Nest, scripted model)"
+        run: node scripts/test-agent-bench.mjs
+
+      - name: "Agent benchmark task set (every check tells right from wrong)"
+        run: node scripts/test-agent-bench-tasks.mjs
+
       - name: "Security: per-account storage scope (path traversal)"
         run: node scripts/test-user-scope.mjs
 
@@ -90,6 +105,9 @@ jobs:
 
       - name: "Security: llama-server localhost-only args"
         run: node scripts/test-llama-args.mjs
+
+      - name: "Chat template override only applied to the model family it fits"
+        run: node scripts/test-chat-template-choice.mjs
 
       # binaryPathRejection() guards spawn()'s first argument and had no
       # coverage at all before 8A.3 made it per-platform. The POSIX branch's
@@ -135,6 +153,9 @@ jobs:
 
       - name: "Security: automatic memory reviews only the user's own words; per account"
         run: node scripts/test-memory-review.mjs
+
+      - name: "Memory bench harness: cases, scorer, frozen v1 reviewer, runner (no model)"
+        run: node scripts/test-memory-bench.mjs
 
       - name: "Security: workflows are per account; org writes need manageOrgWorkflows"
         run: node scripts/test-workflows.mjs
@@ -265,6 +286,12 @@ jobs:
       # Phase 8A exists for.
       - name: "Daemon: nestd boots, serves, and stops (smoke)"
         run: node scripts/test-daemon-smoke.mjs
+
+      # Phase 3's acceptance: a background task survives a client disconnect,
+      # a model stop and start, and a daemon kill, on the real nestd with a
+      # fake llama-server it launches itself (a shell-script shim here).
+      - name: "Daemon: background tasks survive disconnect, model restart, daemon kill"
+        run: node scripts/test-task-survival.mjs
 
       - name: "Daemon: nestd under a shell (pipe protocol, shell's key, EOF stops it)"
         run: node scripts/test-shell-pipe.mjs

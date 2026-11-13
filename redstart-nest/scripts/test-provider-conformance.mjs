@@ -229,6 +229,20 @@ const PROVIDERS = [
     badCall: { name: 'search_tools', arguments: {} }, // missing required query
   },
   {
+    // Host-resolved tools (interaction-tools.mjs). "Enabled" is not a config
+    // switch but the CLIENT's declaration at initialize, so its enabled phase
+    // runs on a second connection that declares it; the disabled phase runs on
+    // the shared client, which declares nothing — the position every client
+    // other than chat-ui and the bench is in. A direct call is an error either
+    // way: nothing on the server can answer a question.
+    name: 'interaction',
+    tools: ['ask_user', 'update_plan'],
+    enable: () => ({}),
+    clientCapabilities: { experimental: { 'redstart/hostTools': { names: ['ask_user', 'update_plan'] } } },
+    advertised: ['ask_user', 'update_plan'],
+    badCall: { name: 'ask_user', arguments: {} },
+  },
+  {
     name: 'postgres',
     tools: CAPABILITY_TOOL_NAMES.postgres,
     enable: () => ({ postgres: { enabled: true, connectionString: PG_URL, maxRows: 200 } }),
@@ -286,6 +300,7 @@ async function main() {
     'file-system': await import('../daemon/filesystem-mcp-provider.mjs'),
     scholar: await import('../daemon/scholar-tool.mjs'),
     postgres: await import('../daemon/postgres-tool.mjs'),
+    interaction: await import('../daemon/interaction-tools.mjs'),
   }
 
   await test('🔍 every provider declares the 4-argument callTool(name, args, cfg, ctx)', async () => {
@@ -347,17 +362,32 @@ async function main() {
     updateMcpConfig(enabledConfig)
     if (p.setup) await p.setup(enabledConfig)
 
+    // A provider enabled by the client's declaration gets its own connection.
+    const enabledClient = p.clientCapabilities
+      ? await connectMcpClient(`http://127.0.0.1:${MCP_PORT}`, { capabilities: p.clientCapabilities })
+      : client
+    const enabledNames = async () => (await enabledClient.call('tools/list')).result.tools.map(t => t.name)
+
     await test(`[${p.name}] enabled: advertises its tools`, async () => {
-      const names = await listNames()
+      const names = await enabledNames()
       const missing = p.advertised.filter(t => !names.includes(t))
       assert(missing.length === 0, `enabled but not advertised: ${missing.join(', ')}`)
     })
 
+    if (p.clientCapabilities) {
+      await test(`🔒 [${p.name}] a client that declared nothing still does not see it`, async () => {
+        const names = await listNames()
+        const leaked = p.tools.filter(t => names.includes(t))
+        assert(leaked.length === 0, `offered to a client that cannot answer it: ${leaked.join(', ')}`)
+      })
+    }
+
     await test(`🔍 [${p.name}] enabled: malformed input -> isError, not a crash`, async () => {
-      const res = await client.call('tools/call', p.badCall)
+      const res = await enabledClient.call('tools/call', p.badCall)
       assert(res.result?.isError === true, `expected isError for ${p.badCall.name}, got ${JSON.stringify(res.result ?? res.error)}`)
     })
 
+    if (enabledClient !== client) enabledClient.close()
     if (p.teardown) await p.teardown()
     updateMcpConfig(disabledBase())
   }

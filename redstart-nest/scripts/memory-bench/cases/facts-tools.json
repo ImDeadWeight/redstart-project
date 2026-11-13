@@ -1,0 +1,44 @@
+{
+  "id": "facts-tools",
+  "group": "facts",
+  "about": "Tools named as a constraint on the answer.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "How do I search and replace across a whole project? I edit everything in Neovim on Fedora, so no VS Code tips please."
+    },
+    {
+      "role": "assistant",
+      "content": "In Neovim: populate the quickfix list with :vimgrep /old/ **/*, then :cfdo %s/old/new/g | update."
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "terms": [
+        [
+          "neovim",
+          "nvim"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Edits code in Neovim on Fedora",
+        "quote": "I edit everything in Neovim on Fedora"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Wanted to search and replace across a project",
+        "quote": "search and replace across a whole project"
+      }
+    ]
+  }
+}

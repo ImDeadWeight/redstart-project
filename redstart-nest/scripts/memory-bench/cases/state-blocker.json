@@ -1,0 +1,55 @@
+{
+  "id": "state-blocker",
+  "group": "state",
+  "about": "A blocker that sets the next step.",
+  "project": {
+    "name": "App release"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "We're blocked: the App Store review rejected us over the login screen. Fixing that comes before anything else."
+    },
+    {
+      "role": "assistant",
+      "content": "The usual cause is a login with no way to try the app. A demo account in the review notes often clears it."
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "kind": "state",
+      "scope": "project",
+      "terms": [
+        [
+          "app store",
+          "review",
+          "rejected"
+        ],
+        [
+          "login"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "state",
+        "scope": "project",
+        "text": "Blocked: App Store review rejected the login screen; fixing it comes first",
+        "quote": "the App Store review rejected us over the login screen"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "scope": "user",
+        "text": "Publishes apps",
+        "quote": "We're blocked"
+      }
+    ]
+  }
+}

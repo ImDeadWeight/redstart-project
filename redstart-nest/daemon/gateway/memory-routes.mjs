@@ -155,7 +155,10 @@ export async function handleMemoryRoute(req, res, urlPath, account, { config } =
       const body = await readJsonBody(req)
       const conversationId = typeof body?.conversationId === 'string' && body.conversationId.length <= 128
         ? body.conversationId : null
-      const r = saveMemory(account, body?.text, { conversationId, fromWebTurn: false, projectId })
+      // kind and why (Phase 8, D35): the user may save any kind, guidance
+      // included (D37: only the assistant is barred from guidance). asOf is
+      // never read from the body; the server dates a state memory.
+      const r = saveMemory(account, body?.text, { conversationId, fromWebTurn: false, projectId, kind: body?.kind, why: body?.why })
       if (!r.ok) {
         sendJson(res, 400, { error: { message: r.error, type: 'invalid_request_error' } })
         return true
@@ -176,7 +179,7 @@ export async function handleMemoryRoute(req, res, urlPath, account, { config } =
       }
       if (req.method === 'PUT') {
         const body = await readJsonBody(req)
-        const r = updateMemory(account, id, body?.text, { projectId })
+        const r = updateMemory(account, id, body?.text, { projectId, kind: body?.kind, why: body?.why })
         if (!r.ok) {
           sendJson(res, r.error === 'not found' ? 404 : 400, { error: { message: r.error, type: r.error === 'not found' ? 'not_found' : 'invalid_request_error' } })
           return true

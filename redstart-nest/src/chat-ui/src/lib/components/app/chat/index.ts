@@ -530,6 +530,7 @@ export { default as ChatMessageAgenticContent } from './ChatMessages/ChatMessage
 export { default as ChatMessageActionCardPermissionRequest } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardPermissionRequest.svelte';
 export { default as ChatMessageActionCard } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCard.svelte';
 export { default as ChatMessageActionCardContinueRequest } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardContinueRequest.svelte';
+export { default as ChatMessageActionCardQuestion } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardQuestion.svelte';
 
 /**
  * Action buttons toolbar for messages. Displays copy, edit, delete, and regenerate

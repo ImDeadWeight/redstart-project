@@ -25,6 +25,7 @@ import { ChatMessageOps } from '$lib/stores/chat/chat-message-ops.svelte';
 import type { ChatMessagePromptProgress, ErrorDialogState } from '$lib/types/chat';
 import type { ApiProcessingState, DatabaseMessage, DatabaseMessageExtra } from '$lib/types';
 import { MessageRole, MessageType } from '$lib/enums';
+import type { AskAnswer } from '$lib/agent-core';
 
 class ChatStore {
 	readonly ui = new ChatUiState();
@@ -251,6 +252,11 @@ class ChatStore {
 
 	async continueAssistantMessage(messageId: string): Promise<void> {
 		return this.ops.continueAssistantMessage(messageId);
+	}
+
+	/** Answer an ask_user question left open by a refresh, and resume. */
+	async answerOpenQuestion(answer: AskAnswer | null): Promise<boolean> {
+		return this.ops.answerOpenQuestion(answer);
 	}
 
 	async editAssistantMessage(

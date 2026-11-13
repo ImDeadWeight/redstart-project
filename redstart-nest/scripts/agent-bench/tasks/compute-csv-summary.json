@@ -1,0 +1,13 @@
+{
+  "id": "compute-csv-summary",
+  "group": "compute",
+  "prompt": "Using sales.csv, what is the total amount for each region, and which region has the highest total?",
+  "fixtures": [
+    {
+      "path": "sales.csv",
+      "from": "fixtures/sales.csv"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/compute.mjs#regionTotals"
+}

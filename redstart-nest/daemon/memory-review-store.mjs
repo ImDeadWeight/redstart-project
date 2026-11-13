@@ -51,6 +51,15 @@ export function textHash(text) {
   return crypto.createHash('sha256').update(norm).digest('hex').slice(0, 32)
 }
 
+/**
+ * What makes two suggestions the same, and what a dismissal remembers. A
+ * forget carries the text it would forget, so it has its own key: dismissing
+ * "forget: Works at Acme" must not stop "Works at Acme" being proposed.
+ */
+export function suggestionKey(s) {
+  return s.op === 'forget' ? textHash(`forget:${s.text}`) : textHash(s.text)
+}
+
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
@@ -76,8 +85,11 @@ export function setSettings(account, body) {
 
 /**
  * Newest first. With `conversationId`, only that chat's.
- * A suggestion: { id, op: 'add'|'update', text, scope: 'user'|'project',
- * projectId?, targetId?, previousText?, conversationId, createdAt }.
+ * A suggestion: { id, op: 'add'|'update'|'forget', text, kind, why?, quote?,
+ * scope: 'user'|'project', projectId?, targetId?, previousText?, replaces?,
+ * replacedTexts?, conversationId, createdAt }. A forget's text is the memory
+ * it would forget. replacedTexts is what a merge folds in, for the chip only:
+ * accepting re-reads the memories by id.
  */
 export function listSuggestions(account, { conversationId = null } = {}) {
   const list = read().suggestions[memoryKey(account)] || []
@@ -102,21 +114,28 @@ export function addSuggestions(account, proposals, { conversationId, now = Date.
   const key = memoryKey(account)
   const list = data.suggestions[key] || []
   const dismissed = new Set(data.dismissed[key] || [])
-  const pending = new Set(list.map((s) => textHash(s.text)))
+  const pending = new Set(list.map(suggestionKey))
   const added = []
   for (const p of proposals) {
     const norm = normalizeText(p.text)
     if (norm.error) continue
-    const h = textHash(norm.text)
+    const op = p.op === 'update' || p.op === 'forget' ? p.op : 'add'
+    const h = suggestionKey({ op, text: norm.text })
     if (dismissed.has(h) || pending.has(h)) continue
     pending.add(h)
     const s = {
       id: crypto.randomUUID(),
-      op: p.op === 'update' ? 'update' : 'add',
+      op,
       text: norm.text,
+      kind: typeof p.kind === 'string' ? p.kind : 'fact',
+      ...(p.why ? { why: p.why } : {}),
+      ...(p.quote ? { quote: p.quote } : {}),
       scope: p.scope === 'project' ? 'project' : 'user',
       ...(p.scope === 'project' && p.projectId ? { projectId: p.projectId } : {}),
-      ...(p.op === 'update' ? { targetId: p.targetId, previousText: p.previousText ?? null } : {}),
+      ...(op !== 'add' ? { targetId: p.targetId } : {}),
+      ...(op === 'update' ? { previousText: p.previousText ?? null } : {}),
+      ...(op === 'update' && Array.isArray(p.replaces) && p.replaces.length ? { replaces: [...p.replaces] } : {}),
+      ...(op === 'update' && Array.isArray(p.replacedTexts) && p.replacedTexts.length ? { replacedTexts: p.replacedTexts.map(String) } : {}),
       conversationId: conversationId ?? null,
       createdAt: now,
     }
@@ -151,7 +170,7 @@ export function dismissSuggestion(account, id) {
   if (!found) return false
   data.suggestions[key] = list.filter((s) => s.id !== id)
   const dismissed = data.dismissed[key] || []
-  dismissed.push(textHash(found.text))
+  dismissed.push(suggestionKey(found))
   data.dismissed[key] = dismissed.slice(-MAX_DISMISSED_PER_ACCOUNT)
   write(data)
   return true

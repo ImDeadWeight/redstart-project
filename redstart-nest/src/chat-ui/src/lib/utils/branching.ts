@@ -28,6 +28,84 @@ export function findMessageById(
 	return messages.find((m) => m.id === id);
 }
 
+/** The tool-call ids an assistant message asked for. */
+function toolCallIdsOf(message: DatabaseMessage): Set<string> {
+	try {
+		const calls = JSON.parse(message.toolCalls || '[]');
+		return new Set(
+			(Array.isArray(calls) ? calls : [])
+				.map((c: { id?: unknown }) => c?.id)
+				.filter((id: unknown): id is string => typeof id === 'string' && id !== '')
+		);
+	} catch {
+		return new Set();
+	}
+}
+
+/**
+ * Put back the tool results a parent-only walk drops (agent-runtime Phase 1).
+ *
+ * Until 2026-11-11 chat-send stored every tool result of a reply as a child
+ * of the assistant message, so a reply with several calls had several sibling
+ * results, and the walk above followed only the last one. After a reload the
+ * earlier results vanished from the chat and from the next request, which
+ * then carried calls with no result. New results are written as a chain
+ * (createToolResultChain below); this repairs conversations stored before.
+ *
+ * Narrow on purpose: only TOOL-role children of an assistant message on the
+ * path, only ones answering a call that assistant made, and only for a call
+ * the path has no result for yet (the latest such child wins). An alternative
+ * assistant reply is a real branch and is never pulled in.
+ */
+function restoreSiblingToolResults(path: DatabaseMessage[], messages: readonly DatabaseMessage[]): void {
+	const onPath = new Set(path.map((m) => m.id));
+	const answered = new Set(path.map((m) => m.toolCallId).filter(Boolean));
+	const additions: DatabaseMessage[] = [];
+	for (const assistant of path) {
+		if (assistant.role !== MessageRole.ASSISTANT || !assistant.toolCalls) continue;
+		const callIds = toolCallIdsOf(assistant);
+		if (callIds.size === 0) continue;
+		const candidates = messages
+			.filter(
+				(m) =>
+					m.parent === assistant.id &&
+					m.role === MessageRole.TOOL &&
+					!onPath.has(m.id) &&
+					!!m.toolCallId &&
+					callIds.has(m.toolCallId) &&
+					!answered.has(m.toolCallId)
+			)
+			.sort((a, b) => b.timestamp - a.timestamp);
+		for (const m of candidates) {
+			if (answered.has(m.toolCallId!)) continue;
+			answered.add(m.toolCallId!);
+			additions.push(m);
+		}
+	}
+	path.push(...additions);
+}
+
+/**
+ * Where each tool result of a reply goes: the first under the assistant
+ * message, each later one under the result before it. A chain keeps every
+ * result on the path a parent walk follows (see restoreSiblingToolResults).
+ */
+export function createToolResultChain() {
+	let assistantId: string | null = null;
+	let tipId: string | null = null;
+	return {
+		/** The parent for the next result of `forAssistantId`'s reply. */
+		parentFor(forAssistantId: string): string {
+			return assistantId === forAssistantId && tipId ? tipId : forAssistantId;
+		},
+		/** Record that `messageId` is now the last result of that reply. */
+		advance(forAssistantId: string, messageId: string): void {
+			assistantId = forAssistantId;
+			tipId = messageId;
+		}
+	};
+}
+
 /**
  * Filters messages to get the conversation path from root to a specific leaf node.
  * If the leafNodeId doesn't exist, returns the path with the latest timestamp.
@@ -77,6 +155,8 @@ export function filterByLeafNodeId(
 		}
 		currentNode = nodeMap.get(currentNode.parent);
 	}
+
+	restoreSiblingToolResults(result, messages);
 
 	// Sort: system messages first, then by timestamp
 	result.sort((a, b) => {

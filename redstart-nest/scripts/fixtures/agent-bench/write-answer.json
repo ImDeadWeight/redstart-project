@@ -1,0 +1,1 @@
+{ "id": "write-answer", "group": "files", "prompt": "[script:write] Put 42 in out/answer.txt.", "approve": "all", "check": "checks.mjs#answerFile" }

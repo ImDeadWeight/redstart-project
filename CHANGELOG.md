@@ -4,6 +4,17 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ---
 
+## 2026-11-11
+
+- **Redstart is AGPL-3.0 now, not MIT.** Anyone can still use, fork and redistribute it, but a distributed modified version, or one offered to people over a network, has to publish its full source under AGPL-3.0. That's what makes a closed commercial clone impractical. Releases up to and including `1.0.0-alpha.12` stay under MIT, since a license can't be withdrawn from copies already published. `AGPL-3.0-only`, not `-or-later`, so a future AGPL version from the FSF doesn't apply to Redstart without a decision to adopt it.
+  - **One license file, at the repo root** as `LICENSE` (the canonical gnu.org text), so GitHub detects it. The two MIT copies, `redstart-nest/LICENSE.txt` and `redstart-twig/windows/LICENSE.txt`, are gone. Both apps' `stage-shell-bundle.mjs` copy the root file into the installer, still as `LICENSE.txt` so it opens on Windows, and now ship `TRADEMARKS.md` beside it. Every package.json and Cargo.toml carries `"license": "AGPL-3.0-only"`.
+  - **`TRADEMARKS.md`**: the name and the mascot artwork are outside the AGPL (section 7(e) allows this). Anyone can fork the code, but a distributed fork has to rename itself and replace the two mascot drawings, which is how Firefox handles it. The marks aren't registered yet.
+  - **`CLA.md` and `CONTRIBUTING.md`**: contributors keep their copyright but license their work to the maintainer broadly enough that Redstart can also be sold under commercial licenses. In return, section 6 promises each contribution stays available under an open-source license. Contributors sign by adding a statement to their first pull request, which the new `.github/pull_request_template.md` includes.
+  - **`THIRD-PARTY-NOTICES.md`** explains why each bundled license is compatible with AGPL. It also gains the attribution it was missing for the chat UI's origin as a fork of llama.cpp's web UI (MIT, The ggml authors).
+  - **Apps built around Redstart can use any license.** The README's License section states, as a permission from the copyright holder, that connectors, MCP servers and plugins that talk to Nest through its interfaces are separate works the AGPL doesn't reach, and that what users make with Redstart is theirs. `docs/connector-contract.md` and the Plugins section of `docs/capabilities.md` say the same thing for the people building them.
+  - **Known gap: no "source code" link in the UI.** AGPL section 13 requires a *modified* version that people use over a network to offer them its source. Unmodified Redstart doesn't need one, but a link in About would carry forward to forks and make their compliance the default.
+  - **Not done in the repo:** registering the trademarks, and having a lawyer read the CLA. The CLA is modelled on the usual license-grant CLAs (Apache's ICLA among them) but written for this project.
+
 ## 2026-11-10
 
 - **The taskbar shows the new icon, and it reads on a dark taskbar.** Two fixes after alpha.11.

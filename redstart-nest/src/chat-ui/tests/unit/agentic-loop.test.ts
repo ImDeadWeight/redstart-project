@@ -373,3 +373,164 @@ describe('executeAgenticLoop callback ordering', () => {
 		expect(finalTimings?.predicted_n).toBe(42);
 	});
 });
+
+/**
+ * ask_user in a running flow (plan §4, 1.1): the browser's `ask` port is the
+ * question card. The loop parks on session.pendingQuestion; the card, a typed
+ * message, or an abort resolves it. The reload path is in ask-user.test.ts.
+ */
+describe('ask_user through the browser ask port', () => {
+	/** Turn 1 asks; turn 2 answers with prose. Records what each request carried. */
+	function asksThenAnswers(args: unknown = { question: 'Which unit?', options: ['C', 'F'] }) {
+		const sent: unknown[][] = [];
+		let turn = 0;
+		sendMessage.mockImplementation(
+			async (messages: unknown[], opts: Record<string, (s: string) => void>) => {
+				sent.push(structuredClone(messages));
+				turn += 1;
+				if (turn === 1) {
+					opts.onToolCallChunk?.(
+						JSON.stringify([
+							{ id: 'q1', type: 'function', function: { name: 'ask_user', arguments: JSON.stringify(args) } }
+						])
+					);
+					return undefined;
+				}
+				opts.onChunk?.('converted');
+				return undefined;
+			}
+		);
+		return sent;
+	}
+
+	async function waitForQuestion(tries = 200) {
+		for (let i = 0; i < tries; i++) {
+			const q = agenticStore.session.pendingQuestion('conv-loop');
+			if (q) return q;
+			await new Promise((r) => setTimeout(r, 0));
+		}
+		return null;
+	}
+
+	const toolResultIn = (messages: unknown[]) =>
+		(messages as Array<{ role: string; content: unknown }>).find((m) => m.role === 'tool')?.content;
+
+	it('parks on the question, sends the chosen option as the result, and asks no permission', async () => {
+		const sent = asksThenAnswers();
+		const { rec, done } = runLoop();
+
+		const q = await waitForQuestion();
+		expect(q).toEqual({ questions: [{ question: 'Which unit?', options: ['C', 'F'], multiSelect: false }] });
+		expect(agenticStore.session.pendingPermissionRequest('conv-loop')).toBeNull();
+		agenticStore.session.resolveQuestion('conv-loop', { chosen: ['C'] });
+		await done;
+
+		expect(sent).toHaveLength(2);
+		expect(toolResultIn(sent[1])).toBe('The user chose: C');
+		expect(agenticStore.session.pendingQuestion('conv-loop')).toBeNull();
+		expect(rec.callbacks.onFlowComplete).toHaveBeenCalledTimes(1);
+	});
+
+	it('a message typed while the question is open is the answer, not an interruption', async () => {
+		const sent = asksThenAnswers({ question: 'Which unit?' });
+		const { done } = runLoop();
+		await waitForQuestion();
+
+		agenticStore.session.injectSteeringMessage('conv-loop', 'Celsius');
+		await done;
+
+		expect(sent).toHaveLength(2);
+		expect(toolResultIn(sent[1])).toBe('The user answered: Celsius');
+		expect(agenticStore.session.hasPendingSteeringMessage('conv-loop')).toBe(false);
+	});
+
+	it('a typed message with attachments dismisses the question and goes out as its own message', async () => {
+		const sent = asksThenAnswers({ question: 'Which unit?' });
+		const { rec, done } = runLoop();
+		await waitForQuestion();
+
+		agenticStore.session.injectSteeringMessage('conv-loop', 'see this', [{ type: 'image' } as never]);
+		await done;
+
+		// The flow exits at the steering check; chat-send then sends the message.
+		expect(sent).toHaveLength(1);
+		expect(agenticStore.session.pendingSteeringMessageContent('conv-loop')).toBe('see this');
+		const results = rec.callbacks.createToolResultMessage.mock.calls as unknown as Array<[string, string]>;
+		expect(results.map(([, c]) => c)[0]).toMatch(/^The user did not answer/);
+	});
+
+	it('aborting while the question is open stops the flow and clears the card', async () => {
+		const controller = new AbortController();
+		const sent = asksThenAnswers();
+		const { rec, done } = runLoop({ signal: controller.signal });
+		await waitForQuestion();
+
+		controller.abort();
+		await done;
+
+		expect(sent).toHaveLength(1);
+		expect(agenticStore.session.pendingQuestion('conv-loop')).toBeNull();
+		expect(rec.callbacks.onFlowComplete).toHaveBeenCalledTimes(1);
+	});
+});
+
+/**
+ * update_plan through the browser plan port (plan §4, 1.2): saved on the
+ * conversation through conversationsStore, the open steps at the tail of each
+ * request, one completion nudge. The store's persistence is spied: what is
+ * pinned here is the loop's use of it.
+ */
+describe('update_plan through the browser plan port', () => {
+	it('saves the steps on the conversation, sends them at the tail, and nudges once', async () => {
+		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
+		let stored: unknown[] | null = null;
+		const save = vi
+			.spyOn(conversationsStore, 'setConversationPlan')
+			.mockImplementation(async (_id, steps) => void (stored = steps));
+		const get = vi.spyOn(conversationsStore, 'getPlanSteps').mockImplementation(() => stored as never);
+
+		const sent: Array<Array<{ role: string; content: unknown }>> = [];
+		let turn = 0;
+		sendMessage.mockImplementation(
+			async (messages: Array<{ role: string; content: unknown }>, opts: Record<string, (s: string) => void>) => {
+				sent.push(structuredClone(messages));
+				turn += 1;
+				if (turn === 1) {
+					opts.onToolCallChunk?.(
+						JSON.stringify([
+							{
+								id: 'p1',
+								type: 'function',
+								function: {
+									name: 'update_plan',
+									arguments: JSON.stringify({ steps: [{ text: 'read', status: 'done' }, { text: 'write', status: 'pending' }] })
+								}
+							}
+						])
+					);
+					return undefined;
+				}
+				opts.onChunk?.(turn === 2 ? 'Read it.' : 'Wrote it.');
+				return undefined;
+			}
+		);
+
+		try {
+			const { rec, done } = runLoop();
+			await done;
+
+			expect(save).toHaveBeenCalledWith('conv-loop', [
+				{ text: 'read', status: 'done' },
+				{ text: 'write', status: 'pending' }
+			]);
+			expect(agenticStore.session.pendingPermissionRequest('conv-loop')).toBeNull();
+			expect(sent).toHaveLength(3);
+			expect(String(sent[1].at(-1)?.content)).toContain('Current plan');
+			expect(String(sent[2].at(-1)?.content)).toMatch(/^\[Automatic note, not from the user\] These steps are still open:\n- write/);
+			expect(rec.callbacks.onFlowComplete).toHaveBeenCalledTimes(1);
+		} finally {
+			save.mockRestore();
+			get.mockRestore();
+		}
+	});
+});

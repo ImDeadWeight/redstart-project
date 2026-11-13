@@ -1,0 +1,27 @@
+{
+  "id": "none-calc",
+  "group": "nothing",
+  "about": "A one-off calculation.",
+  "strict": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "What's 17% of 2,340?"
+    },
+    {
+      "role": "assistant",
+      "content": "397.80"
+    }
+  ],
+  "answers": {
+    "right": [],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Calculated 17% of 2,340",
+        "quote": "What's 17% of 2,340"
+      }
+    ]
+  }
+}

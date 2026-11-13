@@ -20,7 +20,7 @@ import { goto } from '$app/navigation';
 import { toast } from 'svelte-sonner';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from '$lib/constants/routes';
 import { RouterService } from '$lib/services/router.service';
-import { MemoryService } from '$lib/services/memory.service';
+import { MemoryService, parseRemember } from '$lib/services/memory.service';
 import { ContextCompactionService } from '$lib/services/context-compaction.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { chatStore } from '$lib/stores/chat.svelte';
@@ -28,6 +28,7 @@ import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
 import { isRouterMode } from '$lib/stores/server.svelte';
 import { promptModesStore } from '$lib/stores/prompt-modes.svelte';
 import { projectsStore } from '$lib/stores/projects.svelte';
+import { tasksStore } from '$lib/stores/tasks.svelte';
 import { copyToClipboard, formatMessageForClipboard } from '$lib/utils';
 import { filterOptions, usage, type SlashCommandSpec, type SlashOption } from './parse';
 
@@ -114,14 +115,23 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 	},
 	{
 		name: 'remember',
-		summary: 'Save something about you to memory',
+		summary: 'Save something about you to memory (guidance: … because …, state: …)',
 		arg: 'required',
-		argHint: '<text>',
+		argHint: '<text> | guidance: <how> because <why> | state: <where things stand>',
 		async run({ arg }) {
+			// A kind by prefix (agent-runtime 8.6, parseRemember). Guidance is
+			// followed by the assistant, so it is refused here without a reason.
+			const parsed = parseRemember(arg);
+			if (!parsed.ok) {
+				toast.error(parsed.error);
+				return;
+			}
 			try {
 				const memory = await MemoryService.create(
-					arg,
-					conversationsStore.activeConversation?.id ?? null
+					parsed.text,
+					conversationsStore.activeConversation?.id ?? null,
+					null,
+					{ kind: parsed.kind, why: parsed.why }
 				);
 				if (memory.duplicate) {
 					toast.info('Already remembered');
@@ -292,6 +302,33 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 			} catch (e) {
 				toast.error(errorText(e, 'Could not compact this chat'));
 			}
+		}
+	},
+	{
+		// agent-runtime Phase 3.9: the daemon runs the agent loop for this chat
+		// with no browser attached; the chat follows it and shows its cards.
+		name: 'task',
+		summary: 'Run a request in the background, even with this page closed',
+		arg: 'required',
+		argHint: '<request>',
+		async run({ arg }) {
+			if (chatStore.isLoading) {
+				toast.info('Wait for the reply to finish, or stop it first.');
+				return;
+			}
+			let id = conversationsStore.activeConversation?.id ?? null;
+			if (id && tasksStore.activeFor(id)) {
+				toast.info('A background task is already running in this chat. Messages you send go to it.');
+				return;
+			}
+			try {
+				if (!id) id = await conversationsStore.createConversation();
+			} catch (e) {
+				toast.error(errorText(e, 'Could not start a chat for the task'));
+				return;
+			}
+			const task = await tasksStore.start(id, arg);
+			if (task) toast.success('Running in the background. You can close this page; it keeps going.');
 		}
 	},
 	{

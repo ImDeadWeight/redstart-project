@@ -270,6 +270,22 @@ await test('🔒 selected is always a subset of the tools offered', () => {
   }
 })
 
+await test('a family comes together: one member selected brings the rest past the floor (memory, 2026-11-12)', () => {
+  const MEM = ['memory_save', 'memory_search', 'memory_forget']
+  const scored = scoredList([['memory_save', 0.9], ['read_document', 0.8], ['memory_search', 0.2], ['memory_forget', 0.1]])
+  const names = selectTools({ scored, floor: 0.5, families: [MEM] }).selected.map(toolName)
+  assert(MEM.every((n) => names.includes(n)), `the family was split: ${names}`)
+  const none = selectTools({ scored: scoredList([['read_document', 0.9], ['memory_forget', 0.1]]), floor: 0.5, families: [MEM] }).selected.map(toolName)
+  assert(!none.includes('memory_forget'), 'a family member came in with no member selected')
+  const partial = selectTools({ scored: scoredList([['memory_save', 0.9]]), floor: 0.5, families: [MEM] }).selected.map(toolName)
+  assert(partial.join() === 'memory_save', `a family member that was never offered appeared: ${partial}`)
+})
+
+await test('🔒 the tool filter keeps the memory tools together', async () => {
+  const { TOOL_FAMILIES } = await import('../daemon/tool-filter.mjs')
+  assert(TOOL_FAMILIES.some((f) => ['memory_save', 'memory_search', 'memory_forget'].every((n) => f.includes(n))), JSON.stringify(TOOL_FAMILIES))
+})
+
 await test('a pin below the floor is still included', () => {
   const scored = scoredList([['high', 0.9], ['pinned', 0.01]])
   const names = selectTools({ scored, pins: ['pinned'], floor: 0.5 }).selected.map(toolName)
@@ -909,6 +925,23 @@ await test('🔒 a tool the model has already called is never dropped', async ()
   ]
   const out = await filterRequestTools({ tools: allTools, messages, settings: { enabled: true }, embed })
   assert(out.map(toolName).includes('web_fetch'), 'a tool already called mid-task was filtered away')
+})
+
+await test('🔒 ask_user is never dropped, though it matches no task', async () => {
+  // Host-resolved tools score against nothing in particular. Dropped, the
+  // model reads its absence as "you may not ask" (agent-runtime plan §4, 1.1).
+  resetToolFilterState()
+  const ask_user = fnTool('ask_user', 'Ask the user a question and wait for the answer')
+  const out = await filterRequestTools({ tools: [...allTools, ask_user], messages: ask, settings: { enabled: true }, embed })
+  const names = out.map(toolName)
+  assert(names.includes('ask_user'), `ask_user was filtered away: ${names.join(',')}`)
+  assert(!names.includes('web_fetch'), `the pin widened the selection: ${names.join(',')}`)
+})
+
+await test('🔒 the ask_user pin adds nothing the request did not carry', async () => {
+  resetToolFilterState()
+  const out = await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: true }, embed })
+  assert(!out.map(toolName).includes('ask_user'), 'a pin invented a tool the client never sent')
 })
 
 await test('🔒 an empty selection falls back to the full list rather than stripping everything', async () => {

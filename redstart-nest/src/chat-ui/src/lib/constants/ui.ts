@@ -17,6 +17,8 @@ export interface DesktopIconStripItem {
 	keys?: string[];
 	/** Hidden when nobody is signed in (there is no account to open). */
 	requiresAuth?: boolean;
+	/** A thin line above it, setting it apart from the items before. */
+	separatedAbove?: boolean;
 }
 
 /**
@@ -54,11 +56,14 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		route: ROUTES.PROJECTS,
 		activeRoutePrefix: '/projects'
 	},
-	{ icon: Search, tooltip: 'Search', keys: ['cmd', 'k'] },
 	{
 		icon: Settings,
 		tooltip: 'Settings',
 		route: ROUTES.SETTINGS,
 		activeRoutePrefix: '/settings'
-	}
+	},
+	// Last and set apart: it searches the conversation list right below it
+	// (Projects, Recent conversations), so it sits next to that list rather
+	// than among the pages.
+	{ icon: Search, tooltip: 'Search Conversations', keys: ['cmd', 'k'], separatedAbove: true }
 ];

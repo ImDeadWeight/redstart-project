@@ -225,6 +225,24 @@ export function surfacePermitted(account, surface) {
   return allowsSurface(account, roleFor(account), surface)
 }
 
+/**
+ * Who a background task runs as, now (agent-runtime Phase 3, D22): looked up
+ * again before every turn, so a disabled account or a deleted one stops its
+ * task at the next turn, the way the next request from it would be refused.
+ * Mirrors authenticate(): with auth off every caller is the null account.
+ *
+ * @param {string | null} accountId the account that started the task
+ * @returns {{ ok: true, account: object | null } | { ok: false, reason: string }}
+ */
+export function accountForTask(accountId) {
+  if (!accounts.getAuthRequired()) return { ok: true, account: null }
+  if (!accountId) return { ok: false, reason: 'Login was turned on after this task started, and it has no account.' }
+  const record = accounts.findById(accountId)
+  if (!record) return { ok: false, reason: 'The account that started this task no longer exists.' }
+  if (record.status === 'disabled') return { ok: false, reason: 'The account that started this task is disabled.' }
+  return { ok: true, account: toPublicAccount(record) }
+}
+
 export function authenticate(req) {
   if (!accounts.getAuthRequired()) return { ok: true, account: null }
 

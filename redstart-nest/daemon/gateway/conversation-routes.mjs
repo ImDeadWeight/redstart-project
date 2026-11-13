@@ -17,7 +17,7 @@
 // It talks only to conversations-storage.mjs.
 // =============================================================================
 
-import { getConversations, getConversation as getConv, createConversation, updateConversation, deleteConversation, deleteConversationsWithForks } from '../conversations-storage.mjs'
+import { getConversations, getConversation as getConv, createConversation, updateConversation, deleteConversation, deleteConversationsWithForks, LOCKED_BY_TASK } from '../conversations-storage.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
 import { getCapabilities } from '../tools-storage.mjs'
 import { trashWorkspace } from '../conversation-workspace.mjs'
@@ -25,6 +25,7 @@ import { dropKernel } from '../python-tool.mjs'
 import { logEvent } from '../logger.mjs'
 import { getProject } from '../projects-storage.mjs'
 import { dropSuggestions } from '../memory-review-store.mjs'
+import { validatePlanSteps } from '../../../shared/agent-core/update-plan.mjs'
 
 // A conversation may name only one of the caller's own projects (projects-
 // plan D11), checked on every write that carries the field. null moves it
@@ -32,6 +33,19 @@ import { dropSuggestions } from '../memory-review-store.mjs'
 function projectFieldError(body, account) {
   if (!body || !('projectId' in body) || body.projectId === null) return null
   return getProject(account, body.projectId) ? null : 'projectId does not name one of your projects'
+}
+
+// The conversation's plan (agent-runtime plan §4, 1.2): the update_plan
+// checklist the client's loop keeps. null clears it. Otherwise the steps go
+// through the same check the loop core applies to the model's call, and the
+// server stamps updatedAt, so a stored plan is always one the loop could have
+// produced. Rewrites body.plan in place to the normalised form.
+function planFieldError(body) {
+  if (!body || !('plan' in body) || body.plan === null) return null
+  const checked = validatePlanSteps(body.plan?.steps)
+  if (!checked.ok) return `plan: ${checked.error.replace(/^Error: /, '')}`
+  body.plan = { steps: checked.steps, updatedAt: Date.now() }
+  return null
 }
 
 // A deleted conversation's workspace (chat-tooling plan §2) goes to the trash
@@ -87,12 +101,18 @@ export async function handleConversationRoute(req, res, urlPath, accountId, { ac
         sendJson(res, 400, { error: { message: 'Bad request', type: 'invalid_request_error' } })
         return true
       }
-      const projectError = projectFieldError(body, account)
-      if (projectError) {
-        sendJson(res, 400, { error: { message: projectError, type: 'invalid_request_error' } })
+      const fieldError = projectFieldError(body, account) ?? planFieldError(body)
+      if (fieldError) {
+        sendJson(res, 400, { error: { message: fieldError, type: 'invalid_request_error' } })
         return true
       }
       const updated = updateConversation(accountId, convId, body)
+      // A background task holds this conversation's messages (D25). 409 is
+      // chat-ui's cue to reload the conversation rather than fail.
+      if (updated === LOCKED_BY_TASK) {
+        sendJson(res, 409, { error: { message: 'A background task is writing this conversation. Reload it, or cancel the task.', type: 'conflict', code: 'task_active' } })
+        return true
+      }
       if (!updated) {
         sendJson(res, 404, { error: { message: 'Not found', type: 'not_found' } })
         return true

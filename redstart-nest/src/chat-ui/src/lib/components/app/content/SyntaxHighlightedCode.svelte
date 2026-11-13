@@ -68,8 +68,13 @@
 	});
 </script>
 
+<!--
+	overflow-auto: max-height alone clips nothing, so a long block (a tool
+	call's arguments, an update_plan with several steps) ran out of its box and
+	over the Result below it (2026-11-12). It now scrolls inside the box.
+-->
 <div
-	class="code-preview-wrapper rounded-lg border border-border bg-muted {className}"
+	class="code-preview-wrapper overflow-auto rounded-lg border border-border bg-muted {className}"
 	style="max-height: {maxHeight}; max-width: {maxWidth};"
 >
 	<!-- Needs to be formatted as single line for proper rendering -->

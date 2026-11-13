@@ -1,0 +1,50 @@
+{
+  "id": "state-decision",
+  "group": "state",
+  "about": "A decision taken outside the chat.",
+  "project": {
+    "name": "Garden club website"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "We decided at last night's meeting: the site will be built with Hugo, not WordPress. Work starts next week."
+    },
+    {
+      "role": "assistant",
+      "content": "Hugo suits a small club site well. I can sketch the folder layout when you start."
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "kind": "state",
+      "scope": "project",
+      "terms": [
+        [
+          "hugo"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "state",
+        "scope": "project",
+        "text": "Decided: the site is built with Hugo, not WordPress; work starts next week",
+        "quote": "the site will be built with Hugo, not WordPress"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "scope": "user",
+        "text": "Belongs to a garden club",
+        "quote": "last night's meeting"
+      }
+    ]
+  }
+}

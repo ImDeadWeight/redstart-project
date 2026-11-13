@@ -1,0 +1,61 @@
+{
+  "id": "state-update-thesis",
+  "group": "state",
+  "about": "An older state memory that should be updated.",
+  "project": {
+    "name": "Thesis"
+  },
+  "existing": {
+    "project": [
+      {
+        "id": "p1",
+        "kind": "state",
+        "text": "Chapter 2 draft in progress",
+        "ageDays": 15
+      }
+    ]
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "Chapter 2 is done and with my supervisor. I am starting chapter 3, the methods chapter."
+    },
+    {
+      "role": "assistant",
+      "content": "Congratulations. For methods, start from the decisions you would defend in your viva."
+    }
+  ],
+  "expect": [
+    {
+      "op": "update",
+      "target": "p1",
+      "terms": [
+        [
+          "chapter 3",
+          "methods"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "update",
+        "id": "p1",
+        "kind": "state",
+        "scope": "project",
+        "text": "Chapter 2 done and with the supervisor; writing chapter 3 (methods)",
+        "quote": "I am starting chapter 3, the methods chapter"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "scope": "user",
+        "text": "Has a supervisor",
+        "quote": "with my supervisor"
+      }
+    ]
+  }
+}

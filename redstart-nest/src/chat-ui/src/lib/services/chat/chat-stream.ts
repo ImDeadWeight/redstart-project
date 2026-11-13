@@ -13,54 +13,18 @@ import type {
 	ApiChatCompletionToolCallDelta
 } from '$lib/types/api';
 import { extractModelName } from './chat-errors';
+import { mergeToolCallDeltas as coreMergeToolCallDeltas, streamErrorMessage } from '$lib/agent-core';
 
-export function mergeToolCallDeltas(
+/**
+ * Fold one chunk's tool-call deltas into the calls so far. One implementation,
+ * in the shared loop core (shared/agent-core/chat-stream.mjs), so the bench
+ * and the daemon assemble calls exactly as the browser does.
+ */
+export const mergeToolCallDeltas = coreMergeToolCallDeltas as (
 	existing: ApiChatCompletionToolCall[],
 	deltas: ApiChatCompletionToolCallDelta[],
-	indexOffset = 0
-): ApiChatCompletionToolCall[] {
-	const result = existing.map((call) => ({
-		...call,
-		function: call.function ? { ...call.function } : undefined
-	}));
-
-	for (const delta of deltas) {
-		const index =
-			typeof delta.index === 'number' && delta.index >= 0
-				? delta.index + indexOffset
-				: result.length;
-
-		while (result.length <= index) {
-			result.push({ function: undefined });
-		}
-
-		const target = result[index]!;
-
-		if (delta.id) {
-			target.id = delta.id;
-		}
-
-		if (delta.type) {
-			target.type = delta.type;
-		}
-
-		if (delta.function) {
-			const fn = target.function ? { ...target.function } : {};
-
-			if (delta.function.name) {
-				fn.name = delta.function.name;
-			}
-
-			if (delta.function.arguments) {
-				fn.arguments = (fn.arguments ?? '') + delta.function.arguments;
-			}
-
-			target.function = fn;
-		}
-	}
-
-	return result;
-}
+	indexOffset?: number
+) => ApiChatCompletionToolCall[];
 
 export function notifyTimings(
 	timings: ChatMessageTimings | undefined,
@@ -175,8 +139,15 @@ export async function handleStreamResponse(
 						continue;
 					}
 
+					// A server error mid-reply (see streamErrorMessage). Recorded
+					// here and thrown below, outside the try that swallows a chunk
+					// that fails to parse: the outer catch reports it through onError.
+					let streamError: string | null = null;
 					try {
 						const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
+						// An error chunk has no choices, so the rest of this block
+						// does nothing with it.
+						streamError = streamErrorMessage(parsed);
 						const choice = parsed.choices?.[0];
 						const content = choice?.delta?.content;
 						const reasoningContent = choice?.delta?.reasoning_content;
@@ -224,6 +195,7 @@ export async function handleStreamResponse(
 					} catch (e) {
 						console.error('Error parsing JSON chunk:', e);
 					}
+					if (streamError) throw new Error(streamError);
 				}
 			}
 

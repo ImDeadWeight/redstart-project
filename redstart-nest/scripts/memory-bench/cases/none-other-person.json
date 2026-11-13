@@ -1,0 +1,27 @@
+{
+  "id": "none-other-person",
+  "group": "nothing",
+  "about": "A detail about someone else.",
+  "strict": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "My colleague Dana is allergic to nuts. Suggest a lunch place for her team's outing near the station."
+    },
+    {
+      "role": "assistant",
+      "content": "A noodle bar with a clear allergen menu would suit; ask them to confirm nut-free prep."
+    }
+  ],
+  "answers": {
+    "right": [],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Colleague Dana is allergic to nuts",
+        "quote": "My colleague Dana is allergic to nuts"
+      }
+    ]
+  }
+}

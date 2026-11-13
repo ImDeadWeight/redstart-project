@@ -15,6 +15,7 @@
 import { SvelteMap } from 'svelte/reactivity';
 import type { AgenticSession, SteeringMessage } from '$lib/types';
 import type { ToolPermissionDecision } from '$lib/enums';
+import type { AskAnswer, AskRequest } from '$lib/agent-core';
 
 function createDefaultSession(): AgenticSession {
 	return {
@@ -55,6 +56,15 @@ export class AgenticSessionState {
 
 	/** Reactive: queued steering messages to inject between turns */
 	steeringMessages = new SvelteMap<string, SteeringMessage>();
+
+	/**
+	 * Reactive: an ask_user question waiting for the person (plan §4, 1.1).
+	 * Beside pendingPermissions, and resolved the same way.
+	 */
+	pendingQuestions = new SvelteMap<string, AskRequest | null>();
+
+	/** Non-reactive: resolve functions for pending questions. null = dismissed. */
+	questionResolvers = new Map<string, (answer: AskAnswer | null) => void>();
 
 	get isAnyRunning(): boolean {
 		for (const session of this.sessions.values()) {
@@ -136,6 +146,40 @@ export class AgenticSessionState {
 		}
 	}
 
+	pendingQuestion(conversationId: string): AskRequest | null {
+		return this.pendingQuestions.get(conversationId) ?? null;
+	}
+
+	/**
+	 * Put a question to the person and wait (the core's `ask.user` port).
+	 * Resolves null when they skip it or the flow is aborted.
+	 */
+	requestAnswer(
+		conversationId: string,
+		request: AskRequest,
+		signal?: AbortSignal
+	): Promise<AskAnswer | null> {
+		if (signal?.aborted) return Promise.resolve(null);
+		this.pendingQuestions.set(conversationId, request);
+		return new Promise<AskAnswer | null>((resolve) => {
+			this.questionResolvers.set(conversationId, (answer) => {
+				this.pendingQuestions.set(conversationId, null);
+				resolve(answer);
+			});
+			signal?.addEventListener('abort', () => this.resolveQuestion(conversationId, null), {
+				once: true
+			});
+		});
+	}
+
+	resolveQuestion(conversationId: string, answer: AskAnswer | null): void {
+		const resolver = this.questionResolvers.get(conversationId);
+		if (resolver) {
+			this.questionResolvers.delete(conversationId);
+			resolver(answer);
+		}
+	}
+
 	resolvePermission(conversationId: string, decision: ToolPermissionDecision): void {
 		const resolver = this.permissionResolvers.get(conversationId);
 		if (resolver) {
@@ -163,12 +207,27 @@ export class AgenticSessionState {
 	/**
 	 * Queue a steering message. When the current agentic turn completes,
 	 * the flow exits and the caller re-sends the message as a normal chat message.
+	 *
+	 * While a question is open, a typed message is the answer instead (plan §4,
+	 * 1.1): it resolves the question and is not queued, so the flow goes on
+	 * rather than exiting. A message with attachments cannot be a tool result,
+	 * so it is queued as usual and the question is dismissed: the flow then
+	 * exits at the steering check and the message is sent with its files.
 	 */
 	injectSteeringMessage(
 		conversationId: string,
 		content: string,
 		extras?: DatabaseMessageExtra[]
 	): void {
+		if (this.questionResolvers.has(conversationId)) {
+			if (!extras || extras.length === 0) {
+				this.resolveQuestion(conversationId, { text: content });
+				return;
+			}
+			this.steeringMessages.set(conversationId, { content, extras });
+			this.resolveQuestion(conversationId, null);
+			return;
+		}
 		this.steeringMessages.set(conversationId, { content, extras });
 	}
 

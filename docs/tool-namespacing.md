@@ -80,6 +80,21 @@ Registering the app also makes it appear in **Tools → Banned Tools** automatic
    mutating tool that is a silent privilege escalation. `test-tool-policy.mjs` fails if a capability
    tool is missing a classification.
 
+## Host-resolved tools
+
+`ask_user` and `update_plan` are defined by Nest but answered by the client's own agent loop: only
+the client has a person to ask, and the plan is state that loop keeps. Such tools belong to no capability and are listed in `HOST_RESOLVED_TOOL_NAMES`
+(`tools-definitions.mjs`). They follow the same rules as any Nest tool: classified in
+`TOOL_CLASSES`, no app prefix, no collision. Nest offers them only on an MCP session whose client
+declared, at `initialize`, that it answers them:
+
+```json
+{ "capabilities": { "experimental": { "redstart/hostTools": { "names": ["ask_user", "update_plan"] } } } }
+```
+
+A client that declares nothing is never offered one, so it can never be handed a tool that can
+only fail. An admin bans one by name like any other tool.
+
 ## If a name has to collide
 
 Don't. If a client app genuinely needs a tool that does what a Nest tool does, the answer is

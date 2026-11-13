@@ -3,6 +3,7 @@ name = "redstart-nest-shell"
 version = "0.1.0"
 description = "Redstart Nest desktop shell: window, tray and lifetime for nestd"
 edition = "2021"
+license = "AGPL-3.0-only"
 publish = false
 
 [build-dependencies]

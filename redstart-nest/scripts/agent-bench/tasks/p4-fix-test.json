@@ -1,0 +1,19 @@
+{
+  "id": "p4-fix-test",
+  "group": "phase4",
+  "phase": 4,
+  "prompt": "Fix the bug in node-project/math.mjs so that `node --test` passes in node-project. Do not change the test file.",
+  "fixtures": [
+    {
+      "path": "node-project/math.mjs",
+      "from": "fixtures/node-project/math.mjs"
+    },
+    {
+      "path": "node-project/math.test.mjs",
+      "from": "fixtures/node-project/math.test.mjs"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/phase4.mjs#testsNowPass",
+  "notes": "Can pass early: run_python can edit the file without running the tests."
+}

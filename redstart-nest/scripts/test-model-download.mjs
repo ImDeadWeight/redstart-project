@@ -91,7 +91,9 @@ function bodyStream(chunks, { delayMs = 0, signal } = {}) {
       if (delayMs) {
         await new Promise((resolve, reject) => {
           const t = setTimeout(resolve, delayMs)
-          signal?.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')) }, { once: true })
+          // Errors the body with the signal's reason, as Node's fetch does — the
+          // request signal stays attached to the body after headers arrive.
+          signal?.addEventListener('abort', () => { clearTimeout(t); reject(signal.reason ?? new Error('aborted')) }, { once: true })
         })
       }
       controller.enqueue(chunk)
@@ -118,8 +120,15 @@ const {
 } = await import('../daemon/hf-catalog.mjs')
 
 const {
-  downloadArtifact, destinationFor, discardPartials, PART_SUFFIX,
+  downloadArtifact, downloadFile, destinationFor, discardPartials, PART_SUFFIX,
+  setDownloadTransportForTests,
 } = await import('../daemon/model-download.mjs')
+// The downloader moves bytes over node:https, not global fetch (see
+// node-fetch-transport.mjs). Route it through the shim for the canned-response
+// tests; the transport section near the end drives the real one.
+const shimTransport = (url, init) => globalThis.fetch(url, init)
+setDownloadTransportForTests(shimTransport)
+const { nodeFetch } = await import('../daemon/node-fetch-transport.mjs')
 
 const { fetchFollowingRedirects } = await import('../daemon/http-redirects.mjs')
 
@@ -537,6 +546,114 @@ await test('cancelling discards the staging file', async () => {
   await discardPartials(modelsDir, art)
   assert(!fs.existsSync(dest + PART_SUFFIX), 'discardPartials left the .part behind')
 })
+
+// The connect timeout once rode on the fetch signal, which stays attached to
+// the body — so every download longer than 30 s died with "The operation was
+// aborted due to timeout". Here the body takes ~4x the connect timeout.
+await test('🔍 a transfer that outlasts the connect timeout is not cut off', async () => {
+  const buf = Buffer.from('y'.repeat(5000))
+  const dest = path.join(modelsDir, 'long-Q4_K_M.gguf')
+  reset()
+  routes.set('https://huggingface.co/', (url, init) => okResponse(buf, {
+    stream: bodyStream([0, 1, 2, 3, 4].map(i => buf.subarray(i * 1000, (i + 1) * 1000)), { delayMs: 40, signal: init.signal }),
+  }))
+
+  const res = await downloadFile({
+    url: buildDownloadUrl(REPO, REV, 'long-Q4_K_M.gguf'),
+    destPath: dest, expectedSha256: sha256(buf), expectedSize: buf.length,
+    connectTimeoutMs: 50, stallTimeoutMs: 1000,
+  })
+  assert(res.bytes === buf.length && fs.existsSync(dest), 'the long transfer did not complete')
+  fs.rmSync(dest, { force: true })
+  return '200 ms body under a 50 ms connect timeout'
+})
+
+await test('🔍 a stalled transfer fails with a resumable .part instead of hanging', async () => {
+  const buf = Buffer.from('z'.repeat(2000))
+  const dest = path.join(modelsDir, 'stall-Q4_K_M.gguf')
+  reset()
+  routes.set('https://huggingface.co/', (url, init) => okResponse(buf, {
+    stream: bodyStream([buf.subarray(0, 1000), buf.subarray(1000)], { delayMs: 300, signal: init.signal }),
+  }))
+
+  await expectReject(() => downloadFile({
+    url: buildDownloadUrl(REPO, REV, 'stall-Q4_K_M.gguf'),
+    destPath: dest, expectedSha256: sha256(buf), expectedSize: buf.length,
+    connectTimeoutMs: 1000, stallTimeoutMs: 50,
+  }), /stalled/, 'stalled body')
+  assert(!fs.existsSync(dest), 'a stalled download was renamed into place')
+  assert(fs.existsSync(dest + PART_SUFFIX), 'the stall left no .part to resume from')
+  fs.rmSync(dest + PART_SUFFIX, { force: true })
+})
+
+// ===========================================================================
+console.log('\n--- the node:http transport (real sockets, local server) ---')
+// ===========================================================================
+// Everything above runs on the fetch shim. These drive nodeFetch itself, the
+// transport the downloader actually ships with, through the shared redirect
+// walk and downloadFile — redirect, Range resume, and abort-reason propagation.
+
+{
+  const http = await import('node:http')
+  const payload = Buffer.from('GGUF' + 'w'.repeat(200_000))
+  let stallMs = 0
+  const server = http.createServer((req, res) => {
+    if (req.url === '/redirect') { res.writeHead(302, { location: '/file' }); res.end('moved'); return }
+    const m = /bytes=(\d+)-/.exec(req.headers.range || '')
+    const from = m ? Number(m[1]) : 0
+    res.writeHead(m ? 206 : 200, { 'content-length': payload.length - from })
+    const body = payload.subarray(from)
+    if (!stallMs) { res.end(body); return }
+    res.write(body.subarray(0, 1000))
+    setTimeout(() => res.end(body.subarray(1000)), stallMs).unref()
+  })
+  await new Promise(r => server.listen(0, '127.0.0.1', r))
+  const origin = `http://127.0.0.1:${server.address().port}`
+  setDownloadTransportForTests(null) // back to the shipped transport
+
+  await test('nodeFetch returns a real Response and does not follow redirects itself', async () => {
+    const r = await nodeFetch(`${origin}/redirect`)
+    assert(r instanceof Response, 'not a Response')
+    assert(r.status === 302 && r.headers.get('location') === '/file', `got ${r.status} ${r.headers.get('location')}`)
+    await r.body.cancel()
+  })
+
+  await test('🔍 a download over the real transport follows the redirect and verifies', async () => {
+    const dest = path.join(modelsDir, 'transport-Q4_K_M.gguf')
+    const res = await downloadFile({
+      url: `${origin}/redirect`, destPath: dest, isUrlAllowed: () => true,
+      expectedSha256: sha256(payload), expectedSize: payload.length,
+    })
+    assert(res.verified && fs.readFileSync(dest).equals(payload), 'bytes differ')
+    fs.rmSync(dest, { force: true })
+  })
+
+  await test('🔍 a resume over the real transport sends Range and completes the file', async () => {
+    const dest = path.join(modelsDir, 'transport-resume-Q4_K_M.gguf')
+    fs.writeFileSync(dest + PART_SUFFIX, payload.subarray(0, 50_000))
+    const res = await downloadFile({
+      url: `${origin}/file`, destPath: dest, isUrlAllowed: () => true,
+      expectedSha256: sha256(payload), expectedSize: payload.length,
+    })
+    assert(res.verified && fs.readFileSync(dest).equals(payload), 'resumed bytes differ')
+    fs.rmSync(dest, { force: true })
+  })
+
+  await test('🔍 the stall message survives the real transport, not a generic abort', async () => {
+    stallMs = 400
+    const dest = path.join(modelsDir, 'transport-stall-Q4_K_M.gguf')
+    await expectReject(() => downloadFile({
+      url: `${origin}/file`, destPath: dest, isUrlAllowed: () => true,
+      expectedSize: payload.length, stallTimeoutMs: 80,
+    }), /stalled/, 'stalled real socket')
+    stallMs = 0
+    fs.rmSync(dest + PART_SUFFIX, { force: true })
+  })
+
+  setDownloadTransportForTests(shimTransport)
+  server.closeAllConnections?.()
+  server.close()
+}
 
 // ===========================================================================
 console.log('\n--- preflight: disk, shard sets, gated repos ---')

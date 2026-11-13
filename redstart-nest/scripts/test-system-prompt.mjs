@@ -206,9 +206,11 @@ await test('🔒 the destructive-confirmation clause names only what was sent', 
     toolNames: ['read_file', 'write_file', 'delete_file'],
     now: NOW,
   })
-  assert(prompt.includes('Confirm with the user before calling delete_file'), 'delete_file not named')
+  assert(prompt.includes('Every call to delete_file needs the user\'s approval'), 'delete_file not named')
   assert(!prompt.includes('write_file,'), 'a write-class tool was pulled into the destructive clause')
-  assert(prompt.includes('covers one call, not a session'), 'confirmation is not scoped per call')
+  assert(prompt.includes('the app asks them on each call'), 'approval is not said to be per call')
+  assert(prompt.includes('do not ask in the chat as well'), 'the model is not told the app asks (2026-11-12: it asked twice)')
+  assert(!/Confirm with the user before calling/.test(prompt), 'the old line, which made models ask in chat too, is back')
   return 'delete_file only'
 })
 
@@ -227,7 +229,7 @@ await test('🔒 the Twig fs_delete_file reaches the confirmation clause', async
     clientToolNames: ['fs_read_file', 'fs_write_file', 'fs_delete_file'],
     now: NOW,
   })
-  assert(prompt.includes('Confirm with the user before calling fs_delete_file'), 'fs_delete_file is not in the confirmation clause')
+  assert(prompt.includes('Every call to fs_delete_file needs the user\'s approval'), 'fs_delete_file is not in the approval clause')
   return 'the one delete no server policy can reach is covered'
 })
 
@@ -279,6 +281,29 @@ await test('🔒 hasTools with no toolNames states no tool-specific constraint',
   assert(!prompt.includes('Confirm with the user'), 'asked for confirmation with no names supplied')
   assert(prompt.includes('If a tool call fails'), 'lost the failure-handling clause, which needs no names')
   return 'failure handling only'
+})
+
+await test('🔍 ask_user gets its when-to-ask line only when the request carries it', async () => {
+  // The schema says how to ask; only the prompt can say when. Without the
+  // line a small model asks instead of retrying a tool (agent-runtime plan
+  // §4, 1.1). Without the tool, the line would describe a tool it lacks.
+  const withTool = composePrompt({ config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query', 'ask_user'], now: NOW })
+  assert(withTool.prompt.includes('Call ask_user only when'), 'no when-to-ask line with ask_user offered')
+  // D44: a preference only the user can state, or being asked to ask, also counts; the floor stays.
+  assert(withTool.prompt.includes('or the user asked you to ask'), 'the widened when-to-ask line was lost')
+  assert(withTool.prompt.includes('Do not use it to ask permission'), 'the do-not list was lost')
+  assert(withTool.prompt.includes('anything a tool can find out'), 'the "try the tool first" rule is missing')
+  const without = composePrompt({ config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query'], now: NOW })
+  assert(!without.prompt.includes('ask_user'), 'named ask_user to a request that does not carry it')
+})
+
+await test('🔍 update_plan gets its when-to-plan line only when the request carries it', async () => {
+  // Plan §4, 1.2: three or more distinct steps, so a trivial question does
+  // not spend a turn on a checklist.
+  const withTool = composePrompt({ config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['update_plan'], now: NOW })
+  assert(withTool.prompt.includes('three or more distinct steps'), 'no when-to-plan line with update_plan offered')
+  const without = composePrompt({ config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['postgres_query'], now: NOW })
+  assert(!without.prompt.includes('update_plan'), 'named update_plan to a request that does not carry it')
 })
 
 await test('🔒 a narrowed tool list says so, and points at the way out', async () => {

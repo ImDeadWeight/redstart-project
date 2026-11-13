@@ -16,10 +16,17 @@
 // entirely, so a careless caller can never leak PII, credentials, or user data
 // into a log line.
 //
-// ONE documented exception exists: logAudit() at the bottom of this file records
-// the path of a destructive (delete) operation, because a deletion nobody can
-// name is a deletion nobody can undo. It is a closed allowlist of fields, it
-// never records file contents, and nothing else in the codebase may use it.
+// TWO documented exceptions exist, each a closed allowlist of fields, and
+// nothing else in the codebase may add one:
+//   - logAudit() records the path of a destructive (delete) operation, because
+//     a deletion nobody can name is a deletion nobody can undo. It never
+//     records file contents.
+//   - logPolicy() records what policy DECIDED (an approval denied or refused, a
+//     standing grant added or revoked) and who, into its own file an owner can
+//     read back (GET over the control plane, ipc/approvals.mjs). It never
+//     records arguments, paths or summaries: the decision, the tool, the
+//     account, the grant id. resource-grants-plan.md §7 designed it; agent-
+//     runtime Phase 2 built it first.
 //
 // No Electron dependency: index.mjs calls initLogger(configDir()) once at
 // startup — this module was the original model for platform-paths.mjs's
@@ -43,10 +50,12 @@ const BLOCKED_KEYS = new Set([
 
 let stream = null
 let logPath = null
+let policyPath = null
 
 export function initLogger(userDataDir) {
   try {
     fs.mkdirSync(userDataDir, { recursive: true })
+    policyPath = path.join(userDataDir, 'policy.jsonl')
     logPath = path.join(userDataDir, 'redstart.log')
     try {
       if (fs.statSync(logPath).size > MAX_BYTES) fs.renameSync(logPath, `${logPath}.1`)
@@ -136,4 +145,76 @@ export function logAudit(event, fields = {}) {
   const record = { t: new Date().toISOString(), cat: 'audit', event, ...safe }
   try { stream.write(JSON.stringify(record) + '\n') } catch { /* ignore write errors */ }
   console.log(`[audit] ${event} ${JSON.stringify(safe)}`)
+}
+
+// ---------------------------------------------------------------------------
+// THE SECOND EXCEPTION: the decision log (agent-runtime plan D14, designed in
+// resource-grants-plan.md §7).
+//
+// What policy decided, for an owner to read back: an approval denied, an
+// enforced call refused for want of one, a standing grant added or revoked.
+// "Denials only" for access decisions: logging every permitted call would
+// make this the tool log, which exists and is noisy already; the line worth
+// keeping is the one where policy did something.
+//
+// Its own file, policy.jsonl, beside redstart.log rather than in it, so the
+// trail is not rotated away by app chatter and an owner's read returns only
+// policy lines. Written synchronously: a few lines a day, and a read right
+// after a decision must see it.
+//
+// Closed allowlist, scalars only, cut to 128 characters. NEVER the call's
+// arguments, a path, a summary or a query: the decision, the tool, whose it
+// was, the grant, and who acted (an admin revoking someone else's grant).
+// ---------------------------------------------------------------------------
+const POLICY_FIELDS = ['account', 'tool', 'decision', 'grantId', 'capability', 'role', 'by', 'source']
+export const POLICY_EVENTS = new Set(['approval.denied', 'approval.refused', 'grant.added', 'grant.revoked'])
+const MAX_POLICY_VALUE = 128
+const MAX_POLICY_BYTES = 2 * 1024 * 1024
+
+export function logPolicy(event, fields = {}) {
+  if (!POLICY_EVENTS.has(event)) throw new Error(`logPolicy: unknown event ${event}`)
+  const safe = {}
+  for (const key of POLICY_FIELDS) {
+    const value = fields[key]
+    if (value === null || value === undefined) continue
+    const t = typeof value
+    if (t !== 'string' && t !== 'number' && t !== 'boolean') continue
+    safe[key] = t === 'string' ? value.slice(0, MAX_POLICY_VALUE) : value
+  }
+  console.log(`[policy] ${event} ${JSON.stringify(safe)}`)
+  if (!policyPath) return
+  const record = { t: new Date().toISOString(), event, ...safe }
+  try {
+    try {
+      if (fs.statSync(policyPath).size > MAX_POLICY_BYTES) fs.renameSync(policyPath, `${policyPath}.1`)
+    } catch { /* no file yet */ }
+    fs.appendFileSync(policyPath, JSON.stringify(record) + '\n')
+  } catch { /* a failed write must not fail the decision it records */ }
+}
+
+/**
+ * The decision log, newest first: the current file, then the one rotated
+ * before it. `before` pages: pass the `t` of the last record you got.
+ *
+ * @param {{ limit?: number, before?: string }} [opts]
+ * @returns {{ records: Array<Record<string, unknown>>, more: boolean }}
+ */
+export function readPolicyLog({ limit = 100, before } = {}) {
+  const n = Math.min(Math.max(Number(limit) || 100, 1), 500)
+  if (!policyPath) return { records: [], more: false }
+  const lines = []
+  for (const p of [`${policyPath}.1`, policyPath]) {
+    try { lines.push(...fs.readFileSync(p, 'utf8').split('\n')) } catch { /* absent */ }
+  }
+  const records = []
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i]) continue
+    let r
+    try { r = JSON.parse(lines[i]) } catch { continue }
+    if (typeof r?.t !== 'string' || !POLICY_EVENTS.has(r.event)) continue
+    if (typeof before === 'string' && !(r.t < before)) continue
+    records.push(r)
+    if (records.length > n) break
+  }
+  return { records: records.slice(0, n), more: records.length > n }
 }

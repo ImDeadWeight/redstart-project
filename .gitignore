@@ -87,7 +87,13 @@ desktop.ini
 # by filename pattern — which is how redstart-system-prompt-spec.md, a document
 # 95 code comments cite as authority, ended up matching /redstart-*.md and
 # absent from every clone.
-docs/notes/
+#
+# Exceptions, by name only: plans the user edits away from this machine. The
+# contents are ignored (`/*`, not the directory itself) so that git can still
+# re-include a file; an ignored directory cannot have anything re-included.
+docs/notes/*
+!docs/notes/agent-runtime-plan.md
+!docs/notes/agent-runtime-implementation.md
 
 # Local nest directory for `npm run daemon` — a throwaway headless install.
 .redstart-daemon/

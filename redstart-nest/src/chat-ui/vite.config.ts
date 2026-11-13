@@ -119,7 +119,14 @@ export default defineConfig({
 			'/redstart': SERVER_ORIGIN
 		},
 		fs: {
-			allow: [searchForWorkspaceRoot(process.cwd()), resolve(__dirname, 'tests')]
+			// The repo's shared/ holds the agent loop core (shared/agent-core), which
+			// $lib/agent-core imports by relative path. The workspace root vite finds
+			// is this folder, so without this the dev server refuses to serve it.
+			allow: [
+				searchForWorkspaceRoot(process.cwd()),
+				resolve(__dirname, 'tests'),
+				resolve(__dirname, '../../../shared')
+			]
 		}
 	}
 });

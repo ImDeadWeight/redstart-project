@@ -215,6 +215,23 @@ export function capabilityToolNames() {
   return out
 }
 
+// Tools Nest DEFINES but never runs: the client's own agent loop answers them
+// (agent-runtime plan D4). ask_user needs a person, so only a host with one can
+// answer it — chat-ui shows a card, the agent bench answers from the task file.
+// update_plan is conversation state the same loop keeps and sends back.
+//
+// They belong to no capability (like search_tools): there is nothing for an
+// admin to switch on, only a name to ban. They are served by
+// interaction-tools.mjs, and only on an MCP session whose client declared it can
+// answer them at initialize — so Yellowscript, Twig or a third-party MCP client
+// is never offered a tool that can only fail. They are always pinned through
+// retrieval (tool-filter.mjs), since a dropped ask_user would read to the model
+// as "you may not ask".
+//
+// The namespacing contract applies to them like any Nest tool
+// (scripts/test-tool-namespacing.mjs).
+export const HOST_RESOLVED_TOOL_NAMES = ['ask_user', 'update_plan']
+
 // Back-compat alias for call sites that only need the built-ins (the file-system
 // policy set in mcp-server.mjs). Plugins are deliberately absent here.
 export const CAPABILITY_TOOL_NAMES = BUILTIN_CAPABILITY_TOOL_NAMES
@@ -339,6 +356,12 @@ export const TOOL_CLASSES = {
   // policy gate has already filtered, touches nothing, and leaves the machine
   // it runs on alone — 'read' is the honest class, stated rather than defaulted.
   search_tools: 'read',
+  // Host-resolved (HOST_RESOLVED_TOOL_NAMES below). Nothing runs on this
+  // machine: the client answers them in its own loop. 'read' is the honest
+  // class, stated rather than defaulted, as for search_tools.
+  ask_user: 'read',
+  // Writes only the conversation's own plan, which the client stores.
+  update_plan: 'read',
   // Web (egress governed by the whitelist/SSRF guard, tagged network here)
   web_fetch: 'network',
   web_search: 'network',
@@ -430,6 +453,61 @@ export function classifyTool(name) {
   // collision, and this is the belt to that braces), but 'read' is the wrong
   // answer for a name we do in fact know the class of.
   return TOOL_CLASSES[name] ?? CLIENT_APP_TOOL_CLASSES[name] ?? 'read'
+}
+
+// ---------------------------------------------------------------------------
+// Approval rule — when a call needs the user's decision (agent-runtime plan
+// D10, Phase 2).
+//
+//   none    no decision: reads, network fetches, the host-resolved tools
+//   prompt  a decision unless the account holds a standing grant for the tool
+//   always  a decision on every call; no standing grant can cover it
+//
+// Derived from the class, not declared beside it, so the two cannot disagree:
+// a tool reclassified destructive becomes 'always' with no second edit, and a
+// plugin tool an admin promotes from destructive to write becomes 'prompt'.
+// APPROVAL_OVERRIDES is for the day a tool needs a rule its class does not
+// give (none yet). An override may only TIGHTEN, so a typo there cannot
+// loosen a destructive tool.
+//
+// Who enforces: isApprovalEnforced() (D11). In Phase 2 that is every 'always'
+// tool, so the server refuses an unapproved delete from any client, chat-ui
+// or an API key (decided 2026-11-12). 'prompt' tools keep the client's card;
+// only their standing grants live on the server. ENFORCED_TOOLS names tools
+// enforced from the start whatever their rule: run_command first (Phase 4).
+// ---------------------------------------------------------------------------
+
+export const APPROVAL_RULES = /** @type {const} */ (['none', 'prompt', 'always'])
+const RULE_STRICTNESS = { none: 0, prompt: 1, always: 2 }
+
+/** @type {Record<string, 'prompt' | 'always'>} */
+export const APPROVAL_OVERRIDES = {}
+
+/** @type {Set<string>} */
+export const ENFORCED_TOOLS = new Set()
+
+/** @param {string} cls */
+function ruleForClass(cls) {
+  if (cls === 'destructive') return 'always'
+  if (cls === 'write') return 'prompt'
+  return 'none'
+}
+
+/**
+ * @param {string} name
+ * @returns {'none' | 'prompt' | 'always'}
+ */
+export function approvalRule(name) {
+  if (HOST_RESOLVED_TOOL_NAMES.includes(name)) return 'none'
+  const fromClass = ruleForClass(classifyTool(name))
+  const override = APPROVAL_OVERRIDES[name]
+  return override && RULE_STRICTNESS[override] > RULE_STRICTNESS[fromClass] ? override : fromClass
+}
+
+/** Does the server refuse this tool's calls without an approval or grant? */
+export function isApprovalEnforced(name) {
+  if (HOST_RESOLVED_TOOL_NAMES.includes(name)) return false
+  return approvalRule(name) === 'always' || ENFORCED_TOOLS.has(name)
 }
 
 // ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ name = "redstart-twig-shell"
 version = "0.1.0"
 description = "Redstart Twig desktop shell: the window, the chat UI's origin, and twigd's lifetime"
 edition = "2021"
+license = "AGPL-3.0-only"
 publish = false
 
 [build-dependencies]

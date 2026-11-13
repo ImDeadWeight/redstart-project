@@ -1,0 +1,22 @@
+{
+  "id": "docs-search",
+  "group": "documents",
+  "prompt": "Search my documents: what is the liability cap in the agreement with vendor reference KX-4471-Q?",
+  "fixtures": [
+    {
+      "path": "vendor-alder.md",
+      "from": "fixtures/vendor-alder.md"
+    },
+    {
+      "path": "vendor-kestrel.md",
+      "from": "fixtures/vendor-kestrel.md"
+    },
+    {
+      "path": "vendor-osprey.md",
+      "from": "fixtures/vendor-osprey.md"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/documents.mjs#liabilityCap",
+  "notes": "search_documents covers the whole account, so the other two vendors' caps are the distractors."
+}

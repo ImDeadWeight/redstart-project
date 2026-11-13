@@ -57,7 +57,7 @@ export function toolDefs(cfg) {
     inputSchema: {
       type: 'object',
       properties: {
-        code: { type: 'string', description: 'Python source. The value of the last line, if it is an expression, is returned.' },
+        code: { type: 'string', description: 'Python source. The value of the last line is returned if it is an expression at the top level (not inside try, if, for or with). Otherwise print() what you need.' },
         timeout_s: { type: 'number', description: `Wall-clock limit in seconds (default ${DEFAULT_TIMEOUT_S}, max ${MAX_TIMEOUT_S}). The kernel is restarted if it is exceeded.` },
       },
       required: ['code'],
@@ -73,9 +73,117 @@ function clip(s, cap) {
 function kb(n) { return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB` }
 
 /**
+ * The hint for a missing file whose path started with the workspace's own
+ * documents-relative folder, or null.
+ *
+ * list_documents and read_document name a chat's files as
+ * `chats/<conversationId>/<name>`, but run_python already runs inside that
+ * folder, so the same path is not found there. Qwen3-4B copied the prefix
+ * into run_python three times in one run and spent all of docs-rename's turns
+ * on it (agent bench, 2026-11-11), because the error never said why.
+ *
+ * @param {string} errorText the Python traceback
+ * @param {string | undefined} code the code that ran
+ * @param {string | undefined} wsRel e.g. "chats/abc"
+ */
+export function workspacePrefixHint(errorText, code, wsRel) {
+  if (!wsRel || !/FileNotFoundError|No such file or directory/.test(errorText ?? '')) return null
+  const prefix = `${wsRel}/`
+  if (!(code ?? '').includes(prefix) && !(errorText ?? '').includes(prefix)) return null
+  const named = new RegExp(`${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^'"\\s]+)`).exec(`${errorText}\n${code}`)
+  const example = named ? named[1] : '<name>'
+  return `(run_python already runs inside ${wsRel}/, so open a file there by its bare name: "${example}", not "${prefix}${example}".)`
+}
+
+// What the model reads when its code produced nothing at all. It has to say
+// what to do next. The first wording only described the state ("printed
+// nothing, and its last line was not an expression"); in the agent bench of
+// 2026-11-11 Qwen3-4B got it seven times in one task (multi-recover) and
+// rewrote the same code each time. Its value was the last line of a `try:`
+// block, which looks like "the last line" and is not a top-level expression.
+export const NO_OUTPUT_TEXT =
+  '(No output. The code ran without an error but showed nothing. Only an expression on the last line, at the top level, is returned: ' +
+  'a value inside try, if, for, with or a function is not. Run it again with print(...) around the value you need.)'
+
+/**
+ * The hint for code whose line breaks arrived as the two characters "\n",
+ * or null.
+ *
+ * Qwen3-4B sometimes escapes its JSON arguments twice, so the code reaches
+ * Python as one line with literal backslash-n in it. Python's error, "unexpected
+ * character after line continuation character", names the symptom and not
+ * the cause; in the agent bench of 2026-11-11 (results T20-08-45, p4-fix-test)
+ * the 4B sent the same shape eleven times and every call failed.
+ *
+ * Only when that SyntaxError is what happened AND the code has no real line
+ * break but does have "\n": a one-liner using "\n" inside a string is fine
+ * and never gets this error.
+ *
+ * @param {string} errorText @param {string | undefined} code
+ */
+export function escapedNewlineHint(errorText, code) {
+  if (!/unexpected character after line continuation character/.test(errorText ?? '')) return null
+  const src = code ?? ''
+  if (src.includes('\n') || !src.includes('\\n')) return null
+  return '(The code arrived as one line containing the two characters \\n where the line breaks should be: the argument was escaped twice. ' +
+    'Send the code with real line breaks, written once in the JSON as \\n, not \\\\n.)'
+}
+
+// Python statements that are a bare word and have no value to show.
+const PY_BARE_KEYWORDS = new Set(['pass', 'break', 'continue', 'return', 'raise', 'None', 'True', 'False', 'Ellipsis'])
+
+/**
+ * The hint for values the code computed on a line of their own, not the
+ * last, which run_python therefore never showed; or null.
+ *
+ * Only the last line's value comes back. Code that ends in two values on two
+ * lines gets the second one only. In the agent bench of 2026-11-11 (results
+ * T20-08-45, compute-dates) the 4B put `days_difference` on its own line
+ * mid-script, got back only the weekday, and then stated a day count it had
+ * never seen (1031; the answer is 1000).
+ *
+ * Looks only at top-level lines (no indentation) that are a bare name or
+ * attribute, outside brackets and triple-quoted strings. A heuristic over
+ * the source, not a parse: it can miss a case, and says nothing then.
+ *
+ * @param {string | undefined} code
+ * @returns {string | null}
+ */
+export function unshownValuesHint(code) {
+  const lines = (code ?? '').split('\n')
+  let lastIdx = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].trim()
+    if (t && !t.startsWith('#')) { lastIdx = i; break }
+  }
+  const unshown = []
+  let depth = 0
+  let inTriple = false
+  for (let i = 0; i < lastIdx; i++) {
+    const line = lines[i]
+    const triples = (line.match(/"""|'''/g) ?? []).length
+    const wasInTriple = inTriple
+    if (triples % 2 === 1) inTriple = !inTriple
+    if (wasInTriple || triples > 0) continue
+    const bare = line.replace(/(['"])(?:\\.|(?!\1).)*\1/g, '""').replace(/#.*/, '')
+    const startDepth = depth
+    for (const ch of bare) {
+      if ('([{'.includes(ch)) depth++
+      else if (')]}'.includes(ch)) depth = Math.max(0, depth - 1)
+    }
+    if (startDepth > 0 || /^\s/.test(line)) continue
+    const t = bare.trim()
+    if (/^[A-Za-z_][\w.]*$/.test(t) && !PY_BARE_KEYWORDS.has(t)) unshown.push({ line: i + 1, name: t })
+  }
+  if (unshown.length === 0) return null
+  const named = unshown.slice(0, 3).map((u) => `${u.name} (line ${u.line})`).join(', ')
+  return `(Not shown: ${named}. A value on a line of its own is returned only when it is the last line. print() each value you need.)`
+}
+
+/**
  * Word a child reply for the model. Pure; exported for the suite.
  */
-export function formatResult({ reply, error, timedOut, fresh, ranBefore, files, wsRel, capWarning }) {
+export function formatResult({ reply, error, timedOut, fresh, ranBefore, files, wsRel, capWarning, code }) {
   const parts = []
   if (fresh && ranBefore) parts.push('[A new Python kernel was started, so variables from earlier runs are gone. Files in the workspace are still there.]')
   if (timedOut) parts.push(`Error: the code ${error}. The kernel was stopped and will restart on the next call.`)
@@ -84,7 +192,14 @@ export function formatResult({ reply, error, timedOut, fresh, ranBefore, files, 
     const stdout = clip(reply.stdout?.replace(/\n$/, ''), OUTPUT_CAP)
     if (stdout) parts.push(stdout)
     if (reply.result !== null && reply.result !== undefined) parts.push(`Result: ${reply.result}`)
-    if (reply.error) parts.push(clip(reply.error.trimEnd(), 4000))
+    if (reply.error) {
+      parts.push(clip(reply.error.trimEnd(), 4000))
+      const hint = workspacePrefixHint(reply.error, code, wsRel) ?? escapedNewlineHint(reply.error, code)
+      if (hint) parts.push(hint)
+    } else {
+      const unshown = unshownValuesHint(code)
+      if (unshown) parts.push(unshown)
+    }
     const stderr = clip(reply.stderr?.trim(), 2000)
     if (stderr) parts.push(`stderr:\n${stderr}`)
   }
@@ -93,7 +208,7 @@ export function formatResult({ reply, error, timedOut, fresh, ranBefore, files, 
     parts.push(`(These are in this conversation's workspace, ${wsRel}/. read_document opens them as "${wsRel}/<name>".)`)
   }
   if (capWarning) parts.push(capWarning)
-  if (!parts.length) parts.push('(no output: the code ran, printed nothing, and its last line was not an expression)')
+  if (!parts.length) parts.push(NO_OUTPUT_TEXT)
   return parts.join('\n')
 }
 
@@ -139,7 +254,7 @@ export async function callTool(name, args, cfg, ctx) {
   const files = changedFiles(ws, startedAt)
   const after = checkCaps(pyCfg.documentsRoot, account, conversationId, caps)
   const wsRel = workspaceRelative(conversationId)
-  const text = formatResult({ ...outcome, ranBefore, files, wsRel, capWarning: after.ok ? null : `Warning: ${after.reason}` })
+  const text = formatResult({ ...outcome, ranBefore, files, wsRel, code, capWarning: after.ok ? null : `Warning: ${after.reason}` })
 
   // Every changed file, figures included, as a resource link (Phase 2): the
   // chat UI draws images inline, CSVs as a table and the rest as a download,

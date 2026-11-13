@@ -1,6 +1,7 @@
 import {
 	MemoryService,
 	type AutoMemoryMode,
+	type Memory,
 	type MemorySuggestion,
 	type ReviewedMemory
 } from '$lib/services/memory.service';
@@ -8,8 +9,9 @@ import {
 /**
  * Automatic memory, client side (projects-plan Phase 3).
  *
- * Nest does the review (it reads only the user's own messages, and decides
- * what to propose); this store decides WHEN to ask, and holds what came back
+ * Nest does the review (it reads the chat's branch, never a tool result, and
+ * every proposal must quote the user: agent-runtime D34, D36) and decides
+ * what to propose; this store decides WHEN to ask, and holds what came back
  * so the chat can show it:
  *
  *  - a chat is reviewed once it has been quiet for QUIET_MS after a reply,
@@ -155,17 +157,18 @@ class MemoryReviewStore {
 	}
 
 	/**
-	 * Undo a memory the review saved. An addition is deleted; an update gets
-	 * its previous text back, since the memory existed before the review.
+	 * Undo a memory the review saved (or a suggestion the user accepted):
+	 *  - an addition is deleted;
+	 *  - an update gets its text, kind and why back, and a merge also puts
+	 *    back every memory it folded in (D42: nothing in Phase 8 deletes a
+	 *    memory without the user being able to get it back);
+	 *  - a forget puts the memory back.
+	 * A memory put back is saved anew, so it gets a new id, and a state one
+	 * today's date (the routes have no restore); its text, kind and why are
+	 * kept.
 	 */
 	async undo(entry: { conversationId: string; item: ReviewedMemory }): Promise<void> {
-		const { item } = entry;
-		const projectId = item.projectId ?? null;
-		if (item.op === 'update' && item.previousText) {
-			await MemoryService.update(item.memory.id, item.previousText, projectId);
-		} else {
-			await MemoryService.remove(item.memory.id, projectId);
-		}
+		await undoReviewed(entry.item, entry.conversationId);
 		this.saved = this.saved.filter((s) => s !== entry);
 	}
 
@@ -179,6 +182,30 @@ class MemoryReviewStore {
 		this.timers.clear();
 		this.suggestions = [];
 	}
+}
+
+/** Put a memory back as it was (Undo of a forget or a merge). */
+function restore(m: Memory, conversationId: string | null, projectId: string | null) {
+	return MemoryService.create(m.text, conversationId, projectId, { kind: m.kind, why: m.why ?? undefined });
+}
+
+/** The calls that undo one reviewed memory; exported for the unit test. */
+export async function undoReviewed(item: ReviewedMemory, conversationId: string | null): Promise<void> {
+	const projectId = item.projectId ?? null;
+	if (item.op === 'forget') {
+		await restore(item.memory, conversationId, projectId);
+		return;
+	}
+	if (item.op === 'update' && item.previousText) {
+		await MemoryService.update(item.memory.id, item.previousText, projectId, {
+			...(item.previousKind ? { kind: item.previousKind } : {}),
+			// null clears a why the update added; undefined (an older Nest) leaves it.
+			...(item.previousWhy !== undefined ? { why: item.previousWhy } : {})
+		});
+		for (const m of item.removed ?? []) await restore(m, conversationId, projectId);
+		return;
+	}
+	await MemoryService.remove(item.memory.id, projectId);
 }
 
 export const memoryReviewStore = new MemoryReviewStore();

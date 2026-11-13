@@ -14,6 +14,14 @@ import {
   selectTools,
   toolName,
 } from './tool-retrieval.mjs'
+import { HOST_RESOLVED_TOOL_NAMES } from './tools-definitions.mjs'
+import { TOOL_NAMES as MEMORY_TOOL_NAMES } from './memory-tool.mjs'
+
+// Tools retrieval keeps together (tool-retrieval.mjs selectTools, families).
+// Memory: saving without forgetting is the half that does damage, since a
+// model offered only memory_save says it has no way to forget, then says it
+// forgot (2026-11-12).
+export const TOOL_FAMILIES = [MEMORY_TOOL_NAMES]
 
 // =============================================================================
 // Redstart Nest — applying tool retrieval to a request
@@ -123,12 +131,18 @@ export async function filterRequestTools({
 
     const { selected, dropped, reason } = selectTools({
       scored,
-      pins: pinsFromMessages(messages),
+      // Host-resolved tools are always kept (tools-definitions.mjs,
+      // HOST_RESOLVED_TOOL_NAMES): asking scores against no task in
+      // particular, and a dropped ask_user reads as "you may not ask". A pin
+      // only keeps a tool the request carries, so this adds nothing a client
+      // did not send.
+      pins: new Set([...pinsFromMessages(messages), ...HOST_RESOLVED_TOOL_NAMES]),
       previous: memory.get(key),
       budgetTokens,
       floor: config.floor,
       relativeFloor: config.relativeFloor,
       margin: config.margin,
+      families: TOOL_FAMILIES,
     })
 
     // Nothing survived. That is a scorer that has gone wrong, not a request

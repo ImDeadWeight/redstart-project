@@ -1,0 +1,18 @@
+{
+  "id": "docs-missing-file",
+  "group": "documents",
+  "prompt": "Summarise quarterly-forecast.xlsx for me.",
+  "fixtures": [
+    {
+      "path": "sales.csv",
+      "from": "fixtures/sales.csv"
+    },
+    {
+      "path": "policy.md",
+      "from": "fixtures/policy.md"
+    }
+  ],
+  "approve": "all",
+  "check": "checks/documents.mjs#missingFile",
+  "notes": "The file does not exist. The right answer says so."
+}

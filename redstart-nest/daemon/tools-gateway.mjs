@@ -29,6 +29,8 @@ import { getPromptBlocks } from './prompt-storage.mjs'
 import { handleAuthRoute } from './gateway/auth-routes.mjs'
 import { isConversationRoute, handleConversationRoute } from './gateway/conversation-routes.mjs'
 import { isMemoryRoute, handleMemoryRoute } from './gateway/memory-routes.mjs'
+import { isApprovalRoute, handleApprovalRoute } from './gateway/approval-routes.mjs'
+import { isTaskRoute, handleTaskRoute } from './gateway/task-routes.mjs'
 import { isWorkflowRoute, handleWorkflowRoute } from './gateway/workflow-routes.mjs'
 import { isProjectRoute, handleProjectRoute } from './gateway/project-routes.mjs'
 import { getProject } from './projects-storage.mjs'
@@ -64,13 +66,24 @@ function resolveProject(account, claimed) {
   return project ? { id: project.id, name: project.name, instructions: project.instructions } : null
 }
 
-// The latest user message's text, which picks the most relevant memories for
-// this turn (memory-storage selectForPrompt). Content may be a string or an
+// The FIRST user message's text, which picks the most relevant memories for
+// the chat (memory-storage selectForPrompt). Content may be a string or an
 // OpenAI parts array; only text parts count, and only the first 2000 chars.
-export function latestUserText(messages) {
-  const last = [...(messages || [])].reverse().find((m) => m?.role === 'user')
-  if (!last) return ''
-  const c = last.content
+//
+// The first, not the latest (agent-runtime D40): the memory block sits in the
+// system prompt, ahead of the whole chat, and picking by the latest message
+// changed it on most turns. measure-memory-cache.mjs on Ornith 9B, an 8k-token
+// chat: 0 tokens reused from the cache on every turn and 5.5 s of prefill each
+// (a hybrid model reuses no partial prefix at all), against ~7700 reused and
+// 0.2 s with the selection pinned. The request carries the whole chat, so its
+// first user message is the same on every turn: the block now changes only
+// when a memory does, with no state kept here. What a later question needs
+// and the first did not pull in is one memory_search away (the block says so
+// when memories are left out).
+export function firstUserText(messages) {
+  const first = (messages || []).find((m) => m?.role === 'user')
+  if (!first) return ''
+  const c = first.content
   const text = typeof c === 'string'
     ? c
     : Array.isArray(c) ? c.filter((p) => p?.type === 'text' && typeof p.text === 'string').map((p) => p.text).join(' ') : ''
@@ -127,8 +140,8 @@ function toolNamesIn(parsed) {
 // client text lands after the precedence clause and is thereby subordinated to
 // admin policy (spec §4). Phase 7 stops accepting client system prose
 // altogether; until then this ordering is what makes the floor hold.
-function injectSystemContext(messages, config, facts) {
-  const context = buildSystemContext(config, facts, latestUserText(messages))
+export function injectSystemContext(messages, config, facts) {
+  const context = buildSystemContext(config, facts, firstUserText(messages))
   const sysIdx = messages.findIndex(m => m.role === 'system')
   if (sysIdx >= 0) {
     messages[sysIdx] = { ...messages[sysIdx], content: `${context}\n\n${messages[sysIdx].content}` }
@@ -202,6 +215,151 @@ function enforceToolAllowList(parsed, config) {
   }
 
   return parsed
+}
+
+// ---------------------------------------------------------------------------
+// Everything the gateway does to a completions body before it is forwarded:
+// the redstart_* fields, bans, tool retrieval, the composed prompt, and the
+// recorded wire cost (agent-runtime D26).
+//
+// Lifted out of the request handler, unchanged, so the daemon's own task loop
+// (Phase 3) applies exactly what the chat page gets: one path, not a second
+// copy that can drift. Nothing here touches the HTTP request or response, so
+// the caller supplies what the handler used to read off them.
+//
+// Mutates and returns `parsed` (the handler's old behaviour), and returns the
+// numbers it recorded as `wire`.
+//
+// @param {any} parsed the request body, already JSON-parsed
+// @param {{ account: any, surface: any, effectiveConfig: any, accountId: any, timeZone: string | null }} facts
+//   account and surface come from the credential, never from the body;
+//   accountId keys retrieval's cache (a device id with auth off).
+// @returns {Promise<{ parsed: any, wire: object }>}
+// ---------------------------------------------------------------------------
+export async function prepareCompletion(parsed, { account, surface, effectiveConfig, accountId, timeZone }) {
+  // Redstart-specific request field: a MODE ID, never mode prose. The
+  // composer validates it against MODE_IDS and drops anything unknown,
+  // so a client cannot inject an instruction block by naming a mode
+  // that does not exist. Deleted below before forwarding — llama-server
+  // has no such parameter and must not see it.
+  const requestedMode = parsed.redstart_mode
+  delete parsed.redstart_mode
+
+  // Redstart-specific request field: a PROJECT ID, never project text
+  // (projects-plan D10). Resolved against the caller's own projects, so
+  // a foreign or unknown id composes nothing — the same rule as modes.
+  // Deleted before forwarding.
+  const project = resolveProject(account ?? null, parsed.redstart_project)
+  delete parsed.redstart_project
+
+  // Redstart-specific request field: `redstart_retrieval: false` asks the
+  // gateway not to narrow THIS request's tools. For a connector that sends
+  // its own small, curated tool list (Dungeon Books sends ~25 notes tools)
+  // and has no search_tools to recover a dropped one: a selection keyed on
+  // the opening message can lose the one tool the task needs for the whole
+  // conversation, and the model then tells the user it does not exist.
+  // Safe to honour from any client because retrieval is an optimization,
+  // never a boundary — opting out can only return the post-BAN list, so a
+  // banned tool stays banned. Only the literal `false` opts out; consumed
+  // either way so llama-server never sees it.
+  const retrievalOptOut = parsed.redstart_retrieval === false
+  delete parsed.redstart_retrieval
+
+  // BANS FIRST, PROMPT SECOND — and every value the prompt is derived
+  // from is read AFTER this line. The capability claims must describe
+  // what the model actually received this turn, which is the payload the
+  // ban filter left behind, not the one the client sent. Composing first
+  // broke that in two ways: an org-wide ban on a client app
+  // (disabledToolIds naming 'twig') still produced the locality block
+  // telling the model it could reach the user's own files, having taken
+  // the names from the pre-ban array; and a ban that stripped every tool
+  // left `enforceToolAllowList` deleting `parsed.tools` entirely while
+  // hasTools was still true, claiming the whole capability section
+  // against a payload carrying no tools at all. Both are the
+  // substantiation rule in system-prompt.mjs — a claim is made only when
+  // the request substantiates it — and the rule can only hold if the
+  // request has already been narrowed.
+  const toolsOffered = Array.isArray(parsed.tools) ? parsed.tools.length : 0
+
+  parsed = enforceToolAllowList(parsed, effectiveConfig)
+
+  // RETRIEVAL THIRD, and strictly between the two. Bans are a boundary;
+  // this is a selection over what survives one, so it can only ever
+  // shrink the post-ban list — and because it lands before the prompt is
+  // composed, the capability claims still describe what the model
+  // actually received. Off by default, and a failure of any kind returns
+  // the array by identity, so `parsed.tools` is unchanged.
+  //
+  // The budget is measured on the WIRE, not from the Tools tab's
+  // estimate: that estimator walks the providers Nest would serve over
+  // MCP, while parsed.tools is composed client-side and is a different
+  // set. Reserving the messages plus a pins-only prompt gives a LOWER
+  // bound on the non-tool cost, which is what breaks the circularity of
+  // budgeting for a prompt that does not exist yet.
+  const toolsAfterBans = Array.isArray(parsed.tools) ? parsed.tools.length : 0
+  if (!retrievalOptOut && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
+    const pinsOnlyPrompt = injectSystemContext(
+      [...(parsed.messages || [])], effectiveConfig,
+      {
+        hasTools: true,
+        account,
+        mode: requestedMode, project,
+        surface,
+        timeZone,
+        clientToolNames: [],
+        toolNames: [],
+        toolsFiltered: false,
+      },
+    )
+    parsed.tools = await filterRequestTools({
+      tools: parsed.tools,
+      messages: parsed.messages || [],
+      accountId,
+      settings: effectiveConfig.toolRetrieval,
+      ctxSize: effectiveConfig.ctxSize,
+      reservedTokens: estimateMessagesTokens(pinsOnlyPrompt),
+    })
+  }
+
+  const requestHasTools = Array.isArray(parsed.tools) && parsed.tools.length > 0
+
+  // Did retrieval actually take anything away? Counted rather than
+  // inferred from the setting, because filterRequestTools fails open and
+  // because selectTools returns a fresh array even when it kept
+  // everything — an identity check would report a subset that is not one.
+  const toolsSent = Array.isArray(parsed.tools) ? parsed.tools.length : 0
+  const toolsFiltered = toolsAfterBans > toolsSent
+
+  parsed.messages = injectSystemContext([...(parsed.messages || [])], effectiveConfig, {
+    hasTools: requestHasTools,
+    account,
+    mode: requestedMode, project,
+    surface,
+    timeZone,
+    clientToolNames: clientToolNamesIn(parsed),
+    // Read here, after enforceToolAllowList and filterRequestTools have
+    // both had their say, so the capability claims describe the payload
+    // the model is actually about to receive.
+    toolNames: toolNamesIn(parsed),
+    toolsFiltered,
+  })
+
+  // What was really forwarded, recorded after every rewrite this function
+  // performs. This is the only place that sees all three numbers at once
+  // — what the client offered, what survived bans and retrieval, and the
+  // prompt the gateway added — and the Tools tab's estimate has never
+  // seen any of them.
+  const wire = {
+    toolsOffered,
+    toolsAfterBans,
+    tools: parsed.tools,
+    messages: parsed.messages,
+    ctxSize: effectiveConfig.ctxSize,
+    filtered: !retrievalOptOut && toolsAfterBans > 0 && effectiveConfig.toolRetrieval?.enabled === true,
+  }
+  recordWireCost(wire)
+
+  return { parsed, wire }
 }
 
 // ---------------------------------------------------------------------------
@@ -325,13 +483,42 @@ function forwardModified(res, internalPort, parsed) {
   })
 
   proxyReq.on('error', err => {
+    if (res.destroyed) return // the client left; cancelUpstreamOnHangUp destroyed us
     if (!res.headersSent) {
       res.writeHead(502, { 'Content-Type': 'text/plain' })
       res.end(`Gateway error: ${err.message}`)
     }
   })
+  cancelUpstreamOnHangUp(res, proxyReq)
   proxyReq.write(payload)
   proxyReq.end()
+}
+
+/**
+ * When the client goes away before the reply is finished, close our own
+ * request to llama-server too.
+ *
+ * llama-server cancels a task only when ITS connection closes. Without this,
+ * a client that disconnected (Stop in the chat UI, a closed tab, a script
+ * interrupted, the agent bench's time limit) stopped receiving the reply, but
+ * the generation behind it ran on to the end or until the context filled.
+ * Found by the agent bench, 2026-11-11: two stopped runs left a small model
+ * looping for 8 minutes (12k and 10k tokens). That filled the shared KV cache
+ * ("failed to find a memory slot"), slowed every other request about
+ * threefold, and finally failed all live requests with "Context size has
+ * been exceeded".
+ *
+ * `close` after `finish` is the normal end of a reply and leaves the request
+ * alone: by then the upstream response has been fully piped.
+ *
+ * @param {import('http').ServerResponse} res
+ * @param {import('http').ClientRequest} proxyReq
+ */
+export function cancelUpstreamOnHangUp(res, proxyReq) {
+  res.on('close', () => {
+    if (res.writableFinished) return
+    proxyReq.destroy()
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -356,7 +543,11 @@ function passthrough(req, res, internalPort) {
   })
 
   req.pipe(proxyReq)
+  // The same leak as completions: llama-server's own /completion and
+  // /v1/completions stream through here.
+  cancelUpstreamOnHangUp(res, proxyReq)
   proxyReq.on('error', err => {
+    if (res.destroyed) return
     if (!res.headersSent) {
       res.writeHead(502, { 'Content-Type': 'text/plain' })
       res.end(`Gateway error: ${err.message}`)
@@ -421,7 +612,8 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
           // every /conversations call; without it here, browsers block those
           // cross-origin requests at preflight. X-Redstart-Timezone rides on
           // every completions call (the user's local date, session-time.mjs).
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Redstart-Device-Id, X-Redstart-Timezone',
+          // Last-Event-ID: a task's event stream resumes from it (gateway/task-routes.mjs).
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Redstart-Device-Id, X-Redstart-Timezone, Last-Event-ID',
           'Access-Control-Max-Age': '86400',
         })
         res.end()
@@ -460,7 +652,8 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       // unauthenticated — acceptable only for the deliberate auth-off
       // posture; with auth on, every request already carries a real account.
       const accountId = authResult.account?.id || req.headers['x-redstart-device-id']
-      if (isConversationRoute(urlPath) && !accountId) {
+      // Tasks run on conversations, so they need the same storage scope.
+      if ((isConversationRoute(urlPath) || isTaskRoute(urlPath)) && !accountId) {
         res.writeHead(401, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
         res.end(JSON.stringify({ error: { message: 'Unauthorized — no account or device ID', type: 'auth_error' } }))
         return
@@ -497,6 +690,17 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       // _local scope, the same posture as files.
       // Creating one (/remember) is checked against the narrowed config.
       if (isMemoryRoute(urlPath) && await handleMemoryRoute(req, res, urlPath, authResult.account ?? null, { config: effectiveConfig })) return
+      // Approvals and standing grants (agent-runtime Phase 2). Same account
+      // rule as memories: the caller's own scope, _local with auth off.
+      if (isApprovalRoute(urlPath) && await handleApprovalRoute(req, res, urlPath, authResult.account ?? null)) return
+      // Background tasks (agent-runtime Phase 3). The conversations scope as
+      // above; the surface from the credential, for the runner's per-turn check.
+      if (isTaskRoute(urlPath) && await handleTaskRoute(req, res, urlPath, {
+        account: authResult.account ?? null,
+        storeAccountId: accountId,
+        surface: authResult.surface ?? null,
+        timeZone: typeof req.headers['x-redstart-timezone'] === 'string' ? req.headers['x-redstart-timezone'] : null,
+      })) return
       // Workflows (personal + org). Same account rule as memories; the org
       // write permission is checked inside the route module.
       if (isWorkflowRoute(urlPath) && await handleWorkflowRoute(req, res, urlPath, authResult.account ?? null)) return
@@ -570,34 +774,6 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
           return
         }
 
-        // Redstart-specific request field: a MODE ID, never mode prose. The
-        // composer validates it against MODE_IDS and drops anything unknown,
-        // so a client cannot inject an instruction block by naming a mode
-        // that does not exist. Deleted below before forwarding — llama-server
-        // has no such parameter and must not see it.
-        const requestedMode = parsed.redstart_mode
-        delete parsed.redstart_mode
-
-        // Redstart-specific request field: a PROJECT ID, never project text
-        // (projects-plan D10). Resolved against the caller's own projects, so
-        // a foreign or unknown id composes nothing — the same rule as modes.
-        // Deleted before forwarding.
-        const project = resolveProject(authResult.account ?? null, parsed.redstart_project)
-        delete parsed.redstart_project
-
-        // Redstart-specific request field: `redstart_retrieval: false` asks the
-        // gateway not to narrow THIS request's tools. For a connector that sends
-        // its own small, curated tool list (Dungeon Books sends ~25 notes tools)
-        // and has no search_tools to recover a dropped one: a selection keyed on
-        // the opening message can lose the one tool the task needs for the whole
-        // conversation, and the model then tells the user it does not exist.
-        // Safe to honour from any client because retrieval is an optimization,
-        // never a boundary — opting out can only return the post-BAN list, so a
-        // banned tool stays banned. Only the literal `false` opts out; consumed
-        // either way so llama-server never sees it.
-        const retrievalOptOut = parsed.redstart_retrieval === false
-        delete parsed.redstart_retrieval
-
         // The browser's IANA zone, so the prompt states the USER'S date rather
         // than the UTC one. A header, not a body field, so every completions
         // caller in chat-ui (chat, titles, compaction) sends it from one place.
@@ -607,103 +783,18 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
           ? req.headers['x-redstart-timezone']
           : null
 
-        // BANS FIRST, PROMPT SECOND — and every value the prompt is derived
-        // from is read AFTER this line. The capability claims must describe
-        // what the model actually received this turn, which is the payload the
-        // ban filter left behind, not the one the client sent. Composing first
-        // broke that in two ways: an org-wide ban on a client app
-        // (disabledToolIds naming 'twig') still produced the locality block
-        // telling the model it could reach the user's own files, having taken
-        // the names from the pre-ban array; and a ban that stripped every tool
-        // left `enforceToolAllowList` deleting `parsed.tools` entirely while
-        // hasTools was still true, claiming the whole capability section
-        // against a payload carrying no tools at all. Both are the
-        // substantiation rule in system-prompt.mjs — a claim is made only when
-        // the request substantiates it — and the rule can only hold if the
-        // request has already been narrowed.
-        const toolsOffered = Array.isArray(parsed.tools) ? parsed.tools.length : 0
-
-        parsed = enforceToolAllowList(parsed, effectiveConfig)
-
-        // RETRIEVAL THIRD, and strictly between the two. Bans are a boundary;
-        // this is a selection over what survives one, so it can only ever
-        // shrink the post-ban list — and because it lands before the prompt is
-        // composed, the capability claims still describe what the model
-        // actually received. Off by default, and a failure of any kind returns
-        // the array by identity, so `parsed.tools` is unchanged.
-        //
-        // The budget is measured on the WIRE, not from the Tools tab's
-        // estimate: that estimator walks the providers Nest would serve over
-        // MCP, while parsed.tools is composed client-side and is a different
-        // set. Reserving the messages plus a pins-only prompt gives a LOWER
-        // bound on the non-tool cost, which is what breaks the circularity of
-        // budgeting for a prompt that does not exist yet.
-        const toolsAfterBans = Array.isArray(parsed.tools) ? parsed.tools.length : 0
-        if (!retrievalOptOut && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
-          const pinsOnlyPrompt = injectSystemContext(
-            [...(parsed.messages || [])], effectiveConfig,
-            {
-              hasTools: true,
-              account: authResult.account,
-              mode: requestedMode, project,
-              surface: authResult.surface,
-              timeZone,
-              clientToolNames: [],
-              toolNames: [],
-              toolsFiltered: false,
-            },
-          )
-          parsed.tools = await filterRequestTools({
-            tools: parsed.tools,
-            messages: parsed.messages || [],
-            accountId,
-            settings: effectiveConfig.toolRetrieval,
-            ctxSize: effectiveConfig.ctxSize,
-            reservedTokens: estimateMessagesTokens(pinsOnlyPrompt),
-          })
-        }
-
-        const requestHasTools = Array.isArray(parsed.tools) && parsed.tools.length > 0
-
-        // Did retrieval actually take anything away? Counted rather than
-        // inferred from the setting, because filterRequestTools fails open and
-        // because selectTools returns a fresh array even when it kept
-        // everything — an identity check would report a subset that is not one.
-        const toolsSent = Array.isArray(parsed.tools) ? parsed.tools.length : 0
-        const toolsFiltered = toolsAfterBans > toolsSent
-
         // account is null when auth is off (see the posture note above) — the
         // composer degrades to a date-only session block rather than failing.
         // Surface comes from authResult — i.e. from the credential the caller
         // presented (spec §8) — never from a header. X-Redstart-Surface stays
         // accepted and inert; the connector-contract suite asserts that.
-        parsed.messages = injectSystemContext([...(parsed.messages || [])], effectiveConfig, {
-          hasTools: requestHasTools,
+        ;({ parsed } = await prepareCompletion(parsed, {
           account: authResult.account,
-          mode: requestedMode, project,
           surface: authResult.surface,
+          effectiveConfig,
+          accountId,
           timeZone,
-          clientToolNames: clientToolNamesIn(parsed),
-          // Read here, after enforceToolAllowList and filterRequestTools have
-          // both had their say, so the capability claims describe the payload
-          // the model is actually about to receive.
-          toolNames: toolNamesIn(parsed),
-          toolsFiltered,
-        })
-
-        // What was really forwarded, recorded after every rewrite this block
-        // performs. This is the only place that sees all three numbers at once
-        // — what the client offered, what survived bans and retrieval, and the
-        // prompt the gateway added — and the Tools tab's estimate has never
-        // seen any of them.
-        recordWireCost({
-          toolsOffered,
-          toolsAfterBans,
-          tools: parsed.tools,
-          messages: parsed.messages,
-          ctxSize: effectiveConfig.ctxSize,
-          filtered: !retrievalOptOut && toolsAfterBans > 0 && effectiveConfig.toolRetrieval?.enabled === true,
-        })
+        }))
 
         try {
           forwardModified(res, internalPort, parsed)
@@ -749,6 +840,19 @@ export function stopGateway() {
 
 export function updateGatewayConfig(config) {
   activeConfig = config
+}
+
+/**
+ * The config one account sees, as a request from it would resolve it: the
+ * running gateway's, narrowed by its role. For the daemon's task loop, which
+ * has no request (agent-runtime Phase 3). Null when the gateway is not running
+ * (no model loaded): there is nothing to send a completion to.
+ *
+ * @param {any} account null only with auth off
+ */
+export function effectiveConfigFor(account) {
+  if (!activeConfig) return null
+  return resolveEffectiveConfig(account, activeConfig, roleFor(account))
 }
 
 /**

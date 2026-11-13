@@ -181,6 +181,15 @@ async def _rs_run(code):
 const pyRun = py.globals.get('_rs_run')
 const findImports = py.pyimport('pyodide.code').find_imports
 
+// Packages a run needs that its own imports do not name. pandas' plotting
+// (df.plot(), .hist(), .boxplot(), pandas.plotting) imports matplotlib inside
+// pandas, where find_imports cannot see it, so `df.plot(kind='bar')` without
+// `import matplotlib` failed with "matplotlib is required for plotting"
+// (agent bench, 2026-11-11, Qwen3-4B). Matched on the call, not on a pandas
+// import: the DataFrame may come from an earlier cell in this kernel. A false
+// match on some other .plot( only loads an installed package.
+const PANDAS_PLOTTING_RE = /\.(plot|hist|boxplot)\s*[.(]|\bpandas\.plotting\b|\bscatter_matrix\s*\(/
+
 // Packages this run's imports need that are not loaded yet. A stdlib import has
 // no lock entry and is fine. A lock package we did not install is refused with
 // the list, so the model can rewrite instead of retrying the same import.
@@ -195,6 +204,7 @@ function packagesFor(code) {
     if (!available.has(pkg)) return { refused: top }
     need.add(pkg)
   }
+  if (available.has('matplotlib') && PANDAS_PLOTTING_RE.test(code)) need.add('matplotlib')
   return { need: [...need] }
 }
 

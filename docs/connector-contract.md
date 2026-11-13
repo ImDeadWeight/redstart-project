@@ -11,6 +11,15 @@ codebases: anything not settled here gets implemented four different ways.
 Conformance is machine-checked by `redstart-nest/scripts/test-connector-contract.mjs`,
 which runs in `npm run test:security` and in CI.
 
+**Licensing.** Nest is licensed under AGPL-3.0, but a connector is a separate
+program, and the AGPL doesn't apply to it. You can release a connector under any
+license, including a proprietary one. That holds as long as it talks to Nest
+through this contract (HTTP), MCP or another interface, rather than copying
+Nest's source into itself. See the [README's License section](../README.md#license).
+The name "Redstart" is a trademark: a connector can say it works *with*
+Redstart, but it can't present itself *as* Redstart
+([TRADEMARKS.md](../TRADEMARKS.md)).
+
 ---
 
 ## 0. The one rule

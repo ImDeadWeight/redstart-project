@@ -245,7 +245,10 @@ async function main() {
       headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'Mcp-Session-Id': 'not-a-real-session' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }),
     })
-    assert(res.status === 400, `expected 400 for an unrecognised session, got ${res.status}`)
+    // 404 (the MCP spec; until 2026-11-12, 400): refused, and the client's cue to
+    // start a new session through initialize. No session is handed out.
+    assert(res.status === 404, `expected 404 for an unrecognised session, got ${res.status}`)
+    assert(!res.headers.get('mcp-session-id'), 'an unknown session was given a new session id')
   })
 
   // connectMcpClient performs the initialize handshake itself as part of
@@ -299,6 +302,12 @@ async function main() {
   client.close()
   stopMcpServer()
   stopGateway()
+  // Let the servers' handles finish closing before process.exit below. On
+  // Windows, exiting while one is mid-close aborts Node with libuv's
+  // "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)" (0xC0000409):
+  // every test passed, and the suite still failed, intermittently
+  // (2026-11-12: 4 of 4 runs on one checkout, 1 of 4 on the next).
+  await new Promise((resolve) => setTimeout(resolve, 250))
 
   // ---------------------------------------------------------------------------
   // Cleanup + summary

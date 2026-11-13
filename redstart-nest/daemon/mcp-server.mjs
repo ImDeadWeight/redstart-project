@@ -37,6 +37,7 @@ import * as documentSearchTool from './document-search-tool.mjs'
 import { getConversation } from './conversations-storage.mjs'
 import { isWellFormedConversationId } from './conversation-workspace.mjs'
 import * as searchToolsProvider from './search-tools-provider.mjs'
+import * as interactionTools from './interaction-tools.mjs'
 import { promptsFor, getPromptFor } from './workflows-storage.mjs'
 import { pluginProviders, stopAllPlugins } from './plugin-provider.mjs'
 import {
@@ -45,8 +46,16 @@ import {
   CAPABILITY_TOOL_NAMES,
   META_CAPABILITY_KEY,
   META_CLASS_KEY,
+  approvalRule,
+  isApprovalEnforced,
 } from './tools-definitions.mjs'
-import { logEvent } from './logger.mjs'
+import { logEvent, logPolicy } from './logger.mjs'
+import { memoryKey } from './memory-storage.mjs'
+import { requestApproval, consume as consumeApproval } from './approval-ledger.mjs'
+import { covers as grantCovers } from './approval-grants.mjs'
+import {
+  APPROVAL_RULE_META_KEY, APPROVAL_ENFORCED_META_KEY, APPROVAL_META_KEY, APPROVAL_ID_META_KEY, APPROVAL_NEEDED_TEXT,
+} from '../../shared/agent-core/approval.mjs'
 import {
   StreamableHTTPServerTransport
 } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
@@ -55,7 +64,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 // searchToolsProvider is LAST, and deliberately: it is the only provider whose
 // job is to describe the others, so it must never shadow one of them on a name
 // collision, and its own tool must never appear in the catalog it searches.
-const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, memoryTool, documentSearchTool, searchToolsProvider]
+const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, memoryTool, documentSearchTool, interactionTools, searchToolsProvider]
 
 // Resolved per call, never captured in a const: a plugin installed or removed
 // while Nest is running must take effect without a restart. Built-ins come
@@ -75,14 +84,19 @@ function resolveProviders() {
  * offered a tool tools/list withholds, which is precisely the ban-as-speed-bump
  * failure D5 exists to prevent.
  *
+ * `ctx` is the MCP session's state, and only tools/list passes it: the
+ * host-resolved tools (interaction-tools.mjs) are served per client, so the
+ * other two consumers, which have no client, never see them.
+ *
  * @param {any} cfg
+ * @param {{ session?: { hostTools?: string[] } }} [ctx]
  * @returns {any[]}
  */
-export function activeToolCatalog(cfg) {
+export function activeToolCatalog(cfg, ctx) {
   const tools = []
   const seen = new Set()
   for (const provider of resolveProviders()) {
-    for (const tool of provider.toolDefs(cfg)) {
+    for (const tool of provider.toolDefs(cfg, ctx)) {
       if (seen.has(tool.name)) {
         console.warn(`MCP: duplicate tool name "${tool.name}" — keeping the first provider's definition. Namespace your tool names.`)
         continue
@@ -170,6 +184,28 @@ function evaluateToolPolicy(toolName, config) {
 }
 
 // ---------------------------------------------------------------------------
+// The approval gate for one enforced call (agent-runtime Phase 2). Pure apart
+// from the ledger and the grants file; exported for scripts/test-approvals.mjs.
+//
+// Passes when a standing grant covers a 'prompt' tool, or when the call
+// carries an approval id the ledger accepts for this account, tool and
+// arguments. Otherwise opens a pending approval for the client to decide.
+// An id that was presented and did NOT match (other arguments, expired,
+// another account's, already spent) is the one refusal worth an owner's
+// attention, and goes to the decision log; the plain first call of the
+// handshake does not, or every delete would log a refusal.
+// ---------------------------------------------------------------------------
+export function approvalGate(toolName, args, approvalId, ctx) {
+  const accountKey = memoryKey(ctx?.account ?? null)
+  if (approvalRule(toolName) === 'prompt' && grantCovers(accountKey, toolName)) return { ok: true }
+  if (typeof approvalId === 'string' && approvalId) {
+    if (consumeApproval(approvalId, { accountKey, tool: toolName, args })) return { ok: true }
+    logPolicy('approval.refused', { account: ctx?.account?.username ?? '(auth off)', tool: toolName })
+  }
+  return { ok: false, pending: requestApproval({ accountKey, tool: toolName, args }) }
+}
+
+// ---------------------------------------------------------------------------
 // Tool provenance annotation.
 //
 // Stamped centrally on every advertised tool rather than asked of each
@@ -206,6 +242,10 @@ function annotateTool(tool) {
       ...(tool._meta || {}),
       [META_CAPABILITY_KEY]: capabilityForTool(tool.name),
       [META_CLASS_KEY]: cls,
+      // Approvals (agent-runtime Phase 2): the rule, and whether this server
+      // refuses an unapproved call, so a client can show its card first.
+      [APPROVAL_RULE_META_KEY]: approvalRule(tool.name),
+      [APPROVAL_ENFORCED_META_KEY]: isApprovalEnforced(tool.name),
     },
   }
 }
@@ -243,23 +283,120 @@ let activeToolsConfig = null   // { webFetch: {...}, postgres: {...}, documents:
 // transport generates during initialize.
 const transports = new Map()
 
-async function handleRpc(msg, send, ctx = { account: null }) {
-  const { id, method, params } = msg
-
-  //
-  // The null-account branch is split deliberately. A null account means "auth is
-  // off" — the documented, unnarrowed posture — but ONLY when auth is actually
-  // off. With auth on, a null account here means identity failed to reach this
-  // function, and treating that as the auth-off posture would hand a broken
-  // plumbing path the full tool set. That is not hypothetical: it is exactly
-  // what the missing `req.auth` assignment in the transport above produced.
-  const cfg = ctx.account
-    ? resolveEffectiveConfig(ctx.account, activeToolsConfig, roleFor(ctx.account))
+// The tool config one account sees: the server's, narrowed by its role.
+//
+// The null-account branch is split deliberately. A null account means "auth is
+// off" — the documented, unnarrowed posture — but ONLY when auth is actually
+// off. With auth on, a null account here means identity failed to reach this
+// function, and treating that as the auth-off posture would hand a broken
+// plumbing path the full tool set. That is not hypothetical: it is exactly
+// what the missing `req.auth` assignment in the transport below produced.
+function configFor(account) {
+  return account
+    ? resolveEffectiveConfig(account, activeToolsConfig, roleFor(account))
     : getAuthRequired()
       ? narrowConfig(activeToolsConfig, DENY_ALL)
       : activeToolsConfig
+}
+
+/**
+ * The tools one account is served, annotated, as tools/list returns them
+ * (agent-runtime D27). Exported for the daemon's task loop, which is a
+ * client with no MCP session: it says which host-resolved tools it answers
+ * itself (ask_user, update_plan) instead of declaring them at initialize.
+ *
+ * Twig's tools, the browser's in-page sandbox and any MCP server the browser
+ * holds never appear here: they are never on this server (D28).
+ *
+ * @param {any} account
+ * @param {{ hostTools?: string[] }} [opts]
+ */
+export function toolCatalogFor(account, { hostTools = [] } = {}) {
+  return activeToolCatalog(configFor(account), { session: { hostTools } }).map(annotateTool)
+}
+
+/**
+ * One tool call as an account, with every check tools/call makes (agent-runtime
+ * D27): policy (bans, capability switches, role narrowing), the approval gate,
+ * the verified conversation, provider dispatch and logging. tools/call is this
+ * plus the JSON-RPC wrapping; the daemon's task loop calls it directly, so a
+ * task can do nothing a chat could not.
+ *
+ * Returns the MCP result (refusals included, as isError results), or null when
+ * no provider knows the tool.
+ *
+ * @param {any} account null only with auth off
+ * @param {string} toolName
+ * @param {any} args
+ * @param {{ conversationId?: string, approvalId?: string, session?: object }} [opts]
+ *   conversationId is a claim, verified against the account here.
+ */
+export async function callToolAs(account, toolName, args, { conversationId, approvalId, session } = {}) {
+  const cfg = configFor(account)
+  const ctx = { account, session }
+
+  const policy = evaluateToolPolicy(toolName, cfg)
+  if (!policy.allowed) {
+    logEvent('tool', 'denied', { tool: toolName, class: policy.cls })
+    return { isError: true, content: [{ type: 'text', text: policy.reason }] }
+  }
+
+  // The approval (agent-runtime Phase 2, D11/D12). After the policy above,
+  // so an approval never beats a ban, a disabled capability or role
+  // narrowing: those refuse first, approved or not. Only tools that opt in
+  // are enforced (every destructive tool in Phase 2), and for every client,
+  // an API key included (decided 2026-11-12). A standing grant covers a
+  // 'prompt' tool; an 'always' tool needs a consumed approval each call.
+  if (isApprovalEnforced(toolName)) {
+    const gate = approvalGate(toolName, args, approvalId, ctx)
+    if (!gate.ok) {
+      logEvent('tool', 'approval_needed', { tool: toolName, class: policy.cls })
+      return {
+        isError: true,
+        content: [{ type: 'text', text: APPROVAL_NEEDED_TEXT }],
+        _meta: { [APPROVAL_META_KEY]: gate.pending },
+      }
+    }
+  }
+
+  const callCtx = { ...ctx, conversationId: verifiedConversationId(account, conversationId) }
+
+  const startedAt = Date.now()
+  for (const provider of resolveProviders()) {
+    const result = await provider.callTool(toolName, args, cfg, callCtx)
+    if (result !== null && result !== undefined) {
+      // `plugin` and `account` are recorded now so the deferred per-account
+      // permission work reads an existing field instead of re-plumbing this
+      // call path. Pass the USERNAME, not the account — logger.mjs redact()
+      // drops objects entirely and the field would vanish silently.
+      logEvent('tool', 'called', {
+        tool: toolName,
+        class: policy.cls,
+        plugin: capabilityForTool(toolName) ?? undefined,
+        account: account?.username ?? undefined,
+        isError: !!result.isError,
+        durationMs: Date.now() - startedAt,
+      })
+      // Memory marks a save made soon after the web was read in the same
+      // conversation (memory-tool.mjs). Recorded for every network-class
+      // call, successful or not: an error page is web content too.
+      if (policy.cls === 'network') memoryTool.noteNetworkCall(callCtx)
+      return result
+    }
+  }
+
+  logEvent('tool', 'unknown', { tool: toolName })
+  return null
+}
+
+async function handleRpc(msg, send, ctx = { account: null }) {
+  const { id, method, params } = msg
 
   if (method === 'initialize') {
+    // What this client's own loop can answer (interaction-tools.mjs). Kept on
+    // the session, which outlives this request; a client that declares nothing
+    // is never offered a host-resolved tool.
+    if (ctx.session) ctx.session.hostTools = interactionTools.hostToolsDeclared(params)
     send({ jsonrpc: '2.0', id, result: {
       protocolVersion: '2024-11-05',
       // prompts = the account's workflows (workflows-storage.mjs). chat-ui's
@@ -279,14 +416,14 @@ async function handleRpc(msg, send, ctx = { account: null }) {
   }
 
   if (method === 'tools/list') {
-    send({ jsonrpc: '2.0', id, result: { tools: activeToolCatalog(cfg).map(annotateTool) } })
+    send({ jsonrpc: '2.0', id, result: { tools: toolCatalogFor(ctx.account, { hostTools: ctx.session?.hostTools }) } })
     return
   }
 
   // Workflows as MCP prompts (workflows plan D1). The account resolves the
   // scope; a name never reaches another account's personal workflows. An
   // auth-on null account is a broken identity path, not the auth-off posture,
-  // and gets nothing — the same split as `cfg` above, for the same reason.
+  // and gets nothing — the same split as configFor, for the same reason.
   if (method === 'prompts/list') {
     const identityLost = !ctx.account && getAuthRequired()
     send({ jsonrpc: '2.0', id, result: { prompts: identityLost ? [] : promptsFor(ctx.account ?? null) } })
@@ -310,44 +447,14 @@ async function handleRpc(msg, send, ctx = { account: null }) {
 
   if (method === 'tools/call') {
     const toolName = params?.name
-    const args = params?.arguments ?? {}
-
-    const policy = evaluateToolPolicy(toolName, cfg)
-    if (!policy.allowed) {
-      logEvent('tool', 'denied', { tool: toolName, class: policy.cls })
-      send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: policy.reason }] } })
-      return
-    }
-
-    const callCtx = { ...ctx, conversationId: verifiedConversationId(ctx.account, params?._meta?.[META_CONVERSATION_KEY]) }
-
-    const startedAt = Date.now()
-    for (const provider of resolveProviders()) {
-      const result = await provider.callTool(toolName, args, cfg, callCtx)
-      if (result !== null && result !== undefined) {
-        // `plugin` and `account` are recorded now so the deferred per-account
-        // permission work reads an existing field instead of re-plumbing this
-        // call path. Pass the USERNAME, not ctx.account — logger.mjs redact()
-        // drops objects entirely and the field would vanish silently.
-        logEvent('tool', 'called', {
-          tool: toolName,
-          class: policy.cls,
-          plugin: capabilityForTool(toolName) ?? undefined,
-          account: ctx?.account?.username ?? undefined,
-          isError: !!result.isError,
-          durationMs: Date.now() - startedAt,
-        })
-        // Memory marks a save made soon after the web was read in the same
-        // conversation (memory-tool.mjs). Recorded for every network-class
-        // call, successful or not: an error page is web content too.
-        if (policy.cls === 'network') memoryTool.noteNetworkCall(callCtx)
-        send({ jsonrpc: '2.0', id, result })
-        return
-      }
-    }
-
-    logEvent('tool', 'unknown', { tool: toolName })
-    send({ jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown tool: ${toolName}` }})
+    const result = await callToolAs(ctx.account, toolName, params?.arguments ?? {}, {
+      conversationId: params?._meta?.[META_CONVERSATION_KEY],
+      approvalId: params?._meta?.[APPROVAL_ID_META_KEY],
+      session: ctx.session,
+    })
+    send(result === null
+      ? { jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown tool: ${toolName}` } }
+      : { jsonrpc: '2.0', id, result })
     return
   }
 
@@ -435,6 +542,17 @@ export function startMcpServer(port, config, { bindHost = '127.0.0.1' } = {}) {
 
     if (sessionId && transports.has(sessionId)) {
       transport = transports.get(sessionId)
+    } else if (sessionId) {
+      // A session this server does not know: it ended, or Nest restarted
+      // (sessions live in memory). The MCP spec says 404, which is the
+      // client's cue to start a new session; chat-ui reconnects and retries
+      // on exactly that (MCPService.isSessionExpiredError). Until 2026-11-12
+      // this fell through to the 400 below, so after every Nest restart an
+      // open chat page failed every tool call with "No valid session ID
+      // provided" until it was reloaded.
+      res.writeHead(404, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32001, message: 'Session not found' } }))
+      return
     } else if (!sessionId && isInitializeRequest(parsed)) {
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => crypto.randomUUID(),
@@ -452,8 +570,12 @@ export function startMcpServer(port, config, { bindHost = '127.0.0.1' } = {}) {
         console.error('MCP transport error:', err)
       }
 
+      // Per-session state, set at initialize (see handleRpc). One object per
+      // transport, so it lives exactly as long as the session does.
+      const session = { hostTools: [] }
+
       transport.onmessage = async (message, extra) => {
-        const ctx = { account: extra.authInfo?.account ?? null }
+        const ctx = { account: extra.authInfo?.account ?? null, session }
         await handleRpc(message, (response) => {
           transport.send(response).catch((err) => {
             console.error('MCP response send error:', err)

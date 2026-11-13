@@ -25,12 +25,15 @@ import {
 import * as messageRepo from '$lib/stores/chat/chat-message-repo';
 import { ChatTitleService } from '$lib/services/chat-title.service';
 import { memoryReviewStore } from '$lib/stores/memory-review.svelte';
+import { tasksStore } from '$lib/stores/tasks.svelte';
+import { toast } from 'svelte-sonner';
 import {
 	normalizeModelName,
 	isAbortError,
 	generateConversationTitle,
 	filterByLeafNodeId
 } from '$lib/utils';
+import { createToolResultChain } from '$lib/utils/branching';
 import { ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
 import type {
 	ChatMessageTimings,
@@ -56,6 +59,18 @@ export class ChatSendController {
 	): Promise<void> {
 		if (!content.trim() && (!extras || extras.length === 0) && !workspaceFiles?.length) return;
 		const activeConv = conversationsStore.activeConversation;
+
+		// A background task holds this chat (agent-runtime Phase 3.9): the
+		// daemon is its only writer, so a message goes to the task, as
+		// steering or as the answer to its open question. Files cannot ride
+		// along: the steer route takes text.
+		if (activeConv && tasksStore.activeFor(activeConv.id)) {
+			if (extras?.length || workspaceFiles?.length) {
+				toast.info('Files cannot be sent to a background task. Send text, or cancel the task first.');
+			}
+			if (content.trim()) await tasksStore.steer(activeConv.id, content.trim());
+			return;
+		}
 
 		// If agentic loop is running, inject as a steering message instead of starting a new flow
 		if (activeConv && agenticStore.session.isRunning(activeConv.id)) {
@@ -201,6 +216,9 @@ ${workspaceNote}` : workspaceNote) : content,
 		let resolvedModel: string | null = null;
 		let modelPersisted = false;
 		const convId = assistantMessage.convId;
+		// Each tool result hangs off the one before it, so every result of a
+		// reply stays on the path after a reload (utils/branching).
+		const toolResultChain = createToolResultChain();
 
 		const recordModel = (modelName: string | null | undefined, persistImmediately = true): void => {
 			if (!modelName) return;
@@ -343,8 +361,9 @@ ${workspaceNote}` : workspaceNote) : content,
 						children: [],
 						extra: extras
 					},
-					currentMessageId
+					toolResultChain.parentFor(currentMessageId)
 				);
+				toolResultChain.advance(currentMessageId, msg.id);
 				conversationsStore.addMessageToActive(msg);
 				await conversationsStore.updateCurrentNode(msg.id);
 				return msg;

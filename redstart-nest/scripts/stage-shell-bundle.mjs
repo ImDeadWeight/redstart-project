@@ -19,7 +19,8 @@
 //   chat-ui/                         the chat UI llama-server serves
 //   bin/                             llama-server + the DLLs it loads
 //   elevate.exe                      firewall rules with UAC
-//   LICENSE.txt, THIRD-PARTY-NOTICES.md, licenses/
+//   LICENSE.txt (the repo's LICENSE), THIRD-PARTY-NOTICES.md,
+//   TRADEMARKS.md, licenses/
 //
 // Run after the builds it copies from: `npm run build:chat`, `vite build`,
 // `npm run license:gen`, `node scripts/stage-node.mjs`, and the llama-server
@@ -122,8 +123,9 @@ function main() {
     need(out('bin', 'llama-server'))
   }
 
-  fs.copyFileSync(need(path.join(NEST, 'LICENSE.txt')), out('LICENSE.txt'))
+  fs.copyFileSync(need(path.join(REPO, 'LICENSE')), out('LICENSE.txt'))
   fs.copyFileSync(need(path.join(REPO, 'THIRD-PARTY-NOTICES.md')), out('THIRD-PARTY-NOTICES.md'))
+  fs.copyFileSync(need(path.join(REPO, 'TRADEMARKS.md')), out('TRADEMARKS.md'))
   // npm-licenses.json (license:gen) and rust-licenses.json (rust-licenses.mjs).
   need(path.join(NEST, 'licenses', 'rust-licenses.json'))
   copyDir(path.join(NEST, 'licenses'), out('licenses'))
