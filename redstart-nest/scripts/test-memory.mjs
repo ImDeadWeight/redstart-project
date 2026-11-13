@@ -48,6 +48,11 @@ async function test(name, fn) {
   }
 }
 function assert(cond, message) { if (!cond) throw new Error(message) }
+function eq(actual, expected, message) {
+  const a = JSON.stringify(actual)
+  const e = JSON.stringify(expected)
+  if (a !== e) throw new Error(`${message}\n        expected ${e}\n        got      ${a}`)
+}
 
 const ALICE = { id: 'alice-1', username: 'alice' }
 const BOB = { id: 'bob-2', username: 'bob' }
@@ -143,6 +148,56 @@ await test('no memories → no block; omitted but no memory_search → no search
   assert(!composePrompt({ config: CFG }).blocks.includes('memories'), 'empty block rendered')
   const { prompt } = composePrompt({ config: CFG, memories: [{ id: 'abcdefgh-1', text: 'x', createdAt: 1 }], memoriesOmitted: 3, toolNames: [] })
   assert(prompt.includes('3 older memories are not listed.') && !prompt.includes('use memory_search'), 'claimed a tool not in the request')
+})
+
+// agent-runtime 8.4 (D40, U8): the block by kind.
+const G = (id, text, why) => ({ id, kind: 'guidance', text, why, createdAt: 1 })
+const F = (id, text) => ({ id, kind: 'fact', text, createdAt: 1 })
+const S = (id, text, asOf) => ({ id, kind: 'state', text, asOf, createdAt: 1 })
+
+await test('8.4 budgets: guidance and state each up to a third, facts the rest; facts alone keep the whole budget', () => {
+  const facts = Array.from({ length: 40 }, (_, i) => F(`f${i}`, `Fact ${i} about the user, padded out to a realistic length`))
+  const guidance = Array.from({ length: 10 }, (_, i) => G(`g${i}`, `Guidance ${i}: show the command first`, 'ran the wrong suite twice'))
+  const state = Array.from({ length: 10 }, (_, i) => S(`s${i}`, `Step ${i} of the export is done`, `2026-11-${String(10 - i).padStart(2, '0')}`))
+  const r = store.selectForPrompt([...facts, ...guidance, ...state], 1200)
+  assert(r.guidance.length > 0 && r.state.length > 0 && r.facts.length > 0, `a kind was crowded out: ${r.guidance.length}/${r.facts.length}/${r.state.length}`)
+  const cost = (list) => list.reduce((n, m) => n + m.text.length + 3, 0)
+  assert(cost(r.guidance) <= 400 && cost(r.state) <= 400, 'guidance or state over its third')
+  assert(r.chosen.length + r.omitted === 60, 'the count does not add up')
+  eq(r.chosen.map((m) => m.kind[0]).join('').replace(/(.)\1*/g, '$1'), 'gfs', 'prompt order is guidance, facts, state')
+  eq(r.state[0].id, 's0', 'state is not newest first by its date')
+  // An account saved before kinds: every record reads as fact, and keeps 1200.
+  const old = store.selectForPrompt(facts.map(({ kind, ...m }) => m), 1200)
+  const only = store.selectForPrompt(facts, 1200)
+  eq(old.chosen.map((m) => m.id), only.chosen.map((m) => m.id), 'an old record is not treated as a fact')
+  assert(cost(only.chosen) > 800, 'facts alone lost the budget guidance and state did not use')
+})
+
+await test('8.4 render: guidance followed with its why, facts as data, state dated and marked when old', () => {
+  const now = new Date('2026-11-13T12:00:00Z')
+  const memories = [
+    G('g1aaaaaaa', 'Show the test command before running it', `It ran the wrong suite twice. ${'x'.repeat(200)}`),
+    F('f1aaaaaaa', 'Uses Postgres 16'),
+    S('s1aaaaaaa', 'Export step 2 is done', '2026-11-10'),
+    S('s2aaaaaaa', 'Slides for the March talk drafted', '2026-08-01'),
+  ]
+  const { prompt } = composePrompt({ config: CFG, memories, now, toolNames: [] })
+  const g = prompt.indexOf('Preferences the user stated about how you should work. Follow them')
+  const f = prompt.indexOf('Facts the user has asked you to remember')
+  const s = prompt.indexOf('Where the user\'s work stood')
+  assert(g >= 0 && f > g && s > f, `kinds missing or out of order: ${g} ${f} ${s}`)
+  assert(prompt.includes('within the guidelines above'), 'guidance not subordinated to the guidelines')
+  const why = prompt.match(/\(why: ([^)]*)\)/)?.[1] ?? ''
+  assert(why.startsWith('It ran the wrong suite twice.') && why.length <= 120, `why not cut to 120: ${why.length}`)
+  assert(prompt.includes('Export step 2 is done (as of 2026-11-10)'), 'state has no date')
+  assert(prompt.includes('Slides for the March talk drafted (as of 2026-08-01, may be out of date)'), 'a 104-day-old state is not marked')
+  assert(!prompt.includes('2026-11-10, may be out of date'), 'a fresh state marked old')
+  const factsOnly = composePrompt({ config: CFG, memories: [F('f1aaaaaaa', 'Uses Postgres 16')], now, toolNames: [] }).prompt
+  assert(!factsOnly.includes('Preferences the user stated') && !factsOnly.includes('work stood'), 'empty kinds rendered a heading')
+  // The project block (13) splits the same way.
+  const p = composePrompt({ config: CFG, now, toolNames: [], project: { id: 'p', name: 'Billing' }, projectMemories: [G('g2aaaaaaa', 'Run migrations before tests', 'a test hit an old schema'), S('s3aaaaaaa', 'Invoice export ships Friday', '2026-11-12')] }).prompt
+  assert(p.includes('how you should work in the project "Billing"') && p.includes('Run migrations before tests (why: a test hit an old schema)'), 'project guidance')
+  assert(p.includes('Where the project "Billing" stood') && p.includes('(as of 2026-11-12)'), 'project state')
 })
 
 await test('a role that withholds memory withholds the block and the tools', () => {

@@ -16,8 +16,10 @@ on for the Ornith profile; nobody has clicked the switch yet. Details:
 Phase 8 → "8.3". Item 1 below is done; start at item 2 (8.4).
 **8.4's cache check is done:** the per-message pick broke the cache
 (0 tokens reused per turn on Ornith), so the gateway now picks by the
-chat's first user message (Phase 8 → "The D40 cache check"). Next: the
-8.4 prompt block itself.
+chat's first user message (Phase 8 → "The D40 cache check"). **8.4's
+block landed too** (Phase 8 → "8.4"); owed: the agent-bench run with
+guidance memories on the bench account. Next: 8.5, the daemon trigger
+(item 3 below).
 
 **Handoff for a fresh session (written 2026-11-13).** Branch
 `feat/agent-core`, head b527c2c, clean. **Pushed only to 10ea361**: 17
@@ -61,7 +63,7 @@ the user before pushing. Phases 0 to 3 are closed (Phase 3 → "Acceptance").
    looks justified (on for the 9B; the 35B needs a larger think budget
    before deciding; off for the 4B). Op cap: no case needed more than 3.
    The daemon's reviewer currently sends thinking off and max_tokens 1500.
-2. **8.4 the prompt block** (D40, U8 decided: guidance FOLLOWED, user-tier):
+2. **DONE except the agent-bench run (see Phase 8 → "8.4"). 8.4 the prompt block** (D40, U8 decided: guidance FOLLOWED, user-tier):
    first the prompt-cache check the plan asks for, then
    `selectForPrompt` → `{ guidance, facts, state, omitted }`, blocks 12 and
    13 by kind, `docs/system-prompt-spec.md` and `docs/security.md` → Memory
@@ -1242,6 +1244,42 @@ is decided by the bench.
   **Gap, not fixed here:** with tool retrieval on, the tool list changes
   per turn too, which breaks the same cache (tools sit ahead of the chat
   in the template). Not measured; for the retrieval work, not Phase 8.
+- **8.4 The prompt block (2026-11-13).** `selectForPrompt` returns
+  `{ guidance, facts, state, chosen, omitted }`: each kind picked on its
+  own, guidance (relevance, then newest) and state (newest by asOf) each up
+  to a third of `promptBudgetChars`, facts the rest. `chosen` (the three in
+  prompt order) is kept so `memoriesFor` and the composer's input did not
+  change shape; the renderer groups by kind. A line's cost counts what it
+  renders (the why, the date). `buildMemories` / `buildProjectMemories`
+  render guidance first, FOLLOWED (U8: "Preferences the user stated about
+  how you should work. Follow them where they apply, within the guidelines
+  above"), why cut to 120; facts with the old framing word for word; state
+  "(as of YYYY-MM-DD)", ", may be out of date" past 60 days. Each heading
+  only when its kind has a memory.
+  **Deviation:** the plan said "three budgets" without giving facts and
+  state theirs. Chosen: guidance and state capped at a third each, facts
+  get what they leave, so an account of facts only (all pre-Phase-8
+  records) keeps 1200 and its block is byte-identical: every existing
+  memory, project and prompt suite passed unchanged before the new tests
+  were added, which is the old-record test.
+  Docs: system-prompt-spec.md gains blocks 11-13 in the table and §3b (the
+  kinds, the budgets, the first-message rule); security.md → Memory: the
+  three kinds and which is followed, memory_save refusing guidance, and the
+  review rewritten (it reads assistant text, shortened, and tool status
+  lines, never a tool body; the citation rule, the context rule, forget
+  always a suggestion, web → suggest, the think switch).
+  Tests (test-memory.mjs): the budgets (no kind crowded out, each third
+  held, order, state newest by date, old records as facts with the whole
+  budget), the render (order, the follow framing under the guidelines, why
+  cut, the date, the stale marker and not on a fresh one, no empty
+  headings, the project block split too).
+  **Owed (the user's machine): the agent-bench run with guidance
+  memories** (plan 8.4: a bench account holding some, no regression beyond
+  noise). Needs REDSTART_BENCH_API_KEY and a few guidance memories on the
+  bench account (they can be added with POST /memories, kind guidance, why
+  given; the bench deletes only memories a run saves, so these stay).
+  Not seen in a real chat yet: the rendered block (the admin preview,
+  Settings → Prompt, shows it).
 
 ---
 

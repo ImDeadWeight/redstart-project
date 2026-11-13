@@ -302,22 +302,56 @@ export const DEFAULT_PROMPT_BUDGET_CHARS = 1200   // ≈ 300 tokens (plan §3)
  * "Uses Postgres 16" out of the budget. Keyword scoring only, no embedding
  * call: this runs on every request, and must never wait on a sidecar.
  */
-export function selectForPrompt(memories, budgetChars = DEFAULT_PROMPT_BUDGET_CHARS, { query = '' } = {}) {
-  let ordered = memories
-  if (typeof query === 'string' && query.trim()) {
-    const scored = memories.map((m, i) => ({ m, i, s: keywordScore(query, m.text) }))
-    const relevant = scored.filter((x) => x.s > 0).sort((a, b) => b.s - a.s || a.i - b.i)
-    ordered = [...relevant.map((x) => x.m), ...scored.filter((x) => x.s === 0).map((x) => x.m)]
-  }
+//
+// By kind (agent-runtime D40, 8.4): each kind is picked on its own, so a
+// hundred facts cannot crowd out how the user wants the assistant to work.
+// Guidance takes up to a third of the budget, state up to a third, and facts
+// whatever those two leave, so an account of facts only (every record saved
+// before kinds existed) keeps the whole budget, as before.
+export const GUIDANCE_WHY_CHARS = 120
+// The rendered line costs more than the text: a why on guidance, a date on state.
+function promptCost(m) {
+  if (m.kind === 'guidance') return m.text.length + 3 + (m.why ? Math.min(m.why.length, GUIDANCE_WHY_CHARS) + 8 : 0)
+  if (m.kind === 'state') return m.text.length + 3 + 20
+  return m.text.length + 3
+}
+function byRelevance(list, query) {
+  if (typeof query !== 'string' || !query.trim()) return list
+  const scored = list.map((m, i) => ({ m, i, s: keywordScore(query, m.text) }))
+  const relevant = scored.filter((x) => x.s > 0).sort((a, b) => b.s - a.s || a.i - b.i)
+  return [...relevant.map((x) => x.m), ...scored.filter((x) => x.s === 0).map((x) => x.m)]
+}
+function fill(ordered, budgetChars) {
   const chosen = []
   let used = 0
   for (const m of ordered) {
-    const cost = m.text.length + 3
+    const cost = promptCost(m)
     if (used + cost > budgetChars) break
     chosen.push(m)
     used += cost
   }
-  return { chosen, omitted: memories.length - chosen.length }
+  return { chosen, used }
+}
+/** A state memory's date: asOf, else when it was last written. */
+function stateTime(m) {
+  const t = m.asOf ? Date.parse(`${m.asOf}T00:00:00Z`) : NaN
+  return Number.isFinite(t) ? t : (m.updatedAt ?? m.createdAt ?? 0)
+}
+
+/**
+ * @returns {{ guidance, facts, state, chosen, omitted }} `chosen` is the three
+ *   in prompt order (guidance, facts, state); `omitted` counts every memory
+ *   left out, of any kind.
+ */
+export function selectForPrompt(memories, budgetChars = DEFAULT_PROMPT_BUDGET_CHARS, { query = '' } = {}) {
+  const kindOf = (m) => m.kind ?? 'fact'
+  const third = Math.floor(budgetChars / 3)
+  const guidance = fill(byRelevance(memories.filter((m) => kindOf(m) === 'guidance'), query), third)
+  // Newest first by its own date: what a state says is only as good as when.
+  const state = fill(memories.filter((m) => kindOf(m) === 'state').sort((a, b) => stateTime(b) - stateTime(a)), third)
+  const facts = fill(byRelevance(memories.filter((m) => kindOf(m) === 'fact'), query), budgetChars - guidance.used - state.used)
+  const chosen = [...guidance.chosen, ...facts.chosen, ...state.chosen]
+  return { guidance: guidance.chosen, facts: facts.chosen, state: state.chosen, chosen, omitted: memories.length - chosen.length }
 }
 
 /**
