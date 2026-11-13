@@ -5,7 +5,15 @@ what was built, phase by phase: deviations from the plan, and gaps carried
 forward. Branch: `feat/agent-core`, from main @ 224d121 (alpha.12, PR #38
 merged).
 
-## Where we left off (2026-11-13: Phase 8: 8.0, 8.1, 8.2 done and measured on three models; next: 8.3, then 8.4 to 8.6)
+## Where we left off (2026-11-13: Phase 8: 8.0 to 8.3 done; 8.3 owes one 35B run; next: 8.4 to 8.6)
+
+**8.3 landed (2026-11-13, later the same day):** a per-profile
+`tools.memoryReview.think` switch (Tools tab, Memory card), measured on
+Ornith (think on ×3: 28, 31, 30 vs off 27). Op cap stays a constant 3.
+Owed: the 35B with `--think on --think-budget 8192` decides its setting
+(and whether the budget must be per profile too); the user sets thinking
+on for the Ornith profile; nobody has clicked the switch yet. Details:
+Phase 8 → "8.3". Item 1 below is done; start at item 2 (8.4).
 
 **Handoff for a fresh session (written 2026-11-13).** Branch
 `feat/agent-core`, head b527c2c, clean. **Pushed only to 10ea361**: 17
@@ -42,7 +50,7 @@ the user before pushing. Phases 0 to 3 are closed (Phase 3 → "Acceptance").
   instructions were tuned on the bench's own cases.
 
 **Next, in order:**
-1. **8.3, thinking and the op cap by the numbers (U10).** The evidence:
+1. **DONE (8.3, see above). 8.3, thinking and the op cap by the numbers (U10).** The evidence:
    think on helps Ornith (+3, facts 2 → 4), does nothing for the 4B, and
    costs the 35B one case overall (two answers hit the 4096 budget) while
    fixing its facts (3 → 5). So a per-profile `memoryReview.think` setting
@@ -1169,7 +1177,40 @@ is decided by the bench.
   does not count). **Caveat:** the instructions were tuned on these cases;
   the 4B and 35B are the fairer test.
 - **Next: v2 on the 4B and the 35B (the user's machine)**, think off and
-  on; then U10 and the acceptance check.
+  on; then U10 and the acceptance check. (Done: the final 8.2 numbers are in
+  "Where we left off" and agent-bench-results.md.)
+- **8.3 Thinking and the op cap (U10), 2026-11-13.** The setting the plan
+  names, per profile: `tools.memoryReview.think` (src/types.ts
+  ProfileTools), carried by `buildGatewayConfig` as `memory.reviewThink`
+  (a role's narrowing keeps it: it is not a permission), read by
+  `reviewConversation`, passed to `buildReviewRequest({ think })`. On:
+  `enable_thinking` and `max_tokens` REVIEW_THINK_MAX_TOKENS (4096,
+  reasoning included, the bench's own number) and a 180 s timeout instead
+  of 90 (Ornith's slowest thinking review took 83 s with the GPU idle).
+  Off is the default and what every saved profile reads as. The launcher's
+  Tools tab has a "Think before suggesting memories" switch on the Memory
+  card. The `reviewed` log line carries `think`. The bench's v2 now builds
+  the daemon's own thinking request (a test pins them equal), and
+  `--think-budget n` measures a larger budget than the shipped one.
+  **The numbers** (agent-bench-results.md, 8.3): Ornith think on ×3 = 28,
+  31, 30 against think off 27 (exact repeat), facts 15/15 vs 2/5, injection
+  0. So: on for Ornith 9B (the user sets it on that profile), off for the
+  4B (8.2: 28 either way). **The 35B is undecided:** think on fixed its
+  facts (3 → 5) but two answers ran past 4096; the next step is
+  `--think on --think-budget 8192` on the 35B (the user's machine), and if
+  that beats think off (30), the budget becomes a per-profile number too.
+  **Op cap: a constant 3, no setting** (the plan's "a line in the
+  implementation doc"): 3 of 577 v2 answers used all three, none was short
+  of a fourth.
+  Deviation: `maxOps` from the plan's `memoryReview: { think, maxOps }` is
+  not built, for that reason.
+  Tests: test-memory-review.mjs (thinking off by default, on from the
+  config, longer timeout), test-memory-bench.mjs (`--think-budget`
+  validation; bench and daemon think alike), test-mcp-capabilities.mjs
+  (a legacy profile reviews with thinking off; the setting survives
+  narrowing). **Not clicked yet:** the Tools tab switch in the running
+  launcher, and a thinking review through a real Nest (the bench calls
+  llama-server directly).
 
 ---
 
