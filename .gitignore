@@ -94,6 +94,9 @@ desktop.ini
 docs/notes/*
 !docs/notes/agent-runtime-plan.md
 !docs/notes/agent-runtime-implementation.md
+!docs/notes/tool-retrieval-plan.md
+!docs/notes/tool-retrieval-implementation.md
+!docs/notes/tool-retrieval-fixes-implementation.md
 
 # Local nest directory for `npm run daemon` — a throwaway headless install.
 .redstart-daemon/
