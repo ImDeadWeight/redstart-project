@@ -108,6 +108,10 @@ const defaults = {
     const mcp = await import('./mcp-server.mjs')
     return mcp.callToolAs(account, name, args, opts)
   },
+  async reviewConversation(args) {
+    const mr = await import('./memory-review.mjs')
+    return mr.reviewConversation(args)
+  },
   upstreamPort: () => getUpstreamPort(),
   completionsInFlight: () => completionsInFlight(),
   async fetchCompletion(port, body, signal) {
@@ -436,6 +440,50 @@ function finish(task, status, error) {
   const l = live.get(task.id)
   if (l) for (const approvalId of l.heldApprovals) ledger.withdraw(approvalId)
   logEvent('task', status, error ? { reason: preview(error) } : {})
+  // D41: the daemon reviews what the daemon ran. Not awaited: the task has
+  // ended whatever the review does. Kept so tests (and a stop) can wait on it.
+  const p = reviewEndedTask(task).catch((err) => logEvent('memory', 'review_failed', { reason: preview(err?.message ?? String(err)), task: true }))
+  reviewRuns.add(p)
+  p.finally(() => reviewRuns.delete(p))
+}
+
+// ---------------------------------------------------------------------------
+// The memory review of an ended task (agent-runtime 8.5, D41)
+// ---------------------------------------------------------------------------
+// A browser chat is reviewed by the client once it goes quiet; a background
+// task has no client watching it, so nothing reviewed it and an hour of the
+// user steering a task taught the memory nothing. On done, failed or
+// cancelled, the runner asks for the same review a client would, as the
+// task's account (re-resolved, as every turn is) with its narrowed config, so
+// memory off, a role without memory, or the account's mode "off" all mean no
+// review (reviewConversation's own checks). "busy" (a reply being generated,
+// or this account already in a review) is retried once, when no completion is
+// in flight; a second busy is left to the next trigger, as a client's is.
+
+const reviewRuns = new Set()
+const REVIEW_BUSY_WAIT_MS = 10 * 60 * 1000
+
+async function reviewEndedTask(task) {
+  const who = accountForTask(task.accountId)
+  if (!who.ok) return
+  const config = await seams.effectiveConfigFor(who.account)
+  if (!config) return // no model: the next trigger (or the client) reviews it
+  const args = { account: who.account, conversationId: task.conversationId, config }
+  let r = await seams.reviewConversation(args)
+  if (r?.status === 'busy') {
+    const until = Date.now() + REVIEW_BUSY_WAIT_MS
+    // At least one pause: "busy" can be this account's own review running,
+    // which no completion count shows.
+    do await sleep(seams.busyPollMs)
+    while (seams.completionsInFlight() > 0 && Date.now() < until)
+    r = await seams.reviewConversation(args)
+  }
+  logEvent('memory', 'task_reviewed', { status: r?.status ?? 'none' })
+}
+
+/** Tests: wait until every review an ended task queued has finished. */
+export async function _settleReviews() {
+  while (reviewRuns.size > 0) await Promise.allSettled([...reviewRuns])
 }
 
 function generationOf(taskId) {

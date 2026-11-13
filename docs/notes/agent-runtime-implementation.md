@@ -18,8 +18,10 @@ Phase 8 → "8.3". Item 1 below is done; start at item 2 (8.4).
 (0 tokens reused per turn on Ornith), so the gateway now picks by the
 chat's first user message (Phase 8 → "The D40 cache check"). **8.4's
 block landed too** (Phase 8 → "8.4"); owed: the agent-bench run with
-guidance memories on the bench account. Next: 8.5, the daemon trigger
-(item 3 below).
+guidance memories on the bench account. **8.5 landed** (Phase 8 →
+"8.5"). Next: 8.6, chat-ui (item 4 below), then the user's testing; then
+a PR, then the tool-retrieval cache fix on its own branch, then Phase 4
+(the order recommended 2026-11-13).
 
 **Handoff for a fresh session (written 2026-11-13).** Branch
 `feat/agent-core`, head b527c2c, clean. **Pushed only to 10ea361**: 17
@@ -70,7 +72,7 @@ the user before pushing. Phases 0 to 3 are closed (Phase 3 → "Acceptance").
    (kinds, the guidance trust rule, the citation and context rules, the
    reviewer reads assistant text but never tool bodies), then an agent-bench
    run with guidance memories (no regression beyond noise).
-3. **8.5 the daemon trigger** (D41): review a background task's conversation
+3. **DONE. 8.5 the daemon trigger** (D41): review a background task's conversation
    when it ends.
 4. **8.6 chat-ui** (D42): chips showing kind and quote, "Forget:" label,
    merge Undo restoring `removed` (and an update's previousKind/previousWhy),
@@ -1280,6 +1282,24 @@ is decided by the bench.
   given; the bench deletes only memories a run saves, so these stay).
   Not seen in a real chat yet: the rendered block (the admin preview,
   Settings → Prompt, shows it).
+- **8.5 The daemon trigger (2026-11-13).** `task-runner.mjs` `finish()`
+  (the one place a task ends) queues `reviewEndedTask`, not awaited: the
+  account re-resolved (`accountForTask`), the narrowed config
+  (`effectiveConfigFor`), then `reviewConversation` through a new seam.
+  No config (no model) means no review. `busy` is retried once, after at
+  least one pause and once no completion is in flight (capped at 10
+  minutes); a second busy is left to the next trigger. Memory off, a role
+  without memory and mode off are reviewConversation's own checks. A
+  suspended task (orderly stop) is not ended, so not reviewed. Logged as
+  `memory task_reviewed { status }`. `_settleReviews()` for tests.
+  Tests (test-task-runtime.mjs): one review per ended task with the task's
+  account and config; busy retried once, only when idle, never twice; a
+  cancelled task reviewed; through the REAL reviewConversation (model
+  faked) memory off calls no model and memory on calls it once (so the
+  off case is not passing on nothing running).
+  **Gap:** a review in flight when the daemon stops is lost, and nothing
+  re-triggers it for an ended task (the client's quiet trigger still runs
+  if the user opens that chat in a browser). Not seen with a real model.
 
 ---
 

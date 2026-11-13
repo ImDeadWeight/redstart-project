@@ -476,6 +476,76 @@ await test('a chat\'s completion in flight goes first (D29)', async () => {
   await waitFor(() => ended(t.id), 'end')
 })
 
+// agent-runtime 8.5 (D41): the daemon reviews what the daemon ran.
+await test('8.5: an ended task queues one memory review of its conversation, as its account, with its config', async () => {
+  const reviews = []
+  const cfg = { memory: { enabled: true } }
+  fakeWorld([say('Done.')], { effectiveConfigFor: async () => cfg, reviewConversation: async (args) => { reviews.push(args); return { status: 'done' } } })
+  const conv = newConversation()
+  const t = start(conv, 'tidy the notes')
+  await waitFor(() => ended(t.id), 'end')
+  await runner._settleReviews()
+  eq(reviews.length, 1, 'reviews queued')
+  eq([reviews[0].conversationId, reviews[0].account, reviews[0].config === cfg], [conv, null, true], 'what the review was given')
+})
+
+await test('8.5: busy retries once, after the completions end; a cancelled task is reviewed too', async () => {
+  const reviews = []
+  let inFlight = 0
+  let answers = ['busy', 'done']
+  fakeWorld([say('Done.')], {
+    effectiveConfigFor: async () => ({ memory: { enabled: true } }),
+    completionsInFlight: () => inFlight,
+    reviewConversation: async () => { reviews.push(inFlight); return { status: answers.shift() ?? 'busy' } },
+  })
+  const t = start(newConversation())
+  await waitFor(() => ended(t.id), 'end')
+  inFlight = 1
+  await waitFor(() => reviews.length === 1, 'first review')
+  await new Promise((r) => setTimeout(r, 60))
+  eq(reviews.length, 1, 'retried while a completion was in flight')
+  inFlight = 0
+  await runner._settleReviews()
+  eq(reviews, [0, 0], 'busy then one retry once idle')
+  // A second busy is left alone: no third call.
+  reviews.length = 0
+  answers = ['busy', 'busy']
+  const t2 = start(newConversation())
+  await waitFor(() => ended(t2.id), 'end')
+  await runner._settleReviews()
+  eq(reviews.length, 2, 'retried more than once')
+  // cancelled: reviewed as well
+  reviews.length = 0
+  answers = ['done']
+  fakeWorld([call('q1', 'ask_user', { question: 'Which city?' })], { effectiveConfigFor: async () => ({ memory: { enabled: true } }), reviewConversation: async () => { reviews.push(0); return { status: 'done' } } })
+  const t3 = start(newConversation())
+  await waitFor(() => statusOf(t3.id) === 'waiting_user', 'waiting_user')
+  runner.cancelTask(t3.id)
+  await waitFor(() => ended(t3.id), 'cancel')
+  await runner._settleReviews()
+  eq([statusOf(t3.id), reviews.length], ['cancelled', 1], 'a cancelled task reviewed')
+})
+
+await test('8.5: memory off or a role without memory means no review is saved (the real reviewer decides)', async () => {
+  const review = await import('../daemon/memory-review.mjs')
+  let modelCalls = 0
+  review._setTestSeams({ model: async () => { modelCalls++; return { ops: [] } }, busy: () => false })
+  // The real reviewConversation, with only its model call faked.
+  fakeWorld([say('Done.')], { effectiveConfigFor: async () => ({ memory: { enabled: false } }), reviewConversation: (a) => review.reviewConversation(a) })
+  const t = start(newConversation(), 'I always deploy on Fridays')
+  await waitFor(() => ended(t.id), 'end')
+  await runner._settleReviews()
+  eq(modelCalls, 0, 'reviewed with memory withheld')
+  // And with memory on, the same path reaches the model: the off case is not
+  // passing because nothing ran at all.
+  fakeWorld([say('Done.')], { effectiveConfigFor: async () => ({ memory: { enabled: true } }), reviewConversation: (a) => review.reviewConversation(a) })
+  const t2 = start(newConversation(), 'I always deploy on Fridays')
+  await waitFor(() => ended(t2.id), 'end')
+  await runner._settleReviews()
+  eq(modelCalls, 1, 'memory on, but the task\'s conversation was not reviewed')
+  review._setTestSeams()
+})
+
 await test('a second task on a conversation that has one is refused; an unknown conversation is 404', async () => {
   ledger._reset()
   fakeWorld([call('c1', 'delete_file', {})])
