@@ -186,6 +186,22 @@ await test('citation (D36): from a user message, 12+ chars, normalized, sharing 
   eq(review.filterOps({ ops: [{ op: 'add', text: 'Deploys on Fridays', quote: 'We deploy on Fridays' }] }, { turns: SAID })[0].quote, 'We deploy on Fridays', 'the quote is kept on the op')
 })
 
+await test('the context rule: a fact or state may not rest on a word only the assistant said; guidance may; the project name and kept memories are the user\'s', () => {
+  const turns = [U('q', 'Which language should I learn for systems programming?'), CTX('Rust. You clearly love Rust and want everything written in it.'), U('t', 'ok thanks')]
+  const keep = (op, opts = {}) => review.filterOps({ ops: [op] }, { turns, ...opts }).length === 1
+  // The 4B's leak (2026-11-13): a real user span, shared words, the assistant's claim.
+  assert(!keep({ op: 'add', kind: 'fact', text: 'Should learn Rust for systems programming', why: '', quote: 'Which language should I learn for systems programming?' }), 'a fact resting on the assistant\'s "Rust" was kept')
+  assert(keep({ op: 'add', kind: 'fact', text: 'Is learning systems programming', why: '', quote: 'Which language should I learn for systems programming?' }), 'a fact in the user\'s own words was refused')
+  assert(keep({ op: 'add', kind: 'guidance', text: 'Do not push Rust on the user', why: 'the user only asked which language', quote: 'Which language should I learn for systems programming?' }), 'guidance naming what the assistant did was refused')
+  // The project's name is the user's ("club" said only by the assistant).
+  const site = [U('s', 'We decided: the site will be built with Hugo.'), CTX('Hugo suits a small club site well.')]
+  const op = { op: 'add', kind: 'state', text: 'Garden club website will be built with Hugo', why: '', quote: 'the site will be built with Hugo' }
+  assert(!review.filterOps({ ops: [op] }, { turns: site }).length, 'without the project, "club" is the assistant\'s word')
+  assert(review.filterOps({ ops: [op] }, { turns: site, project: { id: 'p', name: 'Garden club website' } }).length === 1, 'the project name was not counted as the user\'s')
+  // Function words are not claims ("...fixing it comes first": only the assistant wrote "it").
+  assert(!review.restsOnContext('Fixing it comes first, then the rest of this', { userTexts: ['fixing comes rest'], contextTexts: ['it is first, this then'] }), 'a function word tripped the rule')
+})
+
 await test('filter: secrets, unknown ids, stray scopes, duplicates, dismissed, unknown kinds, guidance without why, max 3', () => {
   const userMemories = [{ id: 'm-1', text: 'Works on billing in Go' }]
   const q = 'billing service in TypeScript'

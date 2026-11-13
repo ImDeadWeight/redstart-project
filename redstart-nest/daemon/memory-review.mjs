@@ -305,6 +305,41 @@ export function citedQuote(quote, userTexts, saying) {
   return quote.trim()
 }
 
+/** A word's stem for the context rule: its first five letters, which joins "public" and "publicly". */
+const stem = (w) => w.slice(0, 5)
+
+/**
+ * The context rule: a fact or a state is about the user and their work, so it
+ * may not rest on a word that only the assistant or a tool said. Found on the
+ * 4B (2026-11-13): asked "Which language should I learn for systems
+ * programming?", with the assistant answering "Rust. You clearly love Rust",
+ * it kept the fact "Should learn Rust for systems programming", citing the
+ * user's real question. The citation passed (a real span, shared words); the
+ * claim was the assistant's. Guidance is exempt: a correction is about what
+ * the assistant did, and must be able to name it ("never from the /e/ Git
+ * Bash path"). `allowed` is the user's other words: the project's name and
+ * the memories already kept.
+ *
+ * @returns {boolean} true when the text brings in a word only context said
+ */
+export function restsOnContext(text, { userTexts, contextTexts, allowed = [] }) {
+  const words = (t) => memory.tokens(t).filter((w) => w.length >= 4 && !FUNCTION_WORDS.has(w))
+  const own = new Set([...userTexts, ...allowed].flatMap(words).map(stem))
+  const ctx = new Set(contextTexts.flatMap(words).map(stem))
+  return words(text).some((w) => ctx.has(stem(w)) && !own.has(stem(w)))
+}
+
+// Words that say nothing about what a memory claims. The first cut of the
+// context rule refused "...fixing it comes first" because only the assistant
+// had written "it".
+const FUNCTION_WORDS = new Set([
+  'this', 'that', 'these', 'those', 'with', 'from', 'into', 'onto', 'about', 'over', 'under', 'than', 'then',
+  'they', 'them', 'their', 'there', 'here', 'what', 'when', 'where', 'which', 'while', 'will', 'would', 'should',
+  'could', 'have', 'been', 'being', 'were', 'your', 'yours', 'some', 'more', 'most', 'also', 'just', 'only', 'very',
+  'each', 'every', 'other', 'such', 'like', 'make', 'made', 'does', 'done', 'doing', 'after', 'before', 'first',
+  'next', 'well', 'good', 'need', 'needs', 'want', 'wants', 'user', 'users', 'assistant',
+])
+
 /**
  * The model's operations, filtered to what may be acted on. Never throws on a
  * malformed answer; it yields [].
@@ -328,11 +363,16 @@ export function filterOps(answer, { userMemories = [], projectMemories = [], pro
   const ops = Array.isArray(answer?.ops) ? answer.ops : []
   const branchTurns = turns ?? (conversation ? branchForReview(conversation, new Set()).turns : [])
   const userTexts = branchTurns.filter((t) => t.role === 'user').map((t) => t.text)
+  const contextTexts = branchTurns.filter((t) => t.role !== 'user').map((t) => t.text)
   const known = new Map([
     ...userMemories.map((m) => [m.id, { m, scope: 'user' }]),
     ...projectMemories.map((m) => [m.id, { m, scope: 'project' }]),
   ])
   const remembered = new Set([...userMemories, ...projectMemories].map((m) => m.text.toLowerCase()))
+  // The user's own words besides their messages, for the context rule: the
+  // project's name (they named it: "Garden club website" was refused when
+  // only the assistant had said "club") and the memories already kept.
+  const ownWords = [...(project?.name ? [project.name] : []), ...userMemories.map((m) => m.text), ...projectMemories.map((m) => m.text)]
   const out = []
   const seen = new Set()
   const scoped = (scope) => (scope === 'project' ? { projectId: project.id } : {})
@@ -363,6 +403,7 @@ export function filterOps(answer, { userMemories = [], projectMemories = [], pro
     if (remembered.has(lower) || seen.has(lower) || isDismissed(norm.text)) continue
     const quote = citedQuote(raw.quote, userTexts, `${norm.text} ${why}`)
     if (!quote) continue
+    if (kind !== 'guidance' && restsOnContext(norm.text, { userTexts, contextTexts, allowed: ownWords })) continue
     const extra = { kind, ...(why ? { why } : {}), quote }
 
     if (raw.op === 'update') {
