@@ -160,6 +160,26 @@ export function filePathsIn(text) {
   return out
 }
 
+/**
+ * The gateway's retrieval report (redstart_retrieval_report, connector
+ * contract §2) off a completions response: the tools sent, whether retrieval
+ * removed any, and whether it ran. Null when the headers are absent (a Nest
+ * from before the report).
+ *
+ * @param {{ get(name: string): string | null } | undefined} headers
+ * @returns {{ names: string[], filtered: boolean, retrieval: 'on' | 'off' | null } | null}
+ */
+export function toolsSentReport(headers) {
+  const sent = headers?.get?.('x-redstart-tools-sent')
+  if (sent == null) return null
+  const state = headers.get('x-redstart-retrieval')
+  return {
+    names: sent.split(',').filter(Boolean).map((n) => decodeURIComponent(n)),
+    filtered: headers.get('x-redstart-tools-filtered') === '1',
+    retrieval: state === 'on' || state === 'off' ? state : null,
+  }
+}
+
 export const clip = (s) => (typeof s === 'string' && s.length > MAX_LOGGED_RESULT_CHARS
   ? `${s.slice(0, MAX_LOGGED_RESULT_CHARS)}… [${s.length - MAX_LOGGED_RESULT_CHARS} more chars]`
   : s)
@@ -250,7 +270,13 @@ export async function runTask(nest, task, opts) {
                 content,
                 reasoningChars: reasoning?.length ?? 0,
                 toolCalls: toolCalls?.map((c) => ({ id: c.id, name: c.function.name, arguments: c.function.arguments })),
-                timings: timings ? { prompt_n: timings.prompt_n, predicted_n: timings.predicted_n } : undefined,
+                // cache_n and prompt_ms for the retrieval metrics: a changed
+                // tool list shows as a reused prefix near 0 and a long prefill.
+                timings: timings ? {
+                  prompt_n: timings.prompt_n, predicted_n: timings.predicted_n,
+                  ...(typeof timings.cache_n === 'number' ? { cache_n: timings.cache_n } : {}),
+                  ...(typeof timings.prompt_ms === 'number' ? { prompt_ms: timings.prompt_ms } : {}),
+                } : undefined,
               })
               if (!toolCalls) finalText = content
               // The core runs only the first few calls of such a reply. A limit,
@@ -275,8 +301,14 @@ export async function runTask(nest, task, opts) {
                   ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
                   ...(opts.model ? { model: opts.model } : {}),
                   max_tokens: maxReplyTokens(opts),
+                  // Which tools went out, as headers (tools_sent below).
+                  redstart_retrieval_report: true,
+                  // --retrieval off: every post-ban tool, whatever Nest is set to.
+                  ...(opts.retrieval === 'off' ? { redstart_retrieval: false } : {}),
                 }
                 const res = await nest.completion(body, signal)
+                const report = toolsSentReport(res.headers)
+                if (report) log({ type: 'tools_sent', turn, ...report })
                 await readChatStream(res, acc, { signal })
                 // Hitting the cap is a limit like the turn and time limits:
                 // logged, so it shows in the summary's "hit a limit" count.
@@ -495,7 +527,7 @@ export async function runTask(nest, task, opts) {
     conversationId,
     verdict,
     error,
-    metrics: computeMetrics(events, verdict),
+    metrics: computeMetrics(events, verdict, task),
     finalText,
     workspaceFiles: Object.keys(workspace).sort(),
     createdFiles: Object.keys(createdFiles).sort(),

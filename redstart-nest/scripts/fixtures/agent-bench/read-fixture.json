@@ -1,1 +1,1 @@
-{ "id": "read-fixture", "group": "files", "prompt": "[script:read] What is the secret in data.txt?", "fixtures": [{ "path": "data.txt", "from": "data.txt" }, { "path": "nested/inline.txt", "content": "inline" }], "approve": "reads", "check": "checks.mjs#saysSeven" }
+{ "id": "read-fixture", "group": "files", "prompt": "[script:read] What is the secret in data.txt?", "fixtures": [{ "path": "data.txt", "from": "data.txt" }, { "path": "nested/inline.txt", "content": "inline" }], "approve": "reads", "expectTools": ["read_file"], "check": "checks.mjs#saysSeven" }

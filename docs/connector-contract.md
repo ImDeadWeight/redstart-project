@@ -82,8 +82,10 @@ The gateway rewrites the request before forwarding:
 - `redstart_retrieval_report: true` — report which tools were actually
   forwarded, after bans and retrieval. The response carries
   `x-redstart-tools-sent` (the tool names, comma-separated, each one
-  percent-encoded) and `x-redstart-tools-filtered` (`1` when retrieval removed
-  any tool, otherwise `0`); both are listed in
+  percent-encoded), `x-redstart-tools-filtered` (`1` when retrieval removed
+  any tool, otherwise `0`) and `x-redstart-retrieval` (`on` when retrieval ran
+  on this request, even if it kept every tool; `off` when it is disabled or the
+  request opted out); all three are listed in
   `Access-Control-Expose-Headers`. Only the literal `true` asks; the field is
   consumed and never forwarded. The names go to the caller only, never to the
   log

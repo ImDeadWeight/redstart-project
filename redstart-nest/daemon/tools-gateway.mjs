@@ -381,12 +381,16 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
 export const RETRIEVAL_REPORT_HEADERS = Object.freeze({
   sent: 'x-redstart-tools-sent',
   filtered: 'x-redstart-tools-filtered',
+  retrieval: 'x-redstart-retrieval',
 })
 
 /**
  * The response headers that answer `redstart_retrieval_report: true`: the
- * tools forwarded, by name, and whether retrieval removed any. Empty when the
- * caller did not ask, so an ordinary response is unchanged.
+ * tools forwarded, by name; whether retrieval removed any; and whether it ran
+ * on this request at all (`on`: enabled, not opted out, tools to choose from).
+ * The last is separate because "kept everything" and "off" both remove
+ * nothing, and the bench must tell them apart. Empty when the caller did not
+ * ask, so an ordinary response is unchanged.
  *
  * Names are comma-separated and each one percent-encoded, so an MCP tool name
  * with a comma or a non-ASCII character cannot break the list or the header.
@@ -395,7 +399,7 @@ export const RETRIEVAL_REPORT_HEADERS = Object.freeze({
  * Only `wire` is read, which prepareCompletion builds after bans and
  * retrieval, so a banned tool can never appear here.
  *
- * @param {{ report?: boolean, toolNamesSent?: string[], toolsRemoved?: boolean }|null|undefined} wire
+ * @param {{ report?: boolean, toolNamesSent?: string[], toolsRemoved?: boolean, filtered?: boolean }|null|undefined} wire
  * @returns {Record<string, string>}
  */
 export function retrievalReportHeaders(wire) {
@@ -404,7 +408,8 @@ export function retrievalReportHeaders(wire) {
   return {
     [RETRIEVAL_REPORT_HEADERS.sent]: names.map(encodeURIComponent).join(','),
     [RETRIEVAL_REPORT_HEADERS.filtered]: wire.toolsRemoved ? '1' : '0',
-    'Access-Control-Expose-Headers': `${RETRIEVAL_REPORT_HEADERS.sent}, ${RETRIEVAL_REPORT_HEADERS.filtered}`,
+    [RETRIEVAL_REPORT_HEADERS.retrieval]: wire.filtered ? 'on' : 'off',
+    'Access-Control-Expose-Headers': Object.values(RETRIEVAL_REPORT_HEADERS).join(', '),
   }
 }
 

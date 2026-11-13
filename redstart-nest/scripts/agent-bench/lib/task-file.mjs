@@ -14,6 +14,7 @@
 //     "answers": { "<question substring>": "<answer>" },   used from Phase 1
 //     "limits": { "maxTurns": 8, "maxSeconds": 300 },
 //     "check": "checks/csv.mjs#summaryHasTotals",
+//     "expectTools": ["run_python"],             optional: a right first tool
 //     "notes": "why the task is built this way"   optional, for people only
 //   }
 //
@@ -113,6 +114,17 @@ export async function loadTask(file) {
   const requires = raw.requires ?? []
   if (!Array.isArray(requires) || !requires.every((n) => typeof n === 'string')) fail(file, 'requires must be an array of tool names')
 
+  // The tools a sensible first call would use (tool retrieval second pass,
+  // 0.2). Never a pass criterion: the metrics report whether the model's
+  // first call (ask_user and update_plan aside) was one of them, which is how
+  // "the File System tools came first on attachment tasks" is counted.
+  // null: the task does not say, so it is left out of that count.
+  const expectTools = raw.expectTools ?? null
+  if (expectTools !== null && (!Array.isArray(expectTools) || expectTools.length === 0 ||
+      !expectTools.every((n) => typeof n === 'string' && n))) {
+    fail(file, 'expectTools must be a non-empty array of tool names')
+  }
+
   if (typeof raw.check !== 'string' || !raw.check.includes('#')) fail(file, 'check must be "<module>#<export>"')
   const [modPath, exportName] = raw.check.split('#')
   const mod = await import(pathToFileURL(path.resolve(dir, modPath)).href)
@@ -128,6 +140,7 @@ export async function loadTask(file) {
     approve,
     answers,
     requires,
+    expectTools,
     limits,
     checkName: raw.check,
     check,

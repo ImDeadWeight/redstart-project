@@ -26,6 +26,24 @@
 //   planLeftOpen    the run ended with plan steps still open (true/false;
 //                   null without a plan)
 //
+// Tool retrieval (second pass, 0.2), from the gateway's report headers
+// (tools_sent events) and llama-server's timings. Null where the run has no
+// such data: an older Nest, or a --runtime run (the daemon makes the calls).
+//
+//   retrieval         'on' if retrieval ran on any turn, else 'off'
+//   toolSets          distinct tool sets sent over the run's turns (1 means
+//                     the prompt ahead of the chat never changed)
+//   toolsSentFirst    how many tools the first turn was sent
+//   cacheMissTurns    turns after the first whose reused prefix (cache_n) is
+//                     under CACHE_MISS_FRACTION of the previous turn's whole
+//                     prompt: the prefix was thrown away and prefilled again
+//   prefillMs         sum of the turns' prompt_ms
+//   firstTool         the first tool the model called, ask_user and
+//                     update_plan aside (they are always offered, and are no
+//                     choice of retrieval's)
+//   firstToolExpected whether the task's expectTools lists firstTool; null
+//                     when the task names none or nothing was called
+//
 // The schema check is deliberately shallow: an object, every `required` key
 // present, each present key's top-level JSON type matching the schema's
 // `type`, and no unknown key when additionalProperties is false. That catches
@@ -34,6 +52,18 @@
 // =============================================================================
 
 import { FALLBACK_ID_PREFIX } from '../../../../shared/agent-core/tool-call-parser.mjs'
+
+/**
+ * Below this share of the previous turn's prompt, a turn's reused prefix
+ * counts as a cache miss. A turn normally reuses everything before it (cache_n
+ * close to the last prompt's size); a change to the tool list, ahead of the
+ * chat, drops it to roughly the system prompt or to 0 (P2). Half sits far from
+ * both.
+ */
+export const CACHE_MISS_FRACTION = 0.5
+
+/** Host-resolved tools: offered on every turn, so not a first choice. */
+const HOST_TOOLS = new Set(['ask_user', 'update_plan'])
 
 /** @param {unknown} v */
 function jsonType(v) {
@@ -91,8 +121,9 @@ export function argumentProblem(argumentsText, schema) {
 /**
  * @param {any[]} events one run's log
  * @param {{ pass: boolean }} verdict
+ * @param {{ expectTools?: string[] | null }} [task]
  */
-export function computeMetrics(events, verdict) {
+export function computeMetrics(events, verdict, task = {}) {
   let toolCalls = 0
   let toolErrors = 0
   let invalidArgs = 0
@@ -109,12 +140,35 @@ export function computeMetrics(events, verdict) {
   let textAsks = 0
   let planLeftOpen = null
   const lastErroredByTool = new Map()
+  /** @type {'on' | 'off' | null} */
+  let retrieval = null
+  const toolSetKeys = new Set()
+  let toolsSentFirst = null
+  let cacheMissTurns = null
+  let prefillMs = null
+  let firstTool = null
+  /** the previous assistant turn's whole prompt (cache_n + prompt_n) */
+  let lastPromptTotal = null
 
   for (const e of events) {
     if (e.type === 'turn') turns++
     if (e.type === 'assistant' && e.timings) {
       promptTokens += e.timings.prompt_n || 0
       predictedTokens += e.timings.predicted_n || 0
+      if (typeof e.timings.prompt_ms === 'number') prefillMs = (prefillMs ?? 0) + e.timings.prompt_ms
+      if (typeof e.timings.cache_n === 'number') {
+        cacheMissTurns ??= 0
+        if (lastPromptTotal !== null && e.timings.cache_n < CACHE_MISS_FRACTION * lastPromptTotal) cacheMissTurns++
+        lastPromptTotal = e.timings.cache_n + (e.timings.prompt_n || 0)
+      }
+    }
+    if (e.type === 'tools_sent') {
+      if (e.retrieval === 'on') retrieval = 'on'
+      else if (e.retrieval === 'off' && retrieval === null) retrieval = 'off'
+      if (Array.isArray(e.names)) {
+        toolSetKeys.add([...e.names].sort().join('\n'))
+        toolsSentFirst ??= e.names.length
+      }
     }
     if (e.type === 'tool_call') {
       toolCalls++
@@ -123,6 +177,7 @@ export function computeMetrics(events, verdict) {
       if (lastErroredByTool.get(e.name)) retries++
       if (e.name === 'ask_user') askCalls++
       if (e.name === 'update_plan') planCalls++
+      if (firstTool === null && !HOST_TOOLS.has(e.name)) firstTool = e.name
     }
     if (e.type === 'tool_result') {
       if (e.isError) toolErrors++
@@ -158,6 +213,13 @@ export function computeMetrics(events, verdict) {
     planNudges,
     textAsks,
     planLeftOpen,
+    retrieval,
+    toolSets: toolSetKeys.size || null,
+    toolsSentFirst,
+    cacheMissTurns,
+    prefillMs,
+    firstTool,
+    firstToolExpected: firstTool !== null && Array.isArray(task.expectTools) ? task.expectTools.includes(firstTool) : null,
   }
 }
 
@@ -180,6 +242,7 @@ export function summarize(runs) {
     runs: t.runs.length,
     passes: t.runs.filter((m) => m.pass).length,
     passRate: t.runs.filter((m) => m.pass).length / t.runs.length,
+    ...retrievalSummary(t.runs),
   }))
 
   const all = runs.map((r) => r.metrics)
@@ -208,6 +271,30 @@ export function summarize(runs) {
     textAsks: all.reduce((a, m) => a + (m.textAsks ?? 0), 0),
     runsThatAskedInText: all.filter((m) => (m.textAsks ?? 0) > 0).length,
     plansLeftOpen: all.filter((m) => m.planLeftOpen === true).length,
+    ...retrievalSummary(all),
     tasks,
+  }
+}
+
+const sum = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) : null)
+
+/**
+ * The retrieval numbers over some runs (all of them, or one task's). Runs
+ * with no data for a number are left out of it rather than counted as 0.
+ *
+ * @param {Array<ReturnType<typeof computeMetrics>>} runs
+ */
+export function retrievalSummary(runs) {
+  const known = (k) => runs.map((m) => m[k]).filter((x) => x != null)
+  const expected = known('firstToolExpected')
+  return {
+    // e.g. 'on' or 'on, off': which states the runs saw, sorted.
+    retrieval: [...new Set(known('retrieval'))].sort().join(', ') || null,
+    toolSetsPerRun: mean(known('toolSets')),
+    toolsSentFirst: mean(known('toolsSentFirst')),
+    cacheMissTurns: sum(known('cacheMissTurns')),
+    prefillMsPerRun: mean(known('prefillMs')),
+    firstToolExpected: expected.filter(Boolean).length,
+    firstToolJudged: expected.length,
   }
 }

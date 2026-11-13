@@ -358,14 +358,24 @@ function startFakeNest(gatewayPort) {
       // stateless, so two tasks with the same prompt cannot share a counter.
       const turn = body.messages.filter((m) => m.role === 'assistant').length
       const out = SCRIPTS[scriptName](turn, body.messages)
-      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      // The gateway's retrieval report (tools-gateway.mjs retrievalReportHeaders):
+      // every tool sent, nothing removed, on unless the request opted out.
+      const report = body.redstart_retrieval_report === true ? {
+        'x-redstart-tools-sent': (body.tools ?? []).map((t) => encodeURIComponent(t.function.name)).join(','),
+        'x-redstart-tools-filtered': '0',
+        'x-redstart-retrieval': body.redstart_retrieval === false ? 'off' : 'on',
+      } : {}
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', ...report })
       if (out === 'hang') {
         res.write(`data: ${JSON.stringify(chunk({ reasoning_content: 'hmm' }))}\n\n`)
         req.on('close', () => res.end())
         return
       }
       for (const c of out) res.write(`data: ${JSON.stringify(c)}\n\n`)
-      res.write(`data: ${JSON.stringify(chunk({}, { timings: { prompt_n: 100, predicted_n: 10 } }))}\n\n`)
+      // llama-server's timings: each turn reuses the whole previous prompt
+      // (cache_n), so no turn is a cache miss.
+      const cache_n = turn === 0 ? 0 : turn * 110
+      res.write(`data: ${JSON.stringify(chunk({}, { timings: { prompt_n: 100, predicted_n: 10, cache_n, prompt_ms: 50 } }))}\n\n`)
       res.write('data: [DONE]\n\n')
       return res.end()
     }
@@ -462,6 +472,48 @@ await test('argument problems: bad JSON, missing required, wrong type, unknown k
 await test('approval policy: all, reads, a named list', async () => {
   eq([approves('all', 'w', 'write'), approves('reads', 'r', 'read'), approves('reads', 'w', 'write'),
     approves(['w'], 'w', 'write'), approves(['w'], 'x', 'read')], [true, true, false, true, false], 'decisions')
+})
+
+await test('retrieval metrics: tool sets, cache misses, prefill, the first tool (host tools aside), on beats off', async () => {
+  const sent = (names, retrieval = 'on') => ({ t: 0, type: 'tools_sent', names, filtered: false, retrieval })
+  const asst = (cache_n, prompt_n, prompt_ms) => ({ t: 0, type: 'assistant', timings: { prompt_n, predicted_n: 5, cache_n, prompt_ms } })
+  const call = (name) => ({ t: 0, type: 'tool_call', name, id: name })
+  const events = [
+    { t: 0, type: 'start' },
+    sent(['b', 'a']), asst(0, 1000, 400), call('ask_user'), call('fs_read'),
+    // Same set, other order: one set. The prefix was reused (900 of 1000).
+    sent(['a', 'b']), asst(900, 150, 30), call('read_document'),
+    // The set grew: the prefix went (10 of 1050), a miss, and a long prefill.
+    sent(['a', 'b', 'c'], 'off'), asst(10, 1200, 500),
+    { t: 0, type: 'end' },
+  ]
+  const m = computeMetrics(events, { pass: true }, { expectTools: ['read_document'] })
+  eq([m.retrieval, m.toolSets, m.toolsSentFirst, m.cacheMissTurns, m.prefillMs], ['on', 2, 2, 1, 930], 'retrieval, sets, first-turn tools, misses, prefill')
+  eq([m.firstTool, m.firstToolExpected], ['fs_read', false], 'ask_user is skipped; fs_read is not what the task expected')
+  eq(computeMetrics(events, { pass: true }).firstToolExpected, null, 'a task with no expectTools is not judged')
+  const bare = computeMetrics([{ t: 0, type: 'start' }, { t: 0, type: 'assistant', timings: { prompt_n: 1, predicted_n: 1 } }, { t: 0, type: 'end' }], { pass: true })
+  eq([bare.retrieval, bare.toolSets, bare.cacheMissTurns, bare.prefillMs, bare.firstTool], [null, null, null, null, null], 'no report and no timings: unknown, not 0')
+  const { retrievalSummary } = await import('./agent-bench/lib/metrics.mjs')
+  const s = retrievalSummary([m, bare, { ...m, retrieval: 'off', firstToolExpected: true }])
+  eq([s.retrieval, s.cacheMissTurns, s.firstToolExpected, s.firstToolJudged], ['off, on', 2, 1, 2], 'summary: states seen, misses summed, the unknown run left out')
+})
+
+await test('expectTools: optional; anything but a non-empty list of names fails at load', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-expect-'))
+  const checks = path.join(FIXTURES, 'checks.mjs').replace(/\\/g, '/')
+  const write = (name, extra) => {
+    const f = path.join(dir, name)
+    fs.writeFileSync(f, JSON.stringify({ id: 'e', prompt: 'p', check: `${checks}#neverPasses`, ...extra }))
+    return f
+  }
+  eq((await loadTask(write('none.json', {}))).expectTools, null, 'absent is null')
+  eq((await loadTask(write('ok.json', { expectTools: ['read_document', 'run_python'] }))).expectTools, ['read_document', 'run_python'], 'a list')
+  for (const bad of [[], 'read_document', [3], ['']]) {
+    let e = null
+    try { await loadTask(write('bad.json', { expectTools: bad })) } catch (err) { e = err }
+    assert(/expectTools must be a non-empty array of tool names/.test(e?.message ?? ''), `${JSON.stringify(bad)} was accepted`)
+  }
+  fs.rmSync(dir, { recursive: true, force: true })
 })
 
 await test('retries count a call to a tool whose previous call errored', async () => {
@@ -833,6 +885,43 @@ if (bench) {
   await test('tokens are summed from the turns\' timings', async () => {
     const r = run('write-answer')
     eq([r.metrics.promptTokens, r.metrics.predictedTokens], [200, 20], 'two turns of 100/10')
+  })
+
+  await test('every request asks for the retrieval report; the bench logs it per turn and the metrics read it', async () => {
+    assert(nest.state.completionBodies.every((b) => b.redstart_retrieval_report === true), 'a request without redstart_retrieval_report')
+    assert(nest.state.completionBodies.every((b) => !('redstart_retrieval' in b)), '--retrieval server opted a request out')
+    const r = run('read-fixture')
+    const reports = r.events.filter((e) => e.type === 'tools_sent')
+    eq(reports.map((e) => e.turn), [1, 2], 'one report per turn')
+    eq(reports[0].names, ['read_file', 'make_doc', 'write_file', 'search_docs', 'fs_write', 'ask_user', 'update_plan'], 'the names, decoded')
+    eq(r.events.find((e) => e.type === 'assistant').timings, { prompt_n: 100, predicted_n: 10, cache_n: 0, prompt_ms: 50 }, 'cache_n and prompt_ms are kept')
+    const m = r.metrics
+    eq([m.retrieval, m.toolSets, m.toolsSentFirst, m.cacheMissTurns, m.prefillMs, m.firstTool, m.firstToolExpected],
+      ['on', 1, 7, 0, 100, 'read_file', true], 'retrieval, sets, first-turn tools, misses, prefill, first tool, expected')
+    eq(run('write-answer').metrics.firstToolExpected, null, 'a task with no expectTools is not judged')
+    eq([bench.summary.retrieval, bench.summary.firstToolExpected, bench.summary.firstToolJudged], ['on', 1, 1], 'summary')
+    const md = fs.readFileSync(path.join(outDir, 'summary.md'), 'utf8')
+    assert(md.includes('tool retrieval (--retrieval server): on · 7.0 tools on the first turn'), 'summary.md line')
+    assert(/\| read-fixture \| files \| 1\/1 \| on \| 7\.0 \| 1\.0 \| 0 \| 0\.1 \| 1\/1 \|/.test(md), 'per-task row')
+    assert(md.includes('Row for its "Tool retrieval, second pass" table:'), 'results row')
+  })
+
+  await test('--retrieval off opts every request out and the summary says off; bad values and --runtime are refused', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-retrieval-'))
+    const before = nest.state.completionBodies.length
+    const off = await main(['--model-label', 'fake model', '--tasks', path.join(FIXTURES, 'read-fixture.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', dir, '--quiet', '--retrieval', 'off'], { log: () => {} })
+    const bodies = nest.state.completionBodies.slice(before)
+    assert(bodies.length > 0 && bodies.every((b) => b.redstart_retrieval === false), 'a request was not opted out')
+    eq([off.runs[0].metrics.retrieval, off.summary.retrieval], ['off', 'off'], 'read back from the report, not assumed')
+    const { meta } = JSON.parse(fs.readFileSync(path.join(dir, 'summary.json'), 'utf8'))
+    eq(meta.retrieval, 'off', 'the flag is in summary.json')
+    assert(fs.readFileSync(path.join(dir, 'summary.md'), 'utf8').includes('tool retrieval (--retrieval off): off'), 'summary.md line')
+    for (const argv of [['--retrieval', 'sometimes'], ['--retrieval', 'off', '--runtime']]) {
+      let e = null
+      try { parseArgs(['--model-label', 'm', ...argv]) } catch (err) { e = err }
+      assert(/--retrieval/.test(e?.message ?? ''), `${argv.join(' ')} was accepted`)
+    }
+    fs.rmSync(dir, { recursive: true, force: true })
   })
 
   await test('every request caps the reply length (4096 by default), and a capped reply is a limit', async () => {

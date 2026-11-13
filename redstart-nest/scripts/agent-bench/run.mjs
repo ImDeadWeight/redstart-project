@@ -21,6 +21,9 @@
 //                              hosts the loop, the bench answers through
 //                              /tasks; lib/runtime.mjs. Plan is always full;
 //                              --model does not apply)
+//     [--retrieval server|off] (tool retrieval as Nest is set, the default,
+//                              or off for this run: every post-ban tool on
+//                              every turn. The summary says which it was)
 //
 // Login on: put the bench account's API key in REDSTART_BENCH_API_KEY (or
 // pass --api-key, which then sits in your shell history). Use a dedicated
@@ -49,8 +52,9 @@ const FLAGS = {
   '--model-label': 'modelLabel', '--tasks': 'tasks', '--repeat': 'repeat', '--out': 'out',
   '--gateway': 'gateway', '--mcp': 'mcp', '--api-key': 'apiKey', '--temperature': 'temperature',
   '--model': 'model', '--max-tokens': 'maxTokens', '--plan': 'plan',
-  '--request-timeout': 'requestTimeout', '--text-asks': 'textAsks',
+  '--request-timeout': 'requestTimeout', '--text-asks': 'textAsks', '--retrieval': 'retrieval',
 }
+export const RETRIEVAL_MODES = ['server', 'off']
 export const PLAN_MODES = ['full', 'tool', 'off']
 const SWITCHES = { '--thinking': 'thinking', '--keep': 'keep', '--quiet': 'quiet', '--runtime': 'runtime' }
 
@@ -100,6 +104,13 @@ export function parseArgs(argv) {
   // chat-ui ships), and runs on the loaded model.
   if (opts.runtime && opts.plan !== 'full') throw new Error('--runtime runs with --plan full only: a task always has update_plan and its completion check')
   if (opts.runtime && opts.model) throw new Error('--runtime cannot pick a model (--model): a task uses the loaded one')
+  // Tool retrieval (second pass, 0.2): server = as Nest is configured; off =
+  // the request opts out (redstart_retrieval: false), so a retrieval-off row
+  // needs no change to Nest's settings. What actually happened is read back
+  // from the gateway's report, never assumed from this flag.
+  opts.retrieval = opts.retrieval ?? 'server'
+  if (!RETRIEVAL_MODES.includes(opts.retrieval)) throw new Error(`--retrieval must be one of ${RETRIEVAL_MODES.join(', ')}`)
+  if (opts.runtime && opts.retrieval === 'off') throw new Error('--runtime cannot turn retrieval off (--retrieval off): the daemon makes the completions requests')
   opts.apiKey = opts.apiKey ?? process.env.REDSTART_BENCH_API_KEY ?? null
   return opts
 }
@@ -227,6 +238,21 @@ export function fallbackWarning(summary) {
 
 const pct = (x) => (x == null ? '—' : `${(x * 100).toFixed(0)}%`)
 const num = (x, d = 1) => (x == null ? '—' : x.toFixed(d))
+const secs = (ms) => (ms == null ? '—' : (ms / 1000).toFixed(1))
+const ratio = (k, n) => (n ? `${k}/${n}` : '—')
+
+/**
+ * The tool retrieval line of summary.md (second pass, 0.2).
+ *
+ * @param {{ retrieval?: string }} meta
+ * @param {ReturnType<typeof import('./lib/metrics.mjs').retrievalSummary>} s
+ */
+export function retrievalLine(meta, s) {
+  return `tool retrieval (--retrieval ${meta.retrieval ?? 'server'}): ${s.retrieval ?? 'not reported'}` +
+    ` · ${num(s.toolsSentFirst)} tools on the first turn · ${num(s.toolSetsPerRun)} tool set(s)/run` +
+    ` · ${s.cacheMissTurns ?? '—'} cache-miss turn(s) · prefill ${secs(s.prefillMsPerRun)} s/run` +
+    ` · first tool as expected ${ratio(s.firstToolExpected, s.firstToolJudged)}`
+}
 
 export function summaryMarkdown(meta, summary) {
   const lines = [
@@ -249,13 +275,19 @@ export function summaryMarkdown(meta, summary) {
     '',
     `questions in reply text (--text-asks ${meta.textAsks ?? 'end'}): ${summary.textAsks ?? 0} answered in ${summary.runsThatAskedInText ?? 0} run(s)`,
     '',
-    '| task | group | passes |',
-    '|---|---|---|',
-    ...summary.tasks.map((t) => `| ${t.taskId} | ${t.group} | ${t.passes}/${t.runs} |`),
+    retrievalLine(meta, summary),
+    '',
+    '| task | group | passes | retrieval | tools, 1st turn | tool sets/run | cache misses | prefill s/run | first tool as expected |',
+    '|---|---|---|---|---|---|---|---|---|',
+    ...summary.tasks.map((t) => `| ${t.taskId} | ${t.group} | ${t.passes}/${t.runs} | ${t.retrieval ?? '—'} | ${num(t.toolsSentFirst)} | ${num(t.toolSetsPerRun)} | ${t.cacheMissTurns ?? '—'} | ${secs(t.prefillMsPerRun)} | ${ratio(t.firstToolExpected, t.firstToolJudged)} |`),
     '',
     'Row for docs/notes/agent-bench-results.md:',
     '',
     `| ${meta.date} | ${meta.modelLabel} | ${meta.commit} | ${meta.taskCount}×${meta.repeat} | ${pct(summary.passRate)} | ${pct(summary.toolSuccessRate)} | ${pct(summary.invalidArgRate)} | ${pct(summary.fallbackRate)} | ${num(summary.retriesPerTask)} | ${num(summary.turnsPerTask)} | ${summary.hitLimitRuns} |`,
+    '',
+    'Row for its "Tool retrieval, second pass" table:',
+    '',
+    `| ${meta.date} | ${meta.modelLabel} | ${meta.commit} | ${meta.taskCount}×${meta.repeat} | ${summary.retrieval ?? '—'} | ${pct(summary.passRate)} | ${num(summary.toolsSentFirst)} | ${num(summary.toolSetsPerRun)} | ${summary.cacheMissTurns ?? '—'} | ${secs(summary.prefillMsPerRun)} | ${ratio(summary.firstToolExpected, summary.firstToolJudged)} |`,
     '',
   ]
   return lines.join('\n')
@@ -331,7 +363,7 @@ export async function main(argv, io = {}) {
   for (let r = 0; r < opts.repeat; r++) {
     for (const task of tasks) {
       const result = await runTask(nest, task, {
-        mcpTools, thinking: opts.thinking, temperature: opts.temperature, model: opts.model, maxTokens: opts.maxTokens, fileSystemSnapshot, plan: opts.plan, textAsks: opts.textAsks, runtime: !!opts.runtime,
+        mcpTools, thinking: opts.thinking, temperature: opts.temperature, model: opts.model, maxTokens: opts.maxTokens, fileSystemSnapshot, plan: opts.plan, textAsks: opts.textAsks, runtime: !!opts.runtime, retrieval: opts.retrieval,
         keep: opts.keep, runIndex: r,
       })
       runs.push(result)
@@ -371,6 +403,8 @@ export async function main(argv, io = {}) {
     // Who hosted the loop: 'bench' (this process) or 'runtime' (the daemon's tasks).
     host: opts.runtime ? 'runtime' : 'bench',
     textAsks: opts.textAsks,
+    // The --retrieval flag. What happened is summary.retrieval, read from the gateway.
+    retrieval: opts.retrieval,
     temperature: opts.temperature ?? null,
     maxTokens: maxReplyTokens(opts),
     gateway: opts.gateway,

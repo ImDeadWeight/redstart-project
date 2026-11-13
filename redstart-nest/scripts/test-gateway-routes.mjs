@@ -797,6 +797,7 @@ async function main() {
       assert(JSON.stringify(reported) === JSON.stringify(forwarded),
         `reported ${reported.join(',')} but forwarded ${forwarded.join(',')}`)
       assert(res.headers.get('x-redstart-tools-filtered') === '1', 'a narrowed list was reported as unfiltered')
+      assert(res.headers.get('x-redstart-retrieval') === 'on', 'retrieval ran but was reported off')
       assert(/x-redstart-tools-sent/.test(res.headers.get('access-control-expose-headers') ?? ''),
         'a browser client on another origin could not read the header')
     })
@@ -806,7 +807,20 @@ async function main() {
     updateGatewayConfig({ ...baseConfig, ctxSize: 4096 })
     const res = await completions({ ...retrievalBody(), redstart_retrieval_report: true })
     assert(res.headers.get('x-redstart-tools-filtered') === '0', 'retrieval off was reported as filtered')
+    assert(res.headers.get('x-redstart-retrieval') === 'off', 'retrieval off was reported on')
     assert(sentHeader(res)?.length === 3, `expected all three tools: ${res.headers.get('x-redstart-tools-sent')}`)
+  })
+
+  await test('🔍 "on" and "off" are told apart when nothing was removed: enabled but failed open, and opted out', async () => {
+    // No embedding server (the closed port), so retrieval runs and keeps
+    // everything: filtered 0, as with retrieval off, but on.
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+    const failedOpen = await completions({ ...retrievalBody(), redstart_retrieval_report: true })
+    assert(failedOpen.headers.get('x-redstart-tools-filtered') === '0', 'failed open but reported filtered')
+    assert(failedOpen.headers.get('x-redstart-retrieval') === 'on', 'enabled, but reported off')
+    const optedOut = await completions({ ...retrievalBody(), redstart_retrieval: false, redstart_retrieval_report: true })
+    assert(optedOut.headers.get('x-redstart-retrieval') === 'off', 'opted out, but reported on')
+    updateGatewayConfig(baseConfig)
   })
 
   await test('🔒 without the flag there is no report, and the field never reaches llama-server', async () => {

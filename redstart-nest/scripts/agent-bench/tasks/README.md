@@ -102,6 +102,17 @@ bench answer such a question from the task's `answers`, as a chat user would,
 and the checks count it as asking. The summary reports tool asks and text asks
 separately, so the two can be compared.
 
+**Tool retrieval (second pass, 2026-11-13).** A task may name `expectTools`:
+the tools a sensible first call would use. It is never a pass criterion. The
+summary reports how many runs' first call (ask_user and update_plan aside) was
+one of them, which is how "the File System tools came first on attachment
+tasks" is counted. The bench also asks the gateway which tools it sent on
+every turn and records llama-server's `cache_n` and `prompt_ms`, so each task
+row shows retrieval on or off, the tools on the first turn, the distinct tool
+sets, the cache-miss turns and the prefill time. `--retrieval off` runs a task
+with every post-ban tool (the request opts out, so Nest's setting can stay as
+it is). Neither works with `--runtime`, where the daemon makes the requests.
+
 `fixtures/` is byte-stable (`.gitattributes`: `-text`). The data files were
 generated with a fixed seed. Checks compute their expected answers from these
 files, so edit a fixture and its check follows.
