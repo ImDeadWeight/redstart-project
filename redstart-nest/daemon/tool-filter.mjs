@@ -23,6 +23,13 @@ import { TOOL_NAMES as MEMORY_TOOL_NAMES } from './memory-tool.mjs'
 // forgot (2026-11-12).
 export const TOOL_FAMILIES = [MEMORY_TOOL_NAMES]
 
+// Kept on every turn the request carries them, past the floor and the budget
+// (selectTools pins). Host-resolved tools, and the memory tools (second pass
+// 1.1): a fact to remember arrives on a turn about something else, so the
+// query cannot be trusted to score them. Block 12's "you cannot save" line in
+// system-prompt.mjs stays as the fallback for a request that has none.
+export const ALWAYS_PINNED_TOOL_NAMES = Object.freeze([...HOST_RESOLVED_TOOL_NAMES, ...MEMORY_TOOL_NAMES])
+
 // =============================================================================
 // Redstart Nest — applying tool retrieval to a request
 // =============================================================================
@@ -154,7 +161,10 @@ export async function filterRequestTools({
       // particular, and a dropped ask_user reads as "you may not ask". A pin
       // only keeps a tool the request carries, so this adds nothing a client
       // did not send.
-      pins: new Set([...pinsFromMessages(messages), ...HOST_RESOLVED_TOOL_NAMES]),
+      // The memory tools likewise (tool-retrieval second pass, 1.1, P1):
+      // "remember that" can come on any turn of any topic, the query rarely
+      // scores them, and a model without memory_save says it cannot save.
+      pins: new Set([...pinsFromMessages(messages), ...ALWAYS_PINNED_TOOL_NAMES]),
       previous: memory.get(key),
       budgetTokens,
       floor: config.floor,

@@ -944,6 +944,26 @@ await test('🔒 the ask_user pin adds nothing the request did not carry', async
   assert(!out.map(toolName).includes('ask_user'), 'a pin invented a tool the client never sent')
 })
 
+await test('🔒 the memory tools are kept on a turn whose query scores them low (second pass 1.1, P1)', async () => {
+  resetToolFilterState()
+  const mem = ['memory_save', 'memory_search', 'memory_forget'].map((n) => fnTool(n, 'zzz'))
+  const out = await filterRequestTools({ tools: [...allTools, ...mem], messages: ask, settings: { enabled: true }, embed })
+  const names = out.map(toolName)
+  for (const n of ['memory_save', 'memory_search', 'memory_forget']) assert(names.includes(n), `${n} was dropped: ${names.join(',')}`)
+  assert(!names.includes('web_fetch'), `the pin widened the selection: ${names.join(',')}`)
+})
+
+await test('🔒 a request with no memory tools gets none, and a banned (absent) memory_forget stays out', async () => {
+  resetToolFilterState()
+  const none = await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: true }, embed })
+  assert(!none.map(toolName).some((n) => n.startsWith('memory_')), 'a pin invented a memory tool')
+  resetToolFilterState()
+  // A ban runs before retrieval, so a banned tool is simply not in the list.
+  const two = ['memory_save', 'memory_search'].map((n) => fnTool(n, 'zzz'))
+  const out = (await filterRequestTools({ tools: [...allTools, ...two], messages: ask, settings: { enabled: true }, embed })).map(toolName)
+  assert(out.includes('memory_save') && !out.includes('memory_forget'), `got ${out.join(',')}`)
+})
+
 await test('🔒 an empty selection falls back to the full list rather than stripping everything', async () => {
   resetToolFilterState()
   // An embedder that answers with vectors of the wrong length: every cosine is
