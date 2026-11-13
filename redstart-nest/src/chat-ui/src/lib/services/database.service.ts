@@ -262,12 +262,14 @@ export class DatabaseService {
     id: string,
     options?: { deleteWithForks?: boolean }
   ): Promise<void> {
-    const url = new URL(resolveApiPath(`/conversations/${id}`), 'http://x');
-    if (options?.deleteWithForks) url.searchParams.set('deleteWithForks', 'true');
-
-    await fetch(url.toString(), {
-      method: 'DELETE',
-      headers: { 'X-Redstart-Device-Id': getDeviceId() }
+    // Through apiFetch like every other call: it resolves the path against the
+    // server base (relative in the web build, absolute in the app) and carries
+    // the auth header. This used to parse the path against a dummy origin and
+    // fetch the result, which in the web build sent the delete to http://x/…,
+    // without auth, and the chat never went away.
+    const query = options?.deleteWithForks ? '?deleteWithForks=true' : '';
+    await apiFetch<void>(`/conversations/${encodeURIComponent(id)}${query}`, {
+      method: 'DELETE'
     });
   }
 
