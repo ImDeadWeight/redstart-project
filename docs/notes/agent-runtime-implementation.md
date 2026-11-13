@@ -5,7 +5,7 @@ what was built, phase by phase: deviations from the plan, and gaps carried
 forward. Branch: `feat/agent-core`, from main @ 224d121 (alpha.12, PR #38
 merged).
 
-## Where we left off (2026-11-13: Phase 8: 8.0 and 8.1 landed; first v1 baseline run and four cases revised after it; next: rerun the v1 baseline, then 8.2)
+## Where we left off (2026-11-13: Phase 8: 8.0, 8.1 and the v1 baseline done; next: the user decides the acceptance reading, then 8.2)
 
 Phase 3 → "Acceptance" has the closing record; "What landed" the per-module
 notes and the gaps carried out. Phase 2 closed, pushed at bc78774.
@@ -1054,9 +1054,21 @@ is decided by the bench.
   the chips. Found on the way, fixed in 12de950: test-contracts.mjs
   intermittently aborted Node on Windows at exit (libuv
   UV_HANDLE_CLOSING) after every test passed.
-- **Next: rerun the v1 baseline on the revised cases** (same commands as
-  before, all three models, think off and on), rows into the table. Then
-  8.2, the v2 reviewer.
+- **The v1 baseline (the user, 2026-11-13, cases at e61b652): the "before"
+  row Phase 8 is measured against.** Filtered, think off / on: 35B 28/32 /
+  26; Ornith 9B 20 / 20; 4B 14 / 14. Rows and notes in agent-bench-results.md,
+  "Memory bench". The referent-dependent cases (corr-run-from-e,
+  conf-one-pr) now fail on every model, as they should for v1. Thinking
+  helped no model (U10's evidence so far: off).
+- **Acceptance problem found by the baseline (for the user to decide).** The
+  plan's first criterion, "corrections, confirmations and state each rise
+  from the baseline, and together reach at least half their cases on the
+  35B", cannot be met as written: the 35B is already at 12/14 together and
+  5/5 on state under v1, so state cannot rise. And v2 rows are stricter
+  than v1 rows (a v2 op carries a kind, so a wrong kind fails; v1's are
+  judged on content only). Proposed reading: the rise is required on the
+  9B and the 4B (8/14 and 3/14 together now), and on the 35B those groups
+  must not fall beyond one case.
 
 ---
 
