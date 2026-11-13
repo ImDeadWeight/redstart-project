@@ -1,0 +1,48 @@
+{
+  "id": "facts-recurring",
+  "group": "facts",
+  "about": "A recurring project.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "I put together the monthly newsletter for our cycling club. This month I need a short intro paragraph about the autumn rides."
+    },
+    {
+      "role": "assistant",
+      "content": "Here is an intro: \"Autumn is here, and with it some of the best riding of the year...\""
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "terms": [
+        [
+          "newsletter"
+        ],
+        [
+          "cycling",
+          "bike",
+          "club"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Writes the monthly newsletter for their cycling club",
+        "quote": "monthly newsletter for our cycling club"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Wants an intro about autumn rides",
+        "quote": "intro paragraph about the autumn rides"
+      }
+    ]
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "id": "corr-show-test-command",
+  "group": "corrections",
+  "about": "A correction with its reason in the user turn.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Run the tests for the parser."
+    },
+    {
+      "role": "assistant",
+      "content": "Running them.",
+      "tool_calls": [
+        {
+          "id": "c1",
+          "name": "run_command",
+          "arguments": "{\"command\":\"npm test\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "c1",
+      "name": "run_command",
+      "content": "exit 1: 214 passing, 3 failing (ui suite)",
+      "is_error": true
+    },
+    {
+      "role": "assistant",
+      "content": "The ui suite has three failures."
+    },
+    {
+      "role": "user",
+      "content": "That was the wrong suite again. From now on, show me the test command before you run it."
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "kind": "guidance",
+      "terms": [
+        [
+          "test",
+          "command"
+        ],
+        [
+          "show",
+          "before",
+          "first",
+          "confirm"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "guidance",
+        "text": "Show the test command to the user before running it",
+        "why": "Ran the wrong suite more than once",
+        "quote": "show me the test command before you run it"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Has a parser with tests",
+        "quote": "Run the tests for the parser"
+      }
+    ]
+  }
+}

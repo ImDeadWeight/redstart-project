@@ -1,0 +1,53 @@
+{
+  "id": "retr-forget-employer",
+  "group": "retractions",
+  "about": "An explicit request to forget.",
+  "existing": {
+    "user": [
+      {
+        "id": "u1",
+        "kind": "fact",
+        "text": "Works at Acme Corp",
+        "ageDays": 60
+      },
+      {
+        "id": "u2",
+        "kind": "fact",
+        "text": "Prefers Python",
+        "ageDays": 60
+      }
+    ]
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "Forget that I work at Acme, I'd rather that wasn't remembered."
+    },
+    {
+      "role": "assistant",
+      "content": "Understood."
+    }
+  ],
+  "expect": [
+    {
+      "op": "forget",
+      "target": "u1"
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "forget",
+        "id": "u1",
+        "quote": "Forget that I work at Acme"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "forget",
+        "id": "u2",
+        "quote": "Forget that I work at Acme"
+      }
+    ]
+  }
+}

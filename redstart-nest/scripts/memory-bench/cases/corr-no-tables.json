@@ -1,0 +1,49 @@
+{
+  "id": "corr-no-tables",
+  "group": "corrections",
+  "about": "A formatting correction; \"that\" refers to the table the assistant made.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Compare the three phone plans I pasted earlier."
+    },
+    {
+      "role": "assistant",
+      "content": "| Plan | Data | Price |\n|---|---|---|\n| A | 10 GB | 15 |\n| B | 30 GB | 22 |\n| C | unlimited | 35 |"
+    },
+    {
+      "role": "user",
+      "content": "Please don't do that again. My email client mangles those, so give me plain lists instead."
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "kind": "guidance",
+      "terms": [
+        [
+          "table"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "guidance",
+        "text": "Use plain lists, not tables",
+        "why": "The user's email client mangles tables",
+        "quote": "My email client mangles those, so give me plain lists"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Compared three phone plans",
+        "quote": "Compare the three phone plans"
+      }
+    ]
+  }
+}

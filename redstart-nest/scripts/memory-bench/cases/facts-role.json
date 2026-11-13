@@ -1,0 +1,44 @@
+{
+  "id": "facts-role",
+  "group": "facts",
+  "about": "A role and a stack stated in passing.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "I'm a data engineer at a logistics company and we run everything on Postgres 16. Can you help me write a query that finds shipments delayed more than two days?"
+    },
+    {
+      "role": "assistant",
+      "content": "Sure. Assuming a shipments table with shipped_at and delivered_at: SELECT id FROM shipments WHERE delivered_at - shipped_at > interval '2 days';"
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "terms": [
+        [
+          "data engineer",
+          "data engineering"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Works as a data engineer at a logistics company, on Postgres 16",
+        "quote": "I'm a data engineer at a logistics company"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Asked for a query about delayed shipments",
+        "quote": "Can you help me write a query"
+      }
+    ]
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "id": "state-milestone",
+  "group": "state",
+  "about": "A milestone and what is next.",
+  "project": {
+    "name": "Billing migration"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "Quick update: the import job is migrated and running in production as of today. The export job is next."
+    },
+    {
+      "role": "assistant",
+      "content": "Great progress. For the export job, the main difference is the batching."
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "kind": "state",
+      "scope": "project",
+      "terms": [
+        [
+          "import"
+        ],
+        [
+          "export"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "state",
+        "scope": "project",
+        "text": "Import job migrated and in production; export job is next",
+        "quote": "the import job is migrated and running in production"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "scope": "user",
+        "text": "Works on billing",
+        "quote": "Quick update"
+      }
+    ]
+  }
+}

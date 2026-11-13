@@ -1,0 +1,57 @@
+{
+  "id": "corr-full-names",
+  "group": "corrections",
+  "about": "A tone correction on a drafted email.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Draft a reply to Margaret Okonkwo confirming Thursday."
+    },
+    {
+      "role": "assistant",
+      "content": "Hi Margaret,\n\nThursday works. See you then.\n\nBest"
+    },
+    {
+      "role": "user",
+      "content": "Too casual. In client emails use the full name, \"Dear Ms Okonkwo\", never just the first name. We are a law firm."
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "kind": "guidance",
+      "terms": [
+        [
+          "client"
+        ],
+        [
+          "full name",
+          "surname",
+          "last name",
+          "formal",
+          "ms ",
+          "title"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "guidance",
+        "text": "Address clients formally in emails, by title and surname, never first name only",
+        "why": "The user works at a law firm and found first names too casual",
+        "quote": "In client emails use the full name"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Has a meeting with Margaret on Thursday",
+        "quote": "confirming Thursday"
+      }
+    ]
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "id": "retr-state-finished",
+  "group": "retractions",
+  "about": "A state that is finished.",
+  "project": {
+    "name": "Conference talk"
+  },
+  "existing": {
+    "project": [
+      {
+        "id": "p1",
+        "kind": "state",
+        "text": "Preparing slides for the March conference talk",
+        "ageDays": 40
+      }
+    ]
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "The talk went well and it is all done now, nothing left to do on it."
+    },
+    {
+      "role": "assistant",
+      "content": "Congratulations on the talk."
+    }
+  ],
+  "expect": [
+    {
+      "op": "forget",
+      "target": "p1"
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "forget",
+        "id": "p1",
+        "quote": "it is all done now, nothing left to do on it"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "state",
+        "scope": "project",
+        "text": "Talk is done",
+        "quote": "The talk went well"
+      }
+    ]
+  }
+}

@@ -154,6 +154,9 @@ jobs:
       - name: "Security: automatic memory reviews only the user's own words; per account"
         run: node scripts/test-memory-review.mjs
 
+      - name: "Memory bench harness: cases, scorer, frozen v1 reviewer, runner (no model)"
+        run: node scripts/test-memory-bench.mjs
+
       - name: "Security: workflows are per account; org writes need manageOrgWorkflows"
         run: node scripts/test-workflows.mjs
 

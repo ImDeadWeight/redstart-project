@@ -1,0 +1,27 @@
+{
+  "id": "none-question",
+  "group": "nothing",
+  "about": "A question only.",
+  "strict": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "How do magnets actually work?"
+    },
+    {
+      "role": "assistant",
+      "content": "Moving charges create magnetic fields; in a magnet, electron spins line up..."
+    }
+  ],
+  "answers": {
+    "right": [],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Is interested in magnets",
+        "quote": "How do magnets actually work"
+      }
+    ]
+  }
+}

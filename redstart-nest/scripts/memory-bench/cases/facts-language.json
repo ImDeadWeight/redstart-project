@@ -1,0 +1,43 @@
+{
+  "id": "facts-language",
+  "group": "facts",
+  "about": "A language fact that changes every later answer.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "I'm a native Portuguese speaker. English is fine, but when you use an idiom, explain it. What does 'cut corners' mean?"
+    },
+    {
+      "role": "assistant",
+      "content": "'Cut corners' means doing something the quickest or cheapest way, skipping steps that matter."
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "terms": [
+        [
+          "portuguese"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Native Portuguese speaker; wants English idioms explained",
+        "quote": "I'm a native Portuguese speaker"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Asked what 'cut corners' means",
+        "quote": "What does 'cut corners' mean"
+      }
+    ]
+  }
+}

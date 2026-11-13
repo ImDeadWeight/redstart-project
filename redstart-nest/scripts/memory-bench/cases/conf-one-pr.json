@@ -1,0 +1,54 @@
+{
+  "id": "conf-one-pr",
+  "group": "confirmations",
+  "about": "Approval of a choice that could have gone the other way.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Rename getUser to fetchUser everywhere."
+    },
+    {
+      "role": "assistant",
+      "content": "Done in one PR covering all 14 files, rather than 14 small ones, since every change is the same mechanical rename."
+    },
+    {
+      "role": "user",
+      "content": "Yes, one PR was exactly right here. Keep doing that for mechanical refactors."
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "kind": "guidance",
+      "terms": [
+        [
+          "one pr",
+          "single pr",
+          "one pull request",
+          "single pull request",
+          "bundle",
+          "one combined"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "guidance",
+        "text": "Put mechanical refactors in one PR rather than many small ones",
+        "why": "The user confirmed one PR was right for a 14-file rename",
+        "quote": "one PR was exactly right here"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Renamed getUser to fetchUser",
+        "quote": "Rename getUser to fetchUser"
+      }
+    ]
+  }
+}

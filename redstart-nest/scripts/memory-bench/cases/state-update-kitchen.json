@@ -1,0 +1,62 @@
+{
+  "id": "state-update-kitchen",
+  "group": "state",
+  "about": "An older state memory that should be updated, not duplicated.",
+  "project": {
+    "name": "Kitchen renovation"
+  },
+  "existing": {
+    "project": [
+      {
+        "id": "p1",
+        "kind": "state",
+        "text": "Cabinets ordered; waiting on delivery",
+        "ageDays": 20
+      }
+    ]
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "The cabinets arrived and are installed. Now we are waiting on the countertop template appointment."
+    },
+    {
+      "role": "assistant",
+      "content": "Nice. The template usually takes about an hour; clear the counters before they come."
+    }
+  ],
+  "expect": [
+    {
+      "op": "update",
+      "target": "p1",
+      "terms": [
+        [
+          "countertop",
+          "counter top",
+          "template"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "update",
+        "id": "p1",
+        "kind": "state",
+        "scope": "project",
+        "text": "Cabinets installed; waiting on the countertop template appointment",
+        "quote": "waiting on the countertop template appointment"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "state",
+        "scope": "project",
+        "text": "Cabinets installed; waiting on the countertop template appointment",
+        "quote": "waiting on the countertop template appointment"
+      }
+    ]
+  }
+}

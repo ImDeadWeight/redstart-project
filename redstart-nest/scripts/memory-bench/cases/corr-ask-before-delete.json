@@ -1,0 +1,83 @@
+{
+  "id": "corr-ask-before-delete",
+  "group": "corrections",
+  "about": "A correction of an action the assistant took with a tool.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Clean up the old drafts in my notes folder."
+    },
+    {
+      "role": "assistant",
+      "content": "Removing the drafts now.",
+      "tool_calls": [
+        {
+          "id": "c1",
+          "name": "delete_file",
+          "arguments": "{\"path\":\"notes/draft-1.md\"}"
+        },
+        {
+          "id": "c2",
+          "name": "delete_file",
+          "arguments": "{\"path\":\"notes/draft-2.md\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "c1",
+      "name": "delete_file",
+      "content": "Deleted notes/draft-1.md"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "c2",
+      "name": "delete_file",
+      "content": "Deleted notes/draft-2.md"
+    },
+    {
+      "role": "assistant",
+      "content": "Both drafts are deleted."
+    },
+    {
+      "role": "user",
+      "content": "You shouldn't have deleted those without checking with me. Ask me before deleting anything, even drafts."
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "kind": "guidance",
+      "terms": [
+        [
+          "delet"
+        ],
+        [
+          "ask",
+          "confirm",
+          "check",
+          "permission"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "guidance",
+        "text": "Ask the user before deleting any file, drafts included",
+        "why": "Deleted two drafts without asking and the user objected",
+        "quote": "Ask me before deleting anything, even drafts"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Keeps drafts in a notes folder",
+        "quote": "old drafts in my notes folder"
+      }
+    ]
+  }
+}

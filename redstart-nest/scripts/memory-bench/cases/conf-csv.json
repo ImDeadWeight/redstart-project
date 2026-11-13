@@ -1,0 +1,49 @@
+{
+  "id": "conf-csv",
+  "group": "confirmations",
+  "about": "Approval of a file format the assistant chose.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Export the survey results."
+    },
+    {
+      "role": "assistant",
+      "content": "I saved them as results.csv rather than an Excel file, so your Python script can read them directly."
+    },
+    {
+      "role": "user",
+      "content": "Perfect. CSV is what I want for anything data, don't bother with xlsx."
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "kind": "guidance",
+      "terms": [
+        [
+          "csv"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "guidance",
+        "text": "Save data exports as CSV, not xlsx",
+        "why": "The user reads them with a Python script",
+        "quote": "CSV is what I want for anything data"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Ran a survey",
+        "quote": "Export the survey results"
+      }
+    ]
+  }
+}

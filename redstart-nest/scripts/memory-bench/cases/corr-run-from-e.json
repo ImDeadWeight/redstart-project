@@ -1,0 +1,53 @@
+{
+  "id": "corr-run-from-e",
+  "group": "corrections",
+  "about": "A correction of a command; \"it\" is only clear from the assistant turn.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "How do I run the chat-ui unit tests?"
+    },
+    {
+      "role": "assistant",
+      "content": "Open Git Bash and run: cd /e/redstart-project/redstart-nest/src/chat-ui && npx vitest run"
+    },
+    {
+      "role": "user",
+      "content": "No, don't do it that way. Run it from E:\\ in PowerShell. The /e/ path makes vitest load twice and every test fails."
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "kind": "guidance",
+      "terms": [
+        [
+          "e:\\",
+          "e:/",
+          "drive letter",
+          "powershell",
+          "uppercase"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "guidance",
+        "text": "Run chat-ui vitest from E:\\ in PowerShell, never from the /e/ Git Bash path",
+        "why": "The /e/ path makes vitest load twice and every test fails",
+        "quote": "Run it from E:\\ in PowerShell"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Has a project with chat-ui unit tests",
+        "quote": "run the chat-ui unit tests"
+      }
+    ]
+  }
+}

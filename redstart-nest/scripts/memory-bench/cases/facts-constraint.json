@@ -1,0 +1,43 @@
+{
+  "id": "facts-constraint",
+  "group": "facts",
+  "about": "A standing constraint on what can be used.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Our office laptops can't install anything without IT approval, so everything has to be done in plain Excel. How do I remove duplicate rows?"
+    },
+    {
+      "role": "assistant",
+      "content": "In Excel: select the range, then Data > Remove Duplicates, and pick the columns that define a duplicate."
+    }
+  ],
+  "expect": [
+    {
+      "op": "add",
+      "terms": [
+        [
+          "excel"
+        ]
+      ]
+    }
+  ],
+  "answers": {
+    "right": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Cannot install software at work; works in plain Excel",
+        "quote": "everything has to be done in plain Excel"
+      }
+    ],
+    "wrong": [
+      {
+        "op": "add",
+        "kind": "fact",
+        "text": "Removed duplicate rows once",
+        "quote": "How do I remove duplicate rows"
+      }
+    ]
+  }
+}
