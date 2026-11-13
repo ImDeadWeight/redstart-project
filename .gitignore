@@ -97,6 +97,7 @@ docs/notes/*
 !docs/notes/tool-retrieval-plan.md
 !docs/notes/tool-retrieval-implementation.md
 !docs/notes/tool-retrieval-fixes-implementation.md
+!docs/notes/groups-plan.md
 
 # Local nest directory for `npm run daemon` — a throwaway headless install.
 .redstart-daemon/
