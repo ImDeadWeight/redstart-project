@@ -1,7 +1,7 @@
 {
   "id": "conf-one-pr",
   "group": "confirmations",
-  "about": "Approval of a choice that could have gone the other way.",
+  "about": "Approval of a choice that is named only in the assistant turn (D34).",
   "messages": [
     {
       "role": "user",
@@ -13,7 +13,7 @@
     },
     {
       "role": "user",
-      "content": "Yes, one PR was exactly right here. Keep doing that for mechanical refactors."
+      "content": "Yes, that was exactly right here. Keep doing that for mechanical refactors."
     }
   ],
   "expect": [
@@ -39,7 +39,7 @@
         "kind": "guidance",
         "text": "Put mechanical refactors in one PR rather than many small ones",
         "why": "The user confirmed one PR was right for a 14-file rename",
-        "quote": "one PR was exactly right here"
+        "quote": "that was exactly right here. Keep doing that for mechanical refactors"
       }
     ],
     "wrong": [

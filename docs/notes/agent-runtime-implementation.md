@@ -5,7 +5,7 @@ what was built, phase by phase: deviations from the plan, and gaps carried
 forward. Branch: `feat/agent-core`, from main @ 224d121 (alpha.12, PR #38
 merged).
 
-## Where we left off (2026-11-12: Phase 3 closed; Phase 8 started, 8.0 the memory bench landed; next: the v1 baseline runs, then 8.1)
+## Where we left off (2026-11-13: Phase 8: 8.0 and 8.1 landed; first v1 baseline run and four cases revised after it; next: rerun the v1 baseline, then 8.2)
 
 Phase 3 → "Acceptance" has the closing record; "What landed" the per-module
 notes and the gaps carried out. Phase 2 closed, pushed at bc78774.
@@ -1027,11 +1027,36 @@ is decided by the bench.
   construction and the baseline would say nothing. retr-state-finished
   expects a `forget` (the plan allowed forget or update; one expectation
   cannot hold an OR). `--variant v2` refuses until 8.2 lands.
-- **Next: the v1 baseline (the user's machine).** With Nest and a model
-  loaded, from `redstart-nest/`, per model (4B, 9B, 35B):
-  `node scripts/memory-bench/run.mjs --model-label "<file>" --variant v1 --think off`
-  and the same with `--think on`. Paste each summary's row into the table.
-  Then 8.1 (storage: kind, why, asOf).
+- **The first v1 baseline (the user, 2026-11-13, at 0629444): superseded,
+  the cases changed after it.** Filtered pass, think off / on: 35B 28/32
+  (88%) / 26 (81%); Ornith 9B 19 (59%) / 21 (66%); 4B 14 (44%) / 13 (41%).
+  Injection, secrets and nothing 10/10 on every run (expected for v1: it
+  never sees assistant or tool text). Retractions capped at 1/3 (v1 has no
+  forget). Raw = filtered everywhere. What it showed: (1) the 4B and the 9B
+  mostly answer nothing at all, the 4B 0/5 on plain facts: v1's "none is
+  the usual answer" at work, which D39 removes; (2) thinking cost the 35B 2
+  cases and 13 extra ops, helped the 9B by 2, did nothing for the 4B (U10's
+  first data); (3) **two case faults, fixed before the baseline counts:**
+  corr-no-tables refused "prefers plain lists over formatted content" (a
+  right answer; terms widened), and the corrections were too easy for v1:
+  most user replies carried their own meaning ("Metric please, every
+  time"), so the 35B already passed 5/6 and v2 could show nothing. Four
+  cases now depend on the assistant turn, as the plan intends (D34):
+  corr-run-from-e (the path is only in the assistant's command),
+  corr-units (only the assistant said "miles"), corr-show-test-command, and
+  conf-one-pr ("that was exactly right" names nothing).
+- **8.1 (dd4a648).** `kind`, `why`, `asOf` on a memory (D35): storage,
+  routes, and `memory_save` (fact | state; guidance refused per D37, with
+  the plan's message). Old records read as fact, never rewritten. Deviation:
+  storage does not require a why on guidance (a user writing their own need
+  not give one); the reviewer (8.2) drops a proposed guidance without one.
+  The client half of `/remember guidance: … because …` moves to 8.6 with
+  the chips. Found on the way, fixed in 12de950: test-contracts.mjs
+  intermittently aborted Node on Windows at exit (libuv
+  UV_HANDLE_CLOSING) after every test passed.
+- **Next: rerun the v1 baseline on the revised cases** (same commands as
+  before, all three models, think off and on), rows into the table. Then
+  8.2, the v2 reviewer.
 
 ---
 

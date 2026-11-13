@@ -1,7 +1,7 @@
 {
   "id": "corr-no-tables",
   "group": "corrections",
-  "about": "A formatting correction; \"that\" refers to the table the assistant made.",
+  "about": "A formatting correction; \"that\" refers to the table the assistant made. Any wording of \"lists, not tables or formatting\" counts.",
   "messages": [
     {
       "role": "user",
@@ -22,7 +22,12 @@
       "kind": "guidance",
       "terms": [
         [
-          "table"
+          "table",
+          "plain list",
+          "plain-text list",
+          "lists",
+          "formatting",
+          "formatted"
         ]
       ]
     }

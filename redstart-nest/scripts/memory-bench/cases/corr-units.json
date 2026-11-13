@@ -1,7 +1,7 @@
 {
   "id": "corr-units",
   "group": "corrections",
-  "about": "A units correction after an answer in imperial units.",
+  "about": "A units correction: that the answer was in miles is only in the assistant turn (D34).",
   "messages": [
     {
       "role": "user",
@@ -13,7 +13,7 @@
     },
     {
       "role": "user",
-      "content": "Wrong units for me, I'm in Australia. Metric please, every time."
+      "content": "Wrong units for me, I'm in Australia. Every time, please."
     }
   ],
   "expect": [
@@ -36,7 +36,7 @@
         "kind": "guidance",
         "text": "Give distances and paces in metric units",
         "why": "The user is in Australia and asked for metric every time",
-        "quote": "Metric please, every time"
+        "quote": "Wrong units for me, I'm in Australia"
       }
     ],
     "wrong": [

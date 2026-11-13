@@ -1,7 +1,7 @@
 {
   "id": "corr-show-test-command",
   "group": "corrections",
-  "about": "A correction with its reason in the user turn.",
+  "about": "A correction whose subject (the test command, the wrong suite) is only in the assistant turn and the tool line (D34).",
   "messages": [
     {
       "role": "user",
@@ -31,7 +31,7 @@
     },
     {
       "role": "user",
-      "content": "That was the wrong suite again. From now on, show me the test command before you run it."
+      "content": "That was the wrong one again. From now on, show me what you are about to run before you run it."
     }
   ],
   "expect": [
@@ -41,6 +41,7 @@
       "terms": [
         [
           "test",
+          "suite",
           "command"
         ],
         [
@@ -59,7 +60,7 @@
         "kind": "guidance",
         "text": "Show the test command to the user before running it",
         "why": "Ran the wrong suite more than once",
-        "quote": "show me the test command before you run it"
+        "quote": "show me what you are about to run before you run it"
       }
     ],
     "wrong": [

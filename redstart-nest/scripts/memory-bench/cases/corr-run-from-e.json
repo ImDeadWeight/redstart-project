@@ -1,7 +1,7 @@
 {
   "id": "corr-run-from-e",
   "group": "corrections",
-  "about": "A correction of a command; \"it\" is only clear from the assistant turn.",
+  "about": "A correction of a command: which path is wrong, and which drive, are only in the assistant turn (D34).",
   "messages": [
     {
       "role": "user",
@@ -13,7 +13,7 @@
     },
     {
       "role": "user",
-      "content": "No, don't do it that way. Run it from E:\\ in PowerShell. The /e/ path makes vitest load twice and every test fails."
+      "content": "No, not like that. That path makes it load twice and everything fails. Use the Windows drive path, from PowerShell."
     }
   ],
   "expect": [
@@ -22,11 +22,16 @@
       "kind": "guidance",
       "terms": [
         [
+          "vitest",
+          "test",
+          "chat-ui"
+        ],
+        [
           "e:\\",
           "e:/",
-          "drive letter",
-          "powershell",
-          "uppercase"
+          "/e/",
+          "git bash",
+          "drive letter"
         ]
       ]
     }
@@ -38,7 +43,7 @@
         "kind": "guidance",
         "text": "Run chat-ui vitest from E:\\ in PowerShell, never from the /e/ Git Bash path",
         "why": "The /e/ path makes vitest load twice and every test fails",
-        "quote": "Run it from E:\\ in PowerShell"
+        "quote": "Use the Windows drive path, from PowerShell"
       }
     ],
     "wrong": [
