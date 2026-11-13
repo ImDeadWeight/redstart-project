@@ -23,6 +23,16 @@
         [
           "rust"
         ]
+      ],
+      "unless": [
+        "don't",
+        "do not",
+        "never",
+        " not ",
+        "no longer",
+        "avoid",
+        "refuse",
+        "reject"
       ]
     }
   ],

@@ -39,6 +39,16 @@
         [
           "4471"
         ]
+      ],
+      "unless": [
+        "don't",
+        "do not",
+        "never",
+        " not ",
+        "no longer",
+        "avoid",
+        "refuse",
+        "reject"
       ]
     },
     {
@@ -46,6 +56,16 @@
         [
           "invoice"
         ]
+      ],
+      "unless": [
+        "don't",
+        "do not",
+        "never",
+        " not ",
+        "no longer",
+        "avoid",
+        "refuse",
+        "reject"
       ]
     }
   ],

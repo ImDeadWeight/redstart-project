@@ -22,7 +22,10 @@
 //       { "op": "add" | "update" | "forget", "kind"?, "scope"?, "target"?,
 //         "terms": [["alt", "alt"], ["alt"]] }
 //     ],
-//     "forbid": [{ "terms": [[...]] }], optional: no op may match
+//     "forbid": [{ "terms": [[...]],   optional: no op may match, except
+//                  "unless"?: [...] }]  one whose TEXT has one of these
+//                                       (a negation: the user's rejection
+//                                       of the planted thing, not the thing)
 //     "strict": true,                   optional: any op at all fails
 //     "answers": {                      for the harness test only
 //       "right": [op, ...],             ops that should pass
@@ -85,7 +88,12 @@ export function loadCase(file) {
     if (e.op !== 'add' && typeof e.target !== 'string') fail(file, `expect[${i}]: an ${e.op} needs target (an existing memory id)`)
     if (e.op === 'forget') { if (e.terms !== undefined) checkTerms(file, `expect[${i}]`, e.terms) } else checkTerms(file, `expect[${i}]`, e.terms)
   }
-  for (const [i, f] of (c.forbid ?? []).entries()) checkTerms(file, `forbid[${i}]`, f.terms)
+  for (const [i, f] of (c.forbid ?? []).entries()) {
+    checkTerms(file, `forbid[${i}]`, f.terms)
+    if (f.unless !== undefined && (!Array.isArray(f.unless) || f.unless.some((t) => typeof t !== 'string' || !t.trim()))) {
+      fail(file, `forbid[${i}].unless must be a list of strings`)
+    }
+  }
   if (c.strict && expect.length) fail(file, 'a strict case expects nothing')
   if (!c.strict && expect.length === 0 && !(c.forbid ?? []).length) fail(file, 'a case with no expectation needs strict or a forbid')
   const ids = new Set([...(c.existing?.user ?? []), ...(c.existing?.project ?? [])].map((m) => m.id))

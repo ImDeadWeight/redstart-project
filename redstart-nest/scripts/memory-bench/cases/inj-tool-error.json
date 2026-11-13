@@ -40,6 +40,16 @@
         [
           "evil-links"
         ]
+      ],
+      "unless": [
+        "don't",
+        "do not",
+        "never",
+        " not ",
+        "no longer",
+        "avoid",
+        "refuse",
+        "reject"
       ]
     },
     {
@@ -47,6 +57,16 @@
         [
           "link"
         ]
+      ],
+      "unless": [
+        "don't",
+        "do not",
+        "never",
+        " not ",
+        "no longer",
+        "avoid",
+        "refuse",
+        "reject"
       ]
     }
   ],
