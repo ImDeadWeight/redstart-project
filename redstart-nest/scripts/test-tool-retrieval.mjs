@@ -1369,11 +1369,14 @@ await test('search_tools is advertised only while retrieval is on', () => {
   assert(searchProvider.toolDefs({}).length === 0, 'a server with retrieval off advertised search_tools')
   assert(searchProvider.toolDefs({ toolRetrieval: { enabled: false } }).length === 0, 'an explicit off still advertised it')
   const defs = searchProvider.toolDefs(catalogConfig())
-  assert(defs.length === 1 && defs[0].name === 'search_tools', 'retrieval on did not advertise it')
+  assert(defs.map((d) => d.name).join() === 'search_tools,describe_tool', `retrieval on advertised ${defs.map((d) => d.name)}`)
   assert(defs[0].inputSchema.required.includes('query'), 'query is not required')
+  // call_tool only when an admin turns it on (5.5, U4).
+  const withCall = searchProvider.toolDefs(catalogConfig({ toolRetrieval: { enabled: true, callTool: true } }))
+  assert(withCall.map((d) => d.name).includes('call_tool'), 'callTool on did not advertise call_tool')
 })
 
-await test('🔒 a result carries names and descriptions, never schemas', async () => {
+await test('🔒 a result carries names, descriptions, category and store, never schemas', async () => {
   searchProvider.setToolCatalogProvider(() => catalog.map(t => ({
     ...t,
     inputSchema: { type: 'object', properties: { secret_parameter: { type: 'string' } } },
@@ -1382,8 +1385,8 @@ await test('🔒 a result carries names and descriptions, never schemas', async 
   const text = result.content[0].text
   assert(!/secret_parameter/.test(text), `a schema was returned: ${text}`)
   assert(!/inputSchema/.test(text), `a schema field was returned: ${text}`)
-  const rows = JSON.parse(text)
-  assert(rows.every(r => Object.keys(r).sort().join(',') === 'description,name'), `unexpected row shape: ${text}`)
+  const rows = JSON.parse(text).tools
+  assert(rows.every(r => Object.keys(r).sort().join(',') === 'category,description,name,store'), `unexpected row shape: ${text}`)
 })
 
 await test('🔒 the catalog it searches is the one the policy gate produced', async () => {
@@ -1451,6 +1454,123 @@ await test('🔍 results are ranked, best first', async () => {
   })
   const ranked = await searchTools({ tools: catalog, query: 'look at recent commits in the repo', embed })
   assert(ranked[0].name === 'git_status', `wrong first result: ${ranked.map(r => r.name).join(',')}`)
+})
+
+console.log('\n-- discovery: widening, describe_tool, call_tool (second pass 5.x) --')
+
+const stubPort = /** @type {import('net').AddressInfo} */ (embedStub.address()).port
+const deadPort = await new Promise((resolve) => {
+  const probe = http.createServer()
+  probe.listen(0, '127.0.0.1', () => { const port = probe.address().port; probe.close(() => resolve(port)) })
+})
+async function withEmbedderDown(fn) {
+  setEmbedPortForTests(deadPort)
+  resetEmbedFailureLog()
+  // A store warmed by the tests above would still rank; a fresh tool text
+  // has no vector, so ranking needs the (dead) embedder.
+  try { return await fn() } finally { setEmbedPortForTests(stubPort) }
+}
+const searchJson = (result) => JSON.parse(result.content[0].text)
+
+await test('🔍 step 1: a search that matches answers "close", with rows the scorer ranked', async () => {
+  searchProvider.setToolCatalogProvider(() => catalog)
+  const body = searchJson(await searchProvider.callTool('search_tools', { query: 'look at recent commits in the repo' }, catalogConfig()))
+  assert(body.match === 'close' && body.tools[0].name === 'git_status', JSON.stringify(body))
+})
+
+await test('🔍 step 2: nothing above the floors answers "nearest" and says so', async () => {
+  searchProvider.setToolCatalogProvider(() => catalog)
+  // The stub gives a query with no keyword a vector along the web axis at
+  // 0.01; with an absolute floor above every score, nothing is close.
+  const cfg = { toolRetrieval: { enabled: true, scorer: 'cosine', floor: 2 } }
+  const body = searchJson(await searchProvider.callTool('search_tools', { query: 'zzz' }, cfg))
+  assert(body.match === 'nearest' && /nearest/.test(body.note) && body.tools.length > 0, JSON.stringify(body))
+})
+
+await test('🔍 step 3: with the embedder down, keywords on names and tags still answer', async () => {
+  const fresh = [{ name: 'read_text_file', description: 'Read one file (fresh text, never embedded)' }, { name: 'git_log', description: 'Commits (fresh)' }]
+  searchProvider.setToolCatalogProvider(() => fresh)
+  const body = await withEmbedderDown(async () => searchJson(await searchProvider.callTool('search_tools', { query: 'config' }, catalogConfig())))
+  assert(body.match === 'keyword' && body.tools[0].name === 'read_text_file' && /unavailable/.test(body.note), JSON.stringify(body))
+})
+
+await test('🔍 step 4: no keyword either lists every tool by category, and names the client-tool gap', async () => {
+  const fresh = [{ name: 'read_text_file', description: 'Read one file (fresher)' }, { name: 'git_log', description: 'Commits (fresher)' }]
+  searchProvider.setToolCatalogProvider(() => fresh)
+  const body = await withEmbedderDown(async () => searchJson(await searchProvider.callTool('search_tools', { query: 'xyzzy plugh' }, catalogConfig())))
+  assert(body.match === 'categories', JSON.stringify(body))
+  const names = body.categories.flatMap((c) => c.tools)
+  assert(names.sort().join() === 'git_log,read_text_file', JSON.stringify(body))
+  assert(/application provides itself/.test(body.note), 'the client-tool gap was not named')
+})
+
+await test('🔒 the discovery tools are never search results, at any step', async () => {
+  searchProvider.setToolCatalogProvider(() => [...catalog, { name: 'describe_tool', description: 'describe a tool' }, { name: 'call_tool', description: 'call a tool' }])
+  const text = (await searchProvider.callTool('search_tools', { query: 'describe a tool, call a tool' }, catalogConfig())).content[0].text
+  assert(!/describe_tool|call_tool|search_tools/.test(text), text)
+})
+
+await test('🔒 describe_tool returns the schema of a catalog tool, and the same words for banned and unknown', async () => {
+  searchProvider.setToolCatalogProvider(() => catalog.map((t) => ({ ...t, inputSchema: { type: 'object', properties: { path: { type: 'string' } } } })))
+  const ok = searchJson(await searchProvider.callTool('describe_tool', { name: 'read_document' }, catalogConfig()))
+  assert(ok.name === 'read_document' && ok.inputSchema.properties.path && ok.category === 'documents', JSON.stringify(ok))
+  // A ban is absence from the post-policy catalog.
+  searchProvider.setToolCatalogProvider(() => catalog.filter((t) => t.name !== 'read_document'))
+  const banned = await searchProvider.callTool('describe_tool', { name: 'read_document' }, catalogConfig())
+  const unknown = await searchProvider.callTool('describe_tool', { name: 'no_such_tool' }, catalogConfig())
+  assert(banned.isError && unknown.isError, 'not refused')
+  assert(banned.content[0].text.replace('read_document', 'X') === unknown.content[0].text.replace('no_such_tool', 'X'), 'a ban reads differently from absence')
+  const self = await searchProvider.callTool('describe_tool', { name: 'search_tools' }, catalogConfig())
+  assert(self.isError, 'a discovery tool was describable')
+})
+
+await test('🔍 a described tool, and search hits, become pins through tool_call_id (no name on the message)', () => {
+  const pins = pinsFromMessages([
+    { role: 'assistant', tool_calls: [{ id: 'c1', function: { name: 'describe_tool' } }, { id: 'c2', function: { name: 'search_tools' } }] },
+    { role: 'tool', tool_call_id: 'c1', content: JSON.stringify({ name: 'vault_get', inputSchema: {} }) },
+    { role: 'tool', tool_call_id: 'c2', content: JSON.stringify({ match: 'close', tools: [{ name: 'git_log' }] }) },
+  ])
+  assert(pins.has('vault_get') && pins.has('git_log'), `pins: ${[...pins]}`)
+  const forged = pinsFromMessages([
+    { role: 'assistant', tool_calls: [{ id: 'c1', function: { name: 'web_fetch' } }] },
+    { role: 'tool', tool_call_id: 'c1', content: JSON.stringify({ name: 'delete_everything' }) },
+  ])
+  assert(!forged.has('delete_everything'), 'a result from another tool named a pin')
+})
+
+await test('🔒 call_tool is off by default, and then not even answered', async () => {
+  searchProvider.setToolCatalogProvider(() => catalog)
+  assert(!searchProvider.toolDefs(catalogConfig()).some((d) => d.name === 'call_tool'), 'advertised while off')
+  assert(await searchProvider.callTool('call_tool', { name: 'git_status' }, catalogConfig()) === null, 'answered while off')
+})
+
+await test('🔒 call_tool proxies a read through the policy-checked caller, and refuses what needs approval', async () => {
+  const cfg = { toolRetrieval: { enabled: true, callTool: true } }
+  const writes = [{ name: 'create_document', description: 'Create a document' }, { name: 'memory_forget', description: 'Forget' }, { name: 'ask_user', description: 'Ask' }]
+  searchProvider.setToolCatalogProvider(() => [...catalog, ...writes])
+  const calls = []
+  searchProvider.setToolCaller(async (account, name, args, opts) => { calls.push({ account, name, args, opts }); return { content: [{ type: 'text', text: 'ok' }] } })
+  const ok = await searchProvider.callTool('call_tool', { name: 'git_status', arguments: { repo: 'x' } }, cfg, { account: { username: 'u' }, conversationId: 'conv' })
+  assert(ok.content[0].text === 'ok' && calls.length === 1 && calls[0].name === 'git_status' && calls[0].args.repo === 'x', JSON.stringify(calls))
+  assert(calls[0].account.username === 'u' && calls[0].opts.conversationId === 'conv', 'the caller identity was not passed')
+  for (const name of ['create_document', 'memory_forget', 'ask_user', 'call_tool', 'search_tools']) {
+    const r = await searchProvider.callTool('call_tool', { name }, cfg, {})
+    assert(r.isError, `${name} went through call_tool`)
+  }
+  assert(calls.length === 1, `a refused call reached the caller: ${calls.map((c) => c.name)}`)
+  searchProvider.setToolCatalogProvider(() => catalog.filter((t) => t.name !== 'git_status'))
+  const banned = await searchProvider.callTool('call_tool', { name: 'git_status' }, cfg, {})
+  assert(banned.isError && calls.length === 1, 'a banned tool was called by name')
+})
+
+await test('🔒 the discovery tools are never embedded', async () => {
+  resetToolFilterState()
+  const seen = []
+  const watching = async (texts) => { seen.push(...texts); return embed(texts) }
+  const tools = [...allTools, fnTool('search_tools', 'find tools'), fnTool('describe_tool', 'describe one')]
+  const out = (await filterRequestTools({ tools, messages: ask, settings: { enabled: true }, embed: watching })).map(toolName)
+  assert(!seen.some((t) => /^(search_tools|describe_tool):/.test(t)), `embedded: ${seen.filter((t) => /_tool/.test(t))}`)
+  assert(out.includes('search_tools') && out.includes('describe_tool'), `the discovery tools were not pinned: ${out}`)
 })
 
 await new Promise(resolve => embedStub.close(resolve))

@@ -26,6 +26,7 @@ await import('./electron-stub.mjs')
 const meta = await import('../daemon/tool-metadata.mjs')
 const { BUILTIN_CAPABILITY_TOOL_NAMES, HOST_RESOLVED_TOOL_NAMES } = await import('../daemon/tools-definitions.mjs')
 const retrieval = await import('../daemon/tool-retrieval.mjs')
+const { DISCOVERY_TOOL_NAMES } = retrieval
 const { validatePlugin } = await import('../daemon/plugin-registry.mjs')
 
 const results = []
@@ -48,7 +49,7 @@ const builtinNames = new Set([
   ...Object.values(BUILTIN_CAPABILITY_TOOL_NAMES).flat(),
   ...catalog.map((t) => t.name),
   ...HOST_RESOLVED_TOOL_NAMES,
-  'search_tools',
+  ...DISCOVERY_TOOL_NAMES,
 ])
 const entries = Object.entries(meta.BUILTIN_TOOL_METADATA)
 

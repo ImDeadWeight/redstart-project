@@ -140,6 +140,8 @@ export const BUILTIN_TOOL_METADATA = Object.freeze({
   ask_user: { category: 'interaction', store: S.conversation, tags: ['question', 'clarify', 'choose', 'preference'], useWhen: 'the answer would change what you produce' },
   update_plan: { category: 'interaction', store: S.conversation, tags: ['plan', 'checklist', 'steps', 'todo'], useWhen: 'a task with three or more steps' },
   search_tools: { category: 'discovery', store: S.tools, tags: ['find a tool', 'capability', 'can you'], useWhen: 'a needed tool is not in the list' },
+  describe_tool: { category: 'discovery', store: S.tools, tags: ['tool definition', 'parameters', 'schema'], useWhen: 'search_tools found a tool and its parameters are needed' },
+  call_tool: { category: 'discovery', store: S.tools, tags: ['call by name', 'run a found tool'], useWhen: 'calling a found read-only tool without waiting a turn' },
 })
 
 // ---------------------------------------------------------------------------

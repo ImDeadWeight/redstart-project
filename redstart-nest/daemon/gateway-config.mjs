@@ -67,6 +67,7 @@ function retrievalSettings(llamaConfig) {
     ...(SCORERS.includes(r?.scorer) ? { scorer: r.scorer } : {}),
     ...(r?.growth === 'scored' || r?.growth === 'pins-only' ? { growth: r.growth } : {}),
     ...(Number.isInteger(r?.minTools) && r.minTools >= 0 && r.minTools <= 64 ? { minTools: r.minTools } : {}),
+    ...(r?.callTool === true ? { callTool: true } : {}),
   }
 }
 

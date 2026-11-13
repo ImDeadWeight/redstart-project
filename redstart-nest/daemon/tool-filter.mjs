@@ -5,11 +5,14 @@ import { EMBED_MODEL } from './embed-model.mjs'
 import { logEvent } from './logger.mjs'
 import { createHash } from 'node:crypto'
 import {
+  DISCOVERY_TOOL_NAMES,
   SCORERS,
   conversationKey,
   createBm25Index,
   rescore,
   toolContentHash,
+  toolSearchResult,
+  tokenize,
   conversationQueryText,
   createSelectionMemory,
   createVectorStore,
@@ -20,11 +23,9 @@ import {
   toolName,
 } from './tool-retrieval.mjs'
 import { HOST_RESOLVED_TOOL_NAMES } from './tools-definitions.mjs'
+import { toolMetadata } from './tool-metadata.mjs'
 import { TOOL_NAMES as MEMORY_TOOL_NAMES } from './memory-tool.mjs'
 
-// search-tools-provider.mjs imports this module, so its TOOL_NAMES cannot be
-// imported back; the name is fixed by the contract (pinsFromMessages).
-const SEARCH_TOOL_NAMES = ['search_tools']
 
 // Tools retrieval keeps together (tool-retrieval.mjs selectTools, families).
 // Memory: saving without forgetting is the half that does damage, since a
@@ -42,7 +43,11 @@ export const TOOL_FAMILIES = [MEMORY_TOOL_NAMES]
 // reaches what the selection left out, so a selection must never be the
 // thing that hides it. Under the cosine scorer it only survived because its
 // description is about tools in general and scores alike on everything.
-export const ALWAYS_PINNED_TOOL_NAMES = Object.freeze([...HOST_RESOLVED_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...SEARCH_TOOL_NAMES])
+// describe_tool and call_tool (Phase 5) likewise: the discovery tools.
+export const ALWAYS_PINNED_TOOL_NAMES = Object.freeze([...HOST_RESOLVED_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...DISCOVERY_TOOL_NAMES])
+
+const DISCOVERY = new Set(DISCOVERY_TOOL_NAMES)
+const isDiscovery = (tool) => DISCOVERY.has(toolName(tool))
 
 // =============================================================================
 // Redstart Nest — applying tool retrieval to a request
@@ -196,9 +201,15 @@ function keywordIndexFor(tools) {
  * @param {{ tools: any[], queryVector: any, queryText: string, config: ReturnType<typeof resolveRetrievalSettings> }} args
  */
 function rankTools({ tools, queryVector, queryText, config }) {
-  const scored = scoreTools({ tools, query: queryVector, store, textVersion: config.textVersion })
-  if (config.scorer === 'cosine') return scored
-  return rescore({ scored, keyword: keywordIndexFor(tools).score(queryText), scorer: config.scorer })
+  // The discovery tools are not scored (DISCOVERY_TOOL_NAMES): they go last,
+  // at 0, and come in as pins when they come in at all.
+  const scorable = tools.filter((t) => !isDiscovery(t))
+  const scored = scoreTools({ tools: scorable, query: queryVector, store, textVersion: config.textVersion })
+  const ranked = config.scorer === 'cosine'
+    ? scored
+    : rescore({ scored, keyword: keywordIndexFor(scorable).score(queryText), scorer: config.scorer })
+  const unscored = tools.filter(isDiscovery).map((tool) => ({ tool, name: toolName(tool), hash: '', score: 0, missing: false }))
+  return unscored.length ? [...ranked, ...unscored] : ranked
 }
 
 /**
@@ -233,7 +244,7 @@ export async function filterRequestTools({
     // ever, so this is empty on all but the first request that sees a given
     // tool set — and a failure here is simply a colder cache, not an error.
     const textVersion = config.textVersion
-    const missing = store.missingHashes(tools, { textVersion })
+    const missing = store.missingHashes(tools.filter((t) => !isDiscovery(t)), { textVersion })
     if (missing.length > 0) {
       const vectors = await embed(missing.map(m => m.text))
       if (!vectors) return unchanged(tools, 'no-embedding-server')
@@ -356,32 +367,46 @@ export const SEARCH_RESULT_LIMIT = 10
  * Rank a tool catalog against a free-text description of what the model wants.
  *
  * Shares this module's vector store, so a tool the filter has already embedded
- * costs nothing to search, and vice versa.
+ * costs nothing to search, and vice versa. Ranks with the configured scorer
+ * (fused by default), so a search and a selection agree.
  *
- * Returns `{ name, description }` and NEVER a schema. A search result is an
- * index, not a definition: the names it surfaces become pins on the next turn
- * (pinsFromMessages), and the tool arrives with its real schema through the
- * ordinary path — so shipping schemas here would spend the context the whole
- * feature exists to save.
+ * Returns toolSearchResult() rows, `{ name, category, store, description }`,
+ * and NEVER a schema. A search result is an index, not a definition: the names
+ * it surfaces become pins on the next turn (pinsFromMessages), and the tool
+ * arrives with its real schema through the ordinary path (or describe_tool) —
+ * so shipping schemas here would spend the context the whole feature exists
+ * to save. The discovery tools are never results.
  *
  * Returns null if it cannot rank, which callers must report as a failure rather
  * than as an empty result: "no tools match" and "the scorer is down" are
  * different answers and the model should not confuse them.
  *
- * `settings` are the retrieval settings (RETRIEVAL_DEFAULTS), so a search
- * ranks the way the filter does.
- *
  * @param {{ tools: any[], query: string, limit?: number, embed?: typeof embedTexts, settings?: Record<string, any> }} args
- * @returns {Promise<{ name: string, description: string }[]|null>}
+ * @returns {Promise<{ name: string, category: string, store: string, description: string }[]|null>}
  */
 export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, embed = defaultEmbed, settings = {} }) {
+  const ranked = await rankForSearch({ tools, query, embed, settings })
+  if (ranked === null) return null
+  return ranked.slice(0, limit).map(({ tool }) => toolSearchResult(tool))
+}
+
+/**
+ * searchTools' ranking with its scores, for search_tools' widening steps
+ * (search-tools-provider.mjs). The same contract: [] for an empty catalog,
+ * null when it cannot rank.
+ *
+ * @param {{ tools: any[], query: string, embed?: typeof embedTexts, settings?: Record<string, any> }} args
+ * @returns {Promise<{ tool: any, name: string, score: number }[]|null>}
+ */
+export async function rankForSearch({ tools, query, embed = defaultEmbed, settings = {} }) {
   const config = resolveRetrievalSettings(settings)
   const textVersion = config.textVersion
-  if (!Array.isArray(tools) || tools.length === 0) return []
+  const searchable = Array.isArray(tools) ? tools.filter((t) => !isDiscovery(t)) : []
+  if (searchable.length === 0) return []
   if (typeof query !== 'string' || !query.trim()) return null
 
   try {
-    const missing = store.missingHashes(tools, { textVersion })
+    const missing = store.missingHashes(searchable, { textVersion })
     if (missing.length > 0) {
       const vectors = await embed(missing.map(m => m.text))
       if (!vectors) return null
@@ -389,16 +414,33 @@ export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, e
     }
     const queryVectors = await embed([query])
     if (!queryVectors) return null
-
-    return rankTools({ tools, queryVector: queryVectors[0], queryText: query, config })
-      .slice(0, limit)
-      .map(({ tool }) => ({
-        name: toolName(tool),
-        description: String((tool?.function ?? tool)?.description ?? ''),
-      }))
+    return rankTools({ tools: searchable, queryVector: queryVectors[0], queryText: query, config })
   } catch {
     return null
   }
+}
+
+/**
+ * Keywords alone, on each tool's name and registry tags (search_tools' third
+ * step, 5.3): what still works with no embedding server, and what a one-word
+ * query from a small model ("config") is most likely to hit. Best first; only
+ * tools that match.
+ *
+ * @param {{ tools: any[], query: string }} args
+ * @returns {{ tool: any, name: string, score: number }[]}
+ */
+export function keywordSearch({ tools, query }) {
+  const searchable = Array.isArray(tools) ? tools.filter((t) => !isDiscovery(t)) : []
+  if (!searchable.length || !tokenize(query).length) return []
+  const nameAndTags = (tool) => {
+    const name = toolName(tool)
+    return [name, name.replace(/[_-]+/g, ' '), ...toolMetadata(name).tags].join('\n')
+  }
+  const scores = createBm25Index(searchable, nameAndTags).score(query)
+  return searchable
+    .map((tool) => ({ tool, name: toolName(tool), score: scores.get(toolName(tool)) ?? 0 }))
+    .filter((e) => e.score > 0)
+    .sort((a, b) => (b.score - a.score) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 }
 
 // ---------------------------------------------------------------------------

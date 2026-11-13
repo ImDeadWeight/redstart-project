@@ -82,6 +82,14 @@ export function toolContentHash(tool) {
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex')
 }
 
+/**
+ * The tools that find other tools (second pass 5.x). They are never embedded
+ * or scored: they are pinned whenever the request carries them, they are
+ * never a search result, and a score for them would only move the relative
+ * floor that everything else is measured against.
+ */
+export const DISCOVERY_TOOL_NAMES = Object.freeze(['search_tools', 'describe_tool', 'call_tool'])
+
 // ---------------------------------------------------------------------------
 // Every view of a tool retrieval uses (second pass 2.2)
 // ---------------------------------------------------------------------------
@@ -342,10 +350,14 @@ export const BM25_B = 0.75
  * `key` is a hash of every document, so a caller can keep one index while the
  * catalog's content is unchanged and rebuild when it is not.
  *
+ * `documentOf` picks the text indexed for a tool; toolSearchDocument() by
+ * default.
+ *
  * @param {any[]} tools
+ * @param {(tool: any) => string} [documentOf]
  * @returns {{ key: string, size: number, score(query: string): Map<string, number> }}
  */
-export function createBm25Index(tools) {
+export function createBm25Index(tools, documentOf = toolSearchDocument) {
   const list = Array.isArray(tools) ? tools : []
   /** @type {{ name: string, tf: Map<string, number>, length: number }[]} */
   const docs = []
@@ -354,7 +366,7 @@ export function createBm25Index(tools) {
   const keyHash = createHash('sha256')
   for (const tool of list) {
     const name = toolName(tool)
-    const text = toolSearchDocument(tool)
+    const text = documentOf(tool)
     keyHash.update(`${name}\u0000${text}\u0001`)
     const tokens = tokenize(text)
     const tf = new Map()
@@ -779,20 +791,46 @@ export function isConversationId(id) {
  */
 export function pinsFromMessages(messages, { searchToolName = 'search_tools' } = {}) {
   const pins = new Set()
+  // Which tool a result answers. OpenAI tool messages carry tool_call_id and,
+  // from chat-ui and the agent core, no `name` (stored-messages.mjs,
+  // tool-calls.mjs), so the name is read off the assistant call it answers.
+  // Until 2026-11-13 only `name` was read, and a search hit never became a
+  // pin in a real chat (second pass, P5).
+  /** @type {Map<string, string>} */
+  const callNames = new Map()
   for (const msg of Array.isArray(messages) ? messages : []) {
     for (const call of Array.isArray(msg?.tool_calls) ? msg.tool_calls : []) {
       const name = call?.function?.name
       if (typeof name === 'string' && name) pins.add(name)
+      if (typeof call?.id === 'string' && typeof name === 'string') callNames.set(call.id, name)
     }
+    const answered = msg?.role === 'tool'
+      ? (typeof msg.name === 'string' && msg.name ? msg.name : callNames.get(msg.tool_call_id))
+      : undefined
     // A search result is a tool-role message whose body is the JSON this
     // gateway produced. Names it surfaced become pins on the next turn, which
     // is the entire mechanism behind search_tools — no new protocol, no server
     // state, just the transcript the client already sends back.
-    if (msg?.role === 'tool' && msg?.name === searchToolName) {
+    if (answered === searchToolName) {
       for (const name of searchResultNames(msg.content)) pins.add(name)
+    }
+    // describe_tool (second pass 5.2): the tool it described joins the list
+    // on the next turn, with its real schema, the same way.
+    if (answered === 'describe_tool') {
+      const name = describedName(msg.content)
+      if (name) pins.add(name)
     }
   }
   return pins
+}
+
+function describedName(content) {
+  try {
+    const body = JSON.parse(messageText(content))
+    return body && typeof body === 'object' && !Array.isArray(body) && typeof body.name === 'string' && body.name ? body.name : null
+  } catch {
+    return null
+  }
 }
 
 function searchResultNames(content) {
