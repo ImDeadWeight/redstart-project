@@ -46,6 +46,7 @@ export { attachmentNote } from '../../../../../shared/agent-core/attachment-note
 export {
 	ASK_USER_TOOL,
 	DISMISSED_RESULT,
+	MAX_QUESTIONS,
 	parseAskArguments,
 	formatAskAnswer
 } from '../../../../../shared/agent-core/ask-user.mjs';
@@ -73,7 +74,9 @@ export {
 	summaryPrompt
 } from '../../../../../shared/agent-core/compaction.mjs';
 export type {
+	AskQuestion,
 	AskRequest,
+	AskReply,
 	AskAnswer,
 	PlanStep,
 	ToolCallParserConfig,

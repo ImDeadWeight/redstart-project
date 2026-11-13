@@ -66,7 +66,7 @@ vi.mock('$lib/stores/conversations.svelte', () => ({
 }));
 
 const { ChatMessageOps } = await import('$lib/stores/chat/chat-message-ops.svelte');
-const { findOpenQuestion, resultsForAnsweredQuestion, buildAskAnswer, NOT_RUN_AFTER_RELOAD_RESULT } =
+const { findOpenQuestion, resultsForAnsweredQuestion, buildAskAnswer, buildAskAnswers, NOT_RUN_AFTER_RELOAD_RESULT } =
 	await import('$lib/utils/agentic');
 const { DISMISSED_RESULT } = await import('$lib/agent-core');
 
@@ -107,7 +107,7 @@ describe('findOpenQuestion', () => {
 		expect(open).toMatchObject({
 			assistantId: 'a1',
 			toolCallId: 'q1',
-			request: { question: 'Which draft?', options: ['a.md', 'b.md'], multiSelect: false },
+			request: { questions: [{ question: 'Which draft?', options: ['a.md', 'b.md'], multiSelect: false }] },
 			anchorId: 'a1'
 		});
 	});
@@ -146,6 +146,15 @@ describe('findOpenQuestion', () => {
 		]);
 		expect(resultsForAnsweredQuestion(open, null)[0].content).toBe(DISMISSED_RESULT);
 	});
+
+	it('several questions (D43): reloaded as one card, answered one line per question', () => {
+		seed(calls(['q1', 'ask_user', { questions: [{ question: 'Which?', options: ['a', 'b'] }, 'When?'] }]));
+		const open = findOpenQuestion(active.list as never)!;
+		expect(open.request.questions.map((q) => q.question)).toEqual(['Which?', 'When?']);
+		expect(resultsForAnsweredQuestion(open, { answers: [{ chosen: ['b'] }, { text: 'Friday' }] })[0].content).toBe(
+			'The user answered your questions:\n1. Which?\n   The user chose: b\n2. When?\n   The user answered: Friday'
+		);
+	});
 });
 
 describe('buildAskAnswer (the card)', () => {
@@ -154,6 +163,22 @@ describe('buildAskAnswer (the card)', () => {
 		expect(buildAskAnswer(['b.md'], '')).toEqual({ chosen: ['b.md'] });
 		expect(buildAskAnswer([], ' Celsius ')).toEqual({ text: 'Celsius' });
 		expect(buildAskAnswer(['A', 'B'], 'keep the title')).toEqual({ chosen: ['A', 'B'], text: 'keep the title' });
+	});
+
+	it('buildAskAnswers: one question answers flat; several give one reply each, null when all are blank', () => {
+		expect(buildAskAnswers([{ selected: ['x'], text: '' }])).toEqual({ chosen: ['x'] });
+		expect(
+			buildAskAnswers([
+				{ selected: [], text: ' ' },
+				{ selected: [], text: 'Friday' }
+			])
+		).toEqual({ answers: [null, { text: 'Friday' }] });
+		expect(
+			buildAskAnswers([
+				{ selected: [], text: '' },
+				{ selected: [], text: '' }
+			])
+		).toBeNull();
 	});
 });
 

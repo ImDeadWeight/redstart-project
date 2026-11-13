@@ -392,7 +392,7 @@ await test('ask_user goes to the ask port, not the gate or the executor, and the
     turns: [async (acc) => { acc.toolCalls = [askCall('q1', { question: 'Which unit are the readings in?' })] }],
   })
   await h.done
-  eq(seen, [{ question: 'Which unit are the readings in?', multiSelect: false }], 'the request the host got')
+  eq(seen, [{ questions: [{ question: 'Which unit are the readings in?', multiSelect: false }] }], 'the request the host got')
   eq(h.toolResults.map((r) => [r.id, r.content]), [['q1', 'The user answered: Celsius']], 'result')
   assert(!h.calls.some((c) => c.startsWith('approve:') || c.startsWith('execute:')), `gate or executor ran: ${h.calls}`)
   assert(h.calls.includes('ask:q1'), `the port was not handed the call: ${h.calls}`)
@@ -438,6 +438,67 @@ await test('a malformed ask_user is answered with how to call it, and never reac
   for (const r of h.toolResults) assert(/^Error: .*ask_user takes \{"question"/.test(r.content), r.content)
 })
 
+await test('several questions in one call (D43): one ask, one result, a line per question', async () => {
+  const seen = []
+  const h = harness({
+    ask: async (req) => { seen.push(req); return { answers: [{ chosen: ['CSV'] }, null, { text: 'last week' }] } },
+    turns: [async (acc) => {
+      acc.toolCalls = [askCall('q', { questions: [
+        { question: 'Which format?', options: ['CSV', 'JSON'] },
+        { question: 'Which columns?', options: ['all', 'some'], multi_select: true },
+        'Which dates?',
+      ] })]
+    }],
+  })
+  await h.done
+  eq(seen.length, 1, 'asked once')
+  eq(seen[0].questions.map((q) => [q.question, q.multiSelect]), [['Which format?', false], ['Which columns?', true], ['Which dates?', false]], 'the questions')
+  eq(h.toolResults[0].content, [
+    'The user answered your questions:',
+    '1. Which format?',
+    '   The user chose: CSV',
+    '2. Which columns?',
+    '   The user did not answer this one.',
+    '3. Which dates?',
+    '   The user answered: last week',
+    'Where they did not answer, continue with your best judgement and say what you assumed.',
+  ].join('\n'), 'result')
+})
+
+await test('several questions: a typed message answers them as one, a dismissal is a dismissal', async () => {
+  const replies = [{ text: 'CSV, all of them' }, null, { answers: [null, null] }]
+  const h = harness({
+    ask: async () => replies.shift(),
+    turns: [async (acc) => {
+      const two = { questions: [{ question: 'A?' }, { question: 'B?' }] }
+      acc.toolCalls = [askCall('s', two), askCall('d', two), askCall('e', two)]
+    }],
+  })
+  await h.done
+  eq(h.toolResults.map((r) => r.content), [
+    'The user answered all your questions in one message. They answered: CSV, all of them',
+    DISMISSED_RESULT,
+    DISMISSED_RESULT,
+  ], 'results')
+})
+
+await test('parseAskArguments, list form: both forms, duplicates, limits, item errors', async () => {
+  eq(parseAskArguments('{"questions": [{"question": "Only?"}]}'), { ok: true, request: { questions: [{ question: 'Only?', multiSelect: false }] } }, 'a list of one')
+  eq(parseAskArguments('{"question": "A?", "questions": [{"question": "B?"}, {"question": "A?"}]}').request?.questions.map((q) => q.question), ['B?', 'A?'], 'flat already in the list: not added')
+  eq(parseAskArguments('{"question": "A?", "questions": ["B?"]}').request?.questions.map((q) => q.question), ['A?', 'B?'], 'flat and list: flat first')
+  eq(parseAskArguments('{"questions": ["A?", "A?", "B?"]}').request?.questions.length, 2, 'duplicates asked once')
+  eq(parseAskArguments('{"questions": null, "question": "Q"}'), { ok: true, request: { questions: [{ question: 'Q', multiSelect: false }] } }, 'null list = flat form')
+  const tooMany = parseAskArguments(JSON.stringify({ questions: ['1?', '2?', '3?', '4?', '5?'] }))
+  assert(!tooMany.ok && /at most 4/.test(tooMany.error), 'five questions accepted')
+  assert(!parseAskArguments('{"questions": []}').ok, 'an empty list accepted')
+  assert(!parseAskArguments('{"questions": "A?"}').ok, 'a string list accepted')
+  const bad = parseAskArguments('{"questions": [{"question": "A?"}, {"question": "B?", "options": ["x"]}]}')
+  assert(!bad.ok && bad.error.includes('questions[2]: '), `the item is not named: ${bad.error}`)
+  // One question in either form reads back exactly as it always has.
+  eq(formatAskAnswer({ chosen: ['x'] }, { questions: [{ question: 'Q', multiSelect: false }] }), 'The user chose: x', 'one question, flat answer')
+  eq(formatAskAnswer({ answers: [{ text: 'y' }] }, { questions: [{ question: 'Q', multiSelect: false }] }), 'The user answered: y', 'one question, list answer')
+})
+
 await test('aborted while the question is open: the flow stops, completed once, no next turn', async () => {
   const controller = new AbortController()
   const h = harness({
@@ -473,10 +534,10 @@ await test('with no ask port, ask_user is an ordinary call: gate, then executor'
 
 await test('parseAskArguments and formatAskAnswer: trimming, duplicates, multi_select', async () => {
   eq(parseAskArguments('{"question": "  Which?  ", "options": [" a ", "b", "a"]}'),
-    { ok: true, request: { question: 'Which?', options: ['a', 'b'], multiSelect: false } }, 'trimmed, deduplicated')
+    { ok: true, request: { questions: [{ question: 'Which?', options: ['a', 'b'], multiSelect: false }] } }, 'trimmed, deduplicated')
   assert(!parseAskArguments('{"question": "Q", "options": ["only"]}').ok, 'one option accepted')
   assert(!parseAskArguments('{"question": "Q", "multi_select": "yes"}').ok, 'a string multi_select accepted')
-  eq(parseAskArguments('{"question": "Q", "options": null}'), { ok: true, request: { question: 'Q', multiSelect: false } }, 'null options = free text')
+  eq(parseAskArguments('{"question": "Q", "options": null}'), { ok: true, request: { questions: [{ question: 'Q', multiSelect: false }] } }, 'null options = free text')
   eq(formatAskAnswer({ text: '   ' }), DISMISSED_RESULT, 'blank text is a dismissal')
   eq(formatAskAnswer({ chosen: [] }), DISMISSED_RESULT, 'no choice is a dismissal')
 })

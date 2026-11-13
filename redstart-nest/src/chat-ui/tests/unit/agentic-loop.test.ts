@@ -420,7 +420,7 @@ describe('ask_user through the browser ask port', () => {
 		const { rec, done } = runLoop();
 
 		const q = await waitForQuestion();
-		expect(q).toEqual({ question: 'Which unit?', options: ['C', 'F'], multiSelect: false });
+		expect(q).toEqual({ questions: [{ question: 'Which unit?', options: ['C', 'F'], multiSelect: false }] });
 		expect(agenticStore.session.pendingPermissionRequest('conv-loop')).toBeNull();
 		agenticStore.session.resolveQuestion('conv-loop', { chosen: ['C'] });
 		await done;

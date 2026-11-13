@@ -424,7 +424,7 @@ A project groups related chats. It has instructions that apply to every chat in 
 
 ## Asking and planning
 
-Two tools are defined by Nest but answered by the chat app itself: `ask_user` (the assistant asks you a question, shown as a card with options, a text field and Skip) and `update_plan` (a checklist the assistant keeps for a task with several steps, shown above the message box). Nothing runs on the server for either.
+Two tools are defined by Nest but answered by the chat app itself: `ask_user` (the assistant asks you up to four questions at once, shown as one card with options and a text field for each, and Skip) and `update_plan` (a checklist the assistant keeps for a task with several steps, shown above the message box). Nothing runs on the server for either.
 
 - **Offered only to an app that answers them.** An MCP client gets them only if it says, when it connects, that it handles them. The chat UI and the agent benchmark do. Any other client (Yellowscript, Twig's own loop, a third-party MCP client) never sees them. A direct call is answered with an error. An admin can ban either one by name like any other tool.
 - **Neither needs a permission prompt.** A question changes nothing. The plan is part of the chat record, which the server checks on every save: up to 20 steps, each a short text with one of four states.

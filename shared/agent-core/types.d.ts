@@ -113,18 +113,36 @@ export interface AgentStoreCallbacks<A = unknown> {
 	onTurnComplete?: (intermediateTimings: Timings) => void;
 }
 
-/** An ask_user call, checked (ask-user.mjs parseAskArguments). */
-export interface AskRequest {
+/** One question of an ask_user call. */
+export interface AskQuestion {
 	question: string;
 	/** 2 to 4, distinct. Absent: a free-text question. */
 	options?: string[];
 	multiSelect: boolean;
 }
 
-/** What the person said. Both may be set: a choice plus a note. */
-export interface AskAnswer {
+/**
+ * An ask_user call, checked (ask-user.mjs parseAskArguments). Always a list,
+ * 1 to 4, whichever form the model wrote (D43).
+ */
+export interface AskRequest {
+	questions: AskQuestion[];
+}
+
+/** What the person said to one question. Both may be set: a choice plus a note. */
+export interface AskReply {
 	chosen?: string[];
 	text?: string;
+}
+
+/**
+ * What the person said. `answers`, one per question in order (null: that one
+ * not answered), is how a card answers several questions. Without it, the
+ * top-level reply answers a one-question request, or, for several, is one
+ * message meant for all of them (a steering message typed instead).
+ */
+export interface AskAnswer extends AskReply {
+	answers?: Array<AskReply | null>;
 }
 
 /** One update_plan step (update-plan.mjs). */

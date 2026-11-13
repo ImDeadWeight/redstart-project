@@ -51,7 +51,10 @@ describe('wire mappings', () => {
 	it('says what the task waits for', () => {
 		expect(taskStatusLabel({ status: 'waiting_user', waiting: { kind: 'continue' } })).toMatch(/turn limit/);
 		expect(
-			taskStatusLabel({ status: 'waiting_user', waiting: { kind: 'question', question: 'q', multiSelect: false } })
+			taskStatusLabel({
+				status: 'waiting_user',
+				waiting: { kind: 'question', questions: [{ question: 'q', multiSelect: false }] }
+			})
 		).toMatch(/asking/);
 		expect(taskStatusLabel({ status: 'waiting_approval', waiting: null })).toMatch(/approval/);
 	});
@@ -200,7 +203,10 @@ describe('tasksStore', () => {
 		expect(store.activeFor('c1')?.status).toBe('running');
 		expect(stream.calls).toEqual([0]);
 
-		const waiting = { kind: 'question' as const, question: 'Which file?', options: ['a', 'b'], multiSelect: false };
+		const waiting = {
+			kind: 'question' as const,
+			questions: [{ question: 'Which file?', options: ['a', 'b'], multiSelect: false }]
+		};
 		stream.push({ seq: 1, type: 'message' });
 		stream.push({ seq: 2, type: 'status', status: 'waiting_user', waiting });
 		expect(store.activeFor('c1')?.waiting).toEqual(waiting);

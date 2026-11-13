@@ -330,10 +330,11 @@ export async function runTask(nest, task, opts) {
                 log({
                   type: 'tool_call', id, name: 'ask_user', arguments: call?.function.arguments,
                   argsProblem: argumentProblem(call?.function.arguments, toolsByName.get('ask_user')?.inputSchema),
-                  question: request.question, options: request.options,
+                  question: request.questions[0].question, options: request.questions[0].options,
+                  ...(request.questions.length > 1 ? { questions: request.questions } : {}),
                 })
                 const answer = answerFromTask(task.answers, request)
-                log({ type: 'tool_result', id, name: 'ask_user', isError: false, dismissed: answer === null, text: formatAskAnswer(answer), ms: 0 })
+                log({ type: 'tool_result', id, name: 'ask_user', isError: false, dismissed: answer === null, text: formatAskAnswer(answer, request), ms: 0 })
                 return answer
               },
               invalid: (call, problem) => {

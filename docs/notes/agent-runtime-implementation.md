@@ -23,6 +23,10 @@ guidance memories on the bench account. **8.5 landed** (Phase 8 →
 a PR, then the tool-retrieval cache fix on its own branch, then Phase 4
 (the order recommended 2026-11-13).
 
+**D43 landed (2026-11-13, beside Phase 8):** ask_user can carry up to 4
+questions in one call, on one card. Not measured, not clicked; revert if
+the bench shows a loss. See "D43" below.
+
 **Handoff for a fresh session (written 2026-11-13).** Branch
 `feat/agent-core`, head b527c2c, clean. **Pushed only to 10ea361**: 17
 commits since (all of Phase 8 so far, plus the 3.11 close) are local. Ask
@@ -1072,6 +1076,59 @@ both models; no task that passed before fails beyond the noise measured
 after the rerun.
 
 ---
+
+## D43 — several questions in one ask_user (built 2026-11-13, not yet measured)
+
+Asked for by the user alongside Phase 8; plan §4 1.1 carries the amendment.
+One commit, so a revert is clean if it does not hold up.
+
+**What landed.**
+- `shared/agent-core/ask-user.mjs`: `questions` in the schema (nothing
+  `required` now: a call has `question` or `questions`, and the parser says
+  which is missing; no `anyOf`, since not every grammar converter handles
+  one). The parser takes the flat form, the list, both at once (flat first
+  unless already in the list), and bare strings as free-text items; drops
+  repeats; errors name the item (`questions[2]: ...`); more than 4 is an
+  error. `formatAskAnswer(answer, request)`: one question reads as before;
+  several give `The user answered your questions:` then a numbered line each,
+  `The user did not answer this one.` for a blank, and one closing line
+  asking for stated assumptions when any was blank. All blank is the old
+  dismissal.
+- `types.d.ts`: `AskRequest` is `{ questions: AskQuestion[] }`;
+  `AskAnswer` gained `answers?: (AskReply | null)[]`.
+- **A message typed while several questions are open** (steering-as-answer)
+  is passed on whole: `The user answered all your questions in one message.
+  They answered: ...`. Not split or guessed per question.
+- Daemon: the waiting record is `{ kind: 'question', callId, questions }`;
+  `POST /tasks/:id/answer` also takes `{ answers: [...] }` (padded or cut to
+  the question count; all blank is a 400).
+- chat-ui: the card shows a numbered block per question, a text field each,
+  one Send and one Skip (Skip dismisses the whole card). Enter in a field
+  moves to the next; in the last it sends. A one-question card looks and
+  sends exactly as before. `pickQuestionSource` still reads a flat waiting
+  record from before D43.
+- Bench: `answerFromTask` matches each question on its own; dismissed only
+  when none matched. The `tool_call` log keeps the first question in
+  `question`/`options` (so `asked()` and the summaries are unchanged) and adds
+  `questions` when there are several.
+- The system prompt line was **not** changed: the tool description carries
+  "ask them together", which keeps the prompt cache and the prompt tests as
+  they were. Revisit if models ignore the list.
+
+**Gaps carried forward.**
+- **Not measured.** No bench task needs two questions yet, and no run has
+  been made with the new schema. Owed: one Phase 1 task with two independent
+  open points (answers for both), then the 4B and Ornith 9B with
+  `--plan tool`, against the last Phase 1 rows; also watch the
+  `argsProblem` count on ask_user for every task, since a nested schema is
+  where a small model's arguments break. A loss on a small model means
+  revert or gate per profile (plan §4 1.1).
+- **Never clicked.** The card is mounted in a browser test; nobody has
+  answered a several-question card in the running app (build the chat page
+  first: `npm run build:chat`).
+- Option labels shared by two questions on one card are fine for the inputs
+  (each question is its own radio group) but are ambiguous to a screen
+  reader's role lookup, which uses the option text only.
 
 ## Phase 8 — memory that learns from the work (started 2026-11-12)
 

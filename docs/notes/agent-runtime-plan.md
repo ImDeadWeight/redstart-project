@@ -304,6 +304,15 @@ gets them in the same commit as the browser.
   `{ question: string, options?: string[] (2 to 4), multi_select?: boolean }`.
   Free text is always allowed alongside options. No `kind` field: a small model
   fills an enum badly, and the card needs no such distinction.
+- **Amended 2026-11-13 (D43, the user's call): several questions in one call.**
+  An optional `questions: [{ question, options?, multi_select? }]` (1 to 4)
+  beside the flat form, which stays first in the description so a model that
+  never learns the list loses nothing. The parsed request is always
+  `{ questions: [...] }`; one card shows them all with one Send; the result is
+  one numbered line per question, and a one-question result reads exactly as
+  before. Accepted risk: a nested list of objects is the shape this bullet
+  warned against. Kept only if the bench shows no loss on a small model;
+  otherwise revert (it is one commit) or gate it per profile.
 - Result to the model: `The user answered: <text>` or, for options,
   `The user chose: <label>[, <label>]`. On dismissal: `The user did not answer.
   Continue with your best judgement and say what you assumed.`

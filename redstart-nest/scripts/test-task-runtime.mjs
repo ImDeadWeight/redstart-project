@@ -385,11 +385,24 @@ await test('ask_user waits for an answer, which becomes the call\'s result', asy
   const t = start(conv)
   await waitFor(() => statusOf(t.id) === 'waiting_user', 'waiting_user')
   const waiting = store.getTask(t.id).waiting
-  eq([waiting.kind, waiting.question, waiting.options], ['question', 'Which city?', ['Oslo', 'Rome']], 'waiting')
+  eq([waiting.kind, waiting.questions], ['question', [{ question: 'Which city?', options: ['Oslo', 'Rome'], multiSelect: false }]], 'waiting')
   eq(runner.answerTask(t.id, { continue: true }).status, 400, 'a continue answer to a question')
   assert(runner.answerTask(t.id, { chosen: ['Rome'] }).ok, 'answered')
   await waitFor(() => ended(t.id), 'end')
   assert(/Rome/.test(branchOf(conv).find((m) => m.role === 'tool').content), 'answer in the result')
+})
+
+await test('several questions in one ask_user (D43): answered as { answers: [...] }, one line each', async () => {
+  fakeWorld([call('q1', 'ask_user', { questions: [{ question: 'Which city?', options: ['Oslo', 'Rome'] }, { question: 'Which month?' }] }), say('Noted.')])
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'waiting_user', 'waiting_user')
+  eq(store.getTask(t.id).waiting.questions.map((q) => q.question), ['Which city?', 'Which month?'], 'both questions waiting')
+  eq(runner.answerTask(t.id, { answers: [null, { text: '  ' }] }).status, 400, 'nothing answered')
+  assert(runner.answerTask(t.id, { answers: [{ chosen: ['Rome'] }, { text: 'May' }, { text: 'extra, dropped' }] }).ok, 'answered')
+  await waitFor(() => ended(t.id), 'end')
+  const result = branchOf(conv).find((m) => m.role === 'tool').content
+  assert(/1\. Which city\?\n   The user chose: Rome\n2\. Which month\?\n   The user answered: May$/.test(result), result)
 })
 
 await test('a message typed while a question is open is its answer', async () => {
@@ -974,7 +987,7 @@ await test('killed while a question was open: after the restart it is asked agai
     await child(['start', 'question'], dir, ['READY'], { kill: true })
     // The daemon comes back with no model: the question needs none.
     const waiting = await child(['resume', 'question'], dir, ['RESULT', 'WAITING'], { noModel: true })
-    eq([waiting.tag, waiting.rest.status, waiting.rest.waiting?.question], ['WAITING', 'waiting_user', 'Which colour?'], 'waiting again')
+    eq([waiting.tag, waiting.rest.status, waiting.rest.waiting?.questions?.[0]?.question], ['WAITING', 'waiting_user', 'Which colour?'], 'waiting again')
     // A second restart, answering this time.
     const done = await child(['resume', 'question', 'Blue'], dir, ['RESULT'])
     eq(done.rest.status, 'done', 'done')

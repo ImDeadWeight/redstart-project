@@ -144,7 +144,7 @@ export async function runViaRuntime({ nest, task, opts, log, conversationId, too
     else if (e.type === 'status') {
       const w = e.waiting
       if (e.status === 'waiting_user' && w?.kind === 'question') {
-        const answer = answerFromTask(task.answers, { question: w.question, options: w.options, multiSelect: !!w.multiSelect })
+        const answer = answerFromTask(task.answers, w.questions ? { questions: w.questions } : { question: w.question, options: w.options })
         if (w.callId) dismissedByCall.set(w.callId, answer === null)
         await nest.answerTask(taskId, answer ?? { dismissed: true })
       } else if (e.status === 'waiting_user' && w?.kind === 'continue') {

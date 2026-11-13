@@ -250,7 +250,7 @@ export async function runToolCalls(params) {
 					onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
 					return 'stopped';
 				}
-				result = formatAskAnswer(answer);
+				result = formatAskAnswer(answer, parsed.request);
 				// The time the person took to answer is not tool time.
 				toolStartTime = now();
 			}

@@ -534,6 +534,15 @@ await test('ask_user answers: substring match in file order, "" matches any, an 
   eq(answerFromTask({}, { question: 'Anything?' }), null, 'no answers: dismissed')
 })
 
+await test('ask_user answers, several questions (D43): matched one by one; dismissed only when none matched', async () => {
+  const answers = { draft: 'draft_b.md', unit: 'Celsius' }
+  const q = (question, options) => ({ question, ...(options ? { options } : {}), multiSelect: false })
+  eq(answerFromTask(answers, { questions: [q('Which draft?', ['draft_a.md', 'draft_b.md']), q('Due when?'), q('Which unit?')] }),
+    { answers: [{ chosen: ['draft_b.md'] }, null, { text: 'Celsius' }] }, 'per question')
+  eq(answerFromTask(answers, { questions: [q('Due when?'), q('Who?')] }), null, 'none matched: dismissed')
+  eq(answerFromTask(answers, { questions: [q('Which unit?')] }), { text: 'Celsius' }, 'a list of one answers flat')
+})
+
 await test('a task with answers but no ask_user on offer is warned about', async () => {
   const asking = [{ answers: { '': 'yes' } }, { answers: {} }]
   assert(/did not offer ask_user.*1 task/.test(askWarning(asking, [{ name: 'read_file' }]) ?? ''), 'no warning')

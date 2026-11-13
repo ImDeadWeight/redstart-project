@@ -33,6 +33,8 @@ export const TERMINAL_TASK_STATES: readonly TaskStatus[] = ['done', 'failed', 'c
 /** What a waiting task waits for (task-runner.mjs). */
 export type TaskWaiting =
 	| ({ kind: 'question'; callId?: string } & AskRequest)
+	/** A record written before D43 (one flat question); read as a one-item list. */
+	| { kind: 'question'; callId?: string; question: string; options?: string[]; multiSelect?: boolean }
 	| { kind: 'continue'; turns?: number }
 	| {
 			kind: 'approval';
@@ -65,6 +67,7 @@ export interface TaskEvent {
 
 export type TaskAnswer =
 	| { chosen?: string[]; text?: string }
+	| { answers: Array<{ chosen?: string[]; text?: string } | null> }
 	| { dismissed: true }
 	| { continue: boolean };
 

@@ -11,7 +11,7 @@ import { AttachmentType } from '$lib/enums';
 import { getServerBaseUrl } from './server-url';
 import { getAuthHeaders } from './api-headers';
 import { ASK_USER_TOOL, formatAskAnswer, parseAskArguments } from '$lib/agent-core';
-import type { AskAnswer, AskRequest, PlanStep } from '$lib/agent-core';
+import type { AskAnswer, AskQuestion, AskRequest, PlanStep } from '$lib/agent-core';
 import type { TaskRecord } from '$lib/services/task.service';
 
 /**
@@ -383,6 +383,38 @@ export function buildAskAnswer(selected: readonly string[], text: string): AskAn
 	return { ...(chosen.length ? { chosen: [...chosen] } : {}), ...(typed ? { text: typed } : {}) };
 }
 
+/**
+ * The card's answer to several questions: one reply per question, or null
+ * when none has anything yet. One question answers as buildAskAnswer does,
+ * so a one-question card sends exactly what it always sent.
+ */
+export function buildAskAnswers(
+	perQuestion: ReadonlyArray<{ selected: readonly string[]; text: string }>
+): AskAnswer | null {
+	const replies = perQuestion.map((q) => buildAskAnswer(q.selected, q.text));
+	if (replies.length <= 1) return replies[0] ?? null;
+	return replies.some((r) => r !== null) ? { answers: replies } : null;
+}
+
+/**
+ * A task's waiting question as a request. The daemon writes `questions`
+ * (D43); the flat fields are a record from before it, read the same way.
+ */
+function waitingQuestions(w: {
+	questions?: AskQuestion[];
+	question?: string;
+	options?: string[];
+	multiSelect?: boolean;
+}): AskRequest | null {
+	if (Array.isArray(w.questions) && w.questions.length > 0) {
+		return { questions: w.questions.map((q) => ({ ...q, multiSelect: !!q.multiSelect })) };
+	}
+	if (typeof w.question === 'string' && w.question) {
+		return { questions: [{ question: w.question, options: w.options, multiSelect: !!w.multiSelect }] };
+	}
+	return null;
+}
+
 /** Where the composer's question card comes from (ChatFormQuestion.svelte). */
 export type QuestionSource =
 	| { kind: 'task'; key: string; request: AskRequest }
@@ -407,10 +439,12 @@ export function pickQuestionSource(input: {
 	if (task || activeTaskId) {
 		const w = task?.waiting;
 		if (!task || w?.kind !== 'question') return null;
+		const request = waitingQuestions(w);
+		if (!request) return null;
 		return {
 			kind: 'task',
-			key: `task:${task.id}:${w.callId ?? w.question}`,
-			request: { question: w.question, options: w.options, multiSelect: !!w.multiSelect }
+			key: `task:${task.id}:${w.callId ?? request.questions[0].question}`,
+			request
 		};
 	}
 	if (live) return { kind: 'live', key: live, request: live };
@@ -444,7 +478,7 @@ export function resultsForAnsweredQuestion(
 ): Array<{ toolCallId: string; content: string }> {
 	return open.unanswered.map((c) => ({
 		toolCallId: c.id,
-		content: c.id === open.toolCallId ? formatAskAnswer(answer) : NOT_RUN_AFTER_RELOAD_RESULT
+		content: c.id === open.toolCallId ? formatAskAnswer(answer, open.request) : NOT_RUN_AFTER_RELOAD_RESULT
 	}));
 }
 

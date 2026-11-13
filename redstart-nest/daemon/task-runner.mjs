@@ -327,8 +327,9 @@ function appendUserMessage(task, content) {
 // ---------------------------------------------------------------------------
 
 /**
- * Answer what the task is waiting on: a question ({ chosen?, text? } or
- * { dismissed: true }) or the continue prompt ({ continue: boolean }).
+ * Answer what the task is waiting on: a question ({ chosen?, text? }, one
+ * reply per question as { answers: [...] }, or { dismissed: true }) or the
+ * continue prompt ({ continue: boolean }).
  *
  * @returns {{ ok: true } | { ok: false, status: number, error: string }}
  */
@@ -343,15 +344,29 @@ export function answerTask(id, body) {
   } else {
     if (body?.dismissed === true) {
       l.answer(null)
+    } else if (Array.isArray(body?.answers)) {
+      // One reply per question, in order (D43); null: that one not answered.
+      const count = t.waiting?.questions?.length ?? 1
+      const answers = Array.from({ length: count }, (_, i) => cleanReply(body.answers[i]))
+      if (answers.every((a) => a === null)) return { ok: false, status: 400, error: 'Expected at least one answer in { answers: [...] }, or { dismissed: true }' }
+      l.answer({ answers })
     } else {
-      const chosen = Array.isArray(body?.chosen) ? body.chosen.filter((c) => typeof c === 'string').slice(0, 4) : undefined
-      const text = typeof body?.text === 'string' ? body.text.slice(0, 4000) : undefined
-      if (!chosen?.length && !text) return { ok: false, status: 400, error: 'Expected { chosen?: string[], text?: string } or { dismissed: true }' }
-      l.answer({ ...(chosen?.length ? { chosen } : {}), ...(text ? { text } : {}) })
+      const reply = cleanReply(body)
+      if (!reply) return { ok: false, status: 400, error: 'Expected { chosen?: string[], text?: string }, { answers: [...] } or { dismissed: true }' }
+      l.answer(reply)
     }
   }
   store.appendEvent(id, { type: 'answered', kind: l.waitingKind })
   return { ok: true }
+}
+
+/** One question's reply from a request body, bounded, or null when it says nothing. */
+function cleanReply(value) {
+  if (typeof value !== 'object' || value === null) return null
+  const chosen = Array.isArray(value.chosen) ? value.chosen.filter((c) => typeof c === 'string' && c.trim()).slice(0, 4) : []
+  const text = typeof value.text === 'string' && value.text.trim() ? value.text.slice(0, 4000) : ''
+  if (!chosen.length && !text) return null
+  return { ...(chosen.length ? { chosen } : {}), ...(text ? { text } : {}) }
 }
 
 /**
@@ -814,7 +829,7 @@ async function runOnce(task, l, conv, generation, { resume }) {
     },
     ask: {
       user: async (request, _sig, call) => waitForAnswer('question', {
-        kind: 'question', callId: call?.id, question: request.question, options: request.options, multiSelect: request.multiSelect,
+        kind: 'question', callId: call?.id, questions: request.questions,
       }, null),
     },
     plan: {
