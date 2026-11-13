@@ -88,6 +88,9 @@ jobs:
       - name: "Security: tool retrieval (subset-only selection)"
         run: node scripts/test-tool-retrieval.mjs
 
+      - name: "Tool retrieval eval (frozen subset, catalog snapshot)"
+        run: node scripts/test-retrieval-eval.mjs
+
       - name: "Agent loop core (exit paths, under plain Node)"
         run: node scripts/test-agent-core.mjs
 
