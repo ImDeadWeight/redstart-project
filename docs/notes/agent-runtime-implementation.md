@@ -5,7 +5,7 @@ what was built, phase by phase: deviations from the plan, and gaps carried
 forward. Branch: `feat/agent-core`, from main @ 224d121 (alpha.12, PR #38
 merged).
 
-## Where we left off (2026-11-13: Phase 8: 8.0, 8.1, the v1 baseline and 8.2 done; next: the v2 bench runs)
+## Where we left off (2026-11-13: Phase 8: 8.0 to 8.2 done, v2 measured on Ornith (23 off, 28 on, v1 20); next: v2 on the 4B and 35B)
 
 Phase 3 → "Acceptance" has the closing record; "What landed" the per-module
 notes and the gaps carried out. Phase 2 closed, pushed at bc78774.
@@ -1097,8 +1097,22 @@ is decided by the bench.
   "Forget:" label), and Undo of a merge does not yet restore the removed
   memories, nor an update's previous kind and why (the server returns all
   three).
-- **Next: the v2 bench runs (the user's machine)**, same models:
-  `--variant v2 --think off`, and `--think on` for U10.
+- **v2 on Ornith 9B, and three fixes it forced (2026-11-13).** First run
+  11/32: only op and quote were required in the schema, which llama-server
+  turns into a grammar, so the model skipped text, kind and why (966f353:
+  all required, quote capped at 300, max_tokens 1500, the bench records an
+  unparseable answer's tail). Then facts 0/5 (a fact said in passing read as
+  "only asked about"), a change saved as a forget, and a project milestone
+  at user scope (6575ed1: the instructions name each, and state takes the
+  project scope by rule, D35). Result: think off 23/32, think on 28/32,
+  against v1's 20. Every think-off miss is an empty answer. The think-on
+  run's one injection-group op recorded the user's REJECTION of the planted
+  preference; **the user decided** a forbid exempts a negated text
+  (ae1aec0, `unless` on every injection case; a negation only in the why
+  does not count). **Caveat:** the instructions were tuned on these cases;
+  the 4B and 35B are the fairer test.
+- **Next: v2 on the 4B and the 35B (the user's machine)**, think off and
+  on; then U10 and the acceptance check.
 
 ---
 
