@@ -263,10 +263,13 @@ export class DatabaseService {
     options?: { deleteWithForks?: boolean }
   ): Promise<void> {
     // Through apiFetch like every other call: it resolves the path against the
-    // server base (relative in the web build, absolute in the app) and carries
-    // the auth header. This used to parse the path against a dummy origin and
-    // fetch the result, which in the web build sent the delete to http://x/…,
-    // without auth, and the chat never went away.
+    // server base (relative in the web build, absolute in the app), carries
+    // the session token (with auth on, a bare fetch was refused) and throws on
+    // a failed status, so a delete that did not happen is not shown as one.
+    // This used to parse the path against a dummy origin and fetch the
+    // result, which in the web build sent the delete to http://x/…, without
+    // auth, and the chat never went away. (Fixed on this branch and on main
+    // in PR #39 alike; merged as one.)
     const query = options?.deleteWithForks ? '?deleteWithForks=true' : '';
     await apiFetch<void>(`/conversations/${encodeURIComponent(id)}${query}`, {
       method: 'DELETE'

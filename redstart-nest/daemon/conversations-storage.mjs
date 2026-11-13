@@ -204,7 +204,18 @@ export function deleteConversation(accountId, convId) {
   const data = read()
   const idx = data.conversations.findIndex(c => c.id === convId && c.accountId === accountId)
   if (idx === -1) return false
-  data.conversations.splice(idx, 1)
+  const [deleted] = data.conversations.splice(idx, 1)
+  // Its forks survive the delete, so they move up to its parent (or become
+  // top-level), as the chat-ui sidebar already shows them. Left alone they
+  // would point at a conversation that no longer exists once the list is
+  // reloaded. Only the caller's own forks: another account's copy is not this
+  // caller's to rewrite.
+  const newParent = deleted.forkedFromConversationId ?? null
+  for (const c of data.conversations) {
+    if (c.accountId === accountId && c.forkedFromConversationId === convId) {
+      c.forkedFromConversationId = newParent
+    }
+  }
   write(data)
   return true
 }

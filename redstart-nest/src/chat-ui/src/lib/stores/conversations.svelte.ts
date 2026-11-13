@@ -512,6 +512,7 @@ class ConversationsStore {
 			}
 		} catch (error) {
 			console.error('Failed to delete conversation:', error);
+			toast.error('Failed to delete conversation');
 		}
 	}
 
