@@ -265,6 +265,14 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   const retrievalOptOut = parsed.redstart_retrieval === false
   delete parsed.redstart_retrieval
 
+  // Redstart-specific request field: `redstart_retrieval_report: true` asks
+  // for the names of the tools actually forwarded, as response headers
+  // (retrievalReportHeaders). Only the literal `true` asks. The names go to
+  // this caller alone, who sent those tools in the first place; the support
+  // log stays counts-only. Consumed either way so llama-server never sees it.
+  const reportRequested = parsed.redstart_retrieval_report === true
+  delete parsed.redstart_retrieval_report
+
   // BANS FIRST, PROMPT SECOND — and every value the prompt is derived
   // from is read AFTER this line. The capability claims must describe
   // what the model actually received this turn, which is the payload the
@@ -356,10 +364,48 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
     messages: parsed.messages,
     ctxSize: effectiveConfig.ctxSize,
     filtered: !retrievalOptOut && toolsAfterBans > 0 && effectiveConfig.toolRetrieval?.enabled === true,
+    // For the caller's report only (retrievalReportHeaders). recordWireCost
+    // reads counts and never these.
+    report: reportRequested,
+    toolNamesSent: toolNamesIn(parsed),
+    toolsRemoved: toolsFiltered,
   }
   recordWireCost(wire)
 
   return { parsed, wire }
+}
+
+// Header names of the retrieval report, also listed in
+// Access-Control-Expose-Headers so a browser client (chat-ui on another
+// origin) can read them.
+export const RETRIEVAL_REPORT_HEADERS = Object.freeze({
+  sent: 'x-redstart-tools-sent',
+  filtered: 'x-redstart-tools-filtered',
+})
+
+/**
+ * The response headers that answer `redstart_retrieval_report: true`: the
+ * tools forwarded, by name, and whether retrieval removed any. Empty when the
+ * caller did not ask, so an ordinary response is unchanged.
+ *
+ * Names are comma-separated and each one percent-encoded, so an MCP tool name
+ * with a comma or a non-ASCII character cannot break the list or the header.
+ * Ordinary names (letters, digits, `_`, `-`) read as they are.
+ *
+ * Only `wire` is read, which prepareCompletion builds after bans and
+ * retrieval, so a banned tool can never appear here.
+ *
+ * @param {{ report?: boolean, toolNamesSent?: string[], toolsRemoved?: boolean }|null|undefined} wire
+ * @returns {Record<string, string>}
+ */
+export function retrievalReportHeaders(wire) {
+  if (!wire?.report) return {}
+  const names = Array.isArray(wire.toolNamesSent) ? wire.toolNamesSent : []
+  return {
+    [RETRIEVAL_REPORT_HEADERS.sent]: names.map(encodeURIComponent).join(','),
+    [RETRIEVAL_REPORT_HEADERS.filtered]: wire.toolsRemoved ? '1' : '0',
+    'Access-Control-Expose-Headers': `${RETRIEVAL_REPORT_HEADERS.sent}, ${RETRIEVAL_REPORT_HEADERS.filtered}`,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -431,7 +477,9 @@ export function annotateContextError(body, cost) {
   return JSON.stringify(parsedBody)
 }
 
-function forwardModified(res, internalPort, parsed) {
+// `extraHeaders` are added to the response on every path that answers it
+// from upstream (the retrieval report, retrievalReportHeaders).
+function forwardModified(res, internalPort, parsed, extraHeaders = {}) {
   // Every user completion passes through here, so this is where "is the model
   // busy" is counted (completion-activity.mjs; the memory review waits for 0).
   const done = beginCompletion()
@@ -467,7 +515,7 @@ function forwardModified(res, internalPort, parsed) {
         for (const key of Object.keys(headers)) {
           if (key.toLowerCase() === 'content-length') delete headers[key]
         }
-        res.writeHead(400, { ...headers, 'Access-Control-Allow-Origin': '*' })
+        res.writeHead(400, { ...headers, ...extraHeaders, 'Access-Control-Allow-Origin': '*' })
         res.end(out)
       })
       // A truncated error response must still terminate the client's request.
@@ -477,6 +525,7 @@ function forwardModified(res, internalPort, parsed) {
 
     res.writeHead(proxyRes.statusCode, {
       ...withoutUpstreamCors(proxyRes.headers),
+      ...extraHeaders,
       'Access-Control-Allow-Origin': '*',
     })
     proxyRes.pipe(res)
@@ -788,7 +837,8 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         // Surface comes from authResult — i.e. from the credential the caller
         // presented (spec §8) — never from a header. X-Redstart-Surface stays
         // accepted and inert; the connector-contract suite asserts that.
-        ;({ parsed } = await prepareCompletion(parsed, {
+        let wire
+        ;({ parsed, wire } = await prepareCompletion(parsed, {
           account: authResult.account,
           surface: authResult.surface,
           effectiveConfig,
@@ -797,7 +847,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         }))
 
         try {
-          forwardModified(res, internalPort, parsed)
+          forwardModified(res, internalPort, parsed, retrievalReportHeaders(wire))
         } catch (err) {
           if (!res.headersSent) {
             res.writeHead(500, { 'Content-Type': 'application/json' })

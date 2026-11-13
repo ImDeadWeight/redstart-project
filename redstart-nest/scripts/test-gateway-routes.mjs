@@ -776,6 +776,73 @@ async function main() {
     })
   })
 
+  // The opt-in report of what was sent (tool retrieval second pass, 0.1, P4).
+  const sentHeader = res => {
+    const value = res.headers.get('x-redstart-tools-sent')
+    return value === null ? null : value.split(',').filter(Boolean).map(decodeURIComponent)
+  }
+
+  await test('🔍 with redstart_retrieval_report, the header lists exactly the forwarded tools', async () => {
+    await withStubEmbedder(async () => {
+      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+      const res = await completions({
+        messages: [{ role: 'user', content: 'what changed in the git repo today' }],
+        tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch')],
+        redstart_retrieval_report: true,
+      })
+      const forwarded = (lastForwarded.tools || []).map(t => t.function.name)
+      const reported = sentHeader(res)
+      assert(reported !== null, 'no x-redstart-tools-sent header')
+      assert(!forwarded.includes('web_fetch'), 'setup: the stub scorer should have narrowed the list')
+      assert(JSON.stringify(reported) === JSON.stringify(forwarded),
+        `reported ${reported.join(',')} but forwarded ${forwarded.join(',')}`)
+      assert(res.headers.get('x-redstart-tools-filtered') === '1', 'a narrowed list was reported as unfiltered')
+      assert(/x-redstart-tools-sent/.test(res.headers.get('access-control-expose-headers') ?? ''),
+        'a browser client on another origin could not read the header')
+    })
+  })
+
+  await test('🔍 an unfiltered request reports filtered: 0, with every tool', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096 })
+    const res = await completions({ ...retrievalBody(), redstart_retrieval_report: true })
+    assert(res.headers.get('x-redstart-tools-filtered') === '0', 'retrieval off was reported as filtered')
+    assert(sentHeader(res)?.length === 3, `expected all three tools: ${res.headers.get('x-redstart-tools-sent')}`)
+  })
+
+  await test('🔒 without the flag there is no report, and the field never reaches llama-server', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096 })
+    const plain = await completions(retrievalBody())
+    assert(plain.headers.get('x-redstart-tools-sent') === null, 'a report was sent nobody asked for')
+    assert(plain.headers.get('x-redstart-tools-filtered') === null, 'a report was sent nobody asked for')
+    // Only the literal true asks, as with redstart_retrieval's literal false.
+    const truthy = await completions({ ...retrievalBody(), redstart_retrieval_report: 'true' })
+    assert(truthy.headers.get('x-redstart-tools-sent') === null, 'a non-boolean value asked for the report')
+    assert(!('redstart_retrieval_report' in lastForwarded), 'the Redstart-only field was forwarded')
+    await completions({ ...retrievalBody(), redstart_retrieval_report: true })
+    assert(!('redstart_retrieval_report' in lastForwarded), 'the Redstart-only field was forwarded')
+  })
+
+  await test('🔒 a banned tool is never in the report', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, disabledTools: ['create_document'], documents: { enabled: true } })
+    const res = await completions({ ...retrievalBody(), redstart_retrieval_report: true })
+    const reported = sentHeader(res) ?? []
+    assert(!reported.includes('create_document'), 'the report named a banned tool')
+    assert(reported.includes('git_status'), `the report lost an allowed tool: ${reported.join(',')}`)
+    updateGatewayConfig(baseConfig)
+  })
+
+  await test('🔍 a name with a comma or non-ASCII cannot break the list', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096 })
+    const odd = ['a,b', 'café_lookup', 'git_status']
+    const res = await completions({
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: odd.map(toolDef),
+      redstart_retrieval_report: true,
+    })
+    assert(res.status === 200, `expected 200, got ${res.status}`)
+    assert(JSON.stringify(sentHeader(res)) === JSON.stringify(odd), `round-trip lost a name: ${res.headers.get('x-redstart-tools-sent')}`)
+  })
+
   await test('a request carrying no tools is untouched by retrieval', async () => {
     updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
     const res = await completions({ messages: [{ role: 'user', content: 'hello' }] })

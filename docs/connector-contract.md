@@ -79,6 +79,14 @@ The gateway rewrites the request before forwarding:
   retrieval. For a connector that sends its own short, curated tool list and
   has no `search_tools` to recover a dropped tool. Bans still apply. Only the
   literal `false` counts; the field is consumed and never forwarded
+- `redstart_retrieval_report: true` — report which tools were actually
+  forwarded, after bans and retrieval. The response carries
+  `x-redstart-tools-sent` (the tool names, comma-separated, each one
+  percent-encoded) and `x-redstart-tools-filtered` (`1` when retrieval removed
+  any tool, otherwise `0`); both are listed in
+  `Access-Control-Expose-Headers`. Only the literal `true` asks; the field is
+  consumed and never forwarded. The names go to the caller only, never to the
+  log
 - `redstart_project` — the **id** of one of the caller's own projects (from
   `GET /projects`). Nest adds that project's instructions and memories to the
   prompt. An id the caller can't read adds nothing; the field is consumed and
