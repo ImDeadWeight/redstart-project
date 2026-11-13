@@ -20,7 +20,7 @@ import { goto } from '$app/navigation';
 import { toast } from 'svelte-sonner';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from '$lib/constants/routes';
 import { RouterService } from '$lib/services/router.service';
-import { MemoryService } from '$lib/services/memory.service';
+import { MemoryService, parseRemember } from '$lib/services/memory.service';
 import { ContextCompactionService } from '$lib/services/context-compaction.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { chatStore } from '$lib/stores/chat.svelte';
@@ -115,14 +115,23 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 	},
 	{
 		name: 'remember',
-		summary: 'Save something about you to memory',
+		summary: 'Save something about you to memory (guidance: … because …, state: …)',
 		arg: 'required',
-		argHint: '<text>',
+		argHint: '<text> | guidance: <how> because <why> | state: <where things stand>',
 		async run({ arg }) {
+			// A kind by prefix (agent-runtime 8.6, parseRemember). Guidance is
+			// followed by the assistant, so it is refused here without a reason.
+			const parsed = parseRemember(arg);
+			if (!parsed.ok) {
+				toast.error(parsed.error);
+				return;
+			}
 			try {
 				const memory = await MemoryService.create(
-					arg,
-					conversationsStore.activeConversation?.id ?? null
+					parsed.text,
+					conversationsStore.activeConversation?.id ?? null,
+					null,
+					{ kind: parsed.kind, why: parsed.why }
 				);
 				if (memory.duplicate) {
 					toast.info('Already remembered');

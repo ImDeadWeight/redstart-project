@@ -445,7 +445,9 @@ export function filterOps(answer, { userMemories = [], projectMemories = [], pro
       seen.add(lower)
       out.push({
         op: 'update', text: norm.text, scope: target.scope, ...scoped(target.scope),
-        targetId: target.m.id, previousText: target.m.text, ...(replaces.length ? { replaces } : {}), ...extra,
+        targetId: target.m.id, previousText: target.m.text,
+        // The texts ride along so a suggestion chip can say what a merge folds in (8.6).
+        ...(replaces.length ? { replaces, replacedTexts: replaces.map((id) => known.get(id).m.text) } : {}), ...extra,
       })
       continue
     }

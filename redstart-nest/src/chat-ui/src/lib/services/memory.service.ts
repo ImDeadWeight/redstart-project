@@ -12,6 +12,21 @@ import { resolveApiPath } from '$lib/utils/api-fetch';
  * the caller may not read.
  */
 
+/**
+ * What a memory is (agent-runtime D35). Guidance is FOLLOWED by the assistant
+ * (how the user wants it to work, with a why); facts and state are data;
+ * state is dated. A record saved before kinds existed comes back as fact.
+ */
+export type MemoryKind = 'fact' | 'guidance' | 'state';
+export const MEMORY_KINDS: MemoryKind[] = ['guidance', 'fact', 'state'];
+export const KIND_LABELS: Record<MemoryKind, string> = {
+	guidance: 'How to work',
+	fact: 'About you',
+	state: 'Where things stand'
+};
+/** A state memory older than this is marked as possibly out of date (as the prompt does). */
+export const STATE_STALE_DAYS = 60;
+
 export interface Memory {
 	id: string;
 	text: string;
@@ -22,6 +37,43 @@ export interface Memory {
 	fromWebTurn: boolean;
 	/** 'review' when automatic memory saved it. */
 	via?: string;
+	kind?: MemoryKind;
+	why?: string | null;
+	/** State only: the day it describes (YYYY-MM-DD), set by the server. */
+	asOf?: string;
+}
+
+/** A state memory's date, and whether it is old enough to doubt. */
+export function stateAge(m: Pick<Memory, 'kind' | 'asOf' | 'updatedAt'>, now = Date.now()): { date: string; stale: boolean } | null {
+	if ((m.kind ?? 'fact') !== 'state') return null;
+	const t = m.asOf ? Date.parse(`${m.asOf}T00:00:00Z`) : m.updatedAt;
+	if (!Number.isFinite(t)) return null;
+	return { date: new Date(t).toISOString().slice(0, 10), stale: now - t > STATE_STALE_DAYS * 86_400_000 };
+}
+
+/**
+ * The composer's `/remember` text, read for a kind (agent-runtime 8.1, 8.6):
+ *   /remember <fact>                          a fact
+ *   /remember guidance: <text> because <why>  guidance (the why is required)
+ *   /remember state: <text>                   where something stands
+ * The prefix is case-insensitive. Guidance with no "because" is an error the
+ * composer shows, not a fact saved silently: guidance is followed, and its
+ * reason is what lets the user (and the assistant) judge when it applies.
+ */
+export function parseRemember(
+	input: string
+): { ok: true; text: string; kind: MemoryKind; why?: string } | { ok: false; error: string } {
+	const raw = input.trim();
+	const m = /^(guidance|state|fact)\s*:\s*([\s\S]*)$/i.exec(raw);
+	if (!m) return raw ? { ok: true, text: raw, kind: 'fact' } : { ok: false, error: 'Nothing to remember' };
+	const kind = m[1].toLowerCase() as MemoryKind;
+	const body = m[2].trim();
+	if (kind !== 'guidance') return body ? { ok: true, text: body, kind } : { ok: false, error: 'Nothing to remember' };
+	const b = /^([\s\S]*?)\s+because\s+([\s\S]+)$/i.exec(body);
+	if (!b || !b[1].trim() || !b[2].trim()) {
+		return { ok: false, error: 'Guidance needs a reason: /remember guidance: <what> because <why>' };
+	}
+	return { ok: true, text: b[1].trim(), kind, why: b[2].trim() };
 }
 
 /** Automatic memory (projects-plan Phase 3). */
@@ -36,25 +88,40 @@ export interface AutoMemorySettings {
 /** A memory the review proposed, waiting for Save or Dismiss. */
 export interface MemorySuggestion {
 	id: string;
-	op: 'add' | 'update';
+	/** forget: the review thinks a memory no longer holds (always only suggested). */
+	op: 'add' | 'update' | 'forget';
+	/** For a forget, the memory's own text. */
 	text: string;
+	kind?: MemoryKind;
+	why?: string;
+	/** The user's own words the review cited (D36), shown so the user can judge it. */
+	quote?: string;
 	scope: 'user' | 'project';
 	projectId?: string;
-	/** For an update: the memory it replaces, and that memory's text. */
+	/** For an update or forget: the memory it acts on, and (update) that memory's text. */
 	targetId?: string;
 	previousText?: string | null;
+	/** For a merge: the other memories folded into this one, removed when it is saved. */
+	replaces?: string[];
+	/** Their texts, as they were when the review ran (display only). */
+	replacedTexts?: string[];
 	conversationId: string | null;
 	createdAt: number;
 }
 
 /** A memory the review saved (auto mode), or a suggestion once accepted. */
 export interface ReviewedMemory {
-	op: 'add' | 'update';
+	op: 'add' | 'update' | 'forget';
+	/** For a forget, the memory as it was before it went. */
 	memory: Memory;
 	scope: 'user' | 'project';
 	projectId?: string;
-	/** For an update: the text it replaced, which Undo restores. */
+	/** For an update: what it replaced, which Undo restores. */
 	previousText?: string | null;
+	previousKind?: MemoryKind;
+	previousWhy?: string | null;
+	/** For a merge: the memories folded in and removed, whole, for Undo. */
+	removed?: Memory[];
 }
 
 export type ReviewResult =
@@ -81,18 +148,37 @@ export class MemoryService {
 	static async create(
 		text: string,
 		conversationId?: string | null,
-		projectId?: string | null
+		projectId?: string | null,
+		{ kind, why }: { kind?: MemoryKind; why?: string | null } = {}
 	): Promise<Memory & { duplicate: boolean }> {
 		return apiFetch<Memory & { duplicate: boolean }>(scoped('/memories', projectId), {
 			method: 'POST',
-			body: JSON.stringify({ text, conversationId: conversationId ?? null })
+			body: JSON.stringify({
+				text,
+				conversationId: conversationId ?? null,
+				...(kind ? { kind } : {}),
+				...(why ? { why } : {})
+			})
 		});
 	}
 
-	static async update(id: string, text: string, projectId?: string | null): Promise<Memory> {
+	/**
+	 * `kind` and `why` left undefined keep what the memory had; `why: null`
+	 * clears the reason. Editing a state memory re-dates it to today.
+	 */
+	static async update(
+		id: string,
+		text: string,
+		projectId?: string | null,
+		{ kind, why }: { kind?: MemoryKind; why?: string | null } = {}
+	): Promise<Memory> {
 		return apiFetch<Memory>(scoped(`/memories/${encodeURIComponent(id)}`, projectId), {
 			method: 'PUT',
-			body: JSON.stringify({ text })
+			body: JSON.stringify({
+				text,
+				...(kind !== undefined ? { kind } : {}),
+				...(why !== undefined ? { why } : {})
+			})
 		});
 	}
 

@@ -87,7 +87,9 @@ export function setSettings(account, body) {
  * Newest first. With `conversationId`, only that chat's.
  * A suggestion: { id, op: 'add'|'update'|'forget', text, kind, why?, quote?,
  * scope: 'user'|'project', projectId?, targetId?, previousText?, replaces?,
- * conversationId, createdAt }. A forget's text is the memory it would forget.
+ * replacedTexts?, conversationId, createdAt }. A forget's text is the memory
+ * it would forget. replacedTexts is what a merge folds in, for the chip only:
+ * accepting re-reads the memories by id.
  */
 export function listSuggestions(account, { conversationId = null } = {}) {
   const list = read().suggestions[memoryKey(account)] || []
@@ -133,6 +135,7 @@ export function addSuggestions(account, proposals, { conversationId, now = Date.
       ...(op !== 'add' ? { targetId: p.targetId } : {}),
       ...(op === 'update' ? { previousText: p.previousText ?? null } : {}),
       ...(op === 'update' && Array.isArray(p.replaces) && p.replaces.length ? { replaces: [...p.replaces] } : {}),
+      ...(op === 'update' && Array.isArray(p.replacedTexts) && p.replacedTexts.length ? { replacedTexts: p.replacedTexts.map(String) } : {}),
       conversationId: conversationId ?? null,
       createdAt: now,
     }

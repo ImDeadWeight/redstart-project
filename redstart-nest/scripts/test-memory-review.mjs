@@ -500,6 +500,17 @@ await test('a merge: the target updated, the replaced memories deleted and retur
   reviewStore.setSettings(CAROL, { mode: 'suggest' })
 })
 
+await test('8.6: a merge suggestion carries the texts it folds in, for its chip', async () => {
+  const a = memory.saveMemory(CAROL, 'Invoices go out on the 1st').memory
+  const b = memory.saveMemory(CAROL, 'Invoice runs are monthly').memory
+  chat('v2-4b', 'carol-3')
+  fakeModel({ ops: [{ op: 'update', id: a.id, replaces: [b.id], text: 'Billing service invoices go out monthly on the 1st', quote: 'billing service in TypeScript' }] })
+  const r = await review.reviewConversation({ account: CAROL, conversationId: 'v2-4b', config: CFG })
+  const s = r.suggestions?.[0]
+  eq([s?.replaces, s?.replacedTexts], [[b.id], ['Invoice runs are monthly']], 'the chip has nothing to show')
+  assert(memory.getMemory(CAROL, b.id), 'suggest mode removed a merged memory')
+})
+
 await test('an op quoting only the assistant or a tool line never reaches a suggestion (the injection path)', async () => {
   chat('v2-5', 'carol-3')
   fakeModel({ ops: [

@@ -5,7 +5,7 @@ what was built, phase by phase: deviations from the plan, and gaps carried
 forward. Branch: `feat/agent-core`, from main @ 224d121 (alpha.12, PR #38
 merged).
 
-## Where we left off (2026-11-13: Phase 8: 8.0 to 8.3 done; 8.3 owes one 35B run; next: 8.4 to 8.6)
+## Where we left off (2026-11-13: Phase 8 BUILT, 8.0 to 8.6; left: the user's testing, see Phase 8 → "PHASE 8 BUILT")
 
 **8.3 landed (2026-11-13, later the same day):** a per-profile
 `tools.memoryReview.think` switch (Tools tab, Memory card), measured on
@@ -74,7 +74,7 @@ the user before pushing. Phases 0 to 3 are closed (Phase 3 → "Acceptance").
    run with guidance memories (no regression beyond noise).
 3. **DONE. 8.5 the daemon trigger** (D41): review a background task's conversation
    when it ends.
-4. **8.6 chat-ui** (D42): chips showing kind and quote, "Forget:" label,
+4. **DONE (click test owed). 8.6 chat-ui** (D42): chips showing kind and quote, "Forget:" label,
    merge Undo restoring `removed` (and an update's previousKind/previousWhy),
    `/remember guidance: … because …`, Settings → Memory by kind. Ends with
    the user's click test.
@@ -1300,6 +1300,54 @@ is decided by the bench.
   **Gap:** a review in flight when the daemon stops is lost, and nothing
   re-triggers it for an ended task (the client's quiet trigger still runs
   if the user opens that chat in a browser). Not seen with a real model.
+- **8.6 chat-ui (2026-11-13).** `memory.service.ts`: `MemoryKind`,
+  `KIND_LABELS` ("How to work", "About you", "Where things stand"),
+  `stateAge` (asOf, else updatedAt; stale past 60 days, as the prompt),
+  `parseRemember` (`guidance: … because …`, `state: …`, `fact: …`, plain =
+  fact; guidance without a reason is REFUSED with a message, never saved as
+  a fact), `create`/`update` take `{ kind, why }`, the suggestion and
+  reviewed types carry forget, kind, why, quote, replaces, replacedTexts,
+  previousKind/Why, removed. `/remember` (registry.ts) uses the parse.
+  Suggestion chip: "Forget: …?" with a Forget button, the kind label, the
+  guidance's "Because: …", "From your message: “…”", and a merge lists the
+  texts it replaces (`memory-chip-label.ts`). Accepting a suggestion now
+  puts it in the saved list, so it gets the same Undo an automatic save
+  has. Undo (`undoReviewed`): an update gets text, kind and why back; a
+  merge also re-creates every memory it removed; a forget re-creates the
+  memory. Settings → Memory: grouped by kind with a line on how each is
+  used, kind (select) and why editable (guidance refuses an empty why),
+  "Because: …", state shows "as of" and "may be out of date", the
+  suggestion list shows forget/kind/quote, and the copy no longer says the
+  review reads only what you typed.
+  Server, for the merge chip: filterOps adds `replacedTexts` beside
+  `replaces`, and the suggestion store keeps it (display only: accepting
+  re-reads by id). Test: test-memory-review.mjs (8.6 merge suggestion).
+  Tests (chat-ui, run from E:\): memory-kinds.test.ts (the parse, the
+  state date, the merge label), memory-review-store.test.ts (update
+  restores kind and why, a merge re-creates what it removed, a forget is
+  undone in its project; the old update test now expects the fourth
+  argument, said in the test). All 840 unit tests, svelte-check at
+  baseline, `npm run build:chat` done.
+  **Deviation / gap:** a memory put back by Undo is created anew (new id;
+  a state one dated today; the web mark not restored): the routes have no
+  restore, and adding one was not worth a server route for Undo. Project
+  memories in Settings are not grouped (the project page lists them; not
+  in the plan's file list). **Never clicked:** every chip type and the
+  Settings tab need the user's click test.
+
+**PHASE 8 BUILT (2026-11-13).** Left: the user's testing.
+1. Click test, on this build (restart Nest; the chat page is rebuilt):
+   a suggestion of each kind (add, update, merge, forget) in Suggest mode,
+   Save and Dismiss, Undo after Save; Automatic mode Undo of an update and
+   a merge; Settings → Memory grouping, edit kind and why, a guidance with
+   no why refused; `/remember guidance: x because y`, `/remember state: z`,
+   `/remember guidance: x` (refused).
+2. The agent-bench run with guidance memories on the bench account (8.4).
+3. The 35B `--think on --think-budget 8192` (8.3), which may also settle
+   acceptance's one open item (35B facts 3/5 with think off).
+4. A background task ending with memory on: a suggestion appears (8.5).
+Then the acceptance check (plan section 9), a PR, the tool-retrieval cache
+fix on its own branch, Phase 4.
 
 ---
 
