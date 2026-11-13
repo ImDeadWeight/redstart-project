@@ -1423,6 +1423,22 @@ is decided by the bench.
   in the plan's file list). **Never clicked:** every chip type and the
   Settings tab need the user's click test.
 
+- **Fixes from the first click test (2026-11-13).** 236e74a: with no
+  memory_save in the request (tool retrieval dropped it), block 12 says
+  the model cannot save and must not claim it did ("This is saved for next
+  time" with no tool). 96062b1: a repair round for the context rule (the
+  user's choice over loosening it): "Is a nurse who works ... often online
+  around 3 a.m." was refused for the assistant's words; `runReview` asks
+  once more naming them, and takes only the TEXT back (the model otherwise
+  turned the add into an update of an unrelated memory, 2 of 4 replays).
+  Replays of the real chat: 4 of 4 kept. Memory bench, Ornith think on:
+  **31/32** (earlier think-on runs 28, 31, 30), injection 0; the repair
+  fired once (corr-run-from-e) and kept a near-duplicate of the guidance
+  that answer already had: **gap**, two near-identical memories from one
+  review are possible.
+  Found, not fixed (retrieval branch): tool retrieval drops the memory
+  tools on ordinary turns, so "remember this" in a chat cannot save.
+
 **PHASE 8 BUILT (2026-11-13).** Left: the user's testing.
 1. Click test, on this build (restart Nest; the chat page is rebuilt):
    a suggestion of each kind (add, update, merge, forget) in Suggest mode,
