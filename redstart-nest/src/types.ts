@@ -257,6 +257,10 @@ export type ProfileTools = {
   // it, which reads as off — the safe direction, since the whole feature is an
   // optimization the server works without.
   retrieval?: { enabled?: boolean; relativeFloor?: number; floor?: number; margin?: number }
+  // The automatic memory review (agent-runtime 8.3). `think` lets the model
+  // reason before it answers: measured to help some models (Ornith 9B) and not
+  // others (Qwen3-4B), so it is per profile. Absent reads as off.
+  memoryReview?: { think?: boolean }
 }
 
 export type LlamaConfig = {

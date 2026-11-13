@@ -227,6 +227,9 @@ export function buildGatewayConfig(llamaConfig) {
     memory: {
       enabled: toolIdSet.has('memory'),
       promptBudgetChars: capabilities.memory.promptBudgetChars,
+      // Thinking for the automatic review (agent-runtime 8.3). Per profile,
+      // since it follows the model: absent reads as off, what shipped before.
+      reviewThink: toolSettings.memoryReview?.think === true,
     },
     scholar: {
       enabled: scholarWanted,

@@ -578,6 +578,19 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
               </div>
             </div>
             <p className="text-xs text-zinc-600 mt-1.5">Lets the assistant remember durable facts each user tells it about themselves (their tools, preferences, role) across chats. Private per account; the newest (about 300 tokens' worth) ride along with every request. Every save appears in the chat with Undo, users see, edit and delete all of theirs under Settings → Memory, and a save made while the assistant was reading the web is flagged. Withhold it from a role with the capability list.</p>
+            {isActive('memory') && (
+              <label className="flex items-center justify-between gap-2 cursor-pointer select-none mt-2">
+                <span className="min-w-0">
+                  <span className="text-xs text-zinc-300">Think before suggesting memories</span>
+                  <span className="block text-xs text-zinc-600">After a chat goes quiet, the model reviews it for things worth remembering. With this on it reasons first: better suggestions on some models (Ornith 9B), none on others (Qwen3-4B), and each review takes longer. It runs only while no one is waiting on a reply.</span>
+                </span>
+                <TogglePill
+                  checked={config.tools?.memoryReview?.think === true}
+                  onToggle={() => setToolsField('memoryReview', { ...(config.tools?.memoryReview ?? {}), think: config.tools?.memoryReview?.think !== true })}
+                  className="flex-shrink-0"
+                />
+              </label>
+            )}
           </div>
 
           {/* ---- Scholar ---- */}

@@ -264,6 +264,25 @@ await test('suggest (the default): proposals wait as suggestions; each message r
   assert(again.status === 'nothing' && calls.length === 1, 'reviewed the same messages twice')
 })
 
+await test('thinking (8.3): off unless the profile turns it on; on, the budget covers the reasoning and the wait is longer', async () => {
+  const turns = [U('t1', 'I work on the billing service in TypeScript.')]
+  const off = review.buildReviewRequest({ turns })
+  eq([off.enable_thinking, off.chat_template_kwargs.enable_thinking, off.max_tokens], [false, false, review.REVIEW_MAX_TOKENS], 'default')
+  const on = review.buildReviewRequest({ turns, think: true })
+  eq([on.enable_thinking, on.chat_template_kwargs.enable_thinking, on.max_tokens], [true, true, review.REVIEW_THINK_MAX_TOKENS], 'think on')
+  assert(review.reviewTimeoutMs(on) > review.reviewTimeoutMs(off), 'a thinking review gets no longer to finish')
+  // The pass reads the setting off the caller's config (gateway-config.mjs
+  // puts the profile's tools.memoryReview.think there).
+  chat('th-1', 'alice-1')
+  fakeModel({ ops: [] })
+  await review.reviewConversation({ account: ALICE, conversationId: 'th-1', config: { memory: { ...CFG.memory, reviewThink: true } } })
+  assert(calls[0]?.enable_thinking === true, 'reviewThink did not reach the request')
+  chat('th-2', 'alice-1')
+  fakeModel({ ops: [] })
+  await review.reviewConversation({ account: ALICE, conversationId: 'th-2', config: CFG })
+  assert(calls[0]?.enable_thinking === false, 'thinking on with no setting')
+})
+
 await test('auto: saved at once with via "review"; updates apply in place', async () => {
   reviewStore.setSettings(BOB, { mode: 'auto' })
   const old = memory.saveMemory(BOB, 'Works on billing in Go').memory

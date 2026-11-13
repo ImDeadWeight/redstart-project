@@ -995,6 +995,7 @@ async function main() {
   // appear, since toolDefs() serves the cached tools/list from the live child.
   {
     const { buildGatewayConfig } = await import('../daemon/gateway-config.mjs')
+    const { narrowConfig } = await import('../daemon/permissions.mjs')
     const { expandDisabledToolIds } = await import('../daemon/tools-definitions.mjs')
     const storageFs = await import('../daemon/tools-storage.mjs')
     const fsProvider = await import('../daemon/filesystem-mcp-provider.mjs')
@@ -1019,6 +1020,16 @@ async function main() {
 
       const offProfile = { tools: { enabled: true, webAccessEnabled: false, activeToolIds: [] } }
       assert(buildGatewayConfig(offProfile).webFetch.enabled === false, 'webAccessEnabled:false not honoured')
+    })
+
+    // agent-runtime 8.3: the memory review's thinking follows the profile, and
+    // a profile saved before the setting existed reviews with thinking off.
+    await test('🔍 the memory review thinks only when the profile says so', async () => {
+      const legacy = { tools: { enabled: true, activeToolIds: ['memory'] } }
+      assert(buildGatewayConfig(legacy).memory.reviewThink === false, 'a profile with no memoryReview reviews with thinking on')
+      const on = { tools: { enabled: true, activeToolIds: ['memory'], memoryReview: { think: true } } }
+      assert(buildGatewayConfig(on).memory.reviewThink === true, 'memoryReview.think not carried to the gateway config')
+      assert(narrowConfig(buildGatewayConfig(on), { capabilities: ['memory'] }).memory.reviewThink === true, 'a role\'s narrowing dropped the setting')
     })
 
     await test('🔍 disabling Web Access serves no web tool even with whitelist ON and sources selected', async () => {

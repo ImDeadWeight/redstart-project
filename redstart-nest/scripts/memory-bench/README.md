@@ -17,7 +17,11 @@ node scripts/memory-bench/run.mjs --model-label "<model file>" --variant v1 --th
   `lib/v1.mjs` (it reads only the user's messages, adds or updates facts).
   `v2`: the daemon's reviewer once Phase 8.2 lands.
 - `--think on|off`: the review with thinking on or off (U10 is decided by
-  these numbers).
+  these numbers). For v2, on is exactly the request a profile with
+  `tools.memoryReview.think` sends (8.3).
+- `--think-budget n` (with `--think on`): `max_tokens`, reasoning included,
+  in place of the shipped 4096, to see whether a model that runs past it
+  (the 35B) does better with more.
 - `--repeat n`, `--cases <dir or glob>`, `--port` (llama-server's own port,
   the gateway port + 1; default 19081), `--out`.
 

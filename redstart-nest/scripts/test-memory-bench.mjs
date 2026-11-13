@@ -220,13 +220,29 @@ await test('arguments: label required; variant, think and repeat validated', () 
     assert(e2, `${bad.join(' ')} accepted`)
   }
   eq(parseArgs(['--model-label', 'm']).port, 19081, 'default port')
+  for (const bad of [['--think-budget', '8192'], ['--think', 'on', '--think-budget', '1000'], ['--think', 'on', '--think-budget', 'big']]) {
+    let e3 = null
+    try { parseArgs(['--model-label', 'm', ...bad]) } catch (err) { e3 = err }
+    assert(e3, `${bad.join(' ')} accepted`)
+  }
+  eq(parseArgs(['--model-label', 'm', '--think', 'on', '--think-budget', '8192']).thinkBudget, 8192, 'think budget')
 })
 
-await test('think on: thinking enabled and the budget raised; off leaves the request alone', () => {
+await test('think on: thinking enabled and the budget raised; off leaves the request alone; --think-budget replaces it', () => {
   const body = { max_tokens: 600, enable_thinking: false, chat_template_kwargs: { enable_thinking: false } }
   const on = withThinking(body, 'on')
   eq([on.enable_thinking, on.chat_template_kwargs.enable_thinking, on.max_tokens], [true, true, THINK_MAX_TOKENS], 'on')
   assert(withThinking(body, 'off') === body, 'off')
+  eq(withThinking(body, 'on', 8192).max_tokens, 8192, 'budget')
+})
+
+await test('v2 think on is the daemon\'s own thinking request (8.3): what the bench measures is what a profile ships', async () => {
+  const daemon = await import('../daemon/memory-review.mjs')
+  eq(THINK_MAX_TOKENS, daemon.REVIEW_THINK_MAX_TOKENS, 'the bench and the daemon think with different budgets')
+  const v2 = await loadVariant('v2')
+  const turns = [{ id: 'u', role: 'user', text: 'I use metric units for everything.', fresh: true }]
+  const shipped = daemon.buildReviewRequest({ turns, think: true, now: 0 })
+  eq(withThinking(v2.buildReviewRequest({ turns, think: true, now: 0 }), 'on'), shipped, 'v2 think on differs from the daemon')
 })
 
 await test('v2 is refused until the 8.2 reviewer exists', async () => {

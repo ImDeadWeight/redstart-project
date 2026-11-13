@@ -52,7 +52,18 @@ export const MAX_REVIEW_CHARS = 16000
 export const MIN_QUOTE_CHARS = 12
 export const MAX_OPS = 3
 export const MAX_EXISTING_SHOWN = 60
+/** The answer alone: kind, text, why and quote on three ops. */
+export const REVIEW_MAX_TOKENS = 1500
+/**
+ * Reasoning plus the answer, when a profile turns thinking on (8.3, U10). The
+ * memory bench measured with the same number (THINK_MAX_TOKENS there).
+ */
+export const REVIEW_THINK_MAX_TOKENS = 4096
 const MODEL_TIMEOUT_MS = 90000
+// Ornith 9B on a 12 GB 3060 took up to 83 s for a 3100-token thinking answer
+// with the GPU otherwise idle, so the 90 s that suits an answer alone would
+// cut thinking reviews off.
+const THINK_TIMEOUT_MS = 180000
 const DAY_MS = 24 * 60 * 60 * 1000
 
 // ---------------------------------------------------------------------------
@@ -215,8 +226,10 @@ function memoryLine(m, now) {
 /**
  * The chat-completions body for one review. `turns` is branchForReview's;
  * `project` is the chat's project (already resolved for the caller) or null.
+ * `think` is the profile's memoryReview.think (8.3): off unless a profile
+ * turns it on.
  */
-export function buildReviewRequest({ turns, userMemories = [], projectMemories = [], project = null, model = null, now = Date.now() }) {
+export function buildReviewRequest({ turns, userMemories = [], projectMemories = [], project = null, model = null, now = Date.now(), think = false }) {
   const lines = (list, label) => list.length
     ? list.slice(0, MAX_EXISTING_SHOWN).map((m) => memoryLine(m, now)).join('\n')
     : `(none ${label})`
@@ -247,11 +260,14 @@ export function buildReviewRequest({ turns, userMemories = [], projectMemories =
     temperature: 0.2,
     // Room for kind, text, why and quote on three ops; the v1 600 was for
     // text alone, and 900 cut two of the first v2 run's answers mid-JSON.
-    max_tokens: 1500,
+    // With thinking on, the reasoning comes out of the same budget.
+    max_tokens: think ? REVIEW_THINK_MAX_TOKENS : REVIEW_MAX_TOKENS,
     response_format: { type: 'json_schema', json_schema: { name: 'memory_review', schema: REVIEW_SCHEMA, strict: true } },
-    // Thinking off: the v1 baseline found it helped no model (U10, 8.3).
-    enable_thinking: false,
-    chat_template_kwargs: { enable_thinking: false },
+    // Off by default. The 8.2 bench: thinking raised Ornith 9B, did nothing for
+    // the 4B, and cost the 35B (answers past the budget), so it is a profile
+    // setting (tools.memoryReview.think), not a constant (U10, 8.3).
+    enable_thinking: think,
+    chat_template_kwargs: { enable_thinking: think },
   }
 }
 
@@ -456,13 +472,18 @@ async function callUpstream(body) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
+    signal: AbortSignal.timeout(reviewTimeoutMs(body)),
   })
   if (!res.ok) throw new Error(`the model server answered ${res.status}`)
   const json = await res.json()
   const content = json?.choices?.[0]?.message?.content
   if (typeof content !== 'string') throw new Error('the model returned no content')
   return JSON.parse(content)
+}
+
+/** How long one review call may take: longer when it thinks. */
+export function reviewTimeoutMs(body) {
+  return body?.enable_thinking === true ? THINK_TIMEOUT_MS : MODEL_TIMEOUT_MS
 }
 
 let callModel = callUpstream
@@ -513,12 +534,16 @@ export async function reviewConversation({ account, conversationId, config, now 
   const projectMemories = project ? memory.listMemories(account, { projectId: project.id }) : []
   const model = [...currentBranch(conversation)].reverse().find((m) => m.role === 'assistant' && m.model)?.model ?? null
 
+  // The launched profile's setting (gateway-config.mjs); a role's narrowing
+  // keeps it, since it is not a permission.
+  const think = config.memory.reviewThink === true
+
   running.add(key)
   const started = Date.now()
   try {
     let answer
     try {
-      answer = await callModel(buildReviewRequest({ turns, userMemories, projectMemories, project, model, now }))
+      answer = await callModel(buildReviewRequest({ turns, userMemories, projectMemories, project, model, now, think }))
     } catch (err) {
       logEvent('memory', 'review_failed', { reason: err.message })
       // Not marked reviewed: the next trigger tries these messages again.
@@ -536,7 +561,7 @@ export async function reviewConversation({ account, conversationId, config, now 
     const suggestions = toSuggest.length ? store.addSuggestions(account, toSuggest, { conversationId, now }) : []
 
     if (mode === 'suggest') {
-      logEvent('memory', 'reviewed', { mode, proposed: ops.length, suggested: suggestions.length, durationMs: Date.now() - started })
+      logEvent('memory', 'reviewed', { mode, think, proposed: ops.length, suggested: suggestions.length, durationMs: Date.now() - started })
       return { status: 'done', mode, suggestions }
     }
 
@@ -545,7 +570,7 @@ export async function reviewConversation({ account, conversationId, config, now 
       const r = applyOp(account, op, { conversationId, via: 'review' })
       if (r) saved.push(r)
     }
-    logEvent('memory', 'reviewed', { mode, proposed: ops.length, saved: saved.length, suggested: suggestions.length, web, durationMs: Date.now() - started })
+    logEvent('memory', 'reviewed', { mode, think, proposed: ops.length, saved: saved.length, suggested: suggestions.length, web, durationMs: Date.now() - started })
     return { status: 'done', mode, saved, suggestions }
   } finally {
     running.delete(key)

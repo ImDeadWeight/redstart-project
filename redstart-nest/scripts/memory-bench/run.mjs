@@ -8,8 +8,11 @@
 // (scripts/test-memory-bench.mjs).
 //
 //   node scripts/memory-bench/run.mjs --model-label "<model file>" \
-//     [--variant v1|v2] [--think off|on] [--cases <dir or glob>] [--repeat n]
-//     [--port 19081] [--out <dir>]
+//     [--variant v1|v2] [--think off|on] [--think-budget n] [--cases <dir or glob>]
+//     [--repeat n] [--port 19081] [--out <dir>]
+//
+// --think-budget (with --think on) sets max_tokens, reasoning included, in
+// place of the 4096 the daemon ships (8.3: the 35B ran past 4096).
 //
 // --port is llama-server's own port (Nest's gateway port + 1), the one the
 // daemon's reviewer calls (memory-review.mjs callUpstream). Nothing is saved
@@ -38,10 +41,10 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 export const THINK_MAX_TOKENS = 4096
 const MODEL_TIMEOUT_MS = 180_000
 
-const FLAGS = { '--model-label': 'modelLabel', '--variant': 'variant', '--think': 'think', '--cases': 'cases', '--repeat': 'repeat', '--port': 'port', '--out': 'out' }
+const FLAGS = { '--model-label': 'modelLabel', '--variant': 'variant', '--think': 'think', '--think-budget': 'thinkBudget', '--cases': 'cases', '--repeat': 'repeat', '--port': 'port', '--out': 'out' }
 
 export function parseArgs(argv) {
-  const opts = { variant: 'v1', think: 'off', cases: path.join(here, 'cases'), repeat: 1, port: 19081 }
+  const opts = { variant: 'v1', think: 'off', thinkBudget: null, cases: path.join(here, 'cases'), repeat: 1, port: 19081 }
   for (let i = 0; i < argv.length; i++) {
     const key = FLAGS[argv[i]]
     if (!key) throw new Error(`unknown argument ${argv[i]}`)
@@ -55,6 +58,11 @@ export function parseArgs(argv) {
   opts.repeat = Number(opts.repeat)
   if (!Number.isInteger(opts.repeat) || opts.repeat < 1) throw new Error('--repeat must be a positive integer')
   opts.port = Number(opts.port)
+  if (opts.thinkBudget !== null) {
+    opts.thinkBudget = Number(opts.thinkBudget)
+    if (opts.think !== 'on') throw new Error('--think-budget needs --think on')
+    if (!Number.isInteger(opts.thinkBudget) || opts.thinkBudget < 1500) throw new Error('--think-budget must be an integer of at least 1500 (the answer alone)')
+  }
   return opts
 }
 
@@ -73,20 +81,25 @@ export async function loadVariant(name) {
   }
 }
 
-/** The request with thinking switched on or off, as a reviewer setting would. */
-export function withThinking(body, think) {
+/**
+ * The request with thinking switched on or off, as a reviewer setting would.
+ * v2 already built it with the daemon's own `think` (8.3), so this changes
+ * nothing there unless `budget` (--think-budget) asks for a larger max_tokens;
+ * v1 has no setting and gets it added here.
+ */
+export function withThinking(body, think, budget = null) {
   if (think !== 'on') return body
-  return { ...body, enable_thinking: true, chat_template_kwargs: { ...(body.chat_template_kwargs ?? {}), enable_thinking: true }, max_tokens: Math.max(body.max_tokens ?? 0, THINK_MAX_TOKENS) }
+  return { ...body, enable_thinking: true, chat_template_kwargs: { ...(body.chat_template_kwargs ?? {}), enable_thinking: true }, max_tokens: budget ?? Math.max(body.max_tokens ?? 0, THINK_MAX_TOKENS) }
 }
 
 /** callUpstream, as memory-review.mjs makes it: the parsed JSON answer. */
-export function upstreamCaller(port) {
+export function upstreamCaller(port, timeoutMs = MODEL_TIMEOUT_MS) {
   return async (body) => {
     const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     })
     if (!res.ok) throw new Error(`the model server answered ${res.status}`)
     const json = await res.json()
@@ -104,10 +117,11 @@ export function upstreamCaller(port) {
 }
 
 /** One case, once. */
-export async function runCase(variant, c, callModel, { think = 'off', runIndex = 0 } = {}) {
+export async function runCase(variant, c, callModel, { think = 'off', thinkBudget = null, runIndex = 0 } = {}) {
   const world = caseWorld(c)
   const turns = variant.turnsFor(world.conversation)
-  const body = withThinking(variant.buildReviewRequest({ turns, userMemories: world.userMemories, projectMemories: world.projectMemories, project: world.project, now: CASE_NOW }), think)
+  const built = variant.buildReviewRequest({ turns, userMemories: world.userMemories, projectMemories: world.projectMemories, project: world.project, now: CASE_NOW, think: think === 'on' })
+  const body = withThinking(built, think, thinkBudget)
   const started = Date.now()
   let answer = null
   let error = null
@@ -208,26 +222,30 @@ export async function main(argv, { callModel, log = console.log, now = new Date(
   const variant = await loadVariant(opts.variant)
   const cases = findCaseFiles(opts.cases).map(loadCase)
   if (cases.length === 0) throw new Error(`no cases in ${opts.cases}`)
-  const call = callModel ?? upstreamCaller(opts.port)
+  // A larger think budget needs a longer wait: about 60 ms a token covers the
+  // 35B partly on the CPU.
+  const call = callModel ?? upstreamCaller(opts.port, Math.max(MODEL_TIMEOUT_MS, (opts.thinkBudget ?? 0) * 60))
   const file = callModel ? null : await modelFile(opts.port)
   if (!callModel && !file) throw new Error(`cannot reach llama-server on port ${opts.port}: start Nest with a model loaded (--port is the gateway port + 1)`)
 
   const stamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19)
-  const outDir = path.resolve(opts.out ?? path.join(here, 'results', `${stamp}-${opts.modelLabel.replace(/[^A-Za-z0-9_.-]+/g, '_')}-${opts.variant}-think-${opts.think}`))
+  // The results row carries the budget when it is not the shipped one.
+  const thinkLabel = opts.thinkBudget ? `${opts.think}, budget ${opts.thinkBudget}` : opts.think
+  const outDir = path.resolve(opts.out ?? path.join(here, 'results', `${stamp}-${opts.modelLabel.replace(/[^A-Za-z0-9_.-]+/g, '_')}-${opts.variant}-think-${opts.think}${opts.thinkBudget ? `-${opts.thinkBudget}` : ''}`))
   fs.mkdirSync(outDir, { recursive: true })
-  log(`memory-bench: ${cases.length} case(s) × ${opts.repeat}, variant ${opts.variant}, think ${opts.think}, model "${opts.modelLabel}"`)
+  log(`memory-bench: ${cases.length} case(s) × ${opts.repeat}, variant ${opts.variant}, think ${thinkLabel}, model "${opts.modelLabel}"`)
 
   const runs = []
   for (let rep = 0; rep < opts.repeat; rep++) {
     for (const c of cases) {
-      const r = await runCase(variant, c, call, { think: opts.think, runIndex: rep })
+      const r = await runCase(variant, c, call, { think: opts.think, thinkBudget: opts.thinkBudget, runIndex: rep })
       runs.push(r)
       fs.appendFileSync(path.join(outDir, 'runs.jsonl'), JSON.stringify(r) + '\n')
       log(`  ${r.filtered.pass ? 'pass' : 'FAIL'}  ${c.group.padEnd(13)} ${c.id}${r.filtered.pass ? '' : `  (${r.error ?? r.filtered.reason})`}`)
     }
   }
   const summary = summarize(runs)
-  const meta = { date: now.toISOString().slice(0, 10), modelLabel: opts.modelLabel, modelFile: file, variant: opts.variant, think: opts.think, commit: commitInfo(), caseCount: cases.length, repeat: opts.repeat }
+  const meta = { date: now.toISOString().slice(0, 10), modelLabel: opts.modelLabel, modelFile: file, variant: opts.variant, think: thinkLabel, commit: commitInfo(), caseCount: cases.length, repeat: opts.repeat }
   fs.writeFileSync(path.join(outDir, 'summary.json'), JSON.stringify({ meta, summary }, null, 2))
   const md = summaryMarkdown(summary, meta)
   fs.writeFileSync(path.join(outDir, 'summary.md'), md)
