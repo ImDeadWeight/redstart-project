@@ -674,18 +674,18 @@ Phase 1.
 **Phase 8's decisions (added 2026-11-12, all OPEN).** None blocks 8.0, the
 memory bench, which is worth building whatever they become.
 
-**U7 — Where Phase 8 goes.** Recommendation: right after Phase 3 closes,
+**U7 — Where Phase 8 goes. (DECIDED 2026-11-12: next, right after Phase 3.)** Recommendation: right after Phase 3 closes,
 before Phase 4. Memory serves every account on the network; the terminal
 serves only the owner. Phase 8 needs nothing from Phases 4 to 7, and only 8.5
 needs Phase 3.
 
-**U8 — Whether guidance memories are followed (D35).** Recommendation:
+**U8 — Whether guidance memories are followed (D35). (DECIDED 2026-11-12: followed, user-tier.)** Recommendation:
 followed, as user-tier text like project instructions, because a guidance
 memory can only come from the user's own words (D36, D37). The alternative
 keeps them as data the model "may consider", which keeps the old posture and
 loses most of the value.
 
-**U9 — Whether the reviewer sees tool-result bodies (D34).** Recommendation:
+**U9 — Whether the reviewer sees tool-result bodies (D34). (DECIDED 2026-11-12: no, names and status only.)** Recommendation:
 no for the first release. Tool names and status only. Reopen it with the
 injection group's numbers if recall on corrections stays low without them.
 

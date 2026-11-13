@@ -5,7 +5,7 @@ what was built, phase by phase: deviations from the plan, and gaps carried
 forward. Branch: `feat/agent-core`, from main @ 224d121 (alpha.12, PR #38
 merged).
 
-## Where we left off (2026-11-12: Phase 3 CLOSED at ddb34a5, 3.11 measured and closed; next: decide U7, Phase 8 or Phase 4)
+## Where we left off (2026-11-12: Phase 3 closed; Phase 8 started, 8.0 the memory bench landed; next: the v1 baseline runs, then 8.1)
 
 Phase 3 → "Acceptance" has the closing record; "What landed" the per-module
 notes and the gaps carried out. Phase 2 closed, pushed at bc78774.
@@ -1000,6 +1000,41 @@ after the rerun.
 
 ---
 
+## Phase 8 — memory that learns from the work (started 2026-11-12)
+
+Plan section 9, D33 to D42. Decided before the first commit (2026-11-12):
+U7 (Phase 8 now, before Phase 4), U8 (guidance memories are FOLLOWED, as
+user-tier text like project instructions), U9 (the reviewer sees tool names
+and status only, never tool-result bodies). U10 (thinking for the review)
+is decided by the bench.
+
+### What landed
+
+- **8.0 The memory bench.** `scripts/memory-bench/`: `run.mjs` (flags as the
+  plan says, plus `--port`, llama-server's own port, default 19081),
+  `lib/v1.mjs` (the pre-Phase-8 reviewer, a verbatim copy of
+  `memory-review.mjs`'s pure half; test-memory-bench.mjs proves it builds the
+  same request and filter result as the daemon's, a check that retires
+  itself once 8.2 adds `branchForReview`), `lib/case-file.mjs` (format,
+  validation, the stored-conversation branch), `lib/score.mjs`, README.
+  32 cases in the plan's eight groups, each with a right and a wrong answer
+  the harness test scores. `test-memory-bench.mjs` (16 cases) in
+  test:security and ci.yml. Results table: agent-bench-results.md,
+  "Memory bench".
+- **Deviations.** Kind is checked only on an op that carries one, so v1
+  (which has no kinds) is judged on content and the run counts
+  "kind unchecked"; otherwise every v1 correction would fail by
+  construction and the baseline would say nothing. retr-state-finished
+  expects a `forget` (the plan allowed forget or update; one expectation
+  cannot hold an OR). `--variant v2` refuses until 8.2 lands.
+- **Next: the v1 baseline (the user's machine).** With Nest and a model
+  loaded, from `redstart-nest/`, per model (4B, 9B, 35B):
+  `node scripts/memory-bench/run.mjs --model-label "<file>" --variant v1 --think off`
+  and the same with `--think on`. Paste each summary's row into the table.
+  Then 8.1 (storage: kind, why, asOf).
+
+---
+
 ## Phase 3 — the daemon-side task runtime (planned to module level 2026-11-12)
 
 Plan section 5, D22 to D32, checked against the code at bc78774. Nothing
@@ -1248,6 +1283,14 @@ consider `-np` explicitly.
   both contexts are known to be short is a later optimisation, not Phase 3.
   The script's verdict now says "serialized" for a pair run one after the
   other.
+- **3.11, third run (the user raised n_ctx to 131072, same model and GPU).**
+  Throughput the same (92% each). Two ~70k prompts: no "memory slot" or
+  purge messages this time (the bigger pool held them), but still
+  serialized: 60.7 s and 145.2 s against 60.4 s alone, and the first's last
+  tokens ran at 3.5 tok/s during the second's prefill. A larger n_ctx removes
+  the overflow risk for ordinary chat-plus-task sizes; it does not remove
+  the stall. The default stands. Worth knowing for profiles: this 9B fits
+  131k context on a 12 GB RTX 3060.
 - **Gaps carried out of Phase 3:** compaction in a task never run against
   a real model, and the per-turn /tokenize cost on long tasks unmeasured
   (chat-ui pays the same per send); the bench's `--runtime` time-limit
