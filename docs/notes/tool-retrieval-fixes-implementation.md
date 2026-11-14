@@ -73,6 +73,11 @@ unmeasured and stays off.
 
 ### Held: needs a model, a real embedder or a decision
 
+**The benchmarks for every row below are designed in
+`tool-retrieval-fixes-benchmarks.md`** (B0 to B7, plus the harness work H1
+to H7 that has to land first). That file holds the run order and the
+proposed bars.
+
 | What | Why held | To do |
 |---|---|---|
 | 0.6 baseline | Model | As before: the bench on the 4B and Ornith, with `--retrieval server` and `off`; `measure-tool-cache.mjs` on Ornith |
