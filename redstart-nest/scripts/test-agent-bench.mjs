@@ -1154,6 +1154,118 @@ await test('the retrieval report reads origins and would-add, and an older Nest 
   assert(JSON.stringify(old.origins) === '{}' && old.wouldAdd === 0, JSON.stringify(old))
 })
 
+console.log('\n-- discovery metrics (benchmarks H3) --')
+
+// One run's log, as bench.mjs writes it: a turn, its report, the reply, its calls.
+const turnEvents = (turn, { sent, content = '', calls = [] }) => [
+  { type: 'turn', turn },
+  ...(sent ? [{ type: 'tools_sent', turn, names: sent, retrieval: 'on' }] : []),
+  { type: 'assistant', content, toolCalls: calls.map(([name, args]) => ({ name, arguments: JSON.stringify(args ?? {}) })) },
+  ...calls.flatMap(([name, args, extra], i) => [
+    { type: 'tool_call', id: `t${turn}-${i}`, name, arguments: JSON.stringify(args ?? {}), argsProblem: null, ...(extra ?? {}) },
+    { type: 'tool_result', id: `t${turn}-${i}`, name, isError: false, text: '' },
+  ]),
+]
+
+await test('found through search, then called directly: discovered by pin, after one turn', async () => {
+  const events = [
+    ...turnEvents(1, { sent: ['run_python', 'search_tools'], calls: [['search_tools', { query: 'documents' }]] }),
+    ...turnEvents(2, { sent: ['run_python', 'search_tools', 'list_documents'], calls: [['list_documents']] }),
+    ...turnEvents(3, { sent: ['run_python', 'search_tools', 'list_documents'], content: 'There are 3.' }),
+  ]
+  const m = computeMetrics(events, { pass: true }, { expectTools: ['list_documents'] })
+  eq([m.searchCalls, m.discovered, m.discoveryPath, m.turnsToDiscovery, m.unavailableWithoutSearch], [1, true, 'pin', 1, false], 'search, found, path, turns, claim')
+  eq([m.firstTool, m.firstToolExpected, m.recovered], ['search_tools', false, true], 'a search first is a wrong first tool that recovers')
+})
+
+await test('through call_tool: the path, the target, and its bad arguments are counted', async () => {
+  const events = [
+    ...turnEvents(1, { sent: ['search_tools', 'describe_tool', 'call_tool'], calls: [['describe_tool', { name: 'list_documents' }]] }),
+    ...turnEvents(2, { sent: ['search_tools', 'describe_tool', 'call_tool'], calls: [
+      ['call_tool', { name: 'list_documents', arguments: { folder: 1 } }, { innerArgsProblem: 'folder: expected string' }],
+      ['call_tool', { name: 'list_documents', arguments: {} }],
+    ] }),
+  ]
+  const m = computeMetrics(events, { pass: true }, { expectTools: ['list_documents'] })
+  eq([m.describeCalls, m.callToolCalls, m.callToolBadArgs, m.discovered, m.discoveryPath, m.turnsToDiscovery], [1, 2, 1, true, 'call_tool', 1], 'counts and path')
+})
+
+await test('nothing to discover when turn 1 had the tool; not judged without expectTools or a report', async () => {
+  const had = computeMetrics(turnEvents(1, { sent: ['list_documents'], calls: [['list_documents']] }), { pass: true }, { expectTools: ['list_documents'] })
+  eq([had.discovered, had.recovered, had.firstToolExpected], [null, null, true], 'turn 1 had it')
+  const noExpect = computeMetrics(turnEvents(1, { sent: ['a'], calls: [['a']] }), { pass: true }, {})
+  eq(noExpect.discovered, null, 'no expectTools')
+  const noReport = computeMetrics(turnEvents(1, { calls: [['a']] }), { pass: true }, { expectTools: ['b'] })
+  eq(noReport.discovered, null, 'no report (an older Nest, or --runtime)')
+  const missed = computeMetrics(turnEvents(1, { sent: ['a'], content: 'Done.', calls: [['a']] }), { pass: false }, { expectTools: ['b'] })
+  eq([missed.discovered, missed.discoveryPath, missed.turnsToDiscovery], [false, null, null], 'there to find, not found')
+})
+
+await test('said unavailable without searching: counted before a search, not in the same reply as one, not after', async () => {
+  const claim = "I don't have a tool for listing documents."
+  const before = computeMetrics(turnEvents(1, { sent: ['a'], content: claim }), { pass: false }, {})
+  eq(before.unavailableWithoutSearch, true, 'a bare claim')
+  const same = computeMetrics(turnEvents(1, { sent: ['a', 'search_tools'], content: claim, calls: [['search_tools', { query: 'documents' }]] }), { pass: false }, {})
+  eq(same.unavailableWithoutSearch, false, 'the claim came with a search')
+  const after = computeMetrics([
+    ...turnEvents(1, { sent: ['a', 'search_tools'], calls: [['search_tools', { query: 'documents' }]] }),
+    ...turnEvents(2, { sent: ['a', 'search_tools'], content: claim }),
+  ], { pass: false }, {})
+  eq(after.unavailableWithoutSearch, false, 'it searched first')
+})
+
+await test('the unavailable phrases: tools and abilities, never a missing file', async () => {
+  const yes = [
+    "I don't have a tool for that.",
+    'I do not have access to the internet.',
+    "I can't run code here.",
+    'I’m unable to execute Python in this conversation.',
+    'Unfortunately the tool you need is not available to me.',
+    'There is no tool available for listing documents.',
+    'I cannot use tools to do this.',
+    "That function isn't available in this session.",
+  ]
+  const no = [
+    'returns.csv is not available, so I skipped step 2.',
+    "I can't find a file called report_apr.txt in the workspace.",
+    'The file does not exist.',
+    'I ran the code and the total is 4,011.',
+    'There are no documents that mention flights.',
+    '',
+  ]
+  const { saysUnavailable } = await import('./agent-bench/lib/metrics.mjs')
+  for (const s of yes) assert(saysUnavailable(s), `missed: ${s}`)
+  for (const s of no) assert(!saysUnavailable(s), `false positive: ${s}`)
+})
+
+await test('File System first: judged on workspace-fixture tasks only, from the registry', async () => {
+  const { FILE_SYSTEM_TOOLS } = await import('./agent-bench/lib/metrics.mjs')
+  assert(FILE_SYSTEM_TOOLS.has('read_text_file') && FILE_SYSTEM_TOOLS.has('list_directory') && !FILE_SYSTEM_TOOLS.has('read_document'), [...FILE_SYSTEM_TOOLS].join(','))
+  const ws = { fixtures: [{ path: 'sales.csv', content: '', space: 'workspace' }] }
+  eq(computeMetrics(turnEvents(1, { sent: ['a'], calls: [['read_text_file']] }), { pass: false }, ws).fsFirst, true, 'a File System tool first')
+  eq(computeMetrics(turnEvents(1, { sent: ['a'], calls: [['run_python']] }), { pass: true }, ws).fsFirst, false, 'run_python first')
+  eq(computeMetrics(turnEvents(1, { sent: ['a'], calls: [['read_text_file']] }), { pass: true }, { fixtures: [{ path: 'x', content: '', space: 'files' }] }).fsFirst, null, 'a files-space fixture is not an attachment')
+})
+
+await test('callToolArgsProblem: the named tool\'s schema, and unreadable or unknown calls', async () => {
+  const { callToolArgsProblem } = await import('./agent-bench/lib/bench.mjs')
+  const byName = new Map(TOOLS.map((t) => [t.name, t]))
+  eq(callToolArgsProblem(JSON.stringify({ name: 'read_file', arguments: { path: 'a' } }), byName), null, 'valid')
+  assert(callToolArgsProblem(JSON.stringify({ name: 'read_file', arguments: {} }), byName), 'a missing required key passed')
+  assert(/unknown tool/.test(callToolArgsProblem(JSON.stringify({ name: 'nope' }), byName)), 'an unknown tool passed')
+  assert(callToolArgsProblem('{', byName), 'unreadable arguments passed')
+})
+
+await test('the summary totals discovery, and an old runs.jsonl re-summarizes with zeros', async () => {
+  const { retrievalSummary } = await import('./agent-bench/lib/metrics.mjs')
+  const s = retrievalSummary([
+    { discovered: true, discoveryPath: 'pin', turnsToDiscovery: 1, searchCalls: 1 },
+    { discovered: false, unavailableWithoutSearch: true, searchCalls: 0 },
+    { firstTool: 'x' },
+  ])
+  eq([s.discovered, s.discoveryJudged, s.discoveredByPin, s.turnsToDiscovery, s.searchCalls, s.unavailableWithoutSearch], [1, 2, 1, 1, 1, 1], 'totals')
+})
+
 fs.rmSync(outDir, { recursive: true, force: true })
 
 const passed = results.filter((r) => r.pass).length

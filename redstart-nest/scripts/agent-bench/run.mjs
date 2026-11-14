@@ -266,6 +266,19 @@ export function retrievalLine(meta, s) {
     ` · settings ${s.retrievalConfig ?? '—'}`
 }
 
+/**
+ * The discovery line of summary.md (benchmarks H3).
+ *
+ * @param {ReturnType<typeof import('./lib/metrics.mjs').retrievalSummary>} s
+ */
+export function discoveryLine(s) {
+  return `discovery: found ${ratio(s.discovered ?? 0, s.discoveryJudged ?? 0)} (${s.discoveredByPin ?? 0} directly, ${s.discoveredByCallTool ?? 0} through call_tool)` +
+    ` · ${num(s.turnsToDiscovery)} turn(s) to find · search_tools ${s.searchCalls ?? 0}, describe_tool ${s.describeCalls ?? 0}, call_tool ${s.callToolCalls ?? 0} (${s.callToolBadArgs ?? 0} bad args)` +
+    ` · said unavailable without searching ${s.unavailableWithoutSearch ?? 0}` +
+    ` · recovered after a wrong first tool ${ratio(s.recovered ?? 0, s.recoveryJudged ?? 0)}` +
+    ` · File System first on attachment tasks ${ratio(s.fsFirst ?? 0, s.fsFirstJudged ?? 0)}`
+}
+
 export function summaryMarkdown(meta, summary) {
   const lines = [
     `# Agent bench — ${meta.modelLabel}`,
@@ -289,9 +302,11 @@ export function summaryMarkdown(meta, summary) {
     '',
     retrievalLine(meta, summary),
     '',
-    '| task | group | passes | retrieval | tools, 1st turn | tool sets/run | cache misses | prefill s/run | first tool as expected |',
-    '|---|---|---|---|---|---|---|---|---|',
-    ...summary.tasks.map((t) => `| ${t.taskId} | ${t.group} | ${t.passes}/${t.runs} | ${t.retrieval ?? '—'} | ${num(t.toolsSentFirst)} | ${num(t.toolSetsPerRun)} | ${t.cacheMissTurns ?? '—'} | ${secs(t.prefillMsPerRun)} | ${ratio(t.firstToolExpected, t.firstToolJudged)} |`),
+    discoveryLine(summary),
+    '',
+    '| task | group | passes | retrieval | tools, 1st turn | tool sets/run | cache misses | prefill s/run | first tool as expected | found | searches | said unavailable | FS first |',
+    '|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+    ...summary.tasks.map((t) => `| ${t.taskId} | ${t.group} | ${t.passes}/${t.runs} | ${t.retrieval ?? '—'} | ${num(t.toolsSentFirst)} | ${num(t.toolSetsPerRun)} | ${t.cacheMissTurns ?? '—'} | ${secs(t.prefillMsPerRun)} | ${ratio(t.firstToolExpected, t.firstToolJudged)} | ${ratio(t.discovered, t.discoveryJudged)} | ${t.searchCalls} | ${t.unavailableWithoutSearch} | ${ratio(t.fsFirst, t.fsFirstJudged)} |`),
     '',
     'Row for docs/notes/agent-bench-results.md:',
     '',

@@ -259,6 +259,25 @@ export async function probeRetrievalConfig(nest, llmTools) {
   return toolsSentReport(res.headers)?.config ?? null
 }
 
+/**
+ * What is wrong with the arguments a call_tool call passes on, or null: the
+ * named tool's schema (the catalog's, which is what describe_tool returns)
+ * against `arguments`. An unreadable call or a tool not in the catalog is a
+ * problem too, since the call cannot have worked.
+ *
+ * @param {string} argumentsText  call_tool's own arguments, as sent
+ * @param {Map<string, { inputSchema?: object }>} toolsByName
+ * @returns {string | null}
+ */
+export function callToolArgsProblem(argumentsText, toolsByName) {
+  let outer
+  try { outer = JSON.parse(argumentsText) } catch { return 'call_tool arguments are not JSON' }
+  if (typeof outer?.name !== 'string') return 'no tool name'
+  const target = toolsByName.get(outer.name)
+  if (!target) return `unknown tool ${outer.name}`
+  return argumentProblem(JSON.stringify(outer.arguments ?? {}), target.inputSchema)
+}
+
 export const clip = (s) => (typeof s === 'string' && s.length > MAX_LOGGED_RESULT_CHARS
   ? `${s.slice(0, MAX_LOGGED_RESULT_CHARS)}… [${s.length - MAX_LOGGED_RESULT_CHARS} more chars]`
   : s)
@@ -404,6 +423,9 @@ export async function runTask(nest, task, opts) {
                   name,
                   arguments: call.function.arguments,
                   argsProblem: tool ? argumentProblem(call.function.arguments, tool.inputSchema) : 'unknown tool',
+                  // call_tool (benchmarks H3): the named tool's own arguments,
+                  // against the catalog schema describe_tool would return.
+                  ...(name === 'call_tool' ? { innerArgsProblem: callToolArgsProblem(call.function.arguments, toolsByName) } : {}),
                 })
                 const started = now()
                 let result
