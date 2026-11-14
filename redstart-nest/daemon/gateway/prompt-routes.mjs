@@ -50,6 +50,9 @@ export async function handlePromptRoute(req, res, urlPath, config, account) {
       // { kind, label, host } or null. Never the Brave key: webSearchEngineOf
       // in system-prompt.mjs reduces the resolved engine to these three.
       webSearchEngine: facts.webSearchEngine,
+      // run_command (agent-runtime Phase 4): a program it runs can reach any
+      // host, so there is no list of destinations to give, only this flag.
+      commandsReachNetwork: facts.commandsReachNetwork,
       localStores: facts.localStores,
       hasEgress: facts.hasEgress,
       // Redstart records no retention/training terms for third parties.
