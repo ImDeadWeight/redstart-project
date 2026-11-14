@@ -534,6 +534,52 @@ export function approvalRule(name) {
   return override && RULE_STRICTNESS[override] > RULE_STRICTNESS[fromClass] ? override : fromClass
 }
 
+// ---------------------------------------------------------------------------
+// Grant scope (agent-runtime D13, D19; Phase 4 P4-e). A standing grant for
+// most tools covers every call (scope null). A SCOPED tool's grant covers only
+// calls that match its scope, and an unscoped grant for it is refused
+// (approval-grants.mjs), so nothing can always-allow every command.
+//
+// run_command's scope is the program and its first argument: "git status"
+// covers `git status -s` and not `git push`. A call with no first argument
+// has no scope and so can never be always allowed: `git` alone, or `node`
+// alone, is not a decision anyone should make once for all time.
+//
+// Computed from the call's own arguments, always by the server (the ledger
+// records it when it opens the approval), never taken from a client.
+// ---------------------------------------------------------------------------
+
+export const SCOPED_GRANT_TOOLS = new Set(['run_command'])
+export const MAX_SCOPE_PART_CHARS = 256
+
+/** @param {string} name */
+export function isScopedTool(name) {
+  return SCOPED_GRANT_TOOLS.has(name)
+}
+
+/**
+ * The scope a grant made from this call would have, or null (unscoped tool,
+ * or a scoped tool's call that cannot be always allowed).
+ *
+ * @param {string} tool
+ * @param {any} args
+ * @returns {{ executable: string, firstArg: string } | null}
+ */
+export function grantScopeFor(tool, args) {
+  if (tool !== 'run_command') return null
+  const executable = typeof args?.command === 'string' ? args.command.trim() : ''
+  const firstArg = Array.isArray(args?.args) && typeof args.args[0] === 'string' ? args.args[0] : ''
+  if (!executable || !firstArg) return null
+  if (executable.length > MAX_SCOPE_PART_CHARS || firstArg.length > MAX_SCOPE_PART_CHARS) return null
+  return { executable, firstArg }
+}
+
+/** Do two scopes name the same thing? null matches only null. */
+export function sameScope(a, b) {
+  if (a === null || b === null || a === undefined || b === undefined) return (a ?? null) === (b ?? null)
+  return a.executable === b.executable && a.firstArg === b.firstArg
+}
+
 /** Does the server refuse this tool's calls without an approval or grant? */
 export function isApprovalEnforced(name) {
   if (HOST_RESOLVED_TOOL_NAMES.includes(name)) return false

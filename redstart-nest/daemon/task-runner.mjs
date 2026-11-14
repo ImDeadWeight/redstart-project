@@ -801,9 +801,10 @@ async function runOnce(task, l, conv, generation, { resume }) {
         // about. callToolAs refuses it with the reason.
         if (!turnCtx.toolNames.has(name)) return true
         const t = store.getTask(task.id)
-        if (rule === 'prompt' && grantCovers(t.accountKey, name)) return true
         let args
         try { args = parseArgs(call.function.arguments) } catch { return true } // execute reports the bad arguments
+        // After the parse: a scoped grant (run_command) covers a call by its arguments.
+        if (rule === 'prompt' && grantCovers(t.accountKey, name, args)) return true
         const pending = ledger.requestApproval({ accountKey: t.accountKey, tool: name, args, holder: task.id })
         l.heldApprovals.add(pending.id)
         const decision = await new Promise((resolve) => {

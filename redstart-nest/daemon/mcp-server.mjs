@@ -201,7 +201,7 @@ function evaluateToolPolicy(toolName, config) {
 // ---------------------------------------------------------------------------
 export function approvalGate(toolName, args, approvalId, ctx) {
   const accountKey = memoryKey(ctx?.account ?? null)
-  if (approvalRule(toolName) === 'prompt' && grantCovers(accountKey, toolName)) return { ok: true }
+  if (approvalRule(toolName) === 'prompt' && grantCovers(accountKey, toolName, args)) return { ok: true }
   if (typeof approvalId === 'string' && approvalId) {
     if (consumeApproval(approvalId, { accountKey, tool: toolName, args })) return { ok: true }
     logPolicy('approval.refused', { account: ctx?.account?.username ?? '(auth off)', tool: toolName })

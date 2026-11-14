@@ -26,6 +26,7 @@
 // =============================================================================
 
 import crypto from 'node:crypto'
+import { grantScopeFor } from './tools-definitions.mjs'
 
 /** A pending approval lives this long: the client shows its card before it calls (plan P2-d). */
 export const APPROVAL_TTL_MS = 60_000
@@ -61,7 +62,8 @@ export function approvalSummary(tool, args) {
 
 /**
  * @typedef {{ id: string, accountKey: string, tool: string, argsDigest: string,
- *   summary: string, expiresAt: number, decision: 'once' | 'always' | 'deny' | null, holder?: string | null }} Pending
+ *   summary: string, expiresAt: number, decision: 'once' | 'always' | 'deny' | null, holder?: string | null,
+ *   scope?: { executable: string, firstArg: string } | null }} Pending
  */
 
 /** id → Pending */
@@ -132,9 +134,13 @@ export function requestApproval({ accountKey, tool, args, holder = null }) {
     expiresAt: now() + (holder ? HELD_APPROVAL_TTL_MS : APPROVAL_TTL_MS),
     decision: null,
     holder: typeof holder === 'string' && holder ? holder : null,
+    // What an "always" on this approval would grant (run_command: the
+    // program and first argument), from these arguments, here, so a client
+    // can never name a wider scope than the call it approved (P4-e).
+    scope: grantScopeFor(tool, args),
   }
   pending.set(p.id, p)
-  return { id: p.id, tool: p.tool, summary: p.summary, argsDigest: p.argsDigest, expiresAt: p.expiresAt }
+  return { id: p.id, tool: p.tool, summary: p.summary, argsDigest: p.argsDigest, expiresAt: p.expiresAt, scope: p.scope }
 }
 
 /** Remove a pending approval its holder no longer waits on (the task ended). */
@@ -148,7 +154,7 @@ export function withdraw(id) {
  * @param {string} id
  * @param {string} accountKey
  * @param {'once' | 'always' | 'deny'} decision
- * @returns {{ ok: true, tool: string } | { ok: false, error: 'not found' | 'already decided' }}
+ * @returns {{ ok: true, tool: string, scope: { executable: string, firstArg: string } | null } | { ok: false, error: 'not found' | 'already decided' }}
  *   'not found' also covers another account's id and an expired one: a
  *   prober learns nothing from the difference.
  */
@@ -162,7 +168,7 @@ export function decide(id, accountKey, decision) {
   for (const fn of decidedListeners) {
     try { fn(id, decision, { accountKey: p.accountKey, tool: p.tool, holder: p.holder ?? null }) } catch { /* a listener's failure is its own */ }
   }
-  return { ok: true, tool: p.tool }
+  return { ok: true, tool: p.tool, scope: p.scope ?? null }
 }
 
 /**
