@@ -66,3 +66,86 @@ export function approvalRequired(result) {
 		expiresAt: typeof a.expiresAt === 'number' ? a.expiresAt : 0
 	};
 }
+
+/**
+ * Grant scope (plan D13, D19; Phase 4 P4-e). Shared, so Nest (which makes
+ * and checks grants) and chat-ui (which decides whether to show the card,
+ * and what "Always allow" says) compute it the same way.
+ *
+ * A standing grant for most tools covers every call (scope null). A scoped
+ * tool's grant covers only calls whose scope matches, and an unscoped grant
+ * for it is refused, so nothing can always-allow every command.
+ *
+ * run_command's scope is the program and its first argument: "git status"
+ * covers `git status -s` and not `git push`. A call with no first argument
+ * has no scope, so it can never be always allowed: `git` alone, or `node`
+ * alone, is not a decision to make once for all time.
+ *
+ * Nest computes it from the approved call's own arguments when it opens the
+ * approval, never from anything a client sends.
+ *
+ * @typedef {{ executable: string, firstArg: string }} GrantScope
+ */
+
+export const SCOPED_GRANT_TOOLS = Object.freeze(['run_command']);
+export const MAX_SCOPE_PART_CHARS = 256;
+
+/** @param {string} name */
+export function isScopedTool(name) {
+	return SCOPED_GRANT_TOOLS.includes(name);
+}
+
+/**
+ * The scope a grant made from this call would have, or null (an unscoped
+ * tool, or a scoped tool's call that cannot be always allowed).
+ *
+ * @param {string} tool
+ * @param {any} args the call's arguments, parsed
+ * @returns {GrantScope | null}
+ */
+export function grantScopeFor(tool, args) {
+	if (tool !== 'run_command') return null;
+	const executable = typeof args?.command === 'string' ? args.command.trim() : '';
+	const firstArg =
+		Array.isArray(args?.args) && typeof args.args[0] === 'string' ? args.args[0] : '';
+	if (!executable || !firstArg) return null;
+	if (executable.length > MAX_SCOPE_PART_CHARS || firstArg.length > MAX_SCOPE_PART_CHARS)
+		return null;
+	return { executable, firstArg };
+}
+
+/**
+ * Do two scopes name the same thing? null matches only null.
+ *
+ * @param {GrantScope | null | undefined} a
+ * @param {GrantScope | null | undefined} b
+ */
+export function sameScope(a, b) {
+	if (!a || !b) return (a ?? null) === (b ?? null);
+	return a.executable === b.executable && a.firstArg === b.firstArg;
+}
+
+/**
+ * How a card names a scope: "git status".
+ *
+ * @param {GrantScope | null | undefined} scope
+ */
+export function scopeLabel(scope) {
+	return scope ? `${scope.executable} ${scope.firstArg}` : '';
+}
+
+/**
+ * A run_command call as one line a person can read before approving it:
+ * each argument that a shell would split or interpret is shown quoted, so
+ * `"a b"` reads as one argument. Display only: nothing runs this string.
+ *
+ * @param {any} args the call's arguments, parsed
+ * @returns {string}
+ */
+export function commandLine(args) {
+	const command = typeof args?.command === 'string' ? args.command : '?';
+	const rest = Array.isArray(args?.args) ? args.args.map((/** @type {unknown} */ a) => String(a)) : [];
+	return [command, ...rest]
+		.map((a) => (/^[\w./:=@%+,-]+$/.test(a) ? a : JSON.stringify(a)))
+		.join(' ');
+}

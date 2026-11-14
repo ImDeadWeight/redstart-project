@@ -29,6 +29,7 @@ import { parseResourceLine, resourceKind } from '$lib/utils/resource-links';
 import { fetchFileBlob } from '$lib/utils/agentic';
 import { apiPost } from '$lib/utils/api-fetch';
 import type { AgentPorts, AgentToolCall, AgentContentPart, ToolExecution } from '$lib/agent-core';
+import { isScopedTool } from '$lib/agent-core';
 import type { AgenticSessionState } from './agentic-session.svelte';
 import type { MCPToolCall, DatabaseMessageExtraImageFile } from '$lib/types';
 
@@ -82,25 +83,38 @@ export class AgenticToolExec {
 	 * point of granting, so a stale entry cannot silently authorise unattended
 	 * deletion.
 	 */
-	asksPerson(toolName: string): boolean {
+	asksPerson(toolName: string, args?: unknown): boolean {
 		const permissionKey = toolsStore.getPermissionKey(toolName);
 		const destructive = toolsStore.isDestructiveTool(toolName);
-		return destructive || !permissionKey || !permissionsStore.hasTool(permissionKey);
+		// coversCall: a scoped tool (run_command) is covered per command, by
+		// the call's own arguments; every other tool as before.
+		return destructive || !permissionKey || !permissionsStore.coversCall(permissionKey, args);
+	}
+
+	/** The call's arguments for the card and the scope check, or null when they do not parse. */
+	private argsOf(call: AgentToolCall): Record<string, unknown> | null {
+		try {
+			return this.parseToolArguments(call.function.arguments);
+		} catch {
+			return null;
+		}
 	}
 
 	async requestPermission(
 		conversationId: string,
 		toolName: string,
 		serverLabel: string,
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		args: Record<string, unknown> | null = null
 	): Promise<ToolPermissionDecision> {
 		const permissionKey = toolsStore.getPermissionKey(toolName);
 		const destructive = toolsStore.isDestructiveTool(toolName);
-		if (!this.asksPerson(toolName)) {
+		const scoped = isScopedTool(toolName);
+		if (!this.asksPerson(toolName, args)) {
 			return ToolPermissionDecision.ONCE;
 		}
 
-		this.session.pendingPermissions.set(conversationId, { toolName, serverLabel });
+		this.session.pendingPermissions.set(conversationId, { toolName, serverLabel, args });
 
 		return new Promise<ToolPermissionDecision>((resolve) => {
 			if (signal?.aborted) {
@@ -111,7 +125,14 @@ export class AgenticToolExec {
 
 			this.session.permissionResolvers.set(conversationId, (decision) => {
 				this.session.pendingPermissions.set(conversationId, null);
-				if (decision === ToolPermissionDecision.ALWAYS && permissionKey && !destructive) {
+				// A scoped tool's "always" is made by Nest from this very call, in
+				// the approval handshake (gate.approve passes it on), never here.
+				if (
+					decision === ToolPermissionDecision.ALWAYS &&
+					permissionKey &&
+					!destructive &&
+					!scoped
+				) {
 					permissionsStore.allowTool(permissionKey);
 				} else if (decision === ToolPermissionDecision.ALWAYS_SERVER) {
 					// Destructive tools are excluded from the sweep. "Always allow all
@@ -125,6 +146,8 @@ export class AgenticToolExec {
 								: toolsStore.getToolServerLabel(t.definition.function.name) === serverLabel
 						)
 						.filter((t) => !toolsStore.isDestructiveTool(t.definition.function.name))
+						// run_command is always allowed one command at a time, never by a sweep.
+						.filter((t) => !isScopedTool(t.definition.function.name))
 						.map((t) => toolsStore.getPermissionKey(t.definition.function.name)!)
 						.filter((k): k is string => k !== null);
 					permissionsStore.allowTools(serverToolKeys);
@@ -162,20 +185,29 @@ export class AgenticToolExec {
 		// executor answers Nest's request for one only for these, so a call that
 		// passed the gate on a standing grant is never approved on anyone's
 		// behalf. Each id is used once.
-		const approvedByPerson = new Set<string>();
+		// The value is what Nest is told: 'always' only for a scoped tool's
+		// "Always allow `git status`", so Nest makes that command's grant;
+		// every other approval is 'once' (other tools' grants are made by
+		// permissionsStore when the card is decided).
+		const approvedByPerson = new Map<string, 'once' | 'always'>();
 		return {
 			gate: {
 				approve: async (call, signal) => {
 					const toolName = call.function.name;
-					const asked = this.asksPerson(toolName);
+					const args = this.argsOf(call);
+					const asked = this.asksPerson(toolName, args);
 					const decision = await this.requestPermission(
 						conversationId,
 						toolName,
 						toolsStore.getToolServerLabel(toolName),
-						signal
+						signal,
+						args
 					);
 					const allowed = decision !== ToolPermissionDecision.DENY;
-					if (allowed && asked && call.id) approvedByPerson.add(call.id);
+					if (allowed && asked && call.id) {
+						const always = decision === ToolPermissionDecision.ALWAYS && isScopedTool(toolName);
+						approvedByPerson.set(call.id, always ? 'always' : 'once');
+					}
 					// A Deny on the card stops the call here, so it never reaches Nest.
 					// Tell Nest for its decision log, for its own destructive tools only
 					// (getNestToolMeta has no class for anyone else's). Fire and forget:
@@ -187,9 +219,14 @@ export class AgenticToolExec {
 				}
 			},
 			tools: {
-				execute: (call, signal) => {
-					const approved = !!call.id && approvedByPerson.delete(call.id);
-					return this.execute(conversationId, call, signal, approved);
+				execute: async (call, signal) => {
+					const approval = call.id ? (approvedByPerson.get(call.id) ?? null) : null;
+					if (call.id) approvedByPerson.delete(call.id);
+					const result = await this.execute(conversationId, call, signal, approval);
+					// Nest made a command grant in the handshake: refresh the cache so
+					// the next `git status -s` skips the card here too.
+					if (approval === 'always') void permissionsStore.reloadGrants();
+					return result;
 				},
 				extractAttachments: (text) => {
 					const { cleanedResult, attachments } = extractBase64Attachments(text);
@@ -205,7 +242,7 @@ export class AgenticToolExec {
 		conversationId: string,
 		toolCall: AgentToolCall,
 		signal?: AbortSignal,
-		approvedByPerson = false
+		approval: 'once' | 'always' | null = null
 	): Promise<ToolExecution> {
 		const toolName = toolCall.function.name;
 		const toolSource = toolsStore.getToolSource(toolName);
@@ -241,7 +278,8 @@ export class AgenticToolExec {
 		};
 		const executionResult = await mcpStore.executeTool(mcpCall, signal, {
 			conversationId,
-			approvedByPerson
+			approvedByPerson: approval !== null,
+			approvalDecision: approval ?? 'once'
 		});
 		return { text: executionResult.content, isError: !!executionResult.isError };
 	}

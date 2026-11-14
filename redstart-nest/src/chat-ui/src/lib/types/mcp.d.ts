@@ -281,7 +281,7 @@ export interface ToolExecutionResult {
 	 * Phase 2): the pending approval to decide and repeat with
 	 * (shared/agent-core/approval.mjs). Nothing ran.
 	 */
-	approval?: { id: string; tool: string; summary: string; argsDigest: string; expiresAt: number } | null;
+	approval?: { id: string; tool: string; summary: string; argsDigest: string; expiresAt: number; scope?: { executable: string; firstArg: string } | null } | null;
 }
 
 export interface ServerBuiltinToolInfo {

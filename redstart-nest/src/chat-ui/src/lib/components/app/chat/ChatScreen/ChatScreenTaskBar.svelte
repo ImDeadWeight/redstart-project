@@ -80,6 +80,7 @@
 				<ChatMessageActionCardPermissionRequest
 					toolName={waiting.tool}
 					serverLabel=""
+					scope={waiting.approval.scope ?? null}
 					onDecision={onPermission}
 				/>
 				{#if waiting.approval.summary}

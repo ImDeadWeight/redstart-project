@@ -357,7 +357,7 @@ class MCPStore {
 	async executeTool(
 		toolCall: MCPToolCall,
 		signal?: AbortSignal,
-		context?: { conversationId?: string; approvedByPerson?: boolean }
+		context?: { conversationId?: string; approvedByPerson?: boolean; approvalDecision?: 'once' | 'always' }
 	): Promise<ToolExecutionResult> {
 		return this.toolOps.executeTool(toolCall, signal, context);
 	}

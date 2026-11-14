@@ -476,6 +476,7 @@
 		<ChatMessageActionCardPermissionRequest
 			toolName={pendingPermission.toolName}
 			serverLabel={pendingPermission.serverLabel}
+			args={pendingPermission.args ?? null}
 			onDecision={handlePermission}
 		/>
 	{/if}

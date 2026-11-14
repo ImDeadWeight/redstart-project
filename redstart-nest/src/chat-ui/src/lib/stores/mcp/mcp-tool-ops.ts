@@ -123,7 +123,7 @@ export class MCPToolOps {
 	async executeTool(
 		toolCall: MCPToolCall,
 		signal?: AbortSignal,
-		context?: { conversationId?: string; approvedByPerson?: boolean }
+		context?: { conversationId?: string; approvedByPerson?: boolean; approvalDecision?: 'once' | 'always' }
 	): Promise<ToolExecutionResult> {
 		const toolName = toolCall.function.name;
 		// Which chat this call belongs to, so Nest can give its files a home.
@@ -160,7 +160,11 @@ export class MCPToolOps {
 			return first;
 		}
 		try {
-			await apiPost(`/approvals/${encodeURIComponent(first.approval.id)}`, { decision: 'once' });
+			// 'always' only for a scoped tool's "Always allow `git status`"
+			// (agent-runtime 4.6): Nest then grants that command, with the scope
+			// it recorded from this call. Anything else is approved once.
+			const decision = context.approvalDecision === 'always' ? 'always' : 'once';
+			await apiPost(`/approvals/${encodeURIComponent(first.approval.id)}`, { decision });
 		} catch (err) {
 			console.warn(`[approvals] could not record the approval for "${toolName}":`, err);
 			return first;

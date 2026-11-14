@@ -59,8 +59,14 @@ export {
 	APPROVAL_ID_META_KEY,
 	APPROVAL_RULE_META_KEY,
 	APPROVAL_ENFORCED_META_KEY,
-	approvalRequired
+	approvalRequired,
+	isScopedTool,
+	grantScopeFor,
+	sameScope,
+	scopeLabel,
+	commandLine
 } from '../../../../../shared/agent-core/approval.mjs';
+export type { GrantScope } from '../../../../../shared/agent-core/approval.mjs';
 export {
 	SUMMARY_MAX_TOKENS,
 	TRIGGER_RATIO,

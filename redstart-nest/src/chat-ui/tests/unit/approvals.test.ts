@@ -191,3 +191,80 @@ describe('MCPToolOps.executeTool: the approval handshake', () => {
 		expect(apiPost).not.toHaveBeenCalled();
 	});
 });
+
+describe('run_command: grants per command (agent-runtime 4.6)', () => {
+	const RUN = 'mcp-redstart-nest:run_command';
+	const status = { command: 'git', args: ['status', '-s'] };
+
+	it('a scoped grant covers its command, never the whole tool', async () => {
+		stubStorage({ [`${LS_KEY}.importedToNest`]: '1' });
+		apiFetch.mockResolvedValueOnce({
+			grants: [{ id: 'g9', tool: 'run_command', scope: { executable: 'git', firstArg: 'status' } }]
+		});
+		const { permissionsStore } = await import('$lib/stores/permissions.svelte');
+		await permissionsStore.refresh();
+		expect(permissionsStore.hasTool(RUN)).toBe(false);
+		expect(permissionsStore.coversCall(RUN, status)).toBe(true);
+		expect(permissionsStore.coversCall(RUN, { command: 'git', args: ['push'] })).toBe(false);
+		expect(permissionsStore.coversCall(RUN, { command: 'git' })).toBe(false);
+		expect(permissionsStore.coversCall(RUN, null)).toBe(false);
+		expect(permissionsStore.scopedGrants).toEqual([
+			{ id: 'g9', tool: 'run_command', scope: { executable: 'git', firstArg: 'status' } }
+		]);
+	});
+
+	it('"Always allow" on the tool as a whole posts nothing (Nest would refuse it)', async () => {
+		stubStorage({ [`${LS_KEY}.importedToNest`]: '1' });
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const { permissionsStore } = await import('$lib/stores/permissions.svelte');
+		permissionsStore.allowTool(RUN);
+		expect(apiPost).not.toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it('revoking a command grant deletes it on Nest', async () => {
+		stubStorage({ [`${LS_KEY}.importedToNest`]: '1' });
+		apiFetch.mockResolvedValueOnce({
+			grants: [{ id: 'g9', tool: 'run_command', scope: { executable: 'git', firstArg: 'status' } }]
+		});
+		const { permissionsStore } = await import('$lib/stores/permissions.svelte');
+		await permissionsStore.refresh();
+		apiFetch.mockResolvedValueOnce(null);
+		await permissionsStore.revokeScopedGrant('g9');
+		expect(apiFetch).toHaveBeenLastCalledWith('/approvals/grants/g9', { method: 'DELETE' });
+		expect(permissionsStore.coversCall(RUN, status)).toBe(false);
+	});
+
+	it('the handshake posts "always" for the card\'s "Always allow `git status`", "once" otherwise', async () => {
+		const PENDING = { id: 'ap-7', tool: 'run_command', summary: 's', argsDigest: 'd', expiresAt: 9 };
+		const needsApproval = { content: 'needs approval', isError: true, approval: PENDING };
+		const done = { content: 'Exit code 0', isError: false, approval: null };
+		stubStorage();
+		const { MCPToolOps } = await import('$lib/stores/mcp/mcp-tool-ops');
+		const tools = { toolsIndex: new Map([['run_command', 'redstart-nest']]) };
+		const conn = { connections: new Map([['redstart-nest', { tools: [] }]]), reconnectServer: vi.fn() };
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const o = new MCPToolOps(tools as any, conn as any);
+		const runCall = { id: 'c7', function: { name: 'run_command', arguments: JSON.stringify(status) } };
+
+		callTool.mockResolvedValueOnce(needsApproval).mockResolvedValueOnce(done);
+		apiPost.mockResolvedValueOnce({ ok: true });
+		await o.executeTool(runCall, undefined, { approvedByPerson: true, approvalDecision: 'always' });
+		expect(apiPost).toHaveBeenLastCalledWith('/approvals/ap-7', { decision: 'always' });
+
+		callTool.mockResolvedValueOnce(needsApproval).mockResolvedValueOnce(done);
+		apiPost.mockResolvedValueOnce({ ok: true });
+		await o.executeTool(runCall, undefined, { approvedByPerson: true });
+		expect(apiPost).toHaveBeenLastCalledWith('/approvals/ap-7', { decision: 'once' });
+	});
+
+	it('the card\'s words: the exact command line and the scope it would allow', async () => {
+		const { commandLine, scopeLabel, grantScopeFor } = await import('$lib/agent-core');
+		expect(commandLine({ command: 'git', args: ['log', '-3', '--format=%an %s'] })).toBe(
+			'git log -3 "--format=%an %s"'
+		);
+		expect(commandLine({ command: 'node', args: ['a & echo x'] })).toBe('node "a & echo x"');
+		expect(scopeLabel(grantScopeFor('run_command', status))).toBe('git status');
+		expect(grantScopeFor('run_command', { command: 'node' })).toBeNull();
+	});
+});
