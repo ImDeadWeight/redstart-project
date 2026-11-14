@@ -43,6 +43,10 @@
 //                     choice of retrieval's)
 //   firstToolExpected whether the task's expectTools lists firstTool; null
 //                     when the task names none or nothing was called
+//   retrievalConfig   the settings retrieval ran with, as the gateway
+//                     reported them (x-redstart-retrieval-config, benchmarks
+//                     H1); several, joined by " | ", when they changed
+//                     mid-run. null when retrieval never ran or Nest is older
 //
 // The schema check is deliberately shallow: an object, every `required` key
 // present, each present key's top-level JSON type matching the schema's
@@ -147,6 +151,7 @@ export function computeMetrics(events, verdict, task = {}) {
   let cacheMissTurns = null
   let prefillMs = null
   let firstTool = null
+  const configs = new Set()
   /** the previous assistant turn's whole prompt (cache_n + prompt_n) */
   let lastPromptTotal = null
 
@@ -165,6 +170,7 @@ export function computeMetrics(events, verdict, task = {}) {
     if (e.type === 'tools_sent') {
       if (e.retrieval === 'on') retrieval = 'on'
       else if (e.retrieval === 'off' && retrieval === null) retrieval = 'off'
+      if (typeof e.config === 'string' && e.config !== 'off') configs.add(e.config)
       if (Array.isArray(e.names)) {
         toolSetKeys.add([...e.names].sort().join('\n'))
         toolsSentFirst ??= e.names.length
@@ -220,8 +226,11 @@ export function computeMetrics(events, verdict, task = {}) {
     prefillMs,
     firstTool,
     firstToolExpected: firstTool !== null && Array.isArray(task.expectTools) ? task.expectTools.includes(firstTool) : null,
+    retrievalConfig: configs.size ? [...configs].sort().join(CONFIG_SEPARATOR) : null,
   }
 }
+
+const CONFIG_SEPARATOR = ' | '
 
 const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null)
 
@@ -287,7 +296,12 @@ const sum = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) : null)
 export function retrievalSummary(runs) {
   const known = (k) => runs.map((m) => m[k]).filter((x) => x != null)
   const expected = known('firstToolExpected')
+  const configs = [...new Set(known('retrievalConfig').flatMap((c) => c.split(CONFIG_SEPARATOR)))].sort()
   return {
+    // The settings seen (benchmarks H1). More than one means Nest's settings
+    // changed during the runs, and the row mixes variants.
+    retrievalConfig: configs.join(CONFIG_SEPARATOR) || null,
+    retrievalConfigMixed: configs.length > 1,
     // e.g. 'on' or 'on, off': which states the runs saw, sorted.
     retrieval: [...new Set(known('retrieval'))].sort().join(', ') || null,
     toolSetsPerRun: mean(known('toolSets')),

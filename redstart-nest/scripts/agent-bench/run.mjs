@@ -24,6 +24,12 @@
 //     [--retrieval server|off] (tool retrieval as Nest is set, the default,
 //                              or off for this run: every post-ban tool on
 //                              every turn. The summary says which it was)
+//     [--expect-retrieval scorer=fused,growth=pins-only]
+//                             (stop before the first task unless Nest's
+//                              retrieval settings match: one probe request
+//                              reads x-redstart-retrieval-config. Keys:
+//                              scorer, growth, text, min, callTool, floor,
+//                              rel, margin. Benchmarks H1)
 //
 // Login on: put the bench account's API key in REDSTART_BENCH_API_KEY (or
 // pass --api-key, which then sits in your shell history). Use a dedicated
@@ -43,7 +49,7 @@ import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { connectNest, FILES_SNAPSHOT_LIMIT } from './lib/nest-client.mjs'
 import { findTaskFiles, loadTask } from './lib/task-file.mjs'
-import { runTask, maxReplyTokens } from './lib/bench.mjs'
+import { runTask, maxReplyTokens, toLlmTools, parseExpectRetrieval, probeRetrievalConfig, retrievalConfigMismatch } from './lib/bench.mjs'
 import { summarize } from './lib/metrics.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -53,6 +59,7 @@ const FLAGS = {
   '--gateway': 'gateway', '--mcp': 'mcp', '--api-key': 'apiKey', '--temperature': 'temperature',
   '--model': 'model', '--max-tokens': 'maxTokens', '--plan': 'plan',
   '--request-timeout': 'requestTimeout', '--text-asks': 'textAsks', '--retrieval': 'retrieval',
+  '--expect-retrieval': 'expectRetrieval',
 }
 export const RETRIEVAL_MODES = ['server', 'off']
 export const PLAN_MODES = ['full', 'tool', 'off']
@@ -111,6 +118,10 @@ export function parseArgs(argv) {
   opts.retrieval = opts.retrieval ?? 'server'
   if (!RETRIEVAL_MODES.includes(opts.retrieval)) throw new Error(`--retrieval must be one of ${RETRIEVAL_MODES.join(', ')}`)
   if (opts.runtime && opts.retrieval === 'off') throw new Error('--runtime cannot turn retrieval off (--retrieval off): the daemon makes the completions requests')
+  if (opts.expectRetrieval !== undefined) {
+    if (opts.retrieval === 'off') throw new Error('--expect-retrieval with --retrieval off: no retrieval settings apply to a run with retrieval off')
+    opts.expectRetrieval = parseExpectRetrieval(opts.expectRetrieval)
+  }
   opts.apiKey = opts.apiKey ?? process.env.REDSTART_BENCH_API_KEY ?? null
   return opts
 }
@@ -251,7 +262,8 @@ export function retrievalLine(meta, s) {
   return `tool retrieval (--retrieval ${meta.retrieval ?? 'server'}): ${s.retrieval ?? 'not reported'}` +
     ` · ${num(s.toolsSentFirst)} tools on the first turn · ${num(s.toolSetsPerRun)} tool set(s)/run` +
     ` · ${s.cacheMissTurns ?? '—'} cache-miss turn(s) · prefill ${secs(s.prefillMsPerRun)} s/run` +
-    ` · first tool as expected ${ratio(s.firstToolExpected, s.firstToolJudged)}`
+    ` · first tool as expected ${ratio(s.firstToolExpected, s.firstToolJudged)}` +
+    ` · settings ${s.retrievalConfig ?? '—'}`
 }
 
 export function summaryMarkdown(meta, summary) {
@@ -319,6 +331,15 @@ export async function main(argv, io = {}) {
     throw new Error(explainConnectError(err, opts))
   }
   if (mcpTools.length === 0) log('warning: Nest offers this account no tools; every tool task will fail')
+  // Benchmarks H1: a forgotten settings change is found here, not after the
+  // run. One request, before any conversation exists.
+  let retrievalConfigProbed = null
+  if (opts.expectRetrieval) {
+    retrievalConfigProbed = await probeRetrievalConfig(nest, toLlmTools(mcpTools))
+    const why = retrievalConfigMismatch(opts.expectRetrieval, retrievalConfigProbed)
+    if (why) throw new Error(`--expect-retrieval: ${why}`)
+    log(`retrieval settings as expected: ${retrievalConfigProbed}`)
+  }
   const model = await nest.modelInfo()
   const warnings = []
   const lw = labelWarning(opts.modelLabel, model?.modelFile)
@@ -378,6 +399,9 @@ export async function main(argv, io = {}) {
   const summary = summarize(runs)
   const fw = fallbackWarning(summary)
   if (fw) warnings.push(fw)
+  if (summary.retrievalConfigMixed) {
+    warnings.push(`warning: Nest's retrieval settings changed during the run (${summary.retrievalConfig}), so this row mixes variants. Do not compare it.`)
+  }
   const changed = [...new Set(runs.flatMap((r) => r.fileSystemWrites?.modified ?? []))].sort()
   if (changed.length) {
     warnings.push(`warning: runs changed ${changed.length} file(s) that were already in the account's File System folder, which cannot be undone: ${changed.join(', ')}`)
@@ -405,6 +429,9 @@ export async function main(argv, io = {}) {
     textAsks: opts.textAsks,
     // The --retrieval flag. What happened is summary.retrieval, read from the gateway.
     retrieval: opts.retrieval,
+    // --expect-retrieval as given, and what the probe read (benchmarks H1).
+    expectRetrieval: opts.expectRetrieval ?? null,
+    retrievalConfigProbed,
     temperature: opts.temperature ?? null,
     maxTokens: maxReplyTokens(opts),
     gateway: opts.gateway,

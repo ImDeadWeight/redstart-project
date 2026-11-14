@@ -34,7 +34,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { main, parseArgs, labelWarning, fallbackWarning, accountWarning, askWarning } from './agent-bench/run.mjs'
-import { approves, maxReplyTokens, endsInQuestion, TEXT_ASK_NO_ANSWER, toolsSentReport } from './agent-bench/lib/bench.mjs'
+import { approves, maxReplyTokens, endsInQuestion, TEXT_ASK_NO_ANSWER, toolsSentReport, retrievalConfigMismatch } from './agent-bench/lib/bench.mjs'
 import { answerFromTask } from './agent-bench/lib/ask.mjs'
 import { ASK_USER_DEFINITION, DISMISSED_RESULT } from '../../shared/agent-core/ask-user.mjs'
 import { UPDATE_PLAN_DEFINITION } from '../../shared/agent-core/update-plan.mjs'
@@ -223,6 +223,8 @@ function startFakeNest(gatewayPort) {
     approvalFor: null,
     approvals: new Map(),
     approvalPosts: [],
+    // x-redstart-retrieval-config on a request retrieval ran on (benchmarks H1).
+    retrievalConfig: 'scorer=fused;growth=scored;text=1;min=0;callTool=0;floor=0.2;rel=0.85;margin=0.02',
   }
   const json = (res, status, body) => {
     res.writeHead(status, { 'Content-Type': 'application/json' })
@@ -366,6 +368,8 @@ function startFakeNest(gatewayPort) {
         'x-redstart-tools-sent': (body.tools ?? []).map((t) => encodeURIComponent(t.function.name)).join(','),
         'x-redstart-tools-filtered': '0',
         'x-redstart-retrieval': body.redstart_retrieval === false ? 'off' : 'on',
+        // Benchmarks H1: the settings in effect, as tool-filter.mjs writes them.
+        'x-redstart-retrieval-config': body.redstart_retrieval === false ? 'off' : state.retrievalConfig,
       } : {}
       if (body.stream === false) {
         // measure-tool-cache.mjs: one JSON reply, with the timings.
@@ -932,9 +936,51 @@ if (bench) {
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
+  await test('benchmarks H1: the settings are recorded per turn, --expect-retrieval checks them first, and a change mid-run is warned about', async () => {
+    eq(bench.summary.retrievalConfig, nest.state.retrievalConfig, 'the settings, read from the report')
+    eq(run('read-fixture').metrics.retrievalConfig, nest.state.retrievalConfig, 'per run')
+    assert(fs.readFileSync(path.join(outDir, 'summary.md'), 'utf8').includes(`settings ${nest.state.retrievalConfig}`), 'summary.md line')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-expect-'))
+    const task = path.join(FIXTURES, 'read-fixture.json')
+    const argv = (...extra) => ['--model-label', 'fake model', '--tasks', task, '--gateway', `http://127.0.0.1:${port}`, '--out', dir, '--quiet', ...extra]
+    // A match: one probe request, then the tasks.
+    const before = nest.state.completionBodies.length
+    const ok = await main(argv('--expect-retrieval', 'scorer=fused,growth=scored'), { log: () => {} })
+    const probe = nest.state.completionBodies[before]
+    assert(probe.stream === false && probe.max_tokens === 1 && probe.redstart_retrieval_report === true && /^bench-probe-/.test(probe.redstart_conversation_id), 'probe shape')
+    eq(JSON.parse(fs.readFileSync(path.join(dir, 'summary.json'), 'utf8')).meta.retrievalConfigProbed, nest.state.retrievalConfig, 'probe recorded')
+    eq(ok.runs.length, 1, 'the task ran')
+    // A mismatch stops before any task.
+    const afterOk = nest.state.completionBodies.length
+    let e = null
+    try { await main(argv('--expect-retrieval', 'growth=pins-only'), { log: () => {} }) } catch (err) { e = err }
+    assert(/growth is scored, expected pins-only/.test(e?.message ?? ''), `got ${e?.message}`)
+    eq(nest.state.completionBodies.length - afterOk, 1, 'only the probe was sent')
+    // Settings that change mid-run are a warning on the row.
+    let n = 0
+    const saved = nest.state.retrievalConfig
+    Object.defineProperty(nest.state, 'retrievalConfig', { configurable: true, get: () => (n++ === 0 ? saved : saved.replace('growth=scored', 'growth=pins-only')) })
+    try {
+      const mixed = await main(argv(), { log: () => {} })
+      assert(mixed.summary.retrievalConfigMixed, 'not flagged as mixed')
+      assert(JSON.parse(fs.readFileSync(path.join(dir, 'summary.json'), 'utf8')).meta.warnings.some((w) => /settings changed during the run/.test(w)), 'no warning')
+    } finally {
+      Object.defineProperty(nest.state, 'retrievalConfig', { configurable: true, writable: true, value: saved })
+    }
+    for (const bad of [['--expect-retrieval', 'colour=red'], ['--expect-retrieval', 'scorer'], ['--expect-retrieval', 'scorer=fused', '--retrieval', 'off']]) {
+      let pe = null
+      try { parseArgs(['--model-label', 'm', ...bad]) } catch (err) { pe = err }
+      assert(/--expect-retrieval/.test(pe?.message ?? ''), `${bad.join(' ')} was accepted`)
+    }
+    eq(retrievalConfigMismatch({ scorer: 'fused' }, 'off') !== null && retrievalConfigMismatch({ scorer: 'fused' }, null) !== null, true, 'off and absent are mismatches')
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
   await test('every request caps the reply length (4096 by default), and a capped reply is a limit', async () => {
     // The 2026-11-11 runaway: one 4B reply ran to 12k tokens.
-    assert(nest.state.completionBodies.every((b) => b.max_tokens === 4096), 'a request without the default cap')
+    // The --expect-retrieval probe (H1) is not a reply: it asks for 1 token.
+    const replies = nest.state.completionBodies.filter((b) => !/^bench-probe-/.test(b.redstart_conversation_id ?? ''))
+    assert(replies.every((b) => b.max_tokens === 4096), 'a request without the default cap')
     eq([maxReplyTokens({}), maxReplyTokens({ thinking: true }), maxReplyTokens({ maxTokens: 50, thinking: true })], [4096, 16384, 50], 'defaults and override')
     eq(run('write-answer').metrics.hitLimit, null, '10 tokens under a 4096 cap is not a limit')
     // The fake generates 10 tokens a turn, so a cap of 10 is hit.

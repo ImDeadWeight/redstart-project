@@ -788,6 +788,26 @@ async function main() {
     })
   })
 
+  await test('🔍 the report names the retrieval settings in effect, and no tools (benchmarks H1)', async () => {
+    await withStubEmbedder(async () => {
+      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true, scorer: 'cosine', growth: 'pins-only', minTools: 3 } })
+      const body = {
+        messages: [{ role: 'user', content: 'what changed in the git repo this week' }],
+        tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch')],
+      }
+      const res = await completions({ ...body, redstart_retrieval_report: true })
+      const config = res.headers.get('x-redstart-retrieval-config') ?? ''
+      assert(/^scorer=cosine;growth=pins-only;text=1;min=3;callTool=0;floor=[\d.]+;rel=[\d.]+;margin=[\d.]+$/.test(config), `config: ${config}`)
+      assert(!/git_status|create_document|web_fetch/.test(config), 'the settings header carried tool names')
+      const exposed = res.headers.get('access-control-expose-headers') ?? ''
+      assert(exposed.includes('x-redstart-retrieval-config'), 'a browser client cannot read it')
+      const optedOut = await completions({ ...body, redstart_retrieval_report: true, redstart_retrieval: false })
+      assert(optedOut.headers.get('x-redstart-retrieval-config') === 'off', 'settings reported for a request retrieval did not run on')
+      const plain = await completions(body)
+      assert(plain.headers.get('x-redstart-retrieval-config') === null, 'the settings went to a caller who did not ask')
+    })
+  })
+
   await test('🔍 only the literal false opts out of retrieval', async () => {
     await withStubEmbedder(async () => {
       updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })

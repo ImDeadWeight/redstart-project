@@ -170,7 +170,11 @@ export function filePathsIn(text) {
  * Since second pass 6.1 also `origins`, each sent tool's turn and reason
  * (x-redstart-tools-origin; {} from an older Nest), and `wouldAdd`.
  *
- * @returns {{ names: string[], filtered: boolean, retrieval: 'on' | 'off' | null, origins: Record<string, { turn: number, why: string }>, wouldAdd: number } | null}
+ * Since benchmarks H1 also `config`, the settings retrieval ran with
+ * (x-redstart-retrieval-config: `scorer=...;growth=...`, or `off`); null from
+ * an older Nest.
+ *
+ * @returns {{ names: string[], filtered: boolean, retrieval: 'on' | 'off' | null, origins: Record<string, { turn: number, why: string }>, wouldAdd: number, config: string | null } | null}
  */
 export function toolsSentReport(headers) {
   const sent = headers?.get?.('x-redstart-tools-sent')
@@ -189,7 +193,70 @@ export function toolsSentReport(headers) {
     retrieval: state === 'on' || state === 'off' ? state : null,
     origins,
     wouldAdd: Number.isInteger(wouldAdd) ? wouldAdd : 0,
+    config: headers.get('x-redstart-retrieval-config') ?? null,
   }
+}
+
+/**
+ * `--expect-retrieval scorer=fused,growth=pins-only` as { scorer: 'fused',
+ * growth: 'pins-only' }. The keys are x-redstart-retrieval-config's.
+ *
+ * @param {string} text
+ * @returns {Record<string, string>}
+ */
+export function parseExpectRetrieval(text) {
+  /** @type {Record<string, string>} */
+  const out = {}
+  for (const part of String(text).split(',').map((s) => s.trim()).filter(Boolean)) {
+    const m = /^([A-Za-z]+)=(\S+)$/.exec(part)
+    if (!m) throw new Error(`--expect-retrieval: "${part}" is not key=value`)
+    if (!RETRIEVAL_CONFIG_KEYS.includes(m[1])) throw new Error(`--expect-retrieval: unknown setting "${m[1]}" (one of ${RETRIEVAL_CONFIG_KEYS.join(', ')})`)
+    out[m[1]] = m[2]
+  }
+  if (Object.keys(out).length === 0) throw new Error('--expect-retrieval needs at least one key=value')
+  return out
+}
+
+/** The keys of x-redstart-retrieval-config (tool-filter.mjs retrievalConfigSummary). */
+export const RETRIEVAL_CONFIG_KEYS = ['scorer', 'growth', 'text', 'min', 'callTool', 'floor', 'rel', 'margin']
+
+/**
+ * Why the settings Nest reported are not the ones expected, or null when
+ * they match. Benchmarks H1: most variants are Nest settings changed by hand
+ * between runs, and a forgotten change costs a whole run.
+ *
+ * @param {Record<string, string>} expected
+ * @param {string | null} config  x-redstart-retrieval-config
+ * @returns {string | null}
+ */
+export function retrievalConfigMismatch(expected, config) {
+  if (config == null) return 'Nest did not report its retrieval settings (a Nest from before x-redstart-retrieval-config?)'
+  if (config === 'off') return 'retrieval did not run on the probe request: is Nest → Tools → Tool retrieval on?'
+  const actual = Object.fromEntries(config.split(';').map((kv) => kv.split('=')))
+  const wrong = Object.entries(expected).filter(([k, v]) => actual[k] !== v).map(([k, v]) => `${k} is ${actual[k] ?? 'missing'}, expected ${v}`)
+  return wrong.length ? `Nest's retrieval settings differ: ${wrong.join('; ')} (reported: ${config})` : null
+}
+
+/**
+ * One request with every tool, to read the settings retrieval runs with
+ * before any task does. max_tokens 1: nothing is generated to speak of, and
+ * nothing is stored (the conversation id is the probe's own).
+ *
+ * @param {{ completion(body: object, signal?: AbortSignal): Promise<Response> }} nest
+ * @param {any[]} llmTools
+ * @returns {Promise<string | null>}
+ */
+export async function probeRetrievalConfig(nest, llmTools) {
+  const res = await nest.completion({
+    messages: [{ role: 'user', content: 'Hello.' }],
+    tools: llmTools.length > 0 ? llmTools : undefined,
+    stream: false,
+    max_tokens: 1,
+    redstart_retrieval_report: true,
+    redstart_conversation_id: `bench-probe-${crypto.randomBytes(4).toString('hex')}`,
+  })
+  await res.text().catch(() => '')
+  return toolsSentReport(res.headers)?.config ?? null
 }
 
 export const clip = (s) => (typeof s === 'string' && s.length > MAX_LOGGED_RESULT_CHARS

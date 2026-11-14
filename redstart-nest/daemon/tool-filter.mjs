@@ -181,6 +181,30 @@ export function resolveRetrievalSettings(settings) {
   return { ...RETRIEVAL_DEFAULTS, ...SCORER_DEFAULTS[scorer], ...asked, scorer }
 }
 
+/**
+ * The settings a request ran with, as one `key=value;...` string for the
+ * caller's report (x-redstart-retrieval-config, benchmarks H1). The bench
+ * switches these in Nest between runs, so a result has to carry what was in
+ * effect rather than trust its label. Settings only: no tool names, no query.
+ * Keys are fixed and in a fixed order, so two runs' strings compare as text.
+ *
+ * @param {object|null|undefined} settings  effectiveConfig.toolRetrieval
+ * @returns {string}
+ */
+export function retrievalConfigSummary(settings) {
+  const c = resolveRetrievalSettings(settings)
+  return [
+    `scorer=${c.scorer}`,
+    `growth=${c.growth === 'pins-only' ? 'pins-only' : 'scored'}`,
+    `text=${c.textVersion}`,
+    `min=${c.minTools}`,
+    `callTool=${c.callTool === true ? 1 : 0}`,
+    `floor=${c.floor}`,
+    `rel=${c.relativeFloor}`,
+    `margin=${c.margin}`,
+  ].join(';')
+}
+
 // The keyword index of the last few catalogs seen, by their content. A
 // request's tools are mostly the same from one turn to the next, so this is
 // rebuilt only when the set or a tool's text changes.

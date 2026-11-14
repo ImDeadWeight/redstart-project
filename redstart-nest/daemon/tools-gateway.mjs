@@ -38,7 +38,7 @@ import { beginCompletion, setUpstreamPort } from './completion-activity.mjs'
 import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/document-index-routes.mjs'
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
-import { filterRequestTools, estimateMessagesTokens, recordWireCost } from './tool-filter.mjs'
+import { filterRequestTools, estimateMessagesTokens, recordWireCost, retrievalConfigSummary } from './tool-filter.mjs'
 import { isConversationId } from './tool-retrieval.mjs'
 
 let gatewayServer = null
@@ -388,7 +388,10 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
     toolsRemoved: toolsFiltered,
     toolOrigins: retrievalRecord.origins ?? null,
     wouldAdd: retrievalRecord.wouldAdd ?? 0,
+    // The settings retrieval ran with (benchmarks H1), only when it ran.
+    retrievalConfig: null,
   }
+  if (wire.filtered) wire.retrievalConfig = retrievalConfigSummary(effectiveConfig.toolRetrieval)
   recordWireCost(wire)
 
   return { parsed, wire }
@@ -403,6 +406,7 @@ export const RETRIEVAL_REPORT_HEADERS = Object.freeze({
   retrieval: 'x-redstart-retrieval',
   origins: 'x-redstart-tools-origin',
   wouldAdd: 'x-redstart-tools-would-add',
+  config: 'x-redstart-retrieval-config',
 })
 
 /**
@@ -420,7 +424,7 @@ export const RETRIEVAL_REPORT_HEADERS = Object.freeze({
  * Only `wire` is read, which prepareCompletion builds after bans and
  * retrieval, so a banned tool can never appear here.
  *
- * @param {{ report?: boolean, toolNamesSent?: string[], toolsRemoved?: boolean, filtered?: boolean, toolOrigins?: Record<string, { turn: number, why: string }>|null, wouldAdd?: number }|null|undefined} wire
+ * @param {{ report?: boolean, toolNamesSent?: string[], toolsRemoved?: boolean, filtered?: boolean, toolOrigins?: Record<string, { turn: number, why: string }>|null, wouldAdd?: number, retrievalConfig?: string|null }|null|undefined} wire
  * @returns {Record<string, string>}
  */
 export function retrievalReportHeaders(wire) {
@@ -439,6 +443,9 @@ export function retrievalReportHeaders(wire) {
       .map((n) => `${encodeURIComponent(n)}=${wire.toolOrigins[n].turn}:${wire.toolOrigins[n].why}`)
       .join(','),
     [RETRIEVAL_REPORT_HEADERS.wouldAdd]: String(Number.isInteger(wire.wouldAdd) ? wire.wouldAdd : 0),
+    // The settings in effect (benchmarks H1), so a bench row records what ran
+    // instead of trusting its label. `off` when retrieval did not run.
+    [RETRIEVAL_REPORT_HEADERS.config]: typeof wire.retrievalConfig === 'string' ? wire.retrievalConfig : 'off',
     'Access-Control-Expose-Headers': Object.values(RETRIEVAL_REPORT_HEADERS).join(', '),
   }
 }
