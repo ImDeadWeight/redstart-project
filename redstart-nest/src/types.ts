@@ -184,6 +184,27 @@ export type CapabilityConfig = {
   scholar: { enabled: boolean; venueFilter: string | null }
   web_search: { searxngUrl: string | null; hasBraveApiKey: boolean }
   python: PythonCapabilityStatus
+  terminal: TerminalCapabilityStatus
+}
+
+// run_command (agent-runtime Phase 4). Owner only, not a sandbox. Each listed
+// program as daemon/terminal-config.mjs resolved it when the list was saved;
+// `missing` when its file has gone since (it then drops out of the tool).
+export type TerminalExecutable = {
+  entry: string
+  name: string
+  file: string
+  prefixArgs: string[]
+  missing: boolean
+}
+
+export type TerminalCapabilityStatus = {
+  executables: TerminalExecutable[]
+  defaultTimeoutS: number
+  maxTimeoutS: number
+  outputCapBytes: number
+  extraDirs: string[]
+  limits: { timeoutS: { min: number; max: number }; outputCapBytes: { min: number; max: number } }
 }
 
 // run_python (chat-tooling Phase 1). Settings plus what the server can say

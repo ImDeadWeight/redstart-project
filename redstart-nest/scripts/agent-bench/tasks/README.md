@@ -55,6 +55,17 @@ Phase 1 and Phase 4 tasks are expected to fail until those phases land; that
 is how a phase shows it helped. p4-fix-test can pass early, by editing the
 file with run_python.
 
+**Running the Phase 4 group (built 2026-11-14).** run_command is offered to
+the owner account only (agent-runtime plan U3), so the user-tier bench
+account never sees it and the p4 tasks keep failing under it by design. To
+measure them (plan section 10, P4-f): turn Terminal on for the profile, list
+`node` and `git` in its card, and run only this group with the **owner's**
+key, accepting the run's owner-key warning for this group alone:
+`--tasks "scripts/agent-bench/tasks/p4-*.json"`. The other groups stay on the
+bench account. The alternative is login off with network mode off, where
+the anonymous caller is allowed it. The bench's `approve: all` answers each
+command's approval once; it never always-allows a command.
+
 **The Phase 1 group was revised on 2026-11-11**, after the first runs and the
 ask_user probe (`probe-ask.mjs`). Four tasks went because a model could pass
 or fail them for the wrong reason: p1-ambiguous-units (the value range settles

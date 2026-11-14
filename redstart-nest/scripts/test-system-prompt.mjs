@@ -599,6 +599,18 @@ await test('🔍 an enabled plugin with a credential is disclosed as egress (D-f
   }
 })
 
+await test('🔍 the terminal is disclosed as egress, and only when tools are carried (Phase 4)', async () => {
+  const config = { ...LOCAL_ONLY_CONFIG, terminal: { enabled: true } }
+  const facts = deriveEgressFacts(config, [], true)
+  assert(facts.commandsReachNetwork === true && facts.hasEgress === true, 'an enabled terminal is not egress')
+  assert(deriveEgressFacts(config, [], false).commandsReachNetwork === false, 'reported with no tools carried')
+  assert(deriveEgressFacts(LOCAL_ONLY_CONFIG, [], true).commandsReachNetwork === false, 'reported with the terminal off')
+  const { prompt } = composePrompt({ config, hasTools: true, toolNames: ['run_command'], now: NOW })
+  assert(prompt.includes('can reach any host'), 'the composed prompt does not say commands reach the network')
+  assert(prompt.includes('Read its exit code first'), 'the run_command policy line is missing')
+  return 'declared in the facts and in the prompt'
+})
+
 await test('a plugin with NO credential is not reported as egress', async () => {
   const add = addPlugin({
     id: 'nocredplugin',

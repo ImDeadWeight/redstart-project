@@ -7,6 +7,7 @@ import type { usePlugins } from '../hooks/usePlugins'
 import { SectionTitle, TogglePill, btnCls, inputCls } from '../components/ui'
 import { FolderPicker } from '../components/FolderPicker'
 import { PythonCapabilityCard } from '../components/PythonCapabilityCard'
+import { TerminalCapabilityCard } from '../components/TerminalCapabilityCard'
 
 // ---------------------------------------------------------------------------
 // Folder-scoped capability card — one component for Documents/SQLite/Vault/
@@ -544,6 +545,14 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
             documentsConfigured={!!capabilityConfig?.documents.outputDir}
             active={isActive('python')}
             onToggle={() => toggleTool('python')}
+            onChanged={caps.loadCapabilities}
+          />
+
+          <TerminalCapabilityCard
+            status={capabilityConfig?.terminal ?? null}
+            documentsConfigured={!!capabilityConfig?.documents.outputDir}
+            active={isActive('terminal')}
+            onToggle={() => toggleTool('terminal')}
             onChanged={caps.loadCapabilities}
           />
 

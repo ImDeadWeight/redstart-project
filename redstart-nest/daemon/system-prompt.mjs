@@ -270,6 +270,13 @@ function buildToolPolicy(config, hasTools, toolNames) {
     if (has('run_javascript')) parts.push('Prefer run_python over run_javascript: it has pandas and matplotlib, and its files persist with the conversation.')
   }
 
+  // run_command (agent-runtime Phase 4). What its schema cannot say: that the
+  // exit code is the result (ignoring it is the failure the brainstorm names,
+  // D15), and which of two ways to run code to pick.
+  if (has('run_command')) {
+    parts.push('run_command runs one program with its arguments as a list and no shell. Read its exit code first: anything but 0 means the command failed, so report it as a failure and say what it printed. Use it to run tests, git, node or npm; use run_python for calculations and data.')
+  }
+
   // search_documents (Phase 5a): citations are the product claim, and what
   // the schema cannot say is that an uncited answer from a passage is wrong.
   if (has('search_documents')) {
@@ -626,6 +633,11 @@ export function deriveEgressFacts(config, externalServers, hasTools) {
   // configured with, so "the query stays local" is never true of it.
   const webSearchEngine = hasTools ? webSearchEngineOf(config) : null
 
+  // run_command (agent-runtime Phase 4): a program it runs can reach any host
+  // (git clone, npm install), so with the terminal on, "these are the only
+  // destinations" would be untrue. No host to name: the command decides.
+  const commandsReachNetwork = hasTools && config?.terminal?.enabled === true
+
   // Every enabled local store, not a subset — see LOCAL_STORES for why the
   // completeness matters and why the list is a table rather than six inline
   // predicates.
@@ -638,6 +650,7 @@ export function deriveEgressFacts(config, externalServers, hasTools) {
     remoteToolServers,
     credentialPlugins,
     webSearchEngine,
+    commandsReachNetwork,
     localStores,
     // The same set split by who can see it. Kept beside localStores rather than
     // derived by the caller: which stores are per-account is a property of the
@@ -646,7 +659,7 @@ export function deriveEgressFacts(config, externalServers, hasTools) {
     privateStores: active.filter(s => s.perAccount).map(s => s.label),
     sharedStores: active.filter(s => !s.perAccount).map(s => s.label),
     get hasEgress() {
-      return this.webDomains.length > 0 || this.remoteToolServers.length > 0 || this.credentialPlugins.length > 0 || this.webSearchEngine !== null
+      return this.webDomains.length > 0 || this.remoteToolServers.length > 0 || this.credentialPlugins.length > 0 || this.webSearchEngine !== null || this.commandsReachNetwork
     },
   }
 }
@@ -773,6 +786,10 @@ function buildDataHandling(egress, account, toolNames) {
   if (egress.credentialPlugins.length) {
     const list = egress.credentialPlugins.map(p => p.name).join(', ')
     parts.push(`These installed plugins hold a credential for an external service and can send data there when called: ${list}.`)
+  }
+
+  if (egress.commandsReachNetwork) {
+    parts.push('Programs run with run_command execute on the Redstart server and can reach any host on the network or the internet (a git clone, an npm install), so what they send and fetch is not limited to the destinations named here.')
   }
 
   // Spec §7: unsubstantiated terms are STATED, never omitted. Silence about a

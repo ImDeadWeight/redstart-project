@@ -194,6 +194,10 @@ export type RedstartAPI = {
     setWebSearch: (config: { searxngUrl?: string | null; braveApiKey?: string; clearBraveApiKey?: boolean }) => Promise<{ ok: boolean; error?: string }>
     setPython: (config: { maxKernels?: number; timeoutS?: number; workspaceCapMb?: number; accountCapMb?: number }) => Promise<{ ok: boolean; error?: string }>
     installPython: () => Promise<{ ok: boolean; error?: string }>
+    // run_command's allowlist and limits. `executables` is the list as typed
+    // (names or absolute paths); the daemon resolves each one and refuses the
+    // whole save, with the reason, if any one cannot be used.
+    setTerminal: (config: { executables?: string[]; defaultTimeoutS?: number; maxTimeoutS?: number; outputCapBytes?: number; extraDirs?: string[] }) => Promise<{ ok: boolean; error?: string }>
   }
   plugins: {
     list: () => Promise<PluginSummary[]>
