@@ -1031,6 +1031,34 @@ if (bench) {
     }
   })
 
+  await test('measure-tool-cache H5: a discovery turn pins the withheld tool, compaction keeps the id, each variant has its own id', async () => {
+    const mtc = await import('./measure-tool-cache.mjs')
+    const before = nest.state.completionBodies.length
+    const lines = []
+    const results = await mtc.main(['--gateway', `http://127.0.0.1:${port}`, '--turns', '3', '--discover', 'read_file', '--discover-at', '1', '--compact-at', '3'],
+      { log: (s) => lines.push(s), conversation: ['[script:chat] first', 'second', 'third'] })
+    const server = results[0].rows
+    assert(!server[0].names.includes('read_file'), `turn 1 sent the withheld tool: ${server[0].names}`)
+    assert(server[1].names.includes('read_file') && server[1].setChanged, 'the search hit was not pinned on the next turn')
+    assert(server[1].added.some((a) => a.startsWith('read_file:')), `came in: ${server[1].added}`)
+    eq([server[0].discovery, server[2].compacted], [true, true], 'the turns are marked')
+    const bodies = nest.state.completionBodies.slice(before).filter((b) => b.redstart_conversation_id)
+    const ids = [...new Set(bodies.map((b) => b.redstart_conversation_id))]
+    eq(ids.length, 2, 'one conversation id per variant, kept across compaction')
+    assert(bodies.filter((b) => b.redstart_retrieval === false).every((b) => !b.redstart_retrieval_withhold), 'the off variant withheld')
+    assert(bodies.filter((b) => b.redstart_retrieval !== false).every((b) => JSON.stringify(b.redstart_retrieval_withhold) === '["read_file"]'), 'a server turn did not withhold')
+    const turn2 = bodies.find((b) => b.messages.some((m) => m.role === 'tool'))
+    assert(turn2?.messages.some((m) => m.tool_calls?.[0]?.function.name === 'search_tools'), 'no search_tools call before the hit')
+    const turn3 = bodies.filter((b) => b.redstart_retrieval !== false).at(-1)
+    assert(/^\[Summary of the conversation so far\]/.test(turn3.messages[0].content), 'turn 3 was not compacted')
+    assert(lines.some((l) => l.startsWith('| 3 (compacted) |')) && lines.some((l) => l.startsWith('| 1 (search_tools reply) |')), lines.join('\n'))
+    for (const bad of [['--discover', 'x'], ['--discover', 'x', '--discover-at', '3', '--turns', '3'], ['--compact-at', '1']]) {
+      let e = null
+      try { mtc.parseArgs(bad) } catch (err) { e = err }
+      assert(e, `${bad.join(' ')} was accepted`)
+    }
+  })
+
   await test('summary: pass rate and per-task passes', async () => {
     const s = bench.summary
     eq([s.runs, s.tasks.reduce((a, t) => a + t.passes, 0)], [13, 10], 'runs, passes')
