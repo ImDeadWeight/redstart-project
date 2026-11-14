@@ -157,6 +157,12 @@ export const BUILTIN_CAPABILITIES = [
     kind: 'capability',
     description: 'Search open academic literature (OpenAlex, arXiv, PubMed) — abstracts, citations, and open-access PDFs saved into the Documents folder; optional journal/category whitelist',
   },
+  {
+    id: 'terminal',
+    name: 'Terminal',
+    kind: 'capability',
+    description: "Lets the assistant run programs an administrator lists (git, node, npm, ...) with an argument list, no shell, in the conversation workspace. Owner account only. Not a sandbox: a command runs as this machine's user and can reach the network and every account's files. Every command asks first unless always allowed for that program and first argument. Needs Documents configured",
+  },
 ]
 
 // Maps a capability/tool ID to the actual MCP tool function names it exposes.
@@ -196,6 +202,8 @@ export const BUILTIN_CAPABILITY_TOOL_NAMES = {
   ],
   scholar: ['scholar_search', 'scholar_get', 'scholar_save_pdf'],
   python: ['run_python'],
+  // agent-runtime Phase 4. Owner only (permissions.mjs, terminal-tool.mjs).
+  terminal: ['run_command'],
   memory: ['memory_save', 'memory_search', 'memory_forget'],
   document_search: ['search_documents'],
 }
@@ -338,6 +346,9 @@ export function expandDisabledToolIds(ids = []) {
 //   write       — creates or modifies local files
 //   destructive — deletes / irreversibly removes local data
 //   network     — makes an outbound request (whitelist/SSRF-governed separately)
+//   execute     — runs a program; its effect cannot be classified statically
+//                 (agent-runtime D16). run_command only. A plugin tool can
+//                 never be given it (plugin-registry VALID_TOOL_CLASSES).
 //
 // New tools MUST be classified here; classifyTool() defaults an unknown name to
 // 'read', which is intentionally the least-privileged bucket for the gate (it
@@ -349,6 +360,7 @@ export const TOOL_CLASS = {
   write: 'write',
   destructive: 'destructive',
   network: 'network',
+  execute: 'execute',
 }
 
 export const TOOL_CLASSES = {
@@ -428,6 +440,13 @@ export const TOOL_CLASSES = {
   // files, it has no network (python-child.mjs), and nothing it does reaches
   // outside the workspace.
   run_python: 'write',
+  // Terminal (agent-runtime Phase 4) — runs an admin-listed program with an
+  // argument list. What it does depends entirely on the program and the
+  // arguments (`git status` reads, `git push` publishes, `npm install` runs
+  // install scripts), so it gets its own class instead of a guess. Its
+  // approval rule is 'prompt' with grants scoped to the executable and first
+  // argument, and it is enforced from the start (ENFORCED_TOOLS).
+  run_command: 'execute',
   // Memory — per-account facts. Saving writes; forgetting deletes with no
   // recycle bin behind it, so it is destructive and goes under the prompt's
   // confirm-every-time rule and chat-ui's always-prompt.
@@ -489,13 +508,18 @@ const RULE_STRICTNESS = { none: 0, prompt: 1, always: 2 }
 /** @type {Record<string, 'prompt' | 'always'>} */
 export const APPROVAL_OVERRIDES = {}
 
+// run_command (agent-runtime D11, D19): enforced for every client from its
+// first release, so no client can run a command without the server seeing a
+// decision or a standing grant for it.
 /** @type {Set<string>} */
-export const ENFORCED_TOOLS = new Set()
+export const ENFORCED_TOOLS = new Set(['run_command'])
 
 /** @param {string} cls */
 function ruleForClass(cls) {
   if (cls === 'destructive') return 'always'
-  if (cls === 'write') return 'prompt'
+  // execute: a decision unless a grant for that program and first argument
+  // covers it (grants are scoped for run_command, approval-grants.mjs).
+  if (cls === 'write' || cls === 'execute') return 'prompt'
   return 'none'
 }
 

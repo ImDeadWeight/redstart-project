@@ -233,13 +233,16 @@ export function approvalGate(toolName, args, approvalId, ctx) {
 function annotateTool(tool) {
   const cls = classifyTool(tool.name)
   const readOnly = cls === 'read' || cls === 'network'
+  // A command may delete, publish or fetch: the hints say the worst of it,
+  // which is the honest reading for a client that only has hints.
+  const executes = cls === 'execute'
   return {
     ...tool,
     annotations: {
       ...(tool.annotations || {}),
       readOnlyHint: readOnly,
-      destructiveHint: cls === 'destructive',
-      openWorldHint: cls === 'network',
+      destructiveHint: cls === 'destructive' || executes,
+      openWorldHint: cls === 'network' || executes,
     },
     _meta: {
       ...(tool._meta || {}),
@@ -299,7 +302,9 @@ function configFor(account) {
     ? resolveEffectiveConfig(account, activeToolsConfig, roleFor(account))
     : getAuthRequired()
       ? narrowConfig(activeToolsConfig, DENY_ALL)
-      : activeToolsConfig
+      // Through resolveEffectiveConfig, not the bare config: its auth-off
+      // branch still applies the terminal's rule (off when the LAN is let in).
+      : resolveEffectiveConfig(null, activeToolsConfig, null)
 }
 
 /**
@@ -383,7 +388,9 @@ export async function callToolAs(account, toolName, args, { conversationId, appr
       // Memory marks a save made soon after the web was read in the same
       // conversation (memory-tool.mjs). Recorded for every network-class
       // call, successful or not: an error page is web content too.
-      if (policy.cls === 'network') memoryTool.noteNetworkCall(callCtx)
+      // A command's output can carry anything from the network too (git
+      // clone, npm install), so it marks a following save the same way.
+      if (policy.cls === 'network' || policy.cls === 'execute') memoryTool.noteNetworkCall(callCtx)
       return result
     }
   }

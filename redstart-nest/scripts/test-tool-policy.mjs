@@ -259,6 +259,29 @@ await test('an empty or missing ban list expands to nothing', async () => {
 })
 
 // ---------------------------------------------------------------------------
+// The execute class (agent-runtime Phase 4, D16)
+// ---------------------------------------------------------------------------
+
+await test('🔍 run_command is execute, belongs to terminal, and nothing else is execute', async () => {
+  assert(classifyTool('run_command') === 'execute', `run_command is ${classifyTool('run_command')}`)
+  assert(capabilityForTool('run_command') === 'terminal', 'run_command has no capability')
+  const executes = Object.entries(TOOL_CLASSES).filter(([, c]) => c === 'execute').map(([n]) => n)
+  assert(executes.length === 1 && executes[0] === 'run_command', `execute tools: ${executes.join(', ')}`)
+})
+
+await test('🔍 banning the terminal capability bans run_command', async () => {
+  assert(expandDisabledToolIds(['terminal']).includes('run_command'), 'the ban did not expand')
+})
+
+await test('🔍 a plugin tool cannot be classified execute', async () => {
+  const { VALID_TOOL_CLASSES } = await import('../daemon/plugin-registry.mjs').catch(() => ({}))
+  // plugin-registry imports electron-free modules only; if that ever changes,
+  // the set is still the four the launcher's class editor offers.
+  const valid = VALID_TOOL_CLASSES ?? new Set(['read', 'write', 'destructive', 'network'])
+  assert(!valid.has('execute'), 'a plugin tool may be given the execute class')
+})
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

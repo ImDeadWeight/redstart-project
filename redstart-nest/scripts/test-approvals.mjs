@@ -58,9 +58,10 @@ await test('the host-resolved tools need no approval and are never enforced', ()
   }
 })
 
-await test('Phase 2 enforces exactly the destructive tools (D11; decided 2026-11-12)', () => {
-  eq(['delete_file', 'memory_forget', 'create_document', 'run_python', 'read_document'].map(defs.isApprovalEnforced), [true, true, false, false, false], 'enforced')
-  assert(defs.ENFORCED_TOOLS.size === 0, 'ENFORCED_TOOLS should be empty until run_command')
+await test('enforced: the destructive tools (D11, 2026-11-12) and run_command (Phase 4)', () => {
+  eq(['delete_file', 'memory_forget', 'create_document', 'run_python', 'read_document', 'run_command'].map(defs.isApprovalEnforced), [true, true, false, false, false, true], 'enforced')
+  eq([...defs.ENFORCED_TOOLS], ['run_command'], 'ENFORCED_TOOLS')
+  assert(defs.approvalRule('run_command') === 'prompt', 'run_command is not a prompt tool (grants scoped by command, D19)')
 })
 
 await test('an override can only tighten a rule, never loosen one', () => {

@@ -101,6 +101,7 @@ export const CAPABILITY_CONFIG_KEY = {
   python: 'python',
   memory: 'memory',
   document_search: 'documentSearch',
+  terminal: 'terminal',
 }
 
 /**
@@ -212,9 +213,29 @@ export function narrowConfig(config, permissions) {
  * @param {object|null} role     from roles-storage getRoleForAccount()
  */
 export function resolveEffectiveConfig(account, config, role) {
-  if (!account) return config                  // auth off — see FAIL POSTURE
-  if (account.tier === 'owner') return config  // anti-lockout
-  return narrowConfig(config, role?.permissions)
+  if (!account) return ownerOnlyTerminal(config, null)  // auth off — see FAIL POSTURE
+  if (account.tier === 'owner') return config            // anti-lockout
+  return ownerOnlyTerminal(narrowConfig(config, role?.permissions), account)
+}
+
+/**
+ * The terminal is the owner's alone (agent-runtime U3, P4-c). A command runs
+ * as the daemon's OS user and can read every account's files and the secrets
+ * key, so it is owner-equivalent access, and no role can hand it to an admin
+ * or a user: this sits OUTSIDE narrowConfig's restrict-only law, as a ceiling
+ * no permission set reaches. With auth off (account null) every caller is the
+ * same anonymous one, which is the owner's machine only while the data plane
+ * stays on loopback; with network mode on it is every device on the LAN, so
+ * the tool is off. terminal-tool.mjs checks the same again at call time.
+ *
+ * @param {object} config
+ * @param {object | null} account
+ */
+export function ownerOnlyTerminal(config, account) {
+  const t = config?.terminal
+  if (!t?.enabled) return config
+  const permitted = account ? account.tier === 'owner' : t.networkExposed !== true
+  return permitted ? config : { ...config, terminal: { ...t, enabled: false } }
 }
 
 // ---------------------------------------------------------------------------

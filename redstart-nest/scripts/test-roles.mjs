@@ -97,6 +97,10 @@ function randomConfig() {
     python: cap(),
     memory: cap(),
     documentSearch: cap(),
+    // networkExposed false: with it true, auth off turns the terminal off,
+    // which the dedicated tests below cover; here it would break the
+    // auth-off identity the fail-posture test pins.
+    terminal: { ...cap(), networkExposed: false },
     fileSystem: {
       enabled: chance(0.6),
       rootDir: 'C:/root',
@@ -124,7 +128,7 @@ function randomPermissions() {
  * on any field roles can touch? Returns a reason string, or null when fine.
  */
 function widenedAnywhere(base, narrowed) {
-  const capKeys = ['postgres', 'documents', 'sqlite', 'vault', 'git', 'scholar', 'python', 'memory', 'documentSearch', 'fileSystem']
+  const capKeys = ['postgres', 'documents', 'sqlite', 'vault', 'git', 'scholar', 'python', 'memory', 'documentSearch', 'terminal', 'fileSystem']
   for (const key of capKeys) {
     if (!base[key]) continue
     if (narrowed[key].enabled === true && base[key].enabled !== true) {
@@ -247,7 +251,47 @@ await test('🔍 the owner is never narrowed, even holding a restrictive role', 
 await test('an account with no role is not narrowed', async () => {
   const config = randomConfig()
   const out = resolveEffectiveConfig({ id: 'u', tier: 'user' }, config, null)
-  assert(JSON.stringify(out) === JSON.stringify(config), 'a role-less account was narrowed')
+  // Except the terminal, which is owner-only whatever the role (P4-c): a
+  // ceiling outside role narrowing, tested on its own below.
+  const sansTerminal = (c) => JSON.stringify({ ...c, terminal: null })
+  assert(sansTerminal(out) === sansTerminal(config), 'a role-less account was narrowed')
+  assert(out.terminal.enabled === false, 'a user-tier account kept the terminal')
+})
+
+console.log('\n-- the terminal is the owner\'s alone (agent-runtime U3, P4-c) --')
+
+const withTerminal = (networkExposed = false) => ({ ...randomConfig(), terminal: { enabled: true, executables: [{ name: 'git' }], networkExposed } })
+const GENEROUS = { permissions: { capabilities: ['terminal', 'python', 'file_system'] } }
+
+await test('🔍 an admin or a user never gets the terminal, whatever the role grants', async () => {
+  for (const tier of ['admin', 'user']) {
+    for (const role of [null, GENEROUS, RESTRICTIVE]) {
+      const out = resolveEffectiveConfig({ id: 'x', tier }, withTerminal(), role)
+      assert(out.terminal.enabled === false, `${tier} with role ${JSON.stringify(role)} kept the terminal`)
+    }
+  }
+})
+
+await test('🔍 the owner keeps the terminal, and the rest of its config is untouched', async () => {
+  const config = withTerminal(true)
+  const out = resolveEffectiveConfig({ id: 'o', tier: 'owner' }, config, RESTRICTIVE)
+  assert(out === config && out.terminal.enabled, 'the owner lost the terminal')
+})
+
+await test('🔍 auth off: the terminal stays on loopback only, and goes when the LAN is let in', async () => {
+  const local = withTerminal(false)
+  assert(resolveEffectiveConfig(null, local, null) === local, 'auth off on loopback was changed')
+  const lan = withTerminal(true)
+  const out = resolveEffectiveConfig(null, lan, null)
+  assert(out.terminal.enabled === false, 'auth off with network mode on kept the terminal')
+  assert(lan.terminal.enabled === true, 'the input config was mutated')
+  assert(JSON.stringify({ ...out, terminal: null }) === JSON.stringify({ ...lan, terminal: null }), 'more than the terminal changed')
+})
+
+await test('DENY_ALL turns the terminal off and bans run_command', async () => {
+  const out = narrowConfig(withTerminal(), DENY_ALL)
+  assert(out.terminal.enabled === false, 'DENY_ALL kept the terminal')
+  assert(out.disabledTools.includes('run_command'), 'run_command not banned')
 })
 
 await test('🔍 DENY_ALL permits nothing — the broken-invariant fallback', async () => {
