@@ -17,8 +17,10 @@ first, the order to run them in, and what a result has to show.
 | H5 cache-script discovery and compaction turns | d6669b9 | Built |
 | H6 eval harvest | — | Not started: waits for B3's transcripts |
 | H7 matrix runner | — | Not started: only if wanted |
-| p5 and drift task files | — | Not written yet |
-| B0 to B7 | — | Nothing has run on a model |
+| p5 and drift task files | 941b4ec | 11 tasks in `tasks/p5/` (8 discovery, 3 drift), every check right/wrong-tested |
+| B0 cache, Ornith | — | Run 2026-11-14: server 13.7 s prefill and 4 misses over turns 2-10, off 2.4 s and 0 (agent-bench-results.md) |
+| B0 bench, Ornith | — | Run 2026-11-14, ×3 each: on 81% pass, first tool right 87/95, File System first 7/87, 30 cache misses, 5.5 s prefill/run; off 76%, 65/94, 28/87, 1, 2.2 s. run_command was not offered to the bench account in either half |
+| B0 on the 4B, B1 to B7 | — | Not run |
 
 Deviations from the plan below, found while building:
 - **H3:** call_tool's inner arguments are always checked against the catalog
