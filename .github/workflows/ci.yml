@@ -148,6 +148,9 @@ jobs:
         env:
           REDSTART_PYODIDE_DIR: ${{ runner.temp }}/pyodide
 
+      - name: "Security: run_command executor (argv only, no shell, scrubbed env, tree kill)"
+        run: node scripts/test-command-exec.mjs
+
       - name: "Security: conversation workspaces (layout, ownership, caps, trash)"
         run: node scripts/test-conversation-workspace.mjs
 
