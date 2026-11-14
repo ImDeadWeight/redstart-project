@@ -226,6 +226,12 @@ export function computeMetrics(events, verdict, task = {}) {
   let searched = false
   let unavailableWithoutSearch = false
   const expectTools = Array.isArray(task.expectTools) ? task.expectTools : null
+  // What "discovered" looks for: the task's tools and its follow-ups' (H4),
+  // which a drift task's later turns are there to bring in.
+  const followUpTools = (task.followUps ?? []).flatMap((f) => f?.expectTools ?? [])
+  const discoverTools = expectTools || followUpTools.length ? [...(expectTools ?? []), ...followUpTools] : null
+  /** @type {{ name: string, turn: number, via: 'pin' | 'call_tool' } | null} */
+  let firstDiscoverCall = null
   /** the previous assistant turn's whole prompt (cache_n + prompt_n) */
   let lastPromptTotal = null
 
@@ -280,6 +286,8 @@ export function computeMetrics(events, verdict, task = {}) {
         via = 'call_tool'
       }
       if (!e.denied && used && expectTools?.includes(used) && !firstExpectedCall) firstExpectedCall = { name: used, turn: currentTurn, via }
+      // Not yet in the set sent so far is checked below, against turn 1.
+      if (!e.denied && used && discoverTools?.includes(used) && !firstSent?.has(used) && !firstDiscoverCall) firstDiscoverCall = { name: used, turn: currentTurn, via }
     }
     if (e.type === 'tool_result') {
       if (e.isError) toolErrors++
@@ -295,9 +303,14 @@ export function computeMetrics(events, verdict, task = {}) {
   const start = events.find((e) => e.type === 'start')?.t
   const end = events.findLast((e) => e.type === 'end')?.t
 
-  // Something to discover: an expected tool exists, and turn 1 had none.
-  const toDiscover = expectTools && firstSent && !expectTools.some((n) => firstSent.has(n))
-  const discovered = toDiscover ? !!firstExpectedCall : null
+  // Something to discover: a tool to look for that turn 1 was not sent. For
+  // a single-prompt task that means none of expectTools was; a follow-up's
+  // tools are judged one by one, since turn 1 may well have had the first.
+  const missing = discoverTools && firstSent ? discoverTools.filter((n) => !firstSent.has(n)) : []
+  const toDiscover = !!discoverTools && !!firstSent && (followUpTools.length
+    ? missing.length > 0
+    : !discoverTools.some((n) => firstSent.has(n)))
+  const discovered = toDiscover ? !!firstDiscoverCall : null
   const firstToolExpected = firstTool !== null && expectTools ? expectTools.includes(firstTool) : null
   const hasWorkspaceFixture = Array.isArray(task.fixtures) && task.fixtures.some((f) => (f.space ?? 'workspace') === 'workspace')
 
@@ -334,8 +347,8 @@ export function computeMetrics(events, verdict, task = {}) {
     callToolCalls,
     callToolBadArgs,
     discovered,
-    discoveryPath: discovered ? firstExpectedCall.via : null,
-    turnsToDiscovery: discovered ? firstExpectedCall.turn - 1 : null,
+    discoveryPath: discovered ? firstDiscoverCall.via : null,
+    turnsToDiscovery: discovered ? firstDiscoverCall.turn - 1 : null,
     unavailableWithoutSearch,
     // The first call was not one of them; did one come later? The search for
     // it does not count as the first tool here (it is no choice of the task's).

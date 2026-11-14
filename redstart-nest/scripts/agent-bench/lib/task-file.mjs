@@ -135,7 +135,26 @@ export async function loadTask(file) {
   if (!Array.isArray(withhold) || !withhold.every((n) => typeof n === 'string' && n)) fail(file, 'withhold must be an array of tool names')
   const pinnedWithheld = withhold.filter((n) => ALWAYS_PINNED_TOOL_NAMES.includes(n))
   if (pinnedWithheld.length) fail(file, `withhold names always-pinned tools, which are never withheld: ${pinnedWithheld.join(', ')}`)
-  if (withhold.length && !expectTools) fail(file, 'a task that withholds tools needs expectTools, the tools it has to find')
+
+  // Later user messages (benchmarks H4): each is sent after the model's
+  // final reply to the one before, in the same conversation, so a task's
+  // topic can move (B4's drift tasks). A string, or { prompt, expectTools }:
+  // the tools that follow-up should bring in, which "discovered" counts with
+  // the task's own. The one check judges the end of the whole conversation.
+  const rawFollowUps = raw.followUps ?? []
+  if (!Array.isArray(rawFollowUps)) fail(file, 'followUps must be an array')
+  const followUps = rawFollowUps.map((f, i) => {
+    const fu = typeof f === 'string' ? { prompt: f } : f
+    if (!fu || typeof fu.prompt !== 'string' || !fu.prompt.trim()) fail(file, `followUps[${i}] needs a prompt`)
+    const fuExpect = fu.expectTools ?? null
+    if (fuExpect !== null && (!Array.isArray(fuExpect) || !fuExpect.every((n) => typeof n === 'string' && n))) {
+      fail(file, `followUps[${i}].expectTools must be an array of tool names`)
+    }
+    return { prompt: fu.prompt, expectTools: fuExpect }
+  })
+  if (withhold.length && !expectTools && !followUps.some((f) => f.expectTools)) {
+    fail(file, 'a task that withholds tools needs expectTools (its own or a follow-up\'s), the tools it has to find')
+  }
 
   if (typeof raw.check !== 'string' || !raw.check.includes('#')) fail(file, 'check must be "<module>#<export>"')
   const [modPath, exportName] = raw.check.split('#')
@@ -154,6 +173,7 @@ export async function loadTask(file) {
     requires,
     expectTools,
     withhold,
+    followUps,
     limits,
     checkName: raw.check,
     check,

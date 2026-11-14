@@ -219,16 +219,32 @@ export function requiresWarning(tasks, mcpTools) {
 }
 
 /**
- * The tasks this run can measure, and the ids of the ones it cannot: a task
- * with `withhold` needs retrieval on and the bench making the requests.
+ * Why this run cannot measure a task, or null. A task with `withhold`
+ * (benchmarks H2) needs retrieval on and the bench making the requests; one
+ * with `followUps` (H4) needs the bench hosting the loop, which sends them.
  *
- * @param {Array<{ id: string, withhold?: string[] }>} tasks
+ * @param {{ withhold?: string[], followUps?: unknown[] }} task
+ * @param {{ retrieval?: string, runtime?: boolean }} opts
+ * @returns {string | null}
+ */
+export function cannotRun(task, opts) {
+  if (task.withhold?.length && opts.retrieval === 'off') return 'withholds a tool, and --retrieval off sends every tool'
+  if (task.withhold?.length && opts.runtime) return 'withholds a tool, and under --runtime the daemon makes the requests'
+  if (task.followUps?.length && opts.runtime) return 'has follow-ups, which --runtime cannot send'
+  return null
+}
+
+/**
+ * The tasks this run can measure, and the ones it cannot, each with why.
+ *
+ * @param {Array<{ id: string, withhold?: string[], followUps?: unknown[] }>} tasks
  * @param {{ retrieval?: string, runtime?: boolean }} opts
  */
-export function splitWithholdTasks(tasks, opts) {
-  const cannot = opts.retrieval === 'off' || !!opts.runtime
-  const runnable = (t) => !cannot || !(t.withhold?.length)
-  return { tasks: tasks.filter(runnable), skipped: tasks.filter((t) => !runnable(t)).map((t) => t.id) }
+export function splitRunnableTasks(tasks, opts) {
+  return {
+    tasks: tasks.filter((t) => !cannotRun(t, opts)),
+    skipped: tasks.filter((t) => cannotRun(t, opts)).map((t) => `${t.id} (${cannotRun(t, opts)})`),
+  }
 }
 
 /** Conversations an earlier bench left behind: it was stopped mid-task. */
@@ -345,11 +361,9 @@ export async function main(argv, io = {}) {
   if (files.length === 0) throw new Error(`no task files match ${opts.tasks}`)
   const loaded = []
   for (const f of files) loaded.push(await loadTask(f))
-  // A task that withholds a tool (benchmarks H2) measures nothing with
-  // retrieval off (every tool is sent) or under --runtime (the daemon makes
-  // the requests and cannot be told to withhold). Skipped, and named.
-  const { tasks, skipped } = splitWithholdTasks(loaded, opts)
-  if (tasks.length === 0) throw new Error(`every task matched withholds a tool, which ${opts.runtime ? '--runtime' : '--retrieval off'} cannot run: ${skipped.join(', ')}`)
+  // Tasks this run cannot measure (cannotRun): skipped, and named with why.
+  const { tasks, skipped } = splitRunnableTasks(loaded, opts)
+  if (tasks.length === 0) throw new Error(`no task matched can run with these flags: ${skipped.join('; ')}`)
 
   let nest
   let mcpTools
@@ -376,7 +390,7 @@ export async function main(argv, io = {}) {
   const model = await nest.modelInfo()
   const warnings = []
   if (skipped.length) {
-    const w = `warning: skipped ${skipped.length} task(s) that withhold a tool, which ${opts.runtime ? '--runtime' : '--retrieval off'} cannot run: ${skipped.join(', ')}`
+    const w = `warning: skipped ${skipped.length} task(s) these flags cannot run: ${skipped.join('; ')}`
     warnings.push(w)
     log(w)
   }

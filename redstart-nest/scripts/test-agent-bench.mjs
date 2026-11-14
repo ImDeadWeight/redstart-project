@@ -169,6 +169,12 @@ const SCRIPTS = {
   textask: (turn, messages) => (turn === 0
     ? [chunk({ content: 'Happy to. What name should I sign it with?' })]
     : [chunk({ content: `Signed it: ${[...messages].reverse().find((m) => m.role === 'user')?.content}` })]),
+  // Benchmarks H4: answers the first message, then needs read_file for the follow-up.
+  drift: (turn, messages) => (turn === 0
+    ? [chunk({ content: 'Noted.' })]
+    : turn === 1
+      ? [toolCallChunk('d1', 'read_file', '{"path": "data.txt"}')]
+      : [chunk({ content: `It says ${/secret: (\d+)/.exec(lastToolResult(messages))?.[1] ?? 'unknown'}.` })]),
   chat: () => [chunk({ content: 'ok' })],
   forever: () => [toolCallChunk(`c${Math.random().toString(36).slice(2, 8)}`, 'read_file', '{"path": "data.txt"}')],
   hang: () => 'hang',
@@ -1114,7 +1120,42 @@ await test('benchmarks H2: a task\'s withhold reaches every request, the report 
   const lines = []
   const off = await main(argv('--retrieval', 'off'), { log: (s) => lines.push(s) })
   eq(off.runs.map((x) => x.taskId), ['plain-read'], 'only the plain task ran')
-  assert(lines.some((l) => /skipped 1 task\(s\) that withhold a tool, which --retrieval off cannot run: withheld-read/.test(l)), lines.join('\n'))
+  assert(lines.some((l) => /skipped 1 task\(s\) these flags cannot run: withheld-read \(withholds a tool, and --retrieval off sends every tool\)/.test(l)), lines.join('\n'))
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+await test('benchmarks H4: follow-ups are sent after each final reply, in one conversation, and their tools are what discovery looks for', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-followups-'))
+  const checks = path.join(FIXTURES, 'checks.mjs').replace(/\\/g, '/')
+  fs.writeFileSync(path.join(dir, 'drift.json'), JSON.stringify({
+    id: 'drift', prompt: '[script:drift] Remember the word kestrel.', approve: 'all',
+    fixtures: [{ path: 'data.txt', content: fs.readFileSync(path.join(FIXTURES, 'data.txt'), 'utf8') }],
+    withhold: ['read_file'],
+    followUps: [{ prompt: 'Now, what is the secret in data.txt?', expectTools: ['read_file'] }],
+    check: `${checks}#saysSeven`,
+  }))
+  const before = nest.state.completionBodies.length
+  const r = await main(['--model-label', 'm', '--tasks', dir, '--gateway', `http://127.0.0.1:${port}`, '--out', path.join(dir, 'out'), '--quiet'], { log: () => {} })
+  const run = r.runs[0]
+  eq(run.verdict.pass, true, run.verdict.reason)
+  eq(run.events.filter((e) => e.type === 'follow_up').map((e) => e.prompt), ['Now, what is the secret in data.txt?'], 'the follow-up is logged')
+  const last = nest.state.completionBodies.at(-1).messages
+  eq(last.filter((m) => m.role === 'user').length, 2, 'both user messages in one conversation')
+  assert(last.some((m) => m.role === 'assistant' && m.content === 'Noted.'), 'the first reply was not kept before the follow-up')
+  eq(new Set(nest.state.completionBodies.slice(before).map((b) => b.redstart_conversation_id)).size <= 1, true, 'one conversation id')
+  eq([run.metrics.discovered, run.metrics.turnsToDiscovery, run.metrics.firstToolExpected], [true, 1, null], 'found on the follow-up; the first tool is not judged without the task\'s own expectTools')
+  // --runtime cannot send them.
+  const { cannotRun } = await import('./agent-bench/run.mjs')
+  eq(cannotRun({ followUps: [{ prompt: 'x' }] }, { runtime: true }), 'has follow-ups, which --runtime cannot send', 'runtime')
+  eq(cannotRun({ followUps: [{ prompt: 'x' }] }, { retrieval: 'off' }), null, 'retrieval off is fine')
+  // The loader.
+  for (const [raw, want] of [[{ followUps: 'x' }, /followUps must be an array/], [{ followUps: [{}] }, /followUps\[0\] needs a prompt/], [{ followUps: [{ prompt: 'x', expectTools: 'y' }] }, /expectTools must be an array/]]) {
+    const f = path.join(dir, 'bad.json')
+    fs.writeFileSync(f, JSON.stringify({ id: 'b', prompt: 'x', check: `${checks}#saysSeven`, ...raw }))
+    let e = null
+    try { await loadTask(f) } catch (err) { e = err }
+    assert(want.test(e?.message ?? ''), `got ${e?.message}`)
+  }
   fs.rmSync(dir, { recursive: true, force: true })
 })
 

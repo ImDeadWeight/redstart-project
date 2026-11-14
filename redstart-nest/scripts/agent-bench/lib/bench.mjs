@@ -510,20 +510,33 @@ export async function runTask(nest, task, opts) {
             }),
           },
         }
-        await runAgentLoop(loopParams)
         // --text-asks answer: a reply that ends in a question to the user is
         // answered like a chat user would, from the task's `answers`, and the
         // run goes on. Off by default (it ends the run, as before). The probe
         // (probe-ask.mjs, 2026-11-11) found the 35B asks this way, not through
         // ask_user, whenever the user invites questions.
-        for (let round = 0; opts.textAsks === 'answer' && round < MAX_TEXT_ASKS && !controller.signal.aborted; round++) {
-          if (!endsInQuestion(finalText)) break
-          const answer = answerFromTask(task.answers, { question: finalText })
-          const reply = formatTextAskReply(answer)
-          log({ type: 'text_ask', question: finalText.slice(-400), answered: !!answer, reply })
-          messages.push({ role: 'assistant', content: finalText }, { role: 'user', content: reply })
+        const answerTextAsks = async () => {
+          for (let round = 0; opts.textAsks === 'answer' && round < MAX_TEXT_ASKS && !controller.signal.aborted; round++) {
+            if (!endsInQuestion(finalText)) break
+            const answer = answerFromTask(task.answers, { question: finalText })
+            const reply = formatTextAskReply(answer)
+            log({ type: 'text_ask', question: finalText.slice(-400), answered: !!answer, reply })
+            messages.push({ role: 'assistant', content: finalText }, { role: 'user', content: reply })
+            finalText = ''
+            await runAgentLoop(loopParams)
+          }
+        }
+        await runAgentLoop(loopParams)
+        await answerTextAsks()
+        // Follow-ups (benchmarks H4): the next user message, after the final
+        // reply, as a chat user would send it. A time limit ends them too.
+        for (const [index, fu] of (task.followUps ?? []).entries()) {
+          if (controller.signal.aborted) break
+          log({ type: 'follow_up', index, prompt: fu.prompt })
+          messages.push({ role: 'assistant', content: finalText }, { role: 'user', content: fu.prompt })
           finalText = ''
           await runAgentLoop(loopParams)
+          await answerTextAsks()
         }
       } catch (err) {
         error = err.message
