@@ -95,11 +95,21 @@ The gateway rewrites the request before forwarding:
   came into this conversation and why, as `name=turn:why` comma-separated;
   `turn` counts user messages, `why` is `first`, `scored`, `called`,
   `search`, `describe`, `always` or `family`; empty when retrieval did not
-  select) and `x-redstart-tools-would-add` (how many tools a frozen tool set
-  left out this turn); all five are listed in
+  select), `x-redstart-tools-would-add` (how many tools a frozen tool set
+  left out this turn) and `x-redstart-retrieval-config` (the retrieval
+  settings the request ran with, as fixed-order `key=value` pairs separated
+  by `;`: `scorer`, `growth`, `text`, `min`, `callTool`, `floor`, `rel`,
+  `margin`; `off` when retrieval did not run); all six are listed in
   `Access-Control-Expose-Headers`. Only the literal `true` asks; the field is
   consumed and never forwarded. The names go to the caller only, never to the
   log
+- `redstart_retrieval_withhold` — an array of up to 64 tool names that
+  retrieval leaves out of its selection. For testing discovery (the agent
+  bench uses it): a withheld tool is still found by `search_tools` and
+  `describe_tool`, and once one of them (or a call) brings it in, it stays.
+  The memory, discovery and host-resolved tools are never withheld. It can
+  only narrow the list, so bans are unaffected; anything but an array of
+  names is ignored. Consumed and never forwarded
 - `redstart_project` — the **id** of one of the caller's own projects (from
   `GET /projects`). Nest adds that project's instructions and memories to the
   prompt. An id the caller can't read adds nothing; the field is consumed and

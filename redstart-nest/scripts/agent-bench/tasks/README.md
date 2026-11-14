@@ -113,6 +113,27 @@ sets, the cache-miss turns and the prefill time. `--retrieval off` runs a task
 with every post-ban tool (the request opts out, so Nest's setting can stay as
 it is). Neither works with `--runtime`, where the daemon makes the requests.
 
+**Benchmarks harness (2026-11-13, `docs/notes/tool-retrieval-fixes-benchmarks.md`).**
+Four more task fields and flags, for the retrieval benchmarks B0 to B5:
+
+- `withhold: ["list_documents"]`: retrieval leaves those tools out of the
+  selection until a search, a describe or a call brings them in. This is how
+  a p5 task makes its tool something the model has to find. It needs
+  `expectTools`, its own or a follow-up's. Always-pinned tools (memory,
+  discovery, ask_user, update_plan) are refused. Skipped, by name, under
+  `--retrieval off` and `--runtime`.
+- `followUps: ["...", { "prompt": "...", "expectTools": [...] }]`: later user
+  messages, each sent after the final reply to the one before, in the same
+  conversation. The one check judges the end. Skipped under `--runtime`.
+- `--expect-retrieval scorer=fused,growth=pins-only`: one probe request reads
+  Nest's retrieval settings, and the bench stops before the first task if they
+  differ. Every run records the settings per turn anyway, and the summary
+  warns when they changed mid-run.
+- The summary's discovery line: tools found (directly or through call_tool)
+  and in how many turns, the discovery tool calls, call_tool's bad arguments,
+  "said unavailable without searching", recovery after a wrong first tool, and
+  "File System first" on attachment tasks.
+
 `fixtures/` is byte-stable (`.gitattributes`: `-text`). The data files were
 generated with a fixed seed. Checks compute their expected answers from these
 files, so edit a fixture and its check follows.

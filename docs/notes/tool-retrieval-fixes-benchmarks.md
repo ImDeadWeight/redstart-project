@@ -6,7 +6,44 @@ every decision still waiting on a number. This file is the plan for getting
 those numbers: which benchmark answers which held row, what has to be built
 first, the order to run them in, and what a result has to show.
 
-Nothing here has been run. The bars under each benchmark are **proposals**.
+## Status (2026-11-13)
+
+| Piece | Commit | State |
+|---|---|---|
+| H1 settings header, `--expect-retrieval` | 7856e5c | Built, tested on the fake Nest |
+| H3 discovery metrics | b2d17f5 | Built |
+| H2 `redstart_retrieval_withhold`, task `withhold` | 49bf410 | Built |
+| H4 `followUps` | 3c78dee | Built |
+| H5 cache-script discovery and compaction turns | d6669b9 | Built |
+| H6 eval harvest | — | Not started: waits for B3's transcripts |
+| H7 matrix runner | — | Not started: only if wanted |
+| p5 and drift task files | — | Not written yet |
+| B0 to B7 | — | Nothing has run on a model |
+
+Deviations from the plan below, found while building:
+- **H3:** call_tool's inner arguments are always checked against the catalog
+  schema, when the call is logged (`innerArgsProblem`). That schema is what
+  describe_tool returns, so the plan's two sources are one. The phrase cases
+  for `unavailableWithoutSearch` live in `test-agent-bench.mjs`, not in
+  `test-agent-bench-tasks.mjs`.
+- **H3:** the "unavailable" phrases cover tools and abilities only. "returns.csv
+  is not available" is a right answer on p1-plan-missing-input.
+- **H2:** withhold is applied inside `selectTools`, not as a filter in front
+  of it. Otherwise family expansion brings a withheld File System tool
+  straight back when one of its siblings is selected.
+- **H2:** on a fail-open turn (no embedder, an empty selection), every tool is
+  sent, the withheld ones included. That follows the fail-open rule. The
+  bench reads it correctly: turn 1 had the tool, so `discovered` is null.
+- **H4:** one check per task, over the end state. The plan offered a check
+  per follow-up. Add that only when a task needs it.
+- **H5:** each variant of measure-tool-cache now has its own conversation id.
+  Without one, a second run started from the first run's set, because the
+  key hashed the same first message. Every earlier run of the script was
+  the first, so no recorded number is affected.
+- **H5:** the fake Nest has no selection memory, so "compaction keeps the
+  set" is checked only live (B6 case 7).
+
+The bars under each benchmark are **proposals**.
 U1 to U6 belong to the user. A bar here is a starting point for that
 decision, not a substitute for it.
 
