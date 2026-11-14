@@ -403,6 +403,9 @@ export async function runTask(nest, task, opts) {
                   redstart_retrieval_report: true,
                   // --retrieval off: every post-ban tool, whatever Nest is set to.
                   ...(opts.retrieval === 'off' ? { redstart_retrieval: false } : {}),
+                  // The task's tools left out of the selection on purpose
+                  // (benchmarks H2); run.mjs skips such a task with --retrieval off.
+                  ...(task.withhold?.length ? { redstart_retrieval_withhold: task.withhold } : {}),
                 }
                 const res = await nest.completion(body, signal)
                 const report = toolsSentReport(res.headers)

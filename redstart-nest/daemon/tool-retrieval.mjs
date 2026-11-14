@@ -515,7 +515,12 @@ export function rescore({ scored, keyword, scorer = 'cosine', k = RRF_K }) {
  *   families?: Iterable<Iterable<string>>,
  *   growth?: 'scored' | 'pins-only',
  *   minTools?: number,
+ *   withhold?: Iterable<string>,
  * }} args
+ *   `withhold` (benchmarks H2): names never chosen by score, by the minimum
+ *   or by a family, so a benchmark can leave the tool a task needs out of
+ *   the selection on purpose. A pinned or carried tool is not withheld: once
+ *   a search, a describe or a call brings it in, it stays, as any tool does.
  *   `growth` (second pass 4.1): with `previous` and 'pins-only', the set is
  *   frozen after the first selection: `previous` plus the pins (and their
  *   families), never a newly scored tool, so the prompt ahead of the chat
@@ -536,11 +541,13 @@ export function rescore({ scored, keyword, scorer = 'cosine', k = RRF_K }) {
  *   Y" and memory_forget was dropped, so the model said it had no way to
  *   forget and told the user it had, with the memory still saved.
  */
-export function selectTools({ scored, pins, previous, budgetTokens = Infinity, floor = 0, relativeFloor = 0, margin = 0, families = [], growth = 'scored', minTools = 0 }) {
+export function selectTools({ scored, pins, previous, budgetTokens = Infinity, floor = 0, relativeFloor = 0, margin = 0, families = [], growth = 'scored', minTools = 0, withhold = [] }) {
   const entries = Array.isArray(scored) ? scored : []
   const pinned = new Set(pins ?? [])
   const carried = new Set(previous ?? [])
   const frozen = growth === 'pins-only' && carried.size > 0
+  const held = new Set(withhold ?? [])
+  const isHeld = (name) => held.has(name) && !pinned.has(name) && !carried.has(name)
 
   /** @type {Map<string, { tool: any, name: string, score: number }>} */
   const included = new Map()
@@ -575,7 +582,7 @@ export function selectTools({ scored, pins, previous, budgetTokens = Infinity, f
   let scoredCount = 0
 
   for (const entry of entries) {
-    if (target.has(entry.name)) continue
+    if (target.has(entry.name) || isHeld(entry.name)) continue
     if (entry.score < effectiveFloor) { floorBit = true; continue }
     if (weakestIncluded !== null && entry.score < weakestIncluded + margin) { marginBit = true; continue }
     const cost = estimateToolTokens(entry.tool)
@@ -595,7 +602,7 @@ export function selectTools({ scored, pins, previous, budgetTokens = Infinity, f
   if (!frozen && carried.size === 0 && scoredCount < minimum && !budgetBit) {
     for (const entry of entries) {
       if (scoredCount >= minimum) break
-      if (included.has(entry.name)) continue
+      if (included.has(entry.name) || isHeld(entry.name)) continue
       const cost = estimateToolTokens(entry.tool)
       if (spent + cost > budgetTokens) { budgetBit = true; break }
       included.set(entry.name, entry)
@@ -608,7 +615,7 @@ export function selectTools({ scored, pins, previous, budgetTokens = Infinity, f
     const members = [...family]
     if (!members.some((n) => included.has(n))) continue
     for (const entry of entries) {
-      if (members.includes(entry.name) && !included.has(entry.name)) included.set(entry.name, entry)
+      if (members.includes(entry.name) && !included.has(entry.name) && !isHeld(entry.name)) included.set(entry.name, entry)
     }
   }
 
@@ -774,6 +781,24 @@ export function conversationKey(messages, accountId, conversationId = null) {
  */
 export function isConversationId(id) {
   return typeof id === 'string' && id.length > 0 && id.length <= 128 && /^[\x21-\x7e]+$/.test(id)
+}
+
+/** The most names one request may withhold (benchmarks H2). */
+export const MAX_WITHHELD = 64
+
+/**
+ * The tool names a request asks retrieval to leave out of its selection
+ * (`redstart_retrieval_withhold`, benchmarks H2): the strings of at most 128
+ * characters from an array of at most MAX_WITHHELD. Anything else gives [],
+ * never an error. Only ever narrows a selection, so it is safe from any
+ * client, like opting out.
+ *
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+export function withheldToolNames(value) {
+  if (!Array.isArray(value) || value.length > MAX_WITHHELD) return []
+  return value.filter((n) => typeof n === 'string' && n.length > 0 && n.length <= 128)
 }
 
 /**

@@ -39,7 +39,7 @@ import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/docume
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
 import { filterRequestTools, estimateMessagesTokens, recordWireCost, retrievalConfigSummary } from './tool-filter.mjs'
-import { isConversationId } from './tool-retrieval.mjs'
+import { isConversationId, withheldToolNames } from './tool-retrieval.mjs'
 
 let gatewayServer = null
 
@@ -284,6 +284,16 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   const conversationId = isConversationId(parsed.redstart_conversation_id) ? parsed.redstart_conversation_id : null
   delete parsed.redstart_conversation_id
 
+  // Redstart-specific request field: `redstart_retrieval_withhold`, tool
+  // names retrieval leaves out of its selection (benchmarks H2), so the
+  // agent bench can make a task's tool something the model has to find. It
+  // can only narrow, like opting out: a withheld tool is still in the
+  // catalog search_tools and describe_tool search (which stays post-ban), and
+  // a pin (a search hit, a describe, a call, the always-pinned tools) is
+  // never withheld. Consumed either way so llama-server never sees it.
+  const withhold = withheldToolNames(parsed.redstart_retrieval_withhold)
+  delete parsed.redstart_retrieval_withhold
+
   // BANS FIRST, PROMPT SECOND — and every value the prompt is derived
   // from is read AFTER this line. The capability claims must describe
   // what the model actually received this turn, which is the payload the
@@ -343,6 +353,7 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
       ctxSize: effectiveConfig.ctxSize,
       reservedTokens: estimateMessagesTokens(pinsOnlyPrompt),
       record: retrievalRecord,
+      withhold,
     })
   }
 

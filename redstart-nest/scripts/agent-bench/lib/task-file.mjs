@@ -36,6 +36,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { ALWAYS_PINNED_TOOL_NAMES } from '../../../daemon/tool-filter.mjs'
 
 // 30 turns since 2026-11-11 (it was 10): the owner's call, 10 cut off runs that
 // were still making progress. Rows in agent-bench-results.md before that date
@@ -125,6 +126,17 @@ export async function loadTask(file) {
     fail(file, 'expectTools must be a non-empty array of tool names')
   }
 
+  // Tools retrieval leaves out of the selection on purpose (benchmarks H2,
+  // the p5 tasks), sent as redstart_retrieval_withhold. The gateway never
+  // withholds an always-pinned tool, so naming one here is refused: the task
+  // would claim to test something it does not. A withholding task needs
+  // expectTools, or there is nothing for "discovered" to be judged on.
+  const withhold = raw.withhold ?? []
+  if (!Array.isArray(withhold) || !withhold.every((n) => typeof n === 'string' && n)) fail(file, 'withhold must be an array of tool names')
+  const pinnedWithheld = withhold.filter((n) => ALWAYS_PINNED_TOOL_NAMES.includes(n))
+  if (pinnedWithheld.length) fail(file, `withhold names always-pinned tools, which are never withheld: ${pinnedWithheld.join(', ')}`)
+  if (withhold.length && !expectTools) fail(file, 'a task that withholds tools needs expectTools, the tools it has to find')
+
   if (typeof raw.check !== 'string' || !raw.check.includes('#')) fail(file, 'check must be "<module>#<export>"')
   const [modPath, exportName] = raw.check.split('#')
   const mod = await import(pathToFileURL(path.resolve(dir, modPath)).href)
@@ -141,6 +153,7 @@ export async function loadTask(file) {
     answers,
     requires,
     expectTools,
+    withhold,
     limits,
     checkName: raw.check,
     check,

@@ -36,6 +36,8 @@ import {
   createBm25Index,
   rescore,
   RRF_K,
+  withheldToolNames,
+  MAX_WITHHELD,
 } from '../daemon/tool-retrieval.mjs'
 import * as searchProvider from '../daemon/search-tools-provider.mjs'
 const { retrievalStatus, syncRetrieval, applyToolsConfig, resetRetrievalState } = await import('../daemon/ipc/tools.mjs')
@@ -947,6 +949,34 @@ await test('🔍 minTools tops up a first selection by score, pins not counted, 
   assert(tight.selected.length === 2 && tight.reason === 'budget', `the minimum broke the budget: ${tight.selected.map(toolName)}`)
   const later = selectTools({ scored, previous: ['a'], relativeFloor: 0.85, minTools: 3 })
   assert(later.selected.map(toolName).join() === 'a', `the minimum applied to a later turn: ${later.selected.map(toolName)}`)
+})
+
+await test('🔍 a withheld tool is never chosen by score, by the minimum or by a family (benchmarks H2)', () => {
+  const scored = scoredList([['a', 0.9], ['b', 0.89], ['c', 0.4], ['d', 0.3]])
+  const byScore = selectTools({ scored, relativeFloor: 0.85, withhold: ['a'] })
+  assert(byScore.selected.map(toolName).join() === 'b', `by score: ${byScore.selected.map(toolName)}`)
+  const byMinimum = selectTools({ scored, relativeFloor: 0.85, minTools: 3, withhold: ['c'] })
+  assert(byMinimum.selected.map(toolName).join() === 'a,b,d', `by the minimum: ${byMinimum.selected.map(toolName)}`)
+  const byFamily = selectTools({ scored, relativeFloor: 0.85, families: [['a', 'c']], withhold: ['c'] })
+  assert(!byFamily.selected.map(toolName).includes('c'), `by a family: ${byFamily.selected.map(toolName)}`)
+  const none = selectTools({ scored, relativeFloor: 0.85 })
+  assert(none.selected.map(toolName).join() === 'a,b', 'an empty withhold changes nothing')
+})
+
+await test('🔍 a pinned or carried tool is not withheld: once found, it stays (benchmarks H2)', () => {
+  const scored = scoredList([['a', 0.9], ['b', 0.89], ['found', 0.1]])
+  const pinned = selectTools({ scored, pins: ['found'], relativeFloor: 0.85, withhold: ['found'] })
+  assert(pinned.selected.map(toolName).includes('found'), `a search hit was withheld: ${pinned.selected.map(toolName)}`)
+  const carried = selectTools({ scored, previous: ['a', 'found'], relativeFloor: 0.85, withhold: ['found'] })
+  assert(carried.selected.map(toolName).includes('found'), `a carried tool was withheld: ${carried.selected.map(toolName)}`)
+})
+
+await test('withheldToolNames keeps short strings from a short array, and nothing from anything else', () => {
+  assert(withheldToolNames(['a', 7, '', 'b']).join() === 'a,b', 'filtering')
+  for (const bad of ['a', null, { a: 1 }, Array.from({ length: MAX_WITHHELD + 1 }, () => 'x')]) {
+    assert(withheldToolNames(bad).length === 0, `accepted ${JSON.stringify(bad).slice(0, 40)}`)
+  }
+  assert(withheldToolNames(['x'.repeat(129)]).length === 0, 'a 129-character name')
 })
 
 console.log('\n-- the selection memory --')

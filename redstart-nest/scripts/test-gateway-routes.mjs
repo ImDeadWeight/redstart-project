@@ -808,6 +808,33 @@ async function main() {
     })
   })
 
+  await test('🔒 redstart_retrieval_withhold leaves a tool out until a search finds it, never a pinned one, and is never forwarded (benchmarks H2)', async () => {
+    await withStubEmbedder(async () => {
+      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+      const tools = [toolDef('git_status'), toolDef('git_log'), toolDef('create_document'), toolDef('memory_save'), toolDef('search_tools')]
+      const ask = { role: 'user', content: 'what changed in the git repo this week' }
+      await completions({ messages: [ask], tools, redstart_retrieval_withhold: ['git_log', 'memory_save'], redstart_conversation_id: 'withhold-test' })
+      assert(!('redstart_retrieval_withhold' in lastForwarded), 'the Redstart-only field was forwarded to llama-server')
+      let names = (lastForwarded.tools || []).map(t => t.function.name)
+      assert(names.includes('git_status'), `the unwithheld match was dropped: ${names}`)
+      assert(!names.includes('git_log'), `a withheld tool was selected by score: ${names}`)
+      assert(names.includes('memory_save'), `an always-pinned tool was withheld: ${names}`)
+      // The model searches and finds it: the next turn pins it, withhold or not.
+      const found = [
+        ask,
+        { role: 'assistant', content: '', tool_calls: [{ id: 'st1', type: 'function', function: { name: 'search_tools', arguments: '{"query":"git log"}' } }] },
+        { role: 'tool', tool_call_id: 'st1', content: JSON.stringify({ match: 'close', tools: [{ name: 'git_log', description: 'x' }] }) },
+      ]
+      const res = await completions({ messages: found, tools, redstart_retrieval_withhold: ['git_log'], redstart_conversation_id: 'withhold-test', redstart_retrieval_report: true })
+      names = (lastForwarded.tools || []).map(t => t.function.name)
+      assert(names.includes('git_log'), `a search hit stayed withheld: ${names}`)
+      assert(/(^|,)git_log=\d+:search(,|$)/.test(res.headers.get('x-redstart-tools-origin') ?? ''), `origin: ${res.headers.get('x-redstart-tools-origin')}`)
+      // Malformed: ignored, not an error, and still consumed.
+      const bad = await completions({ messages: [ask], tools, redstart_retrieval_withhold: 'git_log' })
+      assert(bad.status === 200 && !('redstart_retrieval_withhold' in lastForwarded), 'a malformed withhold broke the request or was forwarded')
+    })
+  })
+
   await test('🔍 only the literal false opts out of retrieval', async () => {
     await withStubEmbedder(async () => {
       updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })

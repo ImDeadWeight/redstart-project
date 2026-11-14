@@ -218,6 +218,19 @@ export function requiresWarning(tasks, mcpTools) {
     'For delete_file: turn on Nest → Tools → File System → Allow destructive operations (server-wide).'
 }
 
+/**
+ * The tasks this run can measure, and the ids of the ones it cannot: a task
+ * with `withhold` needs retrieval on and the bench making the requests.
+ *
+ * @param {Array<{ id: string, withhold?: string[] }>} tasks
+ * @param {{ retrieval?: string, runtime?: boolean }} opts
+ */
+export function splitWithholdTasks(tasks, opts) {
+  const cannot = opts.retrieval === 'off' || !!opts.runtime
+  const runnable = (t) => !cannot || !(t.withhold?.length)
+  return { tasks: tasks.filter(runnable), skipped: tasks.filter((t) => !runnable(t)).map((t) => t.id) }
+}
+
 /** Conversations an earlier bench left behind: it was stopped mid-task. */
 export const LEFTOVER_CONVERSATION = /^bench-[a-z0-9-]+-[0-9a-f]{8}$/
 
@@ -330,8 +343,13 @@ export async function main(argv, io = {}) {
 
   const files = findTaskFiles(opts.tasks)
   if (files.length === 0) throw new Error(`no task files match ${opts.tasks}`)
-  const tasks = []
-  for (const f of files) tasks.push(await loadTask(f))
+  const loaded = []
+  for (const f of files) loaded.push(await loadTask(f))
+  // A task that withholds a tool (benchmarks H2) measures nothing with
+  // retrieval off (every tool is sent) or under --runtime (the daemon makes
+  // the requests and cannot be told to withhold). Skipped, and named.
+  const { tasks, skipped } = splitWithholdTasks(loaded, opts)
+  if (tasks.length === 0) throw new Error(`every task matched withholds a tool, which ${opts.runtime ? '--runtime' : '--retrieval off'} cannot run: ${skipped.join(', ')}`)
 
   let nest
   let mcpTools
@@ -357,6 +375,11 @@ export async function main(argv, io = {}) {
   }
   const model = await nest.modelInfo()
   const warnings = []
+  if (skipped.length) {
+    const w = `warning: skipped ${skipped.length} task(s) that withhold a tool, which ${opts.runtime ? '--runtime' : '--retrieval off'} cannot run: ${skipped.join(', ')}`
+    warnings.push(w)
+    log(w)
+  }
   const lw = labelWarning(opts.modelLabel, model?.modelFile)
   if (lw) { warnings.push(lw); log(lw) }
   const asw = askWarning(tasks, mcpTools)

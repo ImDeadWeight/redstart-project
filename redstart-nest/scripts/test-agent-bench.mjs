@@ -364,8 +364,12 @@ function startFakeNest(gatewayPort) {
       const out = body.stream === false ? null : SCRIPTS[scriptName](turn, body.messages)
       // The gateway's retrieval report (tools-gateway.mjs retrievalReportHeaders):
       // every tool sent, nothing removed, on unless the request opted out.
+      // A withheld tool (benchmarks H2) is not reported sent until a tool
+      // result in the conversation names it, as a search hit pins it.
+      const withheld = new Set((Array.isArray(body.redstart_retrieval_withhold) ? body.redstart_retrieval_withhold : [])
+        .filter((n) => !body.messages.some((m) => m.role === 'tool' && String(m.content).includes(n))))
       const report = body.redstart_retrieval_report === true ? {
-        'x-redstart-tools-sent': (body.tools ?? []).map((t) => encodeURIComponent(t.function.name)).join(','),
+        'x-redstart-tools-sent': (body.tools ?? []).map((t) => t.function.name).filter((n) => !withheld.has(n)).map(encodeURIComponent).join(','),
         'x-redstart-tools-filtered': '0',
         'x-redstart-retrieval': body.redstart_retrieval === false ? 'off' : 'on',
         // Benchmarks H1: the settings in effect, as tool-filter.mjs writes them.
@@ -1086,6 +1090,51 @@ await test('a files-space fixture lands in the File System folder, reaches the c
   assert(!nest.state.completionBodies.at(-1).messages[0].content.includes('fs-fixture.txt'), 'a files-space fixture was announced as an attachment')
   assert(nest.state.fsDeletes.includes('seeded/fs-fixture.txt'), 'the seeded file was not cleaned up')
   assert(lines.some((l) => /does not offer this account no_such_tool, so fs-fixture cannot pass/.test(l)), lines.join('\n'))
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+await test('benchmarks H2: a task\'s withhold reaches every request, the report shows it left out, and --retrieval off skips the task by name', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-withhold-'))
+  const checks = path.join(FIXTURES, 'checks.mjs').replace(/\\/g, '/')
+  const task = { id: 'withheld-read', prompt: '[script:read] What is the secret in data.txt?', approve: 'all',
+    fixtures: [{ path: 'data.txt', from: path.join(FIXTURES, 'data.txt').replace(/\\/g, '/') }],
+    expectTools: ['read_file'], withhold: ['read_file'], check: `${checks}#saysSeven` }
+  fs.writeFileSync(path.join(dir, 'withheld.json'), JSON.stringify(task))
+  fs.writeFileSync(path.join(dir, 'plain.json'), JSON.stringify({ ...task, id: 'plain-read', withhold: undefined }))
+  const argv = (...extra) => ['--model-label', 'm', '--tasks', path.join(dir, '*.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', path.join(dir, `out${extra.length}`), '--quiet', ...extra]
+  const before = nest.state.completionBodies.length
+  const r = await main(argv(), { log: () => {} })
+  const run = r.runs.find((x) => x.taskId === 'withheld-read')
+  const bodies = nest.state.completionBodies.slice(before).filter((b) => /withheld-read/.test(JSON.stringify(b.messages)) || b.redstart_retrieval_withhold)
+  assert(bodies.length > 0 && bodies.every((b) => JSON.stringify(b.redstart_retrieval_withhold) === '["read_file"]'), 'a request went without the withhold')
+  const sent = run.events.find((e) => e.type === 'tools_sent')
+  assert(!sent.names.includes('read_file'), `turn 1 reported the withheld tool: ${sent.names}`)
+  eq(run.metrics.discovered, true, 'called although withheld: counted as found')
+  assert(!r.runs.find((x) => x.taskId === 'plain-read').events.some((e) => e.type === 'tools_sent' && !e.names.includes('read_file')), 'a plain task had a tool withheld')
+  const lines = []
+  const off = await main(argv('--retrieval', 'off'), { log: (s) => lines.push(s) })
+  eq(off.runs.map((x) => x.taskId), ['plain-read'], 'only the plain task ran')
+  assert(lines.some((l) => /skipped 1 task\(s\) that withhold a tool, which --retrieval off cannot run: withheld-read/.test(l)), lines.join('\n'))
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+await test('benchmarks H2: the loader refuses an always-pinned name, a withhold without expectTools, and a malformed one', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-withhold-bad-'))
+  const checks = path.join(FIXTURES, 'checks.mjs').replace(/\\/g, '/')
+  const base = { id: 'w', prompt: 'x', check: `${checks}#saysSeven`, expectTools: ['list_documents'] }
+  const cases = [
+    [{ ...base, withhold: ['memory_save'] }, /always-pinned tools, which are never withheld: memory_save/],
+    [{ ...base, withhold: ['search_tools'] }, /always-pinned/],
+    [{ ...base, expectTools: undefined, withhold: ['list_documents'] }, /needs expectTools/],
+    [{ ...base, withhold: 'list_documents' }, /withhold must be an array/],
+  ]
+  for (const [i, [raw, want]] of cases.entries()) {
+    const f = path.join(dir, `t${i}.json`)
+    fs.writeFileSync(f, JSON.stringify(raw))
+    let e = null
+    try { await loadTask(f) } catch (err) { e = err }
+    assert(want.test(e?.message ?? ''), `case ${i}: got ${e?.message}`)
+  }
   fs.rmSync(dir, { recursive: true, force: true })
 })
 

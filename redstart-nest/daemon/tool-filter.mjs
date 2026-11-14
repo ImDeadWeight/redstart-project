@@ -268,6 +268,7 @@ function rankTools({ tools, queryVector, queryText, config }) {
  */
 export async function filterRequestTools({
   tools, messages, accountId, conversationId = null, settings, ctxSize, reservedTokens = 0, embed = defaultEmbed, record = undefined,
+  withhold = [],
 }) {
   const config = resolveRetrievalSettings(settings)
   if (!config.enabled) return tools
@@ -314,6 +315,10 @@ export async function filterRequestTools({
       families: TOOL_FAMILIES,
       growth: config.growth === 'pins-only' ? 'pins-only' : 'scored',
       minTools: config.minTools,
+      // A benchmark's tools left out of the selection on purpose (H2).
+      // selectTools never withholds a pin, so the always-pinned tools and
+      // anything found by search, describe or a call still come in.
+      withhold,
     })
 
     // Nothing survived. That is a scorer that has gone wrong, not a request
