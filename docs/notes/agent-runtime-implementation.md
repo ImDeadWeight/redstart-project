@@ -5,7 +5,25 @@ what was built, phase by phase: deviations from the plan, and gaps carried
 forward. Branch: `feat/agent-core`, from main @ 224d121 (alpha.12, PR #38
 merged).
 
-## Where we left off (2026-11-13: Phase 8 BUILT, 8.0 to 8.6; left: the user's testing, see Phase 8 → "PHASE 8 BUILT")
+## Where we left off (2026-11-14: Phase 4 BUILT, 4.1 to 4.7, on feat/tool-retrieval-fixes; left: the user's click test and the p4 bench run, see "Phase 4 — terminal" below)
+
+**Phase 4 (the terminal) was the one phase never built.** U7 moved Phase 8
+ahead of it on 2026-11-12, and the order after that was PR #40 (merged as
+alpha.14), the tool-retrieval branch, then Phase 4. Built 2026-11-14 on
+`feat/tool-retrieval-fixes` (agent-core was merged), re-planned first in the
+plan's section 10. Phases 0 to 3 and 8 are closed or built as recorded
+below; everything older in this block is history.
+
+**Owed for Phase 4, by the user:** (1) the click test (plan section 10,
+Acceptance): Tools tab → Terminal on, list `git` and `node`, then in chat
+as the owner ask for `git status -s` in a cloned repo, check the card's
+argv, choose "Always allow `git status`", check a second `git status
+--short` runs with no card and `git log` asks again, and check a non-owner
+account is not offered run_command; restart Nest on this build first (the
+chat bundle was rebuilt 2026-11-14). (2) The p4 bench group as the owner
+(`--tasks "scripts/agent-bench/tasks/p4-*.json"`, P4-f).
+
+## History: where we left off on 2026-11-13 (Phase 8 BUILT, 8.0 to 8.6; left: the user's testing, see Phase 8 → "PHASE 8 BUILT")
 
 **8.3 landed (2026-11-13, later the same day):** a per-profile
 `tools.memoryReview.think` switch (Tools tab, Memory card), measured on
@@ -339,6 +357,82 @@ The Phase 2 history, kept for reference:
 **Not done and known:** a stale plan keeps steering a chat until cleared (in
 security.md); forks drop the plan; the daemon runtime has no ask/plan ports
 (Phase 3).
+
+---
+
+## Phase 4 — terminal (planned and built 2026-11-14)
+
+Plan section 10 is the module plan (calls P4-a to P4-f). Branch
+`feat/tool-retrieval-fixes`, nine commits, each through typecheck +
+check:mjs + test:security (chat-ui vitest run from `E:\`, see the drive
+letter memory).
+
+### What landed
+
+| Slice | Commit | What |
+|---|---|---|
+| plan | ecb4e84 | section 10 written before any code |
+| 4.1 | f587948 | `shared/command-exec.mjs`: spawn with no shell, `.cmd`/`.bat` refused, head+tail capture, tree kill (taskkill /T; POSIX process group), `buildEnv` from nothing; `test-command-exec.mjs` (hostile arguments first) |
+| 4.2 | 368233c | `daemon/terminal-config.mjs` (resolve at save time, npm/npx as node + CLI script), `capabilities:set-terminal`, the stored default, the gateway config block with `networkExposed`; `test-terminal-config.mjs` |
+| 4.3 | 69cc538 | the `execute` class through every switch (rule prompt, ENFORCED_TOOLS, hints, memory's network mark), the terminal capability, owner-only in `permissions.mjs` (`ownerOnlyTerminal`), mcp-server's auth-off branch through `resolveEffectiveConfig` |
+| 4.4 | 1765dc6 | `daemon/terminal-tool.mjs` (owner check again, cwd confinement, `.home`, one per conversation, exit code first), `changedFiles` skipDirs; `test-terminal-tool.mjs`; conformance entry |
+| 4.5 | 32561a9 | grants scoped to `{ executable, firstArg }`, computed by the server from the approved call; `covers(key, tool, args)` in the MCP gate and the task runner |
+| 4.6 | e1df861 | chat-ui: the card's argv and "Always allow `git status`", `coversCall`, the handshake posts 'always' for a scoped tool, Settings lists command grants |
+| 4.7 | e5498a6, 3bcf4fd | launcher `TerminalCapabilityCard`, a system-prompt line and the terminal as egress (prompt and `GET /egress`), security.md Terminal section + Known gaps, configuration.md, bench README (P4-f) |
+
+Also checked by hand on this machine (not a suite): `git`, `node`, `npm`,
+`npx` resolve (npm → `node.exe npm-cli.js`) and run through the executor
+with the scrubbed environment; `npm --version "& echo INJECTED"` printed no
+INJECTED.
+
+### Deviations from the plan
+
+- **libuv puts variables back.** On Windows `uv_spawn` copies HOMEDRIVE,
+  HOMEPATH, LOGONSERVER, USERDOMAIN and USERNAME from the parent into any
+  child environment that lacks them, so "built from nothing" (D18) needed
+  `buildEnv` to set them itself (home pair → the workspace's `.home`,
+  identity ones empty). Found by the 4.1 suite.
+- **The scope rule lives in `shared/agent-core/approval.mjs`**, not in
+  `tools-definitions.mjs` as section 10 said: chat-ui needs the same
+  function to decide whether to show the card and what it says. Nest
+  re-exports it.
+- **The terminal is an egress path in the system prompt and `GET /egress`**
+  (`commandsReachNetwork`). Section 10 did not list this; without it the
+  data-handling block would name the only destinations while a command could
+  reach any host.
+- **A command's output marks a following memory_save** like a network call
+  does (mcp-server), for the same reason.
+- **Tests changed on purpose:** test-approvals' "ENFORCED_TOOLS is empty
+  until run_command"; test-roles' role-less-user identity now excludes the
+  terminal; three exact-shape checks of `decide()` gained `scope: null`.
+- The plan named `test-roles.mjs` for the owner rule and
+  `test-tool-policy.mjs` for the class; both got them, plus the provider's
+  own suite repeats the refusals at call time.
+
+### Gaps carried forward
+
+- **Not run in the app.** No command has been approved through the real
+  card; the launcher card has not been opened. (security.md Known gaps.)
+- **The p4 bench tasks have not been run** with the terminal on (owed, P4-f).
+  Under the user-tier bench account they keep failing by design.
+- **Background processes** (`start_process`, `read_process_output`,
+  `stop_process`) are not built (plan D18's later slice). A dev server is
+  killed at the timeout.
+- **A grant binds the first argument, not what the rest does**
+  (security.md). `node build.mjs` always allowed runs whatever build.mjs
+  says next time.
+- **Helpers see only the listed programs on PATH.** git's own helpers work
+  (git finds its libexec itself); a tool that shells out to something else
+  needs that program listed.
+- **Isolation stays `none`** (D20). A container/bubblewrap backend needs
+  hardware to verify on.
+- **macOS never run**; the POSIX kill path runs on CI's Ubuntu only.
+- **Twig and Yellowscript** are not offered the tool (owner-only on Nest;
+  Yellowscript has its own `ws_run_command`). A Twig client signed in as the
+  owner gets it like any chat-ui.
+- **An entry added to tools.json by hand** is never resolved or checked
+  until the next save from the Tools tab (configuration.md says so);
+  `liveExecutables` drops one that is not an existing absolute file.
 
 ---
 

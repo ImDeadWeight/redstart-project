@@ -515,7 +515,7 @@ each as a test in a `test-daemon-smoke`-style suite against the real daemon.
 
 ### Phase 4 — terminal
 
-**Re-planned to module level 2026-11-14: section 10.** Decided (U2, U3): it runs on Nest, for the owner tier only, and is refused
+**Re-planned to module level and built 2026-11-14: section 10.** Decided (U2, U3): it runs on Nest, for the owner tier only, and is refused
 when login is off and network mode is on. The reason is that a spawned command
 runs as the daemon's OS user and can read every account's files and the
 secrets key, whatever its working directory. The provider checks the tier
@@ -1070,7 +1070,7 @@ so the user filters the noise.
 
 ---
 
-## 10. Phase 4 — terminal (module level, planned 2026-11-14)
+## 10. Phase 4 — terminal (module level, planned and BUILT 2026-11-14; see the implementation doc, "Phase 4 — terminal")
 
 Re-planned against main @ 49941fa (alpha.14: Phases 0 to 3 and 8 merged in
 PR #40), built on `feat/tool-retrieval-fixes`. The decisions are D15 to D21
