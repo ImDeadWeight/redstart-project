@@ -515,7 +515,7 @@ each as a test in a `test-daemon-smoke`-style suite against the real daemon.
 
 ### Phase 4 — terminal
 
-Decided (U2, U3): it runs on Nest, for the owner tier only, and is refused
+**Re-planned to module level 2026-11-14: section 10.** Decided (U2, U3): it runs on Nest, for the owner tier only, and is refused
 when login is off and network mode is on. The reason is that a spawned command
 runs as the daemon's OS user and can read every account's files and the
 secrets key, whatever its working directory. The provider checks the tier
@@ -1067,3 +1067,209 @@ so the user filters the noise.
   Not in this phase.
 - Twig's chats: Twig hosts the same chat-ui, so the client trigger applies.
   Verify the review route is reachable from a remote Twig before 8.6 closes.
+
+---
+
+## 10. Phase 4 — terminal (module level, planned 2026-11-14)
+
+Re-planned against main @ 49941fa (alpha.14: Phases 0 to 3 and 8 merged in
+PR #40), built on `feat/tool-retrieval-fixes`. The decisions are D15 to D21
+in section 5 and U2, U3 in section 7. This section says where each one lands
+in the code as it is now, and takes the few calls the decisions leave open.
+
+### What exists (verified 2026-11-14)
+
+- **One provider already spawns a process:** `git-tool.mjs` runs `git` by
+  bare name through `execFile` with fixed subcommands, a 10 s timeout and an
+  8000-character clip. No tree kill, inherited environment. It stays as it
+  is; `run_command` does not reuse it.
+- **The sandbox's spawn pattern:** `python-kernel.mjs` builds the child's
+  environment from nothing (`childEnv`: only `SYSTEMROOT` on Windows).
+  `process-supervision.mjs` `killByPid` does `taskkill /F /T /PID` on
+  Windows and `kill(-pid)` on POSIX (needs `detached: true`). Neither lives
+  in `shared/`, and both are small: the executor takes its own copies (D21:
+  no daemon import in `shared/`).
+- **Classes:** `TOOL_CLASSES` + `classifyTool` (unknown → `read`),
+  `ruleForClass` (write → prompt, destructive → always), `ENFORCED_TOOLS`
+  (an empty Set, documented as "run_command first"), `annotateTool` in
+  `mcp-server.mjs` (hints from the class), `evaluateToolPolicy` (only File
+  System and plugin rules switch on class), chat-ui `tool-class.ts` (only
+  `destructive` is special), the launcher's plugin class editor (plugins
+  only; four classes, so a plugin tool cannot be `execute`).
+- **Grants:** `approval-grants.mjs` stores `scope: null` and says the field
+  exists for run_command. `covers(accountKey, tool)` takes no arguments.
+  `POST /approvals/:id` with `always` adds an unscoped grant. chat-ui's
+  `permissionsStore` caches grants by tool name only, and its MCP handshake
+  always posts `once`.
+- **Tier:** `account.tier` is `owner | admin | user`; owners are never
+  narrowed (`permissions.mjs`). With auth off the account is null.
+  **Network mode reaches the daemon only at model start** (`ipc/server.mjs`
+  derives the bind host from `config.networkMode`); `buildGatewayConfig`
+  receives the same llama config, so it can carry the flag into the tool
+  config.
+- **Workspace:** `workspaceDir(documentsRoot, account, conversationId)` and
+  `changedFiles(dir, sinceMs)`, which walks everything (a cloned repo's
+  `.git` would fill its 50 entries).
+- **Bench:** four p4 tasks (`p4-exit-code`, `p4-run-tests`, `p4-fix-test`,
+  `p4-git-log`) and their checks exist. They need `node` and `git`. The
+  bench runs as a user-tier account and warns on an owner key.
+
+### Calls this plan takes (the user may overrule)
+
+- **P4-a — The allowlist starts empty.** The admin adds each executable by
+  name or absolute path. A name is resolved on the daemon's PATH **at save
+  time** (with PATHEXT on Windows) and stored as an absolute path; PATH is
+  never searched at call time (D16). The model names the executable by the
+  allowlist entry's name (`git`, `node`, `npm`).
+- **P4-b — `npm` and `npx` resolve to `node` plus the CLI script** (D17):
+  find `npm.cmd`/`npm` on PATH, then `<its dir>/node_modules/npm/bin/npm-cli.js`
+  (or `npx-cli.js`), and the `node` in the same directory. Any other entry
+  that resolves only to a `.cmd`/`.bat` is refused at save time with the
+  reason.
+- **P4-c — Who may run it, three times over.** (1) `resolveEffectiveConfig`
+  turns the terminal off for any account that is not owner tier; (2) with
+  auth off, `buildGatewayConfig` turns it off when network mode is on; (3)
+  the provider checks both again at call time and refuses with the reason.
+  So tools/list never offers it to an admin or a user, and a call that gets
+  there anyway is refused.
+- **P4-d — HOME is a hidden folder in the workspace**, `.home/`, so git and
+  npm have somewhere inside the confinement to write their config and
+  caches. `changedFiles` gains a skip list (`.home`, `.git`, `node_modules`)
+  for the result's "Files changed".
+- **P4-e — A grant scope is `{ executable, firstArg }`**, computed by the
+  server from the pending approval's own arguments when the decision is
+  `always`. `POST /approvals/grants { tool: 'run_command' }` (an unscoped
+  grant) is refused, so no card, import or API call can always-allow every
+  command. A scope with no first argument (`git` alone) is refused too: the
+  card offers "Always allow" only when there is a first argument (D19).
+- **P4-f — The bench's acceptance runs as the owner.** The four p4 tasks run
+  with an owner key (`--tasks "scripts/agent-bench/tasks/p4-*.json"`), the
+  warning accepted for that group only; the other groups keep the user-tier
+  account. Alternative if the user prefers: auth off with network mode off.
+
+### Modules, in commit order
+
+**4.1 `shared/command-exec.mjs`, the executor (D15, D18, D21).** Plain ESM,
+Node built-ins only. `runCommand({ file, args, prefixArgs, cwd, env,
+timeoutMs, outputCap, signal, isolation = 'none' })` → `{ exitCode, signal,
+timedOut, aborted, stdout, stderr, stdoutDropped, stderrDropped,
+durationMs }`. `spawn(file, [...prefixArgs, ...args], { shell: false,
+windowsHide: true, detached: posix })`. Refuses `.cmd`/`.bat` itself (belt
+to P4-b's braces). Capture keeps the head and tail of each stream and counts
+the bytes dropped between. Timeout and abort kill the tree (`taskkill /F /T
+/PID` on Windows, `kill(-pid, 'SIGKILL')` on POSIX). `isolation` accepts
+only `none` (D20). `buildEnv({ pathDirs, home, platform })`: PATH from the
+given dirs only, HOME/USERPROFILE and TEMP/TMP inside the workspace, and on
+Windows SYSTEMROOT, WINDIR, PATHEXT and COMSPEC (the CRT and git need them);
+nothing else inherited. Suite `scripts/test-command-exec.mjs`, the
+hostile-argument case first: `--version & echo INJECTED` (and `|`, `;`,
+`$()`, backticks, `%PATH%`) reach a node child that prints its argv as JSON,
+verbatim, and nothing is interpreted. Then shim refusal, environment
+contents (a host variable set by the test is absent), timeout and tree kill
+(a child that spawns a grandchild; both gone), the output cap's head and
+tail, abort.
+
+**4.2 `daemon/terminal-config.mjs` + storage + IPC (D16, D17).**
+`resolveExecutable(entry, { pathEnv, pathExt, platform })` → `{ ok, name,
+file, prefixArgs, dir }` or `{ ok: false, reason }`, with `npm`/`npx`
+special-cased (P4-b). `DEFAULT_CAPABILITIES.terminal = { enabled: false,
+executables: [], defaultTimeoutS: 60, maxTimeoutS: 600, outputCapBytes:
+16384, extraDirs: [] }` in `tools-storage.mjs`, executables stored resolved.
+`capabilities:set-terminal` in `ipc/capabilities.mjs`: validates bounds,
+resolves every entry and refuses the whole save with the first refusal's
+reason; `extraDirs` absolute and existing. `getCapabilitiesConfig` reports
+the resolved list. `BUILTIN_CAPABILITIES` gets `terminal` (the description
+says owner only, not a sandbox). `buildGatewayConfig` → `terminal: {
+enabled, executables, …, networkExposed: llamaConfig.networkMode === true,
+documentsRoot }`; enabled needs the card active, Documents configured (the
+workspace lives there), at least one executable, and, with auth off, network
+mode off (P4-c 2). `CAPABILITY_CONFIG_KEY.terminal = 'terminal'`. Suite
+`scripts/test-terminal-config.mjs`: resolution on a fake PATH (a real
+executable, a `.cmd`-only entry refused, npm against a fake npm layout, a
+missing name), bounds, relative paths refused.
+
+**4.3 The `execute` class through every switch (D16).** `TOOL_CLASS.execute`,
+`TOOL_CLASSES.run_command = 'execute'`, `BUILTIN_CAPABILITY_TOOL_NAMES.terminal
+= ['run_command']`, `ruleForClass('execute') = 'prompt'`, `ENFORCED_TOOLS =
+{ run_command }`. `annotateTool`: `readOnlyHint false, destructiveHint true,
+openWorldHint true` for execute (honest hints for third-party clients).
+`evaluateToolPolicy`: nothing new (a plugin tool can never be `execute`),
+said in a comment. `resolveEffectiveConfig`: terminal off for any non-owner
+(P4-c 1). chat-ui `tool-class.ts`: `execute` is always-allowable only with a
+scope (4.6). Tests: `test-tool-policy.mjs` (class, rule, enforced, hints),
+`test-roles.mjs` (an admin and a user get `terminal.enabled false` whatever
+the role says; the owner keeps it).
+
+**4.4 `daemon/terminal-tool.mjs`, the provider (D15, D18, D19).**
+`toolDefs(cfg)`: `run_command` when `cfg.terminal.enabled`, the description
+naming the allowed executables, argv only, the workspace as cwd, one
+example. `callTool(name, args, cfg, ctx)`: refuse unless owner, or auth off
+and not network-exposed (P4-c 3); validate `command` (an allowlist name),
+`args` (strings, each ≤ 8 KB, at most 256), `cwd` (through
+`resolveWithinRoot` in the workspace, or inside an `extraDirs` entry when
+absolute), `timeout_s` bounded by the config; one command at a time per
+conversation (a second call is refused: "another command is still running
+in this conversation"); run; result text with `Exit code N` (or `Timed out
+after N s; the process tree was killed`) on the first line, then the
+duration, stdout, stderr, and the files changed in the workspace (skip list,
+P4-d) as resource links. A non-zero exit and a timeout are `isError`.
+`logEvent('terminal', 'run', { executable, exitCode, durationMs, timedOut
+})`, never argv. Registered in `BUILTIN_PROVIDERS`; `stopMcpServer` kills
+running commands. Suite `scripts/test-terminal-tool.mjs`: tier refusals
+(admin, user, auth off with network on), allowlist refusal, cwd escapes
+(`..`, an absolute path outside, a junction inside the workspace pointing
+out), one at a time, the exit-code first line, a timeout result. Added to
+`test-provider-conformance.mjs` and the namespacing contract.
+
+**4.5 Scoped grants (D13, D19).** `grantScopeFor(tool, args)` in
+`tools-definitions.mjs` (run_command → `{ executable, firstArg }` or null;
+other tools → null; `isScopedTool(tool)`). `approval-grants.mjs`:
+`addGrant(key, tool, { scope })` refuses an unscoped grant for a scoped tool
+and a scope for an unscoped one; `covers(key, tool, args)` matches the
+scope. The ledger records the scope at `requestApproval`, `decide` returns
+it, and `POST /approvals/:id` with `always` adds the scoped grant.
+`approvalGate` passes the args to `covers`. Tests in `test-approvals.mjs`:
+`git status` granted covers `git status -s` and not `git push`; an unscoped
+run_command grant is refused by every route (card POST, import, decide on a
+call with no first argument).
+
+**4.6 chat-ui.** The permission card shows run_command's argv as one code
+line, and "Always allow" reads "Always allow `git status`", hidden when
+there is no first argument; "Always allow all tools from this server" skips
+scoped tools. `permissionsStore` caches grants with their scope and answers
+`coversCall(key, args)`; the gate asks with the call's args. The MCP
+handshake posts the card's decision (`always` when chosen on a scoped tool)
+instead of always `once`, then refreshes the grant cache. Vitest for the
+label, the scope match and the handshake decision. `npm run build:chat`.
+
+**4.7 The launcher card, docs, bench.** `TerminalCapabilityCard.tsx` in the
+Tools tab: enable, the executable list (add by name or path, each shown with
+what it resolved to, or the refusal), timeouts, output cap, extra folders,
+and D20's warning ("grants host access: commands run as this machine's user
+and can read every account's files"). `security.md`: a Terminal section
+(D20: what it is and is not) and Known gaps. `configuration.md` and
+`architecture.md` where they list capabilities. `system-prompt.mjs` only if
+it lists tools by capability. Bench README: P4-f. `ci.yml` and
+`test:security` gain the new suites.
+
+### Acceptance
+
+- The suites above, each in CI.
+- The four p4 bench tasks on one model with the terminal on, as the owner
+  (P4-f), against their rows from before (they fail by design, except where
+  `run_python` passed early).
+- A click test in the running app, by the user: the card's argv, "Always
+  allow `git status`", a second `git status -s` running without a card, a
+  `git log` asking again, a non-owner not offered the tool.
+
+### Gaps already known (to notate as they land)
+
+- Not a sandbox (D20): the command reaches the network and everything the
+  daemon's OS user can read. `npm install` runs install scripts.
+- Background processes (`start_process` and friends) are a later slice.
+- A grant binds the executable and the first argument, not what the rest
+  does: an owner who always-allows `node script.js` has allowed whatever
+  `script.js` says when it next runs.
+- The executable's own children (git's helpers, npm's lifecycle scripts) see
+  only the scrubbed PATH; a tool that needs more on PATH needs that
+  directory's executable allowlisted too.
