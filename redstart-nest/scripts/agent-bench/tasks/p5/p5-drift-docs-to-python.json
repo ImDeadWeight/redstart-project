@@ -1,0 +1,31 @@
+{
+  "id": "p5-drift-docs-to-python",
+  "group": "p5",
+  "phase": 5,
+  "prompt": "According to policy.md, how much notice is needed for leave of more than two weeks, and what else must that request include?",
+  "fixtures": [
+    {
+      "path": "policy.md",
+      "from": "../fixtures/policy.md"
+    },
+    {
+      "path": "sales.csv",
+      "from": "../fixtures/sales.csv"
+    }
+  ],
+  "approve": "all",
+  "expectTools": [
+    "read_document",
+    "run_python"
+  ],
+  "followUps": [
+    {
+      "prompt": "Using sales.csv, what is the total amount for each region, and which region has the highest total?",
+      "expectTools": [
+        "run_python"
+      ]
+    }
+  ],
+  "check": "../checks/compute.mjs#regionTotals",
+  "notes": "Benchmarks B4/B5 (drift): a document question, then a computation. Under growth pins-only run_python must already be in the first set or be found."
+}

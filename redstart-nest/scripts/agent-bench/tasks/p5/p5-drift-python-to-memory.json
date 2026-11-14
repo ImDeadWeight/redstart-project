@@ -1,0 +1,20 @@
+{
+  "id": "p5-drift-python-to-memory",
+  "group": "p5",
+  "phase": 5,
+  "prompt": "What is 48271 × 9973 − 123456? Give me the exact number.",
+  "approve": "all",
+  "expectTools": [
+    "run_python"
+  ],
+  "followUps": [
+    {
+      "prompt": "Remember that result for later.",
+      "expectTools": [
+        "memory_save"
+      ]
+    }
+  ],
+  "check": "../checks/p5.mjs#rememberedProduct",
+  "notes": "Benchmarks B4/B5 (drift), the control: the memory tools are always pinned, so this must pass under either growth setting."
+}

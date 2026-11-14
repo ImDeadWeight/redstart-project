@@ -457,6 +457,75 @@ await test('Phase 1 answers are keyed by topic: a question about where to save d
   assert(JSON.stringify(catchAll) === '["p1-stop-and-report"]', `catch-all answers: ${catchAll}`)
 })
 
+console.log('\n-- the p5 set (tool retrieval benchmarks B3-B5, tasks/p5/) --')
+
+// The p5 tasks reuse the main set's prompts and checks with a tool withheld,
+// plus three drift tasks with follow-ups. They live in their own folder so a
+// full-set run (B0) is still the 32 above.
+const callTool = (name, args = {}) => ({ t: 0, type: 'tool_call', name: 'call_tool', arguments: JSON.stringify({ name, arguments: args }) })
+const saved = (text) => ({ t: 0, type: 'tool_call', name: 'memory_save', arguments: JSON.stringify({ text }) })
+const P5_CASES = {
+  'p5-count-docs': {
+    right: ['There are 4 documents.', {}, [callTool('list_documents')], NONE],
+    wrong: ['There are 4 documents.', {}, [call('search_tools')], NONE], why: 'searched, never listed',
+  },
+  'p5-search-docs': { right: CASES['docs-search'].right, wrong: CASES['docs-search'].wrong, why: CASES['docs-search'].why },
+  'p5-exact-product': { right: CASES['compute-arithmetic'].right, wrong: ['I cannot run code here, but it is roughly 481 million.'], why: 'guessed without a tool' },
+  'p5-write-brief': { right: CASES['docs-two-sources'].right, wrong: CASES['docs-two-sources'].wrong, why: CASES['docs-two-sources'].why },
+  'p5-git-log': { right: CASES['p4-git-log'].right, wrong: CASES['p4-git-log'].wrong, why: CASES['p4-git-log'].why },
+  'p5-delete-approval': { right: CASES['p2-delete-confirmed'].right, wrong: CASES['p2-delete-confirmed'].wrong, why: CASES['p2-delete-confirmed'].why },
+  'p5-guard-unneeded': { right: CASES['compute-dates'].right, wrong: CASES['compute-dates'].wrong, why: CASES['compute-dates'].why },
+  'p5-vague-config': {
+    right: ['settings.json sets the port to 48213 (the README default is 8080).'],
+    wrong: ['It listens on port 8080.'], why: 'read the README default, not the settings',
+  },
+  'p5-drift-docs-to-python': { right: CASES['compute-csv-summary'].right, wrong: CASES['compute-csv-summary'].wrong, why: CASES['compute-csv-summary'].why },
+  'p5-drift-python-to-memory': {
+    right: ['Saved.', {}, [{ t: 0, type: 'assistant', content: 'It is 481,283,227.' }, saved('The product is 481,283,227')], NONE],
+    wrong: ['Noted, I will remember 481,283,227.', {}, [], NONE], why: 'said it would remember, saved nothing',
+  },
+  'p5-drift-to-git': { right: CASES['p4-git-log'].right, wrong: CASES['p4-git-log'].wrong, why: CASES['p4-git-log'].why },
+}
+
+const p5Tasks = []
+await test('the p5 set loads: 11 tasks, each withholding or following up, none withholding a pinned tool', async () => {
+  for (const f of findTaskFiles(path.join(TASKS, 'p5'))) p5Tasks.push(await loadTask(f))
+  assert(p5Tasks.length === 11, `${p5Tasks.length} tasks`)
+  for (const t of p5Tasks) {
+    assert(t.group === 'p5' && t.phase === 5, `${t.id}: group ${t.group}, phase ${t.phase}`)
+    assert(t.withhold.length > 0 || t.followUps.length > 0, `${t.id} neither withholds nor follows up`)
+  }
+  assert(p5Tasks.filter((t) => t.followUps.length).length === 3, 'three drift tasks')
+  const missing = p5Tasks.map((t) => t.id).filter((id) => !P5_CASES[id])
+  assert(missing.length === 0, `no cases for ${missing}`)
+})
+
+await test('🔍 a p5 task withholds every route to its tool: no withheld-task expectTool is left un-withheld', async () => {
+  // Otherwise "discovered" is trivially null: turn 1 had another way in.
+  for (const t of p5Tasks.filter((x) => x.withhold.length && x.id !== 'p5-guard-unneeded')) {
+    const open = t.expectTools.filter((n) => !t.withhold.includes(n))
+    assert(open.length === 0, `${t.id} expects ${open} but does not withhold it`)
+  }
+})
+
+for (const task of p5Tasks) {
+  const c = P5_CASES[task.id]
+  if (!c) continue
+  await test(`${task.id}: right passes, wrong (${c.why}) fails`, async () => {
+    const right = await task.check(...withDefaults(c.right))
+    assert(right?.pass === true, `right case failed: ${right?.reason}`)
+    const wrong = await task.check(...withDefaults(c.wrong))
+    assert(wrong?.pass === false, `wrong case passed: ${wrong?.reason}`)
+  })
+}
+
+await test('withCallTool: a call_tool call counts as the tool it names; nothing else changes', async () => {
+  const { withCallTool } = await import('./agent-bench/tasks/checks/p5.mjs')
+  const out = withCallTool([callTool('list_documents'), call('run_python'), { t: 0, type: 'tool_call', name: 'call_tool', arguments: '{' }])
+  assert(out[0].name === 'list_documents' && out[0].viaCallTool, 'not unwrapped')
+  assert(out[1].name === 'run_python' && out[2].name === 'call_tool', 'changed what it should not')
+})
+
 await test('saysNotFound: absence stated around a file name, and not a figure of speech', async () => {
   const { saysNotFound } = await import('./agent-bench/tasks/checks/lib.mjs')
   for (const yes of [

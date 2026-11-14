@@ -1,0 +1,25 @@
+{
+  "id": "p5-write-brief",
+  "group": "p5",
+  "phase": 5,
+  "prompt": "Using meeting-notes.txt and budget.csv, write a short markdown brief for the committee covering the site, the number of raised beds, and the total budget. Save it as a document called \"Garden project brief\".",
+  "fixtures": [
+    {
+      "path": "meeting-notes.txt",
+      "from": "../fixtures/meeting-notes.txt"
+    },
+    {
+      "path": "budget.csv",
+      "from": "../fixtures/budget.csv"
+    }
+  ],
+  "approve": "all",
+  "withhold": [
+    "create_document"
+  ],
+  "expectTools": [
+    "create_document"
+  ],
+  "check": "../checks/documents.mjs#gardenBrief",
+  "notes": "Benchmarks B3 (tool-retrieval-fixes-benchmarks.md): docs-two-sources with create_document withheld: a write tool through discovery. call_tool refuses a write, so it has to be called directly."
+}

@@ -1,0 +1,23 @@
+{
+  "id": "p5-git-log",
+  "group": "p5",
+  "phase": 5,
+  "prompt": "depot.bundle is a git bundle. Clone it and tell me the author and the message of the third most recent commit.",
+  "fixtures": [
+    {
+      "path": "depot.bundle",
+      "from": "../fixtures/depot.bundle"
+    }
+  ],
+  "approve": "all",
+  "withhold": [
+    "run_command",
+    "run_python"
+  ],
+  "expectTools": [
+    "run_command",
+    "run_python"
+  ],
+  "check": "../checks/phase4.mjs#thirdCommit",
+  "notes": "Benchmarks B3 (tool-retrieval-fixes-benchmarks.md): p4-git-log with both code tools withheld: a tool family the conversation has not touched."
+}

@@ -1,0 +1,29 @@
+{
+  "id": "p5-search-docs",
+  "group": "p5",
+  "phase": 5,
+  "prompt": "Search my documents: what is the liability cap in the agreement with vendor reference KX-4471-Q?",
+  "fixtures": [
+    {
+      "path": "vendor-alder.md",
+      "from": "../fixtures/vendor-alder.md"
+    },
+    {
+      "path": "vendor-kestrel.md",
+      "from": "../fixtures/vendor-kestrel.md"
+    },
+    {
+      "path": "vendor-osprey.md",
+      "from": "../fixtures/vendor-osprey.md"
+    }
+  ],
+  "approve": "all",
+  "withhold": [
+    "search_documents"
+  ],
+  "expectTools": [
+    "search_documents"
+  ],
+  "check": "../checks/documents.mjs#liabilityCap",
+  "notes": "Benchmarks B3 (tool-retrieval-fixes-benchmarks.md): docs-search with search_documents withheld. run_python could read the files instead; discovered says whether the right tool was found anyway."
+}

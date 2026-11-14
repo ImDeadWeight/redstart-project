@@ -1,0 +1,33 @@
+{
+  "id": "p5-count-docs",
+  "group": "p5",
+  "phase": 5,
+  "prompt": "Without running any code, list the documents in my documents folder and tell me how many of them are in this conversation's workspace.",
+  "fixtures": [
+    {
+      "path": "report_jan.txt",
+      "from": "../fixtures/report_jan.txt"
+    },
+    {
+      "path": "report_feb.txt",
+      "from": "../fixtures/report_feb.txt"
+    },
+    {
+      "path": "report_mar.txt",
+      "from": "../fixtures/report_mar.txt"
+    },
+    {
+      "path": "project-notes.md",
+      "from": "../fixtures/project-notes.md"
+    }
+  ],
+  "approve": "all",
+  "withhold": [
+    "list_documents"
+  ],
+  "expectTools": [
+    "list_documents"
+  ],
+  "check": "../checks/p5.mjs#countedDocs",
+  "notes": "Benchmarks B3 (tool-retrieval-fixes-benchmarks.md): multi-find-tool with list_documents withheld: the plain case, search then call. A call_tool(list_documents) counts."
+}

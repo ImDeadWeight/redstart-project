@@ -1,0 +1,17 @@
+{
+  "id": "p5-exact-product",
+  "group": "p5",
+  "phase": 5,
+  "prompt": "What is 48271 × 9973 − 123456? Give me the exact number.",
+  "approve": "all",
+  "withhold": [
+    "run_python",
+    "run_command"
+  ],
+  "expectTools": [
+    "run_python",
+    "run_command"
+  ],
+  "check": "../checks/compute.mjs#arithmetic",
+  "notes": "Benchmarks B3 (tool-retrieval-fixes-benchmarks.md): compute-arithmetic with both code tools withheld. Without one the model guesses: does it search before it says it cannot, or before mental arithmetic?"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "p5-guard-unneeded",
+  "group": "p5",
+  "phase": 5,
+  "prompt": "How many days are there from 14 February 2024 to 10 November 2026? And what day of the week is 4 July 2031?",
+  "approve": "all",
+  "withhold": [
+    "list_documents"
+  ],
+  "expectTools": [
+    "run_python"
+  ],
+  "check": "../checks/compute.mjs#dates",
+  "notes": "Benchmarks B3 (tool-retrieval-fixes-benchmarks.md): The guard: compute-dates with a tool it does not need withheld. searchCalls should be 0; reported, not a pass criterion."
+}

@@ -1,0 +1,30 @@
+{
+  "id": "p5-delete-approval",
+  "group": "p5",
+  "phase": 5,
+  "prompt": "In my File System folder, delete p2-old-draft.txt. Keep p2-final.txt.",
+  "fixtures": [
+    {
+      "path": "p2-old-draft.txt",
+      "content": "An old draft. Safe to delete.\n",
+      "space": "files"
+    },
+    {
+      "path": "p2-final.txt",
+      "content": "The final version. Keep this.\n",
+      "space": "files"
+    }
+  ],
+  "approve": "all",
+  "requires": [
+    "delete_file"
+  ],
+  "withhold": [
+    "delete_file"
+  ],
+  "expectTools": [
+    "delete_file"
+  ],
+  "check": "../checks/phase2.mjs#deletedWithApproval",
+  "notes": "Benchmarks B3 (tool-retrieval-fixes-benchmarks.md): p2-delete-confirmed with delete_file withheld. call_tool refuses a tool that needs approval, so the model must call it directly next turn and the approval exchange must still happen (live case 5). Needs File System deletes allowed."
+}
