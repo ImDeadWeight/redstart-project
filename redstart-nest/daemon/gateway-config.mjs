@@ -17,6 +17,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { configDir } from './platform-paths.mjs'
 import { runtimeDir } from './python-runtime.mjs'
+import { liveExecutables } from './terminal-config.mjs'
 import { BUILTIN_TOOLS, BUILTIN_GROUPS, expandDisabledToolIds } from './tools-definitions.mjs'
 import { getUserTools, getUserGroups, getCapabilities } from './tools-storage.mjs'
 import { updateGatewayConfig, getGatewayPort } from './tools-gateway.mjs'
@@ -71,6 +72,21 @@ function retrievalSettings(llamaConfig) {
   }
 }
 
+function terminalConfig(toolIdSet, capabilities, llamaConfig) {
+  const t = capabilities.terminal
+  const executables = liveExecutables(t.executables)
+  return {
+    enabled: toolIdSet.has('terminal') && !!capabilities.documents.outputDir && executables.length > 0,
+    executables,
+    documentsRoot: capabilities.documents.outputDir,
+    defaultTimeoutS: t.defaultTimeoutS,
+    maxTimeoutS: t.maxTimeoutS,
+    outputCapBytes: t.outputCapBytes,
+    extraDirs: Array.isArray(t.extraDirs) ? t.extraDirs : [],
+    networkExposed: llamaConfig?.networkMode === true,
+  }
+}
+
 export function buildGatewayConfig(llamaConfig) {
   const toolSettings = llamaConfig?.tools
 
@@ -102,6 +118,7 @@ export function buildGatewayConfig(llamaConfig) {
       git:       { enabled: false },
       scholar: { enabled: false },
       python: { enabled: false },
+      terminal: { enabled: false },
       memory: { enabled: false },
       documentSearch: { enabled: false },
       ...Object.fromEntries(listPlugins().map((p) => [p.id, { enabled: false, isPlugin: true }])),
@@ -224,6 +241,14 @@ export function buildGatewayConfig(llamaConfig) {
       workspaceCapBytes: capabilities.python.workspaceCapMb * 1024 * 1024,
       accountCapBytes: capabilities.python.accountCapMb * 1024 * 1024,
     },
+    // run_command (agent-runtime Phase 4). Owner only: permissions.mjs turns
+    // it off for every other tier, and terminal-tool.mjs checks again at call
+    // time. networkExposed is the data plane's bind decision (ipc/server.mjs
+    // derives it from the same networkMode at model start): with auth off and
+    // the LAN let in, every device on the network would be the caller, so the
+    // tool is off (plan U3, P4-c). Needs Documents, where the workspaces live,
+    // and at least one executable that still exists on disk.
+    terminal: terminalConfig(toolIdSet, capabilities, llamaConfig),
     // camelCase like fileSystem: permissions.mjs CAPABILITY_CONFIG_KEY maps
     // document_search to it.
     documentSearch: {
