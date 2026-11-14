@@ -32,6 +32,7 @@ import * as filesystemProvider from './filesystem-mcp-provider.mjs'
 import * as fsDeleteTool from './fs-delete-tool.mjs'
 import * as scholarTool from './scholar-tool.mjs'
 import * as pythonTool from './python-tool.mjs'
+import * as terminalTool from './terminal-tool.mjs'
 import * as memoryTool from './memory-tool.mjs'
 import * as documentSearchTool from './document-search-tool.mjs'
 import { getConversation } from './conversations-storage.mjs'
@@ -64,7 +65,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 // searchToolsProvider is LAST, and deliberately: it is the only provider whose
 // job is to describe the others, so it must never shadow one of them on a name
 // collision, and its own tool must never appear in the catalog it searches.
-const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, memoryTool, documentSearchTool, interactionTools, searchToolsProvider]
+const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, terminalTool, memoryTool, documentSearchTool, interactionTools, searchToolsProvider]
 
 // Resolved per call, never captured in a const: a plugin installed or removed
 // while Nest is running must take effect without a restart. Built-ins come
@@ -660,6 +661,8 @@ export function stopMcpServer() {
   activeToolsConfig = null
   postgresTool.closePool()
   pythonTool.stopAllKernels()
+  // A running command's tree, not only the child: killTree in command-exec.
+  terminalTool.stopAllCommands()
   // Plugin children are separate OS processes; without this they outlive the
   // server that spawned them.
   stopAllPlugins()

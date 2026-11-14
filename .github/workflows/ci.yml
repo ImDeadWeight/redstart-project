@@ -154,6 +154,9 @@ jobs:
       - name: "Security: terminal allowlist (resolved at save time, no .cmd shims, npm via node)"
         run: node scripts/test-terminal-config.mjs
 
+      - name: "Security: run_command (owner only, allowlist, cwd confinement, one at a time)"
+        run: node scripts/test-terminal-tool.mjs
+
       - name: "Security: conversation workspaces (layout, ownership, caps, trash)"
         run: node scripts/test-conversation-workspace.mjs
 

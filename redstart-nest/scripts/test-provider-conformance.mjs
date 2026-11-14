@@ -217,6 +217,21 @@ const PROVIDERS = [
     badCall: { name: 'scholar_get', arguments: {} }, // missing id
   },
   {
+    // run_command (agent-runtime Phase 4). Auth is off in this suite and the
+    // config is not network-exposed, so the owner-only rule lets it be
+    // advertised. Its calls are approval-enforced, so a direct tools/call
+    // without an approval is refused at the gate before the provider runs;
+    // the provider's own refusals are in test-terminal-tool.mjs.
+    name: 'terminal',
+    tools: CAPABILITY_TOOL_NAMES.terminal,
+    enable: () => ({ terminal: {
+      enabled: true, documentsRoot: dirs.docs, defaultTimeoutS: 10, maxTimeoutS: 20, outputCapBytes: 4096, extraDirs: [], networkExposed: false,
+      executables: [{ name: 'node', file: process.execPath, prefixArgs: [], dir: path.dirname(process.execPath) }],
+    } }),
+    advertised: CAPABILITY_TOOL_NAMES.terminal,
+    badCall: { name: 'run_command', arguments: {} }, // missing command
+  },
+  {
     // Retrieval's own tool. Its "enabled" switch is the retrieval setting
     // rather than a capability folder, and its disabled phase is the one that
     // matters most: with retrieval off it must be neither advertised nor
