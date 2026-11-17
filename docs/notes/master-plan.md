@@ -20,10 +20,19 @@ Pull before editing.
 that a person still has to use. It runs alongside every phase. A phase that
 changes a feature updates its items there.
 
-Ground rules are unchanged: one phase at a time; re-plan a phase to module
-level when it is reached, against the code as it is then; every commit passes
-`npm run typecheck && npm run check:mjs && npm run test:security` in
-`redstart-nest/`; a new or removed suite changes both `package.json` and
+Ground rules: one phase at a time; re-plan a phase to module level when it
+is reached, against the code as it is then. **Verification (changed by the
+user 2026-11-17, during Phase 3: the full chain on every commit cost too
+much time):**
+- Every commit runs `npm run typecheck && npm run check:mjs`, plus the suites
+  that cover what it touched, and their callers' suites when an interface
+  changes. chat-ui's `check` and vitest run only when chat-ui changed.
+- A change to a boundary (auth, approvals, bans, path scope, the gateway's
+  rewrite) also runs the suites that guard that boundary.
+- The full `npm run test:security` runs once at the end of each phase, and
+  before any push.
+
+A new or removed suite changes both `package.json` and
 `ci.yml`; gaps go in the phase's implementation doc, and in `docs/security.md`
 → Known gaps when a user could be affected.
 
