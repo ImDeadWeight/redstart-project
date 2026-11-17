@@ -520,7 +520,8 @@ when login is off and network mode is on. The reason is that a spawned command
 runs as the daemon's OS user and can read every account's files and the
 secrets key, whatever its working directory. The provider checks the tier
 itself, in addition to the capability flag, and the suite tests an admin-tier
-and a user-tier refusal. No Twig terminal is planned. Yellowscript's
+and a user-tier refusal. No Twig terminal is planned (superseded 2026-11-17:
+section 11). Yellowscript's
 `ws_run_command` (shell line, always-ask, VS Code terminal) is the coding
 path and is unchanged by this.
 
@@ -653,7 +654,8 @@ found after the first draft:
 
 So the Nest terminal's remaining purpose is server-side work in background
 tasks. Nest only, owner only (U3), and built **after** the runtime (U6). A
-Twig terminal is not planned until someone asks for it.
+Twig terminal is not planned until someone asks for it. **(2026-11-17: the
+user asked. Section 11 plans it, and U11 parks the Nest terminal.)**
 
 **U3 — DECIDED 2026-11-10: owner only.** Owner
 tier only, not admin, until an isolation backend (D20) is real, because of the
@@ -1273,3 +1275,113 @@ it lists tools by capability. Bench README: P4-f. `ci.yml` and
 - The executable's own children (git's helpers, npm's lifecycle scripts) see
   only the scrubbed PATH; a tool that needs more on PATH needs that
   directory's executable allowlisted too.
+
+---
+
+## 11. Where a tool lives, and the Twig terminal (decision level, 2026-11-17)
+
+Written after the first try of the Nest terminal. The user asked what an
+owner-only terminal on the host wins, given that Twig will get PowerShell on
+the user's own machine, and whether the MCP registry belongs in Twig because
+"MCP tools run client side". The answer: MCP says how a tool is called, not
+where it runs. Redstart already has tool hosts on both sides. What was
+missing is the rule for choosing one, written down.
+
+### What exists (verified 2026-11-17)
+
+- **Nest, in-process providers** (`daemon/*-tool.mjs`, `mcp-server.mjs`):
+  documents, run_python, memory, git, search, run_command. They run on the
+  Nest host because their data lives there, behind one chokepoint
+  (`callToolAs`: policy, roles, approvals, logging).
+- **Nest plugins** (`plugins.json`, the launcher's Plugins tab): stdio MCP
+  servers spawned by nestd on the Nest host. One install serves every
+  account and every device.
+- **Twig, local tools** (`redstart-twig/windows/daemon/`): the `fs_*` file
+  tools in a folder the user granted (`local-files.mjs`, granted only by the
+  shell's folder dialog, never by the page), and **Twig's own MCP registry**,
+  `twig-mcp.json`, whose stdio servers twigd spawns on the user's PC
+  (`mcp-local.mjs`, a relay; the chat page's SDK client speaks the
+  protocol). The file is never synced from Nest.
+- The chat page is the MCP client for all of them. Nest sees Twig's tools
+  only as names in a completions request: it can ban them by name
+  (`CLIENT_APPS` in tools-definitions.mjs) and do nothing else.
+
+### D45 — The placement rule (D3, made explicit)
+
+A tool goes in **Twig** when it acts on the user's own machine: their files,
+their shell, an app on their desktop, a device plugged into it, or a secret
+that should never leave their PC. It runs as that user, with their
+authority, and their own card decides it.
+
+A tool goes on **Nest** when any of these hold:
+- it works on data Nest holds (per account or shared);
+- it must work from a phone or a plain browser (no Twig there);
+- a background task must be able to call it (D28: tasks run with no client);
+- one install should serve every account on the network.
+
+Third-party services (GitHub, mail, calendars) are Nest plugins today, with
+Phase 6's caveat that a plugin's credential is per install, not per account.
+Consequences to state wherever they matter: a Twig tool is absent on phones
+and in background tasks (until delegation, Phase 7), and Nest's policy
+reaches it only by a ban.
+
+### U11 — The Nest terminal (DECIDED 2026-11-17: keep it, parked)
+
+Phase 4 stays as built (section 10): off by default, owner only. Its one
+real job is a background task run by the owner that must run a program on
+the server. No further investment: the named extra folders offered after the
+first try (so a command could reach the Git capability's repos folder) are
+not built, and are recorded as a gap. Revisit if background tasks start
+needing it.
+
+### Phase 9 — Twig terminal (decision level; re-plan to module level when reached)
+
+**D46 — It runs in twigd, on the user's machine, as the user.** No owner
+restriction: the user already has a shell on their own PC, and the tool
+gives the model nothing they lack. Offered only inside Twig, as a client
+tool beside `fs_*`, so a phone or a plain browser never sees it.
+
+**D47 — A folder the user granted is where it starts.** The working
+directory resolves inside the folder already granted for the file tools (or
+a second grant made the same way, by the shell's dialog, never by the page).
+Unlike Nest this is a convenience, not containment: a shell line can `cd`
+anywhere the user can.
+
+**D48 — The approval is the client's, on every call.** Nest cannot enforce
+anything on a Twig tool. The card shows the command verbatim. Its class is
+`execute` in `CLIENT_APPS.classes`, and chat-ui's `canAlwaysAllow` must
+treat `execute` as never always-allowable for a client tool unless a scope
+is defined for it (U12 decides whether one is).
+
+**D49 — The executor is the shared one.** `shared/command-exec.mjs` (D21)
+does the spawn, timeout, tree kill and output cap; twigd wraps it. If U12
+chooses a PowerShell line, the line is passed as ONE argument to
+`powershell.exe -NoProfile -NonInteractive -Command` (spawned without
+cmd.exe), so the executor's no-shell rule still holds for everything around
+the line, and the line itself is what the person approves.
+
+**D50 — Nest's controls are the ones it already has.** An admin can ban the
+tool by name, and a role can withhold Twig's tools. The tool's name follows
+`docs/tool-namespacing.md` (an app prefix; Twig's is `fs_` for historical
+reasons, so a new prefix such as `twig_` needs a row in that table and the
+contract test).
+
+**U12 — Shell line or argv. OPEN.** (a) A PowerShell command line: pipes,
+redirection and scripts work, which is what "PowerShell in Twig" suggests;
+the whole line is code, so every call asks and there is no "Always allow"
+(Yellowscript's `ws_run_command` posture). (b) argv only, like Nest's
+run_command: "Always allow `git status`" becomes possible, but most of what
+a user wants from a shell does not fit. Recommendation: (a), with
+Yellowscript's rule of no always-allow.
+
+**U13 — macOS. OPEN.** Twig's tree here is Windows only. A Mac Twig would
+use zsh with the same rules; plan it when a Mac Twig ships.
+
+**U14 — Where Phase 9 goes. OPEN.** After the tool-retrieval branch's owed
+benchmark runs, or before. It needs nothing from Phases 5 to 7.
+
+Tests when built: the shared executor's suite already covers spawn, kill and
+caps; Twig's own suite adds the folder grant (the page cannot set it), the
+card for an `execute` client tool never offering always-allow, the line
+reaching PowerShell as one argument, and a ban on the name stripping it at
+the gateway.

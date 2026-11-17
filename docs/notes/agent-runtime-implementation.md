@@ -5,7 +5,21 @@ what was built, phase by phase: deviations from the plan, and gaps carried
 forward. Branch: `feat/agent-core`, from main @ 224d121 (alpha.12, PR #38
 merged).
 
-## Where we left off (2026-11-14: Phase 4 BUILT, 4.1 to 4.7, on feat/tool-retrieval-fixes; left: the user's click test and the p4 bench run, see "Phase 4 — terminal" below)
+## Where we left off (2026-11-17: Phase 4 built and PARKED (U11); next: Phase 9, the Twig terminal, planned at decision level in plan section 11)
+
+**2026-11-17.** After a first try (the model answered "git status -s" with
+the read-only git_status, because Terminal was never switched on, and the
+repo was in the Git folder, which run_command cannot reach), the user asked
+what an owner-only host terminal wins. Decided (U11): keep Phase 4 as
+built, off by default, for owner background tasks; build nothing more on
+it. Plan section 11 writes down where a tool lives (D45: Twig for the
+user's machine; Nest for server data, phones, background tasks, one install
+for everyone) and plans Phase 9, a Twig terminal (D46 to D50). Open: U12
+(PowerShell line vs argv; recommended: the line, asked every call, no
+always-allow), U13 (macOS), U14 (when). Phase 4's click test and p4 bench
+run are still unrun; they are no longer blocking anything.
+
+## History: where we left off on 2026-11-14 (Phase 4 BUILT, 4.1 to 4.7, on feat/tool-retrieval-fixes)
 
 **Phase 4 (the terminal) was the one phase never built.** U7 moved Phase 8
 ahead of it on 2026-11-12, and the order after that was PR #40 (merged as
@@ -415,6 +429,11 @@ INJECTED.
   card; the launcher card has not been opened. (security.md Known gaps.)
 - **The p4 bench tasks have not been run** with the terminal on (owed, P4-f).
   Under the user-tier bench account they keep failing by design.
+- **run_command cannot reach the Git capability's folder** (found in the
+  first try, 2026-11-17). Repos live in `Documents\Redstart\Repos`; a
+  command starts only in the conversation workspace or an extra folder, and
+  the model is never told an extra folder's absolute path. Named extra
+  folders (`cwd: "repos/<name>"`) would fix it; not built, by U11.
 - **Background processes** (`start_process`, `read_process_output`,
   `stop_process`) are not built (plan D18's later slice). A dev server is
   killed at the timeout.
