@@ -105,8 +105,8 @@ The gateway rewrites the request before forwarding:
   select), `x-redstart-tools-would-add` (how many tools a frozen tool set
   left out this turn) and `x-redstart-retrieval-config` (the retrieval
   settings the request ran with, as fixed-order `key=value` pairs separated
-  by `;`: `scorer`, `growth`, `text`, `min`, `callTool`, `floor`, `rel`,
-  `margin`; `off` when retrieval did not run); all six are listed in
+  by `;`: `mode` (`select` or `catalog`), `scorer`, `growth`, `text`, `min`,
+  `callTool`, `floor`, `rel`, `margin`; `off` when retrieval did not run); all six are listed in
   `Access-Control-Expose-Headers`. Only the literal `true` asks; the field is
   consumed and never forwarded. The names go to the caller only, never to the
   log

@@ -95,6 +95,22 @@ export class MCPToolOps {
 		return names;
 	}
 
+	/**
+	 * Nest tools its catalog mode keeps out of the model's list (master plan
+	 * Phase 3.1, `_meta['redstart/deferred']`). Read from Nest's own servers
+	 * only, like redstartMeta: another server cannot hide a tool from a note.
+	 */
+	getNestDeferredToolNames(): Set<string> {
+		const names = new Set<string>();
+		for (const [serverId, connection] of this.conn.connections) {
+			if (!serverId.startsWith(NEST_MCP_SERVER_ID_PREFIX)) continue;
+			for (const tool of connection.tools) {
+				if ((tool as { _meta?: Record<string, unknown> })._meta?.['redstart/deferred'] === true) names.add(tool.name);
+			}
+		}
+		return names;
+	}
+
 	getToolDefinitionsForLLM(): OpenAIToolDefinition[] {
 		const tools: OpenAIToolDefinition[] = [];
 

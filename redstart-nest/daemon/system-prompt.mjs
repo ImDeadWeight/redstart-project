@@ -357,9 +357,20 @@ function buildToolPolicy(config, hasTools, toolNames) {
 // a shape it is shown more readily than it follows an instruction. One
 // wording change, to be measured on the 4B's "said unavailable without
 // searching" count before the next.
-function buildRetrieval(toolNames, toolsFiltered) {
+//
+// THE CATALOG (master plan Phase 3.1) is a third case: the list is fixed and
+// the rest of the server's tools are deliberately kept out of it, reachable
+// through call_tool without ever joining the list. Said as such, with a call
+// to copy, because "on your next turn it will be in your list" (select's
+// story) is false here. Only when both tools are present; otherwise the
+// select wordings below still tell the truth.
+function buildRetrieval(toolNames, toolsFiltered, catalog = false) {
   if (!toolsFiltered) return null
   const names = Array.isArray(toolNames) ? toolNames : []
+
+  if (catalog && names.includes('search_tools') && names.includes('call_tool')) {
+    return 'More of this server\'s tools are kept in a catalog instead of this list, and that does not change during the conversation. If what you need is not listed, find it with search_tools — for example search_tools({"query": "list the files in a folder"}) — then call what it returns with call_tool, passing the tool\'s name and its arguments: call_tool({"name": "list_directory", "arguments": {"path": "."}}). Never tell the user a capability is unavailable just because it is not in your list.'
+  }
 
   const opening = 'The tools listed this turn are a subset chosen for this conversation, not everything this server can do.'
 
@@ -852,6 +863,8 @@ export function composePrompt(input = {}) {
     // Whether retrieval REMOVED anything this turn, measured by the gateway.
     // Retrieval fails open, so the setting alone is not evidence of a subset.
     toolsFiltered = false,
+    // The removal was the catalog's (master plan Phase 3.1), not a selection.
+    catalog = false,
     // The client's IANA zone, unvalidated (session-time.mjs validates it).
     // Absent → the server's zone, labelled as such in the prompt.
     timeZone = null,
@@ -880,7 +893,7 @@ export function composePrompt(input = {}) {
     // After tool_policy — it qualifies the list those constraints apply to —
     // and before locality, so "your list is partial" is settled before "and
     // these ones touch a different computer".
-    ['retrieval', buildRetrieval(toolNames, toolsFiltered)],
+    ['retrieval', buildRetrieval(toolNames, toolsFiltered, catalog)],
     // After tool_policy (it is about tools) and before the style/data blocks,
     // so the model knows which machine a tool touches before it is told where
     // data is stored. Spec §3.

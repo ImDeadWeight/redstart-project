@@ -21,7 +21,8 @@ import { authenticate, roleFor, surfacePermitted } from './auth.mjs'
 import { resolveEffectiveConfig } from './permissions.mjs'
 import { getMcpServerRunning } from './mcp-server.mjs'
 import { getExternalServers } from './tools-storage.mjs'
-import { CLIENT_APP_TOOL_NAMES } from './tools-definitions.mjs'
+import { CLIENT_APP_TOOL_NAMES, capabilityForTool } from './tools-definitions.mjs'
+import { isDeferredTool } from './tool-deferral.mjs'
 import { handleFilesRequest } from './files-api.mjs'
 import { memoriesFor } from './memory-storage.mjs'
 import { composePrompt } from './system-prompt.mjs'
@@ -38,8 +39,8 @@ import { beginCompletion, setUpstreamPort } from './completion-activity.mjs'
 import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/document-index-routes.mjs'
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
-import { filterRequestTools, estimateMessagesTokens, recordWireCost, retrievalConfigSummary } from './tool-filter.mjs'
-import { isConversationId, withheldToolNames } from './tool-retrieval.mjs'
+import { filterRequestTools, estimateMessagesTokens, recordWireCost, retrievalConfigSummary, isCatalogMode } from './tool-filter.mjs'
+import { isConversationId, withheldToolNames, toolName } from './tool-retrieval.mjs'
 
 let gatewayServer = null
 
@@ -351,7 +352,15 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   // set left out (4.1). The record reaches only a caller who asked for it.
   /** @type {{ origins?: Record<string, { turn: number, why: string }>, wouldAdd?: number }} */
   const retrievalRecord = {}
-  if (!retrievalOptOut && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
+  // The catalog mode (master plan Phase 3.1): not a selection at all. The
+  // list is everything that is not deferred, the same on every turn, so the
+  // prompt prefix never changes; the deferred tools are reached through
+  // search_tools and call_tool. No embedder, no per-conversation state, and
+  // nothing a client sends (withhold included) changes it.
+  const catalog = !retrievalOptOut && isCatalogMode(effectiveConfig.toolRetrieval)
+  if (catalog && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
+    parsed.tools = parsed.tools.filter((t) => !isDeferredTool(toolName(t), effectiveConfig, capabilityForTool))
+  } else if (!retrievalOptOut && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
     const pinsOnlyPrompt = injectSystemContext(
       [...(parsed.messages || [])], effectiveConfig,
       {
@@ -399,6 +408,9 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
     // the model is actually about to receive.
     toolNames: toolNamesIn(parsed),
     toolsFiltered,
+    // Which narrowing it was, for the disclosure's wording (system-prompt
+    // buildRetrieval): a catalog to search, not a per-turn subset.
+    catalog: catalog && toolsFiltered,
   })
 
   // What was really forwarded, recorded after every rewrite this function

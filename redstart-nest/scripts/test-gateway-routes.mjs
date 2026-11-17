@@ -797,6 +797,29 @@ async function main() {
     })
   })
 
+  await test('🔍 the catalog mode sends everything but the deferred tools, the same every turn, with no embedder (master plan Phase 3.1)', async () => {
+    // closedPort is the embedder here: nothing is running, and the catalog
+    // needs nothing. Twig's fs_read_file is a client tool, never deferred.
+    const eqOr = (got, want, who) => assert(got === want, `${who}: sent ${got || '(none)'}, expected ${want}`)
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true, mode: 'catalog' }, deferredCapabilities: ['file_system', 'git'] })
+    const tools = ['write_file', 'git_log', 'read_document', 'search_tools', 'call_tool', 'fs_read_file'].map(toolDef)
+    const sentFor = async (content, token = ownerToken) => {
+      const res = await completions({ messages: [{ role: 'user', content }], tools, redstart_retrieval_report: true }, token)
+      return { names: (lastForwarded.tools || []).map((t) => t.function.name).sort().join(','), config: res.headers.get('x-redstart-retrieval-config') ?? '' }
+    }
+    const a = await sentFor('what changed in the git repo')
+    const b = await sentFor('write a poem to a file')
+    eqOr(a.names, 'call_tool,fs_read_file,read_document,search_tools', 'the catalog list')
+    eqOr(b.names, a.names, 'a second, unrelated message')
+    assert(/^mode=catalog;/.test(a.config), `config header: ${a.config}`)
+    const system = systemOf()
+    assert(/kept in a catalog/.test(system) && /call_tool\(\{"name"/.test(system), 'the catalog was not disclosed with a call to copy')
+    assert(!/subset chosen for this conversation/.test(system), 'the select wording was used')
+    // Phase 1 still decides who gets it at all: an account-wide key, no field.
+    eqOr((await sentFor('what changed', owner.apiKey)).names, 'call_tool,fs_read_file,git_log,read_document,search_tools,write_file', 'an account-wide key')
+    updateGatewayConfig(baseConfig)
+  })
+
   await test('🔒 redstart_conversation_id is consumed and never forwarded, valid or not', async () => {
     for (const id of ['conv-123', 'bad id with spaces', 42]) {
       await completions({ ...retrievalBody(), redstart_conversation_id: id })
@@ -832,7 +855,7 @@ async function main() {
       }
       const res = await completions({ ...body, redstart_retrieval_report: true })
       const config = res.headers.get('x-redstart-retrieval-config') ?? ''
-      assert(/^scorer=cosine;growth=pins-only;text=1;min=3;callTool=0;floor=[\d.]+;rel=[\d.]+;margin=[\d.]+$/.test(config), `config: ${config}`)
+      assert(/^mode=select;scorer=cosine;growth=pins-only;text=1;min=3;callTool=0;floor=[\d.]+;rel=[\d.]+;margin=[\d.]+$/.test(config), `config: ${config}`)
       assert(!/git_status|create_document|web_fetch/.test(config), 'the settings header carried tool names')
       const exposed = res.headers.get('access-control-expose-headers') ?? ''
       assert(exposed.includes('x-redstart-retrieval-config'), 'a browser client cannot read it')

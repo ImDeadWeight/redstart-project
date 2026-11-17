@@ -1438,6 +1438,40 @@ await test('🔒 a result carries names, descriptions, category and store, never
   assert(rows.every(r => Object.keys(r).sort().join(',') === 'category,description,name,store'), `unexpected row shape: ${text}`)
 })
 
+console.log('\n-- the catalog mode (master plan Phase 3.1) --')
+
+const catalogMode = (extra = {}) => ({ toolRetrieval: { enabled: true, mode: 'catalog', ...extra } })
+const withSchemas = () => catalog.map((t) => ({ ...t, inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } }))
+
+await test('🔍 the catalog mode offers search_tools and call_tool, no describe_tool, with no callTool flag', () => {
+  const names = searchProvider.toolDefs(catalogMode()).map((d) => d.name)
+  assert(names.join() === 'search_tools,call_tool', `advertised ${names}`)
+  // mode alone is not "on": retrieval off advertises nothing in either mode.
+  assert(searchProvider.toolDefs({ toolRetrieval: { enabled: false, mode: 'catalog' } }).length === 0, 'retrieval off still advertised')
+})
+
+await test('🔍 a catalog search row carries its schema and how to call it, at most five rows', async () => {
+  searchProvider.setToolCatalogProvider(() => withSchemas())
+  const result = await searchProvider.callTool('search_tools', { query: 'read the text of a document' }, catalogMode())
+  const body = JSON.parse(result.content[0].text)
+  assert(Array.isArray(body.tools) && body.tools.length > 0 && body.tools.length <= searchProvider.CATALOG_RESULT_LIMIT, `rows: ${result.content[0].text}`)
+  assert(body.tools.every((r) => r.inputSchema && r.inputSchema.type === 'object'), 'a row without its schema')
+  assert(/call_tool/.test(body.howToCall), 'no howToCall')
+})
+
+await test('a search for a tool\'s exact name returns just that tool, with its schema', async () => {
+  searchProvider.setToolCatalogProvider(() => withSchemas())
+  const body = JSON.parse((await searchProvider.callTool('search_tools', { query: 'git_status' }, catalogMode())).content[0].text)
+  const got = JSON.stringify([body.match, body.tools.map((t) => t.name), !!body.tools[0].inputSchema])
+  assert(got === JSON.stringify(['exact', ['git_status'], true]), `exact: ${got}`)
+})
+
+await test('🔒 the select mode\'s rows stay schema-free', async () => {
+  searchProvider.setToolCatalogProvider(() => withSchemas())
+  const result = await searchProvider.callTool('search_tools', { query: 'read a document' }, catalogConfig({ toolRetrieval: { enabled: true, mode: 'select' } }))
+  assert(!/inputSchema/.test(result.content[0].text), result.content[0].text)
+})
+
 await test('🔒 the catalog it searches is the one the policy gate produced', async () => {
   // The provider is handed a catalog rather than assembling one. This asserts
   // the consequence: whatever the gate withheld simply is not there to find, so

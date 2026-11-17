@@ -119,6 +119,12 @@ export const CONTEXT_BUDGET_FRACTION = 0.25
 /** Defaults for the knobs an admin does not set. */
 export const RETRIEVAL_DEFAULTS = Object.freeze({
   enabled: false,
+  // What "on" means (master plan Phase 3.1). 'select': the per-turn
+  // selection below. 'catalog': a fixed list, everything that is not
+  // deferred (tool-deferral.mjs), with search_tools and call_tool for the
+  // rest, so the prompt prefix never changes. 'select' until the 3.2 bench
+  // runs decide between them.
+  mode: 'select',
   // A fraction of the best score this turn. The load-bearing floor: the
   // embedding model puts every score in a narrow absolute band, so "within 15%
   // of the best match" means the same thing on every query where an absolute
@@ -178,7 +184,17 @@ export const SCORER_DEFAULTS = Object.freeze({
 export function resolveRetrievalSettings(settings) {
   const asked = settings ?? {}
   const scorer = SCORERS.includes(asked.scorer) ? asked.scorer : RETRIEVAL_DEFAULTS.scorer
-  return { ...RETRIEVAL_DEFAULTS, ...SCORER_DEFAULTS[scorer], ...asked, scorer }
+  const mode = RETRIEVAL_MODES.includes(asked.mode) ? asked.mode : RETRIEVAL_DEFAULTS.mode
+  return { ...RETRIEVAL_DEFAULTS, ...SCORER_DEFAULTS[scorer], ...asked, scorer, mode }
+}
+
+/** The values tools.retrieval.mode takes; anything else is 'select'. */
+export const RETRIEVAL_MODES = Object.freeze(['select', 'catalog'])
+
+/** Is retrieval on and in the catalog mode? */
+export function isCatalogMode(settings) {
+  const c = resolveRetrievalSettings(settings)
+  return c.enabled === true && c.mode === 'catalog'
 }
 
 /**
@@ -194,6 +210,7 @@ export function resolveRetrievalSettings(settings) {
 export function retrievalConfigSummary(settings) {
   const c = resolveRetrievalSettings(settings)
   return [
+    `mode=${c.mode}`,
     `scorer=${c.scorer}`,
     `growth=${c.growth === 'pins-only' ? 'pins-only' : 'scored'}`,
     `text=${c.textVersion}`,

@@ -46,9 +46,12 @@ import {
   CAPABILITY_TOOL_NAMES,
   META_CAPABILITY_KEY,
   META_CLASS_KEY,
+  META_DEFERRED_KEY,
   approvalRule,
   isApprovalEnforced,
 } from './tools-definitions.mjs'
+import { isCatalogMode } from './tool-filter.mjs'
+import { isDeferredTool } from './tool-deferral.mjs'
 import { logEvent, logPolicy } from './logger.mjs'
 import { memoryKey } from './memory-storage.mjs'
 import { requestApproval, consume as consumeApproval } from './approval-ledger.mjs'
@@ -230,7 +233,7 @@ export function approvalGate(toolName, args, approvalId, ctx) {
 //       map, server-side, and that remains the only thing standing between a
 //       call and the disk.
 // ---------------------------------------------------------------------------
-function annotateTool(tool) {
+function annotateTool(tool, cfg) {
   const cls = classifyTool(tool.name)
   const readOnly = cls === 'read' || cls === 'network'
   // A command may delete, publish or fetch: the hints say the worst of it,
@@ -252,6 +255,9 @@ function annotateTool(tool) {
       // refuses an unapproved call, so a client can show its card first.
       [APPROVAL_RULE_META_KEY]: approvalRule(tool.name),
       [APPROVAL_ENFORCED_META_KEY]: isApprovalEnforced(tool.name),
+      // So a Redstart client knows the model will not see it in its list
+      // (chat-ui's attachment note names only what the model can see).
+      ...(isCatalogMode(cfg?.toolRetrieval) && isDeferredTool(tool.name, cfg, capabilityForTool) ? { [META_DEFERRED_KEY]: true } : {}),
     },
   }
 }
@@ -318,7 +324,8 @@ function configFor(account) {
  * @param {{ hostTools?: string[] }} [opts]
  */
 export function toolCatalogFor(account, { hostTools = [] } = {}) {
-  return activeToolCatalog(configFor(account), { session: { hostTools } }).map(annotateTool)
+  const cfg = configFor(account)
+  return activeToolCatalog(cfg, { session: { hostTools } }).map((t) => annotateTool(t, cfg))
 }
 
 /**

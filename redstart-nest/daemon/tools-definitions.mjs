@@ -536,6 +536,10 @@ export function isApprovalEnforced(name) {
 // another server's fields.
 export const META_CAPABILITY_KEY = 'redstart/capability'
 export const META_CLASS_KEY = 'redstart/class'
+// true on a tool the catalog mode keeps out of the prompt's list (master plan
+// Phase 3.1): it is reached through search_tools and call_tool. Absent
+// otherwise, including whenever the catalog mode is off.
+export const META_DEFERRED_KEY = 'redstart/deferred'
 // A HUMAN LABEL for where a tool came from — "ComfyUI", not "comfyui_mcp".
 // Display only, and deliberately separate from META_CAPABILITY_KEY, which is
 // the id every policy decision keys on. A label is allowed to be ambiguous or

@@ -690,6 +690,28 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                 />
               </div>
 
+              {/* What "on" means (master plan Phase 3.1): the per-turn
+                  selection, or a fixed list with the deferred tools in a
+                  catalog. Saved like the switch; 3.2's bench runs decide
+                  which one stays. */}
+              {on && (
+                <label className="flex items-center gap-2 text-xs text-zinc-400 mt-2">
+                  <span>How</span>
+                  <select
+                    className="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-200"
+                    value={config.tools?.retrieval?.mode === 'catalog' ? 'catalog' : 'select'}
+                    onChange={(e) => {
+                      const retrieval = { ...(config.tools?.retrieval ?? {}), mode: e.target.value as 'select' | 'catalog' }
+                      setToolsField('retrieval', retrieval)
+                      applyRetrieval({ ...config, tools: { ...(config.tools ?? {}), retrieval } as typeof config.tools })
+                    }}
+                  >
+                    <option value="select">Choose tools for each conversation</option>
+                    <option value="catalog">Fixed list, the rest in a catalog</option>
+                  </select>
+                </label>
+              )}
+
               {/* Every branch below is read off a fact the daemon reported. The
                   one this replaced ended in a bare "Starting…" whenever the
                   sidecar was merely untouched, which is indistinguishable from

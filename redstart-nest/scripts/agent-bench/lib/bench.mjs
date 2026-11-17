@@ -220,7 +220,7 @@ export function parseExpectRetrieval(text) {
 }
 
 /** The keys of x-redstart-retrieval-config (tool-filter.mjs retrievalConfigSummary). */
-export const RETRIEVAL_CONFIG_KEYS = ['scorer', 'growth', 'text', 'min', 'callTool', 'floor', 'rel', 'margin']
+export const RETRIEVAL_CONFIG_KEYS = ['mode', 'scorer', 'growth', 'text', 'min', 'callTool', 'floor', 'rel', 'margin']
 
 /**
  * Why the settings Nest reported are not the ones expected, or null when

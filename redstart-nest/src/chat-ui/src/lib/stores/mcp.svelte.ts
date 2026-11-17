@@ -346,6 +346,11 @@ class MCPStore {
 		return this.toolOps.getNestToolMeta(toolName);
 	}
 
+	/** Nest tools kept out of the model's list by the catalog mode. */
+	getNestDeferredToolNames(): Set<string> {
+		return this.toolOps.getNestDeferredToolNames();
+	}
+
 	getNestToolNamesForCapability(capability: string): Set<string> {
 		return this.toolOps.getNestToolNamesForCapability(capability);
 	}

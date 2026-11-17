@@ -69,6 +69,8 @@ function retrievalSettings(llamaConfig) {
     ...(r?.growth === 'scored' || r?.growth === 'pins-only' ? { growth: r.growth } : {}),
     ...(Number.isInteger(r?.minTools) && r.minTools >= 0 && r.minTools <= 64 ? { minTools: r.minTools } : {}),
     ...(r?.callTool === true ? { callTool: true } : {}),
+    // master plan Phase 3.1: 'select' (the default) or 'catalog'.
+    ...(r?.mode === 'select' || r?.mode === 'catalog' ? { mode: r.mode } : {}),
   }
 }
 
