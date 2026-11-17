@@ -75,10 +75,16 @@ The gateway rewrites the request before forwarding:
 
 - `messages`, `stream`, `tools`, and the usual sampling parameters
 - `redstart_mode` — a task mode **ID** (§3)
-- `redstart_retrieval: false` — don't narrow this request's `tools` with tool
-  retrieval. For a connector that sends its own short, curated tool list and
-  has no `search_tools` to recover a dropped tool. Bans still apply. Only the
-  literal `false` counts; the field is consumed and never forwarded
+- `redstart_retrieval` — whether tool retrieval may narrow this request's
+  `tools`. **By default it runs only on Redstart's own surfaces, as the
+  credential names them**: a chat-UI login session (`nest-chat`) and a Twig
+  client key (`twig`). Any other caller — an account-wide API key, another
+  client key, login switched off — has its `tools` forwarded as sent, minus
+  bans. `true` asks for retrieval anyway (Redstart's own clients send it, for
+  installs with login off); `false` opts out on any surface, for a connector
+  with its own short, curated list and no `search_tools` to recover a dropped
+  tool. Bans apply either way. Only the literal booleans count; the field is
+  consumed and never forwarded
 - `redstart_conversation_id` — your id for this conversation (a printable
   ASCII string of at most 128 characters; anything else is ignored). Tool
   retrieval keys the tool set it chose for the conversation on it, under your
@@ -90,8 +96,9 @@ The gateway rewrites the request before forwarding:
   `x-redstart-tools-sent` (the tool names, comma-separated, each one
   percent-encoded), `x-redstart-tools-filtered` (`1` when retrieval removed
   any tool, otherwise `0`) and `x-redstart-retrieval` (`on` when retrieval ran
-  on this request, even if it kept every tool; `off` when it is disabled or the
-  request opted out), `x-redstart-tools-origin` (for each tool sent, when it
+  on this request, even if it kept every tool; `off` when it is disabled, the
+  request opted out, or the request neither asked nor came from a Redstart
+  surface), `x-redstart-tools-origin` (for each tool sent, when it
   came into this conversation and why, as `name=turn:why` comma-separated;
   `turn` counts user messages, `why` is `first`, `scored`, `called`,
   `search`, `describe`, `always` or `family`; empty when retrieval did not

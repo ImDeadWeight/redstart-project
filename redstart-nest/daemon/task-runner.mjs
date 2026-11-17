@@ -743,6 +743,10 @@ async function runOnce(task, l, conv, generation, { resume }) {
             // As chat-ui sends it: retrieval keeps this conversation's set
             // across compaction (tool retrieval second pass, 4.3).
             ...(t.conversationId ? { redstart_conversation_id: t.conversationId } : {}),
+            // A task's tools are Nest's own list whoever started it, so
+            // retrieval applies as on chat-ui, with or without a surface
+            // (master plan Phase 1).
+            redstart_retrieval: true,
           }
           const { parsed } = await seams.prepareCompletion(body, {
             account: turnCtx.account,

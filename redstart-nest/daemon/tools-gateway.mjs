@@ -218,6 +218,16 @@ function enforceToolAllowList(parsed, config) {
   return parsed
 }
 
+// The credential-bound surfaces whose tool lists Redstart composes itself:
+// the chat UI (a password session) and Twig (its client key). Every other
+// caller keeps the post-ban list it sent unless it asks for retrieval.
+const RETRIEVAL_SURFACES = new Set(['nest-chat', 'twig'])
+
+/** Does retrieval run by default for a request on this credential's surface? */
+export function retrievalSurface(surface) {
+  return typeof surface === 'string' && RETRIEVAL_SURFACES.has(surface)
+}
+
 // ---------------------------------------------------------------------------
 // Everything the gateway does to a completions body before it is forwarded:
 // the redstart_* fields, bans, tool retrieval, the composed prompt, and the
@@ -263,7 +273,18 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   // never a boundary — opting out can only return the post-BAN list, so a
   // banned tool stays banned. Only the literal `false` opts out; consumed
   // either way so llama-server never sees it.
+  //
+  // Which requests retrieval runs on at all (master plan Phase 1): only
+  // Redstart's own surfaces, by the credential (retrievalSurface), or a
+  // request that asks with the literal `true`. A coding agent (Kilo Code,
+  // Continue) sends its own tool list on an account-wide key, which names no
+  // surface, and never sends this field; rewriting that list under it is not
+  // ours to do. `true` exists for what has no surface to name: chat-ui and
+  // tasks with login off, and the agent bench on an account-wide key. Asking
+  // is as safe as opting out, for the same reason: retrieval only narrows
+  // the post-ban list. `false` wins over the surface.
   const retrievalOptOut = parsed.redstart_retrieval === false
+    || (parsed.redstart_retrieval !== true && !retrievalSurface(surface))
   delete parsed.redstart_retrieval
 
   // Redstart-specific request field: `redstart_retrieval_report: true` asks

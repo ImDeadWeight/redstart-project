@@ -762,6 +762,41 @@ async function main() {
     })
   })
 
+  await test('🔒 retrieval runs only on Redstart\'s own surfaces, or when asked; bans apply to every client (master plan Phase 1)', async () => {
+    // A coding agent (Kilo Code, Continue) sends its own tool list on an
+    // account-wide key, which names no surface, and never sends
+    // redstart_retrieval. Its list must reach the model as it sent it, minus
+    // bans. The same request on a session (nest-chat) or a Twig key is
+    // narrowed; a yellowscript key is not; `true` asks from anywhere and
+    // `false` still wins on a Redstart surface.
+    const { issueClientKey } = await import('../daemon/auth.mjs')
+    const twigKey = issueClientKey(owner.account, { surface: 'twig' })
+    const ysKey = issueClientKey(owner.account, { surface: 'yellowscript' })
+    assert(twigKey.ok && ysKey.ok, `client keys: ${twigKey.error ?? ysKey.error}`)
+    await withStubEmbedder(async () => {
+      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true }, disabledTools: ['create_document'] })
+      const ask = (extra = {}) => ({
+        messages: [{ role: 'user', content: 'summarise what changed in the git repo this week' }],
+        tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch')],
+        ...extra,
+      })
+      const sent = async (body, token) => {
+        await completions(body, token)
+        assert(!('redstart_retrieval' in lastForwarded), 'the Redstart-only field was forwarded to llama-server')
+        return (lastForwarded.tools || []).map(t => t.function.name).sort().join(',')
+      }
+      const eqOr = (got, want, who) => assert(got === want, `${who}: sent ${got || '(none)'}, expected ${want}`)
+      const everyPostBan = 'git_status,web_fetch'
+      eqOr(await sent(ask(), owner.apiKey), everyPostBan, 'an account-wide key with no field')
+      eqOr(await sent(ask(), ysKey.apiKey), everyPostBan, 'a yellowscript key')
+      eqOr(await sent(ask({ redstart_retrieval: 'true' }), owner.apiKey), everyPostBan, 'a truthy non-boolean asked')
+      eqOr(await sent(ask(), ownerToken), 'git_status', 'a session (nest-chat)')
+      eqOr(await sent(ask(), twigKey.apiKey), 'git_status', 'a twig key')
+      eqOr(await sent(ask({ redstart_retrieval: true }), owner.apiKey), 'git_status', 'an account-wide key that asked')
+      eqOr(await sent(ask({ redstart_retrieval: false }), twigKey.apiKey), everyPostBan, 'a twig key that opted out')
+    })
+  })
+
   await test('🔒 redstart_conversation_id is consumed and never forwarded, valid or not', async () => {
     for (const id of ['conv-123', 'bad id with spaces', 42]) {
       await completions({ ...retrievalBody(), redstart_conversation_id: id })

@@ -88,6 +88,10 @@ served from the built bundle).
 ### Tool retrieval (only until the simplification pass replaces it)
 - [ ] With retrieval on: "remember that I prefer X" in an ordinary chat
   saves (the memory tools used to be dropped).
+- [ ] With retrieval on (master plan Phase 1): Kilo Code or Continue on an
+  account-wide API key gets its whole tool list (Tools tab, "last completion":
+  nothing removed by retrieval), while the chat UI on the same Nest is still
+  narrowed. Repeat the chat-UI half with login off.
 - Everything else here waits for `master-plan.md` Phase 3.2, which
   replaces the B1 to B7 runs.
 

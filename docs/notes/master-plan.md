@@ -73,6 +73,20 @@ goes first.
 **Detail:** this section. Touches `tools-gateway.mjs` (`prepareCompletion`)
 and `test-gateway-routes.mjs`.
 
+**Built 2026-11-17.** `retrievalSurface()` in `tools-gateway.mjs`; the test
+is "retrieval runs only on Redstart's own surfaces" in
+`test-gateway-routes.mjs`. *Deviation:* "as the credential says" alone was
+not enough. With login off there is no credential, and the agent bench uses
+an account-wide key, which names no surface, so neither could have retrieval
+at all. A request can therefore also ask with the literal
+`redstart_retrieval: true`. That is as safe as opting out, because retrieval
+only narrows the post-ban list. chat-ui, the task runner and the bench
+(`--retrieval server`, and its probe) send it. `false` still wins on any
+surface. *Behaviour change:* a Blueprints or Yellowscript key, or any
+account-wide key, no longer gets retrieval unless it asks for it (connector
+contract §2). *Gap:* none open. A human check of the Kilo/Continue case is in
+`testing-checklist.md`.
+
 ## Phase 2 — Remove the Nest terminal
 
 Decided 2026-11-17 by the user. About 2,400 lines across 50 files for one job

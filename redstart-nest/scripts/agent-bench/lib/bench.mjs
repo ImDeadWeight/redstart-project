@@ -253,6 +253,8 @@ export async function probeRetrievalConfig(nest, llmTools) {
     stream: false,
     max_tokens: 1,
     redstart_retrieval_report: true,
+    // As a task request with --retrieval server asks (master plan Phase 1).
+    redstart_retrieval: true,
     redstart_conversation_id: `bench-probe-${crypto.randomBytes(4).toString('hex')}`,
   })
   await res.text().catch(() => '')
@@ -402,7 +404,10 @@ export async function runTask(nest, task, opts) {
                   // Which tools went out, as headers (tools_sent below).
                   redstart_retrieval_report: true,
                   // --retrieval off: every post-ban tool, whatever Nest is set to.
-                  ...(opts.retrieval === 'off' ? { redstart_retrieval: false } : {}),
+                  // server: asked for, since the bench's account-wide key names
+                  // no surface and retrieval only runs on Redstart's own by
+                  // default (master plan Phase 1); Nest's setting still decides.
+                  redstart_retrieval: opts.retrieval !== 'off',
                   // The task's tools left out of the selection on purpose
                   // (benchmarks H2); run.mjs skips such a task with --retrieval off.
                   ...(task.withhold?.length ? { redstart_retrieval_withhold: task.withhold } : {}),

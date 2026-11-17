@@ -635,7 +635,7 @@ await test('the real prepareCompletion runs on a task\'s request: the prompt is 
   await waitFor(() => ended(t.id), 'end')
   eq(statusOf(t.id), 'done', `status (${store.getTask(t.id).error})`)
   const b = w.bodies[0]
-  eq([b.messages[0].role, 'redstart_mode' in b, 'redstart_project' in b], ['system', false, false], 'body')
+  eq([b.messages[0].role, 'redstart_mode' in b, 'redstart_project' in b, 'redstart_retrieval' in b], ['system', false, false, false], 'body')
   assert(/Redstart/i.test(b.messages[0].content), 'the composed prompt')
 })
 

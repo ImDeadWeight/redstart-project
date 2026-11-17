@@ -911,7 +911,9 @@ if (bench) {
 
   await test('every request asks for the retrieval report; the bench logs it per turn and the metrics read it', async () => {
     assert(nest.state.completionBodies.every((b) => b.redstart_retrieval_report === true), 'a request without redstart_retrieval_report')
-    assert(nest.state.completionBodies.every((b) => !('redstart_retrieval' in b)), '--retrieval server opted a request out')
+    // Asked for, not merely not opted out: the bench's account-wide key names
+    // no surface, so without `true` retrieval would not run (master plan Phase 1).
+    assert(nest.state.completionBodies.every((b) => b.redstart_retrieval === true), '--retrieval server did not ask for retrieval')
     const r = run('read-fixture')
     const reports = r.events.filter((e) => e.type === 'tools_sent')
     eq(reports.map((e) => e.turn), [1, 2], 'one report per turn')

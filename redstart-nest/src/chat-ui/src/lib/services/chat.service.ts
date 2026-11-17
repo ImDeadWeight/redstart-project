@@ -261,6 +261,12 @@ export class ChatService {
 			requestBody.redstart_conversation_id = conversationId;
 		}
 
+		// Redstart-only field: this is one of Redstart's own surfaces, so tool
+		// retrieval applies (when the admin has it on). The gateway already
+		// knows that from a login session, but with login off there is no
+		// credential to say so (master plan Phase 1). Stripped.
+		requestBody.redstart_retrieval = true;
+
 		if (temperature !== undefined) requestBody.temperature = temperature;
 		if (max_tokens !== undefined) {
 			// Set max_tokens to -1 (infinite) when explicitly configured as 0 or null
