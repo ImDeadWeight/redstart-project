@@ -1021,6 +1021,8 @@ if (bench) {
     eq(bodies.length, 8, 'a slot reset and three turns per variant')
     assert(bodies.every((b) => b.stream === false && b.id_slot === 0 && b.max_tokens === 1 && b.redstart_retrieval_report === true), 'request shape')
     eq(bodies.filter((b) => b.redstart_retrieval === false).length, 5, 'the off turns and both resets opt out; the server turns do not')
+    // The server turns ask (master plan Phase 1): an account-wide key names no surface.
+    assert(bodies.filter((b) => b.redstart_retrieval === true).length === bodies.length - 5, 'a server turn did not ask for retrieval')
     eq(nest.state.declaredHostTools, [], 'no host-resolved tools asked for')
     assert(lines.some((l) => l === 'turns 2-3: 0 cache miss(es), prefilled 200 tokens in 100 ms'), lines.join('\n'))
     // A miss: the prefix falls under half the last prompt.

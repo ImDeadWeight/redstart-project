@@ -157,7 +157,9 @@ export async function main(argv, io = {}) {
       chat_template_kwargs: { enable_thinking: false },
       redstart_retrieval_report: true,
       ...(conversationId ? { redstart_conversation_id: conversationId } : {}),
-      ...(variant === 'off' ? { redstart_retrieval: false } : {}),
+      // server asks for retrieval: on an account-wide key, which names no
+      // surface, it would not run otherwise (master plan Phase 1).
+      redstart_retrieval: variant !== 'off',
       ...(variant !== 'off' && opts.discover ? { redstart_retrieval_withhold: [opts.discover] } : {}),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)

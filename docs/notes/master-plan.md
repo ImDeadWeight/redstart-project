@@ -233,6 +233,25 @@ Set it back to `scored` for arm A so the run matches B0, or run it as is and
 label the row `pins-only`. Change only that field: restoring the backup
 would undo every other profile change made since.
 
+**How to run the three arms** (written 2026-11-17, after 3.1). Ornith
+loaded, the bench account's key in `REDSTART_BENCH_API_KEY`, and the bench
+and measure scripts always run **from the tip checkout**. They only talk
+HTTP. The tip's scripts ask for retrieval (`redstart_retrieval: true`),
+which an account-wide key needs since Phase 1. `phase3-arm-a`'s own
+`measure-tool-cache.mjs` does not, so its "server" variant would quietly
+measure "off".
+
+| Arm | Nest runs from | Nest → Tools → Tool retrieval | Commands, from `redstart-nest/` at the tip |
+|---|---|---|---|
+| A | a worktree at `phase3-arm-a` | on; profile `growth` set back to `scored` (above) | `node scripts/agent-bench/run.mjs --model-label "Ornith-1.5-9B arm A" --repeat 3 --expect-retrieval scorer=fused,growth=scored`, then `node scripts/measure-tool-cache.mjs` |
+| B | the tip | on, How: per conversation (it is bypassed) | `... --model-label "Ornith-1.5-9B arm B" --repeat 3 --retrieval off`, then `node scripts/measure-tool-cache.mjs` (read its `off` rows) |
+| C | the tip | on, How: "Fixed list, the rest in a catalog"; Catalog-only tools as the defaults | `... --model-label "Ornith-1.5-9B arm C" --repeat 3 --expect-retrieval mode=catalog`, then `node scripts/measure-tool-cache.mjs` (read its `server` rows) |
+
+For the worktree, remove its `node_modules` junctions with `rmdir` before
+`git worktree remove`: that removal once wiped chat-ui's dependencies.
+Arm C's runs also log `innerArgsProblem` for every `call_tool` call
+(benchmarks H3). That count decides whether `describe_tool` comes back (3.1).
+
 **Bar (U-S3, DECIDED 2026-11-17, as proposed):** B or C within noise of A
 (≥ 76%) with ≤ 2 cache-miss turns per run. C over B on a tie, because C
 keeps working when an admin installs ten plugins. **If neither passes:**

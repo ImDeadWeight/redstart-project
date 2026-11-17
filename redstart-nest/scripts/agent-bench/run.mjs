@@ -28,8 +28,8 @@
 //                             (stop before the first task unless Nest's
 //                              retrieval settings match: one probe request
 //                              reads x-redstart-retrieval-config. Keys:
-//                              scorer, growth, text, min, callTool, floor,
-//                              rel, margin. Benchmarks H1)
+//                              mode, scorer, growth, text, min, callTool,
+//                              floor, rel, margin. Benchmarks H1)
 //
 // Login on: put the bench account's API key in REDSTART_BENCH_API_KEY (or
 // pass --api-key, which then sits in your shell history). Use a dedicated
