@@ -655,7 +655,8 @@ found after the first draft:
 So the Nest terminal's remaining purpose is server-side work in background
 tasks. Nest only, owner only (U3), and built **after** the runtime (U6). A
 Twig terminal is not planned until someone asks for it. **(2026-11-17: the
-user asked. Section 11 plans it, and U11 parks the Nest terminal.)**
+user asked. Section 11 plans it, and U11, revised the same day, removes
+the Nest terminal.)**
 
 **U3 — DECIDED 2026-11-10: owner only.** Owner
 tier only, not admin, until an isolation backend (D20) is real, because of the
@@ -1325,14 +1326,60 @@ Consequences to state wherever they matter: a Twig tool is absent on phones
 and in background tasks (until delegation, Phase 7), and Nest's policy
 reaches it only by a ban.
 
-### U11 — The Nest terminal (DECIDED 2026-11-17: keep it, parked)
+### U11 — The Nest terminal (REVISED 2026-11-17: removed)
 
-Phase 4 stays as built (section 10): off by default, owner only. Its one
-real job is a background task run by the owner that must run a program on
-the server. No further investment: the named extra folders offered after the
-first try (so a command could reach the Git capability's repos folder) are
-not built, and are recorded as a gap. Revisit if background tasks start
-needing it.
+**Revised later the same day**, in the architecture review
+(`master-plan.md`, Phase 2). The user: "we should amend the current agent
+runtime implementation plan to get rid of the terminal from nest if it
+costs." It does cost: about 2,400 lines across 50 files (commits f587948 to
+3bcf4fd), two suites, an owner-only rule threaded through permissions,
+roles, the system prompt and `GET /egress`, a launcher card, and a
+security.md section, all to serve one job (an owner's background task that
+runs a program on the host) that no task has needed yet. A command spawned
+by the daemon is owner-equivalent access to the host with no sandbox (D20),
+so the surface is also the most dangerous one Nest has.
+
+The original U11 (keep it, parked) is superseded. D45 stands unchanged: it
+says where a tool belongs, and a terminal belongs on the user's machine.
+
+**Removed** (one or more commits, not a revert: the branch has later
+commits on top):
+- `daemon/terminal-tool.mjs`, `daemon/terminal-config.mjs`, and their
+  suites `test-terminal-tool.mjs`, `test-terminal-config.mjs` (from
+  `package.json` and `ci.yml` both).
+- `capabilities:set-terminal` (`ipc/capabilities.mjs`), the `terminal`
+  entries in `tools-storage.mjs`, `gateway-config.mjs`, `tools-definitions.mjs`,
+  `tool-metadata.mjs`, `src/api/redstart.ts`, `src/types.ts`.
+- `ownerOnlyTerminal` in `permissions.mjs` and its `test-roles.mjs` cases.
+- The terminal line in `system-prompt.mjs` (and its `test-system-prompt.mjs`
+  cases), `commandsReachNetwork` in `GET /egress` (3bcf4fd).
+- The server-side command-scoped grants: the `scope` on grants in
+  `approval-grants.mjs` / `approval-ledger.mjs` / `approval-routes.mjs`, and
+  `SCOPED_GRANT_TOOLS`, `grantScopeFor`, `sameScope`, `scopeLabel`,
+  `commandLine` in `shared/agent-core/approval.mjs`, with their
+  `test-approvals.mjs` cases.
+- `TerminalCapabilityCard.tsx` and its slot in `ToolsTab.tsx`.
+- The `.home` handling in `conversation-workspace.mjs` if nothing else uses
+  it.
+- `docs/security.md` → Terminal, the terminal rows in
+  `docs/configuration.md`, the provider in `test-provider-conformance.mjs`.
+- The p4 bench tasks go back to what they were before Phase 4: measuring
+  workarounds (`scripts/agent-bench/tasks/README.md`).
+
+**Kept**, because Phase 9 uses them:
+- `shared/command-exec.mjs` and `test-command-exec.mjs` (D49: Twig's
+  executor).
+- The `execute` tool class and its `test-tool-policy.mjs` cases (D48 puts
+  Twig's terminal in that class).
+- chat-ui's command card and per-command "Always allow"
+  (`ChatMessageActionCardPermissionRequest.svelte`, `permissions.svelte.ts`,
+  `approvals.test.ts`) **only if U12 picks (c)**, where the rule moves to the
+  client; otherwise they go with the rest.
+
+Gaps that close with it: the Git-folder reach, background processes, the
+first-argument grant caveat and the PATH caveat in the implementation doc's
+Phase 4 gaps no longer apply. Phase 4's owed click test and p4 run are
+dropped. Its place in the order is `master-plan.md`, Phase 2.
 
 ### Phase 9 — Twig terminal (decision level; re-plan to module level when reached)
 
@@ -1366,22 +1413,74 @@ tool by name, and a role can withhold Twig's tools. The tool's name follows
 reasons, so a new prefix such as `twig_` needs a row in that table and the
 contract test).
 
-**U12 — Shell line or argv. OPEN.** (a) A PowerShell command line: pipes,
+**D51 — The command runs in a Windows sandbox (U-S5, decided 2026-11-17 in
+`master-plan.md`).** A small native helper, `twig-sandbox.exe`, built in
+Twig's Rust workspace and shipped and signed with the installer, is the one
+native piece. twigd spawns it with no shell (D49's executor still does the
+timeout, tree kill and output cap) and passes the granted folder, the
+network choice (D52) and the line. The helper starts `powershell.exe
+-NoProfile -NonInteractive -Command <line>` under an AppContainer profile
+whose SID is granted write access to the granted folder only, with no
+`internetClient` capability unless D52 allows the network, inside a Job
+Object. This changes D47: writes are now contained to the folder; reads of
+what every app may read are not. The card's rules (U12) do not change
+because a sandbox exists.
+- **8.0 is a spike, before anything else in the phase.** It answers: does
+  PowerShell start and run `git`, `node` and `python` from the user's PATH
+  inside the AppContainer (user-profile installs may need read grants); how
+  the folder's added ACL entry is removed when the grant is revoked or Twig
+  is uninstalled; whether Job Object limits hold for the whole tree.
+- **Fallback, decided now:** if AppContainer cannot run those tools, try a
+  restricted token with low integrity. If neither works, Phase 9 ships
+  without the sandbox (the card and (c) only, off by default), the gap goes
+  in `docs/security.md` → Known gaps, and the sandbox is re-planned on its
+  own.
+- macOS (U13) uses Seatbelt for the same confinement.
+
+**D52 — Network is off inside the sandbox by default.** A line Twig
+classifies as "uses the network" (or "can't tell") gets an "Allow network
+for this command" choice on its card. It applies to that one call; there is
+no standing network grant, and an "Always allow" rule never carries one.
+
+**U12 — Shell line or argv. DECIDED 2026-11-17: (c).** The card also shows a
+classification Twig computes from the line ("reads", "changes files",
+"deletes", "uses the network", "can't tell"), never text the model wrote.
+This defines the scope D48 asks for. The options as weighed: (a) A PowerShell command line: pipes,
 redirection and scripts work, which is what "PowerShell in Twig" suggests;
 the whole line is code, so every call asks and there is no "Always allow"
 (Yellowscript's `ws_run_command` posture). (b) argv only, like Nest's
 run_command: "Always allow `git status`" becomes possible, but most of what
-a user wants from a shell does not fit. Recommendation: (a), with
-Yellowscript's rule of no always-allow.
+a user wants from a shell does not fit. **(c), added 2026-11-17: the line,
+with prefix rules for simple lines only.** The model sends a PowerShell line
+as in (a). A rule such as "Always allow `git status`" matches a line only
+when the line is one plain command (no `|`, `;`, `&&`, `||`, redirection,
+`$(…)`, backticks, script blocks or `&` call operator) and its words start
+with the rule's words. Anything compound, or anything the check cannot
+classify, asks every time. This is how Claude Code's permission rules treat
+shell commands on the user's own machine. Cost: a small, conservative
+tokenizer for PowerShell (in a new `shared/agent-core/command-rules.mjs`),
+whose failure mode must be "ask", never "allow"; and the same first-word
+caveat Phase 4 had (`node build.mjs` allowed runs whatever build.mjs says).
+Chosen: (c), with the tokenizer kept conservative and tested against the
+bypass shapes.
 
-**U13 — macOS. OPEN.** Twig's tree here is Windows only. A Mac Twig would
-use zsh with the same rules; plan it when a Mac Twig ships.
+**U13 — macOS. SETTLED 2026-11-17 (`master-plan.md`).** zsh, a zsh tokenizer
+for (c), Seatbelt for D51's confinement. Built only after a Mac Twig has
+run on a real Mac; until then the terminal is Windows only.
 
-**U14 — Where Phase 9 goes. OPEN.** After the tool-retrieval branch's owed
-benchmark runs, or before. It needs nothing from Phases 5 to 7.
+**U14 — Where Phase 9 goes. DECIDED 2026-11-17: after `master-plan.md`
+Phase 7 step 3** (the server-side loop's client-tool delegation), so it is
+built once, as a delegated client tool that also works in background tasks
+while Twig is connected. In `master-plan.md` this phase is Phase 8.
+
+**Off by default.** Twig shows the terminal behind an "advanced" switch; the
+purpose-built tools stay the default for people who cannot read PowerShell.
 
 Tests when built: the shared executor's suite already covers spawn, kill and
 caps; Twig's own suite adds the folder grant (the page cannot set it), the
-card for an `execute` client tool never offering always-allow, the line
-reaching PowerShell as one argument, and a ban on the name stripping it at
-the gateway.
+tokenizer against the bypass shapes (every compound or unparseable line
+asks), an "Always allow" rule never matching a compound line, the computed
+classification, the line reaching PowerShell as one argument, a write
+outside the granted folder failing inside the sandbox, the network blocked
+unless allowed for that call, and a ban on the name stripping it at the
+gateway.

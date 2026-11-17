@@ -174,9 +174,12 @@ Every provider must pass the same invariant battery — `scripts/test-provider-c
 
 The chat-ui's agentic loop runs the full cycle — model emits a tool call, the chat-ui executes it through the MCP server, the result feeds the next turn — with streaming preserved throughout. The loop itself is host-agnostic code in `shared/agent-core/` (plain ESM, no DOM, no Node built-ins); chat-ui hosts it by supplying ports for the model stream, the tool executors, the permission prompt, the turn-limit prompt and steering, so a second host (a Node benchmark, and later the daemon) runs the same loop rather than a copy.
 
-### Centralized MCP management
+### Where a tool server lives
 
-MCP servers are managed in **one place — Redstart Nest** — not per device. Clients carry no MCP configuration UI; they fetch the active server list on startup and configure themselves. Add or remove a tool server once, and every client picks it up on its next load.
+MCP says how a tool is called, not where it runs, so Redstart has tool hosts on both sides, and the rule for choosing one is about what the tool acts on.
+
+- **On Nest** when it works on data Nest holds, must work from a phone or a plain browser, must be callable by a background task, or should serve every account from one install. Built-in capabilities and admin-installed [plugins](capabilities.md#plugins) are here. They are managed in one place: add or remove one once, and every client picks it up on its next load, with the same policy for all of them.
+- **On the client** when it acts on the user's own machine: their files, their desktop, a secret that should not leave their PC. Twig's granted-folder `fs_*` tools are here, and so are the stdio MCP servers in Twig's own registry (`twig-mcp.json`), which twigd spawns on the user's PC and which is never synced from Nest. These are absent on phones and in background tasks, and Nest's policy reaches them only by a ban on their names (see [`tool-namespacing.md`](tool-namespacing.md)).
 
 ---
 

@@ -5,7 +5,17 @@ what was built, phase by phase: deviations from the plan, and gaps carried
 forward. Branch: `feat/agent-core`, from main @ 224d121 (alpha.12, PR #38
 merged).
 
-## Where we left off (2026-11-17: Phase 4 built and PARKED (U11); next: Phase 9, the Twig terminal, planned at decision level in plan section 11)
+## Where we left off (2026-11-17: Phase 4 to be REMOVED (U11 revised); next: `master-plan.md` Phase 1; the Twig terminal is its Phase 8)
+
+**2026-11-17, later.** An architecture review with the user produced
+`master-plan.md` (tool retrieval cut back to a fixed set plus a
+deferred catalog, the Nest terminal removed, skills and AGENTS.md, splitting
+the long host functions, and the loop moving to the server as an open
+decision). U11 is revised: the Nest terminal is removed; the removal list
+and what Phase 9 keeps are in the plan's section 11. U12 gained a third
+option (c), the line with prefix rules for simple lines. What still needs a
+person to use it is in `testing-checklist.md`. Nothing in the code has
+changed yet.
 
 **2026-11-17.** After a first try (the model answered "git status -s" with
 the read-only git_status, because Terminal was never switched on, and the
