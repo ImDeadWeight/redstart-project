@@ -519,14 +519,6 @@ export function approvalRule(name) {
   return override && RULE_STRICTNESS[override] > RULE_STRICTNESS[fromClass] ? override : fromClass
 }
 
-// ---------------------------------------------------------------------------
-// Grant scope (agent-runtime D13, D19; Phase 4 P4-e): run_command's standing
-// grants cover one program and first argument. The rule lives in
-// shared/agent-core/approval.mjs, so Nest and chat-ui compute the same scope;
-// re-exported here beside the approval rule it belongs with.
-// ---------------------------------------------------------------------------
-export { SCOPED_GRANT_TOOLS, MAX_SCOPE_PART_CHARS, isScopedTool, grantScopeFor, sameScope } from '../../shared/agent-core/approval.mjs'
-
 /** Does the server refuse this tool's calls without an approval or grant? */
 export function isApprovalEnforced(name) {
   if (HOST_RESOLVED_TOOL_NAMES.includes(name)) return false

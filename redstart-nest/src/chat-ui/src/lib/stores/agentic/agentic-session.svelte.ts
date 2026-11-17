@@ -42,7 +42,7 @@ export class AgenticSessionState {
 	/** Dedicated reactive state for pending permission requests (ensures immediate UI updates) */
 	pendingPermissions = new SvelteMap<
 		string,
-		{ toolName: string; serverLabel: string; args?: Record<string, unknown> | null } | null
+		{ toolName: string; serverLabel: string } | null
 	>();
 
 	/** Non-reactive: stores resolve functions for pending permission Promises */
@@ -130,7 +130,7 @@ export class AgenticSessionState {
 
 	pendingPermissionRequest(
 		conversationId: string
-	): { toolName: string; serverLabel: string; args?: Record<string, unknown> | null } | null {
+	): { toolName: string; serverLabel: string } | null {
 		return this.pendingPermissions.get(conversationId) ?? null;
 	}
 

@@ -6,7 +6,6 @@
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { permissionsStore } from '$lib/stores/permissions.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { isScopedTool, scopeLabel } from '$lib/agent-core';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	let expandedGroups = new SvelteSet<string>();
@@ -100,39 +99,19 @@
 							</div>
 
 							<div class="flex w-20 shrink-0 justify-center">
-								{#if isScopedTool(toolName)}
-									<!-- run_command: always allowed one command at a time, from its card. -->
-									<span class="text-[11px] text-muted-foreground" title="Choose Always allow on a command's card">per command</span>
-								{:else}
-									<Checkbox
-										checked={isAlwaysAllowed}
-										onCheckedChange={() => {
-											if (isAlwaysAllowed) {
-												permissionsStore.revokeTool(permissionKey);
-											} else {
-												permissionsStore.allowTool(permissionKey);
-											}
-										}}
-										class="h-4 w-4"
-									/>
-								{/if}
+								<Checkbox
+									checked={isAlwaysAllowed}
+									onCheckedChange={() => {
+										if (isAlwaysAllowed) {
+											permissionsStore.revokeTool(permissionKey);
+										} else {
+											permissionsStore.allowTool(permissionKey);
+										}
+									}}
+									class="h-4 w-4"
+								/>
 							</div>
 						</div>
-						{#if isScopedTool(toolName)}
-							{#each permissionsStore.scopedGrants.filter((g) => g.tool === toolName) as grant (grant.id)}
-								<div class="ml-4 flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
-									<span class="min-w-0 flex-1 truncate">
-										Always allowed: <code class="font-mono">{scopeLabel(grant.scope)}</code>
-									</span>
-									<button
-										class="rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground"
-										onclick={() => permissionsStore.revokeScopedGrant(grant.id)}
-									>
-										Revoke
-									</button>
-								</div>
-							{/each}
-						{/if}
 					{/each}
 					</div>
 				</Collapsible.Content>

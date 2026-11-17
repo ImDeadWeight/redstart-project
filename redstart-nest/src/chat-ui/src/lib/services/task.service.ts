@@ -1,7 +1,7 @@
 import { resolveApiPath } from '$lib/utils/api-fetch';
 import { browserTimeZone } from '$lib/utils/api-headers';
 import { conversationHeaders } from './database.service';
-import type { AskRequest, GrantScope } from '$lib/agent-core';
+import type { AskRequest } from '$lib/agent-core';
 
 /**
  * TaskService — the daemon's background-task routes (agent-runtime Phase 3.6,
@@ -41,8 +41,7 @@ export type TaskWaiting =
 			callId: string;
 			tool: string;
 			rule: string;
-			/** scope: what "Always allow" would grant (run_command: program + first argument), from Nest. */
-			approval: { id: string; tool: string; summary: string; expiresAt?: number; scope?: GrantScope | null };
+			approval: { id: string; tool: string; summary: string; expiresAt?: number };
 	  }
 	| { kind: 'model' };
 

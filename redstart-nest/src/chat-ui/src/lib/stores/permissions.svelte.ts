@@ -16,18 +16,10 @@
  * are sent to /approvals/grants/import, which keeps only tools that may be
  * always allowed (never a delete), and then leave `localStorage`. A flag stops
  * it repeating.
- *
- * Scoped grants (run_command, agent-runtime Phase 4): such a tool is never
- * always allowed as a whole. Its grants each cover one program and first
- * argument ("git status"), are made by Nest from an approved call (the card's
- * "Always allow `git status`" posts 'always' in the approval handshake), and
- * are kept apart here, so `hasTool` stays false for the tool and
- * `coversCall` answers per call.
  */
 
 import { ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY } from '$lib/constants';
 import { apiFetch, apiPost } from '$lib/utils/api-fetch';
-import { isScopedTool, grantScopeFor, sameScope, type GrantScope } from '$lib/agent-core';
 
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
@@ -42,22 +34,12 @@ export function nestToolOfKey(key: string): string | null {
 interface ServerGrant {
 	id: string;
 	tool: string;
-	scope?: GrantScope | null;
-}
-
-/** A scoped grant as the Settings list shows it. */
-export interface ScopedGrant {
-	id: string;
-	tool: string;
-	scope: GrantScope;
 }
 
 class PermissionsStore {
 	private _tools = $state(new SvelteSet<string>());
 	/** Nest tool name → its grant id, from GET /approvals/grants. */
 	private _server = $state(new SvelteMap<string, string>());
-	/** Scoped grants (run_command), by grant id. */
-	private _scoped = $state(new SvelteMap<string, ScopedGrant>());
 
 	constructor() {
 		try {
@@ -90,52 +72,8 @@ class PermissionsStore {
 		return nest ? this._server.has(nest) : this._tools.has(key);
 	}
 
-	/**
-	 * Does a standing grant let THIS call through without the card? The same
-	 * as hasTool for every tool but a scoped one, whose grants are matched
-	 * against the call's own arguments. Nest checks the same again.
-	 */
-	coversCall(key: string, args: unknown): boolean {
-		const nest = nestToolOfKey(key);
-		if (!nest || !isScopedTool(nest)) return this.hasTool(key);
-		const scope = grantScopeFor(nest, args);
-		if (!scope) return false;
-		for (const g of this._scoped.values()) {
-			if (g.tool === nest && sameScope(g.scope, scope)) return true;
-		}
-		return false;
-	}
-
-	/** The scoped grants (run_command's commands), for Settings. */
-	get scopedGrants(): ScopedGrant[] {
-		return [...this._scoped.values()];
-	}
-
-	/** Revoke one scoped grant by id. */
-	async revokeScopedGrant(id: string): Promise<void> {
-		try {
-			await apiFetch(`/approvals/grants/${encodeURIComponent(id)}`, { method: 'DELETE' });
-			this._scoped.delete(id);
-		} catch (err) {
-			console.warn('[permissions] could not revoke a command grant on Nest:', err);
-		}
-	}
-
-	/** Reload Nest's grants (after the handshake made a scoped one). */
-	async reloadGrants(): Promise<void> {
-		await this.loadGrants();
-	}
-
 	allowTool(key: string): void {
 		const nest = nestToolOfKey(key);
-		if (nest && isScopedTool(nest)) {
-			// Nest refuses a whole-tool grant for it; only an approved
-			// command's card can make one (its scope comes from that call).
-			console.warn(
-				`[permissions] "${nest}" is always allowed one command at a time, from its card.`
-			);
-			return;
-		}
 		if (nest) {
 			void this.grantOnServer(nest);
 			return;
@@ -172,12 +110,7 @@ class PermissionsStore {
 		try {
 			const { grants } = await apiFetch<{ grants: ServerGrant[] }>('/approvals/grants');
 			this._server.clear();
-			this._scoped.clear();
-			for (const g of grants ?? []) {
-				if (!g?.tool || !g?.id) continue;
-				if (g.scope) this._scoped.set(g.id, { id: g.id, tool: g.tool, scope: g.scope });
-				else if (!isScopedTool(g.tool)) this._server.set(g.tool, g.id);
-			}
+			for (const g of grants ?? []) if (g?.tool && g?.id) this._server.set(g.tool, g.id);
 			return true;
 		} catch {
 			return false;
