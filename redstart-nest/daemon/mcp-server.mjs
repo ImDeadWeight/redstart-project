@@ -341,10 +341,12 @@ export function toolCatalogFor(account, { hostTools = [] } = {}) {
  * @param {any} account null only with auth off
  * @param {string} toolName
  * @param {any} args
- * @param {{ conversationId?: string, approvalId?: string, session?: object }} [opts]
+ * @param {{ conversationId?: string, approvalId?: string, session?: object, enforceApproval?: boolean }} [opts]
  *   conversationId is a claim, verified against the account here.
+ *   enforceApproval is set by call_tool's dispatcher only (U-S6), never from
+ *   anything a client sends.
  */
-export async function callToolAs(account, toolName, args, { conversationId, approvalId, session } = {}) {
+export async function callToolAs(account, toolName, args, { conversationId, approvalId, session, enforceApproval = false } = {}) {
   const cfg = configFor(account)
   const ctx = { account, session }
 
@@ -360,7 +362,9 @@ export async function callToolAs(account, toolName, args, { conversationId, appr
   // are enforced (every destructive tool in Phase 2), and for every client,
   // an API key included (decided 2026-11-12). A standing grant covers a
   // 'prompt' tool; an 'always' tool needs a consumed approval each call.
-  if (isApprovalEnforced(toolName)) {
+  // enforceApproval: call_tool's inner call (U-S6), enforced for every rule
+  // but 'none', since the client's card saw only "call_tool".
+  if (isApprovalEnforced(toolName) || (enforceApproval && approvalRule(toolName) !== 'none')) {
     const gate = approvalGate(toolName, args, approvalId, ctx)
     if (!gate.ok) {
       logEvent('tool', 'approval_needed', { tool: toolName, class: policy.cls })
@@ -372,7 +376,10 @@ export async function callToolAs(account, toolName, args, { conversationId, appr
     }
   }
 
-  const callCtx = { ...ctx, conversationId: verifiedConversationId(account, conversationId) }
+  // approvalId rides along for call_tool alone (search-tools-provider
+  // proxyCall), which hands it to the inner call's gate. A provider that is
+  // not a dispatcher never reads it.
+  const callCtx = { ...ctx, conversationId: verifiedConversationId(account, conversationId), approvalId }
 
   const startedAt = Date.now()
   for (const provider of resolveProviders()) {

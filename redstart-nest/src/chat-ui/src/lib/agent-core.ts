@@ -59,7 +59,8 @@ export {
 	APPROVAL_ID_META_KEY,
 	APPROVAL_RULE_META_KEY,
 	APPROVAL_ENFORCED_META_KEY,
-	approvalRequired
+	approvalRequired,
+	callToolTarget
 } from '../../../../../shared/agent-core/approval.mjs';
 export {
 	SUMMARY_MAX_TOKENS,

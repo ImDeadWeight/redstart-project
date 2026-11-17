@@ -1627,7 +1627,10 @@ await test('🔒 call_tool is off by default, and then not even answered', async
   assert(await searchProvider.callTool('call_tool', { name: 'git_status' }, catalogConfig()) === null, 'answered while off')
 })
 
-await test('🔒 call_tool proxies a read through the policy-checked caller, and refuses what needs approval', async () => {
+await test('🔒 call_tool proxies through the policy-checked caller, and makes it enforce every approval but a read\'s (U-S6)', async () => {
+  // Until master plan Phase 3.1 a write or a delete was refused outright;
+  // now it goes through with enforceApproval, so Nest's gate holds it until
+  // the person decides the INNER call (mcp-server callToolAs).
   const cfg = { toolRetrieval: { enabled: true, callTool: true } }
   const writes = [{ name: 'create_document', description: 'Create a document' }, { name: 'memory_forget', description: 'Forget' }, { name: 'ask_user', description: 'Ask' }]
   searchProvider.setToolCatalogProvider(() => [...catalog, ...writes])
@@ -1636,11 +1639,21 @@ await test('🔒 call_tool proxies a read through the policy-checked caller, and
   const ok = await searchProvider.callTool('call_tool', { name: 'git_status', arguments: { repo: 'x' } }, cfg, { account: { username: 'u' }, conversationId: 'conv' })
   assert(ok.content[0].text === 'ok' && calls.length === 1 && calls[0].name === 'git_status' && calls[0].args.repo === 'x', JSON.stringify(calls))
   assert(calls[0].account.username === 'u' && calls[0].opts.conversationId === 'conv', 'the caller identity was not passed')
-  for (const name of ['create_document', 'memory_forget', 'ask_user', 'call_tool', 'search_tools']) {
+  assert(calls[0].opts.enforceApproval === false, 'a read was made to wait for an approval')
+  for (const name of ['create_document', 'memory_forget']) {
+    await searchProvider.callTool('call_tool', { name, arguments: { a: 1 } }, cfg, { approvalId: 'appr-1' })
+    const c = calls.at(-1)
+    assert(c.name === name && c.opts.enforceApproval === true && c.opts.approvalId === 'appr-1', `${name}: ${JSON.stringify(c.opts)}`)
+  }
+  // Still refused before the caller: a host-resolved tool, and the discovery
+  // tools themselves (not in the searchable catalog at all).
+  const before = calls.length
+  for (const name of ['ask_user', 'call_tool', 'search_tools']) {
     const r = await searchProvider.callTool('call_tool', { name }, cfg, {})
     assert(r.isError, `${name} went through call_tool`)
   }
-  assert(calls.length === 1, `a refused call reached the caller: ${calls.map((c) => c.name)}`)
+  assert(calls.length === before, `a refused call reached the caller: ${calls.slice(before).map((c) => c.name)}`)
+  calls.length = 1
   searchProvider.setToolCatalogProvider(() => catalog.filter((t) => t.name !== 'git_status'))
   const banned = await searchProvider.callTool('call_tool', { name: 'git_status' }, cfg, {})
   assert(banned.isError && calls.length === 1, 'a banned tool was called by name')

@@ -53,6 +53,7 @@ import {
   SUMMARY_MAX_TOKENS, compactionBudget, countsFromTotal, finishCompaction, messageText, planCompaction, summaryPrompt,
 } from '../../shared/agent-core/compaction.mjs'
 import { ASK_USER_TOOL } from '../../shared/agent-core/ask-user.mjs'
+import { callToolTarget } from '../../shared/agent-core/approval.mjs'
 import { UPDATE_PLAN_TOOL, NUDGE_PREFIX } from '../../shared/agent-core/update-plan.mjs'
 import * as store from './task-store.mjs'
 import * as conversations from './conversations-storage.mjs'
@@ -798,7 +799,16 @@ async function runOnce(task, l, conv, generation, { resume }) {
     },
     gate: {
       approve: async (call, sig) => {
-        const name = call.function.name
+        let name = call.function.name
+        let args
+        // call_tool is decided as the call it carries (U-S6): the approval is
+        // for that tool and those arguments, which is what Nest enforces when
+        // call_tool passes it on. Unreadable or naming nothing: call_tool
+        // itself, and Nest answers it.
+        const target = name === 'call_tool'
+          ? (() => { try { return callToolTarget(name, parseArgs(call.function.arguments)) } catch { return null } })()
+          : null
+        if (target) ({ name, args } = target)
         const rule = approvalRule(name)
         if (rule === 'none') return true
         // Not offered this turn (banned, withdrawn, made up): nothing to ask
@@ -806,8 +816,9 @@ async function runOnce(task, l, conv, generation, { resume }) {
         if (!turnCtx.toolNames.has(name)) return true
         const t = store.getTask(task.id)
         if (rule === 'prompt' && grantCovers(t.accountKey, name)) return true
-        let args
-        try { args = parseArgs(call.function.arguments) } catch { return true } // execute reports the bad arguments
+        if (!target) {
+          try { args = parseArgs(call.function.arguments) } catch { return true } // execute reports the bad arguments
+        }
         const pending = ledger.requestApproval({ accountKey: t.accountKey, tool: name, args, holder: task.id })
         l.heldApprovals.add(pending.id)
         const decision = await new Promise((resolve) => {
@@ -825,7 +836,8 @@ async function runOnce(task, l, conv, generation, { resume }) {
         if (decision === 'once' || decision === 'always') {
           approved.set(call.id, pending.id)
           // A tool Nest does not enforce never spends the approval: clear it.
-          if (!isApprovalEnforced(name)) ledger.consume(pending.id, { accountKey: t.accountKey, tool: name, args })
+          // Through call_tool it does enforce (U-S6), so the id is passed on.
+          if (!isApprovalEnforced(name) && !target) ledger.consume(pending.id, { accountKey: t.accountKey, tool: name, args })
           setRunning()
           return true
         }

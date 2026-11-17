@@ -1137,6 +1137,17 @@ await test('the core imports only its own files: no Svelte, no DOM, no node: bui
   return `${files.length} files`
 })
 
+await test('🔒 callToolTarget: a call_tool call is the call it carries, and nothing else is (U-S6)', async () => {
+  const { callToolTarget } = await import('../../shared/agent-core/approval.mjs')
+  eq(callToolTarget('call_tool', { name: 'delete_file', arguments: { path: 'a' } }), { name: 'delete_file', args: { path: 'a' } }, 'carried')
+  eq(callToolTarget('call_tool', { name: ' write_file ' }), { name: 'write_file', args: {} }, 'no arguments are {}')
+  eq(callToolTarget('call_tool', { name: 'write_file', arguments: ['x'] }), { name: 'write_file', args: {} }, 'an array is {}, as Nest reads it')
+  for (const bad of [{}, { name: '' }, { name: 42 }, { name: 'call_tool' }, null, 'delete_file']) {
+    eq(callToolTarget('call_tool', bad), null, `call_tool with ${JSON.stringify(bad)}`)
+  }
+  eq(callToolTarget('delete_file', { name: 'x' }), null, 'any other tool')
+})
+
 const passed = results.filter((r) => r.pass).length
 console.log(`\n${passed}/${results.length} passed\n`)
 if (passed !== results.length) process.exit(1)

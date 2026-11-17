@@ -194,6 +194,28 @@ retrieval: 3.3 does that after 3.2.
 commit 1 changes the File System set it measured. Arms B and C run on the
 tip after commit 5. B: `--retrieval off`. C: `mode: 'catalog'`.
 
+**3.1 built 2026-11-17:** `4608b02`, `3890b16`, `6a5a296`, `6fcb71c` and
+the call_tool commit. *Deviations:*
+- File System serves **six**: `create_directory` stays, because upstream's
+  `write_file` fails under a missing folder.
+- The deferral override is **one map** in `tools.json` (`deferral`, keyed by
+  capability or plugin id), not a field on each capability record and
+  plugin record.
+- The retrieval eval was refrozen twice against a local bge sidecar: 88/92,
+  against 90/93 before. The new miss is `s-config`; `u-fs-move` went, since
+  no tool can rename now.
+- `search_tools` in the catalog mode also answers an **exact tool name**
+  with that one row, which is how its no-schema category fallback leads to
+  a schema.
+
+*Gaps:*
+- Nothing in 3.1 has been used in the running app. `testing-checklist.md`
+  has the items: the catalog card through `call_tool` in chat, the Tools
+  tab's two new controls, and a background task's held approval.
+- The browser host was changed under U-S6, an exception to U-S1:
+  `agentic-tool-exec.ts` `gateToolName`. Phase 7 moves it to the server
+  with the rest.
+
 ### 3.2 Measure, before deleting anything
 
 The 32-task set ×3 on Ornith, plus `measure-tool-cache.mjs`:

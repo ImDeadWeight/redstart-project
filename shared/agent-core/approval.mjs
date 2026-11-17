@@ -66,3 +66,34 @@ export function approvalRequired(result) {
 		expiresAt: typeof a.expiresAt === 'number' ? a.expiresAt : 0
 	};
 }
+
+/** Nest's dispatcher for catalog tools (master plan Phase 3.1). */
+export const CALL_TOOL_NAME = 'call_tool';
+
+/**
+ * The tool a call_tool call names, and its arguments, or null when the call
+ * is not a call_tool call or names nothing (U-S6). Every gate (chat-ui's
+ * card, the daemon task runner, the bench's policy) decides a call_tool call
+ * as the call it carries, so a write cannot pass as call_tool's own "read".
+ * Nest enforces the same tool's approval on its side whatever a client
+ * decides (search-tools-provider proxyCall), so a gate that gets this wrong
+ * fails as "not done", never as an unapproved write.
+ *
+ * The arguments are read the way Nest's proxyCall reads them: anything but
+ * a plain object is {}.
+ *
+ * @param {string} name the call's function name
+ * @param {unknown} args the call's arguments, parsed
+ * @returns {{ name: string, args: Record<string, unknown> } | null}
+ */
+export function callToolTarget(name, args) {
+	if (name !== CALL_TOOL_NAME || !args || typeof args !== 'object') return null;
+	const a = /** @type {{ name?: unknown, arguments?: unknown }} */ (args);
+	const inner = typeof a.name === 'string' ? a.name.trim() : '';
+	if (!inner || inner === CALL_TOOL_NAME) return null;
+	const innerArgs =
+		a.arguments && typeof a.arguments === 'object' && !Array.isArray(a.arguments)
+			? /** @type {Record<string, unknown>} */ (a.arguments)
+			: {};
+	return { name: inner, args: innerArgs };
+}

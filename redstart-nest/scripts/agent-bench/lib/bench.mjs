@@ -34,6 +34,7 @@ import { readChatStream } from '../../../../shared/agent-core/chat-stream.mjs'
 import { wireSafeToolCalls, MAX_TOOL_CALLS_PER_REPLY, DENIED_RESULT } from '../../../../shared/agent-core/tool-calls.mjs'
 import { attachmentNote } from '../../../../shared/agent-core/attachment-note.mjs'
 import { formatAskAnswer } from '../../../../shared/agent-core/ask-user.mjs'
+import { callToolTarget } from '../../../../shared/agent-core/approval.mjs'
 import { NUDGE_PREFIX, formatPlanResult, openSteps } from '../../../../shared/agent-core/update-plan.mjs'
 import { argumentProblem, computeMetrics, FILE_SYSTEM_TOOLS } from './metrics.mjs'
 import { answerFromTask } from './ask.mjs'
@@ -456,8 +457,14 @@ export async function runTask(nest, task, opts) {
             gate: {
               approve: async (call) => {
                 const name = call.function.name
-                const cls = toolsByName.get(name)?._meta?.[META_CLASS_KEY]
-                const ok = approves(task.approve, name, cls)
+                // A call_tool call is decided as the tool it names (U-S6), as
+                // chat-ui's card and the task runner do: "reads" must not let a
+                // write through as call_tool's own class.
+                let target = null
+                try { target = callToolTarget(name, parseArgs(call.function.arguments)) } catch { /* call_tool itself */ }
+                const decidedName = target && toolsByName.has(target.name) ? target.name : name
+                const cls = toolsByName.get(decidedName)?._meta?.[META_CLASS_KEY]
+                const ok = approves(task.approve, decidedName, cls)
                 if (!ok) {
                   // The core answers a denial itself; record it as the call and
                   // the error result it is, so the metrics count it.

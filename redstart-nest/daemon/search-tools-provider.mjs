@@ -339,9 +339,18 @@ function describe(searchable, args, cfg) {
 // call_tool (5.5 b): a call that does not change the tool list
 // ---------------------------------------------------------------------------
 // Through callToolAs, so policy, the approval gate, the verified conversation
-// and logging are what a direct call gets. Only tools that need no approval:
-// the client asks the user about a call by the name it sees, which here is
-// call_tool, so a write or a delete through it would skip that question.
+// and logging are what a direct call gets.
+//
+// CALL_TOOL CARRIES APPROVAL (U-S6, master plan Phase 3.1). A client asks the
+// person about a call by the name it sees, which here is call_tool, so Nest
+// cannot leave a write to the client's card the way it does for a direct
+// call. Through call_tool, every inner tool whose rule is not 'none' is
+// ENFORCED here (enforceApproval): with no decision or standing grant it does
+// nothing and returns a pending approval for the INNER tool and arguments,
+// which the client decides and repeats with its id (approval.mjs). That is
+// stricter than a direct call, on purpose: no client, an API key included,
+// can write through call_tool without a decision. Redstart's own clients
+// show the inner tool on their card (approval.mjs callToolTarget).
 
 async function proxyCall(searchable, args, ctx) {
   const { tool, error } = lookup(searchable, args)
@@ -349,12 +358,14 @@ async function proxyCall(searchable, args, ctx) {
   if (HOST_RESOLVED_TOOL_NAMES.includes(tool.name)) {
     return errorResult(`${tool.name} is answered by your application, not this server: call it directly.`)
   }
-  if (approvalRule(tool.name) !== 'none') {
-    return errorResult(`${tool.name} changes or deletes something, so it cannot go through call_tool. It is in your tool list from your next turn (call describe_tool on it); call it directly then.`)
-  }
   if (!toolCaller) return errorResult('Calling tools by name is unavailable.')
   const inner = args?.arguments && typeof args.arguments === 'object' && !Array.isArray(args.arguments) ? args.arguments : {}
-  const result = await toolCaller(ctx?.account ?? null, tool.name, inner, { conversationId: ctx?.conversationId, session: ctx?.session })
+  const result = await toolCaller(ctx?.account ?? null, tool.name, inner, {
+    conversationId: ctx?.conversationId,
+    session: ctx?.session,
+    approvalId: ctx?.approvalId,
+    enforceApproval: approvalRule(tool.name) !== 'none',
+  })
   return result ?? notFound(tool.name)
 }
 

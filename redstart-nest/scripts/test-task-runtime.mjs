@@ -353,6 +353,31 @@ await test('a delete (enforced) carries the approval id to callToolAs, which spe
   eq(w.calls[0].opts.approvalId, id, 'approval id passed')
 })
 
+await test('🔒 a call_tool delete parks on the inner tool and its arguments, and passes the id on (U-S6)', async () => {
+  ledger._reset()
+  const withCallTool = { toolCatalogFor: async () => [...TOOLS, { name: 'call_tool', description: 'call_tool', inputSchema: { type: 'object', properties: {} } }] }
+  const w = fakeWorld([call('c1', 'call_tool', { name: 'delete_file', arguments: { path: 'old.txt' } }), say('Deleted.')], withCallTool)
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'waiting_approval', 'waiting_approval')
+  const waiting = store.getTask(t.id).waiting
+  eq([waiting.tool, waiting.rule, waiting.approval.tool], ['delete_file', 'always', 'delete_file'], 'parked on the inner tool')
+  ledger.decide(waiting.approval.id, ANON_KEY, 'once')
+  await waitFor(() => ended(t.id), 'end')
+  eq([w.calls[0].name, w.calls[0].opts.approvalId], ['call_tool', waiting.approval.id], 'call_tool carried the id')
+  // Not spent by the runner: Nest's gate spends it on the inner call.
+  assert(ledger.consume(waiting.approval.id, { accountKey: ANON_KEY, tool: 'delete_file', args: { path: 'old.txt' } }), 'the runner spent the approval itself')
+})
+
+await test('a call_tool read does not park', async () => {
+  ledger._reset()
+  const withCallTool = { toolCatalogFor: async () => [...TOOLS, { name: 'call_tool', description: 'call_tool', inputSchema: { type: 'object', properties: {} } }] }
+  const w = fakeWorld([call('c1', 'call_tool', { name: 'read_document', arguments: { path: 'a.md' } }), say('Read.')], withCallTool)
+  const t = start(newConversation())
+  await waitFor(() => ended(t.id), 'end')
+  eq([statusOf(t.id), w.calls.map((c) => c.name)], ['done', ['call_tool']], 'ran unasked')
+})
+
 await test('a denied call gets the denial as its result, and the task goes on', async () => {
   ledger._reset()
   const w = fakeWorld([call('c1', 'delete_file', { path: 'x' }), say('OK, I left it.')])

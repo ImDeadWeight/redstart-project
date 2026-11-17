@@ -92,6 +92,20 @@ served from the built bundle).
   account-wide API key gets its whole tool list (Tools tab, "last completion":
   nothing removed by retrieval), while the chat UI on the same Nest is still
   narrowed. Repeat the chat-UI half with login off.
+- [ ] The catalog mode (master plan Phase 3.1): Tools tab → retrieval on →
+  How: "Fixed list, the rest in a catalog". In a chat, ask for something only
+  a deferred tool does (list the File System folder, look at a Git repo).
+  The model should call search_tools, then call_tool, and the answer should
+  be right.
+- [ ] Through call_tool, a write (write_file in the File System folder)
+  shows the approval card **named as write_file**, not call_tool. Approve
+  once: it runs. Ask again: the card comes back. "Always allow": the next
+  one runs without a card. Deny: nothing is written.
+- [ ] The same write from a background task parks it on "waiting for
+  approval" naming write_file, and runs after the approval.
+- [ ] Tools tab → Catalog-only tools: untick Git and save. In the catalog
+  mode, git_status is in the list again (the first tool chosen can be a Git
+  tool without a search).
 - Everything else here waits for `master-plan.md` Phase 3.2, which
   replaces the B1 to B7 runs.
 
