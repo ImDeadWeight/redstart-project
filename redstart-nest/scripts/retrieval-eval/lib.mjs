@@ -146,8 +146,8 @@ export function validateCases(raw, names) {
  * The bench tasks' first user messages as selection cases: the prompt plus
  * the attachment note the bench appends (agent-bench/lib/bench.mjs
  * userMessage), expected = the task's expectTools that the catalog has.
- * Tasks whose expected tools are all missing (run_command before agent-runtime
- * Phase 4) are left out rather than scored as misses.
+ * Tasks whose expected tools are all missing from the catalog are left out
+ * rather than scored as misses.
  *
  * @param {Set<string>} names
  * @param {string} [dir]

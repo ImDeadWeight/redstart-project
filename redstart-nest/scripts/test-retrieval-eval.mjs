@@ -121,7 +121,7 @@ await test('the case set loads, bench tasks included, and each source is there',
   const cases = lib.loadCases(names)
   const sources = [...new Set(cases.map((c) => c.source))].sort()
   eq(sources, ['attachment', 'bench', 'bench-attachment', 'small-model', 'transcript', 'user-phrasing'], 'sources')
-  // run_command does not exist yet (agent-runtime Phase 4): its tasks keep run_python.
+  // Nest has no terminal (master plan Phase 2): the p4 tasks expect run_python.
   assert(cases.filter((c) => c.id.startsWith('bench:')).length === 32, 'every bench task became a case')
   const att = cases.find((c) => c.id === 'a-read-file')
   assert(/Attached file saved to this chat's workspace: letter\.txt/.test(lib.caseMessages(att)[0].content), 'the attachment note was appended')

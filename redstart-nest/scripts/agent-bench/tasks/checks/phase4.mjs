@@ -1,6 +1,7 @@
-// Checks for the tasks that need Phase 4 (run_command). Written before the
-// terminal exists; most fail until then. p4-fix-test can pass early: a model
-// can edit math.mjs with run_python without ever running the tests.
+// Checks for the p4 tasks. Written for agent-runtime Phase 4's run_command,
+// which was built and then removed (master plan Phase 2), so they measure
+// workarounds: what a model does with run_python and the documents tools
+// when there is no terminal. p4-fix-test can pass without running the tests.
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'

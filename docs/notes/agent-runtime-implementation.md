@@ -5,7 +5,12 @@ what was built, phase by phase: deviations from the plan, and gaps carried
 forward. Branch: `feat/agent-core`, from main @ 224d121 (alpha.12, PR #38
 merged).
 
-## Where we left off (2026-11-17: Phase 4 to be REMOVED (U11 revised); next: `master-plan.md` Phase 1; the Twig terminal is its Phase 8)
+## Where we left off (2026-11-17: Phase 4 REMOVED (master plan Phase 2); next: `master-plan.md` Phase 3; the Twig terminal is its Phase 8)
+
+**2026-11-17, implementation.** `master-plan.md` Phase 1 (67ba715) and
+Phase 2 are built. The Nest terminal is gone: see "Phase 4", top, for the
+commits, what was kept and the one deviation (chat-ui's command card went
+too).
 
 **2026-11-17, later.** An architecture review with the user produced
 `master-plan.md` (tool retrieval cut back to a fixed set plus a
@@ -384,7 +389,37 @@ security.md); forks drop the plan; the daemon runtime has no ask/plan ports
 
 ---
 
-## Phase 4 — terminal (planned and built 2026-11-14)
+## Phase 4 — terminal (planned and built 2026-11-14; REMOVED 2026-11-17)
+
+**Removed 2026-11-17** (master plan Phase 2; plan §11, U11 revised), on
+`refactor/simplification-pass`:
+- `ac15116` takes out the server side: the provider, its config, the
+  capability, the owner-only rule, the prompt line and egress flag, the
+  launcher card, server scoped grants and their suites and docs. Hunks in
+  surviving files were reverse-applied from `f587948^..3bcf4fd`.
+- `9bbf4a2` takes out chat-ui's per-command card, store and Settings code,
+  and the shared scope helpers.
+- The 2c commit turns the p4 bench tasks into workaround measures and
+  drops `changedFiles`' `skipDirs`.
+
+Kept for master-plan Phase 8 (Twig terminal): `shared/command-exec.mjs` and
+its suite, and the `execute` class.
+
+**Deviation from §11's "Kept" list, decided by the user 2026-11-17:**
+chat-ui's command card and per-command "Always allow" were removed too. §11
+kept them under U12 (c) on the belief that they were a client-side rule. In
+the code they were a cache of Nest's server-side run_command grants, which
+this removal deletes, so nothing in them fits (c)'s client-side prefix rules
+on a PowerShell line. Phase 8 builds its card fresh; e1df861 is the
+reference.
+
+**Gaps below, after the removal:** closed with the tool: not run in the
+app, the p4 run, the Git-folder reach, background processes, the
+first-argument grant caveat, the PATH caveat, the Twig/Yellowscript note
+and hand-edited entries. **Carried to Phase 8** (they belong to the kept
+executor): macOS never run (the POSIX kill path runs on CI's Ubuntu only),
+and isolation `none` (D20), which Phase 8's sandbox (D51) and Phase 10's
+container replace. The libuv deviation still describes `buildEnv`.
 
 Plan section 10 is the module plan (calls P4-a to P4-f). Branch
 `feat/tool-retrieval-fixes`, nine commits, each through typecheck +

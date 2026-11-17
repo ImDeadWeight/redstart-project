@@ -98,6 +98,16 @@ what Phase 8 keeps (`shared/command-exec.mjs`, the `execute` class, and
 chat-ui's per-command card, since U12 is (c)). The Phase 4 items in
 `testing-checklist.md` are already dropped.
 
+**Built 2026-11-17**, in three commits: `ac15116` (server side), `9bbf4a2`
+(chat-ui and the shared scope helpers), and the bench/leftovers commit (p4
+tasks now measure workarounds, `changedFiles`' `skipDirs` dropped). Kept:
+`shared/command-exec.mjs`, the `execute` class. *Deviation, decided by the
+user while building:* chat-ui's per-command card went too. It turned out to
+be a cache of Nest's server-side run_command grants, not a client rule, so
+it had nothing to give Phase 8's (c). *Gaps:* none new. The executor's
+macOS kill path and `isolation: 'none'` carry to Phase 8 (implementation
+doc, "Phase 4", top).
+
 ## Phase 3 — Fewer tools, a fixed set, a deferred catalog
 
 ### Why

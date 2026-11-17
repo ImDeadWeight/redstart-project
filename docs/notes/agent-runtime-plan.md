@@ -1371,10 +1371,18 @@ commits on top):
   executor).
 - The `execute` tool class and its `test-tool-policy.mjs` cases (D48 puts
   Twig's terminal in that class).
-- chat-ui's command card and per-command "Always allow"
+- ~~chat-ui's command card and per-command "Always allow"
   (`ChatMessageActionCardPermissionRequest.svelte`, `permissions.svelte.ts`,
   `approvals.test.ts`) **only if U12 picks (c)**, where the rule moves to the
-  client; otherwise they go with the rest.
+  client; otherwise they go with the rest.~~ **Removed after all (the user,
+  2026-11-17, while building):** U12 did pick (c), but the code held no
+  client rule. It cached Nest's server-side run_command grants, which this
+  removal deletes. Phase 9 builds the (c) card fresh, with e1df861 as the
+  reference. The generic permission card is unchanged.
+
+**Done 2026-11-17** (master plan Phase 2): `ac15116`, `9bbf4a2` and the
+bench/leftovers commit. The record is in the implementation doc, "Phase 4",
+top.
 
 Gaps that close with it: the Git-folder reach, background processes, the
 first-argument grant caveat and the PATH caveat in the implementation doc's

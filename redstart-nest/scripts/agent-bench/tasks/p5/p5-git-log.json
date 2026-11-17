@@ -11,13 +11,11 @@
   ],
   "approve": "all",
   "withhold": [
-    "run_command",
     "run_python"
   ],
   "expectTools": [
-    "run_command",
     "run_python"
   ],
   "check": "../checks/phase4.mjs#thirdCommit",
-  "notes": "Benchmarks B3 (tool-retrieval-fixes-benchmarks.md): p4-git-log with both code tools withheld: a tool family the conversation has not touched."
+  "notes": "Benchmarks B3 (tool-retrieval-fixes-benchmarks.md): p4-git-log with run_python withheld (both code tools until the Nest terminal was removed, master plan Phase 2): a tool family the conversation has not touched."
 }

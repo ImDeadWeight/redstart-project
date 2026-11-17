@@ -177,15 +177,9 @@ export async function sweepOrphanWorkspaces(documentsRoot, liveConversationIds) 
  * Files in a workspace modified at or after `sinceMs`, relative and
  * '/'-separated, every one re-resolved inside the workspace (so a link that
  * points out is dropped, not reported). Used for "Files changed:".
- *
- * `skipDirs`: folder names never walked into, at any depth. run_command
- * passes `.home` (its HOME), `.git` and `node_modules`, which a clone or an
- * install fills with thousands of files nobody asked to see (agent-runtime
- * P4-d). Default none, which is what run_python has always had.
  */
-export function changedFiles(dir, sinceMs, { limit = 50, skipDirs = [] } = {}) {
+export function changedFiles(dir, sinceMs, { limit = 50 } = {}) {
   const out = []
-  const skip = new Set(skipDirs)
   const walk = (current) => {
     let entries
     try { entries = fs.readdirSync(current, { withFileTypes: true }) } catch { return }
@@ -193,7 +187,7 @@ export function changedFiles(dir, sinceMs, { limit = 50, skipDirs = [] } = {}) {
       if (out.length >= limit) return
       const full = path.join(current, entry.name)
       if (entry.isSymbolicLink()) continue
-      if (entry.isDirectory()) { if (!skip.has(entry.name)) walk(full); continue }
+      if (entry.isDirectory()) { walk(full); continue }
       let st
       try { st = fs.lstatSync(full) } catch { continue }
       if (st.mtimeMs + 1 < sinceMs) continue

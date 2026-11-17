@@ -36,7 +36,7 @@
     { "id": "a-chart", "kind": "selection", "conversation": "Plot this data as a line chart.", "attachments": ["readings.csv"], "expected": ["run_python"], "source": "attachment" },
     { "id": "a-read-file", "kind": "selection", "conversation": "Read the file and tell me what it says.", "attachments": ["letter.txt"], "expected": ["read_document", "run_python"], "source": "attachment", "notes": "\"read the file\" is the File System tools' own wording: the P3 trap." },
 
-    { "id": "t-node-script", "kind": "search", "query": "run node mjs script execute javascript file", "expected": ["run_python"], "source": "transcript", "notes": "Qwen3.6-35B, p4-exit-code, 2026-11-11. run_python until run_command exists." },
+    { "id": "t-node-script", "kind": "search", "query": "run node mjs script execute javascript file", "expected": ["run_python"], "source": "transcript", "notes": "Qwen3.6-35B, p4-exit-code, 2026-11-11. run_python: Nest has no terminal (master plan Phase 2)." },
     { "id": "t-node-test", "kind": "search", "query": "run node test in a javascript project", "expected": ["run_python"], "source": "transcript", "notes": "Qwen3-4B, p4-run-tests, 2026-11-11." },
     { "id": "t-shell", "kind": "search", "query": "run node command or execute shell commands", "expected": ["run_python"], "source": "transcript", "notes": "Qwen3.6-35B, p4-run-tests." },
     { "id": "t-clone-bundle", "kind": "search", "query": "clone a git bundle or create a repository from a bundle file", "expected": ["run_python"], "source": "transcript", "notes": "Qwen3.6-35B, p4-git-log. No git tool clones; run_python can." },

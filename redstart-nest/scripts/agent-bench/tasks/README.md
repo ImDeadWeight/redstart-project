@@ -39,10 +39,10 @@ refusal), never how many calls it took. `scripts/test-agent-bench-tasks.mjs`
 | p1-plan-missing-input | phase 1 | update_plan helps | steps 1 and 3 done, no net.csv made up, and says returns.csv is missing |
 | p1-stop-and-report | phase 1 | — | the three new prices applied, SKU-9 left alone, and said so |
 | p2-delete-confirmed | phase 2 | delete_file (approval-enforced) | p2-old-draft.txt deleted through delete_file after the approval exchange, p2-final.txt kept |
-| p4-run-tests | phase 4 | run_command | names the failing test |
-| p4-fix-test | phase 4 | run_command helps | math.mjs fixed, the test untouched |
-| p4-git-log | phase 4 | run_command | the third most recent commit's author and message |
-| p4-exit-code | phase 4 | run_command | reports failure, exit code 3, and why |
+| p4-run-tests | phase 4 | — (no terminal; a workaround) | names the failing test |
+| p4-fix-test | phase 4 | — (no terminal; a workaround) | math.mjs fixed, the test untouched |
+| p4-git-log | phase 4 | — (no terminal; a workaround) | the third most recent commit's author and message |
+| p4-exit-code | phase 4 | — (no terminal; a workaround) | reports failure, exit code 3, and why |
 
 **p2-delete-confirmed needs File System deletes allowed** (Nest → Tools →
 File System → Allow destructive operations, server-wide); run.mjs warns at
@@ -51,20 +51,17 @@ files are seeded into the account's File System folder (a fixture with
 `"space": "files"`, not an attachment) after the bench's snapshot of that
 folder, so whatever the run leaves is removed afterwards.
 
-Phase 1 and Phase 4 tasks are expected to fail until those phases land; that
-is how a phase shows it helped. p4-fix-test can pass early, by editing the
-file with run_python.
+Phase 1 tasks are expected to fail until that phase lands; that is how a
+phase shows it helped.
 
-**Running the Phase 4 group (built 2026-11-14).** run_command is offered to
-the owner account only (agent-runtime plan U3), so the user-tier bench
-account never sees it and the p4 tasks keep failing under it by design. To
-measure them (plan section 10, P4-f): turn Terminal on for the profile, list
-`node` and `git` in its card, and run only this group with the **owner's**
-key, accepting the run's owner-key warning for this group alone:
-`--tasks "scripts/agent-bench/tasks/p4-*.json"`. The other groups stay on the
-bench account. The alternative is login off with network mode off, where
-the anonymous caller is allowed it. The bench's `approve: all` answers each
-command's approval once; it never always-allows a command.
+**The Phase 4 group measures workarounds.** It was written for
+agent-runtime Phase 4's run_command, which was built and then removed
+(master plan Phase 2, 2026-11-17): Nest has no terminal, and Twig's
+(master plan Phase 8) is a client tool the bench does not run. A model can
+pass p4-fix-test with run_python, and p4-run-tests by reading the code.
+p4-git-log and p4-exit-code are expected to fail: no tool Nest has can run
+git or node. Read their transcripts for whether the model says so or invents
+a result.
 
 **The Phase 1 group was revised on 2026-11-11**, after the first runs and the
 ask_user probe (`probe-ask.mjs`). Four tasks went because a model could pass

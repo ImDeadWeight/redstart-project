@@ -22,7 +22,7 @@
     {
       "prompt": "depot.bundle is a git bundle. Clone it and tell me the author and the message of the third most recent commit.",
       "expectTools": [
-        "run_command"
+        "run_python"
       ]
     }
   ],

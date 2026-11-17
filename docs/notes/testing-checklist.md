@@ -140,5 +140,6 @@ served from the built bundle).
 
 ## Dropped
 
-- Phase 4 click test and p4 bench run: the Nest terminal is being removed
-  (agent-runtime plan, U11 revised).
+- Phase 4 click test and p4 bench run: the Nest terminal was removed
+  2026-11-17 (master plan Phase 2). The p4 tasks stay in the bench as
+  workaround measures.

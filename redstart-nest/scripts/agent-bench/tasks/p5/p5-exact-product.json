@@ -5,13 +5,11 @@
   "prompt": "What is 48271 × 9973 − 123456? Give me the exact number.",
   "approve": "all",
   "withhold": [
-    "run_python",
-    "run_command"
+    "run_python"
   ],
   "expectTools": [
-    "run_python",
-    "run_command"
+    "run_python"
   ],
   "check": "../checks/compute.mjs#arithmetic",
-  "notes": "Benchmarks B3 (tool-retrieval-fixes-benchmarks.md): compute-arithmetic with both code tools withheld. Without one the model guesses: does it search before it says it cannot, or before mental arithmetic?"
+  "notes": "Benchmarks B3 (tool-retrieval-fixes-benchmarks.md): compute-arithmetic with run_python withheld (both code tools until the Nest terminal was removed, master plan Phase 2). Without one the model guesses: does it search before it says it cannot, or before mental arithmetic?"
 }
