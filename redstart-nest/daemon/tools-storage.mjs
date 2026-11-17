@@ -51,6 +51,30 @@ export function deleteUserGroup(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Deferral overrides (master plan Phase 3.1): capability id → boolean, for
+// built-ins and plugins alike. Absent means the default (tool-deferral.mjs).
+// ---------------------------------------------------------------------------
+
+export function getDeferralOverrides() {
+  const d = read().deferral
+  return d && typeof d === 'object' && !Array.isArray(d) ? d : {}
+}
+
+/**
+ * @param {string} id a capability or plugin id (the caller validates it)
+ * @param {boolean | null} deferred null clears the override
+ */
+export function setDeferralOverride(id, deferred) {
+  const data = read()
+  const next = { ...(data.deferral && typeof data.deferral === 'object' ? data.deferral : {}) }
+  if (deferred === null) delete next[id]
+  else next[id] = deferred === true
+  data.deferral = next
+  write(data)
+  return next
+}
+
+// ---------------------------------------------------------------------------
 // External MCP servers
 // { id, name, url, enabled }
 // ---------------------------------------------------------------------------

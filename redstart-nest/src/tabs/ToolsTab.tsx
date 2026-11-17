@@ -7,6 +7,7 @@ import type { usePlugins } from '../hooks/usePlugins'
 import { SectionTitle, TogglePill, btnCls, inputCls } from '../components/ui'
 import { FolderPicker } from '../components/FolderPicker'
 import { PythonCapabilityCard } from '../components/PythonCapabilityCard'
+import { DeferralCard } from '../components/DeferralCard'
 
 // ---------------------------------------------------------------------------
 // Folder-scoped capability card — one component for Documents/SQLite/Vault/
@@ -724,6 +725,16 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
             </div>
           )
         })()}
+
+        {/* Catalog-only capabilities (master plan Phase 3.1): in effect only in
+            the catalog mode, which the card says. */}
+        <div className="mt-4">
+          <DeferralCard
+            entries={capabilityConfig?.deferral}
+            catalogMode={config.tools?.retrieval?.enabled === true && config.tools?.retrieval?.mode === 'catalog'}
+            onChanged={caps.loadCapabilities}
+          />
+        </div>
 
         {/* Two numbers, side by side and labelled, because they measure
             different things. The estimate describes the tools THIS PROFILE

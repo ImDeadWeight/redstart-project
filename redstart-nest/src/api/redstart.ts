@@ -194,6 +194,8 @@ export type RedstartAPI = {
     setWebSearch: (config: { searxngUrl?: string | null; braveApiKey?: string; clearBraveApiKey?: boolean }) => Promise<{ ok: boolean; error?: string }>
     setPython: (config: { maxKernels?: number; timeoutS?: number; workspaceCapMb?: number; accountCapMb?: number }) => Promise<{ ok: boolean; error?: string }>
     installPython: () => Promise<{ ok: boolean; error?: string }>
+    // Catalog-only per capability (master plan Phase 3.1); null = the default.
+    setDeferred: (config: { id: string; deferred: boolean | null }) => Promise<{ ok: boolean; error?: string }>
   }
   plugins: {
     list: () => Promise<PluginSummary[]>

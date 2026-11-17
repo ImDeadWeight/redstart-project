@@ -18,7 +18,10 @@
 // specifically exercises that shape. The matching selectXFolder() dialogs
 // are retired, replaced by a native picker that itself retired — FolderPicker.tsx
 // now only ever uses admin/browse-routes.mjs.
-import { getCapabilities, setCapabilityConfig } from '../tools-storage.mjs'
+import { getCapabilities, setCapabilityConfig, getDeferralOverrides, setDeferralOverride } from '../tools-storage.mjs'
+import { BUILTIN_CAPABILITIES } from '../tools-definitions.mjs'
+import { listPlugins } from '../plugin-registry.mjs'
+import { DEFERRED_BY_DEFAULT } from '../tool-deferral.mjs'
 import { encryptSecret, decryptSecret } from '../secrets.mjs'
 import { testConnection as testPostgresConnection } from '../postgres-tool.mjs'
 import { isPlainObject, isAbsolutePath, optional } from './validate.mjs'
@@ -94,7 +97,39 @@ export function getCapabilitiesConfig() {
       hasBraveApiKey: !!caps.web_search.braveApiKeyEnc,
     },
     python: pythonStatus(caps.python),
+    deferral: deferralStatus(),
   }
+}
+
+// Which capabilities are catalog-only (master plan Phase 3.1): every built-in
+// capability and installed plugin, its default, and the admin's override.
+// The Tools tab shows it; it narrows a request only in the catalog mode.
+function deferralCandidates() {
+  return [
+    ...BUILTIN_CAPABILITIES.map((c) => ({ id: c.id, name: c.name, plugin: false, byDefault: DEFERRED_BY_DEFAULT.includes(c.id) })),
+    ...listPlugins().map((p) => ({ id: p.id, name: p.name ?? p.id, plugin: true, byDefault: true })),
+  ]
+}
+
+function deferralStatus() {
+  const overrides = getDeferralOverrides()
+  return deferralCandidates().map((c) => {
+    const o = overrides[c.id]
+    return { ...c, overridden: typeof o === 'boolean', deferred: typeof o === 'boolean' ? o : c.byDefault }
+  })
+}
+
+// { id, deferred: true | false | null } — null goes back to the default.
+export function setDeferredConfig(config, { refreshLiveToolsConfig }) {
+  const channel = 'capabilities:set-deferred'
+  if (!isPlainObject(config)) return refuse(channel, 'expected an object')
+  const { id, deferred } = config
+  if (typeof id !== 'string' || !deferralCandidates().some((c) => c.id === id)) return refuse(channel, `Unknown capability: ${String(id)}`)
+  if (deferred !== null && typeof deferred !== 'boolean') return refuse(channel, 'deferred must be true, false or null')
+  setDeferralOverride(id, deferred)
+  logEvent('tools', 'deferral_saved', { id, deferred })
+  refreshLiveToolsConfig()
+  return { ok: true }
 }
 
 // What the Tools tab needs to say about run_python: whether it CAN run here
@@ -297,6 +332,7 @@ export function capabilitiesHandlers(deps) {
     'capabilities:set-scholar': (config) => setScholarConfig(config, deps),
     'capabilities:set-web-search': (config) => setWebSearchConfig(config, deps),
     'capabilities:set-python': (config) => setPythonConfig(config, deps),
+    'capabilities:set-deferred': (config) => setDeferredConfig(config, deps),
     'capabilities:install-python': async () => installPythonRuntime(deps),
   }
 

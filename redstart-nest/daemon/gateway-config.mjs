@@ -17,8 +17,9 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { configDir } from './platform-paths.mjs'
 import { runtimeDir } from './python-runtime.mjs'
-import { BUILTIN_TOOLS, BUILTIN_GROUPS, expandDisabledToolIds } from './tools-definitions.mjs'
-import { getUserTools, getUserGroups, getCapabilities } from './tools-storage.mjs'
+import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES, expandDisabledToolIds } from './tools-definitions.mjs'
+import { getUserTools, getUserGroups, getCapabilities, getDeferralOverrides } from './tools-storage.mjs'
+import { deferredCapabilities } from './tool-deferral.mjs'
 import { updateGatewayConfig, getGatewayPort } from './tools-gateway.mjs'
 import { updateMcpConfig } from './mcp-server.mjs'
 import { syncFilesystemProvider } from './filesystem-mcp-provider.mjs'
@@ -79,6 +80,15 @@ export function buildGatewayConfig(llamaConfig) {
   // sees so the gateway can strip them from every completions request.
   const disabledTools = expandDisabledToolIds(toolSettings?.disabledToolIds)
 
+  // Which capabilities are catalog-only (master plan Phase 3.1), resolved once
+  // here so nothing reads tools.json per request. It narrows a request only
+  // when tools.retrieval.mode is 'catalog'.
+  const deferred = deferredCapabilities({
+    builtinIds: BUILTIN_CAPABILITIES.map((c) => c.id),
+    pluginIds: listPlugins().map((p) => p.id),
+    overrides: getDeferralOverrides(),
+  })
+
   const allTools = [
     ...BUILTIN_TOOLS.map(t => ({ ...t, builtIn: true })),
     ...getUserTools(),
@@ -91,6 +101,7 @@ export function buildGatewayConfig(llamaConfig) {
   if (!toolSettings?.enabled) {
     return {
       disabledTools,
+      deferredCapabilities: deferred,
       toolRetrieval: retrievalSettings(llamaConfig),
       ctxSize: llamaConfig?.ctxSize,
       webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000, searchEngine: { kind: 'none' } },
@@ -162,6 +173,7 @@ export function buildGatewayConfig(llamaConfig) {
 
   return {
     disabledTools,
+    deferredCapabilities: deferred,
     toolRetrieval: retrievalSettings(llamaConfig),
     ctxSize: llamaConfig?.ctxSize,
     webFetch: {

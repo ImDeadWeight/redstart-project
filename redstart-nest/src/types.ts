@@ -184,6 +184,19 @@ export type CapabilityConfig = {
   scholar: { enabled: boolean; venueFilter: string | null }
   web_search: { searxngUrl: string | null; hasBraveApiKey: boolean }
   python: PythonCapabilityStatus
+  deferral: DeferralEntry[]
+}
+
+// Catalog-only per capability (master plan Phase 3.1): reached through
+// search_tools and call_tool instead of sitting in the prompt. Only takes
+// effect while the profile's retrieval mode is "catalog".
+export type DeferralEntry = {
+  id: string
+  name: string
+  plugin: boolean
+  byDefault: boolean
+  overridden: boolean
+  deferred: boolean
 }
 
 // run_python (chat-tooling Phase 1). Settings plus what the server can say
@@ -258,7 +271,7 @@ export type ProfileTools = {
   // embedding model. Off by default and absent on every profile saved before
   // it, which reads as off — the safe direction, since the whole feature is an
   // optimization the server works without.
-  retrieval?: { enabled?: boolean; relativeFloor?: number; floor?: number; margin?: number; textVersion?: 1 | 2; scorer?: 'cosine' | 'bm25' | 'fused'; growth?: 'scored' | 'pins-only'; minTools?: number; callTool?: boolean }
+  retrieval?: { enabled?: boolean; relativeFloor?: number; floor?: number; margin?: number; textVersion?: 1 | 2; scorer?: 'cosine' | 'bm25' | 'fused'; growth?: 'scored' | 'pins-only'; minTools?: number; callTool?: boolean; mode?: 'select' | 'catalog' }
   // The automatic memory review (agent-runtime 8.3). `think` lets the model
   // reason before it answers: measured to help some models (Ornith 9B) and not
   // others (Qwen3-4B), so it is per profile. Absent reads as off.

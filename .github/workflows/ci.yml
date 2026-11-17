@@ -88,6 +88,9 @@ jobs:
       - name: "Security: tool retrieval (subset-only selection)"
         run: node scripts/test-tool-retrieval.mjs
 
+      - name: "Security: deferred capabilities (defaults, overrides, the setter's refusals)"
+        run: node scripts/test-tool-deferral.mjs
+
       - name: "Tool metadata registry (lint, plugin fields, embedded text)"
         run: node scripts/test-tool-metadata.mjs
 
