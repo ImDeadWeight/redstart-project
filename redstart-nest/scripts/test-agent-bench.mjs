@@ -705,7 +705,7 @@ if (bench) {
     eq(withFx.messages[0].content,
       // The core's note, for the tools this fake offers (read_file and
       // write_file are File System names; no run_python, no read_document).
-      "[script:read] What is the secret in data.txt?\n\n[Attached files saved to this chat's workspace: data.txt, nested/inline.txt\n- The File System tools (read_file, write_file) work on a different folder and cannot see these files.]",
+      "[script:read] What is the secret in data.txt?\n\n[Attached files saved to this chat's workspace: data.txt, nested/inline.txt\n- The File System tools (write_file) work on a different folder and cannot see these files.]",
       'user message')
     const without = nest.state.completionBodies.find((b) => b.messages[0].content.startsWith('[script:write]'))
     eq(without.messages[0].content, '[script:write] Put 42 in out/answer.txt.', 'no note')

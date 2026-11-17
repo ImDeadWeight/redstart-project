@@ -155,7 +155,7 @@ await test('an entry whose id collides with a built-in capability id is rejected
 })
 
 await test('an entry whose id collides with a built-in tool name is rejected', async () => {
-  const bad = registry.addPlugin(samplePlugin({ id: 'read_file' }))
+  const bad = registry.addPlugin(samplePlugin({ id: 'read_text_file' }))
   assert(bad.ok === false, 'a plugin claiming a built-in tool name as its id was accepted')
   return bad.error
 })

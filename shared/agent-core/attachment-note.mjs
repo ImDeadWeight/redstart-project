@@ -23,18 +23,11 @@
 // server Nest wraps). Listed so the note can name the offered ones.
 export const FILE_SYSTEM_TOOLS = [
 	'read_text_file',
-	'read_file',
 	'list_directory',
-	'move_file',
 	'write_file',
 	'search_files',
-	'directory_tree',
-	'get_file_info',
 	'edit_file',
-	'read_multiple_files',
-	'list_directory_with_sizes',
-	'create_directory',
-	'read_media_file'
+	'create_directory'
 ];
 
 /**

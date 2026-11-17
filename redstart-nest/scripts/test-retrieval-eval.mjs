@@ -164,7 +164,8 @@ await test('🔍 catalog.json matches what the providers serve (the File System 
   }
   const fsInSnapshot = catalog.filter((t) => fsNames.has(t.name)).map((t) => t.name).sort()
   eq(fsInSnapshot, [...fsNames].filter((n) => catalog.some((t) => t.name === n)).sort(), 'File System names')
-  assert(fsInSnapshot.length >= 10, `only ${fsInSnapshot.length} File System tools in the snapshot`)
+  // Six since master plan Phase 3.1 (FILESYSTEM_TOOL_NAMES), all of which must be there.
+  assert(fsInSnapshot.length >= 6, `only ${fsInSnapshot.length} File System tools in the snapshot`)
   return `${live.length} in-process tools, ${fsInSnapshot.length} File System tools`
 })
 

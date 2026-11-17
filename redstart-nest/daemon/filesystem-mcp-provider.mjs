@@ -59,21 +59,23 @@ const FILESYSTEM_SERVER_ENTRY = path.join(
 // one means adding it here, to BUILTIN_CAPABILITY_TOOL_NAMES.file_system and
 // TOOL_CLASSES ('write'), and to FILE_PRODUCING_TOOLS if it should get a
 // download marker. Their path arguments already use PATH_STRING_KEYS names.
+//
+// Six of upstream's fourteen since 2026-11-17 (master plan Phase 3.1). B0
+// found that most wrong first picks came from the File System tools being in
+// the list at all, overlapping read_document and run_python. The other eight
+// (read_file, read_media_file, read_multiple_files, list_directory_with_sizes,
+// directory_tree, move_file, get_file_info, list_allowed_directories) are
+// dropped by the same fail-closed filter as an unaudited new one.
+// create_directory stays, beyond the plan's five: upstream's write_file fails
+// under a folder that does not exist (see OTHER_ABSOLUTE_PATH_RE), so without
+// it File System could not make a folder at all.
 export const FILESYSTEM_TOOL_NAMES = [
-  'read_file',
   'read_text_file',
-  'read_media_file',
-  'read_multiple_files',
   'write_file',
   'edit_file',
   'create_directory',
   'list_directory',
-  'list_directory_with_sizes',
-  'directory_tree',
-  'move_file',
   'search_files',
-  'get_file_info',
-  'list_allowed_directories',
 ]
 const FILESYSTEM_TOOL_NAME_SET = new Set(FILESYSTEM_TOOL_NAMES)
 
@@ -512,7 +514,7 @@ export function withAttachmentHint(result, args, cfg, ctx) {
 
 // The tools a model uses to look for files, and what each answers when it
 // found none (after pathsToRelative: an empty listing arrives as '.').
-const LOOKING_TOOLS = new Set(['search_files', 'list_directory', 'list_directory_with_sizes', 'directory_tree'])
+const LOOKING_TOOLS = new Set(['search_files', 'list_directory'])
 const FOUND_NOTHING = new Set(['', '.', '[]', 'No matches found'])
 const MAX_NAMED_ATTACHMENTS = 8
 
@@ -575,21 +577,6 @@ export async function callTool(name, args, cfg, ctx) {
     userRoot = resolveUserRoot(fsCfg.rootDir, ctx?.account, { create: true })
   } catch (err) {
     return { isError: true, content: [{ type: 'text', text: `Could not open your file storage: ${err.message}` }] }
-  }
-
-  // Answered here rather than by the child. The child was spawned with the
-  // CAPABILITY root and would report that — a path pathsToRelative cannot strip,
-  // because it is a prefix of the caller's root rather than a match. Reporting
-  // it would hand every model the server's on-disk layout and the fact that
-  // sibling account folders live next door. The caller's own storage is the only
-  // directory it can reach, and it addresses everything relative to it anyway.
-  if (name === 'list_allowed_directories') {
-    return {
-      content: [{
-        type: 'text',
-        text: 'Allowed directories:\n. (your own file storage on the Redstart server — give every path relative to it)',
-      }],
-    }
   }
 
   try {

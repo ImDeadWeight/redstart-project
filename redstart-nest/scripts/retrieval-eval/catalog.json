@@ -324,34 +324,6 @@
       }
     },
     {
-      "name": "read_file",
-      "description": "Read the complete contents of a file as text. DEPRECATED: Use read_text_file instead.",
-      "inputSchema": {
-        "type": "object",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "properties": {
-          "path": {
-            "type": "string"
-          },
-          "tail": {
-            "description": "If provided, returns only the last N lines of the file",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "head": {
-            "description": "If provided, returns only the first N lines of the file",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          }
-        },
-        "required": [
-          "path"
-        ]
-      }
-    },
-    {
       "name": "read_text_file",
       "description": "Read the complete contents of a file from the file system as text. Handles various text encodings and provides detailed error messages if the file cannot be read. Use this tool when you need to examine the contents of a single file. Use the 'head' parameter to read only the first N lines of a file, or the 'tail' parameter to read only the last N lines of a file. Operates on the file as text regardless of extension. Only works within allowed directories.",
       "inputSchema": {
@@ -376,43 +348,6 @@
         },
         "required": [
           "path"
-        ]
-      }
-    },
-    {
-      "name": "read_media_file",
-      "description": "Read a file and return it as a base64-encoded content block with its MIME type. Image and audio files are returned as image/audio content; any other file type is returned as an embedded resource. Only works within allowed directories.",
-      "inputSchema": {
-        "type": "object",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "properties": {
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "path"
-        ]
-      }
-    },
-    {
-      "name": "read_multiple_files",
-      "description": "Read the contents of multiple files simultaneously. This is more efficient than reading files one by one when you need to analyze or compare multiple files. Each file's content is returned with its path as a reference. Failed reads for individual files won't stop the entire operation. Only works within allowed directories.",
-      "inputSchema": {
-        "type": "object",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "properties": {
-          "paths": {
-            "minItems": 1,
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Array of file paths to read. Each path must be a string pointing to a valid file within allowed directories."
-          }
-        },
-        "required": [
-          "paths"
         ]
       }
     },
@@ -511,80 +446,6 @@
       }
     },
     {
-      "name": "list_directory_with_sizes",
-      "description": "Get a detailed listing of all files and directories in a specified path, including sizes. Results clearly distinguish between files and directories with [FILE] and [DIR] prefixes. This tool is useful for understanding directory structure and finding specific files within a directory. Only works within allowed directories.",
-      "inputSchema": {
-        "type": "object",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "properties": {
-          "path": {
-            "type": "string"
-          },
-          "sortBy": {
-            "default": "name",
-            "description": "Sort entries by name or size",
-            "type": "string",
-            "enum": [
-              "name",
-              "size"
-            ]
-          }
-        },
-        "required": [
-          "path"
-        ]
-      }
-    },
-    {
-      "name": "directory_tree",
-      "description": "Get a recursive tree view of files and directories as a JSON structure. Each entry includes 'name', 'type' (file/directory), and 'children' for directories. Files have no children array, while directories always have a children array (which may be empty), except at the last level when 'depth' limits the tree: those directories are not read and have no children array. The output is formatted with 2-space indentation for readability. Only works within allowed directories.",
-      "inputSchema": {
-        "type": "object",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "properties": {
-          "path": {
-            "type": "string"
-          },
-          "excludePatterns": {
-            "default": [],
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "depth": {
-            "description": "How many levels to descend: 1 lists only the entries directly in path. Directories at the last level have no children array. Omit for the whole tree.",
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
-          }
-        },
-        "required": [
-          "path"
-        ]
-      }
-    },
-    {
-      "name": "move_file",
-      "description": "Move or rename files and directories. Can move files between directories and rename them in a single operation. If the destination exists, the operation will fail. Works across different directories and can be used for simple renaming within the same directory. Both source and destination must be within allowed directories.",
-      "inputSchema": {
-        "type": "object",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "properties": {
-          "source": {
-            "type": "string"
-          },
-          "destination": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "source",
-          "destination"
-        ]
-      }
-    },
-    {
       "name": "search_files",
       "description": "Find files and directories by NAME, not by content: this tool never reads or searches inside files. It walks the tree under 'path' and matches a glob pattern against each entry's path relative to 'path' (case-sensitive). Use '*.ext' to match entries directly under 'path', and '**/*.ext' or '**/name' to match at any depth. Returns full paths to all matching items. Great for finding files when you don't know their exact location. Only searches within allowed directories.",
       "inputSchema": {
@@ -609,31 +470,6 @@
           "path",
           "pattern"
         ]
-      }
-    },
-    {
-      "name": "get_file_info",
-      "description": "Retrieve detailed metadata about a file or directory. Returns comprehensive information including size, creation time, last modified time, permissions, type and hard-link count. This tool is perfect for understanding file characteristics without reading the actual content. Only works within allowed directories.",
-      "inputSchema": {
-        "type": "object",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "properties": {
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "path"
-        ]
-      }
-    },
-    {
-      "name": "list_allowed_directories",
-      "description": "Returns the list of directories that this server is allowed to access. Subdirectories within these allowed directories are also accessible. Use this to understand which directories and their nested paths are available before trying to access files.",
-      "inputSchema": {
-        "type": "object",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "properties": {}
       }
     },
     {

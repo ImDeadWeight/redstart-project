@@ -287,7 +287,7 @@ await test('a File System search that finds nothing names the conversation\'s at
   assert(out.includes('alice-secret-plan.md, readings.csv, sub/notes.txt'), `names: ${out}`)
   assert(out.includes('read_document("alice-secret-plan.md")') && out.includes('run_python'), `tools: ${out}`)
   // An empty listing and an empty tree, as they arrive.
-  for (const [name, empty] of [['list_directory', '.'], ['list_directory_with_sizes', ''], ['directory_tree', '[]']]) {
+  for (const [name, empty] of [['list_directory', '.'], ['search_files', 'No matches found']]) {
     assert(textOf(withEmptyLookHint(name, ok(empty), cfg, inConv)).includes('readings.csv'), `${name} "${empty}" got no hint`)
   }
 

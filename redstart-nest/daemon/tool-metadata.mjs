@@ -87,20 +87,12 @@ export const BUILTIN_TOOL_METADATA = Object.freeze({
   search_documents: { category: 'documents', store: S.documents, tags: ['find in documents', 'policy', 'handbook', 'look up', 'which document says'], useWhen: 'a fact is somewhere in the user\'s own documents' },
 
   // the File System folder
-  read_file: { category: 'files', store: S.fileSystem, tags: FS_READ_TAGS, useWhen: 'deprecated; read_text_file does the same' },
   read_text_file: { category: 'files', store: S.fileSystem, tags: FS_READ_TAGS, useWhen: 'reading a text file in the File System folder, not an attachment' },
-  read_media_file: { category: 'files', store: S.fileSystem, tags: ['image', 'picture', 'photo', 'audio'], useWhen: 'an image or audio file in the File System folder' },
-  read_multiple_files: { category: 'files', store: S.fileSystem, tags: FS_READ_TAGS, useWhen: 'reading several files in the File System folder at once' },
   write_file: { category: 'files', store: S.fileSystem, tags: ['save', 'create file', 'overwrite'], useWhen: 'writing a file in the File System folder' },
   edit_file: { category: 'files', store: S.fileSystem, tags: ['change', 'modify', 'replace', 'patch', 'config'], useWhen: 'changing part of a file in the File System folder' },
   create_directory: { category: 'files', store: S.fileSystem, tags: ['folder', 'mkdir', 'new folder'], useWhen: 'making a folder in the File System folder' },
   list_directory: { category: 'files', store: S.fileSystem, tags: ['folder', 'ls', 'what files'], useWhen: 'seeing what is in a folder of the File System folder' },
-  list_directory_with_sizes: { category: 'files', store: S.fileSystem, tags: ['folder', 'size', 'disk usage', 'largest'], useWhen: 'file sizes in a folder of the File System folder' },
-  directory_tree: { category: 'files', store: S.fileSystem, tags: ['folder', 'tree', 'structure', 'project layout'], useWhen: 'the shape of a whole folder tree' },
-  move_file: { category: 'files', store: S.fileSystem, tags: ['rename', 'move', 'mv'], useWhen: 'renaming or moving within the File System folder' },
   search_files: { category: 'files', store: S.fileSystem, tags: ['find file', 'by name', 'locate', 'glob'], useWhen: 'finding a file in the File System folder by its name' },
-  get_file_info: { category: 'files', store: S.fileSystem, tags: ['metadata', 'size', 'modified', 'stat'], useWhen: 'a file\'s size or dates' },
-  list_allowed_directories: { category: 'files', store: S.fileSystem, tags: ['root', 'which folders'], useWhen: 'which folders the File System tools can reach' },
   delete_file: { category: 'files', store: S.fileSystem, tags: ['delete', 'remove', 'rm', 'recycle bin', 'trash'], useWhen: 'deleting a file in the File System folder' },
 
   // code

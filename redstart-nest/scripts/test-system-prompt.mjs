@@ -203,7 +203,7 @@ await test('🔒 the destructive-confirmation clause names only what was sent', 
   const { prompt } = composePrompt({
     config: LOCAL_ONLY_CONFIG,
     hasTools: true,
-    toolNames: ['read_file', 'write_file', 'delete_file'],
+    toolNames: ['read_text_file', 'write_file', 'delete_file'],
     now: NOW,
   })
   assert(prompt.includes('Every call to delete_file needs the user\'s approval'), 'delete_file not named')
@@ -251,7 +251,7 @@ await test('🔒 documents/file-system overlap is stated only when both are pres
   const both = composePrompt({
     config: LOCAL_ONLY_CONFIG,
     hasTools: true,
-    toolNames: ['read_document', 'read_file'],
+    toolNames: ['read_document', 'read_text_file'],
     now: NOW,
   }).prompt
   assert(both.includes('prefer read_document'), 'overlap rule missing when both tools are present')

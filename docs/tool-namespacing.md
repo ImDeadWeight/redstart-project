@@ -40,7 +40,7 @@ client and llama-server already agree on. So a ban is a flat name match across e
 simultaneously.
 
 That has a consequence people find surprising: **a ban cannot be scoped to one app.** If
-Yellowscript shipped a `read_file`, banning it would also strip Nest's `read_file` from every
+Yellowscript shipped a `read_text_file`, banning it would also strip Nest's `read_text_file` from every
 request, for every client, on that profile. The namespace is the only thing making a ban targetable.
 
 The failure mode is not hypothetical. Nest's File System capability *used* to use `fs_*` names —

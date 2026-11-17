@@ -205,7 +205,7 @@ const READ_ONLY_SQL_TOOLS = [
 
 // File-system reads that overlap with the Documents capability. Both can open a
 // file in the documents folder; only one of them understands the format.
-const FS_READ_TOOLS = ['read_file', 'read_text_file', 'read_multiple_files']
+const FS_READ_TOOLS = ['read_text_file']
 
 function buildToolPolicy(config, hasTools, toolNames) {
   if (!hasTools) return null

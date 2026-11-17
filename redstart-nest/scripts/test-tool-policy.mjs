@@ -81,7 +81,7 @@ await test('destructive is the ONLY class the delete tool can have', async () =>
 })
 
 await test('the known write ops are classified write', async () => {
-  for (const t of ['write_file', 'edit_file', 'create_directory', 'move_file', 'create_document', 'scholar_save_pdf']) {
+  for (const t of ['write_file', 'edit_file', 'create_directory', 'create_document', 'scholar_save_pdf']) {
     assert(classifyTool(t) === 'write', `${t} classified ${classifyTool(t)}, expected write`)
   }
 })

@@ -174,20 +174,12 @@ export const BUILTIN_CAPABILITY_TOOL_NAMES = {
   // Served by @modelcontextprotocol/server-filesystem (see
   // filesystem-mcp-provider.mjs). Keep in sync with FILESYSTEM_TOOL_NAMES there.
   file_system: [
-    'read_file',
     'read_text_file',
-    'read_media_file',
-    'read_multiple_files',
     'write_file',
     'edit_file',
     'create_directory',
     'list_directory',
-    'list_directory_with_sizes',
-    'directory_tree',
-    'move_file',
     'search_files',
-    'get_file_info',
-    'list_allowed_directories',
     // Redstart-owned, NOT from the upstream server (which has no delete at all)
     // — served by fs-delete-tool.mjs. Listed here so an admin ban on
     // `file_system` strips it too, and so the permission gate's FS_TOOL_NAMES
@@ -399,26 +391,18 @@ export const TOOL_CLASSES = {
   git_log: 'read',
   git_diff: 'read',
   // File System — @modelcontextprotocol/server-filesystem. Reads are read;
-  // create/overwrite/edit/move are writes. The upstream server exposes no
-  // delete tool, so deletion is Redstart-owned (fs-delete-tool.mjs) and is the
-  // one 'destructive'-class tool in the system — which is what makes the
-  // allowDestructive policy load-bearing. move_file removes its source but
-  // cannot overwrite an existing destination (upstream fails the op), so it's a
-  // write, not destructive.
-  read_file: 'read',
+  // create/overwrite/edit are writes. The upstream server exposes no delete
+  // tool, so deletion is Redstart-owned (fs-delete-tool.mjs) and is the one
+  // 'destructive'-class tool in the system — which is what makes the
+  // allowDestructive policy load-bearing. Six of upstream's tools are served
+  // (filesystem-mcp-provider.mjs FILESYSTEM_TOOL_NAMES); the rest are filtered
+  // out, and its callTool refuses them, so they need no class here.
   read_text_file: 'read',
-  read_media_file: 'read',
-  read_multiple_files: 'read',
   list_directory: 'read',
-  list_directory_with_sizes: 'read',
-  directory_tree: 'read',
   search_files: 'read',
-  get_file_info: 'read',
-  list_allowed_directories: 'read',
   write_file: 'write',
   edit_file: 'write',
   create_directory: 'write',
-  move_file: 'write',
   // The only destructive-class tool in Redstart. THIS LINE is what activates
   // the allowDestructive gate: evaluateToolPolicy refuses a destructive call
   // unless the admin has explicitly enabled it, at both tools/list and
