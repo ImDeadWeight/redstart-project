@@ -133,6 +133,13 @@ The 32-task set ×3 on Ornith, plus `measure-tool-cache.mjs`:
 | B | the 3.1 set, retrieval off | none |
 | C | the 3.1 core only, fixed | search_tools + call_tool; prefix never changes |
 
+**Before arm A, check the Ornith profile's `growth` setting.** Since the B4
+set-up on 2026-11-14 it has been `pins-only` (`profiles.json`; the backup
+from before the change is `profiles.backup-2026-11-14-before-B4.json`).
+Set it back to `scored` for arm A so the run matches B0, or run it as is and
+label the row `pins-only`. Change only that field: restoring the backup
+would undo every other profile change made since.
+
 **Bar (U-S3, DECIDED 2026-11-17, as proposed):** B or C within noise of A
 (≥ 76%) with ≤ 2 cache-miss turns per run. C over B on a tie, because C
 keeps working when an admin installs ten plugins. **If neither passes:**
