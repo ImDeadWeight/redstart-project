@@ -35,7 +35,7 @@ import { wireSafeToolCalls, MAX_TOOL_CALLS_PER_REPLY, DENIED_RESULT } from '../.
 import { attachmentNote } from '../../../../shared/agent-core/attachment-note.mjs'
 import { formatAskAnswer } from '../../../../shared/agent-core/ask-user.mjs'
 import { NUDGE_PREFIX, formatPlanResult, openSteps } from '../../../../shared/agent-core/update-plan.mjs'
-import { argumentProblem, computeMetrics } from './metrics.mjs'
+import { argumentProblem, computeMetrics, FILE_SYSTEM_TOOLS } from './metrics.mjs'
 import { answerFromTask } from './ask.mjs'
 import { META_CLASS_KEY } from './nest-client.mjs'
 import { runViaRuntime } from './runtime.mjs'
@@ -139,7 +139,9 @@ export function maxReplyTokens(opts) {
  */
 export function userMessage(task, ctx) {
   // Only workspace fixtures are attachments; a files-space one is named by the prompt.
-  const note = attachmentNote({ saved: task.fixtures.filter((f) => f.space !== 'files').map((f) => f.path), ...ctx })
+  // The File System names from tool-metadata, in its order, as chat-ui takes
+  // them from tools/list (master plan Phase 3.1).
+  const note = attachmentNote({ saved: task.fixtures.filter((f) => f.space !== 'files').map((f) => f.path), fileSystemTools: [...FILE_SYSTEM_TOOLS], ...ctx })
   return note ? `${task.prompt}\n\n${note}` : task.prompt
 }
 

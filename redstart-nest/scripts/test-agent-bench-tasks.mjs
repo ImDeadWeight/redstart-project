@@ -267,11 +267,11 @@ await test('🔍 every task names expectTools, and an attachment task never expe
   // tools came first on 8 of 22 attachment tasks). Attachments live in the
   // workspace, which the File System tools cannot see, so one of them as a
   // "right" first call would hide the very failure being counted.
-  const { FILE_SYSTEM_TOOLS } = await import('../../shared/agent-core/attachment-note.mjs')
+  const { FILE_SYSTEM_TOOLS } = await import('./agent-bench/lib/metrics.mjs')
   for (const t of tasks) {
     assert(Array.isArray(t.expectTools), `${t.id} has no expectTools`)
     const attached = t.fixtures.some((fx) => fx.space !== 'files')
-    const fs = t.expectTools.filter((n) => FILE_SYSTEM_TOOLS.includes(n))
+    const fs = t.expectTools.filter((n) => FILE_SYSTEM_TOOLS.has(n))
     assert(!(attached && fs.length), `${t.id} has attachments but expects ${fs.join(', ')}`)
   }
 })

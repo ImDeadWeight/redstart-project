@@ -62,6 +62,9 @@ export async function uploadToWorkspace(conversationId: string, files: File[]): 
 		saved,
 		failed,
 		conversationId,
-		hasTool: (name) => mcpStore.hasTool(name)
+		hasTool: (name) => mcpStore.hasTool(name),
+		// By capability identity from Nest's own tools/list, not by a list of
+		// names kept in the core (master plan Phase 3.1).
+		fileSystemTools: [...mcpStore.getNestToolNamesForCapability('file_system')]
 	});
 }

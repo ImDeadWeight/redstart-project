@@ -990,13 +990,23 @@ await test('the note says how each offered tool reaches the files', async () => 
     saved: ['sales.csv', 'notes.txt'],
     conversationId: 'abc123',
     hasTool: offered('run_python', 'read_document', 'read_text_file', 'list_directory', 'write_file', 'edit_file'),
+    fileSystemTools: ['read_text_file', 'write_file', 'edit_file', 'create_directory', 'list_directory', 'search_files'],
   })
   eq(note, [
     "[Attached files saved to this chat's workspace: sales.csv, notes.txt",
     '- run_python runs in that folder: open them by name, e.g. open("sales.csv"), not open("chats/abc123/sales.csv"). To rename, move or delete them, use run_python (os.rename, os.remove).',
     '- read_document opens them by name too: read_document("sales.csv").',
-    '- The File System tools (read_text_file, list_directory, write_file, ...) work on a different folder and cannot see these files.]',
+    '- The File System tools (read_text_file, write_file, edit_file, ...) work on a different folder and cannot see these files.]',
   ].join('\n'), 'full note')
+})
+
+await test('the File System line names only what the host says is File System (master plan Phase 3.1)', async () => {
+  // The core keeps no list: an offered tool the host did not name is not
+  // called a File System tool, and with no list there is no such line.
+  const note = attachmentNote({ saved: ['a.csv'], conversationId: 'c', hasTool: offered('read_text_file', 'write_file'), fileSystemTools: ['write_file'] })
+  assert(note.includes('The File System tools (write_file)'), note)
+  const none = attachmentNote({ saved: ['a.csv'], conversationId: 'c', hasTool: offered('read_text_file', 'write_file') })
+  assert(!none.includes('File System'), none)
 })
 
 await test('tools that are not offered are not named', async () => {

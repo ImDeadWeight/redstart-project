@@ -822,7 +822,7 @@ await test('the query is the WHOLE conversation, not the last turn', () => {
 
 await test('🔍 with dropAttachmentNote, a message with a note queries like the message without it (1.2, P3)', async () => {
   const { attachmentNote } = await import('../../shared/agent-core/attachment-note.mjs')
-  const note = attachmentNote({ saved: ['sales.csv'], failed: ['big.zip (too large)'], conversationId: 'c1', hasTool: () => true })
+  const note = attachmentNote({ saved: ['sales.csv'], failed: ['big.zip (too large)'], conversationId: 'c1', hasTool: () => true, fileSystemTools: ['read_text_file', 'write_file'] })
   assert(note && note.includes('read_text_file'), 'setup: the note should name the File System tools')
   const bare = [{ role: 'user', content: 'total the sales by region' }]
   const withNote = [{ role: 'user', content: `total the sales by region\n\n${note}` }]
