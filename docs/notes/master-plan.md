@@ -147,6 +147,53 @@ the prefix never changes. Phase 5's skills do the same for instructions.
 - `FILE_SYSTEM_TOOLS` moves out of `shared/agent-core/attachment-note.mjs`:
   the provider exports its own list and the host passes it in.
 
+### 3.1 at module level (re-planned 2026-11-17, against the code after Phase 2)
+
+Five commits, in this order. Each passes the checks, and none deletes
+retrieval: 3.3 does that after 3.2.
+
+1. **File System 13 → 5.** `FILESYSTEM_TOOL_NAMES` in
+   `filesystem-mcp-provider.mjs` becomes the five, so the provider's
+   existing fail-closed filter drops the other eight.
+   `BUILTIN_CAPABILITY_TOOL_NAMES.file_system` and `tool-metadata.mjs`
+   follow. `delete_file` (Redstart's own, `fs-delete-tool.mjs`) is
+   unchanged, still behind `allowDestructive`.
+2. **`FILE_SYSTEM_TOOLS` out of `attachment-note.mjs`.** `attachmentNote`
+   takes `fileSystemTools` from its host. chat-ui passes the names whose
+   tools/list `_meta['redstart/capability']` is `file_system`; the bench
+   passes the provider's list.
+3. **`deferred`, per capability.** A default on each `BUILTIN_CAPABILITIES`
+   entry (true for file_system, git, sqlite, postgres, vault, scholar) and
+   true for every plugin. An admin override is stored with the capability's
+   settings (`capabilities[id].deferred`; a plugin's in its registry
+   record), set over IPC and flipped in the launcher's Tools tab. tools/list
+   stamps `_meta['redstart/deferred']`, and chat-ui leaves a deferred tool
+   out of the attachment note's "offered".
+4. **The catalog mode: `tools.retrieval.mode: 'catalog'`** (the existing
+   selection is `'select'`, still the default until 3.2 decides). On a
+   Redstart surface (the Phase 1 rule), the gateway strips deferred tools
+   after bans, with no embedder and no per-turn state. `search_tools` and
+   `call_tool` are advertised, with no `callTool` flag needed in this mode.
+   `describe_tool` is not advertised: a search row carries the tool's
+   `inputSchema`, and the reply says to call it through `call_tool`. The
+   prompt's narrowing disclosure names the catalog. `retrievalConfigSummary`
+   records `mode=catalog`, so a bench row says which arm ran.
+5. **`call_tool` carries approval (U-S6, decided by the user 2026-11-17).**
+   Through `call_tool`, every inner tool whose rule is not `none` is enforced
+   by Nest through the existing handshake (`approvalGate` on the inner name
+   and arguments; the approval id is passed through). That is stricter than
+   a direct call, so no client can write through it without a decision or a
+   grant. chat-ui's gate and card treat `call_tool` as its inner tool (name,
+   arguments, destructive or not, "Always allow" keyed on the inner tool's
+   permission key). **This is an exception to U-S1's freeze on the browser
+   loop host, recorded as one:** without it, arm C cannot write a file in
+   chat. The task runner's gate unwraps `call_tool` the same way. The bench
+   answers the server's approval by its task policy.
+
+**Arm A runs on `a48d130`** (tagged `phase3-arm-a`): it is "today", and
+commit 1 changes the File System set it measured. Arms B and C run on the
+tip after commit 5. B: `--retrieval off`. C: `mode: 'catalog'`.
+
 ### 3.2 Measure, before deleting anything
 
 The 32-task set ×3 on Ornith, plus `measure-tool-cache.mjs`:
@@ -466,6 +513,7 @@ as purpose-built Nest tools, not a shell.
 |---|---|---|
 | U11 (revised) | The Nest terminal is removed | 2 |
 | U-S3 | The 3.2 bar as proposed; if it fails, freeze the turn-1 selection | 3 |
+| U-S6 | `call_tool` carries approval: Nest enforces the inner tool; chat-ui's card shows it (an exception to U-S1), decided while re-planning 3.1 | 3 |
 | U-S2 | Skill scripts run through `run_python` only | 5 |
 | U-S1 | The loop moves to the server; nothing new in the browser host from today | 7 |
 | U12 | (c): the line, prefix rules for plain lines only, a computed classification on the card | 8 |
