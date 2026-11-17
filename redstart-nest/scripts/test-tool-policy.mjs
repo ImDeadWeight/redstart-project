@@ -262,15 +262,20 @@ await test('an empty or missing ban list expands to nothing', async () => {
 // The execute class (agent-runtime Phase 4, D16)
 // ---------------------------------------------------------------------------
 
-await test('🔍 run_command is execute, belongs to terminal, and nothing else is execute', async () => {
-  assert(classifyTool('run_command') === 'execute', `run_command is ${classifyTool('run_command')}`)
-  assert(capabilityForTool('run_command') === 'terminal', 'run_command has no capability')
+// The Nest terminal was removed (master plan Phase 2); the class stays for
+// Twig's terminal (agent-runtime D48), so its rule is still pinned here.
+
+await test('🔍 no built-in Nest tool is execute, and run_command is gone', async () => {
   const executes = Object.entries(TOOL_CLASSES).filter(([, c]) => c === 'execute').map(([n]) => n)
-  assert(executes.length === 1 && executes[0] === 'run_command', `execute tools: ${executes.join(', ')}`)
+  assert(executes.length === 0, `execute tools: ${executes.join(', ')}`)
+  assert(capabilityForTool('run_command') == null, 'run_command still belongs to a capability')
+  assert(!expandDisabledToolIds(['terminal']).includes('run_command'), 'a terminal capability still expands')
 })
 
-await test('🔍 banning the terminal capability bans run_command', async () => {
-  assert(expandDisabledToolIds(['terminal']).includes('run_command'), 'the ban did not expand')
+await test('🔍 the execute class stays, and no tool is enforced from the start', async () => {
+  const { TOOL_CLASS, ENFORCED_TOOLS } = await import('../daemon/tools-definitions.mjs')
+  assert(TOOL_CLASS.execute === 'execute', 'the execute class is gone')
+  assert(ENFORCED_TOOLS.size === 0, `tools enforced from the start: ${[...ENFORCED_TOOLS].join(', ')}`)
 })
 
 await test('🔍 a plugin tool cannot be classified execute', async () => {

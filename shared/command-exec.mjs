@@ -4,9 +4,11 @@
 // Shared command executor: run one program with an argument list (agent-runtime
 // plan D15, D18, D21)
 // =============================================================================
-// The host-neutral half of run_command. The provider that wraps it
-// (redstart-nest/daemon/terminal-tool.mjs) decides WHO may run WHAT, WHERE;
-// this module only runs a program it is handed and reports what happened.
+// The host-neutral half of a command tool. The host that wraps it decides WHO
+// may run WHAT, WHERE; this module only runs a program it is handed and
+// reports what happened. Nest's run_command was its first host and was
+// removed (master plan Phase 2); it stays for Twig's terminal (agent-runtime
+// D49), whose host passes a PowerShell line as one argument to powershell.exe.
 //
 // THE RULE THIS FILE EXISTS FOR: no string is ever handed to a shell.
 // spawn() runs with shell: false, the program is an absolute path chosen by an
@@ -17,8 +19,8 @@
 // Windows `.cmd` and `.bat` files are refused here (D17). Node refuses to
 // spawn them without a shell (the CVE-2024-27980 fix), and running them
 // through cmd.exe reopens argument injection: verified 2026-11-10, an argument
-// list of `--version & echo INJECTED` printed INJECTED through npm.cmd. The
-// terminal's configuration resolves npm to node + npm-cli.js instead.
+// list of `--version & echo INJECTED` printed INJECTED through npm.cmd. A
+// host resolves npm to node + npm-cli.js instead.
 //
 // Containment is policy, not isolation (D20): a scrubbed environment
 // (buildEnv), a confined working directory (the caller's job), a wall-clock
@@ -279,7 +281,7 @@ export function runCommand({
 
     child.on('error', (e) => {
       const reason = /** @type {any} */ (e)?.code === 'ENOENT'
-        ? `${path.basename(file)} was not found at ${file}. The terminal's executable list may need saving again.`
+        ? `${path.basename(file)} was not found at ${file}.`
         : `Could not start ${path.basename(file)}: ${e.message}`
       finish({ ok: false, reason })
     })

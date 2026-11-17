@@ -32,7 +32,6 @@ import * as filesystemProvider from './filesystem-mcp-provider.mjs'
 import * as fsDeleteTool from './fs-delete-tool.mjs'
 import * as scholarTool from './scholar-tool.mjs'
 import * as pythonTool from './python-tool.mjs'
-import * as terminalTool from './terminal-tool.mjs'
 import * as memoryTool from './memory-tool.mjs'
 import * as documentSearchTool from './document-search-tool.mjs'
 import { getConversation } from './conversations-storage.mjs'
@@ -65,7 +64,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 // searchToolsProvider is LAST, and deliberately: it is the only provider whose
 // job is to describe the others, so it must never shadow one of them on a name
 // collision, and its own tool must never appear in the catalog it searches.
-const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, terminalTool, memoryTool, documentSearchTool, interactionTools, searchToolsProvider]
+const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, memoryTool, documentSearchTool, interactionTools, searchToolsProvider]
 
 // Resolved per call, never captured in a const: a plugin installed or removed
 // while Nest is running must take effect without a restart. Built-ins come
@@ -201,7 +200,7 @@ function evaluateToolPolicy(toolName, config) {
 // ---------------------------------------------------------------------------
 export function approvalGate(toolName, args, approvalId, ctx) {
   const accountKey = memoryKey(ctx?.account ?? null)
-  if (approvalRule(toolName) === 'prompt' && grantCovers(accountKey, toolName, args)) return { ok: true }
+  if (approvalRule(toolName) === 'prompt' && grantCovers(accountKey, toolName)) return { ok: true }
   if (typeof approvalId === 'string' && approvalId) {
     if (consumeApproval(approvalId, { accountKey, tool: toolName, args })) return { ok: true }
     logPolicy('approval.refused', { account: ctx?.account?.username ?? '(auth off)', tool: toolName })
@@ -303,9 +302,7 @@ function configFor(account) {
     ? resolveEffectiveConfig(account, activeToolsConfig, roleFor(account))
     : getAuthRequired()
       ? narrowConfig(activeToolsConfig, DENY_ALL)
-      // Through resolveEffectiveConfig, not the bare config: its auth-off
-      // branch still applies the terminal's rule (off when the LAN is let in).
-      : resolveEffectiveConfig(null, activeToolsConfig, null)
+      : activeToolsConfig
 }
 
 /**
@@ -661,8 +658,6 @@ export function stopMcpServer() {
   activeToolsConfig = null
   postgresTool.closePool()
   pythonTool.stopAllKernels()
-  // A running command's tree, not only the child: killTree in command-exec.
-  terminalTool.stopAllCommands()
   // Plugin children are separate OS processes; without this they outlive the
   // server that spawned them.
   stopAllPlugins()

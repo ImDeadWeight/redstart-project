@@ -119,13 +119,6 @@ const DEFAULT_CAPABILITIES = {
   // Document search (chat-tooling Phase 5a). Its index is Nest's own state
   // (<config>/document-index.sqlite); it searches the Documents root.
   document_search: { enabled: false },
-  // run_command (agent-runtime Phase 4). Owner only, and not a sandbox
-  // (security.md, Terminal). `executables` is stored RESOLVED: each entry
-  // { entry, name, file, prefixArgs, dir }, resolved by terminal-config.mjs
-  // when an admin saves the list; PATH is never searched at call time.
-  // Like Python, it works in the Documents capability's conversation
-  // workspaces. `extraDirs`: absolute folders a command may also run in.
-  terminal:    { enabled: false, executables: [], defaultTimeoutS: 60, maxTimeoutS: 600, outputCapBytes: 16384, extraDirs: [] },
   // NOT a capability id: the global CONNECTION for Web Access's "web" search
   // source (chat-tooling Phase 4b). Which engine a profile uses is that
   // profile's tools.webSearchEngine; this only says where each engine is.

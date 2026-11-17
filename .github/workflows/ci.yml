@@ -148,14 +148,8 @@ jobs:
         env:
           REDSTART_PYODIDE_DIR: ${{ runner.temp }}/pyodide
 
-      - name: "Security: run_command executor (argv only, no shell, scrubbed env, tree kill)"
+      - name: "Security: command executor, kept for Twig's terminal (argv only, no shell, scrubbed env, tree kill)"
         run: node scripts/test-command-exec.mjs
-
-      - name: "Security: terminal allowlist (resolved at save time, no .cmd shims, npm via node)"
-        run: node scripts/test-terminal-config.mjs
-
-      - name: "Security: run_command (owner only, allowlist, cwd confinement, one at a time)"
-        run: node scripts/test-terminal-tool.mjs
 
       - name: "Security: conversation workspaces (layout, ownership, caps, trash)"
         run: node scripts/test-conversation-workspace.mjs

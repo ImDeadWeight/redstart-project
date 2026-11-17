@@ -25,20 +25,17 @@
 // checks the rule again at read time, so a grant written before a tool was
 // reclassified destructive stops counting the moment it is.
 //
-// `scope` is null for most tools: the grant covers every call to the tool.
-// A SCOPED tool (run_command, Phase 4) has grants with a scope instead,
-// { executable, firstArg } (tools-definitions grantScopeFor), and only those:
-// an unscoped grant for it is refused, so no card, import or API call can
-// always-allow every command. The scope is computed by the server from the
-// approved call's arguments (approval-ledger records it), never sent by a
-// client: POST /approvals/grants cannot make a scoped grant at all.
+// `scope` is null: the grant covers every call to the tool. The field exists
+// so a tool with scoped grants is not a migration. Nest's run_command had
+// them ({ executable, firstArg }) until the Nest terminal was removed
+// (master plan Phase 2); Twig's terminal keeps its rules on the client (U12).
 // =============================================================================
 
 import * as crypto from 'crypto'
 import * as path from 'path'
 import { configDir } from './platform-paths.mjs'
 import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
-import { approvalRule, isScopedTool, grantScopeFor, sameScope, MAX_SCOPE_PART_CHARS } from './tools-definitions.mjs'
+import { approvalRule } from './tools-definitions.mjs'
 
 export const MAX_GRANTS_PER_ACCOUNT = 500
 export const GRANT_SOURCES = ['card', 'import']
@@ -57,37 +54,25 @@ const isToolName = (t) => typeof t === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.te
  * The account's grants, newest first.
  *
  * @param {string} accountKey memory-storage memoryKey(account)
- * @returns {Array<{ id: string, tool: string, scope: { executable: string, firstArg: string } | null, createdAt: number, source: string }>}
+ * @returns {Array<{ id: string, tool: string, scope: null, createdAt: number, source: string }>}
  */
 export function listGrants(accountKey) {
   const list = read().accounts[accountKey]
   return Array.isArray(list) ? [...list].sort((a, b) => b.createdAt - a.createdAt) : []
 }
 
-const isScopePart = (s) => typeof s === 'string' && s.length > 0 && s.length <= MAX_SCOPE_PART_CHARS && !s.includes('\0')
-const isValidScope = (s) => !!s && typeof s === 'object' && isScopePart(s.executable) && isScopePart(s.firstArg)
-
 /**
- * Grant a tool. Idempotent: a tool (and scope) already granted returns its grant.
+ * Grant a tool. Idempotent: a tool already granted returns its grant.
  *
  * @param {string} accountKey
  * @param {string} tool
- * @param {{ source?: 'card' | 'import', scope?: { executable: string, firstArg: string } | null }} [opts]
- *   scope: required for a scoped tool, refused for any other
+ * @param {{ source?: 'card' | 'import' }} [opts]
  * @returns {{ ok: true, grant: object, created: boolean } | { ok: false, error: string }}
  */
-export function addGrant(accountKey, tool, { source = 'card', scope = null } = {}) {
+export function addGrant(accountKey, tool, { source = 'card' } = {}) {
   if (!isToolName(tool)) return { ok: false, error: 'not a tool name' }
   const rule = approvalRule(tool)
   if (rule === 'always') return { ok: false, error: 'this tool asks on every call and cannot be always allowed' }
-  if (isScopedTool(tool)) {
-    if (!isValidScope(scope)) return { ok: false, error: "this tool is always allowed one command at a time: choose Always allow on a command's card" }
-    scope = { executable: scope.executable, firstArg: scope.firstArg }
-  } else if (scope !== null && scope !== undefined) {
-    return { ok: false, error: 'this tool takes no scope' }
-  } else {
-    scope = null
-  }
   // A 'none' tool (a read, a web fetch) is granted too. Nest never asks for
   // one, but chat-ui's card does, for every tool not always allowed, so the
   // grant is what stops the card. Until 2026-11-12 these were refused:
@@ -95,13 +80,13 @@ export function addGrant(accountKey, tool, { source = 'card', scope = null } = {
   // and the one-time import dropped every read tool's old "Always allow".
   const data = read()
   const list = Array.isArray(data.accounts[accountKey]) ? data.accounts[accountKey] : []
-  const existing = list.find((g) => g.tool === tool && sameScope(g.scope ?? null, scope))
+  const existing = list.find((g) => g.tool === tool && g.scope === null)
   if (existing) return { ok: true, grant: existing, created: false }
   if (list.length >= MAX_GRANTS_PER_ACCOUNT) return { ok: false, error: 'too many standing grants' }
   const grant = {
     id: crypto.randomUUID(),
     tool,
-    scope,
+    scope: null,
     createdAt: Date.now(),
     source: GRANT_SOURCES.includes(source) ? source : 'card',
   }
@@ -143,18 +128,8 @@ export function revokeAnyGrant(id) {
   return null
 }
 
-/**
- * Does a standing grant let this account make this call without a card?
- * A scoped tool needs the call's arguments: its grant covers a call only when
- * the call's scope matches (`git status` covers `git status -s`).
- *
- * @param {string} accountKey
- * @param {string} tool
- * @param {any} [args] the call's arguments; required for a scoped tool
- */
-export function covers(accountKey, tool, args) {
+/** Does a standing grant let this account call the tool without a card? */
+export function covers(accountKey, tool) {
   if (approvalRule(tool) !== 'prompt') return false
-  const scope = isScopedTool(tool) ? grantScopeFor(tool, args) : null
-  if (isScopedTool(tool) && !scope) return false
-  return listGrants(accountKey).some((g) => g.tool === tool && sameScope(g.scope ?? null, scope))
+  return listGrants(accountKey).some((g) => g.tool === tool && g.scope === null)
 }

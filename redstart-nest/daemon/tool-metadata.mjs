@@ -105,8 +105,6 @@ export const BUILTIN_TOOL_METADATA = Object.freeze({
 
   // code
   run_python: { category: 'code', store: S.workspace, tags: ['python', 'calculate', 'compute', 'math', 'arithmetic', 'exact number', 'chart', 'plot', 'parse', 'csv', 'script', 'unzip'], useWhen: 'computing, transforming data or working on attached files' },
-  // agent-runtime Phase 4: an admin-listed program (git, node, npm) in the workspace.
-  run_command: { category: 'code', store: S.workspace, tags: ['terminal', 'command', 'shell', 'run tests', 'node', 'npm', 'git clone', 'build', 'exit code', 'cli'], useWhen: 'running a program such as git, node or npm and reading its exit code and output' },
 
   // data
   postgres_query: { category: 'data', store: S.postgres, tags: ['sql', 'database', 'select', 'query'], useWhen: 'reading data from the Postgres database' },

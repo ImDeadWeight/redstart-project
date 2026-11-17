@@ -135,10 +135,7 @@ export async function handleApprovalRoute(req, res, urlPath, account) {
       if (decision === 'deny') {
         logPolicy('approval.denied', { account: who(account), tool: r.tool, decision })
       } else if (decision === 'always' && approvalRule(r.tool) === 'prompt') {
-        // A scoped tool's grant takes the scope the ledger recorded from the
-        // approved call itself; with none (run_command with no first
-        // argument) addGrant refuses and the decision counts as once.
-        const added = addGrant(key, r.tool, { source: 'card', scope: r.scope })
+        const added = addGrant(key, r.tool, { source: 'card' })
         if (added.ok) {
           grant = added.grant
           if (added.created) grantAdded(account, added.grant, 'card')

@@ -58,10 +58,9 @@ await test('the host-resolved tools need no approval and are never enforced', ()
   }
 })
 
-await test('enforced: the destructive tools (D11, 2026-11-12) and run_command (Phase 4)', () => {
-  eq(['delete_file', 'memory_forget', 'create_document', 'run_python', 'read_document', 'run_command'].map(defs.isApprovalEnforced), [true, true, false, false, false, true], 'enforced')
-  eq([...defs.ENFORCED_TOOLS], ['run_command'], 'ENFORCED_TOOLS')
-  assert(defs.approvalRule('run_command') === 'prompt', 'run_command is not a prompt tool (grants scoped by command, D19)')
+await test('Phase 2 enforces exactly the destructive tools (D11; decided 2026-11-12)', () => {
+  eq(['delete_file', 'memory_forget', 'create_document', 'run_python', 'read_document'].map(defs.isApprovalEnforced), [true, true, false, false, false], 'enforced')
+  assert(defs.ENFORCED_TOOLS.size === 0, 'ENFORCED_TOOLS should be empty (the Nest terminal was removed)')
 })
 
 await test('an override can only tighten a rule, never loosen one', () => {
@@ -93,7 +92,7 @@ await test('decided once, consumed once, for the same call', () => {
   const a = ledger.requestApproval(call({ path: 'notes/a.md' }))
   assert(ledger.consume(a.id, call({ path: 'notes/a.md' })) === false, 'consumed before any decision')
   const b = ledger.requestApproval(call({ path: 'notes/a.md' }))
-  eq(ledger.decide(b.id, ALICE, 'once'), { ok: true, tool: 'delete_file', scope: null }, 'decide')
+  eq(ledger.decide(b.id, ALICE, 'once'), { ok: true, tool: 'delete_file' }, 'decide')
   eq(ledger.decide(b.id, ALICE, 'once'), { ok: false, error: 'already decided' }, 'second decision')
   assert(ledger.consume(b.id, call({ path: 'notes/a.md' })) === true, 'the approved call was refused')
   assert(ledger.consume(b.id, call({ path: 'notes/a.md' })) === false, 'an approval was used twice')
@@ -147,7 +146,7 @@ await test('bounded per account: the oldest pending goes first, other accounts a
   for (let i = 1; i < ledger.MAX_PENDING_PER_ACCOUNT; i++) ledger.requestApproval(call({ n: i }))
   ledger.requestApproval(call({ n: 'one more' }))
   eq(ledger.decide(first.id, ALICE, 'once'), { ok: false, error: 'not found' }, "alice's oldest is still there")
-  eq(ledger.decide(bobs.id, BOB, 'once'), { ok: true, tool: 'delete_file', scope: null }, "bob's was evicted by alice")
+  eq(ledger.decide(bobs.id, BOB, 'once'), { ok: true, tool: 'delete_file' }, "bob's was evicted by alice")
   assert(ledger.pendingCount() === ledger.MAX_PENDING_PER_ACCOUNT + 1, `pending ${ledger.pendingCount()}`)
 })
 
@@ -337,7 +336,7 @@ await test('an approval presented by another account, or for other arguments, is
 await test('auth off: the gate uses the shared anonymous scope', () => {
   ledger._reset()
   const g = approvalGate('memory_forget', { id: 'm1' }, undefined, { account: null })
-  eq(ledger.decide(g.pending.id, '_local', 'once'), { ok: true, tool: 'memory_forget', scope: null }, 'decided in _local')
+  eq(ledger.decide(g.pending.id, '_local', 'once'), { ok: true, tool: 'memory_forget' }, 'decided in _local')
   assert(approvalGate('memory_forget', { id: 'm1' }, g.pending.id, { account: null }).ok, 'refused')
 })
 
@@ -395,73 +394,6 @@ await test('grants routes: list, add (logged), revoke own only, and the import d
   const imp = await route('POST', '/approvals/grants/import', BOB_ACCOUNT, { tools: ['write_file', 'delete_file', 'memory_forget', 'read_document', 'write_file', 42] })
   eq([imp.json.imported.sort(), imp.json.dropped.sort()], [['read_document', 'write_file'], ['delete_file', 'memory_forget']], 'import keeps reads, drops destructive')
   eq((await route('POST', '/approvals/grants/import', BOB_ACCOUNT, { nope: 1 })).status, 400, 'a malformed import')
-})
-
-console.log('\n-- scoped grants: run_command, one program and first argument (D19, P4-e) --')
-
-const cmd = (command, ...args) => ({ command, args })
-
-await test('the scope is the program and first argument; no first argument, no scope', () => {
-  eq(defs.grantScopeFor('run_command', cmd('git', 'status', '-s')), { executable: 'git', firstArg: 'status' }, 'git status -s')
-  eq(defs.grantScopeFor('run_command', cmd('git')), null, 'git alone')
-  eq(defs.grantScopeFor('run_command', { command: 'git', args: [''] }), null, 'an empty first argument')
-  eq(defs.grantScopeFor('create_document', cmd('git', 'status')), null, 'another tool')
-  assert(defs.isScopedTool('run_command') && !defs.isScopedTool('create_document'), 'isScopedTool')
-})
-
-await test('🔒 an unscoped run_command grant is refused; a scope on any other tool is refused', () => {
-  const key = memoryKey({ id: 'scope-1', username: 'scope' })
-  assert(!grants.addGrant(key, 'run_command').ok, 'an unscoped run_command grant was made')
-  assert(!grants.addGrant(key, 'run_command', { scope: { executable: 'git' } }).ok, 'a scope with no first argument was taken')
-  assert(!grants.addGrant(key, 'create_document', { scope: { executable: 'git', firstArg: 'status' } }).ok, 'a scope on create_document was taken')
-  const a = grants.addGrant(key, 'run_command', { scope: { executable: 'git', firstArg: 'status' } })
-  const again = grants.addGrant(key, 'run_command', { scope: { executable: 'git', firstArg: 'status' } })
-  const b = grants.addGrant(key, 'run_command', { scope: { executable: 'npm', firstArg: 'test' } })
-  assert(a.ok && a.created && again.ok && !again.created && b.ok && b.created, JSON.stringify([a, again, b]))
-  eq(grants.listGrants(key).length, 2, 'two scoped grants')
-})
-
-await test('🔒 "git status" covers git status -s, and not git push, node status, or git alone', () => {
-  const key = memoryKey({ id: 'scope-1', username: 'scope' })
-  const rows = [cmd('git', 'status'), cmd('git', 'status', '-s'), cmd('git', 'push'), cmd('node', 'status'), cmd('git'), cmd('npm', 'test', '--', '-x')]
-    .map((a) => grants.covers(key, 'run_command', a))
-  eq(rows, [true, true, false, false, false, true], 'covers')
-  assert(!grants.covers(key, 'run_command'), 'covered with no arguments')
-})
-
-const OWNER_ACCOUNT = { id: 'owner-9', username: 'owen', tier: 'owner' }
-const OWNER = memoryKey(OWNER_ACCOUNT)
-
-await test('Always allow on a command\'s card grants that command\'s scope, computed by the server', async () => {
-  ledger._reset()
-  const g = approvalGate('run_command', cmd('git', 'status', '-s'), undefined, { account: OWNER_ACCOUNT })
-  assert(!g.ok && g.pending.scope?.firstArg === 'status', JSON.stringify(g))
-  const r = await route('POST', `/approvals/${g.pending.id}`, OWNER_ACCOUNT, { decision: 'always', scope: { executable: 'git', firstArg: 'push' } })
-  eq([r.status, r.json.grant?.scope], [200, { executable: 'git', firstArg: 'status' }], 'the grant (a scope in the body is ignored)')
-  assert(approvalGate('run_command', cmd('git', 'status', '-s'), g.pending.id, { account: OWNER_ACCOUNT }).ok, 'the approved call was refused')
-  assert(approvalGate('run_command', cmd('git', 'status', '--porcelain'), undefined, { account: OWNER_ACCOUNT }).ok, 'the grant did not cover git status --porcelain')
-  const push = approvalGate('run_command', cmd('git', 'push'), undefined, { account: OWNER_ACCOUNT })
-  assert(!push.ok && push.pending, 'git push went through on a git status grant')
-  eq(policyLines().filter((l) => l.event === 'grant.added').at(-1).tool, 'run_command', 'the grant was logged')
-})
-
-await test('Always allow on a command with no first argument counts as once and grants nothing', async () => {
-  ledger._reset()
-  const before = grants.listGrants(OWNER).length
-  const g = approvalGate('run_command', cmd('node'), undefined, { account: OWNER_ACCOUNT })
-  const r = await route('POST', `/approvals/${g.pending.id}`, OWNER_ACCOUNT, { decision: 'always' })
-  eq([r.status, r.json.grant], [200, null], 'always on bare node')
-  assert(approvalGate('run_command', cmd('node'), g.pending.id, { account: OWNER_ACCOUNT }).ok, 'this call was refused')
-  eq(grants.listGrants(OWNER).length, before, 'a grant was made')
-  assert(!approvalGate('run_command', cmd('node'), undefined, { account: OWNER_ACCOUNT }).ok, 'the next bare node went through')
-})
-
-await test('🔒 no route makes a run_command grant without an approved call: POST and the import refuse it', async () => {
-  eq((await route('POST', '/approvals/grants', OWNER_ACCOUNT, { tool: 'run_command' })).status, 400, 'POST unscoped')
-  eq((await route('POST', '/approvals/grants', OWNER_ACCOUNT, { tool: 'run_command', scope: { executable: 'git', firstArg: 'push' } })).status, 400, 'POST with a scope')
-  const imp = await route('POST', '/approvals/grants/import', OWNER_ACCOUNT, { tools: ['run_command'] })
-  eq(imp.json.dropped, ['run_command'], 'import')
-  assert(!grants.listGrants(OWNER).some((x) => x.tool === 'run_command' && x.scope?.firstArg === 'push'), 'a push grant exists')
 })
 
 await test('POST /approvals/denied logs a card denial for an enforced tool only, and runs nothing', async () => {

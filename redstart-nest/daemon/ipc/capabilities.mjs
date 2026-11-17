@@ -18,9 +18,7 @@
 // specifically exercises that shape. The matching selectXFolder() dialogs
 // are retired, replaced by a native picker that itself retired — FolderPicker.tsx
 // now only ever uses admin/browse-routes.mjs.
-import * as fs from 'fs'
 import { getCapabilities, setCapabilityConfig } from '../tools-storage.mjs'
-import { resolveExecutableList, liveExecutables, TERMINAL_LIMITS } from '../terminal-config.mjs'
 import { encryptSecret, decryptSecret } from '../secrets.mjs'
 import { testConnection as testPostgresConnection } from '../postgres-tool.mjs'
 import { isPlainObject, isAbsolutePath, optional } from './validate.mjs'
@@ -96,73 +94,7 @@ export function getCapabilitiesConfig() {
       hasBraveApiKey: !!caps.web_search.braveApiKeyEnc,
     },
     python: pythonStatus(caps.python),
-    terminal: terminalStatus(caps.terminal),
   }
-}
-
-// The terminal card (agent-runtime Phase 4): the list as resolved, and which
-// entries no longer exist on disk (an uninstall since the save), so the card
-// can say why a listed program is missing from the tool.
-function terminalStatus(cfg) {
-  const live = new Set(liveExecutables(cfg.executables).map((e) => e.name))
-  return {
-    executables: (cfg.executables ?? []).map((e) => ({
-      entry: e.entry, name: e.name, file: e.file, prefixArgs: e.prefixArgs, missing: !live.has(e.name),
-    })),
-    defaultTimeoutS: cfg.defaultTimeoutS,
-    maxTimeoutS: cfg.maxTimeoutS,
-    outputCapBytes: cfg.outputCapBytes,
-    extraDirs: cfg.extraDirs ?? [],
-    limits: TERMINAL_LIMITS,
-  }
-}
-
-// Settings for run_command. `executables` is the list of entries as the admin
-// typed them (names or absolute paths); every one is resolved here, and one
-// refusal refuses the whole save with its reason (terminal-config.mjs).
-export function setTerminalConfig(config, { refreshLiveToolsConfig }) {
-  const channel = 'capabilities:set-terminal'
-  const bad = checkConfig(channel, config)
-  if (bad) return refuse(channel, bad)
-  const patch = {}
-  const int = (v, { min, max }) => Number.isInteger(v) && v >= min && v <= max
-  const { executables, defaultTimeoutS, maxTimeoutS, outputCapBytes, extraDirs } = config
-  if (executables !== undefined) {
-    const r = resolveExecutableList(executables)
-    if (!r.ok) return refuse(channel, r.reason)
-    patch.executables = r.executables
-  }
-  const current = getCapabilities().terminal
-  const max = maxTimeoutS ?? current.maxTimeoutS
-  if (maxTimeoutS !== undefined) {
-    if (!int(maxTimeoutS, TERMINAL_LIMITS.timeoutS)) return refuse(channel, `maxTimeoutS must be an integer from ${TERMINAL_LIMITS.timeoutS.min} to ${TERMINAL_LIMITS.timeoutS.max}.`)
-    patch.maxTimeoutS = maxTimeoutS
-  }
-  if (defaultTimeoutS !== undefined) {
-    if (!int(defaultTimeoutS, TERMINAL_LIMITS.timeoutS)) return refuse(channel, `defaultTimeoutS must be an integer from ${TERMINAL_LIMITS.timeoutS.min} to ${TERMINAL_LIMITS.timeoutS.max}.`)
-    patch.defaultTimeoutS = defaultTimeoutS
-  }
-  if ((patch.defaultTimeoutS ?? current.defaultTimeoutS) > max) return refuse(channel, 'defaultTimeoutS cannot be more than maxTimeoutS.')
-  if (outputCapBytes !== undefined) {
-    if (!int(outputCapBytes, TERMINAL_LIMITS.outputCapBytes)) return refuse(channel, `outputCapBytes must be an integer from ${TERMINAL_LIMITS.outputCapBytes.min} to ${TERMINAL_LIMITS.outputCapBytes.max}.`)
-    patch.outputCapBytes = outputCapBytes
-  }
-  if (extraDirs !== undefined) {
-    if (!Array.isArray(extraDirs) || extraDirs.length > 16) return refuse(channel, 'extraDirs must be a list of at most 16 folders.')
-    for (const dir of extraDirs) {
-      if (!isAbsolutePath(dir)) return refuse(channel, 'Every extra folder must be an absolute path.')
-      if (!isDirectory(dir)) return refuse(channel, `${dir} is not a folder on this machine.`)
-    }
-    patch.extraDirs = [...new Set(extraDirs)]
-  }
-  setCapabilityConfig('terminal', patch)
-  logEvent('terminal', 'config_saved', { executables: (patch.executables ?? current.executables ?? []).length })
-  refreshLiveToolsConfig()
-  return { ok: true }
-}
-
-function isDirectory(p) {
-  try { return fs.statSync(p).isDirectory() } catch { return false }
 }
 
 // What the Tools tab needs to say about run_python: whether it CAN run here
@@ -366,7 +298,6 @@ export function capabilitiesHandlers(deps) {
     'capabilities:set-web-search': (config) => setWebSearchConfig(config, deps),
     'capabilities:set-python': (config) => setPythonConfig(config, deps),
     'capabilities:install-python': async () => installPythonRuntime(deps),
-    'capabilities:set-terminal': (config) => setTerminalConfig(config, deps),
   }
 
   // Built in a loop, and that is exactly why the contract tests scan the real

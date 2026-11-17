@@ -1362,8 +1362,6 @@ async function main() {
     assert(body.inference?.local === true, 'inference locality not reported')
     assert(Array.isArray(body.webDomains), 'webDomains missing')
     assert(Array.isArray(body.remoteToolServers), 'remoteToolServers missing')
-    // The terminal (agent-runtime Phase 4) has no destination list, only this flag.
-    assert(typeof body.commandsReachNetwork === 'boolean', 'commandsReachNetwork missing')
     // The point of the endpoint: absence of recorded terms is itself reported.
     assert(body.externalTermsKnown === false, 'claimed knowledge of third-party terms')
   })

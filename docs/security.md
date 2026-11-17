@@ -21,7 +21,6 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 - [Destructive operations](#destructive-operations)
 - [Logging](#logging)
 - [Running model-written code (run_python)](#running-model-written-code-run_python)
-- [The terminal (run_command)](#the-terminal-run_command)
 - [Document search](#document-search)
 - [Memory](#memory)
 - [Workflows](#workflows)
@@ -325,7 +324,6 @@ Each tool has an approval rule that follows from its class: reads and web fetche
 - **An approval is for one exact call.** It's tied to your account, the tool, and the exact arguments, works once, and expires after 60 seconds. An approval for deleting one file can't be used to delete another, by another account, or twice.
 - **What this protects, said plainly:** it protects you from the model, not the server from you. A client holding your account's key is your account, and could approve its own calls. What it adds is that the decision is bound to the call, it's on the server rather than in one browser, and it's recorded.
 - **Always allow is per account and kept on the server** for Nest's tools. It follows you to every browser and client, and you can revoke it from the chat settings. A destructive tool can never be always allowed: Nest refuses the grant, and a grant written before a tool became destructive stops counting. Tools that live in the client (Twig's local files, llama-server's built-ins, the in-page sandbox, other MCP servers) keep their always-allow in the browser, as before. Your old browser list was imported once, with anything destructive dropped.
-- **run_command always asks, and Always allow covers one command at a time.** Nest refuses an unapproved command from any client, like a delete. Its card shows the exact program and arguments, and **Always allow** grants that program with that first argument only (`git status` lets `git status -s` through, not `git push`). Nest takes the grant's scope from the call you approved, never from what a client sends, and refuses a grant for the tool as a whole, so nothing can always-allow every command. A command with no first argument (`node` alone) can only be allowed once.
 - **With login off, everyone shares one set of standing grants**, as they share memories and files.
 - **The decision log.** A denial (on the chat app's card or sent by a client), an approval presented for the wrong call, and every standing grant added or revoked are written to `policy.jsonl` beside the main log, and the owner reads them on the launcher's **Activity** tab. It records the account, the tool and the decision, never arguments or paths. The same tab lists any account's standing grants, and the owner can revoke them.
 
@@ -369,28 +367,6 @@ What runs instead is **Pyodide** (CPython compiled to WebAssembly) in a separate
 **Files.** Each conversation has a workspace, `chats/<conversation>/`, inside your own Documents folder ([per-account storage](#per-account-file-storage) applies unchanged). The conversation id the chat UI sends is honoured only if the conversation is yours; anything else uses your `chats/_scratch/`. With run_python available, the chat UI also uploads your attachments there. `read_document` looks in that conversation's workspace when your Documents folder has no file at the path it was given, so an attachment can be read by its name; it never looks in another conversation's workspace or another account's. The File System tools cannot reach a workspace, and their "no such file" error says so when the file is there. Deleting a conversation sends its workspace to the recycle bin (or `.trash/`), and at startup a workspace whose conversation no longer exists (for example, pruned after 30 days) goes the same way. Workspaces are capped at 200 MB each and 2 GB per account by default.
 
 **Limits.** 30 s per call by default, 120 s at most, enforced by killing the kernel. Two warm kernels at once by default (≈ 457 MB of RAM each), stopped after 10 idle minutes.
-
----
-
-## The terminal (run_command)
-
-The Terminal capability lets the owner's assistant run programs the administrator lists (`git`, `node`, `npm`, ...) on the Redstart server. **It is not a sandbox, and this section says exactly what it is.**
-
-**What a command can reach.** A command runs as the operating-system user that runs Nest. Wherever it starts, it can read and write everything that user can: every account's files, `accounts.json`, the secrets key, and the rest of the disk. It can reach the network and the internet. `npm install` runs whatever install scripts the packages carry. Giving someone the terminal gives them the machine.
-
-**So it is the owner's alone.** run_command is offered only to the **owner** account. No role can give it to an admin or a user: it sits above role narrowing, as a ceiling. With login off, every caller is the same anonymous one, which is the owner only while Nest listens on this machine alone, so with login off **and** network mode on the tool is not offered at all. Nest checks this when it builds each account's tool list and again inside the tool on every call.
-
-**What is in place instead of a sandbox.** These limit what the *model* can do by mistake or under prompt injection; none of them limits what a program can do once it runs:
-
-- **Only listed programs.** The administrator lists each program by name or path in the Tools tab. Each entry is resolved to an absolute path when the list is saved, and that path is what runs: the PATH is never searched when a command runs.
-- **No shell, ever.** The model gives the program and a list of arguments. Nest starts the program directly, so `&`, `|`, `>`, `$(...)` and `%VAR%` are plain characters in an argument and are never interpreted. Windows `.cmd` and `.bat` programs cannot be listed, because they run only through `cmd.exe`, where arguments can be read as commands (verified on this codebase: an argument of `--version & echo INJECTED` ran the second command through `npm.cmd`). `npm` and `npx` are run as `node` plus npm's own script instead.
-- **A confined starting folder.** A command starts in the conversation's workspace (the folder run_python and the documents tools share), a folder inside it, or a folder the administrator listed. Links that point out of it are refused.
-- **A scrubbed environment.** A command gets no environment variables from Nest: no keys or tokens, and a PATH holding only the listed programs' folders. HOME and the temporary folder are the workspace's `.home` folder.
-- **Limits.** A wall-clock timeout (60 s by default, up to the administrator's maximum), after which the command **and everything it started** are killed. Output past the cap (16 KB by default) is cut from the middle, keeping the start and the end. One command at a time per conversation.
-- **Approval.** Every command shows its exact arguments and asks (see [Approvals](#approvals)). Nest refuses an unapproved command from any client.
-- **Logged, without arguments.** The log records which program ran, its exit code and how long it took, never the arguments or the output.
-
-The executor takes an isolation option whose only value today is `none`. A container or `bubblewrap` backend can go behind that option later, and will be built when there is hardware to verify it on.
 
 ---
 
@@ -564,7 +540,6 @@ Inference is local and architecturally so — llama-server runs on this machine,
 | Scholar (OpenAlex, arXiv, PubMed) | the Scholar capability is enabled |
 | An external MCP server on another host | one is registered and enabled, and its URL is not local |
 | A plugin holding a credential | it is enabled and configured with a key — see [Plugins](#plugins) |
-| Anywhere a program run by the terminal connects (`git clone`, `npm install`, ...) | the Terminal capability is enabled for the profile, for the owner — see [the terminal](#the-terminal-run_command). No host is listed, because the command decides |
 | GitHub (`api.github.com`, then the release download) — the update check | the desktop apps (Nest, and Twig on the user's own machine), unless automatic checks are off (Nest: Configuration → Network → Updates; Twig: Settings → Server → Updates), and whenever someone presses *Check now* |
 
 Nothing else transmits. There is no telemetry, and no third-party search engine unless a profile selects one. The update check runs about four times a day. It sends GitHub the machine's IP address and a `User-Agent` naming the installed app and version (`Redstart-Nest/1.0.0-alpha.N`, `Redstart-Twig/1.0.0-alpha.N`), and nothing about accounts, models or conversations. `GET /egress` does not list it, because that endpoint describes where *request data* can go and the update check carries none. The headless daemon (`bin/nestd.mjs`) and development runs never check.
@@ -594,8 +569,7 @@ The accurate one-line summary of the privacy model is **local inference with adm
 | `test-json-store` | state survives an interrupted write; a torn file never reads as empty state |
 | `test-logging` | `logEvent`'s blocklist and scalars-only defense-in-depth; `logAudit`'s closed allowlist and truncation; both against the bytes actually written to `redstart.log` |
 | `test-llama-args` | the localhost-only invariant survives spoofed config and injected `--host` |
-| `test-command-exec` | run_command's executor: shell metacharacters in arguments reach the program verbatim and never run, `.cmd`/`.bat` refused, nothing of the host's environment inherited, a timeout kills the whole process tree |
-| `test-terminal-config` / `test-terminal-tool` | the allowlist is resolved when saved and never searched at run time; the terminal is the owner's alone (an admin, a user, login off on the LAN are refused); a command cannot start outside its workspace, links included |
+| `test-command-exec` | the shared command executor, kept for Twig's terminal (Nest's run_command was removed): shell metacharacters in arguments reach the program verbatim and never run, `.cmd`/`.bat` refused, nothing of the host's environment inherited, a timeout kills the whole process tree |
 | `test-tool-policy` / `test-tool-namespacing` | classification, ban expansion, prefix collisions fail the build |
 | `test-mcp-capabilities` / `test-provider-conformance` | every provider refuses direct calls when disabled and errors rather than crashing on malformed input |
 | `test-system-prompt` | capability claims gated on the request; privacy claims derived; admin policy outranks client prose; unknown mode IDs dropped |
@@ -642,10 +616,8 @@ Stated plainly, because a security document that lists only strengths is not one
 
 - **An organization workflow steers what everyone who runs it gets.** Its text is user-tier, so it can't override policy, but whoever holds `manageOrgWorkflows` decides what a commonly used workflow asks the model to do, and nothing reviews an edit. Edits are logged (`workflow` events) with the editor's username, but the store keeps no history of previous text. Grant `manageOrgWorkflows` the way you would grant `managePromptBlocks`.
 - **run_python's sandbox rests on Node's permission model and on Pyodide's internals staying as they are.** Python can reach Pyodide's own JavaScript API, including internals. One of those (its Node socket support) was a real escape under the old Electron Node, which had no network permission. The runtime now refuses it, and the sandbox suite proves that against a counting stub, but a Pyodide release could add a new route. That is why the runtime is hash-pinned and the suite must pass before any upgrade. The suite is part of CI (Linux) and has been run by hand on Windows. It has never run on macOS.
-- **The terminal is not a sandbox.** A command the owner approves runs as Nest's operating-system user, with that user's access to every account's files, the secrets key and the network ([the terminal](#the-terminal-run_command)). The protections are policy: listed programs only, no shell, a confined starting folder, a scrubbed environment, limits, and approval.
 - **Always allow for a command is bound to its first argument, not to what the rest does.** Always allowing `node build.mjs` allows whatever `build.mjs` contains the next time it runs, and always allowing `npm install` allows any package's install scripts. Prefer **Allow once** for anything that runs code from a file or a download.
 - **A command's own helpers see only the listed programs on PATH.** git's helpers and npm's lifecycle scripts get the scrubbed PATH, so a tool that needs another program on PATH needs that program listed too. Long-running programs (dev servers, watchers) are not supported yet: a command is stopped at its timeout.
-- **The terminal has not been tried in the running app yet.** It's covered by tests (the executor with hostile arguments and a process tree, the allowlist, the owner-only rule, the folder confinement, scoped grants, the chat app's card and exchange), but no real command has been approved through the card.
 - **run_python's memory and disk limits are coarse.** A run can use up to WebAssembly's 4 GB address space before its timeout kills it, and there's no smaller memory cap. Workspace caps are checked before and after each run, not on every write, so one run can overshoot the cap by whatever it writes within its timeout. The next run is then refused until files are removed.
 - **A remembered instruction can still steer the assistant.** Memories are framed as data and every save is visible with Undo, but a model can still act on one that reads like an instruction, and a save from an injected page is only *flagged*, not blocked. The web flag is time-based (15 minutes after a network tool call in that conversation), so it can mark an innocent save and can miss a plugin whose tools reach the network without being classed as network. Check **Settings → Memory** now and then, and withhold Memory from roles that hold write or destructive tools if that worries you.
 - **The document index keeps a deleted file's text until that account searches again.** The index catches up on access, not on delete, so a file removed in the file explorer is still in `document-index.sqlite` until its owner's next search (or a rebuild). The index also holds every account's extracted text in one file on disk.
