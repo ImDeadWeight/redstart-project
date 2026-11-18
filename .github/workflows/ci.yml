@@ -390,7 +390,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     defaults:
       run:
-        working-directory: redstart-twig/windows
+        working-directory: redstart-twig/desktop
     steps:
       - uses: actions/checkout@v4
 
@@ -416,7 +416,7 @@ jobs:
         os: [windows-latest, macos-15]
     defaults:
       run:
-        working-directory: redstart-twig/windows/shell
+        working-directory: redstart-twig/desktop/shell
     steps:
       - uses: actions/checkout@v4
 
@@ -425,8 +425,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            redstart-twig/windows/shell/target
-          key: twig-shell-${{ runner.os }}-${{ hashFiles('redstart-twig/windows/shell/Cargo.lock') }}
+            redstart-twig/desktop/shell/target
+          key: twig-shell-${{ runner.os }}-${{ hashFiles('redstart-twig/desktop/shell/Cargo.lock') }}
 
       # generate_context!() embeds the icons, which Nest's make-icon generates
       # into this app's own build/ (the perched-bird drawing).

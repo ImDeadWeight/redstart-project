@@ -21,7 +21,7 @@
 // the .trash/ folder and this suite can assert on the result. The recycle-bin
 // path itself is a manual check (see SMOKE.md §4).
 //
-// Run:  npm test    (from redstart-twig/windows)
+// Run:  npm test    (from redstart-twig/desktop)
 // =============================================================================
 
 import * as fs from 'node:fs'

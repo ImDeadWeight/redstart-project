@@ -4,7 +4,7 @@
 // Both apps' Node halves import modules that live OUTSIDE their own app root:
 //
 //   redstart-nest/daemon/*.mjs, bin/*.mjs        -> ../../shared/*.mjs
-//   redstart-twig/windows/{bin,daemon}/*.mjs     -> ../../../shared/*.mjs
+//   redstart-twig/desktop/{bin,daemon}/*.mjs     -> ../../../shared/*.mjs
 //
 // In a dev checkout that resolves fine, because the repo has the parent
 // directories. Packaged, each app's tree is copied under resources/ by its
@@ -98,11 +98,11 @@ function escapedTopLevel(appRoot, fileAbs, specifier) {
 
 console.log('\n-- imports that escape the app root are shipped --')
 
-const TWIG = path.join(REPO, 'redstart-twig', 'windows')
+const TWIG = path.join(REPO, 'redstart-twig', 'desktop')
 const TWIG_STAGE_SRC = fs.readFileSync(path.join(TWIG, 'scripts', 'stage-shell-bundle.mjs'), 'utf8')
 
 // Twig: twigd runs from resources/app/twigd/{bin,daemon}, so an import
-// escaping redstart-twig/windows/ by two levels lands in resources/<top>.
+// escaping redstart-twig/desktop/ by two levels lands in resources/<top>.
 {
   const escaping = []
   for (const dir of ['daemon', 'bin']) {

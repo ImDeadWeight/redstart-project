@@ -109,7 +109,7 @@ redstart-nest/shell/gen/
 redstart-nest/shell/bundle/
 
 # Twig's Tauri shell
-redstart-twig/windows/shell/target/
-redstart-twig/windows/shell/gen/
-redstart-twig/windows/shell/bundle/
-redstart-twig/windows/licenses/
+redstart-twig/desktop/shell/target/
+redstart-twig/desktop/shell/gen/
+redstart-twig/desktop/shell/bundle/
+redstart-twig/desktop/licenses/

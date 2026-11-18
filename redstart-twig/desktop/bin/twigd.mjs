@@ -1,7 +1,7 @@
 // =============================================================================
 // twigd: Redstart Twig's local process, under its Tauri shell
 // =============================================================================
-// The Tauri shell (redstart-twig/windows/shell) spawns
+// The Tauri shell (redstart-twig/desktop/shell) spawns
 //   node twigd.mjs --shell-pipe --config <dir>
 // on the Node 26 it bundles, and speaks shared/shell-pipe.mjs over the child's
 // stdin/stdout. This is the half of Twig that used to be Electron's main

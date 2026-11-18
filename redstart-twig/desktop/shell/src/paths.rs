@@ -48,7 +48,7 @@ pub fn resolve(app: &AppHandle) -> Result<Layout, String> {
     let shell_dir = config.join("shell");
 
     if cfg!(debug_assertions) {
-        // shell/ sits inside redstart-twig/windows/, the checkout twigd runs from.
+        // shell/ sits inside redstart-twig/desktop/, the checkout twigd runs from.
         let twig = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .map(PathBuf::from)

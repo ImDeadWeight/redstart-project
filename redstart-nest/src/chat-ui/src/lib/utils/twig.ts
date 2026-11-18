@@ -111,7 +111,7 @@ export interface TwigShellApi {
 }
 
 /**
- * The Tauri shell's window (redstart-twig/windows/shell/src/bridge.js). The
+ * The Tauri shell's window (redstart-twig/desktop/shell/src/bridge.js). The
  * window has no OS frame on Windows, so the page draws the title bar and its
  * buttons. On macOS the native traffic lights stay and `drawsControls` is false.
  */

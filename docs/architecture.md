@@ -111,7 +111,7 @@ shell. It installs only on a deliberate quit, after the daemon and its
 children are gone.
 
 **Twig is built the same way.** Redstart Twig, the desktop chat client, is a
-Tauri shell (`redstart-twig/windows/shell/`) around `twigd`, its own Node
+Tauri shell (`redstart-twig/desktop/shell/`) around `twigd`, its own Node
 half on the same bundled Node 26 and the same shell pipe. twigd does what the
 page needs on the user's machine: the granted folder's `fs_*` tools, local
 stdio MCP servers, the LAN scan for a Nest. The shell serves the chat UI from

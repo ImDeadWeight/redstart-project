@@ -13,7 +13,7 @@
 //     which is what the updater waits on before it installs;
 //   - shutdown and EOF both exit 0 (exit 1 means a crash to the shell).
 //
-// Run:  npm test    (from redstart-twig/windows)
+// Run:  npm test    (from redstart-twig/desktop)
 // =============================================================================
 
 import { spawn } from 'node:child_process'

@@ -83,7 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           nest=$(node -p "require('./redstart-nest/package.json').version")
-          twig=$(node -p "require('./redstart-twig/windows/package.json').version")
+          twig=$(node -p "require('./redstart-twig/desktop/package.json').version")
           # The two apps ship as one release and are versioned in lockstep
           # (docs/development.md). Refuse to guess which one is right.
           if [ "$nest" != "$twig" ]; then
@@ -102,7 +102,7 @@ jobs:
           # npm version also rewrites each package-lock.json, keeping the
           # lockfile's own version field from drifting.
           npm version "$next" --no-git-tag-version --prefix redstart-nest
-          npm version "$next" --no-git-tag-version --prefix redstart-twig/windows
+          npm version "$next" --no-git-tag-version --prefix redstart-twig/desktop
           echo "version=$next" >> "$GITHUB_OUTPUT"
           echo "Releasing $nest -> $next"
 
@@ -142,8 +142,8 @@ jobs:
         include:
           - { label: 'Nest — Windows', app: nest, os: windows-latest, dir: redstart-nest }
           - { label: 'Nest — macOS',   app: nest, os: macos-15,       dir: redstart-nest }
-          - { label: 'Twig — Windows', app: twig, os: windows-latest, dir: redstart-twig/windows }
-          - { label: 'Twig — macOS',   app: twig, os: macos-15,       dir: redstart-twig/windows }
+          - { label: 'Twig — Windows', app: twig, os: windows-latest, dir: redstart-twig/desktop }
+          - { label: 'Twig — macOS',   app: twig, os: macos-15,       dir: redstart-twig/desktop }
     defaults:
       run:
         shell: bash
@@ -160,7 +160,7 @@ jobs:
           cache-dependency-path: |
             redstart-nest/package-lock.json
             redstart-nest/src/chat-ui/package-lock.json
-            redstart-twig/windows/package-lock.json
+            redstart-twig/desktop/package-lock.json
 
       # Both apps package the same chat-ui build.
       - name: Install chat-ui deps
@@ -263,7 +263,7 @@ jobs:
 
       - name: Build installer (Twig, Tauri)
         if: matrix.app == 'twig'
-        working-directory: redstart-twig/windows
+        working-directory: redstart-twig/desktop
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
