@@ -175,6 +175,12 @@ await test('🔒 Vault: search and tags walk the granted folders only; a note el
   assert(refused.isError && /outside the configured vault folder/.test(textOf(refused)), textOf(refused))
 })
 
+await test('the role editor is offered each root\'s top-level folders, dot-folders left out; an unset root offers nothing', async () => {
+  const choices = g.grantFolderChoices({ sqlite: shared, git: shared, vault: '' , shared_documents: path.join(shared, 'missing') })
+  eq(choices.sqlite, ['finance', 'hr'], 'top level, no .git')
+  eq(Object.keys(choices).sort(), ['git', 'sqlite'], 'unset and unreadable roots offer nothing')
+})
+
 logger.closeLogger()
 fs.rmSync(shared, { recursive: true, force: true })
 fs.rmSync(root, { recursive: true, force: true })

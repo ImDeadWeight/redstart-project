@@ -15,6 +15,9 @@
 		fileSystem?: { allowWrite?: boolean; allowDestructive?: boolean } | null;
 		surfaces?: string[] | null;
 		admin?: AdminGrants | null;
+		// Resource grants (master plan 6.1): per shared capability, the folders
+		// of its root this role may use. Absent = the whole root; [] = none.
+		grants?: Record<string, string[] | null> | null;
 	};
 
 	type Role = {
@@ -32,6 +35,8 @@
 		webSources: { id: string; name: string }[];
 		surfaces: string[];
 		canEdit: boolean;
+		grantable?: string[];
+		grantFolders?: Record<string, string[]>;
 	};
 
 	let roles = $state<Role[]>([]);
@@ -40,6 +45,8 @@
 	let webSources = $state<{ id: string; name: string }[]>([]);
 	let surfaces = $state<string[]>([]);
 	let canEdit = $state(false);
+	let grantable = $state<string[]>([]);
+	let grantFolders = $state<Record<string, string[]>>({});
 
 	let loading = $state(true);
 	let error = $state('');
@@ -61,6 +68,8 @@
 			webSources = result.webSources;
 			surfaces = result.surfaces;
 			canEdit = result.canEdit;
+			grantable = result.grantable ?? [];
+			grantFolders = result.grantFolders ?? {};
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load roles';
 		} finally {
@@ -170,6 +179,46 @@
 			: [...list, value];
 	}
 
+	// --- Folder grants (master plan 6.1) ----------------------------------
+	// Same tri-state as the lists above, per capability: absent = the whole
+	// folder, a list = only these of its folders.
+
+	function grantsFor(cap: string): string[] | null {
+		const list = draft?.permissions.grants?.[cap];
+		return Array.isArray(list) ? list : null;
+	}
+
+	function setGrantRestricted(cap: string, on: boolean) {
+		if (!draft) return;
+		const grants = { ...(draft.permissions.grants ?? {}) };
+		if (on) grants[cap] = [];
+		else delete grants[cap];
+		draft.permissions.grants = Object.keys(grants).length ? grants : null;
+	}
+
+	function toggleGrant(cap: string, folder: string) {
+		if (!draft) return;
+		const list = grantsFor(cap);
+		if (!list) return;
+		draft.permissions.grants = {
+			...(draft.permissions.grants ?? {}),
+			[cap]: list.includes(folder) ? list.filter((f) => f !== folder) : [...list, folder]
+		};
+	}
+
+	// A granted folder no longer at the top of the root (renamed, or a nested
+	// one saved earlier) is still shown, so saving keeps it visible.
+	function folderChoices(cap: string): string[] {
+		return [...new Set([...(grantFolders[cap] ?? []), ...(grantsFor(cap) ?? [])])].sort();
+	}
+
+	const GRANT_LABELS: Record<string, string> = {
+		sqlite: 'SQLite',
+		git: 'Git',
+		vault: 'Vault',
+		shared_documents: 'Shared documents'
+	};
+
 	function summarize(role: Role): string {
 		const p = role.permissions ?? {};
 		const parts: string[] = [];
@@ -191,6 +240,9 @@
 		if (p.fileSystem?.allowWrite === false) parts.push('no writes');
 		if (p.fileSystem?.allowDestructive === false) parts.push('no deletes');
 		if (Array.isArray(p.surfaces)) parts.push(`apps: ${p.surfaces.join(', ') || 'none'}`);
+		const limited = Object.entries(p.grants ?? {}).filter(([, l]) => Array.isArray(l));
+		if (limited.length)
+			parts.push(`folders limited: ${limited.map(([c]) => GRANT_LABELS[c] ?? c).join(', ')}`);
 		if (p.admin && Object.keys(p.admin).length === 0) parts.push('no admin');
 		return parts.join(' · ');
 	}
@@ -209,9 +261,9 @@
 <div class="space-y-8">
 	<div class="space-y-1">
 		<p class="text-sm text-muted-foreground">
-			A role <strong>restricts</strong> what an account may reach. It can never grant access the
-			server has not already enabled, so a role's effective reach is whatever the running profile
-			allows, minus what the role withholds.
+			A role <strong>restricts</strong> what an account may reach. It can never grant access the server
+			has not already enabled, so a role's effective reach is whatever the running profile allows, minus
+			what the role withholds.
 		</p>
 		<p class="text-xs text-muted-foreground">
 			The owner account is never restricted. Accounts with no role get Full Access.
@@ -302,7 +354,11 @@
 
 				<div class="flex flex-wrap gap-2">
 					<Input placeholder="Role name" bind:value={draft.name} class="max-w-60" />
-					<Input placeholder="Description (optional)" bind:value={draft.description} class="flex-1" />
+					<Input
+						placeholder="Description (optional)"
+						bind:value={draft.description}
+						class="flex-1"
+					/>
 				</div>
 
 				<!-- Capabilities -->
@@ -334,6 +390,49 @@
 						</p>
 					{/if}
 				</div>
+
+				<!-- Folder grants (master plan 6.1) -->
+				{#if grantable.length}
+					<div class="space-y-2">
+						<div class="text-sm font-medium">Shared folders</div>
+						<p class="text-xs text-muted-foreground">
+							A shared capability serves its whole folder unless you limit it here to some of the
+							folders in it.
+						</p>
+						{#each grantable as cap (cap)}
+							<div class="space-y-1.5 pl-2">
+								<label class="flex items-center gap-2 text-sm">
+									<input
+										type="checkbox"
+										checked={grantsFor(cap) !== null}
+										onchange={(e) => setGrantRestricted(cap, e.currentTarget.checked)}
+									/>
+									Limit {GRANT_LABELS[cap] ?? cap} to some folders
+								</label>
+								{#if grantsFor(cap) !== null}
+									{#if folderChoices(cap).length}
+										<div class="flex flex-wrap gap-x-4 gap-y-1.5 pl-6">
+											{#each folderChoices(cap) as folder (folder)}
+												<label class="flex items-center gap-1.5 text-sm">
+													<input
+														type="checkbox"
+														checked={grantsFor(cap)?.includes(folder)}
+														onchange={() => toggleGrant(cap, folder)}
+													/>
+													{folder}
+												</label>
+											{/each}
+										</div>
+									{:else}
+										<p class="pl-6 text-xs text-muted-foreground">
+											No folders in that capability's folder yet, so this role gets none of it.
+										</p>
+									{/if}
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{/if}
 
 				<!-- Web sources -->
 				<div class="space-y-2">

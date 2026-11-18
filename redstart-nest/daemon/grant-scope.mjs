@@ -180,6 +180,35 @@ export function noteDenied(capability, ctx) {
   logPolicy('access.denied', { account: ctx?.account?.username ?? '(auth off)', capability, decision: 'deny' })
 }
 
+/** How many folder names the role editor is offered per root. */
+const MAX_FOLDER_CHOICES = 200
+
+/**
+ * The folders the role editor offers for each grantable root: the root's
+ * top-level folders (dot-folders left out), sorted. For an account that may
+ * edit roles only: folder names are the org chart. A root that is not set
+ * or cannot be read offers nothing.
+ *
+ * @param {Record<string, string | null | undefined>} roots capability → root folder
+ * @returns {Record<string, string[]>}
+ */
+export function grantFolderChoices(roots) {
+  /** @type {Record<string, string[]>} */
+  const out = {}
+  for (const cap of GRANTABLE) {
+    const root = roots?.[cap]
+    if (typeof root !== 'string' || !root) continue
+    try {
+      out[cap] = fs.readdirSync(root, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !e.name.startsWith('.') && validGrantPath(e.name))
+        .map((e) => e.name)
+        .sort()
+        .slice(0, MAX_FOLDER_CHOICES)
+    } catch { /* unreadable: nothing to offer */ }
+  }
+  return out
+}
+
 /** Is a granted list narrowing anything? */
 export function isNarrowed(grants) {
   return !inherits(grants)
