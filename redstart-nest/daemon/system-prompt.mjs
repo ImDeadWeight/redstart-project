@@ -582,14 +582,20 @@ export function isLocalUrl(url) {
  * same for every account — each of those providers says so in its own callTool
  * comment. Keep this column in step with them; it is a privacy claim, and a
  * wrong one is worse than none.
+ *
+ * `grants` (master plan 6.1): where a shared store keeps its resource grants
+ * in the narrowed config. A shared store whose list is narrowed is "shared,
+ * partly": the same files for everyone in the role, not for every user.
+ * Folder names are never put in the prompt (grants plan §5); the listing
+ * tools name them on demand.
  */
 const LOCAL_STORES = [
   { label: 'a Postgres database', enabled: c => !!c?.postgres?.enabled, perAccount: false },
   { label: 'a documents folder', enabled: c => !!c?.documents?.enabled, perAccount: true },
   { label: 'a file-system folder', enabled: c => !!c?.fileSystem?.rootDir, perAccount: true },
-  { label: 'SQLite database files', enabled: c => !!c?.sqlite?.enabled, perAccount: false },
-  { label: 'a vault of markdown notes', enabled: c => !!c?.vault?.enabled, perAccount: false },
-  { label: 'git repositories', enabled: c => !!c?.git?.enabled, perAccount: false },
+  { label: 'SQLite database files', enabled: c => !!c?.sqlite?.enabled, perAccount: false, grants: c => c?.sqlite?.grants },
+  { label: 'a vault of markdown notes', enabled: c => !!c?.vault?.enabled, perAccount: false, grants: c => c?.vault?.grants },
+  { label: 'git repositories', enabled: c => !!c?.git?.enabled, perAccount: false, grants: c => c?.git?.grants },
   // run_python's per-conversation folders. Inside the documents root, but the
   // Documents capability can be off for a profile that has Python on, so it is
   // its own entry rather than implied by the one above.
@@ -672,6 +678,10 @@ export function deriveEgressFacts(config, externalServers, hasTools) {
     // wrong. localStores keeps its shape — it is published by GET /egress.
     privateStores: active.filter(s => s.perAccount).map(s => s.label),
     sharedStores: active.filter(s => !s.perAccount).map(s => s.label),
+    // The shared ones a role narrows to some of their folders (a subset of
+    // sharedStores). Not published by GET /egress, which describes the
+    // deployment rather than one account.
+    partlySharedStores: active.filter(s => !s.perAccount && s.grants && s.grants(config) !== null && s.grants(config) !== undefined).map(s => s.label),
     get hasEgress() {
       return this.webDomains.length > 0 || this.remoteToolServers.length > 0 || this.credentialPlugins.length > 0 || this.webSearchEngine !== null
     },
@@ -734,7 +744,7 @@ function buildLocality(clientToolNames) {
  * is stated rather than skipped.
  */
 function localStoresSentence(egress, account) {
-  const { localStores = [], privateStores = [], sharedStores = [] } = egress
+  const { localStores = [], privateStores = [], sharedStores = [], partlySharedStores = [] } = egress
   if (!localStores.length) return null
 
   // The single most misread sentence in this block: it means "not in a cloud
@@ -755,7 +765,12 @@ function localStoresSentence(egress, account) {
   // re-listed per group — the second copy cost more tokens than the fact it
   // carried, on the longest block in the assembly.
   const groups = [`Private to this account: ${privateStores.join(', ')}.`]
-  if (sharedStores.length) groups.push(`Shared by every user: ${sharedStores.join(', ')}.`)
+  const partly = new Set(partlySharedStores)
+  const whole = sharedStores.filter((l) => !partly.has(l))
+  if (whole.length) groups.push(`Shared by every user: ${whole.join(', ')}.`)
+  // Resource grants (master plan 6.1): the same for everyone in this
+  // account's role, so neither private nor everyone's.
+  if (partly.size) groups.push(`Shared, limited to the folders this account's role may use: ${[...partly].join(', ')}.`)
   return `${where}. ${groups.join(' ')}`
 }
 

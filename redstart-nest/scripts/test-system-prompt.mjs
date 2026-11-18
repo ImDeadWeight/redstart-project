@@ -503,6 +503,20 @@ await test('🔒 per-account stores are named as private, shared ones as shared'
   return 'documents + files private, Postgres + git shared'
 })
 
+await test('🔒 a shared store a role narrows to folders is "shared, partly", and no folder name reaches the prompt (master plan 6.1)', async () => {
+  const { prompt } = composePrompt({
+    config: { documents: { enabled: true }, postgres: { enabled: true }, git: { enabled: true, grants: ['finance-repos'] }, sqlite: { enabled: true, grants: [] } },
+    hasTools: true,
+    toolNames: ['read_document'],
+    account: { username: 'pat', role: 'user' },
+    now: NOW,
+  })
+  assert(/Shared by every user: [^.]*Postgres/.test(prompt), 'Postgres is no longer shared by everyone')
+  assert(!/Shared by every user: [^.]*git repositories/.test(prompt), 'narrowed git still claimed as everyone\'s')
+  assert(/limited to the folders this account's role may use: [^.]*git repositories[^.]*SQLite|limited to the folders this account's role may use: [^.]*SQLite[^.]*git repositories/.test(prompt), `not shared partly: ${prompt}`)
+  assert(!/finance-repos/.test(prompt), 'a granted folder\'s name is in the prompt')
+})
+
 await test('🔒 with auth off there is no private storage, and the prompt says so', async () => {
   // resolveUserScope(null) maps every caller to one anonymous folder, so the
   // per-account stores are not per-account at all. Derived from the same value
