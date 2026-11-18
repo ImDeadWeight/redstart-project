@@ -768,6 +768,83 @@ await test('🔍 the event stream sends a live event with no id: line, so Last-E
   assert(sseEvents(r.res).some((e) => e.type === 'message'), 'stored events still have ids')
 })
 
+console.log('\n-- the client-executor port (master plan 7.1) --')
+
+const FS_READ = { name: 'fs_read_file', description: 'Read a file on the user\'s computer', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } }
+const toolMsg = (body) => body.messages.filter((m) => m.role === 'tool').at(-1)?.content ?? ''
+
+await test('🔒 a client tool with no client connected is answered "not connected" at once, and is offered to the model', async () => {
+  const w = fakeWorld([call('c1', 'fs_read_file', { path: 'a.txt' }), say('ok')])
+  const conv = newConversation()
+  const t = start(conv, 'read it', { clientTools: [FS_READ] })
+  await waitFor(() => ended(t.id), 'end')
+  assert(w.bodies[0].tools.some((x) => x.function.name === 'fs_read_file'), 'the client tool was not offered')
+  assert(/not connected to this conversation/.test(toolMsg(w.bodies[1])), `model was told: ${toolMsg(w.bodies[1])}`)
+  assert(!w.calls.some((c) => c.name === 'fs_read_file'), 'a client tool went to callToolAs')
+})
+
+await test('🔒 a connected client gets client_call, the run waits, and its POSTed result is what the model reads; no approval is asked', async () => {
+  const w = fakeWorld([call('c2', 'fs_read_file', { path: 'notes.txt' }), say('done')])
+  const conv = newConversation()
+  const t = start(conv, 'read notes', { clientTools: [FS_READ] })
+  const detach = runner.attachClient(t.id)
+  const callEvent = await waitFor(() => store.readEvents(t.id, 0).find((e) => e.type === 'client_call'), 'client_call')
+  eq([callEvent.callId, callEvent.name, JSON.parse(callEvent.arguments).path], ['c2', 'fs_read_file', 'notes.txt'], 'the call')
+  eq(statusOf(t.id), 'waiting_client', 'status while the client runs it')
+  eq(store.getTask(t.id).waiting, { kind: 'client', callId: 'c2', tool: 'fs_read_file' }, 'waiting')
+  assert(!store.readEvents(t.id, 0).some((e) => e.type === 'approval'), 'Nest asked for an approval: a client tool is the client\'s own card')
+  eq(runner.clientResult(t.id, { callId: 'nope', text: 'x' }).status, 409, 'an unknown call id')
+  assert(runner.clientResult(t.id, { callId: 'c2', text: 'the notes say hello' }).ok, 'result refused')
+  await waitFor(() => ended(t.id), 'end')
+  detach()
+  eq(toolMsg(w.bodies[1]), 'the notes say hello', 'the model read the client\'s result')
+  assert(branchOf(conv).some((m) => m.role === 'tool' && m.content === 'the notes say hello'), 'the result was not stored')
+})
+
+await test('a client that leaves mid-call: the call is answered unavailable and the run goes on', async () => {
+  const w = fakeWorld([call('c3', 'fs_read_file', {}), say('carried on')])
+  const conv = newConversation()
+  const t = start(conv, 'x', { clientTools: [FS_READ] })
+  const detach = runner.attachClient(t.id)
+  await waitFor(() => statusOf(t.id) === 'waiting_client', 'waiting_client')
+  detach()
+  await waitFor(() => ended(t.id), 'end')
+  assert(/not connected/.test(toolMsg(w.bodies[1])), toolMsg(w.bodies[1]))
+  eq(statusOf(t.id), 'done', 'the run did not finish')
+})
+
+await test('🔒 a client tool cannot take a Nest tool\'s name, and a banned one is refused; malformed lists are refused at start', async () => {
+  const w = fakeWorld([call('c4', 'fs_read_file', {}), say('ok')], { effectiveConfigFor: async () => ({ disabledTools: ['fs_read_file'] }) })
+  const conv = newConversation()
+  const clash = { name: 'read_document', description: 'a client pretending', inputSchema: { type: 'object' } }
+  const t = start(conv, 'x', { clientTools: [FS_READ, clash] })
+  runner.attachClient(t.id)
+  await waitFor(() => ended(t.id), 'end')
+  eq(w.bodies[0].tools.filter((x) => x.function.name === 'read_document').length, 1, 'read_document offered twice')
+  eq(w.bodies[0].tools.find((x) => x.function.name === 'read_document').function.description, 'read_document', 'the client replaced Nest\'s tool')
+  assert(/not allowed on this server/.test(toolMsg(w.bodies[1])), `a banned client tool ran: ${toolMsg(w.bodies[1])}`)
+  for (const bad of ['fs_read_file', [{ name: 'has space' }], [FS_READ, FS_READ], Array.from({ length: 65 }, (_, i) => ({ name: `t${i}` }))]) {
+    const r = runner.startTask({ account: null, storeAccountId: SCOPE, conversationId: newConversation(), content: 'x', clientTools: bad })
+    eq([r.ok, r.status], [false, 400], `accepted ${JSON.stringify(bad).slice(0, 60)}`)
+  }
+})
+
+await test('the routes: POST /tasks takes clientTools, /client replaces them, /client-result answers; ?client=1 is what counts as connected', async () => {
+  const w = fakeWorld([call('c5', 'fs_read_file', {}), say('via routes')])
+  const conv = newConversation()
+  const r = await taskRoute('POST', '/tasks', { conversationId: conv, content: 'go', clientTools: [FS_READ] })
+  eq(r.status, 201, 'start')
+  const id = r.json.id
+  const ev = await taskRoute('GET', `/tasks/${id}/events?client=1`)
+  await waitFor(() => statusOf(id) === 'waiting_client', 'waiting_client')
+  eq((await taskRoute('POST', `/tasks/${id}/client`, { tools: 'nope' })).status, 400, 'a malformed re-register')
+  eq((await taskRoute('POST', `/tasks/${id}/client-result`, { callId: 'c5', text: 'from the app' })).status, 200, 'result')
+  await waitFor(() => ended(id), 'end')
+  ev.req.emit('close')
+  eq(toolMsg(w.bodies[1]), 'from the app', 'routed result')
+  assert(sseEvents(ev.res).some((e) => e.type === 'client_call' && e.callId === 'c5'), 'the client_call did not reach the stream')
+})
+
 await test('which paths are ours', () => {
   const id = '0f8fad5b-d9cb-469f-a165-70867728950e'
   eq(['/tasks', `/tasks/${id}`, `/tasks/${id}/events`, `/tasks/${id}/answer`, `/tasks/${id}/nope`, '/tasks/abc', '/tasksx'].map(isTaskRoute),

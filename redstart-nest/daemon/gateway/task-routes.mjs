@@ -26,13 +26,13 @@
 
 import { sendJson, readJsonBody } from './http-json.mjs'
 import * as store from '../task-store.mjs'
-import { startTask, answerTask, steerTask, cancelTask, publicTask } from '../task-runner.mjs'
+import { startTask, answerTask, steerTask, cancelTask, publicTask, registerClientTools, attachClient, clientResult } from '../task-runner.mjs'
 import { memoryKey } from '../memory-storage.mjs'
 
 const NOT_FOUND = { error: { message: 'Not found', type: 'not_found' } }
 const bad = (message) => ({ error: { message, type: 'invalid_request_error' } })
 const ONE = /^\/tasks\/([0-9a-f-]{36})$/
-const SUB = /^\/tasks\/([0-9a-f-]{36})\/(events|steer|answer|cancel)$/
+const SUB = /^\/tasks\/([0-9a-f-]{36})\/(events|steer|answer|cancel|client|client-result)$/
 /** A comment line this often keeps a proxy from closing an idle stream. */
 export const SSE_HEARTBEAT_MS = 25_000
 
@@ -83,6 +83,8 @@ export async function handleTaskRoute(req, res, urlPath, who) {
           content: body.content,
           generation: body.generation,
           maxTurns: Number.isInteger(body.maxTurns) ? body.maxTurns : undefined,
+          // Tools this client runs itself (master plan 7.1).
+          clientTools: body.clientTools,
           timeZone: who.timeZone ?? null,
         })
         if (!r.ok) { sendJson(res, r.status, r.status === 404 ? NOT_FOUND : bad(r.error)); return true }
@@ -113,6 +115,8 @@ export async function handleTaskRoute(req, res, urlPath, who) {
     const body = await readJsonBody(req)
     if (action === 'steer') { sendResult(res, steerTask(id, body?.content)); return true }
     if (action === 'answer') { sendResult(res, answerTask(id, body ?? {})); return true }
+    if (action === 'client') { sendResult(res, registerClientTools(id, body?.tools)); return true }
+    if (action === 'client-result') { sendResult(res, clientResult(id, body ?? {})); return true }
     return false
   } catch (err) {
     if (!res.headersSent) sendJson(res, 500, { error: { message: err.message, type: 'internal_error' } })
@@ -170,7 +174,11 @@ function streamEvents(req, res, task) {
     off()
     if (!res.writableEnded) res.end()
   }
-  req.on('close', end)
+  // ?client=1: this stream is the run's executor for the client's tools
+  // (master plan 7.1). While one is open, a call to a client tool is sent
+  // here; when the last one closes, a waiting call is answered unavailable.
+  const detach = new URL(req.url, 'http://x').searchParams.get('client') === '1' ? attachClient(task.id) : () => {}
+  req.on('close', () => { detach(); end() })
 
   for (const e of store.readEvents(task.id, sent)) write(e)
   replaying = false

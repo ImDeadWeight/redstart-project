@@ -36,6 +36,7 @@ import { covers as grantCovers } from './approval-grants.mjs'
 import * as ledger from './approval-ledger.mjs'
 import { beginCompletion } from './completion-activity.mjs'
 import { logEvent } from './logger.mjs'
+import { CLIENT_CALL_TIMEOUT_MS, clientUnavailable } from './client-tools.mjs'
 
 /** chat-ui's DEFAULT parser patterns (the bench uses the same). */
 export const FALLBACK_PARSER_PATTERNS = ['braces', 'xml', 'fn', 'json']
@@ -184,7 +185,7 @@ export function createPass({ task, l, conv, generation, seams }) {
     /** The id the next message hangs under. */
     tip: tipId,
     /** Per pass: who, which tools, set at the start of every turn. */
-    turnCtx: { account: null, toolNames: new Set(), mcpTools: [], model: null },
+    turnCtx: { account: null, toolNames: new Set(), mcpTools: [], model: null, clientToolNames: new Set(), config: null },
     /** call id → approval id the person granted for it */
     approved: new Map(),
     planSteps: Array.isArray(conv.plan?.steps) ? conv.plan.steps : null,
@@ -234,6 +235,7 @@ export function createPass({ task, l, conv, generation, seams }) {
         config = await seams.effectiveConfigFor(who.account)
         port = seams.upstreamPort()
       }
+      pass.turnCtx.config = config
       await loadTools(who.account)
       return { config, port }
     },
@@ -264,8 +266,13 @@ export function createPass({ task, l, conv, generation, seams }) {
 
   async function loadTools(account) {
     const tools = await seams.toolCatalogFor(account, { hostTools: TASK_HOST_TOOLS })
-    pass.turnCtx.mcpTools = tools
-    pass.turnCtx.toolNames = new Set(tools.map((x) => x.name))
+    const nest = new Set(tools.map((x) => x.name))
+    // The client's own tools (master plan 7.1), after Nest's: a name that is
+    // one of Nest's is dropped, never a replacement for it.
+    const client = (l.clientTools ?? []).filter((t) => !nest.has(t.name))
+    pass.turnCtx.mcpTools = [...tools, ...client]
+    pass.turnCtx.clientToolNames = new Set(client.map((t) => t.name))
+    pass.turnCtx.toolNames = new Set([...nest, ...pass.turnCtx.clientToolNames])
   }
 
   return pass
@@ -417,6 +424,7 @@ export function toolsPort(pass) {
   return {
     execute: async (call) => {
       const name = call.function.name
+      if (turnCtx.clientToolNames.has(name)) return runOnClient(pass, call)
       const args = parseArgs(call.function.arguments)
       store.updateTask(task.id, { inFlight: { callId: call.id, name } })
       store.appendEvent(task.id, { type: 'tool_call', callId: call.id, name })
@@ -433,6 +441,39 @@ export function toolsPort(pass) {
       return out
     },
   }
+}
+
+/**
+ * A call to a tool the client runs (master plan 7.1): sent over the event
+ * stream as `client_call`, answered by POST /tasks/:id/client-result. With
+ * no client connected, or when the client leaves or takes longer than
+ * CLIENT_CALL_TIMEOUT_MS, the model is told it was not run. A banned name
+ * is refused here too: bans apply to client tools as to any.
+ */
+async function runOnClient(pass, call) {
+  const { task, l, turnCtx } = pass
+  const name = call.function.name
+  if ((turnCtx.config?.disabledTools ?? []).includes(name)) {
+    return { text: `Error: ${name} is not allowed on this server.`, isError: true }
+  }
+  if (l.clientConnections === 0) {
+    store.appendEvent(task.id, { type: 'tool_result', callId: call.id, name, isError: true, preview: 'client not connected' })
+    return { text: clientUnavailable(name), isError: true }
+  }
+  store.updateTask(task.id, { inFlight: { callId: call.id, name }, status: 'waiting_client', waiting: { kind: 'client', callId: call.id, tool: name } })
+  store.appendEvent(task.id, { type: 'client_call', callId: call.id, name, arguments: call.function.arguments ?? '' })
+  const result = await new Promise((resolve) => {
+    const timer = setTimeout(() => { l.clientWaits.delete(call.id); resolve(null) }, CLIENT_CALL_TIMEOUT_MS)
+    timer.unref?.()
+    const onAbort = () => { clearTimeout(timer); l.clientWaits.delete(call.id); resolve(null) }
+    pass.signal.addEventListener('abort', onAbort, { once: true })
+    l.clientWaits.set(call.id, (r) => { clearTimeout(timer); pass.signal.removeEventListener('abort', onAbort); resolve(r) })
+  })
+  if (pass.signal.aborted) throw abortError()
+  pass.setRunning()
+  const out = result ?? { text: clientUnavailable(name), isError: true }
+  store.appendEvent(task.id, { type: 'tool_result', callId: call.id, name, isError: out.isError, preview: preview(out.text) })
+  return out
 }
 
 // ---------------------------------------------------------------------------
@@ -477,6 +518,9 @@ export function gatePort(pass) {
       // for that tool and those arguments, which is what Nest enforces when
       // call_tool passes it on. Unreadable or naming nothing: call_tool
       // itself, and Nest answers it.
+      // A client tool's approval is the client's own card (D48), shown
+      // before it runs the call; Nest's ledger has no say over it.
+      if (turnCtx.clientToolNames.has(name)) return true
       const target = name === 'call_tool' ? callToolTargetOf(call) : null
       if (target) ({ name, args } = target)
       const rule = approvalRule(name)

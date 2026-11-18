@@ -57,6 +57,7 @@ import {
   GENERATION_KEYS, TaskEnded, isModelGoneError, sleep, preview, createPass, buildPorts, buildCallbacks,
 } from './task-ports.mjs'
 import { finishedBeforeRestart, resumeOpenCalls } from './task-resume.mjs'
+import { cleanClientTools, MAX_CLIENT_RESULT_CHARS } from './client-tools.mjs'
 
 // Where they lived before master plan Phase 4 split runOnce; importers keep
 // reading them from here.
@@ -174,6 +175,10 @@ function pickGeneration(gen) {
 export function startTask(req) {
   const content = typeof req.content === 'string' ? req.content.trim() : ''
   if (!content) return { ok: false, status: 400, error: 'content is required' }
+  // Tools the client runs itself (master plan 7.1), held in memory for this
+  // run only: a restart has no client, so they are not stored.
+  const client = cleanClientTools(req.clientTools)
+  if (!client.ok) return { ok: false, status: 400, error: client.error }
   if (content.length > MAX_CONTENT_CHARS) return { ok: false, status: 400, error: `content is over ${MAX_CONTENT_CHARS} characters` }
   const conv = conversations.getConversation(req.storeAccountId, req.conversationId)
   if (!conv) return { ok: false, status: 404, error: 'Not found' }
@@ -205,7 +210,7 @@ export function startTask(req) {
     return { ok: false, status: 500, error: 'The conversation could not be written.' }
   }
   logEvent('task', 'started', { account: req.account?.username ?? undefined })
-  launch(task.id)
+  launch(task.id, { clientTools: client.tools })
   return { ok: true, task: store.getTask(task.id) }
 }
 
@@ -316,6 +321,55 @@ export function cancelTask(id, by = 'user') {
   return { ok: true }
 }
 
+// ---------------------------------------------------------------------------
+// The client-executor port (master plan 7.1)
+// ---------------------------------------------------------------------------
+
+/** Replace the tools a task's client runs (a reconnect, or a new client). */
+export function registerClientTools(id, tools) {
+  const l = live.get(id)
+  if (!l) return { ok: false, status: store.getTask(id) ? 409 : 404, error: 'This task is not running.' }
+  const clean = cleanClientTools(tools)
+  if (!clean.ok) return { ok: false, status: 400, error: clean.error }
+  l.clientTools = clean.tools
+  return { ok: true }
+}
+
+/**
+ * A client opened the task's event stream as its executor. Returns the
+ * function to call when it closes; when the last one goes, every call
+ * waiting on a client is answered as unavailable.
+ */
+export function attachClient(id) {
+  const l = live.get(id)
+  if (!l) return () => {}
+  l.clientConnections++
+  let closed = false
+  return () => {
+    if (closed) return
+    closed = true
+    l.clientConnections = Math.max(0, l.clientConnections - 1)
+    if (l.clientConnections === 0) {
+      for (const resolve of l.clientWaits.values()) resolve(null)
+      l.clientWaits.clear()
+    }
+  }
+}
+
+/** A client's result for one of its calls: { callId, text, isError? }. */
+export function clientResult(id, body) {
+  const l = live.get(id)
+  if (!l) return { ok: false, status: store.getTask(id) ? 409 : 404, error: 'This task is not running.' }
+  const callId = typeof body?.callId === 'string' ? body.callId : ''
+  const resolve = l.clientWaits.get(callId)
+  if (!resolve) return { ok: false, status: 409, error: 'No call with that id is waiting for a result.' }
+  l.clientWaits.delete(callId)
+  const text = typeof body.text === 'string' ? body.text.slice(0, MAX_CLIENT_RESULT_CHARS) : ''
+  resolve({ text, isError: body.isError === true })
+  store.appendEvent(id, { type: 'client_result', callId, isError: body.isError === true })
+  return { ok: true }
+}
+
 /** Every live task's run, for tests and for an orderly stop. */
 export function _liveRuns() {
   return [...live.values()].map((l) => l.done)
@@ -344,10 +398,16 @@ export function suspendAllTasks() {
 // The run
 // ---------------------------------------------------------------------------
 
-function launch(id, { recovered = false } = {}) {
+function launch(id, { recovered = false, clientTools = [] } = {}) {
   if (live.has(id)) return
   /** @type {Live} */
-  const l = { controller: new AbortController(), steering: [], answer: null, waitingKind: null, heldApprovals: new Set(), done: Promise.resolve(), cancelledBy: null, suspended: false }
+  const l = {
+    controller: new AbortController(), steering: [], answer: null, waitingKind: null, heldApprovals: new Set(),
+    done: Promise.resolve(), cancelledBy: null, suspended: false,
+    // The client-executor port (master plan 7.1): what the client runs, how
+    // many of its streams are open, and the calls waiting on it.
+    clientTools, clientConnections: 0, clientWaits: new Map(),
+  }
   live.set(id, l)
   l.done = run(id, l, { recovered }).catch((err) => {
     // run() handles its own failures; this is a bug in it, and the task must still end.
@@ -518,7 +578,7 @@ export function resumeTasks() {
     // What a waiting task waited on died with the process: an approval id the
     // fresh ledger has never heard of, a question no run is holding. Cleared,
     // so no client acts on it; the resumed run asks again within moments.
-    if (t.status === 'waiting_user' || t.status === 'waiting_approval') store.updateTask(t.id, { status: 'queued', waiting: null })
+    if (t.status === 'waiting_user' || t.status === 'waiting_approval' || t.status === 'waiting_client') store.updateTask(t.id, { status: 'queued', waiting: null })
     store.appendEvent(t.id, { type: 'resumed' })
     launch(t.id, { recovered: true })
     n++

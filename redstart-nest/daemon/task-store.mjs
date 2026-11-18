@@ -20,6 +20,8 @@
 //                     `waiting` says which
 //   waiting_approval  a call is parked on a pending approval (`waiting`)
 //   waiting_model     no model is loaded, or it stopped: resumes when one is
+//   waiting_client    a call to a tool the client runs is with the client
+//                     (master plan 7.1; `waiting` names the call)
 //   done | failed | cancelled   terminal
 //
 // Ownership is the account's memoryKey (memory-storage.mjs): the account id,
@@ -38,10 +40,10 @@ import { configDir } from './platform-paths.mjs'
 import { writeJsonAtomic, readJsonOr } from './json-store.mjs'
 
 export const TASK_STATES = Object.freeze([
-  'queued', 'running', 'waiting_user', 'waiting_approval', 'waiting_model', 'done', 'failed', 'cancelled',
+  'queued', 'running', 'waiting_user', 'waiting_approval', 'waiting_model', 'waiting_client', 'done', 'failed', 'cancelled',
 ])
 export const TERMINAL_STATES = Object.freeze(['done', 'failed', 'cancelled'])
-export const WAITING_STATES = Object.freeze(['waiting_user', 'waiting_approval', 'waiting_model'])
+export const WAITING_STATES = Object.freeze(['waiting_user', 'waiting_approval', 'waiting_model', 'waiting_client'])
 /** Kept, newest first, per account; older finished tasks are removed with their logs. */
 export const MAX_FINISHED_PER_ACCOUNT = 50
 /** One event's JSON is cut to this; a tool result in an event is a preview, the message holds it whole. */
