@@ -2,9 +2,8 @@ import { mdsvex } from 'mdsvex';
 import adapter from '@sveltejs/adapter-static';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
-// CMake sets LLAMA_UI_OUT_DIR to the staging dir under the build tree; manual
-// `npm run build` runs without the env var default to ./dist.
-const outDir = process.env.LLAMA_UI_OUT_DIR ?? './dist';
+// Nest and Twig both stage chat-ui/dist into their installers.
+const outDir = './dist';
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {

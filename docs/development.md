@@ -114,7 +114,7 @@ real hardware yet and say so.
 ```bash
 cd chat-ui
 npm install
-npm run dev:redstart      # Vite on :5174, hot-reloads on save
+npm run dev               # Vite on :5174, hot-reloads on save
 ```
 
 This is the fast loop for UI work: Redstart Nest keeps running and serving the API, the chat-ui hot-reloads, and neither a bundle build nor a shell restart is needed. The dev server proxies the API routes (`/v1`, `/props`, `/models`, `/tools`, `/slots`, `/auth`, `/files`, `/redstart`) to a Nest on `http://localhost:19080`; override with `VITE_PUBLIC_SERVER_ORIGIN`.
@@ -136,7 +136,7 @@ npm run storybook                # interactive, per-component
 cd redstart-nest
 npm run test:security     # the full invariant suite — see docs/security.md
 npm run typecheck         # tsc --noEmit for the launcher
-npm run check:mjs         # node --check across daemon + shared + bin
+npm run check:mjs         # node --check across daemon + shared + bin + tooling
 ```
 
 Two things the suites do not cover, and cannot as they stand:
@@ -168,7 +168,7 @@ The Windows client has no dev server — it just loads the built chat-ui. Build 
 cd chat-ui
 npm run build
 
-cd ../../../redstart-twig/desktop
+cd ../redstart-twig/desktop
 npm run dev
 ```
 

@@ -1,11 +1,18 @@
-# llama-ui
+# Redstart chat UI
 
-A modern, feature-rich web interface for llama-server built with SvelteKit. This UI provides an intuitive chat interface with advanced file handling, conversation management, and comprehensive model interaction capabilities.
+The chat app of Redstart: a SvelteKit single-page app that both Redstart
+apps ship. **Redstart Nest** serves it to the browsers on your network (and
+in its own window); **Redstart Twig** loads it in its desktop window and
+points it at a Nest on the LAN.
 
-Llama UI supports two server operation modes:
+It is its own package (`@redstart/chat-ui`) at the top of the repo. It
+imports only itself and the repo's `shared/` (the agent loop core in
+`shared/agent-core`); Nest and Twig take its build output, `chat-ui/dist`,
+as an artifact and never import its source. See `docs/development.md` for
+which app owns what.
 
-- **MODEL mode** - Single model operation (standard llama-server)
-- **ROUTER mode** - Multi-model operation with dynamic model loading/unloading
+It began as a fork of llama.cpp's web UI (see `THIRD-PARTY-NOTICES.md`), so
+parts of the architecture notes below still describe that design.
 
 ---
 
@@ -14,7 +21,7 @@ Llama UI supports two server operation modes:
 - [Features](#features)
 - [Getting Started](#getting-started)
 - [Tech Stack](#tech-stack)
-- [Build Pipeline](#build-pipeline)
+- [Build](#build)
 - [Architecture](#architecture)
 - [Data Flows](#data-flows)
 - [Architectural Patterns](#architectural-patterns)
@@ -81,151 +88,59 @@ Llama UI supports two server operation modes:
 
 ### Prerequisites
 
-- **Node.js** 18+ (20+ recommended)
-- **npm** 9+
-- **llama-server** running locally (for API access)
+- **Node.js** 26 (what CI and the apps' bundled runtime use; 22+ works)
+- A running **Redstart Nest** to talk to (for anything beyond component work)
 
-### 1. Install Dependencies
+### Install and run
 
 ```bash
-cd tools/ui
+cd chat-ui
 npm install
+npm run dev        # Vite on http://localhost:5174, hot reload
 ```
 
-### 2. Start llama-server
+The dev server proxies the API routes (`/v1`, `/props`, `/models`, `/tools`,
+`/slots`, `/cors-proxy`, `/auth`, `/files`, `/redstart`) to a Nest on
+`http://localhost:19080`. Point it elsewhere with `VITE_PUBLIC_SERVER_ORIGIN`
+in `.env`.
 
-In a separate terminal, start the backend server:
+For component work with no server at all:
 
 ```bash
-# Single model (MODEL mode)
-./llama-server -m model.gguf
-
-# Multi-model (ROUTER mode)
-./llama-server --models-dir /path/to/models
+npm run test:client -- --run   # real Chromium, mocked fetch
+npm run storybook              # http://localhost:6006
 ```
 
-### 3. Start Development Servers
+### Checks
 
 ```bash
-npm run dev
+npm run check:baseline         # svelte-check, compared against the recorded baseline
+npx vitest --run --project=unit
+npm run test:security          # the boundary cases CI runs on their own
 ```
 
-This starts:
-
-- **Vite dev server** at `http://localhost:5173` - The main UI frontend app
-- **Storybook** at `http://localhost:6006` - Component documentation
-
-The Vite dev server proxies API requests to `SERVER_ORIGIN` (with fallback to default llama-server `8080` port):
-
-```typescript
-// vite.config.ts proxy configuration
-proxy: {
-	'/v1': SERVER_ORIGIN,
-	'/props': SERVER_ORIGIN,
-	'/models': SERVER_ORIGIN,
-	'/tools': SERVER_ORIGIN,
-	'/slots': SERVER_ORIGIN,
-	'/cors-proxy': SERVER_ORIGIN
-},
-```
-
-### Development Workflow
-
-1. Open `http://localhost:5173` in your browser
-2. Make changes to `.svelte`, `.ts`, or `.css` files
-3. Changes hot-reload instantly
-4. Use Storybook at `http://localhost:6006` for isolated component development
+On Windows, run vitest from `E:\…` (an uppercase drive letter), not Git
+Bash's `/e/…`: the two spellings make vitest load modules twice.
 
 ---
 
-## Tech Stack
-
-| Layer             | Technology                      | Purpose                                                  |
-| ----------------- | ------------------------------- | -------------------------------------------------------- |
-| **Framework**     | SvelteKit + Svelte 5            | Reactive UI with runes (`$state`, `$derived`, `$effect`) |
-| **UI Components** | shadcn-svelte + bits-ui         | Accessible, customizable component library               |
-| **Styling**       | TailwindCSS 4                   | Utility-first CSS with design tokens                     |
-| **Database**      | IndexedDB (Dexie)               | Client-side storage for conversations and messages       |
-| **Build**         | Vite                            | Fast bundling with static adapter                        |
-| **Testing**       | Playwright + Vitest + Storybook | E2E, unit, and visual testing                            |
-| **Markdown**      | remark + rehype                 | Markdown processing with KaTeX and syntax highlighting   |
-
-### Key Dependencies
-
-```json
-{
-	"svelte": "^5.0.0",
-	"bits-ui": "^2.8.11",
-	"dexie": "^4.0.11",
-	"pdfjs-dist": "^5.4.54",
-	"highlight.js": "^11.11.1",
-	"rehype-katex": "^7.0.1"
-}
-```
-
----
-
-## Build Pipeline
-
-### Development Build
-
-```bash
-npm run dev
-```
-
-Runs Vite in development mode with:
-
-- Hot Module Replacement (HMR)
-- Source maps
-- Proxy to llama-server
-
-### Production Build
+## Build
 
 ```bash
 npm run build
 ```
 
-The build process:
+1. **PWA assets** — icons and splash screens from `static/favicon*.svg`.
+2. **Vite build** — SvelteKit's static adapter, one bundle
+   (`bundleStrategy: 'single'`), hash routing, relative paths.
+3. **Post-build plugins** (`scripts/vite-plugin-*.ts`) — `build.json`, the
+   splash screen, relative `base` refs in `index.html` and `sw.js`.
 
-1. **Vite Build** - Bundles all TypeScript, Svelte, and CSS
-2. **Static Adapter** - Outputs to `../../build/tools/ui/dist` (llama-server's static file directory)
-3. **Post-Build Script** - Cleans up intermediate files
-4. **Custom Plugin** - Creates `index.html` with:
-   - Inlined favicon as base64
-   - GZIP compression (level 9)
-   - Deterministic output (zeroed timestamps)
-
-```text
-tools/ui/        →  build  →  build/tools/ui/dist/
-├── src/                                 ├── index.html  (served by llama-server)
-├── static/                              └── (favicon inlined)
-└── ...
-```
-
-### SvelteKit Configuration
-
-```javascript
-// svelte.config.js
-adapter: adapter({
-  pages: '../../build/tools/ui/dist',      // Output directory
-  assets: '../../build/tools/ui/dist',     // Static assets
-  fallback: 'index.html',  // SPA fallback
-  strict: true
-}),
-output: {
-  bundleStrategy: 'inline' // Single-file bundle
-}
-```
-
-### Integration with llama-server
-
-llama-ui is embedded directly into the llama-server binary:
-
-1. `npm run build` outputs `index.html` to `build/tools/ui/dist/`
-2. llama-server compiles this into the binary at build time
-3. When accessing `/`, llama-server serves the bundled HTML
-
-This results in a **single portable binary** with the full Llama UI included.
+Output: `chat-ui/dist/`. Nest's and Twig's `npm run build:chat` run this, and
+their `stage-shell-bundle.mjs` copy `dist/` into each installer as
+`resources/chat-ui/`. A Nest in dev mode serves the checkout's `chat-ui/dist`
+directly, so **rebuild before testing in the real app**: the apps never
+hot-reload it.
 
 ---
 

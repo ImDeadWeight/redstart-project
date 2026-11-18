@@ -8,7 +8,7 @@ import { SplashOrientation } from '../src/lib/enums/splash.enums';
 
 let processed = false;
 
-const OUTPUT_DIR = process.env.LLAMA_UI_OUT_DIR ?? BUILD_CONFIG.OUTPUT_DIR;
+const OUTPUT_DIR = BUILD_CONFIG.OUTPUT_DIR;
 
 /**
  * Generate iOS splash screen <link> tags from generated apple-splash-*.png files.

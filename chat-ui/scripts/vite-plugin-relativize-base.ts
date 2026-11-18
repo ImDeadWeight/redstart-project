@@ -5,7 +5,7 @@ import { BUILD_CONFIG } from '../src/lib/constants/pwa';
 
 let processed = false;
 
-const OUTPUT_DIR = process.env.LLAMA_UI_OUT_DIR ?? BUILD_CONFIG.OUTPUT_DIR;
+const OUTPUT_DIR = BUILD_CONFIG.OUTPUT_DIR;
 
 function rewrite(path: string, pairs: [string, string][]): void {
 	if (!existsSync(path)) {

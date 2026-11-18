@@ -7,7 +7,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"vite\" \"npm --prefix ../chat-ui run dev:redstart\" \"wait-on http://localhost:5173 && node scripts/dev-shell.mjs\"",
+    "dev": "concurrently \"vite\" \"npm --prefix ../chat-ui run dev\" \"wait-on http://localhost:5173 && node scripts/dev-shell.mjs\"",
     "build": "npm run build:chat && node ../tooling/make-icon.mjs && vite build && npm run license:gen && node ../tooling/rust-licenses.mjs --shell shell --out licenses/rust-licenses.json && node ../tooling/stage-node.mjs && node scripts/stage-shell-bundle.mjs && node scripts/build-shell.mjs",
     "build:chat": "npm --prefix ../chat-ui run build",
     "license:gen": "license-checker-rseidelsohn --production --relativeLicensePath --json --files licenses/npm --out licenses/npm-licenses.json",
