@@ -4,7 +4,9 @@
 //!              ~/Library/Application Support/…   name came from package.json
 //!                                                `name`), so twig-fs-config.json
 //!                                                and twig-mcp.json are found
-//!                                                unchanged
+//!                                                unchanged. The package is
+//!                                                `redstart-twig` now (Phase 7b);
+//!                                                this folder name stays frozen.
 //!   shell dir  <config>/shell                    this process's own files
 //!
 //! Packaged, under `<resource_dir>/resources`:
