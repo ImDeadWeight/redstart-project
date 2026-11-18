@@ -45,6 +45,39 @@ function macrotask() {
 }
 
 /**
+ * The model narrated a call instead of emitting one: recover it from the
+ * answer, then the reasoning, when the host gives a fallback parser.
+ *
+ * @param {TurnAccumulator} acc
+ * @param {any} ports
+ */
+function recoverNarratedCalls(acc, ports) {
+	if (acc.toolCalls.length > 0) return;
+	const parserConfig = ports.fallbackParser?.() ?? null;
+	if (!parserConfig) return;
+	const parsed = parseToolCallsFromTurn(acc.content, acc.reasoning, parserConfig);
+	if (parsed.length > 0) acc.toolCalls = createApiToolCalls(parsed);
+}
+
+/**
+ * The plan steps the completion check (update-plan.mjs) would nudge on, or
+ * null: the model answered (no calls) with steps still open, the host has a
+ * plan and has not turned the check off, it has not fired yet in this flow
+ * (once, so it can never become a loop), and the reply does not end in a
+ * question (then it waits for the person, who answers in the next message).
+ *
+ * @param {TurnAccumulator} acc
+ * @param {any} ports
+ * @param {boolean} nudged
+ */
+function planNudgeFor(acc, ports, nudged) {
+	if (acc.toolCalls.length > 0 || !ports.plan || ports.plan.completionCheck === false || nudged) return null;
+	if (endsInQuestion(acc.content)) return null;
+	const steps = ports.plan.get();
+	return steps && openSteps(steps).length > 0 ? steps : null;
+}
+
+/**
  * Run the flow to its end. Resolves when it is over (answered, stopped,
  * steered away, or refused at the turn limit); rejects only on a model stream
  * error, after saving the partial turn and completing the flow.
@@ -62,6 +95,35 @@ export async function runAgentLoop(params) {
 		onTurnComplete
 	} = callbacks;
 	const yieldToHost = ports.yield ?? macrotask;
+
+	/**
+	 * Every way out but the tool path's (runToolCalls completes the flow
+	 * itself when it stops): save the turn when there is one, then complete
+	 * the flow, once. `answer` is the ordinary end, which also reports the
+	 * turn, with the one timings object all three callbacks are given; the
+	 * other exits build them for each callback, as they always did.
+	 *
+	 * @param {Timings | undefined} captured
+	 * @param {{ acc?: TurnAccumulator, toolCalls?: any[], answer?: boolean }} [turn]
+	 */
+	const finishFlow = async (captured, { acc, toolCalls, answer = false } = {}) => {
+		if (answer && acc) {
+			const finalTimings = buildFinalTimings(captured, agenticTimings);
+			await onAssistantTurnComplete?.(acc.content, acc.reasoning || undefined, finalTimings, undefined);
+			if (finalTimings) onTurnComplete?.(finalTimings);
+			onFlowComplete?.(finalTimings);
+			return;
+		}
+		if (acc) {
+			await onAssistantTurnComplete?.(
+				acc.content,
+				acc.reasoning || undefined,
+				buildFinalTimings(captured, agenticTimings),
+				toolCalls
+			);
+		}
+		onFlowComplete?.(buildFinalTimings(captured, agenticTimings));
+	};
 
 	/** @type {Timings | undefined} */
 	let capturedTimings;
@@ -81,10 +143,7 @@ export async function runAgentLoop(params) {
 			// Let the host repaint (the browser hides the continue prompt here).
 			await yieldToHost();
 
-			if (!shouldContinue || signal?.aborted) {
-				onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-				return;
-			}
+			if (!shouldContinue || signal?.aborted) return finishFlow(capturedTimings);
 
 			// The user chose to go on: a fresh allowance of turns.
 			turn = 0;
@@ -93,10 +152,7 @@ export async function runAgentLoop(params) {
 		ports.progress?.({ currentTurn: turn + 1 });
 		agenticTimings.turns = turn + 1;
 
-		if (signal?.aborted) {
-			onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-			return;
-		}
+		if (signal?.aborted) return finishFlow(capturedTimings);
 
 		// The first turn's assistant message already exists (the host made it
 		// before starting the flow); every later turn needs a new one.
@@ -120,38 +176,16 @@ export async function runAgentLoop(params) {
 
 		try {
 			await ports.model.streamTurn({ acc, messages: sent, signal });
-
-			// The model narrated a call instead of emitting one: recover it from
-			// the answer, then the reasoning. Inside the try because it ran inside
-			// the browser's turn before it moved here.
-			if (acc.toolCalls.length === 0) {
-				const parserConfig = ports.fallbackParser?.() ?? null;
-				if (parserConfig) {
-					const parsed = parseToolCallsFromTurn(acc.content, acc.reasoning, parserConfig);
-					if (parsed.length > 0) acc.toolCalls = createApiToolCalls(parsed);
-				}
-			}
+			// Inside the try because it ran inside the browser's turn before it
+			// moved here.
+			recoverNarratedCalls(acc, ports);
 		} catch (error) {
-			if (signal?.aborted) {
-				await onAssistantTurnComplete?.(
-					acc.content,
-					acc.reasoning || undefined,
-					buildFinalTimings(acc.captured, agenticTimings),
-					undefined
-				);
-				onFlowComplete?.(buildFinalTimings(acc.captured, agenticTimings));
-				return;
-			}
-			const normalizedError = error instanceof Error ? error : new Error('LLM stream error');
-			// Keep the partial output; the host reports the error separately.
-			await onAssistantTurnComplete?.(
-				acc.content,
-				acc.reasoning || undefined,
-				buildFinalTimings(acc.captured, agenticTimings),
-				undefined
-			);
-			onFlowComplete?.(buildFinalTimings(acc.captured, agenticTimings));
-			throw normalizedError;
+			// Keep the partial output either way; on an error the host reports
+			// it separately.
+			const aborted = signal?.aborted;
+			await finishFlow(acc.captured, { acc });
+			if (aborted) return;
+			throw error instanceof Error ? error : new Error('LLM stream error');
 		}
 
 		foldTurnTimings(acc.timings, agenticTimings, turnStats);
@@ -164,30 +198,16 @@ export async function runAgentLoop(params) {
 		// the host sends that message as an ordinary one.
 		if (ports.steering.pending()) {
 			ports.log?.('Steering message detected after turn, exiting agentic flow');
-			await onAssistantTurnComplete?.(
-				acc.content,
-				acc.reasoning || undefined,
-				buildFinalTimings(capturedTimings, agenticTimings),
-				acc.toolCalls.length > 0 ? normalizeToolCalls(acc.toolCalls) : undefined
-			);
-			onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-			return;
+			return finishFlow(capturedTimings, {
+				acc,
+				toolCalls: acc.toolCalls.length > 0 ? normalizeToolCalls(acc.toolCalls) : undefined
+			});
 		}
 
-		// The one completion check (update-plan.mjs): the model answered with
-		// plan steps still open. Save this turn, then give it one more with the
-		// nudge at the tail. Once per flow, so it can never become a loop. Not
-		// when the reply ends in a question: it is waiting for the person, who
-		// answers in the next message (endsInQuestion).
-		const planSteps =
-			acc.toolCalls.length === 0 &&
-			ports.plan &&
-			ports.plan.completionCheck !== false &&
-			!nudged &&
-			!endsInQuestion(acc.content)
-				? ports.plan.get()
-				: null;
-		if (planSteps && openSteps(planSteps).length > 0) {
+		// The one completion check (planNudgeFor): save this turn, then give it
+		// one more with the nudge at the tail.
+		const planSteps = planNudgeFor(acc, ports, nudged);
+		if (planSteps) {
 			nudged = true;
 			ports.log?.('Plan steps still open after an answer: one more turn');
 			agenticTimings.perTurn?.push(turnStats);
@@ -212,29 +232,11 @@ export async function runAgentLoop(params) {
 		// No tool calls: this is the answer.
 		if (acc.toolCalls.length === 0) {
 			agenticTimings.perTurn?.push(turnStats);
-
-			const finalTimings = buildFinalTimings(capturedTimings, agenticTimings);
-
-			await onAssistantTurnComplete?.(acc.content, acc.reasoning || undefined, finalTimings, undefined);
-
-			if (finalTimings) onTurnComplete?.(finalTimings);
-
-			onFlowComplete?.(finalTimings);
-
-			return;
+			return finishFlow(capturedTimings, { acc, answer: true });
 		}
 
 		const calls = normalizeToolCalls(acc.toolCalls);
-		if (calls.length === 0) {
-			await onAssistantTurnComplete?.(
-				acc.content,
-				acc.reasoning || undefined,
-				buildFinalTimings(capturedTimings, agenticTimings),
-				undefined
-			);
-			onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-			return;
-		}
+		if (calls.length === 0) return finishFlow(capturedTimings, { acc });
 
 		totalToolCallCount += calls.length;
 		ports.progress?.({ totalToolCalls: totalToolCallCount });
@@ -273,8 +275,7 @@ export async function runAgentLoop(params) {
 		// Steering interrupted the tools: exit instead of starting another turn.
 		if (ports.steering.pending()) {
 			ports.log?.('Steering message detected after tool execution, exiting agentic flow');
-			onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-			return;
+			return finishFlow(capturedTimings);
 		}
 
 		turn++;
