@@ -20,6 +20,7 @@ import { memoriesFor } from './memory-storage.mjs'
 import { composePrompt } from './system-prompt.mjs'
 import { getPromptBlocks } from './prompt-storage.mjs'
 import { getProject } from './projects-storage.mjs'
+import { skillsForPrompt } from './skills-tool.mjs'
 
 // The request's `redstart_project`, as a project this caller may read, or
 // null. Only name, id and instructions travel on: the composer has no use
@@ -62,6 +63,9 @@ function buildSystemContext(config, facts, query = '') {
     admin: getPromptBlocks(),
     // facts.project is already resolved against the caller (resolveProject).
     ...memoriesFor(config, facts.account, { projectId: facts.project?.id ?? null, query }),
+    // Names and descriptions only (master plan Phase 5); the composer shows
+    // them only when the request carries use_skill.
+    ...skillsForPrompt(facts.account ?? null),
     ...facts,
   })
   return prompt

@@ -34,6 +34,7 @@ import * as scholarTool from './scholar-tool.mjs'
 import * as pythonTool from './python-tool.mjs'
 import * as memoryTool from './memory-tool.mjs'
 import * as documentSearchTool from './document-search-tool.mjs'
+import * as skillsTool from './skills-tool.mjs'
 import { getConversation } from './conversations-storage.mjs'
 import { isWellFormedConversationId } from './conversation-workspace.mjs'
 import * as searchToolsProvider from './search-tools-provider.mjs'
@@ -67,7 +68,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 // searchToolsProvider is LAST, and deliberately: it is the only provider whose
 // job is to describe the others, so it must never shadow one of them on a name
 // collision, and its own tool must never appear in the catalog it searches.
-const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, memoryTool, documentSearchTool, interactionTools, searchToolsProvider]
+const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, memoryTool, documentSearchTool, skillsTool, interactionTools, searchToolsProvider]
 
 // Resolved per call, never captured in a const: a plugin installed or removed
 // while Nest is running must take effect without a restart. Built-ins come

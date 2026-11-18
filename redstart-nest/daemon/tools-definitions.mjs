@@ -365,6 +365,10 @@ export const TOOL_CLASSES = {
   ask_user: 'read',
   // Writes only the conversation's own plan, which the client stores.
   update_plan: 'read',
+  // Reads a saved skill the caller owns or their org's (skills-tool.mjs). It
+  // copies the skill's .py files into the conversation's own workspace,
+  // where only run_python (its own class and gate) can run them.
+  use_skill: 'read',
   // Web (egress governed by the whitelist/SSRF guard, tagged network here)
   web_fetch: 'network',
   web_search: 'network',

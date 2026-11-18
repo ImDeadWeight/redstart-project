@@ -642,6 +642,23 @@
       }
     },
     {
+      "name": "use_skill",
+      "description": "Load one of the saved skills listed in your instructions: step-by-step instructions the user or their organization wrote for a recurring task. Call it with the skill's name when the task fits its description, then follow what it says. With no name it lists every skill you can load. With a file, it returns that file from the skill (reference text, or a script). A skill's Python scripts are copied into this conversation's workspace under skills/<name>/ when you load it: run them with run_python, nowhere else.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The skill's name, as listed (an organization skill starts with \"org-\")"
+          },
+          "file": {
+            "type": "string",
+            "description": "One of the files the skill lists, e.g. \"reference/format.md\""
+          }
+        }
+      }
+    },
+    {
       "name": "ask_user",
       "description": "Ask the user and wait for the answer. Use it when the answer would change what you produce: the request can be read two ways that lead to different work, a choice only the user can make is open (such as level, scope or format) and a sensible default could well be wrong, or the user asked you to ask. Not for permission, and not for anything the conversation or a tool already tells you. Offer 2 to 4 short options when the answers are predictable; the user can always type their own. If you need several things, ask them together in one call with \"questions\" (up to 4, each with a short \"header\") instead of one call after another.",
       "inputSchema": {

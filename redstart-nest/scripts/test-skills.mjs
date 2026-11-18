@@ -6,6 +6,11 @@
 //     description, metadata), the YAML subset this reader takes, and a
 //     refusal with a line number for anything outside it; serialize then
 //     parse returns the same skill; a workflow round-trips through a skill
+//   - the store: workflows.json migrates once and is left alone; file paths
+//     are checked; a rename moves the folder and a name clash is refused
+//   - use_skill: the prompt lists names and descriptions only with the tool;
+//     another account's skills are never reached; .py files are copied for
+//     run_python and nothing else is
 //
 // Run:  node scripts/test-skills.mjs
 // =============================================================================
@@ -201,6 +206,69 @@ await test('a workflow edit keeps what an imported skill carried that the editor
   eq([after.body, after.license, after.metadata.author], ['New steps.', 'MIT', 'Someone'], 'license and foreign metadata kept')
   const bad = workflows.createWorkflow(ann, 'personal', { name: 'two--hyphens', instructions: 'x' })
   assert(!bad.ok && /single inner hyphens/.test(bad.error), `a "--" name: ${JSON.stringify(bad)}`)
+})
+
+console.log('\n-- use_skill and the prompt (skills-tool.mjs) --')
+
+const tool = await import('../daemon/skills-tool.mjs')
+const { composePrompt } = await import('../daemon/system-prompt.mjs')
+const call = async (account, args, cfg = {}, conversationId = null) => tool.callTool('use_skill', args, cfg, { account, conversationId })
+const textOf = (r) => r.content[0].text
+const carol = { id: 'acct-carol', username: 'carol' }
+
+const report = skills.writeSkill(carol, 'personal', {
+  skill: { name: 'report', description: 'Weekly\nreport format', metadata: { 'redstart-example': JSON.stringify({ input: 'in', output: 'out' }) }, body: 'Write the report.' },
+  files: { 'reference/format.md': '# Format', 'scripts/fill.py': 'print("filled")', 'data.bin': Buffer.from([1, 0, 2]) },
+})
+assert(report.ok, report.error)
+skills.writeSkill(null, 'org', { skill: { name: 'style', description: 'House style', metadata: {}, body: 'Use British spelling.' } })
+
+await test('the prompt lists a caller\'s skills, personal then org (org- prefixed), one line each, and only with use_skill', async () => {
+  const p = tool.skillsForPrompt(carol)
+  eq(p.skills.map((s) => s.name), ['report', 'org-style', 'org-summary'], 'names (org-summary is the migrated one)')
+  eq(p.skills[0].description, 'Weekly report format', 'one line')
+  const base = { config: {}, hasTools: true, skills: p.skills, skillsOmitted: 2 }
+  const withTool = composePrompt({ ...base, toolNames: ['use_skill'] })
+  assert(withTool.blocks.includes('skills') && /- org-style: House style/.test(withTool.prompt) && /2 more are not listed/.test(withTool.prompt), withTool.prompt)
+  // After the precedence clause: user-tier, like memories.
+  assert(withTool.blocks.indexOf('skills') > withTool.blocks.indexOf('precedence'), `order: ${withTool.blocks}`)
+  const without = composePrompt({ ...base, toolNames: ['run_python'] })
+  assert(!without.blocks.includes('skills'), 'listed with no use_skill to load them')
+  const long = Array.from({ length: 45 }, (_, i) => `s${String(i).padStart(2, '0')}`)
+  const many = { id: 'acct-many', username: 'many' }
+  for (const n of long) skills.writeSkill(many, 'personal', { skill: { name: n, description: 'd'.repeat(300), metadata: {}, body: 'b' } })
+  const capped = tool.skillsForPrompt(many)
+  eq([capped.skills.length, capped.skillsOmitted, capped.skills[0].name, capped.skills[0].description.length], [40, 7, 's00', 200], 'capped, sorted, cut (45 personal and 2 org)')
+})
+
+await test('🔒 use_skill: lists, loads the body with its example and files, reads a file; never another account\'s skill', async () => {
+  const list = JSON.parse(textOf(await call(carol, {})))
+  eq(list.skills.map((s) => s.name), ['report', 'org-style', 'org-summary'], 'list')
+  const loaded = textOf(await call(carol, { name: 'report' }))
+  assert(/^Skill: report\n\nWrite the report\./.test(loaded) && /Example input:\nin/.test(loaded) && /data\.bin, reference\/format\.md/.test(loaded), loaded)
+  eq(textOf(await call(carol, { name: 'report', file: 'reference/format.md' })), '# Format', 'a file')
+  assert((await call(carol, { name: 'report', file: 'data.bin' })).isError, 'a binary file came back as text')
+  for (const bad of ['../../../../secrets-key.json', '.redstart.json', 'SKILL.md/../x']) {
+    assert((await call(carol, { name: 'report', file: bad })).isError, `${bad} was read`)
+  }
+  eq(textOf(await call(carol, { name: 'org-style' })).split('\n')[0], 'Skill: org-style', 'org by its prefix')
+  assert((await call(ann, { name: 'report' })).isError, 'another account loaded carol\'s skill')
+  assert(!JSON.stringify(JSON.parse(textOf(await call(ann, {}))).skills).includes('"report"'), 'another account listed it')
+})
+
+await test('🔒 a skill\'s .py files are copied into the conversation workspace for run_python, and nothing else is, and only with run_python', async () => {
+  const docs = path.join(tmpDir, 'docs')
+  fs.mkdirSync(docs, { recursive: true })
+  const py = { enabled: true, documentsRoot: docs, workspaceCapBytes: 10 * 1024 * 1024, accountCapBytes: 50 * 1024 * 1024 }
+  const conv = 'conv-skill-1'
+  const out = textOf(await call(carol, { name: 'report' }, { python: py }, conv))
+  assert(/run them with run_python/.test(out), out)
+  const { workspaceDir } = await import('../daemon/conversation-workspace.mjs')
+  const ws = workspaceDir(docs, carol, conv)
+  eq(fs.readFileSync(path.join(ws, 'skills', 'report', 'scripts', 'fill.py'), 'utf8'), 'print("filled")', 'staged')
+  assert(!fs.existsSync(path.join(ws, 'skills', 'report', 'reference')) && !fs.existsSync(path.join(ws, 'skills', 'report', 'data.bin')), 'a non-Python file was copied where code runs')
+  const off = textOf(await call(carol, { name: 'report' }, {}, 'conv-skill-2'))
+  assert(/run_python is not available here/.test(off), off)
 })
 
 fs.rmSync(tmpDir, { recursive: true, force: true })
