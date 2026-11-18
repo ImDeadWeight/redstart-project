@@ -1,4 +1,5 @@
 import type { LlamaConfig, WebSearchEngine } from '../types'
+import { retrievalOnFor } from '../types'
 import type { useToolsCatalog } from '../hooks/useToolsCatalog'
 import type { useCapabilities, FolderCap } from '../hooks/useCapabilities'
 import { folderCapAllowCreate } from '../hooks/useCapabilities'
@@ -654,7 +655,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
             "on", since a switch reading on for a server doing no retrieval is
             the worst version of this control. */}
         {(() => {
-          const on = config.tools?.retrieval?.enabled === true
+          const on = retrievalOnFor(config.tools)
           const dl = retrievalStatus?.model.download
           const downloading = on && (dl?.state === 'downloading')
           const running = retrievalStatus?.server.state === 'running'
@@ -732,7 +733,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
         <div className="mt-4">
           <DeferralCard
             entries={capabilityConfig?.deferral}
-            retrievalOn={config.tools?.retrieval?.enabled === true}
+            retrievalOn={retrievalOnFor(config.tools)}
             onChanged={caps.loadCapabilities}
           />
         </div>

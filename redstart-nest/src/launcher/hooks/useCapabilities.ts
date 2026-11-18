@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, getAPI } from '../api/redstart'
 import type { CapabilityConfig, LlamaConfig, ToolContextEstimate, RetrievalStatus } from '../types'
+import { retrievalOnFor } from '../types'
 
 // Folder-scoped capabilities all share one flow: pick a folder → save+enable,
 // or toggle enabled. Only the IPC method and the config key differ, so one
@@ -169,7 +170,7 @@ export function useCapabilities(config: LlamaConfig) {
   // switch cannot report its own state — it polls while something is in flight
   // and then stops. Every failure reads as "no status", which the tab renders as
   // the honest "not running" rather than as an error nobody can act on.
-  const retrievalOn = config.tools?.retrieval?.enabled === true
+  const retrievalOn = retrievalOnFor(config.tools)
   useEffect(() => {
     if (!toolsEnabled) { setRetrievalStatus(null); return }
     let cancelled = false

@@ -26,6 +26,7 @@ import { decryptSecret } from './secrets.mjs'
 import { listPlugins } from './plugin-registry.mjs'
 import { syncPluginProviders, stopAllPlugins } from './plugin-provider.mjs'
 import { resolveEngine } from './web-search-engines.mjs'
+import { retrievalOnFor } from './tool-filter.mjs'
 
 // The general web search engine for this profile (web_search source "web").
 //
@@ -51,13 +52,14 @@ function searchEngineFor(toolSettings, capabilities) {
 
 // Tool retrieval's per-profile setting, carried through to the gateway.
 //
-// OFF by default and per profile (D8). On means the catalog (master plan
+// ON by default since 2026-11-18, per profile; only an explicit `false` turns
+// it off (tool-filter.mjs retrievalOnFor). On means the catalog (master plan
 // 3.3): the deferred tools leave the list and are reached through
 // search_tools and call_tool. `enabled` is the only field read; a profile's
 // older fields (mode, scorer, growth, textVersion, the floors, minTools,
 // callTool) tuned per-turn selection and are ignored where they lie.
 function retrievalSettings(llamaConfig) {
-  return { enabled: llamaConfig?.tools?.retrieval?.enabled === true }
+  return { enabled: retrievalOnFor(llamaConfig?.tools) }
 }
 
 export function buildGatewayConfig(llamaConfig) {

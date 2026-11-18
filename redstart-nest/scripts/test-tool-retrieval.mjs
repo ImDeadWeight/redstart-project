@@ -42,6 +42,7 @@ import {
   rankForSearch,
   setEmbedPortForTests,
   retrievalEnabled,
+  retrievalOnFor,
   retrievalConfigSummary,
   RETRIEVAL_DEFAULTS,
 } from '../daemon/tool-filter.mjs'
@@ -310,9 +311,13 @@ await test('🔒 with no usable cosine score, fusion leaves everything at 0, so 
   assert(fused.every((e) => e.score === 0), JSON.stringify(fused.map((e) => [e.name, e.score])))
 })
 
-await test('settings: retrieval is off by default, on is `enabled` alone, and the report says the catalog', () => {
-  assert(RETRIEVAL_DEFAULTS.enabled === false, 'retrieval came on by default')
-  assert(retrievalEnabled(undefined) === false && retrievalEnabled({ enabled: 'yes' }) === false, 'something other than true turned it on')
+await test('settings: retrieval is on by default, only an explicit false turns a profile off, and the report says the catalog', () => {
+  // On by default since 2026-11-18 (the user, after 3.2's catalog arm passed).
+  assert(RETRIEVAL_DEFAULTS.enabled === true, 'retrieval is off by default')
+  assert(retrievalOnFor(undefined) && retrievalOnFor({}) && retrievalOnFor({ retrieval: {} }) && retrievalOnFor({ retrieval: { enabled: true } }), 'an absent setting read as off')
+  assert(!retrievalOnFor({ retrieval: { enabled: false } }), 'an explicit false read as on')
+  // The resolved config (gateway-config.mjs) is a boolean; only true is on there.
+  assert(retrievalEnabled(undefined) === false && retrievalEnabled({ enabled: 'yes' }) === false, 'something other than true turned the resolved setting on')
   // The old per-turn fields are ignored where they lie (master plan 3.3).
   assert(retrievalEnabled({ enabled: true, mode: 'select', growth: 'scored' }) === true, 'an old mode field turned it off')
   assert(retrievalConfigSummary() === 'mode=catalog', retrievalConfigSummary())
@@ -977,10 +982,11 @@ await test('🔒 turning it off stops the sidecar and downloads nothing', () => 
   assert(serverStarts === 0, 'switching retrieval off started a server')
 })
 
-await test('a profile with no retrieval field at all reads as off', () => {
-  assert(retrievalStatus({ tools: { enabled: true } }, enableDeps).enabled === false,
-    'an older profile with no retrieval key read as on')
-  assert(syncRetrieval({ tools: { enabled: true } }, enableDeps).enabled === false, 'an absent setting started something')
+await test('a profile with no retrieval field at all reads as on (the default since 2026-11-18); an explicit false as off', () => {
+  assert(retrievalStatus({ tools: { enabled: true } }, enableDeps).enabled === true,
+    'an older profile with no retrieval key read as off')
+  assert(retrievalStatus(profileWith({ enabled: false }), enableDeps).enabled === false, 'an explicit false read as on')
+  assert(syncRetrieval(profileWith({ enabled: false }), enableDeps).enabled === false, 'an explicit false started something')
 })
 
 await test('🔍 turning it on returns immediately rather than waiting on a 67 MB download', () => {

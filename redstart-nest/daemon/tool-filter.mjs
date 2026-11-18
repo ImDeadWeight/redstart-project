@@ -53,8 +53,17 @@ export function setEmbedPortForTests(port) {
 const defaultEmbed = (texts, options) =>
   embedTexts(texts, embedPortOverride === null ? options : { ...options, port: embedPortOverride })
 
-/** Off by default and per profile (D8); `enabled` is the only setting. */
-export const RETRIEVAL_DEFAULTS = Object.freeze({ enabled: false })
+/**
+ * On by default since 2026-11-18 (the user: on, unless the benchmarks say
+ * otherwise; master plan 3.2's catalog arm passed the bar). Per profile;
+ * `enabled` is the only setting, and only an explicit `false` turns it off.
+ */
+export const RETRIEVAL_DEFAULTS = Object.freeze({ enabled: true })
+
+/** Does a profile's tools block want retrieval? Absent reads as on. */
+export function retrievalOnFor(tools) {
+  return tools?.retrieval?.enabled !== false
+}
 
 /**
  * search_tools' floors on the fused scores (fuse() returns 1 for a tool

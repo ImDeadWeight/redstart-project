@@ -297,7 +297,7 @@ validators, Tools-tab controls and tests. `tool-retrieval.mjs` should go from
 ### 3.3 at module level (planned 2026-11-18, after 3.2 chose C)
 
 "On" now means the catalog; there is no mode. `tools.retrieval.enabled` is
-the only field read (still off by default, D8); the profile's old fields
+the only field read (on by default since 2026-11-18; only `false` turns it off); the profile's old fields
 (`mode`, `scorer`, `growth`, `textVersion`, floors, `minTools`, `callTool`)
 are ignored where they lie. The attachment prior was never built (held in
 the fixes plan), so nothing goes for it. Three commits:
@@ -345,8 +345,9 @@ the fixes plan), so nothing goes for it. Three commits:
   search_tools matches by keyword until it is ready.
 
 *Gaps:*
-- **Retrieval is still off by default (D8).** 3.2 decided what "on"
-  means, not whether new installs get it; that is open, for the user.
+- ~~Retrieval is still off by default (D8).~~ **Decided 2026-11-18 by the
+  user: on by default**, unless the benchmarks say otherwise (3.2's catalog
+  arm passed the bar). Only an explicit `enabled: false` turns a profile off.
 - The launcher changes have not been clicked (`testing-checklist.md`,
   "Tool retrieval: the catalog").
 - No task finds a plugin tool through the catalog (3.2's gap, unchanged).

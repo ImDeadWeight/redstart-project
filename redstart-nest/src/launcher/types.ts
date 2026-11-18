@@ -267,9 +267,9 @@ export type ProfileTools = {
   // Tool retrieval. When on, the gateway keeps the catalog-only (deferred)
   // tools out of every completion's list, the same list on every turn, and the
   // model reaches them through search_tools and call_tool (master plan 3.3).
-  // Off by default and absent on every profile saved before it, which reads as
-  // off. `enabled` is the only field; older per-turn fields on a saved profile
-  // are ignored.
+  // ON by default since 2026-11-18: absent reads as on, and only an explicit
+  // `false` turns it off (retrievalOnFor). `enabled` is the only field; older
+  // per-turn fields on a saved profile are ignored.
   retrieval?: { enabled?: boolean }
   // The automatic memory review (agent-runtime 8.3). `think` lets the model
   // reason before it answers: measured to help some models (Ornith 9B) and not
@@ -355,4 +355,13 @@ export const DEFAULT_CONFIG: LlamaConfig = {
   modelPath: '', ctxSize: 4096, batchSize: 256, threads: 4,
   gpuLayers: undefined, port: 19080, host: '0.0.0.0', networkMode: true,
   nCpuMoe: undefined, kvCache: 'balanced', additionalArgs: '',
+}
+
+/**
+ * Does this profile want tool retrieval (the catalog)? On by default since
+ * 2026-11-18: absent reads as on, and only an explicit `false` turns it off.
+ * The daemon's rule is the same (daemon/tool-filter.mjs retrievalOnFor).
+ */
+export function retrievalOnFor(tools?: ProfileTools): boolean {
+  return tools?.retrieval?.enabled !== false
 }
