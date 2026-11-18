@@ -719,6 +719,45 @@ Commits:
    the browser host as it was. Images (vision extras) and edit, regenerate
    and branch still use the browser host this release.
 
+**Phase 7 steps 1-4 built 2026-11-18:** `4c686f7` live tokens; `9bcd9d5`
+the client-executor port, `caa8f04` a call goes to one client only (two
+tabs on a chat never both run it); `1b233a9` Send starts a run on the
+server; `ddbd86b` the run honours the tools switched off in the chat.
+`test-task-runtime` 71 (from 62), chat-ui `background-tasks` 21 (from 14).
+*Deviations:*
+- The live `client_request` (with the arguments) goes only to the client
+  that runs it; the stored `client_call` event has no arguments, so the log
+  and a replay never hold what a call read on the user's computer.
+- Added after review, not in the module plan: **tool limits.** The browser
+  loop connects a chat's MCP servers with its per-chat switches and leaves
+  out tools switched off one by one; the daemon knew neither. `POST /tasks`
+  now takes `toolLimits { nest, exclude }` from chat-ui
+  (`agenticStore.prepareServerRun`), kept on the task record for a resume;
+  a switched-off tool is not offered and a call to one, by name or through
+  `call_tool`, is refused before it runs.
+- A Send that cannot start a run (an older Nest without task routes, or a
+  refusal) goes the browser way without a toast; the console says why.
+- Live tokens are kept on the follower, not only in the message, so the
+  throttled reload in the middle of a turn does not wipe the reply so far.
+
+*Gaps:*
+- None of it has been used in the running app: streaming, a refresh
+  mid-reply, a Twig file call's card, two tabs. Items in
+  `testing-checklist.md`.
+- Still the browser loop this release: a message with extras (images,
+  PDFs and text files as attachments, MCP resources), edit, regenerate
+  and branch. A chat can therefore mix both hosts.
+- A client tool's result is text only: an image a browser-run tool returns
+  goes to the server as its text (cut at 200,000 characters), with no vision
+  parts.
+- The approval card for a client call is the browser session's
+  (`requestPermission`), shown while no browser flow runs: not seen yet.
+- With the setting on, every follower (a tab that opens a running chat)
+  attaches as the client and re-registers its own tools, even for a task
+  another device started; the latest tab runs the calls.
+- Step 5 (delete the browser loop host and the bench's hosted mode) waits
+  for a release with the setting, as planned.
+
 **Detail and cross-references:** this is the first half of agent-runtime
 Phase 7 ("delegation", §6, a sketch); its second half (parallel task
 contexts) stays a sketch. It closes these Phase 3 gaps in

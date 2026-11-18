@@ -85,6 +85,24 @@ served from the built bundle).
 - [ ] Settings → Roles: create a role that withholds a capability and check
   the account it is given cannot use it.
 
+### Chats run on the server (master plan Phase 7)
+- [ ] Send a message: the reply streams in token by token (reasoning too,
+  on a thinking model). Refresh mid-reply: the chat reopens, the reply goes
+  on, and the finished message is the same as the streamed one.
+- [ ] Close the tab mid-reply, wait, reopen the chat: the reply is there.
+- [ ] In Twig, ask for a local file ("read notes.txt on my desktop"): the
+  permission card shows in the chat, Allow runs it, the answer uses it.
+  Deny: the model is told it was declined. Close Twig while a call waits:
+  the run goes on, told the app is not connected.
+- [ ] Two tabs on one chat: a Twig-file call runs once, in one tab.
+- [ ] Settings → General → "Run chats on the server" off: Send is the
+  browser loop as before (stops on refresh).
+- [ ] A message with an image, and edit / regenerate / branch, still work
+  (browser loop this release).
+- [ ] Switch Nest's server off for one chat (the + menu): a reply there
+  uses no Nest tools. Switch one Nest tool off in Settings → Tools: the
+  model is not offered it.
+
 ### Resource grants and Shared Documents (master plan Phase 6)
 - [ ] Settings → Roles: make a role, tick "Limit SQLite to some folders",
   pick one folder, assign it to a test account. In that account's chat,

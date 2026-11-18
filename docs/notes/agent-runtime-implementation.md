@@ -1876,6 +1876,11 @@ consider `-np` explicitly.
   path untested; the send-time "Run in the background" button (only
   `/task` starts one); `/task` takes text only; a task's reply arrives per
   turn, not streamed; U-c (hand a running chat to a task) is a later slice.
+  *Closed 2026-11-18 by master plan Phase 7 (`4c686f7`..`ddbd86b`):* a
+  plain Send is now a task, so the button and U-c are no longer needed,
+  and a task's reply streams. Still open: compaction against a real model,
+  the /tokenize cost, the bench's `--runtime` path; Send with attachments
+  still uses the browser loop.
 
 **Deviations.** `toolCatalogFor` takes `{ hostTools }`, not `{ serverOnly }`:
 D28's exclusions (Twig, in-page sandbox, browser-held MCP) are never on this
