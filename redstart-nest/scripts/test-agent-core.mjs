@@ -1035,6 +1035,11 @@ await test('the budget: n_ctx less max_tokens, or the default reserve; nothing u
   eq(compaction.compactionBudget(4096, 0), { nCtx: 4096, usable: 4096 - compaction.DEFAULT_RESERVE_TOKENS }, 'unlimited max_tokens')
   eq(compaction.compactionBudget(4096, 1000), { nCtx: 4096, usable: 3096 }, 'a set max_tokens')
   eq([compaction.compactionBudget(null, 0), compaction.compactionBudget(500, 1000)], [null, null], 'unknown, or no room')
+  // The prompt and tools beside the messages (2026-11-18).
+  eq(compaction.compactionBudget(12288, 4096, 5150), { nCtx: 12288, usable: 3042 }, 'overhead comes off usable')
+  eq([compaction.compactionBudget(4096, 1000, 0), compaction.compactionBudget(4096, 1000, -5), compaction.compactionBudget(4096, 1000, 'x')],
+    [{ nCtx: 4096, usable: 3096 }, { nCtx: 4096, usable: 3096 }, { nCtx: 4096, usable: 3096 }], 'no or a bad overhead: as before')
+  eq(compaction.compactionBudget(4096, 1000, 3200), null, 'overhead that fills the context: no room')
 })
 
 await test('counts: one /tokenize total apportioned by length plus overhead; chars/3 without one', async () => {

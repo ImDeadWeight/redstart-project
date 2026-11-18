@@ -23,7 +23,8 @@ import { wireSafeToolCalls } from '../../shared/agent-core/tool-calls.mjs'
 import { formatMcpToolResult } from '../../shared/agent-core/tool-result.mjs'
 import { currentBranch, branchToWire } from '../../shared/agent-core/stored-messages.mjs'
 import {
-  SUMMARY_MAX_TOKENS, compactionBudget, countsFromTotal, finishCompaction, messageText, planCompaction, summaryPrompt,
+  PER_MESSAGE_OVERHEAD_TOKENS, SUMMARY_MAX_TOKENS, compactionBudget, countsFromTotal, finishCompaction, messageText,
+  planCompaction, summaryPrompt,
 } from '../../shared/agent-core/compaction.mjs'
 import { ASK_USER_TOOL } from '../../shared/agent-core/ask-user.mjs'
 import { callToolTarget } from '../../shared/agent-core/approval.mjs'
@@ -298,20 +299,54 @@ export function createPass({ task, l, conv, generation, seams }) {
  * callbacks, so storage holds the same history the loop does, with the ids a
  * stored summary is keyed to.
  */
-async function payloadFor(pass, msgs, ready, t) {
+async function payloadFor(pass, msgs, ready, t, overheadTokens) {
   const tail = msgs.length > pass.messages.length ? msgs[msgs.length - 1] : null
   const current = conversations.getConversation(t.storeAccountId, t.conversationId)
   if (!current) throw new TaskEnded('cancelled', 'The conversation was deleted.')
   const stored = currentBranch(current).filter((m) => m.type !== 'root')
-  const compacted = await compact(pass, stored, current, ready, t)
+  const compacted = await compact(pass, stored, current, ready, t, overheadTokens)
   const wire = branchToWire(compacted, pass.wireOpts)
   return toWire(tail ? [...wire, tail] : wire)
 }
 
+/**
+ * Tokens the request carries besides the conversation: the system prompt the
+ * gateway composes and the tool list after bans and the catalog (2026-11-18).
+ * compact() counts the stored messages only, so without this the trigger
+ * ignored ~5,150 tokens on Ornith and a request overflowed long before it
+ * compacted (agent-runtime-implementation, Phase 3 gaps).
+ *
+ * Measured by running the turn's own request, with no messages, through
+ * prepareCompletion (bans, catalog, prompt; it touches no model and its one
+ * side effect, the last-wire-cost record, is overwritten by the real call
+ * straight after), then /tokenize. Cached for the pass while the context
+ * size and the tool names stay the same: the catalog keeps the list fixed
+ * for a conversation. The memory block can change by a few tokens within a
+ * pass; that is inside the trigger's margin. A failure measures 0, which is
+ * the behaviour before the fix, never a refusal to send.
+ */
+async function overheadFor(pass, head, facts, ready) {
+  const names = (head.tools ?? []).map((tool) => tool?.function?.name ?? '').join(',')
+  const key = `${ready.config?.ctxSize ?? ''}|${names}`
+  if (pass.overhead?.key === key) return pass.overhead.tokens
+  let tokens = 0
+  try {
+    const { parsed } = await pass.seams.prepareCompletion(structuredClone({ ...head, messages: [] }), facts)
+    const sent = parsed.messages ?? []
+    const text = [...sent.map((m) => messageText(m)), JSON.stringify(parsed.tools ?? [])].join('\n')
+    const n = await pass.seams.tokenize(ready.port, text)
+    tokens = (n ?? Math.ceil(text.length / 3)) + PER_MESSAGE_OVERHEAD_TOKENS * sent.length
+  } catch {
+    tokens = 0
+  }
+  pass.overhead = { key, tokens }
+  return tokens
+}
+
 /** chat-ui's maybeCompact, with the daemon's I/O. Never blocks a send. */
-async function compact(pass, stored, current, ready, t) {
+async function compact(pass, stored, current, ready, t, overheadTokens = 0) {
   if (pass.generation.contextCompaction === false) return stored
-  const budget = compactionBudget(ready.config?.ctxSize, pass.generation.max_tokens)
+  const budget = compactionBudget(ready.config?.ctxSize, pass.generation.max_tokens, overheadTokens)
   if (!budget) return stored
   try {
     const texts = stored.map((m) => messageText(m))
@@ -372,8 +407,7 @@ export function modelPort(pass) {
         if (sig?.aborted) throw abortError()
         pass.setRunning()
         const t = store.getTask(task.id)
-        const body = {
-          messages: await payloadFor(pass, msgs, ready, t),
+        const head = {
           stream: true,
           tools: turnCtx.mcpTools.length > 0 ? toLlmTools(turnCtx.mcpTools) : undefined,
           reasoning_format: 'auto',
@@ -389,13 +423,18 @@ export function modelPort(pass) {
           // (master plan Phase 1).
           redstart_retrieval: true,
         }
-        const { parsed } = await seams.prepareCompletion(body, {
+        const facts = {
           account: turnCtx.account,
           surface: t.surface,
           effectiveConfig: ready.config,
           accountId: t.storeAccountId,
           timeZone: t.timeZone,
-        })
+        }
+        // The overhead first: compaction's budget is what is left of the
+        // context once the prompt and the tools are in (overheadFor).
+        const overhead = pass.generation.contextCompaction === false ? 0 : await overheadFor(pass, head, facts, ready)
+        const body = { messages: await payloadFor(pass, msgs, ready, t, overhead), ...head }
+        const { parsed } = await seams.prepareCompletion(body, facts)
         store.appendEvent(task.id, { type: 'turn' })
         // This turn exists because the model answered with plan steps still
         // open (the core's completion check): the bench's --runtime counts it.

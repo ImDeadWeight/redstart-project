@@ -701,6 +701,47 @@ await test('a long history is folded into a stored summary, as chat-ui does; the
   assert(store.readEvents(t.id).some((e) => e.type === 'compacted' && e.summarized), 'logged')
 })
 
+await test('the system prompt and the tools count against the budget: a history that fits alone, but not beside them, is compacted (2026-11-18)', async () => {
+  // The bug: compaction counted the stored messages only. On Ornith the
+  // prompt and tools are ~5,150 tokens, so at 12k it never fired before the
+  // request overflowed. Here: ctx 4096, max_tokens unset (1024 held back),
+  // so usable is 3072 and the trigger 0.85 of it (2,611). Eight 150-character
+  // turns (~1,350 "tokens", a character each) plus the five fake tools (~550)
+  // fit under it; a 1,500-token prompt beside them does not.
+  const runWith = async (systemChars, idp) => {
+    let summaries = 0
+    const w = fakeWorld([say('ok')], {
+      effectiveConfigFor: async () => ({ ctxSize: 4096 }),
+      tokenize: async (_port, content) => content.length,
+      // The gateway's part: a composed prompt of `systemChars` in front.
+      prepareCompletion: async (parsed) => ({
+        parsed: { ...parsed, messages: [...(systemChars ? [{ role: 'system', content: 's'.repeat(systemChars) }] : []), ...(parsed.messages ?? [])] },
+        wire: {},
+      }),
+      fetchCompletion: async (_port, body) => {
+        if (body.stream === false) {
+          summaries++
+          return new Response(JSON.stringify({ choices: [{ message: { content: 'Earlier turns, summarized.' } }] }))
+        }
+        w.bodies.push(body)
+        return sse(say('ok'))
+      },
+    })
+    const conv = newConversation()
+    let parent = convs.appendMessage(SCOPE, conv, { id: `root-${idp}`, parent: null, type: 'root', role: 'system', content: '' }).id
+    for (let i = 0; i < 8; i++) {
+      parent = convs.appendMessage(SCOPE, conv, { id: `${idp}${i}`, parent, type: 'text', role: i % 2 ? 'assistant' : 'user', content: `turn ${i} ${'z'.repeat(150)}` }).id
+    }
+    const t = start(conv, 'next?')
+    await waitFor(() => ended(t.id), 'end')
+    return { status: statusOf(t.id), summaries, compacted: store.readEvents(t.id).some((e) => e.type === 'compacted') }
+  }
+  const alone = await runWith(0, 'ov-a')
+  eq([alone.status, alone.summaries, alone.compacted], ['done', 0, false], 'control: no prompt, the history fits, nothing compacted')
+  const beside = await runWith(1500, 'ov-b')
+  eq([beside.status, beside.summaries, beside.compacted], ['done', 1, true], 'with a 1,500-token prompt it does not fit, so it compacts')
+})
+
 await test('compaction off (the client\'s setting) sends the history whole', async () => {
   const w = fakeWorld([say('ok')], { effectiveConfigFor: async () => ({ ctxSize: 4096 }), tokenize: async (_p, c) => c.length })
   const conv = newConversation()
