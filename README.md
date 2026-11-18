@@ -239,7 +239,7 @@ The short list; the [full set is in the roadmap](docs/roadmap.md#known-limitatio
 ```bash
 cd redstart-nest
 npm install
-npm install --prefix src/chat-ui   # the chat-ui is its own package
+npm install --prefix ../chat-ui   # the chat-ui is its own package
 node ../tooling/stage-node.mjs     # the pinned Node 26 the daemon runs on
 npm run dev                        # Vite + chat-ui + the Tauri shell (needs Rust)
 ```

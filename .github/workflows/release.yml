@@ -159,13 +159,13 @@ jobs:
           cache: npm
           cache-dependency-path: |
             redstart-nest/package-lock.json
-            redstart-nest/src/chat-ui/package-lock.json
+            chat-ui/package-lock.json
             redstart-twig/desktop/package-lock.json
 
       # Both apps package the same chat-ui build.
       - name: Install chat-ui deps
         run: npm ci
-        working-directory: redstart-nest/src/chat-ui
+        working-directory: chat-ui
 
       - name: Install ${{ matrix.app }} deps
         run: npm ci

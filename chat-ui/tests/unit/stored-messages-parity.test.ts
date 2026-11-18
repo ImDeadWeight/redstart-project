@@ -11,7 +11,7 @@ vi.mock('$lib/stores/settings.svelte', () => ({
 }));
 
 const { convertDbMessageToApiChatMessageData } = await import('$lib/services/chat/chat-message-convert');
-const { storedToApiMessage } = await import('../../../../../shared/agent-core/stored-messages.mjs');
+const { storedToApiMessage } = await import('../../../shared/agent-core/stored-messages.mjs');
 
 /**
  * The daemon's task runner (agent-runtime Phase 3) rebuilds a conversation's

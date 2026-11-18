@@ -300,7 +300,7 @@ the listed version. Node.js itself (MIT) ships its own `LICENSE` beside
 
 ### Chat UI (llama.cpp web UI)
 
-[`redstart-nest/src/chat-ui/`](redstart-nest/src/chat-ui/) began as a fork of
+[`chat-ui/`](chat-ui/) began as a fork of
 the llama.cpp server's web UI and has been heavily modified since. The code
 taken from upstream remains under its MIT license. Redstart's changes and
 additions to it are under AGPL-3.0, like the rest of Redstart.
@@ -348,7 +348,7 @@ license text quoted above:
 `LICENSE.txt` and isn't complete. The npm appendix in section 2 is generated
 from Nest's `package.json` only, so the chat UI's other runtime dependencies
 aren't enumerated anywhere. Closing this means running `license:gen` against
-`redstart-nest/src/chat-ui` as well and shipping its output in `licenses/`.
+`chat-ui` as well and shipping its output in `licenses/`.
 
 ---
 

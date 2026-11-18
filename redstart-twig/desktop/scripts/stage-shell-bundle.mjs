@@ -17,7 +17,7 @@
 // twigd has no npm dependencies: everything it imports is in this repo.
 // Anything missing is an error, so an installer never silently lacks a part.
 //
-// Run after: `npm --prefix ../../redstart-nest/src/chat-ui run build`,
+// Run after: `npm --prefix ../../chat-ui run build`,
 // `node ../../tooling/stage-node.mjs`, and
 // `node ../../tooling/rust-licenses.mjs --shell shell --out licenses/rust-licenses.json`.
 // (`npm run build` does all of that.)
@@ -80,7 +80,7 @@ export function stage() {
   copyDir(path.join(TWIG, 'bin'), out('app', 'twigd', 'bin'), mjs)
   copyDir(path.join(TWIG, 'daemon'), out('app', 'twigd', 'daemon'), mjs)
   copyDir(path.join(REPO, 'shared'), out('shared'), mjs)
-  copyDir(path.join(REPO, 'redstart-nest', 'src', 'chat-ui', 'dist'), out('chat-ui'))
+  copyDir(path.join(REPO, 'chat-ui', 'dist'), out('chat-ui'))
   need(out('chat-ui', 'index.html'))
 
   fs.copyFileSync(need(path.join(REPO, 'LICENSE')), out('LICENSE.txt'))

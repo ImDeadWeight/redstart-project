@@ -119,7 +119,7 @@ preference:
    sits under a header naming its source;
 3. the name, unchanged.
 
-`toolDisplayName()` (`src/chat-ui/src/lib/stores/tools/tool-display.ts`) is the
+`toolDisplayName()` (`chat-ui/src/lib/stores/tools/tool-display.ts`) is the
 only place that decides this, and it is pure.
 
 Two consequences worth stating plainly, because both are easy to undo by

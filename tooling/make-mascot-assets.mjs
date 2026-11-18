@@ -37,7 +37,7 @@ const nest = loadMascot('nest')
 
 // ── SVGs ─────────────────────────────────────────────────────────────────────
 const svg = toSvg(nest)
-const chatUi = 'redstart-nest/src/chat-ui'
+const chatUi = 'chat-ui'
 for (const rel of ['redstart-nest/public/redstart.svg', 'redstart-nest/assets/redstart.svg', `${chatUi}/static/redstart.svg`, `${chatUi}/static/favicon.svg`]) write(rel, svg)
 write(`${chatUi}/static/favicon-dark.svg`, toSvg(withOutline(nest, 'W')))
 

@@ -4,7 +4,7 @@
 // Injected by the shell (bridge.rs) before the page's own scripts on every
 // load. It is Electron's preload, rebuilt over Tauri's IPC: the same object
 // shape, so the chat-ui's feature detection and call sites are unchanged
-// (redstart-nest/src/chat-ui/src/lib/utils/twig.ts). New since Electron:
+// (chat-ui/src/lib/utils/twig.ts). New since Electron:
 // `window` (the page draws its own title bar buttons) and `updates`.
 //
 // Tauri's internals are read lazily, inside each call, never at the top level:

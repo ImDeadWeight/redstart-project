@@ -123,7 +123,7 @@ and install dependencies as an administrator:
 git clone <your remote> C:\Redstart\app
 cd C:\Redstart\app\redstart-nest
 npm ci
-npm run build      :: produces dist/ and src/chat-ui/dist, both of which the
+npm run build      :: produces dist/ and ../chat-ui/dist, both of which the
                    :: daemon serves; without it the admin page 404s
 ```
 

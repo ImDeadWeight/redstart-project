@@ -105,7 +105,7 @@ function main() {
   })
 
   copyDir(path.join(REPO, 'shared'), out('shared'), (p) => p.endsWith('.mjs'))
-  copyDir(path.join(NEST, 'src', 'chat-ui', 'dist'), out('chat-ui'))
+  copyDir(path.join(REPO, 'chat-ui', 'dist'), out('chat-ui'))
 
   // llama-server and exactly what it loads (the release workflow stages these;
   // on Windows check-dll-closure.mjs proves the set is closed).

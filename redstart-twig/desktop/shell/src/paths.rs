@@ -15,7 +15,7 @@
 //!   chat-ui/                        what the `twig` protocol serves
 //!
 //! A debug build runs the checkout: bin/twigd.mjs on REDSTART_NODE or the Node
-//! staged at the repo root (deps/node), and Nest's chat-ui dist.
+//! staged at the repo root (deps/node), and the repo's chat-ui/dist.
 
 use std::path::{Path, PathBuf};
 
@@ -54,7 +54,6 @@ pub fn resolve(app: &AppHandle) -> Result<Layout, String> {
             .map(PathBuf::from)
             .ok_or("No checkout above the shell crate")?;
         let repo = twig.join("..").join("..");
-        let nest = repo.join("redstart-nest");
         let node = std::env::var_os("REDSTART_NODE")
             .map(PathBuf::from)
             .unwrap_or_else(|| repo.join("deps").join("node").join(node_exe()));
@@ -63,7 +62,7 @@ pub fn resolve(app: &AppHandle) -> Result<Layout, String> {
             shell_dir,
             node,
             twigd: twig.join("bin").join("twigd.mjs"),
-            chat_ui: nest.join("src").join("chat-ui").join("dist"),
+            chat_ui: repo.join("chat-ui").join("dist"),
             packaged: false,
         });
     }

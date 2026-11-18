@@ -36,14 +36,14 @@ jobs:
           cache: npm
           cache-dependency-path: |
             redstart-nest/package-lock.json
-            redstart-nest/src/chat-ui/package-lock.json
+            chat-ui/package-lock.json
 
       - name: Install launcher / main-process deps
         run: npm ci
 
       - name: Install chat-ui deps
         run: npm ci
-        working-directory: redstart-nest/src/chat-ui
+        working-directory: chat-ui
 
       - name: Typecheck launcher (tsc --noEmit)
         run: npm run typecheck
@@ -321,14 +321,14 @@ jobs:
         run: node scripts/test-shell-pipe.mjs
 
       - name: "Security: chat-ui tool display names / file markers (vitest)"
-        run: npm --prefix src/chat-ui run test:security
+        run: npm --prefix ../chat-ui run test:security
 
       # The security-focused vitest step above runs only security.test.ts. The
       # rest of the unit project guards behavior that has silently regressed
       # before — the tool-call fallback parser, stored-message parity — so it
       # runs here too rather than only on developer machines.
       - name: "Unit tests (vitest)"
-        run: npm --prefix src/chat-ui run test:unit -- --run
+        run: npm --prefix ../chat-ui run test:unit -- --run
 
       # Real-browser mount coverage. The node suites prove the HTTP layer and
       # svelte-check proves the types, but neither catches a component that
@@ -340,16 +340,16 @@ jobs:
       # so the count is pinned by a guard script. The previous baseline reached
       # 513 because nothing ran this at all.
       - name: "Types: svelte-check baseline"
-        run: npm --prefix src/chat-ui run check:baseline
+        run: npm --prefix ../chat-ui run check:baseline
 
       # npm ci installs the playwright package but not its browser binaries,
       # and the client project drives a real Chromium.
       - name: Install Chromium for browser tests
         run: npx playwright install --with-deps chromium
-        working-directory: redstart-nest/src/chat-ui
+        working-directory: chat-ui
 
       - name: "Client render tests (vitest browser)"
-        run: npm --prefix src/chat-ui run test:client -- --run
+        run: npm --prefix ../chat-ui run test:client -- --run
 
   shell:
     # The Tauri desktop shell (daemon split T2/T3). The Windows unit tests

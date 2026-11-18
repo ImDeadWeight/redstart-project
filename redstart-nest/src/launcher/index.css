@@ -10,7 +10,7 @@
    on a narrow phone screen, most likely, given the reorg just added more of
    those — the overflowing area renders past the div's edge and falls
    through to the real page background underneath, which defaults to white.
-   Same class of bug as src/chat-ui/src/app.css's html rule; fixed the same
+   Same class of bug as chat-ui/src/app.css's html rule; fixed the same
    way, at the root, so no future overflow can expose unstyled white again
    regardless of which component caused it. */
 html, body {

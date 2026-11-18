@@ -22,10 +22,10 @@ redstart-nest/deps/
 redstart-nest/licenses/
 
 # Android build artifacts
-redstart-nest/src/chat-ui/android/.gradle/
-redstart-nest/src/chat-ui/android/app/build/
-redstart-nest/src/chat-ui/android/build/
-redstart-nest/src/chat-ui/android/local.properties
+chat-ui/android/.gradle/
+chat-ui/android/app/build/
+chat-ui/android/build/
+chat-ui/android/local.properties
 
 # Logs
 *.log

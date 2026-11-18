@@ -65,12 +65,12 @@ The launcher and the chat-ui are **two separate npm packages** — you must inst
 ```bash
 cd redstart-nest
 npm install                       # launcher, daemon and Tauri CLI deps
-npm install --prefix src/chat-ui  # the SvelteKit chat-ui is its own package
+npm install --prefix ../chat-ui  # the SvelteKit chat-ui is its own package
 node ../tooling/stage-node.mjs    # the pinned Node 26 (into the repo root's deps/node, shared with Twig)
 npm run dev
 ```
 
-This starts Vite (React launcher UI), the SvelteKit chat-ui dev server, and the Tauri shell in debug (`cargo run` in `shell/`, via `scripts/dev-shell.mjs`), whose window loads Vite. It needs a Rust toolchain (`rustup`, stable). A debug shell runs this checkout's `bin/nestd.mjs`, uses your real `%APPDATA%\redstart` unless `REDSTART_CONFIG_DIR` points elsewhere, and never touches the login item or the updater. (`npm install` in `redstart-nest` does **not** install the chat-ui's dependencies — `npm run dev` launches the chat-ui dev server via `--prefix src/chat-ui`, so its `node_modules` must exist first.)
+This starts Vite (React launcher UI), the SvelteKit chat-ui dev server, and the Tauri shell in debug (`cargo run` in `shell/`, via `scripts/dev-shell.mjs`), whose window loads Vite. It needs a Rust toolchain (`rustup`, stable). A debug shell runs this checkout's `bin/nestd.mjs`, uses your real `%APPDATA%\redstart` unless `REDSTART_CONFIG_DIR` points elsewhere, and never touches the login item or the updater. (`npm install` in `redstart-nest` does **not** install the chat-ui's dependencies — `npm run dev` launches the chat-ui dev server via `--prefix ../chat-ui`, so its `node_modules` must exist first.)
 
 > **Note:** In dev mode the chat-ui runs on its own port (`:5174`). The `--path` flag that serves it through llama-server only applies in production builds.
 
@@ -112,7 +112,7 @@ real hardware yet and say so.
 ## Chat UI only
 
 ```bash
-cd redstart-nest/src/chat-ui
+cd chat-ui
 npm install
 npm run dev:redstart      # Vite on :5174, hot-reloads on save
 ```
@@ -165,7 +165,7 @@ Every suite in `test:security` must also appear as a step in `.github/workflows/
 The Windows client has no dev server — it just loads the built chat-ui. Build the chat-ui first, then:
 
 ```bash
-cd redstart-nest/src/chat-ui
+cd chat-ui
 npm run build
 
 cd ../../../redstart-twig/desktop
@@ -177,14 +177,14 @@ npm run dev
 ## Redstart Twig Android
 
 ```bash
-cd redstart-nest/src/chat-ui
+cd chat-ui
 npm install
 npm run build
 
 npx cap sync android
 ```
 
-Then open `redstart-nest/src/chat-ui/android` in Android Studio and run on a device or emulator.
+Then open `chat-ui/android` in Android Studio and run on a device or emulator.
 
 ---
 
@@ -230,7 +230,7 @@ Without these, the packaged `llama-server.exe` fails to load on any machine that
 ```bash
 cd redstart-nest
 npm install                       # if not already
-npm install --prefix src/chat-ui  # the build compiles the chat-ui too
+npm install --prefix ../chat-ui  # the build compiles the chat-ui too
 npm run build
 ```
 
@@ -242,7 +242,7 @@ npm run build
 
 ### Redstart Nest
 
-Prerequisites: both packages' dependencies installed (`npm install` in `redstart-nest` **and** `npm install --prefix src/chat-ui`), a Rust toolchain, plus the llama-server binary and `deps/windows/` DLLs in place (see [Building from Source](#building-from-source--llama-server-binary)). The updater signature needs the signing key in the environment, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Without them the build fails, so an installer that cannot be updated never comes out of it.
+Prerequisites: both packages' dependencies installed (`npm install` in `redstart-nest` **and** `npm install --prefix ../chat-ui`), a Rust toolchain, plus the llama-server binary and `deps/windows/` DLLs in place (see [Building from Source](#building-from-source--llama-server-binary)). The updater signature needs the signing key in the environment, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Without them the build fails, so an installer that cannot be updated never comes out of it.
 
 ```bash
 cd redstart-nest
@@ -278,7 +278,7 @@ Output: `redstart-twig/desktop/shell/target/release/bundle/nsis/Redstart Twig_<v
 
 Twig is a Tauri app built the way Nest is: `npm run build` builds the chat-ui, stages the pinned Node 26 (`tooling/stage-node.mjs`, one pin for both apps), lists the Rust crates' licences, stages `shell/bundle/resources` (`scripts/stage-shell-bundle.mjs`), and runs `tauri build`, which needs the updater signing key in `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`). Despite the directory name, the same project builds Twig for macOS (Apple Silicon only).
 
-`npm run dev` runs the shell from the checkout (`cargo run`): twigd on `REDSTART_NODE` or the staged `deps/node` at the repo root, and the chat-ui from `redstart-nest/src/chat-ui/dist` (build it first). `TWIG_CONFIG_DIR` points a dev run at a throwaway state folder.
+`npm run dev` runs the shell from the checkout (`cargo run`): twigd on `REDSTART_NODE` or the staged `deps/node` at the repo root, and the chat-ui from `chat-ui/dist` (build it first). `TWIG_CONFIG_DIR` points a dev run at a throwaway state folder.
 
 ### Releases
 

@@ -125,7 +125,7 @@ export default defineConfig({
 			allow: [
 				searchForWorkspaceRoot(process.cwd()),
 				resolve(__dirname, 'tests'),
-				resolve(__dirname, '../../../shared')
+				resolve(__dirname, '../shared')
 			]
 		}
 	}
