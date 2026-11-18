@@ -30,7 +30,8 @@
 // =============================================================================
 
 import { MAX_SKILL_BODY_CHARS, MAX_SKILL_DESCRIPTION_CHARS, skillToWorkflowFields, workflowToSkill } from './skill-format.mjs'
-import { listSkills, getSkillById, writeSkill, deleteSkill } from './skills-storage.mjs'
+import { listSkills, getSkillById, writeSkill, deleteSkill, skillFromUpload, skillExportFiles } from './skills-storage.mjs'
+import { createZip } from './zip.mjs'
 
 export const MAX_NAME_CHARS = 48
 export const MAX_TITLE_CHARS = 80
@@ -251,6 +252,46 @@ export function updateWorkflow(account, scope, id, body, { now = Date.now() } = 
     return r
   }
   return { ok: true, workflow: toWorkflow(r.skill) }
+}
+
+/**
+ * Import an uploaded skill (a .zip of its folder, or a bare SKILL.md) as a
+ * workflow. Authorization is the route's, as for create.
+ *
+ * @param {Buffer} buf
+ * @returns {{ ok: true, workflow: object } | { ok: false, error: string, code?: string }}
+ */
+export function importWorkflow(account, scope, buf, { now = Date.now() } = {}) {
+  const up = skillFromUpload(buf)
+  if (!up.ok) return up
+  if (scope === 'personal' && up.skill.name.startsWith(ORG_PREFIX)) {
+    return { ok: false, error: `a personal skill name may not start with "${ORG_PREFIX}" — that prefix marks organization workflows; rename it in SKILL.md` }
+  }
+  if (up.skill.name.length > MAX_NAME_CHARS) return { ok: false, error: `name is at most ${MAX_NAME_CHARS} characters here; rename it in SKILL.md` }
+  const cap = scope === 'org' ? MAX_ORG : MAX_PERSONAL_PER_ACCOUNT
+  const r = writeSkill(scope === 'org' ? null : account, scope, { skill: up.skill, files: up.files }, { now, by: account?.username ?? null, cap })
+  if (!r.ok) {
+    if (r.code === 'conflict') return { ok: false, error: `a ${scope} workflow named "${up.skill.name}" already exists`, code: 'conflict' }
+    return r
+  }
+  return { ok: true, workflow: toWorkflow(r.skill) }
+}
+
+/**
+ * A workflow as an Agent Skill for another tool: the folder as a .zip, or
+ * SKILL.md alone. Redstart's own metadata file is never in it.
+ *
+ * @param {'zip'|'md'} format
+ * @returns {{ name: string, contentType: string, filename: string, body: Buffer } | null}
+ */
+export function exportWorkflow(account, scope, id, format = 'zip') {
+  const s = getSkillById(scope === 'org' ? null : account, scope, id)
+  if (!s) return null
+  const files = skillExportFiles(s)
+  if (format === 'md') return { name: s.name, contentType: 'text/markdown; charset=utf-8', filename: 'SKILL.md', body: files['SKILL.md'] }
+  // The folder inside the zip is the skill's name, as other agents expect.
+  const named = Object.fromEntries(Object.entries(files).map(([rel, b]) => [`${s.name}/${rel}`, b]))
+  return { name: s.name, contentType: 'application/zip', filename: `${s.name}.zip`, body: createZip(named) }
 }
 
 export function deleteWorkflow(account, scope, id) {

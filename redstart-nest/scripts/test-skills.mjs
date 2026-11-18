@@ -271,6 +271,87 @@ await test('🔒 a skill\'s .py files are copied into the conversation workspace
   assert(/run_python is not available here/.test(off), off)
 })
 
+console.log('\n-- import and export (zip.mjs, the /workflows routes) --')
+
+const zip = await import('../daemon/zip.mjs')
+const { Readable } = await import('node:stream')
+const { handleWorkflowRoute } = await import('../daemon/gateway/workflow-routes.mjs')
+const LIMITS = { maxEntries: 30, maxEntryBytes: 200 * 1024, maxTotalBytes: 2 * 1024 * 1024 }
+
+await test('🔒 zip: a round trip; a lying size, an encrypted entry and a bomb are refused before they cost anything', async () => {
+  const files = { 'a/SKILL.md': '---\nname: a\ndescription: d\n---\nbody', 'a/big.txt': 'x'.repeat(50000), 'a/empty.txt': '' }
+  const z = zip.createZip(files)
+  assert(zip.isZip(z), 'not a zip')
+  const back = zip.readZip(z, LIMITS)
+  assert(back.ok, back.error)
+  eq(Object.fromEntries(Object.entries(back.files).map(([k, v]) => [k, v.toString()])), files, 'round trip')
+  eq(zip.createZip(files).equals(z), true, 'the same files are the same bytes')
+  // A header that understates the size: inflation stops at the declared size.
+  const lying = Buffer.from(z)
+  const cd = lying.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]))
+  const cd2 = lying.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]), cd + 4)
+  lying.writeUInt32LE(10, cd2 + 24)
+  const lie = zip.readZip(lying, LIMITS)
+  assert(!lie.ok && /big\.txt/.test(lie.error), JSON.stringify(lie))
+  const enc = Buffer.from(z)
+  enc.writeUInt16LE(enc.readUInt16LE(cd + 8) | 1, cd + 8)
+  assert(/encrypted/.test(zip.readZip(enc, LIMITS).error ?? ''), 'encrypted read')
+  const bomb = zip.createZip({ 'b.txt': Buffer.alloc(5 * 1024 * 1024) })
+  assert(/over 200 KB/.test(zip.readZip(bomb, LIMITS).error ?? ''), 'a 5 MB entry (a few KB compressed) was inflated')
+  assert(!zip.readZip(Buffer.from('not a zip at all, just text'), LIMITS).ok, 'text read as a zip')
+})
+
+await test('an upload: a zip with its folder on top, OS junk dropped, a bare SKILL.md; a bad path refused', async () => {
+  const md = '---\nname: notes\ndescription: Notes\n---\nTake notes.'
+  const up = skills.skillFromUpload(zip.createZip({ 'notes/SKILL.md': md, 'notes/ref/a.md': 'A', '__MACOSX/notes/._SKILL.md': 'junk', 'notes/.DS_Store': 'junk' }))
+  assert(up.ok, up.error)
+  eq([up.skill.name, Object.keys(up.files)], ['notes', ['ref/a.md']], 'folder stripped, junk dropped')
+  const bare = skills.skillFromUpload(Buffer.from(md))
+  assert(bare.ok && bare.skill.body === 'Take notes.', JSON.stringify(bare))
+  const evil = skills.skillFromUpload(zip.createZip({ 'SKILL.md': md, '../escape.txt': 'x' }))
+  assert(!evil.ok && /not a path a skill may hold/.test(evil.error), JSON.stringify(evil))
+  assert(!skills.skillFromUpload(zip.createZip({ 'x/readme.md': 'no skill' })).ok, 'a zip with no SKILL.md')
+})
+
+function fakeReq(method, url, body) {
+  const req = Readable.from(body ? [Buffer.from(JSON.stringify(body))] : [])
+  req.method = method; req.url = url; req.headers = {}
+  return req
+}
+function fakeRes() {
+  return { status: 0, headers: {}, body: '', writeHead(s, h) { this.status = s; Object.assign(this.headers, h ?? {}); return this }, setHeader(k, v) { this.headers[k] = v }, end(b) { this.body = b ?? '' } }
+}
+async function route(method, url, account, body) {
+  const res = fakeRes()
+  const handled = await handleWorkflowRoute(fakeReq(method, url, body), res, url.split('?')[0], account)
+  assert(handled, `${method} ${url} was not handled`)
+  return res
+}
+
+await test('🔒 the routes: import (personal; org needs the permission), export as zip and as SKILL.md, never another account\'s', async () => {
+  const dave = { id: 'acct-dave', username: 'dave' }
+  const pkg = zip.createZip({ 'tidy/SKILL.md': '---\nname: tidy\ndescription: Tidy a list\nmetadata:\n  author: "x"\n---\nSort it.', 'tidy/helper.py': 'print(2)' })
+  const imp = await route('POST', '/workflows/personal/import', dave, { file: pkg.toString('base64') })
+  eq(imp.status, 201, `import: ${imp.body}`)
+  const w = JSON.parse(imp.body)
+  eq([w.name, w.instructions], ['tidy', 'Sort it.'], 'imported as a workflow')
+  eq((await route('POST', '/workflows/personal/import', dave, { file: pkg.toString('base64') })).status, 409, 'a second import of the same name')
+  eq((await route('POST', '/workflows/org/import', dave, { file: pkg.toString('base64') })).status, 403, 'org import without manageOrgWorkflows')
+  eq((await route('POST', '/workflows/personal/import', dave, { file: '' })).status, 400, 'no file')
+  const orgPrefixed = zip.createZip({ 'SKILL.md': '---\nname: org-x\ndescription: d\n---\nb' })
+  eq((await route('POST', '/workflows/personal/import', dave, { file: orgPrefixed.toString('base64') })).status, 400, 'a personal org- name')
+
+  const ex = await route('GET', `/workflows/personal/${w.id}/export`, dave)
+  eq([ex.status, ex.headers['Content-Type'], ex.headers['Content-Disposition']], [200, 'application/zip', 'attachment; filename="tidy.zip"'], 'zip headers')
+  const unz = zip.readZip(ex.body, LIMITS)
+  assert(unz.ok, unz.error)
+  eq(Object.keys(unz.files).sort(), ['tidy/SKILL.md', 'tidy/helper.py'], 'the folder, and never .redstart.json')
+  assert(/author: "x"/.test(unz.files['tidy/SKILL.md'].toString()), 'foreign metadata kept on the way out')
+  const mdEx = await route('GET', `/workflows/personal/${w.id}/export?format=md`, dave)
+  assert(mdEx.status === 200 && /^---\nname: tidy\n/.test(mdEx.body.toString()), String(mdEx.body))
+  eq((await route('GET', `/workflows/personal/${w.id}/export`, ann)).status, 404, 'another account exported dave\'s')
+})
+
 fs.rmSync(tmpDir, { recursive: true, force: true })
 const failed = results.filter((r) => !r.pass)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)

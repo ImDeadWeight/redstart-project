@@ -37,6 +37,7 @@ import { configDir } from './platform-paths.mjs'
 import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
 import { memoryKey } from './memory-storage.mjs'
 import { parseSkillMd, serializeSkillMd, validSkillName, workflowToSkill } from './skill-format.mjs'
+import { isZip, readZip } from './zip.mjs'
 
 export const MAX_SKILL_FILES = 20
 export const MAX_SKILL_FILE_BYTES = 200 * 1024
@@ -278,6 +279,47 @@ export function readSkillFile(skill, rel) {
   const file = path.resolve(skill.dir, ...rel.split('/'))
   if (!file.startsWith(path.resolve(skill.dir) + path.sep)) return null
   try { return fs.readFileSync(file) } catch { return null }
+}
+
+/**
+ * An uploaded skill: a .zip of its folder, or a bare SKILL.md. A zip whose
+ * SKILL.md sits in one top folder (as zipping a folder makes it) has that
+ * folder taken off; OS junk (`__MACOSX/`, .DS_Store, `._` files, Thumbs.db) is
+ * dropped; every other path must be one a skill may hold, or the import is
+ * refused.
+ *
+ * @param {Buffer} buf
+ * @returns {{ ok: true, skill: object, files: Record<string, Buffer> } | { ok: false, error: string }}
+ */
+export function skillFromUpload(buf) {
+  let skillText
+  /** @type {Record<string, Buffer>} */
+  let files = {}
+  if (isZip(buf)) {
+    const z = readZip(buf, { maxEntries: MAX_SKILL_FILES + 10, maxEntryBytes: MAX_SKILL_FILE_BYTES, maxTotalBytes: MAX_SKILL_TOTAL_BYTES + MAX_SKILL_FILE_BYTES })
+    if (!z.ok) return z
+    // Only what operating systems add when zipping a folder is junk; any
+    // other odd path (a "..", a dot-file of the author's) is refused below.
+    const junk = (seg) => seg === '__MACOSX' || seg === '.DS_Store' || seg === 'Thumbs.db' || seg.startsWith('._')
+    let entries = Object.entries(z.files).filter(([n]) => !n.split('/').some(junk))
+    if (!entries.some(([n]) => n === 'SKILL.md')) {
+      const tops = new Set(entries.map(([n]) => n.split('/')[0]))
+      const [top] = tops
+      if (tops.size === 1 && entries.some(([n]) => n === `${top}/SKILL.md`)) entries = entries.map(([n, b]) => [n.slice(top.length + 1), b])
+    }
+    const md = entries.find(([n]) => n === 'SKILL.md')
+    if (!md) return { ok: false, error: 'the zip has no SKILL.md at its top (or in one folder at its top)' }
+    skillText = md[1].toString('utf8')
+    files = Object.fromEntries(entries.filter(([n]) => n !== 'SKILL.md'))
+    const err = checkSkillFiles(files)
+    if (err) return { ok: false, error: err }
+  } else {
+    if (!Buffer.isBuffer(buf) || buf.length > MAX_SKILL_FILE_BYTES) return { ok: false, error: 'not a SKILL.md or a .zip, or too large' }
+    skillText = buf.toString('utf8')
+  }
+  const parsed = parseSkillMd(skillText)
+  if (!parsed.ok) return { ok: false, error: `SKILL.md: ${parsed.error}` }
+  return { ok: true, skill: parsed.skill, files }
 }
 
 /** Every file of a skill, SKILL.md included, for an export. */
