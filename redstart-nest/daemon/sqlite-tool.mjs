@@ -25,7 +25,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import initSqlJs from 'sql.js'
-import { resolveWithinRoot } from './path-scope.mjs'
+import { resolveGrantedPath, grantedWalkStarts, noteDenied } from './grant-scope.mjs'
 
 const TOOL_NAMES = ['sqlite_list_databases', 'sqlite_query', 'sqlite_list_tables', 'sqlite_describe_table']
 const MAX_OUTPUT_CHARS = 8000
@@ -69,7 +69,9 @@ function isSqliteFile(fullPath) {
 function listDatabases(sqliteCfg) {
   const root = path.resolve(sqliteCfg.rootDir)
   const found = []
-  const stack = ['']
+  // The granted folders only (master plan 6.1): an un-granted folder's name
+  // never appears in a listing, because it is never walked.
+  const stack = grantedWalkStarts(root, sqliteCfg.grants)
 
   while (stack.length && found.length < MAX_DATABASES) {
     const rel = stack.pop()
@@ -124,15 +126,16 @@ function getSqlJs() {
 // Database loading — scoped, size-capped, read-only
 // ---------------------------------------------------------------------------
 
-async function openDatabase(sqliteCfg, database) {
+async function openDatabase(sqliteCfg, database, ctx) {
   if (!database || typeof database !== 'string') {
     throw new Error('Missing required argument: database (path to a .sqlite/.db file, relative to the configured folder)')
   }
 
   let filePath
   try {
-    filePath = resolveWithinRoot(sqliteCfg.rootDir, database)
-  } catch {
+    filePath = resolveGrantedPath(sqliteCfg.rootDir, sqliteCfg.grants, database)
+  } catch (err) {
+    if (err?.denied) noteDenied('sqlite', ctx)
     throw new Error('Database path is outside the configured SQLite folder')
   }
   if (!fs.existsSync(filePath)) {
@@ -278,9 +281,10 @@ export function toolDefs(cfg) {
 }
 
 // Provider interface: callTool(name, args, cfg, ctx). `ctx.account` is the
-// authenticated caller (null when auth is off). Unused here — this capability
-// is shared reference material and is the same for every account.
-export async function callTool(name, args, cfg, _ctx) {
+// authenticated caller (null when auth is off), used only to log a denial.
+// This capability is shared reference material, narrowed per role by
+// resource grants (cfg.sqlite.grants, master plan 6.1).
+export async function callTool(name, args, cfg, ctx) {
   if (!TOOL_NAMES.includes(name)) return null
 
   const sqliteCfg = cfg?.sqlite
@@ -301,7 +305,7 @@ export async function callTool(name, args, cfg, _ctx) {
 
   let db
   try {
-    db = await openDatabase(sqliteCfg, args?.database)
+    db = await openDatabase(sqliteCfg, args?.database, ctx)
   } catch (err) {
     return { isError: true, content: [{ type: 'text', text: `SQLite error: ${err.message}` }] }
   }

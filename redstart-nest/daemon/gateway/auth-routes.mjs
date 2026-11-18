@@ -19,7 +19,7 @@
 import { authenticate, login, logout, listAccounts, getAuthRequired, createAccount, deleteAccount, resetPassword, regenerateApiKey, regenerateOwnApiKey, hasAdminAccess, canDo, issueClientKey, revokeClientKey, getOwnClientKeys, listRoles, saveRole, deleteRole, assignRole } from '../auth.mjs'
 import { capabilityIds, ADMIN_PERMISSIONS } from '../permissions.mjs'
 import { BUILTIN_TOOLS } from '../tools-definitions.mjs'
-import { logEvent } from '../logger.mjs'
+import { logEvent, logPolicy } from '../logger.mjs'
 import { closeAllMcpSessions } from '../mcp-server.mjs'
 import { SURFACE_IDS } from '../system-prompt.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
@@ -164,6 +164,8 @@ export async function handleAuthRoute(req, res, urlPath) {
     const result = saveRole(actor, body || {})
     if (!result.ok) return sendJson(res, result.error?.startsWith('Not permitted') ? 403 : 400, { error: result.error })
     logEvent('auth', 'role_saved', { role: result.role.name })
+    // The decision log: who changed what a role may do (master plan 6.1).
+    logPolicy('role.saved', { role: result.role.name, by: actor?.username ?? '(auth off)' })
     policyChanged()
     return sendJson(res, 200, { role: result.role })
   }
@@ -174,6 +176,7 @@ export async function handleAuthRoute(req, res, urlPath) {
     const result = deleteRole(actor, roleMatch[1])
     if (!result.ok) return sendJson(res, result.error === 'Role not found' ? 404 : 400, { error: result.error })
     logEvent('auth', 'role_deleted', { reassigned: result.reassigned })
+    logPolicy('role.deleted', { role: roleMatch[1], by: actor?.username ?? '(auth off)' })
     policyChanged()
     return sendJson(res, 200, { ok: true, reassigned: result.reassigned })
   }

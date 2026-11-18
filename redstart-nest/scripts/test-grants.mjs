@@ -112,6 +112,71 @@ await test('🔒 a symlink inside a granted folder is judged by where it points'
   fs.rmSync(link, { force: true, recursive: false })
 })
 
+console.log('\n-- the three capabilities, through their providers --')
+
+const logger = await import('../daemon/logger.mjs')
+const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-grants-log-'))
+logger.initLogger(logDir)
+const sqlite = await import('../daemon/sqlite-tool.mjs')
+const git = await import('../daemon/git-tool.mjs')
+const vault = await import('../daemon/vault-tool.mjs')
+const ctx = { account: { username: 'analyst' } }
+const textOf = (r) => r.content.map((c) => c.text).join('\n')
+
+// A shared root with three areas: a role is given "finance" only.
+const shared = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-grants-shared-'))
+const SQLITE_HEADER = Buffer.concat([Buffer.from('SQLite format 3\0', 'latin1'), Buffer.alloc(84)])
+for (const d of ['finance/q1', 'hr', 'finance/ledger/.git', 'hr/payroll/.git', '.git']) fs.mkdirSync(path.join(shared, d), { recursive: true })
+fs.writeFileSync(path.join(shared, 'finance', 'q1', 'sales.db'), SQLITE_HEADER)
+fs.writeFileSync(path.join(shared, 'hr', 'salaries.db'), SQLITE_HEADER)
+fs.writeFileSync(path.join(shared, 'finance', 'q1', 'plan.md'), '# Plan\nbudget figures #money')
+fs.writeFileSync(path.join(shared, 'hr', 'reviews.md'), '# Reviews\nbudget for raises #money')
+const cfg = (key, grants) => ({ [key]: { enabled: true, rootDir: shared, ...(grants === undefined ? {} : { grants }) } })
+
+await test('🔒 SQLite: the listing names granted databases only; another folder\'s is refused and logged', async () => {
+  const all = textOf(await sqlite.callTool('sqlite_list_databases', {}, cfg('sqlite'), ctx))
+  assert(/finance\/q1\/sales\.db/.test(all) && /hr\/salaries\.db/.test(all), `inherit lists both: ${all}`)
+  const mine = textOf(await sqlite.callTool('sqlite_list_databases', {}, cfg('sqlite', ['finance']), ctx))
+  assert(/finance\/q1\/sales\.db/.test(mine) && !/hr|salaries/.test(mine), `granted: ${mine}`)
+  const none = textOf(await sqlite.callTool('sqlite_list_databases', {}, cfg('sqlite', []), ctx))
+  assert(/No SQLite databases/.test(none), `[]: ${none}`)
+  const refused = await sqlite.callTool('sqlite_list_tables', { database: 'hr/salaries.db' }, cfg('sqlite', ['finance']), ctx)
+  assert(refused.isError && /outside the configured SQLite folder/.test(textOf(refused)), textOf(refused))
+  const log = logger.readPolicyLog({ limit: 5 }).records
+  const last = log.find((r) => r.event === 'access.denied')
+  assert(last && last.capability === 'sqlite' && last.account === 'analyst', JSON.stringify(log))
+  assert(!JSON.stringify(log).includes('salaries') && !JSON.stringify(log).includes('hr'), 'the log names a path')
+})
+
+await test('🔒 Git: no default repo once narrowed; the listing is the granted folders\' repos; another\'s is refused', async () => {
+  const all = textOf(await git.callTool('git_list_repos', {}, cfg('git'), ctx))
+  assert(/^\.$/m.test(all), `inherit lists the root repo: ${all}`)
+  const mine = textOf(await git.callTool('git_list_repos', {}, cfg('git', ['finance']), ctx))
+  assert(/finance\/ledger/.test(mine) && !/payroll|^\.$/m.test(mine), `granted: ${mine}`)
+  const direct = textOf(await git.callTool('git_list_repos', {}, cfg('git', ['finance/ledger']), ctx))
+  assert(/^finance\/ledger$/m.test(direct), `a granted repo itself: ${direct}`)
+  const noDefault = await git.callTool('git_status', {}, cfg('git', ['finance']), ctx)
+  assert(noDefault.isError && /git_list_repos/.test(textOf(noDefault)), textOf(noDefault))
+  const refused = await git.callTool('git_status', { repo: 'hr/payroll' }, cfg('git', ['finance']), ctx)
+  assert(refused.isError && /outside the configured git folder/.test(textOf(refused)), textOf(refused))
+  assert(logger.readPolicyLog({ limit: 3 }).records.some((r) => r.event === 'access.denied' && r.capability === 'git'), 'git denial not logged')
+})
+
+await test('🔒 Vault: search and tags walk the granted folders only; a note elsewhere is refused', async () => {
+  const all = textOf(await vault.callTool('vault_search', { query: 'budget' }, cfg('vault'), ctx))
+  assert(/plan\.md/.test(all) && /reviews\.md/.test(all), `inherit: ${all}`)
+  const mine = textOf(await vault.callTool('vault_search', { query: 'budget' }, cfg('vault', ['finance']), ctx))
+  assert(/finance\/q1\/plan\.md/.test(mine) && !/reviews/.test(mine), `granted: ${mine}`)
+  const tags = textOf(await vault.callTool('vault_tags', { tag: 'money' }, cfg('vault', ['finance']), ctx))
+  assert(/plan\.md/.test(tags) && !/reviews/.test(tags), `tags: ${tags}`)
+  const ok = await vault.callTool('vault_get', { path: 'finance/q1/plan.md' }, cfg('vault', ['finance']), ctx)
+  assert(!ok.isError && /budget figures/.test(textOf(ok)), textOf(ok))
+  const refused = await vault.callTool('vault_get', { path: 'hr/reviews.md' }, cfg('vault', ['finance']), ctx)
+  assert(refused.isError && /outside the configured vault folder/.test(textOf(refused)), textOf(refused))
+})
+
+logger.closeLogger()
+fs.rmSync(shared, { recursive: true, force: true })
 fs.rmSync(root, { recursive: true, force: true })
 const failed = results.filter((r) => !r.pass)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)

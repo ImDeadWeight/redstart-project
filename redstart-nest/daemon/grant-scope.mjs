@@ -27,6 +27,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { resolveWithinRoot } from './path-scope.mjs'
+import { logPolicy } from './logger.mjs'
 
 /** The capabilities a role can narrow to folders, by their grants key. */
 export const GRANTABLE = Object.freeze(['sqlite', 'git', 'vault', 'shared_documents'])
@@ -149,6 +150,34 @@ export function grantedRoots(root, grants) {
  */
 export function grantedPrefixes(grants) {
   return inherits(grants) ? [''] : [...grants]
+}
+
+/**
+ * The relative folders an enumeration walks, as `grantedPrefixes` but only
+ * those that exist and resolve inside the root (a grant whose folder is gone,
+ * or became a link out of the root, is not walked). Walkers skip symlinked
+ * folders on their own, so a link inside a granted folder cannot lead a walk
+ * out of it.
+ *
+ * @param {string} root
+ * @param {string[] | null | undefined} grants
+ */
+export function grantedWalkStarts(root, grants) {
+  if (inherits(grants)) return ['']
+  return grants.filter((g) => {
+    try { return fs.statSync(resolveWithinRoot(root, g)).isDirectory() } catch { return false }
+  })
+}
+
+/**
+ * Record a refusal in the decision log (logger.mjs logPolicy): the
+ * capability and who asked, NEVER the path or a folder name (grants plan §7).
+ *
+ * @param {string} capability
+ * @param {{ account?: { username?: string } | null } | undefined} ctx
+ */
+export function noteDenied(capability, ctx) {
+  logPolicy('access.denied', { account: ctx?.account?.username ?? '(auth off)', capability, decision: 'deny' })
 }
 
 /** Is a granted list narrowing anything? */
