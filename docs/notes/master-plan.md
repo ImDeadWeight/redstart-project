@@ -428,6 +428,37 @@ Not moved now, with the reason:
   moves to `redstart-twig/android/` or is deleted when "Settle Android" is
   decided (parked table).
 
+### Phase 4 built 2026-11-18
+
+`e88b262` task runner, `2b12b46` loop, `0169dd1` tool calls, `68c903b`
+gateway; 4.2: `68f88cb`, `a2b77fe` + `6445e46`, `ccf021a`. Each split was
+behaviour-preserving: the named suites (and chat-ui's `agentic-loop.test.ts`)
+passed unchanged, and the full chain passes at the end.
+
+| File | Before | After |
+|---|---|---|
+| `task-runner.mjs` (`runOnce` ~385 → ~25 lines) | 987 | 535, + `task-ports.mjs` 565, `task-resume.mjs` 64 |
+| `loop.mjs` (`runAgentLoop` 227 → ~170) | 282 | 283 (the helpers took the space) |
+| `tool-calls.mjs` (`runToolCalls` 176 → ~120) | 341 | 319, + `host-tools.mjs` 67 |
+| `tools-gateway.mjs` | 946 | 577, + `completion-prompt.mjs` 117, `gateway/completion-route.mjs` 115, `gateway/upstream.mjs` 205 |
+
+*Deviations:*
+- The helpers both the runner and the ports use (`TaskEnded`, `sleep`,
+  `parseArgs`, the model chain, the constants) live in `task-ports.mjs`;
+  in the runner they would have been an import cycle. The runner
+  re-exports the constants, so importers are unchanged.
+- `gateway/upstream.mjs` is new (forwarding, passthrough, the CORS fix,
+  the context-error note): the completions route and the catch-all both
+  need it. `prepareCompletion` is handed to the route, not imported, for
+  the same cycle reason. `tools-gateway.mjs` re-exports all it exported.
+- comment-density Pass 2: none of its eight files was touched here.
+
+*Gaps:*
+- No installer was built after the two folder moves: the Twig and Nest
+  release builds (`release.yml`) are the first to use the new paths.
+- `startGateway` is still ~210 lines of route table; only the completions
+  branch left, as planned.
+
 ## Phase 5 — Skills and AGENTS.md
 
 - **Workflows become Agent Skills (`SKILL.md`).** A skill is a folder whose
