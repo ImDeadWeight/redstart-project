@@ -1,9 +1,9 @@
 /**
  * Regenerates the committed mascot assets from the drawings in
- * ../assets/mascot/ (see mascot.mjs). Run it after editing a drawing and
+ * tooling/mascot/ (see mascot.mjs). Run it after editing a drawing and
  * commit what it writes:
  *
- *   node redstart-nest/scripts/make-mascot-assets.mjs
+ *   node tooling/make-mascot-assets.mjs
  *
  * - redstart.svg: Nest's admin UI, the chat UI (greeting, login, loading
  *   screen) and assets/
@@ -23,9 +23,11 @@ import { fileURLToPath } from 'url'
 import { SIZE, PALETTE, loadMascot, withOutline, rasterize, flatten, blit, encodePng, toSvg } from './mascot.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const nestDir = path.join(__dirname, '..')
+// It writes into two apps (Nest's launcher and the chat UI), so its paths
+// are from the repo root.
+const repo = path.join(__dirname, '..')
 const write = (rel, data) => {
-  const file = path.join(nestDir, rel)
+  const file = path.join(repo, rel)
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, data)
   console.log(`✓ ${rel}  (${(Buffer.byteLength(data) / 1024).toFixed(1)} KB)`)
@@ -35,11 +37,12 @@ const nest = loadMascot('nest')
 
 // ── SVGs ─────────────────────────────────────────────────────────────────────
 const svg = toSvg(nest)
-for (const rel of ['public/redstart.svg', 'assets/redstart.svg', 'src/chat-ui/static/redstart.svg', 'src/chat-ui/static/favicon.svg']) write(rel, svg)
-write('src/chat-ui/static/favicon-dark.svg', toSvg(withOutline(nest, 'W')))
+const chatUi = 'redstart-nest/src/chat-ui'
+for (const rel of ['redstart-nest/public/redstart.svg', 'redstart-nest/assets/redstart.svg', `${chatUi}/static/redstart.svg`, `${chatUi}/static/favicon.svg`]) write(rel, svg)
+write(`${chatUi}/static/favicon-dark.svg`, toSvg(withOutline(nest, 'W')))
 
 // ── Android ──────────────────────────────────────────────────────────────────
-const res = 'src/chat-ui/android/app/src/main/res'
+const res = `${chatUi}/android/app/src/main/res`
 const DENSITIES = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 }
 const LAUNCHER_BG = PALETTE.W // also values/ic_launcher_background.xml
 

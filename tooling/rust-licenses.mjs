@@ -9,9 +9,12 @@
 // normal dependencies only, not build or dev dependencies). The licence field is the crate's own SPDX expression, as
 // published.
 //
-//   node scripts/rust-licenses.mjs      (run before stage-shell-bundle.mjs)
-//   node scripts/rust-licenses.mjs --shell <crate dir> --out <file>
-//                                       another shell crate (Twig's)
+//   node ../tooling/rust-licenses.mjs --shell <crate dir> --out <file>
+//
+// Run from an app before its stage-shell-bundle.mjs. Both arguments are
+// required: this tool belongs to no app, so it has no default to fall back on
+// (Nest: --shell shell --out licenses/rust-licenses.json; Twig the same, from
+// redstart-twig/desktop).
 // =============================================================================
 
 import * as fs from 'node:fs'
@@ -19,9 +22,6 @@ import * as path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-const here = path.dirname(fileURLToPath(import.meta.url))
-const NEST = path.join(here, '..')
-const OUT = path.join(NEST, 'licenses', 'rust-licenses.json')
 // The crates differ by platform (DPAPI vs Keychain, WebView2 vs WKWebView).
 const TARGET = process.platform === 'darwin' ? 'aarch64-apple-darwin' : 'x86_64-pc-windows-msvc'
 
@@ -50,8 +50,12 @@ export function compiledCrates(metadata) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const arg = (name) => { const i = process.argv.indexOf(name); return i > 0 ? path.resolve(process.argv[i + 1]) : null }
-  const shellDir = arg('--shell') ?? path.join(NEST, 'shell')
-  const out = arg('--out') ?? OUT
+  const shellDir = arg('--shell')
+  const out = arg('--out')
+  if (!shellDir || !out) {
+    console.error('usage: rust-licenses.mjs --shell <crate dir> --out <file>')
+    process.exit(1)
+  }
   const raw = execFileSync('cargo', ['metadata', '--format-version', '1', '--locked', '--filter-platform', TARGET], {
     cwd: shellDir,
     maxBuffer: 256 * 1024 * 1024,

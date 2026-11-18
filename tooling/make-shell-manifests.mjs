@@ -33,9 +33,9 @@
 // merge writes twig-latest.json beside nest-latest.json. No twig.yml: Electron
 // Twig never updated itself, so there is nothing to bridge.
 //
-//   node scripts/make-shell-manifests.mjs windows <version> <setup.exe> <outDir>
-//   node scripts/make-shell-manifests.mjs macos <version> <app.dmg> <app.tar.gz> <outDir>
-//   node scripts/make-shell-manifests.mjs merge <outDir>          (both apps)
+//   node tooling/make-shell-manifests.mjs windows <version> <setup.exe> <outDir>
+//   node tooling/make-shell-manifests.mjs macos <version> <app.dmg> <app.tar.gz> <outDir>
+//   node tooling/make-shell-manifests.mjs merge <outDir>          (both apps)
 //   … windows|macos … --app twig
 // (every updater artifact needs its <file>.sig beside it)
 // =============================================================================
@@ -44,7 +44,7 @@ import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { UPDATE_REPO, feedUrlForTag } from '../../shared/update-feed.mjs'
+import { UPDATE_REPO, feedUrlForTag } from '../shared/update-feed.mjs'
 
 /**
  * The two apps share one release. Each has its own asset names and its own

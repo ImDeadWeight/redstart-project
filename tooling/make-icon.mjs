@@ -1,8 +1,8 @@
 /**
  * Generates an app's icons from its Redstart mascot drawing (see mascot.mjs).
  *
- *   node make-icon.mjs                   Nest's icons → redstart-nest/build/
- *   node make-icon.mjs --variant twig    Twig's icons → redstart-twig/desktop/build/
+ *   node tooling/make-icon.mjs                   Nest's icons → redstart-nest/build/
+ *   node tooling/make-icon.mjs --variant twig    Twig's icons → redstart-twig/desktop/build/
  *
  * Output: icon.ico (Windows), icon.icns (macOS) and icon.png (1024px), which
  * the app's Tauri config embeds at compile time. build/ is gitignored.
@@ -14,7 +14,7 @@ import { fileURLToPath } from 'url'
 import { loadMascot, rasterize, contentSquare, encodePng } from './mascot.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const repo = path.join(__dirname, '..', '..')
+const repo = path.join(__dirname, '..')
 
 const flag = process.argv.indexOf('--variant')
 const variant = flag === -1 ? 'nest' : process.argv[flag + 1]

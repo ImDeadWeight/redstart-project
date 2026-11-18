@@ -239,13 +239,14 @@ jobs:
 
       # ── The daemon runtime (both apps) ─────────────────────────────────────
       # Both Tauri shells run their Node half (nestd, twigd) on a bundled
-      # Node, pinned by version and sha256 in redstart-nest's stage-node.mjs
-      # (Windows x64 and macOS arm64). One pin for both apps.
+      # Node, pinned by version and sha256 in tooling/stage-node.mjs (Windows
+      # x64 and macOS arm64), staged once into the root deps/node/ that both
+      # apps' stage-shell-bundle read. One pin for both apps.
       - name: Stage the pinned Node runtime
         run: |
-          node scripts/stage-node.mjs
+          node tooling/stage-node.mjs
           if [ "$RUNNER_OS" = Windows ]; then deps/node/node.exe --version; else deps/node/node --version; fi
-        working-directory: redstart-nest
+        working-directory: .
 
       # ── Package ────────────────────────────────────────────────────────────
       # Both apps are Tauri shells. Each build makes the same UI builds and
@@ -271,10 +272,10 @@ jobs:
         run: |
           set -euo pipefail
           npm run build:chat
-          node ../../redstart-nest/scripts/make-icon.mjs --variant twig
-          node ../../redstart-nest/scripts/rust-licenses.mjs --shell shell --out licenses/rust-licenses.json
+          node ../../tooling/make-icon.mjs --variant twig
+          node ../../tooling/rust-licenses.mjs --shell shell --out licenses/rust-licenses.json
           node scripts/stage-shell-bundle.mjs
-          manifests=../../redstart-nest/scripts/make-shell-manifests.mjs
+          manifests=../../tooling/make-shell-manifests.mjs
           b=shell/target/release/bundle
           if [ "$RUNNER_OS" = Windows ]; then
             (cd shell && npx tauri build --config tauri.bundle.conf.json --bundles nsis)
@@ -294,20 +295,20 @@ jobs:
         run: |
           set -euo pipefail
           npm run build:chat
-          node scripts/make-icon.mjs
+          node ../tooling/make-icon.mjs
           npx vite build
           npm run license:gen
-          node scripts/rust-licenses.mjs
+          node ../tooling/rust-licenses.mjs --shell shell --out licenses/rust-licenses.json
           node scripts/stage-shell-bundle.mjs
           b=shell/target/release/bundle
           if [ "$RUNNER_OS" = Windows ]; then
             (cd shell && npx tauri build --config tauri.bundle.conf.json --bundles nsis)
-            node scripts/make-shell-manifests.mjs windows "$VERSION" "$(ls $b/nsis/*-setup.exe)" "release/$VERSION"
+            node ../tooling/make-shell-manifests.mjs windows "$VERSION" "$(ls $b/nsis/*-setup.exe)" "release/$VERSION"
           else
             # Ad-hoc signed (bundle.macOS.signingIdentity "-"), like the
             # Electron build was; stage-shell-bundle signed every Mach-O inside.
             (cd shell && npx tauri build --config tauri.bundle.conf.json --bundles app,dmg)
-            node scripts/make-shell-manifests.mjs macos "$VERSION" "$(ls $b/dmg/*.dmg)" "$(ls $b/macos/*.app.tar.gz)" "release/$VERSION"
+            node ../tooling/make-shell-manifests.mjs macos "$VERSION" "$(ls $b/dmg/*.dmg)" "$(ls $b/macos/*.app.tar.gz)" "release/$VERSION"
           fi
 
       - name: Show what was built
@@ -350,12 +351,11 @@ jobs:
           ref: refs/tags/${{ needs.version.outputs.version }}
           path: src
           sparse-checkout: |
-            redstart-nest/scripts
-            redstart-nest/daemon
+            tooling
             shared
 
       - name: Merge the Tauri update manifest
-        run: node src/redstart-nest/scripts/make-shell-manifests.mjs merge dist
+        run: node src/tooling/make-shell-manifests.mjs merge dist
 
       - name: Check asset sizes
         run: |

@@ -13,6 +13,8 @@ build/
 redstart-nest/llama-cpp-turboquant/
 redstart-nest/llama-server.exe
 redstart-nest/deps/
+# The pinned Node both apps run their daemon on (tooling/stage-node.mjs).
+/deps/
 
 # Generated npm license attribution appendix (THIRD-PARTY-NOTICES.md ->
 # "Full attribution appendix"). Regenerated fresh at build time so it can

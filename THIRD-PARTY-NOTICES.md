@@ -284,7 +284,7 @@ The generated `licenses/` folder is included in the installer: through
 through `scripts/stage-shell-bundle.mjs` for the Windows Tauri installer.
 
 The Windows desktop shell (`redstart-nest/shell`) is a Rust binary compiled
-from crates.io crates. `node scripts/rust-licenses.mjs` writes
+from crates.io crates. `tooling/rust-licenses.mjs` writes
 `licenses/rust-licenses.json`: every crate compiled into it for
 `x86_64-pc-windows-msvc`, with its version, its SPDX licence expression and
 its repository. At the time of writing that is 287 crates, all under

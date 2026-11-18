@@ -66,7 +66,7 @@ The launcher and the chat-ui are **two separate npm packages** — you must inst
 cd redstart-nest
 npm install                       # launcher, daemon and Tauri CLI deps
 npm install --prefix src/chat-ui  # the SvelteKit chat-ui is its own package
-node scripts/stage-node.mjs       # the pinned Node 26 the shell runs the daemon on
+node ../tooling/stage-node.mjs    # the pinned Node 26 (into the repo root's deps/node, shared with Twig)
 npm run dev
 ```
 
@@ -252,11 +252,11 @@ npm run build
 `npm run build` runs, in order:
 - the chat-ui and launcher builds;
 - the npm and Rust licence lists;
-- `stage-node.mjs` (the pinned Node 26);
+- `tooling/stage-node.mjs` (the pinned Node 26, into the repo root's `deps/node/`);
 - `stage-shell-bundle.mjs`, which assembles `shell/bundle/resources/`: Node, the daemon with its production `node_modules`, `shared/`, the chat-ui, `bin/` and `elevate.exe`;
 - `tauri build`.
 
-Output: `shell/target/release/bundle/nsis/Redstart Nest_<version>_x64-setup.exe` and its `.sig`. The release workflow renames it to `Redstart-Nest-Setup-<version>.exe` and writes the update manifests (`scripts/make-shell-manifests.mjs`).
+Output: `shell/target/release/bundle/nsis/Redstart Nest_<version>_x64-setup.exe` and its `.sig`. The release workflow renames it to `Redstart-Nest-Setup-<version>.exe` and writes the update manifests (`tooling/make-shell-manifests.mjs`).
 
 The version comes from `package.json` (`shell/tauri.conf.json` reads it). Don't bump it by hand — the [release workflow](#releases)
 does that on every merge, in `redstart-nest/package.json` and
@@ -276,9 +276,9 @@ npm run build
 
 Output: `redstart-twig/desktop/shell/target/release/bundle/nsis/Redstart Twig_<version>_x64-setup.exe` (about 32 MB).
 
-Twig is a Tauri app built the way Nest is: `npm run build` builds the chat-ui, stages Nest's pinned Node 26 (one pin for both apps), lists the Rust crates' licences, stages `shell/bundle/resources` (`scripts/stage-shell-bundle.mjs`), and runs `tauri build`, which needs the updater signing key in `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`). Despite the directory name, the same project builds Twig for macOS (Apple Silicon only).
+Twig is a Tauri app built the way Nest is: `npm run build` builds the chat-ui, stages the pinned Node 26 (`tooling/stage-node.mjs`, one pin for both apps), lists the Rust crates' licences, stages `shell/bundle/resources` (`scripts/stage-shell-bundle.mjs`), and runs `tauri build`, which needs the updater signing key in `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`). Despite the directory name, the same project builds Twig for macOS (Apple Silicon only).
 
-`npm run dev` runs the shell from the checkout (`cargo run`): twigd on `REDSTART_NODE` or Nest's staged `deps/node`, and the chat-ui from `redstart-nest/src/chat-ui/dist` (build it first). `TWIG_CONFIG_DIR` points a dev run at a throwaway state folder.
+`npm run dev` runs the shell from the checkout (`cargo run`): twigd on `REDSTART_NODE` or the staged `deps/node` at the repo root, and the chat-ui from `redstart-nest/src/chat-ui/dist` (build it first). `TWIG_CONFIG_DIR` points a dev run at a throwaway state folder.
 
 ### Releases
 

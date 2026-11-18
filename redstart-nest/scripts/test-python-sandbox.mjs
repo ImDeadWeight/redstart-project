@@ -59,7 +59,7 @@ function assert(cond, message) { if (!cond) throw new Error(message) }
 const node = runtime.resolvePythonNode()
 if (!node.ok) {
   console.log(`FAIL  - no Node with a network permission to run the sandbox on: ${node.reason}`)
-  console.log('        Stage one with: node scripts/stage-node.mjs')
+  console.log('        Stage one with: node tooling/stage-node.mjs (from the repo root)')
   process.exit(1)
 }
 console.log(`# sandbox Node ${node.version} (${node.source})`)

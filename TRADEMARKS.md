@@ -12,9 +12,9 @@ to ship under its own name.
 - **The names** "Redstart", "Redstart Nest" and "Redstart Twig", and any name
   confusingly similar to them when used for software.
 - **The mascot artwork**: the drawings in
-  [`redstart-nest/assets/mascot/`](redstart-nest/assets/mascot/), and every
+  [`tooling/mascot/`](tooling/mascot/), and every
   icon, favicon, splash screen and image generated from them (by
-  `scripts/make-icon.mjs`, `scripts/make-mascot-assets.mjs`, or anything
+  `tooling/make-icon.mjs`, `tooling/make-mascot-assets.mjs`, or anything
   else).
 
 These are trademarks of Patrick Carswell. They are not currently registered.

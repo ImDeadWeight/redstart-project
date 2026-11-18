@@ -5,7 +5,7 @@
  *   nest  the bird settled in its nest (Redstart Nest)
  *   twig  the bird perched on a twig (Redstart Twig)
  *
- * The drawings live in ../assets/mascot/redstart-<variant>.txt: 128 lines of
+ * The drawings live in tooling/mascot/redstart-<variant>.txt: 128 lines of
  * 128 characters, one character per pixel, keyed by PALETTE below ('_' is
  * transparent). They are the source of truth: edit a drawing there, then run
  * make-icon.mjs (app icons, generated at build time) and
@@ -46,7 +46,7 @@ const hexRgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16))
 
 export function loadMascot(variant) {
   if (!VARIANTS.includes(variant)) throw new Error(`unknown mascot variant "${variant}" (expected ${VARIANTS.join(' or ')})`)
-  const file = path.join(__dirname, '..', 'assets', 'mascot', `redstart-${variant}.txt`)
+  const file = path.join(__dirname, 'mascot', `redstart-${variant}.txt`)
   const rows = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(r => r.length)
   if (rows.length !== SIZE || rows.some(r => r.length !== SIZE)) throw new Error(`${file} must be ${SIZE} rows of ${SIZE} characters`)
   for (const r of rows) for (const ch of r) if (ch !== '_' && !PALETTE[ch]) throw new Error(`${file}: "${ch}" is not in the palette`)

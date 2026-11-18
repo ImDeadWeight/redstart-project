@@ -187,13 +187,13 @@ const readRepo = (...p) => fs.readFileSync(path.join(here, '..', ...p), 'utf8')
 
 await test('the release writes nest.yml, the manifest Electron installs look for (the bridge)', () => {
   assert(UPDATE_CHANNEL === 'nest', `UPDATE_CHANNEL is ${UPDATE_CHANNEL}`)
-  assert(readRepo('scripts', 'make-shell-manifests.mjs').includes(`'${UPDATE_CHANNEL}.yml'`),
+  assert(readRepo('..', 'tooling', 'make-shell-manifests.mjs').includes(`'${UPDATE_CHANNEL}.yml'`),
     `make-shell-manifests.mjs no longer writes ${UPDATE_CHANNEL}.yml, so no Electron install would ever find the bridge`)
   return `${UPDATE_CHANNEL}.yml`
 })
 
 await test('🔍 the shell asks for the manifest the release writes', async () => {
-  const { MANIFEST } = await import('./make-shell-manifests.mjs')
+  const { MANIFEST } = await import('../../tooling/make-shell-manifests.mjs')
   const rust = /pub const MANIFEST: &str = "([^"]+)"/.exec(readRepo('shell', 'src', 'update.rs'))?.[1]
   assert(rust === MANIFEST, `update.rs asks for ${rust}, the release writes ${MANIFEST}`)
   return MANIFEST
@@ -202,7 +202,7 @@ await test('🔍 the shell asks for the manifest the release writes', async () =
 await test('🔍 the installer name has no spaces, so the manifest URL matches the uploaded asset', async () => {
   // GitHub rewrites spaces in asset names when they are uploaded, and both
   // manifests name the file verbatim. A space would mean a 404 on every update.
-  const { installerName, macUpdateName } = await import('./make-shell-manifests.mjs')
+  const { installerName, macUpdateName } = await import('../../tooling/make-shell-manifests.mjs')
   for (const name of [installerName('1.0.0-alpha.7'), macUpdateName('1.0.0-alpha.7')]) {
     assert(!/\s/.test(name), `"${name}" contains a space`)
   }

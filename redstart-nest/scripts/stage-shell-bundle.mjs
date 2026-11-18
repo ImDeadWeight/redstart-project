@@ -11,7 +11,7 @@
 // so the daemon's own lookups (resources/bin, resources/chat-ui,
 // resources/elevate.exe, ../../../shared) work unchanged:
 //
-//   node/node.exe, node/LICENSE      the pinned Node 26 (stage-node.mjs)
+//   node/node.exe, node/LICENSE      the pinned Node 26 (tooling/stage-node.mjs)
 //   app/bin, app/daemon       nestd and the daemon
 //   app/dist                         the launcher the admin listener serves
 //   app/node_modules                 production dependencies only (npm ci)
@@ -23,7 +23,7 @@
 //   TRADEMARKS.md, licenses/
 //
 // Run after the builds it copies from: `npm run build:chat`, `vite build`,
-// `npm run license:gen`, `node scripts/stage-node.mjs`, and the llama-server
+// `npm run license:gen`, `node ../tooling/stage-node.mjs`, and the llama-server
 // staging the release workflow does. Anything missing is an error. An
 // installer that silently lacks llama-server is the failure test-packaging
 // exists to stop.
@@ -35,7 +35,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { execFileSync, execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { stagedBinaryPath } from './stage-node.mjs'
+import { stagedBinaryPath, STAGE_DIR } from '../../tooling/stage-node.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const NEST = path.join(here, '..')
@@ -88,7 +88,7 @@ function main() {
   fs.mkdirSync(out('node'))
   fs.copyFileSync(need(stagedBinaryPath(process.platform)), out('node', win ? 'node.exe' : 'node'))
   if (!win) fs.chmodSync(out('node', 'node'), 0o755)
-  fs.copyFileSync(need(path.join(NEST, 'deps', 'node', 'LICENSE')), out('node', 'LICENSE'))
+  fs.copyFileSync(need(path.join(STAGE_DIR, 'LICENSE')), out('node', 'LICENSE'))
 
   // The daemon, and its production dependencies installed from the lockfile.
   copyDir(path.join(NEST, 'bin'), out('app', 'bin'))

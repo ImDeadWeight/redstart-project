@@ -4,16 +4,17 @@
 // =============================================================================
 // The daemon split (docs/notes/daemon-split-tauri-plan.md D8): on the desktop,
 // the daemon runs as `nestd --shell-pipe` under a bundled Node 26, not under
-// Electron's Node 20. This downloads that one pinned build into
-// deps/node/ (gitignored), where stage-shell-bundle.mjs picks it up.
+// Electron's Node 20. This downloads that one pinned build into the repo
+// root's deps/node/ (gitignored), where both apps' stage-shell-bundle.mjs and
+// their debug shells (paths.rs) pick it up. One pin for Nest and Twig.
 //
 // PINNED BY HASH, not just by version: the sha256 below was copied from
 // nodejs.org's SHASUMS256.txt for this release, and a download that doesn't
 // match is refused. Bumping Node means changing VERSION and the hashes, in one
 // commit, on purpose.
 //
-//   node scripts/stage-node.mjs            stage for this platform
-//   node scripts/stage-node.mjs --check    exit 0 if already staged and intact
+//   node tooling/stage-node.mjs            stage for this platform
+//   node tooling/stage-node.mjs --check    exit 0 if already staged and intact
 // =============================================================================
 
 import * as crypto from 'node:crypto'
@@ -54,7 +55,7 @@ async function stage() {
     console.log(`Node ${NODE_VERSION} already staged at ${target}`)
     return
   }
-  if (process.argv.includes('--check')) throw new Error(`Node ${NODE_VERSION} is not staged (run: node scripts/stage-node.mjs)`)
+  if (process.argv.includes('--check')) throw new Error(`Node ${NODE_VERSION} is not staged (run: node tooling/stage-node.mjs)`)
 
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-stage-node-'))
   try {

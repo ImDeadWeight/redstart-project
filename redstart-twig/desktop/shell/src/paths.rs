@@ -9,13 +9,13 @@
 //!
 //! Packaged, under `<resource_dir>/resources`:
 //!
-//!   node/node(.exe)                 the pinned Node 26 (Nest's stage-node.mjs)
+//!   node/node(.exe)                 the pinned Node 26 (tooling/stage-node.mjs)
 //!   app/twigd/{bin,daemon}          twigd, at the depth the checkout has it,
 //!   shared/*.mjs                    so its `../../../shared` imports resolve here
 //!   chat-ui/                        what the `twig` protocol serves
 //!
 //! A debug build runs the checkout: bin/twigd.mjs on REDSTART_NODE or the Node
-//! Nest stages (redstart-nest/deps/node), and Nest's chat-ui dist.
+//! staged at the repo root (deps/node), and Nest's chat-ui dist.
 
 use std::path::{Path, PathBuf};
 
@@ -53,10 +53,11 @@ pub fn resolve(app: &AppHandle) -> Result<Layout, String> {
             .parent()
             .map(PathBuf::from)
             .ok_or("No checkout above the shell crate")?;
-        let nest = twig.join("..").join("..").join("redstart-nest");
+        let repo = twig.join("..").join("..");
+        let nest = repo.join("redstart-nest");
         let node = std::env::var_os("REDSTART_NODE")
             .map(PathBuf::from)
-            .unwrap_or_else(|| nest.join("deps").join("node").join(node_exe()));
+            .unwrap_or_else(|| repo.join("deps").join("node").join(node_exe()));
         return Ok(Layout {
             config,
             shell_dir,

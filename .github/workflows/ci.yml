@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           # 26: the Node the desktop shell bundles and runs nestd on
-          # (scripts/stage-node.mjs), so the suites run where the daemon does.
+          # (tooling/stage-node.mjs), so the suites run where the daemon does.
           # chat-ui's @capacitor/cli needs >= 22 under engine-strict anyway.
           node-version: 26
           cache: npm
@@ -379,7 +379,7 @@ jobs:
       # tauri::generate_context!() embeds the app icons at compile time, and
       # build/ is generated (gitignored), as `npm run build` does first.
       - name: Generate the app icons
-        run: node ../scripts/make-icon.mjs
+        run: node ../../tooling/make-icon.mjs
 
       - name: Build
         run: cargo build --locked
@@ -440,10 +440,10 @@ jobs:
             redstart-twig/desktop/shell/target
           key: twig-shell-${{ runner.os }}-${{ hashFiles('redstart-twig/desktop/shell/Cargo.lock') }}
 
-      # generate_context!() embeds the icons, which Nest's make-icon generates
+      # generate_context!() embeds the icons, which tooling/make-icon generates
       # into this app's own build/ (the perched-bird drawing).
       - name: Generate the app icons
-        run: node ../../../redstart-nest/scripts/make-icon.mjs --variant twig
+        run: node ../../../tooling/make-icon.mjs --variant twig
 
       - name: Build
         run: cargo build --locked
