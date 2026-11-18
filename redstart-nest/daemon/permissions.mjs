@@ -37,6 +37,7 @@
 // =============================================================================
 
 import { capabilityToolNames, expandDisabledToolIds } from './tools-definitions.mjs'
+import { GRANTABLE, intersectGrants } from './grant-scope.mjs'
 
 /**
  * Capability ids a role can grant or withhold — built-ins plus installed plugins.
@@ -104,6 +105,18 @@ export const CAPABILITY_CONFIG_KEY = {
 }
 
 /**
+ * Where each grantable capability keeps its grants in the resolved config.
+ * Shared Documents lives on the document_search config, beside the folder
+ * it narrows (documentSearch.sharedRootDir), as `sharedGrants`.
+ */
+export const GRANT_CONFIG = Object.freeze({
+  sqlite: { key: 'sqlite', field: 'grants' },
+  git: { key: 'git', field: 'grants' },
+  vault: { key: 'vault', field: 'grants' },
+  shared_documents: { key: 'documentSearch', field: 'sharedGrants' },
+})
+
+/**
  * Is this permission field asking for narrowing at all?
  *
  * null/undefined means "inherit" everywhere in a role's permission set — an
@@ -149,6 +162,21 @@ export function narrowConfig(config, permissions) {
   out.disabledTools = [
     ...new Set([...(config.disabledTools || []), ...expandDisabledToolIds(withheldCaps)]),
   ]
+
+  // --- Resource grants (master plan 6.1, grant-scope.mjs) -----------------
+  // A role narrows a shared root to some of its folders. Intersection with
+  // whatever the config already carries, so it only ever removes; an absent
+  // entry inherits, and an EMPTY list is narrowed to nothing, never "all".
+  // Written only when it narrows, so a role without grants leaves the config
+  // exactly as it was.
+  const roleGrants = p.grants && typeof p.grants === 'object' ? p.grants : {}
+  for (const cap of GRANTABLE) {
+    const key = GRANT_CONFIG[cap].key
+    const field = GRANT_CONFIG[cap].field
+    if (!out[key]) continue
+    const next = intersectGrants(out[key][field], roleGrants[cap])
+    if (next !== null) out[key] = { ...out[key], [field]: next }
+  }
 
   // --- File system policy -------------------------------------------------
   // `&&` both sides: the role can turn a permission off, never on. `!== false`

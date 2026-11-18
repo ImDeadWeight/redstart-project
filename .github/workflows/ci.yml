@@ -82,6 +82,9 @@ jobs:
       - name: "Security: role narrowing (restrict-only law)"
         run: node scripts/test-roles.mjs
 
+      - name: "Security: resource grants narrow a shared root to folders, never widen it"
+        run: node scripts/test-grants.mjs
+
       - name: "Security: tool namespacing (ban targetability)"
         run: node scripts/test-tool-namespacing.mjs
 

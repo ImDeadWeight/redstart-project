@@ -570,6 +570,56 @@ RAG: chat-tooling 5b, on the store 5a already built (it carries `grant_id`).
 5b. Re-plan grants to module level against today's code first: approvals,
 roles and projects have all landed since it was written 2026-09-05.
 
+### 6.1 at module level (planned 2026-11-18)
+
+Against today's code. **Already built** (agent-runtime Phase 2): the decision
+log itself, `logPolicy` / `readPolicyLog` and `policy.jsonl`, its closed
+allowlist, and an IPC reader for the launcher. So grants plan §7's steps 5
+and 7 are mostly done; what is left is two event kinds.
+
+Calls made here (the grants plan's open questions, §10):
+- **A grant is a folder path relative to the capability's root**, not a
+  labelled resource: less machinery, and the role editor shows the root's
+  top-level folders to pick from. The decision log records the capability,
+  never the folder name (§7).
+- **Git:** with grants set, the root itself is not a repo the role can use;
+  a granted folder is a repo, or holds repos one level down.
+- **Disclosure:** the prompt says "shared, partly" (§5); the file explorer's
+  read-only shared space comes with Shared Documents (6.2).
+
+**Shared Documents (U, decided 2026-11-18 by the user):** a new shared
+folder for 5b, not the Vault. One admin-chosen folder (`documentSearch.
+sharedRootDir`, set on the Document search card), read-only, narrowed per
+role by grants like the others (`grants.shared_documents`).
+
+Commits:
+1. `grant-scope.mjs` (`validGrantPath`, `grantedRoots`, `resolveGrantedPath`,
+   `grantedPrefixes`) and `permissions.grants` in `narrowConfig`: per
+   capability, absent inherits, `[]` narrows to nothing, a list narrows to
+   those folders; composition is intersection, so idempotence holds. Role
+   saves validate grants (relative, no `..`, at most 32 a capability).
+   New suite `test-grants.mjs`; `test-roles.mjs` gains the empty-array case.
+2. SQLite, Git and Vault: resolution through grants, enumeration that walks
+   the granted roots only, and a denial logged (`access.denied`, the
+   capability and the role, no path). `role.saved` / `role.deleted` join the
+   log's events.
+3. The prompt's stores block: three-valued (private, shared, shared partly).
+4. The Roles tab: per grantable capability, "Limit folders" with the root's
+   top-level folders to tick (from `GET /auth/roles`, for role editors only).
+
+### 6.2 at module level (planned 2026-11-18)
+
+5. The shared root: `documentSearch.sharedRootDir` in the capability config,
+   the Document search card's folder picker, and `grants.shared_documents`.
+6. The index: the shared root's files indexed once, `scope = '_shared'`,
+   `grant_id = 'shared'`, paths relative to the root; a query takes the
+   caller's own chunks plus the shared chunks under their granted prefixes.
+   A revoked grant stops matching with no re-index (rag-plan §1).
+   `search_documents` cites a shared hit as "Shared: <path>".
+7. The file explorer's read-only `shared` space, showing the granted
+   folders only; nothing in it accepts an account.
+8. The stores block names shared documents (shared, or shared partly).
+
 ## Phase 7 — The loop moves to the server
 
 **U-S1, DECIDED 2026-11-17: yes.** Step 1 below is in force from today:
