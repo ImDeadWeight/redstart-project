@@ -784,6 +784,14 @@ async function main() {
     eqOr(a.config, 'mode=catalog', 'config header')
     const system = systemOf()
     assert(/kept in a catalog/.test(system) && /call_tool\(\{"name"/.test(system), 'the catalog was not disclosed with a call to copy')
+    // What it holds is named, from what was removed (2026-11-18).
+    assert(system.includes('It holds: File System (write_file); Git (git_log).'), `the catalog's contents are not named: ${system.match(/It holds:[^.]*\./)?.[0] ?? '(none)'}`)
+    // 🔒 Post-ban: a banned tool is never named as reachable.
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true }, deferredCapabilities: ['file_system', 'git'], disabledTools: ['write_file'] })
+    await sentFor('what changed in the git repo')
+    const banned = systemOf().match(/It holds:[^.]*\./)?.[0] ?? ''
+    assert(banned === 'It holds: Git (git_log).', `a banned tool was named in the catalog line: ${banned || '(none)'}`)
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true }, deferredCapabilities: ['file_system', 'git'] })
     // Phase 1 still decides who gets it at all: an account-wide key, no field.
     eqOr((await sentFor('what changed', owner.apiKey)).names, 'call_tool,fs_read_file,git_log,read_document,search_tools,write_file', 'an account-wide key')
     // A profile's old per-turn fields are ignored: the list is the same.

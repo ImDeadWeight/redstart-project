@@ -559,6 +559,11 @@ for (const [capability, names] of Object.entries(BUILTIN_CAPABILITY_TOOL_NAMES))
  * The capability id that produced a tool, or null for tools that belong to no
  * capability (the web tools, which the whitelist governs instead).
  */
+/** A built-in capability's display name ("File System"), or null (a plugin, or unknown). */
+export function builtinCapabilityName(id) {
+  return BUILTIN_CAPABILITIES.find((c) => c.id === id)?.name ?? null
+}
+
 export function capabilityForTool(name) {
   const builtin = BUILTIN_CAPABILITY_BY_TOOL_NAME.get(name)
   if (builtin) return builtin

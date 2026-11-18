@@ -88,17 +88,10 @@ desktop.ini
 # 95 code comments cite as authority, ended up matching /redstart-*.md and
 # absent from every clone.
 #
-# Exceptions, by name only: plans the user edits away from this machine. The
-# contents are ignored (`/*`, not the directory itself) so that git can still
-# re-include a file; an ignored directory cannot have anything re-included.
-docs/notes/*
-!docs/notes/agent-runtime-plan.md
-!docs/notes/agent-runtime-implementation.md
-!docs/notes/tool-retrieval-plan.md
-!docs/notes/tool-retrieval-implementation.md
-!docs/notes/tool-retrieval-fixes-implementation.md
-!docs/notes/master-plan.md
-!docs/notes/testing-checklist.md
+# No exceptions (2026-11-18): plans used to be re-included here so they synced
+# between machines, but planning docs do not belong in the public repo. Do not
+# `git add -f` into this directory.
+docs/notes/
 
 # Local nest directory for `npm run daemon` — a throwaway headless install.
 .redstart-daemon/

@@ -532,7 +532,11 @@ export function toolDefs(cfg) {
     },
     {
       name: 'list_documents',
-      description: `List the readable documents, data files, and scripts (${READABLE_EXTENSIONS.join(', ')}) in your documents folder on the Redstart server, with sizes.`,
+      // The File System sentence (2026-11-18): asked to delete a file in the
+      // File System folder, Ornith listed this folder twice, did not see it,
+      // and gave up ("I don't have a tool to delete files"). read_document and
+      // create_document already said the stores are separate; this one did not.
+      description: `List the readable documents, data files, and scripts (${READABLE_EXTENSIONS.join(', ')}) in your documents folder on the Redstart server, with sizes. This is not the File System folder: a file there does not show up here, and reading, writing, moving or deleting it takes the File System tools (list_directory, read_text_file, write_file, delete_file).`,
       inputSchema: { type: 'object', properties: {} },
     },
   ]

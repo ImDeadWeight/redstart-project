@@ -363,12 +363,32 @@ function buildToolPolicy(config, hasTools, toolNames) {
 // it, reachable through call_tool without ever joining the list. Said as
 // such, with a call to copy. Without both tools (a ban on one, or a client
 // that dropped them) the model is told there is no way to the rest.
-function buildRetrieval(toolNames, toolsFiltered) {
+//
+// WHAT IS IN IT (2026-11-18): the line said how to search but not what there
+// was to find, so a small model could not tell when a search was worth it.
+// Ornith, asked to delete a File System file, listed the documents folder,
+// saw nothing and said it had no delete tool (the 8.4 bench: 4 runs said a
+// tool was unavailable without searching). The gateway now passes the tools
+// the catalog removed from THIS request (tool-deferral catalogContents,
+// post-ban), and they are named here, grouped. Names only, never schemas:
+// the arguments still come from search_tools.
+function formatCatalog(catalog) {
+  const parts = []
+  const more = (n) => (n > 0 ? `, and ${n} more` : '')
+  for (const g of catalog?.groups ?? []) {
+    if (g.tools?.length) parts.push(`${g.label} (${g.tools.join(', ')}${more(g.more)})`)
+  }
+  const p = catalog?.plugins
+  if (p?.tools?.length) parts.push(`plugin tools (${p.tools.join(', ')}${more(p.more)})`)
+  return parts.length ? ` It holds: ${parts.join('; ')}.` : ''
+}
+
+function buildRetrieval(toolNames, toolsFiltered, catalog) {
   if (!toolsFiltered) return null
   const names = Array.isArray(toolNames) ? toolNames : []
 
   if (names.includes('search_tools') && names.includes('call_tool')) {
-    return 'More of this server\'s tools are kept in a catalog instead of this list, and that does not change during the conversation. If what you need is not listed, find it with search_tools — for example search_tools({"query": "list the files in a folder"}) — then call what it returns with call_tool, passing the tool\'s name and its arguments: call_tool({"name": "list_directory", "arguments": {"path": "."}}). Never tell the user a capability is unavailable just because it is not in your list.'
+    return 'More of this server\'s tools are kept in a catalog instead of this list, and that does not change during the conversation.' + formatCatalog(catalog) + ' If what you need is not listed, find it with search_tools — for example search_tools({"query": "list the files in a folder"}) — then call what it returns with call_tool, passing the tool\'s name and its arguments: call_tool({"name": "list_directory", "arguments": {"path": "."}}). Catalog tools run only through call_tool. Never tell the user a capability is unavailable just because it is not in your list.'
   }
 
   return 'The tools listed are not everything this server can do. There is no way to reach the rest from here, so if what you need is missing, say it is not available in this session — never that this server cannot do it.'
@@ -866,6 +886,8 @@ function buildSession(account, now, timeZone) {
  *                                          post-ban and post-retrieval
  * @param {boolean} [input.toolsFiltered]    the catalog actually removed tools
  *                                          from this request
+ * @param {object}  [input.catalog]         what it removed, grouped
+ *                                          (tool-deferral catalogContents)
  * @param {Array}   [input.externalServers] getExternalServers()
  * @param {object}  [input.account]         authResult.account, or null (auth off)
  * @param {Date}    [input.now]
@@ -897,6 +919,9 @@ export function composePrompt(input = {}) {
     // Whether retrieval REMOVED anything this turn, measured by the gateway.
     // Retrieval fails open, so the setting alone is not evidence of a subset.
     toolsFiltered = false,
+    // What the catalog holds for this request (tool-deferral catalogContents),
+    // named in the retrieval block. Absent: the block names nothing.
+    catalog = null,
     // The client's IANA zone, unvalidated (session-time.mjs validates it).
     // Absent → the server's zone, labelled as such in the prompt.
     timeZone = null,
@@ -930,7 +955,7 @@ export function composePrompt(input = {}) {
     // After tool_policy — it qualifies the list those constraints apply to —
     // and before locality, so "your list is partial" is settled before "and
     // these ones touch a different computer".
-    ['retrieval', buildRetrieval(toolNames, toolsFiltered)],
+    ['retrieval', buildRetrieval(toolNames, toolsFiltered, catalog)],
     // After tool_policy (it is about tools) and before the style/data blocks,
     // so the model knows which machine a tool touches before it is told where
     // data is stored. Spec §3.

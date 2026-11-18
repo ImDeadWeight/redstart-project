@@ -23,8 +23,8 @@ import { authenticate, roleFor, surfacePermitted } from './auth.mjs'
 import { resolveEffectiveConfig } from './permissions.mjs'
 import { getMcpServerRunning } from './mcp-server.mjs'
 import { getExternalServers } from './tools-storage.mjs'
-import { capabilityForTool } from './tools-definitions.mjs'
-import { isDeferredTool } from './tool-deferral.mjs'
+import { builtinCapabilityName, capabilityForTool } from './tools-definitions.mjs'
+import { catalogContents, isDeferredTool } from './tool-deferral.mjs'
 import { handleFilesRequest } from './files-api.mjs'
 import { resolveProject, injectSystemContext, clientToolNamesIn, toolNamesIn } from './completion-prompt.mjs'
 import { isCompletionRoute, handleCompletionRoute } from './gateway/completion-route.mjs'
@@ -236,8 +236,15 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   // changes the list, beyond opting out.
   const toolsAfterBans = Array.isArray(parsed.tools) ? parsed.tools.length : 0
   const retrievalOn = !retrievalOptOut && retrievalEnabled(effectiveConfig.toolRetrieval)
+  // What the catalog took out, by name, for the prompt's catalog line
+  // (catalogContents). Post-ban, so it never names a banned tool.
+  const catalogNames = []
   if (retrievalOn && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
-    parsed.tools = parsed.tools.filter((t) => !isDeferredTool(toolName(t), effectiveConfig, capabilityForTool))
+    parsed.tools = parsed.tools.filter((t) => {
+      const deferred = isDeferredTool(toolName(t), effectiveConfig, capabilityForTool)
+      if (deferred) catalogNames.push(toolName(t))
+      return !deferred
+    })
   }
 
   const requestHasTools = Array.isArray(parsed.tools) && parsed.tools.length > 0
@@ -260,6 +267,7 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
     // the model is actually about to receive.
     toolNames: toolNamesIn(parsed),
     toolsFiltered,
+    catalog: catalogContents(catalogNames, capabilityForTool, builtinCapabilityName),
   })
 
   // What was really forwarded, recorded after every rewrite this function

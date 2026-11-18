@@ -94,6 +94,26 @@ await test('the setter saves, refreshes the live config, and the status reports 
   setDeferredConfig({ id: 'documents', deferred: null }, noop)
 })
 
+await test('catalogContents groups by capability, pools plugins without their prefix, and caps both', async () => {
+  const { catalogContents, CATALOG_NAMES_PER_GROUP, CATALOG_PLUGIN_NAMES } = await import('../daemon/tool-deferral.mjs')
+  const { builtinCapabilityName } = await import('../daemon/tools-definitions.mjs')
+  const plugin = (n) => `someplugin__tool_${n}`
+  const capOf = (name) => (name.startsWith('someplugin__') ? 'someplugin' : capabilityForTool(name))
+  const got = catalogContents(
+    ['git_log', 'write_file', 'delete_file', 'git_status', plugin(1), plugin(1), 'not_a_tool', '', null],
+    capOf, builtinCapabilityName)
+  eq(got.groups, [
+    { label: 'File System', tools: ['write_file', 'delete_file'], more: 0 },
+    { label: 'Git', tools: ['git_log', 'git_status'], more: 0 },
+  ], 'groups, by label, in the order removed')
+  eq(got.plugins, { tools: ['tool_1', 'not_a_tool'], more: 0 }, 'plugins pooled, prefix dropped, repeats once')
+  const many = catalogContents(Array.from({ length: CATALOG_PLUGIN_NAMES + 3 }, (_, i) => plugin(i)), capOf, builtinCapabilityName)
+  eq([many.plugins.tools.length, many.plugins.more], [CATALOG_PLUGIN_NAMES, 3], 'plugin cap')
+  const fs = catalogContents(Array.from({ length: CATALOG_NAMES_PER_GROUP + 2 }, (_, i) => `fs${i}`), () => 'file_system', builtinCapabilityName)
+  eq([fs.groups[0].tools.length, fs.groups[0].more], [CATALOG_NAMES_PER_GROUP, 2], 'per-group cap')
+  eq(catalogContents([], capOf, builtinCapabilityName), { groups: [], plugins: null }, 'nothing removed')
+})
+
 await test('🔍 the gateway config carries the resolved list, tools on or off', () => {
   setDeferralOverride('git', false)
   for (const enabled of [true, false]) {

@@ -324,6 +324,26 @@ await test('🔒 a narrowed tool list says so, and points at the way out', async
   return 'partial list disclosed'
 })
 
+await test('the catalog line names what the catalog holds, capped, and nothing when it is not told', async () => {
+  // 2026-11-18: the line said how to search but not what there was to find.
+  const base = { config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['read_document', 'search_tools', 'call_tool'], toolsFiltered: true, now: NOW }
+  const catalog = {
+    groups: [
+      { label: 'File System', tools: ['list_directory', 'read_text_file', 'write_file', 'delete_file'], more: 0 },
+      { label: 'Git', tools: ['git_status', 'git_log'], more: 2 },
+    ],
+    plugins: { tools: ['calculate'], more: 0 },
+  }
+  const named = composePrompt({ ...base, catalog }).prompt
+  assert(named.includes('It holds: File System (list_directory, read_text_file, write_file, delete_file); Git (git_status, git_log, and 2 more); plugin tools (calculate).'), named.match(/It holds:[^.]*\./)?.[0] ?? 'no "It holds"')
+  assert(named.includes('Catalog tools run only through call_tool.'), 'not told the names are reached through call_tool')
+  const unnamed = composePrompt(base).prompt
+  assert(!unnamed.includes('It holds'), 'named a catalog it was not given')
+  assert(composePrompt({ ...base, catalog: { groups: [], plugins: null } }).prompt === unnamed, 'an empty catalog changed the prompt')
+  // A client without search_tools gets no names: it has no way to call them.
+  assert(!composePrompt({ ...base, toolNames: ['read_document'], catalog }).prompt.includes('It holds'), 'named catalog tools to a client that cannot reach them')
+})
+
 await test('🔒 a client with no search_tools is told what to say instead', async () => {
   // search_tools and call_tool are advertised only to clients connected to
   // Nest's MCP server. A client that sends its own tool definitions and asks

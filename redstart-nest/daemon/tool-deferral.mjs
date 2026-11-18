@@ -64,3 +64,51 @@ export function isDeferredTool(name, cfg, capabilityOf) {
   const cap = capabilityOf(name)
   return cap !== null && list.includes(cap)
 }
+
+/** At most this many names under one built-in capability in the prompt. */
+export const CATALOG_NAMES_PER_GROUP = 8
+/** At most this many plugin tool names in the prompt, all plugins together. */
+export const CATALOG_PLUGIN_NAMES = 10
+
+/**
+ * What the catalog holds for THIS request, for the system prompt's catalog
+ * line (2026-11-18): the tools the catalog took out of the list, grouped by
+ * capability. The prompt said how to search but not what there was to find,
+ * and a small model cannot tell when a search is worth trying: Ornith, asked
+ * to delete a File System file, said it had no delete tool without searching
+ * (4 such runs in the 8.4 bench).
+ *
+ * Built from the names actually removed from this request, after bans, so it
+ * never names a tool the caller could not reach. The same request shape gives
+ * the same groups, so the prompt prefix stays the same for the conversation.
+ * Built-in capabilities are labelled by name; plugins have no label of their
+ * own, so their tools are pooled and named without the "<pluginId>__" prefix.
+ *
+ * @param {string[]} names the tool names the catalog removed
+ * @param {(name: string) => string | null} capabilityOf tools-definitions capabilityForTool
+ * @param {(capabilityId: string) => string | null} labelOf a built-in capability's name, or null for a plugin
+ * @returns {{ groups: Array<{ label: string, tools: string[], more: number }>, plugins: { tools: string[], more: number } | null }}
+ */
+export function catalogContents(names, capabilityOf, labelOf) {
+  /** @type {Map<string, { label: string, tools: string[] }>} */
+  const byCap = new Map()
+  const pluginTools = []
+  for (const name of names ?? []) {
+    if (typeof name !== 'string' || !name) continue
+    const cap = capabilityOf(name)
+    const label = cap ? labelOf(cap) : null
+    if (cap && label) {
+      if (!byCap.has(cap)) byCap.set(cap, { label, tools: [] })
+      byCap.get(cap).tools.push(name)
+    } else {
+      const sep = name.indexOf('__')
+      pluginTools.push(sep > 0 ? name.slice(sep + 2) : name)
+    }
+  }
+  const cut = (list, n) => ({ tools: list.slice(0, n), more: Math.max(0, list.length - n) })
+  const groups = [...byCap.values()]
+    .sort((a, b) => a.label.localeCompare(b.label))
+    .map((g) => ({ label: g.label, ...cut(g.tools, CATALOG_NAMES_PER_GROUP) }))
+  const unique = [...new Set(pluginTools)]
+  return { groups, plugins: unique.length ? cut(unique, CATALOG_PLUGIN_NAMES) : null }
+}
