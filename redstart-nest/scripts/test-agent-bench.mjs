@@ -1332,6 +1332,31 @@ await test('the summary totals discovery, and an old runs.jsonl re-summarizes wi
   eq([s.discovered, s.discoveryJudged, s.discoveredByPin, s.turnsToDiscovery, s.searchCalls, s.unavailableWithoutSearch], [1, 2, 1, 1, 1, 1], 'totals')
 })
 
+await test('trained habits: each is counted from the log, and none on a clean run', async () => {
+  const { misuseOf, misuseSummary } = await import('./agent-bench/lib/misuse.mjs')
+  const call = (name, args = {}) => ({ type: 'tool_call', name, arguments: JSON.stringify(args) })
+  const err = (name, text) => ({ type: 'tool_result', name, isError: true, text })
+  const bad = misuseOf([
+    { type: 'tools_sent', names: ['ask_user', 'use_skill', 'run_python', 'read_document', 'memory_search'] },
+    call('memory_search', { query: 'discount' }), call('web_search', { query: 'our rate' }),
+    call('run_python'), err('run_python', 'OSError: [Errno 138] emscripten does not support processes'),
+    call('read_document', { path: 'a.mjs' }), err('read_document', 'Failed to read document: Unsupported file type ".mjs"'),
+    call('use_skill', { name: 'ask_user' }),
+    { type: 'end', finalText: 'I need two things.\n\n**What is your hourly rate?**' },
+  ])
+  eq(bad, { proseAsk: true, lookups: 2, subprocess: 1, unsupportedRead: 1, skillAsTool: 1 }, 'every habit')
+  // Asking through the tool, then a closing question, is not a prose ask;
+  // use_skill with a real skill name is not a mix-up.
+  const ok = misuseOf([
+    { type: 'tools_sent', names: ['ask_user', 'use_skill'] }, call('ask_user', { question: 'Which?' }), call('use_skill', { name: 'weekly-report' }),
+    { type: 'end', finalText: 'Done. Anything else?' },
+  ])
+  eq(ok, { proseAsk: false, lookups: 0, subprocess: 0, unsupportedRead: 0, skillAsTool: 0 }, 'a clean run')
+  // call_tool's inner name counts like a direct call.
+  eq(misuseOf([call('call_tool', { name: 'web_fetch', arguments: { url: 'x' } })]).lookups, 1, 'through call_tool')
+  eq(misuseSummary([{ misuse: bad }, { misuse: ok }, {}]), { proseAskRuns: 1, lookups: 2, subprocess: 1, unsupportedRead: 1, skillAsTool: 1 }, 'totals; an old row counts 0')
+})
+
 fs.rmSync(outDir, { recursive: true, force: true })
 
 const passed = results.filter((r) => r.pass).length

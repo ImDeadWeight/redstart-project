@@ -326,6 +326,9 @@ export function summaryMarkdown(meta, summary) {
     '',
     `questions in reply text (--text-asks ${meta.textAsks ?? 'end'}): ${summary.textAsks ?? 0} answered in ${summary.runsThatAskedInText ?? 0} run(s)`,
     '',
+    // The trained habits a run fell back on (lib/misuse.mjs).
+    `trained habits: ${summary.misuse?.proseAskRuns ?? 0} run(s) ended asking in reply text with no ask_user · ${summary.misuse?.lookups ?? 0} memory/web lookup(s) · ${summary.misuse?.subprocess ?? 0} run_python try at another program · ${summary.misuse?.unsupportedRead ?? 0} read_document type refusal(s) · ${summary.misuse?.skillAsTool ?? 0} use_skill with a tool's name`,
+    '',
     retrievalLine(meta, summary),
     '',
     discoveryLine(summary),

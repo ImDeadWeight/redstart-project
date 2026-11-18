@@ -223,6 +223,38 @@ await test('read_document opens a file attached to the caller\'s conversation by
   }
 })
 
+await test('read_document reads code and unlisted text; never a key file or a binary (2026-11-18)', async () => {
+  // Ornith: 103 "Unsupported file type .mjs" errors on a small Node project.
+  const ws = path.join(resolveUserRoot(dirs.docs, ALICE, { create: true }), 'chats', 'conv-alice-3')
+  fs.mkdirSync(ws, { recursive: true })
+  fs.writeFileSync(path.join(ws, 'math.mjs'), 'export const add = (a, b) => a + b\n')
+  fs.writeFileSync(path.join(ws, 'Makefile'), 'all:\n\techo héllo\n')
+  fs.writeFileSync(path.join(ws, '.env'), 'API_KEY=sk-should-not-read\n')
+  fs.writeFileSync(path.join(ws, 'server.pem'), '-----BEGIN PRIVATE KEY-----\n')
+  fs.writeFileSync(path.join(ws, 'blob.bin'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0xff]))
+  const inConv = { account: ALICE, conversationId: 'conv-alice-3' }
+  const read = async (p) => documentsTool.callTool('read_document', { path: p }, docsCfg, inConv)
+  assert(textOf(await read('math.mjs')).includes('export const add'), `.mjs not read: ${textOf(await read('math.mjs'))}`)
+  assert(textOf(await read('Makefile')).includes('héllo'), 'an unlisted UTF-8 text file was not read')
+  for (const p of ['.env', 'server.pem', 'blob.bin']) {
+    const res = await read(p)
+    assert(res?.isError && /not a text file/.test(textOf(res)), `${p} was read: ${textOf(res)}`)
+  }
+})
+
+await test('create_document saves under the filename asked for, inside the caller\'s folder only (2026-11-18)', async () => {
+  const make = (args) => documentsTool.callTool('create_document', { content: 'x', format: 'markdown', ...args }, docsCfg, ctx(ALICE))
+  const root = resolveUserRoot(dirs.docs, ALICE, { create: true })
+  const saved = async (args) => textOf(await make(args)).match(/\[FILE: ([^\]]+)\]/)?.[1]
+  eq(await saved({ title: 'Thank-you note to volunteers', filename: 'thanks.md' }), 'thanks.md', 'filename beside a title')
+  eq(await saved({ title: 'Quote', filename: 'quote_discounted', format: 'csv' }), 'quote_discounted.csv', 'case and underscores kept, extension from format')
+  eq(await saved({ title: 'No name given' }), 'no-name-given.md', 'no filename: from the title, as before')
+  for (const evil of ['../../bob/stolen.md', '..\\..\\escape.md', '/etc/passwd']) {
+    const name = await saved({ title: 't', filename: evil })
+    assert(name && !name.includes('..') && !name.includes('/') && fs.existsSync(path.join(root, name)), `"${evil}" was saved as ${name}`)
+  }
+})
+
 await test('🔍 the conversation fallback never reaches another account\'s workspace', async () => {
   // Bob sends Alice's conversation id. mcp-server.mjs would have refused it
   // (verifiedConversationId); even past that check, the path is resolved in

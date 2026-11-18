@@ -78,6 +78,7 @@
 
 import { FALLBACK_ID_PREFIX } from '../../../../shared/agent-core/tool-call-parser.mjs'
 import { BUILTIN_TOOL_METADATA } from '../../../daemon/tool-metadata.mjs'
+import { misuseOf, misuseSummary } from './misuse.mjs'
 
 /**
  * The File System family, by where the registry says a tool acts, so this
@@ -354,6 +355,8 @@ export function computeMetrics(events, verdict, task = {}) {
     // it does not count as the first tool here (it is no choice of the task's).
     recovered: firstToolExpected === false ? !!firstExpectedCall : null,
     fsFirst: hasWorkspaceFixture && firstTool !== null ? FILE_SYSTEM_TOOLS.has(firstTool) : null,
+    // The trained habits the run fell back on (misuse.mjs, 2026-11-18).
+    misuse: misuseOf(events),
   }
 }
 
@@ -407,6 +410,7 @@ export function summarize(runs) {
     textAsks: all.reduce((a, m) => a + (m.textAsks ?? 0), 0),
     runsThatAskedInText: all.filter((m) => (m.textAsks ?? 0) > 0).length,
     plansLeftOpen: all.filter((m) => m.planLeftOpen === true).length,
+    misuse: misuseSummary(all),
     ...retrievalSummary(all),
     tasks,
   }
