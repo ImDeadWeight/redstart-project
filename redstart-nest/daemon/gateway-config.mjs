@@ -27,7 +27,6 @@ import { listPlugins } from './plugin-registry.mjs'
 import { syncPluginProviders, stopAllPlugins } from './plugin-provider.mjs'
 import { resolveEngine } from './web-search-engines.mjs'
 import { retrievalOnFor } from './tool-filter.mjs'
-import { toolTextArmOf } from './tool-text-arms.mjs'
 
 // The general web search engine for this profile (web_search source "web").
 //
@@ -94,7 +93,6 @@ export function buildGatewayConfig(llamaConfig) {
       disabledTools,
       deferredCapabilities: deferred,
       toolRetrieval: retrievalSettings(llamaConfig),
-      toolTextArm: toolTextArmOf(llamaConfig?.toolTextArm),
       ctxSize: llamaConfig?.ctxSize,
       webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000, searchEngine: { kind: 'none' } },
       postgres: { enabled: false },
@@ -167,9 +165,6 @@ export function buildGatewayConfig(llamaConfig) {
     disabledTools,
     deferredCapabilities: deferred,
     toolRetrieval: retrievalSettings(llamaConfig),
-    // The tool-text experiment's arm (tool-text-arms.mjs): 'a' unless the
-    // profile names 'b' or 'c'.
-    toolTextArm: toolTextArmOf(llamaConfig?.toolTextArm),
     ctxSize: llamaConfig?.ctxSize,
     webFetch: {
       // Absent webAccessEnabled means enabled — see ProfileTools.webAccessEnabled

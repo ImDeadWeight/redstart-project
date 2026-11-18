@@ -344,28 +344,6 @@ await test('the catalog line names what the catalog holds, capped, and nothing w
   assert(!composePrompt({ ...base, toolNames: ['read_document'], catalog }).prompt.includes('It holds'), 'named catalog tools to a client that cannot reach them')
 })
 
-await test('tool-text arms: a is today\'s prompt byte for byte; b adds its line; c swaps the ask line and maps only tools sent', async () => {
-  const { ARM_B_PROMPT_LINE, ARM_C_ASK_PROMPT_LINE, withArmText } = await import('../daemon/tool-text-arms.mjs')
-  const names = ['ask_user', 'run_python', 'read_document', 'create_document', 'memory_search', 'search_tools', 'call_tool']
-  const at = (arm, extra = {}) => composePrompt({ config: { ...LOCAL_ONLY_CONFIG, ...(arm ? { toolTextArm: arm } : {}) }, hasTools: true, toolNames: names, now: NOW, ...extra }).prompt
-  const today = at(null)
-  assert(at('a') === today && at('nonsense') === today, 'arm a (or an unknown value) changed the prompt')
-  const b = at('b')
-  assert(b.includes('try the tool first') && b.includes(ARM_B_PROMPT_LINE), 'arm b: the ask line and its addition')
-  const c = at('c', { toolsFiltered: true, catalog: { groups: [{ label: 'File System', tools: ['delete_file'], more: 0 }], plugins: null } })
-  assert(!c.includes('try the tool first') && c.includes(ARM_C_ASK_PROMPT_LINE), 'arm c replaces the ask line')
-  assert(c.includes('Which tool for what:') && c.includes('- A fact only the user knows') && c.includes('found with search_tools and called with call_tool'), 'arm c: the map, File System reached through the catalog')
-  assert(!c.includes('- Public facts: web_search'), 'arm c named web_search, which the request does not carry')
-  assert(!at('c').includes('- Files in the File System folder'), 'arm c named the File System with no way to reach it')
-  // The tool side: arm a is the same object; b and c swap or append by name.
-  const ask = { name: 'ask_user', description: 'old' }
-  assert(withArmText(ask, 'a') === ask, 'arm a copied a tool')
-  assert(/WAIT for their answer/.test(withArmText(ask, 'b').description), 'arm b ask_user')
-  assert(/only way to ask/.test(withArmText(ask, 'c').description), 'arm c ask_user')
-  assert(withArmText({ name: 'web_search', description: 'Search.' }, 'c').description === 'Search. Public information only: never for facts about the user, their business or their files.', 'arm c appends')
-  assert(withArmText({ name: 'web_search', description: 'Search.' }, 'b').description === 'Search.', 'arm b touched a tool it does not change')
-})
-
 await test('🔒 a client with no search_tools is told what to say instead', async () => {
   // search_tools and call_tool are advertised only to clients connected to
   // Nest's MCP server. A client that sends its own tool definitions and asks
