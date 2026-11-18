@@ -478,6 +478,49 @@ passed unchanged, and the full chain passes at the end.
 - **Not changed:** the approvals ledger, connector surfaces, `GET /egress`,
   the composed system prompt. No standard covers them; they are Redstart's.
 
+### 5.1 at module level (planned 2026-11-18)
+
+Calls made here, none of them the user's to make (each is a default with
+an obvious fallback):
+
+- **A skill is a folder on disk:** `<config>/skills/personal/<scope key>/<name>/`
+  and `<config>/skills/org/<name>/`, each with `SKILL.md` and up to 20 more
+  files (200 KB each, 1 MB a skill). The scope key and the org rule are
+  workflows.json's.
+- **`SKILL.md` as the Agent Skills format has it:** front matter with `name`
+  (lowercase, digits, hyphens, at most 64) and `description` (at most 1024),
+  then the body. Redstart's extras go in `metadata` (string values, as the
+  format allows): `redstart-title`, `redstart-inputs` (the `/` inputs, as
+  JSON) and `redstart-example` (JSON). A workflow's instructions are the
+  body; the example stays in metadata so chat-ui's editor, which edits the
+  two apart, is unchanged, and `/` and `use_skill` both append it. The id,
+  timestamps and authorship are a `.redstart.json` beside `SKILL.md`, never
+  exported. No YAML library: the parser reads exactly that subset
+  (scalars, quoted strings, one level of `metadata`) and refuses the rest.
+- **Migration:** on first read, every workflow in `workflows.json` is written
+  as a skill folder; `workflows.json` is left in place, untouched, and a
+  marker file says the migration ran. The `/workflows` routes, the MCP
+  prompts and chat-ui's Workflows page keep their shapes.
+- **The model loads a skill itself** through one core tool, `use_skill`
+  (`{ name, file? }`): no file returns the body and the file list; a file
+  returns that file's text. Loading copies the skill's `.py` files into the
+  conversation folder under `skills/<name>/`, which is what `run_python`
+  mounts (U-S2: they run there and nowhere else). The prompt lists the
+  skills the caller can reach, name and description, at most 40, in a block
+  that changes only when a skill does. *Deviation:* `use_skill` is a core
+  tool rather than a catalog entry; it is one small tool, and the catalog's
+  search is for tools, not for text.
+- **Import and export:** a `.zip` of the folder, or a bare `SKILL.md`. The zip
+  reader and writer are a small module on Node's own zlib (no dependency).
+- **Projects ↔ `AGENTS.md`:** export a project's instructions as an
+  `AGENTS.md` file, and import one into a project's instructions.
+
+Commits: (1) `skill-format.mjs` (parse, serialize, validate, workflow ↔
+skill); (2) `skills-storage.mjs` with the migration, behind
+`workflows-storage.mjs`'s existing API; (3) `use_skill` and the prompt
+block; (4) `zip.mjs` and the import/export routes, and the Workflows page's
+two buttons; (5) the AGENTS.md routes and the project page's two buttons.
+
 **Detail and cross-references:** `workflows-plan.md` D1 (MCP prompts) is
 superseded for storage, kept for `/` delivery; its later phases (mode and
 tool pinning, `json_schema` output, Twig quick-capture, folder runs) are

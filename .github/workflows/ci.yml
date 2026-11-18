@@ -172,6 +172,9 @@ jobs:
       - name: "Security: workflows are per account; org writes need manageOrgWorkflows"
         run: node scripts/test-workflows.mjs
 
+      - name: "Skills: SKILL.md is read and written as the format has it; a skill's scripts run only through run_python"
+        run: node scripts/test-skills.mjs
+
       - name: "Security: projects are per account and owner-only; deleting one keeps its chats"
         run: node scripts/test-projects.mjs
 
