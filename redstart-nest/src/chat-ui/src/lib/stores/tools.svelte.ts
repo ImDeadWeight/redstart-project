@@ -377,7 +377,10 @@ class ToolsStore {
 	getEnabledToolsForLLM(): OpenAIToolDefinition[] {
 		const enabledNames = new SvelteSet<string>();
 		for (const entry of this.allTools) {
-			if (!this._disabledTools.has(entry.key) && !this._serverDisabledTools.has(entry.definition.function.name)) {
+			if (
+				!this._disabledTools.has(entry.key) &&
+				!this._serverDisabledTools.has(entry.definition.function.name)
+			) {
 				enabledNames.add(entry.definition.function.name);
 			}
 		}
@@ -400,6 +403,34 @@ class ToolsStore {
 		for (const def of this.customTools) take(def);
 
 		return result;
+	}
+
+	/**
+	 * The tools this app runs itself, for a run on the server (master plan
+	 * 7.1): every enabled tool that is not Nest's own (Nest offers those
+	 * itself), and not ask_user / update_plan (the server answers those).
+	 * Twig's local files, llama-server's built-ins, the sandbox, and MCP
+	 * servers this browser reaches directly. At most 64, as Nest accepts.
+	 */
+	getClientToolsForServerRun(): {
+		name: string;
+		description: string;
+		inputSchema: Record<string, unknown>;
+	}[] {
+		const hostResolved = new Set(['ask_user', 'update_plan']);
+		return this.getEnabledToolsForLLM()
+			.filter(
+				(def) => !hostResolved.has(def.function.name) && !mcpStore.isNestTool(def.function.name)
+			)
+			.slice(0, 64)
+			.map((def) => ({
+				name: def.function.name,
+				description: def.function.description ?? '',
+				inputSchema: (def.function.parameters as Record<string, unknown>) ?? {
+					type: 'object',
+					properties: {}
+				}
+			}));
 	}
 
 	get allToolDefinitions(): OpenAIToolDefinition[] {

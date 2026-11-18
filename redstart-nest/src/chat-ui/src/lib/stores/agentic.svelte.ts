@@ -31,10 +31,7 @@ import { toolsStore } from '$lib/stores/tools.svelte';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { ToolPermissionDecision } from '$lib/enums';
 import { DEFAULT_AGENTIC_CONFIG } from '$lib/constants';
-import {
-	MessageRole,
-	ToolCallType
-} from '$lib/enums';
+import { MessageRole, ToolCallType } from '$lib/enums';
 import type {
 	AgenticFlowParams,
 	AgenticFlowResult,
@@ -42,17 +39,9 @@ import type {
 	SettingsConfigType,
 	McpServerOverride
 } from '$lib/types';
-import type {
-	AgenticMessage,
-	AgenticFlowCallbacks,
-	AgenticFlowOptions
-} from '$lib/types/agentic';
+import type { AgenticMessage, AgenticFlowCallbacks, AgenticFlowOptions } from '$lib/types/agentic';
 import type { ApiChatMessageData, ApiChatMessageContentPart } from '$lib/types/api';
-import type {
-	DatabaseMessage,
-	DatabaseMessageExtra
-} from '$lib/types/database';
-
+import type { DatabaseMessage, DatabaseMessageExtra } from '$lib/types/database';
 
 function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 	return messages.map((message) => {
@@ -164,6 +153,29 @@ class AgenticStore {
 				{ once: true }
 			);
 		});
+	}
+
+	/**
+	 * Run one call a run on the server sent to this app, for a tool this app
+	 * runs (master plan 7.1): its own approval card, then its executor.
+	 */
+	async runClientCall(
+		conversationId: string,
+		call: { id: string; name: string; arguments: string },
+		signal?: AbortSignal
+	): Promise<{ text: string; isError: boolean }> {
+		const model = modelsStore.models[0]?.model || '';
+		try {
+			const r = await this.toolExec.runForServer(
+				conversationId,
+				{ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } },
+				model,
+				signal
+			);
+			return { text: r.text, isError: !!r.isError };
+		} catch (error) {
+			return { text: error instanceof Error ? error.message : String(error), isError: true };
+		}
 	}
 
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {

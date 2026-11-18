@@ -12,6 +12,7 @@ export const SETTINGS_KEYS = {
 	SEND_ON_ENTER: 'sendOnEnter',
 	ENABLE_CONTINUE_GENERATION: 'enableContinueGeneration',
 	CONTEXT_COMPACTION: 'contextCompaction',
+	SERVER_RUNS: 'serverRuns',
 	PDF_AS_IMAGE: 'pdfAsImage',
 	TITLE_GENERATION_USE_FIRST_LINE: 'titleGenerationUseFirstLine',
 	AUTO_TITLE_CONVERSATIONS: 'autoTitleConversations',

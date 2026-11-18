@@ -157,6 +157,17 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
+				// Master plan Phase 7: a chat runs on the server, so a refresh, a
+				// closed tab or a sleeping phone does not end it. Off is the
+				// browser loop, kept for one release.
+				key: SETTINGS_KEYS.SERVER_RUNS,
+				label: 'Run chats on the server',
+				help: 'The assistant works on the Redstart server, so a reply carries on if you refresh, close the tab or your phone sleeps, and you can come back to it. Turn off to run the conversation in this browser as before (kept for one release). Images in a message, and edit, regenerate and branch, still run in the browser.',
+				defaultValue: true,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.GENERAL
+			},
+			{
 				key: SETTINGS_KEYS.PDF_AS_IMAGE,
 				label: 'Parse PDF as image',
 				help: 'Parse PDF as image instead of text. Automatically falls back to text processing for non-vision models.',

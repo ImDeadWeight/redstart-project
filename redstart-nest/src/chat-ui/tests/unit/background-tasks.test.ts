@@ -36,6 +36,17 @@ describe('parseSseFrames', () => {
 		);
 		expect(events).toEqual([{ seq: 4, type: 'turn' }]);
 	});
+
+	it('takes a live frame (no id, no seq) as seq -1, so it never moves the reconnect point', () => {
+		const { events } = parseSseFrames(
+			'data: {"live":true,"type":"delta","messageId":"m1","content":"Hel"}\n\n' +
+				'id: 7\ndata: {"seq":7,"type":"message"}\n\n'
+		);
+		expect(events).toEqual([
+			{ live: true, type: 'delta', messageId: 'm1', content: 'Hel', seq: -1 },
+			{ seq: 7, type: 'message' }
+		]);
+	});
 });
 
 describe('wire mappings', () => {
@@ -49,7 +60,9 @@ describe('wire mappings', () => {
 	});
 
 	it('says what the task waits for', () => {
-		expect(taskStatusLabel({ status: 'waiting_user', waiting: { kind: 'continue' } })).toMatch(/turn limit/);
+		expect(taskStatusLabel({ status: 'waiting_user', waiting: { kind: 'continue' } })).toMatch(
+			/turn limit/
+		);
 		expect(
 			taskStatusLabel({
 				status: 'waiting_user',
@@ -57,6 +70,7 @@ describe('wire mappings', () => {
 			})
 		).toMatch(/asking/);
 		expect(taskStatusLabel({ status: 'waiting_approval', waiting: null })).toMatch(/approval/);
+		expect(taskStatusLabel({ status: 'waiting_client', waiting: null })).toMatch(/this app/);
 	});
 });
 
@@ -74,11 +88,17 @@ describe('a conversation write while a task holds the chat', () => {
 	it('throws TaskActiveError and tells the registered handler which chat', async () => {
 		vi.stubGlobal(
 			'fetch',
-			vi.fn(async () =>
-				new Response(
-					JSON.stringify({ error: { message: 'A background task is writing this conversation.', code: 'task_active' } }),
-					{ status: 409 }
-				)
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							error: {
+								message: 'A background task is writing this conversation.',
+								code: 'task_active'
+							}
+						}),
+						{ status: 409 }
+					)
 			)
 		);
 		const db = await vi.importActual<typeof import('$lib/services/database.service')>(
@@ -86,21 +106,26 @@ describe('a conversation write while a task holds the chat', () => {
 		);
 		const handler = vi.fn();
 		db.setTaskActiveHandler(handler);
-		await expect(db.DatabaseService.updateConversation('conv-1', { currNode: 'm1' })).rejects.toBeInstanceOf(
-			db.TaskActiveError
-		);
+		await expect(
+			db.DatabaseService.updateConversation('conv-1', { currNode: 'm1' })
+		).rejects.toBeInstanceOf(db.TaskActiveError);
 		expect(handler).toHaveBeenCalledWith('conv-1');
 		db.setTaskActiveHandler(null);
 	});
 
 	it('any other 409 is an ordinary error', async () => {
-		vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":{"type":"conflict"}}', { status: 409 })));
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response('{"error":{"type":"conflict"}}', { status: 409 }))
+		);
 		const db = await vi.importActual<typeof import('$lib/services/database.service')>(
 			'$lib/services/database.service'
 		);
 		const handler = vi.fn();
 		db.setTaskActiveHandler(handler);
-		const err = await db.DatabaseService.updateConversation('conv-1', { pinned: true }).catch((e) => e);
+		const err = await db.DatabaseService.updateConversation('conv-1', { pinned: true }).catch(
+			(e) => e
+		);
 		expect(err).not.toBeInstanceOf(db.TaskActiveError);
 		expect(String(err?.message)).toMatch(/API error 409/);
 		expect(handler).not.toHaveBeenCalled();
@@ -121,9 +146,33 @@ const h = vi.hoisted(() => ({
 		answer: vi.fn(),
 		cancel: vi.fn(),
 		decideApproval: vi.fn(),
-		readEvents: vi.fn()
+		readEvents: vi.fn(),
+		registerClient: vi.fn(),
+		clientResult: vi.fn()
 	},
-	conv: { activeConversation: null as { id: string; activeTaskId?: string } | null, reloadActiveFromServer: vi.fn() },
+	conv: {
+		activeConversation: null as { id: string; activeTaskId?: string } | null,
+		reloadActiveFromServer: vi.fn(),
+		// The active chat's messages, for live tokens (master plan 7.1).
+		activeMessages: [] as {
+			id: string;
+			content: string;
+			reasoningContent?: string;
+			parent: string | null;
+		}[],
+		findMessageIndex(id: string) {
+			return this.activeMessages.findIndex((m) => m.id === id);
+		},
+		addMessageToActive(m: { id: string; content: string; parent: string | null }) {
+			this.activeMessages.push(m);
+		},
+		updateMessageAtIndex(i: number, u: object) {
+			this.activeMessages[i] = { ...this.activeMessages[i], ...u };
+		}
+	},
+	settings: { contextCompaction: false } as Record<string, unknown>,
+	agentic: { runClientCall: vi.fn() },
+	clientTools: [{ name: 'read_file', description: 'Read a file', inputSchema: { type: 'object' } }],
 	toast: { info: vi.fn(), error: vi.fn(), success: vi.fn() },
 	taskActiveHandler: null as ((id: string | null) => void) | null
 }));
@@ -136,7 +185,11 @@ vi.mock('$lib/stores/conversations.svelte', () => ({ conversationsStore: h.conv 
 vi.mock('$lib/stores/chat/chat-options', () => ({
 	getApiOptions: () => ({ stream: true, temperature: 0.3, excludeReasoningFromContext: true })
 }));
-vi.mock('$lib/stores/settings.svelte', () => ({ config: () => ({ contextCompaction: false }) }));
+vi.mock('$lib/stores/settings.svelte', () => ({ config: () => h.settings }));
+vi.mock('$lib/stores/agentic.svelte', () => ({ agenticStore: h.agentic }));
+vi.mock('$lib/stores/tools.svelte', () => ({
+	toolsStore: { getClientToolsForServerRun: () => h.clientTools }
+}));
 vi.mock('svelte-sonner', () => ({ toast: h.toast }));
 vi.mock('$lib/services/database.service', () => ({
 	setTaskActiveHandler: (fn: (id: string | null) => void) => (h.taskActiveHandler = fn)
@@ -182,6 +235,9 @@ describe('tasksStore', () => {
 		for (const f of Object.values(h.toast)) f.mockReset();
 		h.conv.reloadActiveFromServer.mockReset().mockResolvedValue(undefined);
 		h.conv.activeConversation = null;
+		h.conv.activeMessages = [];
+		h.settings = { contextCompaction: false };
+		h.agentic.runClientCall.mockReset();
 	});
 	afterEach(() => vi.useRealTimers());
 
@@ -250,20 +306,27 @@ describe('tasksStore', () => {
 		h.svc.get.mockResolvedValue(record({ status: 'failed', error: 'The account was disabled.' }));
 		stream.end();
 		await vi.advanceTimersByTimeAsync(0);
-		expect(h.toast.error).toHaveBeenCalledWith(expect.stringContaining('The account was disabled.'));
+		expect(h.toast.error).toHaveBeenCalledWith(
+			expect.stringContaining('The account was disabled.')
+		);
 	});
 
-	it('start sends the settings in the runner\'s names, then follows and reloads', async () => {
+	it("start sends the settings in the runner's names, then follows and reloads", async () => {
 		controllableStream();
 		const store = await freshStore();
 		h.conv.activeConversation = { id: 'c1' };
 		h.svc.start.mockResolvedValue(record());
-		await store.start('c1', 'tidy the folder');
-		expect(h.svc.start).toHaveBeenCalledWith('c1', 'tidy the folder', expect.objectContaining({
-			temperature: 0.3,
-			excludeReasoning: true,
-			contextCompaction: false
-		}));
+		await store.start('c1', 'tidy the folder', h.clientTools);
+		expect(h.svc.start).toHaveBeenCalledWith(
+			'c1',
+			'tidy the folder',
+			expect.objectContaining({
+				temperature: 0.3,
+				excludeReasoning: true,
+				contextCompaction: false
+			}),
+			h.clientTools
+		);
 		expect(store.activeFor('c1')?.id).toBe('t1');
 		expect(h.conv.reloadActiveFromServer).toHaveBeenCalledWith('c1');
 	});
@@ -278,7 +341,13 @@ describe('tasksStore', () => {
 			seq: 1,
 			type: 'status',
 			status: 'waiting_approval',
-			waiting: { kind: 'approval', callId: 'x', tool: 'write_file', rule: 'prompt', approval: { id: 'ap-9', tool: 'write_file', summary: 's' } }
+			waiting: {
+				kind: 'approval',
+				callId: 'x',
+				tool: 'write_file',
+				rule: 'prompt',
+				approval: { id: 'ap-9', tool: 'write_file', summary: 's' }
+			}
 		});
 		h.svc.decideApproval.mockResolvedValue({});
 		await store.decideApproval('c1', 'once');
@@ -312,5 +381,116 @@ describe('tasksStore', () => {
 		expect(h.toast.info).toHaveBeenCalled();
 		expect(h.svc.listFor).toHaveBeenCalledWith('c1');
 		expect(store.activeFor('c1')?.id).toBe('t1');
+	});
+
+	// --- a run on the server (master plan 7.1) -------------------------------
+
+	it('a started task is followed as the client; its tools are not registered twice', async () => {
+		const stream = controllableStream();
+		const store = await freshStore();
+		h.conv.activeConversation = { id: 'c1' };
+		h.svc.start.mockResolvedValue(record());
+		await store.start('c1', 'hi', h.clientTools);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(stream.calls).toEqual([0]);
+		expect(h.svc.readEvents.mock.calls[0][4]).toBe(true);
+		expect(h.svc.registerClient).not.toHaveBeenCalled();
+	});
+
+	it("a task picked up after a reload registers this app's tools before it reads", async () => {
+		controllableStream();
+		const store = await freshStore();
+		h.svc.registerClient.mockResolvedValue({ ok: true });
+		h.conv.activeConversation = { id: 'c1', activeTaskId: 't1' };
+		h.svc.get.mockResolvedValue(record());
+		await store.watch('c1');
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.svc.registerClient).toHaveBeenCalledWith('t1', h.clientTools);
+		expect(h.svc.readEvents.mock.calls[0][4]).toBe(true);
+	});
+
+	it('with the setting off, a follower is not the client', async () => {
+		controllableStream();
+		h.settings = { contextCompaction: false, serverRuns: false };
+		const store = await freshStore();
+		h.conv.activeConversation = { id: 'c1', activeTaskId: 't1' };
+		h.svc.get.mockResolvedValue(record());
+		await store.watch('c1');
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.svc.registerClient).not.toHaveBeenCalled();
+		expect(h.svc.readEvents.mock.calls[0][4]).toBe(false);
+	});
+
+	it('live tokens fill a placeholder reply under the last message, and do not move the reconnect point', async () => {
+		const stream = controllableStream();
+		const store = await freshStore();
+		h.conv.activeConversation = { id: 'c1', activeTaskId: 't1' };
+		h.conv.activeMessages = [{ id: 'u1', content: 'hi', parent: null }];
+		h.svc.get.mockResolvedValue(record());
+		await store.watch('c1');
+		await vi.advanceTimersByTimeAsync(0);
+		stream.push({ seq: 3, type: 'turn' });
+		stream.push({ seq: -1, live: true, type: 'delta', messageId: 'a1', reasoning: 'hmm' });
+		stream.push({ seq: -1, live: true, type: 'delta', messageId: 'a1', content: 'Hel' });
+		stream.push({ seq: -1, live: true, type: 'delta', messageId: 'a1', content: 'lo' });
+		expect(h.conv.activeMessages[1]).toMatchObject({
+			id: 'a1',
+			parent: 'u1',
+			content: 'Hello',
+			reasoningContent: 'hmm'
+		});
+		stream.end();
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(stream.calls).toEqual([0, 3]);
+	});
+
+	it('a reload in the middle of a turn puts the reply so far back; the stored message ends it', async () => {
+		const stream = controllableStream();
+		const store = await freshStore();
+		h.conv.activeConversation = { id: 'c1', activeTaskId: 't1' };
+		h.conv.activeMessages = [{ id: 'u1', content: 'hi', parent: null }];
+		// The server's copy has no reply yet.
+		h.conv.reloadActiveFromServer.mockImplementation(async () => {
+			h.conv.activeMessages = [{ id: 'u1', content: 'hi', parent: null }];
+		});
+		h.svc.get.mockResolvedValue(record());
+		await store.watch('c1');
+		await vi.advanceTimersByTimeAsync(0);
+		stream.push({ seq: 1, type: 'turn' });
+		stream.push({ seq: -1, live: true, type: 'delta', messageId: 'a1', content: 'Hel' });
+		await vi.advanceTimersByTimeAsync(400);
+		expect(h.conv.activeMessages[1]).toMatchObject({ id: 'a1', content: 'Hel' });
+		stream.push({ seq: -1, live: true, type: 'delta', messageId: 'a1', content: 'lo' });
+		expect(h.conv.activeMessages[1].content).toBe('Hello');
+
+		stream.push({ seq: 2, type: 'message' });
+		await vi.advanceTimersByTimeAsync(400);
+		expect(h.conv.activeMessages).toHaveLength(1); // the stored copy, not the placeholder
+	});
+
+	it('a client_request runs here and its result is posted back', async () => {
+		const stream = controllableStream();
+		const store = await freshStore();
+		h.conv.activeConversation = { id: 'c1', activeTaskId: 't1' };
+		h.svc.get.mockResolvedValue(record());
+		h.svc.clientResult.mockResolvedValue({ ok: true });
+		h.agentic.runClientCall.mockResolvedValue({ text: 'file text', isError: false });
+		await store.watch('c1');
+		await vi.advanceTimersByTimeAsync(0);
+		stream.push({
+			seq: -1,
+			live: true,
+			type: 'client_request',
+			callId: 'call-1',
+			name: 'read_file',
+			arguments: '{"path":"a.txt"}'
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.agentic.runClientCall).toHaveBeenCalledWith(
+			'c1',
+			{ id: 'call-1', name: 'read_file', arguments: '{"path":"a.txt"}' },
+			expect.any(AbortSignal)
+		);
+		expect(h.svc.clientResult).toHaveBeenCalledWith('t1', 'call-1', 'file text', false);
 	});
 });

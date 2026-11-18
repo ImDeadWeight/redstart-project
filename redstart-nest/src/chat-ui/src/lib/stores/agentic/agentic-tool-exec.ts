@@ -28,7 +28,7 @@ import { extractBase64Attachments } from './agentic-attachments';
 import { parseResourceLine, resourceKind } from '$lib/utils/resource-links';
 import { fetchFileBlob } from '$lib/utils/agentic';
 import { apiPost } from '$lib/utils/api-fetch';
-import { callToolTarget } from '$lib/agent-core';
+import { callToolTarget, DENIED_RESULT } from '$lib/agent-core';
 import type { AgentPorts, AgentToolCall, AgentContentPart, ToolExecution } from '$lib/agent-core';
 import type { AgenticSessionState } from './agentic-session.svelte';
 import type { MCPToolCall, DatabaseMessageExtraImageFile } from '$lib/types';
@@ -226,6 +226,22 @@ export class AgenticToolExec {
 				extraParts: (text, attachments) => this.visionParts(text, attachments, effectiveModel)
 			}
 		};
+	}
+
+	/**
+	 * One call a run on the server sent this app (master plan 7.1): the
+	 * permission card, then the executor, as in a browser flow. A Deny is
+	 * the same result text the loop core gives the model.
+	 */
+	async runForServer(
+		conversationId: string,
+		call: AgentToolCall,
+		effectiveModel: string,
+		signal?: AbortSignal
+	): Promise<ToolExecution> {
+		const { gate, tools } = this.ports(conversationId, effectiveModel);
+		if (!(await gate.approve(call, signal))) return { text: DENIED_RESULT, isError: true };
+		return tools.execute(call, signal);
 	}
 
 	/** Dispatch one call to the executor that owns it. Throws on abort. */
