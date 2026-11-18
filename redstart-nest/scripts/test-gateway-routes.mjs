@@ -835,6 +835,22 @@ async function main() {
     })
   })
 
+  await test('🔍 redstart_tool_text_arm picks the prompt\'s arm, is echoed, and never reaches llama-server', async () => {
+    // Arm c's routing map needs two of its tools to be worth a block.
+    const body = { messages: [{ role: 'user', content: 'hello' }], tools: [toolDef('run_python'), toolDef('create_document'), toolDef('web_search')] }
+    const system = () => (lastForwarded.messages || []).find((m) => m.role === 'system')?.content ?? ''
+    const c = await completions({ ...body, redstart_retrieval_report: true, redstart_tool_text_arm: 'c' })
+    assert(c.headers.get('x-redstart-tool-text-arm') === 'c', `echo: ${c.headers.get('x-redstart-tool-text-arm')}`)
+    assert(system().includes('Which tool for what'), 'arm c prompt not composed')
+    assert(!('redstart_tool_text_arm' in lastForwarded), 'the field reached llama-server')
+    assert((c.headers.get('access-control-expose-headers') ?? '').includes('x-redstart-tool-text-arm'), 'a browser client cannot read it')
+    const a = await completions({ ...body, redstart_retrieval_report: true })
+    assert(a.headers.get('x-redstart-tool-text-arm') === 'a', 'no field: the profile\'s arm (a)')
+    assert(!system().includes('Which tool for what'), 'arm c leaked into a plain request')
+    const junk = await completions({ ...body, redstart_retrieval_report: true, redstart_tool_text_arm: 'z' })
+    assert(junk.headers.get('x-redstart-tool-text-arm') === 'a', 'an unknown arm is not a')
+  })
+
   await test('🔍 only the literal false opts out of retrieval', async () => {
     await withGitDeferred(async () => {
       await completions({

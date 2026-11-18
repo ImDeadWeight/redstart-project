@@ -53,7 +53,7 @@ import {
 } from './tools-definitions.mjs'
 import { retrievalEnabled } from './tool-filter.mjs'
 import { isDeferredTool } from './tool-deferral.mjs'
-import { toolTextArm, withArmText } from './tool-text-arms.mjs'
+import { toolTextArm, toolTextArmDeclared, withArmText } from './tool-text-arms.mjs'
 import { logEvent, logPolicy } from './logger.mjs'
 import { memoryKey } from './memory-storage.mjs'
 import { requestApproval, consume as consumeApproval } from './approval-ledger.mjs'
@@ -94,7 +94,7 @@ function resolveProviders() {
  * other two consumers, which have no client, never see them.
  *
  * @param {any} cfg
- * @param {{ session?: { hostTools?: string[] } }} [ctx]
+ * @param {{ session?: { hostTools?: string[], toolTextArm?: string | null } }} [ctx]
  * @returns {any[]}
  */
 export function activeToolCatalog(cfg, ctx) {
@@ -103,7 +103,8 @@ export function activeToolCatalog(cfg, ctx) {
   // The profile's tool-text arm (tool-text-arms.mjs, an experiment): every
   // tool list passes here, so one swap covers chat, tasks, the bench and
   // search_tools' catalog.
-  const arm = toolTextArm(cfg)
+  // A session that declared an arm at initialize (the bench) wins.
+  const arm = ctx?.session?.toolTextArm ?? toolTextArm(cfg)
   for (const provider of resolveProviders()) {
     for (const tool of provider.toolDefs(cfg, ctx)) {
       if (seen.has(tool.name)) {
@@ -327,11 +328,11 @@ function configFor(account) {
  * holds never appear here: they are never on this server (D28).
  *
  * @param {any} account
- * @param {{ hostTools?: string[] }} [opts]
+ * @param {{ hostTools?: string[], toolTextArm?: string | null }} [opts]
  */
-export function toolCatalogFor(account, { hostTools = [] } = {}) {
+export function toolCatalogFor(account, { hostTools = [], toolTextArm = null } = {}) {
   const cfg = configFor(account)
-  return activeToolCatalog(cfg, { session: { hostTools } }).map((t) => annotateTool(t, cfg))
+  return activeToolCatalog(cfg, { session: { hostTools, toolTextArm } }).map((t) => annotateTool(t, cfg))
 }
 
 /**
@@ -425,6 +426,7 @@ async function handleRpc(msg, send, ctx = { account: null }) {
     // the session, which outlives this request; a client that declares nothing
     // is never offered a host-resolved tool.
     if (ctx.session) ctx.session.hostTools = interactionTools.hostToolsDeclared(params)
+    if (ctx.session) ctx.session.toolTextArm = toolTextArmDeclared(params)
     send({ jsonrpc: '2.0', id, result: {
       protocolVersion: '2024-11-05',
       // prompts = the account's workflows (workflows-storage.mjs). chat-ui's
@@ -444,7 +446,7 @@ async function handleRpc(msg, send, ctx = { account: null }) {
   }
 
   if (method === 'tools/list') {
-    send({ jsonrpc: '2.0', id, result: { tools: toolCatalogFor(ctx.account, { hostTools: ctx.session?.hostTools }) } })
+    send({ jsonrpc: '2.0', id, result: { tools: toolCatalogFor(ctx.account, { hostTools: ctx.session?.hostTools, toolTextArm: ctx.session?.toolTextArm }) } })
     return
   }
 
@@ -600,7 +602,7 @@ export function startMcpServer(port, config, { bindHost = '127.0.0.1' } = {}) {
 
       // Per-session state, set at initialize (see handleRpc). One object per
       // transport, so it lives exactly as long as the session does.
-      const session = { hostTools: [] }
+      const session = { hostTools: [], toolTextArm: null }
 
       transport.onmessage = async (message, extra) => {
         const ctx = { account: extra.authInfo?.account ?? null, session }

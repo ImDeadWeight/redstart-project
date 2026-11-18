@@ -175,7 +175,7 @@ export function filePathsIn(text) {
  * `off`); null from an older Nest. The per-tool origins and would-add
  * headers went with per-turn selection (3.3).
  *
- * @returns {{ names: string[], filtered: boolean, retrieval: 'on' | 'off' | null, config: string | null } | null}
+ * @returns {{ names: string[], filtered: boolean, retrieval: 'on' | 'off' | null, config: string | null, arm: string | null } | null}
  */
 export function toolsSentReport(headers) {
   const sent = headers?.get?.('x-redstart-tools-sent')
@@ -186,6 +186,8 @@ export function toolsSentReport(headers) {
     filtered: headers.get('x-redstart-tools-filtered') === '1',
     retrieval: state === 'on' || state === 'off' ? state : null,
     config: headers.get('x-redstart-retrieval-config') ?? null,
+    // The tool-text arm the gateway composed with (--arms); null from an older Nest.
+    arm: headers.get('x-redstart-tool-text-arm') ?? null,
   }
 }
 

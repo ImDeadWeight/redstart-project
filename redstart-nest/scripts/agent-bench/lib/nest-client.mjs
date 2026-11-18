@@ -26,6 +26,8 @@ export const META_CONVERSATION_KEY = 'redstart/conversationId'
 export const META_CLASS_KEY = 'redstart/class'
 // Mirrors daemon/interaction-tools.mjs; no daemon module is imported here.
 export const HOST_TOOLS_CAPABILITY = 'redstart/hostTools'
+// daemon/tool-text-arms.mjs TOOL_TEXT_ARM_CAPABILITY.
+export const TOOL_TEXT_ARM_CAPABILITY = 'redstart/toolTextArm'
 const DOCS_SPACE = 'documents'
 const MAX_READBACK_BYTES = 1024 * 1024
 // A bench account's File System folder holds what runs leave there: a few
@@ -155,7 +157,11 @@ export function taskRoutesClient({ gateway, auth, doFetch, req }) {
  * `hostTools`: the host-resolved tools this run answers itself (default
  * ask_user and update_plan); Nest offers only those.
  *
- * @param {{ gateway: string, mcp: string, apiKey?: string | null, fetch?: typeof fetch, mcpTimeoutMs?: number, requestTimeoutMs?: number, hostTools?: string[] }} opts
+ * @param {{ gateway: string, mcp: string, apiKey?: string | null, fetch?: typeof fetch, mcpTimeoutMs?: number, requestTimeoutMs?: number, hostTools?: string[], toolTextArm?: string | null }} opts
+ *
+ * `toolTextArm` (--arms): the tool-text arm this client asks for, on its MCP
+ * session (tool descriptions) and on every completions request (prompt);
+ * daemon/tool-text-arms.mjs. Unset: whatever the daemon's profile says.
  */
 export async function connectNest(opts) {
   const gateway = opts.gateway.replace(/\/$/, '')
@@ -176,8 +182,12 @@ export async function connectNest(opts) {
   const mcp = await connectMcpClient(opts.mcp, {
     headers: auth,
     timeoutMs: opts.mcpTimeoutMs ?? 300_000,
-    capabilities: { experimental: { [HOST_TOOLS_CAPABILITY]: { names: opts.hostTools ?? ['ask_user', 'update_plan'] } } },
+    capabilities: { experimental: {
+      [HOST_TOOLS_CAPABILITY]: { names: opts.hostTools ?? ['ask_user', 'update_plan'] },
+      ...(opts.toolTextArm ? { [TOOL_TEXT_ARM_CAPABILITY]: { arm: opts.toolTextArm } } : {}),
+    } },
   })
+  const armField = opts.toolTextArm ? { redstart_tool_text_arm: opts.toolTextArm } : {}
 
   return {
     /** The account's tools, as MCP lists them (bans and role narrowing already applied). */
@@ -395,7 +405,7 @@ export async function connectNest(opts) {
       return doFetch(`${gateway}/v1/chat/completions`, {
         method: 'POST',
         headers: { ...auth, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, ...armField }),
         signal,
       })
     },

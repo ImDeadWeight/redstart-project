@@ -36,6 +36,23 @@ export function toolTextArm(cfg) {
   return toolTextArmOf(cfg?.toolTextArm)
 }
 
+// The bench can also pick the arm per request, so one daemon serves all three
+// arms in one run, alternating, with nothing to restart between them: the
+// completions body field `redstart_tool_text_arm` (prompt), and the MCP
+// initialize capability below (tool descriptions, per session). Both are
+// wording only, so honouring them from any client changes no boundary. The
+// gateway echoes the arm it used (x-redstart-tool-text-arm) so the bench can
+// check it was applied.
+export const TOOL_TEXT_ARM_FIELD = 'redstart_tool_text_arm'
+export const TOOL_TEXT_ARM_CAPABILITY = 'redstart/toolTextArm'
+export const TOOL_TEXT_ARM_HEADER = 'x-redstart-tool-text-arm'
+
+/** The arm an MCP initialize declares, or null when it declares none. */
+export function toolTextArmDeclared(initializeParams) {
+  const arm = initializeParams?.capabilities?.experimental?.[TOOL_TEXT_ARM_CAPABILITY]?.arm
+  return TOOL_TEXT_ARMS.includes(arm) ? arm : null
+}
+
 // ---------------------------------------------------------------------------
 // Arm B: the user's rewrite, verbatim (only straight quotes made JS-safe)
 // ---------------------------------------------------------------------------

@@ -35,6 +35,8 @@ export const RETRIEVAL_REPORT_HEADERS = Object.freeze({
   filtered: 'x-redstart-tools-filtered',
   retrieval: 'x-redstart-retrieval',
   config: 'x-redstart-retrieval-config',
+  // The tool-text arm the prompt used (tool-text-arms.mjs, an experiment).
+  arm: 'x-redstart-tool-text-arm',
 })
 
 /**
@@ -65,6 +67,7 @@ export function retrievalReportHeaders(wire) {
     // The settings in effect (benchmarks H1), so a bench row records what ran
     // instead of trusting its label. `off` when retrieval did not run.
     [RETRIEVAL_REPORT_HEADERS.config]: typeof wire.retrievalConfig === 'string' ? wire.retrievalConfig : 'off',
+    [RETRIEVAL_REPORT_HEADERS.arm]: wire.toolTextArm ?? 'a',
     'Access-Control-Expose-Headers': Object.values(RETRIEVAL_REPORT_HEADERS).join(', '),
   }
 }

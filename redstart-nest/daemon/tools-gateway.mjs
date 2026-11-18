@@ -42,6 +42,7 @@ import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
 import { recordWireCost, retrievalConfigSummary, retrievalEnabled } from './tool-filter.mjs'
 import { toolName } from './tool-retrieval.mjs'
+import { TOOL_TEXT_ARM_FIELD, toolTextArm, toolTextArmOf } from './tool-text-arms.mjs'
 
 // Exported from here before master plan Phase 4 split them out; importers
 // keep reading them from here.
@@ -152,6 +153,13 @@ export function retrievalSurface(surface) {
 // @returns {Promise<{ parsed: any, wire: object }>}
 // ---------------------------------------------------------------------------
 export async function prepareCompletion(parsed, { account, surface, effectiveConfig, timeZone }) {
+  // The tool-text experiment's per-request arm (tool-text-arms.mjs): wording
+  // only, so honoured from any client. Consumed so llama-server never sees it.
+  if (parsed[TOOL_TEXT_ARM_FIELD] !== undefined) {
+    effectiveConfig = { ...effectiveConfig, toolTextArm: toolTextArmOf(parsed[TOOL_TEXT_ARM_FIELD]) }
+  }
+  delete parsed[TOOL_TEXT_ARM_FIELD]
+
   // Redstart-specific request field: a MODE ID, never mode prose. The
   // composer validates it against MODE_IDS and drops anything unknown,
   // so a client cannot inject an instruction block by naming a mode
@@ -289,6 +297,8 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
     toolsRemoved: toolsFiltered,
     // The settings retrieval ran with (benchmarks H1), only when it ran.
     retrievalConfig: null,
+    // The tool-text arm the prompt was composed with (tool-text-arms.mjs).
+    toolTextArm: toolTextArm(effectiveConfig),
   }
   if (wire.filtered) wire.retrievalConfig = retrievalConfigSummary()
   recordWireCost(wire)

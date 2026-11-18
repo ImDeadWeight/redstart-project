@@ -199,6 +199,22 @@ async function main() {
     assert(names.includes('web_fetch'), `expected web_fetch in ${JSON.stringify(names)}`)
   })
 
+  await test('a session that declares a tool-text arm lists that arm\'s text; others keep the profile\'s (--arms)', async () => {
+    const declare = (arm) => ({ experimental: { 'redstart/hostTools': { names: ['ask_user'] }, ...(arm ? { 'redstart/toolTextArm': { arm } } : {}) } })
+    const describe = async (arm) => {
+      const c = await connectMcpClient(mcpUrl, { capabilities: declare(arm) })
+      try {
+        const tools = (await c.call('tools/list')).result.tools
+        return Object.fromEntries(tools.filter((t) => ['ask_user', 'web_fetch'].includes(t.name)).map((t) => [t.name, t.description]))
+      } finally { await c.close?.() }
+    }
+    const [plain, b, c, junk] = [await describe(null), await describe('b'), await describe('c'), await describe('z')]
+    assert(/WAIT for their answer/.test(b.ask_user) && !/WAIT for their answer/.test(plain.ask_user), 'arm b ask_user')
+    assert(/only way to ask/.test(c.ask_user), 'arm c ask_user')
+    assert(c.web_fetch !== plain.web_fetch && b.web_fetch === plain.web_fetch, 'arm c appends to web_fetch, b leaves it')
+    assert(junk.ask_user === plain.ask_user, 'an unknown arm changed the text')
+  })
+
   await test('tools/list omits create_document and postgres_* when both capabilities are disabled', async () => {
     const res = await client.call('tools/list')
     const names = res.result.tools.map(t => t.name)

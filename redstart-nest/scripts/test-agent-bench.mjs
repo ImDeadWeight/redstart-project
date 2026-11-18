@@ -33,7 +33,7 @@ import * as net from 'node:net'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { main, parseArgs, labelWarning, fallbackWarning, accountWarning, askWarning, staleDaemonWhy } from './agent-bench/run.mjs'
+import { main, parseArgs, labelWarning, fallbackWarning, accountWarning, askWarning, staleDaemonWhy, taskSet, armsComparison } from './agent-bench/run.mjs'
 import { approves, maxReplyTokens, endsInQuestion, TEXT_ASK_NO_ANSWER, toolsSentReport, retrievalConfigMismatch } from './agent-bench/lib/bench.mjs'
 import { answerFromTask } from './agent-bench/lib/ask.mjs'
 import { ASK_USER_DEFINITION, DISMISSED_RESULT } from '../../shared/agent-core/ask-user.mjs'
@@ -235,6 +235,11 @@ function startFakeNest(gatewayPort) {
     approvalPosts: [],
     // x-redstart-retrieval-config on a request retrieval ran on (benchmarks H1).
     retrievalConfig: 'mode=catalog',
+    // The tool-text arms (--arms): one MCP session per declared arm, its
+    // ask_user text marked with the arm, as mcp-server.mjs swaps it. With
+    // ignoreArms, the fake behaves as a daemon from before per-request arms.
+    sessionArms: new Map(),
+    ignoreArms: false,
   }
   const json = (res, status, body) => {
     res.writeHead(status, { 'Content-Type': 'application/json' })
@@ -380,6 +385,7 @@ function startFakeNest(gatewayPort) {
         'x-redstart-retrieval': body.redstart_retrieval === false ? 'off' : 'on',
         // Benchmarks H1: the settings in effect, as tool-filter.mjs writes them.
         'x-redstart-retrieval-config': body.redstart_retrieval === false ? 'off' : state.retrievalConfig,
+        ...(state.ignoreArms ? {} : { 'x-redstart-tool-text-arm': body.redstart_tool_text_arm ?? 'a' }),
       } : {}
       if (body.stream === false) {
         // measure-tool-cache.mjs: one JSON reply, with the timings.
@@ -412,11 +418,19 @@ function startFakeNest(gatewayPort) {
     // it answers it. One flag for the fake, since the bench opens one session.
     if (msg.method === 'initialize') {
       state.declaredHostTools = msg.params?.capabilities?.experimental?.['redstart/hostTools']?.names ?? []
+      const arm = msg.params?.capabilities?.experimental?.['redstart/toolTextArm']?.arm
+      if (arm) {
+        state.sessionArms.set(`s-${arm}`, arm)
+        res.writeHead(200, { 'Content-Type': 'application/json', 'mcp-session-id': `s-${arm}` })
+        return res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} } } }))
+      }
       return reply({ protocolVersion: '2024-11-05', capabilities: { tools: {} } })
     }
     if (msg.method === 'tools/list') {
       const hostTools = [ASK_USER_TOOL_DEF, UPDATE_PLAN_TOOL_DEF].filter((t) => state.declaredHostTools?.includes(t.name))
-      return reply({ tools: [...TOOLS, ...hostTools] })
+      const arm = state.ignoreArms ? null : state.sessionArms.get(req.headers['mcp-session-id'])
+      const armed = arm ? hostTools.map((t) => (t.name === 'ask_user' ? { ...t, description: `${t.description} (arm ${arm})` } : t)) : hostTools
+      return reply({ tools: [...TOOLS, ...armed] })
     }
     if (msg.method === 'tools/call') {
       const { name, arguments: args, _meta } = msg.params
@@ -663,6 +677,41 @@ await test('arguments: --model-label required, MCP defaults to the gateway port 
     try { parseArgs(['--model-label', 'm', '--max-tokens', bad]) } catch (e) { e2 = e }
     assert(/--max-tokens must be a positive integer/.test(e2?.message ?? ''), `--max-tokens ${bad} accepted`)
   }
+})
+
+await test('--arms and --set: parsed and checked', async () => {
+  eq(parseArgs(['--model-label', 'm', '--arms', 'A, c']).arms, ['a', 'c'], 'list, case and spaces')
+  for (const [bad, why] of [['a,d', /unknown arm d/], ['a,a', /distinct/], [',', /distinct/]]) {
+    let e = null
+    try { parseArgs(['--model-label', 'm', '--arms', bad]) } catch (err) { e = err }
+    assert(why.test(e?.message ?? ''), `--arms ${bad}: ${e?.message}`)
+  }
+  let e = null
+  try { parseArgs(['--model-label', 'm', '--arms', 'a,b', '--runtime']) } catch (err) { e = err }
+  assert(/--arms cannot run with --runtime/.test(e?.message ?? ''), `--runtime: ${e?.message}`)
+  // The signal set names real tasks only.
+  const real = new Set(findTaskFiles(path.join(here, 'agent-bench', 'tasks')).map((f) => path.basename(f, '.json')))
+  const signal = taskSet('signal')
+  assert(signal.length >= 10 && signal.every((id) => real.has(id)), `signal: ${signal.filter((id) => !real.has(id))}`)
+  for (const [name, why] of [['nope', /cannot read sets\/nope\.json.*sets: .*signal/], ['../x', /not a set name/]]) {
+    let e2 = null
+    try { taskSet(name) } catch (err) { e2 = err }
+    assert(why.test(e2?.message ?? ''), `${name}: ${e2?.message}`)
+  }
+  let e3 = null
+  try { await main(['--model-label', 'm', '--tasks', FIXTURES, '--set', 'signal', '--quiet'], { log: () => {} }) } catch (err) { e3 = err }
+  assert(/--set signal names task\(s\) .* does not hold: compute-arithmetic/.test(e3?.message ?? ''), `main: ${e3?.message}`)
+})
+
+await test('armsComparison: a row per arm and the tasks that differ', async () => {
+  const t = (taskId, group, passes) => ({ taskId, group, runs: 3, passes })
+  const s = (tasks) => ({ runs: 6, tasks, askCalls: 2, misuse: { proseAskRuns: 1, lookups: 0, subprocess: 4, unsupportedRead: 0, skillAsTool: 0 } })
+  const md = armsComparison([
+    { arm: 'a', summary: s([t('x', 'phase1', 1), t('y', 'compute', 3)]) },
+    { arm: 'b', summary: s([t('x', 'phase1', 3), t('y', 'compute', 3)]) },
+  ])
+  assert(md.includes('| A | 4/6 | 1/3 | 2 | 1 | 0 | 4 | 0 | 0 |') && md.includes('| B | 6/6 | 3/3 |'), md)
+  assert(md.includes('| x | 1/3 | 3/3 |') && !md.includes('| y |'), md)
 })
 
 await test('--runtime: on with the default plan; refused with --plan tool|off or --model (a task cannot honour them)', async () => {
@@ -1223,6 +1272,37 @@ await test('a conversation an earlier, stopped bench left behind is deleted at t
   } finally {
     nest.state.conversations.delete('my-own-chat')
   }
+})
+
+await test('--arms a,b,c: one run, one folder per arm, rotated per task, each arm checked and recorded', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-arms-'))
+  const lines = []
+  const before = nest.state.completionBodies.length
+  const r = await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', dir, '--quiet', '--repeat', '2', '--arms', 'a,b,c'], { log: (s) => lines.push(s) })
+  eq(r.arms.map((a) => [a.arm, a.runs.length, path.basename(a.outDir)]), [['a', 2, 'arm_a'], ['b', 2, 'arm_b'], ['c', 2, 'arm_c']], 'per-arm results')
+  for (const a of r.arms) {
+    const meta = JSON.parse(fs.readFileSync(path.join(a.outDir, 'summary.json'), 'utf8')).meta
+    eq([meta.toolTextArm, meta.modelLabel], [a.arm, `m arm ${a.arm.toUpperCase()}`], 'meta names the arm')
+    assert(!meta.warnings.some((w) => /another tool-text arm/.test(w)), meta.warnings.join('\n'))
+    assert(a.runs.every((run) => run.events.filter((e) => e.type === 'tools_sent').every((e) => e.arm === a.arm)), `arm ${a.arm}: a turn without its arm`)
+  }
+  // Each run's first task request, in order: repeat 0 runs a, b, c; repeat 1 starts at b.
+  const order = nest.state.completionBodies.slice(before).filter((b) => b.stream !== false && b.messages.filter((m) => m.role === 'assistant').length === 0).map((b) => b.redstart_tool_text_arm)
+  eq(order, ['a', 'b', 'c', 'b', 'c', 'a'], 'rotation')
+  assert(lines.some((l) => /## Arms compared/.test(l)), 'no comparison table')
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+await test('--arms on a daemon that ignores them stops before the first task', async () => {
+  nest.state.ignoreArms = true
+  const before = nest.state.completionBodies.length
+  let err = null
+  try {
+    await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', outDir, '--quiet', '--arms', 'a,b'], { log: () => {} })
+  } catch (e) { err = e }
+  nest.state.ignoreArms = false
+  assert(/--arms: asked for arm a, the gateway composed arm \(none reported/.test(err?.message ?? ''), `got ${err?.message}`)
+  eq(nest.state.completionBodies.slice(before).filter((b) => b.stream !== false).length, 0, 'a task ran')
 })
 
 console.log('\n-- first-run failures say what to fix --')
