@@ -326,6 +326,33 @@ the fixes plan), so nothing goes for it. Three commits:
 3. **The launcher.** The Tools tab's "How" select goes; the deferral card
    shows whenever retrieval is on. `types.ts` follows.
 
+**3.3 built 2026-11-18:** `d767beb`, `0abbcbf`, `4b346cd`. `tool-retrieval.mjs`
+932 → 465 lines, `tool-filter.mjs` 594 → 252, `search-tools-provider.mjs`
+378 → 248, `test-tool-retrieval.mjs` 1823 → 1083. *Deviations:*
+- `tool-retrieval.mjs` is 465 lines, not ~250: BM25 and the RRF stay,
+  because `search_tools` ranks with them (keep list: "one scorer, fused").
+- Four p5 tasks stay, none with `withhold`: `p5-vague-config`
+  (read_text_file is deferred, so it is a catalog task; a test holds that)
+  and the three drift tasks. Seven went, six for withholding a core tool and one a
+  duplicate of p2-delete-confirmed.
+- The retrieval eval is search cases only (32). The 28 selection cases and
+  the bench tasks loaded as them went: nothing in production ranks a
+  conversation now. Refrozen against Nest's bge sidecar: the same 28.
+- `stripAttachmentNote` went from shared/agent-core (only the text
+  version 2 query used it).
+- The Tools tab's status no longer says "every tool is still being sent"
+  while the search model loads: the catalog needs no embedder, and
+  search_tools matches by keyword until it is ready.
+
+*Gaps:*
+- **Retrieval is still off by default (D8).** 3.2 decided what "on"
+  means, not whether new installs get it; that is open, for the user.
+- The launcher changes have not been clicked (`testing-checklist.md`,
+  "Tool retrieval: the catalog").
+- No task finds a plugin tool through the catalog (3.2's gap, unchanged).
+- A profile keeps its old retrieval fields in `profiles.json`; they are
+  ignored, not removed.
+
 **Detail and what this supersedes:**
 - `tool-retrieval-fixes-benchmarks.md`: B1, B2, B4, B5 are not run (they tune
   what 3.3 deletes); B3 is replaced by arm C; H6 and H7 are not built; B0's
