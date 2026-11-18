@@ -30,6 +30,10 @@
 //                              reads x-redstart-retrieval-config. Keys:
 //                              mode, the only one since master plan 3.3.
 //                              Benchmarks H1)
+//     [--allow-stale-daemon]   (run even when the local daemon started before
+//                              the newest change to daemon/, shared/ or bin/;
+//                              without it the bench stops, since the run
+//                              would measure older code. Warned in summary)
 //
 // Login on: put the bench account's API key in REDSTART_BENCH_API_KEY (or
 // pass --api-key, which then sits in your shell history). Use a dedicated
@@ -63,7 +67,7 @@ const FLAGS = {
 }
 export const RETRIEVAL_MODES = ['server', 'off']
 export const PLAN_MODES = ['full', 'tool', 'off']
-const SWITCHES = { '--thinking': 'thinking', '--keep': 'keep', '--quiet': 'quiet', '--runtime': 'runtime' }
+const SWITCHES = { '--thinking': 'thinking', '--keep': 'keep', '--quiet': 'quiet', '--runtime': 'runtime', '--allow-stale-daemon': 'allowStaleDaemon' }
 
 export function parseArgs(argv) {
   const opts = { tasks: path.join(here, 'tasks'), repeat: 1, gateway: 'http://127.0.0.1:19080' }
@@ -133,6 +137,63 @@ function commitInfo() {
     return dirty ? `${sha}+dirty` : sha
   } catch {
     return 'unknown'
+  }
+}
+
+// The code a run measures is what nestd loaded when it started, not this
+// checkout. On 2026-11-18 three tool-text "arms" ran on a daemon that had
+// been up since before the arms existed, and every header named the
+// checkout's commit, so the stale code went unseen. The check compares the
+// daemon's start (its pid file) with the newest change to the code it loads.
+const DAEMON_CODE = ['daemon', 'shared', 'bin']
+
+/**
+ * Why the daemon is older than its code, or null.
+ * @param {number | null} startedAt  ms, from nestd.pid
+ * @param {number | null} changedAt  ms, newest commit or edit under DAEMON_CODE
+ * @param {string} changedWhat       e.g. "commit 76d57b2"
+ */
+export function staleDaemonWhy(startedAt, changedAt, changedWhat) {
+  if (!(startedAt > 0) || !(changedAt > 0) || startedAt >= changedAt) return null
+  return `Nest's daemon started ${new Date(startedAt).toISOString()}, before ${changedWhat} (${new Date(changedAt).toISOString()}), so it runs older code than this checkout. Restart the daemon itself (loading a profile restarts only the model) and run again, or pass --allow-stale-daemon.`
+}
+
+function nestConfigDir() {
+  if (process.env.REDSTART_TEST_USERDATA_DIR) return process.env.REDSTART_TEST_USERDATA_DIR
+  if (process.platform === 'win32') return process.env.APPDATA ? path.join(process.env.APPDATA, 'redstart') : null
+  if (process.platform === 'darwin') return path.join(process.env.HOME ?? '', 'Library', 'Application Support', 'redstart')
+  return path.join(process.env.XDG_CONFIG_HOME ?? path.join(process.env.HOME ?? '', '.config'), 'redstart')
+}
+
+function daemonStartedAt() {
+  const dir = nestConfigDir()
+  if (!dir) return null
+  try {
+    return Number(JSON.parse(fs.readFileSync(path.join(dir, 'nestd.pid'), 'utf8')).startedAt) || null
+  } catch {
+    return null
+  }
+}
+
+/** The newest commit or uncommitted edit under DAEMON_CODE: { at, what } or null. */
+function daemonCodeChangedAt() {
+  const nestRoot = path.resolve(here, '..', '..')
+  try {
+    const git = (args) => execFileSync('git', args, { cwd: nestRoot, encoding: 'utf8' })
+    const [ct, sha] = git(['log', '-1', '--format=%ct %h', '--', ...DAEMON_CODE]).trim().split(' ')
+    let newest = { at: Number(ct) * 1000, what: `commit ${sha}` }
+    // Porcelain paths are relative to the repository root, whatever the cwd.
+    const top = git(['rev-parse', '--show-toplevel']).trim()
+    for (const line of git(['status', '--porcelain', '--', ...DAEMON_CODE]).split('\n').filter(Boolean)) {
+      const rel = line.slice(3).split(' -> ').pop().replace(/^"|"$/g, '')
+      try {
+        const at = fs.statSync(path.join(top, rel)).mtimeMs
+        if (at > newest.at) newest = { at, what: `an uncommitted edit to ${rel}` }
+      } catch { /* deleted: no time to compare */ }
+    }
+    return newest
+  } catch {
+    return null
   }
 }
 
@@ -365,6 +426,14 @@ export async function main(argv, io = {}) {
   const { tasks, skipped } = splitRunnableTasks(loaded, opts)
   if (tasks.length === 0) throw new Error(`no task matched can run with these flags: ${skipped.join('; ')}`)
 
+  // Only a daemon on this machine has its pid file here.
+  let staleDaemon = null
+  if (['127.0.0.1', 'localhost', '[::1]'].includes(new URL(opts.gateway).hostname)) {
+    const changed = daemonCodeChangedAt()
+    staleDaemon = changed && staleDaemonWhy(daemonStartedAt(), changed.at, changed.what)
+    if (staleDaemon && !opts.allowStaleDaemon) throw new Error(staleDaemon)
+  }
+
   let nest
   let mcpTools
   try {
@@ -391,6 +460,11 @@ export async function main(argv, io = {}) {
   const warnings = []
   if (skipped.length) {
     const w = `warning: skipped ${skipped.length} task(s) these flags cannot run: ${skipped.join('; ')}`
+    warnings.push(w)
+    log(w)
+  }
+  if (staleDaemon) {
+    const w = `warning: ${staleDaemon.replace(/ Restart.*$/, '')} The header's commit is the checkout's, not the daemon's.`
     warnings.push(w)
     log(w)
   }

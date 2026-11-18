@@ -33,7 +33,7 @@ import * as net from 'node:net'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { main, parseArgs, labelWarning, fallbackWarning, accountWarning, askWarning } from './agent-bench/run.mjs'
+import { main, parseArgs, labelWarning, fallbackWarning, accountWarning, askWarning, staleDaemonWhy } from './agent-bench/run.mjs'
 import { approves, maxReplyTokens, endsInQuestion, TEXT_ASK_NO_ANSWER, toolsSentReport, retrievalConfigMismatch } from './agent-bench/lib/bench.mjs'
 import { answerFromTask } from './agent-bench/lib/ask.mjs'
 import { ASK_USER_DEFINITION, DISMISSED_RESULT } from '../../shared/agent-core/ask-user.mjs'
@@ -42,6 +42,10 @@ import { argumentProblem, computeMetrics } from './agent-bench/lib/metrics.mjs'
 import { findTaskFiles, loadTask } from './agent-bench/lib/task-file.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
+// The stale-daemon check reads nestd.pid from Nest's config folder; point it
+// at an empty one so the real daemon's age never fails these runs.
+const PID_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-pid-'))
+process.env.REDSTART_TEST_USERDATA_DIR = PID_DIR
 const FIXTURES = path.join(here, 'fixtures', 'agent-bench')
 const API_KEY = 'rsk_bench_test_key'
 const FAKE_TEMPLATE = '{% for m in messages %}<|im_start|>{{ m.role }}{% endfor %}'
@@ -584,6 +588,29 @@ await test('a label that does not name the loaded file is warned about', async (
   assert(labelWarning('Qwen3-4B-Instruct-2507-Q4_K_M', 'Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf'), 'wrong quant not flagged')
   eq(labelWarning('Qwen3-4B-Instruct-2507-UD-Q4_K_XL, embedded template', 'Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf'), null, 'label containing the file name')
   eq(labelWarning('anything', null), null, 'no /props, no warning')
+})
+
+await test('a daemon older than its code stops the run (2026-11-18 arms)', async () => {
+  assert(/before commit abc/.test(staleDaemonWhy(1000, 2000, 'commit abc') ?? ''), 'older daemon not flagged')
+  eq(staleDaemonWhy(3000, 2000, 'commit abc'), null, 'a newer daemon flagged')
+  eq(staleDaemonWhy(null, 2000, 'commit abc'), null, 'no pid file, no verdict')
+  // Through main: a pid file from 1970 stops it before any connection.
+  fs.writeFileSync(path.join(PID_DIR, 'nestd.pid'), JSON.stringify({ pid: 1, startedAt: 1 }))
+  try {
+    let threw = null
+    try {
+      await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', 'http://127.0.0.1:1', '--quiet'], { log: () => {} })
+    } catch (err) { threw = err }
+    assert(/runs older code than this checkout/.test(threw?.message ?? ''), `got ${threw?.message}`)
+    // With the switch it goes on to connect, and fails there instead.
+    threw = null
+    try {
+      await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', 'http://127.0.0.1:1', '--quiet', '--allow-stale-daemon'], { log: () => {} })
+    } catch (err) { threw = err }
+    assert(threw && !/older code/.test(threw.message), `got ${threw?.message}`)
+  } finally {
+    fs.rmSync(path.join(PID_DIR, 'nestd.pid'), { force: true })
+  }
 })
 
 await test('an owner or admin API key is warned about', async () => {
