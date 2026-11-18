@@ -7,6 +7,7 @@ import type { useExternalMcp } from '../hooks/useExternalMcp'
 import type { usePlugins } from '../hooks/usePlugins'
 import { SectionTitle, TogglePill, btnCls, inputCls } from '../components/ui'
 import { FolderPicker } from '../components/FolderPicker'
+import { api } from '../api/redstart'
 import { PythonCapabilityCard } from '../components/PythonCapabilityCard'
 import { DeferralCard } from '../components/DeferralCard'
 
@@ -563,7 +564,32 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
               </div>
             </div>
             {!capabilityConfig?.documents.outputDir && <p className="text-xs text-amber-400 mb-1.5">Choose a Documents folder first: this searches each user's files there.</p>}
-            <p className="text-xs text-zinc-600 mt-1.5">Gives the assistant search_documents: it finds the passages in a user's own files (uploads, chat attachments, conversation workspaces, created documents) that answer a question, and cites them. Private per account; nothing leaves the machine. The index is kept in Redstart's config folder and catches up on each search. Ranking uses the embedding model when it runs (it starts with tool retrieval) and word matching otherwise. Shared folders come with resource grants.</p>
+            <p className="text-xs text-zinc-600 mt-1.5">Gives the assistant search_documents: it finds the passages in a user's own files (uploads, chat attachments, conversation workspaces, created documents) that answer a question, and cites them. Private per account; nothing leaves the machine. The index is kept in Redstart's config folder and catches up on each search. Ranking uses the embedding model when it runs (it starts with tool retrieval) and word matching otherwise.</p>
+            {/* Shared Documents (master plan 6.2): one folder every account
+                searches too, read-only, limited per role on the Roles page. */}
+            <div className="flex items-center gap-2 mt-2">
+              <span className="text-xs text-zinc-400 flex-shrink-0">Shared documents:</span>
+              <span className="flex-1 min-w-0 text-xs text-zinc-400 truncate">
+                {capabilityConfig?.shared_documents?.rootDir || 'none (only each user\'s own files are searched)'}
+              </span>
+              <FolderPicker
+                mode="directory"
+                allowCreate={false}
+                title="Select the shared documents folder"
+                startPath={capabilityConfig?.shared_documents?.rootDir ?? undefined}
+                onPick={async (picked) => { await api().capabilities.setSharedDocuments({ rootDir: picked }); await caps.loadCapabilities() }}
+                className="px-2.5 py-1 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 rounded text-xs transition-colors flex-shrink-0">
+                Choose folder…
+              </FolderPicker>
+              {capabilityConfig?.shared_documents?.rootDir && (
+                <button
+                  onClick={async () => { await api().capabilities.setSharedDocuments({ clear: true }); await caps.loadCapabilities() }}
+                  className={btnCls.chip}>
+                  Clear
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-zinc-600 mt-1">Read-only: search_documents cites a passage from it as "Shared:", and the file explorer shows it. A role can limit an account to some of its folders (Settings, Roles).</p>
           </div>
 
           {/* ---- Memory ---- */}

@@ -196,6 +196,8 @@ export type RedstartAPI = {
     installPython: () => Promise<{ ok: boolean; error?: string }>
     // Catalog-only per capability (master plan Phase 3.1); null = the default.
     setDeferred: (config: { id: string; deferred: boolean | null }) => Promise<{ ok: boolean; error?: string }>
+    // Shared Documents' folder (master plan 6.2); { clear: true } removes it.
+    setSharedDocuments: (config: { rootDir?: string; clear?: boolean }) => Promise<{ ok: boolean; error?: string }>
   }
   plugins: {
     list: () => Promise<PluginSummary[]>

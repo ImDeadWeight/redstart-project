@@ -97,6 +97,9 @@ export function getCapabilitiesConfig() {
       hasBraveApiKey: !!caps.web_search.braveApiKeyEnc,
     },
     python: pythonStatus(caps.python),
+    // Shared Documents (master plan 6.2): the folder search_documents also
+    // searches for every account its role allows.
+    shared_documents: { rootDir: caps.document_search?.sharedRootDir ?? null },
     deferral: deferralStatus(),
   }
 }
@@ -322,6 +325,22 @@ export function setFolderScopedCapability(cap, config, { refreshLiveToolsConfig 
   return { ok: true }
 }
 
+// Shared Documents' folder (master plan 6.2). { rootDir } sets it (an
+// absolute path, like every capability root); { clear: true } removes it.
+// Read-only to the model: search_documents reads it, nothing writes to it.
+export function setSharedDocumentsConfig(config, { refreshLiveToolsConfig }) {
+  const channel = 'capabilities:set-shared-documents'
+  const bad = checkConfig(channel, config, 'rootDir')
+  if (bad) return refuse(channel, bad)
+  const patch = {}
+  if (config.clear === true) patch.sharedRootDir = null
+  else if (config.rootDir) patch.sharedRootDir = config.rootDir
+  else return refuse(channel, 'Expected { rootDir } or { clear: true }.')
+  setCapabilityConfig('document_search', patch)
+  refreshLiveToolsConfig()
+  return { ok: true }
+}
+
 export function capabilitiesHandlers(deps) {
   const handlers = {
     'capabilities:get': () => getCapabilitiesConfig(),
@@ -333,6 +352,7 @@ export function capabilitiesHandlers(deps) {
     'capabilities:set-web-search': (config) => setWebSearchConfig(config, deps),
     'capabilities:set-python': (config) => setPythonConfig(config, deps),
     'capabilities:set-deferred': (config) => setDeferredConfig(config, deps),
+    'capabilities:set-shared-documents': (config) => setSharedDocumentsConfig(config, deps),
     'capabilities:install-python': async () => installPythonRuntime(deps),
   }
 

@@ -231,6 +231,9 @@ export function buildGatewayConfig(llamaConfig) {
     documentSearch: {
       enabled: toolIdSet.has('document_search') && !!capabilities.documents.outputDir,
       documentsRoot: capabilities.documents.outputDir,
+      // Shared Documents (master plan 6.2): searched beside each account's own
+      // files, narrowed per role by grants.shared_documents (sharedGrants).
+      sharedRootDir: capabilities.document_search?.sharedRootDir ?? null,
     },
     memory: {
       enabled: toolIdSet.has('memory'),

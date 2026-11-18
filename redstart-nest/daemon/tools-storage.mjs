@@ -142,7 +142,10 @@ const DEFAULT_CAPABILITIES = {
   memory:      { enabled: false, promptBudgetChars: 1200 },
   // Document search (chat-tooling Phase 5a). Its index is Nest's own state
   // (<config>/document-index.sqlite); it searches the Documents root.
-  document_search: { enabled: false },
+  // sharedRootDir: Shared Documents (master plan 6.2), one admin-chosen
+  // folder search_documents also searches, read-only, narrowed per role by
+  // grants.shared_documents. null: none.
+  document_search: { enabled: false, sharedRootDir: null },
   // NOT a capability id: the global CONNECTION for Web Access's "web" search
   // source (chat-tooling Phase 4b). Which engine a profile uses is that
   // profile's tools.webSearchEngine; this only says where each engine is.

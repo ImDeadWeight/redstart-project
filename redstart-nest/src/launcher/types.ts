@@ -182,6 +182,9 @@ export type CapabilityConfig = {
   scholar: { enabled: boolean; venueFilter: string | null }
   web_search: { searxngUrl: string | null; hasBraveApiKey: boolean }
   python: PythonCapabilityStatus
+  // Shared Documents (master plan 6.2): searched by search_documents for
+  // every account its role's grants allow. null: none chosen.
+  shared_documents?: { rootDir: string | null }
   deferral: DeferralEntry[]
 }
 
