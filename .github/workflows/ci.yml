@@ -61,6 +61,11 @@ jobs:
       - name: "Security: CI parity (this list vs test:security)"
         run: node scripts/test-ci-parity.mjs
 
+      # Each app imports only itself and shared/ (docs/development.md, "Which
+      # app owns what"). Scans chat-ui/, both apps, shared/ and tooling/.
+      - name: "Boundaries: no app reaches into another app's source"
+        run: node scripts/test-boundaries.mjs
+
       - name: "Security: path containment (path-scope)"
         run: node scripts/test-path-scope.mjs
 

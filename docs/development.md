@@ -18,33 +18,56 @@ Repository layout, dev loops, and how to build the binaries and installers.
 
 ```
 redstart-project/
-├── docs/                  # This documentation, plus contracts and specs
-├── deploy/                # Service units, SCM procedure and Caddyfile for appliance installs
+├── chat-ui/               # The chat app (SvelteKit), shipped by both Nest and Twig
+│   └── android/           # Capacitor Android project (parked: "Settle Android")
 ├── redstart-nest/         # Redstart Nest (server manager)
 │   ├── bin/nestd.mjs      # The daemon's entrypoint (headless, or --shell-pipe under the shell)
 │   ├── daemon/            # The daemon: gateway, MCP server, providers, control plane
 │   │   ├── admin/         # The control plane's HTTP routes (auth, api, events, cors)
 │   │   ├── gateway/       # The data plane's non-proxied routes
 │   │   └── ipc/           # Handler bodies, one module per namespace
-│   ├── scripts/           # Security/contract test suites (npm run test:security)
-│   ├── src/
-│   │   ├── App.tsx        # React UI (the launcher — a browser page, served by :19083)
-│   │   ├── api/http.ts    # The launcher's HTTP client for the control plane
-│   │   └── chat-ui/       # SvelteKit chat frontend (shared with all clients)
-│   │       └── android/   # Capacitor Android project (Redstart Twig for Android)
+│   ├── scripts/           # Test suites (npm run test:security) and Nest's build steps
+│   ├── src/launcher/      # React UI (the launcher — a browser page, served by :19083)
 │   └── shell/             # The desktop shell (Tauri, Rust): window, tray, updater, installer
-├── shared/                # Code shared between nestd and twigd
+├── redstart-twig/
+│   └── desktop/           # Redstart Twig desktop (Windows and macOS)
+│       ├── bin/twigd.mjs  # twigd: Twig's Node half, run by the shell
+│       ├── daemon/        # what twigd does: the granted folder, local MCP, LAN scan
+│       │   └── fs/        # Twig's own local file tools (fs_*) — see below
+│       ├── shell/         # The Tauri shell (Rust): window, chat-ui origin, updater, installer
+│       └── SMOKE.md       # Manual checklist for what the suites cannot reach
+├── shared/                # Modules more than one app imports
+│   ├── agent-core/        # the agent loop (chat-ui, the bench, the daemon)
 │   ├── mcp-stdio-process.mjs   # stdio MCP child-process supervisor
 │   ├── shell-pipe.mjs     # the JSON-lines pipe between a Tauri shell and its Node half
 │   └── update-feed.mjs    # which GitHub release is an app's update
-└── redstart-twig/         # Redstart Twig client apps
-    └── windows/           # Redstart Twig desktop (Windows and macOS, despite the name)
-        ├── bin/twigd.mjs  # twigd: Twig's Node half, run by the shell
-        ├── daemon/        # what twigd does: the granted folder, local MCP, LAN scan
-        │   └── fs/        # Twig's own local file tools (fs_*) — see below
-        ├── shell/         # The Tauri shell (Rust): window, chat-ui origin, updater, installer
-        └── SMOKE.md       # Manual checklist for what the suites cannot reach
+├── tooling/               # Build tools both apps run: icons + mascot, Node staging,
+│                          # Rust licence lists, update manifests
+├── deps/node/             # (gitignored) the pinned Node 26, staged by tooling/stage-node.mjs
+├── deploy/                # Service units, SCM procedure and Caddyfile for appliance installs
+└── docs/                  # This documentation, plus contracts and specs
 ```
+
+### Which app owns what
+
+Three apps and two libraries. **Nothing imports another app's source.**
+
+| Code in | May import | Takes as a build artifact |
+|---|---|---|
+| `chat-ui/` | itself, `shared/` | — |
+| `redstart-nest/` | itself, `shared/`, `tooling/` | `chat-ui/dist` |
+| `redstart-twig/` | itself, `shared/`, `tooling/` | `chat-ui/dist` |
+| `shared/` | itself | — |
+| `tooling/` | itself, `shared/` | — |
+
+chat-ui is its own package (`@redstart/chat-ui`); Nest and Twig each run its
+build (`npm run build:chat`) and copy `chat-ui/dist` into their installers,
+and a dev-mode Nest serves the checkout's `chat-ui/dist`. Code that two apps
+need goes in `shared/`; a build step two apps run goes in `tooling/`. Tests
+may read another app's files as text to check a cross-app contract (one
+signing key, one version, the installer layout); they may not import its
+code. `redstart-nest/scripts/test-boundaries.mjs` enforces the table in
+`test:security` and CI; its header says exactly what it scans.
 
 **Two frontend frameworks, two jobs.** React owns the launcher — the surface that starts and stops the model, configures capabilities and manages accounts. SvelteKit owns the chat UI, served on the data plane and shared by every client (browser, Twig Windows, Twig Android, Blueprints). They share no state, no routing and no auth code, and neither imports from the other.
 
