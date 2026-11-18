@@ -120,6 +120,12 @@ await test('🔍 the gateway config carries the resolved list, tools on or off',
     const cfg = buildGatewayConfig({ ctxSize: 4096, tools: { enabled, activeToolIds: [] } })
     assert(Array.isArray(cfg.deferredCapabilities), `no list with tools ${enabled ? 'on' : 'off'}`)
     assert(cfg.deferredCapabilities.includes('file_system') && !cfg.deferredCapabilities.includes('git'), cfg.deferredCapabilities.join(','))
+    // The tool-text arm rides along the same way (tool-text-arms.mjs).
+    assert(cfg.toolTextArm === 'a', `default arm ${cfg.toolTextArm}`)
+    for (const [asked, got] of [['b', 'b'], ['c', 'c'], ['z', 'a']]) {
+      const armed = buildGatewayConfig({ ctxSize: 4096, toolTextArm: asked, tools: { enabled, activeToolIds: [] } })
+      assert(armed.toolTextArm === got, `asked ${asked}, got ${armed.toolTextArm}`)
+    }
   }
   setDeferralOverride('git', null)
 })
