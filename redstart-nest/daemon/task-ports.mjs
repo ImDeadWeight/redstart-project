@@ -456,18 +456,27 @@ async function runOnClient(pass, call) {
   if ((turnCtx.config?.disabledTools ?? []).includes(name)) {
     return { text: `Error: ${name} is not allowed on this server.`, isError: true }
   }
-  if (l.clientConnections === 0) {
+  const sink = l.clientSinks.at(-1)
+  if (!sink) {
     store.appendEvent(task.id, { type: 'tool_result', callId: call.id, name, isError: true, preview: 'client not connected' })
     return { text: clientUnavailable(name), isError: true }
   }
   store.updateTask(task.id, { inFlight: { callId: call.id, name }, status: 'waiting_client', waiting: { kind: 'client', callId: call.id, tool: name } })
-  store.appendEvent(task.id, { type: 'client_call', callId: call.id, name, arguments: call.function.arguments ?? '' })
+  // Stored for the record; the request itself goes to one client only (a
+  // live event on its stream), so a second tab never runs it too.
+  store.appendEvent(task.id, { type: 'client_call', callId: call.id, name })
   const result = await new Promise((resolve) => {
     const timer = setTimeout(() => { l.clientWaits.delete(call.id); resolve(null) }, CLIENT_CALL_TIMEOUT_MS)
     timer.unref?.()
     const onAbort = () => { clearTimeout(timer); l.clientWaits.delete(call.id); resolve(null) }
     pass.signal.addEventListener('abort', onAbort, { once: true })
-    l.clientWaits.set(call.id, (r) => { clearTimeout(timer); pass.signal.removeEventListener('abort', onAbort); resolve(r) })
+    l.clientWaits.set(call.id, { sinkId: sink.id, resolve: (r) => { clearTimeout(timer); pass.signal.removeEventListener('abort', onAbort); resolve(r) } })
+    try {
+      sink.send({ type: 'client_request', callId: call.id, name, arguments: call.function.arguments ?? '' })
+    } catch {
+      l.clientWaits.delete(call.id)
+      resolve(null)
+    }
   })
   if (pass.signal.aborted) throw abortError()
   pass.setRunning()

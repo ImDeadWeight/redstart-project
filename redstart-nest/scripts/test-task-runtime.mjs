@@ -787,9 +787,12 @@ await test('🔒 a connected client gets client_call, the run waits, and its POS
   const w = fakeWorld([call('c2', 'fs_read_file', { path: 'notes.txt' }), say('done')])
   const conv = newConversation()
   const t = start(conv, 'read notes', { clientTools: [FS_READ] })
-  const detach = runner.attachClient(t.id)
-  const callEvent = await waitFor(() => store.readEvents(t.id, 0).find((e) => e.type === 'client_call'), 'client_call')
+  const requests = []
+  const detach = runner.attachClient(t.id, (e) => requests.push(e))
+  const callEvent = await waitFor(() => requests.find((e) => e.type === 'client_request'), 'client_request')
   eq([callEvent.callId, callEvent.name, JSON.parse(callEvent.arguments).path], ['c2', 'fs_read_file', 'notes.txt'], 'the call')
+  const record = store.readEvents(t.id, 0).find((e) => e.type === 'client_call')
+  assert(record && record.arguments === undefined, 'the stored record carries the arguments')
   eq(statusOf(t.id), 'waiting_client', 'status while the client runs it')
   eq(store.getTask(t.id).waiting, { kind: 'client', callId: 'c2', tool: 'fs_read_file' }, 'waiting')
   assert(!store.readEvents(t.id, 0).some((e) => e.type === 'approval'), 'Nest asked for an approval: a client tool is the client\'s own card')
@@ -842,7 +845,26 @@ await test('the routes: POST /tasks takes clientTools, /client replaces them, /c
   await waitFor(() => ended(id), 'end')
   ev.req.emit('close')
   eq(toolMsg(w.bodies[1]), 'from the app', 'routed result')
-  assert(sseEvents(ev.res).some((e) => e.type === 'client_call' && e.callId === 'c5'), 'the client_call did not reach the stream')
+  assert(sseEvents(ev.res).some((e) => e.type === 'client_call' && e.callId === 'c5'), 'the client_call record did not reach the stream')
+  const liveFrames = ev.res.chunks.join('').split('\n\n').filter((b) => b.startsWith('data: ')).map((b) => JSON.parse(b.slice(6)))
+  const request = liveFrames.find((e) => e.live && e.type === 'client_request')
+  eq([request?.callId, request?.name], ['c5', 'fs_read_file'], 'the request went to this client as a live frame')
+})
+
+await test('🔒 two clients connected: the call goes to ONE of them, so a second tab never runs it too', async () => {
+  fakeWorld([call('c6', 'fs_read_file', {}), say('once')])
+  const conv = newConversation()
+  const t = start(conv, 'x', { clientTools: [FS_READ] })
+  const a = []
+  const b = []
+  const detachA = runner.attachClient(t.id, (e) => a.push(e))
+  const detachB = runner.attachClient(t.id, (e) => b.push(e))
+  await waitFor(() => a.length + b.length > 0, 'a request')
+  eq([a.length + b.length, a.length === 0 || b.length === 0], [1, true], `requests: a=${a.length} b=${b.length}`)
+  // The asked client leaving answers its call unavailable; the other stays.
+  ;(b.length ? detachB : detachA)()
+  await waitFor(() => ended(t.id), 'end')
+  ;(b.length ? detachA : detachB)()
 })
 
 await test('which paths are ours', () => {

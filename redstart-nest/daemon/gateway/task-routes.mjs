@@ -177,7 +177,9 @@ function streamEvents(req, res, task) {
   // ?client=1: this stream is the run's executor for the client's tools
   // (master plan 7.1). While one is open, a call to a client tool is sent
   // here; when the last one closes, a waiting call is answered unavailable.
-  const detach = new URL(req.url, 'http://x').searchParams.get('client') === '1' ? attachClient(task.id) : () => {}
+  const detach = new URL(req.url, 'http://x').searchParams.get('client') === '1'
+    ? attachClient(task.id, (event) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify({ live: true, at: Date.now(), ...event })}\n\n`) })
+    : () => {}
   req.on('close', () => { detach(); end() })
 
   for (const e of store.readEvents(task.id, sent)) write(e)

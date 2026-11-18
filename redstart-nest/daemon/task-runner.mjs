@@ -335,23 +335,32 @@ export function registerClientTools(id, tools) {
   return { ok: true }
 }
 
+let nextSinkId = 1
+
 /**
- * A client opened the task's event stream as its executor. Returns the
- * function to call when it closes; when the last one goes, every call
- * waiting on a client is answered as unavailable.
+ * A client opened the task's event stream as its executor. `send` delivers a
+ * live event to that one connection: a call goes to exactly ONE client (the
+ * most recent), so two tabs on one chat never both run it. Returns the
+ * function to call when it closes; a call waiting on that client is then
+ * answered as unavailable.
+ *
+ * @param {string} id
+ * @param {(event: object) => void} [send]
  */
-export function attachClient(id) {
+export function attachClient(id, send = () => {}) {
   const l = live.get(id)
   if (!l) return () => {}
-  l.clientConnections++
+  const sink = { id: nextSinkId++, send }
+  l.clientSinks.push(sink)
   let closed = false
   return () => {
     if (closed) return
     closed = true
-    l.clientConnections = Math.max(0, l.clientConnections - 1)
-    if (l.clientConnections === 0) {
-      for (const resolve of l.clientWaits.values()) resolve(null)
-      l.clientWaits.clear()
+    l.clientSinks = l.clientSinks.filter((s) => s !== sink)
+    for (const [callId, wait] of l.clientWaits) {
+      if (wait.sinkId !== sink.id) continue
+      l.clientWaits.delete(callId)
+      wait.resolve(null)
     }
   }
 }
@@ -361,9 +370,10 @@ export function clientResult(id, body) {
   const l = live.get(id)
   if (!l) return { ok: false, status: store.getTask(id) ? 409 : 404, error: 'This task is not running.' }
   const callId = typeof body?.callId === 'string' ? body.callId : ''
-  const resolve = l.clientWaits.get(callId)
-  if (!resolve) return { ok: false, status: 409, error: 'No call with that id is waiting for a result.' }
+  const wait = l.clientWaits.get(callId)
+  if (!wait) return { ok: false, status: 409, error: 'No call with that id is waiting for a result.' }
   l.clientWaits.delete(callId)
+  const resolve = wait.resolve
   const text = typeof body.text === 'string' ? body.text.slice(0, MAX_CLIENT_RESULT_CHARS) : ''
   resolve({ text, isError: body.isError === true })
   store.appendEvent(id, { type: 'client_result', callId, isError: body.isError === true })
@@ -406,7 +416,7 @@ function launch(id, { recovered = false, clientTools = [] } = {}) {
     done: Promise.resolve(), cancelledBy: null, suspended: false,
     // The client-executor port (master plan 7.1): what the client runs, how
     // many of its streams are open, and the calls waiting on it.
-    clientTools, clientConnections: 0, clientWaits: new Map(),
+    clientTools, clientSinks: [], clientWaits: new Map(),
   }
   live.set(id, l)
   l.done = run(id, l, { recovered }).catch((err) => {
