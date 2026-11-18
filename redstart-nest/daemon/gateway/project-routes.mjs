@@ -12,6 +12,9 @@
 //   PUT    /projects/:id    name and/or instructions
 //   DELETE /projects/:id    its chats MOVE OUT (user decision), its memories
 //                           go with it, its files folder is left on disk
+//   GET    /projects/:id/agents-md   the instructions as an AGENTS.md file
+//   PUT    /projects/:id/agents-md   { text }: an AGENTS.md replaces them
+//                                    (master plan Phase 5)
 //
 // Every project in a response carries `folder` ("Projects/<slug>/"), relative
 // to the user's Documents space; POST and GET make sure it exists.
@@ -28,6 +31,7 @@
 import * as fs from 'fs'
 import {
   listProjects, getProject, createProject, updateProject, deleteProject, projectFolder,
+  agentsMdFor, instructionsFromAgentsMd,
   MAX_NAME_CHARS, MAX_INSTRUCTIONS_CHARS, MAX_PROJECTS_PER_ACCOUNT,
 } from '../projects-storage.mjs'
 import { getCapabilities } from '../tools-storage.mjs'
@@ -39,9 +43,24 @@ import { sendJson, readJsonBody } from './http-json.mjs'
 import { logEvent } from '../logger.mjs'
 
 const ITEM = /^\/projects\/([A-Za-z0-9-]{1,64})$/
+const AGENTS_MD = /^\/projects\/([A-Za-z0-9-]{1,64})\/agents-md$/
+/** An AGENTS.md import's JSON body. The instructions limit applies after. */
+const MAX_AGENTS_MD_BODY_BYTES = 256 * 1024
 
 export function isProjectRoute(urlPath) {
-  return urlPath === '/projects' || ITEM.test(urlPath)
+  return urlPath === '/projects' || ITEM.test(urlPath) || AGENTS_MD.test(urlPath)
+}
+
+/** The body, or null when it is over `max` bytes or not JSON. Stops reading at the cap. */
+async function readCappedJson(req, max) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > max) return null
+    chunks.push(chunk)
+  }
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') } catch { return null }
 }
 
 const NOT_FOUND = { error: { message: 'Not found', type: 'not_found' } }
@@ -96,6 +115,35 @@ export async function handleProjectRoute(req, res, urlPath, account) {
       sendJson(res, 201, view(r.project))
       return true
     }
+
+    const agents = AGENTS_MD.exec(urlPath)
+    if (agents && req.method === 'GET') {
+      const project = getProject(account, agents[1])
+      if (!project) { sendJson(res, 404, NOT_FOUND); return true }
+      const body = Buffer.from(agentsMdFor(project))
+      res.writeHead(200, {
+        'Content-Type': 'text/markdown; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="AGENTS.md"',
+        'Content-Length': body.length,
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Expose-Headers': 'Content-Disposition',
+      })
+      res.end(body)
+      return true
+    }
+    if (agents && req.method === 'PUT') {
+      const body = await readCappedJson(req, MAX_AGENTS_MD_BODY_BYTES)
+      if (!body || typeof body.text !== 'string') {
+        sendJson(res, 400, { error: { message: 'Expected { text: <the AGENTS.md file> }', type: 'invalid_request_error' } })
+        return true
+      }
+      const r = updateProject(account, agents[1], { instructions: instructionsFromAgentsMd(body.text) })
+      if (!r.ok) { fail(res, r); return true }
+      logEvent('project', 'agents_md_imported', { account: account?.username ?? undefined })
+      sendJson(res, 200, view(r.project))
+      return true
+    }
+    if (agents) return false
 
     const item = ITEM.exec(urlPath)
     if (!item) return false

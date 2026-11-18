@@ -196,6 +196,23 @@ export function updateProject(account, id, body, { now = Date.now() } = {}) {
   return { ok: true, project: list[idx] }
 }
 
+// ---------------------------------------------------------------------------
+// AGENTS.md (master plan Phase 5)
+// ---------------------------------------------------------------------------
+// The file other coding agents read their project instructions from: plain
+// Markdown, no front matter. A project's instructions ARE such a file, so the
+// mapping is the text itself, both ways, and a round trip changes nothing.
+
+/** A project's instructions as an AGENTS.md file. */
+export function agentsMdFor(project) {
+  return `${project.instructions ?? ''}`.replace(/\s+$/, '') + '\n'
+}
+
+/** An AGENTS.md file's text as instructions: BOM and CRLF gone, trimmed. */
+export function instructionsFromAgentsMd(text) {
+  return String(text ?? '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim()
+}
+
 /** Where the folder lives under the user's Documents root, posix, with a trailing slash. */
 export const PROJECTS_DIR = 'Projects'
 export function projectFolder(project) {
