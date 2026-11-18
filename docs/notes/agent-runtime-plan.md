@@ -1297,7 +1297,7 @@ missing is the rule for choosing one, written down.
 - **Nest plugins** (`plugins.json`, the launcher's Plugins tab): stdio MCP
   servers spawned by nestd on the Nest host. One install serves every
   account and every device.
-- **Twig, local tools** (`redstart-twig/windows/daemon/`): the `fs_*` file
+- **Twig, local tools** (`redstart-twig/desktop/daemon/`): the `fs_*` file
   tools in a folder the user granted (`local-files.mjs`, granted only by the
   shell's folder dialog, never by the page), and **Twig's own MCP registry**,
   `twig-mcp.json`, whose stdio servers twigd spawns on the user's PC
