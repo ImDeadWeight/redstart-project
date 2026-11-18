@@ -11,8 +11,11 @@
 //   org      — visible to every account. Writing one takes the admin
 //              permission manageOrgWorkflows (permissions.mjs, plan D4).
 //
-//   <config>/workflows.json
-//   { personal: { "<scope key>": [workflow] }, org: [workflow] }
+// STORED AS SKILLS since master plan Phase 5: each workflow is a SKILL.md
+// folder (skills-storage.mjs, skill-format.mjs), which the model can also load
+// itself, and which imports and exports as other agents write it. This
+// module's API, the records it returns and the MCP view are what they were;
+// workflows.json is migrated once and left in place.
 //
 // The scope key is the account id, or '_local' with auth off — the same rule
 // and the same shared-with-auth-off posture as memories (memory-storage.mjs).
@@ -26,16 +29,14 @@
 // system prompt (plan D3).
 // =============================================================================
 
-import * as crypto from 'crypto'
-import * as path from 'path'
-import { configDir } from './platform-paths.mjs'
-import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
-import { memoryKey } from './memory-storage.mjs'
+import { MAX_SKILL_BODY_CHARS, MAX_SKILL_DESCRIPTION_CHARS, skillToWorkflowFields, workflowToSkill } from './skill-format.mjs'
+import { listSkills, getSkillById, writeSkill, deleteSkill } from './skills-storage.mjs'
 
 export const MAX_NAME_CHARS = 48
 export const MAX_TITLE_CHARS = 80
-export const MAX_DESCRIPTION_CHARS = 300
-export const MAX_INSTRUCTIONS_CHARS = 6000
+// The skill format's own limits, so an imported skill can be edited here.
+export const MAX_DESCRIPTION_CHARS = MAX_SKILL_DESCRIPTION_CHARS
+export const MAX_INSTRUCTIONS_CHARS = MAX_SKILL_BODY_CHARS
 export const MAX_EXAMPLE_CHARS = 3000
 export const MAX_INPUTS = 8
 export const MAX_INPUT_DESCRIPTION_CHARS = 200
@@ -47,18 +48,10 @@ export const MAX_ORG = 200
 // may not itself start with it, or the two namespaces would overlap again.
 export const ORG_PREFIX = 'org-'
 
-const SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
+// The skill name rule (skill-format.mjs): no "--", which a slug used to allow.
+const SLUG = /^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9]))*$/
 const INPUT_NAME = /^[a-z][a-z0-9_]{0,31}$/
 const PLACEHOLDER = /\{\{\s*([a-z][a-z0-9_]{0,31})\s*\}\}/g
-
-function file() { return path.join(configDir(), 'workflows.json') }
-function read() {
-  const data = readJsonOr(file(), { personal: {}, org: [] })
-  if (!data.personal || typeof data.personal !== 'object') data.personal = {}
-  if (!Array.isArray(data.org)) data.org = []
-  return data
-}
-function write(data) { writeJsonAtomic(file(), data) }
 
 // ---------------------------------------------------------------------------
 // Validation — pure
@@ -86,7 +79,7 @@ export function validateWorkflow(body, { scope }) {
   const name = typeof body.name === 'string' ? body.name.trim().toLowerCase() : ''
   if (!name) return { ok: false, error: 'name is required — it is the /command that runs the workflow' }
   if (name.length > MAX_NAME_CHARS) return { ok: false, error: `name is at most ${MAX_NAME_CHARS} characters` }
-  if (!SLUG.test(name)) return { ok: false, error: 'name may use lowercase letters, digits and inner hyphens only (e.g. "weekly-report")' }
+  if (!SLUG.test(name)) return { ok: false, error: 'name may use lowercase letters, digits and single inner hyphens only (e.g. "weekly-report")' }
   if (scope === 'personal' && name.startsWith(ORG_PREFIX)) {
     return { ok: false, error: `a personal workflow name may not start with "${ORG_PREFIX}" — that prefix marks organization workflows` }
   }
@@ -193,31 +186,38 @@ export function composeWorkflowMessage(workflow, args = {}) {
 // Store
 // ---------------------------------------------------------------------------
 
-/** Newest-updated first, for display. */
-function byUpdated(list) {
-  return [...list].sort((a, b) => b.updatedAt - a.updatedAt)
+/** A skill as the workflow record the routes and chat-ui have always read. */
+function toWorkflow(skill) {
+  return {
+    id: skill.id,
+    ...skillToWorkflowFields(skill),
+    createdAt: skill.createdAt,
+    updatedAt: skill.updatedAt,
+    createdBy: skill.createdBy,
+    ...(skill.updatedBy ? { updatedBy: skill.updatedBy } : {}),
+  }
 }
 
 export function listPersonal(account) {
-  return byUpdated(read().personal[memoryKey(account)] || [])
+  return listSkills(account, 'personal').map(toWorkflow)
 }
 
 export function listOrg() {
-  return byUpdated(read().org)
+  return listSkills(null, 'org').map(toWorkflow)
 }
 
-/** Look up by id within the caller's reach: their own personal ones, then org. */
+/** Look up by id within the caller's reach: their own personal ones, or org. */
 export function getWorkflow(account, scope, id) {
-  const data = read()
-  const list = scope === 'org' ? data.org : (data.personal[memoryKey(account)] || [])
-  return list.find((w) => w.id === id) || null
+  const s = getSkillById(scope === 'org' ? null : account, scope, id)
+  return s ? toWorkflow(s) : null
 }
 
-function listFor(data, account, scope) {
-  if (scope === 'org') return data.org
-  const key = memoryKey(account)
-  if (!data.personal[key]) data.personal[key] = []
-  return data.personal[key]
+// Metadata a workflow edit does not own: whatever else an imported skill
+// carried (an author, a version) survives the edit.
+const WORKFLOW_KEYS = ['redstart-title', 'redstart-inputs', 'redstart-example']
+function keepForeignMetadata(existing, next) {
+  const kept = Object.fromEntries(Object.entries(existing?.metadata ?? {}).filter(([k]) => !WORKFLOW_KEYS.includes(k)))
+  return { ...next, license: existing?.license ?? '', metadata: { ...kept, ...next.metadata } }
 }
 
 /**
@@ -229,49 +229,32 @@ function listFor(data, account, scope) {
 export function createWorkflow(account, scope, body, { now = Date.now() } = {}) {
   const v = validateWorkflow(body, { scope })
   if (!v.ok) return v
-  const data = read()
-  const list = listFor(data, account, scope)
   const cap = scope === 'org' ? MAX_ORG : MAX_PERSONAL_PER_ACCOUNT
-  if (list.length >= cap) return { ok: false, error: `the ${scope} limit of ${cap} workflows is reached; delete one first` }
-  if (list.some((w) => w.name === v.fields.name)) {
-    return { ok: false, error: `a ${scope} workflow named "${v.fields.name}" already exists`, code: 'conflict' }
+  const r = writeSkill(scope === 'org' ? null : account, scope, { skill: workflowToSkill(v.fields) }, { now, by: account?.username ?? null, cap })
+  if (!r.ok) {
+    if (r.code === 'conflict') return { ok: false, error: `a ${scope} workflow named "${v.fields.name}" already exists`, code: 'conflict' }
+    return { ...r, error: r.error.replace(/limit of (\d+) is reached/, 'limit of $1 workflows is reached') }
   }
-  const workflow = {
-    id: crypto.randomUUID(),
-    ...v.fields,
-    createdAt: now,
-    updatedAt: now,
-    createdBy: account?.username ?? null,
-  }
-  list.push(workflow)
-  write(data)
-  return { ok: true, workflow }
+  return { ok: true, workflow: toWorkflow(r.skill) }
 }
 
 export function updateWorkflow(account, scope, id, body, { now = Date.now() } = {}) {
   const v = validateWorkflow(body, { scope })
   if (!v.ok) return v
-  const data = read()
-  const list = listFor(data, account, scope)
-  const idx = list.findIndex((w) => w.id === id)
-  if (idx === -1) return { ok: false, error: 'not found', code: 'not_found' }
-  if (list.some((w, i) => i !== idx && w.name === v.fields.name)) {
-    return { ok: false, error: `a ${scope} workflow named "${v.fields.name}" already exists`, code: 'conflict' }
+  const owner = scope === 'org' ? null : account
+  const existing = getSkillById(owner, scope, id)
+  if (!existing) return { ok: false, error: 'not found', code: 'not_found' }
+  const skill = keepForeignMetadata(existing, workflowToSkill(v.fields))
+  const r = writeSkill(owner, scope, { skill }, { id, now, by: account?.username ?? null })
+  if (!r.ok) {
+    if (r.code === 'conflict') return { ok: false, error: `a ${scope} workflow named "${v.fields.name}" already exists`, code: 'conflict' }
+    return r
   }
-  list[idx] = { ...list[idx], ...v.fields, updatedAt: now, updatedBy: account?.username ?? null }
-  write(data)
-  return { ok: true, workflow: list[idx] }
+  return { ok: true, workflow: toWorkflow(r.skill) }
 }
 
 export function deleteWorkflow(account, scope, id) {
-  const data = read()
-  const list = listFor(data, account, scope)
-  const next = list.filter((w) => w.id !== id)
-  if (next.length === list.length) return false
-  if (scope === 'org') data.org = next
-  else data.personal[memoryKey(account)] = next
-  write(data)
-  return true
+  return deleteSkill(scope === 'org' ? null : account, scope, id)
 }
 
 // ---------------------------------------------------------------------------

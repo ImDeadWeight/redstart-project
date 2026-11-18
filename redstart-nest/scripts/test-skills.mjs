@@ -14,8 +14,12 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
+import { register } from 'node:module'
+
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-skills-test-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
+register('./auth-test-loader.mjs', import.meta.url)
+await import('./electron-stub.mjs')
 
 const fmt = await import('../daemon/skill-format.mjs')
 
@@ -127,6 +131,76 @@ await test('a workflow round-trips through a skill; a skill from another agent h
   eq(back, { ...w, description: 'Weekly report' }, 'round trip')
   const foreign = fmt.skillToWorkflowFields({ name: 'x', description: 'd', metadata: { 'redstart-inputs': 'not json' }, body: 'b' })
   eq([foreign.inputs, foreign.example, foreign.title], [[], null, ''], 'foreign')
+})
+
+console.log('\n-- the store (skills-storage.mjs) --')
+
+const { configDir } = await import('../daemon/platform-paths.mjs')
+const skills = await import('../daemon/skills-storage.mjs')
+const workflows = await import('../daemon/workflows-storage.mjs')
+const ann = { id: 'acct-ann', username: 'ann' }
+const bob = { id: 'acct-bob', username: 'bob' }
+
+await test('🔒 workflows.json migrates once into skill folders, keeping ids; the file itself is left alone', async () => {
+  const wfFile = path.join(configDir(), 'workflows.json')
+  fs.mkdirSync(configDir(), { recursive: true })
+  const before = {
+    personal: { 'acct-ann': [{ id: 'w1', name: 'weekly--report', title: 'Weekly', description: '', instructions: 'Do {{notes}}.', inputs: [{ name: 'notes', description: '', required: true }], example: null, createdAt: 5, updatedAt: 6, createdBy: 'ann' }] },
+    org: [{ id: 'w2', name: 'summary', title: '', description: 'Summarise', instructions: 'Summarise it.', inputs: [], example: { input: 'i', output: 'o' }, createdAt: 1, updatedAt: 2, createdBy: 'admin' }],
+  }
+  fs.writeFileSync(wfFile, JSON.stringify(before))
+  skills._resetMigrationForTests()
+  const mine = workflows.listPersonal(ann)
+  eq(mine.map((w) => [w.id, w.name, w.title, w.instructions, w.inputs.length, w.createdAt, w.updatedAt]), [['w1', 'weekly-report', 'Weekly', 'Do {{notes}}.', 1, 5, 6]], 'personal, "--" collapsed')
+  eq(workflows.listOrg().map((w) => [w.id, w.name, w.example]), [['w2', 'summary', { input: 'i', output: 'o' }]], 'org')
+  eq(JSON.parse(fs.readFileSync(wfFile, 'utf8')), before, 'workflows.json is untouched')
+  assert(fs.existsSync(path.join(configDir(), 'skills', 'personal', 'acct-ann', 'weekly-report', 'SKILL.md')), 'no SKILL.md on disk')
+  // Once: a second run (a new process) does not import again.
+  fs.writeFileSync(wfFile, JSON.stringify({ personal: { 'acct-ann': [{ id: 'w3', name: 'late', instructions: 'x' }] }, org: [] }))
+  skills._resetMigrationForTests()
+  eq(workflows.listPersonal(ann).map((w) => w.id), ['w1'], 'migrated twice')
+  eq(workflows.listPersonal(bob), [], 'another account sees nothing')
+})
+
+await test('🔒 a skill file path must be relative, forward-slashed, inside the folder and not a dot-file', async () => {
+  for (const ok of ['notes.md', 'scripts/fill.py', 'a/b/c/d/e.txt']) assert(skills.validSkillFilePath(ok), `${ok} refused`)
+  for (const bad of ['', '/etc/passwd', 'C:/x', '..\\x', '../x', 'a/../b', '.redstart.json', 'a/.hidden', 'a//b', 'a/b/c/d/e/f.txt', 'x\0y', 'a:b']) {
+    assert(!skills.validSkillFilePath(bad), `${JSON.stringify(bad)} accepted`)
+  }
+  eq(skills.checkSkillFiles({ '../x': 'a' })?.startsWith('"../x" is not a path'), true, 'checkSkillFiles names the path')
+  assert(/at most 20 files/.test(skills.checkSkillFiles(Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`f${i}.txt`, 'x']))) ?? ''), 'count')
+  assert(/over 200 KB/.test(skills.checkSkillFiles({ 'big.txt': Buffer.alloc(200 * 1024 + 1) }) ?? ''), 'size')
+})
+
+await test('writeSkill: create, rename on update, a conflict refused (a stray folder included), files replaced, reads contained', async () => {
+  const mk = (name, body = 'b') => ({ name, description: `d ${name}`, metadata: {}, body })
+  const a = skills.writeSkill(ann, 'personal', { skill: mk('alpha'), files: { 'ref/notes.md': 'hello', 'run.py': 'print(1)' } }, { by: 'ann' })
+  assert(a.ok, a.error)
+  eq(a.skill.files, ['ref/notes.md', 'run.py'], 'files')
+  eq(skills.readSkillFile(a.skill, 'ref/notes.md')?.toString(), 'hello', 'read')
+  eq(skills.readSkillFile(a.skill, '../SKILL.md'), null, 'a path out of the folder')
+  const dupe = skills.writeSkill(ann, 'personal', { skill: mk('alpha') })
+  eq([dupe.ok, dupe.code], [false, 'conflict'], 'same name')
+  fs.mkdirSync(path.join(path.dirname(a.skill.dir), 'stray'), { recursive: true })
+  const stray = skills.writeSkill(ann, 'personal', { skill: mk('stray') })
+  eq([stray.ok, stray.code], [false, 'conflict'], 'a folder that is not a skill is not overwritten')
+  const renamed = skills.writeSkill(ann, 'personal', { skill: mk('beta'), files: { 'only.txt': 'x' } }, { id: a.skill.id })
+  assert(renamed.ok, renamed.error)
+  eq([renamed.skill.name, renamed.skill.id, renamed.skill.files, fs.existsSync(a.skill.dir)], ['beta', a.skill.id, ['only.txt'], false], 'renamed, same id, files replaced')
+  assert(skills.deleteSkill(ann, 'personal', a.skill.id) && !fs.existsSync(renamed.skill.dir), 'delete')
+})
+
+await test('a workflow edit keeps what an imported skill carried that the editor does not show', async () => {
+  const imported = skills.writeSkill(ann, 'personal', { skill: { name: 'imported', description: 'From elsewhere', license: 'MIT', metadata: { author: 'Someone' }, body: 'Steps.' } })
+  assert(imported.ok, imported.error)
+  const w = workflows.getWorkflow(ann, 'personal', imported.skill.id)
+  eq([w.name, w.description, w.instructions, w.inputs], ['imported', 'From elsewhere', 'Steps.', []], 'read as a workflow')
+  const r = workflows.updateWorkflow(ann, 'personal', w.id, { ...w, instructions: 'New steps.' })
+  assert(r.ok, r.error)
+  const after = skills.getSkillById(ann, 'personal', w.id)
+  eq([after.body, after.license, after.metadata.author], ['New steps.', 'MIT', 'Someone'], 'license and foreign metadata kept')
+  const bad = workflows.createWorkflow(ann, 'personal', { name: 'two--hyphens', instructions: 'x' })
+  assert(!bad.ok && /single inner hyphens/.test(bad.error), `a "--" name: ${JSON.stringify(bad)}`)
 })
 
 fs.rmSync(tmpDir, { recursive: true, force: true })

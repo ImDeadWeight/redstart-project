@@ -399,14 +399,14 @@ The box's administrator can read `memories.json` on disk, as with every per-acco
 
 ## Workflows
 
-A workflow is a saved instruction for one recurring task, run from the chat by typing `/`. They're stored in `workflows.json`, in two scopes:
+A workflow is a saved instruction for one recurring task, run from the chat by typing `/`. Each one is stored as a skill, a folder with a `SKILL.md` file under `skills/` in Nest's config folder (an older `workflows.json` is copied there once and left in place), in two scopes:
 
 - **Personal** workflows belong to one account. Anyone may create them, and no capability or role turns that off. Another account can't list, edit, delete or run them: every route and MCP call resolves the account from the credential, never from a name the client sends. With login off, everyone shares one personal list, as with memories.
 - **Organization** workflows are listed for every account. Creating, editing or deleting one takes `manageOrgWorkflows`, an admin permission: admin-tier accounts have it unless their role withholds it, and no role can give it to a User-tier account. To let someone edit org workflows and nothing else, make them admin-tier with a role that limits administration to `manageOrgWorkflows`. With login off there is no account to hold the permission, so org workflows can't be written.
 
 **Workflow text never enters the system prompt.** Nest serves workflows as MCP prompts. Running one sends a *user* message, so a workflow is user-supplied content: it sits below the administrator's prompt blocks and can't change the assistant's guidelines or permissions. The client sends only the workflow's name and input values; Nest holds the text and composes the message, so a client can't run a workflow that doesn't exist. Input values fill `{{placeholders}}` in one pass and are never re-read as template.
 
-Everyone can read an organization workflow's full text on the **Workflows** page (in the sidebar, beside New chat) before running it. The box's administrator can read `workflows.json` on disk.
+Everyone can read an organization workflow's full text on the **Workflows** page (in the sidebar, beside New chat) before running it. The box's administrator can read the `skills/` folder on disk.
 
 ---
 
