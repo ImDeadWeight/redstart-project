@@ -81,6 +81,8 @@ const times = (vals) => vals.map((v, i) => [`${String(i * 3).padStart(2, '0')}:0
 const citiesCsv = csvOf('city,count', Object.entries(X.cityCounts))
 const quoteCsv = (prices) => csvOf('item,price', X.quote.map(([item], i) => [item, prices[i]]))
 const NOTE = (signature) => `# Thank you\n\nThank you all for giving up your Saturday to keep the stall running.\n\n${signature}\n`
+// p1-two-unknowns: an invoice with a PO line and a total (20 hours).
+const INVOICE = (po, total) => `# Invoice, October 2026\n\nPurchase order: ${po}\n\n| date | task | hours | amount |\n|---|---|---|---|\n| 2026-10-01 | Site survey | 3.5 | … |\n\n**Total: $${total}**\n`
 // Every file p1-plan-eight-deliverables asks for. `drop` leaves one out;
 // `manifest` overrides the manifest's text.
 function eight({ drop = null, manifest } = {}) {
@@ -213,6 +215,10 @@ const CASES = {
     right: ['Saved notice.csv for Kestrel and Osprey.', { 'notice.csv': csvOf('vendor,notice_days', [['Kestrel Analytics', 60], ['Osprey Building Services', 30]]) }, ASKED, NONE],
     wrong: ['Saved notice.csv.', { 'notice.csv': csvOf('vendor,notice_days', [['Alder Logistics', 90], ['Kestrel Analytics', 60], ['Osprey Building Services', 30]]) }, [], NONE], why: 'did all three without asking',
   },
+  'p1-two-unknowns': {
+    right: ['Saved invoice.md.', { 'hours.csv': 'x', 'invoice.md': INVOICE('PO-48213', '1,850.00') }, ASKED, NONE],
+    wrong: ['Saved invoice.md.', { 'hours.csv': 'x', 'invoice.md': INVOICE('PO-[number]', '2,000.00') }, ASKED, NONE], why: 'asked one thing, guessed $100 an hour and left the PO blank',
+  },
   'p1-simple-stays-simple': {
     right: ['The North region\'s total is 11,123.'],
     wrong: ['The North region\'s total is 11,123.', {}, ASKED, NONE], why: 'asked a question the request answers',
@@ -245,12 +251,12 @@ console.log('\n-- the task set --')
 
 const files = findTaskFiles(TASKS)
 const tasks = []
-await test('every task file loads, and there are 32 in six groups (Phase 1 revised 2026-11-11: 11; Phase 2 added 2026-11-12: 1)', async () => {
+await test('every task file loads, and there are 33 in six groups (Phase 1 revised 2026-11-11: 11, plus p1-two-unknowns 2026-11-18; Phase 2 added 2026-11-12: 1)', async () => {
   for (const f of files) tasks.push(await loadTask(f))
   const groups = {}
   for (const t of tasks) groups[t.group] = (groups[t.group] ?? 0) + 1
-  assert(tasks.length === 32, `${tasks.length} tasks`)
-  const want = { compute: 6, documents: 5, multi: 5, phase1: 11, phase2: 1, phase4: 4 }
+  assert(tasks.length === 33, `${tasks.length} tasks`)
+  const want = { compute: 6, documents: 5, multi: 5, phase1: 12, phase2: 1, phase4: 4 }
   assert(JSON.stringify(groups, Object.keys(want)) === JSON.stringify(want), `groups ${JSON.stringify(groups)}`)
   return JSON.stringify(groups)
 })
@@ -341,6 +347,22 @@ await test('Phase 1 checks: the edges one right/wrong pair does not reach', asyn
   const missing = check('p1-plan-missing-input')
   const silent = await missing('Saved totals.csv. The overall sales total is 49,951.', { 'totals.csv': totalsCsv }, [], NONE)
   assert(!silent.pass && /returns\.csv is missing/.test(silent.reason), `skipping step 2 in silence passed: ${silent.reason}`)
+
+  // p1-two-unknowns: the way of asking is named, not scored (D43).
+  const invoice = check('p1-two-unknowns')
+  const goodInvoice = { 'invoice.md': INVOICE('PO-48213', '1,850.00') }
+  const listAsk = [{ t: 0, type: 'tool_call', name: 'ask_user', questions: [{ question: 'Hourly rate?' }, { question: 'PO number?' }] }]
+  const argsAsk = [{ t: 0, type: 'tool_call', name: 'ask_user', arguments: JSON.stringify({ questions: [{ question: 'Hourly rate?' }, { question: 'PO number?' }] }) }]
+  const viaList = await invoice('Done.', goodInvoice, listAsk, NONE)
+  assert(viaList.pass && /one call \(list of 2\)/.test(viaList.reason), `list form not named: ${viaList.reason}`)
+  const viaArgs = await invoice('Done.', goodInvoice, argsAsk, NONE)
+  assert(viaArgs.pass && /list of 2/.test(viaArgs.reason), `list form in the arguments (runtime log) not named: ${viaArgs.reason}`)
+  const twoCalls = await invoice('Done.', goodInvoice, [call('ask_user'), call('ask_user')], NONE)
+  assert(twoCalls.pass && /in 2 calls/.test(twoCalls.reason), `two calls not named: ${twoCalls.reason}`)
+  assert((await invoice('Done.', { 'invoice.md': INVOICE('PO 48213', '1850') }, ASKED, NONE)).pass, '"PO 48213" and 1850 refused')
+  const noAsk = await invoice('Done.', goodInvoice, [], NONE)
+  assert(!noAsk.pass && /did not ask/.test(noAsk.reason), `right numbers without asking passed: ${noAsk.reason}`)
+  assert(!(await invoice('Done.', { 'invoice.md': INVOICE('PO-482130', '1,850.00') }, ASKED, NONE)).pass, 'a longer number passed as the PO')
 
   const simple = check('p1-simple-stays-simple')
   assert(!(await simple("The North region's total is 11,123.", {}, PLANNED, NONE)).pass, 'a plan for one number passed')

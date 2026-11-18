@@ -11,7 +11,7 @@
 // The asking tasks now need a fact that is in no file and cannot be guessed;
 // the planning tasks are long enough, or contain an impossible step, so a plan
 // has something to do.
-import { allAssistantText, asked, fail, findFile, fixture, groupSum, mentionsNumber, normalize, parseCsv, pass, planned, saysNotFound } from './lib.mjs'
+import { allAssistantText, asked, fail, findFile, fixture, groupSum, mentionsNumber, normalize, parseCsv, pass, planned, saysNotFound, toolCallsNamed } from './lib.mjs'
 
 const people = () => JSON.parse(fixture('people.json'))
 const regionTotals = () => groupSum(fixture('sales.csv'), 'region', 'amount')
@@ -284,4 +284,43 @@ export function skippedTheImpossibleStep(finalText, files, events, ctx) {
   if (!mentionsNumber(text, grandTotal())) problems.push(`step 3: overall total ${grandTotal()} not stated`)
   if (!(/returns\.csv/i.test(text) && (saysNotFound(text) || SAYS_MISSING.test(text)))) problems.push('the answer does not say returns.csv is missing')
   return problems.length ? fail(problems.join('; ')) : pass('did steps 1 and 3, made no net.csv, and said returns.csv is missing')
+}
+
+// p1-two-unknowns (D43, 2026-11-18): two facts in no file, the rate and the
+// purchase order number. Both must reach invoice.md. How they were asked is
+// not scored, only named: one ask_user carrying both (D43's list form) or
+// one call per fact. That split is what the task was added to count.
+const HOURLY_RATE = 92.5
+const PO_NUMBER = 'PO-48213'
+
+/** How many questions one ask_user call carried: the logged list, else its arguments. */
+function questionCount(e) {
+  if (Array.isArray(e.questions)) return e.questions.length
+  try {
+    const a = typeof e.arguments === 'string' ? JSON.parse(e.arguments) : e.arguments
+    return Array.isArray(a?.questions) ? a.questions.length : 1
+  } catch { return 1 }
+}
+
+/** "asked both in one call (list of 2)", "asked in 2 calls", "asked in reply text", ... */
+export function howAsked(events) {
+  const calls = toolCallsNamed(events, 'ask_user')
+  if (!calls.length) return (events ?? []).some((e) => e.type === 'text_ask') ? 'asked in reply text' : 'did not ask'
+  const most = Math.max(...calls.map(questionCount))
+  if (calls.length === 1) return most > 1 ? `asked both in one call (list of ${most})` : 'asked one question in one call'
+  return `asked in ${calls.length} calls${most > 1 ? ` (one a list of ${most})` : ''}`
+}
+
+export function invoiceWithBothAnswers(_text, files, events, ctx) {
+  const how = howAsked(events)
+  const f = findFile(files, ctx, /(^|\/)invoice[^/]*\.md$/i) ?? findFile(files, ctx, /\.md$/i)
+  if (!f) return fail(`no invoice.md; ${how}`)
+  const hours = parseCsv(fixture('hours.csv')).rows.reduce((n, r) => n + Number(r[2]), 0)
+  const total = hours * HOURLY_RATE
+  const problems = []
+  if (!mentionsNumber(f.text, total)) problems.push(`no total of ${total.toFixed(2)} (${hours} hours at $${HOURLY_RATE.toFixed(2)})`)
+  // The digits are the fact; "PO 48213" or "#48213" is the same number.
+  if (!/(^|\D)48213(\D|$)/.test(normalize(f.text))) problems.push(`no ${PO_NUMBER}`)
+  if (problems.length) return fail(`${problems.join('; ')}; ${how}`)
+  return asked(events) ? pass(`both answers in the invoice; ${how}`) : fail('the rate and PO number are in no file, yet it did not ask')
 }
