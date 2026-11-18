@@ -588,7 +588,9 @@ The accurate one-line summary of the privacy model is **local inference with adm
 | `test-admin-bootstrap` | the setup code is checked before anything else; create and reset are one door; login gives a non-owner the same answer as a wrong password |
 | `test-admin-api` | every launcher method has a route, every route refuses an anonymous caller and an admin-tier session, and the local-only exclusions stay exactly the client-machine actions |
 | `test-ci-parity` | every local suite also gates pull requests |
-| chat-ui `security.test.ts` | containment, SSRF, beacon and download-endpoint behaviour in the client |
+| `test-daemon-security` | accounts default to auth required; no localhost or LAN exemption; sessions, logout, revocation and the role hierarchy; beacon payload minimalism; the File System containment gate; `/files/download` auth, containment and both roots |
+| `test-document-formats` | source and data formats written verbatim; a document's download marker is relative, never an absolute server path; a supplied filename cannot traverse |
+| chat-ui `security.test.ts` | a tool's display label never replaces its wire name (the name bans match on); the `[FILE: …]` marker regex the UI uses |
 
 The distinction worth drawing: these are mostly **adversarial and integration** tests rather than unit tests. Where a claim is about the network, the test opens a socket; where it is about isolation, it creates two accounts and has one reach for the other's files.
 

@@ -184,6 +184,9 @@ jobs:
       - name: "Security: document search is per account; index, citations, sync"
         run: node scripts/test-document-search.mjs
 
+      - name: "Documents: formats written verbatim, tables, the [FILE:] marker"
+        run: node scripts/test-document-formats.mjs
+
       - name: "Security: external MCP endpoint validation"
         run: node scripts/test-external-mcp-url.mjs
 
@@ -259,6 +262,9 @@ jobs:
       - name: "Security: auth / sessions / roles"
         run: node scripts/test-auth.mjs
 
+      - name: "Security: accounts / beacon / containment gate / download endpoint"
+        run: node scripts/test-daemon-security.mjs
+
       - name: "Security: session persistence / plane binding"
         run: node scripts/test-sessions.mjs
 
@@ -314,12 +320,12 @@ jobs:
       - name: "Daemon: nestd under a shell (pipe protocol, shell's key, EOF stops it)"
         run: node scripts/test-shell-pipe.mjs
 
-      - name: "Security: containment / SSRF / beacon / download endpoint (vitest)"
+      - name: "Security: chat-ui tool display names / file markers (vitest)"
         run: npm --prefix src/chat-ui run test:security
 
       # The security-focused vitest step above runs only security.test.ts. The
       # rest of the unit project guards behavior that has silently regressed
-      # before — document table rendering, the tool-call fallback parser — so it
+      # before — the tool-call fallback parser, stored-message parity — so it
       # runs here too rather than only on developer machines.
       - name: "Unit tests (vitest)"
         run: npm --prefix src/chat-ui run test:unit -- --run
