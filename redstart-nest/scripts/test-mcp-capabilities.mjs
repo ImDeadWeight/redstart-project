@@ -363,7 +363,7 @@ async function main() {
   // client's card is held by Nest when it comes through call_tool, as the
   // inner tool and arguments, until decided; the decided id runs it once.
   {
-    updateMcpConfig({ ...baseConfig, documents: { enabled: true, outputDir: tmpDocsDir }, toolRetrieval: { enabled: true, mode: 'catalog' }, deferredCapabilities: ['documents'] })
+    updateMcpConfig({ ...baseConfig, documents: { enabled: true, outputDir: tmpDocsDir }, toolRetrieval: { enabled: true }, deferredCapabilities: ['documents'] })
     const args = { title: 'Via The Catalog', content: 'hello', format: 'markdown' }
     const via = (meta) => client.call('tools/call', { name: 'call_tool', arguments: { name: 'create_document', arguments: args }, ...(meta ? { _meta: meta } : {}) })
     // Recursive: documents land in the caller's own folder under the root.

@@ -608,9 +608,10 @@ async function main() {
   })
   setEmbedPortForTests(closedPort)
 
-  await test('🔒 with retrieval on and no embedding server, the request is byte-identical too', async () => {
-    // A real connection-refused, not a mocked one. It is the state every install
-    // is in until the model is downloaded, so it is the one that has to be free.
+  await test('🔒 with retrieval on and nothing deferred in the request, the request is byte-identical too', async () => {
+    // The catalog needs no embedder (closedPort is a real connection-refused):
+    // a request that carries no deferred tool goes out exactly as with
+    // retrieval off.
     updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: false } })
     await completions(retrievalBody())
     const off = JSON.stringify(lastForwarded)
@@ -657,98 +658,68 @@ async function main() {
     updateGatewayConfig(baseConfig)
   })
 
-  // Same premise as above (no embedding server on the real port), same guard.
-  await test('🔒 retrieval that fails open discloses nothing — "enabled" is not "narrowed"', async () => {
-    // No embedding server, so the filter forwards the full list. The block is
-    // gated on tools having actually gone, not on the setting, so a request
-    // that kept everything must not be told it is looking at a subset.
+  await test('🔒 a request the catalog took nothing from discloses nothing — "enabled" is not "narrowed"', async () => {
+    // Nothing in the request is deferred, so nothing goes. The block is gated
+    // on tools having actually gone, not on the setting, so a request that
+    // kept everything must not be told it is looking at a subset.
     updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
     await completions({
       messages: [{ role: 'user', content: 'what changed in the repo' }],
       tools: [toolDef('git_status'), toolDef('search_tools')],
     })
     const names = (lastForwarded.tools || []).map(t => t.function.name)
-    assert(names.length === 2, `the filter dropped something with no embedder: ${names.join(',')}`)
-    assert(!/subset chosen for this conversation/.test(systemOf()), 'claimed a narrowing that did not happen')
+    assert(names.length === 2, `the catalog dropped something with nothing deferred: ${names.join(',')}`)
+    assert(!/kept in a catalog|not everything this server can do/.test(systemOf()), 'claimed a narrowing that did not happen')
     updateGatewayConfig(baseConfig)
   })
 
-  // A stub embedding server on an ephemeral port, so the whole chain runs: embed
-  // the tools, embed the conversation, score, drop, compose. Vectors are
-  // deterministic and orthogonal — anything matching the query's subject gets
-  // [1,0] and everything else [0,1], so the relative floor (0.85 of the best
-  // score) cuts exactly the tools that scored zero.
-  const withStubEmbedder = async (fn) => {
-    const server = http.createServer((req, res) => {
-      let body = ''
-      req.on('data', chunk => { body += chunk })
-      req.on('end', () => {
-        let input = []
-        try { input = JSON.parse(body).input ?? [] } catch { /* answered below as empty */ }
-        res.setHeader('content-type', 'application/json')
-        res.end(JSON.stringify({
-          data: input.map((text, index) => ({
-            index,
-            object: 'embedding',
-            embedding: /git|repo|search_tools/.test(String(text)) ? [1, 0] : [0, 1],
-          })),
-        }))
-      })
-    })
-    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-    setEmbedPortForTests(/** @type {import('net').AddressInfo} */ (server.address()).port)
+  // Git deferred: the narrowing in the tests below is the catalog's (master
+  // plan 3.3), which needs no embedder and no scorer.
+  const withGitDeferred = async (fn, extra = {}) => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true }, deferredCapabilities: ['git'], ...extra })
     try {
       return await fn()
     } finally {
-      setEmbedPortForTests(closedPort)
-      await new Promise(resolve => server.close(resolve))
       updateGatewayConfig(baseConfig)
     }
   }
 
-  await test('🔒 a genuinely narrowed list is disclosed, and names search_tools when it survives', async () => {
-    await withStubEmbedder(async () => {
-      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+  await test('🔒 a genuinely narrowed list is disclosed as the catalog, with a call to copy', async () => {
+    await withGitDeferred(async () => {
       await completions({
         messages: [{ role: 'user', content: 'what changed in the git repo today' }],
-        tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch'), toolDef('search_tools')],
+        tools: [toolDef('git_status'), toolDef('create_document'), toolDef('search_tools'), toolDef('call_tool')],
       })
       const names = (lastForwarded.tools || []).map(t => t.function.name)
-      assert(names.includes('git_status'), 'the matching tool was dropped')
-      assert(names.includes('search_tools'), 'search_tools was dropped, so this tests the wrong branch')
-      assert(!names.includes('create_document'), 'nothing was filtered, so there is no narrowing to disclose')
+      assert(!names.includes('git_status'), 'nothing was deferred, so there is no narrowing to disclose')
+      assert(names.includes('search_tools') && names.includes('call_tool'), 'a discovery tool was dropped, so this tests the wrong branch')
       const system = systemOf()
-      assert(/subset chosen for this conversation/.test(system), 'the narrowing was not disclosed')
-      assert(/call search_tools/.test(system), 'search_tools survived but the remedy was not named')
+      assert(/kept in a catalog/.test(system), 'the narrowing was not disclosed')
+      assert(/call_tool\(\{"name"/.test(system), 'the remedy was not named with a call to copy')
     })
   })
 
   await test('🔒 a narrowed list with no search_tools is told what to say instead', async () => {
-    // The gap this closes: an OpenAI-compatible client that sends its own tools
-    // and never connects to Nest's MCP server is filtered like any other and
-    // has nothing to search with. It used to be told nothing at all.
-    await withStubEmbedder(async () => {
-      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+    // A client that sends its own tools and never connects to Nest's MCP
+    // server has nothing to search with. It used to be told nothing at all.
+    await withGitDeferred(async () => {
       await completions({
         messages: [{ role: 'user', content: 'summarise what changed in the git repo this week' }],
         tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch')],
       })
       const names = (lastForwarded.tools || []).map(t => t.function.name)
-      assert(names.includes('git_status'), 'the matching tool was dropped')
-      assert(!names.includes('web_fetch'), 'nothing was filtered, so there is no narrowing to disclose')
+      assert(!names.includes('git_status'), 'nothing was deferred, so there is no narrowing to disclose')
       const system = systemOf()
-      assert(/subset chosen for this conversation/.test(system), 'the narrowing was not disclosed')
+      assert(/not everything this server can do/.test(system), 'the narrowing was not disclosed')
       assert(!/search_tools/.test(system), 'named a tool this client cannot call')
       assert(/not available in this session/.test(system), 'the model was not told what to say instead')
     })
   })
 
   await test('🔒 redstart_retrieval: false keeps every post-ban tool and is never forwarded', async () => {
-    // The same request that the stub scorer narrows above, opted out. A client
-    // with its own curated list and no search_tools must be able to say "send
-    // them all" — and that must still be bounded by the ban list.
-    await withStubEmbedder(async () => {
-      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true }, disabledTools: ['create_document'] })
+    // A client with its own curated list must be able to say "send them all",
+    // and that must still be bounded by the ban list.
+    await withGitDeferred(async () => {
       await completions({
         messages: [{ role: 'user', content: 'summarise what changed in the git repo this week' }],
         tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch')],
@@ -756,10 +727,10 @@ async function main() {
       })
       const names = (lastForwarded.tools || []).map(t => t.function.name)
       assert(!('redstart_retrieval' in lastForwarded), 'the Redstart-only field was forwarded to llama-server')
-      assert(names.includes('web_fetch'), `the opt-out was ignored: ${names.join(',')}`)
+      assert(names.includes('git_status'), `the opt-out was ignored: ${names.join(',')}`)
       assert(!names.includes('create_document'), 'opting out of retrieval let a banned tool through')
-      assert(!/subset chosen for this conversation/.test(systemOf()), 'claimed a narrowing that did not happen')
-    })
+      assert(!/kept in a catalog|not everything this server can do/.test(systemOf()), 'claimed a narrowing that did not happen')
+    }, { disabledTools: ['create_document'] })
   })
 
   await test('🔒 retrieval runs only on Redstart\'s own surfaces, or when asked; bans apply to every client (master plan Phase 1)', async () => {
@@ -773,8 +744,7 @@ async function main() {
     const twigKey = issueClientKey(owner.account, { surface: 'twig' })
     const ysKey = issueClientKey(owner.account, { surface: 'yellowscript' })
     assert(twigKey.ok && ysKey.ok, `client keys: ${twigKey.error ?? ysKey.error}`)
-    await withStubEmbedder(async () => {
-      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true }, disabledTools: ['create_document'] })
+    await withGitDeferred(async () => {
       const ask = (extra = {}) => ({
         messages: [{ role: 'user', content: 'summarise what changed in the git repo this week' }],
         tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch')],
@@ -790,18 +760,18 @@ async function main() {
       eqOr(await sent(ask(), owner.apiKey), everyPostBan, 'an account-wide key with no field')
       eqOr(await sent(ask(), ysKey.apiKey), everyPostBan, 'a yellowscript key')
       eqOr(await sent(ask({ redstart_retrieval: 'true' }), owner.apiKey), everyPostBan, 'a truthy non-boolean asked')
-      eqOr(await sent(ask(), ownerToken), 'git_status', 'a session (nest-chat)')
-      eqOr(await sent(ask(), twigKey.apiKey), 'git_status', 'a twig key')
-      eqOr(await sent(ask({ redstart_retrieval: true }), owner.apiKey), 'git_status', 'an account-wide key that asked')
+      eqOr(await sent(ask(), ownerToken), 'web_fetch', 'a session (nest-chat)')
+      eqOr(await sent(ask(), twigKey.apiKey), 'web_fetch', 'a twig key')
+      eqOr(await sent(ask({ redstart_retrieval: true }), owner.apiKey), 'web_fetch', 'an account-wide key that asked')
       eqOr(await sent(ask({ redstart_retrieval: false }), twigKey.apiKey), everyPostBan, 'a twig key that opted out')
-    })
+    }, { disabledTools: ['create_document'] })
   })
 
-  await test('🔍 the catalog mode sends everything but the deferred tools, the same every turn, with no embedder (master plan Phase 3.1)', async () => {
+  await test('🔍 the catalog sends everything but the deferred tools, the same every turn, with no embedder (master plan 3.1, 3.3)', async () => {
     // closedPort is the embedder here: nothing is running, and the catalog
     // needs nothing. Twig's fs_read_file is a client tool, never deferred.
     const eqOr = (got, want, who) => assert(got === want, `${who}: sent ${got || '(none)'}, expected ${want}`)
-    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true, mode: 'catalog' }, deferredCapabilities: ['file_system', 'git'] })
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true }, deferredCapabilities: ['file_system', 'git'] })
     const tools = ['write_file', 'git_log', 'read_document', 'search_tools', 'call_tool', 'fs_read_file'].map(toolDef)
     const sentFor = async (content, token = ownerToken) => {
       const res = await completions({ messages: [{ role: 'user', content }], tools, redstart_retrieval_report: true }, token)
@@ -811,52 +781,43 @@ async function main() {
     const b = await sentFor('write a poem to a file')
     eqOr(a.names, 'call_tool,fs_read_file,read_document,search_tools', 'the catalog list')
     eqOr(b.names, a.names, 'a second, unrelated message')
-    assert(/^mode=catalog;/.test(a.config), `config header: ${a.config}`)
+    eqOr(a.config, 'mode=catalog', 'config header')
     const system = systemOf()
     assert(/kept in a catalog/.test(system) && /call_tool\(\{"name"/.test(system), 'the catalog was not disclosed with a call to copy')
-    assert(!/subset chosen for this conversation/.test(system), 'the select wording was used')
     // Phase 1 still decides who gets it at all: an account-wide key, no field.
     eqOr((await sentFor('what changed', owner.apiKey)).names, 'call_tool,fs_read_file,git_log,read_document,search_tools,write_file', 'an account-wide key')
+    // A profile's old per-turn fields are ignored: the list is the same.
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true, mode: 'select', growth: 'scored', scorer: 'cosine' }, deferredCapabilities: ['file_system', 'git'] })
+    eqOr((await sentFor('what changed in the git repo')).names, a.names, 'a profile with the old fields')
     updateGatewayConfig(baseConfig)
   })
 
-  await test('🔒 redstart_conversation_id is consumed and never forwarded, valid or not', async () => {
+  await test('🔒 redstart_conversation_id and redstart_retrieval_withhold are consumed and never forwarded, valid or not', async () => {
     for (const id of ['conv-123', 'bad id with spaces', 42]) {
       await completions({ ...retrievalBody(), redstart_conversation_id: id })
       assert(!('redstart_conversation_id' in lastForwarded), `the Redstart-only field was forwarded (${JSON.stringify(id)})`)
     }
-  })
-
-  await test('🔍 the report carries each sent tool\'s turn and reason, and the would-add count (6.1)', async () => {
-    await withStubEmbedder(async () => {
-      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
-      const res = await completions({
-        messages: [{ role: 'user', content: 'what changed in the git repo this week' }],
-        tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch'), toolDef('search_tools')],
-        redstart_retrieval_report: true,
-        redstart_conversation_id: 'origin-test',
-      })
-      const origin = res.headers.get('x-redstart-tools-origin') ?? ''
-      assert(/(^|,)git_status=1:first(,|$)/.test(origin), `origin: ${origin}`)
-      assert(/(^|,)search_tools=1:always(,|$)/.test(origin), `origin: ${origin}`)
-      assert(!/create_document/.test(origin), `a tool not sent has an origin: ${origin}`)
-      assert(res.headers.get('x-redstart-tools-would-add') === '0', 'would-add on a scored set')
-      const plain = await completions({ messages: [{ role: 'user', content: 'what changed in the git repo this week' }], tools: [toolDef('git_status')] })
-      assert(plain.headers.get('x-redstart-tools-origin') === null, 'the record went to a caller who did not ask')
+    await withGitDeferred(async () => {
+      const tools = [toolDef('git_status'), toolDef('web_fetch')]
+      for (const withhold of [['web_fetch'], 'web_fetch']) {
+        const res = await completions({ messages: [{ role: 'user', content: 'x' }], tools, redstart_retrieval_withhold: withhold })
+        assert(res.status === 200 && !('redstart_retrieval_withhold' in lastForwarded), 'withhold broke the request or was forwarded')
+        const names = (lastForwarded.tools || []).map(t => t.function.name)
+        assert(names.join() === 'web_fetch', `withhold still narrows (master plan 3.3 removed it): ${names}`)
+      }
     })
   })
 
-  await test('🔍 the report names the retrieval settings in effect, and no tools (benchmarks H1)', async () => {
-    await withStubEmbedder(async () => {
-      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true, scorer: 'cosine', growth: 'pins-only', minTools: 3 } })
+  await test('🔍 the report names the settings in effect, and no tools, origins or would-add (benchmarks H1; 3.3)', async () => {
+    await withGitDeferred(async () => {
       const body = {
         messages: [{ role: 'user', content: 'what changed in the git repo this week' }],
         tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch')],
       }
       const res = await completions({ ...body, redstart_retrieval_report: true })
       const config = res.headers.get('x-redstart-retrieval-config') ?? ''
-      assert(/^mode=select;scorer=cosine;growth=pins-only;text=1;min=3;callTool=0;floor=[\d.]+;rel=[\d.]+;margin=[\d.]+$/.test(config), `config: ${config}`)
-      assert(!/git_status|create_document|web_fetch/.test(config), 'the settings header carried tool names')
+      assert(config === 'mode=catalog', `config: ${config}`)
+      assert(res.headers.get('x-redstart-tools-origin') === null && res.headers.get('x-redstart-tools-would-add') === null, 'per-turn selection\'s headers are back')
       const exposed = res.headers.get('access-control-expose-headers') ?? ''
       assert(exposed.includes('x-redstart-retrieval-config'), 'a browser client cannot read it')
       const optedOut = await completions({ ...body, redstart_retrieval_report: true, redstart_retrieval: false })
@@ -866,36 +827,8 @@ async function main() {
     })
   })
 
-  await test('🔒 redstart_retrieval_withhold leaves a tool out until a search finds it, never a pinned one, and is never forwarded (benchmarks H2)', async () => {
-    await withStubEmbedder(async () => {
-      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
-      const tools = [toolDef('git_status'), toolDef('git_log'), toolDef('create_document'), toolDef('memory_save'), toolDef('search_tools')]
-      const ask = { role: 'user', content: 'what changed in the git repo this week' }
-      await completions({ messages: [ask], tools, redstart_retrieval_withhold: ['git_log', 'memory_save'], redstart_conversation_id: 'withhold-test' })
-      assert(!('redstart_retrieval_withhold' in lastForwarded), 'the Redstart-only field was forwarded to llama-server')
-      let names = (lastForwarded.tools || []).map(t => t.function.name)
-      assert(names.includes('git_status'), `the unwithheld match was dropped: ${names}`)
-      assert(!names.includes('git_log'), `a withheld tool was selected by score: ${names}`)
-      assert(names.includes('memory_save'), `an always-pinned tool was withheld: ${names}`)
-      // The model searches and finds it: the next turn pins it, withhold or not.
-      const found = [
-        ask,
-        { role: 'assistant', content: '', tool_calls: [{ id: 'st1', type: 'function', function: { name: 'search_tools', arguments: '{"query":"git log"}' } }] },
-        { role: 'tool', tool_call_id: 'st1', content: JSON.stringify({ match: 'close', tools: [{ name: 'git_log', description: 'x' }] }) },
-      ]
-      const res = await completions({ messages: found, tools, redstart_retrieval_withhold: ['git_log'], redstart_conversation_id: 'withhold-test', redstart_retrieval_report: true })
-      names = (lastForwarded.tools || []).map(t => t.function.name)
-      assert(names.includes('git_log'), `a search hit stayed withheld: ${names}`)
-      assert(/(^|,)git_log=\d+:search(,|$)/.test(res.headers.get('x-redstart-tools-origin') ?? ''), `origin: ${res.headers.get('x-redstart-tools-origin')}`)
-      // Malformed: ignored, not an error, and still consumed.
-      const bad = await completions({ messages: [ask], tools, redstart_retrieval_withhold: 'git_log' })
-      assert(bad.status === 200 && !('redstart_retrieval_withhold' in lastForwarded), 'a malformed withhold broke the request or was forwarded')
-    })
-  })
-
   await test('🔍 only the literal false opts out of retrieval', async () => {
-    await withStubEmbedder(async () => {
-      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+    await withGitDeferred(async () => {
       await completions({
         messages: [{ role: 'user', content: 'summarise what changed in the git repo this month' }],
         tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch')],
@@ -903,7 +836,7 @@ async function main() {
       })
       const names = (lastForwarded.tools || []).map(t => t.function.name)
       assert(!('redstart_retrieval' in lastForwarded), 'the Redstart-only field was forwarded to llama-server')
-      assert(!names.includes('web_fetch'), 'a non-boolean value opted out')
+      assert(!names.includes('git_status'), 'a non-boolean value opted out')
     })
   })
 
@@ -914,8 +847,7 @@ async function main() {
   }
 
   await test('🔍 with redstart_retrieval_report, the header lists exactly the forwarded tools', async () => {
-    await withStubEmbedder(async () => {
-      updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
+    await withGitDeferred(async () => {
       const res = await completions({
         messages: [{ role: 'user', content: 'what changed in the git repo today' }],
         tools: [toolDef('git_status'), toolDef('create_document'), toolDef('web_fetch')],
@@ -924,7 +856,7 @@ async function main() {
       const forwarded = (lastForwarded.tools || []).map(t => t.function.name)
       const reported = sentHeader(res)
       assert(reported !== null, 'no x-redstart-tools-sent header')
-      assert(!forwarded.includes('web_fetch'), 'setup: the stub scorer should have narrowed the list')
+      assert(!forwarded.includes('git_status'), 'setup: the catalog should have narrowed the list')
       assert(JSON.stringify(reported) === JSON.stringify(forwarded),
         `reported ${reported.join(',')} but forwarded ${forwarded.join(',')}`)
       assert(res.headers.get('x-redstart-tools-filtered') === '1', 'a narrowed list was reported as unfiltered')
@@ -942,12 +874,12 @@ async function main() {
     assert(sentHeader(res)?.length === 3, `expected all three tools: ${res.headers.get('x-redstart-tools-sent')}`)
   })
 
-  await test('🔍 "on" and "off" are told apart when nothing was removed: enabled but failed open, and opted out', async () => {
-    // No embedding server (the closed port), so retrieval runs and keeps
+  await test('🔍 "on" and "off" are told apart when nothing was removed: enabled with nothing deferred, and opted out', async () => {
+    // Nothing in the request is deferred, so the catalog runs and keeps
     // everything: filtered 0, as with retrieval off, but on.
     updateGatewayConfig({ ...baseConfig, ctxSize: 4096, toolRetrieval: { enabled: true } })
     const failedOpen = await completions({ ...retrievalBody(), redstart_retrieval_report: true })
-    assert(failedOpen.headers.get('x-redstart-tools-filtered') === '0', 'failed open but reported filtered')
+    assert(failedOpen.headers.get('x-redstart-tools-filtered') === '0', 'kept everything but reported filtered')
     assert(failedOpen.headers.get('x-redstart-retrieval') === 'on', 'enabled, but reported off')
     const optedOut = await completions({ ...retrievalBody(), redstart_retrieval: false, redstart_retrieval_report: true })
     assert(optedOut.headers.get('x-redstart-retrieval') === 'off', 'opted out, but reported on')

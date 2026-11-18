@@ -50,7 +50,7 @@ import {
   approvalRule,
   isApprovalEnforced,
 } from './tools-definitions.mjs'
-import { isCatalogMode } from './tool-filter.mjs'
+import { retrievalEnabled } from './tool-filter.mjs'
 import { isDeferredTool } from './tool-deferral.mjs'
 import { logEvent, logPolicy } from './logger.mjs'
 import { memoryKey } from './memory-storage.mjs'
@@ -257,7 +257,7 @@ function annotateTool(tool, cfg) {
       [APPROVAL_ENFORCED_META_KEY]: isApprovalEnforced(tool.name),
       // So a Redstart client knows the model will not see it in its list
       // (chat-ui's attachment note names only what the model can see).
-      ...(isCatalogMode(cfg?.toolRetrieval) && isDeferredTool(tool.name, cfg, capabilityForTool) ? { [META_DEFERRED_KEY]: true } : {}),
+      ...(retrievalEnabled(cfg?.toolRetrieval) && isDeferredTool(tool.name, cfg, capabilityForTool) ? { [META_DEFERRED_KEY]: true } : {}),
     },
   }
 }

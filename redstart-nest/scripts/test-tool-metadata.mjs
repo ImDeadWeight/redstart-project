@@ -147,17 +147,9 @@ console.log('\n-- the views (2.2) --')
 
 const tool = { type: 'function', function: { name: 'read_text_file', description: 'Read a file.', parameters: { type: 'object' } } }
 
-await test('🔒 text version 1 embeds exactly what it did before Phase 2, under the same key', () => {
+await test('🔒 the embedded text is name and description, as it was before Phase 2 (text version 2 went in master plan 3.3)', () => {
   assert(retrieval.toolEmbeddingText(tool) === 'read_text_file: Read a file.', retrieval.toolEmbeddingText(tool))
-  assert(retrieval.toolVectorKey(tool) === retrieval.toolContentHash(tool), 'the version 1 key moved: every stored vector would go cold')
-})
-
-await test('text version 2 adds the metadata, under a different key', () => {
-  const v2 = retrieval.toolEmbeddingText(tool, { textVersion: 2 })
-  assert(v2.startsWith('read_text_file: Read a file.\n') && v2.includes('File System folder'), v2)
-  assert(retrieval.toolVectorKey(tool, 2) !== retrieval.toolVectorKey(tool, 1), 'version 2 shares version 1 vectors')
-  const plain = { type: 'function', function: { name: 'nobody_tool', description: 'x' } }
-  assert(retrieval.toolEmbeddingText(plain, { textVersion: 2 }) === 'nobody_tool: x', 'an undescribed tool changed text')
+  assert(!('toolVectorKey' in retrieval), 'the versioned key is back: the store keys on toolContentHash')
 })
 
 await test('the BM25 document reads the name as words and carries the tags', () => {
@@ -165,7 +157,7 @@ await test('the BM25 document reads the name as words and carries the tags', () 
   assert(doc.includes('read text file') && doc.includes('config'), doc)
 })
 
-await test('a search result carries category and store and never a schema', () => {
+await test('a search result row carries category and store (the provider adds the schema)', () => {
   const row = retrieval.toolSearchResult(tool)
   assert(JSON.stringify(Object.keys(row)) === JSON.stringify(['name', 'category', 'store', 'description']), JSON.stringify(row))
   assert(row.category === 'files' && row.store.includes('File System'), JSON.stringify(row))

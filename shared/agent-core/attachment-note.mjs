@@ -19,44 +19,14 @@
  * not offered are not named: a small model calls what it is told about.
  */
 
-/**
- * How each block of the note opens. Exported so tool retrieval can leave the
- * note out of its query (tool-retrieval.mjs conversationQueryText): the note
- * names tools, and on attachment prompts it pulled the File System tools up
- * the ranking it then told the model not to use (tool retrieval second pass,
- * 1.2, P3). Built from the same strings attachmentNote() writes, so the two
- * cannot drift apart.
- */
-export const ATTACHMENT_NOTE_MARKERS = Object.freeze([
+// How each block of the note opens. It was exported for tool retrieval, which
+// left the note out of its query; that query went with per-turn selection
+// (master plan 3.3), and so did stripAttachmentNote.
+const ATTACHMENT_NOTE_MARKERS = Object.freeze([
 	"[Attached file saved to this chat's workspace:",
 	"[Attached files saved to this chat's workspace:",
 	"[Could not save to this chat's workspace:"
 ]);
-
-/**
- * A message's text without the attachment note chat-ui appended to it. Only a
- * note that runs to the end of the text, starting on a line of its own, is
- * removed: that is where chat-ui and the bench put it, and anything else is
- * the user's own words.
- *
- * @param {string} text
- * @returns {string}
- */
-export function stripAttachmentNote(text) {
-	if (typeof text !== 'string' || !text.includes('[')) return text;
-	let cut = -1;
-	for (const marker of ATTACHMENT_NOTE_MARKERS) {
-		let at = text.indexOf(marker);
-		while (at >= 0) {
-			if ((at === 0 || text[at - 1] === '\n') && (cut < 0 || at < cut)) {
-				if (text.trimEnd().endsWith(']')) cut = at;
-				break;
-			}
-			at = text.indexOf(marker, at + 1);
-		}
-	}
-	return cut < 0 ? text : text.slice(0, cut).trimEnd();
-}
 
 /**
  * @param {{

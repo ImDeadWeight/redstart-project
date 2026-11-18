@@ -39,8 +39,8 @@ import { beginCompletion, setUpstreamPort } from './completion-activity.mjs'
 import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/document-index-routes.mjs'
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
-import { filterRequestTools, estimateMessagesTokens, recordWireCost, retrievalConfigSummary, isCatalogMode } from './tool-filter.mjs'
-import { isConversationId, withheldToolNames, toolName } from './tool-retrieval.mjs'
+import { recordWireCost, retrievalConfigSummary, retrievalEnabled } from './tool-filter.mjs'
+import { toolName } from './tool-retrieval.mjs'
 
 let gatewayServer = null
 
@@ -243,12 +243,13 @@ export function retrievalSurface(surface) {
 // numbers it recorded as `wire`.
 //
 // @param {any} parsed the request body, already JSON-parsed
-// @param {{ account: any, surface: any, effectiveConfig: any, accountId: any, timeZone: string | null }} facts
-//   account and surface come from the credential, never from the body;
-//   accountId keys retrieval's cache (a device id with auth off).
+// @param {{ account: any, surface: any, effectiveConfig: any, accountId?: any, timeZone: string | null }} facts
+//   account and surface come from the credential, never from the body.
+//   accountId keyed per-turn selection's cache; callers still pass it, and it
+//   is unused since master plan 3.3.
 // @returns {Promise<{ parsed: any, wire: object }>}
 // ---------------------------------------------------------------------------
-export async function prepareCompletion(parsed, { account, surface, effectiveConfig, accountId, timeZone }) {
+export async function prepareCompletion(parsed, { account, surface, effectiveConfig, timeZone }) {
   // Redstart-specific request field: a MODE ID, never mode prose. The
   // composer validates it against MODE_IDS and drops anything unknown,
   // so a client cannot inject an instruction block by naming a mode
@@ -296,24 +297,11 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   const reportRequested = parsed.redstart_retrieval_report === true
   delete parsed.redstart_retrieval_report
 
-  // Redstart-specific request field: `redstart_conversation_id`, the client's
-  // id for this conversation. Retrieval keys the set it applied last turn on
-  // it (tool-retrieval.mjs conversationKey), under the caller's account, so
-  // an id can only ever name the caller's own entry; without it the key is a
-  // hash of the first user message, which compaction replaces (second pass
-  // 4.3). Anything but a short printable string is ignored. Consumed either
-  // way so llama-server never sees it.
-  const conversationId = isConversationId(parsed.redstart_conversation_id) ? parsed.redstart_conversation_id : null
+  // `redstart_conversation_id` and `redstart_retrieval_withhold` keyed and
+  // narrowed per-turn selection, which master plan 3.3 removed. chat-ui still
+  // sends the first and an older bench the second, so both are still
+  // consumed, and ignored, so llama-server never sees them.
   delete parsed.redstart_conversation_id
-
-  // Redstart-specific request field: `redstart_retrieval_withhold`, tool
-  // names retrieval leaves out of its selection (benchmarks H2), so the
-  // agent bench can make a task's tool something the model has to find. It
-  // can only narrow, like opting out: a withheld tool is still in the
-  // catalog search_tools and describe_tool search (which stays post-ban), and
-  // a pin (a search hit, a describe, a call, the always-pinned tools) is
-  // never withheld. Consumed either way so llama-server never sees it.
-  const withhold = withheldToolNames(parsed.redstart_retrieval_withhold)
   delete parsed.redstart_retrieval_withhold
 
   // BANS FIRST, PROMPT SECOND — and every value the prompt is derived
@@ -335,64 +323,26 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   parsed = enforceToolAllowList(parsed, effectiveConfig)
 
   // RETRIEVAL THIRD, and strictly between the two. Bans are a boundary;
-  // this is a selection over what survives one, so it can only ever
-  // shrink the post-ban list — and because it lands before the prompt is
-  // composed, the capability claims still describe what the model
-  // actually received. Off by default, and a failure of any kind returns
-  // the array by identity, so `parsed.tools` is unchanged.
+  // this narrows what survives one, so it can only ever shrink the post-ban
+  // list, and because it lands before the prompt is composed, the
+  // capability claims still describe what the model actually received.
   //
-  // The budget is measured on the WIRE, not from the Tools tab's
-  // estimate: that estimator walks the providers Nest would serve over
-  // MCP, while parsed.tools is composed client-side and is a different
-  // set. Reserving the messages plus a pins-only prompt gives a LOWER
-  // bound on the non-tool cost, which is what breaks the circularity of
-  // budgeting for a prompt that does not exist yet.
+  // On means the catalog (master plan 3.3): everything that is not deferred,
+  // the same list on every turn, so the prompt prefix never changes; the
+  // deferred tools are reached through search_tools and call_tool. No
+  // embedder and no per-conversation state, and nothing a client sends
+  // changes the list, beyond opting out.
   const toolsAfterBans = Array.isArray(parsed.tools) ? parsed.tools.length : 0
-  // Filled by retrieval: this conversation's record (6.1) and what a frozen
-  // set left out (4.1). The record reaches only a caller who asked for it.
-  /** @type {{ origins?: Record<string, { turn: number, why: string }>, wouldAdd?: number }} */
-  const retrievalRecord = {}
-  // The catalog mode (master plan Phase 3.1): not a selection at all. The
-  // list is everything that is not deferred, the same on every turn, so the
-  // prompt prefix never changes; the deferred tools are reached through
-  // search_tools and call_tool. No embedder, no per-conversation state, and
-  // nothing a client sends (withhold included) changes it.
-  const catalog = !retrievalOptOut && isCatalogMode(effectiveConfig.toolRetrieval)
-  if (catalog && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
+  const retrievalOn = !retrievalOptOut && retrievalEnabled(effectiveConfig.toolRetrieval)
+  if (retrievalOn && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
     parsed.tools = parsed.tools.filter((t) => !isDeferredTool(toolName(t), effectiveConfig, capabilityForTool))
-  } else if (!retrievalOptOut && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
-    const pinsOnlyPrompt = injectSystemContext(
-      [...(parsed.messages || [])], effectiveConfig,
-      {
-        hasTools: true,
-        account,
-        mode: requestedMode, project,
-        surface,
-        timeZone,
-        clientToolNames: [],
-        toolNames: [],
-        toolsFiltered: false,
-      },
-    )
-    parsed.tools = await filterRequestTools({
-      tools: parsed.tools,
-      messages: parsed.messages || [],
-      accountId,
-      conversationId,
-      settings: effectiveConfig.toolRetrieval,
-      ctxSize: effectiveConfig.ctxSize,
-      reservedTokens: estimateMessagesTokens(pinsOnlyPrompt),
-      record: retrievalRecord,
-      withhold,
-    })
   }
 
   const requestHasTools = Array.isArray(parsed.tools) && parsed.tools.length > 0
 
-  // Did retrieval actually take anything away? Counted rather than
-  // inferred from the setting, because filterRequestTools fails open and
-  // because selectTools returns a fresh array even when it kept
-  // everything — an identity check would report a subset that is not one.
+  // Did the catalog actually take anything away? Counted rather than
+  // inferred from the setting: with nothing deferred in the request, it
+  // removes nothing, and the prompt must not say it did.
   const toolsSent = Array.isArray(parsed.tools) ? parsed.tools.length : 0
   const toolsFiltered = toolsAfterBans > toolsSent
 
@@ -403,14 +353,11 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
     surface,
     timeZone,
     clientToolNames: clientToolNamesIn(parsed),
-    // Read here, after enforceToolAllowList and filterRequestTools have
-    // both had their say, so the capability claims describe the payload
+    // Read here, after enforceToolAllowList and the catalog have both had
+    // their say, so the capability claims describe the payload
     // the model is actually about to receive.
     toolNames: toolNamesIn(parsed),
     toolsFiltered,
-    // Which narrowing it was, for the disclosure's wording (system-prompt
-    // buildRetrieval): a catalog to search, not a per-turn subset.
-    catalog: catalog && toolsFiltered,
   })
 
   // What was really forwarded, recorded after every rewrite this function
@@ -424,18 +371,16 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
     tools: parsed.tools,
     messages: parsed.messages,
     ctxSize: effectiveConfig.ctxSize,
-    filtered: !retrievalOptOut && toolsAfterBans > 0 && effectiveConfig.toolRetrieval?.enabled === true,
+    filtered: retrievalOn && toolsAfterBans > 0,
     // For the caller's report only (retrievalReportHeaders). recordWireCost
     // reads counts and never these.
     report: reportRequested,
     toolNamesSent: toolNamesIn(parsed),
     toolsRemoved: toolsFiltered,
-    toolOrigins: retrievalRecord.origins ?? null,
-    wouldAdd: retrievalRecord.wouldAdd ?? 0,
     // The settings retrieval ran with (benchmarks H1), only when it ran.
     retrievalConfig: null,
   }
-  if (wire.filtered) wire.retrievalConfig = retrievalConfigSummary(effectiveConfig.toolRetrieval)
+  if (wire.filtered) wire.retrievalConfig = retrievalConfigSummary()
   recordWireCost(wire)
 
   return { parsed, wire }
@@ -448,8 +393,6 @@ export const RETRIEVAL_REPORT_HEADERS = Object.freeze({
   sent: 'x-redstart-tools-sent',
   filtered: 'x-redstart-tools-filtered',
   retrieval: 'x-redstart-retrieval',
-  origins: 'x-redstart-tools-origin',
-  wouldAdd: 'x-redstart-tools-would-add',
   config: 'x-redstart-retrieval-config',
 })
 
@@ -468,7 +411,7 @@ export const RETRIEVAL_REPORT_HEADERS = Object.freeze({
  * Only `wire` is read, which prepareCompletion builds after bans and
  * retrieval, so a banned tool can never appear here.
  *
- * @param {{ report?: boolean, toolNamesSent?: string[], toolsRemoved?: boolean, filtered?: boolean, toolOrigins?: Record<string, { turn: number, why: string }>|null, wouldAdd?: number, retrievalConfig?: string|null }|null|undefined} wire
+ * @param {{ report?: boolean, toolNamesSent?: string[], toolsRemoved?: boolean, filtered?: boolean, retrievalConfig?: string|null }|null|undefined} wire
  * @returns {Record<string, string>}
  */
 export function retrievalReportHeaders(wire) {
@@ -478,15 +421,6 @@ export function retrievalReportHeaders(wire) {
     [RETRIEVAL_REPORT_HEADERS.sent]: names.map(encodeURIComponent).join(','),
     [RETRIEVAL_REPORT_HEADERS.filtered]: wire.toolsRemoved ? '1' : '0',
     [RETRIEVAL_REPORT_HEADERS.retrieval]: wire.filtered ? 'on' : 'off',
-    // The conversation's record (second pass 6.1): for each tool sent, the
-    // turn it came in and why, as name=turn:why, comma-separated, the name
-    // percent-encoded as in the sent list. Empty when retrieval did not
-    // select (off, opted out, or failed open).
-    [RETRIEVAL_REPORT_HEADERS.origins]: names
-      .filter((n) => wire.toolOrigins?.[n])
-      .map((n) => `${encodeURIComponent(n)}=${wire.toolOrigins[n].turn}:${wire.toolOrigins[n].why}`)
-      .join(','),
-    [RETRIEVAL_REPORT_HEADERS.wouldAdd]: String(Number.isInteger(wire.wouldAdd) ? wire.wouldAdd : 0),
     // The settings in effect (benchmarks H1), so a bench row records what ran
     // instead of trusting its label. `off` when retrieval did not run.
     [RETRIEVAL_REPORT_HEADERS.config]: typeof wire.retrievalConfig === 'string' ? wire.retrievalConfig : 'off',

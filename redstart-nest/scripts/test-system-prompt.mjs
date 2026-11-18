@@ -308,26 +308,26 @@ await test('🔍 update_plan gets its when-to-plan line only when the request ca
 
 await test('🔒 a narrowed tool list says so, and points at the way out', async () => {
   // Every other block here stops the model claiming what the request does not
-  // support. This one stops the opposite error: with retrieval on, an absent
+  // support. This one stops the opposite error: with the catalog on, an absent
   // tool reads as a capability the deployment lacks, and the model says so.
   const { prompt, blocks } = composePrompt({
     config: LOCAL_ONLY_CONFIG,
     hasTools: true,
-    toolNames: ['postgres_query', 'search_tools'],
+    toolNames: ['postgres_query', 'search_tools', 'call_tool'],
     toolsFiltered: true,
     now: NOW,
   })
   assert(blocks.includes('retrieval'), 'no retrieval block after tools were removed')
-  assert(prompt.includes('subset chosen for this conversation'), 'the list is not described as partial')
-  assert(prompt.includes('call search_tools'), 'the remedy is not named')
-  assert(prompt.includes('never tell the user a capability is unavailable'), 'the failure mode is not ruled out')
+  assert(prompt.includes('kept in a catalog'), 'the list is not described as partial')
+  assert(prompt.includes('search_tools({') && prompt.includes('call_tool({'), 'the remedy is not named with a call to copy')
+  assert(prompt.includes('Never tell the user a capability is unavailable'), 'the failure mode is not ruled out')
   return 'partial list disclosed'
 })
 
 await test('🔒 a client with no search_tools is told what to say instead', async () => {
-  // search_tools is advertised only to clients connected to Nest's MCP server.
-  // An OpenAI-compatible client that sends its own tool definitions is filtered
-  // just the same and has nothing to call. Naming search_tools to that model
+  // search_tools and call_tool are advertised only to clients connected to
+  // Nest's MCP server. A client that sends its own tool definitions and asks
+  // for retrieval has nothing to call. Naming search_tools to that model
   // would be a false claim; saying nothing leaves it to report the capability
   // as non-existent, which is the failure this block exists for.
   const { prompt, blocks } = composePrompt({
@@ -338,7 +338,7 @@ await test('🔒 a client with no search_tools is told what to say instead', asy
     now: NOW,
   })
   assert(blocks.includes('retrieval'), 'a filtered request with no search_tools got no disclosure')
-  assert(prompt.includes('subset chosen for this conversation'), 'the list is not described as partial')
+  assert(prompt.includes('not everything this server can do'), 'the list is not described as partial')
   assert(!prompt.includes('search_tools'), 'named a tool the payload does not carry')
   assert(prompt.includes('not available in this session'), 'the model is not told what to say instead')
   assert(prompt.includes('never that this server cannot do it'), 'the wrong answer is not ruled out')
@@ -346,9 +346,9 @@ await test('🔒 a client with no search_tools is told what to say instead', asy
 })
 
 await test('🔒 nothing removed → no retrieval block, whatever the setting says', async () => {
-  // Retrieval fails open: sidecar down, cold cache, empty selection all forward
-  // the full list. "Enabled" is therefore not evidence of a subset, so the gate
-  // is on tools having actually gone — measured by the gateway, not inferred.
+  // A request that carries no deferred tool loses nothing. "Enabled" is
+  // therefore not evidence of a subset, so the gate is on tools having
+  // actually gone — measured by the gateway, not inferred.
   const { blocks, prompt } = composePrompt({
     config: LOCAL_ONLY_CONFIG,
     hasTools: true,
@@ -357,7 +357,7 @@ await test('🔒 nothing removed → no retrieval block, whatever the setting sa
     now: NOW,
   })
   assert(!blocks.includes('retrieval'), 'called a complete tool list a subset')
-  assert(!prompt.includes('subset chosen for this conversation'), 'claimed a narrowing that did not happen')
+  assert(!prompt.includes('kept in a catalog'), 'claimed a narrowing that did not happen')
   return 'silent when nothing was dropped'
 })
 

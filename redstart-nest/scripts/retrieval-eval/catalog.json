@@ -746,7 +746,7 @@
     },
     {
       "name": "search_tools",
-      "description": "Find tools THIS SERVER offers that are not currently listed. Describe what you are trying to do in your own words — for example \"read a spreadsheet\" or \"look at recent commits\" — and this returns the names, categories and descriptions of the closest matches. Call a returned tool by name on your next turn and it will be available. It indexes this server's own tools only: tools your application supplies itself, such as file tools that run on the user's computer, are not searchable here and a nil result says nothing about them.",
+      "description": "Find tools THIS SERVER keeps in its catalog rather than in your list. Describe what you are trying to do in your own words — for example \"list the files in a folder\" or \"look at recent commits\" — and this returns the closest tools with their inputSchema. Call one with call_tool. It indexes this server's own tools only: tools your application supplies itself, such as file tools that run on the user's computer, are not searchable here and a nil result says nothing about them.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -761,14 +761,18 @@
       }
     },
     {
-      "name": "describe_tool",
-      "description": "Get the full definition of one of this server's tools by name — what it does, where it acts and its parameters — for a tool search_tools found. The tool is then in your list from your next turn.",
+      "name": "call_tool",
+      "description": "Call one of this server's catalog tools by the name search_tools returned, with arguments matching its inputSchema. The result is that tool's result.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "name": {
             "type": "string",
             "description": "The tool's exact name, as search_tools returned it"
+          },
+          "arguments": {
+            "type": "object",
+            "description": "The tool's arguments, as its inputSchema describes them"
           }
         },
         "required": [

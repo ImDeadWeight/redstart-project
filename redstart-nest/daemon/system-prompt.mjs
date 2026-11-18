@@ -338,10 +338,10 @@ function buildToolPolicy(config, hasTools, toolNames) {
 // exist.
 //
 // GATED ON TOOLS HAVING ACTUALLY BEEN REMOVED, which the gateway measures by
-// counting the payload before and after the filter. Not on the retrieval
-// setting: retrieval fails open, so "enabled" is compatible with a request
-// that carried every tool it started with, and calling that a subset would be
-// the same unsubstantiated claim this file exists to prevent.
+// counting the payload before and after the catalog. Not on the retrieval
+// setting: a request that carries no deferred tool loses nothing, and calling
+// its list a subset would be the same unsubstantiated claim this file exists
+// to prevent.
 //
 // TWO WORDINGS, because the remedy is not always present. search_tools is
 // advertised only to clients connected to Nest's MCP server; a client that
@@ -358,25 +358,20 @@ function buildToolPolicy(config, hasTools, toolNames) {
 // wording change, to be measured on the 4B's "said unavailable without
 // searching" count before the next.
 //
-// THE CATALOG (master plan Phase 3.1) is a third case: the list is fixed and
-// the rest of the server's tools are deliberately kept out of it, reachable
-// through call_tool without ever joining the list. Said as such, with a call
-// to copy, because "on your next turn it will be in your list" (select's
-// story) is false here. Only when both tools are present; otherwise the
-// select wordings below still tell the truth.
-function buildRetrieval(toolNames, toolsFiltered, catalog = false) {
+// THE CATALOG (master plan Phase 3.1, the only retrieval since 3.3): the list
+// is fixed and the rest of the server's tools are deliberately kept out of
+// it, reachable through call_tool without ever joining the list. Said as
+// such, with a call to copy. Without both tools (a ban on one, or a client
+// that dropped them) the model is told there is no way to the rest.
+function buildRetrieval(toolNames, toolsFiltered) {
   if (!toolsFiltered) return null
   const names = Array.isArray(toolNames) ? toolNames : []
 
-  if (catalog && names.includes('search_tools') && names.includes('call_tool')) {
+  if (names.includes('search_tools') && names.includes('call_tool')) {
     return 'More of this server\'s tools are kept in a catalog instead of this list, and that does not change during the conversation. If what you need is not listed, find it with search_tools — for example search_tools({"query": "list the files in a folder"}) — then call what it returns with call_tool, passing the tool\'s name and its arguments: call_tool({"name": "list_directory", "arguments": {"path": "."}}). Never tell the user a capability is unavailable just because it is not in your list.'
   }
 
-  const opening = 'The tools listed this turn are a subset chosen for this conversation, not everything this server can do.'
-
-  return names.includes('search_tools')
-    ? `${opening} If what you need is missing, call search_tools before concluding it does not exist — for example search_tools({"query": "read a spreadsheet"}) — and never tell the user a capability is unavailable just because it is not in your list.`
-    : `${opening} There is no way to search for the rest from here, so if what you need is missing, say it is not available in this session — never that this server cannot do it.`
+  return 'The tools listed are not everything this server can do. There is no way to reach the rest from here, so if what you need is missing, say it is not available in this session — never that this server cannot do it.'
 }
 
 // ---------------------------------------------------------------------------
@@ -830,7 +825,7 @@ function buildSession(account, now, timeZone) {
  * @param {boolean} input.hasTools          request carries tool definitions
  * @param {string[]} [input.toolNames]      every tool name in THIS request,
  *                                          post-ban and post-retrieval
- * @param {boolean} [input.toolsFiltered]    retrieval actually removed tools
+ * @param {boolean} [input.toolsFiltered]    the catalog actually removed tools
  *                                          from this request
  * @param {Array}   [input.externalServers] getExternalServers()
  * @param {object}  [input.account]         authResult.account, or null (auth off)
@@ -863,8 +858,6 @@ export function composePrompt(input = {}) {
     // Whether retrieval REMOVED anything this turn, measured by the gateway.
     // Retrieval fails open, so the setting alone is not evidence of a subset.
     toolsFiltered = false,
-    // The removal was the catalog's (master plan Phase 3.1), not a selection.
-    catalog = false,
     // The client's IANA zone, unvalidated (session-time.mjs validates it).
     // Absent → the server's zone, labelled as such in the prompt.
     timeZone = null,
@@ -893,7 +886,7 @@ export function composePrompt(input = {}) {
     // After tool_policy — it qualifies the list those constraints apply to —
     // and before locality, so "your list is partial" is settled before "and
     // these ones touch a different computer".
-    ['retrieval', buildRetrieval(toolNames, toolsFiltered, catalog)],
+    ['retrieval', buildRetrieval(toolNames, toolsFiltered)],
     // After tool_policy (it is about tools) and before the style/data blocks,
     // so the model knows which machine a tool touches before it is told where
     // data is stored. Spec §3.

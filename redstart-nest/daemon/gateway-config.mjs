@@ -12,7 +12,6 @@
 //
 // Note: tools-gateway.mjs RUNS the gateway (proxy, auth, allow-list, system
 // context) and CONSUMES this config; this module PRODUCES it. No overlap.
-import { SCORERS } from './tool-retrieval.mjs'
 import * as fs from 'fs'
 import * as path from 'path'
 import { configDir } from './platform-paths.mjs'
@@ -28,13 +27,6 @@ import { listPlugins } from './plugin-registry.mjs'
 import { syncPluginProviders, stopAllPlugins } from './plugin-provider.mjs'
 import { resolveEngine } from './web-search-engines.mjs'
 
-// Tool retrieval's per-profile settings, carried through to the gateway.
-//
-// OFF by default and per profile, deliberately: this is a rollout control, not
-// the engagement question. When retrieval runs it runs on every tool-carrying
-// request; this decides whether it runs at all, and it goes away once the
-// default flips. ctxSize rides along because the gateway is where the budget is
-// measured and it has no other route to the number.
 // The general web search engine for this profile (web_search source "web").
 //
 // Choice per profile, connection global: the admin picks an engine for each
@@ -57,21 +49,15 @@ function searchEngineFor(toolSettings, capabilities) {
   return resolveEngine(choice, { searxngUrl: conn.searxngUrl, braveApiKey })
 }
 
+// Tool retrieval's per-profile setting, carried through to the gateway.
+//
+// OFF by default and per profile (D8). On means the catalog (master plan
+// 3.3): the deferred tools leave the list and are reached through
+// search_tools and call_tool. `enabled` is the only field read; a profile's
+// older fields (mode, scorer, growth, textVersion, the floors, minTools,
+// callTool) tuned per-turn selection and are ignored where they lie.
 function retrievalSettings(llamaConfig) {
-  const r = llamaConfig?.tools?.retrieval
-  return {
-    enabled: r?.enabled === true,
-    ...(Number.isFinite(r?.relativeFloor) ? { relativeFloor: r.relativeFloor } : {}),
-    ...(Number.isFinite(r?.floor) ? { floor: r.floor } : {}),
-    ...(Number.isFinite(r?.margin) ? { margin: r.margin } : {}),
-    ...(r?.textVersion === 1 || r?.textVersion === 2 ? { textVersion: r.textVersion } : {}),
-    ...(SCORERS.includes(r?.scorer) ? { scorer: r.scorer } : {}),
-    ...(r?.growth === 'scored' || r?.growth === 'pins-only' ? { growth: r.growth } : {}),
-    ...(Number.isInteger(r?.minTools) && r.minTools >= 0 && r.minTools <= 64 ? { minTools: r.minTools } : {}),
-    ...(r?.callTool === true ? { callTool: true } : {}),
-    // master plan Phase 3.1: 'select' (the default) or 'catalog'.
-    ...(r?.mode === 'select' || r?.mode === 'catalog' ? { mode: r.mode } : {}),
-  }
+  return { enabled: llamaConfig?.tools?.retrieval?.enabled === true }
 }
 
 export function buildGatewayConfig(llamaConfig) {
@@ -84,7 +70,7 @@ export function buildGatewayConfig(llamaConfig) {
 
   // Which capabilities are catalog-only (master plan Phase 3.1), resolved once
   // here so nothing reads tools.json per request. It narrows a request only
-  // when tools.retrieval.mode is 'catalog'.
+  // while tool retrieval is on.
   const deferred = deferredCapabilities({
     builtinIds: BUILTIN_CAPABILITIES.map((c) => c.id),
     pluginIds: listPlugins().map((p) => p.id),
