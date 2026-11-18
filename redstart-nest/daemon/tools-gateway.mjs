@@ -11,9 +11,11 @@
 // request and response straight through (streaming SSE included). Everything
 // else is a transparent passthrough to llama-server.
 //
-// Tool execution (web_fetch, etc.) is handled client-side by the chat-ui
-// via llama-server's built-in GET/POST /tools endpoints. The gateway passes
-// those requests through without interference.
+// Since master plan Phase 4 this file holds the request pipeline
+// (prepareCompletion: the redstart_* fields, bans, the catalog) and the route
+// table. The prompt is completion-prompt.mjs; the completions route is
+// gateway/completion-route.mjs; forwarding to llama-server is
+// gateway/upstream.mjs. What this file exported before, it still exports.
 // =============================================================================
 
 import * as http from 'http'
@@ -21,12 +23,12 @@ import { authenticate, roleFor, surfacePermitted } from './auth.mjs'
 import { resolveEffectiveConfig } from './permissions.mjs'
 import { getMcpServerRunning } from './mcp-server.mjs'
 import { getExternalServers } from './tools-storage.mjs'
-import { CLIENT_APP_TOOL_NAMES, capabilityForTool } from './tools-definitions.mjs'
+import { capabilityForTool } from './tools-definitions.mjs'
 import { isDeferredTool } from './tool-deferral.mjs'
 import { handleFilesRequest } from './files-api.mjs'
-import { memoriesFor } from './memory-storage.mjs'
-import { composePrompt } from './system-prompt.mjs'
-import { getPromptBlocks } from './prompt-storage.mjs'
+import { resolveProject, injectSystemContext, clientToolNamesIn, toolNamesIn } from './completion-prompt.mjs'
+import { isCompletionRoute, handleCompletionRoute } from './gateway/completion-route.mjs'
+import { passthrough } from './gateway/upstream.mjs'
 import { handleAuthRoute } from './gateway/auth-routes.mjs'
 import { isConversationRoute, handleConversationRoute } from './gateway/conversation-routes.mjs'
 import { isMemoryRoute, handleMemoryRoute } from './gateway/memory-routes.mjs'
@@ -34,124 +36,24 @@ import { isApprovalRoute, handleApprovalRoute } from './gateway/approval-routes.
 import { isTaskRoute, handleTaskRoute } from './gateway/task-routes.mjs'
 import { isWorkflowRoute, handleWorkflowRoute } from './gateway/workflow-routes.mjs'
 import { isProjectRoute, handleProjectRoute } from './gateway/project-routes.mjs'
-import { getProject } from './projects-storage.mjs'
-import { beginCompletion, setUpstreamPort } from './completion-activity.mjs'
+import { setUpstreamPort } from './completion-activity.mjs'
 import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/document-index-routes.mjs'
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
 import { handleDownloadRoute } from './gateway/download-route.mjs'
 import { recordWireCost, retrievalConfigSummary, retrievalEnabled } from './tool-filter.mjs'
 import { toolName } from './tool-retrieval.mjs'
 
+// Exported from here before master plan Phase 4 split them out; importers
+// keep reading them from here.
+export { firstUserText, injectSystemContext } from './completion-prompt.mjs'
+export { RETRIEVAL_REPORT_HEADERS, retrievalReportHeaders } from './gateway/completion-route.mjs'
+export { annotateContextError, cancelUpstreamOnHangUp } from './gateway/upstream.mjs'
+
 let gatewayServer = null
 
 // Active tool config: set when the gateway starts, updated when profile changes.
 // { allowedBaseUrls: string[], activeTools: {name,baseUrl,description}[], maxFetchTokens: number }
 let activeConfig = null
-
-// ---------------------------------------------------------------------------
-// System context injection
-// ---------------------------------------------------------------------------
-
-// Assembly itself lives in system-prompt.mjs — pure, synchronous, and testable
-// without a server (spec §11). This function's only job is to resolve the live
-// facts the composer needs and hand them over.
-//
-// `hasTools` = the request actually carries tool definitions, and gates every
-// capability claim; see the substantiation rule in system-prompt.mjs.
-// The request's `redstart_project`, as a project this caller may read, or
-// null. Only name, id and instructions travel on: the composer has no use
-// for the owner or members, and a smaller object is a smaller surface.
-function resolveProject(account, claimed) {
-  if (typeof claimed !== 'string' || !claimed) return null
-  let project = null
-  try { project = getProject(account, claimed) } catch { return null }
-  return project ? { id: project.id, name: project.name, instructions: project.instructions } : null
-}
-
-// The FIRST user message's text, which picks the most relevant memories for
-// the chat (memory-storage selectForPrompt). Content may be a string or an
-// OpenAI parts array; only text parts count, and only the first 2000 chars.
-//
-// The first, not the latest (agent-runtime D40): the memory block sits in the
-// system prompt, ahead of the whole chat, and picking by the latest message
-// changed it on most turns. measure-memory-cache.mjs on Ornith 9B, an 8k-token
-// chat: 0 tokens reused from the cache on every turn and 5.5 s of prefill each
-// (a hybrid model reuses no partial prefix at all), against ~7700 reused and
-// 0.2 s with the selection pinned. The request carries the whole chat, so its
-// first user message is the same on every turn: the block now changes only
-// when a memory does, with no state kept here. What a later question needs
-// and the first did not pull in is one memory_search away (the block says so
-// when memories are left out).
-export function firstUserText(messages) {
-  const first = (messages || []).find((m) => m?.role === 'user')
-  if (!first) return ''
-  const c = first.content
-  const text = typeof c === 'string'
-    ? c
-    : Array.isArray(c) ? c.filter((p) => p?.type === 'text' && typeof p.text === 'string').map((p) => p.text).join(' ') : ''
-  return text.slice(0, 2000)
-}
-
-function buildSystemContext(config, facts, query = '') {
-  const { prompt } = composePrompt({
-    config,
-    externalServers: getExternalServers(),
-    admin: getPromptBlocks(),
-    // facts.project is already resolved against the caller (resolveProject).
-    ...memoriesFor(config, facts.account, { projectId: facts.project?.id ?? null, query }),
-    ...facts,
-  })
-  return prompt
-}
-
-// Tool names in this request that execute on the CLIENT'S machine — Redstart
-// Twig's fs_* file tools, which act on a folder the user granted on their own
-// PC. Read from the payload rather than inferred from the surface: a Twig user
-// who has granted no folder sends none of them, and for that session there is
-// only one machine to talk about.
-//
-// This is the same rule the rest of the prompt follows: a claim is made only
-// when the request substantiates it.
-function clientToolNamesIn(parsed) {
-  const present = new Set(toolNamesIn(parsed))
-  const local = []
-  for (const names of Object.values(CLIENT_APP_TOOL_NAMES)) {
-    for (const name of names) if (present.has(name)) local.push(name)
-  }
-  return local
-}
-
-// Every tool name in the payload, in both shapes the gateway sees: OpenAI's
-// { function: { name } } on the wire and MCP's flat { name }.
-//
-// This is what the capability claims are substantiated against. It must be read
-// AFTER bans and retrieval have both run — config says what an admin enabled,
-// and since retrieval can narrow a payload without changing any config, config
-// is no longer evidence that the model received anything in particular.
-function toolNamesIn(parsed) {
-  if (!Array.isArray(parsed?.tools)) return []
-  const names = []
-  for (const tool of parsed.tools) {
-    const name = typeof tool === 'object' && tool !== null ? tool.function?.name : tool?.name
-    if (typeof name === 'string' && name) names.push(name)
-  }
-  return names
-}
-
-// The composed prompt is PREPENDED to any client-supplied system message, so
-// client text lands after the precedence clause and is thereby subordinated to
-// admin policy (spec §4). Phase 7 stops accepting client system prose
-// altogether; until then this ordering is what makes the floor hold.
-export function injectSystemContext(messages, config, facts) {
-  const context = buildSystemContext(config, facts, firstUserText(messages))
-  const sysIdx = messages.findIndex(m => m.role === 'system')
-  if (sysIdx >= 0) {
-    messages[sysIdx] = { ...messages[sysIdx], content: `${context}\n\n${messages[sysIdx].content}` }
-  } else {
-    messages.unshift({ role: 'system', content: context })
-  }
-  return messages
-}
 
 // ---------------------------------------------------------------------------
 // Server-enforced tool allow-list.
@@ -386,244 +288,6 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   return { parsed, wire }
 }
 
-// Header names of the retrieval report, also listed in
-// Access-Control-Expose-Headers so a browser client (chat-ui on another
-// origin) can read them.
-export const RETRIEVAL_REPORT_HEADERS = Object.freeze({
-  sent: 'x-redstart-tools-sent',
-  filtered: 'x-redstart-tools-filtered',
-  retrieval: 'x-redstart-retrieval',
-  config: 'x-redstart-retrieval-config',
-})
-
-/**
- * The response headers that answer `redstart_retrieval_report: true`: the
- * tools forwarded, by name; whether retrieval removed any; and whether it ran
- * on this request at all (`on`: enabled, not opted out, tools to choose from).
- * The last is separate because "kept everything" and "off" both remove
- * nothing, and the bench must tell them apart. Empty when the caller did not
- * ask, so an ordinary response is unchanged.
- *
- * Names are comma-separated and each one percent-encoded, so an MCP tool name
- * with a comma or a non-ASCII character cannot break the list or the header.
- * Ordinary names (letters, digits, `_`, `-`) read as they are.
- *
- * Only `wire` is read, which prepareCompletion builds after bans and
- * retrieval, so a banned tool can never appear here.
- *
- * @param {{ report?: boolean, toolNamesSent?: string[], toolsRemoved?: boolean, filtered?: boolean, retrievalConfig?: string|null }|null|undefined} wire
- * @returns {Record<string, string>}
- */
-export function retrievalReportHeaders(wire) {
-  if (!wire?.report) return {}
-  const names = Array.isArray(wire.toolNamesSent) ? wire.toolNamesSent : []
-  return {
-    [RETRIEVAL_REPORT_HEADERS.sent]: names.map(encodeURIComponent).join(','),
-    [RETRIEVAL_REPORT_HEADERS.filtered]: wire.toolsRemoved ? '1' : '0',
-    [RETRIEVAL_REPORT_HEADERS.retrieval]: wire.filtered ? 'on' : 'off',
-    // The settings in effect (benchmarks H1), so a bench row records what ran
-    // instead of trusting its label. `off` when retrieval did not run.
-    [RETRIEVAL_REPORT_HEADERS.config]: typeof wire.retrievalConfig === 'string' ? wire.retrievalConfig : 'off',
-    'Access-Control-Expose-Headers': Object.values(RETRIEVAL_REPORT_HEADERS).join(', '),
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Forward a modified completions request to llama-server, piping the response
-// back unchanged — handles both streaming SSE and non-streaming JSON.
-// ---------------------------------------------------------------------------
-
-// llama-server reflects the request's Origin back into its own
-// Access-Control-Allow-Origin header. If we spread its headers and then also set
-// our own '*', the response carries TWO values for that header (the reflected
-// origin AND '*') — which browsers reject as invalid CORS, silently blocking
-// every cross-origin call from a UI served on a different origin (Twig's file
-// server, the web dev server). Strip any upstream CORS-origin header
-// (case-insensitively) so the gateway emits exactly one value.
-function withoutUpstreamCors(headers) {
-  const out = {}
-  for (const [k, v] of Object.entries(headers)) {
-    if (k.toLowerCase() === 'access-control-allow-origin') continue
-    out[k] = v
-  }
-  return out
-}
-
-// ---------------------------------------------------------------------------
-// Context-exceeded diagnosis.
-//
-// llama-server rejects a prompt larger than n_ctx with HTTP 400 and
-// { error: { type: 'exceed_context_size_error', message, n_prompt_tokens,
-// n_ctx } } — and in streaming mode too, because an error that is the FIRST
-// result is deliberately returned as a non-stream response rather than an SSE
-// frame (server-context.cpp, "in streaming mode, the first error must be
-// treated as non-stream response"). A prompt too large to process always fails
-// before the first token, so this rejection is always the first result.
-//
-// So the numbers do reach the client. What no client can know is WHY, and the
-// answer is usually the same one: every enabled tool's full JSON schema rides
-// on every request, so one plugin advertising forty tools can spend more of the
-// window than the conversation does. llama-server cannot say that — it never
-// saw a tool list, only a rendered prompt — and each client would otherwise
-// have to reinvent the explanation. The gateway is the one place that knows
-// both halves, so it annotates the message here, once, for every client.
-//
-// The count is of what was actually FORWARDED (post-ban, and post-retrieval
-// when that lands), so the number quoted is the one that was really spent.
-// Same chars/4 heuristic as estimateActiveToolTokens — a diagnosis, not an
-// accounting.
-// ---------------------------------------------------------------------------
-function toolCostOf(parsed) {
-  const tools = Array.isArray(parsed?.tools) ? parsed.tools : []
-  if (tools.length === 0) return null
-  return { count: tools.length, approxTokens: Math.ceil(JSON.stringify(tools).length / 4) }
-}
-
-export function annotateContextError(body, cost) {
-  // Anything unrecognised is returned byte-identical: this must never be able
-  // to turn an upstream error into a different one, or a parse failure into a
-  // gateway failure.
-  if (!cost) return body
-  let parsedBody
-  try { parsedBody = JSON.parse(body) } catch { return body }
-  if (parsedBody?.error?.type !== 'exceed_context_size_error') return body
-  if (typeof parsedBody.error.message !== 'string') return body
-
-  const { count, approxTokens } = cost
-  parsedBody.error.message +=
-    ` About ${approxTokens.toLocaleString()} of those tokens are the ${count} tool definition${count === 1 ? '' : 's'}` +
-    ' sent with this request — every enabled tool\'s full schema is included in every message.' +
-    ' Turning off tools you are not using, or raising the context size, both free up room.'
-  return JSON.stringify(parsedBody)
-}
-
-// `extraHeaders` are added to the response on every path that answers it
-// from upstream (the retrieval report, retrievalReportHeaders).
-function forwardModified(res, internalPort, parsed, extraHeaders = {}) {
-  // Every user completion passes through here, so this is where "is the model
-  // busy" is counted (completion-activity.mjs; the memory review waits for 0).
-  const done = beginCompletion()
-  res.on('close', done)
-  res.on('finish', done)
-  const payload = JSON.stringify(parsed)
-  const toolCost = toolCostOf(parsed)
-  const options = {
-    hostname: '127.0.0.1',
-    port: internalPort,
-    path: '/v1/chat/completions',
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(payload),
-    },
-    timeout: 180000,
-  }
-
-  const proxyReq = http.request(options, proxyRes => {
-    // A 400 is small, complete, and never a stream — buffer it so the tool cost
-    // can be added to the message. Every other status is piped exactly as
-    // before, so nothing about the streaming path changes.
-    if (proxyRes.statusCode === 400 && toolCost) {
-      let raw = ''
-      proxyRes.setEncoding('utf8')
-      proxyRes.on('data', chunk => { raw += chunk })
-      proxyRes.on('end', () => {
-        const out = annotateContextError(raw, toolCost)
-        const headers = withoutUpstreamCors(proxyRes.headers)
-        // The body length changed, so the upstream's own value would truncate
-        // the response. Drop every spelling of it and let Node recompute.
-        for (const key of Object.keys(headers)) {
-          if (key.toLowerCase() === 'content-length') delete headers[key]
-        }
-        res.writeHead(400, { ...headers, ...extraHeaders, 'Access-Control-Allow-Origin': '*' })
-        res.end(out)
-      })
-      // A truncated error response must still terminate the client's request.
-      proxyRes.on('error', () => { if (!res.writableEnded) res.end(raw) })
-      return
-    }
-
-    res.writeHead(proxyRes.statusCode, {
-      ...withoutUpstreamCors(proxyRes.headers),
-      ...extraHeaders,
-      'Access-Control-Allow-Origin': '*',
-    })
-    proxyRes.pipe(res)
-  })
-
-  proxyReq.on('error', err => {
-    if (res.destroyed) return // the client left; cancelUpstreamOnHangUp destroyed us
-    if (!res.headersSent) {
-      res.writeHead(502, { 'Content-Type': 'text/plain' })
-      res.end(`Gateway error: ${err.message}`)
-    }
-  })
-  cancelUpstreamOnHangUp(res, proxyReq)
-  proxyReq.write(payload)
-  proxyReq.end()
-}
-
-/**
- * When the client goes away before the reply is finished, close our own
- * request to llama-server too.
- *
- * llama-server cancels a task only when ITS connection closes. Without this,
- * a client that disconnected (Stop in the chat UI, a closed tab, a script
- * interrupted, the agent bench's time limit) stopped receiving the reply, but
- * the generation behind it ran on to the end or until the context filled.
- * Found by the agent bench, 2026-11-11: two stopped runs left a small model
- * looping for 8 minutes (12k and 10k tokens). That filled the shared KV cache
- * ("failed to find a memory slot"), slowed every other request about
- * threefold, and finally failed all live requests with "Context size has
- * been exceeded".
- *
- * `close` after `finish` is the normal end of a reply and leaves the request
- * alone: by then the upstream response has been fully piped.
- *
- * @param {import('http').ServerResponse} res
- * @param {import('http').ClientRequest} proxyReq
- */
-export function cancelUpstreamOnHangUp(res, proxyReq) {
-  res.on('close', () => {
-    if (res.writableFinished) return
-    proxyReq.destroy()
-  })
-}
-
-// ---------------------------------------------------------------------------
-// Passthrough proxy for all non-completions paths
-// ---------------------------------------------------------------------------
-
-function passthrough(req, res, internalPort) {
-  const options = {
-    hostname: '127.0.0.1',
-    port: internalPort,
-    path: req.url,
-    method: req.method,
-    headers: { ...req.headers, host: `127.0.0.1:${internalPort}` },
-  }
-
-  const proxyReq = http.request(options, proxyRes => {
-    res.writeHead(proxyRes.statusCode, {
-      ...withoutUpstreamCors(proxyRes.headers),
-      'Access-Control-Allow-Origin': '*',
-    })
-    proxyRes.pipe(res)
-  })
-
-  req.pipe(proxyReq)
-  // The same leak as completions: llama-server's own /completion and
-  // /v1/completions stream through here.
-  cancelUpstreamOnHangUp(res, proxyReq)
-  proxyReq.on('error', err => {
-    if (res.destroyed) return
-    if (!res.headersSent) {
-      res.writeHead(502, { 'Content-Type': 'text/plain' })
-      res.end(`Gateway error: ${err.message}`)
-    }
-  })
-}
-
 // ---------------------------------------------------------------------------
 // Static app-shell detection
 // ---------------------------------------------------------------------------
@@ -831,50 +495,17 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
         return handleDownloadRoute(req, res, effectiveConfig)
       }
 
-      // Intercept completions to inject Redstart identity + tool context
-      if (req.method === 'POST' && req.url.startsWith('/v1/chat/completions')) {
-        let rawBody = ''
-        for await (const chunk of req) rawBody += chunk
-
-        let parsed
-        try { parsed = JSON.parse(rawBody) } catch {
-          res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
-          res.end(JSON.stringify({ error: { message: 'Bad request: invalid JSON', type: 'invalid_request_error' } }))
-          return
-        }
-
-        // The browser's IANA zone, so the prompt states the USER'S date rather
-        // than the UTC one. A header, not a body field, so every completions
-        // caller in chat-ui (chat, titles, compaction) sends it from one place.
-        // Unvalidated here: session-time.mjs validates it before it reaches
-        // the prompt, and an invalid value degrades to the server's zone.
-        const timeZone = typeof req.headers['x-redstart-timezone'] === 'string'
-          ? req.headers['x-redstart-timezone']
-          : null
-
-        // account is null when auth is off (see the posture note above) — the
-        // composer degrades to a date-only session block rather than failing.
-        // Surface comes from authResult — i.e. from the credential the caller
-        // presented (spec §8) — never from a header. X-Redstart-Surface stays
-        // accepted and inert; the connector-contract suite asserts that.
-        let wire
-        ;({ parsed, wire } = await prepareCompletion(parsed, {
+      // Completions: rewritten, then forwarded (gateway/completion-route.mjs).
+      // Account and surface from authResult, i.e. from the credential.
+      if (isCompletionRoute(req)) {
+        return await handleCompletionRoute(req, res, {
+          internalPort,
           account: authResult.account,
           surface: authResult.surface,
           effectiveConfig,
           accountId,
-          timeZone,
-        }))
-
-        try {
-          forwardModified(res, internalPort, parsed, retrievalReportHeaders(wire))
-        } catch (err) {
-          if (!res.headersSent) {
-            res.writeHead(500, { 'Content-Type': 'application/json' })
-            res.end(JSON.stringify({ error: { message: err.message, type: 'internal_error' } }))
-          }
-        }
-        return
+          prepareCompletion,
+        })
       }
 
       // Everything else → passthrough to llama-server
