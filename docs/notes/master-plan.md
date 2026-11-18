@@ -645,6 +645,13 @@ gained cases, their old ones unchanged. *Deviations:*
 - A shared file has no download link; the explorer previews it.
 - Postgres stays all-or-nothing (grants plan §8).
 
+*Correction:* `64f9cd0`'s message says the full chain passed; it had not.
+`search_documents`' new description left the retrieval eval's catalog
+stale (one failure). The next commit rebuilds and refreezes it (the same
+28 of 32), and the full chain then passes, run from PowerShell at `E:\`
+(from Git Bash's `/e/`, chat-ui's vitest loads twice and fails to start,
+which is not a test failure).
+
 ## Phase 7 — The loop moves to the server
 
 **U-S1, DECIDED 2026-11-17: yes.** Step 1 below is in force from today:
