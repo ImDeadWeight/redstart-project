@@ -27,5 +27,5 @@
     }
   ],
   "check": "../checks/compute.mjs#regionTotals",
-  "notes": "Benchmarks B4/B5 (drift): a document question, then a computation. Under growth pins-only run_python must already be in the first set or be found."
+  "notes": "Benchmarks B4/B5 (drift): a document question, then a computation. Kept for the catalog (master plan 3.3): the list is fixed, so this checks that a topic change needs nothing new."
 }

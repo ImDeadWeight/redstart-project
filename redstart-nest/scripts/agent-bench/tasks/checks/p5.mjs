@@ -1,30 +1,19 @@
 // =============================================================================
 // Agent bench — p5 checks: discovery and drift (tool retrieval benchmarks B3-B5)
 // =============================================================================
-// The p5 tasks (tasks/p5/) reuse the main set's prompts and checks with a
-// tool withheld, so a result compares with the same task un-withheld. Two
-// things are new here:
-//
-// - A tool found by search may be used through call_tool (U4 option b).
-//   withCallTool() turns such a call into a call of the tool it names, so a
-//   check that asks "was list_documents called" counts both ways.
-// - The checks for the tasks that are new: a File System config read with
-//   vague words (p5-vague-config), and a drift task whose follow-up saves a
-//   memory (p5-drift-python-to-memory).
+// The checks for the p5 tasks the main set has none for: a File System
+// config read with vague words, reached through the catalog
+// (p5-vague-config), and a drift task whose follow-up saves a memory
+// (p5-drift-python-to-memory). The tasks that withheld a tool went with
+// per-turn selection (master plan 3.3).
 // =============================================================================
 
 import { allAssistantText, fail, fixture, mentionsNumber, numbersIn, pass, toolCallsNamed, withCallTool } from './lib.mjs'
 import { arithmetic } from './compute.mjs'
-import { listedWithoutCode } from './multi.mjs'
 
 // withCallTool lives in lib.mjs now (every check counts call_tool since
 // 2026-11-18); re-exported here for the callers that import it from p5.
 export { withCallTool }
-
-/** p5-count-docs: multi-find-tool's check, a call_tool(list_documents) counting. */
-export function countedDocs(text, files, events, ctx) {
-  return listedWithoutCode(text, files, withCallTool(events), ctx)
-}
 
 /** The port in the p5-vague-config fixture, read from it. */
 export const CONFIG_FILE = 'p5-app/settings.json'
@@ -41,8 +30,7 @@ export function configuredPort(text, _files, events) {
 /**
  * p5-drift-python-to-memory: the product is right, and the follow-up saved
  * it with memory_save (the bench removes the memory after the run). The
- * memory tools are always pinned, so this is the control: it must pass
- * under either growth setting.
+ * memory tools are core, in every list, so this is the control.
  */
 export function rememberedProduct(text, files, events, ctx) {
   const product = arithmetic(allAssistantText(text, events), files, events, ctx)

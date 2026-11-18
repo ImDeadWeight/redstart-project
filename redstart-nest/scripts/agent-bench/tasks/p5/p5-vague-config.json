@@ -16,16 +16,9 @@
     }
   ],
   "approve": "all",
-  "withhold": [
-    "read_text_file",
-    "read_file",
-    "read_multiple_files"
-  ],
   "expectTools": [
-    "read_text_file",
-    "read_file",
-    "read_multiple_files"
+    "read_text_file"
   ],
   "check": "../checks/p5.mjs#configuredPort",
-  "notes": "Benchmarks B3 (tool-retrieval-fixes-benchmarks.md): every File System read tool withheld, and a prompt in the words a small model would search with (\"config\"). The README names the default port 8080; settings.json sets 48213."
+  "notes": "Benchmarks B3, kept for the catalog (master plan 3.3): File System is deferred by default, so read_text_file is reached only through search_tools and call_tool, with a prompt in the words a small model would search with (\"config\"). The README names the default port 8080; settings.json sets 48213."
 }

@@ -68,7 +68,7 @@ await test('🔍 every case frozen as right is still right, through the producti
     assert(c, `frozen case ${id} is no longer in the case set: refreeze`)
     const scored = await lib.scoreCase(c, { wire, embed })
     if (!lib.frozenCaseOk(c, scored)) {
-      broken.push(`${id}: wants ${c.expected.join('|')}; top 3 ${scored.ranking.slice(0, 3).join(' ')}${scored.selected ? `; sent ${scored.selected.join(' ')}` : ''}`)
+      broken.push(`${id}: wants ${c.expected.join('|')}; top 3 ${scored.ranking.slice(0, 3).join(' ')}`)
     }
   }
   assert(broken.length === 0, `a change dropped ${broken.length} known case(s):\n        ${broken.join('\n        ')}`)
@@ -78,32 +78,28 @@ await test('🔍 every case frozen as right is still right, through the producti
 console.log('\n-- the metrics --')
 
 await test('recall@K, precision@K and the reciprocal rank, need any and all', async () => {
-  const scored = { ranking: ['a', 'b', 'c', 'd', 'e'], selected: ['a', 'c'] }
+  const scored = { ranking: ['a', 'b', 'c', 'd', 'e'] }
   const any = lib.caseMetrics(['c', 'e'], scored)
   eq([any.ranks, any.reciprocalRank, any.at[1].recall, any.at[3].recall, any.at[3].precision, any.at[5].precision], [[3, 5], 1 / 3, 0, 1, 1 / 3, 2 / 5], 'any')
-  eq(any.selectedRecall, 1, 'any: one of them was sent')
   const all = lib.caseMetrics(['c', 'e'], scored, 'all')
-  eq([all.at[3].recall, all.at[5].recall, all.selectedRecall], [0.5, 1, 0.5], 'all: shares')
+  eq([all.at[3].recall, all.at[5].recall], [0.5, 1], 'all: shares')
   eq(lib.caseMetrics(['zz'], scored).ranks, [6], 'a tool missing from the ranking ranks after everything')
-  eq(lib.caseMetrics(['a'], { ranking: ['a'], selected: null }).selectedSize, null, 'a search case has no selection')
 })
 
-await test('aggregate: means overall and per source, selections only where there are some', async () => {
-  const row = (source, rr, sel) => ({
+await test('aggregate: means overall and per source', async () => {
+  const row = (source, rr) => ({
     case: { source }, ms: 2,
-    metrics: { reciprocalRank: rr, at: Object.fromEntries(lib.KS.map((k) => [k, { recall: rr, precision: rr / k }])), selectedRecall: sel, selectedSize: sel === null ? null : 4 },
+    metrics: { reciprocalRank: rr, at: Object.fromEntries(lib.KS.map((k) => [k, { recall: rr, precision: rr / k }])) },
   })
-  const a = lib.aggregate([row('x', 1, 1), row('x', 0.5, null), row('y', 0, 0)])
-  eq([a.all.cases, a.all.mrr, a.all.selectedRecall, a.bySource.x.mrr, a.bySource.y.cases], [3, 0.5, 0.5, 0.75, 1], 'means')
+  const a = lib.aggregate([row('x', 1), row('x', 0.5), row('y', 0)])
+  eq([a.all.cases, a.all.mrr, a.bySource.x.mrr, a.bySource.y.cases], [3, 0.5, 0.75, 1], 'means')
 })
 
-await test('frozenCaseOk: top 3 for a search case, the needed tools sent for a selection case', async () => {
-  const s = (ranking, selected = null) => ({ ranking, selected })
+await test('frozenCaseOk: a right tool in the top 3, every one of them for need all', async () => {
+  const s = (ranking) => ({ ranking })
   assert(lib.frozenCaseOk({ kind: 'search', expected: ['c'] }, s(['a', 'b', 'c'])), 'third is in')
   assert(!lib.frozenCaseOk({ kind: 'search', expected: ['d'] }, s(['a', 'b', 'c', 'd'])), 'fourth is out')
   assert(!lib.frozenCaseOk({ kind: 'search', expected: ['a', 'd'], need: 'all' }, s(['a', 'b', 'c', 'd'])), 'all needs every one')
-  assert(lib.frozenCaseOk({ kind: 'selection', expected: ['x', 'y'] }, s(['x'], ['y'])), 'any: one sent is enough')
-  assert(!lib.frozenCaseOk({ kind: 'selection', expected: ['x', 'y'], need: 'all' }, s(['x'], ['y'])), 'all: both must be sent')
 })
 
 await test('the frozen embedder names a missing text and says how to fix it', async () => {
@@ -117,14 +113,11 @@ await test('the frozen embedder names a missing text and says how to fix it', as
 
 console.log('\n-- the cases --')
 
-await test('the case set loads, bench tasks included, and each source is there', async () => {
+await test('the case set loads, search cases only, and each source is there', async () => {
   const cases = lib.loadCases(names)
   const sources = [...new Set(cases.map((c) => c.source))].sort()
-  eq(sources, ['attachment', 'bench', 'bench-attachment', 'small-model', 'transcript', 'user-phrasing'], 'sources')
-  // Nest has no terminal (master plan Phase 2): the p4 tasks expect run_python.
-  assert(cases.filter((c) => c.id.startsWith('bench:')).length === 32, 'every bench task became a case')
-  const att = cases.find((c) => c.id === 'a-read-file')
-  assert(/Attached file saved to this chat's workspace: letter\.txt/.test(lib.caseMessages(att)[0].content), 'the attachment note was appended')
+  eq(sources, ['small-model', 'transcript'], 'sources')
+  assert(cases.every((c) => c.kind === 'search'), 'a selection case is left')
   return `${cases.length} cases`
 })
 
@@ -134,7 +127,7 @@ await test('validation refuses an unknown tool, a missing query, a bad need, a d
     [{ ...ok, expected: ['no_such_tool'] }, /does not have: no_such_tool/],
     [{ ...ok, query: ' ' }, /needs a query/],
     [{ ...ok, need: 'some' }, /need must be any or all/],
-    [{ ...ok, attachments: ['a.csv'] }, /attachments/],
+    [{ ...ok, kind: 'selection' }, /kind must be search/],
     [{ ...ok, source: '' }, /source is required/],
   ]
   for (const [c, re] of bad) {

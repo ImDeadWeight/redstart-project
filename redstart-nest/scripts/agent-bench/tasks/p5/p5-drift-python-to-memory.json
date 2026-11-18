@@ -16,5 +16,5 @@
     }
   ],
   "check": "../checks/p5.mjs#rememberedProduct",
-  "notes": "Benchmarks B4/B5 (drift), the control: the memory tools are always pinned, so this must pass under either growth setting."
+  "notes": "Benchmarks B4/B5 (drift), the control: the memory tools are core, in every list."
 }

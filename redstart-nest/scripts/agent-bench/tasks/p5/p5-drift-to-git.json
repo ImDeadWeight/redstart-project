@@ -27,5 +27,5 @@
     }
   ],
   "check": "../checks/phase4.mjs#thirdCommit",
-  "notes": "Benchmarks B4/B5 (drift): a summary, then a git question, a family the first turn has no reason to select."
+  "notes": "Benchmarks B4/B5 (drift): a summary, then a git question. Git is deferred by default (master plan 3.3), so the second turn reaches it through search_tools and call_tool."
 }

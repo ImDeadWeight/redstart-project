@@ -2,20 +2,17 @@
 // =============================================================================
 // Tool retrieval eval — run the labelled cases against the real embedder
 // =============================================================================
-// Tool retrieval second pass, 0.4. Scores every case in cases.json, plus the
-// agent-bench tasks, against catalog.json through the production scorer
-// (lib.mjs), with vectors from a real bge-small embedding server. Reports per
-// variant, overall and per source:
+// Tool retrieval second pass, 0.4. Scores every search case in cases.json
+// against catalog.json through the production ranking search_tools runs
+// (lib.mjs), with vectors from a real bge-small embedding server. Reports,
+// overall and per source:
 //
 //   MRR, recall@K, precision@K   the full ranking (searchTools, no limit)
-//   sel. recall, sel. size       selection cases: what filterRequestTools
-//                                would send, at a 32k window
 //   ms                           ranking time per case, vectors cached
 //
-// Variants: one per scorer, `cosine` (the first pass), `bm25` and `fused`
-// (second pass 3.2), each a setting the production functions take per call.
-// --scorer runs one; --relative-floor, --floor and --margin override that
-// scorer's defaults (for tuning them).
+// One ranking: the production one (fused, master plan 3.3 fixed it). The
+// scorer, text-version, floor and min-tools flags went with per-turn
+// selection, and so did the selection columns.
 //
 // The embedding server: Nest's own sidecar on 19084 while retrieval is on, or
 // one started by hand on another port (the eval then never touches Nest):
@@ -23,20 +20,13 @@
 //     --port 19184 -ngl 0 -c 512
 //
 //   node scripts/retrieval-eval/run.mjs [--port 19084] [--source <name>]
-//     [--json <file>] [--text-version 1|2] [--scorer cosine|bm25|fused]
-//     [--relative-floor x] [--floor x] [--margin x] [--min-tools n] [--freeze]
+//     [--json <file>] [--freeze]
 //
-// --text-version scores with that RETRIEVAL_DEFAULTS.textVersion (1: today's
-// embedded text; 2: the query without the attachment note, tools with their
-// registry metadata). Version 2 changes the embedded text, so it needs the
-// real embedder; the frozen vectors only cover the default.
-//
-// --freeze rewrites frozen.json: the cases this scorer gets right (a search
-// case's right tool in the top 3; a selection case's selection holding what it
-// needs) with every vector they use, so test-retrieval-eval.mjs fails in CI
-// when a change drops one. Refreeze after rebuilding catalog.json, after a
-// change to the text tools are embedded by (Phase 2), or when a phase moves
-// more cases into passing, and say so in the commit.
+// --freeze rewrites frozen.json: the cases the ranking gets right (a right
+// tool in the top 3) with every vector they use, so test-retrieval-eval.mjs
+// fails in CI when a change drops one. Refreeze after rebuilding
+// catalog.json, after a change to the text tools are embedded by, or when a
+// change moves more cases into passing, and say so in the commit.
 // =============================================================================
 
 import * as fs from 'node:fs'
@@ -44,19 +34,13 @@ import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EMBED_PORT } from '../../daemon/ports.mjs'
 import { embedTexts } from '../../daemon/embed-server.mjs'
-import { SCORERS } from '../../daemon/tool-retrieval.mjs'
-import { RETRIEVAL_DEFAULTS } from '../../daemon/tool-filter.mjs'
 import {
   KS, FROZEN_FILE, aggregate, caseMetrics, loadCases, loadCatalog, recordingEmbedder, scoreCase, toWireTools,
   frozenCaseOk, catalogHash,
 } from './lib.mjs'
 
-// One variant per scorer (tool-retrieval.mjs SCORERS), each with its own
-// default floors (tool-filter.mjs SCORER_DEFAULTS).
-export const VARIANTS = [...SCORERS]
-
 export function parseArgs(argv) {
-  const opts = { port: EMBED_PORT, freeze: false, settings: {} }
+  const opts = { port: EMBED_PORT, freeze: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--freeze') { opts.freeze = true; continue }
@@ -65,29 +49,10 @@ export function parseArgs(argv) {
     if (a === '--port') opts.port = Number(v)
     else if (a === '--source') opts.source = v
     else if (a === '--json') opts.json = v
-    else if (a === '--scorer') {
-      if (!SCORERS.includes(v)) throw new Error(`--scorer is one of ${SCORERS.join(', ')}`)
-      opts.scorer = v
-    } else if (a === '--relative-floor' || a === '--floor' || a === '--margin') {
-      const n = Number(v)
-      if (!Number.isFinite(n)) throw new Error(`${a} needs a number`)
-      opts.settings[a === '--relative-floor' ? 'relativeFloor' : a.slice(2)] = n
-    } else if (a === '--min-tools') {
-      const n = Number(v)
-      if (!Number.isInteger(n) || n < 0) throw new Error('--min-tools needs a whole number')
-      opts.settings.minTools = n
-    } else if (a === '--text-version') {
-      const n = Number(v)
-      if (n !== 1 && n !== 2) throw new Error('--text-version is 1 or 2')
-      opts.settings.textVersion = n
-    }
     else throw new Error(`unknown argument ${a}`)
   }
   if (!Number.isInteger(opts.port) || opts.port < 1) throw new Error('--port must be a port number')
   if (opts.freeze && opts.source) throw new Error('--freeze runs every case; drop --source')
-  // CI scores the freeze with the production defaults, so a freeze is made
-  // with them too: change the default in tool-filter.mjs, then refreeze.
-  if (opts.freeze && (Object.keys(opts.settings).length || opts.scorer)) throw new Error('--freeze uses the production defaults; drop the settings flags')
   return opts
 }
 
@@ -96,9 +61,9 @@ const n3 = (x) => (x == null ? '—' : x.toFixed(3))
 const n1 = (x) => (x == null ? '—' : x.toFixed(1))
 
 export function table(label, agg) {
-  const head = `| ${label} | cases | MRR | ${KS.map((k) => `R@${k}`).join(' | ')} | P@3 | sel. recall | sel. size | ms |`
-  const sep = `|${'---|'.repeat(6 + KS.length + 2)}`
-  const row = (name, a) => `| ${name} | ${a.cases} | ${n3(a.mrr)} | ${KS.map((k) => pct(a.recall[k])).join(' | ')} | ${pct(a.precision[3])} | ${pct(a.selectedRecall)} | ${n1(a.selectedSize)} | ${n1(a.ms)} |`
+  const head = `| ${label} | cases | MRR | ${KS.map((k) => `R@${k}`).join(' | ')} | P@3 | ms |`
+  const sep = `|${'---|'.repeat(5 + KS.length)}`
+  const row = (name, a) => `| ${name} | ${a.cases} | ${n3(a.mrr)} | ${KS.map((k) => pct(a.recall[k])).join(' | ')} | ${pct(a.precision[3])} | ${n1(a.ms)} |`
   return [head, sep, row('all', agg.all), ...Object.entries(agg.bySource).map(([s, a]) => row(s, a))].join('\n')
 }
 
@@ -124,35 +89,28 @@ export async function main(argv, io = {}) {
   })
 
   log(`${cases.length} cases over ${catalog.length} tools, embedding on port ${opts.port}`)
-  const results = {}
-  for (const variant of opts.scorer ? [opts.scorer] : VARIANTS) {
-    const rows = []
-    for (const c of cases) {
-      const scored = await scoreCase(c, { wire, embed: recorder.embed, settings: { ...opts.settings, scorer: variant } })
-      rows.push({ case: c, scored, metrics: caseMetrics(c.expected, scored, c.need), ms: scored.ms })
-    }
-    // The first case pays for embedding the whole catalog; leave it out of ms.
-    rows[0].ms = rows.length > 1 ? rows[1].ms : rows[0].ms
-    const agg = aggregate(rows)
-    results[variant] = { agg, rows }
-    log(`\n## ${variant}\n\n${table(variant, agg)}`)
-    const misses = rows.filter((r) => !frozenCaseOk(r.case, r.scored))
-    log(`\n${misses.length} case(s) the scorer gets wrong (search: right tool not in the top 3; selection: a needed tool not sent):`)
-    for (const r of misses) {
-      const best = Math.min(...r.metrics.ranks)
-      const sel = r.scored.selected ? `, sent ${r.scored.selected.length}: ${r.scored.selected.join(' ')}` : ''
-      log(`- ${r.case.id} (${r.case.source}): wants ${r.case.expected.join('|')}, best rank ${best}; top 3 ${r.scored.ranking.slice(0, 3).join(' ')}${sel}`)
-    }
+  const rows = []
+  for (const c of cases) {
+    const scored = await scoreCase(c, { wire, embed: recorder.embed })
+    rows.push({ case: c, scored, metrics: caseMetrics(c.expected, scored, c.need), ms: scored.ms })
+  }
+  // The first case pays for embedding the whole catalog; leave it out of ms.
+  rows[0].ms = rows.length > 1 ? rows[1].ms : rows[0].ms
+  const agg = aggregate(rows)
+  log(`\n${table('search_tools', agg)}`)
+  const misses = rows.filter((r) => !frozenCaseOk(r.case, r.scored))
+  log(`\n${misses.length} case(s) the ranking gets wrong (right tool not in the top 3):`)
+  for (const r of misses) {
+    const best = Math.min(...r.metrics.ranks)
+    log(`- ${r.case.id} (${r.case.source}): wants ${r.case.expected.join('|')}, best rank ${best}; top 3 ${r.scored.ranking.slice(0, 3).join(' ')}`)
   }
 
-  if (opts.json) fs.writeFileSync(opts.json, `${JSON.stringify(Object.fromEntries(Object.entries(results).map(([v, r]) => [v, r.agg])), null, 2)}\n`)
+  if (opts.json) fs.writeFileSync(opts.json, `${JSON.stringify(agg, null, 2)}\n`)
 
   if (opts.freeze) {
-    // The production scorer is the one CI holds the freeze to.
-    const rows = results[RETRIEVAL_DEFAULTS.scorer].rows
     const kept = rows.filter((r) => frozenCaseOk(r.case, r.scored)).map((r) => r.case.id)
     fs.writeFileSync(FROZEN_FILE, `${JSON.stringify({
-      note: `Generated by run.mjs --freeze. Cases the production scorer (${RETRIEVAL_DEFAULTS.scorer}) got right at freeze time, and every vector they use (bge-small-en-v1.5 f16, base64 float32, keyed by sha256 of the text). Do not edit by hand.`,
+      note: 'Generated by run.mjs --freeze. Cases the production ranking got right at freeze time, and every vector they use (bge-small-en-v1.5 f16, base64 float32, keyed by sha256 of the text). Do not edit by hand.',
       frozenAt: new Date().toISOString().slice(0, 10),
       catalogHash: catalogHash(catalog),
       cases: kept,
@@ -160,7 +118,7 @@ export async function main(argv, io = {}) {
     })}\n`)
     log(`\nfroze ${kept.length} of ${rows.length} cases and ${Object.keys(recorder.seen).length} vectors -> ${path.relative(process.cwd(), FROZEN_FILE)}`)
   }
-  return results
+  return { agg, rows }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

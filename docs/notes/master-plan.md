@@ -294,6 +294,38 @@ expansion; `createSelectionMemory`; the attachment prior (fixes 3.3);
 validators, Tools-tab controls and tests. `tool-retrieval.mjs` should go from
 ~930 lines to ~250.
 
+### 3.3 at module level (planned 2026-11-18, after 3.2 chose C)
+
+"On" now means the catalog; there is no mode. `tools.retrieval.enabled` is
+the only field read (still off by default, D8); the profile's old fields
+(`mode`, `scorer`, `growth`, `textVersion`, floors, `minTools`, `callTool`)
+are ignored where they lie. The attachment prior was never built (held in
+the fixes plan), so nothing goes for it. Three commits:
+
+1. **The consumers stop asking for selection.** Bench: `withhold` goes
+   (task-file refuses it with a pointer here), so do the eight p5 tasks
+   built on it and their checks (B3, replaced by arm C); the origins and
+   would-add headers are no longer read; `--expect-retrieval` keys shrink to
+   `mode`. `measure-tool-cache.mjs` drops its "came in" and "would add"
+   columns. The retrieval eval keeps its ranking cases (`searchTools`, which
+   `search_tools` runs) and drops the selection cases and the scorer, text
+   and floor flags.
+2. **The server.** Gateway: the catalog branch is the only one;
+   `redstart_conversation_id` and `redstart_retrieval_withhold` are still
+   consumed (chat-ui and older benches send them) and ignored. Headers
+   `x-redstart-tools-origin` and `-would-add` go; `-retrieval-config` reads
+   `mode=catalog`. `tool-filter.mjs` keeps the vector store, the fused
+   ranking (fixed, with fused's floors as constants), `searchTools`,
+   `rankForSearch`, `keywordSearch` and the wire cost.
+   `tool-retrieval.mjs` keeps the tool text, hashes, the store, cosine,
+   BM25 and RRF. `search-tools-provider.mjs` serves only `search_tools`
+   (with schemas) and `call_tool`; `describe_tool` goes (3.2: no bad
+   `call_tool` arguments). `mcp-server.mjs` stamps deferred whenever
+   retrieval is on. The prompt keeps the catalog wording and the
+   "no way to search" fallback.
+3. **The launcher.** The Tools tab's "How" select goes; the deferral card
+   shows whenever retrieval is on. `types.ts` follows.
+
 **Detail and what this supersedes:**
 - `tool-retrieval-fixes-benchmarks.md`: B1, B2, B4, B5 are not run (they tune
   what 3.3 deletes); B3 is replaced by arm C; H6 and H7 are not built; B0's

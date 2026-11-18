@@ -2,11 +2,11 @@
 // =============================================================================
 // Does the tool list break the prompt cache? (tool retrieval second pass, 0.3)
 // =============================================================================
-// Retrieval adds tools to a conversation as its query drifts (tool-filter.mjs,
-// monotonic per conversation). The tools block is rendered ahead of the whole
-// chat, so each change to it makes llama-server prefill the entire
-// conversation again (P2). On a hybrid model (Ornith) that is a full prefill
-// with nothing reused.
+// The tools block is rendered ahead of the whole chat, so each change to it
+// makes llama-server prefill the entire conversation again (P2). On a hybrid
+// model (Ornith) that is a full prefill with nothing reused. Per-turn
+// selection changed it as the query drifted; the catalog (master plan 3.3)
+// sends one fixed list, and this is how that is checked.
 //
 // This measures it on the loaded model, through the REAL gateway, so bans,
 // retrieval, the composed prompt and the account's memories all apply exactly
@@ -29,19 +29,12 @@
 //
 //   node scripts/measure-tool-cache.mjs [--gateway http://127.0.0.1:19080]
 //     [--mcp <gateway port + 2>] [--turns 10] [--variants server,off]
-//     [--discover <tool> --discover-at N]  (benchmarks H5: turn N's reply is
-//                     a fixed search_tools call whose result names <tool>,
-//                     so turn N+1 pins it: the one prefill a discovered tool
-//                     costs. <tool> is withheld until then, so it was not
-//                     already in the set)
 //     [--compact-at N] (turn N replaces everything before the last exchange
 //                     with a summary, as compaction does, keeping the
 //                     conversation id: the tool set must not change, 4.3)
 //
-// Each variant gets its own redstart_conversation_id, so a second run of
-// this script starts from a first selection, not the last run's set.
-// The table shows, per turn, the tools that came in that turn and why
-// (x-redstart-tools-origin) and would_add (what a frozen set left out).
+// Each variant gets its own redstart_conversation_id. The table shows, per
+// turn, the tools that came in that turn (none, once the list is fixed).
 //
 // Login on: the API key in REDSTART_BENCH_API_KEY (or --api-key), as for the
 // agent bench. Use the bench account: the tools measured are that account's.
@@ -88,16 +81,10 @@ export function parseArgs(argv) {
     else if (a === '--api-key') opts.apiKey = v
     else if (a === '--turns') opts.turns = Number(v)
     else if (a === '--variants') opts.variants = v.split(',').map((s) => s.trim()).filter(Boolean)
-    else if (a === '--discover') opts.discover = v
-    else if (a === '--discover-at') opts.discoverAt = Number(v)
     else if (a === '--compact-at') opts.compactAt = Number(v)
     else throw new Error(`unknown argument ${a}`)
   }
   if (!Number.isInteger(opts.turns) || opts.turns < 2) throw new Error('--turns must be an integer of at least 2')
-  if ((opts.discover === undefined) !== (opts.discoverAt === undefined)) throw new Error('--discover and --discover-at go together')
-  if (opts.discoverAt !== undefined && !(Number.isInteger(opts.discoverAt) && opts.discoverAt >= 1 && opts.discoverAt < opts.turns)) {
-    throw new Error('--discover-at must be a turn from 1 to --turns - 1 (the next turn is the one that pins it)')
-  }
   if (opts.compactAt !== undefined && !(Number.isInteger(opts.compactAt) && opts.compactAt >= 2 && opts.compactAt <= opts.turns)) {
     throw new Error('--compact-at must be a turn from 2 to --turns')
   }
@@ -160,7 +147,6 @@ export async function main(argv, io = {}) {
       // server asks for retrieval: on an account-wide key, which names no
       // surface, it would not run otherwise (master plan Phase 1).
       redstart_retrieval: variant !== 'off',
-      ...(variant !== 'off' && opts.discover ? { redstart_retrieval_withhold: [opts.discover] } : {}),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
     const report = toolsSentReport(res.headers)
@@ -168,8 +154,6 @@ export async function main(argv, io = {}) {
     return {
       names: report?.names ?? null,
       retrieval: report?.retrieval ?? null,
-      origins: report?.origins ?? {},
-      wouldAdd: report?.wouldAdd ?? 0,
       cached: typeof t.cache_n === 'number' ? t.cache_n : null,
       prefilled: typeof t.prompt_n === 'number' ? t.prompt_n : null,
       ms: Math.round(t.prompt_ms ?? 0),
@@ -195,19 +179,11 @@ export async function main(argv, io = {}) {
       msgs.push({ role: 'user', content: conversation[k] })
       const r = await send([...msgs], variant, conversationId)
       const set = r.names ? [...r.names].sort().join('\n') : null
-      // What came in this turn, and why (6.1): name:why for each new tool.
-      const added = (r.names ?? []).filter((n) => !lastNames.has(n)).map((n) => `${n}:${r.origins[n]?.why ?? '?'}`)
-      rows.push({ turn, setChanged: lastSet !== null && set !== lastSet, compacted, discovery: opts.discoverAt === turn, added: turn === 1 ? [] : added, ...r })
+      // What came in this turn: none, in the catalog, whose list is fixed.
+      const added = (r.names ?? []).filter((n) => !lastNames.has(n))
+      rows.push({ turn, setChanged: lastSet !== null && set !== lastSet, compacted, added: turn === 1 ? [] : added, ...r })
       lastSet = set
       lastNames = new Set(r.names ?? [])
-      if (opts.discoverAt === turn) {
-        // A fixed search_tools call and its hit, so the next turn pins it.
-        const id = `discover-${turn}`
-        msgs.push(
-          { role: 'assistant', content: '', tool_calls: [{ id, type: 'function', function: { name: 'search_tools', arguments: JSON.stringify({ query: opts.discover.replace(/_/g, ' ') }) } }] },
-          { role: 'tool', tool_call_id: id, content: JSON.stringify({ match: 'close', tools: [{ name: opts.discover, description: '(found by search)' }] }) },
-        )
-      }
       // The reply the next turn carries (fixed, so both variants see the same chat).
       msgs.push({ role: 'assistant', content: `Reply ${k}. ${filler(k + 500, 120)}.` })
     }
@@ -216,11 +192,10 @@ export async function main(argv, io = {}) {
 
   for (const { variant, rows, misses, prefilled, ms } of results) {
     log(`\n## --variants ${variant} (gateway reported retrieval ${[...new Set(rows.map((r) => r.retrieval ?? 'not reported'))].join(', ')})`)
-    log('| turn | tools sent | set changed | came in (why) | would add | cached tokens | prefilled tokens | prefill ms |')
-    log('|---|---|---|---|---|---|---|---|')
+    log('| turn | tools sent | set changed | came in | cached tokens | prefilled tokens | prefill ms |')
+    log('|---|---|---|---|---|---|---|')
     for (const r of rows) {
-      const note = [r.compacted ? 'compacted' : '', r.discovery ? 'search_tools reply' : ''].filter(Boolean).join(', ')
-      log(`| ${r.turn}${note ? ` (${note})` : ''} | ${r.names ? r.names.length : '?'} | ${r.turn === 1 ? '(first)' : r.setChanged ? 'yes' : 'no'} | ${r.added.join(', ') || '—'} | ${r.wouldAdd} | ${r.cached ?? '?'} | ${r.prefilled ?? '?'} | ${r.ms} |`)
+      log(`| ${r.turn}${r.compacted ? ' (compacted)' : ''} | ${r.names ? r.names.length : '?'} | ${r.turn === 1 ? '(first)' : r.setChanged ? 'yes' : 'no'} | ${r.added.join(', ') || '—'} | ${r.cached ?? '?'} | ${r.prefilled ?? '?'} | ${r.ms} |`)
     }
     log(`turns 2-${rows.length}: ${misses} cache miss(es), prefilled ${prefilled} tokens in ${ms} ms`)
   }

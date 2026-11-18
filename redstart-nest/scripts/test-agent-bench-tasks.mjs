@@ -459,22 +459,13 @@ await test('Phase 1 answers are keyed by topic: a question about where to save d
 
 console.log('\n-- the p5 set (tool retrieval benchmarks B3-B5, tasks/p5/) --')
 
-// The p5 tasks reuse the main set's prompts and checks with a tool withheld,
-// plus three drift tasks with follow-ups. They live in their own folder so a
-// full-set run (B0) is still the 32 above.
+// What is left of the p5 set after master plan 3.3: p5-vague-config, a
+// File System read the model reaches only through the catalog, and three
+// drift tasks with follow-ups. The tasks that withheld a core tool went with
+// withhold. They live in their own folder so a full-set run is still the 32.
 const callTool = (name, args = {}) => ({ t: 0, type: 'tool_call', name: 'call_tool', arguments: JSON.stringify({ name, arguments: args }) })
 const saved = (text) => ({ t: 0, type: 'tool_call', name: 'memory_save', arguments: JSON.stringify({ text }) })
 const P5_CASES = {
-  'p5-count-docs': {
-    right: ['There are 4 documents.', {}, [callTool('list_documents')], NONE],
-    wrong: ['There are 4 documents.', {}, [call('search_tools')], NONE], why: 'searched, never listed',
-  },
-  'p5-search-docs': { right: CASES['docs-search'].right, wrong: CASES['docs-search'].wrong, why: CASES['docs-search'].why },
-  'p5-exact-product': { right: CASES['compute-arithmetic'].right, wrong: ['I cannot run code here, but it is roughly 481 million.'], why: 'guessed without a tool' },
-  'p5-write-brief': { right: CASES['docs-two-sources'].right, wrong: CASES['docs-two-sources'].wrong, why: CASES['docs-two-sources'].why },
-  'p5-git-log': { right: CASES['p4-git-log'].right, wrong: CASES['p4-git-log'].wrong, why: CASES['p4-git-log'].why },
-  'p5-delete-approval': { right: CASES['p2-delete-confirmed'].right, wrong: CASES['p2-delete-confirmed'].wrong, why: CASES['p2-delete-confirmed'].why },
-  'p5-guard-unneeded': { right: CASES['compute-dates'].right, wrong: CASES['compute-dates'].wrong, why: CASES['compute-dates'].why },
   'p5-vague-config': {
     right: ['settings.json sets the port to 48213 (the README default is 8080).'],
     wrong: ['It listens on port 8080.'], why: 'read the README default, not the settings',
@@ -488,24 +479,23 @@ const P5_CASES = {
 }
 
 const p5Tasks = []
-await test('the p5 set loads: 11 tasks, each withholding or following up, none withholding a pinned tool', async () => {
+await test('the p5 set loads: 4 tasks, three of them drift tasks with follow-ups', async () => {
   for (const f of findTaskFiles(path.join(TASKS, 'p5'))) p5Tasks.push(await loadTask(f))
-  assert(p5Tasks.length === 11, `${p5Tasks.length} tasks`)
-  for (const t of p5Tasks) {
-    assert(t.group === 'p5' && t.phase === 5, `${t.id}: group ${t.group}, phase ${t.phase}`)
-    assert(t.withhold.length > 0 || t.followUps.length > 0, `${t.id} neither withholds nor follows up`)
-  }
+  assert(p5Tasks.length === 4, `${p5Tasks.length} tasks`)
+  for (const t of p5Tasks) assert(t.group === 'p5' && t.phase === 5, `${t.id}: group ${t.group}, phase ${t.phase}`)
   assert(p5Tasks.filter((t) => t.followUps.length).length === 3, 'three drift tasks')
   const missing = p5Tasks.map((t) => t.id).filter((id) => !P5_CASES[id])
   assert(missing.length === 0, `no cases for ${missing}`)
 })
 
-await test('🔍 a p5 task withholds every route to its tool: no withheld-task expectTool is left un-withheld', async () => {
-  // Otherwise "discovered" is trivially null: turn 1 had another way in.
-  for (const t of p5Tasks.filter((x) => x.withhold.length && x.id !== 'p5-guard-unneeded')) {
-    const open = t.expectTools.filter((n) => !t.withhold.includes(n))
-    assert(open.length === 0, `${t.id} expects ${open} but does not withhold it`)
-  }
+await test('🔍 p5-vague-config tests the catalog: its tool is deferred by default', async () => {
+  // Otherwise "discovered" is trivially null: turn 1 would have it.
+  const { DEFERRED_BY_DEFAULT } = await import('../daemon/tool-deferral.mjs')
+  const { BUILTIN_CAPABILITY_TOOL_NAMES } = await import('../daemon/tools-definitions.mjs')
+  const t = p5Tasks.find((x) => x.id === 'p5-vague-config')
+  const deferred = DEFERRED_BY_DEFAULT.flatMap((id) => BUILTIN_CAPABILITY_TOOL_NAMES[id] ?? [])
+  const open = t.expectTools.filter((n) => !deferred.includes(n))
+  assert(open.length === 0, `expects ${open}, which is not deferred`)
 })
 
 for (const task of p5Tasks) {

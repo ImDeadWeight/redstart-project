@@ -230,7 +230,7 @@ function startFakeNest(gatewayPort) {
     approvals: new Map(),
     approvalPosts: [],
     // x-redstart-retrieval-config on a request retrieval ran on (benchmarks H1).
-    retrievalConfig: 'scorer=fused;growth=scored;text=1;min=0;callTool=0;floor=0.2;rel=0.85;margin=0.02',
+    retrievalConfig: 'mode=catalog',
   }
   const json = (res, status, body) => {
     res.writeHead(status, { 'Content-Type': 'application/json' })
@@ -370,12 +370,8 @@ function startFakeNest(gatewayPort) {
       const out = body.stream === false ? null : SCRIPTS[scriptName](turn, body.messages)
       // The gateway's retrieval report (tools-gateway.mjs retrievalReportHeaders):
       // every tool sent, nothing removed, on unless the request opted out.
-      // A withheld tool (benchmarks H2) is not reported sent until a tool
-      // result in the conversation names it, as a search hit pins it.
-      const withheld = new Set((Array.isArray(body.redstart_retrieval_withhold) ? body.redstart_retrieval_withhold : [])
-        .filter((n) => !body.messages.some((m) => m.role === 'tool' && String(m.content).includes(n))))
       const report = body.redstart_retrieval_report === true ? {
-        'x-redstart-tools-sent': (body.tools ?? []).map((t) => t.function.name).filter((n) => !withheld.has(n)).map(encodeURIComponent).join(','),
+        'x-redstart-tools-sent': (body.tools ?? []).map((t) => t.function.name).map(encodeURIComponent).join(','),
         'x-redstart-tools-filtered': '0',
         'x-redstart-retrieval': body.redstart_retrieval === false ? 'off' : 'on',
         // Benchmarks H1: the settings in effect, as tool-filter.mjs writes them.
@@ -957,7 +953,7 @@ if (bench) {
     const argv = (...extra) => ['--model-label', 'fake model', '--tasks', task, '--gateway', `http://127.0.0.1:${port}`, '--out', dir, '--quiet', ...extra]
     // A match: one probe request, then the tasks.
     const before = nest.state.completionBodies.length
-    const ok = await main(argv('--expect-retrieval', 'scorer=fused,growth=scored'), { log: () => {} })
+    const ok = await main(argv('--expect-retrieval', 'mode=catalog'), { log: () => {} })
     const probe = nest.state.completionBodies[before]
     assert(probe.stream === false && probe.max_tokens === 1 && probe.redstart_retrieval_report === true && /^bench-probe-/.test(probe.redstart_conversation_id), 'probe shape')
     eq(JSON.parse(fs.readFileSync(path.join(dir, 'summary.json'), 'utf8')).meta.retrievalConfigProbed, nest.state.retrievalConfig, 'probe recorded')
@@ -965,13 +961,13 @@ if (bench) {
     // A mismatch stops before any task.
     const afterOk = nest.state.completionBodies.length
     let e = null
-    try { await main(argv('--expect-retrieval', 'growth=pins-only'), { log: () => {} }) } catch (err) { e = err }
-    assert(/growth is scored, expected pins-only/.test(e?.message ?? ''), `got ${e?.message}`)
+    try { await main(argv('--expect-retrieval', 'mode=select'), { log: () => {} }) } catch (err) { e = err }
+    assert(/mode is catalog, expected select/.test(e?.message ?? ''), `got ${e?.message}`)
     eq(nest.state.completionBodies.length - afterOk, 1, 'only the probe was sent')
     // Settings that change mid-run are a warning on the row.
     let n = 0
     const saved = nest.state.retrievalConfig
-    Object.defineProperty(nest.state, 'retrievalConfig', { configurable: true, get: () => (n++ === 0 ? saved : saved.replace('growth=scored', 'growth=pins-only')) })
+    Object.defineProperty(nest.state, 'retrievalConfig', { configurable: true, get: () => (n++ === 0 ? saved : saved.replace('mode=catalog', 'mode=select')) })
     try {
       const mixed = await main(argv(), { log: () => {} })
       assert(mixed.summary.retrievalConfigMixed, 'not flagged as mixed')
@@ -979,12 +975,12 @@ if (bench) {
     } finally {
       Object.defineProperty(nest.state, 'retrievalConfig', { configurable: true, writable: true, value: saved })
     }
-    for (const bad of [['--expect-retrieval', 'colour=red'], ['--expect-retrieval', 'scorer'], ['--expect-retrieval', 'scorer=fused', '--retrieval', 'off']]) {
+    for (const bad of [['--expect-retrieval', 'colour=red'], ['--expect-retrieval', 'scorer'], ['--expect-retrieval', 'scorer=fused'], ['--expect-retrieval', 'mode=catalog', '--retrieval', 'off']]) {
       let pe = null
       try { parseArgs(['--model-label', 'm', ...bad]) } catch (err) { pe = err }
       assert(/--expect-retrieval/.test(pe?.message ?? ''), `${bad.join(' ')} was accepted`)
     }
-    eq(retrievalConfigMismatch({ scorer: 'fused' }, 'off') !== null && retrievalConfigMismatch({ scorer: 'fused' }, null) !== null, true, 'off and absent are mismatches')
+    eq(retrievalConfigMismatch({ mode: 'catalog' }, 'off') !== null && retrievalConfigMismatch({ mode: 'catalog' }, null) !== null, true, 'off and absent are mismatches')
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
@@ -1035,28 +1031,22 @@ if (bench) {
     }
   })
 
-  await test('measure-tool-cache H5: a discovery turn pins the withheld tool, compaction keeps the id, each variant has its own id', async () => {
+  await test('measure-tool-cache: compaction keeps the id, each variant has its own id', async () => {
     const mtc = await import('./measure-tool-cache.mjs')
     const before = nest.state.completionBodies.length
     const lines = []
-    const results = await mtc.main(['--gateway', `http://127.0.0.1:${port}`, '--turns', '3', '--discover', 'read_file', '--discover-at', '1', '--compact-at', '3'],
+    const results = await mtc.main(['--gateway', `http://127.0.0.1:${port}`, '--turns', '3', '--compact-at', '3'],
       { log: (s) => lines.push(s), conversation: ['[script:chat] first', 'second', 'third'] })
     const server = results[0].rows
-    assert(!server[0].names.includes('read_file'), `turn 1 sent the withheld tool: ${server[0].names}`)
-    assert(server[1].names.includes('read_file') && server[1].setChanged, 'the search hit was not pinned on the next turn')
-    assert(server[1].added.some((a) => a.startsWith('read_file:')), `came in: ${server[1].added}`)
-    eq([server[0].discovery, server[2].compacted], [true, true], 'the turns are marked')
+    eq([server[1].setChanged, server[2].compacted], [false, true], 'a fixed set, and the compacted turn marked')
     const bodies = nest.state.completionBodies.slice(before).filter((b) => b.redstart_conversation_id)
     const ids = [...new Set(bodies.map((b) => b.redstart_conversation_id))]
     eq(ids.length, 2, 'one conversation id per variant, kept across compaction')
-    assert(bodies.filter((b) => b.redstart_retrieval === false).every((b) => !b.redstart_retrieval_withhold), 'the off variant withheld')
-    assert(bodies.filter((b) => b.redstart_retrieval !== false).every((b) => JSON.stringify(b.redstart_retrieval_withhold) === '["read_file"]'), 'a server turn did not withhold')
-    const turn2 = bodies.find((b) => b.messages.some((m) => m.role === 'tool'))
-    assert(turn2?.messages.some((m) => m.tool_calls?.[0]?.function.name === 'search_tools'), 'no search_tools call before the hit')
+    assert(bodies.every((b) => b.redstart_retrieval_withhold === undefined), 'a request still sent redstart_retrieval_withhold')
     const turn3 = bodies.filter((b) => b.redstart_retrieval !== false).at(-1)
     assert(/^\[Summary of the conversation so far\]/.test(turn3.messages[0].content), 'turn 3 was not compacted')
-    assert(lines.some((l) => l.startsWith('| 3 (compacted) |')) && lines.some((l) => l.startsWith('| 1 (search_tools reply) |')), lines.join('\n'))
-    for (const bad of [['--discover', 'x'], ['--discover', 'x', '--discover-at', '3', '--turns', '3'], ['--compact-at', '1']]) {
+    assert(lines.some((l) => l.startsWith('| 3 (compacted) |')), lines.join('\n'))
+    for (const bad of [['--discover', 'x'], ['--compact-at', '1']]) {
       let e = null
       try { mtc.parseArgs(bad) } catch (err) { e = err }
       assert(e, `${bad.join(' ')} was accepted`)
@@ -1131,38 +1121,12 @@ await test('a files-space fixture lands in the File System folder, reaches the c
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
-await test('benchmarks H2: a task\'s withhold reaches every request, the report shows it left out, and --retrieval off skips the task by name', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-withhold-'))
-  const checks = path.join(FIXTURES, 'checks.mjs').replace(/\\/g, '/')
-  const task = { id: 'withheld-read', prompt: '[script:read] What is the secret in data.txt?', approve: 'all',
-    fixtures: [{ path: 'data.txt', from: path.join(FIXTURES, 'data.txt').replace(/\\/g, '/') }],
-    expectTools: ['read_file'], withhold: ['read_file'], check: `${checks}#saysSeven` }
-  fs.writeFileSync(path.join(dir, 'withheld.json'), JSON.stringify(task))
-  fs.writeFileSync(path.join(dir, 'plain.json'), JSON.stringify({ ...task, id: 'plain-read', withhold: undefined }))
-  const argv = (...extra) => ['--model-label', 'm', '--tasks', path.join(dir, '*.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', path.join(dir, `out${extra.length}`), '--quiet', ...extra]
-  const before = nest.state.completionBodies.length
-  const r = await main(argv(), { log: () => {} })
-  const run = r.runs.find((x) => x.taskId === 'withheld-read')
-  const bodies = nest.state.completionBodies.slice(before).filter((b) => /withheld-read/.test(JSON.stringify(b.messages)) || b.redstart_retrieval_withhold)
-  assert(bodies.length > 0 && bodies.every((b) => JSON.stringify(b.redstart_retrieval_withhold) === '["read_file"]'), 'a request went without the withhold')
-  const sent = run.events.find((e) => e.type === 'tools_sent')
-  assert(!sent.names.includes('read_file'), `turn 1 reported the withheld tool: ${sent.names}`)
-  eq(run.metrics.discovered, true, 'called although withheld: counted as found')
-  assert(!r.runs.find((x) => x.taskId === 'plain-read').events.some((e) => e.type === 'tools_sent' && !e.names.includes('read_file')), 'a plain task had a tool withheld')
-  const lines = []
-  const off = await main(argv('--retrieval', 'off'), { log: (s) => lines.push(s) })
-  eq(off.runs.map((x) => x.taskId), ['plain-read'], 'only the plain task ran')
-  assert(lines.some((l) => /skipped 1 task\(s\) these flags cannot run: withheld-read \(withholds a tool, and --retrieval off sends every tool\)/.test(l)), lines.join('\n'))
-  fs.rmSync(dir, { recursive: true, force: true })
-})
-
-await test('benchmarks H4: follow-ups are sent after each final reply, in one conversation, and their tools are what discovery looks for', async () => {
+await test('benchmarks H4: follow-ups are sent after each final reply, in one conversation, and their tools count for discovery', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-followups-'))
   const checks = path.join(FIXTURES, 'checks.mjs').replace(/\\/g, '/')
   fs.writeFileSync(path.join(dir, 'drift.json'), JSON.stringify({
     id: 'drift', prompt: '[script:drift] Remember the word kestrel.', approve: 'all',
     fixtures: [{ path: 'data.txt', content: fs.readFileSync(path.join(FIXTURES, 'data.txt'), 'utf8') }],
-    withhold: ['read_file'],
     followUps: [{ prompt: 'Now, what is the secret in data.txt?', expectTools: ['read_file'] }],
     check: `${checks}#saysSeven`,
   }))
@@ -1175,7 +1139,7 @@ await test('benchmarks H4: follow-ups are sent after each final reply, in one co
   eq(last.filter((m) => m.role === 'user').length, 2, 'both user messages in one conversation')
   assert(last.some((m) => m.role === 'assistant' && m.content === 'Noted.'), 'the first reply was not kept before the follow-up')
   eq(new Set(nest.state.completionBodies.slice(before).map((b) => b.redstart_conversation_id)).size <= 1, true, 'one conversation id')
-  eq([run.metrics.discovered, run.metrics.turnsToDiscovery, run.metrics.firstToolExpected], [true, 1, null], 'found on the follow-up; the first tool is not judged without the task\'s own expectTools')
+  eq([run.metrics.discovered, run.metrics.firstToolExpected], [null, null], 'turn 1 already had read_file, so nothing to discover; the first tool is not judged without the task\'s own expectTools')
   // --runtime cannot send them.
   const { cannotRun } = await import('./agent-bench/run.mjs')
   eq(cannotRun({ followUps: [{ prompt: 'x' }] }, { runtime: true }), 'has follow-ups, which --runtime cannot send', 'runtime')
@@ -1191,28 +1155,16 @@ await test('benchmarks H4: follow-ups are sent after each final reply, in one co
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
-await test('benchmarks H2: the loader refuses an always-pinned name, a withhold without expectTools, and a malformed one', async () => {
+await test('master plan 3.3: the loader refuses withhold, which went with per-turn selection', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-withhold-bad-'))
   const checks = path.join(FIXTURES, 'checks.mjs').replace(/\\/g, '/')
-  const base = { id: 'w', prompt: 'x', check: `${checks}#saysSeven`, expectTools: ['list_documents'] }
-  const cases = [
-    [{ ...base, withhold: ['memory_save'] }, /always-pinned tools, which are never withheld: memory_save/],
-    [{ ...base, withhold: ['search_tools'] }, /always-pinned/],
-    [{ ...base, expectTools: undefined, withhold: ['list_documents'] }, /needs expectTools/],
-    [{ ...base, withhold: 'list_documents' }, /withhold must be an array/],
-  ]
-  for (const [i, [raw, want]] of cases.entries()) {
-    const f = path.join(dir, `t${i}.json`)
-    fs.writeFileSync(f, JSON.stringify(raw))
-    let e = null
-    try { await loadTask(f) } catch (err) { e = err }
-    assert(want.test(e?.message ?? ''), `case ${i}: got ${e?.message}`)
-  }
+  const f = path.join(dir, 't.json')
+  fs.writeFileSync(f, JSON.stringify({ id: 'w', prompt: 'x', check: `${checks}#saysSeven`, expectTools: ['list_documents'], withhold: ['list_documents'] }))
+  let e = null
+  try { await loadTask(f) } catch (err) { e = err }
+  assert(/withhold was removed with per-turn selection/.test(e?.message ?? ''), `got ${e?.message}`)
   fs.rmSync(dir, { recursive: true, force: true })
 })
-
-console.log('\n-- one run does not change the next --')
-
 await test('a memory a run saves is removed after it; ones already there are warned about, not deleted', async () => {
   // 2026-11-12: p1-skip-no-invent's memory_search found an earlier run's
   // "Wrote thank-you note to school bake sale volunteers".
@@ -1266,14 +1218,6 @@ await test('nothing listening: the error says Nest is not reachable and why that
     await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', outDir, '--quiet'], { log: () => {} })
   } catch (e) { err = e }
   assert(/could not reach Nest at/.test(err?.message ?? '') && /model loaded/.test(err.message), `got ${err?.message}`)
-})
-
-await test('the retrieval report reads origins and would-add, and an older Nest gives {} and 0', async () => {
-  const h = (o) => ({ get: (k) => (k in o ? o[k] : null) })
-  const r = toolsSentReport(h({ 'x-redstart-tools-sent': 'git_log,a%2Cb', 'x-redstart-tools-origin': 'git_log=1:first,a%2Cb=3:search,bad', 'x-redstart-tools-would-add': '2' }))
-  assert(r.origins.git_log.why === 'first' && r.origins['a,b'].turn === 3 && r.wouldAdd === 2, JSON.stringify(r))
-  const old = toolsSentReport(h({ 'x-redstart-tools-sent': 'git_log' }))
-  assert(JSON.stringify(old.origins) === '{}' && old.wouldAdd === 0, JSON.stringify(old))
 })
 
 console.log('\n-- discovery metrics (benchmarks H3) --')

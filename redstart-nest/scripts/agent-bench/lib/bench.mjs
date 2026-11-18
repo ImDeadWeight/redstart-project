@@ -170,39 +170,28 @@ export function filePathsIn(text) {
  * from before the report).
  *
  * @param {{ get(name: string): string | null } | undefined} headers
- * Since second pass 6.1 also `origins`, each sent tool's turn and reason
- * (x-redstart-tools-origin; {} from an older Nest), and `wouldAdd`.
- *
  * Since benchmarks H1 also `config`, the settings retrieval ran with
- * (x-redstart-retrieval-config: `scorer=...;growth=...`, or `off`); null from
- * an older Nest.
+ * (x-redstart-retrieval-config: `mode=catalog` since master plan 3.3, or
+ * `off`); null from an older Nest. The per-tool origins and would-add
+ * headers went with per-turn selection (3.3).
  *
- * @returns {{ names: string[], filtered: boolean, retrieval: 'on' | 'off' | null, origins: Record<string, { turn: number, why: string }>, wouldAdd: number, config: string | null } | null}
+ * @returns {{ names: string[], filtered: boolean, retrieval: 'on' | 'off' | null, config: string | null } | null}
  */
 export function toolsSentReport(headers) {
   const sent = headers?.get?.('x-redstart-tools-sent')
   if (sent == null) return null
   const state = headers.get('x-redstart-retrieval')
-  /** @type {Record<string, { turn: number, why: string }>} */
-  const origins = {}
-  for (const part of (headers.get('x-redstart-tools-origin') ?? '').split(',').filter(Boolean)) {
-    const m = /^([^=]+)=(\d+):([a-z]+)$/.exec(part)
-    if (m) origins[decodeURIComponent(m[1])] = { turn: Number(m[2]), why: m[3] }
-  }
-  const wouldAdd = Number(headers.get('x-redstart-tools-would-add'))
   return {
     names: sent.split(',').filter(Boolean).map((n) => decodeURIComponent(n)),
     filtered: headers.get('x-redstart-tools-filtered') === '1',
     retrieval: state === 'on' || state === 'off' ? state : null,
-    origins,
-    wouldAdd: Number.isInteger(wouldAdd) ? wouldAdd : 0,
     config: headers.get('x-redstart-retrieval-config') ?? null,
   }
 }
 
 /**
- * `--expect-retrieval scorer=fused,growth=pins-only` as { scorer: 'fused',
- * growth: 'pins-only' }. The keys are x-redstart-retrieval-config's.
+ * `--expect-retrieval mode=catalog` as { mode: 'catalog' }. The keys are
+ * x-redstart-retrieval-config's.
  *
  * @param {string} text
  * @returns {Record<string, string>}
@@ -221,7 +210,7 @@ export function parseExpectRetrieval(text) {
 }
 
 /** The keys of x-redstart-retrieval-config (tool-filter.mjs retrievalConfigSummary). */
-export const RETRIEVAL_CONFIG_KEYS = ['mode', 'scorer', 'growth', 'text', 'min', 'callTool', 'floor', 'rel', 'margin']
+export const RETRIEVAL_CONFIG_KEYS = ['mode']
 
 /**
  * Why the settings Nest reported are not the ones expected, or null when
@@ -411,9 +400,6 @@ export async function runTask(nest, task, opts) {
                   // no surface and retrieval only runs on Redstart's own by
                   // default (master plan Phase 1); Nest's setting still decides.
                   redstart_retrieval: opts.retrieval !== 'off',
-                  // The task's tools left out of the selection on purpose
-                  // (benchmarks H2); run.mjs skips such a task with --retrieval off.
-                  ...(task.withhold?.length ? { redstart_retrieval_withhold: task.withhold } : {}),
                 }
                 const res = await nest.completion(body, signal)
                 const report = toolsSentReport(res.headers)

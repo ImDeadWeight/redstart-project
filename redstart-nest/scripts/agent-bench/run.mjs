@@ -24,12 +24,12 @@
 //     [--retrieval server|off] (tool retrieval as Nest is set, the default,
 //                              or off for this run: every post-ban tool on
 //                              every turn. The summary says which it was)
-//     [--expect-retrieval scorer=fused,growth=pins-only]
+//     [--expect-retrieval mode=catalog]
 //                             (stop before the first task unless Nest's
 //                              retrieval settings match: one probe request
 //                              reads x-redstart-retrieval-config. Keys:
-//                              mode, scorer, growth, text, min, callTool,
-//                              floor, rel, margin. Benchmarks H1)
+//                              mode, the only one since master plan 3.3.
+//                              Benchmarks H1)
 //
 // Login on: put the bench account's API key in REDSTART_BENCH_API_KEY (or
 // pass --api-key, which then sits in your shell history). Use a dedicated
@@ -219,17 +219,14 @@ export function requiresWarning(tasks, mcpTools) {
 }
 
 /**
- * Why this run cannot measure a task, or null. A task with `withhold`
- * (benchmarks H2) needs retrieval on and the bench making the requests; one
- * with `followUps` (H4) needs the bench hosting the loop, which sends them.
+ * Why this run cannot measure a task, or null. A task with `followUps` (H4)
+ * needs the bench hosting the loop, which sends them.
  *
- * @param {{ withhold?: string[], followUps?: unknown[] }} task
+ * @param {{ followUps?: unknown[] }} task
  * @param {{ retrieval?: string, runtime?: boolean }} opts
  * @returns {string | null}
  */
 export function cannotRun(task, opts) {
-  if (task.withhold?.length && opts.retrieval === 'off') return 'withholds a tool, and --retrieval off sends every tool'
-  if (task.withhold?.length && opts.runtime) return 'withholds a tool, and under --runtime the daemon makes the requests'
   if (task.followUps?.length && opts.runtime) return 'has follow-ups, which --runtime cannot send'
   return null
 }
@@ -237,7 +234,7 @@ export function cannotRun(task, opts) {
 /**
  * The tasks this run can measure, and the ones it cannot, each with why.
  *
- * @param {Array<{ id: string, withhold?: string[], followUps?: unknown[] }>} tasks
+ * @param {Array<{ id: string, followUps?: unknown[] }>} tasks
  * @param {{ retrieval?: string, runtime?: boolean }} opts
  */
 export function splitRunnableTasks(tasks, opts) {
