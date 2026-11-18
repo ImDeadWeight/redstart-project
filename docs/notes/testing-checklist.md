@@ -85,6 +85,21 @@ served from the built bundle).
 - [ ] Settings → Roles: create a role that withholds a capability and check
   the account it is given cannot use it.
 
+### Skills and AGENTS.md (master plan Phase 5)
+- [ ] First start after the update: existing workflows are still on the
+  Workflows page and still run with `/`; `workflows.json` is still on disk,
+  and `skills/` holds a folder per workflow.
+- [ ] In a chat, ask for a task one saved workflow describes, without `/`.
+  The model calls `use_skill` with its name and follows it.
+- [ ] A skill with a `.py` file (import one): loading it puts the script
+  in the conversation's workspace under `skills/<name>/`, and the model
+  runs it with `run_python`.
+- [ ] Workflows page: Export a workflow (a `.zip` downloads), Import that
+  zip into a second account, and import a `SKILL.md` from another agent's
+  skills folder.
+- [ ] Project page: AGENTS.md download, then load an AGENTS.md into the
+  instructions, check it, Save.
+
 ### Tool retrieval: the catalog (master plan 3.3)
 - [ ] With retrieval on: "remember that I prefer X" in an ordinary chat
   saves (the memory tools are core, in every list).

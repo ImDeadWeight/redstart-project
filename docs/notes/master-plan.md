@@ -521,6 +521,35 @@ skill); (2) `skills-storage.mjs` with the migration, behind
 block; (4) `zip.mjs` and the import/export routes, and the Workflows page's
 two buttons; (5) the AGENTS.md routes and the project page's two buttons.
 
+**Phase 5 built 2026-11-18:** `a5980e9` format, `fd1dcf2` store and
+migration, `75aa982` use_skill and the prompt block, `faa0ab3` import and
+export, `13d31a4` AGENTS.md. New suite `test-skills.mjs` (15); `test-projects`
+gains one; `test-workflows` passed unchanged throughout. *Deviations:*
+- A workflow with no description reads back with its title (or name) as
+  one: the format requires a description, and it is what the model reads.
+- New workflow names may not contain `--` (the skill name rule); the
+  migration collapses an old one. The description and instructions limits
+  are the skill format's (1024, 20,000).
+- An import with any odd path (a `..`, an author's dot-file) is refused
+  whole; only OS junk is dropped.
+- An imported `AGENTS.md` on the project page goes into the draft, not
+  straight to the server; the PUT route does replace (for API clients).
+- The retrieval eval was refrozen against a bge-small server started by
+  hand on 19184 (`use_skill` joined the catalog): the same 28 of 32.
+
+*Gaps:*
+- Nothing in Phase 5 has been used in the running app: a model choosing
+  `use_skill` in a chat, the Workflows page's Import and Export, the
+  project page's AGENTS.md buttons, and a real `workflows.json` migrating.
+  Items for `testing-checklist.md`.
+- `use_skill` is offered to every account, skills or not: `toolDefs` has
+  no account to check.
+- `listSkills` reads every SKILL.md on each completion (for the prompt
+  block). Fine at tens of skills; a cache keyed on folder mtimes if it is
+  ever hundreds.
+- workflows-plan's later phases (mode and tool pinning, `json_schema`
+  output, Twig quick-capture, folder runs) are still to re-plan on skills.
+
 **Detail and cross-references:** `workflows-plan.md` D1 (MCP prompts) is
 superseded for storage, kept for `/` delivery; its later phases (mode and
 tool pinning, `json_schema` output, Twig quick-capture, folder runs) are
