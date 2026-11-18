@@ -57,15 +57,16 @@ chat bundle was rebuilt 2026-11-14). (2) The p4 bench group as the owner
 **8.3 landed (2026-11-13, later the same day):** a per-profile
 `tools.memoryReview.think` switch (Tools tab, Memory card), measured on
 Ornith (think on ×3: 28, 31, 30 vs off 27). Op cap stays a constant 3.
-Owed: the 35B with `--think on --think-budget 8192` decides its setting
-(and whether the budget must be per profile too); the user sets thinking
+~~Owed: the 35B with `--think on --think-budget 8192` decides its setting
+(and whether the budget must be per profile too);~~ decided 2026-11-18:
+the 35B stays think off, no per-profile budget (Phase 8 list, item 3); the user sets thinking
 on for the Ornith profile; nobody has clicked the switch yet. Details:
 Phase 8 → "8.3". Item 1 below is done; start at item 2 (8.4).
 **8.4's cache check is done:** the per-message pick broke the cache
 (0 tokens reused per turn on Ornith), so the gateway now picks by the
 chat's first user message (Phase 8 → "The D40 cache check"). **8.4's
-block landed too** (Phase 8 → "8.4"); owed: the agent-bench run with
-guidance memories on the bench account. **8.5 landed** (Phase 8 →
+block landed too** (Phase 8 → "8.4"); its agent-bench run with
+guidance memories was done 2026-11-18 (75% against 76.0%, no regression). **8.5 landed** (Phase 8 →
 "8.5"). Next: 8.6, chat-ui (item 4 below), then the user's testing; then
 a PR, then the tool-retrieval cache fix on its own branch, then Phase 4
 (the order recommended 2026-11-13).
@@ -1275,7 +1276,13 @@ One commit, so a revert is clean if it does not hold up.
   they were. Revisit if models ignore the list.
 
 **Gaps carried forward.**
-- **Not measured.** No bench task needs two questions yet, and no run has
+- **Half measured (2026-11-18).** Ornith, Phase 1 with `--plan tool`
+  (`agent-bench-results.md`, "Testing-checklist bench runs"): 19/33 against
+  20-22 on the plan-full arms, `argsProblem` 0 on 6 ask_user calls, the
+  "should not ask" guards 6/6. So the new schema costs nothing when one
+  question is asked. Every call asked one, though: the list form is still
+  unmeasured, and so is the 4B.
+- **Was: not measured.** No bench task needs two questions yet, and no run has
   been made with the new schema. Owed: one Phase 1 task with two independent
   open points (answers for both), then the 4B and Ornith 9B with
   `--plan tool`, against the last Phase 1 rows; also watch the
@@ -1604,9 +1611,14 @@ is decided by the bench.
    a merge; Settings → Memory grouping, edit kind and why, a guidance with
    no why refused; `/remember guidance: x because y`, `/remember state: z`,
    `/remember guidance: x` (refused).
-2. The agent-bench run with guidance memories on the bench account (8.4).
-3. The 35B `--think on --think-budget 8192` (8.3), which may also settle
-   acceptance's one open item (35B facts 3/5 with think off).
+2. ~~The agent-bench run with guidance memories on the bench account (8.4).~~
+   Done 2026-11-18: 75% against arm C's 76.0%, no regression.
+3. ~~The 35B `--think on --think-budget 8192` (8.3), which may also settle
+   acceptance's one open item (35B facts 3/5 with think off).~~ Done
+   2026-11-18: 84/96, no gain over 4096 or think off, 4 answers still out
+   of budget; the 35B stays think off, and the budget needs no per-profile
+   setting. Facts 14/15 with think on, so the open item is think-off only:
+   accept it or tell 35B users to switch thinking on for the review.
 4. A background task ending with memory on: a suggestion appears (8.5).
 Then the acceptance check (plan section 9). Recommended next (the user
 asked; not yet confirmed): a PR, the tool-retrieval cache fix on its own

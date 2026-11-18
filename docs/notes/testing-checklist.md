@@ -164,14 +164,32 @@ served from the built bundle).
 
 ## 3. Bench runs owed (need a model loaded)
 
-- [ ] Simplification S1.1: arms A, B, C on Ornith ×3 (replaces B1 to B7).
-- [ ] p2-delete-confirmed: `--tasks "scripts/agent-bench/tasks/p2-*.json"`
-  with File System destructive operations on.
-- [ ] D43: one Phase 1 run with `--plan tool`, against the last Phase 1 rows;
+Results and notes for the 2026-11-18 runs: `agent-bench-results.md`,
+"Testing-checklist bench runs" and the end of "Memory bench".
+
+- [x] Simplification S1.1: arms A, B, C on Ornith ×3 (replaces B1 to B7).
+  2026-11-18: done as master plan 3.2 (A 80.2%, B 81.3%, C 76.0%); C won.
+- [x] p2-delete-confirmed: `--tasks "scripts/agent-bench/tasks/p2-*.json"`
+  with File System destructive operations on. 2026-11-18: 3/3, found
+  through search_tools + call_tool.
+- [x] D43: one Phase 1 run with `--plan tool`, against the last Phase 1 rows;
   watch `argsProblem` on ask_user and the p1 "should not ask" tasks.
-- [ ] 8.4: the agent bench with guidance memories on the bench account.
-- [ ] 8.3: the 35B memory bench with `--think on --think-budget 8192`.
+  2026-11-18: 19/33 against 20-22 (no loss), argsProblem 0, guards 6/6.
+  Gap: no call used the several-question list (no task has two open
+  points); see the next item.
+- [ ] D43, the list form: a Phase 1 task with two independent open points
+  (answers for both), on Ornith and the 4B (agent-runtime-implementation,
+  "D43", gaps).
+- [x] 8.4: the agent bench with guidance memories on the bench account.
+  2026-11-18: 75% against arm C's 76.0%, no regression. Delete the three
+  guidance memories from the bench account before the next ordinary run.
+- [x] 8.3: the 35B memory bench with `--think on --think-budget 8192`.
+  2026-11-18: 84/96 (88%), no better than 4096 (29/32) or think off
+  (30/32); 4 answers still ran out of budget. 35B stays think off.
 - [ ] A task that compacts, against a real model (Phase 3 gap).
+  2026-11-18: tried with `--runtime` multi-chain, but llama-server was at
+  `-c 131072`, so nothing compacted (7,846 prompt tokens). Retry with the
+  context really lowered (check `-c` in the server log first).
 
 ## 4. Installers and platforms
 
