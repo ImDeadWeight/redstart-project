@@ -34,6 +34,8 @@ export interface StorageSpace {
 	label: string;
 	/** What lands here, and which tools put it there. */
 	description?: string;
+	/** The organization's shared folder (master plan 6.2): browse and preview only. */
+	readOnly?: boolean;
 }
 
 export class FilesService {

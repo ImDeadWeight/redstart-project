@@ -9,6 +9,13 @@
 // way for a client to name a user; a request can only ever reach the caller's
 // own files, so there is no ownership check to forget on one endpoint.
 //
+// ONE SHARED SPACE (master plan 6.2): `shared`, the organization's Shared
+// Documents folder. It resolves to that folder, never to an account, and is
+// READ-ONLY: every write route refuses it (two accounts writing one folder is
+// what per-account storage exists to prevent). A role's grants narrow it: a
+// listing at or above the granted folders shows only them and the folders
+// that lead to them, and a preview is served only inside one.
+//
 // Routes (all under /files/, all authenticated by the gateway before dispatch):
 //   GET  /files/spaces           — which storage spaces exist for this account
 //   GET  /files/list?space&path  — one directory listing
@@ -33,6 +40,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { resolveWithinRoot } from './path-scope.mjs'
+import { resolveGrantedPath, isNarrowed } from './grant-scope.mjs'
 import { resolveUserRoot } from './user-scope.mjs'
 import { moveToTrash, isInTrash, TRASH_DIR_NAME } from './trash.mjs'
 import { logAudit } from './logger.mjs'
@@ -55,6 +63,42 @@ const SPACES = {
     description: 'Scripts and project files the model reads and edits',
     pick: (cfg) => cfg?.fileSystem?.rootDir,
   },
+  // Not per account: see the header. Offered only while document search is
+  // on for the caller (it is what reads this folder) and their role grants
+  // some of it.
+  shared: {
+    label: 'Shared',
+    description: 'Your organization\'s shared documents, read-only. The assistant searches them with search_documents.',
+    pick: (cfg) => (cfg?.documentSearch?.enabled && !(Array.isArray(cfg.documentSearch.sharedGrants) && cfg.documentSearch.sharedGrants.length === 0)
+      ? cfg.documentSearch.sharedRootDir
+      : null),
+    shared: true,
+  },
+}
+
+/** Is this space the read-only shared one? Every write route asks. */
+function isSharedSpace(space) {
+  return Object.prototype.hasOwnProperty.call(SPACES, space) && SPACES[space].shared === true
+}
+
+function refuseShared(res) {
+  return fail(res, 403, 'The shared folder is read-only', 'permission_error')
+}
+
+/** A relative folder path, '/'-separated, '' for the root. */
+const relOf = (root, full) => {
+  const r = path.relative(root, full).split(path.sep).join('/')
+  return r === '.' ? '' : r
+}
+
+/**
+ * Within the shared space, may this relative path be LISTED? Inside a granted
+ * folder, or above one (so the way to it can be walked). Only inside one may a
+ * file be previewed (resolveGrantedPath).
+ */
+function sharedListable(grants, rel) {
+  if (!isNarrowed(grants)) return true
+  return grants.some((g) => rel === g || rel.startsWith(`${g}/`) || rel === '' || g.startsWith(`${rel}/`))
 }
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
@@ -122,6 +166,22 @@ function resolveRequest(config, account, space, relPath = '.') {
   const capabilityRoot = spec.pick(config)
   if (!capabilityRoot) return { error: { status: 404, message: `The ${spec.label} storage is not configured` } }
 
+  if (spec.shared) {
+    let full
+    try {
+      full = resolveWithinRoot(capabilityRoot, relPath ?? '.')
+    } catch {
+      return { error: { status: 403, message: 'Path is outside your storage' } }
+    }
+    // The same answer for a folder the role was not given as for one
+    // outside the folder: a probing client learns nothing from the
+    // difference.
+    if (!sharedListable(config.documentSearch.sharedGrants, relOf(fs.realpathSync.native(path.resolve(capabilityRoot)), full))) {
+      return { error: { status: 403, message: 'Path is outside your storage' } }
+    }
+    return { userRoot: fs.realpathSync.native(path.resolve(capabilityRoot)), full, shared: true, grants: config.documentSearch.sharedGrants }
+  }
+
   let userRoot
   try {
     userRoot = resolveUserRoot(capabilityRoot, account, { create: true })
@@ -149,7 +209,7 @@ const toRelative = (userRoot, full) => path.relative(userRoot, full).split(path.
 function listDirectory(res, config, account, url) {
   const space = url.searchParams.get('space') || 'documents'
   const relPath = url.searchParams.get('path') || '.'
-  const { userRoot, full, error } = resolveRequest(config, account, space, relPath)
+  const { userRoot, full, error, shared, grants } = resolveRequest(config, account, space, relPath)
   if (error) return fail(res, error.status, error.message)
 
   let stat
@@ -174,6 +234,13 @@ function listDirectory(res, config, account, url) {
     // a place to browse: showing it would invite "delete" on already-deleted
     // items, which is the one path that could destroy data.
     if (dirent.isDirectory() && isInTrash(userRoot, childPath)) continue
+    // The shared space shows a role only its granted folders and the way to
+    // them; a file above every granted folder is not shown either.
+    if (shared && isNarrowed(grants)) {
+      const rel = relOf(userRoot, childPath)
+      const inside = grants.some((g) => rel === g || rel.startsWith(`${g}/`))
+      if (!inside && !(dirent.isDirectory() && grants.some((g) => g.startsWith(`${rel}/`)))) continue
+    }
     let childStat
     try {
       childStat = fs.statSync(childPath)
@@ -206,7 +273,10 @@ async function previewFile(res, config, account, url) {
   const relPath = url.searchParams.get('path')
   if (!relPath) return fail(res, 400, 'Missing required query parameter: path')
 
-  const { full, error } = resolveRequest(config, account, space, relPath)
+  const { full, error, shared, userRoot: sharedRoot, grants } = resolveRequest(config, account, space, relPath)
+  if (!error && shared) {
+    try { resolveGrantedPath(sharedRoot, grants, relPath) } catch { return fail(res, 403, 'Path is outside your storage') }
+  }
   if (error) return fail(res, error.status, error.message)
   if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return fail(res, 404, 'File not found', 'not_found')
   if (!PREVIEWABLE.has(path.extname(full).toLowerCase())) return fail(res, 415, 'No preview is available for this file type')
@@ -224,6 +294,7 @@ async function previewFile(res, config, account, url) {
 
 async function makeDirectory(req, res, config, account) {
   const body = await readJsonBody(req)
+  if (isSharedSpace(body?.space)) return refuseShared(res)
   const { userRoot, full, error } = resolveRequest(config, account, body.space, body.path)
   if (error) return fail(res, error.status, error.message)
   if (path.relative(userRoot, full) === '') return fail(res, 400, 'A folder needs a name')
@@ -238,6 +309,7 @@ async function makeDirectory(req, res, config, account) {
 
 async function renameEntry(req, res, config, account) {
   const body = await readJsonBody(req)
+  if (isSharedSpace(body?.space)) return refuseShared(res)
   // BOTH paths are resolved through the same containment — a rename is two
   // path arguments, and checking only the source would let the destination
   // write anywhere.
@@ -272,6 +344,7 @@ async function renameEntry(req, res, config, account) {
 
 async function deleteEntry(req, res, config, account) {
   const body = await readJsonBody(req)
+  if (isSharedSpace(body?.space)) return refuseShared(res)
   const { userRoot, full, error } = resolveRequest(config, account, body.space, body.path)
   if (error) return fail(res, error.status, error.message)
 
@@ -303,6 +376,7 @@ async function deleteEntry(req, res, config, account) {
  */
 async function uploadFile(req, res, config, account, url) {
   const space = url.searchParams.get('space') || 'documents'
+  if (isSharedSpace(space)) return refuseShared(res)
   const dirParam = url.searchParams.get('path') || '.'
   const nameParam = url.searchParams.get('name') || ''
 
@@ -388,7 +462,8 @@ export async function handleFilesRequest(req, res, urlPath, { config, account })
           ? path.resolve(root).toLowerCase()
           : path.resolve(root)
         if (seen.has(key)) continue
-        seen.set(key, { id, label: spec.label, description: spec.description })
+        // readOnly: the explorer hides every write control for it (6.2).
+        seen.set(key, { id, label: spec.label, description: spec.description, ...(spec.shared ? { readOnly: true } : {}) })
       }
       sendJson(res, 200, { spaces: [...seen.values()] })
       return true

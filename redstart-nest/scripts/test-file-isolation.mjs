@@ -664,6 +664,77 @@ await test('an empty upload is refused', async () => {
   assert(res.status === 400, `expected 400, got ${res.status}`)
 })
 
+// ---------------------------------------------------------------------------
+// Surface 4 — the shared space (Shared Documents, master plan 6.2)
+// ---------------------------------------------------------------------------
+
+console.log('\n-- surface 4: the shared space --')
+
+const sharedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-shared-space-'))
+fs.mkdirSync(path.join(sharedRoot, 'finance', 'q1'), { recursive: true })
+fs.mkdirSync(path.join(sharedRoot, 'hr'), { recursive: true })
+fs.writeFileSync(path.join(sharedRoot, 'finance', 'q1', 'budget.md'), 'shared-budget-text')
+fs.writeFileSync(path.join(sharedRoot, 'hr', 'pay.md'), 'shared-pay-text')
+fs.writeFileSync(path.join(sharedRoot, 'top.md'), 'shared-top-text')
+const withSharedSpace = (sharedGrants) => updateGatewayConfig({
+  documents: { enabled: true, outputDir: dirs.docs },
+  fileSystem: { enabled: true, rootDir: dirs.fs },
+  documentSearch: { enabled: true, documentsRoot: dirs.docs, sharedRootDir: sharedRoot, ...(sharedGrants === undefined ? {} : { sharedGrants }) },
+  webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 },
+})
+
+await test('🔒 the shared space is listed read-only, browsable and previewable, and refuses every write', async () => {
+  withSharedSpace()
+  const spaces = await (await api(bobToken, '/files/spaces')).json()
+  const shared = spaces.spaces.find((s) => s.id === 'shared')
+  assert(shared?.readOnly === true, `spaces: ${JSON.stringify(spaces)}`)
+  const list = await (await api(bobToken, '/files/list?space=shared&path=.')).json()
+  assert(list.entries.map((e) => e.name).sort().join() === 'finance,hr,top.md', JSON.stringify(list))
+  const prev = await api(bobToken, '/files/preview?space=shared&path=finance/q1/budget.md')
+  assert(prev.status === 200 && /shared-budget-text/.test(JSON.stringify(await prev.json())), `preview ${prev.status}`)
+  for (const [p, body] of [['/files/mkdir', { space: 'shared', path: 'new' }], ['/files/rename', { space: 'shared', from: 'top.md', to: 'x.md' }], ['/files/delete', { space: 'shared', path: 'top.md' }]]) {
+    const r = await postJson(bobToken, p, body)
+    assert(r.status === 403, `${p} on the shared space: ${r.status}`)
+  }
+  const up = await api(bobToken, '/files/upload?space=shared&path=.&name=x.txt', { method: 'POST', body: 'x' })
+  assert(up.status === 403, `upload to the shared space: ${up.status}`)
+  assert(fs.existsSync(path.join(sharedRoot, 'top.md')) && !fs.existsSync(path.join(sharedRoot, 'new')), 'a write reached the shared folder')
+})
+
+await test('🔒 a role granted "finance/q1" sees only the way to it and it: no hr, no top-level file; a path outside is refused', async () => {
+  withSharedSpace(['finance/q1'])
+  const top = await (await api(bobToken, '/files/list?space=shared&path=.')).json()
+  assert(top.entries.map((e) => e.name).join() === 'finance', `root: ${JSON.stringify(top.entries.map((e) => e.name))}`)
+  const fin = await (await api(bobToken, '/files/list?space=shared&path=finance')).json()
+  assert(fin.entries.map((e) => e.name).join() === 'q1', `finance: ${JSON.stringify(fin.entries.map((e) => e.name))}`)
+  const inside = await (await api(bobToken, '/files/list?space=shared&path=finance/q1')).json()
+  assert(inside.entries.map((e) => e.name).join() === 'budget.md', JSON.stringify(inside))
+  for (const p of ['hr', '../', 'hr/../hr']) {
+    const r = await api(bobToken, `/files/list?space=shared&path=${encodeURIComponent(p)}`)
+    assert(r.status === 403, `listing ${p}: ${r.status}`)
+  }
+  const prevTop = await api(bobToken, '/files/preview?space=shared&path=top.md')
+  assert(prevTop.status === 403, `a file above the granted folder was previewed: ${prevTop.status}`)
+  const prevHr = await api(bobToken, '/files/preview?space=shared&path=hr/pay.md')
+  assert(prevHr.status === 403, `an un-granted file was previewed: ${prevHr.status}`)
+})
+
+await test('a role granted none of it, or no shared folder at all, gets no shared space', async () => {
+  withSharedSpace([])
+  const none = await (await api(bobToken, '/files/spaces')).json()
+  assert(!none.spaces.some((s) => s.id === 'shared'), JSON.stringify(none))
+  const r = await api(bobToken, '/files/list?space=shared&path=.')
+  assert(r.status === 404, `listing with [] grants: ${r.status}`)
+  updateGatewayConfig({
+    documents: { enabled: true, outputDir: dirs.docs },
+    fileSystem: { enabled: true, rootDir: dirs.fs },
+    webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 },
+  })
+  const off = await (await api(bobToken, '/files/spaces')).json()
+  assert(!off.spaces.some((s) => s.id === 'shared'), JSON.stringify(off))
+  fs.rmSync(sharedRoot, { recursive: true, force: true })
+})
+
 stopGateway()
 // Let the closed sockets finish unwinding before the process tears down. Node's
 // fetch keeps connections alive, and exiting mid-close aborts the process with a

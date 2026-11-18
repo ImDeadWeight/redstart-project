@@ -29,7 +29,10 @@
 	async function rebuildIndex() {
 		rebuilding = true;
 		try {
-			const res = await fetch(resolveApiPath('/documents/reindex'), { method: 'POST', headers: getAuthHeaders() });
+			const res = await fetch(resolveApiPath('/documents/reindex'), {
+				method: 'POST',
+				headers: getAuthHeaders()
+			});
 			if (!res.ok) throw new Error(`${res.status}`);
 			toast.success('Search index cleared. It rebuilds on the next document search.');
 		} catch (e) {
@@ -257,6 +260,8 @@
 		event.preventDefault();
 		// Stop the surrounding list from also handling a drop aimed at one row.
 		event.stopPropagation();
+		// The shared space takes no drops: nothing is written there (6.2).
+		if (browser?.readOnly) return;
 
 		if (isExternalDrag(event)) {
 			const files = Array.from(event.dataTransfer?.files ?? []);
@@ -441,9 +446,13 @@
 				<Upload class="h-3.5 w-3.5" /> Upload
 			</Button>
 		{/if}
-		<Button variant="outline" size="sm" onclick={newFolder}>
-			<FolderPlus class="h-3.5 w-3.5" /> New folder
-		</Button>
+		{#if !browser?.readOnly}
+			<Button variant="outline" size="sm" onclick={newFolder}>
+				<FolderPlus class="h-3.5 w-3.5" /> New folder
+			</Button>
+		{:else}
+			<span class="text-xs text-muted-foreground">Read-only: shared by your organization.</span>
+		{/if}
 		<input
 			bind:this={uploadInput}
 			type="file"
@@ -511,7 +520,7 @@
 							{entry.type === 'folder' && (dropTarget === entry.path || uploadTarget === entry.path)
 							? 'bg-primary/10 ring-1 ring-primary/40 ring-inset'
 							: ''}"
-						draggable="true"
+						draggable={browser?.readOnly ? 'false' : 'true'}
 						ondragstart={(e) => startDrag(e, entry)}
 						ondragend={endDrag}
 						ondragover={(e) => entry.type === 'folder' && onDragOver(e, entry.path)}
@@ -563,21 +572,23 @@
 									<Download class="h-3.5 w-3.5" />
 								</a>
 							{/if}
-							<button
-								type="button"
-								class="cursor-pointer rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-								onclick={() => renameEntry(entry)}
-							>
-								Rename
-							</button>
-							<button
-								type="button"
-								class="cursor-pointer rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive"
-								onclick={() => removeEntry(entry)}
-								aria-label="Delete {entry.name}"
-							>
-								<Trash2 class="h-3.5 w-3.5" />
-							</button>
+							{#if !browser?.readOnly}
+								<button
+									type="button"
+									class="cursor-pointer rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+									onclick={() => renameEntry(entry)}
+								>
+									Rename
+								</button>
+								<button
+									type="button"
+									class="cursor-pointer rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive"
+									onclick={() => removeEntry(entry)}
+									aria-label="Delete {entry.name}"
+								>
+									<Trash2 class="h-3.5 w-3.5" />
+								</button>
+							{/if}
 						</div>
 					</li>
 				{/each}
@@ -610,8 +621,8 @@
 	{#if mcpStore.hasTool('search_documents')}
 		<div class="flex items-center justify-between gap-3 border-t border-border/40 pt-3">
 			<p class="text-xs text-muted-foreground">
-				The assistant can search the text of these files. Its index updates itself; rebuild it if search
-				results look out of date.
+				The assistant can search the text of these files. Its index updates itself; rebuild it if
+				search results look out of date.
 			</p>
 			<Button size="sm" variant="outline" onclick={rebuildIndex} disabled={rebuilding}>
 				{rebuilding ? 'Rebuilding…' : 'Rebuild search index'}

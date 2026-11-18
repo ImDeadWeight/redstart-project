@@ -40,10 +40,31 @@ export interface FileBrowser {
 	upload?(dir: string, file: File): Promise<unknown>;
 	/** Absent when there is nothing to download over HTTP. */
 	downloadUrl?(path: string): string;
+	/**
+	 * Browse and preview only (the shared space, master plan 6.2): the
+	 * explorer shows no write control. The server refuses writes regardless.
+	 */
+	readOnly?: boolean;
 }
 
 /** Server-side storage, scoped to the signed-in account. */
 export function serverBrowser(space: StorageSpace): FileBrowser {
+	if (space.readOnly) {
+		const refuse = () => Promise.reject(new Error('The shared folder is read-only'));
+		// No upload and no download URL: the download route serves only the
+		// account's own folders.
+		return {
+			id: space.id,
+			label: space.label,
+			description: space.description,
+			readOnly: true,
+			list: (path) => FilesService.list(space.id, path),
+			preview: (path) => FilesService.preview(space.id, path),
+			mkdir: refuse,
+			move: refuse,
+			remove: refuse
+		};
+	}
 	return {
 		id: space.id,
 		label: space.label,
