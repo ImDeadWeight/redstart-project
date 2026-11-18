@@ -217,6 +217,22 @@ export function appendEvent(id, event) {
 }
 
 /**
+ * A live-only event (master plan 7.1): subscribers hear it, marked `live`,
+ * and nothing is written to the log. It has no seq, so a reconnect replays
+ * the stored messages, never the keystrokes that led to them. For the
+ * tokens of the reply being written.
+ *
+ * @param {string} id
+ * @param {{ type: string } & Record<string, unknown>} event
+ */
+export function emitLive(id, event) {
+  const full = { live: true, at: Date.now(), ...event }
+  for (const fn of subscribers.get(id) ?? []) {
+    try { fn(full) } catch { /* a subscriber's failure is its own */ }
+  }
+}
+
+/**
  * The events after `afterSeq`, oldest first. A line that does not parse (a
  * write cut short by a crash) is skipped.
  */

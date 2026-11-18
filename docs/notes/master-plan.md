@@ -685,6 +685,40 @@ Third-party clients are unaffected.
 5. Delete chat-ui's loop host (~1,200 lines in `stores/agentic*`) and the
    bench's hosted mode.
 
+### 7.1 at module level (planned 2026-11-18)
+
+Against today's code. chat-ui already starts a task, follows its event
+stream, steers it and renders its question and approval cards
+(`tasks.svelte.ts`), so step 4 is mostly pointing Send at that. Step 5
+(deleting the browser host) waits for a release with the flag, as written.
+
+Commits:
+1. **Live tokens.** `task-store.mjs emitLive(id, event)`: subscribers hear
+   it, nothing is written to the log and it has no seq, so a reconnect
+   replays messages, not keystrokes. The model port passes
+   `readChatStream`'s `onContent` / `onReasoning` through as `delta` events
+   for the message being written, batched (about 50 ms). The SSE route
+   writes a live event without an `id:` line, so Last-Event-ID is
+   unaffected.
+2. **The client-executor port.** A task start (and `POST /tasks/:id/client`,
+   for a reconnect) carries the tools the client can run itself (Twig's
+   `fs_*`, the browser's own MCP servers): name, description, schema. They
+   are offered to the model beside Nest's (a name that collides with one
+   of Nest's is dropped, and bans apply as to any tool). A call to one
+   writes a `client_call` event and waits (`waiting_client`) for
+   `POST /tasks/:id/client-result` `{ callId, text, isError }`. A client is
+   connected while it holds the task's event stream with `?client=1`; with
+   none, the call answers "the app that runs it is not connected" at once,
+   and a client that leaves mid-call does the same. Approval for a client
+   tool is the client's own card (D48): the server gate passes it.
+3. **Send starts a server run** (chat-ui): a plain send (text, and files
+   saved to the workspace) starts a task on the conversation and follows
+   it, with live tokens shown in the reply being written and `client_call`
+   run by the browser's own executors (their own approval card) and posted
+   back. Behind a setting, "Run chats on the server", on by default; off is
+   the browser host as it was. Images (vision extras) and edit, regenerate
+   and branch still use the browser host this release.
+
 **Detail and cross-references:** this is the first half of agent-runtime
 Phase 7 ("delegation", §6, a sketch); its second half (parallel task
 contexts) stays a sketch. It closes these Phase 3 gaps in

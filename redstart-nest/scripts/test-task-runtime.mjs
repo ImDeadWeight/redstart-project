@@ -737,6 +737,37 @@ function sseEvents(res) {
   return res.chunks.join('').split('\n\n').filter((b) => b.startsWith('id: ')).map((b) => JSON.parse(b.split('\ndata: ')[1]))
 }
 
+await test('🔍 live tokens: the reply being written arrives as batched delta events, and none is stored (master plan 7.1)', async () => {
+  // Three chunks in one response: batching gathers them into far fewer events.
+  fakeWorld([[...say('Hel'), ...say('lo, '), ...say('world.')]])
+  const conv = newConversation()
+  const live = []
+  const t = start(conv, 'greet')
+  const off = store.subscribe(t.id, (e) => { if (e.live) live.push(e) })
+  await waitFor(() => ended(t.id), 'end')
+  off()
+  const text = live.filter((e) => e.type === 'delta').map((e) => e.content ?? '').join('')
+  eq(text, 'Hello, world.', 'the deltas spell the reply')
+  assert(live.every((e) => e.seq === undefined && typeof e.messageId === 'string'), 'a delta has a seq, or names no message')
+  const reply = branchOf(conv).find((m) => m.role === 'assistant')
+  assert(live.every((e) => e.messageId === reply.id), 'a delta names another message than the one stored')
+  assert(!store.readEvents(t.id, 0).some((e) => e.type === 'delta'), 'a delta was written to the log')
+})
+
+await test('🔍 the event stream sends a live event with no id: line, so Last-Event-ID still names the last stored one', async () => {
+  fakeWorld([(body) => new Promise((resolve) => setTimeout(() => resolve(sse(say('slow reply'))), 150))])
+  const conv = newConversation()
+  const t = start(conv, 'go')
+  const r = await taskRoute('GET', `/tasks/${t.id}/events`)
+  await waitFor(() => ended(t.id) && r.res.writableEnded, 'stream end')
+  const raw = r.res.chunks.join('')
+  const blocks = raw.split('\n\n').filter(Boolean)
+  const liveBlocks = blocks.filter((b) => b.startsWith('data: ') && JSON.parse(b.slice(6)).live)
+  assert(liveBlocks.length > 0, `no live frame: ${raw.slice(0, 300)}`)
+  assert(liveBlocks.every((b) => !b.includes('id: ')), 'a live frame carries an id')
+  assert(sseEvents(r.res).some((e) => e.type === 'message'), 'stored events still have ids')
+})
+
 await test('which paths are ours', () => {
   const id = '0f8fad5b-d9cb-469f-a165-70867728950e'
   eq(['/tasks', `/tasks/${id}`, `/tasks/${id}/events`, `/tasks/${id}/answer`, `/tasks/${id}/nope`, '/tasks/abc', '/tasksx'].map(isTaskRoute),

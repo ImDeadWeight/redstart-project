@@ -131,6 +131,34 @@ function toWire(messages) {
 
 const abortError = () => Object.assign(new Error('aborted'), { name: 'AbortError' })
 
+/** How long tokens gather before they go out as one live event. */
+export const DELTA_BATCH_MS = 50
+
+/**
+ * The tokens of the reply being written, as live events (master plan 7.1):
+ * `{ type: 'delta', messageId, content?, reasoning? }`, batched so a fast
+ * model is tens of events a second, not hundreds. Nothing is stored: the
+ * message itself is, once the turn is complete. `flush` sends what is left.
+ */
+function liveDeltas(taskId, messageId) {
+  let content = ''
+  let reasoning = ''
+  let timer = null
+  const send = () => {
+    timer = null
+    if (!content && !reasoning) return
+    store.emitLive(taskId, { type: 'delta', messageId, ...(content ? { content } : {}), ...(reasoning ? { reasoning } : {}) })
+    content = ''
+    reasoning = ''
+  }
+  const schedule = () => { if (!timer) timer = setTimeout(send, DELTA_BATCH_MS) }
+  return {
+    onContent: (t) => { content += t; schedule() },
+    onReasoning: (t) => { reasoning += t; schedule() },
+    flush: () => { if (timer) clearTimeout(timer); send() },
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The pass
 // ---------------------------------------------------------------------------
@@ -359,6 +387,7 @@ export function modelPort(pass) {
         const tail = msgs.at(-1)
         if (typeof tail?.content === 'string' && tail.content.startsWith(NUDGE_PREFIX)) store.appendEvent(task.id, { type: 'plan_nudge' })
         const done = beginCompletion()
+        const live = liveDeltas(task.id, pass.current.id)
         try {
           let res
           try {
@@ -367,9 +396,10 @@ export function modelPort(pass) {
             if (sig?.aborted) throw err
             throw new ModelGone(err?.message ?? 'The model could not be reached.')
           }
-          const r = await readChatStream(res, acc, { signal: sig })
+          const r = await readChatStream(res, acc, { signal: sig, onContent: live.onContent, onReasoning: live.onReasoning })
           turnCtx.model = r?.model ?? turnCtx.model
         } finally {
+          live.flush()
           done()
         }
       })

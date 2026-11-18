@@ -142,6 +142,12 @@ function streamEvents(req, res, task) {
   })
   let sent = lastSeen(req)
   const write = (e) => {
+    // A live event (tokens) has no seq and no id: line, so Last-Event-ID
+    // still names the last stored event (master plan 7.1).
+    if (e.live) {
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify(e)}\n\n`)
+      return
+    }
     if (e.seq <= sent || res.writableEnded) return
     sent = e.seq
     res.write(frame(e))
@@ -151,7 +157,9 @@ function streamEvents(req, res, task) {
   const buffered = []
   let replaying = true
   const off = store.subscribe(task.id, (e) => {
-    if (replaying) { buffered.push(e); return }
+    // Tokens from before the replay finished are not worth holding: the
+    // message they belong to arrives as a stored event.
+    if (replaying) { if (!e.live) buffered.push(e); return }
     write(e)
     if (e.type === 'status' && store.TERMINAL_STATES.includes(e.status)) end()
   })
