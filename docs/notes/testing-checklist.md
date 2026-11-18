@@ -179,7 +179,9 @@ Results and notes for the 2026-11-18 runs: `agent-bench-results.md`,
   points); see the next item.
 - [ ] D43, the list form: a Phase 1 task with two independent open points
   (answers for both), on Ornith and the 4B (agent-runtime-implementation,
-  "D43", gaps).
+  "D43", gaps). Task: p1-two-unknowns (819c8e6). 2026-11-18, Ornith ×3:
+  1/3, never used `questions` (one flat question naming both, or both in
+  reply text), never guessed. Owed: the 4B, or a model that fills the list.
 - [x] 8.4: the agent bench with guidance memories on the bench account.
   2026-11-18: 75% against arm C's 76.0%, no regression. Delete the three
   guidance memories from the bench account before the next ordinary run.
@@ -190,6 +192,12 @@ Results and notes for the 2026-11-18 runs: `agent-bench-results.md`,
   2026-11-18: tried with `--runtime` multi-chain, but llama-server was at
   `-c 131072`, so nothing compacted (7,846 prompt tokens). Retry with the
   context really lowered (check `-c` in the server log first).
+  Profile for it: "Ornith 9B · 12k (compaction test)" (the 128k one with
+  ctxSize 12288). Why 12k: turn 1 is already 5,149 tokens and a task
+  reserves max_tokens (4,096), so 8k overflows at once; 12k gives 8,192
+  usable and compacts at ~6,960, mid-chain. Run with `--runtime --tasks
+  scripts/agent-bench/tasks/multi-chain.json --repeat 3`; pass means a
+  `compacted` line in redstart.log and the chain's end still right.
 
 ## 4. Installers and platforms
 

@@ -1282,6 +1282,12 @@ One commit, so a revert is clean if it does not hold up.
   "should not ask" guards 6/6. So the new schema costs nothing when one
   question is asked. Every call asked one, though: the list form is still
   unmeasured, and so is the 4B.
+- **The list form, measured on Ornith (2026-11-18, p1-two-unknowns ×3,
+  819c8e6): never used.** Ornith asked for both facts together, as one flat
+  question or in reply text, never through `questions`, and never guessed.
+  No harm and no use; not a revert. The 4B is still owed. If no small
+  model fills the list, the tool description's "ask them together" may
+  need to name the `questions` field.
 - **Was: not measured.** No bench task needs two questions yet, and no run has
   been made with the new schema. Owed: one Phase 1 task with two independent
   open points (answers for both), then the 4B and Ornith 9B with
