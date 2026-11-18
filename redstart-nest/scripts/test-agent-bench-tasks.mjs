@@ -526,6 +526,20 @@ await test('withCallTool: a call_tool call counts as the tool it names; nothing 
   assert(out[1].name === 'run_python' && out[2].name === 'call_tool', 'changed what it should not')
 })
 
+await test('p2-delete-confirmed: a delete through call_tool, approved, passes (Ornith arm C, 2026-11-18)', async () => {
+  const { deletedWithApproval } = await import('./agent-bench/tasks/checks/phase2.mjs')
+  const ctx = { fileSystemAfter: ['p2-final.txt'] }
+  const via = { ...callTool('delete_file', { path: 'p2-old-draft.txt' }), id: 'c1' }
+  const ok = deletedWithApproval('', {}, [via, { t: 0, type: 'approval', id: 'c1', name: 'call_tool', decided: true }], ctx)
+  assert(ok.pass === true, `failed: ${ok.reason}`)
+  // An approval for some other call_tool call does not count for this one.
+  const other = deletedWithApproval('', {}, [via, { t: 0, type: 'approval', id: 'c2', name: 'call_tool', decided: true }], ctx)
+  assert(other.pass === false, 'an unrelated approval counted')
+  // Through call_tool to another tool, the file going is still not a delete_file.
+  const wrong = deletedWithApproval('', {}, [{ ...callTool('run_python'), id: 'c1' }], ctx)
+  assert(wrong.pass === false, 'run_python counted as delete_file')
+})
+
 await test('saysNotFound: absence stated around a file name, and not a figure of speech', async () => {
   const { saysNotFound } = await import('./agent-bench/tasks/checks/lib.mjs')
   for (const yes of [

@@ -13,26 +13,13 @@
 //   memory (p5-drift-python-to-memory).
 // =============================================================================
 
-import { allAssistantText, fail, fixture, mentionsNumber, numbersIn, pass, toolCallsNamed } from './lib.mjs'
+import { allAssistantText, fail, fixture, mentionsNumber, numbersIn, pass, toolCallsNamed, withCallTool } from './lib.mjs'
 import { arithmetic } from './compute.mjs'
 import { listedWithoutCode } from './multi.mjs'
 
-/** call_tool's target, or null. */
-function target(argumentsText) {
-  try {
-    const a = typeof argumentsText === 'string' ? JSON.parse(argumentsText) : argumentsText
-    return typeof a?.name === 'string' ? a.name : null
-  } catch {
-    return null
-  }
-}
-
-/** The events with each call_tool call standing for the tool it named. */
-export function withCallTool(events) {
-  return (events ?? []).map((e) => (e.type === 'tool_call' && e.name === 'call_tool' && target(e.arguments)
-    ? { ...e, name: target(e.arguments), viaCallTool: true }
-    : e))
-}
+// withCallTool lives in lib.mjs now (every check counts call_tool since
+// 2026-11-18); re-exported here for the callers that import it from p5.
+export { withCallTool }
 
 /** p5-count-docs: multi-find-tool's check, a call_tool(list_documents) counting. */
 export function countedDocs(text, files, events, ctx) {

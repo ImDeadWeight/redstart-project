@@ -268,6 +268,17 @@ keep the turn-1 selection, freeze it for the conversation (no growth; new
 tools only through `call_tool`), and still do 3.3's scrap list except the
 scorer and `selectTools`' budget, which the turn-1 selection needs.
 
+**3.2 measured 2026-11-18 (run by the user; numbers in
+`agent-bench-results.md`, "Master plan 3.2"):** A 80.2%, B 81.3%, C 76.0%,
+cache-miss turns 23 / 0 / 0. Both pass; a tie, so **C, the catalog mode,
+wins.** *Deviations:* arm A ran on the tip's Nest, not the tag (per-turn
+selection over the 3.1 set); the bar is B0's 76% floor, so it does not
+change the call. C's p2-delete-confirmed check counted only direct
+`delete_file` calls; fixed, two runs rescored (74% → 76.0%). `describe_tool`
+stays folded (0 bad `call_tool` arguments). *Gap:* the 32-task set reaches
+the catalog 8 times, all File System; no task finds a plugin tool through
+it.
+
 ### 3.3 Keep and scrap (once 3.2 passes)
 
 Keep: `search_tools`, `call_tool` and the catalog, with one scorer (`fused`,
