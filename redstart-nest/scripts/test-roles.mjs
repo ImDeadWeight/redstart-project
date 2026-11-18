@@ -77,7 +77,10 @@ function randomConfig() {
   const activeTools = subset(WEB_SOURCES).map(id => ({
     id, name: id, baseUrl: `https://${id}.example`, description: '',
   }))
-  const cap = () => ({ enabled: chance(0.6) })
+  // Resource grants (master plan 6.1): sometimes the config already carries
+  // a folder list, as it would after one narrowing.
+  const FOLDERS = ['a', 'a/x', 'b', 'c', 'c/y/z']
+  const cap = () => ({ enabled: chance(0.6), ...(chance(0.3) ? { grants: subset(FOLDERS) } : {}) })
   return {
     disabledTools: chance(0.3) ? ['delete_file'] : [],
     webFetch: {
@@ -116,7 +119,19 @@ function randomPermissions() {
   if (chance(0.5)) p.fileSystem = { allowWrite: chance(0.5), allowDestructive: chance(0.5) }
   if (chance(0.3)) p.surfaces = ['nest-chat']
   if (chance(0.3)) p.admin = {}
+  if (chance(0.5)) {
+    p.grants = {}
+    for (const cap of ['sqlite', 'git', 'vault']) {
+      if (chance(0.6)) p.grants[cap] = subset(['a', 'a/x', 'a/w', 'b', 'c/y', 'd'])
+    }
+  }
   return p
+}
+
+/** Is relative folder `f` inside one of `list` (or is `list` absent: everything)? */
+function grantCovers(list, f) {
+  if (list === null || list === undefined) return true
+  return list.some((g) => f === g || f.startsWith(`${g}/`))
 }
 
 /**
@@ -129,6 +144,18 @@ function widenedAnywhere(base, narrowed) {
     if (!base[key]) continue
     if (narrowed[key].enabled === true && base[key].enabled !== true) {
       return `${key}.enabled went from ${base[key].enabled} to true`
+    }
+  }
+
+  // A grant list may only narrow: every folder after must be inside one
+  // before, and a list may never become "everything" again.
+  for (const key of ['sqlite', 'git', 'vault']) {
+    if (!base[key]) continue
+    const before = base[key].grants
+    const after = narrowed[key].grants
+    if (before !== undefined && before !== null && (after === undefined || after === null)) return `${key}.grants went from a list to everything`
+    for (const f of after ?? []) {
+      if (!grantCovers(before, f)) return `${key}.grants gained "${f}"`
     }
   }
 
@@ -205,6 +232,19 @@ await test('narrowing is idempotent — applying the same role twice changes not
     )
   }
   return '200 cases'
+})
+
+await test('🔒 grants: an EMPTY folder list narrows to nothing, never to everything; absent inherits (master plan 6.1)', async () => {
+  const base = { sqlite: { enabled: true, rootDir: 'C:/db' }, git: { enabled: true, grants: ['a', 'b'] }, vault: { enabled: true } }
+  const none = narrowConfig(base, { grants: { sqlite: [], git: [] } })
+  assert(Array.isArray(none.sqlite.grants) && none.sqlite.grants.length === 0, `sqlite: ${JSON.stringify(none.sqlite.grants)}`)
+  assert(Array.isArray(none.git.grants) && none.git.grants.length === 0, `git: ${JSON.stringify(none.git.grants)}`)
+  assert(!('grants' in none.vault), 'an absent vault entry wrote a grants field')
+  const narrowed = narrowConfig(base, { grants: { git: ['a/x', 'c'], sqlite: ['reports'] } })
+  assert(JSON.stringify(narrowed.git.grants) === '["a/x"]', `intersection: ${JSON.stringify(narrowed.git.grants)}`)
+  assert(JSON.stringify(narrowed.sqlite.grants) === '["reports"]', `sqlite: ${JSON.stringify(narrowed.sqlite.grants)}`)
+  const inherit = narrowConfig(base, {})
+  assert(!('grants' in inherit.sqlite) && JSON.stringify(inherit.git.grants) === '["a","b"]', 'no role grants changed something')
 })
 
 await test('an empty permission set is the identity — this is what makes upgrades inert', async () => {

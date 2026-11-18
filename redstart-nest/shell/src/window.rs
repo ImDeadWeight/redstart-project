@@ -1,7 +1,7 @@
 //! The one window: the admin listener's own page, as a browser would load it.
 //!
 //! No OS title bar (`decorations: false`). The page draws its own (TopBar in
-//! src/components/ui.tsx) and, inside this shell only, its own minimise /
+//! src/launcher/components/ui.tsx) and, inside this shell only, its own minimise /
 //! maximise / close. Those call Tauri's window API, which the
 //! `window-controls` capability allows for this window at the admin origin
 //! and nothing else.

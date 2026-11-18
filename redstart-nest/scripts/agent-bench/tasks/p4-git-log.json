@@ -10,5 +10,12 @@
     }
   ],
   "approve": "all",
+  "limits": {
+    "maxTurns": 10,
+    "maxSeconds": 240
+  },
+  "expectTools": [
+    "run_python"
+  ],
   "check": "checks/phase4.mjs#thirdCommit"
 }

@@ -58,10 +58,18 @@ export async function uploadToWorkspace(conversationId: string, files: File[]): 
 	// The note is built by the shared core, which the agent bench also uses,
 	// so the bench measures exactly what a chat user's model is told. It
 	// names how each OFFERED tool reaches the files (see attachment-note.mjs).
+	const deferred = mcpStore.getNestDeferredToolNames();
 	return attachmentNote({
 		saved,
 		failed,
 		conversationId,
-		hasTool: (name) => mcpStore.hasTool(name)
+		hasTool: (name) => mcpStore.hasTool(name),
+		// By capability identity from Nest's own tools/list, not by a list of
+		// names kept in the core (master plan Phase 3.1), and without the ones
+		// Nest's catalog mode keeps out of the model's list: a small model
+		// calls what it is told about.
+		fileSystemTools: [...mcpStore.getNestToolNamesForCapability('file_system')].filter(
+			(name) => !deferred.has(name)
+		)
 	});
 }

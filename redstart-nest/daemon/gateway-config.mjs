@@ -16,8 +16,9 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { configDir } from './platform-paths.mjs'
 import { runtimeDir } from './python-runtime.mjs'
-import { BUILTIN_TOOLS, BUILTIN_GROUPS, expandDisabledToolIds } from './tools-definitions.mjs'
-import { getUserTools, getUserGroups, getCapabilities } from './tools-storage.mjs'
+import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES, expandDisabledToolIds } from './tools-definitions.mjs'
+import { getUserTools, getUserGroups, getCapabilities, getDeferralOverrides } from './tools-storage.mjs'
+import { deferredCapabilities } from './tool-deferral.mjs'
 import { updateGatewayConfig, getGatewayPort } from './tools-gateway.mjs'
 import { updateMcpConfig } from './mcp-server.mjs'
 import { syncFilesystemProvider } from './filesystem-mcp-provider.mjs'
@@ -25,14 +26,9 @@ import { decryptSecret } from './secrets.mjs'
 import { listPlugins } from './plugin-registry.mjs'
 import { syncPluginProviders, stopAllPlugins } from './plugin-provider.mjs'
 import { resolveEngine } from './web-search-engines.mjs'
+import { retrievalOnFor } from './tool-filter.mjs'
+import { toolTextArmOf } from './tool-text-arms.mjs'
 
-// Tool retrieval's per-profile settings, carried through to the gateway.
-//
-// OFF by default and per profile, deliberately: this is a rollout control, not
-// the engagement question. When retrieval runs it runs on every tool-carrying
-// request; this decides whether it runs at all, and it goes away once the
-// default flips. ctxSize rides along because the gateway is where the budget is
-// measured and it has no other route to the number.
 // The general web search engine for this profile (web_search source "web").
 //
 // Choice per profile, connection global: the admin picks an engine for each
@@ -55,14 +51,16 @@ function searchEngineFor(toolSettings, capabilities) {
   return resolveEngine(choice, { searxngUrl: conn.searxngUrl, braveApiKey })
 }
 
+// Tool retrieval's per-profile setting, carried through to the gateway.
+//
+// ON by default since 2026-11-18, per profile; only an explicit `false` turns
+// it off (tool-filter.mjs retrievalOnFor). On means the catalog (master plan
+// 3.3): the deferred tools leave the list and are reached through
+// search_tools and call_tool. `enabled` is the only field read; a profile's
+// older fields (mode, scorer, growth, textVersion, the floors, minTools,
+// callTool) tuned per-turn selection and are ignored where they lie.
 function retrievalSettings(llamaConfig) {
-  const r = llamaConfig?.tools?.retrieval
-  return {
-    enabled: r?.enabled === true,
-    ...(Number.isFinite(r?.relativeFloor) ? { relativeFloor: r.relativeFloor } : {}),
-    ...(Number.isFinite(r?.floor) ? { floor: r.floor } : {}),
-    ...(Number.isFinite(r?.margin) ? { margin: r.margin } : {}),
-  }
+  return { enabled: retrievalOnFor(llamaConfig?.tools) }
 }
 
 export function buildGatewayConfig(llamaConfig) {
@@ -72,6 +70,15 @@ export function buildGatewayConfig(llamaConfig) {
   // profile level; expand them to the concrete MCP function names the model
   // sees so the gateway can strip them from every completions request.
   const disabledTools = expandDisabledToolIds(toolSettings?.disabledToolIds)
+
+  // Which capabilities are catalog-only (master plan Phase 3.1), resolved once
+  // here so nothing reads tools.json per request. It narrows a request only
+  // while tool retrieval is on.
+  const deferred = deferredCapabilities({
+    builtinIds: BUILTIN_CAPABILITIES.map((c) => c.id),
+    pluginIds: listPlugins().map((p) => p.id),
+    overrides: getDeferralOverrides(),
+  })
 
   const allTools = [
     ...BUILTIN_TOOLS.map(t => ({ ...t, builtIn: true })),
@@ -85,7 +92,9 @@ export function buildGatewayConfig(llamaConfig) {
   if (!toolSettings?.enabled) {
     return {
       disabledTools,
+      deferredCapabilities: deferred,
       toolRetrieval: retrievalSettings(llamaConfig),
+      toolTextArm: toolTextArmOf(llamaConfig?.toolTextArm),
       ctxSize: llamaConfig?.ctxSize,
       webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000, searchEngine: { kind: 'none' } },
       postgres: { enabled: false },
@@ -156,11 +165,15 @@ export function buildGatewayConfig(llamaConfig) {
 
   return {
     disabledTools,
+    deferredCapabilities: deferred,
     toolRetrieval: retrievalSettings(llamaConfig),
+    // The tool-text experiment's arm (tool-text-arms.mjs): 'a' unless the
+    // profile names 'b' or 'c'.
+    toolTextArm: toolTextArmOf(llamaConfig?.toolTextArm),
     ctxSize: llamaConfig?.ctxSize,
     webFetch: {
       // Absent webAccessEnabled means enabled — see ProfileTools.webAccessEnabled
-      // in src/types.ts for why this is `!== false` and not an activeToolIds check.
+      // in src/launcher/types.ts for why this is `!== false` and not an activeToolIds check.
       enabled: toolSettings.webAccessEnabled !== false,
       // Per-profile toggle: with the whitelist OFF the model may fetch any
       // public http(s) URL (private/LAN addresses always blocked in the
@@ -223,6 +236,9 @@ export function buildGatewayConfig(llamaConfig) {
     documentSearch: {
       enabled: toolIdSet.has('document_search') && !!capabilities.documents.outputDir,
       documentsRoot: capabilities.documents.outputDir,
+      // Shared Documents (master plan 6.2): searched beside each account's own
+      // files, narrowed per role by grants.shared_documents (sharedGrants).
+      sharedRootDir: capabilities.document_search?.sharedRootDir ?? null,
     },
     memory: {
       enabled: toolIdSet.has('memory'),

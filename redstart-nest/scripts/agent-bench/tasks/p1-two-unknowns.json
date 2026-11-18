@@ -1,0 +1,33 @@
+{
+  "id": "p1-two-unknowns",
+  "group": "phase1",
+  "phase": 1,
+  "prompt": "Turn hours.csv into an invoice for October and save it as invoice.md: one line per entry with its amount at our hourly rate, the total at the bottom, and the client's purchase order number at the top.",
+  "fixtures": [
+    {
+      "path": "hours.csv",
+      "from": "fixtures/hours.csv"
+    }
+  ],
+  "approve": "all",
+  "answers": {
+    "rate": "We bill $92.50 an hour.",
+    "hourly": "We bill $92.50 an hour.",
+    "per hour": "We bill $92.50 an hour.",
+    "charge": "We bill $92.50 an hour.",
+    "purchase order": "The purchase order number is PO-48213.",
+    "p.o": "The purchase order number is PO-48213.",
+    "po number": "The purchase order number is PO-48213.",
+    " po ": "The purchase order number is PO-48213.",
+    " po?": "The purchase order number is PO-48213.",
+    " po,": "The purchase order number is PO-48213.",
+    "(po": "The purchase order number is PO-48213.",
+    "order number": "The purchase order number is PO-48213.",
+    "reference": "The purchase order number is PO-48213.",
+    "save": "Save it here in this chat, next to hours.csv.",
+    "where": "Save it here in this chat, next to hours.csv."
+  },
+  "expectTools": ["run_python", "read_document", "create_document"],
+  "check": "checks/phase1.mjs#invoiceWithBothAnswers",
+  "notes": "Added 2026-11-18 for D43 (several questions in one ask_user): two independent facts, neither in any file nor guessable (20 hours at $92.50 is 1,850.00; PO-48213). Rate keys come first, so one question naming both topics gets only the rate (a model that asks that way has to ask again for the PO). The PO keys are bounded so 'report', 'position' or 'post' do not match. The check passes either way of asking (one call with a questions list, or one call per fact) and names which in its reason: that split is what D43 measures."
+}

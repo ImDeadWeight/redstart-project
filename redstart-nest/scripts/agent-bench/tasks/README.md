@@ -1,7 +1,9 @@
 # Agent benchmark tasks
 
 The 24 tasks of agent-runtime plan Phase 0.3, with the Phase 1 group revised
-once ask_user and update_plan existed (2026-11-11), and one Phase 2 task (2026-11-12): 32 in six groups. Run them with
+once ask_user and update_plan existed (2026-11-11), one Phase 2 task (2026-11-12), and p1-two-unknowns for D43 (2026-11-18): 33 in six groups.
+Bench rows before 2026-11-18 are on the 32-task set: compare totals without
+p1-two-unknowns. Run them with
 `node scripts/agent-bench/run.mjs --model-label "<model> <quant>"` against a
 Nest with a model loaded (see the header of `run.mjs`).
 
@@ -38,11 +40,12 @@ refusal), never how many calls it took. `scripts/test-agent-bench-tasks.mjs`
 | p1-plan-eight-deliverables | phase 1 | update_plan helps | eight outputs over two files, ending with a manifest of every file made |
 | p1-plan-missing-input | phase 1 | update_plan helps | steps 1 and 3 done, no net.csv made up, and says returns.csv is missing |
 | p1-stop-and-report | phase 1 | — | the three new prices applied, SKU-9 left alone, and said so |
+| p1-two-unknowns | phase 1 | ask_user (D43) | invoice.md with the $92.50 rate (total 1,850.00) and PO-48213, both in no file; the reason names whether both were asked in one call (the list form) or separately |
 | p2-delete-confirmed | phase 2 | delete_file (approval-enforced) | p2-old-draft.txt deleted through delete_file after the approval exchange, p2-final.txt kept |
-| p4-run-tests | phase 4 | run_command | names the failing test |
-| p4-fix-test | phase 4 | run_command helps | math.mjs fixed, the test untouched |
-| p4-git-log | phase 4 | run_command | the third most recent commit's author and message |
-| p4-exit-code | phase 4 | run_command | reports failure, exit code 3, and why |
+| p4-run-tests | phase 4 | — (no terminal; a workaround) | names the failing test |
+| p4-fix-test | phase 4 | — (no terminal; a workaround) | math.mjs fixed, the test untouched |
+| p4-git-log | phase 4 | — (no terminal; a workaround) | the third most recent commit's author and message |
+| p4-exit-code | phase 4 | — (no terminal; a workaround) | reports failure, exit code 3, and why |
 
 **p2-delete-confirmed needs File System deletes allowed** (Nest → Tools →
 File System → Allow destructive operations, server-wide); run.mjs warns at
@@ -51,9 +54,18 @@ files are seeded into the account's File System folder (a fixture with
 `"space": "files"`, not an attachment) after the bench's snapshot of that
 folder, so whatever the run leaves is removed afterwards.
 
-Phase 1 and Phase 4 tasks are expected to fail until those phases land; that
-is how a phase shows it helped. p4-fix-test can pass early, by editing the
-file with run_python.
+Phase 1 tasks are expected to fail until that phase lands; that is how a
+phase shows it helped.
+
+**The Phase 4 group measures workarounds.** It was written for
+agent-runtime Phase 4's run_command, which was built and then removed
+(master plan Phase 2, 2026-11-17): Nest has no terminal, and Twig's
+(master plan Phase 8) is a client tool the bench does not run. A model can
+pass p4-fix-test with run_python, and p4-run-tests by reading the code.
+p4-git-log and p4-exit-code are expected to fail: no tool Nest has can run
+git or node. Read their transcripts for whether the model says so or invents
+a result. p4-git-log is capped at 10 turns (2026-11-18): Ornith spent 30
+turns retrying run_python on it, 242 s a run, a quarter of a full run's time.
 
 **The Phase 1 group was revised on 2026-11-11**, after the first runs and the
 ask_user probe (`probe-ask.mjs`). Four tasks went because a model could pass
@@ -101,6 +113,38 @@ that ends the run, and the must-ask tasks fail. `--text-asks answer` has the
 bench answer such a question from the task's `answers`, as a chat user would,
 and the checks count it as asking. The summary reports tool asks and text asks
 separately, so the two can be compared.
+
+**Tool retrieval (second pass, 2026-11-13).** A task may name `expectTools`:
+the tools a sensible first call would use. It is never a pass criterion. The
+summary reports how many runs' first call (ask_user and update_plan aside) was
+one of them, which is how "the File System tools came first on attachment
+tasks" is counted. The bench also asks the gateway which tools it sent on
+every turn and records llama-server's `cache_n` and `prompt_ms`, so each task
+row shows retrieval on or off, the tools on the first turn, the distinct tool
+sets, the cache-miss turns and the prefill time. `--retrieval off` runs a task
+with every post-ban tool (the request opts out, so Nest's setting can stay as
+it is). Neither works with `--runtime`, where the daemon makes the requests.
+
+**Benchmarks harness (2026-11-13, `docs/notes/tool-retrieval-fixes-benchmarks.md`).**
+Four more task fields and flags, for the retrieval benchmarks B0 to B5:
+
+- `withhold: ["list_documents"]`: retrieval leaves those tools out of the
+  selection until a search, a describe or a call brings them in. This is how
+  a p5 task makes its tool something the model has to find. It needs
+  `expectTools`, its own or a follow-up's. Always-pinned tools (memory,
+  discovery, ask_user, update_plan) are refused. Skipped, by name, under
+  `--retrieval off` and `--runtime`.
+- `followUps: ["...", { "prompt": "...", "expectTools": [...] }]`: later user
+  messages, each sent after the final reply to the one before, in the same
+  conversation. The one check judges the end. Skipped under `--runtime`.
+- `--expect-retrieval scorer=fused,growth=pins-only`: one probe request reads
+  Nest's retrieval settings, and the bench stops before the first task if they
+  differ. Every run records the settings per turn anyway, and the summary
+  warns when they changed mid-run.
+- The summary's discovery line: tools found (directly or through call_tool)
+  and in how many turns, the discovery tool calls, call_tool's bad arguments,
+  "said unavailable without searching", recovery after a wrong first tool, and
+  "File System first" on attachment tasks.
 
 `fixtures/` is byte-stable (`.gitattributes`: `-text`). The data files were
 generated with a fixed seed. Checks compute their expected answers from these

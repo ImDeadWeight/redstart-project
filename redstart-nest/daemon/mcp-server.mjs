@@ -34,6 +34,7 @@ import * as scholarTool from './scholar-tool.mjs'
 import * as pythonTool from './python-tool.mjs'
 import * as memoryTool from './memory-tool.mjs'
 import * as documentSearchTool from './document-search-tool.mjs'
+import * as skillsTool from './skills-tool.mjs'
 import { getConversation } from './conversations-storage.mjs'
 import { isWellFormedConversationId } from './conversation-workspace.mjs'
 import * as searchToolsProvider from './search-tools-provider.mjs'
@@ -46,9 +47,13 @@ import {
   CAPABILITY_TOOL_NAMES,
   META_CAPABILITY_KEY,
   META_CLASS_KEY,
+  META_DEFERRED_KEY,
   approvalRule,
   isApprovalEnforced,
 } from './tools-definitions.mjs'
+import { retrievalEnabled } from './tool-filter.mjs'
+import { isDeferredTool } from './tool-deferral.mjs'
+import { toolTextArm, toolTextArmDeclared, withArmText } from './tool-text-arms.mjs'
 import { logEvent, logPolicy } from './logger.mjs'
 import { memoryKey } from './memory-storage.mjs'
 import { requestApproval, consume as consumeApproval } from './approval-ledger.mjs'
@@ -64,7 +69,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 // searchToolsProvider is LAST, and deliberately: it is the only provider whose
 // job is to describe the others, so it must never shadow one of them on a name
 // collision, and its own tool must never appear in the catalog it searches.
-const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, memoryTool, documentSearchTool, interactionTools, searchToolsProvider]
+const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, memoryTool, documentSearchTool, skillsTool, interactionTools, searchToolsProvider]
 
 // Resolved per call, never captured in a const: a plugin installed or removed
 // while Nest is running must take effect without a restart. Built-ins come
@@ -89,12 +94,17 @@ function resolveProviders() {
  * other two consumers, which have no client, never see them.
  *
  * @param {any} cfg
- * @param {{ session?: { hostTools?: string[] } }} [ctx]
+ * @param {{ session?: { hostTools?: string[], toolTextArm?: string | null } }} [ctx]
  * @returns {any[]}
  */
 export function activeToolCatalog(cfg, ctx) {
   const tools = []
   const seen = new Set()
+  // The profile's tool-text arm (tool-text-arms.mjs, an experiment): every
+  // tool list passes here, so one swap covers chat, tasks, the bench and
+  // search_tools' catalog.
+  // A session that declared an arm at initialize (the bench) wins.
+  const arm = ctx?.session?.toolTextArm ?? toolTextArm(cfg)
   for (const provider of resolveProviders()) {
     for (const tool of provider.toolDefs(cfg, ctx)) {
       if (seen.has(tool.name)) {
@@ -103,7 +113,7 @@ export function activeToolCatalog(cfg, ctx) {
       }
       seen.add(tool.name)
       if (!evaluateToolPolicy(tool.name, cfg).allowed) continue
-      tools.push(tool)
+      tools.push(withArmText(tool, arm))
     }
   }
   return tools
@@ -113,6 +123,9 @@ export function activeToolCatalog(cfg, ctx) {
 // it IS one of the entries in it. Handed in here instead, the same way
 // tools-definitions.mjs receives its plugin capability provider.
 searchToolsProvider.setToolCatalogProvider(activeToolCatalog)
+// call_tool (tool retrieval second pass, 5.5) dispatches through callToolAs,
+// below, so a call by name passes every check a direct call does.
+searchToolsProvider.setToolCaller((...args) => callToolAs(...args))
 
 export const ALLOWED_CORS_HEADERS =
   'Content-Type, Authorization, mcp-protocol-version, mcp-session-id, last-event-id'
@@ -227,16 +240,19 @@ export function approvalGate(toolName, args, approvalId, ctx) {
 //       map, server-side, and that remains the only thing standing between a
 //       call and the disk.
 // ---------------------------------------------------------------------------
-function annotateTool(tool) {
+function annotateTool(tool, cfg) {
   const cls = classifyTool(tool.name)
   const readOnly = cls === 'read' || cls === 'network'
+  // A command may delete, publish or fetch: the hints say the worst of it,
+  // which is the honest reading for a client that only has hints.
+  const executes = cls === 'execute'
   return {
     ...tool,
     annotations: {
       ...(tool.annotations || {}),
       readOnlyHint: readOnly,
-      destructiveHint: cls === 'destructive',
-      openWorldHint: cls === 'network',
+      destructiveHint: cls === 'destructive' || executes,
+      openWorldHint: cls === 'network' || executes,
     },
     _meta: {
       ...(tool._meta || {}),
@@ -246,6 +262,9 @@ function annotateTool(tool) {
       // refuses an unapproved call, so a client can show its card first.
       [APPROVAL_RULE_META_KEY]: approvalRule(tool.name),
       [APPROVAL_ENFORCED_META_KEY]: isApprovalEnforced(tool.name),
+      // So a Redstart client knows the model will not see it in its list
+      // (chat-ui's attachment note names only what the model can see).
+      ...(retrievalEnabled(cfg?.toolRetrieval) && isDeferredTool(tool.name, cfg, capabilityForTool) ? { [META_DEFERRED_KEY]: true } : {}),
     },
   }
 }
@@ -309,10 +328,11 @@ function configFor(account) {
  * holds never appear here: they are never on this server (D28).
  *
  * @param {any} account
- * @param {{ hostTools?: string[] }} [opts]
+ * @param {{ hostTools?: string[], toolTextArm?: string | null }} [opts]
  */
-export function toolCatalogFor(account, { hostTools = [] } = {}) {
-  return activeToolCatalog(configFor(account), { session: { hostTools } }).map(annotateTool)
+export function toolCatalogFor(account, { hostTools = [], toolTextArm = null } = {}) {
+  const cfg = configFor(account)
+  return activeToolCatalog(cfg, { session: { hostTools, toolTextArm } }).map((t) => annotateTool(t, cfg))
 }
 
 /**
@@ -328,10 +348,12 @@ export function toolCatalogFor(account, { hostTools = [] } = {}) {
  * @param {any} account null only with auth off
  * @param {string} toolName
  * @param {any} args
- * @param {{ conversationId?: string, approvalId?: string, session?: object }} [opts]
+ * @param {{ conversationId?: string, approvalId?: string, session?: object, enforceApproval?: boolean }} [opts]
  *   conversationId is a claim, verified against the account here.
+ *   enforceApproval is set by call_tool's dispatcher only (U-S6), never from
+ *   anything a client sends.
  */
-export async function callToolAs(account, toolName, args, { conversationId, approvalId, session } = {}) {
+export async function callToolAs(account, toolName, args, { conversationId, approvalId, session, enforceApproval = false } = {}) {
   const cfg = configFor(account)
   const ctx = { account, session }
 
@@ -347,7 +369,9 @@ export async function callToolAs(account, toolName, args, { conversationId, appr
   // are enforced (every destructive tool in Phase 2), and for every client,
   // an API key included (decided 2026-11-12). A standing grant covers a
   // 'prompt' tool; an 'always' tool needs a consumed approval each call.
-  if (isApprovalEnforced(toolName)) {
+  // enforceApproval: call_tool's inner call (U-S6), enforced for every rule
+  // but 'none', since the client's card saw only "call_tool".
+  if (isApprovalEnforced(toolName) || (enforceApproval && approvalRule(toolName) !== 'none')) {
     const gate = approvalGate(toolName, args, approvalId, ctx)
     if (!gate.ok) {
       logEvent('tool', 'approval_needed', { tool: toolName, class: policy.cls })
@@ -359,7 +383,10 @@ export async function callToolAs(account, toolName, args, { conversationId, appr
     }
   }
 
-  const callCtx = { ...ctx, conversationId: verifiedConversationId(account, conversationId) }
+  // approvalId rides along for call_tool alone (search-tools-provider
+  // proxyCall), which hands it to the inner call's gate. A provider that is
+  // not a dispatcher never reads it.
+  const callCtx = { ...ctx, conversationId: verifiedConversationId(account, conversationId), approvalId }
 
   const startedAt = Date.now()
   for (const provider of resolveProviders()) {
@@ -380,7 +407,9 @@ export async function callToolAs(account, toolName, args, { conversationId, appr
       // Memory marks a save made soon after the web was read in the same
       // conversation (memory-tool.mjs). Recorded for every network-class
       // call, successful or not: an error page is web content too.
-      if (policy.cls === 'network') memoryTool.noteNetworkCall(callCtx)
+      // A command's output can carry anything from the network too (git
+      // clone, npm install), so it marks a following save the same way.
+      if (policy.cls === 'network' || policy.cls === 'execute') memoryTool.noteNetworkCall(callCtx)
       return result
     }
   }
@@ -397,6 +426,7 @@ async function handleRpc(msg, send, ctx = { account: null }) {
     // the session, which outlives this request; a client that declares nothing
     // is never offered a host-resolved tool.
     if (ctx.session) ctx.session.hostTools = interactionTools.hostToolsDeclared(params)
+    if (ctx.session) ctx.session.toolTextArm = toolTextArmDeclared(params)
     send({ jsonrpc: '2.0', id, result: {
       protocolVersion: '2024-11-05',
       // prompts = the account's workflows (workflows-storage.mjs). chat-ui's
@@ -416,7 +446,7 @@ async function handleRpc(msg, send, ctx = { account: null }) {
   }
 
   if (method === 'tools/list') {
-    send({ jsonrpc: '2.0', id, result: { tools: toolCatalogFor(ctx.account, { hostTools: ctx.session?.hostTools }) } })
+    send({ jsonrpc: '2.0', id, result: { tools: toolCatalogFor(ctx.account, { hostTools: ctx.session?.hostTools, toolTextArm: ctx.session?.toolTextArm }) } })
     return
   }
 
@@ -572,7 +602,7 @@ export function startMcpServer(port, config, { bindHost = '127.0.0.1' } = {}) {
 
       // Per-session state, set at initialize (see handleRpc). One object per
       // transport, so it lives exactly as long as the session does.
-      const session = { hostTools: [] }
+      const session = { hostTools: [], toolTextArm: null }
 
       transport.onmessage = async (message, extra) => {
         const ctx = { account: extra.authInfo?.account ?? null, session }

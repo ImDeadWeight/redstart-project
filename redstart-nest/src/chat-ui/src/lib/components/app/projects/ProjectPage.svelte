@@ -19,6 +19,7 @@
 		Brain,
 		FileText,
 		Upload,
+		Download,
 		X,
 		Pencil
 	} from '@lucide/svelte';
@@ -121,6 +122,33 @@
 			toast.error(e instanceof Error ? e.message : 'Could not save');
 		} finally {
 			savingInstructions = false;
+		}
+	}
+
+	// AGENTS.md (master plan Phase 5): an imported file goes into the draft, not
+	// straight to the server, so it is read before Save replaces anything.
+	let agentsMdInput = $state<HTMLInputElement | null>(null);
+
+	async function importAgentsMd(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file) return;
+		const text = (await file.text()).replace(/^﻿/, '').replace(/\r\n?/g, '\n').trim();
+		const max = projectsStore.limits?.maxInstructionsChars;
+		if (max && text.length > max) {
+			toast.error(`That AGENTS.md is ${text.length} characters; instructions are at most ${max}.`);
+			return;
+		}
+		instructionsDraft = text;
+		toast.success('AGENTS.md loaded. Review it, then Save to replace the instructions.');
+	}
+
+	async function exportAgentsMd() {
+		try {
+			await ProjectService.exportAgentsMd(id);
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Could not export');
 		}
 	}
 
@@ -282,7 +310,35 @@
 		</section>
 
 		<section class="space-y-2">
-			<h2 class="text-sm font-medium">Instructions</h2>
+			<div class="flex items-center justify-between gap-2">
+				<h2 class="text-sm font-medium">Instructions</h2>
+				<div class="flex gap-1">
+					<input
+						type="file"
+						accept=".md,text/markdown,text/plain"
+						class="hidden"
+						bind:this={agentsMdInput}
+						onchange={importAgentsMd}
+					/>
+					<Button
+						size="sm"
+						variant="ghost"
+						onclick={() => agentsMdInput?.click()}
+						title="Load an AGENTS.md file into the instructions (review, then Save)"
+					>
+						<Upload class="h-3 w-3" /> AGENTS.md
+					</Button>
+					<Button
+						size="sm"
+						variant="ghost"
+						onclick={exportAgentsMd}
+						disabled={!project?.instructions}
+						title="Download the saved instructions as AGENTS.md, for other agents"
+					>
+						<Download class="h-3 w-3" /> AGENTS.md
+					</Button>
+				</div>
+			</div>
 			<Textarea
 				bind:value={instructionsDraft}
 				rows={6}

@@ -48,7 +48,7 @@ export function toolDefs(cfg) {
     description:
       `Run Python ${PYTHON_VERSION} code in a sandbox and get back its printed output, the value of its last expression, and any files it wrote. ` +
       `Use it for anything you would otherwise do in your head and could get wrong: arithmetic, counting, sorting, dates, unit conversion, parsing, statistics, and analysing data files. ` +
-      `Installed: ${TOP_LEVEL_PACKAGES.join(', ')} and the standard library. There is no network and no pip, so code cannot fetch URLs or install packages. ` +
+      `Installed: ${TOP_LEVEL_PACKAGES.join(', ')} and the standard library. There is no network and no pip, so code cannot fetch URLs or install packages, and it cannot start other programs: no subprocess, os.system, shell, node or git. ` +
       `The working directory is this conversation's workspace: files the user attached are there, and files you write there (e.g. df.to_csv('out.csv')) persist and are listed in the result. ` +
       `matplotlib figures are saved and shown to the user automatically, so you don't need plt.savefig. ` +
       `Files persist; variables usually persist between calls but may not (a kernel restarts after a timeout or 10 idle minutes), so re-load data if a name is undefined. ` +

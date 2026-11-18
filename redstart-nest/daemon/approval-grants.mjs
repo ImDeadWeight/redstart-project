@@ -25,9 +25,10 @@
 // checks the rule again at read time, so a grant written before a tool was
 // reclassified destructive stops counting the moment it is.
 //
-// `scope` is null: the grant covers every call to the tool. run_command
-// (Phase 4) is the first tool whose grants are scoped (an executable and an
-// argv prefix); the field exists so that change is not a migration.
+// `scope` is null: the grant covers every call to the tool. The field exists
+// so a tool with scoped grants is not a migration. Nest's run_command had
+// them ({ executable, firstArg }) until the Nest terminal was removed
+// (master plan Phase 2); Twig's terminal keeps its rules on the client (U12).
 // =============================================================================
 
 import * as crypto from 'crypto'

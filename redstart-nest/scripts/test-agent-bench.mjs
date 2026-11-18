@@ -33,8 +33,8 @@ import * as net from 'node:net'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { main, parseArgs, labelWarning, fallbackWarning, accountWarning, askWarning } from './agent-bench/run.mjs'
-import { approves, maxReplyTokens, endsInQuestion, TEXT_ASK_NO_ANSWER } from './agent-bench/lib/bench.mjs'
+import { main, parseArgs, labelWarning, fallbackWarning, accountWarning, askWarning, staleDaemonWhy, taskSet, armsComparison } from './agent-bench/run.mjs'
+import { approves, maxReplyTokens, endsInQuestion, TEXT_ASK_NO_ANSWER, toolsSentReport, retrievalConfigMismatch } from './agent-bench/lib/bench.mjs'
 import { answerFromTask } from './agent-bench/lib/ask.mjs'
 import { ASK_USER_DEFINITION, DISMISSED_RESULT } from '../../shared/agent-core/ask-user.mjs'
 import { UPDATE_PLAN_DEFINITION } from '../../shared/agent-core/update-plan.mjs'
@@ -42,6 +42,10 @@ import { argumentProblem, computeMetrics } from './agent-bench/lib/metrics.mjs'
 import { findTaskFiles, loadTask } from './agent-bench/lib/task-file.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
+// The stale-daemon check reads nestd.pid from Nest's config folder; point it
+// at an empty one so the real daemon's age never fails these runs.
+const PID_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-pid-'))
+process.env.REDSTART_TEST_USERDATA_DIR = PID_DIR
 const FIXTURES = path.join(here, 'fixtures', 'agent-bench')
 const API_KEY = 'rsk_bench_test_key'
 const FAKE_TEMPLATE = '{% for m in messages %}<|im_start|>{{ m.role }}{% endfor %}'
@@ -169,6 +173,13 @@ const SCRIPTS = {
   textask: (turn, messages) => (turn === 0
     ? [chunk({ content: 'Happy to. What name should I sign it with?' })]
     : [chunk({ content: `Signed it: ${[...messages].reverse().find((m) => m.role === 'user')?.content}` })]),
+  // Benchmarks H4: answers the first message, then needs read_file for the follow-up.
+  drift: (turn, messages) => (turn === 0
+    ? [chunk({ content: 'Noted.' })]
+    : turn === 1
+      ? [toolCallChunk('d1', 'read_file', '{"path": "data.txt"}')]
+      : [chunk({ content: `It says ${/secret: (\d+)/.exec(lastToolResult(messages))?.[1] ?? 'unknown'}.` })]),
+  chat: () => [chunk({ content: 'ok' })],
   forever: () => [toolCallChunk(`c${Math.random().toString(36).slice(2, 8)}`, 'read_file', '{"path": "data.txt"}')],
   hang: () => 'hang',
 }
@@ -222,6 +233,13 @@ function startFakeNest(gatewayPort) {
     approvalFor: null,
     approvals: new Map(),
     approvalPosts: [],
+    // x-redstart-retrieval-config on a request retrieval ran on (benchmarks H1).
+    retrievalConfig: 'mode=catalog',
+    // The tool-text arms (--arms): one MCP session per declared arm, its
+    // ask_user text marked with the arm, as mcp-server.mjs swaps it. With
+    // ignoreArms, the fake behaves as a daemon from before per-request arms.
+    sessionArms: new Map(),
+    ignoreArms: false,
   }
   const json = (res, status, body) => {
     res.writeHead(status, { 'Content-Type': 'application/json' })
@@ -357,15 +375,35 @@ function startFakeNest(gatewayPort) {
       // The turn is how many assistant messages the request already carries:
       // stateless, so two tasks with the same prompt cannot share a counter.
       const turn = body.messages.filter((m) => m.role === 'assistant').length
-      const out = SCRIPTS[scriptName](turn, body.messages)
-      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      // A non-streaming request (measure-tool-cache.mjs) needs no script.
+      const out = body.stream === false ? null : SCRIPTS[scriptName](turn, body.messages)
+      // The gateway's retrieval report (tools-gateway.mjs retrievalReportHeaders):
+      // every tool sent, nothing removed, on unless the request opted out.
+      const report = body.redstart_retrieval_report === true ? {
+        'x-redstart-tools-sent': (body.tools ?? []).map((t) => t.function.name).map(encodeURIComponent).join(','),
+        'x-redstart-tools-filtered': '0',
+        'x-redstart-retrieval': body.redstart_retrieval === false ? 'off' : 'on',
+        // Benchmarks H1: the settings in effect, as tool-filter.mjs writes them.
+        'x-redstart-retrieval-config': body.redstart_retrieval === false ? 'off' : state.retrievalConfig,
+        ...(state.ignoreArms ? {} : { 'x-redstart-tool-text-arm': body.redstart_tool_text_arm ?? 'a' }),
+      } : {}
+      if (body.stream === false) {
+        // measure-tool-cache.mjs: one JSON reply, with the timings.
+        res.writeHead(200, { 'Content-Type': 'application/json', ...report })
+        return res.end(JSON.stringify({ choices: [{ index: 0, message: { role: 'assistant', content: 'ok' } }],
+          timings: { prompt_n: 100, predicted_n: 1, cache_n: turn === 0 ? 0 : turn * 110, prompt_ms: 50 } }))
+      }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', ...report })
       if (out === 'hang') {
         res.write(`data: ${JSON.stringify(chunk({ reasoning_content: 'hmm' }))}\n\n`)
         req.on('close', () => res.end())
         return
       }
       for (const c of out) res.write(`data: ${JSON.stringify(c)}\n\n`)
-      res.write(`data: ${JSON.stringify(chunk({}, { timings: { prompt_n: 100, predicted_n: 10 } }))}\n\n`)
+      // llama-server's timings: each turn reuses the whole previous prompt
+      // (cache_n), so no turn is a cache miss.
+      const cache_n = turn === 0 ? 0 : turn * 110
+      res.write(`data: ${JSON.stringify(chunk({}, { timings: { prompt_n: 100, predicted_n: 10, cache_n, prompt_ms: 50 } }))}\n\n`)
       res.write('data: [DONE]\n\n')
       return res.end()
     }
@@ -380,11 +418,19 @@ function startFakeNest(gatewayPort) {
     // it answers it. One flag for the fake, since the bench opens one session.
     if (msg.method === 'initialize') {
       state.declaredHostTools = msg.params?.capabilities?.experimental?.['redstart/hostTools']?.names ?? []
+      const arm = msg.params?.capabilities?.experimental?.['redstart/toolTextArm']?.arm
+      if (arm) {
+        state.sessionArms.set(`s-${arm}`, arm)
+        res.writeHead(200, { 'Content-Type': 'application/json', 'mcp-session-id': `s-${arm}` })
+        return res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} } } }))
+      }
       return reply({ protocolVersion: '2024-11-05', capabilities: { tools: {} } })
     }
     if (msg.method === 'tools/list') {
       const hostTools = [ASK_USER_TOOL_DEF, UPDATE_PLAN_TOOL_DEF].filter((t) => state.declaredHostTools?.includes(t.name))
-      return reply({ tools: [...TOOLS, ...hostTools] })
+      const arm = state.ignoreArms ? null : state.sessionArms.get(req.headers['mcp-session-id'])
+      const armed = arm ? hostTools.map((t) => (t.name === 'ask_user' ? { ...t, description: `${t.description} (arm ${arm})` } : t)) : hostTools
+      return reply({ tools: [...TOOLS, ...armed] })
     }
     if (msg.method === 'tools/call') {
       const { name, arguments: args, _meta } = msg.params
@@ -464,6 +510,48 @@ await test('approval policy: all, reads, a named list', async () => {
     approves(['w'], 'w', 'write'), approves(['w'], 'x', 'read')], [true, true, false, true, false], 'decisions')
 })
 
+await test('retrieval metrics: tool sets, cache misses, prefill, the first tool (host tools aside), on beats off', async () => {
+  const sent = (names, retrieval = 'on') => ({ t: 0, type: 'tools_sent', names, filtered: false, retrieval })
+  const asst = (cache_n, prompt_n, prompt_ms) => ({ t: 0, type: 'assistant', timings: { prompt_n, predicted_n: 5, cache_n, prompt_ms } })
+  const call = (name) => ({ t: 0, type: 'tool_call', name, id: name })
+  const events = [
+    { t: 0, type: 'start' },
+    sent(['b', 'a']), asst(0, 1000, 400), call('ask_user'), call('fs_read'),
+    // Same set, other order: one set. The prefix was reused (900 of 1000).
+    sent(['a', 'b']), asst(900, 150, 30), call('read_document'),
+    // The set grew: the prefix went (10 of 1050), a miss, and a long prefill.
+    sent(['a', 'b', 'c'], 'off'), asst(10, 1200, 500),
+    { t: 0, type: 'end' },
+  ]
+  const m = computeMetrics(events, { pass: true }, { expectTools: ['read_document'] })
+  eq([m.retrieval, m.toolSets, m.toolsSentFirst, m.cacheMissTurns, m.prefillMs], ['on', 2, 2, 1, 930], 'retrieval, sets, first-turn tools, misses, prefill')
+  eq([m.firstTool, m.firstToolExpected], ['fs_read', false], 'ask_user is skipped; fs_read is not what the task expected')
+  eq(computeMetrics(events, { pass: true }).firstToolExpected, null, 'a task with no expectTools is not judged')
+  const bare = computeMetrics([{ t: 0, type: 'start' }, { t: 0, type: 'assistant', timings: { prompt_n: 1, predicted_n: 1 } }, { t: 0, type: 'end' }], { pass: true })
+  eq([bare.retrieval, bare.toolSets, bare.cacheMissTurns, bare.prefillMs, bare.firstTool], [null, null, null, null, null], 'no report and no timings: unknown, not 0')
+  const { retrievalSummary } = await import('./agent-bench/lib/metrics.mjs')
+  const s = retrievalSummary([m, bare, { ...m, retrieval: 'off', firstToolExpected: true }])
+  eq([s.retrieval, s.cacheMissTurns, s.firstToolExpected, s.firstToolJudged], ['off, on', 2, 1, 2], 'summary: states seen, misses summed, the unknown run left out')
+})
+
+await test('expectTools: optional; anything but a non-empty list of names fails at load', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-expect-'))
+  const checks = path.join(FIXTURES, 'checks.mjs').replace(/\\/g, '/')
+  const write = (name, extra) => {
+    const f = path.join(dir, name)
+    fs.writeFileSync(f, JSON.stringify({ id: 'e', prompt: 'p', check: `${checks}#neverPasses`, ...extra }))
+    return f
+  }
+  eq((await loadTask(write('none.json', {}))).expectTools, null, 'absent is null')
+  eq((await loadTask(write('ok.json', { expectTools: ['read_document', 'run_python'] }))).expectTools, ['read_document', 'run_python'], 'a list')
+  for (const bad of [[], 'read_document', [3], ['']]) {
+    let e = null
+    try { await loadTask(write('bad.json', { expectTools: bad })) } catch (err) { e = err }
+    assert(/expectTools must be a non-empty array of tool names/.test(e?.message ?? ''), `${JSON.stringify(bad)} was accepted`)
+  }
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
 await test('retries count a call to a tool whose previous call errored', async () => {
   const ev = (type, name, isError) => ({ t: 0, type, name, isError })
   const m = computeMetrics([
@@ -516,6 +604,29 @@ await test('a label that does not name the loaded file is warned about', async (
   eq(labelWarning('anything', null), null, 'no /props, no warning')
 })
 
+await test('a daemon older than its code stops the run (2026-11-18 arms)', async () => {
+  assert(/before commit abc/.test(staleDaemonWhy(1000, 2000, 'commit abc') ?? ''), 'older daemon not flagged')
+  eq(staleDaemonWhy(3000, 2000, 'commit abc'), null, 'a newer daemon flagged')
+  eq(staleDaemonWhy(null, 2000, 'commit abc'), null, 'no pid file, no verdict')
+  // Through main: a pid file from 1970 stops it before any connection.
+  fs.writeFileSync(path.join(PID_DIR, 'nestd.pid'), JSON.stringify({ pid: 1, startedAt: 1 }))
+  try {
+    let threw = null
+    try {
+      await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', 'http://127.0.0.1:1', '--quiet'], { log: () => {} })
+    } catch (err) { threw = err }
+    assert(/runs older code than this checkout/.test(threw?.message ?? ''), `got ${threw?.message}`)
+    // With the switch it goes on to connect, and fails there instead.
+    threw = null
+    try {
+      await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', 'http://127.0.0.1:1', '--quiet', '--allow-stale-daemon'], { log: () => {} })
+    } catch (err) { threw = err }
+    assert(threw && !/older code/.test(threw.message), `got ${threw?.message}`)
+  } finally {
+    fs.rmSync(path.join(PID_DIR, 'nestd.pid'), { force: true })
+  }
+})
+
 await test('an owner or admin API key is warned about', async () => {
   // The bench ran as the owner on 2026-11-11.
   for (const role of ['owner', 'admin']) {
@@ -566,6 +677,41 @@ await test('arguments: --model-label required, MCP defaults to the gateway port 
     try { parseArgs(['--model-label', 'm', '--max-tokens', bad]) } catch (e) { e2 = e }
     assert(/--max-tokens must be a positive integer/.test(e2?.message ?? ''), `--max-tokens ${bad} accepted`)
   }
+})
+
+await test('--arms and --set: parsed and checked', async () => {
+  eq(parseArgs(['--model-label', 'm', '--arms', 'A, c']).arms, ['a', 'c'], 'list, case and spaces')
+  for (const [bad, why] of [['a,d', /unknown arm d/], ['a,a', /distinct/], [',', /distinct/]]) {
+    let e = null
+    try { parseArgs(['--model-label', 'm', '--arms', bad]) } catch (err) { e = err }
+    assert(why.test(e?.message ?? ''), `--arms ${bad}: ${e?.message}`)
+  }
+  let e = null
+  try { parseArgs(['--model-label', 'm', '--arms', 'a,b', '--runtime']) } catch (err) { e = err }
+  assert(/--arms cannot run with --runtime/.test(e?.message ?? ''), `--runtime: ${e?.message}`)
+  // The signal set names real tasks only.
+  const real = new Set(findTaskFiles(path.join(here, 'agent-bench', 'tasks')).map((f) => path.basename(f, '.json')))
+  const signal = taskSet('signal')
+  assert(signal.length >= 10 && signal.every((id) => real.has(id)), `signal: ${signal.filter((id) => !real.has(id))}`)
+  for (const [name, why] of [['nope', /cannot read sets\/nope\.json.*sets: .*signal/], ['../x', /not a set name/]]) {
+    let e2 = null
+    try { taskSet(name) } catch (err) { e2 = err }
+    assert(why.test(e2?.message ?? ''), `${name}: ${e2?.message}`)
+  }
+  let e3 = null
+  try { await main(['--model-label', 'm', '--tasks', FIXTURES, '--set', 'signal', '--quiet'], { log: () => {} }) } catch (err) { e3 = err }
+  assert(/--set signal names task\(s\) .* does not hold: compute-arithmetic/.test(e3?.message ?? ''), `main: ${e3?.message}`)
+})
+
+await test('armsComparison: a row per arm and the tasks that differ', async () => {
+  const t = (taskId, group, passes) => ({ taskId, group, runs: 3, passes })
+  const s = (tasks) => ({ runs: 6, tasks, askCalls: 2, misuse: { proseAskRuns: 1, lookups: 0, subprocess: 4, unsupportedRead: 0, skillAsTool: 0 } })
+  const md = armsComparison([
+    { arm: 'a', summary: s([t('x', 'phase1', 1), t('y', 'compute', 3)]) },
+    { arm: 'b', summary: s([t('x', 'phase1', 3), t('y', 'compute', 3)]) },
+  ])
+  assert(md.includes('| A | 4/6 | 1/3 | 2 | 1 | 0 | 4 | 0 | 0 |') && md.includes('| B | 6/6 | 3/3 |'), md)
+  assert(md.includes('| x | 1/3 | 3/3 |') && !md.includes('| y |'), md)
 })
 
 await test('--runtime: on with the default plan; refused with --plan tool|off or --model (a task cannot honour them)', async () => {
@@ -631,7 +777,7 @@ if (bench) {
     eq(withFx.messages[0].content,
       // The core's note, for the tools this fake offers (read_file and
       // write_file are File System names; no run_python, no read_document).
-      "[script:read] What is the secret in data.txt?\n\n[Attached files saved to this chat's workspace: data.txt, nested/inline.txt\n- The File System tools (read_file, write_file) work on a different folder and cannot see these files.]",
+      "[script:read] What is the secret in data.txt?\n\n[Attached files saved to this chat's workspace: data.txt, nested/inline.txt\n- The File System tools (write_file) work on a different folder and cannot see these files.]",
       'user message')
     const without = nest.state.completionBodies.find((b) => b.messages[0].content.startsWith('[script:write]'))
     eq(without.messages[0].content, '[script:write] Put 42 in out/answer.txt.', 'no note')
@@ -835,9 +981,90 @@ if (bench) {
     eq([r.metrics.promptTokens, r.metrics.predictedTokens], [200, 20], 'two turns of 100/10')
   })
 
+  await test('every request asks for the retrieval report; the bench logs it per turn and the metrics read it', async () => {
+    assert(nest.state.completionBodies.every((b) => b.redstart_retrieval_report === true), 'a request without redstart_retrieval_report')
+    // Asked for, not merely not opted out: the bench's account-wide key names
+    // no surface, so without `true` retrieval would not run (master plan Phase 1).
+    assert(nest.state.completionBodies.every((b) => b.redstart_retrieval === true), '--retrieval server did not ask for retrieval')
+    const r = run('read-fixture')
+    const reports = r.events.filter((e) => e.type === 'tools_sent')
+    eq(reports.map((e) => e.turn), [1, 2], 'one report per turn')
+    eq(reports[0].names, ['read_file', 'make_doc', 'write_file', 'search_docs', 'fs_write', 'ask_user', 'update_plan'], 'the names, decoded')
+    eq(r.events.find((e) => e.type === 'assistant').timings, { prompt_n: 100, predicted_n: 10, cache_n: 0, prompt_ms: 50 }, 'cache_n and prompt_ms are kept')
+    const m = r.metrics
+    eq([m.retrieval, m.toolSets, m.toolsSentFirst, m.cacheMissTurns, m.prefillMs, m.firstTool, m.firstToolExpected],
+      ['on', 1, 7, 0, 100, 'read_file', true], 'retrieval, sets, first-turn tools, misses, prefill, first tool, expected')
+    eq(run('write-answer').metrics.firstToolExpected, null, 'a task with no expectTools is not judged')
+    eq([bench.summary.retrieval, bench.summary.firstToolExpected, bench.summary.firstToolJudged], ['on', 1, 1], 'summary')
+    const md = fs.readFileSync(path.join(outDir, 'summary.md'), 'utf8')
+    assert(md.includes('tool retrieval (--retrieval server): on · 7.0 tools on the first turn'), 'summary.md line')
+    assert(/\| read-fixture \| files \| 1\/1 \| on \| 7\.0 \| 1\.0 \| 0 \| 0\.1 \| 1\/1 \|/.test(md), 'per-task row')
+    assert(md.includes('Row for its "Tool retrieval, second pass" table:'), 'results row')
+  })
+
+  await test('--retrieval off opts every request out and the summary says off; bad values and --runtime are refused', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-retrieval-'))
+    const before = nest.state.completionBodies.length
+    const off = await main(['--model-label', 'fake model', '--tasks', path.join(FIXTURES, 'read-fixture.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', dir, '--quiet', '--retrieval', 'off'], { log: () => {} })
+    const bodies = nest.state.completionBodies.slice(before)
+    assert(bodies.length > 0 && bodies.every((b) => b.redstart_retrieval === false), 'a request was not opted out')
+    eq([off.runs[0].metrics.retrieval, off.summary.retrieval], ['off', 'off'], 'read back from the report, not assumed')
+    const { meta } = JSON.parse(fs.readFileSync(path.join(dir, 'summary.json'), 'utf8'))
+    eq(meta.retrieval, 'off', 'the flag is in summary.json')
+    assert(fs.readFileSync(path.join(dir, 'summary.md'), 'utf8').includes('tool retrieval (--retrieval off): off'), 'summary.md line')
+    for (const argv of [['--retrieval', 'sometimes'], ['--retrieval', 'off', '--runtime']]) {
+      let e = null
+      try { parseArgs(['--model-label', 'm', ...argv]) } catch (err) { e = err }
+      assert(/--retrieval/.test(e?.message ?? ''), `${argv.join(' ')} was accepted`)
+    }
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  await test('benchmarks H1: the settings are recorded per turn, --expect-retrieval checks them first, and a change mid-run is warned about', async () => {
+    eq(bench.summary.retrievalConfig, nest.state.retrievalConfig, 'the settings, read from the report')
+    eq(run('read-fixture').metrics.retrievalConfig, nest.state.retrievalConfig, 'per run')
+    assert(fs.readFileSync(path.join(outDir, 'summary.md'), 'utf8').includes(`settings ${nest.state.retrievalConfig}`), 'summary.md line')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-expect-'))
+    const task = path.join(FIXTURES, 'read-fixture.json')
+    const argv = (...extra) => ['--model-label', 'fake model', '--tasks', task, '--gateway', `http://127.0.0.1:${port}`, '--out', dir, '--quiet', ...extra]
+    // A match: one probe request, then the tasks.
+    const before = nest.state.completionBodies.length
+    const ok = await main(argv('--expect-retrieval', 'mode=catalog'), { log: () => {} })
+    const probe = nest.state.completionBodies[before]
+    assert(probe.stream === false && probe.max_tokens === 1 && probe.redstart_retrieval_report === true && /^bench-probe-/.test(probe.redstart_conversation_id), 'probe shape')
+    eq(JSON.parse(fs.readFileSync(path.join(dir, 'summary.json'), 'utf8')).meta.retrievalConfigProbed, nest.state.retrievalConfig, 'probe recorded')
+    eq(ok.runs.length, 1, 'the task ran')
+    // A mismatch stops before any task.
+    const afterOk = nest.state.completionBodies.length
+    let e = null
+    try { await main(argv('--expect-retrieval', 'mode=select'), { log: () => {} }) } catch (err) { e = err }
+    assert(/mode is catalog, expected select/.test(e?.message ?? ''), `got ${e?.message}`)
+    eq(nest.state.completionBodies.length - afterOk, 1, 'only the probe was sent')
+    // Settings that change mid-run are a warning on the row.
+    let n = 0
+    const saved = nest.state.retrievalConfig
+    Object.defineProperty(nest.state, 'retrievalConfig', { configurable: true, get: () => (n++ === 0 ? saved : saved.replace('mode=catalog', 'mode=select')) })
+    try {
+      const mixed = await main(argv(), { log: () => {} })
+      assert(mixed.summary.retrievalConfigMixed, 'not flagged as mixed')
+      assert(JSON.parse(fs.readFileSync(path.join(dir, 'summary.json'), 'utf8')).meta.warnings.some((w) => /settings changed during the run/.test(w)), 'no warning')
+    } finally {
+      Object.defineProperty(nest.state, 'retrievalConfig', { configurable: true, writable: true, value: saved })
+    }
+    for (const bad of [['--expect-retrieval', 'colour=red'], ['--expect-retrieval', 'scorer'], ['--expect-retrieval', 'scorer=fused'], ['--expect-retrieval', 'mode=catalog', '--retrieval', 'off']]) {
+      let pe = null
+      try { parseArgs(['--model-label', 'm', ...bad]) } catch (err) { pe = err }
+      assert(/--expect-retrieval/.test(pe?.message ?? ''), `${bad.join(' ')} was accepted`)
+    }
+    eq(retrievalConfigMismatch({ mode: 'catalog' }, 'off') !== null && retrievalConfigMismatch({ mode: 'catalog' }, null) !== null, true, 'off and absent are mismatches')
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
   await test('every request caps the reply length (4096 by default), and a capped reply is a limit', async () => {
     // The 2026-11-11 runaway: one 4B reply ran to 12k tokens.
-    assert(nest.state.completionBodies.every((b) => b.max_tokens === 4096), 'a request without the default cap')
+    // The --expect-retrieval probe (H1) is not a reply: it asks for 1 token.
+    const replies = nest.state.completionBodies.filter((b) => !/^bench-probe-/.test(b.redstart_conversation_id ?? ''))
+    assert(replies.every((b) => b.max_tokens === 4096), 'a request without the default cap')
     eq([maxReplyTokens({}), maxReplyTokens({ thinking: true }), maxReplyTokens({ maxTokens: 50, thinking: true })], [4096, 16384, 50], 'defaults and override')
     eq(run('write-answer').metrics.hitLimit, null, '10 tokens under a 4096 cap is not a limit')
     // The fake generates 10 tokens a turn, so a cap of 10 is hit.
@@ -848,6 +1075,58 @@ if (bench) {
     eq(capped.runs[0].metrics.hitLimit, 'reply-length', 'the capped reply is recorded as a limit')
     eq(JSON.parse(fs.readFileSync(path.join(capDir, 'summary.json'), 'utf8')).meta.maxTokens, 10, 'recorded in summary.json')
     fs.rmSync(capDir, { recursive: true, force: true })
+  })
+
+  await test('measure-tool-cache: both variants, the report and timings read per turn, off opts out', async () => {
+    const mtc = await import('./measure-tool-cache.mjs')
+    const before = nest.state.completionBodies.length
+    const lines = []
+    const results = await mtc.main(['--gateway', `http://127.0.0.1:${port}`, '--turns', '3'],
+      { log: (s) => lines.push(s), conversation: ['[script:chat] first', 'second', 'third'] })
+    eq(results.map((r) => r.variant), ['server', 'off'], 'variants, in order')
+    for (const r of results) {
+      eq(r.rows.map((x) => [x.names?.length, x.cached, x.prefilled]), [[5, 0, 100], [5, 110, 100], [5, 220, 100]], `${r.variant}: tools sent, cached, prefilled`)
+      eq([r.misses, r.prefilled, r.ms], [0, 200, 100], `${r.variant}: turns 2-3`)
+    }
+    eq([results[0].rows[0].retrieval, results[1].rows[0].retrieval], ['on', 'off'], 'read back from the gateway')
+    const bodies = nest.state.completionBodies.slice(before)
+    eq(bodies.length, 8, 'a slot reset and three turns per variant')
+    assert(bodies.every((b) => b.stream === false && b.id_slot === 0 && b.max_tokens === 1 && b.redstart_retrieval_report === true), 'request shape')
+    eq(bodies.filter((b) => b.redstart_retrieval === false).length, 5, 'the off turns and both resets opt out; the server turns do not')
+    // The server turns ask (master plan Phase 1): an account-wide key names no surface.
+    assert(bodies.filter((b) => b.redstart_retrieval === true).length === bodies.length - 5, 'a server turn did not ask for retrieval')
+    eq(nest.state.declaredHostTools, [], 'no host-resolved tools asked for')
+    assert(lines.some((l) => l === 'turns 2-3: 0 cache miss(es), prefilled 200 tokens in 100 ms'), lines.join('\n'))
+    // A miss: the prefix falls under half the last prompt.
+    eq(mtc.summarizeRows([{ cached: 0, prefilled: 1000, ms: 1 }, { cached: 900, prefilled: 50, ms: 1 }, { cached: 3, prefilled: 1000, ms: 9 }]),
+      { misses: 1, prefilled: 1050, ms: 10 }, 'summarizeRows')
+    for (const bad of [['--turns', '1'], ['--variants', 'pins'], ['--nope', 'x']]) {
+      let e = null
+      try { mtc.parseArgs(bad) } catch (err) { e = err }
+      assert(e, `${bad.join(' ')} was accepted`)
+    }
+  })
+
+  await test('measure-tool-cache: compaction keeps the id, each variant has its own id', async () => {
+    const mtc = await import('./measure-tool-cache.mjs')
+    const before = nest.state.completionBodies.length
+    const lines = []
+    const results = await mtc.main(['--gateway', `http://127.0.0.1:${port}`, '--turns', '3', '--compact-at', '3'],
+      { log: (s) => lines.push(s), conversation: ['[script:chat] first', 'second', 'third'] })
+    const server = results[0].rows
+    eq([server[1].setChanged, server[2].compacted], [false, true], 'a fixed set, and the compacted turn marked')
+    const bodies = nest.state.completionBodies.slice(before).filter((b) => b.redstart_conversation_id)
+    const ids = [...new Set(bodies.map((b) => b.redstart_conversation_id))]
+    eq(ids.length, 2, 'one conversation id per variant, kept across compaction')
+    assert(bodies.every((b) => b.redstart_retrieval_withhold === undefined), 'a request still sent redstart_retrieval_withhold')
+    const turn3 = bodies.filter((b) => b.redstart_retrieval !== false).at(-1)
+    assert(/^\[Summary of the conversation so far\]/.test(turn3.messages[0].content), 'turn 3 was not compacted')
+    assert(lines.some((l) => l.startsWith('| 3 (compacted) |')), lines.join('\n'))
+    for (const bad of [['--discover', 'x'], ['--compact-at', '1']]) {
+      let e = null
+      try { mtc.parseArgs(bad) } catch (err) { e = err }
+      assert(e, `${bad.join(' ')} was accepted`)
+    }
   })
 
   await test('summary: pass rate and per-task passes', async () => {
@@ -918,8 +1197,50 @@ await test('a files-space fixture lands in the File System folder, reaches the c
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
-console.log('\n-- one run does not change the next --')
+await test('benchmarks H4: follow-ups are sent after each final reply, in one conversation, and their tools count for discovery', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-followups-'))
+  const checks = path.join(FIXTURES, 'checks.mjs').replace(/\\/g, '/')
+  fs.writeFileSync(path.join(dir, 'drift.json'), JSON.stringify({
+    id: 'drift', prompt: '[script:drift] Remember the word kestrel.', approve: 'all',
+    fixtures: [{ path: 'data.txt', content: fs.readFileSync(path.join(FIXTURES, 'data.txt'), 'utf8') }],
+    followUps: [{ prompt: 'Now, what is the secret in data.txt?', expectTools: ['read_file'] }],
+    check: `${checks}#saysSeven`,
+  }))
+  const before = nest.state.completionBodies.length
+  const r = await main(['--model-label', 'm', '--tasks', dir, '--gateway', `http://127.0.0.1:${port}`, '--out', path.join(dir, 'out'), '--quiet'], { log: () => {} })
+  const run = r.runs[0]
+  eq(run.verdict.pass, true, run.verdict.reason)
+  eq(run.events.filter((e) => e.type === 'follow_up').map((e) => e.prompt), ['Now, what is the secret in data.txt?'], 'the follow-up is logged')
+  const last = nest.state.completionBodies.at(-1).messages
+  eq(last.filter((m) => m.role === 'user').length, 2, 'both user messages in one conversation')
+  assert(last.some((m) => m.role === 'assistant' && m.content === 'Noted.'), 'the first reply was not kept before the follow-up')
+  eq(new Set(nest.state.completionBodies.slice(before).map((b) => b.redstart_conversation_id)).size <= 1, true, 'one conversation id')
+  eq([run.metrics.discovered, run.metrics.firstToolExpected], [null, null], 'turn 1 already had read_file, so nothing to discover; the first tool is not judged without the task\'s own expectTools')
+  // --runtime cannot send them.
+  const { cannotRun } = await import('./agent-bench/run.mjs')
+  eq(cannotRun({ followUps: [{ prompt: 'x' }] }, { runtime: true }), 'has follow-ups, which --runtime cannot send', 'runtime')
+  eq(cannotRun({ followUps: [{ prompt: 'x' }] }, { retrieval: 'off' }), null, 'retrieval off is fine')
+  // The loader.
+  for (const [raw, want] of [[{ followUps: 'x' }, /followUps must be an array/], [{ followUps: [{}] }, /followUps\[0\] needs a prompt/], [{ followUps: [{ prompt: 'x', expectTools: 'y' }] }, /expectTools must be an array/]]) {
+    const f = path.join(dir, 'bad.json')
+    fs.writeFileSync(f, JSON.stringify({ id: 'b', prompt: 'x', check: `${checks}#saysSeven`, ...raw }))
+    let e = null
+    try { await loadTask(f) } catch (err) { e = err }
+    assert(want.test(e?.message ?? ''), `got ${e?.message}`)
+  }
+  fs.rmSync(dir, { recursive: true, force: true })
+})
 
+await test('master plan 3.3: the loader refuses withhold, which went with per-turn selection', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-withhold-bad-'))
+  const checks = path.join(FIXTURES, 'checks.mjs').replace(/\\/g, '/')
+  const f = path.join(dir, 't.json')
+  fs.writeFileSync(f, JSON.stringify({ id: 'w', prompt: 'x', check: `${checks}#saysSeven`, expectTools: ['list_documents'], withhold: ['list_documents'] }))
+  let e = null
+  try { await loadTask(f) } catch (err) { e = err }
+  assert(/withhold was removed with per-turn selection/.test(e?.message ?? ''), `got ${e?.message}`)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
 await test('a memory a run saves is removed after it; ones already there are warned about, not deleted', async () => {
   // 2026-11-12: p1-skip-no-invent's memory_search found an earlier run's
   // "Wrote thank-you note to school bake sale volunteers".
@@ -953,6 +1274,37 @@ await test('a conversation an earlier, stopped bench left behind is deleted at t
   }
 })
 
+await test('--arms a,b,c: one run, one folder per arm, rotated per task, each arm checked and recorded', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-bench-arms-'))
+  const lines = []
+  const before = nest.state.completionBodies.length
+  const r = await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', dir, '--quiet', '--repeat', '2', '--arms', 'a,b,c'], { log: (s) => lines.push(s) })
+  eq(r.arms.map((a) => [a.arm, a.runs.length, path.basename(a.outDir)]), [['a', 2, 'arm_a'], ['b', 2, 'arm_b'], ['c', 2, 'arm_c']], 'per-arm results')
+  for (const a of r.arms) {
+    const meta = JSON.parse(fs.readFileSync(path.join(a.outDir, 'summary.json'), 'utf8')).meta
+    eq([meta.toolTextArm, meta.modelLabel], [a.arm, `m arm ${a.arm.toUpperCase()}`], 'meta names the arm')
+    assert(!meta.warnings.some((w) => /another tool-text arm/.test(w)), meta.warnings.join('\n'))
+    assert(a.runs.every((run) => run.events.filter((e) => e.type === 'tools_sent').every((e) => e.arm === a.arm)), `arm ${a.arm}: a turn without its arm`)
+  }
+  // Each run's first task request, in order: repeat 0 runs a, b, c; repeat 1 starts at b.
+  const order = nest.state.completionBodies.slice(before).filter((b) => b.stream !== false && b.messages.filter((m) => m.role === 'assistant').length === 0).map((b) => b.redstart_tool_text_arm)
+  eq(order, ['a', 'b', 'c', 'b', 'c', 'a'], 'rotation')
+  assert(lines.some((l) => /## Arms compared/.test(l)), 'no comparison table')
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+await test('--arms on a daemon that ignores them stops before the first task', async () => {
+  nest.state.ignoreArms = true
+  const before = nest.state.completionBodies.length
+  let err = null
+  try {
+    await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', outDir, '--quiet', '--arms', 'a,b'], { log: () => {} })
+  } catch (e) { err = e }
+  nest.state.ignoreArms = false
+  assert(/--arms: asked for arm a, the gateway composed arm \(none reported/.test(err?.message ?? ''), `got ${err?.message}`)
+  eq(nest.state.completionBodies.slice(before).filter((b) => b.stream !== false).length, 0, 'a task ran')
+})
+
 console.log('\n-- first-run failures say what to fix --')
 
 await test('a wrong API key: the error names the key and where to get a real one', async () => {
@@ -973,6 +1325,143 @@ await test('nothing listening: the error says Nest is not reachable and why that
     await main(['--model-label', 'm', '--tasks', path.join(FIXTURES, 'write-answer.json'), '--gateway', `http://127.0.0.1:${port}`, '--out', outDir, '--quiet'], { log: () => {} })
   } catch (e) { err = e }
   assert(/could not reach Nest at/.test(err?.message ?? '') && /model loaded/.test(err.message), `got ${err?.message}`)
+})
+
+console.log('\n-- discovery metrics (benchmarks H3) --')
+
+// One run's log, as bench.mjs writes it: a turn, its report, the reply, its calls.
+const turnEvents = (turn, { sent, content = '', calls = [] }) => [
+  { type: 'turn', turn },
+  ...(sent ? [{ type: 'tools_sent', turn, names: sent, retrieval: 'on' }] : []),
+  { type: 'assistant', content, toolCalls: calls.map(([name, args]) => ({ name, arguments: JSON.stringify(args ?? {}) })) },
+  ...calls.flatMap(([name, args, extra], i) => [
+    { type: 'tool_call', id: `t${turn}-${i}`, name, arguments: JSON.stringify(args ?? {}), argsProblem: null, ...(extra ?? {}) },
+    { type: 'tool_result', id: `t${turn}-${i}`, name, isError: false, text: '' },
+  ]),
+]
+
+await test('found through search, then called directly: discovered by pin, after one turn', async () => {
+  const events = [
+    ...turnEvents(1, { sent: ['run_python', 'search_tools'], calls: [['search_tools', { query: 'documents' }]] }),
+    ...turnEvents(2, { sent: ['run_python', 'search_tools', 'list_documents'], calls: [['list_documents']] }),
+    ...turnEvents(3, { sent: ['run_python', 'search_tools', 'list_documents'], content: 'There are 3.' }),
+  ]
+  const m = computeMetrics(events, { pass: true }, { expectTools: ['list_documents'] })
+  eq([m.searchCalls, m.discovered, m.discoveryPath, m.turnsToDiscovery, m.unavailableWithoutSearch], [1, true, 'pin', 1, false], 'search, found, path, turns, claim')
+  eq([m.firstTool, m.firstToolExpected, m.recovered], ['search_tools', false, true], 'a search first is a wrong first tool that recovers')
+})
+
+await test('through call_tool: the path, the target, and its bad arguments are counted', async () => {
+  const events = [
+    ...turnEvents(1, { sent: ['search_tools', 'describe_tool', 'call_tool'], calls: [['describe_tool', { name: 'list_documents' }]] }),
+    ...turnEvents(2, { sent: ['search_tools', 'describe_tool', 'call_tool'], calls: [
+      ['call_tool', { name: 'list_documents', arguments: { folder: 1 } }, { innerArgsProblem: 'folder: expected string' }],
+      ['call_tool', { name: 'list_documents', arguments: {} }],
+    ] }),
+  ]
+  const m = computeMetrics(events, { pass: true }, { expectTools: ['list_documents'] })
+  eq([m.describeCalls, m.callToolCalls, m.callToolBadArgs, m.discovered, m.discoveryPath, m.turnsToDiscovery], [1, 2, 1, true, 'call_tool', 1], 'counts and path')
+})
+
+await test('nothing to discover when turn 1 had the tool; not judged without expectTools or a report', async () => {
+  const had = computeMetrics(turnEvents(1, { sent: ['list_documents'], calls: [['list_documents']] }), { pass: true }, { expectTools: ['list_documents'] })
+  eq([had.discovered, had.recovered, had.firstToolExpected], [null, null, true], 'turn 1 had it')
+  const noExpect = computeMetrics(turnEvents(1, { sent: ['a'], calls: [['a']] }), { pass: true }, {})
+  eq(noExpect.discovered, null, 'no expectTools')
+  const noReport = computeMetrics(turnEvents(1, { calls: [['a']] }), { pass: true }, { expectTools: ['b'] })
+  eq(noReport.discovered, null, 'no report (an older Nest, or --runtime)')
+  const missed = computeMetrics(turnEvents(1, { sent: ['a'], content: 'Done.', calls: [['a']] }), { pass: false }, { expectTools: ['b'] })
+  eq([missed.discovered, missed.discoveryPath, missed.turnsToDiscovery], [false, null, null], 'there to find, not found')
+})
+
+await test('said unavailable without searching: counted before a search, not in the same reply as one, not after', async () => {
+  const claim = "I don't have a tool for listing documents."
+  const before = computeMetrics(turnEvents(1, { sent: ['a'], content: claim }), { pass: false }, {})
+  eq(before.unavailableWithoutSearch, true, 'a bare claim')
+  const same = computeMetrics(turnEvents(1, { sent: ['a', 'search_tools'], content: claim, calls: [['search_tools', { query: 'documents' }]] }), { pass: false }, {})
+  eq(same.unavailableWithoutSearch, false, 'the claim came with a search')
+  const after = computeMetrics([
+    ...turnEvents(1, { sent: ['a', 'search_tools'], calls: [['search_tools', { query: 'documents' }]] }),
+    ...turnEvents(2, { sent: ['a', 'search_tools'], content: claim }),
+  ], { pass: false }, {})
+  eq(after.unavailableWithoutSearch, false, 'it searched first')
+})
+
+await test('the unavailable phrases: tools and abilities, never a missing file', async () => {
+  const yes = [
+    "I don't have a tool for that.",
+    'I do not have access to the internet.',
+    "I can't run code here.",
+    'I’m unable to execute Python in this conversation.',
+    'Unfortunately the tool you need is not available to me.',
+    'There is no tool available for listing documents.',
+    'I cannot use tools to do this.',
+    "That function isn't available in this session.",
+  ]
+  const no = [
+    'returns.csv is not available, so I skipped step 2.',
+    "I can't find a file called report_apr.txt in the workspace.",
+    'The file does not exist.',
+    'I ran the code and the total is 4,011.',
+    'There are no documents that mention flights.',
+    '',
+  ]
+  const { saysUnavailable } = await import('./agent-bench/lib/metrics.mjs')
+  for (const s of yes) assert(saysUnavailable(s), `missed: ${s}`)
+  for (const s of no) assert(!saysUnavailable(s), `false positive: ${s}`)
+})
+
+await test('File System first: judged on workspace-fixture tasks only, from the registry', async () => {
+  const { FILE_SYSTEM_TOOLS } = await import('./agent-bench/lib/metrics.mjs')
+  assert(FILE_SYSTEM_TOOLS.has('read_text_file') && FILE_SYSTEM_TOOLS.has('list_directory') && !FILE_SYSTEM_TOOLS.has('read_document'), [...FILE_SYSTEM_TOOLS].join(','))
+  const ws = { fixtures: [{ path: 'sales.csv', content: '', space: 'workspace' }] }
+  eq(computeMetrics(turnEvents(1, { sent: ['a'], calls: [['read_text_file']] }), { pass: false }, ws).fsFirst, true, 'a File System tool first')
+  eq(computeMetrics(turnEvents(1, { sent: ['a'], calls: [['run_python']] }), { pass: true }, ws).fsFirst, false, 'run_python first')
+  eq(computeMetrics(turnEvents(1, { sent: ['a'], calls: [['read_text_file']] }), { pass: true }, { fixtures: [{ path: 'x', content: '', space: 'files' }] }).fsFirst, null, 'a files-space fixture is not an attachment')
+})
+
+await test('callToolArgsProblem: the named tool\'s schema, and unreadable or unknown calls', async () => {
+  const { callToolArgsProblem } = await import('./agent-bench/lib/bench.mjs')
+  const byName = new Map(TOOLS.map((t) => [t.name, t]))
+  eq(callToolArgsProblem(JSON.stringify({ name: 'read_file', arguments: { path: 'a' } }), byName), null, 'valid')
+  assert(callToolArgsProblem(JSON.stringify({ name: 'read_file', arguments: {} }), byName), 'a missing required key passed')
+  assert(/unknown tool/.test(callToolArgsProblem(JSON.stringify({ name: 'nope' }), byName)), 'an unknown tool passed')
+  assert(callToolArgsProblem('{', byName), 'unreadable arguments passed')
+})
+
+await test('the summary totals discovery, and an old runs.jsonl re-summarizes with zeros', async () => {
+  const { retrievalSummary } = await import('./agent-bench/lib/metrics.mjs')
+  const s = retrievalSummary([
+    { discovered: true, discoveryPath: 'pin', turnsToDiscovery: 1, searchCalls: 1 },
+    { discovered: false, unavailableWithoutSearch: true, searchCalls: 0 },
+    { firstTool: 'x' },
+  ])
+  eq([s.discovered, s.discoveryJudged, s.discoveredByPin, s.turnsToDiscovery, s.searchCalls, s.unavailableWithoutSearch], [1, 2, 1, 1, 1, 1], 'totals')
+})
+
+await test('trained habits: each is counted from the log, and none on a clean run', async () => {
+  const { misuseOf, misuseSummary } = await import('./agent-bench/lib/misuse.mjs')
+  const call = (name, args = {}) => ({ type: 'tool_call', name, arguments: JSON.stringify(args) })
+  const err = (name, text) => ({ type: 'tool_result', name, isError: true, text })
+  const bad = misuseOf([
+    { type: 'tools_sent', names: ['ask_user', 'use_skill', 'run_python', 'read_document', 'memory_search'] },
+    call('memory_search', { query: 'discount' }), call('web_search', { query: 'our rate' }),
+    call('run_python'), err('run_python', 'OSError: [Errno 138] emscripten does not support processes'),
+    call('read_document', { path: 'a.mjs' }), err('read_document', 'Failed to read document: Unsupported file type ".mjs"'),
+    call('use_skill', { name: 'ask_user' }),
+    { type: 'end', finalText: 'I need two things.\n\n**What is your hourly rate?**' },
+  ])
+  eq(bad, { proseAsk: true, lookups: 2, subprocess: 1, unsupportedRead: 1, skillAsTool: 1 }, 'every habit')
+  // Asking through the tool, then a closing question, is not a prose ask;
+  // use_skill with a real skill name is not a mix-up.
+  const ok = misuseOf([
+    { type: 'tools_sent', names: ['ask_user', 'use_skill'] }, call('ask_user', { question: 'Which?' }), call('use_skill', { name: 'weekly-report' }),
+    { type: 'end', finalText: 'Done. Anything else?' },
+  ])
+  eq(ok, { proseAsk: false, lookups: 0, subprocess: 0, unsupportedRead: 0, skillAsTool: 0 }, 'a clean run')
+  // call_tool's inner name counts like a direct call.
+  eq(misuseOf([call('call_tool', { name: 'web_fetch', arguments: { url: 'x' } })]).lookups, 1, 'through call_tool')
+  eq(misuseSummary([{ misuse: bad }, { misuse: ok }, {}]), { proseAskRuns: 1, lookups: 2, subprocess: 1, unsupportedRead: 1, skillAsTool: 1 }, 'totals; an old row counts 0')
 })
 
 fs.rmSync(outDir, { recursive: true, force: true })

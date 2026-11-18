@@ -174,20 +174,12 @@ export const BUILTIN_CAPABILITY_TOOL_NAMES = {
   // Served by @modelcontextprotocol/server-filesystem (see
   // filesystem-mcp-provider.mjs). Keep in sync with FILESYSTEM_TOOL_NAMES there.
   file_system: [
-    'read_file',
     'read_text_file',
-    'read_media_file',
-    'read_multiple_files',
     'write_file',
     'edit_file',
     'create_directory',
     'list_directory',
-    'list_directory_with_sizes',
-    'directory_tree',
-    'move_file',
     'search_files',
-    'get_file_info',
-    'list_allowed_directories',
     // Redstart-owned, NOT from the upstream server (which has no delete at all)
     // — served by fs-delete-tool.mjs. Listed here so an admin ban on
     // `file_system` strips it too, and so the permission gate's FS_TOOL_NAMES
@@ -338,6 +330,11 @@ export function expandDisabledToolIds(ids = []) {
 //   write       — creates or modifies local files
 //   destructive — deletes / irreversibly removes local data
 //   network     — makes an outbound request (whitelist/SSRF-governed separately)
+//   execute     — runs a program; its effect cannot be classified statically
+//                 (agent-runtime D16). No built-in has it since the Nest
+//                 terminal was removed (master plan Phase 2); kept for
+//                 Twig's terminal (D48). A plugin tool can never be given it
+//                 (plugin-registry VALID_TOOL_CLASSES).
 //
 // New tools MUST be classified here; classifyTool() defaults an unknown name to
 // 'read', which is intentionally the least-privileged bucket for the gate (it
@@ -349,6 +346,7 @@ export const TOOL_CLASS = {
   write: 'write',
   destructive: 'destructive',
   network: 'network',
+  execute: 'execute',
 }
 
 export const TOOL_CLASSES = {
@@ -356,12 +354,21 @@ export const TOOL_CLASSES = {
   // policy gate has already filtered, touches nothing, and leaves the machine
   // it runs on alone — 'read' is the honest class, stated rather than defaulted.
   search_tools: 'read',
+  // Its sibling: one tool's definition from the same post-policy catalog.
+  // A dispatcher. The tool it calls is checked as itself by callToolAs
+  // (policy, then the approval gate), and call_tool refuses any tool whose
+  // approval rule is not 'none', so this class grants nothing of its own.
+  call_tool: 'read',
   // Host-resolved (HOST_RESOLVED_TOOL_NAMES below). Nothing runs on this
   // machine: the client answers them in its own loop. 'read' is the honest
   // class, stated rather than defaulted, as for search_tools.
   ask_user: 'read',
   // Writes only the conversation's own plan, which the client stores.
   update_plan: 'read',
+  // Reads a saved skill the caller owns or their org's (skills-tool.mjs). It
+  // copies the skill's .py files into the conversation's own workspace,
+  // where only run_python (its own class and gate) can run them.
+  use_skill: 'read',
   // Web (egress governed by the whitelist/SSRF guard, tagged network here)
   web_fetch: 'network',
   web_search: 'network',
@@ -387,26 +394,18 @@ export const TOOL_CLASSES = {
   git_log: 'read',
   git_diff: 'read',
   // File System — @modelcontextprotocol/server-filesystem. Reads are read;
-  // create/overwrite/edit/move are writes. The upstream server exposes no
-  // delete tool, so deletion is Redstart-owned (fs-delete-tool.mjs) and is the
-  // one 'destructive'-class tool in the system — which is what makes the
-  // allowDestructive policy load-bearing. move_file removes its source but
-  // cannot overwrite an existing destination (upstream fails the op), so it's a
-  // write, not destructive.
-  read_file: 'read',
+  // create/overwrite/edit are writes. The upstream server exposes no delete
+  // tool, so deletion is Redstart-owned (fs-delete-tool.mjs) and is the one
+  // 'destructive'-class tool in the system — which is what makes the
+  // allowDestructive policy load-bearing. Six of upstream's tools are served
+  // (filesystem-mcp-provider.mjs FILESYSTEM_TOOL_NAMES); the rest are filtered
+  // out, and its callTool refuses them, so they need no class here.
   read_text_file: 'read',
-  read_media_file: 'read',
-  read_multiple_files: 'read',
   list_directory: 'read',
-  list_directory_with_sizes: 'read',
-  directory_tree: 'read',
   search_files: 'read',
-  get_file_info: 'read',
-  list_allowed_directories: 'read',
   write_file: 'write',
   edit_file: 'write',
   create_directory: 'write',
-  move_file: 'write',
   // The only destructive-class tool in Redstart. THIS LINE is what activates
   // the allowDestructive gate: evaluateToolPolicy refuses a destructive call
   // unless the admin has explicitly enabled it, at both tools/list and
@@ -474,7 +473,8 @@ export function classifyTool(name) {
 // tool, so the server refuses an unapproved delete from any client, chat-ui
 // or an API key (decided 2026-11-12). 'prompt' tools keep the client's card;
 // only their standing grants live on the server. ENFORCED_TOOLS names tools
-// enforced from the start whatever their rule: run_command first (Phase 4).
+// enforced from the start whatever their rule (none since the Nest terminal
+// was removed, master plan Phase 2).
 // ---------------------------------------------------------------------------
 
 export const APPROVAL_RULES = /** @type {const} */ (['none', 'prompt', 'always'])
@@ -489,7 +489,9 @@ export const ENFORCED_TOOLS = new Set()
 /** @param {string} cls */
 function ruleForClass(cls) {
   if (cls === 'destructive') return 'always'
-  if (cls === 'write') return 'prompt'
+  // execute: a decision unless a standing grant covers it. No Nest tool has
+  // the class today (Twig's terminal will, client-side: D48).
+  if (cls === 'write' || cls === 'execute') return 'prompt'
   return 'none'
 }
 
@@ -537,6 +539,10 @@ export function isApprovalEnforced(name) {
 // another server's fields.
 export const META_CAPABILITY_KEY = 'redstart/capability'
 export const META_CLASS_KEY = 'redstart/class'
+// true on a tool the catalog mode keeps out of the prompt's list (master plan
+// Phase 3.1): it is reached through search_tools and call_tool. Absent
+// otherwise, including whenever the catalog mode is off.
+export const META_DEFERRED_KEY = 'redstart/deferred'
 // A HUMAN LABEL for where a tool came from — "ComfyUI", not "comfyui_mcp".
 // Display only, and deliberately separate from META_CAPABILITY_KEY, which is
 // the id every policy decision keys on. A label is allowed to be ambiguous or
@@ -553,6 +559,11 @@ for (const [capability, names] of Object.entries(BUILTIN_CAPABILITY_TOOL_NAMES))
  * The capability id that produced a tool, or null for tools that belong to no
  * capability (the web tools, which the whitelist governs instead).
  */
+/** A built-in capability's display name ("File System"), or null (a plugin, or unknown). */
+export function builtinCapabilityName(id) {
+  return BUILTIN_CAPABILITIES.find((c) => c.id === id)?.name ?? null
+}
+
 export function capabilityForTool(name) {
   const builtin = BUILTIN_CAPABILITY_BY_TOOL_NAME.get(name)
   if (builtin) return builtin

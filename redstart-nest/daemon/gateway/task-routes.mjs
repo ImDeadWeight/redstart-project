@@ -8,7 +8,8 @@
 // task's owner (memoryKey) and its conversations scope must both be the
 // caller's, or the answer is 404, so ids cannot be probed.
 //
-//   POST /tasks                  { conversationId, content, generation?, maxTurns? }
+//   POST /tasks                  { conversationId, content, generation?, maxTurns?,
+//                                  clientTools?, toolLimits? }
 //                                start one (task-runner.mjs startTask)
 //   GET  /tasks[?conversationId=]  the caller's tasks, newest first
 //   GET  /tasks/:id              one task
@@ -26,13 +27,13 @@
 
 import { sendJson, readJsonBody } from './http-json.mjs'
 import * as store from '../task-store.mjs'
-import { startTask, answerTask, steerTask, cancelTask, publicTask } from '../task-runner.mjs'
+import { startTask, answerTask, steerTask, cancelTask, publicTask, registerClientTools, attachClient, clientResult } from '../task-runner.mjs'
 import { memoryKey } from '../memory-storage.mjs'
 
 const NOT_FOUND = { error: { message: 'Not found', type: 'not_found' } }
 const bad = (message) => ({ error: { message, type: 'invalid_request_error' } })
 const ONE = /^\/tasks\/([0-9a-f-]{36})$/
-const SUB = /^\/tasks\/([0-9a-f-]{36})\/(events|steer|answer|cancel)$/
+const SUB = /^\/tasks\/([0-9a-f-]{36})\/(events|steer|answer|cancel|client|client-result)$/
 /** A comment line this often keeps a proxy from closing an idle stream. */
 export const SSE_HEARTBEAT_MS = 25_000
 
@@ -83,6 +84,10 @@ export async function handleTaskRoute(req, res, urlPath, who) {
           content: body.content,
           generation: body.generation,
           maxTurns: Number.isInteger(body.maxTurns) ? body.maxTurns : undefined,
+          // Tools this client runs itself (master plan 7.1).
+          clientTools: body.clientTools,
+          // Nest tools the client switched off for this chat.
+          toolLimits: body.toolLimits,
           timeZone: who.timeZone ?? null,
         })
         if (!r.ok) { sendJson(res, r.status, r.status === 404 ? NOT_FOUND : bad(r.error)); return true }
@@ -113,6 +118,8 @@ export async function handleTaskRoute(req, res, urlPath, who) {
     const body = await readJsonBody(req)
     if (action === 'steer') { sendResult(res, steerTask(id, body?.content)); return true }
     if (action === 'answer') { sendResult(res, answerTask(id, body ?? {})); return true }
+    if (action === 'client') { sendResult(res, registerClientTools(id, body?.tools)); return true }
+    if (action === 'client-result') { sendResult(res, clientResult(id, body ?? {})); return true }
     return false
   } catch (err) {
     if (!res.headersSent) sendJson(res, 500, { error: { message: err.message, type: 'internal_error' } })
@@ -142,6 +149,12 @@ function streamEvents(req, res, task) {
   })
   let sent = lastSeen(req)
   const write = (e) => {
+    // A live event (tokens) has no seq and no id: line, so Last-Event-ID
+    // still names the last stored event (master plan 7.1).
+    if (e.live) {
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify(e)}\n\n`)
+      return
+    }
     if (e.seq <= sent || res.writableEnded) return
     sent = e.seq
     res.write(frame(e))
@@ -151,7 +164,9 @@ function streamEvents(req, res, task) {
   const buffered = []
   let replaying = true
   const off = store.subscribe(task.id, (e) => {
-    if (replaying) { buffered.push(e); return }
+    // Tokens from before the replay finished are not worth holding: the
+    // message they belong to arrives as a stored event.
+    if (replaying) { if (!e.live) buffered.push(e); return }
     write(e)
     if (e.type === 'status' && store.TERMINAL_STATES.includes(e.status)) end()
   })
@@ -162,7 +177,13 @@ function streamEvents(req, res, task) {
     off()
     if (!res.writableEnded) res.end()
   }
-  req.on('close', end)
+  // ?client=1: this stream is the run's executor for the client's tools
+  // (master plan 7.1). While one is open, a call to a client tool is sent
+  // here; when the last one closes, a waiting call is answered unavailable.
+  const detach = new URL(req.url, 'http://x').searchParams.get('client') === '1'
+    ? attachClient(task.id, (event) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify({ live: true, at: Date.now(), ...event })}\n\n`) })
+    : () => {}
+  req.on('close', () => { detach(); end() })
 
   for (const e of store.readEvents(task.id, sent)) write(e)
   replaying = false

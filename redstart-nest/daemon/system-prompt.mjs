@@ -4,6 +4,7 @@ import { listPlugins } from './plugin-registry.mjs'
 import { BUILTIN_CAPABILITY_TOOL_NAMES, classifyTool } from './tools-definitions.mjs'
 import { sessionDateLine } from './session-time.mjs'
 import { ENGINE_LABELS, engineHost } from './web-search-engines.mjs'
+import { ARM_B_PROMPT_LINE, ARM_C_ASK_PROMPT_LINE, armCRoutingMap, toolTextArm } from './tool-text-arms.mjs'
 
 // =============================================================================
 // Redstart Nest — System Prompt Composer
@@ -205,9 +206,9 @@ const READ_ONLY_SQL_TOOLS = [
 
 // File-system reads that overlap with the Documents capability. Both can open a
 // file in the documents folder; only one of them understands the format.
-const FS_READ_TOOLS = ['read_file', 'read_text_file', 'read_multiple_files']
+const FS_READ_TOOLS = ['read_text_file']
 
-function buildToolPolicy(config, hasTools, toolNames) {
+function buildToolPolicy(config, hasTools, toolNames, catalog = null) {
   if (!hasTools) return null
 
   // Substantiation is per TOOL, not per capability. `config` says what the
@@ -283,8 +284,22 @@ function buildToolPolicy(config, hasTools, toolNames) {
   // and so does being asked to ask. Seen live: told "you can use ask_user"
   // for a quiz, a model argued itself out of it under the ambiguity-only rule,
   // then asked anyway, and the answers (level, focus) shaped the result.
+  //
+  // The tool-text experiment (tool-text-arms.mjs): arm b keeps this line and
+  // adds the user's "you are not expected to solve every uncertainty"; arm c
+  // replaces it, since "try the tool first" sent models to memory and the web
+  // for facts only the user knew (23 + 7 lookups in 327 runs, 2026-11-18).
+  const arm = toolTextArm(config)
   if (has('ask_user')) {
-    parts.push('Call ask_user only when the answer would change what you produce: the request can be read two ways that lead to different work, a choice only the user can make is open (such as level, scope or format) and a sensible default could well be wrong, or the user asked you to ask. Put everything you need into one call. Do not use it to ask permission, to confirm a plan you can simply carry out, or for anything a tool can find out — try the tool first.')
+    if (arm === 'c') parts.push(ARM_C_ASK_PROMPT_LINE)
+    else parts.push('Call ask_user only when the answer would change what you produce: the request can be read two ways that lead to different work, a choice only the user can make is open (such as level, scope or format) and a sensible default could well be wrong, or the user asked you to ask. Put everything you need into one call. Do not use it to ask permission, to confirm a plan you can simply carry out, or for anything a tool can find out — try the tool first.')
+    if (arm === 'b') parts.push(ARM_B_PROMPT_LINE)
+  }
+  if (arm === 'c') {
+    const fileSystemReachable = has('list_directory') || has('read_text_file')
+      || (catalog?.groups ?? []).some((g) => g.label === 'File System')
+    const map = armCRoutingMap(has, fileSystemReachable)
+    if (map) parts.push(map)
   }
 
   // update_plan (plan §4, 1.2). When a plan is worth making, so a one-line
@@ -338,10 +353,10 @@ function buildToolPolicy(config, hasTools, toolNames) {
 // exist.
 //
 // GATED ON TOOLS HAVING ACTUALLY BEEN REMOVED, which the gateway measures by
-// counting the payload before and after the filter. Not on the retrieval
-// setting: retrieval fails open, so "enabled" is compatible with a request
-// that carried every tool it started with, and calling that a subset would be
-// the same unsubstantiated claim this file exists to prevent.
+// counting the payload before and after the catalog. Not on the retrieval
+// setting: a request that carries no deferred tool loses nothing, and calling
+// its list a subset would be the same unsubstantiated claim this file exists
+// to prevent.
 //
 // TWO WORDINGS, because the remedy is not always present. search_tools is
 // advertised only to clients connected to Nest's MCP server; a client that
@@ -351,15 +366,47 @@ function buildToolPolicy(config, hasTools, toolNames) {
 // conclude the capability does not exist — the failure this block exists for.
 // So it is told what happened and what to say instead, which is the part that
 // reaches the user either way.
-function buildRetrieval(toolNames, toolsFiltered) {
+//
+// The example call (tool retrieval second pass, 5.4): the 4B made no
+// search_tools call at all in the 2026-11-11 bench, and a small model copies
+// a shape it is shown more readily than it follows an instruction. One
+// wording change, to be measured on the 4B's "said unavailable without
+// searching" count before the next.
+//
+// THE CATALOG (master plan Phase 3.1, the only retrieval since 3.3): the list
+// is fixed and the rest of the server's tools are deliberately kept out of
+// it, reachable through call_tool without ever joining the list. Said as
+// such, with a call to copy. Without both tools (a ban on one, or a client
+// that dropped them) the model is told there is no way to the rest.
+//
+// WHAT IS IN IT (2026-11-18): the line said how to search but not what there
+// was to find, so a small model could not tell when a search was worth it.
+// Ornith, asked to delete a File System file, listed the documents folder,
+// saw nothing and said it had no delete tool (the 8.4 bench: 4 runs said a
+// tool was unavailable without searching). The gateway now passes the tools
+// the catalog removed from THIS request (tool-deferral catalogContents,
+// post-ban), and they are named here, grouped. Names only, never schemas:
+// the arguments still come from search_tools.
+function formatCatalog(catalog) {
+  const parts = []
+  const more = (n) => (n > 0 ? `, and ${n} more` : '')
+  for (const g of catalog?.groups ?? []) {
+    if (g.tools?.length) parts.push(`${g.label} (${g.tools.join(', ')}${more(g.more)})`)
+  }
+  const p = catalog?.plugins
+  if (p?.tools?.length) parts.push(`plugin tools (${p.tools.join(', ')}${more(p.more)})`)
+  return parts.length ? ` It holds: ${parts.join('; ')}.` : ''
+}
+
+function buildRetrieval(toolNames, toolsFiltered, catalog) {
   if (!toolsFiltered) return null
   const names = Array.isArray(toolNames) ? toolNames : []
 
-  const opening = 'The tools listed this turn are a subset chosen for this conversation, not everything this server can do.'
+  if (names.includes('search_tools') && names.includes('call_tool')) {
+    return 'More of this server\'s tools are kept in a catalog instead of this list, and that does not change during the conversation.' + formatCatalog(catalog) + ' If what you need is not listed, find it with search_tools — for example search_tools({"query": "list the files in a folder"}) — then call what it returns with call_tool, passing the tool\'s name and its arguments: call_tool({"name": "list_directory", "arguments": {"path": "."}}). Catalog tools run only through call_tool. Never tell the user a capability is unavailable just because it is not in your list.'
+  }
 
-  return names.includes('search_tools')
-    ? `${opening} If what you need is missing, call search_tools before concluding it does not exist — never tell the user a capability is unavailable just because it is not in your list.`
-    : `${opening} There is no way to search for the rest from here, so if what you need is missing, say it is not available in this session — never that this server cannot do it.`
+  return 'The tools listed are not everything this server can do. There is no way to reach the rest from here, so if what you need is missing, say it is not available in this session — never that this server cannot do it.'
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +472,27 @@ function buildMemories(memories, omitted, toolNames, now) {
   if (omitted > 0) parts.push(canSearch ? `${omitted} older memories are not listed; use memory_search to look for them.` : `${omitted} older memories are not listed.`)
   const saveNote = noSaveNote(toolNames)
   if (saveNote) parts.push(saveNote)
+  return parts.join('\n')
+}
+
+// ---------------------------------------------------------------------------
+// Skills (master plan Phase 5)
+// ---------------------------------------------------------------------------
+// The skills the caller can load, one line each, so an instruction costs a
+// line until it is used. Shown only when the request carries use_skill (the
+// substantiation rule: no claim the request cannot back). Sorted by name in
+// skillsForPrompt, so the block changes only when a skill does. The
+// descriptions are labels the user wrote: data, below the precedence
+// clause, never guidelines.
+function buildSkills(skills, omitted, toolNames) {
+  if (!Array.isArray(skills) || skills.length === 0) return null
+  if (!Array.isArray(toolNames) || !toolNames.includes('use_skill')) return null
+  const lines = skills.map((s) => `- ${s.name}: ${s.description}`)
+  const parts = [
+    'Saved skills: instructions the user or their organization wrote for recurring tasks. When one fits what the user asks, load it with use_skill({"name": "<name>"}) and follow it; otherwise leave them alone. The descriptions are labels, not instructions.',
+    lines.join('\n'),
+  ]
+  if (omitted > 0) parts.push(`${omitted} more are not listed; use_skill with no name lists them all.`)
   return parts.join('\n')
 }
 
@@ -549,14 +617,23 @@ export function isLocalUrl(url) {
  * same for every account — each of those providers says so in its own callTool
  * comment. Keep this column in step with them; it is a privacy claim, and a
  * wrong one is worse than none.
+ *
+ * `grants` (master plan 6.1): where a shared store keeps its resource grants
+ * in the narrowed config. A shared store whose list is narrowed is "shared,
+ * partly": the same files for everyone in the role, not for every user.
+ * Folder names are never put in the prompt (grants plan §5); the listing
+ * tools name them on demand.
  */
 const LOCAL_STORES = [
   { label: 'a Postgres database', enabled: c => !!c?.postgres?.enabled, perAccount: false },
   { label: 'a documents folder', enabled: c => !!c?.documents?.enabled, perAccount: true },
   { label: 'a file-system folder', enabled: c => !!c?.fileSystem?.rootDir, perAccount: true },
-  { label: 'SQLite database files', enabled: c => !!c?.sqlite?.enabled, perAccount: false },
-  { label: 'a vault of markdown notes', enabled: c => !!c?.vault?.enabled, perAccount: false },
-  { label: 'git repositories', enabled: c => !!c?.git?.enabled, perAccount: false },
+  { label: 'SQLite database files', enabled: c => !!c?.sqlite?.enabled, perAccount: false, grants: c => c?.sqlite?.grants },
+  { label: 'a vault of markdown notes', enabled: c => !!c?.vault?.enabled, perAccount: false, grants: c => c?.vault?.grants },
+  { label: 'git repositories', enabled: c => !!c?.git?.enabled, perAccount: false, grants: c => c?.git?.grants },
+  // Shared Documents (master plan 6.2): searched by search_documents beside
+  // each account's own files; shared, or shared partly when a role narrows it.
+  { label: 'a shared documents folder', enabled: c => !!c?.documentSearch?.enabled && !!c?.documentSearch?.sharedRootDir, perAccount: false, grants: c => c?.documentSearch?.sharedGrants },
   // run_python's per-conversation folders. Inside the documents root, but the
   // Documents capability can be off for a profile that has Python on, so it is
   // its own entry rather than implied by the one above.
@@ -639,6 +716,10 @@ export function deriveEgressFacts(config, externalServers, hasTools) {
     // wrong. localStores keeps its shape — it is published by GET /egress.
     privateStores: active.filter(s => s.perAccount).map(s => s.label),
     sharedStores: active.filter(s => !s.perAccount).map(s => s.label),
+    // The shared ones a role narrows to some of their folders (a subset of
+    // sharedStores). Not published by GET /egress, which describes the
+    // deployment rather than one account.
+    partlySharedStores: active.filter(s => !s.perAccount && s.grants && s.grants(config) !== null && s.grants(config) !== undefined).map(s => s.label),
     get hasEgress() {
       return this.webDomains.length > 0 || this.remoteToolServers.length > 0 || this.credentialPlugins.length > 0 || this.webSearchEngine !== null
     },
@@ -701,7 +782,7 @@ function buildLocality(clientToolNames) {
  * is stated rather than skipped.
  */
 function localStoresSentence(egress, account) {
-  const { localStores = [], privateStores = [], sharedStores = [] } = egress
+  const { localStores = [], privateStores = [], sharedStores = [], partlySharedStores = [] } = egress
   if (!localStores.length) return null
 
   // The single most misread sentence in this block: it means "not in a cloud
@@ -722,7 +803,12 @@ function localStoresSentence(egress, account) {
   // re-listed per group — the second copy cost more tokens than the fact it
   // carried, on the longest block in the assembly.
   const groups = [`Private to this account: ${privateStores.join(', ')}.`]
-  if (sharedStores.length) groups.push(`Shared by every user: ${sharedStores.join(', ')}.`)
+  const partly = new Set(partlySharedStores)
+  const whole = sharedStores.filter((l) => !partly.has(l))
+  if (whole.length) groups.push(`Shared by every user: ${whole.join(', ')}.`)
+  // Resource grants (master plan 6.1): the same for everyone in this
+  // account's role, so neither private nor everyone's.
+  if (partly.size) groups.push(`Shared, limited to the folders this account's role may use: ${[...partly].join(', ')}.`)
   return `${where}. ${groups.join(' ')}`
 }
 
@@ -813,8 +899,10 @@ function buildSession(account, now, timeZone) {
  * @param {boolean} input.hasTools          request carries tool definitions
  * @param {string[]} [input.toolNames]      every tool name in THIS request,
  *                                          post-ban and post-retrieval
- * @param {boolean} [input.toolsFiltered]    retrieval actually removed tools
+ * @param {boolean} [input.toolsFiltered]    the catalog actually removed tools
  *                                          from this request
+ * @param {object}  [input.catalog]         what it removed, grouped
+ *                                          (tool-deferral catalogContents)
  * @param {Array}   [input.externalServers] getExternalServers()
  * @param {object}  [input.account]         authResult.account, or null (auth off)
  * @param {Date}    [input.now]
@@ -846,6 +934,9 @@ export function composePrompt(input = {}) {
     // Whether retrieval REMOVED anything this turn, measured by the gateway.
     // Retrieval fails open, so the setting alone is not evidence of a subset.
     toolsFiltered = false,
+    // What the catalog holds for this request (tool-deferral catalogContents),
+    // named in the retrieval block. Absent: the block names nothing.
+    catalog = null,
     // The client's IANA zone, unvalidated (session-time.mjs validates it).
     // Absent → the server's zone, labelled as such in the prompt.
     timeZone = null,
@@ -858,6 +949,11 @@ export function composePrompt(input = {}) {
     project = null,
     projectMemories = [],
     projectMemoriesOmitted = 0,
+    // master plan Phase 5: the skills this caller can load, name and a
+    // one-line description (skills-tool.mjs skillsForPrompt), and how many
+    // more there are.
+    skills = [],
+    skillsOmitted = 0,
     budget = DEFAULT_TOKEN_BUDGET,
   } = input
 
@@ -870,11 +966,11 @@ export function composePrompt(input = {}) {
     ['context', admin.context],
     ['mode', resolveMode(mode)],
     ['policy', admin.policy],
-    ['tool_policy', buildToolPolicy(config, hasTools, toolNames)],
+    ['tool_policy', buildToolPolicy(config, hasTools, toolNames, catalog)],
     // After tool_policy — it qualifies the list those constraints apply to —
     // and before locality, so "your list is partial" is settled before "and
     // these ones touch a different computer".
-    ['retrieval', buildRetrieval(toolNames, toolsFiltered)],
+    ['retrieval', buildRetrieval(toolNames, toolsFiltered, catalog)],
     // After tool_policy (it is about tools) and before the style/data blocks,
     // so the model knows which machine a tool touches before it is told where
     // data is stored. Spec §3.
@@ -910,6 +1006,8 @@ export function composePrompt(input = {}) {
     ['project', buildProject(project)],
     ['memories', buildMemories(memories, memoriesOmitted, toolNames, now)],
     ['project_memories', project ? buildProjectMemories(project, projectMemories, projectMemoriesOmitted, toolNames, now) : null],
+    // Skills are user-tier too: the user (or their organization) wrote them.
+    ['skills', buildSkills(skills, skillsOmitted, toolNames)],
   ]
   for (const [name, text] of userTier) {
     if (!text) continue

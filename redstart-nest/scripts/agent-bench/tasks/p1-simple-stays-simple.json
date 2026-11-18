@@ -10,6 +10,7 @@
     }
   ],
   "approve": "all",
+  "expectTools": ["run_python", "read_document"],
   "check": "checks/phase1.mjs#answeredWithoutAskingOrPlanning",
   "notes": "A guard: one clear question with one answer. Fails if the model calls ask_user or update_plan, which would mean the Phase 1 tools cost a turn where they add nothing."
 }

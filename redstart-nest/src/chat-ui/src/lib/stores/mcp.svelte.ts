@@ -337,6 +337,16 @@ class MCPStore {
 		return this.tools.getToolServer(toolName);
 	}
 
+	/** Every tool Nest's own MCP servers list. */
+	getNestToolNames(): Set<string> {
+		return this.toolOps.getNestToolNames();
+	}
+
+	/** Is this tool one of Nest's own (its built-in MCP server)? */
+	isNestTool(toolName: string): boolean {
+		return this.toolOps.isNestTool(toolName);
+	}
+
 	/** Public accessor for a tool's provenance, by name. See redstartMeta. */
 	getNestToolMeta(toolName: string): {
 		capability: string | null;
@@ -344,6 +354,11 @@ class MCPStore {
 		source: string | null;
 	} {
 		return this.toolOps.getNestToolMeta(toolName);
+	}
+
+	/** Nest tools kept out of the model's list by the catalog mode. */
+	getNestDeferredToolNames(): Set<string> {
+		return this.toolOps.getNestDeferredToolNames();
 	}
 
 	getNestToolNamesForCapability(capability: string): Set<string> {
@@ -386,14 +401,18 @@ class MCPStore {
 	 *
 	 */
 
-
 	async getResourceCompletions(
 		serverName: string,
 		uriTemplate: string,
 		argumentName: string,
 		argumentValue: string
 	): Promise<{ values: string[]; total?: number; hasMore?: boolean } | null> {
-		return this.resources.getResourceCompletions(serverName, uriTemplate, argumentName, argumentValue);
+		return this.resources.getResourceCompletions(
+			serverName,
+			uriTemplate,
+			argumentName,
+			argumentValue
+		);
 	}
 
 	async readResourceByUri(serverName: string, uri: string): Promise<MCPResourceContent[] | null> {

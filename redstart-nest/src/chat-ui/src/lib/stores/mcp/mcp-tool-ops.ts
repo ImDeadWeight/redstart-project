@@ -62,6 +62,25 @@ export class MCPToolOps {
 		};
 	}
 
+	/** Every tool Nest's own MCP servers list, deferred ones included. */
+	getNestToolNames(): Set<string> {
+		const names = new Set<string>();
+		for (const [serverId, connection] of this.conn.connections) {
+			if (!serverId.startsWith(NEST_MCP_SERVER_ID_PREFIX)) continue;
+			for (const tool of connection.tools) names.add(tool.name);
+		}
+		return names;
+	}
+
+	/** Is this tool served by Nest's own MCP server? (Not a third party's.) */
+	isNestTool(toolName: string): boolean {
+		for (const [serverId, connection] of this.conn.connections) {
+			if (!serverId.startsWith(NEST_MCP_SERVER_ID_PREFIX)) continue;
+			if (connection.tools.some((t) => t.name === toolName)) return true;
+		}
+		return false;
+	}
+
 	/** Public accessor for a tool's provenance, by name. See redstartMeta. */
 	getNestToolMeta(toolName: string): {
 		capability: string | null;
@@ -90,6 +109,23 @@ export class MCPToolOps {
 		for (const [serverId, connection] of this.conn.connections) {
 			for (const tool of connection.tools) {
 				if (this.redstartMeta(serverId, tool).capability === capability) names.add(tool.name);
+			}
+		}
+		return names;
+	}
+
+	/**
+	 * Nest tools its catalog mode keeps out of the model's list (master plan
+	 * Phase 3.1, `_meta['redstart/deferred']`). Read from Nest's own servers
+	 * only, like redstartMeta: another server cannot hide a tool from a note.
+	 */
+	getNestDeferredToolNames(): Set<string> {
+		const names = new Set<string>();
+		for (const [serverId, connection] of this.conn.connections) {
+			if (!serverId.startsWith(NEST_MCP_SERVER_ID_PREFIX)) continue;
+			for (const tool of connection.tools) {
+				if ((tool as { _meta?: Record<string, unknown> })._meta?.['redstart/deferred'] === true)
+					names.add(tool.name);
 			}
 		}
 		return names;
@@ -136,7 +172,8 @@ export class MCPToolOps {
 		const serverName = this.tools.toolsIndex.get(toolName);
 		if (!serverName) throw new Error(`Unknown tool: ${toolName}`);
 
-		if (!this.conn.connections.get(serverName)) throw new Error(`Server "${serverName}" is not connected`);
+		if (!this.conn.connections.get(serverName))
+			throw new Error(`Server "${serverName}" is not connected`);
 
 		const args = parseToolArguments(toolCall.function.arguments);
 
@@ -155,7 +192,9 @@ export class MCPToolOps {
 		if (!context?.approvedByPerson || !serverName.startsWith(NEST_MCP_SERVER_ID_PREFIX)) {
 			console.warn(
 				`[approvals] Nest asked for an approval for "${toolName}", not answered: ` +
-					(context?.approvedByPerson ? `server "${serverName}" is not Nest's` : 'the card was not approved for this call')
+					(context?.approvedByPerson
+						? `server "${serverName}" is not Nest's`
+						: 'the card was not approved for this call')
 			);
 			return first;
 		}
@@ -185,7 +224,11 @@ export class MCPToolOps {
 		const connection = this.conn.connections.get(serverName);
 		if (!connection) throw new Error(`Server "${serverName}" is not connected`);
 		try {
-			return await MCPService.callTool(connection, { name: toolName, arguments: args, _meta }, signal);
+			return await MCPService.callTool(
+				connection,
+				{ name: toolName, arguments: args, _meta },
+				signal
+			);
 		} catch (error) {
 			// Session expired (server restarted) - reconnect and retry once
 			if (MCPService.isSessionExpiredError(error)) {
@@ -194,7 +237,11 @@ export class MCPToolOps {
 				const newConnection = this.conn.connections.get(serverName);
 				if (!newConnection) throw new Error(`Failed to reconnect to "${serverName}"`);
 
-				return MCPService.callTool(newConnection, { name: toolName, arguments: args, _meta }, signal);
+				return MCPService.callTool(
+					newConnection,
+					{ name: toolName, arguments: args, _meta },
+					signal
+				);
 			}
 
 			throw error;

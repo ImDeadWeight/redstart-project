@@ -10,6 +10,7 @@
     }
   ],
   "approve": "all",
+  "expectTools": ["run_python", "read_document"],
   "check": "checks/phase1.mjs#fiveSteps",
   "notes": "Solvable today. Step 4 is the one a model forgets; update_plan and the completion check should help."
 }

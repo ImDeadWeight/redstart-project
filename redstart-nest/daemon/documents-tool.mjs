@@ -39,10 +39,21 @@ const FORMATS = [
   'python', 'javascript', 'powershell',
 ]
 const TOOL_NAMES = ['create_document', 'read_document', 'list_documents']
+// Code, config and data files are text (2026-11-18): Ornith's runs hit 103
+// "Unsupported file type .mjs" errors reading a small Node project, a file
+// any reader of text could open. extractText also reads an unlisted file
+// that sniffs as UTF-8 text (looksLikeText). Never key or credential files:
+// .env, .pem and .key are not listed, and stay unlisted.
+const CODE_AND_CONFIG_EXTENSIONS = [
+  '.mjs', '.cjs', '.jsx', '.ts', '.tsx', '.css', '.scss', '.sql', '.sh', '.bat',
+  '.java', '.c', '.h', '.cpp', '.cs', '.go', '.rs', '.rb', '.php', '.r',
+  '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.tsv', '.rst', '.tex',
+]
 const READABLE_EXTENSIONS = [
   '.pdf', '.docx', '.xlsx',
   '.txt', '.md', '.csv', '.json', '.html',
-  '.py', '.js', '.ps1',
+  '.py', '.js', '.ps1', '.log',
+  ...CODE_AND_CONFIG_EXTENSIONS,
 ]
 
 // Format -> file extension.
@@ -81,7 +92,52 @@ const EXTENSION_FORMATS = {
 // files-api.mjs — an extension listed there but missing here fails the preview.
 const PLAIN_TEXT_EXTENSIONS = new Set([
   '.txt', '.md', '.csv', '.json', '.html', '.py', '.js', '.ps1', '.log',
+  ...CODE_AND_CONFIG_EXTENSIONS,
 ])
+
+/** Bytes sniffed by looksLikeText. */
+const SNIFF_BYTES = 64 * 1024
+/**
+ * Never sniffed into text: key and credential files, and binary types by
+ * extension (a stub .exe of two ASCII bytes would otherwise pass the sniff).
+ *
+ * Matched against the BASENAME, anchored at its start. The earlier form took
+ * the whole path with `(^|[\\/])` in front, so a match could begin after every
+ * separator and `.*` rescanned the rest each time — quadratic in the number of
+ * path segments (CodeQL js/polynomial-redos). One start position makes it
+ * linear, and a basename is at most 255 characters. It also stops treating a
+ * file inside a folder named `.env.d/` as a key file, which the old form did
+ * by accident (`.env(\..*)?` ran on past the separator).
+ */
+const NEVER_SNIFFED = /^(\.env(\..*)?|.*\.(pem|key|p12|pfx|kdbx|exe|dll|so|dylib|bin|msi|zip|gz|7z|rar|tar|png|jpe?g|gif|webp|bmp|ico|mp3|mp4|wav|mov|avi|sqlite|db|wasm|class|jar|pyc|o|a|lib))$/i
+
+/**
+ * An unlisted file read as text when its first 64 KB has no NUL byte and is
+ * valid UTF-8 (a README with no extension, a Makefile, a .gitignore). Binary
+ * files have NULs or invalid sequences almost at once.
+ */
+function looksLikeText(filePath) {
+  if (NEVER_SNIFFED.test(path.basename(filePath))) return false
+  let fd
+  try {
+    fd = fs.openSync(filePath, 'r')
+    const buf = Buffer.alloc(SNIFF_BYTES)
+    const n = fs.readSync(fd, buf, 0, SNIFF_BYTES, 0)
+    const head = buf.subarray(0, n)
+    if (head.includes(0)) return false
+    // A multi-byte character cut at the 64 KB edge is not a failure: trim to
+    // the last complete sequence before decoding strictly.
+    let end = head.length
+    while (end > 0 && end > head.length - 4 && (head[end - 1] & 0xc0) === 0x80) end--
+    if (end > 0 && head[end - 1] >= 0xc0) end--
+    new TextDecoder('utf-8', { fatal: true }).decode(n < SNIFF_BYTES ? head : head.subarray(0, end))
+    return true
+  } catch {
+    return false
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd)
+  }
+}
 
 // Models routinely wrap code in a markdown fence even when asked for a raw
 // file. Written verbatim that produces a .py whose first line is ```python — a
@@ -329,8 +385,24 @@ function slugify(title) {
   return base || 'document'
 }
 
-function resolveOutputPath(outputDir, title, extension) {
-  const slug = slugify(title)
+/**
+ * The stem of a file name the caller asked for (2026-11-18), or null: the
+ * base name only (no folder survives), its extension dropped (the format
+ * decides it), every character outside letters, digits, "." "_" "-" turned
+ * into "-". Unlike slugify it keeps case and underscores, so "quote_discounted"
+ * stays quote_discounted. Containment is still resolveWithinRoot's, below.
+ */
+function requestedStem(filename) {
+  if (typeof filename !== 'string' || !filename.trim()) return null
+  const base = path.basename(filename.trim().replace(/\\/g, '/'))
+  const ext = path.extname(base)
+  const stem = (EXTENSION_FORMATS[ext.slice(1).toLowerCase()] ? base.slice(0, -ext.length) : base)
+    .replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+|[.-]+$/g, '')
+  return stem || null
+}
+
+function resolveOutputPath(outputDir, title, extension, stem = null) {
+  const slug = stem ?? slugify(title)
   let filename = `${slug}.${extension}`
   let n = 2
   while (fs.existsSync(path.join(outputDir, filename))) {
@@ -402,7 +474,8 @@ export async function extractText(filePath) {
       await parser.destroy?.()
     }
   }
-  throw new Error(`Unsupported file type "${extension}" — readable types: ${READABLE_EXTENSIONS.join(', ')}`)
+  if (looksLikeText(filePath)) return fs.readFileSync(filePath, 'utf8')
+  throw new Error(`Unsupported file type "${extension}": not a text file, and not .pdf, .docx or .xlsx`)
 }
 
 const isFile = (p) => fs.existsSync(p) && fs.statSync(p).isFile()
@@ -502,7 +575,7 @@ export function toolDefs(cfg) {
       name: 'create_document',
       description:
         'Create a new document, data file, or script and save it to the local documents folder, where the user can download it. ' +
-        'Takes exactly three arguments: title, content, format. There is NO file_path or filename argument — the file name is derived from title, and the folder is fixed by the server. ' +
+        'Arguments: title, content, format, and optionally filename. Give filename when the user named the file (e.g. "thanks.md"); otherwise the name comes from title. There is no path argument: the folder is fixed by the server. ' +
         'The documents folder is a SEPARATE store from the File System capability: read it back with read_document, not read_text_file, and do not expect list_directory to show it. ' +
         'For the prose formats (markdown, docx, pdf) format content with simple markdown: "# Heading", "## Subheading", "- bullet", blank lines between paragraphs, ' +
         'and markdown pipe tables ("| A | B |" then "| --- | --- |" then one line per row) which are rendered as real tables in .docx and .pdf. ' +
@@ -514,13 +587,14 @@ export function toolDefs(cfg) {
           title: { type: 'string', description: 'Document title — also used to name the file. Do not include a path or extension.' },
           content: { type: 'string', description: 'Full body of the file. For the prose formats, markdown text — include every row of any table here. For the source and data formats, the raw file contents, written out verbatim.' },
           format: { type: 'string', enum: FORMATS, description: `Output file format — one of: ${FORMATS.join(', ')}` },
+          filename: { type: 'string', description: 'Optional: the file name to save under, such as "thanks.md" or "quote_discounted.csv". A name only, no folder; the extension follows format.' },
         },
         required: ['title', 'content', 'format'],
       },
     },
     {
       name: 'read_document',
-      description: `Read the text content of a document, data file, or script (${READABLE_EXTENSIONS.join(', ')}) in your documents folder on the Redstart server — including anything create_document just wrote. This is a SEPARATE store from the File System capability, so use this rather than read_text_file for documents. Spreadsheets are rendered as one text table per sheet. Long documents are returned in chunks — follow the offset instructions at the end of a truncated result to read more.`,
+      description: `Read a file in your documents folder on the Redstart server, or attached to this conversation: any text file (notes, data, code, config) plus .pdf, .docx and .xlsx — including anything create_document just wrote. This is a SEPARATE store from the File System capability, so use this rather than read_text_file for documents. Spreadsheets are rendered as one text table per sheet. Long documents are returned in chunks — follow the offset instructions at the end of a truncated result to read more.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -532,7 +606,11 @@ export function toolDefs(cfg) {
     },
     {
       name: 'list_documents',
-      description: `List the readable documents, data files, and scripts (${READABLE_EXTENSIONS.join(', ')}) in your documents folder on the Redstart server, with sizes.`,
+      // The File System sentence (2026-11-18): asked to delete a file in the
+      // File System folder, Ornith listed this folder twice, did not see it,
+      // and gave up ("I don't have a tool to delete files"). read_document and
+      // create_document already said the stores are separate; this one did not.
+      description: `List the files in your documents folder on the Redstart server that read_document can read (text, code, data, .pdf, .docx, .xlsx), with sizes. This is not the File System folder: a file there does not show up here, and reading, writing, moving or deleting it takes the File System tools (list_directory, read_text_file, write_file, delete_file).`,
       inputSchema: { type: 'object', properties: {} },
     },
   ]
@@ -597,6 +675,11 @@ export async function callTool(name, args, cfg, ctx) {
   }
 
   let { title, content, format } = args || {}
+  // A file name asked for alongside a title names the file (2026-11-18):
+  // asked to save thanks.md, models titled the note "Thank-you note to
+  // volunteers", got thank-you-note-to-volunteers.md, and told the user it was
+  // thanks.md (5 runs). Read before the no-title branch below reuses it.
+  const stem = title ? requestedStem(args?.filename ?? args?.fileName) : null
 
   // Models overwhelmingly want to name the output file, and reach for
   // filename/file_path/path to do it even though the schema says title. The
@@ -644,8 +727,8 @@ export async function callTool(name, args, cfg, ctx) {
   // Models frequently invent a file_path/filename argument for this tool. The
   // error a retry sees has to name the real arguments, or the model just
   // repeats the same malformed call.
-  const USAGE = 'create_document takes exactly: title (string), content (markdown string), format (one of: ' +
-    `${FORMATS.join(', ')}). There is no file_path or filename argument — the file name comes from title.`
+  const USAGE = 'create_document takes: title (string), content (string), format (one of: ' +
+    `${FORMATS.join(', ')}), and optionally filename (a name such as "thanks.md"; otherwise the name comes from title). There is no path argument.`
   if (!title || typeof title !== 'string') {
     return { isError: true, content: [{ type: 'text', text: `Missing required argument: title. ${USAGE}` }] }
   }
@@ -659,7 +742,7 @@ export async function callTool(name, args, cfg, ctx) {
   try {
     fs.mkdirSync(docCfg.outputDir, { recursive: true })
     const extension = FORMAT_EXTENSIONS[format]
-    const outputPath = resolveOutputPath(docCfg.outputDir, title, extension)
+    const outputPath = resolveOutputPath(docCfg.outputDir, title, extension, stem)
 
     if (VERBATIM_FORMATS.has(format)) {
       fs.writeFileSync(outputPath, stripCodeFence(content), 'utf8')

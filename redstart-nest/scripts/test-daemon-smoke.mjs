@@ -148,7 +148,7 @@ const post = (p, body, token) => fetch(base + p, {
   body: JSON.stringify(body),
 })
 // The dispatcher wants { args: [...] } — a bare array is refused, which is
-// the same envelope src/api/http.ts sends.
+// the same envelope src/launcher/api/http.ts sends.
 const callMethod = (channel, args, token) =>
   post('/admin/api/' + channel.replace(':', '/'), { args }, token)
 
@@ -326,7 +326,7 @@ try {
     const controller = new AbortController()
     // fetch() + a stream reader, not EventSource — the listener authenticates
     // on the Authorization header only, which native EventSource cannot send.
-    // That is the same thing src/api/http.ts does, and this is the first test
+    // That is the same thing src/launcher/api/http.ts does, and this is the first test
     // that proves it works against the real listener over a real socket.
     const res = await fetch(`${base}/admin/events`, {
       headers: { Authorization: `Bearer ${ownerToken}` },

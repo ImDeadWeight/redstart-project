@@ -223,6 +223,39 @@ await test('read_document opens a file attached to the caller\'s conversation by
   }
 })
 
+await test('read_document reads code and unlisted text; never a key file or a binary (2026-11-18)', async () => {
+  // Ornith: 103 "Unsupported file type .mjs" errors on a small Node project.
+  const ws = path.join(resolveUserRoot(dirs.docs, ALICE, { create: true }), 'chats', 'conv-alice-3')
+  fs.mkdirSync(ws, { recursive: true })
+  fs.writeFileSync(path.join(ws, 'math.mjs'), 'export const add = (a, b) => a + b\n')
+  fs.writeFileSync(path.join(ws, 'Makefile'), 'all:\n\techo héllo\n')
+  fs.writeFileSync(path.join(ws, '.env'), 'API_KEY=sk-should-not-read\n')
+  fs.writeFileSync(path.join(ws, 'server.pem'), '-----BEGIN PRIVATE KEY-----\n')
+  fs.writeFileSync(path.join(ws, 'blob.bin'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0xff]))
+  const inConv = { account: ALICE, conversationId: 'conv-alice-3' }
+  const read = async (p) => documentsTool.callTool('read_document', { path: p }, docsCfg, inConv)
+  assert(textOf(await read('math.mjs')).includes('export const add'), `.mjs not read: ${textOf(await read('math.mjs'))}`)
+  assert(textOf(await read('Makefile')).includes('héllo'), 'an unlisted UTF-8 text file was not read')
+  fs.writeFileSync(path.join(ws, 'stub.exe'), 'MZ')
+  for (const p of ['.env', 'server.pem', 'blob.bin', 'stub.exe']) {
+    const res = await read(p)
+    assert(res?.isError && /not a text file/.test(textOf(res)), `${p} was read: ${textOf(res)}`)
+  }
+})
+
+await test('create_document saves under the filename asked for, inside the caller\'s folder only (2026-11-18)', async () => {
+  const make = (args) => documentsTool.callTool('create_document', { content: 'x', format: 'markdown', ...args }, docsCfg, ctx(ALICE))
+  const root = resolveUserRoot(dirs.docs, ALICE, { create: true })
+  const saved = async (args) => textOf(await make(args)).match(/\[FILE: ([^\]]+)\]/)?.[1]
+  eq(await saved({ title: 'Thank-you note to volunteers', filename: 'thanks.md' }), 'thanks.md', 'filename beside a title')
+  eq(await saved({ title: 'Quote', filename: 'quote_discounted', format: 'csv' }), 'quote_discounted.csv', 'case and underscores kept, extension from format')
+  eq(await saved({ title: 'No name given' }), 'no-name-given.md', 'no filename: from the title, as before')
+  for (const evil of ['../../bob/stolen.md', '..\\..\\escape.md', '/etc/passwd']) {
+    const name = await saved({ title: 't', filename: evil })
+    assert(name && !name.includes('..') && !name.includes('/') && fs.existsSync(path.join(root, name)), `"${evil}" was saved as ${name}`)
+  }
+})
+
 await test('🔍 the conversation fallback never reaches another account\'s workspace', async () => {
   // Bob sends Alice's conversation id. mcp-server.mjs would have refused it
   // (verifiedConversationId); even past that check, the path is resolved in
@@ -287,7 +320,7 @@ await test('a File System search that finds nothing names the conversation\'s at
   assert(out.includes('alice-secret-plan.md, readings.csv, sub/notes.txt'), `names: ${out}`)
   assert(out.includes('read_document("alice-secret-plan.md")') && out.includes('run_python'), `tools: ${out}`)
   // An empty listing and an empty tree, as they arrive.
-  for (const [name, empty] of [['list_directory', '.'], ['list_directory_with_sizes', ''], ['directory_tree', '[]']]) {
+  for (const [name, empty] of [['list_directory', '.'], ['search_files', 'No matches found']]) {
     assert(textOf(withEmptyLookHint(name, ok(empty), cfg, inConv)).includes('readings.csv'), `${name} "${empty}" got no hint`)
   }
 
@@ -662,6 +695,77 @@ await test('an upload does not silently overwrite an existing file', async () =>
 await test('an empty upload is refused', async () => {
   const res = await upload(bobToken, 'empty.txt', '')
   assert(res.status === 400, `expected 400, got ${res.status}`)
+})
+
+// ---------------------------------------------------------------------------
+// Surface 4 — the shared space (Shared Documents, master plan 6.2)
+// ---------------------------------------------------------------------------
+
+console.log('\n-- surface 4: the shared space --')
+
+const sharedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-shared-space-'))
+fs.mkdirSync(path.join(sharedRoot, 'finance', 'q1'), { recursive: true })
+fs.mkdirSync(path.join(sharedRoot, 'hr'), { recursive: true })
+fs.writeFileSync(path.join(sharedRoot, 'finance', 'q1', 'budget.md'), 'shared-budget-text')
+fs.writeFileSync(path.join(sharedRoot, 'hr', 'pay.md'), 'shared-pay-text')
+fs.writeFileSync(path.join(sharedRoot, 'top.md'), 'shared-top-text')
+const withSharedSpace = (sharedGrants) => updateGatewayConfig({
+  documents: { enabled: true, outputDir: dirs.docs },
+  fileSystem: { enabled: true, rootDir: dirs.fs },
+  documentSearch: { enabled: true, documentsRoot: dirs.docs, sharedRootDir: sharedRoot, ...(sharedGrants === undefined ? {} : { sharedGrants }) },
+  webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 },
+})
+
+await test('🔒 the shared space is listed read-only, browsable and previewable, and refuses every write', async () => {
+  withSharedSpace()
+  const spaces = await (await api(bobToken, '/files/spaces')).json()
+  const shared = spaces.spaces.find((s) => s.id === 'shared')
+  assert(shared?.readOnly === true, `spaces: ${JSON.stringify(spaces)}`)
+  const list = await (await api(bobToken, '/files/list?space=shared&path=.')).json()
+  assert(list.entries.map((e) => e.name).sort().join() === 'finance,hr,top.md', JSON.stringify(list))
+  const prev = await api(bobToken, '/files/preview?space=shared&path=finance/q1/budget.md')
+  assert(prev.status === 200 && /shared-budget-text/.test(JSON.stringify(await prev.json())), `preview ${prev.status}`)
+  for (const [p, body] of [['/files/mkdir', { space: 'shared', path: 'new' }], ['/files/rename', { space: 'shared', from: 'top.md', to: 'x.md' }], ['/files/delete', { space: 'shared', path: 'top.md' }]]) {
+    const r = await postJson(bobToken, p, body)
+    assert(r.status === 403, `${p} on the shared space: ${r.status}`)
+  }
+  const up = await api(bobToken, '/files/upload?space=shared&path=.&name=x.txt', { method: 'POST', body: 'x' })
+  assert(up.status === 403, `upload to the shared space: ${up.status}`)
+  assert(fs.existsSync(path.join(sharedRoot, 'top.md')) && !fs.existsSync(path.join(sharedRoot, 'new')), 'a write reached the shared folder')
+})
+
+await test('🔒 a role granted "finance/q1" sees only the way to it and it: no hr, no top-level file; a path outside is refused', async () => {
+  withSharedSpace(['finance/q1'])
+  const top = await (await api(bobToken, '/files/list?space=shared&path=.')).json()
+  assert(top.entries.map((e) => e.name).join() === 'finance', `root: ${JSON.stringify(top.entries.map((e) => e.name))}`)
+  const fin = await (await api(bobToken, '/files/list?space=shared&path=finance')).json()
+  assert(fin.entries.map((e) => e.name).join() === 'q1', `finance: ${JSON.stringify(fin.entries.map((e) => e.name))}`)
+  const inside = await (await api(bobToken, '/files/list?space=shared&path=finance/q1')).json()
+  assert(inside.entries.map((e) => e.name).join() === 'budget.md', JSON.stringify(inside))
+  for (const p of ['hr', '../', 'hr/../hr']) {
+    const r = await api(bobToken, `/files/list?space=shared&path=${encodeURIComponent(p)}`)
+    assert(r.status === 403, `listing ${p}: ${r.status}`)
+  }
+  const prevTop = await api(bobToken, '/files/preview?space=shared&path=top.md')
+  assert(prevTop.status === 403, `a file above the granted folder was previewed: ${prevTop.status}`)
+  const prevHr = await api(bobToken, '/files/preview?space=shared&path=hr/pay.md')
+  assert(prevHr.status === 403, `an un-granted file was previewed: ${prevHr.status}`)
+})
+
+await test('a role granted none of it, or no shared folder at all, gets no shared space', async () => {
+  withSharedSpace([])
+  const none = await (await api(bobToken, '/files/spaces')).json()
+  assert(!none.spaces.some((s) => s.id === 'shared'), JSON.stringify(none))
+  const r = await api(bobToken, '/files/list?space=shared&path=.')
+  assert(r.status === 404, `listing with [] grants: ${r.status}`)
+  updateGatewayConfig({
+    documents: { enabled: true, outputDir: dirs.docs },
+    fileSystem: { enabled: true, rootDir: dirs.fs },
+    webFetch: { enabled: false, whitelistEnabled: true, allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 },
+  })
+  const off = await (await api(bobToken, '/files/spaces')).json()
+  assert(!off.spaces.some((s) => s.id === 'shared'), JSON.stringify(off))
+  fs.rmSync(sharedRoot, { recursive: true, force: true })
 })
 
 stopGateway()

@@ -353,6 +353,31 @@ await test('a delete (enforced) carries the approval id to callToolAs, which spe
   eq(w.calls[0].opts.approvalId, id, 'approval id passed')
 })
 
+await test('🔒 a call_tool delete parks on the inner tool and its arguments, and passes the id on (U-S6)', async () => {
+  ledger._reset()
+  const withCallTool = { toolCatalogFor: async () => [...TOOLS, { name: 'call_tool', description: 'call_tool', inputSchema: { type: 'object', properties: {} } }] }
+  const w = fakeWorld([call('c1', 'call_tool', { name: 'delete_file', arguments: { path: 'old.txt' } }), say('Deleted.')], withCallTool)
+  const conv = newConversation()
+  const t = start(conv)
+  await waitFor(() => statusOf(t.id) === 'waiting_approval', 'waiting_approval')
+  const waiting = store.getTask(t.id).waiting
+  eq([waiting.tool, waiting.rule, waiting.approval.tool], ['delete_file', 'always', 'delete_file'], 'parked on the inner tool')
+  ledger.decide(waiting.approval.id, ANON_KEY, 'once')
+  await waitFor(() => ended(t.id), 'end')
+  eq([w.calls[0].name, w.calls[0].opts.approvalId], ['call_tool', waiting.approval.id], 'call_tool carried the id')
+  // Not spent by the runner: Nest's gate spends it on the inner call.
+  assert(ledger.consume(waiting.approval.id, { accountKey: ANON_KEY, tool: 'delete_file', args: { path: 'old.txt' } }), 'the runner spent the approval itself')
+})
+
+await test('a call_tool read does not park', async () => {
+  ledger._reset()
+  const withCallTool = { toolCatalogFor: async () => [...TOOLS, { name: 'call_tool', description: 'call_tool', inputSchema: { type: 'object', properties: {} } }] }
+  const w = fakeWorld([call('c1', 'call_tool', { name: 'read_document', arguments: { path: 'a.md' } }), say('Read.')], withCallTool)
+  const t = start(newConversation())
+  await waitFor(() => ended(t.id), 'end')
+  eq([statusOf(t.id), w.calls.map((c) => c.name)], ['done', ['call_tool']], 'ran unasked')
+})
+
 await test('a denied call gets the denial as its result, and the task goes on', async () => {
   ledger._reset()
   const w = fakeWorld([call('c1', 'delete_file', { path: 'x' }), say('OK, I left it.')])
@@ -635,7 +660,7 @@ await test('the real prepareCompletion runs on a task\'s request: the prompt is 
   await waitFor(() => ended(t.id), 'end')
   eq(statusOf(t.id), 'done', `status (${store.getTask(t.id).error})`)
   const b = w.bodies[0]
-  eq([b.messages[0].role, 'redstart_mode' in b, 'redstart_project' in b], ['system', false, false], 'body')
+  eq([b.messages[0].role, 'redstart_mode' in b, 'redstart_project' in b, 'redstart_retrieval' in b], ['system', false, false, false], 'body')
   assert(/Redstart/i.test(b.messages[0].content), 'the composed prompt')
 })
 
@@ -676,6 +701,47 @@ await test('a long history is folded into a stored summary, as chat-ui does; the
   assert(store.readEvents(t.id).some((e) => e.type === 'compacted' && e.summarized), 'logged')
 })
 
+await test('the system prompt and the tools count against the budget: a history that fits alone, but not beside them, is compacted (2026-11-18)', async () => {
+  // The bug: compaction counted the stored messages only. On Ornith the
+  // prompt and tools are ~5,150 tokens, so at 12k it never fired before the
+  // request overflowed. Here: ctx 4096, max_tokens unset (1024 held back),
+  // so usable is 3072 and the trigger 0.85 of it (2,611). Eight 150-character
+  // turns (~1,350 "tokens", a character each) plus the five fake tools (~550)
+  // fit under it; a 1,500-token prompt beside them does not.
+  const runWith = async (systemChars, idp) => {
+    let summaries = 0
+    const w = fakeWorld([say('ok')], {
+      effectiveConfigFor: async () => ({ ctxSize: 4096 }),
+      tokenize: async (_port, content) => content.length,
+      // The gateway's part: a composed prompt of `systemChars` in front.
+      prepareCompletion: async (parsed) => ({
+        parsed: { ...parsed, messages: [...(systemChars ? [{ role: 'system', content: 's'.repeat(systemChars) }] : []), ...(parsed.messages ?? [])] },
+        wire: {},
+      }),
+      fetchCompletion: async (_port, body) => {
+        if (body.stream === false) {
+          summaries++
+          return new Response(JSON.stringify({ choices: [{ message: { content: 'Earlier turns, summarized.' } }] }))
+        }
+        w.bodies.push(body)
+        return sse(say('ok'))
+      },
+    })
+    const conv = newConversation()
+    let parent = convs.appendMessage(SCOPE, conv, { id: `root-${idp}`, parent: null, type: 'root', role: 'system', content: '' }).id
+    for (let i = 0; i < 8; i++) {
+      parent = convs.appendMessage(SCOPE, conv, { id: `${idp}${i}`, parent, type: 'text', role: i % 2 ? 'assistant' : 'user', content: `turn ${i} ${'z'.repeat(150)}` }).id
+    }
+    const t = start(conv, 'next?')
+    await waitFor(() => ended(t.id), 'end')
+    return { status: statusOf(t.id), summaries, compacted: store.readEvents(t.id).some((e) => e.type === 'compacted') }
+  }
+  const alone = await runWith(0, 'ov-a')
+  eq([alone.status, alone.summaries, alone.compacted], ['done', 0, false], 'control: no prompt, the history fits, nothing compacted')
+  const beside = await runWith(1500, 'ov-b')
+  eq([beside.status, beside.summaries, beside.compacted], ['done', 1, true], 'with a 1,500-token prompt it does not fit, so it compacts')
+})
+
 await test('compaction off (the client\'s setting) sends the history whole', async () => {
   const w = fakeWorld([say('ok')], { effectiveConfigFor: async () => ({ ctxSize: 4096 }), tokenize: async (_p, c) => c.length })
   const conv = newConversation()
@@ -711,6 +777,166 @@ async function taskRoute(method, urlPath, body, { scope = SCOPE, headers = {} } 
 function sseEvents(res) {
   return res.chunks.join('').split('\n\n').filter((b) => b.startsWith('id: ')).map((b) => JSON.parse(b.split('\ndata: ')[1]))
 }
+
+await test('🔍 live tokens: the reply being written arrives as batched delta events, and none is stored (master plan 7.1)', async () => {
+  // Three chunks in one response: batching gathers them into far fewer events.
+  fakeWorld([[...say('Hel'), ...say('lo, '), ...say('world.')]])
+  const conv = newConversation()
+  const live = []
+  const t = start(conv, 'greet')
+  const off = store.subscribe(t.id, (e) => { if (e.live) live.push(e) })
+  await waitFor(() => ended(t.id), 'end')
+  off()
+  const text = live.filter((e) => e.type === 'delta').map((e) => e.content ?? '').join('')
+  eq(text, 'Hello, world.', 'the deltas spell the reply')
+  assert(live.every((e) => e.seq === undefined && typeof e.messageId === 'string'), 'a delta has a seq, or names no message')
+  const reply = branchOf(conv).find((m) => m.role === 'assistant')
+  assert(live.every((e) => e.messageId === reply.id), 'a delta names another message than the one stored')
+  assert(!store.readEvents(t.id, 0).some((e) => e.type === 'delta'), 'a delta was written to the log')
+})
+
+await test('🔍 the event stream sends a live event with no id: line, so Last-Event-ID still names the last stored one', async () => {
+  fakeWorld([(body) => new Promise((resolve) => setTimeout(() => resolve(sse(say('slow reply'))), 150))])
+  const conv = newConversation()
+  const t = start(conv, 'go')
+  const r = await taskRoute('GET', `/tasks/${t.id}/events`)
+  await waitFor(() => ended(t.id) && r.res.writableEnded, 'stream end')
+  const raw = r.res.chunks.join('')
+  const blocks = raw.split('\n\n').filter(Boolean)
+  const liveBlocks = blocks.filter((b) => b.startsWith('data: ') && JSON.parse(b.slice(6)).live)
+  assert(liveBlocks.length > 0, `no live frame: ${raw.slice(0, 300)}`)
+  assert(liveBlocks.every((b) => !b.includes('id: ')), 'a live frame carries an id')
+  assert(sseEvents(r.res).some((e) => e.type === 'message'), 'stored events still have ids')
+})
+
+console.log('\n-- the client-executor port (master plan 7.1) --')
+
+const FS_READ = { name: 'fs_read_file', description: 'Read a file on the user\'s computer', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } }
+const toolMsg = (body) => body.messages.filter((m) => m.role === 'tool').at(-1)?.content ?? ''
+
+await test('🔒 a client tool with no client connected is answered "not connected" at once, and is offered to the model', async () => {
+  const w = fakeWorld([call('c1', 'fs_read_file', { path: 'a.txt' }), say('ok')])
+  const conv = newConversation()
+  const t = start(conv, 'read it', { clientTools: [FS_READ] })
+  await waitFor(() => ended(t.id), 'end')
+  assert(w.bodies[0].tools.some((x) => x.function.name === 'fs_read_file'), 'the client tool was not offered')
+  assert(/not connected to this conversation/.test(toolMsg(w.bodies[1])), `model was told: ${toolMsg(w.bodies[1])}`)
+  assert(!w.calls.some((c) => c.name === 'fs_read_file'), 'a client tool went to callToolAs')
+})
+
+await test('🔒 a connected client gets client_call, the run waits, and its POSTed result is what the model reads; no approval is asked', async () => {
+  const w = fakeWorld([call('c2', 'fs_read_file', { path: 'notes.txt' }), say('done')])
+  const conv = newConversation()
+  const t = start(conv, 'read notes', { clientTools: [FS_READ] })
+  const requests = []
+  const detach = runner.attachClient(t.id, (e) => requests.push(e))
+  const callEvent = await waitFor(() => requests.find((e) => e.type === 'client_request'), 'client_request')
+  eq([callEvent.callId, callEvent.name, JSON.parse(callEvent.arguments).path], ['c2', 'fs_read_file', 'notes.txt'], 'the call')
+  const record = store.readEvents(t.id, 0).find((e) => e.type === 'client_call')
+  assert(record && record.arguments === undefined, 'the stored record carries the arguments')
+  eq(statusOf(t.id), 'waiting_client', 'status while the client runs it')
+  eq(store.getTask(t.id).waiting, { kind: 'client', callId: 'c2', tool: 'fs_read_file' }, 'waiting')
+  assert(!store.readEvents(t.id, 0).some((e) => e.type === 'approval'), 'Nest asked for an approval: a client tool is the client\'s own card')
+  eq(runner.clientResult(t.id, { callId: 'nope', text: 'x' }).status, 409, 'an unknown call id')
+  assert(runner.clientResult(t.id, { callId: 'c2', text: 'the notes say hello' }).ok, 'result refused')
+  await waitFor(() => ended(t.id), 'end')
+  detach()
+  eq(toolMsg(w.bodies[1]), 'the notes say hello', 'the model read the client\'s result')
+  assert(branchOf(conv).some((m) => m.role === 'tool' && m.content === 'the notes say hello'), 'the result was not stored')
+})
+
+await test('a client that leaves mid-call: the call is answered unavailable and the run goes on', async () => {
+  const w = fakeWorld([call('c3', 'fs_read_file', {}), say('carried on')])
+  const conv = newConversation()
+  const t = start(conv, 'x', { clientTools: [FS_READ] })
+  const detach = runner.attachClient(t.id)
+  await waitFor(() => statusOf(t.id) === 'waiting_client', 'waiting_client')
+  detach()
+  await waitFor(() => ended(t.id), 'end')
+  assert(/not connected/.test(toolMsg(w.bodies[1])), toolMsg(w.bodies[1]))
+  eq(statusOf(t.id), 'done', 'the run did not finish')
+})
+
+await test('🔒 a client tool cannot take a Nest tool\'s name, and a banned one is refused; malformed lists are refused at start', async () => {
+  const w = fakeWorld([call('c4', 'fs_read_file', {}), say('ok')], { effectiveConfigFor: async () => ({ disabledTools: ['fs_read_file'] }) })
+  const conv = newConversation()
+  const clash = { name: 'read_document', description: 'a client pretending', inputSchema: { type: 'object' } }
+  const t = start(conv, 'x', { clientTools: [FS_READ, clash] })
+  runner.attachClient(t.id)
+  await waitFor(() => ended(t.id), 'end')
+  eq(w.bodies[0].tools.filter((x) => x.function.name === 'read_document').length, 1, 'read_document offered twice')
+  eq(w.bodies[0].tools.find((x) => x.function.name === 'read_document').function.description, 'read_document', 'the client replaced Nest\'s tool')
+  assert(/not allowed on this server/.test(toolMsg(w.bodies[1])), `a banned client tool ran: ${toolMsg(w.bodies[1])}`)
+  for (const bad of ['fs_read_file', [{ name: 'has space' }], [FS_READ, FS_READ], Array.from({ length: 65 }, (_, i) => ({ name: `t${i}` }))]) {
+    const r = runner.startTask({ account: null, storeAccountId: SCOPE, conversationId: newConversation(), content: 'x', clientTools: bad })
+    eq([r.ok, r.status], [false, 400], `accepted ${JSON.stringify(bad).slice(0, 60)}`)
+  }
+})
+
+await test('🔒 Nest tools the client switched off for the chat are not offered, and a call to one (or through call_tool) is not run; the task\'s own two stay', async () => {
+  const withCallTool = { toolCatalogFor: async () => [...TOOLS, { name: 'call_tool', description: 'call_tool', inputSchema: { type: 'object', properties: {} } }] }
+  const w = fakeWorld([
+    call('c1', 'delete_file', {}),
+    call('c2', 'call_tool', { name: 'delete_file', arguments: {} }),
+    say('ok'),
+  ], withCallTool)
+  const conv = newConversation()
+  const t = start(conv, 'x', { toolLimits: { exclude: ['delete_file'] } })
+  await waitFor(() => ended(t.id), 'end')
+  const offered = w.bodies[0].tools.map((x) => x.function.name)
+  assert(!offered.includes('delete_file'), 'a switched-off tool was offered')
+  assert(offered.includes('read_document') && offered.includes('ask_user'), `too much removed: ${offered}`)
+  assert(!w.calls.some((c) => c.name === 'delete_file' || c.name === 'call_tool'), 'a switched-off tool ran')
+  assert(/switched off in this chat/.test(toolMsg(w.bodies[1])), toolMsg(w.bodies[1]))
+  assert(/switched off in this chat/.test(toolMsg(w.bodies[2])), toolMsg(w.bodies[2]))
+  eq(store.getTask(t.id).toolLimits, { nest: true, exclude: ['delete_file'] }, 'kept on the record for a resume')
+
+  // Nest's server off for the chat: none of Nest's, but ask_user, update_plan and the client's own.
+  const w2 = fakeWorld([say('ok')])
+  const t2 = start(newConversation(), 'x', { toolLimits: { nest: false }, clientTools: [FS_READ] })
+  await waitFor(() => ended(t2.id), 'end')
+  eq(w2.bodies[0].tools.map((x) => x.function.name).sort(), ['ask_user', 'fs_read_file', 'update_plan'], 'tools with Nest off')
+
+  for (const bad of ['all', { nest: 'no' }, { exclude: 'delete_file' }, { exclude: ['has space'] }]) {
+    const r = runner.startTask({ account: null, storeAccountId: SCOPE, conversationId: newConversation(), content: 'x', toolLimits: bad })
+    eq([r.ok, r.status], [false, 400], `accepted ${JSON.stringify(bad)}`)
+  }
+})
+
+await test('the routes: POST /tasks takes clientTools, /client replaces them, /client-result answers; ?client=1 is what counts as connected', async () => {
+  const w = fakeWorld([call('c5', 'fs_read_file', {}), say('via routes')])
+  const conv = newConversation()
+  const r = await taskRoute('POST', '/tasks', { conversationId: conv, content: 'go', clientTools: [FS_READ] })
+  eq(r.status, 201, 'start')
+  const id = r.json.id
+  const ev = await taskRoute('GET', `/tasks/${id}/events?client=1`)
+  await waitFor(() => statusOf(id) === 'waiting_client', 'waiting_client')
+  eq((await taskRoute('POST', `/tasks/${id}/client`, { tools: 'nope' })).status, 400, 'a malformed re-register')
+  eq((await taskRoute('POST', `/tasks/${id}/client-result`, { callId: 'c5', text: 'from the app' })).status, 200, 'result')
+  await waitFor(() => ended(id), 'end')
+  ev.req.emit('close')
+  eq(toolMsg(w.bodies[1]), 'from the app', 'routed result')
+  assert(sseEvents(ev.res).some((e) => e.type === 'client_call' && e.callId === 'c5'), 'the client_call record did not reach the stream')
+  const liveFrames = ev.res.chunks.join('').split('\n\n').filter((b) => b.startsWith('data: ')).map((b) => JSON.parse(b.slice(6)))
+  const request = liveFrames.find((e) => e.live && e.type === 'client_request')
+  eq([request?.callId, request?.name], ['c5', 'fs_read_file'], 'the request went to this client as a live frame')
+})
+
+await test('🔒 two clients connected: the call goes to ONE of them, so a second tab never runs it too', async () => {
+  fakeWorld([call('c6', 'fs_read_file', {}), say('once')])
+  const conv = newConversation()
+  const t = start(conv, 'x', { clientTools: [FS_READ] })
+  const a = []
+  const b = []
+  const detachA = runner.attachClient(t.id, (e) => a.push(e))
+  const detachB = runner.attachClient(t.id, (e) => b.push(e))
+  await waitFor(() => a.length + b.length > 0, 'a request')
+  eq([a.length + b.length, a.length === 0 || b.length === 0], [1, true], `requests: a=${a.length} b=${b.length}`)
+  // The asked client leaving answers its call unavailable; the other stays.
+  ;(b.length ? detachB : detachA)()
+  await waitFor(() => ended(t.id), 'end')
+  ;(b.length ? detachA : detachB)()
+})
 
 await test('which paths are ours', () => {
   const id = '0f8fad5b-d9cb-469f-a165-70867728950e'

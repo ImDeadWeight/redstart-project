@@ -95,7 +95,7 @@ export function corsHeaders(requestOrigin, allowed) {
     Vary: 'Origin',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     // Authorization because that is how this listener authenticates; the SSE
-    // feed rides on the same header (src/api/http.ts uses fetch rather than
+    // feed rides on the same header (src/launcher/api/http.ts uses fetch rather than
     // EventSource for exactly that reason).
     'Access-Control-Allow-Headers': 'Authorization, Content-Type',
     'Access-Control-Max-Age': '600',

@@ -75,10 +75,48 @@ The gateway rewrites the request before forwarding:
 
 - `messages`, `stream`, `tools`, and the usual sampling parameters
 - `redstart_mode` — a task mode **ID** (§3)
-- `redstart_retrieval: false` — don't narrow this request's `tools` with tool
-  retrieval. For a connector that sends its own short, curated tool list and
-  has no `search_tools` to recover a dropped tool. Bans still apply. Only the
-  literal `false` counts; the field is consumed and never forwarded
+- `redstart_retrieval` — whether tool retrieval may narrow this request's
+  `tools`. **By default it runs only on Redstart's own surfaces, as the
+  credential names them**: a chat-UI login session (`nest-chat`) and a Twig
+  client key (`twig`). Any other caller — an account-wide API key, another
+  client key, login switched off — has its `tools` forwarded as sent, minus
+  bans. `true` asks for retrieval anyway (Redstart's own clients send it, for
+  installs with login off); `false` opts out on any surface, for a connector
+  with its own short, curated list and no `search_tools` to recover a dropped
+  tool. Bans apply either way. Only the literal booleans count; the field is
+  consumed and never forwarded
+- `redstart_conversation_id` — your id for this conversation (a printable
+  ASCII string of at most 128 characters; anything else is ignored). Tool
+  retrieval keys the tool set it chose for the conversation on it, under your
+  account, so the set survives your client compacting or trimming the opening
+  message. Without it the key is a hash of the first user message. Consumed and
+  never forwarded
+- `redstart_retrieval_report: true` — report which tools were actually
+  forwarded, after bans and retrieval. The response carries
+  `x-redstart-tools-sent` (the tool names, comma-separated, each one
+  percent-encoded), `x-redstart-tools-filtered` (`1` when retrieval removed
+  any tool, otherwise `0`) and `x-redstart-retrieval` (`on` when retrieval ran
+  on this request, even if it kept every tool; `off` when it is disabled, the
+  request opted out, or the request neither asked nor came from a Redstart
+  surface), `x-redstart-tools-origin` (for each tool sent, when it
+  came into this conversation and why, as `name=turn:why` comma-separated;
+  `turn` counts user messages, `why` is `first`, `scored`, `called`,
+  `search`, `describe`, `always` or `family`; empty when retrieval did not
+  select), `x-redstart-tools-would-add` (how many tools a frozen tool set
+  left out this turn) and `x-redstart-retrieval-config` (the retrieval
+  settings the request ran with, as fixed-order `key=value` pairs separated
+  by `;`: `mode` (`select` or `catalog`), `scorer`, `growth`, `text`, `min`,
+  `callTool`, `floor`, `rel`, `margin`; `off` when retrieval did not run); all six are listed in
+  `Access-Control-Expose-Headers`. Only the literal `true` asks; the field is
+  consumed and never forwarded. The names go to the caller only, never to the
+  log
+- `redstart_retrieval_withhold` — an array of up to 64 tool names that
+  retrieval leaves out of its selection. For testing discovery (the agent
+  bench uses it): a withheld tool is still found by `search_tools` and
+  `describe_tool`, and once one of them (or a call) brings it in, it stays.
+  The memory, discovery and host-resolved tools are never withheld. It can
+  only narrow the list, so bans are unaffected; anything but an array of
+  names is ignored. Consumed and never forwarded
 - `redstart_project` — the **id** of one of the caller's own projects (from
   `GET /projects`). Nest adds that project's instructions and memories to the
   prompt. An id the caller can't read adds nothing; the field is consumed and

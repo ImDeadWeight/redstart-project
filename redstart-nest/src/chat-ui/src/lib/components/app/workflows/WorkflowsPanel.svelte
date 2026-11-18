@@ -12,7 +12,17 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
-	import { Loader, Trash2, Pencil, Plus, X, Building2, User } from '@lucide/svelte';
+	import {
+		Loader,
+		Trash2,
+		Pencil,
+		Plus,
+		X,
+		Building2,
+		User,
+		Download,
+		Upload
+	} from '@lucide/svelte';
 	import { toast } from 'svelte-sonner';
 	import {
 		WorkflowService,
@@ -146,6 +156,38 @@
 		}
 	}
 
+	// Agent Skills (master plan Phase 5): a workflow is stored as a SKILL.md
+	// folder, so it moves to and from other agents as one.
+	let importInputs = $state<Record<WorkflowScope, HTMLInputElement | null>>({
+		personal: null,
+		org: null
+	});
+
+	async function importFile(scope: WorkflowScope, event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file) return;
+		try {
+			const saved = await WorkflowService.importSkill(scope, file);
+			if (scope === 'org') org = [saved, ...org];
+			else personal = [saved, ...personal];
+			toast.success(
+				`Imported. Type /${scope === 'org' ? 'org-' : ''}${saved.name} in a chat to run it.`
+			);
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Could not import');
+		}
+	}
+
+	async function exportOne(scope: WorkflowScope, w: Workflow) {
+		try {
+			await WorkflowService.exportSkill(scope, w);
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Could not export');
+		}
+	}
+
 	const command = (scope: WorkflowScope, w: Workflow) =>
 		`/${scope === 'org' ? 'org-' : ''}${w.name}`;
 </script>
@@ -170,6 +212,15 @@
 					<div class="mt-1 text-xs text-muted-foreground">Added by {w.createdBy}</div>
 				{/if}
 			</div>
+			<Button
+				size="sm"
+				variant="ghost"
+				onclick={() => exportOne(scope, w)}
+				aria-label="Export as a skill (.zip)"
+				title="Export as a skill (.zip)"
+			>
+				<Download class="h-4 w-4" />
+			</Button>
 			{#if editable}
 				<Button size="sm" variant="ghost" onclick={() => startEdit(scope, w)} aria-label="Edit">
 					<Pencil class="h-4 w-4" />
@@ -191,9 +242,11 @@
 <div class="space-y-6">
 	<p class="text-sm text-muted-foreground">
 		A workflow is a saved instruction for one task you do often, such as turning shorthand notes
-		into the format your job uses. Type <code>/</code> in a chat to pick one; it asks for its inputs and
-		sends them with the instructions. One worked example helps the model more than a long description
-		of the format.
+		into the format your job uses. Type <code>/</code> in a chat to pick one; it asks for its inputs
+		and sends them with the instructions. One worked example helps the model more than a long
+		description of the format. Each workflow is also an Agent Skill: the assistant can load one
+		itself when it fits, and you can import or export it as a <code>SKILL.md</code> folder to use with
+		other agents.
 	</p>
 
 	{#if loading}
@@ -324,9 +377,26 @@
 				<h3 class="flex items-center gap-1.5 text-sm font-medium">
 					<User class="h-4 w-4" /> Yours
 				</h3>
-				<Button size="sm" variant="outline" onclick={() => startNew('personal')}>
-					<Plus class="h-3 w-3" /> New workflow
-				</Button>
+				<div class="flex gap-2">
+					<input
+						type="file"
+						accept=".zip,.md"
+						class="hidden"
+						bind:this={importInputs.personal}
+						onchange={(e) => importFile('personal', e)}
+					/>
+					<Button
+						size="sm"
+						variant="ghost"
+						onclick={() => importInputs.personal?.click()}
+						title="Import a skill: a .zip of its folder, or a SKILL.md"
+					>
+						<Upload class="h-3 w-3" /> Import
+					</Button>
+					<Button size="sm" variant="outline" onclick={() => startNew('personal')}>
+						<Plus class="h-3 w-3" /> New workflow
+					</Button>
+				</div>
 			</div>
 			{#if personal.length === 0}
 				<div class="text-sm text-muted-foreground italic">No workflows of your own yet.</div>
@@ -345,9 +415,26 @@
 					<Building2 class="h-4 w-4" /> Organization
 				</h3>
 				{#if canEditOrg}
-					<Button size="sm" variant="outline" onclick={() => startNew('org')}>
-						<Plus class="h-3 w-3" /> New for everyone
-					</Button>
+					<div class="flex gap-2">
+						<input
+							type="file"
+							accept=".zip,.md"
+							class="hidden"
+							bind:this={importInputs.org}
+							onchange={(e) => importFile('org', e)}
+						/>
+						<Button
+							size="sm"
+							variant="ghost"
+							onclick={() => importInputs.org?.click()}
+							title="Import a skill for everyone: a .zip of its folder, or a SKILL.md"
+						>
+							<Upload class="h-3 w-3" /> Import
+						</Button>
+						<Button size="sm" variant="outline" onclick={() => startNew('org')}>
+							<Plus class="h-3 w-3" /> New for everyone
+						</Button>
+					</div>
 				{/if}
 			</div>
 			{#if org.length === 0}

@@ -82,11 +82,23 @@ jobs:
       - name: "Security: role narrowing (restrict-only law)"
         run: node scripts/test-roles.mjs
 
+      - name: "Security: resource grants narrow a shared root to folders, never widen it"
+        run: node scripts/test-grants.mjs
+
       - name: "Security: tool namespacing (ban targetability)"
         run: node scripts/test-tool-namespacing.mjs
 
       - name: "Security: tool retrieval (subset-only selection)"
         run: node scripts/test-tool-retrieval.mjs
+
+      - name: "Security: deferred capabilities (defaults, overrides, the setter's refusals)"
+        run: node scripts/test-tool-deferral.mjs
+
+      - name: "Tool metadata registry (lint, plugin fields, embedded text)"
+        run: node scripts/test-tool-metadata.mjs
+
+      - name: "Tool retrieval eval (frozen subset, catalog snapshot)"
+        run: node scripts/test-retrieval-eval.mjs
 
       - name: "Agent loop core (exit paths, under plain Node)"
         run: node scripts/test-agent-core.mjs
@@ -142,6 +154,9 @@ jobs:
         env:
           REDSTART_PYODIDE_DIR: ${{ runner.temp }}/pyodide
 
+      - name: "Security: command executor, kept for Twig's terminal (argv only, no shell, scrubbed env, tree kill)"
+        run: node scripts/test-command-exec.mjs
+
       - name: "Security: conversation workspaces (layout, ownership, caps, trash)"
         run: node scripts/test-conversation-workspace.mjs
 
@@ -159,6 +174,9 @@ jobs:
 
       - name: "Security: workflows are per account; org writes need manageOrgWorkflows"
         run: node scripts/test-workflows.mjs
+
+      - name: "Skills: SKILL.md is read and written as the format has it; a skill's scripts run only through run_python"
+        run: node scripts/test-skills.mjs
 
       - name: "Security: projects are per account and owner-only; deleting one keeps its chats"
         run: node scripts/test-projects.mjs
@@ -378,7 +396,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     defaults:
       run:
-        working-directory: redstart-twig/windows
+        working-directory: redstart-twig/desktop
     steps:
       - uses: actions/checkout@v4
 
@@ -404,7 +422,7 @@ jobs:
         os: [windows-latest, macos-15]
     defaults:
       run:
-        working-directory: redstart-twig/windows/shell
+        working-directory: redstart-twig/desktop/shell
     steps:
       - uses: actions/checkout@v4
 
@@ -413,8 +431,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            redstart-twig/windows/shell/target
-          key: twig-shell-${{ runner.os }}-${{ hashFiles('redstart-twig/windows/shell/Cargo.lock') }}
+            redstart-twig/desktop/shell/target
+          key: twig-shell-${{ runner.os }}-${{ hashFiles('redstart-twig/desktop/shell/Cargo.lock') }}
 
       # generate_context!() embeds the icons, which Nest's make-icon generates
       # into this app's own build/ (the perched-bird drawing).

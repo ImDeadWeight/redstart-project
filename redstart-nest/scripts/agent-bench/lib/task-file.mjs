@@ -14,6 +14,7 @@
 //     "answers": { "<question substring>": "<answer>" },   used from Phase 1
 //     "limits": { "maxTurns": 8, "maxSeconds": 300 },
 //     "check": "checks/csv.mjs#summaryHasTotals",
+//     "expectTools": ["run_python"],             optional: a right first tool
 //     "notes": "why the task is built this way"   optional, for people only
 //   }
 //
@@ -113,6 +114,42 @@ export async function loadTask(file) {
   const requires = raw.requires ?? []
   if (!Array.isArray(requires) || !requires.every((n) => typeof n === 'string')) fail(file, 'requires must be an array of tool names')
 
+  // The tools a sensible first call would use (tool retrieval second pass,
+  // 0.2). Never a pass criterion: the metrics report whether the model's
+  // first call (ask_user and update_plan aside) was one of them, which is how
+  // "the File System tools came first on attachment tasks" is counted.
+  // null: the task does not say, so it is left out of that count.
+  const expectTools = raw.expectTools ?? null
+  if (expectTools !== null && (!Array.isArray(expectTools) || expectTools.length === 0 ||
+      !expectTools.every((n) => typeof n === 'string' && n))) {
+    fail(file, 'expectTools must be a non-empty array of tool names')
+  }
+
+  // `withhold` (benchmarks H2) left a task's tools out of the per-turn
+  // selection; that selection went in master plan 3.3. Refused rather than
+  // ignored, so an old task file cannot claim to test discovery it no longer
+  // does. A deferred tool is in the catalog anyway.
+  if (raw.withhold !== undefined) {
+    fail(file, 'withhold was removed with per-turn selection (master plan 3.3): a deferred tool is reached through the catalog already')
+  }
+
+  // Later user messages (benchmarks H4): each is sent after the model's
+  // final reply to the one before, in the same conversation, so a task's
+  // topic can move (B4's drift tasks). A string, or { prompt, expectTools }:
+  // the tools that follow-up should bring in, which "discovered" counts with
+  // the task's own. The one check judges the end of the whole conversation.
+  const rawFollowUps = raw.followUps ?? []
+  if (!Array.isArray(rawFollowUps)) fail(file, 'followUps must be an array')
+  const followUps = rawFollowUps.map((f, i) => {
+    const fu = typeof f === 'string' ? { prompt: f } : f
+    if (!fu || typeof fu.prompt !== 'string' || !fu.prompt.trim()) fail(file, `followUps[${i}] needs a prompt`)
+    const fuExpect = fu.expectTools ?? null
+    if (fuExpect !== null && (!Array.isArray(fuExpect) || !fuExpect.every((n) => typeof n === 'string' && n))) {
+      fail(file, `followUps[${i}].expectTools must be an array of tool names`)
+    }
+    return { prompt: fu.prompt, expectTools: fuExpect }
+  })
+
   if (typeof raw.check !== 'string' || !raw.check.includes('#')) fail(file, 'check must be "<module>#<export>"')
   const [modPath, exportName] = raw.check.split('#')
   const mod = await import(pathToFileURL(path.resolve(dir, modPath)).href)
@@ -128,6 +165,8 @@ export async function loadTask(file) {
     approve,
     answers,
     requires,
+    expectTools,
+    followUps,
     limits,
     checkName: raw.check,
     check,

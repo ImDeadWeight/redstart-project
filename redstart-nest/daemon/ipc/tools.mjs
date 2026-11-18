@@ -14,7 +14,7 @@ import { BUILTIN_TOOLS, BUILTIN_GROUPS, BUILTIN_CAPABILITIES, CLIENT_APPS } from
 import { getUserTools, getUserGroups, addUserTool, deleteUserTool, addUserGroup, deleteUserGroup } from '../tools-storage.mjs'
 import { updateGatewayConfig, getGatewayPort, gatewayToolRetrieval } from '../tools-gateway.mjs'
 import { updateMcpConfig, estimateActiveToolTokens } from '../mcp-server.mjs'
-import { observedWireCost } from '../tool-filter.mjs'
+import { observedWireCost, retrievalOnFor } from '../tool-filter.mjs'
 import { EMBED_MODEL, embedModelPath, hasEmbedModel, ensureEmbedModel } from '../embed-model.mjs'
 import { startEmbedServer, stopEmbedServer, embedServerStatus } from '../embed-server.mjs'
 import { syncFilesystemProvider } from '../filesystem-mcp-provider.mjs'
@@ -127,7 +127,7 @@ let retrievalWanted = false
  */
 export function retrievalStatus(llamaConfig, { resolveModelsDir }) {
   return {
-    enabled: llamaConfig?.tools?.retrieval?.enabled === true,
+    enabled: retrievalOnFor(llamaConfig?.tools),
     model: {
       label: EMBED_MODEL.label,
       bytes: EMBED_MODEL.size,
@@ -158,7 +158,7 @@ export function syncRetrieval(llamaConfig, {
   // drive this without a 67 MB transfer and without spawning anything.
   fetchModel = ensureEmbedModel, startServer = startEmbedServer,
 }) {
-  const wanted = llamaConfig?.tools?.retrieval?.enabled === true
+  const wanted = retrievalOnFor(llamaConfig?.tools)
   retrievalWanted = wanted
   if (!wanted) {
     stopEmbedServer({ configDir: userDataDir })

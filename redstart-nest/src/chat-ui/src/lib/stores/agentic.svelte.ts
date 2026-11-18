@@ -30,11 +30,9 @@ import { modelsStore } from '$lib/stores/models.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { ToolPermissionDecision } from '$lib/enums';
-import { DEFAULT_AGENTIC_CONFIG } from '$lib/constants';
-import {
-	MessageRole,
-	ToolCallType
-} from '$lib/enums';
+import { DEFAULT_AGENTIC_CONFIG, NEST_MCP_SERVER_ID_PREFIX } from '$lib/constants';
+import type { ClientToolSpec } from '$lib/services/task.service';
+import { MessageRole, ToolCallType } from '$lib/enums';
 import type {
 	AgenticFlowParams,
 	AgenticFlowResult,
@@ -42,17 +40,9 @@ import type {
 	SettingsConfigType,
 	McpServerOverride
 } from '$lib/types';
-import type {
-	AgenticMessage,
-	AgenticFlowCallbacks,
-	AgenticFlowOptions
-} from '$lib/types/agentic';
+import type { AgenticMessage, AgenticFlowCallbacks, AgenticFlowOptions } from '$lib/types/agentic';
 import type { ApiChatMessageData, ApiChatMessageContentPart } from '$lib/types/api';
-import type {
-	DatabaseMessage,
-	DatabaseMessageExtra
-} from '$lib/types/database';
-
+import type { DatabaseMessage, DatabaseMessageExtra } from '$lib/types/database';
 
 function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 	return messages.map((message) => {
@@ -164,6 +154,62 @@ class AgenticStore {
 				{ once: true }
 			);
 		});
+	}
+
+	/**
+	 * What a run on the server needs from this app before it starts (master
+	 * plan 7.1), got as the browser flow gets its tools: the chat's MCP
+	 * servers connected (per-chat switches applied), then
+	 * - clientTools: the tools this app runs itself;
+	 * - toolLimits: Nest's tools switched off here, so the server leaves out
+	 *   what this app's own loop would. `nest: false` when Nest's server is
+	 *   off for this chat.
+	 */
+	async prepareServerRun(): Promise<{
+		clientTools: ClientToolSpec[];
+		toolLimits: { nest: boolean; exclude: string[] };
+	}> {
+		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
+			await toolsStore.fetchBuiltinTools().catch(() => undefined);
+		}
+		if (mcpStore.hasEnabledServers(perChatOverrides)) {
+			await mcpStore.ensureInitialized(perChatOverrides).catch(() => false);
+		}
+		const isNest = (id: string) => id.startsWith(NEST_MCP_SERVER_ID_PREFIX);
+		const nestConfigured = mcpStore.getServers().some((s) => isNest(s.id));
+		const nestOn =
+			!nestConfigured ||
+			mcpStore.getEnabledServersForConversation(perChatOverrides).some((s) => isNest(s.id));
+		const enabled = new Set(toolsStore.getEnabledToolsForLLM().map((d) => d.function.name));
+		const exclude = [...mcpStore.getNestToolNames()].filter((name) => !enabled.has(name));
+		return {
+			clientTools: toolsStore.getClientToolsForServerRun(),
+			toolLimits: { nest: nestOn, exclude: exclude.slice(0, 512) }
+		};
+	}
+
+	/**
+	 * Run one call a run on the server sent to this app, for a tool this app
+	 * runs (master plan 7.1): its own approval card, then its executor.
+	 */
+	async runClientCall(
+		conversationId: string,
+		call: { id: string; name: string; arguments: string },
+		signal?: AbortSignal
+	): Promise<{ text: string; isError: boolean }> {
+		const model = modelsStore.models[0]?.model || '';
+		try {
+			const r = await this.toolExec.runForServer(
+				conversationId,
+				{ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } },
+				model,
+				signal
+			);
+			return { text: r.text, isError: !!r.isError };
+		} catch (error) {
+			return { text: error instanceof Error ? error.message : String(error), isError: true };
+		}
 	}
 
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {

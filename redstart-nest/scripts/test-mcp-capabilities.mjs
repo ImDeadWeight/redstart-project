@@ -199,6 +199,22 @@ async function main() {
     assert(names.includes('web_fetch'), `expected web_fetch in ${JSON.stringify(names)}`)
   })
 
+  await test('a session that declares a tool-text arm lists that arm\'s text; others keep the profile\'s (--arms)', async () => {
+    const declare = (arm) => ({ experimental: { 'redstart/hostTools': { names: ['ask_user'] }, ...(arm ? { 'redstart/toolTextArm': { arm } } : {}) } })
+    const describe = async (arm) => {
+      const c = await connectMcpClient(mcpUrl, { capabilities: declare(arm) })
+      try {
+        const tools = (await c.call('tools/list')).result.tools
+        return Object.fromEntries(tools.filter((t) => ['ask_user', 'web_fetch'].includes(t.name)).map((t) => [t.name, t.description]))
+      } finally { await c.close?.() }
+    }
+    const [plain, b, c, junk] = [await describe(null), await describe('b'), await describe('c'), await describe('z')]
+    assert(/WAIT for their answer/.test(b.ask_user) && !/WAIT for their answer/.test(plain.ask_user), 'arm b ask_user')
+    assert(/only way to ask/.test(c.ask_user), 'arm c ask_user')
+    assert(c.web_fetch !== plain.web_fetch && b.web_fetch === plain.web_fetch, 'arm c appends to web_fetch, b leaves it')
+    assert(junk.ask_user === plain.ask_user, 'an unknown arm changed the text')
+  })
+
   await test('tools/list omits create_document and postgres_* when both capabilities are disabled', async () => {
     const res = await client.call('tools/list')
     const names = res.result.tools.map(t => t.name)
@@ -357,6 +373,41 @@ async function main() {
   }
 
   console.log('\n-- documents provider --')
+
+  // call_tool carries approval (U-S6, master plan Phase 3.1), through the
+  // real tools/call and callToolAs: a write that a direct call leaves to the
+  // client's card is held by Nest when it comes through call_tool, as the
+  // inner tool and arguments, until decided; the decided id runs it once.
+  {
+    updateMcpConfig({ ...baseConfig, documents: { enabled: true, outputDir: tmpDocsDir }, toolRetrieval: { enabled: true }, deferredCapabilities: ['documents'] })
+    const args = { title: 'Via The Catalog', content: 'hello', format: 'markdown' }
+    const via = (meta) => client.call('tools/call', { name: 'call_tool', arguments: { name: 'create_document', arguments: args }, ...(meta ? { _meta: meta } : {}) })
+    // Recursive: documents land in the caller's own folder under the root.
+    const written = () => fs.readdirSync(tmpDocsDir, { recursive: true }).map(String).filter((f) => /via-the-catalog/i.test(f))
+
+    await test('🔒 a write through call_tool does nothing until the inner call is approved, then runs once (U-S6)', async () => {
+      const listed = (await client.call('tools/list')).result.tools
+      const createDoc = listed.find((t) => t.name === 'create_document')
+      assert(createDoc?._meta?.['redstart/deferred'] === true, 'create_document is not stamped deferred in the catalog mode')
+      const first = await via()
+      const pending = approvalRequired(first.result)
+      assert(pending && pending.tool === 'create_document', `not held as the inner tool: ${JSON.stringify(first.result)}`)
+      assert(written().length === 0, 'the document was written before the approval')
+      approvalLedger.decide(pending.id, '_local', 'once')
+      const second = await via({ [APPROVAL_ID_META_KEY]: pending.id })
+      assert(!second.result?.isError, `the approved call failed: ${JSON.stringify(second.result)}`)
+      assert(written().length === 1, 'the approved call wrote nothing')
+      const third = await via({ [APPROVAL_ID_META_KEY]: pending.id })
+      assert(approvalRequired(third.result), 'a spent approval ran the write again')
+      assert(written().length === 1, 'a spent approval wrote again')
+    })
+
+    await test('a read through call_tool runs with no approval', async () => {
+      const res = await client.call('tools/call', { name: 'call_tool', arguments: { name: 'list_documents', arguments: {} } })
+      assert(!res.result?.isError && !approvalRequired(res.result), JSON.stringify(res.result))
+    })
+    for (const f of written()) fs.rmSync(path.join(tmpDocsDir, f), { force: true })
+  }
 
   // Live-update config: documents enabled, postgres still off.
   updateMcpConfig({ ...baseConfig, documents: { enabled: true, outputDir: tmpDocsDir } })

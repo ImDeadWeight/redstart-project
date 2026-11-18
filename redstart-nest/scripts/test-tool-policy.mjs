@@ -81,7 +81,7 @@ await test('destructive is the ONLY class the delete tool can have', async () =>
 })
 
 await test('the known write ops are classified write', async () => {
-  for (const t of ['write_file', 'edit_file', 'create_directory', 'move_file', 'create_document', 'scholar_save_pdf']) {
+  for (const t of ['write_file', 'edit_file', 'create_directory', 'create_document', 'scholar_save_pdf']) {
     assert(classifyTool(t) === 'write', `${t} classified ${classifyTool(t)}, expected write`)
   }
 })
@@ -256,6 +256,34 @@ await test('🔍 a plugin id expands to all of its namespaced tool names (ban pr
 await test('an empty or missing ban list expands to nothing', async () => {
   assert(expandDisabledToolIds([]).length === 0, 'empty list produced bans')
   assert(expandDisabledToolIds().length === 0, 'missing list produced bans')
+})
+
+// ---------------------------------------------------------------------------
+// The execute class (agent-runtime Phase 4, D16)
+// ---------------------------------------------------------------------------
+
+// The Nest terminal was removed (master plan Phase 2); the class stays for
+// Twig's terminal (agent-runtime D48), so its rule is still pinned here.
+
+await test('🔍 no built-in Nest tool is execute, and run_command is gone', async () => {
+  const executes = Object.entries(TOOL_CLASSES).filter(([, c]) => c === 'execute').map(([n]) => n)
+  assert(executes.length === 0, `execute tools: ${executes.join(', ')}`)
+  assert(capabilityForTool('run_command') == null, 'run_command still belongs to a capability')
+  assert(!expandDisabledToolIds(['terminal']).includes('run_command'), 'a terminal capability still expands')
+})
+
+await test('🔍 the execute class stays, and no tool is enforced from the start', async () => {
+  const { TOOL_CLASS, ENFORCED_TOOLS } = await import('../daemon/tools-definitions.mjs')
+  assert(TOOL_CLASS.execute === 'execute', 'the execute class is gone')
+  assert(ENFORCED_TOOLS.size === 0, `tools enforced from the start: ${[...ENFORCED_TOOLS].join(', ')}`)
+})
+
+await test('🔍 a plugin tool cannot be classified execute', async () => {
+  const { VALID_TOOL_CLASSES } = await import('../daemon/plugin-registry.mjs').catch(() => ({}))
+  // plugin-registry imports electron-free modules only; if that ever changes,
+  // the set is still the four the launcher's class editor offers.
+  const valid = VALID_TOOL_CLASSES ?? new Set(['read', 'write', 'destructive', 'network'])
+  assert(!valid.has('execute'), 'a plugin tool may be given the execute class')
 })
 
 // ---------------------------------------------------------------------------

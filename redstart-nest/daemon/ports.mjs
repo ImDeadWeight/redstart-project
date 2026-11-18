@@ -40,7 +40,7 @@ export const ADMIN_PORT = 19083
  */
 export const EMBED_PORT = 19084
 
-/** config.port's default, duplicated in src/types.ts's DEFAULT_CONFIG. */
+/** config.port's default, duplicated in src/launcher/types.ts's DEFAULT_CONFIG. */
 export const DEFAULT_GATEWAY_PORT = 19080
 
 /** Every fixed port, mapped to what it is, for error messages. */

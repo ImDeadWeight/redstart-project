@@ -1,0 +1,40 @@
+{
+  "note": "Labelled cases for the tool retrieval eval (second pass, 0.4). Sources: user-phrasing (asks written the way a user writes them, replacing the first pass's 18 bge asks, which were never committed), transcript (search_tools queries models really wrote in agent-bench runs, 2026-11-11/12), small-model (short queries in the style a small model writes). The selection cases, and the bench tasks loaded as them, went with per-turn selection (master plan 3.3), the attachment source with them. expected: the right tools; need any (default) or all.",
+  "cases": [
+
+
+    { "id": "t-node-script", "kind": "search", "query": "run node mjs script execute javascript file", "expected": ["run_python"], "source": "transcript", "notes": "Qwen3.6-35B, p4-exit-code, 2026-11-11. run_python: Nest has no terminal (master plan Phase 2)." },
+    { "id": "t-node-test", "kind": "search", "query": "run node test in a javascript project", "expected": ["run_python"], "source": "transcript", "notes": "Qwen3-4B, p4-run-tests, 2026-11-11." },
+    { "id": "t-shell", "kind": "search", "query": "run node command or execute shell commands", "expected": ["run_python"], "source": "transcript", "notes": "Qwen3.6-35B, p4-run-tests." },
+    { "id": "t-clone-bundle", "kind": "search", "query": "clone a git bundle or create a repository from a bundle file", "expected": ["run_python"], "source": "transcript", "notes": "Qwen3.6-35B, p4-git-log. No git tool clones; run_python can." },
+    { "id": "t-clone-short", "kind": "search", "query": "clone git bundle", "expected": ["run_python"], "source": "transcript", "notes": "Qwen3.6-35B, p4-git-log." },
+    { "id": "t-parse-bundle", "kind": "search", "query": "parse git bundle or extract commit details from a git bundle file", "expected": ["run_python"], "source": "transcript", "notes": "Qwen3-4B, p4-git-log." },
+    { "id": "t-read-js", "kind": "search", "query": "read or analyze JavaScript or TypeScript files", "expected": ["read_document", "run_python"], "source": "transcript", "notes": "Qwen3-4B, p4-run-tests: the files were in the workspace." },
+    { "id": "t-read-mjs", "kind": "search", "query": "read a JavaScript or MJS file", "expected": ["read_document", "run_python"], "source": "transcript", "notes": "Qwen3-4B, p4-fix-test." },
+    { "id": "t-discount-policy", "kind": "search", "query": "standard customer discount policy", "expected": ["search_documents", "memory_search"], "source": "transcript", "notes": "Ornith 1.5, p1-standard-discount: looking for a fact, which only a search could hold." },
+    { "id": "t-write-markdown", "kind": "search", "query": "write a markdown file", "expected": ["create_document", "run_python"], "source": "transcript", "notes": "Ornith 1.5, p1-sign-off-name: the note goes in the workspace." },
+    { "id": "t-write-local", "kind": "search", "query": "write a file in vault or local file system", "expected": ["create_document", "run_python"], "source": "transcript", "notes": "Qwen3.6-35B, p1-sign-off-name. write_file matches the words and is the wrong store." },
+    { "id": "t-write-documents", "kind": "search", "query": "write a file to documents folder", "expected": ["create_document"], "source": "transcript", "notes": "Qwen3.6-35B, p1-skip-no-invent." },
+    { "id": "t-save-disk", "kind": "search", "query": "write or save a markdown file to disk", "expected": ["create_document", "run_python"], "source": "transcript", "notes": "Qwen3.6-35B, p1-skip-no-invent." },
+    { "id": "t-sort-json", "kind": "search", "query": "sort people in json file and save as csv", "expected": ["run_python"], "source": "transcript", "notes": "Qwen3-4B, p1-answer-steers." },
+    { "id": "t-spreadsheet", "kind": "search", "query": "read a spreadsheet", "expected": ["run_python", "read_document"], "source": "transcript", "notes": "Qwen3-4B, multi-recover." },
+
+    { "id": "s-config", "kind": "search", "query": "config file", "expected": ["read_text_file", "read_document"], "source": "small-model", "notes": "The plan's example: \"config\" when it needs read_text_file." },
+    { "id": "s-repo", "kind": "search", "query": "look at the repo", "expected": ["git_status", "git_log", "git_list_repos"], "source": "small-model" },
+    { "id": "s-read-file", "kind": "search", "query": "read file", "expected": ["read_text_file", "read_document"], "source": "small-model" },
+    { "id": "s-save", "kind": "search", "query": "save", "expected": ["create_document", "write_file", "memory_save"], "source": "small-model" },
+    { "id": "s-remember", "kind": "search", "query": "remember this", "expected": ["memory_save"], "source": "small-model" },
+    { "id": "s-internet", "kind": "search", "query": "internet", "expected": ["web_search", "web_fetch"], "source": "small-model" },
+    { "id": "s-code", "kind": "search", "query": "run code", "expected": ["run_python"], "source": "small-model" },
+    { "id": "s-calculator", "kind": "search", "query": "calculator", "expected": ["run_python"], "source": "small-model" },
+    { "id": "s-list-files", "kind": "search", "query": "list files", "expected": ["list_directory", "list_documents"], "source": "small-model" },
+    { "id": "s-delete", "kind": "search", "query": "delete", "expected": ["delete_file", "memory_forget"], "source": "small-model" },
+    { "id": "s-database", "kind": "search", "query": "database", "expected": ["sqlite_query", "postgres_query", "sqlite_list_databases", "postgres_list_tables"], "source": "small-model" },
+    { "id": "s-notes", "kind": "search", "query": "notes", "expected": ["vault_search", "read_document", "list_documents", "search_documents"], "source": "small-model" },
+    { "id": "s-commits", "kind": "search", "query": "commits", "expected": ["git_log"], "source": "small-model" },
+    { "id": "s-papers", "kind": "search", "query": "research papers", "expected": ["scholar_search"], "source": "small-model" },
+    { "id": "s-website", "kind": "search", "query": "open website", "expected": ["web_fetch"], "source": "small-model" },
+    { "id": "s-spreadsheet", "kind": "search", "query": "spreadsheet", "expected": ["run_python", "read_document"], "source": "small-model" },
+    { "id": "s-forget", "kind": "search", "query": "forget", "expected": ["memory_forget"], "source": "small-model" }
+  ]
+}

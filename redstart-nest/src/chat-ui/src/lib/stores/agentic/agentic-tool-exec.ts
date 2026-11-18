@@ -28,6 +28,7 @@ import { extractBase64Attachments } from './agentic-attachments';
 import { parseResourceLine, resourceKind } from '$lib/utils/resource-links';
 import { fetchFileBlob } from '$lib/utils/agentic';
 import { apiPost } from '$lib/utils/api-fetch';
+import { callToolTarget, DENIED_RESULT } from '$lib/agent-core';
 import type { AgentPorts, AgentToolCall, AgentContentPart, ToolExecution } from '$lib/agent-core';
 import type { AgenticSessionState } from './agentic-session.svelte';
 import type { MCPToolCall, DatabaseMessageExtraImageFile } from '$lib/types';
@@ -71,6 +72,33 @@ export class AgenticToolExec {
 		const trimmed = args.trim();
 		if (trimmed === '') return {};
 		return JSON.parse(trimmed) as Record<string, unknown>;
+	}
+
+	/**
+	 * The tool a call's card is about. A call_tool call is decided as the
+	 * Nest tool it names (U-S6, master plan Phase 3.1): Nest enforces that
+	 * tool's approval through call_tool, so the card, the destructive check
+	 * and "Always allow" must all be about it, not about call_tool's own
+	 * "read". Only a tool on the same server as call_tool; anything else stays
+	 * call_tool, and Nest then answers "not done" (the safe direction).
+	 *
+	 * An exception to U-S1's freeze on this host, recorded as one in
+	 * docs/notes/master-plan.md: without it a catalog write could not be
+	 * approved in chat.
+	 */
+	gateToolName(call: AgentToolCall): string {
+		const name = call.function.name;
+		if (name !== 'call_tool') return name;
+		let args: Record<string, unknown>;
+		try {
+			args = this.parseToolArguments(call.function.arguments);
+		} catch {
+			return name;
+		}
+		const target = callToolTarget(name, args);
+		if (!target) return name;
+		const server = mcpStore.getToolServer(name);
+		return server && mcpStore.getToolServer(target.name) === server ? target.name : name;
 	}
 
 	/**
@@ -166,7 +194,7 @@ export class AgenticToolExec {
 		return {
 			gate: {
 				approve: async (call, signal) => {
-					const toolName = call.function.name;
+					const toolName = this.gateToolName(call);
 					const asked = this.asksPerson(toolName);
 					const decision = await this.requestPermission(
 						conversationId,
@@ -198,6 +226,22 @@ export class AgenticToolExec {
 				extraParts: (text, attachments) => this.visionParts(text, attachments, effectiveModel)
 			}
 		};
+	}
+
+	/**
+	 * One call a run on the server sent this app (master plan 7.1): the
+	 * permission card, then the executor, as in a browser flow. A Deny is
+	 * the same result text the loop core gives the model.
+	 */
+	async runForServer(
+		conversationId: string,
+		call: AgentToolCall,
+		effectiveModel: string,
+		signal?: AbortSignal
+	): Promise<ToolExecution> {
+		const { gate, tools } = this.ports(conversationId, effectiveModel);
+		if (!(await gate.approve(call, signal))) return { text: DENIED_RESULT, isError: true };
+		return tools.execute(call, signal);
 	}
 
 	/** Dispatch one call to the executor that owns it. Throws on abort. */

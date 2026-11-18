@@ -1,0 +1,24 @@
+{
+  "id": "p5-vague-config",
+  "group": "p5",
+  "phase": 5,
+  "prompt": "Check the config for my app in the File System folder (it is under p5-app). What port is it on?",
+  "fixtures": [
+    {
+      "path": "p5-app/settings.json",
+      "from": "../fixtures/p5-app-settings.json",
+      "space": "files"
+    },
+    {
+      "path": "p5-app/README.md",
+      "from": "../fixtures/p5-app-readme.md",
+      "space": "files"
+    }
+  ],
+  "approve": "all",
+  "expectTools": [
+    "read_text_file"
+  ],
+  "check": "../checks/p5.mjs#configuredPort",
+  "notes": "Benchmarks B3, kept for the catalog (master plan 3.3): File System is deferred by default, so read_text_file is reached only through search_tools and call_tool, with a prompt in the words a small model would search with (\"config\"). The README names the default port 8080; settings.json sets 48213."
+}

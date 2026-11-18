@@ -34,8 +34,9 @@ import { readChatStream } from '../../../../shared/agent-core/chat-stream.mjs'
 import { wireSafeToolCalls, MAX_TOOL_CALLS_PER_REPLY, DENIED_RESULT } from '../../../../shared/agent-core/tool-calls.mjs'
 import { attachmentNote } from '../../../../shared/agent-core/attachment-note.mjs'
 import { formatAskAnswer } from '../../../../shared/agent-core/ask-user.mjs'
+import { callToolTarget } from '../../../../shared/agent-core/approval.mjs'
 import { NUDGE_PREFIX, formatPlanResult, openSteps } from '../../../../shared/agent-core/update-plan.mjs'
-import { argumentProblem, computeMetrics } from './metrics.mjs'
+import { argumentProblem, computeMetrics, FILE_SYSTEM_TOOLS } from './metrics.mjs'
 import { answerFromTask } from './ask.mjs'
 import { META_CLASS_KEY } from './nest-client.mjs'
 import { runViaRuntime } from './runtime.mjs'
@@ -139,7 +140,9 @@ export function maxReplyTokens(opts) {
  */
 export function userMessage(task, ctx) {
   // Only workspace fixtures are attachments; a files-space one is named by the prompt.
-  const note = attachmentNote({ saved: task.fixtures.filter((f) => f.space !== 'files').map((f) => f.path), ...ctx })
+  // The File System names from tool-metadata, in its order, as chat-ui takes
+  // them from tools/list (master plan Phase 3.1).
+  const note = attachmentNote({ saved: task.fixtures.filter((f) => f.space !== 'files').map((f) => f.path), fileSystemTools: [...FILE_SYSTEM_TOOLS], ...ctx })
   return note ? `${task.prompt}\n\n${note}` : task.prompt
 }
 
@@ -158,6 +161,117 @@ export function filePathsIn(text) {
     }
   }
   return out
+}
+
+/**
+ * The gateway's retrieval report (redstart_retrieval_report, connector
+ * contract §2) off a completions response: the tools sent, whether retrieval
+ * removed any, and whether it ran. Null when the headers are absent (a Nest
+ * from before the report).
+ *
+ * @param {{ get(name: string): string | null } | undefined} headers
+ * Since benchmarks H1 also `config`, the settings retrieval ran with
+ * (x-redstart-retrieval-config: `mode=catalog` since master plan 3.3, or
+ * `off`); null from an older Nest. The per-tool origins and would-add
+ * headers went with per-turn selection (3.3).
+ *
+ * @returns {{ names: string[], filtered: boolean, retrieval: 'on' | 'off' | null, config: string | null, arm: string | null } | null}
+ */
+export function toolsSentReport(headers) {
+  const sent = headers?.get?.('x-redstart-tools-sent')
+  if (sent == null) return null
+  const state = headers.get('x-redstart-retrieval')
+  return {
+    names: sent.split(',').filter(Boolean).map((n) => decodeURIComponent(n)),
+    filtered: headers.get('x-redstart-tools-filtered') === '1',
+    retrieval: state === 'on' || state === 'off' ? state : null,
+    config: headers.get('x-redstart-retrieval-config') ?? null,
+    // The tool-text arm the gateway composed with (--arms); null from an older Nest.
+    arm: headers.get('x-redstart-tool-text-arm') ?? null,
+  }
+}
+
+/**
+ * `--expect-retrieval mode=catalog` as { mode: 'catalog' }. The keys are
+ * x-redstart-retrieval-config's.
+ *
+ * @param {string} text
+ * @returns {Record<string, string>}
+ */
+export function parseExpectRetrieval(text) {
+  /** @type {Record<string, string>} */
+  const out = {}
+  for (const part of String(text).split(',').map((s) => s.trim()).filter(Boolean)) {
+    const m = /^([A-Za-z]+)=(\S+)$/.exec(part)
+    if (!m) throw new Error(`--expect-retrieval: "${part}" is not key=value`)
+    if (!RETRIEVAL_CONFIG_KEYS.includes(m[1])) throw new Error(`--expect-retrieval: unknown setting "${m[1]}" (one of ${RETRIEVAL_CONFIG_KEYS.join(', ')})`)
+    out[m[1]] = m[2]
+  }
+  if (Object.keys(out).length === 0) throw new Error('--expect-retrieval needs at least one key=value')
+  return out
+}
+
+/** The keys of x-redstart-retrieval-config (tool-filter.mjs retrievalConfigSummary). */
+export const RETRIEVAL_CONFIG_KEYS = ['mode']
+
+/**
+ * Why the settings Nest reported are not the ones expected, or null when
+ * they match. Benchmarks H1: most variants are Nest settings changed by hand
+ * between runs, and a forgotten change costs a whole run.
+ *
+ * @param {Record<string, string>} expected
+ * @param {string | null} config  x-redstart-retrieval-config
+ * @returns {string | null}
+ */
+export function retrievalConfigMismatch(expected, config) {
+  if (config == null) return 'Nest did not report its retrieval settings (a Nest from before x-redstart-retrieval-config?)'
+  if (config === 'off') return 'retrieval did not run on the probe request: is Nest → Tools → Tool retrieval on?'
+  const actual = Object.fromEntries(config.split(';').map((kv) => kv.split('=')))
+  const wrong = Object.entries(expected).filter(([k, v]) => actual[k] !== v).map(([k, v]) => `${k} is ${actual[k] ?? 'missing'}, expected ${v}`)
+  return wrong.length ? `Nest's retrieval settings differ: ${wrong.join('; ')} (reported: ${config})` : null
+}
+
+/**
+ * One request with every tool, to read the settings retrieval runs with
+ * before any task does. max_tokens 1: nothing is generated to speak of, and
+ * nothing is stored (the conversation id is the probe's own).
+ *
+ * @param {{ completion(body: object, signal?: AbortSignal): Promise<Response> }} nest
+ * @param {any[]} llmTools
+ * @returns {Promise<string | null>}
+ */
+export async function probeRetrievalConfig(nest, llmTools) {
+  const res = await nest.completion({
+    messages: [{ role: 'user', content: 'Hello.' }],
+    tools: llmTools.length > 0 ? llmTools : undefined,
+    stream: false,
+    max_tokens: 1,
+    redstart_retrieval_report: true,
+    // As a task request with --retrieval server asks (master plan Phase 1).
+    redstart_retrieval: true,
+    redstart_conversation_id: `bench-probe-${crypto.randomBytes(4).toString('hex')}`,
+  })
+  await res.text().catch(() => '')
+  return toolsSentReport(res.headers)?.config ?? null
+}
+
+/**
+ * What is wrong with the arguments a call_tool call passes on, or null: the
+ * named tool's schema (the catalog's, which is what describe_tool returns)
+ * against `arguments`. An unreadable call or a tool not in the catalog is a
+ * problem too, since the call cannot have worked.
+ *
+ * @param {string} argumentsText  call_tool's own arguments, as sent
+ * @param {Map<string, { inputSchema?: object }>} toolsByName
+ * @returns {string | null}
+ */
+export function callToolArgsProblem(argumentsText, toolsByName) {
+  let outer
+  try { outer = JSON.parse(argumentsText) } catch { return 'call_tool arguments are not JSON' }
+  if (typeof outer?.name !== 'string') return 'no tool name'
+  const target = toolsByName.get(outer.name)
+  if (!target) return `unknown tool ${outer.name}`
+  return argumentProblem(JSON.stringify(outer.arguments ?? {}), target.inputSchema)
 }
 
 export const clip = (s) => (typeof s === 'string' && s.length > MAX_LOGGED_RESULT_CHARS
@@ -250,7 +364,13 @@ export async function runTask(nest, task, opts) {
                 content,
                 reasoningChars: reasoning?.length ?? 0,
                 toolCalls: toolCalls?.map((c) => ({ id: c.id, name: c.function.name, arguments: c.function.arguments })),
-                timings: timings ? { prompt_n: timings.prompt_n, predicted_n: timings.predicted_n } : undefined,
+                // cache_n and prompt_ms for the retrieval metrics: a changed
+                // tool list shows as a reused prefix near 0 and a long prefill.
+                timings: timings ? {
+                  prompt_n: timings.prompt_n, predicted_n: timings.predicted_n,
+                  ...(typeof timings.cache_n === 'number' ? { cache_n: timings.cache_n } : {}),
+                  ...(typeof timings.prompt_ms === 'number' ? { prompt_ms: timings.prompt_ms } : {}),
+                } : undefined,
               })
               if (!toolCalls) finalText = content
               // The core runs only the first few calls of such a reply. A limit,
@@ -275,8 +395,17 @@ export async function runTask(nest, task, opts) {
                   ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
                   ...(opts.model ? { model: opts.model } : {}),
                   max_tokens: maxReplyTokens(opts),
+                  // Which tools went out, as headers (tools_sent below).
+                  redstart_retrieval_report: true,
+                  // --retrieval off: every post-ban tool, whatever Nest is set to.
+                  // server: asked for, since the bench's account-wide key names
+                  // no surface and retrieval only runs on Redstart's own by
+                  // default (master plan Phase 1); Nest's setting still decides.
+                  redstart_retrieval: opts.retrieval !== 'off',
                 }
                 const res = await nest.completion(body, signal)
+                const report = toolsSentReport(res.headers)
+                if (report) log({ type: 'tools_sent', turn, ...report })
                 await readChatStream(res, acc, { signal })
                 // Hitting the cap is a limit like the turn and time limits:
                 // logged, so it shows in the summary's "hit a limit" count.
@@ -293,6 +422,9 @@ export async function runTask(nest, task, opts) {
                   name,
                   arguments: call.function.arguments,
                   argsProblem: tool ? argumentProblem(call.function.arguments, tool.inputSchema) : 'unknown tool',
+                  // call_tool (benchmarks H3): the named tool's own arguments,
+                  // against the catalog schema describe_tool would return.
+                  ...(name === 'call_tool' ? { innerArgsProblem: callToolArgsProblem(call.function.arguments, toolsByName) } : {}),
                 })
                 const started = now()
                 let result
@@ -313,8 +445,14 @@ export async function runTask(nest, task, opts) {
             gate: {
               approve: async (call) => {
                 const name = call.function.name
-                const cls = toolsByName.get(name)?._meta?.[META_CLASS_KEY]
-                const ok = approves(task.approve, name, cls)
+                // A call_tool call is decided as the tool it names (U-S6), as
+                // chat-ui's card and the task runner do: "reads" must not let a
+                // write through as call_tool's own class.
+                let target = null
+                try { target = callToolTarget(name, parseArgs(call.function.arguments)) } catch { /* call_tool itself */ }
+                const decidedName = target && toolsByName.has(target.name) ? target.name : name
+                const cls = toolsByName.get(decidedName)?._meta?.[META_CLASS_KEY]
+                const ok = approves(task.approve, decidedName, cls)
                 if (!ok) {
                   // The core answers a denial itself; record it as the call and
                   // the error result it is, so the metrics count it.
@@ -374,20 +512,33 @@ export async function runTask(nest, task, opts) {
             }),
           },
         }
-        await runAgentLoop(loopParams)
         // --text-asks answer: a reply that ends in a question to the user is
         // answered like a chat user would, from the task's `answers`, and the
         // run goes on. Off by default (it ends the run, as before). The probe
         // (probe-ask.mjs, 2026-11-11) found the 35B asks this way, not through
         // ask_user, whenever the user invites questions.
-        for (let round = 0; opts.textAsks === 'answer' && round < MAX_TEXT_ASKS && !controller.signal.aborted; round++) {
-          if (!endsInQuestion(finalText)) break
-          const answer = answerFromTask(task.answers, { question: finalText })
-          const reply = formatTextAskReply(answer)
-          log({ type: 'text_ask', question: finalText.slice(-400), answered: !!answer, reply })
-          messages.push({ role: 'assistant', content: finalText }, { role: 'user', content: reply })
+        const answerTextAsks = async () => {
+          for (let round = 0; opts.textAsks === 'answer' && round < MAX_TEXT_ASKS && !controller.signal.aborted; round++) {
+            if (!endsInQuestion(finalText)) break
+            const answer = answerFromTask(task.answers, { question: finalText })
+            const reply = formatTextAskReply(answer)
+            log({ type: 'text_ask', question: finalText.slice(-400), answered: !!answer, reply })
+            messages.push({ role: 'assistant', content: finalText }, { role: 'user', content: reply })
+            finalText = ''
+            await runAgentLoop(loopParams)
+          }
+        }
+        await runAgentLoop(loopParams)
+        await answerTextAsks()
+        // Follow-ups (benchmarks H4): the next user message, after the final
+        // reply, as a chat user would send it. A time limit ends them too.
+        for (const [index, fu] of (task.followUps ?? []).entries()) {
+          if (controller.signal.aborted) break
+          log({ type: 'follow_up', index, prompt: fu.prompt })
+          messages.push({ role: 'assistant', content: finalText }, { role: 'user', content: fu.prompt })
           finalText = ''
           await runAgentLoop(loopParams)
+          await answerTextAsks()
         }
       } catch (err) {
         error = err.message
@@ -495,7 +646,7 @@ export async function runTask(nest, task, opts) {
     conversationId,
     verdict,
     error,
-    metrics: computeMetrics(events, verdict),
+    metrics: computeMetrics(events, verdict, task),
     finalText,
     workspaceFiles: Object.keys(workspace).sort(),
     createdFiles: Object.keys(createdFiles).sort(),

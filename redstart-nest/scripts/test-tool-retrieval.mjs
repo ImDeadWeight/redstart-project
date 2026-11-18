@@ -1,18 +1,20 @@
 // =============================================================================
 // Invariant tests for daemon/tool-retrieval.mjs
 // =============================================================================
-// Three things this suite exists to catch, all of which are easy to lose to an
-// innocent-looking edit:
+// What this suite exists to catch, since master plan 3.3 left retrieval as
+// the catalog (a fixed list, the deferred tools behind search_tools and
+// call_tool):
 //
-//  1. selectTools() is a SUBSET function. It can only ever remove from the list
-//     it is given, because the list it is given is the post-ban one. A change
-//     that let a pin or a carried-forward name conjure a tool that was not
-//     offered would turn an optimization into a hole in the ban filter.
-//  2. An unchanged selection serializes identically. The result is ordered by
-//     name, never by score — sorting by score is the obvious thing to write and
-//     it silently costs a full KV-cache re-prefill on every turn.
-//  3. Nothing here throws. A degenerate vector scores 0; it does not produce a
-//     NaN that poisons a sort.
+//  1. search_tools searches the POST-POLICY catalog only, so a ban cannot be
+//     walked around by describing the tool, and never returns a discovery
+//     tool.
+//  2. call_tool goes through the policy-checked caller and makes it enforce
+//     every approval but a read's (U-S6).
+//  3. Nothing here throws, and the embedder fails open. A degenerate vector
+//     scores 0; it does not produce a NaN that poisons a sort.
+//
+// Per-turn selection's tests (subset, name order, pins, families, budget,
+// floors, growth, withhold, the selection memory) went with it.
 //
 // Run:  node scripts/test-tool-retrieval.mjs
 // =============================================================================
@@ -25,24 +27,24 @@ import {
   createVectorStore,
   cosine,
   scoreTools,
-  selectTools,
-  conversationQueryText,
-  conversationKey,
-  pinsFromMessages,
-  createSelectionMemory,
   truncateForEmbedding,
   CHARS_PER_TOKEN,
+  tokenize,
+  createBm25Index,
+  fuse,
+  RRF_K,
 } from '../daemon/tool-retrieval.mjs'
 import * as searchProvider from '../daemon/search-tools-provider.mjs'
 const { retrievalStatus, syncRetrieval, applyToolsConfig, resetRetrievalState } = await import('../daemon/ipc/tools.mjs')
-import { EMBED_PORT } from '../daemon/ports.mjs'
 import { EMBED_MODEL } from '../daemon/embed-model.mjs'
 import {
-  filterRequestTools,
   searchTools,
-  toolBudget,
-  resetToolFilterState,
-  CONTEXT_BUDGET_FRACTION,
+  rankForSearch,
+  setEmbedPortForTests,
+  retrievalEnabled,
+  retrievalOnFor,
+  retrievalConfigSummary,
+  RETRIEVAL_DEFAULTS,
 } from '../daemon/tool-filter.mjs'
 import {
   EMBED_PID_FILE,
@@ -248,165 +250,77 @@ await test('a null query scores everything 0 instead of throwing', () => {
   assert(scored[0].score === 0, `null query scored ${scored[0].score}`)
 })
 
-console.log('\n-- selection --')
+console.log('\n-- keywords and fusion (second pass 3.1, 3.2) --')
 
-// A scored list built by hand, so selection is tested against exact scores
+// A scored list built by hand, so fusion is tested against exact scores
 // rather than against whatever the vector math happened to produce.
 function scoredList(pairs) {
   return pairs.map(([name, score]) => ({ tool: fnTool(name, `desc of ${name}`), name, score }))
 }
 
-await test('pins survive an empty score list', () => {
-  const { selected } = selectTools({ scored: [], pins: ['ghost'], floor: 0.5 })
-  assert(selected.length === 0, 'a pin conjured a tool that was never offered — retrieval must only ever remove')
+await test('the tokenizer splits names, drops stopwords and numbers, and stems', () => {
+  const got = tokenize('Show me the recent commits of read_text_file-configs: 48271 running studies')
+  const want = ['recent', 'commit', 'read', 'text', 'file', 'config', 'run', 'study']
+  assert(JSON.stringify(got) === JSON.stringify(want), JSON.stringify(got))
+  assert(tokenize('').length === 0 && tokenize(null).length === 0, 'empty input')
 })
 
-await test('🔒 selected is always a subset of the tools offered', () => {
-  const scored = scoredList([['a', 0.9], ['b', 0.8]])
-  const { selected } = selectTools({ scored, pins: ['banned_tool'], previous: ['also_banned'], floor: 0 })
-  const offered = new Set(scored.map(s => s.name))
-  for (const t of selected) {
-    assert(offered.has(toolName(t)), `${toolName(t)} was selected but never offered`)
-  }
+await test('🔍 BM25 finds a tool by a word in its name, and scores only what matches', () => {
+  const tools = [fnTool('read_text_file', 'Read a file'), fnTool('web_fetch', 'Fetch a page'), fnTool('git_log', 'Show commits')]
+  const index = createBm25Index(tools)
+  const s = index.score('text file please')
+  assert(s.has('read_text_file') && !s.has('web_fetch'), JSON.stringify([...s]))
+  assert(index.score('nothing matches xyzzy').size === 0, 'a miss scored something')
+  assert(createBm25Index(tools).key === index.key, 'the same catalog gave a different key')
+  assert(createBm25Index([tools[0], fnTool('web_fetch', 'Fetch a web page')]).key !== index.key, 'a changed catalog kept its key')
 })
 
-await test('a family comes together: one member selected brings the rest past the floor (memory, 2026-11-12)', () => {
-  const MEM = ['memory_save', 'memory_search', 'memory_forget']
-  const scored = scoredList([['memory_save', 0.9], ['read_document', 0.8], ['memory_search', 0.2], ['memory_forget', 0.1]])
-  const names = selectTools({ scored, floor: 0.5, families: [MEM] }).selected.map(toolName)
-  assert(MEM.every((n) => names.includes(n)), `the family was split: ${names}`)
-  const none = selectTools({ scored: scoredList([['read_document', 0.9], ['memory_forget', 0.1]]), floor: 0.5, families: [MEM] }).selected.map(toolName)
-  assert(!none.includes('memory_forget'), 'a family member came in with no member selected')
-  const partial = selectTools({ scored: scoredList([['memory_save', 0.9]]), floor: 0.5, families: [MEM] }).selected.map(toolName)
-  assert(partial.join() === 'memory_save', `a family member that was never offered appeared: ${partial}`)
+await test('🔍 a rarer term outweighs a common one', () => {
+  const tools = [fnTool('a_tool', 'file file vault'), fnTool('b_tool', 'file'), fnTool('c_tool', 'file')]
+  const s = createBm25Index(tools).score('file vault')
+  assert(s.get('a_tool') > s.get('b_tool'), JSON.stringify([...s]))
 })
 
-await test('🔒 the tool filter keeps the memory tools together', async () => {
-  const { TOOL_FAMILIES } = await import('../daemon/tool-filter.mjs')
-  assert(TOOL_FAMILIES.some((f) => ['memory_save', 'memory_search', 'memory_forget'].every((n) => f.includes(n))), JSON.stringify(TOOL_FAMILIES))
+await test('fusion keeps the shape: every tool, sorted, normalised so 1 is first by both', () => {
+  const scored = scoredList([['a', 0.9], ['b', 0.8], ['c', 0.7]])
+  const fused = fuse({ scored, keyword: new Map([['a', 5], ['c', 9]]) })
+  assert(fused.length === 3, 'a tool went missing')
+  assert(fused.every((e, i) => i === 0 || fused[i - 1].score >= e.score), 'not sorted')
+  const a = fused.find((e) => e.name === 'a').score
+  const expectA = (1 / (RRF_K + 1) + 1 / (RRF_K + 2)) / (2 / (RRF_K + 1))
+  assert(Math.abs(a - expectA) < 1e-12, `a scored ${a}, expected ${expectA}`)
+  const top = fuse({ scored, keyword: new Map([['a', 5]]) })[0]
+  assert(top.name === 'a' && Math.abs(top.score - 1) < 1e-12, 'first by both is not 1')
 })
 
-await test('a pin below the floor is still included', () => {
-  const scored = scoredList([['high', 0.9], ['pinned', 0.01]])
-  const names = selectTools({ scored, pins: ['pinned'], floor: 0.5 }).selected.map(toolName)
-  assert(names.includes('pinned'), `a pin was dropped by the floor: ${names.join(',')}`)
+await test('🔍 a keyword match lifts a tool the embedding ranked low', () => {
+  const scored = scoredList([['web', 0.9], ['git', 0.85], ['vault', 0.3]])
+  const fused = fuse({ scored, keyword: new Map([['vault', 4]]) }).map((e) => e.name)
+  assert(fused[0] === 'vault', `vault did not rise: ${fused}`)
 })
 
-await test('🔍 previous is always a subset of selected — the set never shrinks', () => {
-  const scored = scoredList([['a', 0.9], ['b', 0.2], ['c', 0.1]])
-  const previous = ['b', 'c']
-  const names = new Set(selectTools({ scored, previous, floor: 0.5, budgetTokens: 10 }).selected.map(toolName))
-  for (const p of previous) assert(names.has(p), `${p} was applied last turn and vanished this turn`)
+await test('ties share a rank, so the alphabet does not decide between equal scores', () => {
+  const scored = scoredList([['b', 1], ['z', 1], ['c', 0]])
+  const fused = fuse({ scored, keyword: new Map() })
+  assert(fused.find((e) => e.name === 'b').score === fused.find((e) => e.name === 'z').score, 'a tie was split')
 })
 
-await test('a tool below the floor is never added even with budget to spare', () => {
-  const scored = scoredList([['good', 0.9], ['junk', 0.05]])
-  const { selected, reason } = selectTools({ scored, floor: 0.5, budgetTokens: 1e6 })
-  const names = selected.map(toolName)
-  assert(names.length === 1 && names[0] === 'good', `floor ignored: ${names.join(',')}`)
-  assert(reason === 'floor', `expected reason 'floor', got '${reason}'`)
-})
-
-await test('budget exhaustion drops the lowest scorer, never a pin', () => {
-  const scored = scoredList([['pinned', 0.01], ['high', 0.9], ['mid', 0.8], ['low', 0.7]])
-  const perTool = estimateToolTokens(scored[0].tool)
-  // Room for the pin plus exactly one more.
-  const { selected, reason } = selectTools({ scored, pins: ['pinned'], floor: 0, budgetTokens: perTool * 2 })
-  const names = selected.map(toolName)
-  assert(names.includes('pinned'), `the pin was evicted by the budget: ${names.join(',')}`)
-  assert(names.includes('high'), `the best scorer was dropped before the worst: ${names.join(',')}`)
-  assert(!names.includes('low'), `the budget was exceeded: ${names.join(',')}`)
-  assert(reason === 'budget', `expected reason 'budget', got '${reason}'`)
-})
-
-await test('a budget smaller than the pins alone still keeps the pins', () => {
-  const scored = scoredList([['pinned', 0.01], ['high', 0.9]])
-  const names = selectTools({ scored, pins: ['pinned'], floor: 0, budgetTokens: 1 }).selected.map(toolName)
-  assert(names.join(',') === 'pinned', `a pin is a promise, not a budget line: ${names.join(',')}`)
-})
-
-await test('🔍 hysteresis suppresses a marginal add', () => {
-  const scored = scoredList([['strong', 0.9], ['carried', 0.50], ['marginal', 0.52]])
-  const withoutMargin = selectTools({ scored, previous: ['carried'], floor: 0, margin: 0 }).selected.map(toolName)
-  assert(withoutMargin.includes('marginal'), 'setup wrong: the marginal tool should qualify with no margin')
-  const withMargin = selectTools({ scored, previous: ['carried'], floor: 0, margin: 0.1 }).selected.map(toolName)
-  assert(!withMargin.includes('marginal'), `a hair-width score change toggled the set: ${withMargin.join(',')}`)
-  assert(withMargin.includes('strong'), `the margin blocked a clear winner too: ${withMargin.join(',')}`)
-})
-
-await test('the margin is measured against the WEAKEST included tool, not the strongest', () => {
-  // If it were measured against the strongest, 'candidate' could never clear it.
-  const scored = scoredList([['strong', 0.99], ['weak', 0.30], ['candidate', 0.45]])
-  const names = selectTools({ scored, previous: ['strong', 'weak'], floor: 0, margin: 0.1 }).selected.map(toolName)
-  assert(names.includes('candidate'), `a tool clearly better than the worst included was blocked: ${names.join(',')}`)
-})
-
-await test('🔒 two calls with re-ordered inputs and the same set serialize identically', () => {
-  const a = selectTools({ scored: scoredList([['a', 0.9], ['b', 0.8], ['c', 0.7]]), floor: 0 })
-  const b = selectTools({ scored: scoredList([['c', 0.7], ['a', 0.9], ['b', 0.8]]), floor: 0 })
-  assert(
-    JSON.stringify(a.selected) === JSON.stringify(b.selected),
-    'the same set serialized two ways — this invalidates the KV cache on every turn',
-  )
-})
-
-await test('🔒 the result is ordered by name, not by score', () => {
-  const names = selectTools({ scored: scoredList([['zeta', 0.99], ['alpha', 0.10]]), floor: 0 }).selected.map(toolName)
-  assert(names.join(',') === 'alpha,zeta', `ordered by score instead of name: ${names.join(',')}`)
-})
-
-await test('selected and dropped partition the offered set exactly once', () => {
-  const scored = scoredList([['a', 0.9], ['b', 0.4], ['c', 0.1]])
-  const { selected, dropped } = selectTools({ scored, floor: 0.5 })
-  const all = [...selected, ...dropped].map(toolName).sort()
-  assert(all.join(',') === 'a,b,c', `partition lost or duplicated a tool: ${all.join(',')}`)
-})
-
-await test('nothing dropped reports all-selected', () => {
-  const { reason, dropped } = selectTools({ scored: scoredList([['a', 0.9], ['b', 0.8]]), floor: 0 })
-  assert(dropped.length === 0 && reason === 'all-selected', `expected a clean pass, got '${reason}' with ${dropped.length} dropped`)
-})
-
-await test('🔍 a relative floor cuts where an absolute one cannot', () => {
-  // The band bge actually produces on this tree's tools: everything between
-  // 0.57 and 0.82. An absolute floor is either a no-op or an arbitrary cut.
-  const scored = scoredList([['best', 0.82], ['good', 0.74], ['weak', 0.58], ['weaker', 0.57]])
-  const absolute = selectTools({ scored, floor: 0.5 }).selected.map(toolName)
-  assert(absolute.length === 4, `an absolute floor of 0.5 cut nothing, as expected: ${absolute.length}`)
-  const relative = selectTools({ scored, relativeFloor: 0.9 }).selected.map(toolName)
-  assert(relative.join(',') === 'best,good', `expected the top band only, got: ${relative.join(',')}`)
-})
-
-await test('the absolute and relative floors both apply — a tool must clear each', () => {
-  const scored = scoredList([['best', 0.9], ['mid', 0.5]])
-  // relativeFloor alone would admit 'mid' (0.5 >= 0.9 * 0.5); the absolute one
-  // must still be able to refuse it.
-  const names = selectTools({ scored, floor: 0.6, relativeFloor: 0.5 }).selected.map(toolName)
-  assert(names.join(',') === 'best', `the absolute floor was ignored: ${names.join(',')}`)
-})
-
-await test('a relative floor is inert when every score is zero', () => {
-  // A cold cache scores everything 0. That is not a licence to widen or to
-  // admit the whole registry on a division that never happened.
+await test('🔒 with no usable cosine score, fusion leaves everything at 0, so search_tools falls through to keywords', () => {
   const scored = scoredList([['a', 0], ['b', 0]])
-  const names = selectTools({ scored, relativeFloor: 0.9 }).selected.map(toolName)
-  assert(names.length === 2, `a zero best score changed the outcome: ${names.join(',')}`)
+  const fused = fuse({ scored, keyword: new Map([['a', 3]]) })
+  assert(fused.every((e) => e.score === 0), JSON.stringify(fused.map((e) => [e.name, e.score])))
 })
 
-await test('the relative floor is read off the scored field, and a pin still overrides it', () => {
-  // The bar is a fraction of the best score anything got this turn, pins
-  // included — "within x% of the best match" is a claim about the query, not
-  // about the selection. What must hold is that the pin itself is never
-  // measured against it.
-  const scored = scoredList([['pinned', 0.99], ['a', 0.60]])
-  const names = selectTools({ scored, pins: ['pinned'], relativeFloor: 0.9 }).selected.map(toolName)
-  assert(names.includes('pinned'), 'a pin was cut by the floor it set')
-  assert(!names.includes('a'), `0.60 is well under 0.9 x 0.99 and should not have survived: ${names.join(',')}`)
-})
-
-await test('an empty request selects nothing without throwing', () => {
-  const { selected, dropped, reason } = selectTools({ scored: [] })
-  assert(selected.length === 0 && dropped.length === 0 && reason === 'all-selected', 'an empty tool list should be a no-op')
+await test('settings: retrieval is on by default, only an explicit false turns a profile off, and the report says the catalog', () => {
+  // On by default since 2026-11-18 (the user, after 3.2's catalog arm passed).
+  assert(RETRIEVAL_DEFAULTS.enabled === true, 'retrieval is off by default')
+  assert(retrievalOnFor(undefined) && retrievalOnFor({}) && retrievalOnFor({ retrieval: {} }) && retrievalOnFor({ retrieval: { enabled: true } }), 'an absent setting read as off')
+  assert(!retrievalOnFor({ retrieval: { enabled: false } }), 'an explicit false read as on')
+  // The resolved config (gateway-config.mjs) is a boolean; only true is on there.
+  assert(retrievalEnabled(undefined) === false && retrievalEnabled({ enabled: 'yes' }) === false, 'something other than true turned the resolved setting on')
+  // The old per-turn fields are ignored where they lie (master plan 3.3).
+  assert(retrievalEnabled({ enabled: true, mode: 'select', growth: 'scored' }) === true, 'an old mode field turned it off')
+  assert(retrievalConfigSummary() === 'mode=catalog', retrievalConfigSummary())
 })
 
 console.log('\n-- the embedding server never fails a request --')
@@ -727,296 +641,13 @@ await test('🔍 a persistent outage logs once, not once per request', async () 
 
 fs.rmSync(tmpDir, { recursive: true, force: true })
 
-console.log('\n-- reading the request --')
-
-await test('the query is the WHOLE conversation, not the last turn', () => {
-  const text = conversationQueryText([
-    { role: 'user', content: 'find my tax notes' },
-    { role: 'assistant', content: '', tool_calls: [{ function: { name: 'vault_search' } }] },
-    { role: 'tool', name: 'vault_search', content: '[]' },
-    { role: 'user', content: 'now check the repo' },
-  ])
-  assert(/tax notes/.test(text), 'an earlier user message was dropped — the query would churn every turn')
-  assert(/check the repo/.test(text), 'the latest message was dropped')
-  assert(/vault_search/.test(text), 'the name of a tool already called is part of the query')
-})
-
-await test('tool RESULTS are not part of the query', () => {
-  // A search result or a file read can be tens of kilobytes and says nothing
-  // about what the user wants next; it would swamp the sentence that does.
-  const text = conversationQueryText([
-    { role: 'user', content: 'hi' },
-    { role: 'tool', name: 'read_document', content: 'CHAPTER ONE. It was a dark and stormy night.' },
-  ])
-  assert(!/stormy/.test(text), `a tool result leaked into the query: ${text}`)
-})
-
-await test('multimodal content contributes its text and not its image data', () => {
-  const text = conversationQueryText([{
-    role: 'user',
-    content: [{ type: 'text', text: 'what is in this' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }],
-  }])
-  assert(text === 'what is in this', `unexpected query text: ${text}`)
-})
-
-await test('🔍 the conversation key is stable as the conversation grows', () => {
-  const opening = { role: 'user', content: 'what changed in the repo' }
-  const early = conversationKey([opening], 'acct-1')
-  const later = conversationKey([opening, { role: 'assistant', content: 'ok' }, { role: 'user', content: 'and now?' }], 'acct-1')
-  assert(early === later, 'the key changed as messages were added — every turn would be a cache miss')
-})
-
-await test('🔒 two accounts opening with the same sentence get different keys', () => {
-  const messages = [{ role: 'user', content: 'hello' }]
-  assert(conversationKey(messages, 'a') !== conversationKey(messages, 'b'), 'the applied set would be shared across accounts')
-})
-
-await test('a conversation with no user message still keys without throwing', () => {
-  assert(/^[0-9a-f]{64}$/.test(conversationKey([{ role: 'system', content: 'x' }], null)), 'no key produced')
-})
-
-await test('🔍 every tool already called is pinned', () => {
-  const pins = pinsFromMessages([
-    { role: 'assistant', tool_calls: [{ function: { name: 'git_log' } }, { function: { name: 'git_diff' } }] },
-    { role: 'assistant', tool_calls: [{ function: { name: 'read_document' } }] },
-  ])
-  assert(pins.has('git_log') && pins.has('git_diff') && pins.has('read_document'),
-    `a tool used mid-task was not pinned: ${[...pins].join(',')}`)
-})
-
-await test('🔍 names a search_tools result surfaced become pins', () => {
-  const pins = pinsFromMessages([
-    { role: 'assistant', tool_calls: [{ function: { name: 'search_tools' } }] },
-    { role: 'tool', name: 'search_tools', content: JSON.stringify([{ name: 'vault_search', description: 'x' }]) },
-  ])
-  assert(pins.has('vault_search'), 'a searched-for tool was not pinned on the next turn')
-})
-
-await test('an unparseable search result pins nothing rather than guessing', () => {
-  const pins = pinsFromMessages([
-    { role: 'tool', name: 'search_tools', content: 'I found vault_search for you' },
-  ])
-  assert(!pins.has('vault_search'), 'a name was parsed out of prose')
-})
-
-await test('a tool result from something OTHER than search_tools pins nothing', () => {
-  const pins = pinsFromMessages([
-    { role: 'tool', name: 'read_document', content: JSON.stringify([{ name: 'delete_everything' }]) },
-  ])
-  assert(!pins.has('delete_everything'), 'a tool result could name its own pins — content is not authority')
-})
-
-console.log('\n-- the selection memory --')
-
-await test('the memory returns what was applied, and an empty list for a miss', () => {
-  const mem = createSelectionMemory({ max: 3 })
-  assert(mem.get('nope').length === 0, 'a miss should be an empty list, not undefined')
-  mem.set('k', ['a', 'b'])
-  assert(mem.get('k').join(',') === 'a,b', 'the applied set did not round-trip')
-})
-
-await test('🔍 the memory is bounded, and evicts least-recently-used', () => {
-  const mem = createSelectionMemory({ max: 2 })
-  mem.set('a', ['1'])
-  mem.set('b', ['2'])
-  mem.get('a')            // 'a' is now the most recently used
-  mem.set('c', ['3'])     // evicts 'b', not 'a'
-  assert(mem.size() === 2, `memory grew to ${mem.size()}`)
-  assert(mem.get('a').length === 1, 'the recently used entry was evicted')
-  assert(mem.get('b').length === 0, 'the stale entry survived')
-})
-
-console.log('\n-- the filter, end to end --')
-
-const t = {
-  git: fnTool('git_status', 'Show the working-tree status of a git repository'),
-  doc: fnTool('read_document', 'Read the text content of a document'),
-  web: fnTool('web_fetch', 'Fetch a web page and return its article text'),
-}
-const allTools = [t.git, t.doc, t.web]
-const ask = [{ role: 'user', content: 'what changed in the repo' }]
-
-// A stand-in embedder: each text gets a vector along the axis of whichever
-// keyword it contains, so relevance is exact and the assertions are about the
-// filter's decisions rather than about a model's judgement.
-function keywordEmbed(axes) {
-  return async (texts) => texts.map(text => {
-    const v = new Float32Array(axes.length)
-    axes.forEach((word, i) => { if (text.toLowerCase().includes(word)) v[i] = 1 })
-    // Never hand back an all-zero vector for a text that matched nothing: that
-    // is a legitimate score of 0, but it would make every miss identical.
-    if (v.every(x => x === 0)) v[axes.length - 1] = 0.01
-    return v
-  })
-}
-const embed = keywordEmbed(['repo', 'document', 'web'])
-
-await test('🔒 with the setting off, the very same array comes back', async () => {
-  resetToolFilterState()
-  const out = await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: false }, embed })
-  assert(out === allTools, 'the array was rebuilt with retrieval off — callers rely on identity to know nothing happened')
-})
-
-await test('🔒 a null from the embedder returns the same array', async () => {
-  resetToolFilterState()
-  const out = await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: true }, embed: async () => null })
-  assert(out === allTools, 'a dead embedding server changed the tool list')
-})
-
-await test('🔒 an embedder that throws returns the same array', async () => {
-  resetToolFilterState()
-  const out = await filterRequestTools({
-    tools: allTools, messages: ask, settings: { enabled: true },
-    embed: async () => { throw new Error('kaboom') },
-  })
-  assert(out === allTools, 'an exception escaped the filter')
-})
-
-await test('🔍 an on-topic ask keeps the matching tool and drops the rest', async () => {
-  resetToolFilterState()
-  const out = await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: true }, embed })
-  const names = out.map(toolName)
-  assert(names.includes('git_status'), `the relevant tool was dropped: ${names.join(',')}`)
-  assert(!names.includes('web_fetch'), `an unrelated tool survived: ${names.join(',')}`)
-})
-
-await test('🔒 the result is always a subset of what was offered', async () => {
-  resetToolFilterState()
-  const out = await filterRequestTools({ tools: [t.git], messages: ask, settings: { enabled: true }, embed })
-  assert(out.every(x => allTools.includes(x)), 'the filter returned a tool that was not offered')
-  assert(out.length <= 1, `the filter grew the list to ${out.length}`)
-})
-
-await test('🔍 the applied set never shrinks across turns in one conversation', async () => {
-  resetToolFilterState()
-  const first = await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: true }, embed })
-  const firstNames = first.map(toolName)
-  // The topic moves on. Monotonicity says nothing already applied may leave.
-  const turn2 = [...ask, { role: 'assistant', content: 'ok' }, { role: 'user', content: 'now read a document' }]
-  const second = await filterRequestTools({ tools: allTools, messages: turn2, settings: { enabled: true, margin: 0 }, embed })
-  const secondNames = second.map(toolName)
-  for (const name of firstNames) {
-    assert(secondNames.includes(name), `${name} was applied last turn and vanished — that is a re-prefill and a broken task`)
-  }
-  assert(secondNames.includes('read_document'), `the new topic's tool was not added: ${secondNames.join(',')}`)
-})
-
-await test('🔍 hysteresis suppresses a tie, which is the point of it', () => {
-  // The turn above with the default margin instead of 0. The new topic scores
-  // EXACTLY what the carried tool scores, and the margin refuses it — a set
-  // that reshuffles on a tie costs a full re-prefill every turn, and because
-  // the query is the whole conversation the tie breaks on its own as the
-  // conversation moves rather than staying stuck. Pinned here because it is
-  // surprising, not because it is incidental.
-  const scored = scoredList([['carried', 0.707], ['newcomer', 0.707]])
-  const withDefault = selectTools({ scored, previous: ['carried'], floor: 0, margin: 0.02 }).selected.map(toolName)
-  assert(!withDefault.includes('newcomer'), `a tie was admitted: ${withDefault.join(',')}`)
-  const withNone = selectTools({ scored, previous: ['carried'], floor: 0, margin: 0 }).selected.map(toolName)
-  assert(withNone.includes('newcomer'), 'setup: with no margin the tie should be admitted')
-})
-
-await test('🔒 a tool the model has already called is never dropped', async () => {
-  resetToolFilterState()
-  const messages = [
-    { role: 'user', content: 'read a document' },
-    { role: 'assistant', tool_calls: [{ function: { name: 'web_fetch' } }] },
-    { role: 'tool', name: 'web_fetch', content: 'ok' },
-    { role: 'user', content: 'read a document' },
-  ]
-  const out = await filterRequestTools({ tools: allTools, messages, settings: { enabled: true }, embed })
-  assert(out.map(toolName).includes('web_fetch'), 'a tool already called mid-task was filtered away')
-})
-
-await test('🔒 ask_user is never dropped, though it matches no task', async () => {
-  // Host-resolved tools score against nothing in particular. Dropped, the
-  // model reads its absence as "you may not ask" (agent-runtime plan §4, 1.1).
-  resetToolFilterState()
-  const ask_user = fnTool('ask_user', 'Ask the user a question and wait for the answer')
-  const out = await filterRequestTools({ tools: [...allTools, ask_user], messages: ask, settings: { enabled: true }, embed })
-  const names = out.map(toolName)
-  assert(names.includes('ask_user'), `ask_user was filtered away: ${names.join(',')}`)
-  assert(!names.includes('web_fetch'), `the pin widened the selection: ${names.join(',')}`)
-})
-
-await test('🔒 the ask_user pin adds nothing the request did not carry', async () => {
-  resetToolFilterState()
-  const out = await filterRequestTools({ tools: allTools, messages: ask, settings: { enabled: true }, embed })
-  assert(!out.map(toolName).includes('ask_user'), 'a pin invented a tool the client never sent')
-})
-
-await test('🔒 an empty selection falls back to the full list rather than stripping everything', async () => {
-  resetToolFilterState()
-  // An embedder that answers with vectors of the wrong length: every cosine is
-  // 0, so nothing clears a floor. Sending no tools at all would strip a
-  // capability the prompt is about to claim.
-  const out = await filterRequestTools({
-    tools: allTools, messages: ask, settings: { enabled: true, floor: 0.5 },
-    embed: async (texts) => texts.map(() => new Float32Array([0, 0, 0, 0, 0])),
-  })
-  assert(out === allTools, 'a scorer that matched nothing emptied the request')
-})
-
-await test('a conversation with no user text is left alone', async () => {
-  resetToolFilterState()
-  const out = await filterRequestTools({
-    tools: allTools, messages: [{ role: 'system', content: 'you are a bot' }],
-    settings: { enabled: true }, embed,
-  })
-  assert(out === allTools, 'a request with nothing to score was filtered anyway')
-})
-
-await test('🔒 the gateway budget and the Tools tab agree on what is too much', () => {
-  // Two numbers in one product deciding "too much context spent on tools"
-  // independently is how a filter comes to report success while sending a
-  // request the UI would have warned about. The tab's amber threshold has
-  // always been a quarter of the window; the budget matches it, and this reads
-  // the tab to say so rather than trusting a comment.
-  const tab = fs.readFileSync(new URL('../src/tabs/ToolsTab.tsx', import.meta.url), 'utf8')
-  const thresholds = [...tab.matchAll(/ctxSize \* ([\d.]+)|ctx \* ([\d.]+)/g)].map(m => Number(m[1] ?? m[2]))
-  assert(thresholds.length > 0, 'no context threshold found in ToolsTab.tsx — has it changed shape?')
-  for (const t of thresholds) {
-    assert(t === CONTEXT_BUDGET_FRACTION,
-      `the Tools tab warns at ${t} of the window but the gateway budgets ${CONTEXT_BUDGET_FRACTION}`)
-  }
-  return `both ${CONTEXT_BUDGET_FRACTION}, across ${thresholds.length} site(s)`
-})
-
-await test('🔍 the budget leaves room for the conversation and the answer', () => {
-  assert(toolBudget(4096, 0) === Math.floor(4096 * CONTEXT_BUDGET_FRACTION),
-    `an empty conversation should get the whole tool share: ${toolBudget(4096, 0)}`)
-  assert(toolBudget(4096, 1000) === Math.floor(4096 * CONTEXT_BUDGET_FRACTION) - 1000,
-    'the reserved prompt was not subtracted')
-  assert(toolBudget(4096, 999999) === 0, 'a conversation larger than the window produced a negative budget')
-})
-
-await test('an unknown context size budgets nothing rather than guessing', () => {
-  for (const bad of [undefined, null, 0, -1, NaN, 'big']) {
-    assert(toolBudget(bad, 0) === Infinity, `${JSON.stringify(bad)} produced an invented budget`)
-  }
-  return 'the floors still decide'
-})
-
-await test('🔍 the budget is enforced end to end', async () => {
-  resetToolFilterState()
-  // A window small enough that one tool fits and three do not.
-  const perTool = estimateToolTokens(t.git)
-  const out = await filterRequestTools({
-    tools: allTools, messages: ask, settings: { enabled: true, relativeFloor: 0, floor: -1 },
-    ctxSize: Math.ceil((perTool * 2) / CONTEXT_BUDGET_FRACTION), embed,
-  })
-  assert(out.length < allTools.length, `the budget did not bind: kept ${out.length} of ${allTools.length}`)
-  assert(out.map(toolName).includes('git_status'), 'the budget dropped the best match first')
-})
-
-
 console.log('\n-- the embedding model cannot see more than 512 tokens --')
 
-// The bug this section exists for. The query is the whole conversation by
-// design, bge-small stops at 512 positions, and llama-server answers an
-// over-long input with a 500 that fails the ENTIRE batch — so one long
-// conversation cost every tool its vector and the request went out unfiltered.
-// The Phase 2.4 evaluation used one-sentence queries, so the two decisions
-// never met until a real conversation put them together.
+// The bug this section exists for. bge-small stops at 512 positions, and
+// llama-server answers an over-long input with a 500 that fails the ENTIRE
+// batch, so one long text (a whole conversation, when per-turn selection
+// embedded one; a long tool description or document chunk now) cost every
+// other input its vector.
 
 await test('truncateForEmbedding leaves text that already fits alone', () => {
   assert(truncateForEmbedding('short enough', 512) === 'short enough', 'a short string was cut')
@@ -1039,41 +670,6 @@ await test('it prefers a word boundary, but not at any cost', () => {
 await test('a non-string and a zero budget are handled rather than thrown on', () => {
   assert(truncateForEmbedding(null, 512) === '', 'null did not become an empty string')
   assert(truncateForEmbedding('text', 0) === 'text', 'a zero budget cut everything')
-})
-
-await test('🔍 a bounded query stays inside the budget, however long the conversation', () => {
-  const messages = [
-    { role: 'user', content: 'x'.repeat(20000) },
-    { role: 'assistant', tool_calls: [{ function: { name: 'git_status' } }] },
-    { role: 'user', content: 'now check the repo' },
-  ]
-  const q = conversationQueryText(messages, { maxTokens: 512 })
-  assert(q.length <= 512 * CHARS_PER_TOKEN, `query was ${q.length} chars — this is the 500`)
-})
-
-await test('🔒 tool names survive a tight budget; the oldest prose does not', () => {
-  const messages = [
-    { role: 'user', content: 'the opening question, long ago '.repeat(200) },
-    { role: 'assistant', tool_calls: [{ function: { name: 'vault_search' } }] },
-    { role: 'user', content: 'and what about now' },
-  ]
-  const q = conversationQueryText(messages, { maxTokens: 64 })
-  assert(q.length <= 64 * CHARS_PER_TOKEN, `over budget at ${q.length} chars`)
-  assert(q.includes('vault_search'), `a tool already called was dropped from the query: ${JSON.stringify(q)}`)
-  assert(q.includes('and what about now'), 'the most recent question was dropped in favour of the oldest')
-  // The opening message is 6,200 characters; whatever survives of it is a tail
-  // fragment, never the message.
-  assert(q.length < messages[0].content.length, 'the whole opening survived a 64-token budget')
-})
-
-await test('an unbounded call is still the whole conversation', () => {
-  const messages = [
-    { role: 'user', content: 'first' },
-    { role: 'assistant', tool_calls: [{ function: { name: 'git_log' } }] },
-    { role: 'user', content: 'second' },
-  ]
-  const q = conversationQueryText(messages)
-  assert(/first/.test(q) && /second/.test(q) && /git_log/.test(q), `something was lost with no budget: ${q}`)
 })
 
 await test('🔒 embedTexts truncates before sending, so one long input cannot fail the batch', async () => {
@@ -1105,7 +701,7 @@ await test('🔒 embedTexts truncates before sending, so one long input cannot f
 
 console.log('\n-- search_tools --')
 
-// A stub embedding server on the real EMBED_PORT, so callTool() runs the whole
+// A stub embedding server on an ephemeral port, so callTool() runs the whole
 // production path — embedTexts over a socket, the shared vector store, the
 // scorer — rather than through a seam wired in for the test. Keyword axes make
 // the ranking exact.
@@ -1124,18 +720,12 @@ const embedStub = http.createServer(async (req, res) => {
   res.setHeader('content-type', 'application/json')
   res.end(JSON.stringify({ data }))
 })
-// EMBED_PORT specifically, because these drive the provider's real callTool()
-// and it embeds through the production client, which knows one port. A running
-// Redstart owns that port, so this section skips rather than failing — the same
-// bargain test-daemon-smoke.mjs makes, and CI always has the port to itself.
-const embedPortFree = await new Promise(resolve => {
-  embedStub.once('error', () => resolve(false))
-  embedStub.listen(EMBED_PORT, '127.0.0.1', () => resolve(true))
-})
+// An ephemeral port, handed to the production client through
+// setEmbedPortForTests. It used to be EMBED_PORT itself, which a running
+// Redstart owns, so the whole section skipped on a developer's machine (P6).
+await new Promise(resolve => embedStub.listen(0, '127.0.0.1', resolve))
+setEmbedPortForTests(/** @type {import('net').AddressInfo} */ (embedStub.address()).port)
 resetEmbedFailureLog()
-if (!embedPortFree) {
-  console.log(`  SKIP - port ${EMBED_PORT} is in use; is a Redstart embedding server running?`)
-}
 
 const catalog = [
   { name: 'git_status', description: 'Show the working-tree status of a git repository' },
@@ -1147,28 +737,35 @@ function catalogConfig(extra = {}) {
   return { toolRetrieval: { enabled: true }, ...extra }
 }
 
-if (embedPortFree) await test('search_tools is advertised only while retrieval is on', () => {
+const withSchemas = () => catalog.map((t) => ({ ...t, inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } }))
+
+await test('search_tools and call_tool are advertised only while retrieval is on, and describe_tool never', () => {
   assert(searchProvider.toolDefs({}).length === 0, 'a server with retrieval off advertised search_tools')
   assert(searchProvider.toolDefs({ toolRetrieval: { enabled: false } }).length === 0, 'an explicit off still advertised it')
   const defs = searchProvider.toolDefs(catalogConfig())
-  assert(defs.length === 1 && defs[0].name === 'search_tools', 'retrieval on did not advertise it')
+  assert(defs.map((d) => d.name).join() === 'search_tools,call_tool', `retrieval on advertised ${defs.map((d) => d.name)}`)
   assert(defs[0].inputSchema.required.includes('query'), 'query is not required')
+  assert(defs[1].inputSchema.required.includes('name'), 'name is not required')
 })
 
-if (embedPortFree) await test('🔒 a result carries names and descriptions, never schemas', async () => {
-  searchProvider.setToolCatalogProvider(() => catalog.map(t => ({
-    ...t,
-    inputSchema: { type: 'object', properties: { secret_parameter: { type: 'string' } } },
-  })))
-  const result = await searchProvider.callTool('search_tools', { query: 'read a document' }, catalogConfig())
-  const text = result.content[0].text
-  assert(!/secret_parameter/.test(text), `a schema was returned: ${text}`)
-  assert(!/inputSchema/.test(text), `a schema field was returned: ${text}`)
-  const rows = JSON.parse(text)
-  assert(rows.every(r => Object.keys(r).sort().join(',') === 'description,name'), `unexpected row shape: ${text}`)
+await test('🔍 a search row carries its schema and how to call it, at most five rows', async () => {
+  searchProvider.setToolCatalogProvider(() => withSchemas())
+  const result = await searchProvider.callTool('search_tools', { query: 'read the text of a document' }, catalogConfig())
+  const body = JSON.parse(result.content[0].text)
+  assert(Array.isArray(body.tools) && body.tools.length > 0 && body.tools.length <= searchProvider.CATALOG_RESULT_LIMIT, `rows: ${result.content[0].text}`)
+  assert(body.tools.every((r) => r.inputSchema && r.inputSchema.type === 'object'), 'a row without its schema')
+  assert(body.tools.every((r) => Object.keys(r).sort().join(',') === 'category,description,inputSchema,name,store'), `unexpected row shape: ${result.content[0].text}`)
+  assert(/call_tool/.test(body.howToCall), 'no howToCall')
 })
 
-if (embedPortFree) await test('🔒 the catalog it searches is the one the policy gate produced', async () => {
+await test('a search for a tool\'s exact name returns just that tool, with its schema', async () => {
+  searchProvider.setToolCatalogProvider(() => withSchemas())
+  const body = JSON.parse((await searchProvider.callTool('search_tools', { query: 'git_status' }, catalogConfig())).content[0].text)
+  const got = JSON.stringify([body.match, body.tools.map((t) => t.name), !!body.tools[0].inputSchema])
+  assert(got === JSON.stringify(['exact', ['git_status'], true]), `exact: ${got}`)
+})
+
+await test('🔒 the catalog it searches is the one the policy gate produced', async () => {
   // The provider is handed a catalog rather than assembling one. This asserts
   // the consequence: whatever the gate withheld simply is not there to find, so
   // a ban cannot be walked around by describing the tool.
@@ -1184,7 +781,7 @@ if (embedPortFree) await test('🔒 the catalog it searches is the one the polic
   assert(!/read_document/.test(result.content[0].text), 'a withheld tool was reachable by describing it')
 })
 
-if (embedPortFree) await test('🔍 search_tools never returns itself', async () => {
+await test('🔍 search_tools never returns itself', async () => {
   searchProvider.setToolCatalogProvider(() => [
     ...catalog,
     { name: 'search_tools', description: 'Find tools that are available but not currently listed' },
@@ -1193,7 +790,7 @@ if (embedPortFree) await test('🔍 search_tools never returns itself', async ()
   assert(!/search_tools/.test(result.content[0].text), 'search_tools offered itself as a result')
 })
 
-if (embedPortFree) await test('🔍 a scorer that is down is reported as such, not as "no matches"', async () => {
+await test('🔍 a scorer that is down is reported as such, not as "no matches"', async () => {
   // Different answers. A model told nothing matched stops looking; one told the
   // search is unavailable keeps using what it can already see.
   searchProvider.setToolCatalogProvider(() => catalog)
@@ -1203,7 +800,7 @@ if (embedPortFree) await test('🔍 a scorer that is down is reported as such, n
   assert(Array.isArray(empty) && empty.length === 0, 'an empty catalog is an empty result, not a failure')
 })
 
-if (embedPortFree) await test('a blank query is refused rather than scored', async () => {
+await test('a blank query is refused rather than scored', async () => {
   searchProvider.setToolCatalogProvider(() => catalog)
   for (const bad of [{}, { query: '' }, { query: '   ' }, { query: 42 }]) {
     const result = await searchProvider.callTool('search_tools', bad, catalogConfig())
@@ -1211,18 +808,18 @@ if (embedPortFree) await test('a blank query is refused rather than scored', asy
   }
 })
 
-if (embedPortFree) await test('🔒 search_tools refuses to run when retrieval is off', async () => {
+await test('🔒 search_tools refuses to run when retrieval is off', async () => {
   searchProvider.setToolCatalogProvider(() => catalog)
   const result = await searchProvider.callTool('search_tools', { query: 'read a document' }, { toolRetrieval: { enabled: false } })
   assert(result.isError === true, 'a call succeeded on a server where retrieval is off')
 })
 
-if (embedPortFree) await test('search_tools declines a call that is not its own', async () => {
+await test('search_tools declines a call that is not its own', async () => {
   const result = await searchProvider.callTool('git_status', {}, catalogConfig())
   assert(result === null, 'the provider answered for a tool it does not own')
 })
 
-if (embedPortFree) await test('🔍 results are ranked, best first', async () => {
+await test('🔍 results are ranked, best first', async () => {
   const embed = async (texts) => texts.map(text => {
     const v = new Float32Array(3)
     if (/git|commit|repo/i.test(text)) v[0] = 1
@@ -1235,7 +832,110 @@ if (embedPortFree) await test('🔍 results are ranked, best first', async () =>
   assert(ranked[0].name === 'git_status', `wrong first result: ${ranked.map(r => r.name).join(',')}`)
 })
 
-if (embedPortFree) await new Promise(resolve => embedStub.close(resolve))
+console.log('\n-- discovery: widening and call_tool (second pass 5.x) --')
+
+const stubPort = /** @type {import('net').AddressInfo} */ (embedStub.address()).port
+const deadPort = await new Promise((resolve) => {
+  const probe = http.createServer()
+  probe.listen(0, '127.0.0.1', () => { const port = probe.address().port; probe.close(() => resolve(port)) })
+})
+async function withEmbedderDown(fn) {
+  setEmbedPortForTests(deadPort)
+  resetEmbedFailureLog()
+  // A store warmed by the tests above would still rank; a fresh tool text
+  // has no vector, so ranking needs the (dead) embedder.
+  try { return await fn() } finally { setEmbedPortForTests(stubPort) }
+}
+const searchJson = (result) => JSON.parse(result.content[0].text)
+
+await test('🔍 step 1: a search that matches answers "close", with rows the scorer ranked', async () => {
+  searchProvider.setToolCatalogProvider(() => catalog)
+  const body = searchJson(await searchProvider.callTool('search_tools', { query: 'look at recent commits in the repo' }, catalogConfig()))
+  assert(body.match === 'close' && body.tools[0].name === 'git_status', JSON.stringify(body))
+})
+
+await test('🔍 step 2: nothing above the floors answers "nearest" and says so', async () => {
+  // The stub gives a query with no keyword a vector along the web axis at
+  // 0.01, which no tool here shares: every cosine is 0, fusion leaves them
+  // there, and nothing clears the floor. (The floors are constants since
+  // master plan 3.3, so this is the way to reach the step.)
+  searchProvider.setToolCatalogProvider(() => catalog.filter((t) => t.name !== 'web_fetch'))
+  const body = searchJson(await searchProvider.callTool('search_tools', { query: 'zzz' }, catalogConfig()))
+  assert(body.match === 'nearest' && /nearest/.test(body.note) && body.tools.length > 0, JSON.stringify(body))
+})
+
+await test('🔍 step 3: with the embedder down, keywords on names and tags still answer', async () => {
+  const fresh = [{ name: 'read_text_file', description: 'Read one file (fresh text, never embedded)' }, { name: 'git_log', description: 'Commits (fresh)' }]
+  searchProvider.setToolCatalogProvider(() => fresh)
+  const body = await withEmbedderDown(async () => searchJson(await searchProvider.callTool('search_tools', { query: 'config' }, catalogConfig())))
+  assert(body.match === 'keyword' && body.tools[0].name === 'read_text_file' && /unavailable/.test(body.note), JSON.stringify(body))
+})
+
+await test('🔍 step 4: no keyword either lists every tool by category, and names the client-tool gap', async () => {
+  const fresh = [{ name: 'read_text_file', description: 'Read one file (fresher)' }, { name: 'git_log', description: 'Commits (fresher)' }]
+  searchProvider.setToolCatalogProvider(() => fresh)
+  const body = await withEmbedderDown(async () => searchJson(await searchProvider.callTool('search_tools', { query: 'xyzzy plugh' }, catalogConfig())))
+  assert(body.match === 'categories', JSON.stringify(body))
+  const names = body.categories.flatMap((c) => c.tools)
+  assert(names.sort().join() === 'git_log,read_text_file', JSON.stringify(body))
+  assert(/application provides itself/.test(body.note), 'the client-tool gap was not named')
+})
+
+await test('🔒 the discovery tools are never search results, at any step', async () => {
+  searchProvider.setToolCatalogProvider(() => [...catalog, { name: 'search_tools', description: 'find a tool' }, { name: 'call_tool', description: 'call a tool' }])
+  const text = (await searchProvider.callTool('search_tools', { query: 'find a tool, call a tool' }, catalogConfig())).content[0].text
+  assert(!/call_tool"|search_tools"/.test(text.replace(/"howToCall":"[^"]*"/, '')), text)
+})
+
+await test('🔒 call_tool refuses to run when retrieval is off', async () => {
+  searchProvider.setToolCatalogProvider(() => catalog)
+  const r = await searchProvider.callTool('call_tool', { name: 'git_status' }, { toolRetrieval: { enabled: false } })
+  assert(r?.isError === true, 'call_tool ran with retrieval off')
+})
+
+await test('🔒 call_tool proxies through the policy-checked caller, and makes it enforce every approval but a read\'s (U-S6)', async () => {
+  // Until master plan Phase 3.1 a write or a delete was refused outright;
+  // now it goes through with enforceApproval, so Nest's gate holds it until
+  // the person decides the INNER call (mcp-server callToolAs).
+  const cfg = catalogConfig()
+  const writes = [{ name: 'create_document', description: 'Create a document' }, { name: 'memory_forget', description: 'Forget' }, { name: 'ask_user', description: 'Ask' }]
+  searchProvider.setToolCatalogProvider(() => [...catalog, ...writes])
+  const calls = []
+  searchProvider.setToolCaller(async (account, name, args, opts) => { calls.push({ account, name, args, opts }); return { content: [{ type: 'text', text: 'ok' }] } })
+  const ok = await searchProvider.callTool('call_tool', { name: 'git_status', arguments: { repo: 'x' } }, cfg, { account: { username: 'u' }, conversationId: 'conv' })
+  assert(ok.content[0].text === 'ok' && calls.length === 1 && calls[0].name === 'git_status' && calls[0].args.repo === 'x', JSON.stringify(calls))
+  assert(calls[0].account.username === 'u' && calls[0].opts.conversationId === 'conv', 'the caller identity was not passed')
+  assert(calls[0].opts.enforceApproval === false, 'a read was made to wait for an approval')
+  for (const name of ['create_document', 'memory_forget']) {
+    await searchProvider.callTool('call_tool', { name, arguments: { a: 1 } }, cfg, { approvalId: 'appr-1' })
+    const c = calls.at(-1)
+    assert(c.name === name && c.opts.enforceApproval === true && c.opts.approvalId === 'appr-1', `${name}: ${JSON.stringify(c.opts)}`)
+  }
+  // Still refused before the caller: a host-resolved tool, and the discovery
+  // tools themselves (not in the searchable catalog at all).
+  const before = calls.length
+  for (const name of ['ask_user', 'call_tool', 'search_tools']) {
+    const r = await searchProvider.callTool('call_tool', { name }, cfg, {})
+    assert(r.isError, `${name} went through call_tool`)
+  }
+  assert(calls.length === before, `a refused call reached the caller: ${calls.slice(before).map((c) => c.name)}`)
+  calls.length = 1
+  searchProvider.setToolCatalogProvider(() => catalog.filter((t) => t.name !== 'git_status'))
+  const banned = await searchProvider.callTool('call_tool', { name: 'git_status' }, cfg, {})
+  assert(banned.isError && calls.length === 1, 'a banned tool was called by name')
+})
+
+await test('🔒 the discovery tools are never embedded', async () => {
+  const seen = []
+  const watching = async (texts) => { seen.push(...texts); return texts.map(() => Float32Array.from([1, 0, 0])) }
+  const tools = [mcpTool('git_status', 'status (never seen)'), mcpTool('search_tools', 'find tools'), mcpTool('call_tool', 'call one')]
+  const ranked = await rankForSearch({ tools, query: 'status', embed: watching })
+  assert(!seen.some((t) => /^(search_tools|call_tool):/.test(t)), `embedded: ${seen.filter((t) => /_tool/.test(t))}`)
+  assert(ranked.map((r) => r.name).join() === 'git_status', `ranked: ${ranked.map((r) => r.name)}`)
+})
+
+await new Promise(resolve => embedStub.close(resolve))
+setEmbedPortForTests(null)
 
 console.log('\n-- turning retrieval on --')
 
@@ -1282,10 +982,11 @@ await test('🔒 turning it off stops the sidecar and downloads nothing', () => 
   assert(serverStarts === 0, 'switching retrieval off started a server')
 })
 
-await test('a profile with no retrieval field at all reads as off', () => {
-  assert(retrievalStatus({ tools: { enabled: true } }, enableDeps).enabled === false,
-    'an older profile with no retrieval key read as on')
-  assert(syncRetrieval({ tools: { enabled: true } }, enableDeps).enabled === false, 'an absent setting started something')
+await test('a profile with no retrieval field at all reads as on (the default since 2026-11-18); an explicit false as off', () => {
+  assert(retrievalStatus({ tools: { enabled: true } }, enableDeps).enabled === true,
+    'an older profile with no retrieval key read as off')
+  assert(retrievalStatus(profileWith({ enabled: false }), enableDeps).enabled === false, 'an explicit false read as on')
+  assert(syncRetrieval(profileWith({ enabled: false }), enableDeps).enabled === false, 'an explicit false started something')
 })
 
 await test('🔍 turning it on returns immediately rather than waiting on a 67 MB download', () => {

@@ -35,7 +35,7 @@ import { logEvent } from './logger.mjs'
  * The last network configuration a launch actually used, normalised.
  *
  * Absent on a machine that has never launched — deliberately NOT defaulted to
- * `networkMode: true`. The default in src/types.ts is on, but inferring "this
+ * `networkMode: true`. The default in src/launcher/types.ts is on, but inferring "this
  * box wants to be on the LAN" from a value nobody has chosen yet is how a fresh
  * install would start advertising itself at boot without anyone asking.
  *

@@ -19,42 +19,38 @@
  * not offered are not named: a small model calls what it is told about.
  */
 
-// The File System capability's tool names (the reference filesystem MCP
-// server Nest wraps). Listed so the note can name the offered ones.
-const FILE_SYSTEM_TOOLS = [
-	'read_text_file',
-	'read_file',
-	'list_directory',
-	'move_file',
-	'write_file',
-	'search_files',
-	'directory_tree',
-	'get_file_info',
-	'edit_file',
-	'read_multiple_files',
-	'list_directory_with_sizes',
-	'create_directory',
-	'read_media_file'
-];
+// How each block of the note opens. It was exported for tool retrieval, which
+// left the note out of its query; that query went with per-turn selection
+// (master plan 3.3), and so did stripAttachmentNote.
+const ATTACHMENT_NOTE_MARKERS = Object.freeze([
+	"[Attached file saved to this chat's workspace:",
+	"[Attached files saved to this chat's workspace:",
+	"[Could not save to this chat's workspace:"
+]);
 
 /**
  * @param {{
  *   saved: string[],
  *   failed?: string[],
  *   conversationId: string,
- *   hasTool: (name: string) => boolean
+ *   hasTool: (name: string) => boolean,
+ *   fileSystemTools?: string[]
  * }} params `saved`: workspace-relative paths that were saved; `failed`:
- *   "name (reason)" for each upload that failed
+ *   "name (reason)" for each upload that failed; `fileSystemTools`: the File
+ *   System capability's tool names, in the order the host lists them. The
+ *   host knows which they are (chat-ui by each tool's `redstart/capability`,
+ *   the bench from tool-metadata), so the core keeps no copy of the list to
+ *   drift (master plan Phase 3.1). Only the offered ones are named.
  * @returns {string | null} the text to append to the user's message, or null
  *   when there is nothing to say
  */
-export function attachmentNote({ saved, failed = [], conversationId, hasTool }) {
+export function attachmentNote({ saved, failed = [], conversationId, hasTool, fileSystemTools = [] }) {
 	/** @type {string[]} */
 	const parts = [];
 	if (saved.length > 0) {
 		const plural = saved.length > 1;
 		const first = saved[0];
-		const lines = [`[Attached file${plural ? 's' : ''} saved to this chat's workspace: ${saved.join(', ')}`];
+		const lines = [`${ATTACHMENT_NOTE_MARKERS[plural ? 1 : 0]} ${saved.join(', ')}`];
 		if (hasTool('run_python')) {
 			lines.push(
 				// The explicit "not chats/..." is for small models: shown the
@@ -70,13 +66,13 @@ export function attachmentNote({ saved, failed = [], conversationId, hasTool }) 
 			// both bench models called it with the bare name anyway.
 			lines.push(`- read_document opens ${plural ? 'them' : 'it'} by name too: read_document(${JSON.stringify(first)}).`);
 		}
-		const fsOffered = FILE_SYSTEM_TOOLS.filter((t) => hasTool(t));
+		const fsOffered = fileSystemTools.filter((t) => hasTool(t));
 		if (fsOffered.length > 0) {
 			const named = fsOffered.slice(0, 3).join(', ');
 			lines.push(`- The File System tools (${named}${fsOffered.length > 3 ? ', ...' : ''}) work on a different folder and cannot see ${plural ? 'these files' : 'this file'}.`);
 		}
 		parts.push(`${lines.join('\n')}]`);
 	}
-	if (failed.length > 0) parts.push(`[Could not save to this chat's workspace: ${failed.join('; ')}]`);
+	if (failed.length > 0) parts.push(`${ATTACHMENT_NOTE_MARKERS[2]} ${failed.join('; ')}]`);
 	return parts.length > 0 ? parts.join('\n') : null;
 }

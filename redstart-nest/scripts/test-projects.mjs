@@ -462,6 +462,30 @@ function findFile(dir, name) {
   return null
 }
 
+console.log('\n-- AGENTS.md (master plan Phase 5) --')
+
+await test('🔒 a project\'s instructions export as AGENTS.md and import from one; another account gets 404 both ways', async () => {
+  const p = store.createProject(ALICE, { name: 'Agents md', instructions: 'Use TypeScript.\n\n## Tests\nRun them.' }).project
+  const res = fakeRes()
+  res.headers = {}
+  res.writeHead = function (s, h) { this.status = s; Object.assign(this.headers, h ?? {}); return this }
+  assert(await handleProjectRoute(fakeReq('GET'), res, `/projects/${p.id}/agents-md`, ALICE), 'export not handled')
+  assert(res.status === 200 && res.headers['Content-Disposition'] === 'attachment; filename="AGENTS.md"', `export: ${res.status}`)
+  assert(String(res.body) === 'Use TypeScript.\n\n## Tests\nRun them.\n', `body: ${JSON.stringify(String(res.body))}`)
+
+  const imp = await route('PUT', `/projects/${p.id}/agents-md`, ALICE, { text: '﻿# Rules\r\nBe brief.\r\n\r\n' })
+  assert(imp.status === 200 && imp.json.instructions === '# Rules\nBe brief.', `import: ${JSON.stringify(imp)}`)
+  // A round trip changes nothing.
+  assert(store.agentsMdFor(store.getProject(ALICE, p.id)) === '# Rules\nBe brief.\n', 'round trip')
+
+  assert((await route('GET', `/projects/${p.id}/agents-md`, BOB)).status === 404, 'another account exported it')
+  assert((await route('PUT', `/projects/${p.id}/agents-md`, BOB, { text: 'mine now' })).status === 404, 'another account imported into it')
+  assert(store.getProject(ALICE, p.id).instructions === '# Rules\nBe brief.', 'a refused import changed the project')
+  const tooLong = await route('PUT', `/projects/${p.id}/agents-md`, ALICE, { text: 'x'.repeat(store.MAX_INSTRUCTIONS_CHARS + 1) })
+  assert(tooLong.status === 400, `an over-long AGENTS.md: ${tooLong.status}`)
+  assert((await route('PUT', `/projects/${p.id}/agents-md`, ALICE, { nope: 1 })).status === 400, 'no text')
+})
+
 const failed = results.filter((r) => !r.pass)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)
 try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}

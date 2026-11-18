@@ -2,7 +2,7 @@
  * Generates an app's icons from its Redstart mascot drawing (see mascot.mjs).
  *
  *   node make-icon.mjs                   Nest's icons → redstart-nest/build/
- *   node make-icon.mjs --variant twig    Twig's icons → redstart-twig/windows/build/
+ *   node make-icon.mjs --variant twig    Twig's icons → redstart-twig/desktop/build/
  *
  * Output: icon.ico (Windows), icon.icns (macOS) and icon.png (1024px), which
  * the app's Tauri config embeds at compile time. build/ is gitignored.
@@ -20,7 +20,7 @@ const flag = process.argv.indexOf('--variant')
 const variant = flag === -1 ? 'nest' : process.argv[flag + 1]
 const OUT_DIRS = {
   nest: path.join(repo, 'redstart-nest', 'build'),
-  twig: path.join(repo, 'redstart-twig', 'windows', 'build'),
+  twig: path.join(repo, 'redstart-twig', 'desktop', 'build'),
 }
 if (!OUT_DIRS[variant]) {
   console.error(`make-icon: unknown --variant "${variant}" (expected nest or twig)`)

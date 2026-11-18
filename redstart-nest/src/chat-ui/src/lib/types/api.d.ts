@@ -265,6 +265,14 @@ export interface ApiChatCompletionRequest {
 	 * before forwarding; an id the caller cannot read adds nothing.
 	 */
 	redstart_project?: string;
+	/** Redstart-only: the conversation's id, for tool retrieval's per-conversation set. Stripped by the gateway. */
+	redstart_conversation_id?: string;
+	/**
+	 * Redstart-only: `true` asks for tool retrieval on a request with no
+	 * Redstart surface on its credential (login off); `false` opts out.
+	 * Stripped by the gateway.
+	 */
+	redstart_retrieval?: boolean;
 }
 
 export interface ApiChatCompletionToolCallFunctionDelta {

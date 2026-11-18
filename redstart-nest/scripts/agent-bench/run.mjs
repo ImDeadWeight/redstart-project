@@ -21,6 +21,25 @@
 //                              hosts the loop, the bench answers through
 //                              /tasks; lib/runtime.mjs. Plan is always full;
 //                              --model does not apply)
+//     [--retrieval server|off] (tool retrieval as Nest is set, the default,
+//                              or off for this run: every post-ban tool on
+//                              every turn. The summary says which it was)
+//     [--set signal]           (only the tasks sets/<name>.json lists: the
+//                              signal set is the tasks that move between
+//                              repeats, for comparing variants quickly)
+//     [--arms a,b,c]           (the tool-text arms in one run on one daemon,
+//                              alternating per task; one results folder per
+//                              arm, each checked to have been applied)
+//     [--expect-retrieval mode=catalog]
+//                             (stop before the first task unless Nest's
+//                              retrieval settings match: one probe request
+//                              reads x-redstart-retrieval-config. Keys:
+//                              mode, the only one since master plan 3.3.
+//                              Benchmarks H1)
+//     [--allow-stale-daemon]   (run even when the local daemon started before
+//                              the newest change to daemon/, shared/ or bin/;
+//                              without it the bench stops, since the run
+//                              would measure older code. Warned in summary)
 //
 // Login on: put the bench account's API key in REDSTART_BENCH_API_KEY (or
 // pass --api-key, which then sits in your shell history). Use a dedicated
@@ -40,8 +59,9 @@ import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { connectNest, FILES_SNAPSHOT_LIMIT } from './lib/nest-client.mjs'
 import { findTaskFiles, loadTask } from './lib/task-file.mjs'
-import { runTask, maxReplyTokens } from './lib/bench.mjs'
+import { runTask, maxReplyTokens, toLlmTools, parseExpectRetrieval, probeRetrievalConfig, retrievalConfigMismatch } from './lib/bench.mjs'
 import { summarize } from './lib/metrics.mjs'
+import { TOOL_TEXT_ARMS, TOOL_TEXT_ARM_HEADER } from '../../daemon/tool-text-arms.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -49,10 +69,12 @@ const FLAGS = {
   '--model-label': 'modelLabel', '--tasks': 'tasks', '--repeat': 'repeat', '--out': 'out',
   '--gateway': 'gateway', '--mcp': 'mcp', '--api-key': 'apiKey', '--temperature': 'temperature',
   '--model': 'model', '--max-tokens': 'maxTokens', '--plan': 'plan',
-  '--request-timeout': 'requestTimeout', '--text-asks': 'textAsks',
+  '--request-timeout': 'requestTimeout', '--text-asks': 'textAsks', '--retrieval': 'retrieval',
+  '--expect-retrieval': 'expectRetrieval', '--set': 'set', '--arms': 'arms',
 }
+export const RETRIEVAL_MODES = ['server', 'off']
 export const PLAN_MODES = ['full', 'tool', 'off']
-const SWITCHES = { '--thinking': 'thinking', '--keep': 'keep', '--quiet': 'quiet', '--runtime': 'runtime' }
+const SWITCHES = { '--thinking': 'thinking', '--keep': 'keep', '--quiet': 'quiet', '--runtime': 'runtime', '--allow-stale-daemon': 'allowStaleDaemon' }
 
 export function parseArgs(argv) {
   const opts = { tasks: path.join(here, 'tasks'), repeat: 1, gateway: 'http://127.0.0.1:19080' }
@@ -100,6 +122,28 @@ export function parseArgs(argv) {
   // chat-ui ships), and runs on the loaded model.
   if (opts.runtime && opts.plan !== 'full') throw new Error('--runtime runs with --plan full only: a task always has update_plan and its completion check')
   if (opts.runtime && opts.model) throw new Error('--runtime cannot pick a model (--model): a task uses the loaded one')
+  // Tool retrieval (second pass, 0.2): server = as Nest is configured; off =
+  // the request opts out (redstart_retrieval: false), so a retrieval-off row
+  // needs no change to Nest's settings. What actually happened is read back
+  // from the gateway's report, never assumed from this flag.
+  opts.retrieval = opts.retrieval ?? 'server'
+  if (!RETRIEVAL_MODES.includes(opts.retrieval)) throw new Error(`--retrieval must be one of ${RETRIEVAL_MODES.join(', ')}`)
+  if (opts.runtime && opts.retrieval === 'off') throw new Error('--runtime cannot turn retrieval off (--retrieval off): the daemon makes the completions requests')
+  if (opts.expectRetrieval !== undefined) {
+    if (opts.retrieval === 'off') throw new Error('--expect-retrieval with --retrieval off: no retrieval settings apply to a run with retrieval off')
+    opts.expectRetrieval = parseExpectRetrieval(opts.expectRetrieval)
+  }
+  // --arms a,b,c: the tool-text arms (daemon/tool-text-arms.mjs), all in one
+  // run on one daemon, alternating per task. The bench loop only: a --runtime
+  // task is hosted by the daemon, which takes its arm from the profile.
+  if (opts.arms !== undefined) {
+    const arms = String(opts.arms).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+    const bad = arms.filter((a) => !TOOL_TEXT_ARMS.includes(a))
+    if (bad.length) throw new Error(`--arms: unknown arm ${bad.join(', ')} (one of ${TOOL_TEXT_ARMS.join(', ')})`)
+    if (arms.length === 0 || new Set(arms).size !== arms.length) throw new Error('--arms needs distinct arms, e.g. a,b,c')
+    if (opts.runtime) throw new Error('--arms cannot run with --runtime: a task takes its arm from the daemon\'s profile')
+    opts.arms = arms
+  }
   opts.apiKey = opts.apiKey ?? process.env.REDSTART_BENCH_API_KEY ?? null
   return opts
 }
@@ -112,6 +156,152 @@ function commitInfo() {
   } catch {
     return 'unknown'
   }
+}
+
+// The code a run measures is what nestd loaded when it started, not this
+// checkout. On 2026-11-18 three tool-text "arms" ran on a daemon that had
+// been up since before the arms existed, and every header named the
+// checkout's commit, so the stale code went unseen. The check compares the
+// daemon's start (its pid file) with the newest change to the code it loads.
+const DAEMON_CODE = ['daemon', 'shared', 'bin']
+
+/**
+ * Why the daemon is older than its code, or null.
+ * @param {number | null} startedAt  ms, from nestd.pid
+ * @param {number | null} changedAt  ms, newest commit or edit under DAEMON_CODE
+ * @param {string} changedWhat       e.g. "commit 76d57b2"
+ */
+export function staleDaemonWhy(startedAt, changedAt, changedWhat) {
+  if (!(startedAt > 0) || !(changedAt > 0) || startedAt >= changedAt) return null
+  return `Nest's daemon started ${new Date(startedAt).toISOString()}, before ${changedWhat} (${new Date(changedAt).toISOString()}), so it runs older code than this checkout. Restart the daemon itself (loading a profile restarts only the model) and run again, or pass --allow-stale-daemon.`
+}
+
+function nestConfigDir() {
+  if (process.env.REDSTART_TEST_USERDATA_DIR) return process.env.REDSTART_TEST_USERDATA_DIR
+  if (process.platform === 'win32') return process.env.APPDATA ? path.join(process.env.APPDATA, 'redstart') : null
+  if (process.platform === 'darwin') return path.join(process.env.HOME ?? '', 'Library', 'Application Support', 'redstart')
+  return path.join(process.env.XDG_CONFIG_HOME ?? path.join(process.env.HOME ?? '', '.config'), 'redstart')
+}
+
+function daemonStartedAt() {
+  const dir = nestConfigDir()
+  if (!dir) return null
+  try {
+    return Number(JSON.parse(fs.readFileSync(path.join(dir, 'nestd.pid'), 'utf8')).startedAt) || null
+  } catch {
+    return null
+  }
+}
+
+/** The newest commit or uncommitted edit under DAEMON_CODE: { at, what } or null. */
+function daemonCodeChangedAt() {
+  const nestRoot = path.resolve(here, '..', '..')
+  try {
+    const git = (args) => execFileSync('git', args, { cwd: nestRoot, encoding: 'utf8' })
+    const [ct, sha] = git(['log', '-1', '--format=%ct %h', '--', ...DAEMON_CODE]).trim().split(' ')
+    let newest = { at: Number(ct) * 1000, what: `commit ${sha}` }
+    // Porcelain paths are relative to the repository root, whatever the cwd.
+    const top = git(['rev-parse', '--show-toplevel']).trim()
+    for (const line of git(['status', '--porcelain', '--', ...DAEMON_CODE]).split('\n').filter(Boolean)) {
+      const rel = line.slice(3).split(' -> ').pop().replace(/^"|"$/g, '')
+      try {
+        const at = fs.statSync(path.join(top, rel)).mtimeMs
+        if (at > newest.at) newest = { at, what: `an uncommitted edit to ${rel}` }
+      } catch { /* deleted: no time to compare */ }
+    }
+    return newest
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The task ids sets/<name>.json lists (--set).
+ * @param {string} name
+ * @returns {string[]}
+ */
+export function taskSet(name) {
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) throw new Error(`--set: "${name}" is not a set name`)
+  const file = path.join(here, 'sets', `${name}.json`)
+  let set
+  try {
+    set = JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch (err) {
+    const have = fs.existsSync(path.join(here, 'sets')) ? fs.readdirSync(path.join(here, 'sets')).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)) : []
+    throw new Error(`--set: cannot read sets/${name}.json (${err.code ?? err.message}); sets: ${have.join(', ') || 'none'}`)
+  }
+  if (!Array.isArray(set?.tasks) || set.tasks.length === 0 || !set.tasks.every((t) => typeof t === 'string')) {
+    throw new Error(`--set: sets/${name}.json needs a "tasks" list of task ids`)
+  }
+  return set.tasks
+}
+
+/**
+ * Why the arms were not applied, or null when they were. Checked before the
+ * first task, because the first A/B/C attempt (2026-11-18) ran three arms on
+ * a daemon that ignored them and nothing said so. Two checks: the gateway
+ * reports the arm it composed the prompt with (one max_tokens 1 request per
+ * arm), and each arm's MCP session lists a different ask_user description
+ * (every arm rewrites it).
+ *
+ * @param {{ arm: string | null, nest: { completion(body: object): Promise<Response> }, mcpTools: any[] }[]} variants
+ * @returns {Promise<string | null>}
+ */
+export async function armsNotApplied(variants) {
+  for (const v of variants) {
+    const res = await v.nest.completion({
+      messages: [{ role: 'user', content: 'Hello.' }],
+      stream: false,
+      max_tokens: 1,
+      redstart_retrieval_report: true,
+      redstart_conversation_id: `bench-probe-arm-${v.arm}-${Date.now()}`,
+    })
+    await res.text().catch(() => '')
+    const got = res.headers.get(TOOL_TEXT_ARM_HEADER)
+    if (got !== v.arm) return `asked for arm ${v.arm}, the gateway composed arm ${got ?? '(none reported: a daemon from before per-request arms? Restart it)'}`
+  }
+  /** @type {Map<string, string | null>} */
+  const seen = new Map()
+  for (const v of variants) {
+    const text = v.mcpTools.find((t) => t.name === 'ask_user')?.description
+    if (text == null) continue
+    if (seen.has(text)) return `arms ${seen.get(text)} and ${v.arm} list the same ask_user text: the MCP server did not apply the session's arm`
+    seen.set(text, v.arm)
+  }
+  return null
+}
+
+/**
+ * The arms side by side, for the console after an --arms run: pass, the
+ * Phase 1 group, asking, the trained habits, and the tasks whose pass count
+ * differs between arms.
+ *
+ * @param {{ arm: string | null, summary: any }[]} results
+ * @returns {string}
+ */
+export function armsComparison(results) {
+  const passes = (tasks) => tasks.reduce((a, t) => a + t.passes, 0)
+  const runsOf = (tasks) => tasks.reduce((a, t) => a + t.runs, 0)
+  const lines = [
+    '## Arms compared',
+    '',
+    '| arm | pass | phase1 | ask_user calls | reply-text asks | lookups | run_python at another program | type refusals | use_skill misnamed |',
+    '|---|---|---|---|---|---|---|---|---|',
+  ]
+  for (const { arm, summary: s } of results) {
+    const p1 = s.tasks.filter((t) => t.group === 'phase1')
+    const m = s.misuse ?? {}
+    lines.push(`| ${String(arm).toUpperCase()} | ${passes(s.tasks)}/${s.runs} | ${p1.length ? `${passes(p1)}/${runsOf(p1)}` : '—'} | ${s.askCalls} | ${m.proseAskRuns ?? 0} | ${m.lookups ?? 0} | ${m.subprocess ?? 0} | ${m.unsupportedRead ?? 0} | ${m.skillAsTool ?? 0} |`)
+  }
+  const ids = [...new Set(results.flatMap((r) => r.summary.tasks.map((t) => t.taskId)))]
+  const moved = ids.map((id) => results.map((r) => r.summary.tasks.find((t) => t.taskId === id)))
+    .filter((row) => new Set(row.map((t) => t?.passes)).size > 1)
+  if (moved.length) {
+    lines.push('', `| task | ${results.map((r) => String(r.arm).toUpperCase()).join(' | ')} |`, `|---|${results.map(() => '---').join('|')}|`)
+    for (const row of moved) lines.push(`| ${row.find(Boolean).taskId} | ${row.map((t) => (t ? `${t.passes}/${t.runs}` : '—')).join(' | ')} |`)
+  }
+  lines.push('', 'A difference of one run in a task is noise; three repeats of one setup swung a task from 0/3 to 3/3 (agent-bench-results, 2026-11-18).')
+  return lines.join('\n')
 }
 
 /**
@@ -196,6 +386,32 @@ export function requiresWarning(tasks, mcpTools) {
     'For delete_file: turn on Nest → Tools → File System → Allow destructive operations (server-wide).'
 }
 
+/**
+ * Why this run cannot measure a task, or null. A task with `followUps` (H4)
+ * needs the bench hosting the loop, which sends them.
+ *
+ * @param {{ followUps?: unknown[] }} task
+ * @param {{ retrieval?: string, runtime?: boolean }} opts
+ * @returns {string | null}
+ */
+export function cannotRun(task, opts) {
+  if (task.followUps?.length && opts.runtime) return 'has follow-ups, which --runtime cannot send'
+  return null
+}
+
+/**
+ * The tasks this run can measure, and the ones it cannot, each with why.
+ *
+ * @param {Array<{ id: string, followUps?: unknown[] }>} tasks
+ * @param {{ retrieval?: string, runtime?: boolean }} opts
+ */
+export function splitRunnableTasks(tasks, opts) {
+  return {
+    tasks: tasks.filter((t) => !cannotRun(t, opts)),
+    skipped: tasks.filter((t) => cannotRun(t, opts)).map((t) => `${t.id} (${cannotRun(t, opts)})`),
+  }
+}
+
 /** Conversations an earlier bench left behind: it was stopped mid-task. */
 export const LEFTOVER_CONVERSATION = /^bench-[a-z0-9-]+-[0-9a-f]{8}$/
 
@@ -227,6 +443,35 @@ export function fallbackWarning(summary) {
 
 const pct = (x) => (x == null ? '—' : `${(x * 100).toFixed(0)}%`)
 const num = (x, d = 1) => (x == null ? '—' : x.toFixed(d))
+const secs = (ms) => (ms == null ? '—' : (ms / 1000).toFixed(1))
+const ratio = (k, n) => (n ? `${k}/${n}` : '—')
+
+/**
+ * The tool retrieval line of summary.md (second pass, 0.2).
+ *
+ * @param {{ retrieval?: string }} meta
+ * @param {ReturnType<typeof import('./lib/metrics.mjs').retrievalSummary>} s
+ */
+export function retrievalLine(meta, s) {
+  return `tool retrieval (--retrieval ${meta.retrieval ?? 'server'}): ${s.retrieval ?? 'not reported'}` +
+    ` · ${num(s.toolsSentFirst)} tools on the first turn · ${num(s.toolSetsPerRun)} tool set(s)/run` +
+    ` · ${s.cacheMissTurns ?? '—'} cache-miss turn(s) · prefill ${secs(s.prefillMsPerRun)} s/run` +
+    ` · first tool as expected ${ratio(s.firstToolExpected, s.firstToolJudged)}` +
+    ` · settings ${s.retrievalConfig ?? '—'}`
+}
+
+/**
+ * The discovery line of summary.md (benchmarks H3).
+ *
+ * @param {ReturnType<typeof import('./lib/metrics.mjs').retrievalSummary>} s
+ */
+export function discoveryLine(s) {
+  return `discovery: found ${ratio(s.discovered ?? 0, s.discoveryJudged ?? 0)} (${s.discoveredByPin ?? 0} directly, ${s.discoveredByCallTool ?? 0} through call_tool)` +
+    ` · ${num(s.turnsToDiscovery)} turn(s) to find · search_tools ${s.searchCalls ?? 0}, describe_tool ${s.describeCalls ?? 0}, call_tool ${s.callToolCalls ?? 0} (${s.callToolBadArgs ?? 0} bad args)` +
+    ` · said unavailable without searching ${s.unavailableWithoutSearch ?? 0}` +
+    ` · recovered after a wrong first tool ${ratio(s.recovered ?? 0, s.recoveryJudged ?? 0)}` +
+    ` · File System first on attachment tasks ${ratio(s.fsFirst ?? 0, s.fsFirstJudged ?? 0)}`
+}
 
 export function summaryMarkdown(meta, summary) {
   const lines = [
@@ -249,13 +494,24 @@ export function summaryMarkdown(meta, summary) {
     '',
     `questions in reply text (--text-asks ${meta.textAsks ?? 'end'}): ${summary.textAsks ?? 0} answered in ${summary.runsThatAskedInText ?? 0} run(s)`,
     '',
-    '| task | group | passes |',
-    '|---|---|---|',
-    ...summary.tasks.map((t) => `| ${t.taskId} | ${t.group} | ${t.passes}/${t.runs} |`),
+    // The trained habits a run fell back on (lib/misuse.mjs).
+    `trained habits: ${summary.misuse?.proseAskRuns ?? 0} run(s) ended asking in reply text with no ask_user · ${summary.misuse?.lookups ?? 0} memory/web lookup(s) · ${summary.misuse?.subprocess ?? 0} run_python try at another program · ${summary.misuse?.unsupportedRead ?? 0} read_document type refusal(s) · ${summary.misuse?.skillAsTool ?? 0} use_skill with a tool's name`,
+    '',
+    retrievalLine(meta, summary),
+    '',
+    discoveryLine(summary),
+    '',
+    '| task | group | passes | retrieval | tools, 1st turn | tool sets/run | cache misses | prefill s/run | first tool as expected | found | searches | said unavailable | FS first |',
+    '|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+    ...summary.tasks.map((t) => `| ${t.taskId} | ${t.group} | ${t.passes}/${t.runs} | ${t.retrieval ?? '—'} | ${num(t.toolsSentFirst)} | ${num(t.toolSetsPerRun)} | ${t.cacheMissTurns ?? '—'} | ${secs(t.prefillMsPerRun)} | ${ratio(t.firstToolExpected, t.firstToolJudged)} | ${ratio(t.discovered, t.discoveryJudged)} | ${t.searchCalls} | ${t.unavailableWithoutSearch} | ${ratio(t.fsFirst, t.fsFirstJudged)} |`),
     '',
     'Row for docs/notes/agent-bench-results.md:',
     '',
     `| ${meta.date} | ${meta.modelLabel} | ${meta.commit} | ${meta.taskCount}×${meta.repeat} | ${pct(summary.passRate)} | ${pct(summary.toolSuccessRate)} | ${pct(summary.invalidArgRate)} | ${pct(summary.fallbackRate)} | ${num(summary.retriesPerTask)} | ${num(summary.turnsPerTask)} | ${summary.hitLimitRuns} |`,
+    '',
+    'Row for its "Tool retrieval, second pass" table:',
+    '',
+    `| ${meta.date} | ${meta.modelLabel} | ${meta.commit} | ${meta.taskCount}×${meta.repeat} | ${summary.retrieval ?? '—'} | ${pct(summary.passRate)} | ${num(summary.toolsSentFirst)} | ${num(summary.toolSetsPerRun)} | ${summary.cacheMissTurns ?? '—'} | ${secs(summary.prefillMsPerRun)} | ${ratio(summary.firstToolExpected, summary.firstToolJudged)} |`,
     '',
   ]
   return lines.join('\n')
@@ -271,24 +527,74 @@ export async function main(argv, io = {}) {
 
   const files = findTaskFiles(opts.tasks)
   if (files.length === 0) throw new Error(`no task files match ${opts.tasks}`)
-  const tasks = []
-  for (const f of files) tasks.push(await loadTask(f))
+  const loaded = []
+  for (const f of files) loaded.push(await loadTask(f))
+  if (opts.set) {
+    const ids = taskSet(opts.set)
+    const missing = ids.filter((id) => !loaded.some((t) => t.id === id))
+    if (missing.length) throw new Error(`--set ${opts.set} names task(s) ${opts.tasks} does not hold: ${missing.join(', ')}`)
+    loaded.splice(0, loaded.length, ...loaded.filter((t) => ids.includes(t.id)))
+  }
+  // Tasks this run cannot measure (cannotRun): skipped, and named with why.
+  const { tasks, skipped } = splitRunnableTasks(loaded, opts)
+  if (tasks.length === 0) throw new Error(`no task matched can run with these flags: ${skipped.join('; ')}`)
 
-  let nest
-  let mcpTools
+  // Only a daemon on this machine has its pid file here.
+  let staleDaemon = null
+  if (['127.0.0.1', 'localhost', '[::1]'].includes(new URL(opts.gateway).hostname)) {
+    const changed = daemonCodeChangedAt()
+    staleDaemon = changed && staleDaemonWhy(daemonStartedAt(), changed.at, changed.what)
+    if (staleDaemon && !opts.allowStaleDaemon) throw new Error(staleDaemon)
+  }
+
+  // One client per arm (--arms), each with its own MCP session, so each
+  // lists its arm's tool text; one client otherwise. Setup and the checks
+  // below use the first.
+  /** @type {{ arm: string | null, nest: any, mcpTools: any[], label?: string, outDir?: string, runsFile?: string, runs?: any[] }[]} */
+  const variants = []
   try {
-    nest = await connectNest({
-      gateway: opts.gateway, mcp: opts.mcp, apiKey: opts.apiKey,
-      ...(opts.requestTimeout ? { requestTimeoutMs: opts.requestTimeout * 1000 } : {}),
-      hostTools: opts.plan === 'off' ? ['ask_user'] : ['ask_user', 'update_plan'],
-    })
-    mcpTools = await nest.listTools()
+    for (const arm of opts.arms ?? [null]) {
+      const client = await connectNest({
+        gateway: opts.gateway, mcp: opts.mcp, apiKey: opts.apiKey,
+        ...(opts.requestTimeout ? { requestTimeoutMs: opts.requestTimeout * 1000 } : {}),
+        hostTools: opts.plan === 'off' ? ['ask_user'] : ['ask_user', 'update_plan'],
+        ...(arm ? { toolTextArm: arm } : {}),
+      })
+      variants.push({ arm, nest: client, mcpTools: await client.listTools() })
+    }
   } catch (err) {
     throw new Error(explainConnectError(err, opts))
   }
+  const nest = variants[0].nest
+  const mcpTools = variants[0].mcpTools
   if (mcpTools.length === 0) log('warning: Nest offers this account no tools; every tool task will fail')
+  // Benchmarks H1: a forgotten settings change is found here, not after the
+  // run. One request, before any conversation exists.
+  let retrievalConfigProbed = null
+  if (opts.expectRetrieval) {
+    retrievalConfigProbed = await probeRetrievalConfig(nest, toLlmTools(mcpTools))
+    const why = retrievalConfigMismatch(opts.expectRetrieval, retrievalConfigProbed)
+    if (why) throw new Error(`--expect-retrieval: ${why}`)
+    log(`retrieval settings as expected: ${retrievalConfigProbed}`)
+  }
+  if (opts.arms) {
+    const why = await armsNotApplied(variants)
+    if (why) throw new Error(`--arms: ${why}`)
+    log(`tool-text arms applied: ${opts.arms.join(', ')}`)
+  }
   const model = await nest.modelInfo()
   const warnings = []
+  const setupWarnings = warnings
+  if (skipped.length) {
+    const w = `warning: skipped ${skipped.length} task(s) these flags cannot run: ${skipped.join('; ')}`
+    warnings.push(w)
+    log(w)
+  }
+  if (staleDaemon) {
+    const w = `warning: ${staleDaemon.replace(/ Restart.*$/, '')} The header's commit is the checkout's, not the daemon's.`
+    warnings.push(w)
+    log(w)
+  }
   const lw = labelWarning(opts.modelLabel, model?.modelFile)
   if (lw) { warnings.push(lw); log(lw) }
   const asw = askWarning(tasks, mcpTools)
@@ -321,70 +627,103 @@ export async function main(argv, io = {}) {
   }
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-  const outDir = path.resolve(opts.out ?? path.join(here, 'results', `${stamp}-${opts.modelLabel.replace(/[^A-Za-z0-9_.-]+/g, '_')}`))
-  fs.mkdirSync(outDir, { recursive: true })
-  const runsFile = path.join(outDir, 'runs.jsonl')
-  fs.writeFileSync(runsFile, '')
+  for (const v of variants) {
+    v.label = v.arm ? `${opts.modelLabel} arm ${v.arm.toUpperCase()}` : opts.modelLabel
+    const own = path.join(here, 'results', `${stamp}-${v.label.replace(/[^A-Za-z0-9_.-]+/g, '_')}`)
+    v.outDir = path.resolve(opts.out ? (v.arm ? path.join(opts.out, `arm_${v.arm}`) : opts.out) : own)
+    fs.mkdirSync(v.outDir, { recursive: true })
+    v.runsFile = path.join(v.outDir, 'runs.jsonl')
+    fs.writeFileSync(v.runsFile, '')
+    v.runs = []
+  }
 
-  log(`agent-bench: ${tasks.length} task(s) × ${opts.repeat}, ${mcpTools.length} tools, model "${opts.modelLabel}"`)
-  const runs = []
+  log(`agent-bench: ${tasks.length} task(s) × ${opts.repeat}${opts.arms ? ` × arms ${opts.arms.join(', ')}` : ''}, ${mcpTools.length} tools, model "${opts.modelLabel}"`)
   for (let r = 0; r < opts.repeat; r++) {
-    for (const task of tasks) {
-      const result = await runTask(nest, task, {
-        mcpTools, thinking: opts.thinking, temperature: opts.temperature, model: opts.model, maxTokens: opts.maxTokens, fileSystemSnapshot, plan: opts.plan, textAsks: opts.textAsks, runtime: !!opts.runtime,
-        keep: opts.keep, runIndex: r,
-      })
-      runs.push(result)
-      fs.appendFileSync(runsFile, `${JSON.stringify(result)}\n`)
-      if (!opts.quiet) {
-        const m = result.metrics
-        log(`  ${result.verdict.pass ? 'pass' : 'FAIL'}  ${task.id} [${r + 1}/${opts.repeat}]  ${m.turns} turns, ${m.toolCalls} calls${m.hitLimit ? `, hit ${m.hitLimit} limit` : ''}${result.error ? `, error: ${result.error}` : ''}  — ${result.verdict.reason ?? ''}`)
+    for (const [ti, task] of tasks.entries()) {
+      // Rotated per task and repeat, so no arm always goes first (a warm
+      // prompt cache, a cooler GPU, the evening's drift).
+      const shift = (r + ti) % variants.length
+      for (const v of [...variants.slice(shift), ...variants.slice(0, shift)]) {
+        const result = await runTask(v.nest, task, {
+          mcpTools: v.mcpTools, thinking: opts.thinking, temperature: opts.temperature, model: opts.model, maxTokens: opts.maxTokens, fileSystemSnapshot, plan: opts.plan, textAsks: opts.textAsks, runtime: !!opts.runtime, retrieval: opts.retrieval,
+          keep: opts.keep, runIndex: r,
+        })
+        v.runs.push(result)
+        fs.appendFileSync(v.runsFile, `${JSON.stringify(result)}\n`)
+        if (!opts.quiet) {
+          const m = result.metrics
+          log(`  ${result.verdict.pass ? 'pass' : 'FAIL'}  ${task.id}${v.arm ? ` arm ${v.arm.toUpperCase()}` : ''} [${r + 1}/${opts.repeat}]  ${m.turns} turns, ${m.toolCalls} calls${m.hitLimit ? `, hit ${m.hitLimit} limit` : ''}${result.error ? `, error: ${result.error}` : ''}  — ${result.verdict.reason ?? ''}`)
+        }
       }
     }
   }
 
-  const summary = summarize(runs)
-  const fw = fallbackWarning(summary)
-  if (fw) warnings.push(fw)
-  const changed = [...new Set(runs.flatMap((r) => r.fileSystemWrites?.modified ?? []))].sort()
-  if (changed.length) {
-    warnings.push(`warning: runs changed ${changed.length} file(s) that were already in the account's File System folder, which cannot be undone: ${changed.join(', ')}`)
+  const results = []
+  for (const v of variants) results.push(finishVariant(v))
+  if (opts.arms) log(`\n${armsComparison(results)}`)
+  return opts.arms ? { ...results[0], arms: results } : results[0]
+
+  /** Summary, warnings and files for one arm (or the only variant). */
+  function finishVariant(v) {
+    const runs = v.runs
+    const outDir = v.outDir
+    const warnings = [...setupWarnings]
+    const summary = summarize(runs)
+    const fw = fallbackWarning(summary)
+    if (fw) warnings.push(fw)
+    if (summary.retrievalConfigMixed) {
+      warnings.push(`warning: Nest's retrieval settings changed during the run (${summary.retrievalConfig}), so this row mixes variants. Do not compare it.`)
+    }
+    const changed = [...new Set(runs.flatMap((r) => r.fileSystemWrites?.modified ?? []))].sort()
+    if (changed.length) {
+      warnings.push(`warning: runs changed ${changed.length} file(s) that were already in the account's File System folder, which cannot be undone: ${changed.join(', ')}`)
+    }
+    const broken = runs.filter((r) => r.events.some((e) => e.type === 'bench_error'))
+    if (broken.length) {
+      warnings.push(`warning: ${broken.length} run(s) failed because Nest did not answer a setup or read-back call, not because of the model: ${broken.map((r) => `${r.taskId} (${r.events.find((e) => e.type === 'bench_error').message})`).join('; ')}. Do not compare this row.`)
+    }
+    // --arms: every turn's prompt must have used this arm, not just the probe's.
+    const offArm = v.arm ? runs.flatMap((r) => r.events).filter((e) => e.type === 'tools_sent' && e.arm !== v.arm).length : 0
+    if (offArm) warnings.push(`warning: ${offArm} turn(s) were composed with another tool-text arm than ${v.arm}. Do not compare this row.`)
+    const unchecked = runs.filter((r) => r.events.some((e) => e.type === 'documents_not_checked')).map((r) => r.taskId)
+    if (unchecked.length) {
+      warnings.push(`warning: the account's documents folder could not be listed (over ${FILES_SNAPSHOT_LIMIT} entries, or the listing failed), so documents these runs may have created were neither given to their checks nor removed: ${[...new Set(unchecked)].join(', ')}. Use a dedicated bench account.`)
+    }
+    const meta = {
+      modelLabel: v.label,
+      // --arms: the tool-text arm these runs asked for, checked before the run.
+      toolTextArm: v.arm,
+      date: new Date().toISOString().slice(0, 10),
+      commit: commitInfo(),
+      repeat: opts.repeat,
+      taskCount: tasks.length,
+      toolCount: v.mcpTools.length,
+      tools: v.mcpTools.map((t) => t.name),
+      thinking: !!opts.thinking,
+      plan: opts.plan,
+      // Who hosted the loop: 'bench' (this process) or 'runtime' (the daemon's tasks).
+      host: opts.runtime ? 'runtime' : 'bench',
+      textAsks: opts.textAsks,
+      // The --retrieval flag. What happened is summary.retrieval, read from the gateway.
+      retrieval: opts.retrieval,
+      // --expect-retrieval as given, and what the probe read (benchmarks H1).
+      expectRetrieval: opts.expectRetrieval ?? null,
+      retrievalConfigProbed,
+      temperature: opts.temperature ?? null,
+      maxTokens: maxReplyTokens(opts),
+      gateway: opts.gateway,
+      // From llama-server's /props, not from the label. null when unavailable.
+      model,
+      account: who?.user ? { username: who.user.username ?? null, role: who.user.role ?? null } : null,
+      warnings,
+    }
+    fs.writeFileSync(path.join(outDir, 'summary.json'), `${JSON.stringify({ meta, summary }, null, 2)}\n`)
+    const md = summaryMarkdown(meta, summary)
+    fs.writeFileSync(path.join(outDir, 'summary.md'), md)
+    log(`\n${md}`)
+    log(`results: ${outDir}`)
+    return { arm: v.arm, label: v.label, outDir, summary, runs }
   }
-  const broken = runs.filter((r) => r.events.some((e) => e.type === 'bench_error'))
-  if (broken.length) {
-    warnings.push(`warning: ${broken.length} run(s) failed because Nest did not answer a setup or read-back call, not because of the model: ${broken.map((r) => `${r.taskId} (${r.events.find((e) => e.type === 'bench_error').message})`).join('; ')}. Do not compare this row.`)
-  }
-  const unchecked = runs.filter((r) => r.events.some((e) => e.type === 'documents_not_checked')).map((r) => r.taskId)
-  if (unchecked.length) {
-    warnings.push(`warning: the account's documents folder could not be listed (over ${FILES_SNAPSHOT_LIMIT} entries, or the listing failed), so documents these runs may have created were neither given to their checks nor removed: ${[...new Set(unchecked)].join(', ')}. Use a dedicated bench account.`)
-  }
-  const meta = {
-    modelLabel: opts.modelLabel,
-    date: new Date().toISOString().slice(0, 10),
-    commit: commitInfo(),
-    repeat: opts.repeat,
-    taskCount: tasks.length,
-    toolCount: mcpTools.length,
-    tools: mcpTools.map((t) => t.name),
-    thinking: !!opts.thinking,
-    plan: opts.plan,
-    // Who hosted the loop: 'bench' (this process) or 'runtime' (the daemon's tasks).
-    host: opts.runtime ? 'runtime' : 'bench',
-    textAsks: opts.textAsks,
-    temperature: opts.temperature ?? null,
-    maxTokens: maxReplyTokens(opts),
-    gateway: opts.gateway,
-    // From llama-server's /props, not from the label. null when unavailable.
-    model,
-    account: who?.user ? { username: who.user.username ?? null, role: who.user.role ?? null } : null,
-    warnings,
-  }
-  fs.writeFileSync(path.join(outDir, 'summary.json'), `${JSON.stringify({ meta, summary }, null, 2)}\n`)
-  const md = summaryMarkdown(meta, summary)
-  fs.writeFileSync(path.join(outDir, 'summary.md'), md)
-  log(`\n${md}`)
-  log(`results: ${outDir}`)
-  return { outDir, summary, runs }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

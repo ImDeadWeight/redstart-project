@@ -203,7 +203,7 @@ await test('🔒 the destructive-confirmation clause names only what was sent', 
   const { prompt } = composePrompt({
     config: LOCAL_ONLY_CONFIG,
     hasTools: true,
-    toolNames: ['read_file', 'write_file', 'delete_file'],
+    toolNames: ['read_text_file', 'write_file', 'delete_file'],
     now: NOW,
   })
   assert(prompt.includes('Every call to delete_file needs the user\'s approval'), 'delete_file not named')
@@ -251,7 +251,7 @@ await test('🔒 documents/file-system overlap is stated only when both are pres
   const both = composePrompt({
     config: LOCAL_ONLY_CONFIG,
     hasTools: true,
-    toolNames: ['read_document', 'read_file'],
+    toolNames: ['read_document', 'read_text_file'],
     now: NOW,
   }).prompt
   assert(both.includes('prefer read_document'), 'overlap rule missing when both tools are present')
@@ -308,26 +308,68 @@ await test('🔍 update_plan gets its when-to-plan line only when the request ca
 
 await test('🔒 a narrowed tool list says so, and points at the way out', async () => {
   // Every other block here stops the model claiming what the request does not
-  // support. This one stops the opposite error: with retrieval on, an absent
+  // support. This one stops the opposite error: with the catalog on, an absent
   // tool reads as a capability the deployment lacks, and the model says so.
   const { prompt, blocks } = composePrompt({
     config: LOCAL_ONLY_CONFIG,
     hasTools: true,
-    toolNames: ['postgres_query', 'search_tools'],
+    toolNames: ['postgres_query', 'search_tools', 'call_tool'],
     toolsFiltered: true,
     now: NOW,
   })
   assert(blocks.includes('retrieval'), 'no retrieval block after tools were removed')
-  assert(prompt.includes('subset chosen for this conversation'), 'the list is not described as partial')
-  assert(prompt.includes('call search_tools'), 'the remedy is not named')
-  assert(prompt.includes('never tell the user a capability is unavailable'), 'the failure mode is not ruled out')
+  assert(prompt.includes('kept in a catalog'), 'the list is not described as partial')
+  assert(prompt.includes('search_tools({') && prompt.includes('call_tool({'), 'the remedy is not named with a call to copy')
+  assert(prompt.includes('Never tell the user a capability is unavailable'), 'the failure mode is not ruled out')
   return 'partial list disclosed'
 })
 
+await test('the catalog line names what the catalog holds, capped, and nothing when it is not told', async () => {
+  // 2026-11-18: the line said how to search but not what there was to find.
+  const base = { config: LOCAL_ONLY_CONFIG, hasTools: true, toolNames: ['read_document', 'search_tools', 'call_tool'], toolsFiltered: true, now: NOW }
+  const catalog = {
+    groups: [
+      { label: 'File System', tools: ['list_directory', 'read_text_file', 'write_file', 'delete_file'], more: 0 },
+      { label: 'Git', tools: ['git_status', 'git_log'], more: 2 },
+    ],
+    plugins: { tools: ['calculate'], more: 0 },
+  }
+  const named = composePrompt({ ...base, catalog }).prompt
+  assert(named.includes('It holds: File System (list_directory, read_text_file, write_file, delete_file); Git (git_status, git_log, and 2 more); plugin tools (calculate).'), named.match(/It holds:[^.]*\./)?.[0] ?? 'no "It holds"')
+  assert(named.includes('Catalog tools run only through call_tool.'), 'not told the names are reached through call_tool')
+  const unnamed = composePrompt(base).prompt
+  assert(!unnamed.includes('It holds'), 'named a catalog it was not given')
+  assert(composePrompt({ ...base, catalog: { groups: [], plugins: null } }).prompt === unnamed, 'an empty catalog changed the prompt')
+  // A client without search_tools gets no names: it has no way to call them.
+  assert(!composePrompt({ ...base, toolNames: ['read_document'], catalog }).prompt.includes('It holds'), 'named catalog tools to a client that cannot reach them')
+})
+
+await test('tool-text arms: a is today\'s prompt byte for byte; b adds its line; c swaps the ask line and maps only tools sent', async () => {
+  const { ARM_B_PROMPT_LINE, ARM_C_ASK_PROMPT_LINE, withArmText } = await import('../daemon/tool-text-arms.mjs')
+  const names = ['ask_user', 'run_python', 'read_document', 'create_document', 'memory_search', 'search_tools', 'call_tool']
+  const at = (arm, extra = {}) => composePrompt({ config: { ...LOCAL_ONLY_CONFIG, ...(arm ? { toolTextArm: arm } : {}) }, hasTools: true, toolNames: names, now: NOW, ...extra }).prompt
+  const today = at(null)
+  assert(at('a') === today && at('nonsense') === today, 'arm a (or an unknown value) changed the prompt')
+  const b = at('b')
+  assert(b.includes('try the tool first') && b.includes(ARM_B_PROMPT_LINE), 'arm b: the ask line and its addition')
+  const c = at('c', { toolsFiltered: true, catalog: { groups: [{ label: 'File System', tools: ['delete_file'], more: 0 }], plugins: null } })
+  assert(!c.includes('try the tool first') && c.includes(ARM_C_ASK_PROMPT_LINE), 'arm c replaces the ask line')
+  assert(c.includes('Which tool for what:') && c.includes('- A fact only the user knows') && c.includes('found with search_tools and called with call_tool'), 'arm c: the map, File System reached through the catalog')
+  assert(!c.includes('- Public facts: web_search'), 'arm c named web_search, which the request does not carry')
+  assert(!at('c').includes('- Files in the File System folder'), 'arm c named the File System with no way to reach it')
+  // The tool side: arm a is the same object; b and c swap or append by name.
+  const ask = { name: 'ask_user', description: 'old' }
+  assert(withArmText(ask, 'a') === ask, 'arm a copied a tool')
+  assert(/WAIT for their answer/.test(withArmText(ask, 'b').description), 'arm b ask_user')
+  assert(/only way to ask/.test(withArmText(ask, 'c').description), 'arm c ask_user')
+  assert(withArmText({ name: 'web_search', description: 'Search.' }, 'c').description === 'Search. Public information only: never for facts about the user, their business or their files.', 'arm c appends')
+  assert(withArmText({ name: 'web_search', description: 'Search.' }, 'b').description === 'Search.', 'arm b touched a tool it does not change')
+})
+
 await test('🔒 a client with no search_tools is told what to say instead', async () => {
-  // search_tools is advertised only to clients connected to Nest's MCP server.
-  // An OpenAI-compatible client that sends its own tool definitions is filtered
-  // just the same and has nothing to call. Naming search_tools to that model
+  // search_tools and call_tool are advertised only to clients connected to
+  // Nest's MCP server. A client that sends its own tool definitions and asks
+  // for retrieval has nothing to call. Naming search_tools to that model
   // would be a false claim; saying nothing leaves it to report the capability
   // as non-existent, which is the failure this block exists for.
   const { prompt, blocks } = composePrompt({
@@ -338,7 +380,7 @@ await test('🔒 a client with no search_tools is told what to say instead', asy
     now: NOW,
   })
   assert(blocks.includes('retrieval'), 'a filtered request with no search_tools got no disclosure')
-  assert(prompt.includes('subset chosen for this conversation'), 'the list is not described as partial')
+  assert(prompt.includes('not everything this server can do'), 'the list is not described as partial')
   assert(!prompt.includes('search_tools'), 'named a tool the payload does not carry')
   assert(prompt.includes('not available in this session'), 'the model is not told what to say instead')
   assert(prompt.includes('never that this server cannot do it'), 'the wrong answer is not ruled out')
@@ -346,9 +388,9 @@ await test('🔒 a client with no search_tools is told what to say instead', asy
 })
 
 await test('🔒 nothing removed → no retrieval block, whatever the setting says', async () => {
-  // Retrieval fails open: sidecar down, cold cache, empty selection all forward
-  // the full list. "Enabled" is therefore not evidence of a subset, so the gate
-  // is on tools having actually gone — measured by the gateway, not inferred.
+  // A request that carries no deferred tool loses nothing. "Enabled" is
+  // therefore not evidence of a subset, so the gate is on tools having
+  // actually gone — measured by the gateway, not inferred.
   const { blocks, prompt } = composePrompt({
     config: LOCAL_ONLY_CONFIG,
     hasTools: true,
@@ -357,7 +399,7 @@ await test('🔒 nothing removed → no retrieval block, whatever the setting sa
     now: NOW,
   })
   assert(!blocks.includes('retrieval'), 'called a complete tool list a subset')
-  assert(!prompt.includes('subset chosen for this conversation'), 'claimed a narrowing that did not happen')
+  assert(!prompt.includes('kept in a catalog'), 'claimed a narrowing that did not happen')
   return 'silent when nothing was dropped'
 })
 
@@ -501,6 +543,20 @@ await test('🔒 per-account stores are named as private, shared ones as shared'
   // The claim that would be worst to get backwards.
   assert(!/Private to this account: [^.]*Postgres/.test(prompt), 'claimed privacy for a store every account can read')
   return 'documents + files private, Postgres + git shared'
+})
+
+await test('🔒 a shared store a role narrows to folders is "shared, partly", and no folder name reaches the prompt (master plan 6.1)', async () => {
+  const { prompt } = composePrompt({
+    config: { documents: { enabled: true }, postgres: { enabled: true }, git: { enabled: true, grants: ['finance-repos'] }, sqlite: { enabled: true, grants: [] } },
+    hasTools: true,
+    toolNames: ['read_document'],
+    account: { username: 'pat', role: 'user' },
+    now: NOW,
+  })
+  assert(/Shared by every user: [^.]*Postgres/.test(prompt), 'Postgres is no longer shared by everyone')
+  assert(!/Shared by every user: [^.]*git repositories/.test(prompt), 'narrowed git still claimed as everyone\'s')
+  assert(/limited to the folders this account's role may use: [^.]*git repositories[^.]*SQLite|limited to the folders this account's role may use: [^.]*SQLite[^.]*git repositories/.test(prompt), `not shared partly: ${prompt}`)
+  assert(!/finance-repos/.test(prompt), 'a granted folder\'s name is in the prompt')
 })
 
 await test('🔒 with auth off there is no private storage, and the prompt says so', async () => {

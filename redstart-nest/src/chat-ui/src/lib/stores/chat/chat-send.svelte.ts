@@ -25,7 +25,7 @@ import {
 import * as messageRepo from '$lib/stores/chat/chat-message-repo';
 import { ChatTitleService } from '$lib/services/chat-title.service';
 import { memoryReviewStore } from '$lib/stores/memory-review.svelte';
-import { tasksStore } from '$lib/stores/tasks.svelte';
+import { tasksStore, serverRunsOn } from '$lib/stores/tasks.svelte';
 import { toast } from 'svelte-sonner';
 import {
 	normalizeModelName,
@@ -66,7 +66,9 @@ export class ChatSendController {
 		// along: the steer route takes text.
 		if (activeConv && tasksStore.activeFor(activeConv.id)) {
 			if (extras?.length || workspaceFiles?.length) {
-				toast.info('Files cannot be sent to a background task. Send text, or cancel the task first.');
+				toast.info(
+					'Files cannot be sent to a background task. Send text, or cancel the task first.'
+				);
 			}
 			if (content.trim()) await tasksStore.steer(activeConv.id, content.trim());
 			return;
@@ -121,9 +123,7 @@ export class ChatSendController {
 				// under (spec §5). Best-effort by design: captureSnapshot()
 				// returns null instead of throwing, because a missing provenance
 				// record must never stop someone sending a message.
-				const snapshot = await PromptService.captureSnapshot(
-					conversationsStore.getPromptMode()
-				);
+				const snapshot = await PromptService.captureSnapshot(conversationsStore.getPromptMode());
 				if (snapshot) {
 					await DatabaseService.updateConversation(currentConv.id, {
 						promptSnapshot: snapshot
@@ -137,20 +137,41 @@ export class ChatSendController {
 			const workspaceNote = workspaceFiles?.length
 				? await uploadToWorkspace(currentConv.id, workspaceFiles)
 				: null;
-			const userMessage = await messageRepo.addMessage(
-				MessageRole.USER,
-				workspaceNote ? (content ? `${content}
+			const messageText = workspaceNote
+				? content
+					? `${content}\n\n${workspaceNote}`
+					: workspaceNote
+				: content;
 
-${workspaceNote}` : workspaceNote) : content,
-				MessageType.TEXT,
-				parentIdForUserMessage ?? '-1',
-				allExtras
-			);
+			// Master plan Phase 7: a plain Send is a run on the server, so a
+			// refresh or a closed tab does not end it. The daemon writes the
+			// user's message itself; this app runs its own tools when the run
+			// asks. Images and other extras still go the browser way this
+			// release, and so does a Nest that cannot start one (an older one).
 			if (isNewConversation && content)
 				await conversationsStore.updateConversationName(
 					currentConv.id,
 					generateConversationTitle(content, Boolean(config().titleGenerationUseFirstLine))
 				);
+			if (serverRunsOn() && !allExtras?.length) {
+				const { clientTools, toolLimits } = await agenticStore.prepareServerRun();
+				const task = await tasksStore.start(currentConv.id, messageText, clientTools, {
+					quiet: true,
+					toolLimits
+				});
+				if (task) {
+					this.runtime.setChatLoading(currentConv.id, false);
+					return;
+				}
+			}
+
+			const userMessage = await messageRepo.addMessage(
+				MessageRole.USER,
+				messageText,
+				MessageType.TEXT,
+				parentIdForUserMessage ?? '-1',
+				allExtras
+			);
 			const assistantMessage = await messageRepo.createAssistantMessage(userMessage.id);
 			conversationsStore.addMessageToActive(assistantMessage);
 			await this.streamChatCompletion(

@@ -48,11 +48,11 @@ redstart-project/
 
 **Two frontend frameworks, two jobs.** React owns the launcher — the surface that starts and stops the model, configures capabilities and manages accounts. SvelteKit owns the chat UI, served on the data plane and shared by every client (browser, Twig Windows, Twig Android, Blueprints). They share no state, no routing and no auth code, and neither imports from the other.
 
-**The launcher talks HTTP, not IPC.** The launcher has to be servable to a browser, so it reaches the daemon only over HTTP: `src/api/http.ts` implements the `RedstartAPI` surface against `POST /admin/api/<namespace>/<method>` on the control plane, and the desktop window and a browser on another machine are the same client over the same transport. The one exception is window chrome: inside the Tauri shell the page's own minimise/maximise/close call Tauri's window API, which `shell/capabilities/window-controls.json` allows for the admin origin only. `scripts/test-admin-api.mjs` holds the two halves together: every method the type declares must have a route, and every route must be gated.
+**The launcher talks HTTP, not IPC.** The launcher has to be servable to a browser, so it reaches the daemon only over HTTP: `src/launcher/api/http.ts` implements the `RedstartAPI` surface against `POST /admin/api/<namespace>/<method>` on the control plane, and the desktop window and a browser on another machine are the same client over the same transport. The one exception is window chrome: inside the Tauri shell the page's own minimise/maximise/close call Tauri's window API, which `shell/capabilities/window-controls.json` allows for the admin origin only. `scripts/test-admin-api.mjs` holds the two halves together: every method the type declares must have a route, and every route must be gated.
 
 **One daemon, two ways in.** `bin/nestd.mjs` starts the daemon either headless or under the desktop shell (`--shell-pipe`, see `bin/shell-mode.mjs`); what differs is what is injected. Paths come from `platform-paths.mjs` and crypto from `secrets.mjs`, both fail-closed seams. Under the shell, the paths and the OSCrypt key arrive in `hello`; headless, they come from a directory and a key file. The test suites still stub a module named `electron` for a few legacy imports in test helpers; nothing in `daemon/` imports it.
 
-**Twig owns its local file tools.** Twig's `fs_*` tools act on a folder on the *user's* machine and live in `redstart-twig/windows/daemon/fs/`. They keep the `fs_*` prefix rather than adopting the upstream server's names, so the model — and an admin writing a tool ban — can tell Twig's local filesystem from Nest's server-side one. Only `path-scope.mjs` is duplicated between the apps; it is kept in sync by hand, and both copies say so.
+**Twig owns its local file tools.** Twig's `fs_*` tools act on a folder on the *user's* machine and live in `redstart-twig/desktop/daemon/fs/`. They keep the `fs_*` prefix rather than adopting the upstream server's names, so the model — and an admin writing a tool ban — can tell Twig's local filesystem from Nest's server-side one. Only `path-scope.mjs` is duplicated between the apps; it is kept in sync by hand, and both copies say so.
 
 **Chat-ui state.** `chat.svelte.ts` is a thin facade over focused sub-stores in `lib/stores/chat/` (UI state, runtime state, message repo, send pipeline, message ops, helpers). Dependencies flow one way and the public API is unchanged.
 
@@ -168,7 +168,7 @@ The Windows client has no dev server — it just loads the built chat-ui. Build 
 cd redstart-nest/src/chat-ui
 npm run build
 
-cd ../../../redstart-twig/windows
+cd ../../../redstart-twig/desktop
 npm run dev
 ```
 
@@ -260,7 +260,7 @@ Output: `shell/target/release/bundle/nsis/Redstart Nest_<version>_x64-setup.exe`
 
 The version comes from `package.json` (`shell/tauri.conf.json` reads it). Don't bump it by hand — the [release workflow](#releases)
 does that on every merge, in `redstart-nest/package.json` and
-`redstart-twig/windows/package.json` together (it refuses to run if they
+`redstart-twig/desktop/package.json` together (it refuses to run if they
 disagree).
 
 On a Mac, `npm run build` produces `shell/target/release/bundle/dmg/*.dmg`
@@ -270,11 +270,11 @@ because the only prebuilt Metal binary is arm64.
 ### Redstart Twig Windows
 
 ```bash
-cd redstart-twig/windows
+cd redstart-twig/desktop
 npm run build
 ```
 
-Output: `redstart-twig/windows/shell/target/release/bundle/nsis/Redstart Twig_<version>_x64-setup.exe` (about 32 MB).
+Output: `redstart-twig/desktop/shell/target/release/bundle/nsis/Redstart Twig_<version>_x64-setup.exe` (about 32 MB).
 
 Twig is a Tauri app built the way Nest is: `npm run build` builds the chat-ui, stages Nest's pinned Node 26 (one pin for both apps), lists the Rust crates' licences, stages `shell/bundle/resources` (`scripts/stage-shell-bundle.mjs`), and runs `tauri build`, which needs the updater signing key in `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`). Despite the directory name, the same project builds Twig for macOS (Apple Silicon only).
 

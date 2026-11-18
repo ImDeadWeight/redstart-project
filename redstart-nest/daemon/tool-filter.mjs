@@ -1,219 +1,121 @@
 'use strict'
 
 import { embedTexts } from './embed-server.mjs'
-import { EMBED_MODEL } from './embed-model.mjs'
-import { logEvent } from './logger.mjs'
+import { createHash } from 'node:crypto'
 import {
-  conversationKey,
-  conversationQueryText,
-  createSelectionMemory,
+  DISCOVERY_TOOL_NAMES,
+  createBm25Index,
+  fuse,
+  toolContentHash,
+  toolSearchResult,
+  tokenize,
   createVectorStore,
   estimateToolTokens,
-  pinsFromMessages,
   scoreTools,
-  selectTools,
   toolName,
 } from './tool-retrieval.mjs'
-import { HOST_RESOLVED_TOOL_NAMES } from './tools-definitions.mjs'
-import { TOOL_NAMES as MEMORY_TOOL_NAMES } from './memory-tool.mjs'
+import { toolMetadata } from './tool-metadata.mjs'
 
-// Tools retrieval keeps together (tool-retrieval.mjs selectTools, families).
-// Memory: saving without forgetting is the half that does damage, since a
-// model offered only memory_save says it has no way to forget, then says it
-// forgot (2026-11-12).
-export const TOOL_FAMILIES = [MEMORY_TOOL_NAMES]
+const DISCOVERY = new Set(DISCOVERY_TOOL_NAMES)
+const isDiscovery = (tool) => DISCOVERY.has(toolName(tool))
 
 // =============================================================================
-// Redstart Nest — applying tool retrieval to a request
+// Redstart Nest — tool retrieval: the setting, search_tools' ranking, the wire
 // =============================================================================
-// tool-retrieval.mjs decides; embed-server.mjs embeds; this joins them to one
-// completions request. It is the only file that holds state across requests,
-// and both pieces of that state are caches whose worst failure is a slower
-// turn: the vector store, and the last set applied per conversation.
+// tool-retrieval.mjs ranks; embed-server.mjs embeds; this joins them for
+// search_tools (search-tools-provider.mjs) and holds the one cache that lives
+// across requests, the vector store, whose worst failure is a slower search.
 //
-// INVARIANT — this runs AFTER enforceToolAllowList() and can only ever shrink
-// what that left behind. It is handed the post-ban tools and returns a subset;
-// a banned tool cannot re-enter by scoring well, by being pinned, or by having
-// been applied on an earlier turn.
-//
-// INVARIANT — fail open. Retrieval off, no embedding server, a cold cache that
-// cannot be filled, an embed call that times out: every one of them returns the
-// tools unchanged, which is byte-for-byte today's behaviour. Nothing in this
-// file is allowed to fail a completion.
+// What "on" means since master plan 3.3: the catalog. The gateway sends every
+// tool that is not deferred (tool-deferral.mjs), the same list on every turn,
+// and the deferred ones are reached through search_tools and call_tool.
+// Per-turn selection, its budget, floors-as-a-selection, growth modes,
+// selection memory and withhold all went; so did the scorer switch.
 // =============================================================================
 
 const store = createVectorStore()
-const memory = createSelectionMemory({ max: 200 })
+
+// Test seam: the port the default embedder dials. Null is production
+// (EMBED_PORT). The suites set it to a port they own, either a closed one for
+// "no embedding server" or a stub's ephemeral one, so they no longer depend on
+// what a running Redstart has on 19084. That dependency made "retrieval that
+// fails open discloses nothing" fail now and then (P6, 2026-10-26). The
+// production client still runs over a real socket; only its port changes.
+/** @type {number|null} */
+let embedPortOverride = null
+
+/** @param {number|null} port */
+export function setEmbedPortForTests(port) {
+  embedPortOverride = Number.isInteger(port) && port > 0 ? port : null
+}
+
+/** @type {typeof embedTexts} */
+const defaultEmbed = (texts, options) =>
+  embedTexts(texts, embedPortOverride === null ? options : { ...options, port: embedPortOverride })
 
 /**
- * How much of the context window the tool list may occupy.
- *
- * A QUARTER, matching the threshold the Tools tab has always used to turn its
- * estimate amber ("over a quarter of your window — consider enabling fewer
- * tools"). Two numbers in one product disagreeing about what "too much context
- * spent on tools" means is how a filter comes to report success while sending
- * a request the UI would have warned about.
- *
- * It was a half, and a half is enough rope to make the filter useless: on a
- * query where every tool scores alike — "which tools are relevant here?" is the
- * pathological case, since it is *about* tool descriptions — the floors admit
- * nearly everything and this becomes the only constraint left. Retrieval then
- * stops selecting and starts packing: measured at 29 of 76 tools and 15,494
- * tokens, which is a filter that has technically run and saved the user very
- * little. At a quarter the same query yields 14 tools and 7,480 tokens.
- *
- * When this is the binding constraint the scorer could not tell the tools
- * apart, which is worth knowing — `reason: 'budget'` in the telemetry says so.
+ * On by default since 2026-11-18 (the user: on, unless the benchmarks say
+ * otherwise; master plan 3.2's catalog arm passed the bar). Per profile;
+ * `enabled` is the only setting, and only an explicit `false` turns it off.
  */
-export const CONTEXT_BUDGET_FRACTION = 0.25
+export const RETRIEVAL_DEFAULTS = Object.freeze({ enabled: true })
 
-/** Defaults for the knobs an admin does not set. */
-export const RETRIEVAL_DEFAULTS = Object.freeze({
-  enabled: false,
-  // A fraction of the best score this turn. The load-bearing floor: the
-  // embedding model puts every score in a narrow absolute band, so "within 15%
-  // of the best match" means the same thing on every query where an absolute
-  // threshold does not. See embed-model.mjs for the measurement.
-  relativeFloor: 0.85,
-  // A hard "this query matched nothing" cut, well below anything the model
-  // produces for a real match.
-  floor: 0.2,
-  // Hysteresis against the weakest included tool, so a score jittering by a
-  // hair does not toggle the set and re-prefill the conversation.
-  margin: 0.02,
-})
+/** Does a profile's tools block want retrieval? Absent reads as on. */
+export function retrievalOnFor(tools) {
+  return tools?.retrieval?.enabled !== false
+}
 
 /**
- * Filter a request's tools down to the ones this conversation plausibly needs.
+ * search_tools' floors on the fused scores (fuse() returns 1 for a tool
+ * ranked first by both), tuned on the eval set
+ * (tool-retrieval-fixes-implementation.md, 3.2). Constants since master plan
+ * 3.3: the per-profile floor, relativeFloor and margin settings went with the
+ * selection they also tuned.
  *
- * Returns the tools to send. On any failure, and whenever retrieval is off,
- * that is the input array unchanged and by identity, so a caller can tell that
- * nothing happened without comparing contents.
- *
- * @param {{
- *   tools: any[],
- *   messages: any[],
- *   accountId?: string|null,
- *   settings?: { enabled?: boolean, relativeFloor?: number, floor?: number, margin?: number },
- *   ctxSize?: number,
- *   reservedTokens?: number,
- *   embed?: typeof embedTexts,
- * }} request
- * @returns {Promise<any[]>}
+ * relativeFloor: a fraction of the best score this query, the load-bearing
+ * one, since "close to the best match" means the same on every query where an
+ * absolute threshold does not. floor: a hard "this matched nothing" cut.
  */
-export async function filterRequestTools({
-  tools, messages, accountId, settings, ctxSize, reservedTokens = 0, embed = embedTexts,
-}) {
-  const config = { ...RETRIEVAL_DEFAULTS, ...(settings ?? {}) }
-  if (!config.enabled) return tools
-  if (!Array.isArray(tools) || tools.length === 0) return tools
+export const SEARCH_FLOORS = Object.freeze({ relativeFloor: 0.85, floor: 0.2 })
 
-  const startedAt = Date.now()
-  try {
-    // Fill the cache before scoring. A tool is embedded once per content hash,
-    // ever, so this is empty on all but the first request that sees a given
-    // tool set — and a failure here is simply a colder cache, not an error.
-    const missing = store.missingHashes(tools)
-    if (missing.length > 0) {
-      const vectors = await embed(missing.map(m => m.text))
-      if (!vectors) return unchanged(tools, 'no-embedding-server')
-      store.setMany(missing.map((m, i) => [m.hash, vectors[i]]))
-    }
+/** Is retrieval on? On means the catalog (master plan 3.3). */
+export function retrievalEnabled(settings) {
+  return settings?.enabled === true
+}
 
-    const queryText = conversationQueryText(messages, { maxTokens: EMBED_MODEL.maxTokens })
-    if (!queryText.trim()) return unchanged(tools, 'no-query')
-    const queryVectors = await embed([queryText])
-    if (!queryVectors) return unchanged(tools, 'no-embedding-server')
+/**
+ * The settings a request ran with, for the caller's report
+ * (x-redstart-retrieval-config, benchmarks H1), so a bench row says what ran
+ * rather than trusting its label. Keys are fixed and in a fixed order, so two
+ * runs' strings compare as text. One key since 3.3; the header stays so a row
+ * still says which arm ran.
+ *
+ * @returns {string}
+ */
+export function retrievalConfigSummary() {
+  return 'mode=catalog'
+}
 
-    const key = conversationKey(messages, accountId)
-    const scored = scoreTools({ tools, query: queryVectors[0], store })
-    const budgetTokens = toolBudget(ctxSize, reservedTokens)
+// The keyword index of the last few catalogs seen, by their content. A
+// catalog is mostly the same from one search to the next, so this is rebuilt
+// only when the set or a tool's text changes.
+/** @type {Map<string, ReturnType<typeof createBm25Index>>} */
+const keywordIndexes = new Map()
+const KEYWORD_INDEX_CACHE = 8
 
-    const { selected, dropped, reason } = selectTools({
-      scored,
-      // Host-resolved tools are always kept (tools-definitions.mjs,
-      // HOST_RESOLVED_TOOL_NAMES): asking scores against no task in
-      // particular, and a dropped ask_user reads as "you may not ask". A pin
-      // only keeps a tool the request carries, so this adds nothing a client
-      // did not send.
-      pins: new Set([...pinsFromMessages(messages), ...HOST_RESOLVED_TOOL_NAMES]),
-      previous: memory.get(key),
-      budgetTokens,
-      floor: config.floor,
-      relativeFloor: config.relativeFloor,
-      margin: config.margin,
-      families: TOOL_FAMILIES,
-    })
-
-    // Nothing survived. That is a scorer that has gone wrong, not a request
-    // with no tools, and sending an empty list would strip a capability the
-    // model was told it has. Fall back rather than trust it.
-    if (selected.length === 0) return unchanged(tools, 'empty-selection')
-
-    memory.set(key, selected.map(toolName))
-
-    // COUNTS ONLY — never tool names, never query text, never message content.
-    // The privacy contract in logger.mjs is about what a support log may
-    // contain, and "which tools this user has" is exactly the kind of fact it
-    // exists to keep out.
-    // `ms` is here because the first question asked of a filter that runs on
-    // every request is "is this what made the model slow?", and counts alone
-    // cannot answer it. Cold is one batch of embeds; warm is single-digit
-    // milliseconds, and a log that shows which is which settles the question
-    // instead of inviting a guess.
-    logEvent('retrieval', 'tools_filtered', {
-      offered: tools.length,
-      selected: selected.length,
-      dropped: dropped.length,
-      reason,
-      ms: Date.now() - startedAt,
-      budgetTokens: Number.isFinite(budgetTokens) ? budgetTokens : null,
-      sentTokens: estimateToolTokens(selected),
-    })
-    return selected
-  } catch (err) {
-    // Belt and braces over embedTexts' own contract: nothing this module does
-    // may become a failed completion.
-    return unchanged(tools, err?.message ?? 'unknown-error')
+function keywordIndexFor(tools) {
+  const key = createHash('sha256').update(tools.map((t) => toolContentHash(t)).join(',')).digest('hex')
+  let index = keywordIndexes.get(key)
+  if (!index) {
+    index = createBm25Index(tools)
+    keywordIndexes.set(key, index)
+    while (keywordIndexes.size > KEYWORD_INDEX_CACHE) keywordIndexes.delete(keywordIndexes.keys().next().value)
   }
+  return index
 }
 
-function unchanged(tools, reason) {
-  logEvent('retrieval', 'tools_unfiltered', { offered: tools.length, reason })
-  return tools
-}
-
-/**
- * How many tokens the tool list may spend.
- *
- * The circular part of the plan's §3.3: the prompt is composed from the
- * selected tools, and the selection needs to know how big the prompt is. It is
- * broken by budgeting against `reservedTokens` — a LOWER bound on the non-tool
- * cost, measured from a prompt composed before any selection exists — so the
- * budget is always at least as tight as the truth. Erring tight costs a tool;
- * erring loose costs the request.
- *
- * An unknown or absurd ctxSize yields no budget at all rather than a guess:
- * with Infinity the other constraints (the floors, the margin) still decide,
- * which is a better failure than a number invented here.
- */
-export function toolBudget(ctxSize, reservedTokens = 0) {
-  if (!Number.isFinite(ctxSize) || ctxSize <= 0) return Infinity
-  return Math.max(0, Math.floor(ctxSize * CONTEXT_BUDGET_FRACTION) - reservedTokens)
-}
-
-/**
- * Approximate token cost of a message array as it will go on the wire. Same
- * length/4 heuristic as everything else here, and it is used only to size a
- * budget, never to reject a request.
- */
-export function estimateMessagesTokens(messages) {
-  return estimateToolTokens(messages)
-}
-
-/** Test seam: forget everything cached between requests. */
+/** Test seam: forget the recorded wire cost. */
 export function resetToolFilterState() {
-  memory.clear()
   lastWireCost = null
 }
 
@@ -221,34 +123,46 @@ export function resetToolFilterState() {
 // search_tools
 // ---------------------------------------------------------------------------
 
-/** How many matches a search returns. Enough to choose from, few enough to read. */
+/** How many matches searchTools returns by default. */
 export const SEARCH_RESULT_LIMIT = 10
 
 /**
  * Rank a tool catalog against a free-text description of what the model wants.
  *
- * Shares this module's vector store, so a tool the filter has already embedded
- * costs nothing to search, and vice versa.
- *
- * Returns `{ name, description }` and NEVER a schema. A search result is an
- * index, not a definition: the names it surfaces become pins on the next turn
- * (pinsFromMessages), and the tool arrives with its real schema through the
- * ordinary path — so shipping schemas here would spend the context the whole
- * feature exists to save.
+ * Returns toolSearchResult() rows, `{ name, category, store, description }`;
+ * search-tools-provider.mjs adds the schemas. The discovery tools are never
+ * results.
  *
  * Returns null if it cannot rank, which callers must report as a failure rather
  * than as an empty result: "no tools match" and "the scorer is down" are
  * different answers and the model should not confuse them.
  *
  * @param {{ tools: any[], query: string, limit?: number, embed?: typeof embedTexts }} args
- * @returns {Promise<{ name: string, description: string }[]|null>}
+ * @returns {Promise<{ name: string, category: string, store: string, description: string }[]|null>}
  */
-export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, embed = embedTexts }) {
-  if (!Array.isArray(tools) || tools.length === 0) return []
+export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, embed = defaultEmbed }) {
+  const ranked = await rankForSearch({ tools, query, embed })
+  if (ranked === null) return null
+  return ranked.slice(0, limit).map(({ tool }) => toolSearchResult(tool))
+}
+
+/**
+ * searchTools' ranking with its scores, for search_tools' widening steps
+ * (search-tools-provider.mjs). The same contract: [] for an empty catalog,
+ * null when it cannot rank.
+ *
+ * @param {{ tools: any[], query: string, embed?: typeof embedTexts }} args
+ * @returns {Promise<{ tool: any, name: string, score: number }[]|null>}
+ */
+export async function rankForSearch({ tools, query, embed = defaultEmbed }) {
+  const searchable = Array.isArray(tools) ? tools.filter((t) => !isDiscovery(t)) : []
+  if (searchable.length === 0) return []
   if (typeof query !== 'string' || !query.trim()) return null
 
   try {
-    const missing = store.missingHashes(tools)
+    // A tool is embedded once per content hash, ever, so this is empty on all
+    // but the first search that sees a given catalog.
+    const missing = store.missingHashes(searchable)
     if (missing.length > 0) {
       const vectors = await embed(missing.map(m => m.text))
       if (!vectors) return null
@@ -256,16 +170,34 @@ export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, e
     }
     const queryVectors = await embed([query])
     if (!queryVectors) return null
-
-    return scoreTools({ tools, query: queryVectors[0], store })
-      .slice(0, limit)
-      .map(({ tool }) => ({
-        name: toolName(tool),
-        description: String((tool?.function ?? tool)?.description ?? ''),
-      }))
+    const scored = scoreTools({ tools: searchable, query: queryVectors[0], store })
+    return fuse({ scored, keyword: keywordIndexFor(searchable).score(query) })
   } catch {
     return null
   }
+}
+
+/**
+ * Keywords alone, on each tool's name and registry tags (search_tools' third
+ * step, 5.3): what still works with no embedding server, and what a one-word
+ * query from a small model ("config") is most likely to hit. Best first; only
+ * tools that match.
+ *
+ * @param {{ tools: any[], query: string }} args
+ * @returns {{ tool: any, name: string, score: number }[]}
+ */
+export function keywordSearch({ tools, query }) {
+  const searchable = Array.isArray(tools) ? tools.filter((t) => !isDiscovery(t)) : []
+  if (!searchable.length || !tokenize(query).length) return []
+  const nameAndTags = (tool) => {
+    const name = toolName(tool)
+    return [name, name.replace(/[_-]+/g, ' '), ...toolMetadata(name).tags].join('\n')
+  }
+  const scores = createBm25Index(searchable, nameAndTags).score(query)
+  return searchable
+    .map((tool) => ({ tool, name: toolName(tool), score: scores.get(toolName(tool)) ?? 0 }))
+    .filter((e) => e.score > 0)
+    .sort((a, b) => (b.score - a.score) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 }
 
 // ---------------------------------------------------------------------------
@@ -275,9 +207,7 @@ export async function searchTools({ tools, query, limit = SEARCH_RESULT_LIMIT, e
 // is a configuration-time hint and it has always UNDER-counted the real cost:
 // `parsed.tools` is composed client-side (live MCP connections, health-check
 // tools, and a client app's own local tools), and the gateway then adds a
-// system prompt the client never accounted for. Retrieval did not make that
-// wrong — it made it matter, because an admin now needs to know what the filter
-// removed as well as what was there to remove.
+// system prompt the client never accounted for.
 //
 // So the gateway records what it actually forwarded, and the estimate is shown
 // beside it rather than instead of it. One observation, overwritten per
@@ -294,9 +224,9 @@ let lastWireCost = null
  * identified by.
  *
  * THREE tool counts, not two, because two would make the reconciliation
- * dishonest: bans and retrieval both remove tools, and an admin looking at a
- * shrunken list needs to know which did it. A ban is policy they set; a
- * retrieval drop is a judgement the scorer made.
+ * dishonest: bans and the catalog both remove tools, and an admin looking at
+ * a shrunken list needs to know which did it. A ban is policy they set; a
+ * deferred tool is still there, through search_tools.
  */
 export function recordWireCost({ toolsOffered, toolsAfterBans, tools, messages, ctxSize, filtered }) {
   const sent = Array.isArray(tools) ? tools.length : 0

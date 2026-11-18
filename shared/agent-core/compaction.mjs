@@ -59,17 +59,28 @@ export function buildSummaryPrompt(existingSummary, newLines) {
 }
 
 /**
- * n_ctx and the send budget (n_ctx minus generation headroom), or null.
+ * n_ctx and the send budget for the conversation's own messages, or null:
+ * n_ctx minus generation headroom, minus what the request carries besides
+ * those messages.
+ *
+ * `overheadTokens` is the system prompt and the tool list the gateway adds
+ * (2026-11-18). Without it the trigger was measured against the messages
+ * alone: on Ornith the 15 core tools and the composed prompt are ~5,150
+ * tokens, so at n_ctx 12,288 compaction waited for ~6,960 tokens of messages
+ * while the request overflowed past ~3,000. Absent or not a positive number:
+ * 0, the old behaviour, for a caller that cannot measure it.
  *
  * @param {number | null | undefined} nCtx
  * @param {unknown} maxTokens the client's max_tokens setting
+ * @param {unknown} [overheadTokens] the system prompt and tools, in tokens
  * @returns {{ nCtx: number, usable: number } | null}
  */
-export function compactionBudget(nCtx, maxTokens) {
+export function compactionBudget(nCtx, maxTokens, overheadTokens = 0) {
 	if (!nCtx || nCtx <= 0) return null;
 	const m = Number(maxTokens);
 	const reserve = m > 0 ? m : DEFAULT_RESERVE_TOKENS;
-	const usable = nCtx - reserve;
+	const o = Number(overheadTokens);
+	const usable = nCtx - reserve - (o > 0 ? Math.ceil(o) : 0);
 	return usable > 0 ? { nCtx, usable } : null;
 }
 

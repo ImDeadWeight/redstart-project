@@ -61,6 +61,23 @@ export class ProjectService {
 		});
 	}
 
+	/**
+	 * Download the project's instructions as an AGENTS.md file, the file other
+	 * coding agents read theirs from (master plan Phase 5).
+	 */
+	static async exportAgentsMd(id: string): Promise<void> {
+		const res = await fetch(resolveApiPath(`/projects/${encodeURIComponent(id)}/agents-md`), {
+			headers: getAuthHeaders()
+		});
+		if (!res.ok) throw new Error(`Could not export AGENTS.md (${res.status})`);
+		const url = URL.createObjectURL(await res.blob());
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = 'AGENTS.md';
+		a.click();
+		setTimeout(() => URL.revokeObjectURL(url), 1000);
+	}
+
 	/** Its chats move out to the ordinary list; its memories go; its files stay. */
 	static async remove(id: string): Promise<{ chatsMovedOut: number; memoriesDeleted: number }> {
 		const res = await fetch(resolveApiPath(`/projects/${encodeURIComponent(id)}`), {

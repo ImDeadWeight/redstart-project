@@ -989,14 +989,24 @@ await test('the note says how each offered tool reaches the files', async () => 
   const note = attachmentNote({
     saved: ['sales.csv', 'notes.txt'],
     conversationId: 'abc123',
-    hasTool: offered('run_python', 'read_document', 'read_text_file', 'list_directory', 'move_file', 'write_file'),
+    hasTool: offered('run_python', 'read_document', 'read_text_file', 'list_directory', 'write_file', 'edit_file'),
+    fileSystemTools: ['read_text_file', 'write_file', 'edit_file', 'create_directory', 'list_directory', 'search_files'],
   })
   eq(note, [
     "[Attached files saved to this chat's workspace: sales.csv, notes.txt",
     '- run_python runs in that folder: open them by name, e.g. open("sales.csv"), not open("chats/abc123/sales.csv"). To rename, move or delete them, use run_python (os.rename, os.remove).',
     '- read_document opens them by name too: read_document("sales.csv").',
-    '- The File System tools (read_text_file, list_directory, move_file, ...) work on a different folder and cannot see these files.]',
+    '- The File System tools (read_text_file, write_file, edit_file, ...) work on a different folder and cannot see these files.]',
   ].join('\n'), 'full note')
+})
+
+await test('the File System line names only what the host says is File System (master plan Phase 3.1)', async () => {
+  // The core keeps no list: an offered tool the host did not name is not
+  // called a File System tool, and with no list there is no such line.
+  const note = attachmentNote({ saved: ['a.csv'], conversationId: 'c', hasTool: offered('read_text_file', 'write_file'), fileSystemTools: ['write_file'] })
+  assert(note.includes('The File System tools (write_file)'), note)
+  const none = attachmentNote({ saved: ['a.csv'], conversationId: 'c', hasTool: offered('read_text_file', 'write_file') })
+  assert(!none.includes('File System'), none)
 })
 
 await test('tools that are not offered are not named', async () => {
@@ -1025,6 +1035,11 @@ await test('the budget: n_ctx less max_tokens, or the default reserve; nothing u
   eq(compaction.compactionBudget(4096, 0), { nCtx: 4096, usable: 4096 - compaction.DEFAULT_RESERVE_TOKENS }, 'unlimited max_tokens')
   eq(compaction.compactionBudget(4096, 1000), { nCtx: 4096, usable: 3096 }, 'a set max_tokens')
   eq([compaction.compactionBudget(null, 0), compaction.compactionBudget(500, 1000)], [null, null], 'unknown, or no room')
+  // The prompt and tools beside the messages (2026-11-18).
+  eq(compaction.compactionBudget(12288, 4096, 5150), { nCtx: 12288, usable: 3042 }, 'overhead comes off usable')
+  eq([compaction.compactionBudget(4096, 1000, 0), compaction.compactionBudget(4096, 1000, -5), compaction.compactionBudget(4096, 1000, 'x')],
+    [{ nCtx: 4096, usable: 3096 }, { nCtx: 4096, usable: 3096 }, { nCtx: 4096, usable: 3096 }], 'no or a bad overhead: as before')
+  eq(compaction.compactionBudget(4096, 1000, 3200), null, 'overhead that fills the context: no room')
 })
 
 await test('counts: one /tokenize total apportioned by length plus overhead; chars/3 without one', async () => {
@@ -1125,6 +1140,17 @@ await test('the core imports only its own files: no Svelte, no DOM, no node: bui
     }
   }
   return `${files.length} files`
+})
+
+await test('🔒 callToolTarget: a call_tool call is the call it carries, and nothing else is (U-S6)', async () => {
+  const { callToolTarget } = await import('../../shared/agent-core/approval.mjs')
+  eq(callToolTarget('call_tool', { name: 'delete_file', arguments: { path: 'a' } }), { name: 'delete_file', args: { path: 'a' } }, 'carried')
+  eq(callToolTarget('call_tool', { name: ' write_file ' }), { name: 'write_file', args: {} }, 'no arguments are {}')
+  eq(callToolTarget('call_tool', { name: 'write_file', arguments: ['x'] }), { name: 'write_file', args: {} }, 'an array is {}, as Nest reads it')
+  for (const bad of [{}, { name: '' }, { name: 42 }, { name: 'call_tool' }, null, 'delete_file']) {
+    eq(callToolTarget('call_tool', bad), null, `call_tool with ${JSON.stringify(bad)}`)
+  }
+  eq(callToolTarget('delete_file', { name: 'x' }), null, 'any other tool')
 })
 
 const passed = results.filter((r) => r.pass).length

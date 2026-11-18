@@ -51,6 +51,13 @@ const QUESTION_PROPERTIES = Object.freeze({
  * (daemon/interaction-tools.mjs) only to a client that declared it can answer;
  * kept here so the schema and the parser below cannot drift apart.
  *
+ * The example and the last sentence (2026-11-18, p1-two-unknowns on Ornith):
+ * told to use "questions", it never did; it put both questions in one flat
+ * string, or asked in reply text, which ends a task. A small model copies a
+ * shape it is shown more readily than it follows an instruction (the same
+ * finding as search_tools' example). The example's topic is deliberately not
+ * the bench task's, so a pass is not a copied answer.
+ *
  * Nothing is `required`: a call carries either `question` or `questions`,
  * and the parser says which is missing. (An anyOf would say it in the schema,
  * but not every grammar converter a local server uses handles one.)
@@ -58,7 +65,7 @@ const QUESTION_PROPERTIES = Object.freeze({
 export const ASK_USER_DEFINITION = Object.freeze({
 	name: ASK_USER_TOOL,
 	description:
-		'Ask the user and wait for the answer. Use it when the answer would change what you produce: the request can be read two ways that lead to different work, a choice only the user can make is open (such as level, scope or format) and a sensible default could well be wrong, or the user asked you to ask. Not for permission, and not for anything the conversation or a tool already tells you. Offer 2 to 4 short options when the answers are predictable; the user can always type their own. If you need several things, ask them together in one call with "questions" (up to 4, each with a short "header") instead of one call after another.',
+		'Ask the user and wait for the answer. Use it when the answer would change what you produce: the request can be read two ways that lead to different work, a choice only the user can make is open (such as level, scope or format) and a sensible default could well be wrong, or the user asked you to ask. Not for permission, and not for anything the conversation or a tool already tells you. Offer 2 to 4 short options when the answers are predictable; the user can always type their own. If you need several things, ask them together in one call with "questions" (up to 4, each with a short "header") instead of one call after another, e.g. {"questions": [{"header": "Audience", "question": "Who will read the report?", "options": ["Executives", "Engineers"]}, {"header": "Length", "question": "How long should it be?"}]}. Ask through this tool, not at the end of your reply: a question in your reply ends your turn without an answer, and in a background task it ends the task.',
 	inputSchema: {
 		type: 'object',
 		properties: {

@@ -167,7 +167,9 @@ export function logAudit(event, fields = {}) {
 // was, the grant, and who acted (an admin revoking someone else's grant).
 // ---------------------------------------------------------------------------
 const POLICY_FIELDS = ['account', 'tool', 'decision', 'grantId', 'capability', 'role', 'by', 'source']
-export const POLICY_EVENTS = new Set(['approval.denied', 'approval.refused', 'grant.added', 'grant.revoked'])
+// access.denied: a resource grant refused a path (grant-scope.mjs, master
+// plan 6.1). role.saved / role.deleted: who changed what a role may do.
+export const POLICY_EVENTS = new Set(['approval.denied', 'approval.refused', 'grant.added', 'grant.revoked', 'access.denied', 'role.saved', 'role.deleted'])
 const MAX_POLICY_VALUE = 128
 const MAX_POLICY_BYTES = 2 * 1024 * 1024
 

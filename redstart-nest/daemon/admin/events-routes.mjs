@@ -7,7 +7,7 @@
 // route. Deliberately not the browser's native EventSource — it cannot attach
 // an Authorization header, and this listener sends no cookie for it to ride on
 // instead (admin-listener.mjs's header explains why: no CSRF token needed
-// because there is no cookie). The client (src/api/http.ts) reads the stream
+// because there is no cookie). The client (src/launcher/api/http.ts) reads the stream
 // with `fetch()` + a `ReadableStream` reader instead, which can carry the
 // header, and gets ordinary text/event-stream framing back.
 //

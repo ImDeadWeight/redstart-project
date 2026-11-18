@@ -24,6 +24,7 @@ export type TaskStatus =
 	| 'waiting_user'
 	| 'waiting_approval'
 	| 'waiting_model'
+	| 'waiting_client'
 	| 'done'
 	| 'failed'
 	| 'cancelled';
@@ -34,7 +35,13 @@ export const TERMINAL_TASK_STATES: readonly TaskStatus[] = ['done', 'failed', 'c
 export type TaskWaiting =
 	| ({ kind: 'question'; callId?: string } & AskRequest)
 	/** A record written before D43 (one flat question); read as a one-item list. */
-	| { kind: 'question'; callId?: string; question: string; options?: string[]; multiSelect?: boolean }
+	| {
+			kind: 'question';
+			callId?: string;
+			question: string;
+			options?: string[];
+			multiSelect?: boolean;
+	  }
 	| { kind: 'continue'; turns?: number }
 	| {
 			kind: 'approval';
@@ -43,7 +50,9 @@ export type TaskWaiting =
 			rule: string;
 			approval: { id: string; tool: string; summary: string; expiresAt?: number };
 	  }
-	| { kind: 'model' };
+	| { kind: 'model' }
+	/** A call to a tool this app runs (master plan 7.1). */
+	| { kind: 'client'; callId: string; tool: string };
 
 export interface TaskRecord {
 	id: string;
@@ -63,6 +72,19 @@ export interface TaskEvent {
 	waiting?: TaskWaiting | null;
 	error?: string;
 	[k: string]: unknown;
+}
+
+/** A tool this app runs itself, as a task start registers it (master plan 7.1). */
+export interface ClientToolSpec {
+	name: string;
+	description: string;
+	inputSchema: Record<string, unknown>;
+}
+
+/** Nest's tools this app switched off for the chat (master plan 7.1). */
+export interface TaskToolLimits {
+	nest: boolean;
+	exclude: string[];
 }
 
 export type TaskAnswer =
@@ -109,6 +131,8 @@ export function taskStatusLabel(record: Pick<TaskRecord, 'status' | 'waiting'>):
 			return 'Background task needs your approval';
 		case 'waiting_model':
 			return 'Background task waiting for a model to load';
+		case 'waiting_client':
+			return 'Running a tool in this app';
 		case 'done':
 			return 'Background task finished';
 		case 'failed':
@@ -124,7 +148,11 @@ export function isTerminal(status: TaskStatus | undefined | null): boolean {
 
 function headers(extra?: Record<string, string>): Record<string, string> {
 	const tz = browserTimeZone();
-	return { ...conversationHeaders(), ...(tz ? { 'X-Redstart-Timezone': tz } : {}), ...(extra ?? {}) };
+	return {
+		...conversationHeaders(),
+		...(tz ? { 'X-Redstart-Timezone': tz } : {}),
+		...(extra ?? {})
+	};
 }
 
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -160,7 +188,12 @@ export function parseSseFrames(buffer: string): { events: TaskEvent[]; rest: str
 		if (!data) continue;
 		try {
 			const event = JSON.parse(data);
-			if (event && typeof event.seq === 'number' && typeof event.type === 'string') events.push(event);
+			// A live event (tokens, a request for this client) has no seq: it is
+			// never replayed, so it takes -1 and never moves the reconnect point.
+			if (event && event.live === true && typeof event.type === 'string')
+				events.push({ ...event, seq: -1 });
+			else if (event && typeof event.seq === 'number' && typeof event.type === 'string')
+				events.push(event);
 		} catch {
 			/* a torn or foreign frame: skip it */
 		}
@@ -172,9 +205,32 @@ export class TaskService {
 	static start(
 		conversationId: string,
 		content: string,
-		generation: Record<string, unknown>
+		generation: Record<string, unknown>,
+		clientTools?: ClientToolSpec[],
+		toolLimits?: TaskToolLimits
 	): Promise<TaskRecord> {
-		return post<TaskRecord>('/tasks', { conversationId, content, generation });
+		return post<TaskRecord>('/tasks', {
+			conversationId,
+			content,
+			generation,
+			...(clientTools?.length ? { clientTools } : {}),
+			...(toolLimits ? { toolLimits } : {})
+		});
+	}
+
+	/** The tools this app runs for the task, after a reload or a reconnect. */
+	static registerClient(id: string, tools: ClientToolSpec[]): Promise<{ ok: true }> {
+		return post(`/tasks/${id}/client`, { tools });
+	}
+
+	/** This app's result for a client_request. */
+	static clientResult(
+		id: string,
+		callId: string,
+		text: string,
+		isError: boolean
+	): Promise<{ ok: true }> {
+		return post(`/tasks/${id}/client-result`, { callId, text, isError });
 	}
 
 	static async listFor(conversationId: string): Promise<TaskRecord[]> {
@@ -215,13 +271,19 @@ export class TaskService {
 		id: string,
 		afterSeq: number,
 		onEvent: (event: TaskEvent) => void,
-		signal: AbortSignal
+		signal: AbortSignal,
+		asClient = false
 	): Promise<void> {
-		const res = await fetch(resolveApiPath(`/tasks/${id}/events?after=${afterSeq}`), {
-			headers: headers({ Accept: 'text/event-stream' }),
-			signal
-		});
-		if (!res.ok || !res.body) throw new TaskRequestError(`${res.status} ${res.statusText}`, res.status);
+		// asClient: this app is the run's executor for its own tools (7.1).
+		const res = await fetch(
+			resolveApiPath(`/tasks/${id}/events?after=${afterSeq}${asClient ? '&client=1' : ''}`),
+			{
+				headers: headers({ Accept: 'text/event-stream' }),
+				signal
+			}
+		);
+		if (!res.ok || !res.body)
+			throw new TaskRequestError(`${res.status} ${res.statusText}`, res.status);
 		const reader = res.body.getReader();
 		const decoder = new TextDecoder();
 		let buffer = '';

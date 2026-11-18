@@ -51,6 +51,30 @@ export function deleteUserGroup(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Deferral overrides (master plan Phase 3.1): capability id → boolean, for
+// built-ins and plugins alike. Absent means the default (tool-deferral.mjs).
+// ---------------------------------------------------------------------------
+
+export function getDeferralOverrides() {
+  const d = read().deferral
+  return d && typeof d === 'object' && !Array.isArray(d) ? d : {}
+}
+
+/**
+ * @param {string} id a capability or plugin id (the caller validates it)
+ * @param {boolean | null} deferred null clears the override
+ */
+export function setDeferralOverride(id, deferred) {
+  const data = read()
+  const next = { ...(data.deferral && typeof data.deferral === 'object' ? data.deferral : {}) }
+  if (deferred === null) delete next[id]
+  else next[id] = deferred === true
+  data.deferral = next
+  write(data)
+  return next
+}
+
+// ---------------------------------------------------------------------------
 // External MCP servers
 // { id, name, url, enabled }
 // ---------------------------------------------------------------------------
@@ -118,7 +142,10 @@ const DEFAULT_CAPABILITIES = {
   memory:      { enabled: false, promptBudgetChars: 1200 },
   // Document search (chat-tooling Phase 5a). Its index is Nest's own state
   // (<config>/document-index.sqlite); it searches the Documents root.
-  document_search: { enabled: false },
+  // sharedRootDir: Shared Documents (master plan 6.2), one admin-chosen
+  // folder search_documents also searches, read-only, narrowed per role by
+  // grants.shared_documents. null: none.
+  document_search: { enabled: false, sharedRootDir: null },
   // NOT a capability id: the global CONNECTION for Web Access's "web" search
   // source (chat-tooling Phase 4b). Which engine a profile uses is that
   // profile's tools.webSearchEngine; this only says where each engine is.

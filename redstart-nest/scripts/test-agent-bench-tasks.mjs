@@ -81,6 +81,8 @@ const times = (vals) => vals.map((v, i) => [`${String(i * 3).padStart(2, '0')}:0
 const citiesCsv = csvOf('city,count', Object.entries(X.cityCounts))
 const quoteCsv = (prices) => csvOf('item,price', X.quote.map(([item], i) => [item, prices[i]]))
 const NOTE = (signature) => `# Thank you\n\nThank you all for giving up your Saturday to keep the stall running.\n\n${signature}\n`
+// p1-two-unknowns: an invoice with a PO line and a total (20 hours).
+const INVOICE = (po, total) => `# Invoice, October 2026\n\nPurchase order: ${po}\n\n| date | task | hours | amount |\n|---|---|---|---|\n| 2026-10-01 | Site survey | 3.5 | … |\n\n**Total: $${total}**\n`
 // Every file p1-plan-eight-deliverables asks for. `drop` leaves one out;
 // `manifest` overrides the manifest's text.
 function eight({ drop = null, manifest } = {}) {
@@ -213,6 +215,10 @@ const CASES = {
     right: ['Saved notice.csv for Kestrel and Osprey.', { 'notice.csv': csvOf('vendor,notice_days', [['Kestrel Analytics', 60], ['Osprey Building Services', 30]]) }, ASKED, NONE],
     wrong: ['Saved notice.csv.', { 'notice.csv': csvOf('vendor,notice_days', [['Alder Logistics', 90], ['Kestrel Analytics', 60], ['Osprey Building Services', 30]]) }, [], NONE], why: 'did all three without asking',
   },
+  'p1-two-unknowns': {
+    right: ['Saved invoice.md.', { 'hours.csv': 'x', 'invoice.md': INVOICE('PO-48213', '1,850.00') }, ASKED, NONE],
+    wrong: ['Saved invoice.md.', { 'hours.csv': 'x', 'invoice.md': INVOICE('PO-[number]', '2,000.00') }, ASKED, NONE], why: 'asked one thing, guessed $100 an hour and left the PO blank',
+  },
   'p1-simple-stays-simple': {
     right: ['The North region\'s total is 11,123.'],
     wrong: ['The North region\'s total is 11,123.', {}, ASKED, NONE], why: 'asked a question the request answers',
@@ -245,12 +251,12 @@ console.log('\n-- the task set --')
 
 const files = findTaskFiles(TASKS)
 const tasks = []
-await test('every task file loads, and there are 32 in six groups (Phase 1 revised 2026-11-11: 11; Phase 2 added 2026-11-12: 1)', async () => {
+await test('every task file loads, and there are 33 in six groups (Phase 1 revised 2026-11-11: 11, plus p1-two-unknowns 2026-11-18; Phase 2 added 2026-11-12: 1)', async () => {
   for (const f of files) tasks.push(await loadTask(f))
   const groups = {}
   for (const t of tasks) groups[t.group] = (groups[t.group] ?? 0) + 1
-  assert(tasks.length === 32, `${tasks.length} tasks`)
-  const want = { compute: 6, documents: 5, multi: 5, phase1: 11, phase2: 1, phase4: 4 }
+  assert(tasks.length === 33, `${tasks.length} tasks`)
+  const want = { compute: 6, documents: 5, multi: 5, phase1: 12, phase2: 1, phase4: 4 }
   assert(JSON.stringify(groups, Object.keys(want)) === JSON.stringify(want), `groups ${JSON.stringify(groups)}`)
   return JSON.stringify(groups)
 })
@@ -259,6 +265,20 @@ await test('tasks for a later phase say which, and only they do', async () => {
   for (const t of tasks) {
     const expected = t.group === 'phase1' ? 1 : t.group === 'phase2' ? 2 : t.group === 'phase4' ? 4 : 0
     assert(t.phase === expected, `${t.id}: phase ${t.phase}, expected ${expected}`)
+  }
+})
+
+await test('🔍 every task names expectTools, and an attachment task never expects a File System tool', async () => {
+  // The count that tracks P3 (tool retrieval second pass: the File System
+  // tools came first on 8 of 22 attachment tasks). Attachments live in the
+  // workspace, which the File System tools cannot see, so one of them as a
+  // "right" first call would hide the very failure being counted.
+  const { FILE_SYSTEM_TOOLS } = await import('./agent-bench/lib/metrics.mjs')
+  for (const t of tasks) {
+    assert(Array.isArray(t.expectTools), `${t.id} has no expectTools`)
+    const attached = t.fixtures.some((fx) => fx.space !== 'files')
+    const fs = t.expectTools.filter((n) => FILE_SYSTEM_TOOLS.has(n))
+    assert(!(attached && fs.length), `${t.id} has attachments but expects ${fs.join(', ')}`)
   }
 })
 
@@ -327,6 +347,22 @@ await test('Phase 1 checks: the edges one right/wrong pair does not reach', asyn
   const missing = check('p1-plan-missing-input')
   const silent = await missing('Saved totals.csv. The overall sales total is 49,951.', { 'totals.csv': totalsCsv }, [], NONE)
   assert(!silent.pass && /returns\.csv is missing/.test(silent.reason), `skipping step 2 in silence passed: ${silent.reason}`)
+
+  // p1-two-unknowns: the way of asking is named, not scored (D43).
+  const invoice = check('p1-two-unknowns')
+  const goodInvoice = { 'invoice.md': INVOICE('PO-48213', '1,850.00') }
+  const listAsk = [{ t: 0, type: 'tool_call', name: 'ask_user', questions: [{ question: 'Hourly rate?' }, { question: 'PO number?' }] }]
+  const argsAsk = [{ t: 0, type: 'tool_call', name: 'ask_user', arguments: JSON.stringify({ questions: [{ question: 'Hourly rate?' }, { question: 'PO number?' }] }) }]
+  const viaList = await invoice('Done.', goodInvoice, listAsk, NONE)
+  assert(viaList.pass && /one call \(list of 2\)/.test(viaList.reason), `list form not named: ${viaList.reason}`)
+  const viaArgs = await invoice('Done.', goodInvoice, argsAsk, NONE)
+  assert(viaArgs.pass && /list of 2/.test(viaArgs.reason), `list form in the arguments (runtime log) not named: ${viaArgs.reason}`)
+  const twoCalls = await invoice('Done.', goodInvoice, [call('ask_user'), call('ask_user')], NONE)
+  assert(twoCalls.pass && /in 2 calls/.test(twoCalls.reason), `two calls not named: ${twoCalls.reason}`)
+  assert((await invoice('Done.', { 'invoice.md': INVOICE('PO 48213', '1850') }, ASKED, NONE)).pass, '"PO 48213" and 1850 refused')
+  const noAsk = await invoice('Done.', goodInvoice, [], NONE)
+  assert(!noAsk.pass && /did not ask/.test(noAsk.reason), `right numbers without asking passed: ${noAsk.reason}`)
+  assert(!(await invoice('Done.', { 'invoice.md': INVOICE('PO-482130', '1,850.00') }, ASKED, NONE)).pass, 'a longer number passed as the PO')
 
   const simple = check('p1-simple-stays-simple')
   assert(!(await simple("The North region's total is 11,123.", {}, PLANNED, NONE)).pass, 'a plan for one number passed')
@@ -441,6 +477,79 @@ await test('Phase 1 answers are keyed by topic: a question about where to save d
   assert(/age/.test(answerFromTask(byId('p1-answer-steers').answers, { question: 'What order would you like?' })?.text ?? ''), 'the order question')
   const catchAll = tasks.filter((t) => '' in (t.answers ?? {})).map((t) => t.id)
   assert(JSON.stringify(catchAll) === '["p1-stop-and-report"]', `catch-all answers: ${catchAll}`)
+})
+
+console.log('\n-- the p5 set (tool retrieval benchmarks B3-B5, tasks/p5/) --')
+
+// What is left of the p5 set after master plan 3.3: p5-vague-config, a
+// File System read the model reaches only through the catalog, and three
+// drift tasks with follow-ups. The tasks that withheld a core tool went with
+// withhold. They live in their own folder so a full-set run is still the 32.
+const callTool = (name, args = {}) => ({ t: 0, type: 'tool_call', name: 'call_tool', arguments: JSON.stringify({ name, arguments: args }) })
+const saved = (text) => ({ t: 0, type: 'tool_call', name: 'memory_save', arguments: JSON.stringify({ text }) })
+const P5_CASES = {
+  'p5-vague-config': {
+    right: ['settings.json sets the port to 48213 (the README default is 8080).'],
+    wrong: ['It listens on port 8080.'], why: 'read the README default, not the settings',
+  },
+  'p5-drift-docs-to-python': { right: CASES['compute-csv-summary'].right, wrong: CASES['compute-csv-summary'].wrong, why: CASES['compute-csv-summary'].why },
+  'p5-drift-python-to-memory': {
+    right: ['Saved.', {}, [{ t: 0, type: 'assistant', content: 'It is 481,283,227.' }, saved('The product is 481,283,227')], NONE],
+    wrong: ['Noted, I will remember 481,283,227.', {}, [], NONE], why: 'said it would remember, saved nothing',
+  },
+  'p5-drift-to-git': { right: CASES['p4-git-log'].right, wrong: CASES['p4-git-log'].wrong, why: CASES['p4-git-log'].why },
+}
+
+const p5Tasks = []
+await test('the p5 set loads: 4 tasks, three of them drift tasks with follow-ups', async () => {
+  for (const f of findTaskFiles(path.join(TASKS, 'p5'))) p5Tasks.push(await loadTask(f))
+  assert(p5Tasks.length === 4, `${p5Tasks.length} tasks`)
+  for (const t of p5Tasks) assert(t.group === 'p5' && t.phase === 5, `${t.id}: group ${t.group}, phase ${t.phase}`)
+  assert(p5Tasks.filter((t) => t.followUps.length).length === 3, 'three drift tasks')
+  const missing = p5Tasks.map((t) => t.id).filter((id) => !P5_CASES[id])
+  assert(missing.length === 0, `no cases for ${missing}`)
+})
+
+await test('🔍 p5-vague-config tests the catalog: its tool is deferred by default', async () => {
+  // Otherwise "discovered" is trivially null: turn 1 would have it.
+  const { DEFERRED_BY_DEFAULT } = await import('../daemon/tool-deferral.mjs')
+  const { BUILTIN_CAPABILITY_TOOL_NAMES } = await import('../daemon/tools-definitions.mjs')
+  const t = p5Tasks.find((x) => x.id === 'p5-vague-config')
+  const deferred = DEFERRED_BY_DEFAULT.flatMap((id) => BUILTIN_CAPABILITY_TOOL_NAMES[id] ?? [])
+  const open = t.expectTools.filter((n) => !deferred.includes(n))
+  assert(open.length === 0, `expects ${open}, which is not deferred`)
+})
+
+for (const task of p5Tasks) {
+  const c = P5_CASES[task.id]
+  if (!c) continue
+  await test(`${task.id}: right passes, wrong (${c.why}) fails`, async () => {
+    const right = await task.check(...withDefaults(c.right))
+    assert(right?.pass === true, `right case failed: ${right?.reason}`)
+    const wrong = await task.check(...withDefaults(c.wrong))
+    assert(wrong?.pass === false, `wrong case passed: ${wrong?.reason}`)
+  })
+}
+
+await test('withCallTool: a call_tool call counts as the tool it names; nothing else changes', async () => {
+  const { withCallTool } = await import('./agent-bench/tasks/checks/p5.mjs')
+  const out = withCallTool([callTool('list_documents'), call('run_python'), { t: 0, type: 'tool_call', name: 'call_tool', arguments: '{' }])
+  assert(out[0].name === 'list_documents' && out[0].viaCallTool, 'not unwrapped')
+  assert(out[1].name === 'run_python' && out[2].name === 'call_tool', 'changed what it should not')
+})
+
+await test('p2-delete-confirmed: a delete through call_tool, approved, passes (Ornith arm C, 2026-11-18)', async () => {
+  const { deletedWithApproval } = await import('./agent-bench/tasks/checks/phase2.mjs')
+  const ctx = { fileSystemAfter: ['p2-final.txt'] }
+  const via = { ...callTool('delete_file', { path: 'p2-old-draft.txt' }), id: 'c1' }
+  const ok = deletedWithApproval('', {}, [via, { t: 0, type: 'approval', id: 'c1', name: 'call_tool', decided: true }], ctx)
+  assert(ok.pass === true, `failed: ${ok.reason}`)
+  // An approval for some other call_tool call does not count for this one.
+  const other = deletedWithApproval('', {}, [via, { t: 0, type: 'approval', id: 'c2', name: 'call_tool', decided: true }], ctx)
+  assert(other.pass === false, 'an unrelated approval counted')
+  // Through call_tool to another tool, the file going is still not a delete_file.
+  const wrong = deletedWithApproval('', {}, [{ ...callTool('run_python'), id: 'c1' }], ctx)
+  assert(wrong.pass === false, 'run_python counted as delete_file')
 })
 
 await test('saysNotFound: absence stated around a file name, and not a figure of speech', async () => {

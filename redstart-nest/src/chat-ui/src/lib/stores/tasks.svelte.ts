@@ -3,10 +3,15 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { getApiOptions } from '$lib/stores/chat/chat-options';
 import { setTaskActiveHandler } from '$lib/services/database.service';
+import { agenticStore } from '$lib/stores/agentic.svelte';
+import { toolsStore } from '$lib/stores/tools.svelte';
+import { MessageRole, MessageType } from '$lib/enums';
 import {
 	TaskService,
 	isTerminal,
 	type ApprovalDecision,
+	type ClientToolSpec,
+	type TaskToolLimits,
 	type TaskAnswer,
 	type TaskEvent,
 	type TaskRecord
@@ -25,7 +30,12 @@ import {
  * reconnects from the last seq while the task has not ended. At the end the
  * conversation is reloaded once more and the record is dropped.
  *
- * The browser loop is not involved: an ordinary chat never touches this.
+ * Since master plan Phase 7 a plain Send starts a task too (setting "Run
+ * chats on the server"). The stream then also carries live events: `delta`
+ * tokens, shown in a placeholder reply until the stored message replaces it,
+ * and `client_request`, a call to a tool this app runs (Twig's files, the
+ * sandbox, a browser-reached MCP server), run here with its own approval
+ * card and posted back.
  */
 
 /** Events after which the stored conversation has changed. */
@@ -49,6 +59,17 @@ interface Follower {
 	conversationId: string;
 	controller: AbortController;
 	lastSeq: number;
+	/** This app runs the task's client tools (7.1). */
+	asClient: boolean;
+	/** Register this app's tools on the first connect (a task picked up after a reload). */
+	registerOnConnect: boolean;
+	/** The reply being written, from live tokens, until it is stored. */
+	live: { messageId: string; content: string; reasoning: string } | null;
+}
+
+/** Is a plain Send a run on the server? (Settings: "Run chats on the server".) */
+export function serverRunsOn(): boolean {
+	return config().serverRuns !== false;
 }
 
 class TasksStore {
@@ -59,7 +80,9 @@ class TasksStore {
 
 	constructor() {
 		setTaskActiveHandler((conversationId) => {
-			toast.info('A background task is writing this chat, so it was reloaded. Cancel the task to edit it.');
+			toast.info(
+				'A background task is writing this chat, so it was reloaded. Cancel the task to edit it.'
+			);
 			const id = conversationId ?? conversationsStore.activeConversation?.id;
 			if (!id) return;
 			if (this.follower?.conversationId === id) void conversationsStore.reloadActiveFromServer(id);
@@ -106,14 +129,27 @@ class TasksStore {
 	 * Start a task in this conversation with `content` as the user's message.
 	 * The daemon writes the message itself; the chat is reloaded to show it.
 	 */
-	async start(conversationId: string, content: string): Promise<TaskRecord | null> {
+	async start(
+		conversationId: string,
+		content: string,
+		clientTools?: ClientToolSpec[],
+		opts: { quiet?: boolean; toolLimits?: TaskToolLimits } = {}
+	): Promise<TaskRecord | null> {
 		try {
-			const record = await TaskService.start(conversationId, content, taskGeneration());
-			this.follow(record);
+			const record = await TaskService.start(
+				conversationId,
+				content,
+				taskGeneration(),
+				clientTools,
+				opts.toolLimits
+			);
+			this.follow(record, { registered: true });
 			await conversationsStore.reloadActiveFromServer(conversationId);
 			return record;
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : 'The task could not be started.');
+			// quiet: the caller falls back to the browser loop (a plain Send).
+			if (opts.quiet) console.warn('[tasks] a run on the server did not start:', error);
+			else toast.error(error instanceof Error ? error.message : 'The task could not be started.');
 			return null;
 		}
 	}
@@ -135,7 +171,10 @@ class TasksStore {
 	async answer(conversationId: string, answer: TaskAnswer): Promise<boolean> {
 		const record = this.activeFor(conversationId);
 		if (!record) return false;
-		return this.act(() => TaskService.answer(record.id, answer), 'The answer did not reach the task.');
+		return this.act(
+			() => TaskService.answer(record.id, answer),
+			'The answer did not reach the task.'
+		);
 	}
 
 	async decideApproval(conversationId: string, decision: ApprovalDecision): Promise<void> {
@@ -164,15 +203,19 @@ class TasksStore {
 		}
 	}
 
-	private follow(record: TaskRecord): void {
+	private follow(record: TaskRecord, opts: { registered?: boolean } = {}): void {
 		if (this.follower?.taskId === record.id) return;
 		this.stopFollowing();
 		this.records = { ...this.records, [record.conversationId]: record };
+		const asClient = serverRunsOn();
 		const follower: Follower = {
 			taskId: record.id,
 			conversationId: record.conversationId,
 			controller: new AbortController(),
-			lastSeq: 0
+			lastSeq: 0,
+			asClient,
+			registerOnConnect: asClient && !opts.registered,
+			live: null
 		};
 		this.follower = follower;
 		void this.run(follower);
@@ -192,7 +235,22 @@ class TasksStore {
 		let delay = RECONNECT_MIN_MS;
 		while (!f.controller.signal.aborted) {
 			try {
-				await TaskService.readEvents(f.taskId, f.lastSeq, (e) => this.onEvent(f, e), f.controller.signal);
+				if (f.registerOnConnect) {
+					f.registerOnConnect = false;
+					const tools = toolsStore.getClientToolsForServerRun();
+					try {
+						if (tools.length) await TaskService.registerClient(f.taskId, tools);
+					} catch {
+						/* the run goes on with the tools it had; a call to one is answered unavailable */
+					}
+				}
+				await TaskService.readEvents(
+					f.taskId,
+					f.lastSeq,
+					(e) => this.onEvent(f, e),
+					f.controller.signal,
+					f.asClient
+				);
 				delay = RECONNECT_MIN_MS;
 			} catch {
 				if (f.controller.signal.aborted) return;
@@ -213,7 +271,14 @@ class TasksStore {
 
 	private onEvent(f: Follower, e: TaskEvent): void {
 		if (this.follower !== f) return;
+		if (e.live === true) {
+			if (e.type === 'delta') this.onDelta(f, e);
+			else if (e.type === 'client_request') void this.onClientRequest(f, e);
+			return;
+		}
 		if (e.seq > f.lastSeq) f.lastSeq = e.seq;
+		// The stored message replaces the live one at the next reload.
+		if (e.type === 'message') f.live = null;
 		if (e.type === 'status' && e.status) {
 			const current = this.records[f.conversationId];
 			if (current) {
@@ -228,6 +293,72 @@ class TasksStore {
 		if (RELOADING_EVENTS.has(e.type)) this.scheduleReload(f.conversationId);
 	}
 
+	/**
+	 * Tokens of the reply being written. They go into a placeholder message
+	 * with the id the stored one will have, so the reload that brings the
+	 * finished message replaces it in place.
+	 */
+	private onDelta(f: Follower, e: TaskEvent): void {
+		if (conversationsStore.activeConversation?.id !== f.conversationId) return;
+		const messageId = typeof e.messageId === 'string' ? e.messageId : '';
+		if (!messageId) return;
+		if (f.live?.messageId !== messageId) f.live = { messageId, content: '', reasoning: '' };
+		if (typeof e.content === 'string') f.live.content += e.content;
+		if (typeof e.reasoning === 'string') f.live.reasoning += e.reasoning;
+		this.showLive(f);
+	}
+
+	/**
+	 * Put the reply so far into its placeholder, adding it if a reload took
+	 * it away. The text is held here, not in the message, so a reload in the
+	 * middle of a turn loses nothing.
+	 */
+	private showLive(f: Follower): void {
+		const live = f.live;
+		if (!live || conversationsStore.activeConversation?.id !== f.conversationId) return;
+		const { messageId } = live;
+		let index = conversationsStore.findMessageIndex(messageId);
+		if (index === -1) {
+			const last = conversationsStore.activeMessages.at(-1);
+			conversationsStore.addMessageToActive({
+				id: messageId,
+				convId: f.conversationId,
+				type: MessageType.TEXT,
+				role: MessageRole.ASSISTANT,
+				content: '',
+				timestamp: Date.now(),
+				parent: last?.id ?? null,
+				children: [],
+				model: null
+			});
+			index = conversationsStore.findMessageIndex(messageId);
+			if (index === -1) return;
+		}
+		conversationsStore.updateMessageAtIndex(index, {
+			content: live.content,
+			...(live.reasoning ? { reasoningContent: live.reasoning } : {})
+		});
+	}
+
+	/** A call to a tool this app runs: its own card, its executor, the result back. */
+	private async onClientRequest(f: Follower, e: TaskEvent): Promise<void> {
+		const callId = typeof e.callId === 'string' ? e.callId : '';
+		const name = typeof e.name === 'string' ? e.name : '';
+		if (!callId || !name) return;
+		const args = typeof e.arguments === 'string' ? e.arguments : '';
+		const result = await agenticStore.runClientCall(
+			f.conversationId,
+			{ id: callId, name, arguments: args },
+			f.controller.signal
+		);
+		if (f.controller.signal.aborted) return;
+		try {
+			await TaskService.clientResult(f.taskId, callId, result.text, result.isError);
+		} catch {
+			/* the run moved on (cancelled, or the call was closed as unavailable) */
+		}
+	}
+
 	private setRecord(f: Follower, record: TaskRecord): void {
 		if (this.follower !== f) return;
 		this.records = { ...this.records, [f.conversationId]: record };
@@ -235,7 +366,8 @@ class TasksStore {
 
 	private finish(f: Follower, record: TaskRecord | null): void {
 		if (this.follower !== f) return;
-		if (record?.status === 'failed') toast.error(`The background task failed: ${record.error || 'no reason given'}`);
+		if (record?.status === 'failed')
+			toast.error(`The background task failed: ${record.error || 'no reason given'}`);
 		this.stopFollowing();
 		if (this.reloadTimer) clearTimeout(this.reloadTimer);
 		this.reloadTimer = null;
@@ -246,7 +378,14 @@ class TasksStore {
 		if (this.reloadTimer) return;
 		this.reloadTimer = setTimeout(() => {
 			this.reloadTimer = null;
-			void conversationsStore.reloadActiveFromServer(conversationId).catch(() => undefined);
+			void conversationsStore
+				.reloadActiveFromServer(conversationId)
+				.then(() => {
+					// A reload mid-turn drops the placeholder: put the reply back.
+					const f = this.follower;
+					if (f?.conversationId === conversationId) this.showLive(f);
+				})
+				.catch(() => undefined);
 		}, RELOAD_THROTTLE_MS);
 	}
 }

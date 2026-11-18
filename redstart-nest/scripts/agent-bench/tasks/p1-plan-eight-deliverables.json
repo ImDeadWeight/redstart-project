@@ -14,6 +14,7 @@
     }
   ],
   "approve": "all",
+  "expectTools": ["run_python", "read_document"],
   "check": "checks/phase1.mjs#eightDeliverables",
   "notes": "Replaces p1-plan-per-city (2026-11-11), which both models passed without a plan. Eight deliverables over two files; step 8 depends on remembering every earlier one. The task update_plan and the completion check should most help."
 }

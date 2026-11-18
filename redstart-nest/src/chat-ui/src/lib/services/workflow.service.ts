@@ -86,4 +86,35 @@ export class WorkflowService {
 		if (!res.ok && res.status !== 404)
 			throw new Error(`Could not delete the workflow (${res.status})`);
 	}
+
+	/**
+	 * Import an Agent Skill: a .zip of its folder, or a bare SKILL.md (master
+	 * plan Phase 5). Nest reads and checks it; this only carries the bytes.
+	 */
+	static async importSkill(scope: WorkflowScope, file: File): Promise<Workflow> {
+		const bytes = new Uint8Array(await file.arrayBuffer());
+		let binary = '';
+		for (let i = 0; i < bytes.length; i += 0x8000) {
+			binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+		}
+		return apiFetch<Workflow>(`/workflows/${scope}/import`, {
+			method: 'POST',
+			body: JSON.stringify({ file: btoa(binary) })
+		});
+	}
+
+	/** Download a workflow as an Agent Skill folder (.zip) for another tool. */
+	static async exportSkill(scope: WorkflowScope, w: Workflow): Promise<void> {
+		const res = await fetch(
+			resolveApiPath(`/workflows/${scope}/${encodeURIComponent(w.id)}/export`),
+			{ headers: getAuthHeaders() }
+		);
+		if (!res.ok) throw new Error(`Could not export the workflow (${res.status})`);
+		const url = URL.createObjectURL(await res.blob());
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `${w.name}.zip`;
+		a.click();
+		setTimeout(() => URL.revokeObjectURL(url), 1000);
+	}
 }

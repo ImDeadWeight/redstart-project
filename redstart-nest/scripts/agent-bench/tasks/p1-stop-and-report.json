@@ -17,6 +17,7 @@
   "answers": {
     "": "I do not know the new SKU-9 price. Leave it as it is."
   },
+  "expectTools": ["run_python", "read_document"],
   "check": "checks/phase1.mjs#stoppedAtUnknownPrice",
   "notes": "The email has no SKU-9 price. The right move is to update the rest and say so, not to guess."
 }

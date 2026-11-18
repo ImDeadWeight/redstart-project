@@ -1,27 +1,23 @@
 'use strict'
 
 import { createHash } from 'node:crypto'
+import { metadataText, toolMetadata } from './tool-metadata.mjs'
 
 // =============================================================================
-// Redstart Nest — tool retrieval: hashing, vectors, scoring, selection
+// Redstart Nest — tool retrieval: hashing, vectors, ranking
 // =============================================================================
-// Pure. Imports node:crypto and nothing else — no electron, no network, no
-// process — so it runs under the headless daemon and under plain `node` in the
-// test suite. Everything that talks to an embedding server lives elsewhere;
-// this module never learns where its vectors came from.
+// Pure. Imports node:crypto and one pure helper and nothing else — no
+// electron, no network, no process — so it runs under the headless daemon and
+// under plain `node` in the test suite. Everything that talks to an embedding
+// server lives elsewhere; this module never learns where its vectors came
+// from.
 //
-// INVARIANT — retrieval is an optimization, never a boundary. Nothing here is
-// allowed to widen a tool set: selectTools() only ever returns a subset of the
-// tools handed to it, and callers must hand it the POST-ban list so a banned
-// tool cannot re-enter by scoring well. enforceToolAllowList() in
-// tools-gateway.mjs is the boundary; this is a selection over what survives it.
-//
-// INVARIANT — an unchanged selection serializes identically. The tools block is
-// rendered into the prompt ahead of every message, so any reordering of it
-// invalidates llama-server's KV cache for the whole conversation and costs a
-// full re-prefill. selectTools() therefore returns its result ordered by NAME,
-// never by score, and never shrinks a set within a conversation. Guarded by
-// scripts/test-tool-retrieval.mjs.
+// What is left after master plan 3.3: the pieces search_tools ranks the
+// catalog with (a tool's text, its hash, the vector store, cosine, BM25 and
+// their reciprocal rank fusion). Per-turn selection (selectTools, the
+// conversation query, the pins, the selection memory, withhold) went: the
+// catalog's list is fixed for the conversation, so nothing here decides what
+// a request carries.
 // =============================================================================
 
 /**
@@ -81,23 +77,69 @@ export function toolContentHash(tool) {
 }
 
 /**
- * The text an embedding model sees for a tool. Name and description only: a
- * JSON schema is mostly type keywords, which crowd out the prose that actually
- * distinguishes one tool from another.
+ * The tools that find other tools (second pass 5.x). They are never embedded
+ * or scored, and never a search result: a score for them would only move the
+ * relative floor that everything else is measured against. describe_tool
+ * went in master plan 3.3 (a search row carries the schema).
+ */
+export const DISCOVERY_TOOL_NAMES = Object.freeze(['search_tools', 'call_tool'])
+
+// ---------------------------------------------------------------------------
+// Every view of a tool retrieval uses (second pass 2.2)
+// ---------------------------------------------------------------------------
+// One place builds them all, from the tool and its registry metadata
+// (tool-metadata.mjs): the text embedded, the BM25 document, and the row a
+// search returns. The wire description is never rewritten here.
+
+function toolDescription(tool) {
+  const body = toolBody(tool)
+  return typeof body.description === 'string' ? body.description : ''
+}
+
+/**
+ * The text an embedding model sees for a tool: name and description only. A
+ * JSON schema is mostly type keywords, which crowd out the prose that
+ * actually distinguishes one tool from another. (A second version with the
+ * registry metadata was built and never switched on; it went in master plan
+ * 3.3. BM25 reads the metadata instead, toolSearchDocument.)
  *
  * @param {any} tool
  * @returns {string}
  */
 export function toolEmbeddingText(tool) {
-  const body = toolBody(tool)
-  const description = typeof body.description === 'string' ? body.description : ''
+  const description = toolDescription(tool)
   return description ? `${toolName(tool)}: ${description}` : toolName(tool)
 }
 
 /**
+ * The BM25 document for a tool: its name with `_` and `-` read as spaces, its
+ * description, and every metadata field.
+ *
+ * @param {any} tool
+ * @returns {string}
+ */
+export function toolSearchDocument(tool) {
+  const name = toolName(tool)
+  return [name, name.replace(/[_-]+/g, ' '), toolDescription(tool), metadataText(name)].filter(Boolean).join('\n')
+}
+
+/**
+ * The row search_tools returns for a tool, before the provider adds its
+ * inputSchema (search-tools-provider.mjs callRows).
+ *
+ * @param {any} tool
+ * @returns {{ name: string, category: string, store: string, description: string }}
+ */
+export function toolSearchResult(tool) {
+  const name = toolName(tool)
+  const m = toolMetadata(name)
+  return { name, category: m.category, store: m.store, description: toolDescription(tool) }
+}
+
+/**
  * Approximate token cost of a tool as serialized on the wire. The same
- * length/4 heuristic the Tools tab's estimator uses, kept here so the budget
- * gate and the UI hint at least share an arithmetic.
+ * length/4 heuristic the Tools tab's estimator uses, so the wire cost the
+ * gateway records and the UI's estimate share an arithmetic.
  *
  * @param {any} tool
  * @returns {number}
@@ -146,8 +188,9 @@ export function createVectorStore() {
         vectors.set(hash, vector instanceof Float32Array ? vector : Float32Array.from(vector))
       }
     },
-    // What a request would need embedded before it could be scored: deduped,
-    // in first-seen order so a batch is reproducible.
+    // What a search would need embedded before it could rank: deduped, in
+    // first-seen order so a batch is reproducible. `hash` is the store key
+    // (toolContentHash).
     missingHashes(tools) {
       const seen = new Set()
       const out = []
@@ -193,9 +236,9 @@ export function cosine(a, b) {
 }
 
 /**
- * Score every tool against the query vector. Decides nothing — no floor, no
- * budget, no pins. Sorted by descending score, ties broken by name so the order
- * is a function of the inputs alone.
+ * Score every tool against the query vector. Decides nothing (no floor).
+ * Sorted by descending score, ties broken by name so the order is a function
+ * of the inputs alone.
  *
  * A tool whose vector is not in the store scores 0 and is flagged `missing`; a
  * partially cold cache degrades to "these tools rank last", not to an error.
@@ -220,125 +263,179 @@ export function scoreTools({ tools, query, store }) {
 }
 
 // ---------------------------------------------------------------------------
-// Selection
+// Keyword search: BM25 (second pass 3.1)
 // ---------------------------------------------------------------------------
+// Pure, and small: a few hundred short documents, so a linear scan per query.
+// The documents are toolSearchDocument(): name (also as words), description
+// and registry metadata. A small model's search query is often one or two
+// words ("config", "notes") that an embedding places badly and a keyword
+// index finds at once.
+
+const STOPWORDS = new Set((
+  'a an and are as at be by can could do does for from get give has have how i if in into is it its me my ' +
+  'need of on or please show so some that the their them then there these this to tool tools use using ' +
+  'want was we what when where which who will with would you your'
+).split(' '))
 
 /**
- * The whole policy, pure.
+ * Lowercase, split on anything that is not a letter or digit (so `_` and `-`
+ * split, and `read_text_file` matches "text file"), drop stopwords and bare
+ * numbers, and strip
+ * a plural or verb ending so "commits" meets "commit".
  *
- * - `pins` are included first and unconditionally, and are NOT weighed against
- *   the budget. A pin is a promise: a tool the model has already called, or a
- *   tool an admin requires, cannot vanish mid-task because the budget got tight.
- * - `previous` — the set applied on the last turn of this conversation — is
- *   included for the same reason, which is what makes the applied set
- *   monotonic. A tool wrongly added costs one re-prefill once; a set that
- *   churns costs one every turn, forever.
- * - Everything else is added by descending score while it clears the floor and
- *   while the running estimate stays under `budgetTokens`. Below the floor a
- *   tool is never added even with budget to spare, so a pathological query
- *   cannot drag the whole registry in.
- * - The floor has two halves and a tool must clear BOTH. `floor` is absolute;
- *   `relativeFloor` is a fraction of the best score this turn. The relative one
- *   is the load-bearing half in practice: measured against this tree's own tool
- *   descriptions, bge-small-en-v1.5 puts every score in a narrow band (0.57 to
- *   0.82 across 21 tools and 18 asks), so an absolute cut is either a no-op or
- *   an arbitrary guillotine, while "within x% of the best match this turn"
- *   means the same thing on every query.
- * - `margin` is hysteresis against the weakest tool already included, so a
- *   score jittering by a hair does not toggle the set.
- *
- * @param {{
- *   scored: { tool: any, name: string, score: number }[],
- *   pins?: Iterable<string>,
- *   previous?: Iterable<string>,
- *   budgetTokens?: number,
- *   floor?: number,
- *   relativeFloor?: number,
- *   margin?: number,
- *   families?: Iterable<Iterable<string>>,
- * }} args
- *   `families`: tools that only make sense together. Once any member is
- *   selected, every other member the request carries comes with it, past
- *   the floor, the margin and the budget (a family is a few small tools).
- *   Like a pin it only keeps what the client sent, so this stays a subset.
- *   Added 2026-11-12: memory_save was selected for "remember X, then forget
- *   Y" and memory_forget was dropped, so the model said it had no way to
- *   forget and told the user it had, with the memory still saved.
- * @returns {{ selected: any[], dropped: any[], reason: string }}
+ * @param {string} text
+ * @returns {string[]}
  */
-export function selectTools({ scored, pins, previous, budgetTokens = Infinity, floor = 0, relativeFloor = 0, margin = 0, families = [] }) {
-  const entries = Array.isArray(scored) ? scored : []
-  const pinned = new Set(pins ?? [])
-  const carried = new Set(previous ?? [])
-
-  /** @type {Map<string, { tool: any, name: string, score: number }>} */
-  const included = new Map()
-  let spent = 0
-
-  for (const entry of entries) {
-    if (!pinned.has(entry.name) && !carried.has(entry.name)) continue
-    included.set(entry.name, entry)
-    spent += estimateToolTokens(entry.tool)
+export function tokenize(text) {
+  if (typeof text !== 'string' || !text) return []
+  const out = []
+  for (const raw of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+    // A bare number names no tool ("48271 × 9973"), and as a rare term it
+    // would hand its whole weight to whichever description has a digit.
+    if (!raw || STOPWORDS.has(raw) || /^\p{N}+$/u.test(raw)) continue
+    out.push(stem(raw))
   }
+  return out
+}
 
-  // The hysteresis baseline is computed once, from the set we start with.
-  // Candidates only ever clear it by `margin`, so admitting one cannot lower it.
-  const weakestIncluded = included.size > 0
-    ? Math.min(...[...included.values()].map(e => e.score))
-    : null
+function stem(word) {
+  if (word.length > 4 && word.endsWith('ies')) return `${word.slice(0, -3)}y`
+  if (word.length > 5 && word.endsWith('ing')) return undouble(word.slice(0, -3))
+  if (word.length > 4 && word.endsWith('ed')) return undouble(word.slice(0, -2))
+  if (word.length > 3 && word.endsWith('s') && !word.endsWith('ss')) return word.slice(0, -1)
+  return word
+}
 
-  // entries is sorted by descending score, so the best is the first — but a
-  // pinned tool that scores higher is already in `included` and must not raise
-  // the bar for everything else, which is why this reads the scored list rather
-  // than the selection.
-  const best = entries.length > 0 ? entries[0].score : 0
-  // A relative floor off a non-positive best score would admit everything or
-  // nothing depending on sign; a query that matched nothing is not a licence to
-  // widen, so fall back to the absolute floor alone.
-  const effectiveFloor = (relativeFloor > 0 && best > 0) ? Math.max(floor, best * relativeFloor) : floor
+// "running" → "runn" → "run"; "spelled" keeps its "ll".
+function undouble(word) {
+  const n = word.length
+  return n > 2 && word[n - 1] === word[n - 2] && !'lsz'.includes(word[n - 1]) ? word.slice(0, -1) : word
+}
 
-  let budgetBit = false, floorBit = false, marginBit = false
+/** BM25's two constants, the usual ones. */
+export const BM25_K1 = 1.2
+export const BM25_B = 0.75
 
-  for (const entry of entries) {
-    if (included.has(entry.name)) continue
-    if (entry.score < effectiveFloor) { floorBit = true; continue }
-    if (weakestIncluded !== null && entry.score < weakestIncluded + margin) { marginBit = true; continue }
-    const cost = estimateToolTokens(entry.tool)
-    // Stop at the first tool that does not fit rather than skipping it and
-    // trying smaller ones — "the next cheap thing squeezed in" is exactly the
-    // kind of set that reshuffles between turns.
-    if (spent + cost > budgetTokens) { budgetBit = true; break }
-    included.set(entry.name, entry)
-    spent += cost
+/**
+ * An index over tools' search documents.
+ *
+ * `key` is a hash of every document, so a caller can keep one index while the
+ * catalog's content is unchanged and rebuild when it is not.
+ *
+ * `documentOf` picks the text indexed for a tool; toolSearchDocument() by
+ * default.
+ *
+ * @param {any[]} tools
+ * @param {(tool: any) => string} [documentOf]
+ * @returns {{ key: string, size: number, score(query: string): Map<string, number> }}
+ */
+export function createBm25Index(tools, documentOf = toolSearchDocument) {
+  const list = Array.isArray(tools) ? tools : []
+  /** @type {{ name: string, tf: Map<string, number>, length: number }[]} */
+  const docs = []
+  /** @type {Map<string, number>} */
+  const df = new Map()
+  const keyHash = createHash('sha256')
+  for (const tool of list) {
+    const name = toolName(tool)
+    const text = documentOf(tool)
+    keyHash.update(`${name}\u0000${text}\u0001`)
+    const tokens = tokenize(text)
+    const tf = new Map()
+    for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1)
+    for (const t of tf.keys()) df.set(t, (df.get(t) ?? 0) + 1)
+    docs.push({ name, tf, length: tokens.length })
   }
+  const n = docs.length
+  const avg = n ? docs.reduce((a, d) => a + d.length, 0) / n : 0
 
-  for (const family of families ?? []) {
-    const members = [...family]
-    if (!members.some((n) => included.has(n))) continue
-    for (const entry of entries) {
-      if (members.includes(entry.name) && !included.has(entry.name)) included.set(entry.name, entry)
-    }
+  return {
+    key: keyHash.digest('hex'),
+    size: n,
+    // Name to score, for the tools that match at least one query term. A tool
+    // that matches nothing is absent, not zero: it has no keyword rank.
+    score(query) {
+      const terms = [...new Set(tokenize(query))]
+      /** @type {Map<string, number>} */
+      const out = new Map()
+      if (!terms.length || !n) return out
+      for (const doc of docs) {
+        let score = 0
+        for (const term of terms) {
+          const f = doc.tf.get(term)
+          if (!f) continue
+          const d = df.get(term) ?? 0
+          const idf = Math.log(1 + (n - d + 0.5) / (d + 0.5))
+          score += idf * (f * (BM25_K1 + 1)) / (f + BM25_K1 * (1 - BM25_B + BM25_B * (avg ? doc.length / avg : 1)))
+        }
+        if (score > 0) out.set(doc.name, Math.max(out.get(doc.name) ?? 0, score))
+      }
+      return out
+    },
   }
-
-  const byName = (a, b) => (toolName(a) < toolName(b) ? -1 : toolName(a) > toolName(b) ? 1 : 0)
-  const selected = [...included.values()].map(e => e.tool).sort(byName)
-  const dropped = entries.filter(e => !included.has(e.name)).map(e => e.tool).sort(byName)
-
-  const reason = dropped.length === 0
-    ? 'all-selected'
-    : budgetBit ? 'budget' : marginBit ? 'margin' : floorBit ? 'floor' : 'all-selected'
-
-  return { selected, dropped, reason }
 }
 
 // ---------------------------------------------------------------------------
-// Reading the request
+// Fusion (second pass 3.2)
 // ---------------------------------------------------------------------------
-// No conversation identity reaches the gateway: chat.service.ts takes a
-// conversationId and does not put it in the body, so everything below is
-// derived from the `messages` array, which arrives in full on every request.
-// That turns out to be a feature — pins are a pure function of the payload,
-// with no session table to grow, expire, or leak across accounts.
+
+// 1-based ranks by descending score, ties sharing the better rank
+// ("1, 1, 3"), so two tools a scorer cannot tell apart are not split by
+// their names' alphabetical order.
+function ranksOf(rows) {
+  /** @type {Map<string, number>} */
+  const out = new Map()
+  const sorted = [...rows].sort((a, b) => b.score - a.score)
+  let rank = 0
+  let last = NaN
+  sorted.forEach((row, i) => {
+    if (row.score !== last) { rank = i + 1; last = row.score }
+    if (!out.has(row.name)) out.set(row.name, rank)
+  })
+  return out
+}
+
+/** Reciprocal rank fusion's constant: the usual 60. */
+export const RRF_K = 60
+
+/**
+ * Re-score a cosine-scored list (scoreTools) with the reciprocal rank fusion
+ * of cosine and BM25, keeping the shape: sorted by descending score, ties by
+ * name, every tool present. The only ranking since master plan 3.3 fixed it
+ * (the 'cosine' and 'bm25' switch went).
+ *
+ * Rank based, so the narrow cosine band (0.57 to 0.82 on bge-small) does not
+ * matter. Each score is normalised so 1 is the best possible: a tool ranked
+ * first by both. A tool with no keyword match gets only its cosine share.
+ *
+ * With no usable cosine score (no vectors, or none above 0) it returns the
+ * cosine list as it is: an embedder that is not working, on which fusion does
+ * not quietly become keywords alone. The scores stay 0, nothing clears a
+ * floor, and search_tools falls through to its keyword step, which says so.
+ *
+ * @param {{ scored: { tool: any, name: string, hash?: string, score: number, missing?: boolean }[], keyword: Map<string, number>, k?: number }} args
+ */
+export function fuse({ scored, keyword, k = RRF_K }) {
+  const entries = Array.isArray(scored) ? scored : []
+  if (!entries.some((e) => !e.missing && e.score > 0)) return entries
+  const kw = keyword instanceof Map ? keyword : new Map()
+  const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+  const kwRank = ranksOf([...kw.entries()].map(([name, score]) => ({ name, score })))
+  const cosRank = ranksOf(entries)
+  const max = 2 / (k + 1)
+  return entries
+    .map((e) => {
+      const fromCosine = 1 / (k + (cosRank.get(e.name) ?? entries.length))
+      const r = kwRank.get(e.name)
+      const fromKeyword = r ? 1 / (k + r) : 0
+      return { ...e, score: (fromCosine + fromKeyword) / max }
+    })
+    .sort((a, b) => (b.score - a.score) || byName(a, b))
+}
+
+// ---------------------------------------------------------------------------
+// Text against a positional limit (embed-server.mjs)
+// ---------------------------------------------------------------------------
 
 /**
  * Characters per token, for sizing text against a model's positional limit.
@@ -365,170 +462,4 @@ export function truncateForEmbedding(text, maxTokens) {
   const cut = text.slice(0, maxChars)
   const lastSpace = cut.lastIndexOf(' ')
   return lastSpace > maxChars * 0.8 ? cut.slice(0, lastSpace) : cut
-}
-
-/**
- * The text scored against the tools: every user message in the conversation,
- * plus the name of every tool it has already called.
- *
- * The WHOLE conversation, not the last turn. It costs one embed either way, and
- * the last turn is the most volatile input available — a query built from it
- * would reshuffle the tool list constantly, and each reshuffle re-prefills the
- * entire KV cache. A query that drifts slowly is what makes a monotonic
- * selection nearly free rather than a constant fight against the scorer.
- *
- * The embedding model has a hard positional limit, so "the whole conversation"
- * has a ceiling whether anyone likes it or not. When it is reached the OLDEST
- * user messages are dropped first and the tool names are always kept: names are
- * a handful of tokens each and are the strongest signal in the query, while the
- * opening of a long conversation is the part least likely to describe what is
- * wanted now.
- *
- * Dropping the oldest reintroduces some of the volatility that choosing the
- * whole conversation was meant to avoid — but only some, and it is affordable
- * precisely because application is monotonic: a drifting query can add tools,
- * never take them away, so the cost of drift is bounded at one re-prefill.
- *
- * @param {any[]} messages
- * @param {{ maxTokens?: number }} [options]
- * @returns {string}
- */
-export function conversationQueryText(messages, { maxTokens = Infinity } = {}) {
-  const userParts = []
-  const toolNames = []
-  for (const msg of Array.isArray(messages) ? messages : []) {
-    if (msg?.role === 'user') {
-      const text = messageText(msg.content)
-      if (text) userParts.push(text)
-    }
-    for (const call of Array.isArray(msg?.tool_calls) ? msg.tool_calls : []) {
-      const name = call?.function?.name
-      if (typeof name === 'string' && name && !toolNames.includes(name)) toolNames.push(name)
-    }
-  }
-
-  if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
-    return [...userParts, ...toolNames].join('\n')
-  }
-
-  const budget = Math.floor(maxTokens * CHARS_PER_TOKEN)
-  // Names first, so what survives a tight budget is the part that identifies
-  // tools rather than the part that describes a problem.
-  const names = truncateForEmbedding(toolNames.join('\n'), maxTokens)
-  let remaining = budget - names.length - 1
-  const kept = []
-  for (let i = userParts.length - 1; i >= 0 && remaining > 0; i--) {
-    const part = userParts[i].length <= remaining ? userParts[i] : userParts[i].slice(-remaining)
-    kept.unshift(part)
-    remaining -= part.length + 1
-  }
-  return [...kept, names].filter(Boolean).join('\n')
-}
-
-// Content is a string in the simple case and an array of parts in the
-// multimodal one. Only text parts are read: an image contributes nothing to
-// which tool is wanted, and its base64 would swamp the query if it did.
-function messageText(content) {
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-  return content
-    .filter(part => part?.type === 'text' && typeof part.text === 'string')
-    .map(part => part.text)
-    .join(' ')
-}
-
-/**
- * A stable key for the conversation this request belongs to.
- *
- * The first user message plus the account id. The first message is the one part
- * of a conversation that never changes as it grows, and the account id keeps
- * two users who opened with the same sentence in separate buckets. Only ever
- * used as a cache key for the previously-applied set, so a miss costs one
- * re-prefill and never correctness.
- *
- * @param {any[]} messages
- * @param {string|null|undefined} accountId
- * @returns {string}
- */
-export function conversationKey(messages, accountId) {
-  const first = (Array.isArray(messages) ? messages : []).find(m => m?.role === 'user')
-  return createHash('sha256')
-    .update(`${accountId ?? ''}\u0000${messageText(first?.content)}`)
-    .digest('hex')
-}
-
-/**
- * Tools this request has already committed to, which must therefore survive
- * any filtering: everything the model has already called, and everything a
- * previous search_tools call surfaced.
- *
- * A tool dropped mid-task is the worst failure this feature has, and deriving
- * the pins from the payload makes avoiding it structural rather than a rule
- * someone has to remember.
- *
- * @param {any[]} messages
- * @param {{ searchToolName?: string }} [options]
- * @returns {Set<string>}
- */
-export function pinsFromMessages(messages, { searchToolName = 'search_tools' } = {}) {
-  const pins = new Set()
-  for (const msg of Array.isArray(messages) ? messages : []) {
-    for (const call of Array.isArray(msg?.tool_calls) ? msg.tool_calls : []) {
-      const name = call?.function?.name
-      if (typeof name === 'string' && name) pins.add(name)
-    }
-    // A search result is a tool-role message whose body is the JSON this
-    // gateway produced. Names it surfaced become pins on the next turn, which
-    // is the entire mechanism behind search_tools — no new protocol, no server
-    // state, just the transcript the client already sends back.
-    if (msg?.role === 'tool' && msg?.name === searchToolName) {
-      for (const name of searchResultNames(msg.content)) pins.add(name)
-    }
-  }
-  return pins
-}
-
-function searchResultNames(content) {
-  const text = messageText(content)
-  if (!text) return []
-  try {
-    const body = JSON.parse(text)
-    const rows = Array.isArray(body) ? body : Array.isArray(body?.tools) ? body.tools : []
-    return rows.map(r => (typeof r === 'string' ? r : r?.name)).filter(n => typeof n === 'string' && n)
-  } catch {
-    // Not JSON: a client that rewrote the result into prose gets no pins from
-    // it rather than a guess parsed out of English.
-    return []
-  }
-}
-
-/**
- * A bounded map of conversation key to the tool names applied on its last turn.
- *
- * Deliberately lossy. Eviction costs one re-prefill for a conversation nobody
- * has touched in a while, never a wrong answer, so there is no expiry policy to
- * get wrong and nothing to persist across a restart.
- *
- * @param {{ max?: number }} [options]
- */
-export function createSelectionMemory({ max = 200 } = {}) {
-  /** @type {Map<string, string[]>} */
-  const entries = new Map()
-  return {
-    get(key) {
-      const value = entries.get(key)
-      if (!value) return []
-      // Re-insert so the least recently USED is evicted, not the oldest.
-      entries.delete(key)
-      entries.set(key, value)
-      return value
-    },
-    set(key, names) {
-      entries.delete(key)
-      entries.set(key, [...names])
-      while (entries.size > max) entries.delete(entries.keys().next().value)
-    },
-    size: () => entries.size,
-    clear: () => entries.clear(),
-  }
 }

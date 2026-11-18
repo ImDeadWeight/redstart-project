@@ -20,6 +20,8 @@
 //                     `waiting` says which
 //   waiting_approval  a call is parked on a pending approval (`waiting`)
 //   waiting_model     no model is loaded, or it stopped: resumes when one is
+//   waiting_client    a call to a tool the client runs is with the client
+//                     (master plan 7.1; `waiting` names the call)
 //   done | failed | cancelled   terminal
 //
 // Ownership is the account's memoryKey (memory-storage.mjs): the account id,
@@ -38,10 +40,10 @@ import { configDir } from './platform-paths.mjs'
 import { writeJsonAtomic, readJsonOr } from './json-store.mjs'
 
 export const TASK_STATES = Object.freeze([
-  'queued', 'running', 'waiting_user', 'waiting_approval', 'waiting_model', 'done', 'failed', 'cancelled',
+  'queued', 'running', 'waiting_user', 'waiting_approval', 'waiting_model', 'waiting_client', 'done', 'failed', 'cancelled',
 ])
 export const TERMINAL_STATES = Object.freeze(['done', 'failed', 'cancelled'])
-export const WAITING_STATES = Object.freeze(['waiting_user', 'waiting_approval', 'waiting_model'])
+export const WAITING_STATES = Object.freeze(['waiting_user', 'waiting_approval', 'waiting_model', 'waiting_client'])
 /** Kept, newest first, per account; older finished tasks are removed with their logs. */
 export const MAX_FINISHED_PER_ACCOUNT = 50
 /** One event's JSON is cut to this; a tool result in an event is a preview, the message holds it whole. */
@@ -99,6 +101,9 @@ export function createTask(spec) {
     waiting: null,
     limits: { maxTurns: Number.isInteger(spec.limits?.maxTurns) && spec.limits.maxTurns > 0 ? spec.limits.maxTurns : 100 },
     timeZone: typeof spec.timeZone === 'string' ? spec.timeZone : null,
+    // Nest tools the client switched off for this chat (client-tools.mjs
+    // cleanToolLimits); null: none.
+    toolLimits: spec.toolLimits ?? null,
     error: null,
     inFlight: null,
     createdAt: now,
@@ -214,6 +219,22 @@ export function appendEvent(id, event) {
     try { fn(full) } catch { /* a subscriber's failure is its own */ }
   }
   return full
+}
+
+/**
+ * A live-only event (master plan 7.1): subscribers hear it, marked `live`,
+ * and nothing is written to the log. It has no seq, so a reconnect replays
+ * the stored messages, never the keystrokes that led to them. For the
+ * tokens of the reply being written.
+ *
+ * @param {string} id
+ * @param {{ type: string } & Record<string, unknown>} event
+ */
+export function emitLive(id, event) {
+  const full = { live: true, at: Date.now(), ...event }
+  for (const fn of subscribers.get(id) ?? []) {
+    try { fn(full) } catch { /* a subscriber's failure is its own */ }
+  }
 }
 
 /**

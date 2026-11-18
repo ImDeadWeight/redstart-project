@@ -6,7 +6,7 @@
  *   node redstart-nest/scripts/make-mascot-assets.mjs
  *
  * - redstart.svg: Nest's admin UI, the chat UI (greeting, login, loading
- *   screen) and electron/assets
+ *   screen) and assets/
  * - favicon.svg / favicon-dark.svg: the chat UI's favicons, which the PWA
  *   asset generator also builds the PWA icons from. The dark one gets a
  *   light outline so the black bird shows on a dark tab strip.
@@ -35,7 +35,7 @@ const nest = loadMascot('nest')
 
 // ── SVGs ─────────────────────────────────────────────────────────────────────
 const svg = toSvg(nest)
-for (const rel of ['public/redstart.svg', 'electron/assets/redstart.svg', 'src/chat-ui/static/redstart.svg', 'src/chat-ui/static/favicon.svg']) write(rel, svg)
+for (const rel of ['public/redstart.svg', 'assets/redstart.svg', 'src/chat-ui/static/redstart.svg', 'src/chat-ui/static/favicon.svg']) write(rel, svg)
 write('src/chat-ui/static/favicon-dark.svg', toSvg(withOutline(nest, 'W')))
 
 // ── Android ──────────────────────────────────────────────────────────────────

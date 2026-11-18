@@ -16,7 +16,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { resolveWithinRoot } from './path-scope.mjs'
+import { resolveGrantedPath, grantedWalkStarts, noteDenied } from './grant-scope.mjs'
 
 const TOOL_NAMES = ['vault_search', 'vault_get', 'vault_tags']
 const MAX_OUTPUT_CHARS = 8000
@@ -32,9 +32,11 @@ const SKIP_DIRS = new Set(['.obsidian', '.trash', '.git', 'logseq/.recycle', 'no
 // Vault walking
 // ---------------------------------------------------------------------------
 
-function* walkMarkdownFiles(root) {
+// `starts`: the relative folders to walk, the granted ones (master plan
+// 6.1); the root itself for inherit.
+function* walkMarkdownFiles(root, starts = ['']) {
   let scanned = 0
-  const stack = ['']
+  const stack = [...starts]
   while (stack.length) {
     const relDir = stack.pop()
     let entries
@@ -102,7 +104,7 @@ function extractTags(content) {
 // Tool implementations
 // ---------------------------------------------------------------------------
 
-function searchVault(rootDir, query) {
+function searchVault(rootDir, query, starts) {
   if (!query || typeof query !== 'string') {
     return { isError: true, content: [{ type: 'text', text: 'Missing required argument: query' }] }
   }
@@ -112,7 +114,7 @@ function searchVault(rootDir, query) {
   }
 
   const hits = []
-  for (const rel of walkMarkdownFiles(rootDir)) {
+  for (const rel of walkMarkdownFiles(rootDir, starts)) {
     const content = readNote(rootDir, rel)
     if (content === null) continue
     const haystack = content.toLowerCase()
@@ -151,14 +153,15 @@ function searchVault(rootDir, query) {
   return { content: [{ type: 'text', text }] }
 }
 
-function getNote(rootDir, notePath, offset) {
+function getNote(rootDir, notePath, offset, grants, ctx) {
   if (!notePath || typeof notePath !== 'string') {
     return { isError: true, content: [{ type: 'text', text: 'Missing required argument: path' }] }
   }
   let filePath
   try {
-    filePath = resolveWithinRoot(rootDir, notePath)
-  } catch {
+    filePath = resolveGrantedPath(rootDir, grants, notePath)
+  } catch (err) {
+    if (err?.denied) noteDenied('vault', ctx)
     return { isError: true, content: [{ type: 'text', text: 'Path is outside the configured vault folder' }] }
   }
   if (!filePath.toLowerCase().endsWith('.md')) {
@@ -181,12 +184,12 @@ function getNote(rootDir, notePath, offset) {
   return { content: [{ type: 'text', text: out || '[Empty note]' }] }
 }
 
-function listTags(rootDir, tag) {
+function listTags(rootDir, tag, starts) {
   const wanted = typeof tag === 'string' && tag.trim() ? tag.trim().replace(/^#/, '').toLowerCase() : null
   const tagCounts = new Map()
   const notesWithTag = []
 
-  for (const rel of walkMarkdownFiles(rootDir)) {
+  for (const rel of walkMarkdownFiles(rootDir, starts)) {
     const content = readNote(rootDir, rel)
     if (content === null) continue
     const tags = extractTags(content)
@@ -250,9 +253,10 @@ export function toolDefs(cfg) {
 }
 
 // Provider interface: callTool(name, args, cfg, ctx). `ctx.account` is the
-// authenticated caller (null when auth is off). Unused here — this capability
-// is shared reference material and is the same for every account.
-export async function callTool(name, args, cfg, _ctx) {
+// authenticated caller (null when auth is off), used only to log a denial.
+// This capability is shared reference material, narrowed per role by
+// resource grants (cfg.vault.grants, master plan 6.1).
+export async function callTool(name, args, cfg, ctx) {
   if (!TOOL_NAMES.includes(name)) return null
 
   const vaultCfg = cfg?.vault
@@ -263,10 +267,11 @@ export async function callTool(name, args, cfg, _ctx) {
     return { isError: true, content: [{ type: 'text', text: 'The configured vault folder does not exist.' }] }
   }
 
+  const starts = grantedWalkStarts(vaultCfg.rootDir, vaultCfg.grants)
   try {
-    if (name === 'vault_search') return searchVault(vaultCfg.rootDir, args?.query)
-    if (name === 'vault_get') return getNote(vaultCfg.rootDir, args?.path, args?.offset)
-    if (name === 'vault_tags') return listTags(vaultCfg.rootDir, args?.tag)
+    if (name === 'vault_search') return searchVault(vaultCfg.rootDir, args?.query, starts)
+    if (name === 'vault_get') return getNote(vaultCfg.rootDir, args?.path, args?.offset, vaultCfg.grants, ctx)
+    if (name === 'vault_tags') return listTags(vaultCfg.rootDir, args?.tag, starts)
   } catch (err) {
     return { isError: true, content: [{ type: 'text', text: `Vault error: ${err.message}` }] }
   }

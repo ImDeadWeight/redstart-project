@@ -2,7 +2,7 @@
 	/**
 	 * Settings → Server → Updates, inside Redstart Twig only.
 	 *
-	 * The shell (redstart-twig/windows/shell/src/update.rs) checks GitHub every
+	 * The shell (redstart-twig/desktop/shell/src/update.rs) checks GitHub every
 	 * six hours while automatic updates are on, downloads in the background, and
 	 * verifies the installer's signature. A downloaded update installs when Twig
 	 * closes, or now from "Restart to update". Nothing restarts on its own.

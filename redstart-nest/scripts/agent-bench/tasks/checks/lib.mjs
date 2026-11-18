@@ -83,9 +83,47 @@ export function allPaths(files, ctx) {
   return [...Object.keys(files), ...Object.keys(ctx?.createdFiles ?? {})]
 }
 
-/** The tool calls the model made, by name. */
+/** call_tool's target, or null. */
+function callToolTarget(argumentsText) {
+  try {
+    const a = typeof argumentsText === 'string' ? JSON.parse(argumentsText) : argumentsText
+    return typeof a?.name === 'string' ? a.name : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The events with each call_tool call standing for the tool it named, and
+ * each approval logged for that call (same id) named after it too. A
+ * deferred tool is reached only through call_tool in the catalog mode
+ * (master plan Phase 3.1), so "was delete_file called, and approved" has to
+ * count both ways. 2026-11-18, Ornith arm C: two runs deleted the file through
+ * call_tool(delete_file) after an approval and were failed for it.
+ */
+export function withCallTool(events) {
+  const inner = new Map()
+  for (const e of events ?? []) {
+    if (e.type === 'tool_call' && e.name === 'call_tool' && e.id != null) {
+      const t = callToolTarget(e.arguments)
+      if (t) inner.set(e.id, t)
+    }
+  }
+  return (events ?? []).map((e) => {
+    if (e.type === 'tool_call' && e.name === 'call_tool') {
+      const t = callToolTarget(e.arguments)
+      return t ? { ...e, name: t, viaCallTool: true } : e
+    }
+    if (e.type === 'approval' && e.name === 'call_tool' && inner.has(e.id)) {
+      return { ...e, name: inner.get(e.id), viaCallTool: true }
+    }
+    return e
+  })
+}
+
+/** The tool calls the model made, by name, a call through call_tool included. */
 export function toolCallsNamed(events, name) {
-  return events.filter((e) => e.type === 'tool_call' && e.name === name)
+  return withCallTool(events).filter((e) => e.type === 'tool_call' && e.name === name)
 }
 
 /**

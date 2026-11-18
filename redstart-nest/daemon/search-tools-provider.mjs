@@ -1,41 +1,42 @@
 'use strict'
 
-import { searchTools, SEARCH_RESULT_LIMIT } from './tool-filter.mjs'
+import { keywordSearch, rankForSearch, retrievalEnabled, SEARCH_FLOORS } from './tool-filter.mjs'
+import { DISCOVERY_TOOL_NAMES, toolSearchResult } from './tool-retrieval.mjs'
+import { toolMetadata } from './tool-metadata.mjs'
+import { approvalRule, HOST_RESOLVED_TOOL_NAMES } from './tools-definitions.mjs'
 
 // =============================================================================
-// Redstart Nest — the search_tools capability
+// Redstart Nest — the catalog's two tools: search_tools and call_tool
 // =============================================================================
-// The other half of retrieval: when the filter has narrowed the tool list, this
-// is how the model asks for something it cannot see. It returns NAMES AND
-// DESCRIPTIONS ONLY. A result is an index, not a definition — the names it
-// surfaces become pins on the next turn (pinsFromMessages), and the tool then
-// arrives with its real schema through the ordinary path. Returning schemas
-// here would spend exactly the context the filter exists to save.
+// The other half of retrieval: with retrieval on, the deferred tools are kept
+// out of the list (tools-gateway.mjs), and these are how the model reaches
+// them. search_tools returns the closest tools WITH their inputSchema, so
+// finding a tool and learning how to call it is one call; call_tool then
+// calls one by name. The list never changes during a conversation, so the
+// prompt prefix stays cached (master plan 3.3, which removed per-turn
+// selection, describe_tool and the search that returned names only).
 //
 // INVARIANT — it searches the POST-POLICY catalog and nothing else. A banned
 // tool must not be reachable by describing it: a search that could name one
-// would turn a ban into a speed bump, and the model would then ask for a tool
-// the gateway will strip on every subsequent turn. The catalog is supplied by
+// would turn a ban into a speed bump. The catalog is supplied by
 // mcp-server.mjs, which is the component that applies the bans, rather than
 // assembled here from the raw registry.
 //
-// Advertised only while retrieval is enabled. With the filter off the model can
-// already see every tool, so a search over them is a tool call that can only
-// waste a turn.
+// Advertised only while retrieval is on. With it off the model can already
+// see every tool, so a search over them is a tool call that can only waste a
+// turn.
 //
 // IT SEARCHES THIS SERVER'S CATALOG, WHICH IS NOT THE WHOLE PAYLOAD. The
 // completions request is assembled client-side and can carry tools Nest never
 // served — a client app's own local tools (Twig's fs_*), or an MCP server the
-// client connects to directly. Retrieval can drop those, and a search cannot
-// bring them back, because mcp-server.mjs has no view of the payload and
-// deliberately does not get one.
+// client connects to directly. A search cannot find those, because
+// mcp-server.mjs has no view of the payload and deliberately does not get one.
 //
 // That asymmetry cannot be fixed from here, so it is at least made LEGIBLE: the
 // tool says what it indexes, and a no-match answer says what it did not look
 // at. A model told "no tools match" by an index it believes is complete will
-// report the capability as non-existent — the same failure the retrieval block
-// in system-prompt.mjs exists to prevent, arriving through the remedy instead
-// of through the narrowed list.
+// report the capability as non-existent — the failure the retrieval block in
+// system-prompt.mjs exists to prevent.
 // =============================================================================
 
 /**
@@ -52,36 +53,59 @@ let catalogProvider = null
 
 /** @param {(config: any) => any[]} fn */
 export function setToolCatalogProvider(fn) {
-  catalogProvider = fn
+  catalogProvider = typeof fn === 'function' ? fn : null
 }
 
-export const TOOL_NAMES = ['search_tools']
+/**
+ * The policy-checked caller for call_tool: mcp-server.mjs callToolAs, injected
+ * for the same reason as the catalog (the dependency runs the other way).
+ *
+ * @type {((account: any, name: string, args: any, opts: { conversationId?: string, session?: object }) => Promise<any>)|null}
+ */
+let toolCaller = null
+
+/** @param {(account: any, name: string, args: any, opts: object) => Promise<any>} fn */
+export function setToolCaller(fn) {
+  toolCaller = typeof fn === 'function' ? fn : null
+}
+
+export const TOOL_NAMES = ['search_tools', 'call_tool']
+
+/** How many rows a search returns: each carries its schema. */
+export const CATALOG_RESULT_LIMIT = 5
+
+const NAME_SCHEMA = { type: 'string', description: 'The tool\'s exact name, as search_tools returned it' }
 
 export function toolDefs(cfg) {
-  if (cfg?.toolRetrieval?.enabled !== true) return []
+  if (!retrievalEnabled(cfg?.toolRetrieval)) return []
   return [{
     name: 'search_tools',
     description:
-      'Find tools THIS SERVER offers that are not currently listed. Describe what you are trying to do in your own words — for example "read a spreadsheet" or "look at recent commits" — and this returns the names and descriptions of the closest matches. Call a returned tool by name on your next turn and it will be available. It indexes this server\'s own tools only: tools your application supplies itself, such as file tools that run on the user\'s computer, are not searchable here and a nil result says nothing about them.',
+      'Find tools THIS SERVER keeps in its catalog rather than in your list. Describe what you are trying to do in your own words — for example "list the files in a folder" or "look at recent commits" — and this returns the closest tools with their inputSchema. Call one with call_tool. It indexes this server\'s own tools only: tools your application supplies itself, such as file tools that run on the user\'s computer, are not searchable here and a nil result says nothing about them.',
+    inputSchema: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'What you are trying to do, in your own words' } },
+      required: ['query'],
+    },
+  }, {
+    name: 'call_tool',
+    description:
+      'Call one of this server\'s catalog tools by the name search_tools returned, with arguments matching its inputSchema. The result is that tool\'s result.',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'What you are trying to do, in your own words' },
+        name: NAME_SCHEMA,
+        arguments: { type: 'object', description: 'The tool\'s arguments, as its inputSchema describes them' },
       },
-      required: ['query'],
+      required: ['name'],
     },
   }]
 }
 
-export async function callTool(name, args, cfg, _ctx) {
-  if (name !== 'search_tools') return null
-  if (cfg?.toolRetrieval?.enabled !== true) {
+export async function callTool(name, args, cfg, ctx) {
+  if (!TOOL_NAMES.includes(name)) return null
+  if (!retrievalEnabled(cfg?.toolRetrieval)) {
     return errorResult('Tool retrieval is not enabled on this server, so there are no hidden tools to search for.')
-  }
-
-  const query = typeof args?.query === 'string' ? args.query.trim() : ''
-  if (!query) {
-    return errorResult('Describe what you are trying to do — search_tools takes a `query` string.')
   }
   if (!catalogProvider) {
     return errorResult('The tool catalog is unavailable.')
@@ -93,25 +117,126 @@ export async function callTool(name, args, cfg, _ctx) {
   } catch (err) {
     return errorResult(`The tool catalog could not be read: ${err.message}`)
   }
+  // Never offer a discovery tool as a result of discovery.
+  const searchable = (catalog ?? []).filter(t => t && !DISCOVERY_TOOL_NAMES.includes(t.name))
 
-  // Never offer search_tools as a result of a search.
-  const searchable = (catalog ?? []).filter(t => t?.name !== 'search_tools')
-  const matches = await searchTools({ tools: searchable, query, limit: SEARCH_RESULT_LIMIT })
+  if (name === 'search_tools') return search(searchable, args)
+  return proxyCall(searchable, args, ctx)
+}
 
-  // null is "the scorer is down", which is a different answer from "nothing
-  // matched" and must not be flattened into it — a model told there are no
-  // matching tools will stop looking.
-  if (matches === null) {
-    return errorResult('Tool search is temporarily unavailable. The tools you can already see are still the ones you can use.')
-  }
-  if (matches.length === 0) {
+// ---------------------------------------------------------------------------
+// search_tools: widening the search until something answers (5.3)
+// ---------------------------------------------------------------------------
+// 0. the query is a tool's exact name                match: "exact"
+// 1. the fused ranking with its floors               match: "close"
+// 2. the same ranking with no floors, the top few    match: "nearest"
+// 3. keywords alone on names and tags (no embedder)  match: "keyword"
+// 4. every category with its tool names              match: "categories"
+// Steps 0 to 3 return rows with the tool's inputSchema, so the next call can
+// be call_tool. Step 4 lists names by category with no schemas (all of them
+// would be the whole catalog) and says how to get one: search again with the
+// exact name. The reply says which step answered, so a model can weigh a
+// "nearest" list as the guess it is. Only an empty catalog says there is no
+// such tool.
+
+async function search(searchable, args) {
+  const query = typeof args?.query === 'string' ? args.query.trim() : ''
+  if (!query) return errorResult('Describe what you are trying to do — search_tools takes a `query` string.')
+  if (searchable.length === 0) {
     // Says what was searched, not just that nothing was found. "No tools match"
     // from an index the model believes is complete becomes "this deployment
     // cannot do that" in the answer to the user.
-    return textResult('No other tools on this server match that description. This index covers this server\'s own tools only, so it says nothing about tools your application provides itself.')
+    return textResult('No tools on this server match that description. This index covers this server\'s own tools only, so it says nothing about tools your application provides itself.')
+  }
+  const exact = searchable.find((t) => t.name === query)
+  if (exact) return callRows('exact', [exact])
+
+  const ranked = await rankForSearch({ tools: searchable, query })
+  if (ranked && ranked.length > 0) {
+    const best = ranked[0].score
+    const cut = best > 0 ? Math.max(SEARCH_FLOORS.floor, best * SEARCH_FLOORS.relativeFloor) : SEARCH_FLOORS.floor
+    const close = ranked.filter((e) => e.score >= cut && e.score > 0).slice(0, CATALOG_RESULT_LIMIT)
+    if (close.length > 0) return callRows('close', close.map((e) => e.tool))
+    return callRows('nearest', ranked.slice(0, CATALOG_RESULT_LIMIT).map((e) => e.tool),
+      'Nothing matched closely. These are the nearest by score; check a description before relying on one.')
   }
 
-  return textResult(JSON.stringify(matches))
+  const keyword = keywordSearch({ tools: searchable, query })
+  if (keyword.length > 0) {
+    return callRows('keyword', keyword.slice(0, CATALOG_RESULT_LIMIT).map((e) => e.tool ?? e),
+      'Matched by name and keywords only: the semantic search is unavailable right now.')
+  }
+
+  /** @type {Map<string, string[]>} */
+  const byCategory = new Map()
+  for (const t of searchable) {
+    const c = toolMetadata(t.name).category
+    if (!byCategory.has(c)) byCategory.set(c, [])
+    byCategory.get(c).push(t.name)
+  }
+  return textResult(JSON.stringify({
+    match: 'categories',
+    note: 'Nothing matched by name or keyword. These are all of this server\'s tools, by category. To call one, search_tools with its exact name as the query: that returns its inputSchema. If none fits, this server has no such tool; tools your application provides itself are not indexed here.',
+    categories: [...byCategory.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([category, tools]) => ({ category, tools: tools.sort() })),
+  }))
+}
+
+function callRows(match, tools, note) {
+  return textResult(JSON.stringify({
+    match,
+    ...(note ? { note } : {}),
+    howToCall: 'call_tool({"name": <name>, "arguments": {...}}), with arguments matching that tool\'s inputSchema.',
+    tools: tools.map((t) => ({ ...toolSearchResult(t), inputSchema: t.inputSchema ?? { type: 'object', properties: {} } })),
+  }))
+}
+
+// The same words for a banned tool and a tool that does not exist: the catalog
+// is post-policy, so a ban is simply absence, and the answer must not tell
+// the two apart.
+function notFound(name) {
+  const shown = String(name).slice(0, 128)
+  return errorResult(`No tool named "${shown}" on this server. search_tools lists what there is.`)
+}
+
+function lookup(searchable, args) {
+  const name = typeof args?.name === 'string' ? args.name.trim() : ''
+  if (!name) return { error: errorResult('Name the tool — this takes a `name` string.') }
+  const tool = searchable.find((t) => t.name === name)
+  return tool ? { tool } : { error: notFound(name) }
+}
+
+// ---------------------------------------------------------------------------
+// call_tool (5.5 b): a call that does not change the tool list
+// ---------------------------------------------------------------------------
+// Through callToolAs, so policy, the approval gate, the verified conversation
+// and logging are what a direct call gets.
+//
+// CALL_TOOL CARRIES APPROVAL (U-S6, master plan Phase 3.1). A client asks the
+// person about a call by the name it sees, which here is call_tool, so Nest
+// cannot leave a write to the client's card the way it does for a direct
+// call. Through call_tool, every inner tool whose rule is not 'none' is
+// ENFORCED here (enforceApproval): with no decision or standing grant it does
+// nothing and returns a pending approval for the INNER tool and arguments,
+// which the client decides and repeats with its id (approval.mjs). That is
+// stricter than a direct call, on purpose: no client, an API key included,
+// can write through call_tool without a decision. Redstart's own clients
+// show the inner tool on their card (approval.mjs callToolTarget).
+
+async function proxyCall(searchable, args, ctx) {
+  const { tool, error } = lookup(searchable, args)
+  if (error) return error
+  if (HOST_RESOLVED_TOOL_NAMES.includes(tool.name)) {
+    return errorResult(`${tool.name} is answered by your application, not this server: call it directly.`)
+  }
+  if (!toolCaller) return errorResult('Calling tools by name is unavailable.')
+  const inner = args?.arguments && typeof args.arguments === 'object' && !Array.isArray(args.arguments) ? args.arguments : {}
+  const result = await toolCaller(ctx?.account ?? null, tool.name, inner, {
+    conversationId: ctx?.conversationId,
+    session: ctx?.session,
+    approvalId: ctx?.approvalId,
+    enforceApproval: approvalRule(tool.name) !== 'none',
+  })
+  return result ?? notFound(tool.name)
 }
 
 function textResult(text) {

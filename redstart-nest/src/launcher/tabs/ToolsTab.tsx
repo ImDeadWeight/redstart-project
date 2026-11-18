@@ -1,0 +1,958 @@
+import type { LlamaConfig, WebSearchEngine } from '../types'
+import { retrievalOnFor } from '../types'
+import type { useToolsCatalog } from '../hooks/useToolsCatalog'
+import type { useCapabilities, FolderCap } from '../hooks/useCapabilities'
+import { folderCapAllowCreate } from '../hooks/useCapabilities'
+import type { useExternalMcp } from '../hooks/useExternalMcp'
+import type { usePlugins } from '../hooks/usePlugins'
+import { SectionTitle, TogglePill, btnCls, inputCls } from '../components/ui'
+import { FolderPicker } from '../components/FolderPicker'
+import { api } from '../api/redstart'
+import { PythonCapabilityCard } from '../components/PythonCapabilityCard'
+import { DeferralCard } from '../components/DeferralCard'
+
+// ---------------------------------------------------------------------------
+// Folder-scoped capability card — one component for Documents/SQLite/Vault/
+// Git/File System (they differ only in copy and which config field holds the
+// folder). Postgres and Scholar keep bespoke cards below.
+// ---------------------------------------------------------------------------
+
+const FOLDER_CARDS: { cap: FolderCap; title: string; emptyText: string; description: string }[] = [
+  {
+    cap: 'documents', title: 'Documents', emptyText: 'No output folder chosen',
+    description: 'The model can create documents in this folder and read documents and spreadsheets (.pdf, .docx, .txt, .md, .xlsx, .csv) you place in it. All extraction happens on-device.',
+  },
+  {
+    cap: 'sqlite', title: 'SQLite', emptyText: 'No database folder chosen',
+    description: 'Read-only queries against .sqlite/.db files in the chosen folder. The files are never opened for writing.',
+  },
+  {
+    cap: 'vault', title: 'Vault', emptyText: 'No notes folder chosen',
+    description: 'Read-only search across markdown notes (Obsidian vault or any folder of .md files) — search, read notes, browse tags.',
+  },
+  {
+    cap: 'git', title: 'Git', emptyText: 'No repository folder chosen',
+    description: 'Read-only repository context (status, recent commits, uncommitted diffs). Choose a repository or a folder containing repositories. Requires git on the server machine.',
+  },
+  {
+    cap: 'file_system', title: 'File System', emptyText: 'No folder chosen',
+    description: 'Read and write files within a chosen folder — read configs, write scripts, edit project files. Paths are contained to the chosen root.',
+  },
+]
+
+function capDir(caps: ReturnType<typeof useCapabilities>, cap: FolderCap): string | null {
+  const cc = caps.capabilityConfig
+  if (!cc) return null
+  return cap === 'documents' ? cc.documents.outputDir : cc[cap].rootDir
+}
+
+// Mirrors the *Wanted checks in buildGatewayConfig: a capability produces tools
+// when its card is enabled for this profile AND it has whatever it needs to run
+// (a folder, or a connection string). This function answers only the second
+// half — "is it configured" — because the card's own toggle is the first half.
+// A card that is enabled but not configured is the silent-no-op case each card
+// warns about inline.
+type CapabilityConfig = ReturnType<typeof useCapabilities>['capabilityConfig']
+function isCapabilityReady(cc: CapabilityConfig, id: string): boolean {
+  if (!cc) return false
+  switch (id) {
+    case 'postgres': return cc.postgres.hasConnectionString
+    case 'documents': return !!cc.documents.outputDir
+    case 'scholar': return true   // no setup required
+    case 'memory': return true   // nothing to configure
+    case 'document_search': return !!cc.documents.outputDir
+    case 'python': return !!cc.documents.outputDir && cc.python.runtimeInstalled && cc.python.sandboxAvailable
+    case 'sqlite':
+    case 'vault':
+    case 'git':
+    case 'file_system': return !!cc[id].rootDir
+    default: return true
+  }
+}
+
+// `active` is this profile's activeToolIds membership; `onToggle` flips it.
+// The card no longer touches the global capability `enabled` flag — see
+// buildGatewayConfig. "Configured" (a folder is chosen) is now purely a
+// readout, not a second gate.
+function FolderCapabilityCard({ caps, cap, title, emptyText, description, active, onToggle }: {
+  caps: ReturnType<typeof useCapabilities>
+  cap: FolderCap
+  title: string
+  emptyText: string
+  description: string
+  active: boolean
+  onToggle: () => void
+}) {
+  const dir = capDir(caps, cap)
+  return (
+    <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm text-zinc-200">{title}</span>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <span className={`text-xs ${!dir ? 'text-zinc-600' : active ? 'text-green-400' : 'text-zinc-500'}`}>
+            {!dir ? 'Not configured' : active ? 'Configured · Enabled' : 'Configured · Disabled'}
+          </span>
+          <button onClick={onToggle} className={btnCls.chip}>
+            {active ? 'Disable' : 'Enable'}
+          </button>
+        </div>
+      </div>
+      {active && !dir && (
+        <p className="text-xs text-yellow-500/90 mb-1.5">
+          Enabled for this profile, but no folder chosen — the model will not see its tools.
+        </p>
+      )}
+      <div className="flex items-center gap-2">
+        <span className="flex-1 min-w-0 text-xs text-zinc-400 truncate">
+          {dir || emptyText}
+        </span>
+        <FolderPicker
+          mode="directory"
+          allowCreate={folderCapAllowCreate(cap)}
+          title={`Select the ${title} folder`}
+          startPath={dir ?? undefined}
+          onPick={(picked) => caps.applyFolder(cap, picked)}
+          disabled={caps.savingCap === cap}
+          className="px-2.5 py-1 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 rounded text-xs transition-colors flex-shrink-0">
+          Choose folder…
+        </FolderPicker>
+      </div>
+
+      {/* File System is the one read/write capability, so it carries a
+          server-enforced permission policy. The current server
+          (@modelcontextprotocol/server-filesystem) exposes no delete tool, so
+          the destructive toggle is reserved: it pre-gates any future
+          destructive-class file tool but currently changes nothing. */}
+      {cap === 'file_system' && dir && caps.capabilityConfig && (
+        <div className="mt-2 pt-2 border-t border-zinc-700/50 space-y-2">
+          <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
+            <span className="min-w-0">
+              <span className="text-xs text-zinc-300">Allow writes</span>
+              <span className="block text-xs text-zinc-600">Create and edit files. Off = read-only access.</span>
+            </span>
+            <TogglePill
+              checked={caps.capabilityConfig.file_system.allowWrite !== false}
+              onToggle={() => caps.toggleFsPolicy('allowWrite')}
+              className="flex-shrink-0"
+            />
+          </label>
+          <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
+            <span className="min-w-0">
+              <span className="text-xs text-zinc-300">Allow destructive operations</span>
+              <span className="block text-xs text-zinc-600">Lets the model delete files in its own storage. Deletions go to the Recycle Bin and can be recovered, and the user approves every single one on the chat's approval card — "always allow" is never offered for deletion.</span>
+            </span>
+            <TogglePill
+              checked={!!caps.capabilityConfig.file_system.allowDestructive}
+              onToggle={() => caps.toggleFsPolicy('allowDestructive')}
+              className="flex-shrink-0"
+            />
+          </label>
+          {caps.capabilityConfig.file_system.allowDestructive && (
+            <p className="text-xs text-yellow-500/90">⚠ The model can delete files in each user's own storage under this folder. Deletions are recoverable from the Recycle Bin and are confirmed one at a time.</p>
+          )}
+        </div>
+      )}
+
+      <p className="text-xs text-zinc-600 mt-1.5">{description}</p>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Tools tab
+// ---------------------------------------------------------------------------
+
+export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
+  config: LlamaConfig
+  toolsCatalog: ReturnType<typeof useToolsCatalog>
+  caps: ReturnType<typeof useCapabilities>
+  mcp: ReturnType<typeof useExternalMcp>
+  plugins: ReturnType<typeof usePlugins>
+}) {
+  const {
+    allTools, allGroups, clientApps,
+    showAddTool, setShowAddTool, newToolName, setNewToolName,
+    newToolUrl, setNewToolUrl, newToolDesc, setNewToolDesc,
+    editingToolId, startEditTool, cancelToolForm,
+    showAddGroup, setShowAddGroup, newGroupName, setNewGroupName,
+    newGroupDesc, setNewGroupDesc, newGroupToolIds, setNewGroupToolIds,
+    setToolsField, toggleGroup, toggleTool, toggleDisabledTool,
+    addCustomTool, deleteCustomTool, addCustomGroup, deleteCustomGroup,
+  } = toolsCatalog
+  const {
+    capabilityConfig, pgConnectionString, setPgConnectionString, pgMaxRows, setPgMaxRows,
+    pgTestResult, pgSaving, savePostgresConfig, testPostgresConnection,
+    scholarVenueFilter, setScholarVenueFilter, saveScholarVenueFilter,
+    searxngUrl, setSearxngUrl, braveApiKey, setBraveApiKey, webSearchError,
+    saveWebSearchConfig, clearBraveApiKey,
+    toolContextEstimate, retrievalStatus, applyRetrieval,
+  } = caps
+  const {
+    externalServers, showAddExternal, setShowAddExternal,
+    newExtName, setNewExtName, newExtUrl, setNewExtUrl, mcpTestResults,
+    newExtApiKey, setNewExtApiKey, editingServerId, startEditServer, cancelServerForm,
+    addExternalError, addExternalWarnings,
+    addExternalMcpServer, removeExternalMcpServer, testExternalMcpServer,
+  } = mcp
+
+  // Every card's Enable/Disable is this profile's activeToolIds membership.
+  // Web Access is the one exception — it predates activeToolIds and defaults to
+  // on, so it uses its own `!== false` boolean (see ProfileTools in types.ts).
+  const isActive = (id: string) => config.tools?.activeToolIds?.includes(id) ?? false
+  const webAccessOn = config.tools?.webAccessEnabled !== false
+  const restrictOn = config.tools?.whitelistEnabled !== false
+
+  // Mirrors resolveEngine in web-search-engines.mjs: chosen AND configured, or
+  // off. The UI says "off" in exactly the cases the server treats as off.
+  const searchEngine: WebSearchEngine = config.tools?.webSearchEngine ?? 'none'
+  const savedSearxng = capabilityConfig?.web_search?.searxngUrl || null
+  const searchEngineReady =
+    (searchEngine === 'searxng' && !!savedSearxng) ||
+    (searchEngine === 'brave' && !!capabilityConfig?.web_search?.hasBraveApiKey)
+  const searchEngineDestination = searchEngine === 'searxng'
+    ? (() => { try { return `SearXNG at ${new URL(savedSearxng || '').host}` } catch { return 'SearXNG' } })()
+    : 'Brave Search (api.search.brave.com)'
+
+  return (
+    <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
+      <div className="flex items-center justify-between mb-4">
+        <SectionTitle className="">Tools</SectionTitle>
+        <label className="flex items-center gap-2 cursor-pointer select-none">
+          <span className="text-xs text-zinc-400">{config.tools?.enabled ? 'Enabled' : 'Disabled'}</span>
+          <TogglePill checked={!!config.tools?.enabled} onToggle={() => setToolsField('enabled', !(config.tools?.enabled))} />
+        </label>
+      </div>
+
+      {config.tools?.enabled ? (<>
+        {/* Performance warning — context cost applies to every tool, so it sits
+            above the cards rather than inside any one of them. */}
+        <div className={`mb-4 px-3 py-2 rounded text-xs border ${
+          config.ctxSize < 4096
+            ? 'bg-red-900/30 border-red-700 text-red-300'
+            : config.ctxSize < 8192
+            ? 'bg-yellow-900/30 border-yellow-700 text-yellow-300'
+            : 'bg-zinc-800 border-zinc-700 text-zinc-400'
+        }`}>
+          {config.ctxSize < 4096
+            ? `⚠ Context is very small (${config.ctxSize} tokens). Tool fetches may fill it completely. Increase context size or keep tools off.`
+            : config.ctxSize < 8192
+            ? `⚠ Small context (${config.ctxSize} tokens). Fetched content may use most of it. Consider 8192+ for tool use.`
+            : `ⓘ Tool calls add ~2–5 s latency per lookup. The response appears after all fetches complete.`
+          }
+        </div>
+
+        <div className="space-y-4">
+          {/* ---- Web Access (web_fetch + web_search) ----
+              Same card shape as the capability cards below: one Enable/Disable
+              for this profile, with its setup nested inside. Its on/off lives in
+              webAccessEnabled rather than activeToolIds — see types.ts. */}
+          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-zinc-200">Web Access</span>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`text-xs ${webAccessOn ? 'text-green-400' : 'text-zinc-500'}`}>
+                  {webAccessOn ? 'Enabled' : 'Disabled'}
+                </span>
+                <button
+                  onClick={() => setToolsField('webAccessEnabled', !webAccessOn)}
+                  className={btnCls.chip}>
+                  {webAccessOn ? 'Disable' : 'Enable'}
+                </button>
+              </div>
+            </div>
+
+            {webAccessOn && (<>
+              <div className="flex items-center justify-between gap-2 py-2 border-t border-zinc-700/50">
+                <span className="min-w-0">
+                  <span className="text-xs text-zinc-300">Restrict to approved sources</span>
+                  <span className="block text-xs text-zinc-600">
+                    {restrictOn
+                      ? 'The model can only fetch from the sources selected below.'
+                      : 'The model can fetch any public website. Local network addresses are always blocked.'}
+                  </span>
+                </span>
+                <TogglePill
+                  checked={restrictOn}
+                  onToggle={() => setToolsField('whitelistEnabled', !restrictOn)}
+                  className="flex-shrink-0"
+                />
+              </div>
+
+              {!restrictOn && (
+                <div className="mb-3 px-3 py-2 rounded text-xs border bg-yellow-900/30 border-yellow-700 text-yellow-300">
+                  ⚠ Open web access: the model can reach any public site, including ones you haven't reviewed. Fetched pages can contain wrong or manipulative content.
+                </div>
+              )}
+
+              {restrictOn && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-3">
+                  {/* Left column: Groups */}
+                  <div>
+                    <p className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Source Groups</p>
+
+                    <div className="space-y-2 mb-4">
+                      {allGroups.filter(g => g.builtIn).map(group => {
+                        const active = config.tools?.activeGroupIds?.includes(group.id) ?? false
+                        return (
+                          <label key={group.id} className="flex items-start gap-2 cursor-pointer select-none">
+                            <input
+                              type="checkbox" checked={active}
+                              onChange={() => toggleGroup(group.id)}
+                              className="mt-0.5 accent-orange-500"
+                            />
+                            <div>
+                              <span className="text-sm text-zinc-200">{group.name}</span>
+                              <span className="text-xs text-zinc-500 ml-2">{group.description}</span>
+                            </div>
+                          </label>
+                        )
+                      })}
+                    </div>
+
+                    {allGroups.filter(g => !g.builtIn).length > 0 && (<>
+                      <p className="text-xs text-zinc-500 mb-2">Custom groups</p>
+                      <div className="space-y-1 mb-3">
+                        {allGroups.filter(g => !g.builtIn).map(group => {
+                          const active = config.tools?.activeGroupIds?.includes(group.id) ?? false
+                          return (
+                            <div key={group.id} className="flex items-center gap-2">
+                              <label className="flex items-center gap-2 cursor-pointer select-none flex-1">
+                                <input type="checkbox" checked={active} onChange={() => toggleGroup(group.id)} className="accent-orange-500" />
+                                <span className="text-sm text-zinc-200">{group.name}</span>
+                              </label>
+                              <button onClick={() => deleteCustomGroup(group.id)} className="text-xs text-zinc-600 hover:text-red-400 transition-colors px-1">✕</button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </>)}
+
+                    {!showAddGroup ? (
+                      <button onClick={() => setShowAddGroup(true)} className={btnCls.subtle}>
+                        + Create custom group
+                      </button>
+                    ) : (
+                      <div className="space-y-2 bg-zinc-800/60 p-3 rounded border border-zinc-700">
+                        <input value={newGroupName} onChange={e => setNewGroupName(e.target.value)}
+                          placeholder="Group name" className={inputCls.dark} />
+                        <input value={newGroupDesc} onChange={e => setNewGroupDesc(e.target.value)}
+                          placeholder="Description (optional)" className={inputCls.dark} />
+                        <p className="text-xs text-zinc-500">Select sources for this group:</p>
+                        <div className="space-y-1 max-h-40 overflow-y-auto">
+                           {allTools.filter(t => t.kind === 'web').map(tool => (
+                             <label key={tool.id} className="flex items-center gap-2 cursor-pointer select-none">
+                               <input type="checkbox" checked={newGroupToolIds.includes(tool.id)}
+                                 onChange={() => setNewGroupToolIds(prev => prev.includes(tool.id) ? prev.filter(id => id !== tool.id) : [...prev, tool.id])}
+                                 className="accent-orange-500" />
+                               <span className="text-sm text-zinc-300">{tool.name}</span>
+                             </label>
+                           ))}
+                        </div>
+                        <div className="flex gap-2 pt-1">
+                          <button onClick={addCustomGroup} className={btnCls.primary}>Save group</button>
+                          <button onClick={() => { setShowAddGroup(false); setNewGroupName(''); setNewGroupToolIds([]) }} className={btnCls.secondary}>Cancel</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right column: Individual sources */}
+                  <div>
+                    <p className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Individual Sources</p>
+                    <div className="space-y-1.5 mb-4">
+                      {allTools.filter(t => t.kind === 'web').map(tool => {
+                        const inActiveGroup = (config.tools?.activeGroupIds ?? []).some(gid => {
+                          const grp = allGroups.find(g => g.id === gid)
+                          return grp?.toolIds.includes(tool.id)
+                        })
+                        const active = (config.tools?.activeToolIds?.includes(tool.id) ?? false) || inActiveGroup
+                        return (
+                          <div key={tool.id} className="flex items-center gap-2">
+                            <label className={`flex items-center gap-2 cursor-pointer select-none flex-1 ${inActiveGroup ? 'opacity-50' : ''}`}>
+                              <input type="checkbox" checked={active} disabled={inActiveGroup}
+                                onChange={() => toggleTool(tool.id)} className="accent-orange-500" />
+                              <div className="min-w-0">
+                                <span className="text-sm text-zinc-200">{tool.name}</span>
+                                {inActiveGroup && <span className="text-xs text-zinc-600 ml-2">(via group)</span>}
+                                {tool.builtIn && !inActiveGroup && <span className="text-xs text-zinc-600 ml-2">{tool.baseUrl}</span>}
+                              </div>
+                            </label>
+                            {!tool.builtIn && (
+                              <span className="flex items-center gap-1 flex-shrink-0">
+                                <button onClick={() => startEditTool(tool)} className="text-xs text-zinc-600 hover:text-zinc-300 transition-colors px-1">Edit</button>
+                                <button onClick={() => deleteCustomTool(tool.id)} className="text-xs text-zinc-600 hover:text-red-400 transition-colors px-1">✕</button>
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+
+                    {!showAddTool ? (
+                      <button onClick={() => setShowAddTool(true)} className={`${btnCls.subtle} mb-4 block`}>
+                        + Add custom source
+                      </button>
+                    ) : (
+                      <div className="space-y-2 bg-zinc-800/60 p-3 rounded border border-zinc-700 mb-4">
+                        <input value={newToolName} onChange={e => setNewToolName(e.target.value)}
+                          placeholder="Source name" className={inputCls.dark} />
+                        <input value={newToolUrl} onChange={e => setNewToolUrl(e.target.value)}
+                          placeholder="Base URL (e.g. https://example.com)" className={inputCls.dark} />
+                        <input value={newToolDesc} onChange={e => setNewToolDesc(e.target.value)}
+                          placeholder="Description (optional)" className={inputCls.dark} />
+                        <div className="flex gap-2 pt-1">
+                          <button onClick={addCustomTool} className={btnCls.primary}>{editingToolId ? 'Save changes' : 'Save source'}</button>
+                          <button onClick={cancelToolForm} className={btnCls.secondary}>Cancel</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* General web search engine (web_search source "web"). Off by
+                  default; "off" is a visible state, not an absent control, and
+                  the selected engine's destination is named (plan D1). The
+                  choice is this profile's; the connection below is global. */}
+              <div className="py-2 border-t border-zinc-700/50 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0">
+                    <span className="text-xs text-zinc-300">Web search engine</span>
+                    <span className="block text-xs text-zinc-600">
+                      {searchEngine === 'none'
+                        ? 'Off. The model can only search the specific sources above.'
+                        : searchEngineReady
+                        ? `Queries are sent to ${searchEngineDestination}.`
+                        : 'Selected but not configured below, so it is off.'}
+                    </span>
+                  </span>
+                  <select
+                    value={searchEngine}
+                    onChange={e => setToolsField('webSearchEngine', e.target.value as WebSearchEngine)}
+                    className="flex-shrink-0 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-orange-500">
+                    <option value="none">Off</option>
+                    <option value="searxng">SearXNG (self-hosted)</option>
+                    <option value="brave">Brave Search API</option>
+                  </select>
+                </div>
+
+                {searchEngine !== 'none' && (
+                  <div className="px-3 py-2 rounded text-xs border bg-yellow-900/30 border-yellow-700 text-yellow-300">
+                    ⚠ Every web search the model makes is sent to this engine{searchEngine === 'searxng' ? ', which forwards it to the public search engines it is configured to use' : ', a hosted service outside your network'}. Result snippets come from unreviewed pages.
+                    {restrictOn && ' With sources restricted, results are filtered to the approved sources.'}
+                  </div>
+                )}
+
+                {searchEngine === 'searxng' && (
+                  <div className="flex gap-2">
+                    <input value={searxngUrl} onChange={e => setSearxngUrl(e.target.value)}
+                      placeholder="SearXNG URL, e.g. http://search.lan:8080/" className={inputCls.dark} />
+                    <button onClick={saveWebSearchConfig} className={btnCls.secondary}>Save</button>
+                  </div>
+                )}
+                {searchEngine === 'searxng' && (
+                  <p className="text-xs text-zinc-600">The instance must allow JSON results (settings.yml → search.formats: json). Shared by every profile.</p>
+                )}
+
+                {searchEngine === 'brave' && (
+                  <div className="flex gap-2">
+                    <input type="password" value={braveApiKey} onChange={e => setBraveApiKey(e.target.value)}
+                      placeholder={capabilityConfig?.web_search?.hasBraveApiKey ? 'API key saved (enter a new one to replace)' : 'Brave Search API key'}
+                      className={inputCls.dark} />
+                    <button onClick={saveWebSearchConfig} className={btnCls.secondary}>Save</button>
+                    {capabilityConfig?.web_search?.hasBraveApiKey && (
+                      <button onClick={clearBraveApiKey} className={btnCls.secondary}>Remove</button>
+                    )}
+                  </div>
+                )}
+                {webSearchError && <p className="text-xs text-red-400">{webSearchError}</p>}
+              </div>
+
+              <div className="flex items-center gap-3 pt-2 border-t border-zinc-700/50">
+                <label className="text-xs text-zinc-400 whitespace-nowrap">Max tokens per fetch</label>
+                <input
+                  type="number" min={500} max={8000} step={500}
+                  value={config.tools?.maxFetchTokens ?? 2000}
+                  onChange={e => setToolsField('maxFetchTokens', Math.max(500, Math.min(8000, parseInt(e.target.value) || 2000)))}
+                  className="w-24 bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500"
+                />
+                <span className="text-xs text-zinc-600">of {config.ctxSize} ctx tokens</span>
+              </div>
+            </>)}
+
+            <p className="text-xs text-zinc-600 mt-1.5">
+              Look things up on the web: <span className="text-zinc-500">web_fetch</span> reads a page, <span className="text-zinc-500">web_search</span> searches a source's own search endpoint. Private and local network addresses are always blocked.
+            </p>
+          </div>
+
+          {/* ---- Postgres ---- */}
+          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-zinc-200">Postgres</span>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`text-xs ${
+                  !capabilityConfig?.postgres.hasConnectionString
+                    ? 'text-zinc-600'
+                    : isActive('postgres') ? 'text-green-400' : 'text-zinc-500'
+                }`}>
+                  {!capabilityConfig?.postgres.hasConnectionString
+                    ? 'Not configured'
+                    : isActive('postgres') ? 'Configured · Enabled' : 'Configured · Disabled'}
+                </span>
+                <button onClick={() => toggleTool('postgres')} className={btnCls.chip}>
+                  {isActive('postgres') ? 'Disable' : 'Enable'}
+                </button>
+              </div>
+            </div>
+            {isActive('postgres') && !isCapabilityReady(capabilityConfig, 'postgres') && (
+              <p className="text-xs text-yellow-500/90 mb-1.5">
+                Enabled for this profile, but no connection string saved — the model will not see its tools.
+              </p>
+            )}
+            <div className="flex gap-2 mb-1.5">
+              <input
+                type="password" value={pgConnectionString} onChange={e => setPgConnectionString(e.target.value)}
+                placeholder={capabilityConfig?.postgres.hasConnectionString ? 'postgresql://... (leave blank to keep current)' : 'postgresql://user:pass@host:5432/db'}
+                className="flex-1 min-w-0 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500" />
+              <input
+                type="number" min={10} max={5000} step={10} value={pgMaxRows}
+                onChange={e => setPgMaxRows(Math.max(10, Math.min(5000, parseInt(e.target.value) || 200)))}
+                title="Max rows returned per query"
+                className="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500" />
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={testPostgresConnection} className={btnCls.chip}>Test connection</button>
+              <button onClick={savePostgresConfig} disabled={pgSaving} className="px-2.5 py-1 bg-orange-500 hover:bg-orange-400 disabled:opacity-50 rounded text-xs font-medium transition-colors">
+                {pgSaving ? 'Saving…' : 'Save'}
+              </button>
+              {pgTestResult && (
+                <span className={`text-xs ${pgTestResult.ok ? 'text-green-400' : 'text-red-400'}`}>{pgTestResult.message}</span>
+              )}
+            </div>
+            <p className="text-xs text-zinc-600 mt-1.5">Queries run read-only. Use a database role with read-only grants for defense in depth.</p>
+          </div>
+
+          {FOLDER_CARDS.map(card => (
+            <FolderCapabilityCard
+              key={card.cap}
+              caps={caps}
+              active={isActive(card.cap)}
+              onToggle={() => toggleTool(card.cap)}
+              {...card}
+            />
+          ))}
+
+          <PythonCapabilityCard
+            status={capabilityConfig?.python ?? null}
+            documentsConfigured={!!capabilityConfig?.documents.outputDir}
+            active={isActive('python')}
+            onToggle={() => toggleTool('python')}
+            onChanged={caps.loadCapabilities}
+          />
+
+          {/* ---- Document search ---- */}
+          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-zinc-200">Document search</span>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`text-xs ${isActive('document_search') ? (capabilityConfig?.documents.outputDir ? 'text-green-400' : 'text-amber-400') : 'text-zinc-500'}`}>
+                  {isActive('document_search') ? (capabilityConfig?.documents.outputDir ? 'Enabled' : 'Enabled, not ready') : 'Disabled'}
+                </span>
+                <button onClick={() => toggleTool('document_search')} className={btnCls.chip}>
+                  {isActive('document_search') ? 'Disable' : 'Enable'}
+                </button>
+              </div>
+            </div>
+            {!capabilityConfig?.documents.outputDir && <p className="text-xs text-amber-400 mb-1.5">Choose a Documents folder first: this searches each user's files there.</p>}
+            <p className="text-xs text-zinc-600 mt-1.5">Gives the assistant search_documents: it finds the passages in a user's own files (uploads, chat attachments, conversation workspaces, created documents) that answer a question, and cites them. Private per account; nothing leaves the machine. The index is kept in Redstart's config folder and catches up on each search. Ranking uses the embedding model when it runs (it starts with tool retrieval) and word matching otherwise.</p>
+            {/* Shared Documents (master plan 6.2): one folder every account
+                searches too, read-only, limited per role on the Roles page. */}
+            <div className="flex items-center gap-2 mt-2">
+              <span className="text-xs text-zinc-400 flex-shrink-0">Shared documents:</span>
+              <span className="flex-1 min-w-0 text-xs text-zinc-400 truncate">
+                {capabilityConfig?.shared_documents?.rootDir || 'none (only each user\'s own files are searched)'}
+              </span>
+              <FolderPicker
+                mode="directory"
+                allowCreate={false}
+                title="Select the shared documents folder"
+                startPath={capabilityConfig?.shared_documents?.rootDir ?? undefined}
+                onPick={async (picked) => { await api().capabilities.setSharedDocuments({ rootDir: picked }); await caps.loadCapabilities() }}
+                className="px-2.5 py-1 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 rounded text-xs transition-colors flex-shrink-0">
+                Choose folder…
+              </FolderPicker>
+              {capabilityConfig?.shared_documents?.rootDir && (
+                <button
+                  onClick={async () => { await api().capabilities.setSharedDocuments({ clear: true }); await caps.loadCapabilities() }}
+                  className={btnCls.chip}>
+                  Clear
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-zinc-600 mt-1">Read-only: search_documents cites a passage from it as "Shared:", and the file explorer shows it. A role can limit an account to some of its folders (Settings, Roles).</p>
+          </div>
+
+          {/* ---- Memory ---- */}
+          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-zinc-200">Memory</span>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`text-xs ${isActive('memory') ? 'text-green-400' : 'text-zinc-500'}`}>
+                  {isActive('memory') ? 'Enabled' : 'Disabled'}
+                </span>
+                <button onClick={() => toggleTool('memory')} className={btnCls.chip}>
+                  {isActive('memory') ? 'Disable' : 'Enable'}
+                </button>
+              </div>
+            </div>
+            <p className="text-xs text-zinc-600 mt-1.5">Lets the assistant remember durable facts each user tells it about themselves (their tools, preferences, role) across chats. Private per account; the newest (about 300 tokens' worth) ride along with every request. Every save appears in the chat with Undo, users see, edit and delete all of theirs under Settings → Memory, and a save made while the assistant was reading the web is flagged. Withhold it from a role with the capability list.</p>
+            {isActive('memory') && (
+              <label className="flex items-center justify-between gap-2 cursor-pointer select-none mt-2">
+                <span className="min-w-0">
+                  <span className="text-xs text-zinc-300">Think before suggesting memories</span>
+                  <span className="block text-xs text-zinc-600">After a chat goes quiet, the model reviews it for things worth remembering. With this on it reasons first: better suggestions on some models (Ornith 9B), none on others (Qwen3-4B), and each review takes longer. It runs only while no one is waiting on a reply.</span>
+                </span>
+                <TogglePill
+                  checked={config.tools?.memoryReview?.think === true}
+                  onToggle={() => setToolsField('memoryReview', { ...(config.tools?.memoryReview ?? {}), think: config.tools?.memoryReview?.think !== true })}
+                  className="flex-shrink-0"
+                />
+              </label>
+            )}
+          </div>
+
+          {/* ---- Scholar ---- */}
+          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-zinc-200">Scholar</span>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`text-xs ${isActive('scholar') ? 'text-green-400' : 'text-zinc-500'}`}>
+                  {isActive('scholar') ? 'Enabled' : 'Disabled'}
+                </span>
+                <button onClick={() => toggleTool('scholar')} className={btnCls.chip}>
+                  {isActive('scholar') ? 'Disable' : 'Enable'}
+                </button>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 mb-1.5">
+              <input
+                type="text" value={scholarVenueFilter} onChange={e => setScholarVenueFilter(e.target.value)}
+                placeholder="Optional venue whitelist: journal ISSNs and/or arXiv categories (e.g. 1932-6203, cs.CL)"
+                className="flex-1 min-w-0 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500 placeholder:text-zinc-600" />
+              <button onClick={saveScholarVenueFilter} className={btnCls.chip}>Save filter</button>
+            </div>
+            <p className="text-xs text-zinc-600 mt-1.5">Search open academic literature (OpenAlex, arXiv, PubMed) and save open-access PDFs into the Documents folder. Leave the whitelist empty for all venues; when set, searches and downloads are restricted to those journals/categories at the API level.</p>
+          </div>
+
+          {/* ---- Installed plugins ----
+              One card per installed+enabled plugin (decision D1 — a plugin is a
+              capability, not a special case). A plugin installed but not yet
+              registry-enabled shows no card at all: it isn't available on this
+              server, so a per-profile toggle for it would imply otherwise. The
+              registry `enabled` switch itself lives on the Plugins tab, not here —
+              see [Two tabs, not one section] in the plan. */}
+          {plugins.plugins.filter((p) => p.enabled).map((p) => (
+            <div key={p.id} className="bg-zinc-800/40 rounded px-3 py-2.5">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm text-zinc-200">{p.displayName}</span>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <span className={`text-xs ${isActive(p.id) ? 'text-green-400' : 'text-zinc-500'}`}>
+                    {isActive(p.id) ? 'Enabled' : 'Disabled'}
+                  </span>
+                  <button onClick={() => toggleTool(p.id)} className={btnCls.chip}>
+                    {isActive(p.id) ? 'Disable' : 'Enable'}
+                  </button>
+                </div>
+              </div>
+              <p className="text-xs text-zinc-600">
+                {p.toolCount} tool{p.toolCount === 1 ? '' : 's'} · third-party plugin — manage installation, health and classification on the Plugins tab.
+              </p>
+              {p.lastError && (
+                <p className="text-xs text-red-400 mt-1">⚠ Unhealthy: {p.lastError}</p>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* ---- Tool retrieval ----
+            Placed directly under the two cost readouts, because it is the
+            answer to the number they report. Its three states are shown
+            separately (setting, model, sidecar) rather than collapsed into one
+            "on", since a switch reading on for a server doing no retrieval is
+            the worst version of this control. */}
+        {(() => {
+          const on = retrievalOnFor(config.tools)
+          const dl = retrievalStatus?.model.download
+          const downloading = on && (dl?.state === 'downloading')
+          const running = retrievalStatus?.server.state === 'running'
+          // Spawned but not yet answering. A real interval — llama-server
+          // accepts the connection before the model is loaded — and it used to
+          // be reported as "running", which is the one reading this control
+          // exists to avoid.
+          const starting = retrievalStatus?.server.state === 'starting'
+          const pct = dl && dl.totalBytes > 0 ? Math.min(100, Math.round((dl.receivedBytes / dl.totalBytes) * 100)) : 0
+          return (
+            <div className="bg-zinc-800/40 rounded px-3 py-2.5 mt-4">
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0">
+                  <span className="text-sm text-zinc-200">Keep catalog-only tools out of every message</span>
+                  <span className="block text-xs text-zinc-600 mt-0.5">
+                    The capabilities ticked below stay out of the tool list, which is the same on every message, so
+                    the model never re-reads the conversation. It finds them with search_tools and calls them
+                    through call_tool. Search runs a small model locally
+                    {retrievalStatus ? ` (${retrievalStatus.model.label}, ${Math.round(retrievalStatus.model.bytes / 1e6)} MB, downloaded once)` : ''},
+                    and matches by keyword until it is ready.
+                  </span>
+                </span>
+                <TogglePill
+                  checked={on}
+                  onToggle={() => {
+                    const retrieval = { ...(config.tools?.retrieval ?? {}), enabled: !on }
+                    setToolsField('retrieval', retrieval)
+                    // Straight to the daemon, not through the live-server tool
+                    // sync: the sidecar's lifetime is the daemon's, so it must
+                    // start whether or not a chat model happens to be loaded.
+                    applyRetrieval({ ...config, tools: { ...(config.tools ?? {}), retrieval } as typeof config.tools })
+                  }}
+                  className="flex-shrink-0"
+                />
+              </div>
+
+              {/* Every branch below is read off a fact the daemon reported. The
+                  one this replaced ended in a bare "Starting…" whenever the
+                  sidecar was merely untouched, which is indistinguishable from
+                  starting and was wrong in exactly the case that mattered:
+                  nothing had been asked to start at all. */}
+              {on && (
+                <p className={`text-xs mt-2 pt-2 border-t border-zinc-700/50 ${
+                  running && retrievalStatus?.applied.enabled ? 'text-zinc-500' : 'text-amber-400'
+                }`}>
+                  {!retrievalStatus
+                    ? 'Checking…'
+                    : downloading
+                      ? `Downloading the search model — ${pct}% of ${Math.round((dl?.totalBytes ?? 0) / 1e6)} MB. Until it finishes, search_tools matches by keyword.`
+                      : dl?.state === 'failed'
+                        ? `⚠ The search model could not be downloaded${dl?.error ? `: ${dl.error}` : ''}. search_tools matches by keyword only. Toggle this off and on to retry.`
+                        : !retrievalStatus.model.present
+                          ? '⚠ The search model is not downloaded yet, so search_tools matches by keyword only. Toggle this off and on to fetch it.'
+                          : starting
+                            ? 'Loading the search model into memory. Until it is ready, search_tools matches by keyword.'
+                            : !running
+                              ? `⚠ The search model is downloaded, but its process is not running${retrievalStatus.server.reason ? `: ${retrievalStatus.server.reason}` : ''}. search_tools matches by keyword only.`
+                              : !retrievalStatus.applied.gatewayUp
+                                ? '✓ Ready. The catalog applies when you launch a model.'
+                                : !retrievalStatus.applied.enabled
+                                  ? '⚠ Ready, but the running server is still using the previously saved settings. Save this profile to apply it.'
+                                  : '✓ Running. The catalog applies from your next message.'}
+                </p>
+              )}
+
+              {on && !config.tools?.enabled && (
+                <p className="text-xs mt-2 text-zinc-600">Tools are switched off for this profile, so there is nothing to keep out.</p>
+              )}
+            </div>
+          )
+        })()}
+
+        {/* Catalog-only capabilities (master plan Phase 3.1): in effect only
+            while tool retrieval is on, which the card says. */}
+        <div className="mt-4">
+          <DeferralCard
+            entries={capabilityConfig?.deferral}
+            retrievalOn={retrievalOnFor(config.tools)}
+            onChanged={caps.loadCapabilities}
+          />
+        </div>
+
+        {/* Two numbers, side by side and labelled, because they measure
+            different things. The estimate describes the tools THIS PROFILE
+            would serve over MCP; the observed line is what the last real
+            request carried, which is a larger set (the payload is composed
+            client-side, and the gateway adds a system prompt on top) and is
+            the only one that can say what a request actually costs. Collapsing
+            them into one number would have to be wrong about one of them. */}
+        {toolContextEstimate && toolContextEstimate.toolCount > 0 && (
+          <p className={`text-xs mt-4 ${
+            toolContextEstimate.approxTokens > config.ctxSize * 0.25 ? 'text-amber-400' : 'text-zinc-500'
+          }`}>
+            {toolContextEstimate.toolCount} active tool{toolContextEstimate.toolCount === 1 ? '' : 's'} in this profile ≈ {toolContextEstimate.approxTokens.toLocaleString()} tokens of context on every request
+            {toolContextEstimate.approxTokens > config.ctxSize * 0.25
+              ? ` — over a quarter of your ${config.ctxSize.toLocaleString()}-token window. Consider enabling fewer tools per profile.`
+              : ''}
+          </p>
+        )}
+        {toolContextEstimate?.observed && (() => {
+          const o = toolContextEstimate.observed
+          const total = o.toolTokens + o.promptTokens
+          const ctx = o.ctxSize ?? config.ctxSize
+          return (
+            /* Amber on the same quarter-of-the-window threshold the estimate
+               above uses.
+
+               "from any account" is not padding. This is ONE observation,
+               overwritten by every completion the daemon serves, so on a
+               multi-user box it is whoever asked last — not this admin, and not
+               a series. Reading it as "my last request" is the obvious mistake
+               and the number is useless once it has been made. A per-account
+               history was declined deliberately (it is a log of one user's tool
+               usage, with a retention policy to argue about), so saying what
+               the number is stands in for keeping more of them. */
+            <p className={`text-xs mt-1 ${o.toolTokens > ctx * 0.25 ? 'text-amber-400' : 'text-zinc-500'}`}>
+              Last request from any account: {o.toolsSent} tool{o.toolsSent === 1 ? '' : 's'} ≈ {o.toolTokens.toLocaleString()} tokens,
+              plus {o.promptTokens.toLocaleString()} for the prompt and conversation — {total.toLocaleString()} of {ctx.toLocaleString()}.
+              {o.toolsOffered > o.toolsAfterBans
+                ? ` ${o.toolsOffered - o.toolsAfterBans} of the ${o.toolsOffered} the client offered were withheld by policy.`
+                : ''}
+              {o.toolsAfterBans > o.toolsSent
+                ? ` ${o.toolsAfterBans - o.toolsSent} more were in the catalog, reachable through search_tools.`
+                : ''}
+            </p>
+          )
+        })()}
+      </>) : (
+        <p className="text-xs text-zinc-600">Enable tools to let the model use web access and local capabilities via the built-in MCP server. Settings are saved with the active profile.</p>
+      )}
+
+      {/* External MCP Servers */}
+      <div className="mt-6 pt-4 border-t border-zinc-700">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs uppercase tracking-widest text-zinc-500">External MCP Servers</p>
+          {!showAddExternal && (
+            <button onClick={() => setShowAddExternal(true)} className={btnCls.subtle}>
+              + Add server
+            </button>
+          )}
+        </div>
+
+        <div className="mb-3 px-3 py-2 bg-zinc-800/60 rounded text-xs text-zinc-400">
+          <span className="text-zinc-300 font-medium">Built-in Redstart MCP:</span>{' '}
+          {config.tools?.enabled
+            ? <span className="text-green-400">http://localhost:{(config.port ?? 19080) + 2}/mcp</span>
+            : <span className="text-zinc-600">Starts with server (enable tools above)</span>
+          }
+        </div>
+
+        {externalServers.length === 0 && !showAddExternal && (
+          <p className="text-xs text-zinc-600">No external MCP servers configured. Add a server URL to connect to an MCP server on another device.</p>
+        )}
+
+        <div className="space-y-2">
+          {externalServers.map(server => (
+            <div key={server.id} className="flex items-start gap-2 bg-zinc-800/40 rounded px-3 py-2">
+              <div className="flex-1 min-w-0">
+                <span className="text-sm text-zinc-200">{server.name}</span>
+                <span className="text-xs text-zinc-500 ml-2 break-all">{server.url}</span>
+                {server.hasApiKey && (
+                  <span className="text-xs text-zinc-600 ml-2" title="An API key is stored for this server">🔑</span>
+                )}
+                {mcpTestResults[server.id] && (
+                  <span className={`block text-xs mt-0.5 ${mcpTestResults[server.id].ok ? 'text-green-400' : 'text-red-400'}`}>
+                    {mcpTestResults[server.id].message}
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={() => testExternalMcpServer(server.id, server.url)}
+                className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-1 flex-shrink-0">
+                Test
+              </button>
+              <button
+                onClick={() => startEditServer(server)}
+                className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-1 flex-shrink-0">
+                Edit
+              </button>
+              <button
+                onClick={() => removeExternalMcpServer(server.id)}
+                className="text-xs text-zinc-600 hover:text-red-400 transition-colors px-1 flex-shrink-0">
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {/* Cautions about the server that was just added — plaintext to a remote
+            host, egress, an endpoint that doesn't look like /sse. Non-blocking
+            by design: the main process accepted it, and an admin at the console
+            is allowed to make these choices. See external-mcp-url.mjs. */}
+        {addExternalWarnings.length > 0 && (
+          <div className="mt-2 text-xs text-amber-300/90 bg-amber-950/30 border border-amber-900/60 rounded p-2 space-y-1">
+            {addExternalWarnings.map((w, i) => <p key={i}>⚠ {w}</p>)}
+          </div>
+        )}
+
+        {showAddExternal && (
+          <div className="space-y-2 bg-zinc-800/60 p-3 rounded border border-zinc-700 mt-2">
+            <input
+              value={newExtName} onChange={e => setNewExtName(e.target.value)}
+              placeholder="Server name (e.g. Legal DB Server)"
+              className={inputCls.dark} />
+            <input
+              value={newExtUrl} onChange={e => setNewExtUrl(e.target.value)}
+              placeholder="SSE URL (e.g. http://10.0.0.5:9000/sse)"
+              className={inputCls.dark} />
+            <input
+              type="password"
+              value={newExtApiKey} onChange={e => setNewExtApiKey(e.target.value)}
+              placeholder={
+                editingServerId && externalServers.find(s => s.id === editingServerId)?.hasApiKey
+                  ? 'API key (leave blank to keep the current one)'
+                  : 'API key (optional — sent as Authorization: Bearer …)'
+              }
+              className={inputCls.dark} />
+            {/* A refusal from the main process. Without this the Add button
+                would simply do nothing on a rejected URL, which reads as a
+                broken button rather than a policy decision. */}
+            {addExternalError && (
+              <p className="text-xs text-red-400 bg-red-950/30 border border-red-900/60 rounded p-2">
+                {addExternalError}
+              </p>
+            )}
+            <div className="flex gap-2 pt-1">
+              <button onClick={addExternalMcpServer} className={btnCls.primary}>
+                {editingServerId ? 'Save changes' : 'Add server'}
+              </button>
+              <button onClick={cancelServerForm} className={btnCls.secondary}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Banned tools — the only control that reaches tools this server does
+          not provide. Deliberately NOT a second list of the cards above: for a
+          capability, disabling its card already stops the tools being served at
+          all, so listing capabilities here would be two controls over the same
+          names meaning opposite things — while the set that genuinely needs
+          banning could not be named at all. */}
+      <div className="mt-6 pt-4 border-t border-zinc-700">
+        <p className="text-xs uppercase tracking-widest text-zinc-500 mb-1">Banned Tools</p>
+        <p className="text-xs text-zinc-600 mb-3">
+          Client apps bring their own tools, which arrive already inside the request — this server never offers them, so it cannot withhold them either. Banning strips them by name from every request this profile serves, and clients cannot re-enable them. Applies to <span className="text-zinc-500">this profile</span>; other profiles have their own list.
+        </p>
+        <div className="space-y-2.5">
+          {clientApps.map(app => {
+            const banned = (config.tools?.disabledToolIds ?? []).includes(app.id)
+            return (
+              <label key={app.id} className="flex items-start gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox" checked={banned}
+                  onChange={() => toggleDisabledTool(app.id)}
+                  className="accent-orange-500 mt-0.5 flex-shrink-0"
+                />
+                <span className="min-w-0">
+                  <span className="text-sm text-zinc-200">{app.name}</span>
+                  <span className="text-xs text-zinc-600 ml-1.5">({app.toolNames.length} tools)</span>
+                  <span className="block text-xs text-zinc-600">{app.description}</span>
+                </span>
+              </label>
+            )
+          })}
+        </div>
+        <p className="text-xs text-zinc-600 mt-3">
+          To turn off one of this server's own capabilities, disable its card above — that stops it being served at all. To make the File System capability read-only, use its "Allow writes" toggle rather than banning the whole thing.
+        </p>
+      </div>
+    </section>
+  )
+}

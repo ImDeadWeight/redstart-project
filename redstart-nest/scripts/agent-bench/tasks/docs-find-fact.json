@@ -9,5 +9,6 @@
     }
   ],
   "approve": "all",
+  "expectTools": ["read_document", "run_python"],
   "check": "checks/documents.mjs#noticePeriod"
 }

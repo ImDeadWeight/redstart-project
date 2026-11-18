@@ -20,6 +20,7 @@ import * as crypto from 'crypto'
 import * as accounts from './accounts-storage.mjs'
 import * as roles from './roles-storage.mjs'
 import { can, allowsSurface, restrictsSurfaces, ADMIN_PERMISSIONS } from './permissions.mjs'
+import { validateGrants } from './grant-scope.mjs'
 import { isKnownSurface } from './system-prompt.mjs'
 import * as sessionStore from './sessions-storage.mjs'
 
@@ -587,8 +588,14 @@ export function saveRole(actor, role) {
     id,
     name: role.name.trim().slice(0, 64),
     description: typeof role.description === 'string' ? role.description.trim().slice(0, 280) : '',
-    permissions: role.permissions && typeof role.permissions === 'object' ? role.permissions : {},
+    permissions: role.permissions && typeof role.permissions === 'object' ? { ...role.permissions } : {},
   }
+  // Resource grants (master plan 6.1): folders relative to each shared root,
+  // checked here so a stored role can never name a path outside one.
+  const grants = validateGrants(candidate.permissions.grants)
+  if (!grants.ok) return { ok: false, error: grants.error }
+  if (grants.grants) candidate.permissions.grants = grants.grants
+  else delete candidate.permissions.grants
   // Same escalation rule as assignment: creating a role that grants more than
   // the actor holds is the same act as assigning one, one step removed.
   const check = assertNoEscalation(actor, candidate.permissions, 'create a role granting')

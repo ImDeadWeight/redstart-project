@@ -17,7 +17,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { execFile } from 'child_process'
-import { resolveWithinRoot } from './path-scope.mjs'
+import { resolveGrantedPath, grantedWalkStarts, isNarrowed, noteDenied } from './grant-scope.mjs'
 
 const TOOL_NAMES = ['git_list_repos', 'git_status', 'git_log', 'git_diff']
 const MAX_OUTPUT_CHARS = 8000
@@ -55,7 +55,11 @@ function clip(text) {
 function resolveRepo(gitCfg, repo) {
   let repoPath
   if (repo && typeof repo === 'string' && repo.trim() && repo.trim() !== '.') {
-    repoPath = resolveWithinRoot(gitCfg.rootDir, repo.trim())
+    repoPath = resolveGrantedPath(gitCfg.rootDir, gitCfg.grants, repo.trim())
+  } else if (isNarrowed(gitCfg.grants)) {
+    // Narrowed to folders (master plan 6.1): the root itself is not one of
+    // them, so there is no default repository; git_list_repos names them.
+    throw new Error('Name the repository: call git_list_repos for the ones available')
   } else {
     repoPath = path.resolve(gitCfg.rootDir)
   }
@@ -101,20 +105,30 @@ function listRepos(gitCfg) {
     }
   }
 
-  if (isRepo(root)) found.push('.')
+  // The granted folders only (master plan 6.1). Inherit is the root, which
+  // may itself be a repo; a granted folder is a repo, or holds repos one level
+  // down, and the root is never listed for a role narrowed to folders.
+  const narrowed = isNarrowed(gitCfg.grants)
+  if (!narrowed && isRepo(root)) found.push('.')
 
-  let entries = []
-  try {
-    entries = fs.readdirSync(root, { withFileTypes: true })
-  } catch {
-    return { isError: true, content: [{ type: 'text', text: 'Could not read the configured git folder.' }] }
-  }
-  // One level deep only: repos are conventionally direct children of a projects
-  // folder, and descending further would walk every node_modules on the disk.
-  for (const entry of entries) {
-    if (found.length >= MAX_REPOS) break
-    if (!entry.isDirectory() || entry.name.startsWith('.')) continue
-    if (isRepo(path.join(root, entry.name))) found.push(entry.name)
+  for (const start of grantedWalkStarts(root, gitCfg.grants)) {
+    const dir = path.join(root, start)
+    if (start && isRepo(dir)) { found.push(start); continue }
+    let entries = []
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      if (!narrowed) return { isError: true, content: [{ type: 'text', text: 'Could not read the configured git folder.' }] }
+      continue
+    }
+    // One level deep only: repos are conventionally direct children of a
+    // projects folder, and descending further would walk every node_modules
+    // on the disk.
+    for (const entry of entries) {
+      if (found.length >= MAX_REPOS) break
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+      if (isRepo(path.join(dir, entry.name))) found.push(start ? `${start}/${entry.name}` : entry.name)
+    }
   }
 
   if (found.length === 0) {
@@ -166,9 +180,10 @@ export function toolDefs(cfg) {
 }
 
 // Provider interface: callTool(name, args, cfg, ctx). `ctx.account` is the
-// authenticated caller (null when auth is off). Unused here — this capability
-// is shared reference material and is the same for every account.
-export async function callTool(name, args, cfg, _ctx) {
+// authenticated caller (null when auth is off), used only to log a denial.
+// This capability is shared reference material, narrowed per role by
+// resource grants (cfg.git.grants, master plan 6.1).
+export async function callTool(name, args, cfg, ctx) {
   if (!TOOL_NAMES.includes(name)) return null
 
   const gitCfg = cfg?.git
@@ -184,6 +199,7 @@ export async function callTool(name, args, cfg, _ctx) {
   try {
     repoPath = resolveRepo(gitCfg, args?.repo)
   } catch (err) {
+    if (err?.denied) noteDenied('git', ctx)
     const outside = err.message.includes('escapes')
     return { isError: true, content: [{ type: 'text', text: outside ? 'Repository path is outside the configured git folder' : `Git error: ${err.message}` }] }
   }

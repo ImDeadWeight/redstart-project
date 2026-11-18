@@ -234,30 +234,45 @@ export function listIndexable(root, { limit = MAX_FILES_PER_SCOPE } = {}) {
   return out
 }
 
+// Which rows a call works on: NULL is a scope's own (private) rows, as 5a
+// wrote them; a string is a grant scope's (Shared Documents, master plan
+// 6.2). One condition for every statement, so no query can forget it.
+function grantCond(grantId) {
+  return grantId === null || grantId === undefined
+    ? { cond: 'grant_id IS NULL', params: [] }
+    : { cond: 'grant_id = ?', params: [grantId] }
+}
+
 /**
  * Bring one scope's index up to date with its folder: drop what is gone,
  * (re)chunk what is new or changed, embed chunks that have no vector yet when
- * an embedder works. Stops starting new files after `budgetMs`.
+ * an embedder works. Stops starting new files after `budgetMs`. `grantId`:
+ * null for an account's own files, a string for a grant scope.
  *
- * @param {{ dir: string, scope: string, root: string,
+ * @param {{ dir: string, scope: string, grantId?: string | null, root: string,
  *           extract: (fullPath: string) => Promise<string>,
  *           embed?: (texts: string[]) => Promise<Float32Array[]|null>,
  *           budgetMs?: number, now?: () => number }} args
  * @returns {Promise<{ files: number, indexed: number, removed: number, pending: number, embedded: number, unembedded: number, errors: string[] }>}
  */
-export async function syncScope({ dir, scope, root, extract, embed, budgetMs = 20000, now = Date.now }) {
+export async function syncScope({ dir, scope, grantId = null, root, extract, embed, budgetMs = 20000, now = Date.now }) {
   const entry = await db(dir)
   const h = entry.db
+  const g = grantCond(grantId)
+  const gid = grantId ?? null
   const started = now()
   const onDisk = listIndexable(root)
-  const known = new Map(rows(h, 'SELECT path, mtime, size FROM sources WHERE scope = ? AND grant_id IS NULL', [scope]).map((r) => [r.path, r]))
+  const known = new Map(rows(h, `SELECT path, mtime, size FROM sources WHERE scope = ? AND ${g.cond}`, [scope, ...g.params]).map((r) => [r.path, r]))
   const present = new Set(onDisk.map((f) => f.path))
+  const drop = (p) => {
+    h.run(`DELETE FROM chunks WHERE scope = ? AND ${g.cond} AND path = ?`, [scope, ...g.params, p])
+    h.run(`DELETE FROM sources WHERE scope = ? AND ${g.cond} AND path = ?`, [scope, ...g.params, p])
+  }
 
   let removed = 0
   for (const p of known.keys()) {
     if (present.has(p)) continue
-    h.run('DELETE FROM chunks WHERE scope = ? AND grant_id IS NULL AND path = ?', [scope, p])
-    h.run('DELETE FROM sources WHERE scope = ? AND grant_id IS NULL AND path = ?', [scope, p])
+    drop(p)
     removed++
     entry.dirty = true
   }
@@ -275,17 +290,16 @@ export async function syncScope({ dir, scope, root, extract, embed, budgetMs = 2
       error = String(err?.message || err).slice(0, 200)
       errors.push(`${f.path}: ${error}`)
     }
-    h.run('DELETE FROM chunks WHERE scope = ? AND grant_id IS NULL AND path = ?', [scope, f.path])
-    h.run('DELETE FROM sources WHERE scope = ? AND grant_id IS NULL AND path = ?', [scope, f.path])
-    chunks.forEach((text, ord) => h.run('INSERT INTO chunks (scope, grant_id, path, ord, text, vector) VALUES (?, NULL, ?, ?, ?, NULL)', [scope, f.path, ord, text]))
-    h.run('INSERT INTO sources (scope, grant_id, path, mtime, size, chunks, indexed_at, error) VALUES (?, NULL, ?, ?, ?, ?, ?, ?)', [scope, f.path, f.mtime, f.size, chunks.length, now(), error])
+    drop(f.path)
+    chunks.forEach((text, ord) => h.run('INSERT INTO chunks (scope, grant_id, path, ord, text, vector) VALUES (?, ?, ?, ?, ?, NULL)', [scope, gid, f.path, ord, text]))
+    h.run('INSERT INTO sources (scope, grant_id, path, mtime, size, chunks, indexed_at, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [scope, gid, f.path, f.mtime, f.size, chunks.length, now(), error])
     indexed++
     entry.dirty = true
   }
 
   let embedded = 0
   if (embed) {
-    const missing = rows(h, 'SELECT id, text FROM chunks WHERE scope = ? AND grant_id IS NULL AND vector IS NULL ORDER BY id', [scope])
+    const missing = rows(h, `SELECT id, text FROM chunks WHERE scope = ? AND ${g.cond} AND vector IS NULL ORDER BY id`, [scope, ...g.params])
     for (let i = 0; i < missing.length; i += EMBED_BATCH) {
       if (now() - started > budgetMs) break
       const batch = missing.slice(i, i + EMBED_BATCH)
@@ -296,38 +310,61 @@ export async function syncScope({ dir, scope, root, extract, embed, budgetMs = 2
       entry.dirty = true
     }
   }
-  const unembedded = rows(h, 'SELECT COUNT(*) AS n FROM chunks WHERE scope = ? AND grant_id IS NULL AND vector IS NULL', [scope])[0]?.n ?? 0
+  const unembedded = rows(h, `SELECT COUNT(*) AS n FROM chunks WHERE scope = ? AND ${g.cond} AND vector IS NULL`, [scope, ...g.params])[0]?.n ?? 0
 
   persist(entry)
   return { files: onDisk.length, indexed, removed, pending: stale.length - indexed, embedded, unembedded, errors }
 }
 
+/** One source's chunks, filtered by folder in JS (a "%" or "_" in a name is not a wildcard). */
+function sourceChunks(h, { scope, grantId = null, pathPrefix = null, pathPrefixes = null }) {
+  const g = grantCond(grantId)
+  let all = rows(h, `SELECT path, ord, text, vector FROM chunks WHERE scope = ? AND ${g.cond}`, [scope, ...g.params])
+    .map((r) => ({ path: r.path, ord: r.ord, text: r.text, vector: fromBlob(r.vector), scope, grantId: grantId ?? null }))
+  if (pathPrefix) all = all.filter((c) => c.path.startsWith(pathPrefix))
+  // A grant scope narrowed to folders: only chunks under one of them. []
+  // matches nothing, never everything.
+  if (Array.isArray(pathPrefixes)) all = all.filter((c) => pathPrefixes.some((pre) => c.path.startsWith(pre)))
+  return all
+}
+
 /**
  * Search one scope's chunks. A query vector is used when given.
  * `pathPrefix` (e.g. "Projects/billing/") keeps only files under that folder
- * of the scope's root, for a project chat (projects-plan D14). Filtered in JS
- * rather than with LIKE, so a "%" or "_" in a folder name is not a wildcard.
- * It narrows inside the scope and can never widen it.
+ * of the scope's root, for a project chat (projects-plan D14). It narrows
+ * inside the scope and can never widen it.
  */
-export async function searchScope({ dir, scope, query, queryVector = null, limit = 6, pathPrefix = null }) {
+export async function searchScope({ dir, scope, grantId = null, query, queryVector = null, limit = 6, pathPrefix = null, pathPrefixes = null }) {
   const { db: h } = await db(dir)
-  let all = rows(h, 'SELECT path, ord, text, vector FROM chunks WHERE scope = ? AND grant_id IS NULL', [scope])
-    .map((r) => ({ path: r.path, ord: r.ord, text: r.text, vector: fromBlob(r.vector) }))
-  if (pathPrefix) all = all.filter((c) => c.path.startsWith(pathPrefix))
+  return rankChunks(sourceChunks(h, { scope, grantId, pathPrefix, pathPrefixes }), query, queryVector).slice(0, limit)
+}
+
+/**
+ * Search several sources at once, ranked together (the scores are relative to
+ * the set, so ranking each alone and merging would not compare). Each hit's
+ * chunk says which scope and grant it came from.
+ *
+ * @param {{ dir: string, sources: { scope: string, grantId?: string | null, pathPrefix?: string | null, pathPrefixes?: string[] | null }[], query: string, queryVector?: Float32Array | null, limit?: number }} args
+ */
+export async function searchSources({ dir, sources, query, queryVector = null, limit = 6 }) {
+  const { db: h } = await db(dir)
+  const all = sources.flatMap((src) => sourceChunks(h, src))
   return rankChunks(all, query, queryVector).slice(0, limit)
 }
 
 /** Forget one scope entirely (the manual rebuild: the next search re-indexes it). */
-export async function clearScope({ dir, scope }) {
+export async function clearScope({ dir, scope, grantId = null }) {
   const entry = await db(dir)
-  entry.db.run('DELETE FROM chunks WHERE scope = ? AND grant_id IS NULL', [scope])
-  entry.db.run('DELETE FROM sources WHERE scope = ? AND grant_id IS NULL', [scope])
+  const g = grantCond(grantId)
+  entry.db.run(`DELETE FROM chunks WHERE scope = ? AND ${g.cond}`, [scope, ...g.params])
+  entry.db.run(`DELETE FROM sources WHERE scope = ? AND ${g.cond}`, [scope, ...g.params])
   entry.dirty = true
   persist(entry)
 }
 
-export async function scopeStats({ dir, scope }) {
+export async function scopeStats({ dir, scope, grantId = null }) {
   const { db: h } = await db(dir)
-  const s = rows(h, 'SELECT COUNT(*) AS files, SUM(chunks) AS chunks, SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END) AS failed FROM sources WHERE scope = ? AND grant_id IS NULL', [scope])[0]
-  return { files: s?.files ?? 0, chunks: s?.chunks ?? 0, failed: s?.failed ?? 0 }
+  const g = grantCond(grantId)
+  const st = rows(h, `SELECT COUNT(*) AS files, SUM(chunks) AS chunks, SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END) AS failed FROM sources WHERE scope = ? AND ${g.cond}`, [scope, ...g.params])[0]
+  return { files: st?.files ?? 0, chunks: st?.chunks ?? 0, failed: st?.failed ?? 0 }
 }

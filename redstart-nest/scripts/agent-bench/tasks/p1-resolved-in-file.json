@@ -10,6 +10,7 @@
     }
   ],
   "approve": "all",
+  "expectTools": ["run_python", "read_document"],
   "check": "checks/phase1.mjs#convertedWithoutAsking",
   "notes": "A guard (2026-11-11): the same request as the old units task, but the column is temp_c, so the file settles it. Fails if the model asks, or converts the wrong way."
 }

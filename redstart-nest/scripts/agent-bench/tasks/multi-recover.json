@@ -9,6 +9,7 @@
     }
   ],
   "approve": "all",
+  "expectTools": ["run_python", "read_document"],
   "check": "checks/multi.mjs#averageScore",
   "notes": "The malformed rows make a plain pandas read_csv fail: the first call errors, and the run measures recovery."
 }

@@ -1,0 +1,19 @@
+{
+  "description": "Tasks whose pass rate moved between same-code repeats (Ornith 1.5 9B, 128k, 91af2d2 x9 runs, 2026-11-18), plus the two guards that catch asking too much. The 18 tasks that passed 9/9 and the two that never pass cannot show a difference between variants. For comparisons: run with --repeat 5. The full task set stays for milestones.",
+  "tasks": [
+    "compute-arithmetic",
+    "docs-search",
+    "multi-find-tool",
+    "multi-recover",
+    "p1-answer-steers",
+    "p1-plan-eight-deliverables",
+    "p1-plan-missing-input",
+    "p1-resolved-in-file",
+    "p1-sign-off-name",
+    "p1-simple-stays-simple",
+    "p1-skip-no-invent",
+    "p1-standard-discount",
+    "p1-two-unknowns",
+    "p4-exit-code"
+  ]
+}

@@ -12,6 +12,11 @@
 //   POST   /workflows/org             manageOrgWorkflows
 //   PUT    /workflows/org/:id         manageOrgWorkflows
 //   DELETE /workflows/org/:id         manageOrgWorkflows
+//   POST   /workflows/:scope/import   { file: base64 } — a skill's .zip or a
+//                                     bare SKILL.md (org: manageOrgWorkflows)
+//   GET    /workflows/:scope/:id/export[?format=md]
+//                                     the skill as a .zip of its folder, or
+//                                     SKILL.md alone (master plan Phase 5)
 //
 // Personal routes are scoped to the authenticated account (or the shared
 // auth-off scope), never to an id the client names — the same rule as
@@ -27,7 +32,7 @@
 
 import { canDo } from '../auth.mjs'
 import {
-  listPersonal, listOrg, createWorkflow, updateWorkflow, deleteWorkflow,
+  listPersonal, listOrg, createWorkflow, updateWorkflow, deleteWorkflow, importWorkflow, exportWorkflow,
   MAX_INSTRUCTIONS_CHARS, MAX_EXAMPLE_CHARS, MAX_INPUTS, MAX_NAME_CHARS,
   MAX_TITLE_CHARS, MAX_DESCRIPTION_CHARS, MAX_PERSONAL_PER_ACCOUNT, MAX_ORG,
 } from '../workflows-storage.mjs'
@@ -37,9 +42,26 @@ import { logEvent } from '../logger.mjs'
 const ID = '[A-Za-z0-9-]{1,64}'
 const ITEM = new RegExp(`^/workflows/(personal|org)/(${ID})$`)
 const COLLECTION = /^\/workflows\/(personal|org)$/
+const IMPORT = /^\/workflows\/(personal|org)\/import$/
+const EXPORT = new RegExp(`^/workflows/(personal|org)/(${ID})/export$`)
+
+/** An import's JSON body: a 1 MB skill as base64, with room to spare. */
+const MAX_IMPORT_BODY_BYTES = 2 * 1024 * 1024
 
 export function isWorkflowRoute(urlPath) {
-  return urlPath === '/workflows' || COLLECTION.test(urlPath) || ITEM.test(urlPath)
+  return urlPath === '/workflows' || COLLECTION.test(urlPath) || ITEM.test(urlPath) || IMPORT.test(urlPath) || EXPORT.test(urlPath)
+}
+
+/** The body, or null when it is over `max` bytes or not JSON. Stops reading at the cap. */
+async function readCappedJson(req, max) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > max) return null
+    chunks.push(chunk)
+  }
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') } catch { return null }
 }
 
 function fail(res, r) {
@@ -69,15 +91,45 @@ export async function handleWorkflowRoute(req, res, urlPath, account) {
       return true
     }
 
-    const coll = COLLECTION.exec(urlPath)
-    const item = coll ? null : ITEM.exec(urlPath)
-    const scope = coll?.[1] ?? item?.[1]
+    const imp = IMPORT.exec(urlPath)
+    const exp = imp ? null : EXPORT.exec(urlPath)
+    const coll = imp || exp ? null : COLLECTION.exec(urlPath)
+    const item = imp || exp || coll ? null : ITEM.exec(urlPath)
+    const scope = imp?.[1] ?? exp?.[1] ?? coll?.[1] ?? item?.[1]
     if (!scope) return false
 
     // Checked before the body is read: a refused writer learns nothing about
     // whether their payload would have validated.
     if (scope === 'org' && req.method !== 'GET' && !canDo(account, 'manageOrgWorkflows')) {
       sendJson(res, 403, { error: { message: 'Your role does not permit "manageOrgWorkflows"', type: 'permission_error' } })
+      return true
+    }
+
+    if (exp && req.method === 'GET') {
+      const format = new URL(req.url, 'http://x').searchParams.get('format') === 'md' ? 'md' : 'zip'
+      const out = exportWorkflow(account, scope, exp[2], format)
+      if (!out) { sendJson(res, 404, { error: { message: 'Not found', type: 'not_found' } }); return true }
+      res.writeHead(200, {
+        'Content-Type': out.contentType,
+        'Content-Disposition': `attachment; filename="${out.filename}"`,
+        'Content-Length': out.body.length,
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Expose-Headers': 'Content-Disposition',
+      })
+      res.end(out.body)
+      return true
+    }
+
+    if (imp && req.method === 'POST') {
+      const body = await readCappedJson(req, MAX_IMPORT_BODY_BYTES)
+      if (!body || typeof body.file !== 'string' || !body.file) {
+        sendJson(res, 400, { error: { message: 'Expected { file: <base64 of a .zip or a SKILL.md> }, at most 1 MB of skill', type: 'invalid_request_error' } })
+        return true
+      }
+      const r = importWorkflow(account, scope, Buffer.from(body.file, 'base64'))
+      if (!r.ok) { fail(res, r); return true }
+      logEvent('workflow', 'imported', { scope, name: r.workflow.name, account: account?.username ?? undefined })
+      sendJson(res, 201, r.workflow)
       return true
     }
 
