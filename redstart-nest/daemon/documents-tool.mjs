@@ -97,8 +97,11 @@ const PLAIN_TEXT_EXTENSIONS = new Set([
 
 /** Bytes sniffed by looksLikeText. */
 const SNIFF_BYTES = 64 * 1024
-/** Never sniffed into text: key and credential files, by name. */
-const NEVER_SNIFFED = /(^|[\\/])(\.env(\..*)?|.*\.(pem|key|p12|pfx|kdbx))$/i
+/**
+ * Never sniffed into text: key and credential files, and binary types by
+ * extension (a stub .exe of two ASCII bytes would otherwise pass the sniff).
+ */
+const NEVER_SNIFFED = /(^|[\\/])(\.env(\..*)?|.*\.(pem|key|p12|pfx|kdbx|exe|dll|so|dylib|bin|msi|zip|gz|7z|rar|tar|png|jpe?g|gif|webp|bmp|ico|mp3|mp4|wav|mov|avi|sqlite|db|wasm|class|jar|pyc|o|a|lib))$/i
 
 /**
  * An unlisted file read as text when its first 64 KB has no NUL byte and is

@@ -87,7 +87,7 @@
     },
     {
       "name": "create_document",
-      "description": "Create a new document, data file, or script and save it to the local documents folder, where the user can download it. Takes exactly three arguments: title, content, format. There is NO file_path or filename argument — the file name is derived from title, and the folder is fixed by the server. The documents folder is a SEPARATE store from the File System capability: read it back with read_document, not read_text_file, and do not expect list_directory to show it. For the prose formats (markdown, docx, pdf) format content with simple markdown: \"# Heading\", \"## Subheading\", \"- bullet\", blank lines between paragraphs, and markdown pipe tables (\"| A | B |\" then \"| --- | --- |\" then one line per row) which are rendered as real tables in .docx and .pdf. For every other format (text, csv, json, html, python, javascript, powershell) content is written to the file exactly as supplied: put the raw source or data in content, with no markdown fences, no title heading, and no explanation around it — the result has to be a valid file of that type on its own.",
+      "description": "Create a new document, data file, or script and save it to the local documents folder, where the user can download it. Arguments: title, content, format, and optionally filename. Give filename when the user named the file (e.g. \"thanks.md\"); otherwise the name comes from title. There is no path argument: the folder is fixed by the server. The documents folder is a SEPARATE store from the File System capability: read it back with read_document, not read_text_file, and do not expect list_directory to show it. For the prose formats (markdown, docx, pdf) format content with simple markdown: \"# Heading\", \"## Subheading\", \"- bullet\", blank lines between paragraphs, and markdown pipe tables (\"| A | B |\" then \"| --- | --- |\" then one line per row) which are rendered as real tables in .docx and .pdf. For every other format (text, csv, json, html, python, javascript, powershell) content is written to the file exactly as supplied: put the raw source or data in content, with no markdown fences, no title heading, and no explanation around it — the result has to be a valid file of that type on its own.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -114,6 +114,10 @@
               "powershell"
             ],
             "description": "Output file format — one of: markdown, docx, pdf, text, csv, json, html, python, javascript, powershell"
+          },
+          "filename": {
+            "type": "string",
+            "description": "Optional: the file name to save under, such as \"thanks.md\" or \"quote_discounted.csv\". A name only, no folder; the extension follows format."
           }
         },
         "required": [
@@ -125,7 +129,7 @@
     },
     {
       "name": "read_document",
-      "description": "Read the text content of a document, data file, or script (.pdf, .docx, .xlsx, .txt, .md, .csv, .json, .html, .py, .js, .ps1) in your documents folder on the Redstart server — including anything create_document just wrote. This is a SEPARATE store from the File System capability, so use this rather than read_text_file for documents. Spreadsheets are rendered as one text table per sheet. Long documents are returned in chunks — follow the offset instructions at the end of a truncated result to read more.",
+      "description": "Read a file in your documents folder on the Redstart server, or attached to this conversation: any text file (notes, data, code, config) plus .pdf, .docx and .xlsx — including anything create_document just wrote. This is a SEPARATE store from the File System capability, so use this rather than read_text_file for documents. Spreadsheets are rendered as one text table per sheet. Long documents are returned in chunks — follow the offset instructions at the end of a truncated result to read more.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -145,7 +149,7 @@
     },
     {
       "name": "list_documents",
-      "description": "List the readable documents, data files, and scripts (.pdf, .docx, .xlsx, .txt, .md, .csv, .json, .html, .py, .js, .ps1) in your documents folder on the Redstart server, with sizes.",
+      "description": "List the files in your documents folder on the Redstart server that read_document can read (text, code, data, .pdf, .docx, .xlsx), with sizes. This is not the File System folder: a file there does not show up here, and reading, writing, moving or deleting it takes the File System tools (list_directory, read_text_file, write_file, delete_file).",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -531,7 +535,7 @@
     },
     {
       "name": "run_python",
-      "description": "Run Python 3.14.2 code in a sandbox and get back its printed output, the value of its last expression, and any files it wrote. Use it for anything you would otherwise do in your head and could get wrong: arithmetic, counting, sorting, dates, unit conversion, parsing, statistics, and analysing data files. Installed: numpy, pandas, matplotlib and the standard library. There is no network and no pip, so code cannot fetch URLs or install packages. The working directory is this conversation's workspace: files the user attached are there, and files you write there (e.g. df.to_csv('out.csv')) persist and are listed in the result. matplotlib figures are saved and shown to the user automatically, so you don't need plt.savefig. Files persist; variables usually persist between calls but may not (a kernel restarts after a timeout or 10 idle minutes), so re-load data if a name is undefined. Do not use it for questions you can answer directly, and do not print huge outputs: summarise with pandas instead. Example: {\"code\": \"import pandas as pd\\ndf = pd.read_csv('sales.csv')\\ndf.groupby('region')['amount'].sum()\"}",
+      "description": "Run Python 3.14.2 code in a sandbox and get back its printed output, the value of its last expression, and any files it wrote. Use it for anything you would otherwise do in your head and could get wrong: arithmetic, counting, sorting, dates, unit conversion, parsing, statistics, and analysing data files. Installed: numpy, pandas, matplotlib and the standard library. There is no network and no pip, so code cannot fetch URLs or install packages, and it cannot start other programs: no subprocess, os.system, shell, node or git. The working directory is this conversation's workspace: files the user attached are there, and files you write there (e.g. df.to_csv('out.csv')) persist and are listed in the result. matplotlib figures are saved and shown to the user automatically, so you don't need plt.savefig. Files persist; variables usually persist between calls but may not (a kernel restarts after a timeout or 10 idle minutes), so re-load data if a name is undefined. Do not use it for questions you can answer directly, and do not print huge outputs: summarise with pandas instead. Example: {\"code\": \"import pandas as pd\\ndf = pd.read_csv('sales.csv')\\ndf.groupby('region')['amount'].sum()\"}",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -660,7 +664,7 @@
     },
     {
       "name": "ask_user",
-      "description": "Ask the user and wait for the answer. Use it when the answer would change what you produce: the request can be read two ways that lead to different work, a choice only the user can make is open (such as level, scope or format) and a sensible default could well be wrong, or the user asked you to ask. Not for permission, and not for anything the conversation or a tool already tells you. Offer 2 to 4 short options when the answers are predictable; the user can always type their own. If you need several things, ask them together in one call with \"questions\" (up to 4, each with a short \"header\") instead of one call after another.",
+      "description": "Ask the user and wait for the answer. Use it when the answer would change what you produce: the request can be read two ways that lead to different work, a choice only the user can make is open (such as level, scope or format) and a sensible default could well be wrong, or the user asked you to ask. Not for permission, and not for anything the conversation or a tool already tells you. Offer 2 to 4 short options when the answers are predictable; the user can always type their own. If you need several things, ask them together in one call with \"questions\" (up to 4, each with a short \"header\") instead of one call after another, e.g. {\"questions\": [{\"header\": \"Audience\", \"question\": \"Who will read the report?\", \"options\": [\"Executives\", \"Engineers\"]}, {\"header\": \"Length\", \"question\": \"How long should it be?\"}]}. Ask through this tool, not at the end of your reply: a question in your reply ends your turn without an answer, and in a background task it ends the task.",
       "inputSchema": {
         "type": "object",
         "properties": {

@@ -236,7 +236,8 @@ await test('read_document reads code and unlisted text; never a key file or a bi
   const read = async (p) => documentsTool.callTool('read_document', { path: p }, docsCfg, inConv)
   assert(textOf(await read('math.mjs')).includes('export const add'), `.mjs not read: ${textOf(await read('math.mjs'))}`)
   assert(textOf(await read('Makefile')).includes('héllo'), 'an unlisted UTF-8 text file was not read')
-  for (const p of ['.env', 'server.pem', 'blob.bin']) {
+  fs.writeFileSync(path.join(ws, 'stub.exe'), 'MZ')
+  for (const p of ['.env', 'server.pem', 'blob.bin', 'stub.exe']) {
     const res = await read(p)
     assert(res?.isError && /not a text file/.test(textOf(res)), `${p} was read: ${textOf(res)}`)
   }
