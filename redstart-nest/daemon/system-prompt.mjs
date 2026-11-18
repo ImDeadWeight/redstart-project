@@ -596,6 +596,9 @@ const LOCAL_STORES = [
   { label: 'SQLite database files', enabled: c => !!c?.sqlite?.enabled, perAccount: false, grants: c => c?.sqlite?.grants },
   { label: 'a vault of markdown notes', enabled: c => !!c?.vault?.enabled, perAccount: false, grants: c => c?.vault?.grants },
   { label: 'git repositories', enabled: c => !!c?.git?.enabled, perAccount: false, grants: c => c?.git?.grants },
+  // Shared Documents (master plan 6.2): searched by search_documents beside
+  // each account's own files; shared, or shared partly when a role narrows it.
+  { label: 'a shared documents folder', enabled: c => !!c?.documentSearch?.enabled && !!c?.documentSearch?.sharedRootDir, perAccount: false, grants: c => c?.documentSearch?.sharedGrants },
   // run_python's per-conversation folders. Inside the documents root, but the
   // Documents capability can be off for a profile that has Python on, so it is
   // its own entry rather than implied by the one above.

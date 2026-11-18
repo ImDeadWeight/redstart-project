@@ -219,6 +219,42 @@ await test('class read; a role withholds it; off serves nothing', async () => {
   assert(r.isError, 'ran while off')
 })
 
+console.log('\n-- Shared Documents (5b, master plan 6.2) --')
+
+const sharedRoot = fs.mkdtempSync(path.join(tmpDir, 'shared-'))
+fs.mkdirSync(path.join(sharedRoot, 'finance'), { recursive: true })
+fs.mkdirSync(path.join(sharedRoot, 'hr'), { recursive: true })
+fs.writeFileSync(path.join(sharedRoot, 'finance', 'budget.md'), 'The 2027 travel budget is KESTREL-77 thousand.')
+fs.writeFileSync(path.join(sharedRoot, 'hr', 'pay.md'), 'Pay bands are set in table HERON-12.')
+const withShared = (sharedGrants) => ({ documentSearch: { enabled: true, documentsRoot: docs, sharedRootDir: sharedRoot, ...(sharedGrants === undefined ? {} : { sharedGrants }) } })
+
+await test('🔒 shared documents: the whole folder, a role\'s granted folders only, or none; cited as "Shared:", with no download link', async () => {
+  const all = await tool.callTool('search_documents', { query: 'KESTREL-77 travel budget' }, withShared(), { account: BOB })
+  assert(/\[1\] Shared: finance\/budget\.md/.test(all.content[0].text), all.content[0].text)
+  assert(/come from the organization's shared documents folder/.test(all.content[0].text), 'not said where it came from')
+  assert(!all.content.some((c) => c.type === 'resource_link' && c.uri.includes('budget')), 'a shared file got a download link')
+  // Narrowed to finance: the hr folder's passage is never returned.
+  const fin = await tool.callTool('search_documents', { query: 'HERON-12 pay bands' }, withShared(['finance']), { account: BOB })
+  assert(!fin.content[0].text.includes('pay.md') && !fin.content[0].text.includes('Pay bands'), `an un-granted folder leaked: ${fin.content[0].text}`)
+  const fin2 = await tool.callTool('search_documents', { query: 'KESTREL-77' }, withShared(['finance']), { account: BOB })
+  assert(/Shared: finance\/budget\.md/.test(fin2.content[0].text), fin2.content[0].text)
+  // [] is nothing, not everything.
+  const none = await tool.callTool('search_documents', { query: 'KESTREL-77' }, withShared([]), { account: BOB })
+  assert(!none.content[0].text.includes('budget.md'), `[] returned a shared passage: ${none.content[0].text}`)
+  // A prefix is a folder: "fin" does not grant "finance".
+  const prefix = await tool.callTool('search_documents', { query: 'KESTREL-77' }, withShared(['fin']), { account: BOB })
+  assert(!prefix.content[0].text.includes('budget.md'), `"fin" matched "finance": ${prefix.content[0].text}`)
+  // The user's own files are still searched beside it, and stay theirs.
+  const mixed = await tool.callTool('search_documents', { query: 'four weeks notice' }, withShared(), { account: BOB })
+  assert(mixed.content[0].text.includes('bob.md') && !mixed.content[0].text.includes('handbook.md'), mixed.content[0].text)
+})
+
+await test('no shared folder set, or one that is gone, searches the user\'s own files as before', async () => {
+  const gone = { documentSearch: { enabled: true, documentsRoot: docs, sharedRootDir: path.join(tmpDir, 'no-such-folder') } }
+  const r = await tool.callTool('search_documents', { query: 'four weeks notice' }, gone, { account: BOB })
+  assert(!r.isError && r.content[0].text.includes('bob.md'), r.content[0].text)
+})
+
 idx.closeAll()
 const failed = results.filter((r) => !r.pass)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)

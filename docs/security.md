@@ -21,6 +21,7 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 - [Destructive operations](#destructive-operations)
 - [Logging](#logging)
 - [Running model-written code (run_python)](#running-model-written-code-run_python)
+- [Resource grants](#resource-grants)
 - [Document search](#document-search)
 - [Memory](#memory)
 - [Workflows](#workflows)
@@ -286,7 +287,7 @@ Folders are keyed on the account **id**, not the username. Usernames are validat
 
 Folders are created **lazily**, on first use — a tool call or opening the Files tab. An account that has never touched a file has no folder, which is normal rather than a fault. When login is disabled there is one defined `_local/` scope; a request with no identity never falls through to the capability root.
 
-The **read-only reference capabilities are deliberately not per-account.** Vault, Git, SQLite and Postgres are shared: a per-user vault would be empty and useless, and shared repositories are the whole point. Today that sharing is all-or-nothing — see [Known limitations](roadmap.md#known-limitations).
+The **read-only reference capabilities are deliberately not per-account.** Vault, Git, SQLite and Postgres are shared: a per-user vault would be empty and useless, and shared repositories are the whole point. A role can narrow Vault, Git and SQLite to some of their folders ([Resource grants](#resource-grants)); Postgres stays all-or-nothing.
 
 > **If you are upgrading:** files already sitting in a configured root are left exactly where they are, but are no longer served to anyone, because serving them to every account is the exposure this change closes. Move them into a specific account's folder to make them reachable again.
 
@@ -370,9 +371,15 @@ What runs instead is **Pyodide** (CPython compiled to WebAssembly) in a separate
 
 ---
 
+## Resource grants
+
+Vault, Git, SQLite and Shared Documents each read one folder the administrator chose, shared by every account that has the capability. A **role** can narrow each of them to some of that folder's folders (Settings, Roles, "Shared folders"). A grant only ever narrows: it names folders *inside* the administrator's folder, relative to it, so no role can reach a directory the administrator did not configure, and a role applied on top of another keeps only what both allow. An empty list means none, never everything.
+
+The tools serve only granted folders. Listing (`sqlite_list_databases`, `git_list_repos`, `vault_search`, `vault_tags`) walks the granted folders and nothing else, so the names of the others never appear; opening a database, a repository or a note elsewhere is refused with the same words as a path outside the folder altogether. A symlink inside a granted folder is judged by where it points. Each refusal is a line in the decision log (`policy.jsonl`): the capability and the account, never the path. Saving or deleting a role is logged there too. The assistant is told a store is "shared, limited to the folders this account's role may use" when it is, and is never told the folder names.
+
 ## Document search
 
-`search_documents` searches the text of **your own** documents: everything in your Documents folder, including conversation workspaces and files you attached. It can't reach another account's files. Its index is built from your folder only, every passage is stored under your account's scope, and a search reads only that scope. It also can't reach shared folders yet; those arrive with resource grants. The index (`<config>/document-index.sqlite`) holds extracted text and vectors for every account in one file, so the box's administrator can read it, as with the files themselves. Deleting a file removes it from the index on your next search, and files in the recycle bin or `.trash/` are never indexed. Nothing leaves the machine: extraction is on-device, and ranking uses the local embedding model or plain word matching.
+`search_documents` searches the text of **your own** documents: everything in your Documents folder, including conversation workspaces and files you attached. It can't reach another account's files. Its index is built from your folder only, every passage is stored under your account's scope, and a search reads only that scope. If the administrator has chosen a **Shared Documents** folder (Tools tab, Document search card), it also searches that, read-only, but only the folders of it your role grants: a role with no Shared Documents limit gets the whole folder, a role limited to some folders gets those, and a role limited to none gets nothing from it. The shared folder is indexed once, for everyone, and each search keeps only the passages under your granted folders, so a revoked grant stops matching at once. A shared passage is cited as "Shared:", never mixed up with your own files, and has no download link. The index (`<config>/document-index.sqlite`) holds extracted text and vectors for every account in one file, so the box's administrator can read it, as with the files themselves. Deleting a file removes it from the index on your next search, and files in the recycle bin or `.trash/` are never indexed. Nothing leaves the machine: extraction is on-device, and ranking uses the local embedding model or plain word matching.
 
 ---
 
@@ -653,7 +660,7 @@ Stated plainly, because a security document that lists only strengths is not one
 - **What the Tools tab estimates and what a request costs are different numbers, and both are now shown.** The estimate describes the tools *that profile* would serve over MCP; the completions payload is composed by the client (its live MCP connections, its own local tools) and the gateway then adds a system prompt on top, so the estimate has always under-counted a real request. The tab now also reports what the last completion actually forwarded, and how many tools policy and retrieval each removed. That observation is server-wide and overwritten by every request, so on a multi-user daemon it describes whoever asked last — deliberately, because a per-account series would be a log of one user's tool usage.
 - **Projects can't be shared yet.** The plan is that a project's owner adds people and sets what each may do, as with a shared document. Today a project is visible only to its owner. Records already carry an owner and an (empty) member list, and every access check goes through one function, so sharing is an addition rather than a migration. Until then, use an organization workflow for instructions many people should share.
 - **A project's files folder is not protected from the rest of your Documents.** It's an ordinary folder in your own storage: the file explorer, and any of your chats with file tools, can read or change it. Project chats search it first and say so, but nothing stops a chat outside the project from searching it too.
-- **Shared capabilities are all-or-nothing.** Vault, Git, SQLite and Postgres are shared across every account with no per-account grants yet.
+- **Postgres is all-or-nothing.** Vault, Git, SQLite and Shared Documents can be narrowed per role to folders; Postgres has one connection and no subdivision, so a role can only withhold it whole.
 - **Twig's local MCP servers are unmoderated.** Twig can run local stdio MCP servers from a file on the user's own machine — arbitrary command execution by design, with the local disk as the trust boundary. Tool bans can strip their tools by name, but the server never sees them registered.
 - **The filesystem containment check is not atomic with the operation.** The File System capability re-validates every path argument through `resolveWithinRoot()` before handing the call to the upstream stdio child, but the child is a separate process, so a check-then-operate window exists in principle. The upstream server re-validates independently, which makes this degraded defense-in-depth rather than a hole.
 - **`path-scope.mjs` is duplicated** between Nest and Twig, kept in sync by hand. The two copies are byte-identical in logic and both say so in their headers; the apps have separate build boundaries and grant folders on different machines under different trust models.

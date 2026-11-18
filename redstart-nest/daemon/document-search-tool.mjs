@@ -23,8 +23,9 @@
 // files are still pending.
 // =============================================================================
 
+import * as fs from 'fs'
 import * as path from 'path'
-import { syncScope, searchScope, clearScope } from './document-index.mjs'
+import { syncScope, searchScope, searchSources, clearScope } from './document-index.mjs'
 import { extractText } from './documents-tool.mjs'
 import { resolveUserRoot, resolveUserScope } from './user-scope.mjs'
 import { embedTexts, embedServerStatus } from './embed-server.mjs'
@@ -38,6 +39,14 @@ const SNIPPET_CHARS = 900
 const DEFAULT_LIMIT = 5
 const MAX_LIMIT = 10
 const SYNC_BUDGET_MS = 20000
+
+// Shared Documents (master plan 6.2): one index scope for the shared folder,
+// whoever searches it; each search keeps only the chunks under the caller's
+// granted folders. A revoked grant stops matching with no re-index.
+export const SHARED_SCOPE = '_shared'
+export const SHARED_GRANT = 'shared'
+/** How a shared passage is cited, so it is never taken for the user's own file. */
+export const SHARED_LABEL = 'Shared: '
 
 // The embedder is used only while the sidecar runs; null otherwise, and the
 // index falls back to words. Overridable for the suite.
@@ -61,7 +70,8 @@ export function toolDefs(cfg) {
       'Search the text of the user\'s own documents on this server: files they uploaded or attached to chats, documents you created, and files in their conversation workspaces (pdf, docx, xlsx, txt, md, csv, json, html). ' +
       'Returns the most relevant passages, numbered, each naming its file. Use it when the user asks what their documents say, or refers to a file they gave you. ' +
       'Cite every claim from a passage with its number and file name, e.g. [2] contract.pdf, and say plainly when nothing relevant was found rather than answering from memory. ' +
-      'It does not search the web, shared folders or databases. To read a whole file, use read_document with the path shown. ' +
+      'When the organization has a shared documents folder it searches the parts of it this user may read too, and marks those passages "Shared:". ' +
+      'It does not search the web or databases. To read a whole file of the user\'s own, use read_document with the path shown. ' +
       'Example: {"query": "termination notice period"}',
     inputSchema: {
       type: 'object',
@@ -75,6 +85,22 @@ export function toolDefs(cfg) {
   }]
 }
 
+const isShared = (h) => h.chunk.grantId === SHARED_GRANT
+
+/**
+ * The shared folder's part of a search, or null when there is none for this
+ * caller: no folder set, it does not exist, or the role grants none of it.
+ * `pathPrefixes` is null for the whole folder, otherwise the granted folders
+ * each with a trailing slash.
+ */
+function sharedSource(dsCfg) {
+  const root = dsCfg?.sharedRootDir
+  if (!root || !fs.existsSync(root)) return null
+  const grants = dsCfg.sharedGrants
+  if (Array.isArray(grants) && grants.length === 0) return null
+  return { root, pathPrefixes: Array.isArray(grants) ? grants.map((g) => `${g}/`) : null }
+}
+
 /** Pure: word the hits for the model. Exported for the suite. */
 export function formatHits(hits, { status, query }) {
   const lines = []
@@ -83,9 +109,13 @@ export function formatHits(hits, { status, query }) {
   } else {
     hits.forEach((h, i) => {
       const snippet = h.chunk.text.length > SNIPPET_CHARS ? h.chunk.text.slice(0, SNIPPET_CHARS) + ' …' : h.chunk.text
-      lines.push(`[${i + 1}] ${h.chunk.path} (part ${h.chunk.ord + 1})\n${snippet}`)
+      lines.push(`[${i + 1}] ${isShared(h) ? SHARED_LABEL : ''}${h.chunk.path} (part ${h.chunk.ord + 1})\n${snippet}`)
     })
-    lines.push('Cite each claim with its passage number and file name, e.g. [1] ' + path.posix.basename(hits[0].chunk.path) + '. These come only from this user\'s own documents.')
+    const anyShared = hits.some(isShared)
+    lines.push('Cite each claim with its passage number and file name, e.g. [1] ' + path.posix.basename(hits[0].chunk.path) + '. ' +
+      (anyShared
+        ? 'Passages marked "Shared:" come from the organization\'s shared documents folder, the rest from this user\'s own documents.'
+        : 'These come only from this user\'s own documents.'))
   }
   const notes = []
   notes.push(`Searched ${status.files} file${status.files === 1 ? '' : 's'}.`)
@@ -115,7 +145,23 @@ export async function callTool(name, args, cfg, ctx) {
 
   const embed = embedder()
   const started = Date.now()
-  const sync = await syncScope({ dir: indexDir(), scope, root, extract: extractText, embed: embed ?? undefined, budgetMs: SYNC_BUDGET_MS })
+  const own = await syncScope({ dir: indexDir(), scope, root, extract: extractText, embed: embed ?? undefined, budgetMs: SYNC_BUDGET_MS })
+  // The shared folder, indexed once for everyone, inside what is left of the
+  // budget; this caller's grants decide which of its chunks they see.
+  const shared = sharedSource(dsCfg)
+  let sync = own
+  if (shared) {
+    const left = Math.max(1000, SYNC_BUDGET_MS - (Date.now() - started))
+    const s2 = await syncScope({ dir: indexDir(), scope: SHARED_SCOPE, grantId: SHARED_GRANT, root: shared.root, extract: extractText, embed: embed ?? undefined, budgetMs: left })
+    sync = {
+      ...own,
+      files: own.files + s2.files,
+      indexed: own.indexed + s2.indexed,
+      pending: own.pending + s2.pending,
+      errors: [...own.errors, ...s2.errors.map((e) => `${SHARED_LABEL}${e}`)],
+    }
+  }
+  const sharedSrc = shared ? [{ scope: SHARED_SCOPE, grantId: SHARED_GRANT, pathPrefixes: shared.pathPrefixes }] : []
   let queryVector = null
   if (embed) {
     const v = await embed([query])
@@ -128,23 +174,30 @@ export async function callTool(name, args, cfg, ctx) {
   // answer says so, so "nothing found" is never claimed too early.
   const project = projectForConversation(ctx?.account ?? null, ctx?.conversationId ?? null)
   const pathPrefix = project && args?.scope !== 'all' ? projectFolder(project) : null
-  let hits = await searchScope({ dir: indexDir(), scope, query, queryVector, limit, pathPrefix })
+  // A project search stays in the project's own files; "all" and the
+  // fallback also take the shared folder.
+  let hits = pathPrefix
+    ? await searchScope({ dir: indexDir(), scope, query, queryVector, limit, pathPrefix })
+    : await searchSources({ dir: indexDir(), sources: [{ scope }, ...sharedSrc], query, queryVector, limit })
   let where = pathPrefix ? 'project' : 'all'
   if (pathPrefix && hits.length === 0) {
-    hits = await searchScope({ dir: indexDir(), scope, query, queryVector, limit })
+    hits = await searchSources({ dir: indexDir(), sources: [{ scope }, ...sharedSrc], query, queryVector, limit })
     where = 'fallback'
   }
   let text = formatHits(hits, { query, status: { ...sync, semantic: !!queryVector } })
   if (where === 'project') text = `From the files of the project "${project.name}" (${pathPrefix}). Search with scope "all" for the rest of the user's documents.\n\n${text}`
   if (where === 'fallback') text = `Nothing in the files of the project "${project.name}" matched, so this searched all of the user's documents.\n\n${text}`
 
-  logEvent('documents', 'searched', { durationMs: Date.now() - started, files: sync.files, indexed: sync.indexed, pending: sync.pending, hits: hits.length, semantic: !!queryVector })
+  logEvent('documents', 'searched', { durationMs: Date.now() - started, files: sync.files, indexed: sync.indexed, pending: sync.pending, hits: hits.length, semantic: !!queryVector, shared: hits.filter(isShared).length })
 
-  // One link per distinct source, so the user can open what was read (Phase 2).
+  // One link per distinct source of the user's own, so the user can open what
+  // was read (Phase 2). A shared file has no download link: the download
+  // route serves the user's own folders; the file explorer shows the shared
+  // one (6.2).
   const seen = new Set()
   const links = []
   for (const h of hits) {
-    if (seen.has(h.chunk.path)) continue
+    if (isShared(h) || seen.has(h.chunk.path)) continue
     seen.add(h.chunk.path)
     links.push(fileLink(h.chunk.path))
   }
