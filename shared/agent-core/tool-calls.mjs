@@ -29,8 +29,9 @@
  */
 
 import { buildFinalTimings } from './timings.mjs';
-import { ASK_USER_TOOL, formatAskAnswer, parseAskArguments } from './ask-user.mjs';
-import { UPDATE_PLAN_TOOL, formatPlanResult, parsePlanArguments, samePlan } from './update-plan.mjs';
+import { ASK_USER_TOOL } from './ask-user.mjs';
+import { UPDATE_PLAN_TOOL } from './update-plan.mjs';
+import { runAskUser, runUpdatePlan } from './host-tools.mjs';
 
 /** @typedef {import('./types').AgentToolCall} AgentToolCall */
 /** @typedef {import('./types').RawToolCall} RawToolCall */
@@ -149,6 +150,23 @@ function macrotask() {
 }
 
 /**
+ * Answer calls[from..] with one text, unrun: a call with no result is a
+ * malformed transcript. The over-limit and steering paths.
+ *
+ * @param {AgentToolCall[]} calls
+ * @param {number} from
+ * @param {string} text
+ * @param {AgentMessage[]} messages
+ * @param {((toolCallId: string, content: string) => Promise<unknown>) | undefined} createToolResultMessage
+ */
+async function answerRemaining(calls, from, text, messages, createToolResultMessage) {
+	for (let j = from; j < calls.length; j++) {
+		if (createToolResultMessage) await createToolResultMessage(calls[j].id, text);
+		messages.push({ role: 'tool', tool_call_id: calls[j].id, content: text });
+	}
+}
+
+/**
  * @template A the host's attachment type (see AgentPorts)
  * @param {{
  *   calls: AgentToolCall[],
@@ -172,24 +190,23 @@ export async function runToolCalls(params) {
 
 	const limit = params.maxToolCalls ?? MAX_TOOL_CALLS_PER_REPLY;
 
+	/** Every abort: complete the flow here, on these timings, and tell the caller. */
+	const stopped = () => {
+		onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
+		return /** @type {const} */ ('stopped');
+	};
+
 	for (let i = 0; i < calls.length; i++) {
 		const toolCall = calls[i];
 
-		if (signal?.aborted) {
-			onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-			return 'stopped';
-		}
+		if (signal?.aborted) return stopped();
 
 		// Past the limit: answer every remaining call (a call with no result is
 		// a malformed transcript) and go on to the next turn, where the model
 		// sees what the first ones returned.
 		if (i >= limit) {
 			ports.log?.(`Reply asked for ${calls.length} tool calls; ${calls.length - i} not run`);
-			const text = overLimitResult(calls.length, limit);
-			for (let j = i; j < calls.length; j++) {
-				if (createToolResultMessage) await createToolResultMessage(calls[j].id, text);
-				messages.push({ role: 'tool', tool_call_id: calls[j].id, content: text });
-			}
+			await answerRemaining(calls, i, overLimitResult(calls.length, limit), messages, createToolResultMessage);
 			break;
 		}
 
@@ -199,22 +216,13 @@ export async function runToolCalls(params) {
 			ports.log?.(
 				`Steering message detected, skipping ${calls.length - i} remaining tool call(s)`
 			);
-			for (let j = i; j < calls.length; j++) {
-				const remainingCall = calls[j];
-				if (createToolResultMessage) {
-					await createToolResultMessage(remainingCall.id, INTERRUPTED_RESULT);
-				}
-				messages.push({ role: 'tool', tool_call_id: remainingCall.id, content: INTERRUPTED_RESULT });
-			}
+			await answerRemaining(calls, i, INTERRUPTED_RESULT, messages, createToolResultMessage);
 			break;
 		}
 
-		// ask_user, when the host can ask: answered by the person through the
-		// ask port, not the gate or the executor. Asking needs no approval, and
-		// nothing on a server could answer it.
+		// ask_user and update_plan, when the host has the port: answered by the
+		// host (host-tools.mjs), never the gate or an executor.
 		const asking = !!ports.ask && toolCall.function.name === ASK_USER_TOOL;
-		// update_plan, when the host keeps a plan: stored by the host, no
-		// approval (it changes nothing outside the conversation).
 		const planning = !!ports.plan && toolCall.function.name === UPDATE_PLAN_TOOL;
 		const hostResolved = asking || planning;
 
@@ -223,10 +231,7 @@ export async function runToolCalls(params) {
 		// Let the host repaint (the browser hides the permission card here).
 		if (!hostResolved) await yieldToHost();
 
-		if (signal?.aborted) {
-			onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-			return 'stopped';
-		}
+		if (signal?.aborted) return stopped();
 
 		let toolStartTime = now();
 
@@ -235,42 +240,21 @@ export async function runToolCalls(params) {
 		let toolSuccess = true;
 
 		if (asking) {
-			const parsed = parseAskArguments(toolCall.function.arguments);
-			const ask = /** @type {NonNullable<typeof ports.ask>} */ (ports.ask);
-			if (!parsed.ok) {
-				result = parsed.error;
-				toolSuccess = false;
-				// Nobody was asked, but the host may still record the attempt.
-				ask.invalid?.(toolCall, parsed.error);
-			} else {
-				const answer = await ask.user(parsed.request, signal, toolCall);
-				// Let the host repaint (the browser hides the question card here).
-				await yieldToHost();
-				if (signal?.aborted) {
-					onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-					return 'stopped';
-				}
-				result = formatAskAnswer(answer, parsed.request);
-				// The time the person took to answer is not tool time.
-				toolStartTime = now();
-			}
+			const asked = await runAskUser(
+				toolCall,
+				/** @type {NonNullable<typeof ports.ask>} */ (ports.ask),
+				signal,
+				yieldToHost
+			);
+			if (asked.stopped) return stopped();
+			result = asked.result;
+			toolSuccess = asked.success;
+			// The time the person took to answer is not tool time.
+			if (asked.answered) toolStartTime = now();
 		} else if (planning) {
-			const plan = /** @type {NonNullable<typeof ports.plan>} */ (ports.plan);
-			const parsed = parsePlanArguments(toolCall.function.arguments);
-			if (!parsed.ok) {
-				result = parsed.error;
-				toolSuccess = false;
-				plan.invalid?.(toolCall, parsed.error);
-			} else {
-				try {
-					const unchanged = samePlan(plan.get(), parsed.steps);
-					if (!unchanged) await plan.save(parsed.steps, toolCall);
-					result = formatPlanResult(parsed.steps, { unchanged });
-				} catch (error) {
-					result = `Error: the plan could not be saved: ${error instanceof Error ? error.message : String(error)}`;
-					toolSuccess = false;
-				}
-			}
+			const planned = await runUpdatePlan(toolCall, /** @type {NonNullable<typeof ports.plan>} */ (ports.plan));
+			result = planned.result;
+			toolSuccess = planned.success;
 		} else if (!allowed) {
 			result = DENIED_RESULT;
 			toolSuccess = false;
@@ -280,10 +264,7 @@ export async function runToolCalls(params) {
 				result = execution.text;
 				if (execution.isError) toolSuccess = false;
 			} catch (error) {
-				if (isAbortError(error)) {
-					onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-					return 'stopped';
-				}
+				if (isAbortError(error)) return stopped();
 				result = `Error: ${error instanceof Error ? error.message : String(error)}`;
 				toolSuccess = false;
 			}
@@ -303,10 +284,7 @@ export async function runToolCalls(params) {
 		turnStats.toolCalls.push(toolTiming);
 		turnStats.toolsMs += Math.round(toolDurationMs);
 
-		if (signal?.aborted) {
-			onFlowComplete?.(buildFinalTimings(capturedTimings, agenticTimings));
-			return 'stopped';
-		}
+		if (signal?.aborted) return stopped();
 
 		const { text: cleanedResult, attachments } = ports.tools.extractAttachments
 			? ports.tools.extractAttachments(result)
