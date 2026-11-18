@@ -64,7 +64,8 @@ agent-runtime Phase 4's run_command, which was built and then removed
 pass p4-fix-test with run_python, and p4-run-tests by reading the code.
 p4-git-log and p4-exit-code are expected to fail: no tool Nest has can run
 git or node. Read their transcripts for whether the model says so or invents
-a result.
+a result. p4-git-log is capped at 10 turns (2026-11-18): Ornith spent 30
+turns retrying run_python on it, 242 s a run, a quarter of a full run's time.
 
 **The Phase 1 group was revised on 2026-11-11**, after the first runs and the
 ask_user probe (`probe-ask.mjs`). Four tasks went because a model could pass
