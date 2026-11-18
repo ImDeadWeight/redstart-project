@@ -62,6 +62,16 @@ export class MCPToolOps {
 		};
 	}
 
+	/** Every tool Nest's own MCP servers list, deferred ones included. */
+	getNestToolNames(): Set<string> {
+		const names = new Set<string>();
+		for (const [serverId, connection] of this.conn.connections) {
+			if (!serverId.startsWith(NEST_MCP_SERVER_ID_PREFIX)) continue;
+			for (const tool of connection.tools) names.add(tool.name);
+		}
+		return names;
+	}
+
 	/** Is this tool served by Nest's own MCP server? (Not a third party's.) */
 	isNestTool(toolName: string): boolean {
 		for (const [serverId, connection] of this.conn.connections) {

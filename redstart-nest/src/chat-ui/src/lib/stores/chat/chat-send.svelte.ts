@@ -26,7 +26,6 @@ import * as messageRepo from '$lib/stores/chat/chat-message-repo';
 import { ChatTitleService } from '$lib/services/chat-title.service';
 import { memoryReviewStore } from '$lib/stores/memory-review.svelte';
 import { tasksStore, serverRunsOn } from '$lib/stores/tasks.svelte';
-import { toolsStore } from '$lib/stores/tools.svelte';
 import { toast } from 'svelte-sonner';
 import {
 	normalizeModelName,
@@ -155,12 +154,11 @@ export class ChatSendController {
 					generateConversationTitle(content, Boolean(config().titleGenerationUseFirstLine))
 				);
 			if (serverRunsOn() && !allExtras?.length) {
-				const task = await tasksStore.start(
-					currentConv.id,
-					messageText,
-					toolsStore.getClientToolsForServerRun(),
-					{ quiet: true }
-				);
+				const { clientTools, toolLimits } = await agenticStore.prepareServerRun();
+				const task = await tasksStore.start(currentConv.id, messageText, clientTools, {
+					quiet: true,
+					toolLimits
+				});
 				if (task) {
 					this.runtime.setChatLoading(currentConv.id, false);
 					return;

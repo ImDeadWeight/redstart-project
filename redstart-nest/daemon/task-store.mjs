@@ -101,6 +101,9 @@ export function createTask(spec) {
     waiting: null,
     limits: { maxTurns: Number.isInteger(spec.limits?.maxTurns) && spec.limits.maxTurns > 0 ? spec.limits.maxTurns : 100 },
     timeZone: typeof spec.timeZone === 'string' ? spec.timeZone : null,
+    // Nest tools the client switched off for this chat (client-tools.mjs
+    // cleanToolLimits); null: none.
+    toolLimits: spec.toolLimits ?? null,
     error: null,
     inFlight: null,
     createdAt: now,

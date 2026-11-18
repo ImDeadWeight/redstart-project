@@ -57,7 +57,7 @@ import {
   GENERATION_KEYS, TaskEnded, isModelGoneError, sleep, preview, createPass, buildPorts, buildCallbacks,
 } from './task-ports.mjs'
 import { finishedBeforeRestart, resumeOpenCalls } from './task-resume.mjs'
-import { cleanClientTools, MAX_CLIENT_RESULT_CHARS } from './client-tools.mjs'
+import { cleanClientTools, cleanToolLimits, MAX_CLIENT_RESULT_CHARS } from './client-tools.mjs'
 
 // Where they lived before master plan Phase 4 split runOnce; importers keep
 // reading them from here.
@@ -179,6 +179,8 @@ export function startTask(req) {
   // run only: a restart has no client, so they are not stored.
   const client = cleanClientTools(req.clientTools)
   if (!client.ok) return { ok: false, status: 400, error: client.error }
+  const limits = cleanToolLimits(req.toolLimits)
+  if (!limits.ok) return { ok: false, status: 400, error: limits.error }
   if (content.length > MAX_CONTENT_CHARS) return { ok: false, status: 400, error: `content is over ${MAX_CONTENT_CHARS} characters` }
   const conv = conversations.getConversation(req.storeAccountId, req.conversationId)
   if (!conv) return { ok: false, status: 404, error: 'Not found' }
@@ -197,6 +199,7 @@ export function startTask(req) {
     surface: req.surface ?? null,
     limits: { maxTurns: req.maxTurns },
     timeZone: req.timeZone ?? null,
+    toolLimits: limits.limits,
   })
   // The record carries the sampling settings for every later turn and for a
   // restart: the client that sent them may never be back.

@@ -337,6 +337,11 @@ class MCPStore {
 		return this.tools.getToolServer(toolName);
 	}
 
+	/** Every tool Nest's own MCP servers list. */
+	getNestToolNames(): Set<string> {
+		return this.toolOps.getNestToolNames();
+	}
+
 	/** Is this tool one of Nest's own (its built-in MCP server)? */
 	isNestTool(toolName: string): boolean {
 		return this.toolOps.isNestTool(toolName);

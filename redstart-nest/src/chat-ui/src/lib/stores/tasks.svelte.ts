@@ -11,6 +11,7 @@ import {
 	isTerminal,
 	type ApprovalDecision,
 	type ClientToolSpec,
+	type TaskToolLimits,
 	type TaskAnswer,
 	type TaskEvent,
 	type TaskRecord
@@ -132,14 +133,15 @@ class TasksStore {
 		conversationId: string,
 		content: string,
 		clientTools?: ClientToolSpec[],
-		opts: { quiet?: boolean } = {}
+		opts: { quiet?: boolean; toolLimits?: TaskToolLimits } = {}
 	): Promise<TaskRecord | null> {
 		try {
 			const record = await TaskService.start(
 				conversationId,
 				content,
 				taskGeneration(),
-				clientTools
+				clientTools,
+				opts.toolLimits
 			);
 			this.follow(record, { registered: true });
 			await conversationsStore.reloadActiveFromServer(conversationId);

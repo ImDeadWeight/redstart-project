@@ -57,6 +57,32 @@ export function cleanClientTools(raw) {
   return { ok: true, tools }
 }
 
+export const MAX_EXCLUDED_TOOLS = 512
+
+/**
+ * Which of Nest's tools the client has switched off for this chat, as its
+ * own loop would (master plan 7.1): `nest: false` when Nest's server is off
+ * for the chat, `exclude` the tools switched off one by one. Kept on the
+ * task record, so a resume after a restart honours them too. A narrowing
+ * only: nothing here can add a tool. ask_user and update_plan are the
+ * task's own and stay.
+ *
+ * @param {unknown} raw
+ * @returns {{ ok: true, limits: { nest: boolean, exclude: string[] } | null } | { ok: false, error: string }}
+ */
+export function cleanToolLimits(raw) {
+  if (raw === undefined || raw === null) return { ok: true, limits: null }
+  if (typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'toolLimits must be an object' }
+  if (raw.nest !== undefined && typeof raw.nest !== 'boolean') return { ok: false, error: 'toolLimits.nest must be true or false' }
+  const exclude = raw.exclude ?? []
+  if (!Array.isArray(exclude)) return { ok: false, error: 'toolLimits.exclude must be a list' }
+  if (exclude.length > MAX_EXCLUDED_TOOLS) return { ok: false, error: `toolLimits.exclude: at most ${MAX_EXCLUDED_TOOLS} names` }
+  for (const name of exclude) {
+    if (typeof name !== 'string' || !NAME.test(name)) return { ok: false, error: `toolLimits.exclude: not a tool name: ${String(name).slice(0, 80)}` }
+  }
+  return { ok: true, limits: { nest: raw.nest !== false, exclude: [...new Set(exclude)] } }
+}
+
 /** What the model is told when the app that runs a tool is not there. */
 export function clientUnavailable(name) {
   return `Error: ${name} runs in the user's app, which is not connected to this conversation right now, so it was not run. Tell the user, or carry on without it.`

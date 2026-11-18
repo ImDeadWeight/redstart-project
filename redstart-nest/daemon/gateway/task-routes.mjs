@@ -8,7 +8,8 @@
 // task's owner (memoryKey) and its conversations scope must both be the
 // caller's, or the answer is 404, so ids cannot be probed.
 //
-//   POST /tasks                  { conversationId, content, generation?, maxTurns? }
+//   POST /tasks                  { conversationId, content, generation?, maxTurns?,
+//                                  clientTools?, toolLimits? }
 //                                start one (task-runner.mjs startTask)
 //   GET  /tasks[?conversationId=]  the caller's tasks, newest first
 //   GET  /tasks/:id              one task
@@ -85,6 +86,8 @@ export async function handleTaskRoute(req, res, urlPath, who) {
           maxTurns: Number.isInteger(body.maxTurns) ? body.maxTurns : undefined,
           // Tools this client runs itself (master plan 7.1).
           clientTools: body.clientTools,
+          // Nest tools the client switched off for this chat.
+          toolLimits: body.toolLimits,
           timeZone: who.timeZone ?? null,
         })
         if (!r.ok) { sendJson(res, r.status, r.status === 404 ? NOT_FOUND : bad(r.error)); return true }

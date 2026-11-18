@@ -42,6 +42,7 @@ import { CLIENT_CALL_TIMEOUT_MS, clientUnavailable } from './client-tools.mjs'
 export const FALLBACK_PARSER_PATTERNS = ['braces', 'xml', 'fn', 'json']
 /** The host-resolved tools this host answers itself. */
 export const TASK_HOST_TOOLS = [ASK_USER_TOOL, UPDATE_PLAN_TOOL]
+const HOST_TOOL_NAMES = new Set(TASK_HOST_TOOLS)
 const PREVIEW_CHARS = 400
 
 /**
@@ -185,7 +186,7 @@ export function createPass({ task, l, conv, generation, seams }) {
     /** The id the next message hangs under. */
     tip: tipId,
     /** Per pass: who, which tools, set at the start of every turn. */
-    turnCtx: { account: null, toolNames: new Set(), mcpTools: [], model: null, clientToolNames: new Set(), config: null },
+    turnCtx: { account: null, toolNames: new Set(), mcpTools: [], model: null, clientToolNames: new Set(), config: null, switchedOff: () => false },
     /** call id → approval id the person granted for it */
     approved: new Map(),
     planSteps: Array.isArray(conv.plan?.steps) ? conv.plan.steps : null,
@@ -265,14 +266,21 @@ export function createPass({ task, l, conv, generation, seams }) {
   }
 
   async function loadTools(account) {
-    const tools = await seams.toolCatalogFor(account, { hostTools: TASK_HOST_TOOLS })
-    const nest = new Set(tools.map((x) => x.name))
+    const catalog = await seams.toolCatalogFor(account, { hostTools: TASK_HOST_TOOLS })
+    const nest = new Set(catalog.map((x) => x.name))
+    // Nest tools the client switched off for this chat, as its own loop
+    // would leave them out (cleanToolLimits). The task's own two stay.
+    const limits = store.getTask(task.id)?.toolLimits
+    const excluded = new Set(limits?.exclude ?? [])
+    const switchedOff = (name) => nest.has(name) && !HOST_TOOL_NAMES.has(name) && (limits?.nest === false || excluded.has(name))
+    const tools = catalog.filter((x) => !switchedOff(x.name))
     // The client's own tools (master plan 7.1), after Nest's: a name that is
     // one of Nest's is dropped, never a replacement for it.
     const client = (l.clientTools ?? []).filter((t) => !nest.has(t.name))
+    pass.turnCtx.switchedOff = switchedOff
     pass.turnCtx.mcpTools = [...tools, ...client]
     pass.turnCtx.clientToolNames = new Set(client.map((t) => t.name))
-    pass.turnCtx.toolNames = new Set([...nest, ...pass.turnCtx.clientToolNames])
+    pass.turnCtx.toolNames = new Set([...tools.map((x) => x.name), ...pass.turnCtx.clientToolNames])
   }
 
   return pass
@@ -425,6 +433,11 @@ export function toolsPort(pass) {
     execute: async (call) => {
       const name = call.function.name
       if (turnCtx.clientToolNames.has(name)) return runOnClient(pass, call)
+      // Switched off in this chat, by name or through call_tool: not offered,
+      // so not run either.
+      const target = name === 'call_tool' ? callToolTargetOf(call) : null
+      const off = turnCtx.switchedOff(name) ? name : target && turnCtx.switchedOff(target.name) ? target.name : null
+      if (off) return { text: `Error: ${off} is switched off in this chat, so it was not run.`, isError: true }
       const args = parseArgs(call.function.arguments)
       store.updateTask(task.id, { inFlight: { callId: call.id, name } })
       store.appendEvent(task.id, { type: 'tool_call', callId: call.id, name })

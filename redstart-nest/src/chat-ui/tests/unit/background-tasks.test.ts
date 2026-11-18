@@ -325,7 +325,8 @@ describe('tasksStore', () => {
 				excludeReasoning: true,
 				contextCompaction: false
 			}),
-			h.clientTools
+			h.clientTools,
+			undefined
 		);
 		expect(store.activeFor('c1')?.id).toBe('t1');
 		expect(h.conv.reloadActiveFromServer).toHaveBeenCalledWith('c1');

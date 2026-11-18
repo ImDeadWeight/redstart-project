@@ -832,6 +832,36 @@ await test('🔒 a client tool cannot take a Nest tool\'s name, and a banned one
   }
 })
 
+await test('🔒 Nest tools the client switched off for the chat are not offered, and a call to one (or through call_tool) is not run; the task\'s own two stay', async () => {
+  const withCallTool = { toolCatalogFor: async () => [...TOOLS, { name: 'call_tool', description: 'call_tool', inputSchema: { type: 'object', properties: {} } }] }
+  const w = fakeWorld([
+    call('c1', 'delete_file', {}),
+    call('c2', 'call_tool', { name: 'delete_file', arguments: {} }),
+    say('ok'),
+  ], withCallTool)
+  const conv = newConversation()
+  const t = start(conv, 'x', { toolLimits: { exclude: ['delete_file'] } })
+  await waitFor(() => ended(t.id), 'end')
+  const offered = w.bodies[0].tools.map((x) => x.function.name)
+  assert(!offered.includes('delete_file'), 'a switched-off tool was offered')
+  assert(offered.includes('read_document') && offered.includes('ask_user'), `too much removed: ${offered}`)
+  assert(!w.calls.some((c) => c.name === 'delete_file' || c.name === 'call_tool'), 'a switched-off tool ran')
+  assert(/switched off in this chat/.test(toolMsg(w.bodies[1])), toolMsg(w.bodies[1]))
+  assert(/switched off in this chat/.test(toolMsg(w.bodies[2])), toolMsg(w.bodies[2]))
+  eq(store.getTask(t.id).toolLimits, { nest: true, exclude: ['delete_file'] }, 'kept on the record for a resume')
+
+  // Nest's server off for the chat: none of Nest's, but ask_user, update_plan and the client's own.
+  const w2 = fakeWorld([say('ok')])
+  const t2 = start(newConversation(), 'x', { toolLimits: { nest: false }, clientTools: [FS_READ] })
+  await waitFor(() => ended(t2.id), 'end')
+  eq(w2.bodies[0].tools.map((x) => x.function.name).sort(), ['ask_user', 'fs_read_file', 'update_plan'], 'tools with Nest off')
+
+  for (const bad of ['all', { nest: 'no' }, { exclude: 'delete_file' }, { exclude: ['has space'] }]) {
+    const r = runner.startTask({ account: null, storeAccountId: SCOPE, conversationId: newConversation(), content: 'x', toolLimits: bad })
+    eq([r.ok, r.status], [false, 400], `accepted ${JSON.stringify(bad)}`)
+  }
+})
+
 await test('the routes: POST /tasks takes clientTools, /client replaces them, /client-result answers; ?client=1 is what counts as connected', async () => {
   const w = fakeWorld([call('c5', 'fs_read_file', {}), say('via routes')])
   const conv = newConversation()

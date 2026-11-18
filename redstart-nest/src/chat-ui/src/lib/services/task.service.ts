@@ -81,6 +81,12 @@ export interface ClientToolSpec {
 	inputSchema: Record<string, unknown>;
 }
 
+/** Nest's tools this app switched off for the chat (master plan 7.1). */
+export interface TaskToolLimits {
+	nest: boolean;
+	exclude: string[];
+}
+
 export type TaskAnswer =
 	| { chosen?: string[]; text?: string }
 	| { answers: Array<{ chosen?: string[]; text?: string } | null> }
@@ -200,13 +206,15 @@ export class TaskService {
 		conversationId: string,
 		content: string,
 		generation: Record<string, unknown>,
-		clientTools?: ClientToolSpec[]
+		clientTools?: ClientToolSpec[],
+		toolLimits?: TaskToolLimits
 	): Promise<TaskRecord> {
 		return post<TaskRecord>('/tasks', {
 			conversationId,
 			content,
 			generation,
-			...(clientTools?.length ? { clientTools } : {})
+			...(clientTools?.length ? { clientTools } : {}),
+			...(toolLimits ? { toolLimits } : {})
 		});
 	}
 
