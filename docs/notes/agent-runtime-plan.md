@@ -1349,7 +1349,7 @@ commits on top):
   `package.json` and `ci.yml` both).
 - `capabilities:set-terminal` (`ipc/capabilities.mjs`), the `terminal`
   entries in `tools-storage.mjs`, `gateway-config.mjs`, `tools-definitions.mjs`,
-  `tool-metadata.mjs`, `src/api/redstart.ts`, `src/types.ts`.
+  `tool-metadata.mjs`, `src/launcher/api/redstart.ts`, `src/launcher/types.ts`.
 - `ownerOnlyTerminal` in `permissions.mjs` and its `test-roles.mjs` cases.
 - The terminal line in `system-prompt.mjs` (and its `test-system-prompt.mjs`
   cases), `commandsReachNetwork` in `GET /egress` (3bcf4fd).

@@ -27,7 +27,7 @@ diagnosis path (the rejection only appears in the raw llama-server console log).
 - `tools:estimate-context` (`electron/main/mcp-server.mjs:484`,
   `≈ JSON.stringify(tools).length / 4`) already estimates the token cost of the
   active tool set and is surfaced in the Tools tab
-  (`src/tabs/ToolsTab.tsx:520-525`), turning amber past 25% of `ctxSize`. It is
+  (`src/launcher/tabs/ToolsTab.tsx:520-525`), turning amber past 25% of `ctxSize`. It is
   a **color hint only** — no gate stops enabling past 100% of context, and the
   resulting llama-server rejection is never translated into a UI message.
 - `electron/main/tools-gateway.mjs` already runs one filter over

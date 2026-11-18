@@ -127,8 +127,8 @@ Twig is closed.
 `contextBridge`. The React launcher talks to the daemon over HTTP —
 `POST /admin/api/<namespace>/<method>` on the control plane, so the desktop
 window and a browser on a different machine are the same client over the same
-transport, with no second UI to maintain. `src/api/redstart.ts` declares the
-surface; `src/api/http.ts` derives every route from it;
+transport, with no second UI to maintain. `src/launcher/api/redstart.ts` declares the
+surface; `src/launcher/api/http.ts` derives every route from it;
 `scripts/test-admin-api.mjs` fails the build if a declared method has no route or
 a route is not gated.
 

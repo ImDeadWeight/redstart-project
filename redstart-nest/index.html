@@ -26,7 +26,7 @@
       INLINE styles, not classes: Tailwind's stylesheet is a separate request
       (and in dev is injected by the bundle itself), so a class here would be
       unstyled at exactly the moment this needs to look right. Keep the values
-      in step with TopBar in src/components/ui.tsx (h-12): 48px, both ways
+      in step with TopBar in src/launcher/components/ui.tsx (h-12): 48px, both ways
       (scripts/test-packaging.mjs checks it).
     -->
     <div id="root">
@@ -68,6 +68,6 @@
         </span>
       </div>
     </div>
-    <script type="module" src="/src/main.tsx"></script>
+    <script type="module" src="/src/launcher/main.tsx"></script>
   </body>
 </html>

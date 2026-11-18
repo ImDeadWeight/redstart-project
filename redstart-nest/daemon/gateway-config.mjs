@@ -166,7 +166,7 @@ export function buildGatewayConfig(llamaConfig) {
     ctxSize: llamaConfig?.ctxSize,
     webFetch: {
       // Absent webAccessEnabled means enabled — see ProfileTools.webAccessEnabled
-      // in src/types.ts for why this is `!== false` and not an activeToolIds check.
+      // in src/launcher/types.ts for why this is `!== false` and not an activeToolIds check.
       enabled: toolSettings.webAccessEnabled !== false,
       // Per-profile toggle: with the whitelist OFF the model may fetch any
       // public http(s) URL (private/LAN addresses always blocked in the

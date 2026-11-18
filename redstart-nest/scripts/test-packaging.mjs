@@ -160,7 +160,7 @@ console.log('\n-- the launcher title bar --')
 test('🔍 the title bar is the same height in React and in index.html', () => {
   const read = (rel) => fs.readFileSync(path.join(REPO, rel), 'utf8')
   // Tailwind's h-12 is 3rem — 48px at the browser default root size.
-  const ui = read('redstart-nest/src/components/ui.tsx')
+  const ui = read('redstart-nest/src/launcher/components/ui.tsx')
   // A plain string or a template literal (TopBar's padding differs by platform).
   assert(/className=(?:"|\{`)[^"`]*\bh-12[ "`]/.test(ui), 'TopBar no longer uses h-12')
   const bootHeight = Number(/height:\s*(\d+)px/.exec(read('redstart-nest/index.html'))?.[1])

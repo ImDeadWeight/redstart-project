@@ -5,7 +5,7 @@
 // tier/surface-gated" needs to be pinned by a test, not left a convention.
 // This is it, and it has two halves:
 //
-//   COVERAGE — every method declared on RedstartAPI (src/api/redstart.ts) is
+//   COVERAGE — every method declared on RedstartAPI (src/launcher/api/redstart.ts) is
 //   reachable over HTTP, or is explicitly marked local-only. Not "most of
 //   them", and not a list maintained by hand: the same function objects back
 //   the table (ipc/transport.mjs), so a namespace that grows a method grows a
@@ -95,12 +95,12 @@ const routable = channels.filter(c => !isLocalOnly(table[c]))
 const localOnlyChannels = channels.filter(c => isLocalOnly(table[c]))
 
 // The methods RedstartAPI declares — the renderer's whole reach — parsed out
-// of src/api/redstart.ts's type declaration. `events` is excluded: it is not
+// of src/launcher/api/redstart.ts's type declaration. `events` is excluded: it is not
 // a request/response namespace (no channel, no route — see
-// src/api/http.ts's separate EVENT_NAMESPACE handling), the same way the old
+// src/launcher/api/http.ts's separate EVENT_NAMESPACE handling), the same way the old
 // preload-based version only ever looked at ipcRenderer.invoke() and left
 // ipcRenderer.on()/removeAllListeners() to a separate check.
-const redstartSource = fs.readFileSync(path.join(repoRoot, 'src', 'api', 'redstart.ts'), 'utf8')
+const redstartSource = fs.readFileSync(path.join(repoRoot, 'src', 'launcher', 'api', 'redstart.ts'), 'utf8')
 
 /**
  * Extract { namespace, method } pairs from RedstartAPI's type body.
@@ -161,7 +161,7 @@ console.log('\n-- every method the renderer can reach has a route --')
 
 const kebab = (method) => method.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`)
 
-const httpSource = fs.readFileSync(path.join(repoRoot, 'src', 'api', 'http.ts'), 'utf8')
+const httpSource = fs.readFileSync(path.join(repoRoot, 'src', 'launcher', 'api', 'http.ts'), 'utf8')
 
 // The exceptions the client declares. Parsed from source rather than imported,
 // because this suite runs under plain node and the client is TypeScript — and

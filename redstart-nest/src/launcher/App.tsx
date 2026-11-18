@@ -8,7 +8,7 @@
 // implementation installed by AdminGate (see api/redstart.ts).
 //
 // App itself is just the shell: layout, tab switching, and wiring the domain
-// hooks (src/hooks/) into the panel/tab components (src/panels/, src/tabs/).
+// hooks (src/launcher/hooks/) into the panel/tab components (src/launcher/panels/, src/launcher/tabs/).
 // Each hook owns one slice of state and its IPC calls; each component owns
 // its own markup. Shared visual primitives live in components/ui.tsx.
 // =============================================================================

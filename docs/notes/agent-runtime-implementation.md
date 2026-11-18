@@ -1434,7 +1434,7 @@ is decided by the bench.
   on; then U10 and the acceptance check. (Done: the final 8.2 numbers are in
   "Where we left off" and agent-bench-results.md.)
 - **8.3 Thinking and the op cap (U10), 2026-11-13.** The setting the plan
-  names, per profile: `tools.memoryReview.think` (src/types.ts
+  names, per profile: `tools.memoryReview.think` (src/launcher/types.ts
   ProfileTools), carried by `buildGatewayConfig` as `memory.reviewThink`
   (a role's narrowing keeps it: it is not a permission), read by
   `reviewConversation`, passed to `buildReviewRequest({ think })`. On:

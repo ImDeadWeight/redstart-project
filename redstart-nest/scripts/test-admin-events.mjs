@@ -10,7 +10,7 @@
 //      any live event — a reconnecting admin sees recent history immediately
 //      rather than an empty terminal that slowly fills back in.
 //   3. A PUBLISHED EVENT REACHES A CONNECTED CLIENT, framed as SSE
-//      (`data: {...}\n\n`), which is what src/api/http.ts's reader parses.
+//      (`data: {...}\n\n`), which is what src/launcher/api/http.ts's reader parses.
 //
 // Run:  node scripts/test-admin-events.mjs
 // =============================================================================
