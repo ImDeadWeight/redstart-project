@@ -7,13 +7,13 @@ import type { DeferralEntry } from '../types'
 // search_tools and calls them through call_tool, so the prompt's tool list
 // stays the same for the whole conversation, however many plugins are added.
 //
-// It only takes effect while the profile's tool retrieval mode is "catalog",
-// and the card says so, so an admin who ticks a box and sees no change is not
-// left guessing.
+// It only takes effect while the profile's tool retrieval is on (which means
+// the catalog, master plan 3.3), and the card says so, so an admin who ticks a
+// box and sees no change is not left guessing.
 
-export function DeferralCard({ entries, catalogMode, onChanged }: {
+export function DeferralCard({ entries, retrievalOn, onChanged }: {
   entries: DeferralEntry[] | null | undefined
-  catalogMode: boolean
+  retrievalOn: boolean
   onChanged: () => void | Promise<void>
 }) {
   const [error, setError] = useState<string | null>(null)
@@ -35,14 +35,14 @@ export function DeferralCard({ entries, catalogMode, onChanged }: {
     <div className="bg-zinc-800/40 rounded px-3 py-2.5">
       <div className="flex items-center justify-between mb-1">
         <span className="text-sm text-zinc-200">Catalog-only tools</span>
-        <span className={`text-xs ${catalogMode ? 'text-green-400' : 'text-zinc-500'}`}>
-          {catalogMode ? 'In effect' : 'Not in effect'}
+        <span className={`text-xs ${retrievalOn ? 'text-green-400' : 'text-zinc-500'}`}>
+          {retrievalOn ? 'In effect' : 'Not in effect'}
         </span>
       </div>
       <p className="text-xs text-zinc-500 mb-2">
         A ticked capability's tools are left out of the assistant's tool list. It finds them by searching
         and calls them through call_tool, so the list never changes mid-conversation.
-        {!catalogMode && ' This applies only when tool retrieval is set to "catalog".'}
+        {!retrievalOn && ' This applies only while tool retrieval is on.'}
       </p>
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
         {entries.map((e) => (

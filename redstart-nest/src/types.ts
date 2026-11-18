@@ -167,10 +167,8 @@ export type ToolContextEstimate = {
     /** The composed system prompt plus the conversation. */
     promptTokens: number
     ctxSize: number | null
-    /** Whether tool retrieval was switched on for that request. */
+    /** Whether tool retrieval (the catalog) was switched on for that request. */
     filtered: boolean
-    /** Tools a frozen set (growth 'pins-only') left out that scoring would have added. */
-    wouldAdd?: number
   } | null
 }
 
@@ -189,7 +187,7 @@ export type CapabilityConfig = {
 
 // Catalog-only per capability (master plan Phase 3.1): reached through
 // search_tools and call_tool instead of sitting in the prompt. Only takes
-// effect while the profile's retrieval mode is "catalog".
+// effect while the profile's tool retrieval is on.
 export type DeferralEntry = {
   id: string
   name: string
@@ -266,12 +264,13 @@ export type ProfileTools = {
   // An admin uses this to enforce an org policy (e.g. disable write_file)
   // that non-technical staff cannot override client-side.
   disabledToolIds: string[]
-  // Tool retrieval. When on, the gateway narrows the tool list on each
-  // completion to what the conversation plausibly needs, using a local
-  // embedding model. Off by default and absent on every profile saved before
-  // it, which reads as off — the safe direction, since the whole feature is an
-  // optimization the server works without.
-  retrieval?: { enabled?: boolean; relativeFloor?: number; floor?: number; margin?: number; textVersion?: 1 | 2; scorer?: 'cosine' | 'bm25' | 'fused'; growth?: 'scored' | 'pins-only'; minTools?: number; callTool?: boolean; mode?: 'select' | 'catalog' }
+  // Tool retrieval. When on, the gateway keeps the catalog-only (deferred)
+  // tools out of every completion's list, the same list on every turn, and the
+  // model reaches them through search_tools and call_tool (master plan 3.3).
+  // Off by default and absent on every profile saved before it, which reads as
+  // off. `enabled` is the only field; older per-turn fields on a saved profile
+  // are ignored.
+  retrieval?: { enabled?: boolean }
   // The automatic memory review (agent-runtime 8.3). `think` lets the model
   // reason before it answers: measured to help some models (Ornith 9B) and not
   // others (Qwen3-4B), so it is per profile. Absent reads as off.

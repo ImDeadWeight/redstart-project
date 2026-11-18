@@ -85,29 +85,30 @@ served from the built bundle).
 - [ ] Settings → Roles: create a role that withholds a capability and check
   the account it is given cannot use it.
 
-### Tool retrieval (only until the simplification pass replaces it)
+### Tool retrieval: the catalog (master plan 3.3)
 - [ ] With retrieval on: "remember that I prefer X" in an ordinary chat
-  saves (the memory tools used to be dropped).
+  saves (the memory tools are core, in every list).
 - [ ] With retrieval on (master plan Phase 1): Kilo Code or Continue on an
   account-wide API key gets its whole tool list (Tools tab, "last completion":
-  nothing removed by retrieval), while the chat UI on the same Nest is still
-  narrowed. Repeat the chat-UI half with login off.
-- [ ] The catalog mode (master plan Phase 3.1): Tools tab → retrieval on →
-  How: "Fixed list, the rest in a catalog". In a chat, ask for something only
-  a deferred tool does (list the File System folder, look at a Git repo).
-  The model should call search_tools, then call_tool, and the answer should
-  be right.
+  nothing removed by retrieval), while the chat UI on the same Nest gets the
+  catalog list. Repeat the chat-UI half with login off.
+- [ ] The catalog (master plan Phase 3.1, 3.3): Tools tab → retrieval on
+  (there is no "How" select any more). In a chat, ask for something only a
+  deferred tool does (list the File System folder, look at a Git repo). The
+  model should call search_tools, then call_tool, and the answer should be
+  right.
+- [ ] The Tools tab's retrieval card, with the search model not yet
+  downloaded: the status says search_tools matches by keyword, and the
+  catalog still applies (File System tools are not in the list).
 - [ ] Through call_tool, a write (write_file in the File System folder)
   shows the approval card **named as write_file**, not call_tool. Approve
   once: it runs. Ask again: the card comes back. "Always allow": the next
   one runs without a card. Deny: nothing is written.
 - [ ] The same write from a background task parks it on "waiting for
   approval" naming write_file, and runs after the approval.
-- [ ] Tools tab → Catalog-only tools: untick Git and save. In the catalog
-  mode, git_status is in the list again (the first tool chosen can be a Git
+- [ ] Tools tab → Catalog-only tools: untick Git and save. With retrieval
+  on, git_status is in the list again (the first tool chosen can be a Git
   tool without a search).
-- Everything else here waits for `master-plan.md` Phase 3.2, which
-  replaces the B1 to B7 runs.
 
 ### Coding on a small model (never tried)
 - [ ] A multi-step programming task on Ornith in the chat, using

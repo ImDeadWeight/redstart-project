@@ -668,12 +668,13 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
             <div className="bg-zinc-800/40 rounded px-3 py-2.5 mt-4">
               <div className="flex items-center justify-between gap-2">
                 <span className="min-w-0">
-                  <span className="text-sm text-zinc-200">Send only the tools a conversation needs</span>
+                  <span className="text-sm text-zinc-200">Keep catalog-only tools out of every message</span>
                   <span className="block text-xs text-zinc-600 mt-0.5">
-                    Ranks your enabled tools against the conversation and sends the ones that match, instead of
-                    every schema on every message. Runs a small model locally
-                    {retrievalStatus ? ` (${retrievalStatus.model.label}, ${Math.round(retrievalStatus.model.bytes / 1e6)} MB, downloaded once)` : ''}.
-                    Tools the model has already used are never taken away mid-task, and it can ask for others by name.
+                    The capabilities ticked below stay out of the tool list, which is the same on every message, so
+                    the model never re-reads the conversation. It finds them with search_tools and calls them
+                    through call_tool. Search runs a small model locally
+                    {retrievalStatus ? ` (${retrievalStatus.model.label}, ${Math.round(retrievalStatus.model.bytes / 1e6)} MB, downloaded once)` : ''},
+                    and matches by keyword until it is ready.
                   </span>
                 </span>
                 <TogglePill
@@ -690,28 +691,6 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                 />
               </div>
 
-              {/* What "on" means (master plan Phase 3.1): the per-turn
-                  selection, or a fixed list with the deferred tools in a
-                  catalog. Saved like the switch; 3.2's bench runs decide
-                  which one stays. */}
-              {on && (
-                <label className="flex items-center gap-2 text-xs text-zinc-400 mt-2">
-                  <span>How</span>
-                  <select
-                    className="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-200"
-                    value={config.tools?.retrieval?.mode === 'catalog' ? 'catalog' : 'select'}
-                    onChange={(e) => {
-                      const retrieval = { ...(config.tools?.retrieval ?? {}), mode: e.target.value as 'select' | 'catalog' }
-                      setToolsField('retrieval', retrieval)
-                      applyRetrieval({ ...config, tools: { ...(config.tools ?? {}), retrieval } as typeof config.tools })
-                    }}
-                  >
-                    <option value="select">Choose tools for each conversation</option>
-                    <option value="catalog">Fixed list, the rest in a catalog</option>
-                  </select>
-                </label>
-              )}
-
               {/* Every branch below is read off a fact the daemon reported. The
                   one this replaced ended in a bare "Starting…" whenever the
                   sidecar was merely untouched, which is indistinguishable from
@@ -724,36 +703,36 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                   {!retrievalStatus
                     ? 'Checking…'
                     : downloading
-                      ? `Downloading the ranking model — ${pct}% of ${Math.round((dl?.totalBytes ?? 0) / 1e6)} MB. Every tool is still being sent until it finishes.`
+                      ? `Downloading the search model — ${pct}% of ${Math.round((dl?.totalBytes ?? 0) / 1e6)} MB. Until it finishes, search_tools matches by keyword.`
                       : dl?.state === 'failed'
-                        ? `⚠ The ranking model could not be downloaded${dl?.error ? `: ${dl.error}` : ''}. Every tool is still being sent — nothing is broken, but nothing is being saved either. Toggle this off and on to retry.`
+                        ? `⚠ The search model could not be downloaded${dl?.error ? `: ${dl.error}` : ''}. search_tools matches by keyword only. Toggle this off and on to retry.`
                         : !retrievalStatus.model.present
-                          ? '⚠ The ranking model is not downloaded yet. Toggle this off and on to fetch it.'
+                          ? '⚠ The search model is not downloaded yet, so search_tools matches by keyword only. Toggle this off and on to fetch it.'
                           : starting
-                            ? 'Loading the ranking model into memory. Every tool is still being sent until it finishes.'
+                            ? 'Loading the search model into memory. Until it is ready, search_tools matches by keyword.'
                             : !running
-                              ? `⚠ The ranking model is downloaded, but its process is not running${retrievalStatus.server.reason ? `: ${retrievalStatus.server.reason}` : ''}. Every tool is still being sent.`
+                              ? `⚠ The search model is downloaded, but its process is not running${retrievalStatus.server.reason ? `: ${retrievalStatus.server.reason}` : ''}. search_tools matches by keyword only.`
                               : !retrievalStatus.applied.gatewayUp
-                                ? '✓ Ready. Filtering starts when you launch a model.'
+                                ? '✓ Ready. The catalog applies when you launch a model.'
                                 : !retrievalStatus.applied.enabled
                                   ? '⚠ Ready, but the running server is still using the previously saved settings. Save this profile to apply it.'
-                                  : '✓ Running. Filtering applies from your next message.'}
+                                  : '✓ Running. The catalog applies from your next message.'}
                 </p>
               )}
 
               {on && !config.tools?.enabled && (
-                <p className="text-xs mt-2 text-zinc-600">Tools are switched off for this profile, so there is nothing to filter.</p>
+                <p className="text-xs mt-2 text-zinc-600">Tools are switched off for this profile, so there is nothing to keep out.</p>
               )}
             </div>
           )
         })()}
 
-        {/* Catalog-only capabilities (master plan Phase 3.1): in effect only in
-            the catalog mode, which the card says. */}
+        {/* Catalog-only capabilities (master plan Phase 3.1): in effect only
+            while tool retrieval is on, which the card says. */}
         <div className="mt-4">
           <DeferralCard
             entries={capabilityConfig?.deferral}
-            catalogMode={config.tools?.retrieval?.enabled === true && config.tools?.retrieval?.mode === 'catalog'}
+            retrievalOn={config.tools?.retrieval?.enabled === true}
             onChanged={caps.loadCapabilities}
           />
         </div>
@@ -781,7 +760,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
           const ctx = o.ctxSize ?? config.ctxSize
           return (
             /* Amber on the same quarter-of-the-window threshold the estimate
-               above uses, and that tool-filter.mjs budgets against.
+               above uses.
 
                "from any account" is not padding. This is ONE observation,
                overwritten by every completion the daemon serves, so on a
@@ -798,10 +777,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                 ? ` ${o.toolsOffered - o.toolsAfterBans} of the ${o.toolsOffered} the client offered were withheld by policy.`
                 : ''}
               {o.toolsAfterBans > o.toolsSent
-                ? ` Tool retrieval left out ${o.toolsAfterBans - o.toolsSent} more.`
-                : ''}
-              {(o.wouldAdd ?? 0) > 0
-                ? ` The conversation's tool set is frozen; scoring would have added ${o.wouldAdd}.`
+                ? ` ${o.toolsAfterBans - o.toolsSent} more were in the catalog, reachable through search_tools.`
                 : ''}
             </p>
           )
