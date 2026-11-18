@@ -620,6 +620,31 @@ Commits:
    folders only; nothing in it accepts an account.
 8. The stores block names shared documents (shared, or shared partly).
 
+**Phase 6 built 2026-11-18:** 6.1 `bfe46bf` grants and narrowing, `42298f1`
+enforcement and the log, `4370a68` the prompt, `f4f8615` the Roles tab; 6.2
+`2ca5dd7` the folder, `9d7052e` the index and search, `de9b447` the file
+explorer. Before it, `8397cba` turned retrieval on by default (the user,
+the same day). New suite `test-grants.mjs` (9); `test-roles` covers grants
+in its random property tests (which found a non-canonical list; fixed);
+`test-document-search`, `test-system-prompt` and `test-file-isolation`
+gained cases, their old ones unchanged. *Deviations:*
+- 8 (the stores block) landed with 6, so the prompt never said "only
+  your own documents" while shared ones were searchable.
+- The decision log needed only two new event kinds (`access.denied`,
+  `role.saved` / `role.deleted`); the rest was built in agent-runtime
+  Phase 2.
+- Git: with grants set, the root is never the implicit repository.
+
+*Gaps:*
+- Nothing in Phase 6 has been used in the running app: the Roles tab's
+  folder picker, the Shared Documents card, a shared search in chat, and
+  the read-only Shared tab in the explorer. Items for `testing-checklist.md`.
+- The shared folder is indexed within each search's time budget: the
+  first searches after it is set say "still being indexed" until it is
+  through (2000 files at most, as for a private scope).
+- A shared file has no download link; the explorer previews it.
+- Postgres stays all-or-nothing (grants plan §8).
+
 ## Phase 7 — The loop moves to the server
 
 **U-S1, DECIDED 2026-11-17: yes.** Step 1 below is in force from today:

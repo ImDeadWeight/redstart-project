@@ -85,6 +85,19 @@ served from the built bundle).
 - [ ] Settings → Roles: create a role that withholds a capability and check
   the account it is given cannot use it.
 
+### Resource grants and Shared Documents (master plan Phase 6)
+- [ ] Settings → Roles: make a role, tick "Limit SQLite to some folders",
+  pick one folder, assign it to a test account. In that account's chat,
+  "what databases are there?" lists only that folder's; asking for one
+  elsewhere is refused, and the launcher's decision log shows an
+  `access.denied` line naming SQLite but no path.
+- [ ] Same for Git (no repository by default once limited) and Vault.
+- [ ] Tools tab → Document search card → Shared documents: choose a
+  folder with a PDF in it. In a chat, ask what it says: the answer cites
+  "Shared: …". A role limited to another folder of it does not see it.
+- [ ] Profile → Files: a Shared tab, read-only (no Upload, New folder,
+  Rename, Delete), showing only the granted folders.
+
 ### Skills and AGENTS.md (master plan Phase 5)
 - [ ] First start after the update: existing workflows are still on the
   Workflows page and still run with `/`; `workflows.json` is still on disk,
