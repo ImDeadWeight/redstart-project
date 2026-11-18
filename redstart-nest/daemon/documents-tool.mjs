@@ -100,8 +100,16 @@ const SNIFF_BYTES = 64 * 1024
 /**
  * Never sniffed into text: key and credential files, and binary types by
  * extension (a stub .exe of two ASCII bytes would otherwise pass the sniff).
+ *
+ * Matched against the BASENAME, anchored at its start. The earlier form took
+ * the whole path with `(^|[\\/])` in front, so a match could begin after every
+ * separator and `.*` rescanned the rest each time — quadratic in the number of
+ * path segments (CodeQL js/polynomial-redos). One start position makes it
+ * linear, and a basename is at most 255 characters. It also stops treating a
+ * file inside a folder named `.env.d/` as a key file, which the old form did
+ * by accident (`.env(\..*)?` ran on past the separator).
  */
-const NEVER_SNIFFED = /(^|[\\/])(\.env(\..*)?|.*\.(pem|key|p12|pfx|kdbx|exe|dll|so|dylib|bin|msi|zip|gz|7z|rar|tar|png|jpe?g|gif|webp|bmp|ico|mp3|mp4|wav|mov|avi|sqlite|db|wasm|class|jar|pyc|o|a|lib))$/i
+const NEVER_SNIFFED = /^(\.env(\..*)?|.*\.(pem|key|p12|pfx|kdbx|exe|dll|so|dylib|bin|msi|zip|gz|7z|rar|tar|png|jpe?g|gif|webp|bmp|ico|mp3|mp4|wav|mov|avi|sqlite|db|wasm|class|jar|pyc|o|a|lib))$/i
 
 /**
  * An unlisted file read as text when its first 64 KB has no NUL byte and is
@@ -109,7 +117,7 @@ const NEVER_SNIFFED = /(^|[\\/])(\.env(\..*)?|.*\.(pem|key|p12|pfx|kdbx|exe|dll|
  * files have NULs or invalid sequences almost at once.
  */
 function looksLikeText(filePath) {
-  if (NEVER_SNIFFED.test(filePath)) return false
+  if (NEVER_SNIFFED.test(path.basename(filePath))) return false
   let fd
   try {
     fd = fs.openSync(filePath, 'r')
