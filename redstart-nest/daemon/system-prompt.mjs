@@ -4,6 +4,7 @@ import { listPlugins } from './plugin-registry.mjs'
 import { BUILTIN_CAPABILITY_TOOL_NAMES, classifyTool } from './tools-definitions.mjs'
 import { sessionDateLine } from './session-time.mjs'
 import { ENGINE_LABELS, engineHost } from './web-search-engines.mjs'
+import { ARM_B_PROMPT_LINE, ARM_C_ASK_PROMPT_LINE, armCRoutingMap, toolTextArm } from './tool-text-arms.mjs'
 
 // =============================================================================
 // Redstart Nest — System Prompt Composer
@@ -207,7 +208,7 @@ const READ_ONLY_SQL_TOOLS = [
 // file in the documents folder; only one of them understands the format.
 const FS_READ_TOOLS = ['read_text_file']
 
-function buildToolPolicy(config, hasTools, toolNames) {
+function buildToolPolicy(config, hasTools, toolNames, catalog = null) {
   if (!hasTools) return null
 
   // Substantiation is per TOOL, not per capability. `config` says what the
@@ -283,8 +284,22 @@ function buildToolPolicy(config, hasTools, toolNames) {
   // and so does being asked to ask. Seen live: told "you can use ask_user"
   // for a quiz, a model argued itself out of it under the ambiguity-only rule,
   // then asked anyway, and the answers (level, focus) shaped the result.
+  //
+  // The tool-text experiment (tool-text-arms.mjs): arm b keeps this line and
+  // adds the user's "you are not expected to solve every uncertainty"; arm c
+  // replaces it, since "try the tool first" sent models to memory and the web
+  // for facts only the user knew (23 + 7 lookups in 327 runs, 2026-11-18).
+  const arm = toolTextArm(config)
   if (has('ask_user')) {
-    parts.push('Call ask_user only when the answer would change what you produce: the request can be read two ways that lead to different work, a choice only the user can make is open (such as level, scope or format) and a sensible default could well be wrong, or the user asked you to ask. Put everything you need into one call. Do not use it to ask permission, to confirm a plan you can simply carry out, or for anything a tool can find out — try the tool first.')
+    if (arm === 'c') parts.push(ARM_C_ASK_PROMPT_LINE)
+    else parts.push('Call ask_user only when the answer would change what you produce: the request can be read two ways that lead to different work, a choice only the user can make is open (such as level, scope or format) and a sensible default could well be wrong, or the user asked you to ask. Put everything you need into one call. Do not use it to ask permission, to confirm a plan you can simply carry out, or for anything a tool can find out — try the tool first.')
+    if (arm === 'b') parts.push(ARM_B_PROMPT_LINE)
+  }
+  if (arm === 'c') {
+    const fileSystemReachable = has('list_directory') || has('read_text_file')
+      || (catalog?.groups ?? []).some((g) => g.label === 'File System')
+    const map = armCRoutingMap(has, fileSystemReachable)
+    if (map) parts.push(map)
   }
 
   // update_plan (plan §4, 1.2). When a plan is worth making, so a one-line
@@ -951,7 +966,7 @@ export function composePrompt(input = {}) {
     ['context', admin.context],
     ['mode', resolveMode(mode)],
     ['policy', admin.policy],
-    ['tool_policy', buildToolPolicy(config, hasTools, toolNames)],
+    ['tool_policy', buildToolPolicy(config, hasTools, toolNames, catalog)],
     // After tool_policy — it qualifies the list those constraints apply to —
     // and before locality, so "your list is partial" is settled before "and
     // these ones touch a different computer".

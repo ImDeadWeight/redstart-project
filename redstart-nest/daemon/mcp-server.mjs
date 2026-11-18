@@ -53,6 +53,7 @@ import {
 } from './tools-definitions.mjs'
 import { retrievalEnabled } from './tool-filter.mjs'
 import { isDeferredTool } from './tool-deferral.mjs'
+import { toolTextArm, withArmText } from './tool-text-arms.mjs'
 import { logEvent, logPolicy } from './logger.mjs'
 import { memoryKey } from './memory-storage.mjs'
 import { requestApproval, consume as consumeApproval } from './approval-ledger.mjs'
@@ -99,6 +100,10 @@ function resolveProviders() {
 export function activeToolCatalog(cfg, ctx) {
   const tools = []
   const seen = new Set()
+  // The profile's tool-text arm (tool-text-arms.mjs, an experiment): every
+  // tool list passes here, so one swap covers chat, tasks, the bench and
+  // search_tools' catalog.
+  const arm = toolTextArm(cfg)
   for (const provider of resolveProviders()) {
     for (const tool of provider.toolDefs(cfg, ctx)) {
       if (seen.has(tool.name)) {
@@ -107,7 +112,7 @@ export function activeToolCatalog(cfg, ctx) {
       }
       seen.add(tool.name)
       if (!evaluateToolPolicy(tool.name, cfg).allowed) continue
-      tools.push(tool)
+      tools.push(withArmText(tool, arm))
     }
   }
   return tools
