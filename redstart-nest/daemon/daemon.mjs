@@ -39,7 +39,7 @@ import { stopMcpServer } from './mcp-server.mjs'
 import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
 import { startAdminListener, stopAdminListener, DEFAULT_ADMIN_BIND_HOST } from './admin-listener.mjs'
 import { lastKnownDiscovery } from './discovery.mjs'
-import { initLan, lanOwner, stopLanNow, tlsInputsFrom } from './lan.mjs'
+import { initLan, lanOwner, stopLanNow, tlsInputsFrom, beaconInfo } from './lan.mjs'
 import { decryptSecret } from './secrets.mjs'
 import { ensureBootstrapToken } from './bootstrap-token.mjs'
 import { buildAdminApi } from './admin/api-table.mjs'
@@ -279,9 +279,14 @@ function parseEvalTokensPerSec(line) {
 // ---------------------------------------------------------------------------
 
 async function startDiscoveryBeacon() {
+  // Port and HTTPS origin come from the LAN state (lan.mjs beaconInfo):
+  // behind Caddy the reachable port is 80, not the gateway's.
+  const gatewayPort = () => serverState.lastConfig?.port ?? 19080
   beaconServerInstance = await startBeaconServer(
     () => !!serverState.process,
-    () => serverState.lastConfig?.port ?? 19080,
+    () => beaconInfo(gatewayPort()).port,
+    undefined,
+    () => beaconInfo(gatewayPort()).origin,
   )
   console.log(`Redstart Nest beacon listening on port 8765`)
 }

@@ -24,6 +24,7 @@ import { logEvent } from '../logger.mjs'
 import { getExternalServers } from '../tools-storage.mjs'
 import { activeToolCatalog } from '../mcp-server.mjs'
 import { composePrompt, deriveEgressFacts, DEFAULT_TOKEN_BUDGET, listModes } from '../system-prompt.mjs'
+import { infrastructureEgress } from '../infrastructure-egress.mjs'
 import { getPromptBlocks, getPromptBlocksMeta, setPromptBlocks, MAX_BLOCK_CHARS } from '../prompt-storage.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
 import { memoriesFor } from '../memory-storage.mjs'
@@ -55,6 +56,10 @@ export async function handlePromptRoute(req, res, urlPath, config, account) {
       // Redstart records no retention/training terms for third parties.
       // Reporting the absence is the point — see spec §7.
       externalTermsKnown: false,
+      // Traffic that is NOT conversation data (TLS plan C10): HTTPS's name
+      // provider and Let's Encrypt, while HTTPS is on and facing the LAN.
+      // Empty otherwise. Never part of the system prompt.
+      infrastructure: infrastructureEgress(),
     })
     return true
   }

@@ -222,7 +222,7 @@ async function main() {
 
   await test('/egress exposes the fields the contract documents', async () => {
     const body = await json(await fetch(`${gw}/egress`))
-    for (const key of ['inference', 'webDomains', 'remoteToolServers', 'localStores', 'hasEgress', 'externalTermsKnown']) {
+    for (const key of ['inference', 'webDomains', 'remoteToolServers', 'localStores', 'hasEgress', 'externalTermsKnown', 'infrastructure']) {
       assert(key in body, `documented field "${key}" missing`)
     }
     return Object.keys(body).length + ' fields'
@@ -231,6 +231,21 @@ async function main() {
   await test('🔍 unknown third-party terms are reported as unknown, never as fine', async () => {
     const body = await json(await fetch(`${gw}/egress`))
     assert(body.externalTermsKnown === false, 'claimed knowledge of third-party terms')
+  })
+
+  await test('🔍 infrastructure egress (HTTPS) is its own list: empty with HTTPS off, the providers when on', async () => {
+    const { setInfrastructureEgress } = await import('../daemon/infrastructure-egress.mjs')
+    const off = await json(await fetch(`${gw}/egress`))
+    assert(Array.isArray(off.infrastructure) && off.infrastructure.length === 0, `HTTPS off but infrastructure: ${JSON.stringify(off.infrastructure)}`)
+    setInfrastructureEgress(() => [{ host: 'www.duckdns.org', purpose: 'name' }, { host: 'acme-v02.api.letsencrypt.org', purpose: 'certificate' }])
+    try {
+      const on = await json(await fetch(`${gw}/egress`))
+      assert(on.infrastructure.map((e) => e.host).join(',') === 'www.duckdns.org,acme-v02.api.letsencrypt.org', JSON.stringify(on.infrastructure))
+      // It is not conversation data, so it changes nothing about the conversation claims.
+      assert(JSON.stringify(on.webDomains) === JSON.stringify(off.webDomains) && on.hasEgress === off.hasEgress, 'infrastructure leaked into the conversation egress facts')
+    } finally {
+      setInfrastructureEgress(() => [])
+    }
   })
 
   // -------------------------------------------------------------------------

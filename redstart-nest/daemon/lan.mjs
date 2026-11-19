@@ -18,6 +18,7 @@ import { nameProvider, createAddressWatcher } from './tls-names.mjs'
 import { checkServing, diagnostics, createHealthRunner } from './tls-health.mjs'
 import { getPrimaryLanIp } from './net-interfaces.mjs'
 import { logEvent } from './logger.mjs'
+import { setInfrastructureEgress } from './infrastructure-egress.mjs'
 
 // =============================================================================
 // Redstart Nest — the LAN front door, wired (TLS plan C2 + C2b + C4 + C5 + C9)
@@ -102,6 +103,12 @@ export function initLan({ configDir, packaged = false, resourcesDir = null, read
     },
   })
   owner = createNetworkModeOwner({ effects: realEffects({ configDir }), onChange: onOwnerChange })
+  // /egress's infrastructure list (C10): only while HTTPS actually faces the
+  // LAN. A loopback-only install, or HTTPS off, sends nothing.
+  setInfrastructureEgress(() => {
+    const st = owner.status().state
+    return st === 'lan-https' || st === 'lan-https-fallback' ? lanStatus().egress : []
+  })
   return owner
 }
 
@@ -249,6 +256,20 @@ export function lanStatus() {
       ? nameProvider({ provider: settings.provider, name: settings.name }).egress()
       : [],
   }
+}
+
+/**
+ * What the discovery beacon advertises (TLS plan C7). While Caddy fronts the
+ * data plane the gateway is on loopback, so the reachable port is Caddy's
+ * 80, never the gateway's (which a LAN client could not connect to). The
+ * HTTPS origin is added only while it is SERVING.
+ * @param {number} gatewayPort
+ */
+export function beaconInfo(gatewayPort) {
+  const s = owner?.status()
+  if (s?.state !== 'lan-https') return { port: gatewayPort, origin: null }
+  const t = io ? readTls(io.readSettings()) : null
+  return { port: 80, origin: health?.serving() && t?.name ? `https://${t.name}` : null }
 }
 
 /** The owner. Lazily created with defaults for callers that run without a daemon (tests). */

@@ -212,6 +212,43 @@ await test('returns only the app identity marker, running, and port — no versi
   }
 })
 
+// TLS plan C7: while HTTPS is serving, a fourth field, and nothing else.
+const { beaconPayload } = await import('../daemon/beacon.mjs')
+
+await test('🔍 with HTTPS serving: exactly one more field, a bare https origin', async () => {
+  const server = await startBeaconServer(() => true, () => 80, 0, () => 'https://myhouse.duckdns.org')
+  try {
+    const result = await new Promise((resolve, reject) => {
+      http.get(`http://127.0.0.1:${server.address().port}`, (res) => {
+        let data = ''
+        res.on('data', (c) => (data += c))
+        res.on('end', () => { try { resolve(JSON.parse(data)) } catch (e) { reject(e) } })
+      }).on('error', reject)
+    })
+    eq(result, { app: 'redstart-nest', running: true, port: 80, origin: 'https://myhouse.duckdns.org' }, 'payload')
+  } finally {
+    stopBeaconServer(server)
+  }
+})
+
+await test('🔍 anything but a bare https origin is dropped, never sent', () => {
+  for (const bad of ['http://myhouse.duckdns.org', 'https://myhouse.duckdns.org/path', 'https://myhouse.duckdns.org:8443',
+    'https://user@evil.example', 'https://UPPER.example', 'javascript:alert(1)', '', 42, { toString: () => 'https://x.y' }]) {
+    const body = beaconPayload({ running: true, port: 80, origin: bad })
+    eq(Object.keys(body).length, 3, `origin ${JSON.stringify(String(bad))} was sent`)
+  }
+})
+
+await test('a getOrigin that throws costs the field, not the beacon', async () => {
+  const server = await startBeaconServer(() => true, () => 19080, 0, () => { throw new Error('boom') })
+  try {
+    const status = await new Promise((resolve) => http.get(`http://127.0.0.1:${server.address().port}`, (res) => { res.resume(); resolve(res.statusCode) }).on('error', () => resolve(0)))
+    eq(status, 200, 'beacon status')
+  } finally {
+    stopBeaconServer(server)
+  }
+})
+
 // ---------------------------------------------------------------------------
 console.log('\n-- auth.mjs — sessions and roles --')
 

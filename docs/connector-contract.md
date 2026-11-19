@@ -172,6 +172,13 @@ that user, and a rule someone is subject to should not be hidden from them.
 which web domains tools can reach, which tool servers run off-machine, and
 `externalTermsKnown` (currently always `false`).
 
+`infrastructure` is a separate list, `[{ host, purpose }]`, of traffic that is
+**not conversation data**: while Nest serves HTTPS on the LAN, its name provider
+(the LAN address, when it changes) and Let's Encrypt (a verification record,
+about every 60 days). It is empty otherwise, it never changes `hasEgress`, and
+it is not part of the system prompt. Show it next to the conversation facts,
+not inside them.
+
 **A connector displaying privacy information must read it from `/egress`.**
 Do not hardcode a privacy claim in your UI. Blueprints' README currently says
 "no data leaving the building"; that is a property of a *configuration*, not of

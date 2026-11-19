@@ -10,7 +10,7 @@
     "build:chat": "npm --prefix ../../chat-ui run build",
     "build": "npm run build:chat && node ../../tooling/make-icon.mjs --variant twig && node ../../tooling/stage-node.mjs && node ../../tooling/rust-licenses.mjs --shell shell --out licenses/rust-licenses.json && node scripts/stage-shell-bundle.mjs && node scripts/build-shell.mjs",
     "dev": "node ../../tooling/make-icon.mjs --variant twig && cargo run --manifest-path shell/Cargo.toml",
-    "test": "node scripts/test-fs-tool.mjs && node scripts/test-twigd.mjs"
+    "test": "node scripts/test-fs-tool.mjs && node scripts/test-twigd.mjs && node scripts/test-beacon-origin.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.4"
