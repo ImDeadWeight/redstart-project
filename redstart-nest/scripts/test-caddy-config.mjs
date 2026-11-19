@@ -143,7 +143,7 @@ test('🔍 :443 answers only for the hostname (SNI policy + host matcher + stric
   assert(JSON.stringify(https.routes[0].match) === JSON.stringify([{ host: [BASE.hostname] }]), 'route not host-matched')
   assert(https.routes.length === 1, 'a second route on :443')
   assert(https.strict_sni_host === true, 'strict_sni_host off: Host could differ from SNI')
-  assert(JSON.stringify(https.listen) === JSON.stringify([':443']), `listen ${https.listen}`)
+  assert(JSON.stringify(https.listen) === JSON.stringify(['tcp4/0.0.0.0:443', 'tcp6/[::]:443']), `listen ${https.listen}`)
 })
 
 test('🔍 :80 redirects exactly when httpsServing', () => {
@@ -177,6 +177,14 @@ test('Caddy adds no redirects of its own; :80 runs no automatic HTTPS', () => {
   const s = servers(build())
   assert(s.https.automatic_https?.disable_redirects === true, ':443 automatic redirects not disabled')
   assert(s.http.automatic_https?.disable === true, ':80 automatic HTTPS not disabled')
+})
+
+test('🔍 both families are bound explicitly, never one dual-stack socket', () => {
+  // A bare ':80' on Windows loses IPv4 silently to whoever holds 0.0.0.0:80.
+  for (const [name, s] of Object.entries(servers(build()))) {
+    const p = name === 'https' ? 443 : 80
+    assert(JSON.stringify(s.listen) === JSON.stringify([`tcp4/0.0.0.0:${p}`, `tcp6/[::]:${p}`]), `${name}: listen ${s.listen}`)
+  }
 })
 
 test('HTTP/3 is off (no UDP listener to firewall)', () => {

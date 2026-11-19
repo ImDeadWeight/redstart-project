@@ -228,6 +228,28 @@ try {
     assert(gateway.seen.length === before, 'requireHttps still proxied')
   })
 
+  console.log('\n-- a port another process holds on IPv4 only --')
+
+  await test('🔍 is reported as "in use", not silently split (found on the first real run, Windows)', async () => {
+    await sup.stop()
+    const squatter = net.createServer()
+    await new Promise((r) => squatter.listen(httpPort, '0.0.0.0', r))
+    try {
+      await sup.start({ config: config({ httpsServing: false, requireHttps: false }), secrets: { REDSTART_DNS_TOKEN: 'not-a-real-token', [PROXY_SECRET_ENV]: SECRET } })
+      const deadline = Date.now() + 15000
+      while (!/in use/.test(sup.status().reason ?? '') && sup.status().state !== 'running' && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      const s = sup.status()
+      assert(s.state !== 'running', 'Caddy came up while another process held IPv4 :' + httpPort + ' — IPv4 clients would reach that process')
+      assert(new RegExp(`^Port ${httpPort} is in use by another program`).test(s.reason ?? ''), `reason: ${s.reason}`)
+      return s.reason.split(' —')[0]
+    } finally {
+      await sup.stop()
+      await new Promise((r) => squatter.close(r))
+    }
+  })
+
   console.log('\n-- stop --')
 
   await test('🔍 stop() returns with both ports free', async () => {

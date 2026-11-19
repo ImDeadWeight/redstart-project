@@ -36,6 +36,8 @@
 //     config file Nest writes to disk can never hold one.
 //   DNS-01 only: the HTTP and TLS-ALPN challenges are disabled, because the
 //     name points at a private address no CA can reach.
+//   Listens on tcp4 and tcp6 separately, so a port another process holds on
+//     either family is a startup error rather than a silent split.
 //   HTTP/1.1 and HTTP/2 only. HTTP/3 would need a UDP firewall rule as well,
 //     for no gain on a LAN.
 // =============================================================================
@@ -86,6 +88,18 @@ export function checkDnsProvider(provider) {
     }
   }
   return { ...provider }
+}
+
+/**
+ * Both address families, bound separately. A bare `:80` is ONE dual-stack
+ * IPv6 socket, and on Windows that bind succeeds even while another process
+ * holds 0.0.0.0:80: IPv4 clients then reach the other process and Caddy
+ * reports nothing. Found 2026-11-19 on the first real run, with Nest's own
+ * port80-proxy holding IPv4 :80. Binding tcp4 explicitly turns that into a
+ * startup error the supervisor reports ("Port 80 is in use").
+ */
+function listenOn(p) {
+  return [`tcp4/0.0.0.0:${p}`, `tcp6/[::]:${p}`]
 }
 
 function reverseProxy(upstreamPort) {
@@ -175,7 +189,7 @@ export function buildCaddyConfig({
         https_port: httpsPort,
         servers: {
           https: {
-            listen: [`:${httpsPort}`],
+            listen: listenOn(httpsPort),
             protocols: ['h1', 'h2'],
             // The Host header must match the SNI the handshake was made for.
             strict_sni_host: true,
@@ -185,7 +199,7 @@ export function buildCaddyConfig({
             automatic_https: { disable_redirects: true },
           },
           http: {
-            listen: [`:${httpPort}`],
+            listen: listenOn(httpPort),
             protocols: ['h1', 'h2'],
             routes: plainRoutes,
             automatic_https: { disable: true },
