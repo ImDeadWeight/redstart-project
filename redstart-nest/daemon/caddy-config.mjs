@@ -37,8 +37,9 @@
 //     config file Nest writes to disk can never hold one.
 //   DNS-01 only: the HTTP and TLS-ALPN challenges are disabled, because the
 //     name points at a private address no CA can reach.
-//   Listens on tcp4 and tcp6 separately, so a port another process holds on
-//     either family is a startup error rather than a silent split.
+//   Listens on IPv4 only (tcp4/0.0.0.0), never IPv6: a machine's global IPv6
+//     addresses are reachable from the internet unless the router blocks
+//     them, and Nest must not depend on that (listenOn below).
 //   HTTP/1.1 and HTTP/2 only. HTTP/3 would need a UDP firewall rule as well,
 //     for no gain on a LAN.
 // =============================================================================
@@ -95,15 +96,28 @@ export function checkDnsProvider(provider) {
 }
 
 /**
- * Both address families, bound separately. A bare `:80` is ONE dual-stack
- * IPv6 socket, and on Windows that bind succeeds even while another process
- * holds 0.0.0.0:80: IPv4 clients then reach the other process and Caddy
- * reports nothing. Found 2026-11-19 on the first real run, with Nest's own
- * port80-proxy holding IPv4 :80. Binding tcp4 explicitly turns that into a
- * startup error the supervisor reports ("Port 80 is in use").
+ * IPv4 ONLY, bound explicitly. Two reasons, both found on real hardware
+ * on 2026-11-19:
+ *
+ *  - NOT ON THE INTERNET. Most home connections now give every machine
+ *    GLOBAL IPv6 addresses (this project's own test machine has seven),
+ *    and those are reachable from anywhere unless the router's IPv6
+ *    firewall blocks them, which Nest cannot see or rely on. Windows'
+ *    "allow this app?" prompt also adds a rule for ANY remote address. An
+ *    IPv6 listener therefore put the chat login page one router setting
+ *    away from the open internet. LAN IPv4 sits behind the router's NAT,
+ *    and nothing in Redstart ever asks a router to forward a port (no
+ *    UPnP, no NAT-PMP). Nothing on the LAN needs IPv6: the names carry A
+ *    records (private IPv4) only. Before HTTPS every LAN listener was
+ *    already IPv4-only (0.0.0.0); this keeps Caddy the same.
+ *  - NOT A SILENT SPLIT. A bare ':80' is one dual-stack IPv6 socket, and on
+ *    Windows that bind succeeds even while another process holds
+ *    0.0.0.0:80, so IPv4 clients reach that process and Caddy reports
+ *    nothing (Nest's own port80-proxy, first real run). Binding tcp4
+ *    explicitly makes that "Port 80 is in use".
  */
 function listenOn(p) {
-  return [`tcp4/0.0.0.0:${p}`, `tcp6/[::]:${p}`]
+  return [`tcp4/0.0.0.0:${p}`]
 }
 
 function reverseProxy(upstreamPort) {

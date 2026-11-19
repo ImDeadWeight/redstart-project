@@ -45,6 +45,14 @@ function resolveElevatePath() {
   return fs.existsSync(candidate) ? candidate : null
 }
 
+/**
+ * The rule set's name suffix. Rules are found by NAME, so the LAN-only rules
+ * get new names: an older rule (any remote address) would otherwise be
+ * found and kept. The older ones are inert once nothing listens for them,
+ * and are listed in docs/security.md for removal.
+ */
+export const RULE_SUFFIX = ' (LAN only)'
+
 // Add an inbound allow rule if one by this name isn't already present.
 // Fire-and-forget: a missing rule degrades reachability, it never breaks the
 // server, so nothing here is allowed to reject into a caller's start path.
@@ -74,6 +82,11 @@ export function ensureInboundRule({ name, protocol, port, program = null, label 
           // Scoped to one executable when given: the rule then admits that
           // program on these ports and nothing else that might bind them.
           ...(program ? [`program=${program}`] : []),
+          // The LAN only, whatever the network profile: Windows itself
+          // refuses any connection from outside this machine's own subnets,
+          // so a forwarded port or a public address still cannot reach Nest
+          // through a rule Nest made (2026-11-19, the internet-exposure check).
+          'remoteip=localsubnet',
         ],
         (err) => {
           if (err) console.warn(`Could not add firewall rule ${label}:`, err.message)
@@ -87,7 +100,7 @@ export function ensureInboundRule({ name, protocol, port, program = null, label 
 // TCP rule for a listening service port (gateway, port-80 proxy, MCP server).
 export function ensureFirewallRule(gatewayPort) {
   ensureInboundRule({
-    name: `RedstartNest Gateway ${gatewayPort}`,
+    name: `RedstartNest Gateway ${gatewayPort}${RULE_SUFFIX}`,
     protocol: 'TCP',
     port: gatewayPort,
   })
@@ -99,5 +112,5 @@ export function ensureFirewallRule(gatewayPort) {
  * well-known ports another program could bind.
  */
 export function ensureCaddyFirewallRule(caddyPath) {
-  ensureInboundRule({ name: 'RedstartNest Caddy (HTTPS)', protocol: 'TCP', port: '80,443', program: caddyPath })
+  ensureInboundRule({ name: `RedstartNest Caddy HTTPS${RULE_SUFFIX}`, protocol: 'TCP', port: '80,443', program: caddyPath })
 }

@@ -62,7 +62,7 @@ Prefer the IP and give the host a DHCP reservation on your router. The sslip nam
 
 **Browser access:** When Redstart Nest is running, the chat UI is also accessible directly in any browser at `http://127.0.0.1:19080` (or `http://<LAN-IP>:19080` in network mode). No app required. If login is enabled, the browser shows the login screen first (see [Accounts & login](security.md#accounts--login)).
 
-**HTTP only:** The LAN connection uses plain HTTP. HTTPS with self-signed certificates was tried and abandoned — Android WebView rejects them without manual cert trust, which is too much friction for a home tool. Proper transport security is on the roadmap, likely via a lightweight CA or certificate pinning approach, and becomes more important as the project moves toward small business use.
+**HTTPS (opt-in):** With Network → Secure address on, LAN devices use `https://<name>` with a real Let's Encrypt certificate: an Automatic name (`<id>.nest.redstartdevelopment.com`, from Redstart's name service) or your own DuckDNS/deSEC name. Nest's bundled Caddy terminates TLS on :443, the gateway and MCP server move to loopback, and certificates are issued by DNS-01, so nothing on the internet ever connects in. With it Off (the default) the LAN connection is plain HTTP and the chat UI says so. Every LAN listener is IPv4-only. See [Security](security.md).
 
 ---
 

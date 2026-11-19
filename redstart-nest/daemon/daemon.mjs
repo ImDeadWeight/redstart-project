@@ -37,7 +37,7 @@ import { ensureDefaultCapabilityFolders, getCapabilities } from './tools-storage
 import { stopGateway } from './tools-gateway.mjs'
 import { stopMcpServer } from './mcp-server.mjs'
 import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
-import { startAdminListener, stopAdminListener, DEFAULT_ADMIN_BIND_HOST } from './admin-listener.mjs'
+import { startAdminListener, stopAdminListener, DEFAULT_ADMIN_BIND_HOST, bindHostRejection } from './admin-listener.mjs'
 import { lastKnownDiscovery } from './discovery.mjs'
 import { initLan, lanOwner, stopLanNow, tlsInputsFrom, beaconInfo } from './lan.mjs'
 import { decryptSecret, encryptSecret } from './secrets.mjs'
@@ -319,7 +319,17 @@ async function startAdminPlane() {
   // request that needed it. See bootstrap-token.mjs.
   ensureBootstrapToken()
   const settings = readSettings()
-  const bindHost = settings.adminBindHost || DEFAULT_ADMIN_BIND_HOST
+  // Checked at boot too, not only when set: settings.json is a file, and a
+  // value written by hand, or before 2026-11-19 when "::" was still
+  // accepted, must not put the control plane on a public address. Refused →
+  // loopback (fail closed), and the log says why.
+  let bindHost = settings.adminBindHost || DEFAULT_ADMIN_BIND_HOST
+  const refusal = bindHostRejection(bindHost)
+  if (refusal) {
+    logEvent('security', 'admin_bind_refused', { reason: refusal })
+    console.warn(`adminBindHost ${bindHost} refused (${refusal}); the admin panel stays on this machine only.`)
+    bindHost = DEFAULT_ADMIN_BIND_HOST
+  }
   try {
     // Absent on every install, which means no CORS headers at all. It exists
     // for a client that did not come from this origin, which is a thing only

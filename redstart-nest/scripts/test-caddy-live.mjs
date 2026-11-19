@@ -162,6 +162,27 @@ try {
     return `pid ${sup.status().pid}`
   })
 
+  await test('🔍 Caddy is NOT reachable over IPv6: not on ::1, not on any of this machine\'s global addresses', async () => {
+    // A machine's global IPv6 addresses face the internet unless the router
+    // blocks them (found 2026-11-19: Caddy listened on [::] and the test
+    // machine has seven). IPv4-only listening is what keeps Nest off it.
+    const v6 = ['::1', ...Object.values(os.networkInterfaces()).flat().filter((a) => a?.family === 'IPv6' && !a.internal && /^[23]/.test(a.address)).map((a) => a.address)]
+    const open = []
+    for (const addr of v6) {
+      for (const port of [httpPort, httpsPort]) {
+        const ok = await new Promise((resolve) => {
+          const s = net.connect({ host: addr, port, family: 6 })
+          s.once('connect', () => { s.destroy(); resolve(true) })
+          s.once('error', () => resolve(false))
+          s.setTimeout(1500, () => { s.destroy(); resolve(false) })
+        })
+        if (ok) open.push(`[${addr}]:${port}`)
+      }
+    }
+    assert(open.length === 0, `Caddy answers on IPv6: ${open.join(', ')}`)
+    return `${v6.length} IPv6 addresses refused`
+  })
+
   await test('🔍 a forged X-Redstart-Proxy is overwritten with the launch secret', async () => {
     const r = await get(httpPort, '/health', { [PROXY_HEADER]: 'forged-by-a-lan-client' })
     assert(r.status === 200 && JSON.parse(r.body).upstream === 'gateway', `${r.status} ${r.body}`)

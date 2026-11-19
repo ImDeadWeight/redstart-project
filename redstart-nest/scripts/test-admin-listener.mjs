@@ -269,9 +269,17 @@ await test('🔍 the default bind is loopback — exposure is opt-in', () => {
   assert(isLoopbackBind(DEFAULT_ADMIN_BIND_HOST), `default bind ${DEFAULT_ADMIN_BIND_HOST} is not loopback`)
 })
 
-await test('loopback, wildcard and a literal LAN address are accepted', () => {
-  for (const host of ['127.0.0.1', '::1', 'localhost', '0.0.0.0', '::', '192.168.1.50', 'fe80::1']) {
+await test('loopback, the IPv4 wildcard and a literal LAN address are accepted', () => {
+  for (const host of ['127.0.0.1', '::1', 'localhost', '0.0.0.0', '192.168.1.50', '10.0.0.2', '172.20.1.1', '100.64.3.4', 'fe80::1', 'fd12::5']) {
     assert(bindHostRejection(host) === null, `${host} refused: ${bindHostRejection(host)}`)
+  }
+})
+
+await test('🔍 never the internet: "::" (every IPv6 address, global ones included) and public addresses are refused', () => {
+  // Changed 2026-11-19: "::" used to be accepted. The test machine has seven
+  // global IPv6 addresses; "::" would have put the control plane on them.
+  for (const host of ['::', '2600:8800:4d06:7400::4e1a', '2001:db8::1', '8.8.8.8', '203.0.113.5', '172.32.0.1']) {
+    assert(bindHostRejection(host) !== null, `${host} was accepted as a control-plane bind address`)
   }
 })
 

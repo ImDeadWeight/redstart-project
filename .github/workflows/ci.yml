@@ -297,6 +297,9 @@ jobs:
       - name: "Launcher: Secure address logic (HTTPS address leads only while serving; status sentences)"
         run: node scripts/test-launcher-tls.mjs
 
+      - name: "Security: Nest is never on the open internet (IPv4-only listeners, LAN-only firewall rules, no port mapping)"
+        run: node scripts/test-lan-exposure.mjs
+
       - name: "Packaging: Tauri release assets + both update manifests (the bridge)"
         run: node scripts/test-shell-manifests.mjs
 
