@@ -460,6 +460,28 @@ jobs:
       - name: Twig suites (npm test)
         run: npm test
 
+  name-service:
+    # The Redstart name service (infra/name-service, TLS plan C12): a
+    # Cloudflare Worker, tested under Node with node:sqlite standing in for D1
+    # and a fake Cloudflare DNS API. Checks the invariants on what would be
+    # sent to Cloudflare: own records only, nothing outside <id>.nest.,
+    # DNS-only, private addresses only. No install: the tests import only the
+    # Worker's own source (wrangler is needed for dev and deploy, not tests).
+    name: Name service (Worker)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/name-service
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+
+      - name: Name service suite (npm test)
+        run: npm test
+
   twig-shell:
     # Twig's Tauri shell: the chat UI's protocol (containment, the 503 rule,
     # CSP), the page's allowlist, the origin pin, the pid wait on real children.

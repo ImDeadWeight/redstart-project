@@ -1,0 +1,16 @@
+{
+  "name": "@redstart/name-service",
+  "private": true,
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "description": "Redstart's name service: automatic <id>.nest.redstartdevelopment.com names for Nest installs (TLS plan C12). A Cloudflare Worker.",
+  "scripts": {
+    "test": "node --disable-warning=ExperimentalWarning test/service.test.mjs",
+    "dev": "wrangler dev --local",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.158.0"
+  }
+}
