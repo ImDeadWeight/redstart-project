@@ -260,7 +260,9 @@ mode does not move it; `adminBindHost` does. See [The control plane](#the-contro
 
 Full detail, including why firewall rules are not removed on toggle-off, is in [Architecture → Ports used](architecture.md#ports-used).
 
-**Discovery is not authentication.** The beacon answers "where might a Redstart server be?" — never "this server is trustworthy". The beacon payload is minimal by design (`{ app, running, port }`) and discloses no version, auth state, configuration or URLs. A discovered server still has to authenticate the client. (mDNS was retired — see [Known limitations](roadmap.md#known-limitations) — the beacon was always the mechanism that mattered; Twig never depended on the `.local` name.)
+**Discovery is not authentication.** The beacon answers "where might a Redstart server be?" — never "this server is trustworthy". The beacon payload is minimal by design (`{ app, running, port }`) and discloses no version, auth state or configuration. While HTTPS is serving it adds one field, `origin` (`https://<name>`). That name is already public (DNS, certificate transparency logs), and it is only ever a bare https origin. Twig uses it only if the name resolves to the IP that answered; otherwise it builds the URL from that IP as before, so a spoofed beacon gains nothing it could not do with its own address. A discovered server still has to authenticate the client.
+
+**The chat UI says when a connection isn't encrypted.** Over plain HTTP to a LAN address (the browser's `isSecureContext`, or, in Twig and the Android app, a non-https server URL that isn't loopback), a banner says so, including on the login page, where a password is about to be sent. It can be dismissed for the session only. (mDNS was retired — see [Known limitations](roadmap.md#known-limitations) — the beacon was always the mechanism that mattered; Twig never depended on the `.local` name.)
 
 ---
 
