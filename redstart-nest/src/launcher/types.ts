@@ -372,13 +372,18 @@ export function retrievalOnFor(tools?: ProfileTools): boolean {
 // HTTPS on the LAN (TLS plan C8/C9; daemon/lan.mjs lanStatus()). The token is
 // never part of this: only whether one is stored.
 export type TlsProvider = 'duckdns' | 'desec'
+export type TlsMode = 'off' | 'own' | 'redstart'
 export type TlsSettingsView = {
-  mode: 'off' | 'own'
+  mode: TlsMode
   provider: TlsProvider
   name: string
   hasToken: boolean
   requireHttps: boolean
   acmeStaging: boolean
+  // Automatic: the name, once registered (it registers when HTTPS first starts).
+  automatic: { hostname: string } | null
+  // The one-time consent screen has been answered.
+  consentAsked: boolean
 }
 export type TlsLanState = 'local' | 'lan-http' | 'lan-https' | 'lan-https-fallback' | 'stopping'
 export type TlsStatus = {
@@ -394,4 +399,4 @@ export type TlsStatus = {
   lastSwitchFailure: string | null
   egress: { host: string; purpose: string }[]
 }
-export type TlsPatch = Partial<{ mode: 'off' | 'own'; provider: TlsProvider; name: string; token: string; requireHttps: boolean; acmeStaging: boolean }>
+export type TlsPatch = Partial<{ mode: TlsMode; provider: TlsProvider; name: string; token: string; requireHttps: boolean; acmeStaging: boolean; consentAsked: true }>

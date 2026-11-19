@@ -88,8 +88,9 @@ export function NetworkPanel({
   // The HTTPS name, once set up, leads the list and the QR code while it is
   // serving (addresses.ts).
   const tlsSettings = tls.status?.settings
-  const httpsName = tlsSettings?.mode === 'own' && tlsSettings.name && tls.status?.state !== 'local'
-    ? { name: tlsSettings.name, serving: !!tls.status?.serving, requireHttps: tlsSettings.requireHttps }
+  const nameInUse = tlsSettings?.mode === 'own' ? tlsSettings.name : tlsSettings?.mode === 'redstart' ? tlsSettings.automatic?.hostname : null
+  const httpsName = nameInUse && tls.status?.state !== 'local'
+    ? { name: nameInUse, serving: !!tls.status?.serving, requireHttps: !!tlsSettings?.requireHttps }
     : null
   const addresses = buildAddresses(localIp, port, httpsName)
   const primary = addresses[0]

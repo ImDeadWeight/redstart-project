@@ -37,6 +37,9 @@ export function tlsStatusLine(s: TlsStatus | null, networkMode: boolean): TlsLin
   if (s.switching) {
     return { tone: 'progress', text: `Switching to ${s.switching.name}. If it isn't working within 5 minutes, the previous name comes back.` }
   }
+  if (!s.serving && s.settings.mode === 'redstart' && !s.settings.automatic) {
+    return { tone: 'progress', text: "Getting a name from Redstart's name service…" }
+  }
   if (!s.serving) {
     const acme = s.caddy?.lastAcmeError
     return acme
@@ -50,6 +53,9 @@ export function tlsStatusLine(s: TlsStatus | null, networkMode: boolean): TlsLin
 /** The one sentence about what HTTPS sends off the box (C10), for under the choices. */
 export function egressSentence(s: TlsStatus | null): string {
   if (!s || !s.settings || s.settings.mode === 'off') return ''
+  if (s.settings.mode === 'redstart') {
+    return "Sends: this computer's LAN address to Redstart's name service when it changes, a weekly \"still here\", and a verification record about every 60 days (to the name service and Let's Encrypt). Nothing about your conversations."
+  }
   const provider = s.settings.provider === 'duckdns' ? 'DuckDNS' : 'deSEC'
   return `Sends: this computer's LAN address to ${provider} when it changes, and a verification record to ${provider} and Let's Encrypt about every 60 days. Nothing about your conversations.`
 }

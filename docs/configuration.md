@@ -69,7 +69,9 @@ HTTPS for LAN clients through the bundled Caddy. It is set from the launcher (Ne
 
 | Key | Meaning |
 |---|---|
-| `mode` | `off` (the default): LAN clients use plain HTTP, as before. `own`: Caddy serves `https://<name>` and the gateway and MCP server go back to loopback. (`redstart`, an automatic name, is not available yet.) |
+| `mode` | `off` (the default): LAN clients use plain HTTP, as before. `redstart` (Automatic): a name `<id>.nest.redstartdevelopment.com` from Redstart's name service. `own`: your own DuckDNS or deSEC name. In both HTTPS modes Caddy serves `https://<name>` and the gateway and MCP server go back to loopback. |
+| `redstart` | Automatic's registration: `{ id, credentialEnc, registeredAt }`. Written by Nest the first time HTTPS starts with network mode on, never when the choice is made. The credential is encrypted and never returned to a client; the name is derived from `id`. Removed (and the name given back) when HTTPS is turned off, or once a replacement own name is serving. |
+| `consentAsked` | The one-time "secure address?" question has been answered. Set by any choice, including *Not now*. |
 | `own.provider` | `duckdns` or `desec`, the service that holds your name and proves it to Let's Encrypt (DNS-01). |
 | `own.name` | Your name at that provider (`yourname.duckdns.org`, `yourname.dedyn.io`). Nest points it at this computer's LAN address and keeps it there. Only private addresses are ever published. |
 | `own.tokenEnc` | The provider's token, encrypted. Never returned to a client. Changing the provider drops it. |

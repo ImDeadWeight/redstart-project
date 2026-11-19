@@ -104,6 +104,29 @@ test('🔍 the egress sentence names the provider and promises nothing about con
   assert(egressSentence(base({ settings: set({ mode: 'off' }) })) === '', 'off sends nothing')
 })
 
+console.log('\n-- Automatic (step 8) --')
+
+test('🔍 Automatic before it has a name says so; once it has one, the ordinary lines apply', () => {
+  const pending = tlsStatusLine(base({ settings: set({ mode: 'redstart', automatic: null }), serving: false }), true)
+  assert(pending.tone === 'progress' && /Redstart's name service/.test(pending.text), pending.text)
+  const named = tlsStatusLine(base({ settings: set({ mode: 'redstart', automatic: { hostname: 'k7f3q2.nest.redstartdevelopment.com' } }), serving: false }), true)
+  assert(/Waiting for the certificate/.test(named.text), named.text)
+  const ready = tlsStatusLine(base({ settings: set({ mode: 'redstart', automatic: { hostname: 'k7f3q2.nest.redstartdevelopment.com' } }) }), true)
+  assert(ready.tone === 'ok', ready.text)
+  const off = tlsStatusLine(base({ settings: set({ mode: 'redstart' }), state: 'local' }), false)
+  assert(/Turn on Local network/.test(off.text), off.text)
+})
+
+test('🔍 Automatic\'s egress sentence names the name service and the weekly "still here", and promises no conversation data', () => {
+  const e = egressSentence(base({ settings: set({ mode: 'redstart' }) }))
+  assert(/Redstart's name service/.test(e) && /still here/.test(e) && /Nothing about your conversations/.test(e), e)
+})
+
+test('the Automatic name leads the address list, and the QR, once serving', () => {
+  const a = buildAddresses(IP, 19080, { name: 'k7f3q2.nest.redstartdevelopment.com', serving: true })
+  assert(a[0].url === 'https://k7f3q2.nest.redstartdevelopment.com', a[0].url)
+})
+
 const failed = results.filter((r) => !r.pass)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)
 if (failed.length) {
