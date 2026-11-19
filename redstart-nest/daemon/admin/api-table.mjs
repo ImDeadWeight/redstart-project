@@ -40,6 +40,7 @@ import { pluginsHandlers } from '../ipc/plugins.mjs'
 import { browseRouteHandlers } from './browse-routes.mjs'
 import { approvalsHandlers } from '../ipc/approvals.mjs'
 import { tasksHandlers } from '../ipc/tasks.mjs'
+import { tlsHandlers } from '../ipc/tls.mjs'
 
 /**
  * Every control-plane method, keyed by channel.
@@ -69,5 +70,7 @@ export function buildAdminApi(deps) {
     ...approvalsHandlers(),
     // Every account's background tasks (agent-runtime Phase 3), table-only.
     ...tasksHandlers(),
+    // The "Secure address" section (TLS plan C9): owner-only, control plane only.
+    ...tlsHandlers(deps),
   }
 }

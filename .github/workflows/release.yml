@@ -236,6 +236,17 @@ jobs:
           rm -rf "$dl"
           "$bin/llama-server" --version
 
+      # ── Nest's TLS front door ──────────────────────────────────────────────
+      # The Caddy build .github/workflows/caddy.yml published, pinned by tag
+      # and sha256 in scripts/fetch-caddy.mjs (one pin for dev and release).
+      # stage-shell-bundle.mjs copies it into resources/bin/.
+      - name: Stage Caddy
+        if: matrix.app == 'nest'
+        working-directory: redstart-nest
+        run: |
+          node scripts/fetch-caddy.mjs
+          if [ "$RUNNER_OS" = Windows ]; then deps/caddy/caddy.exe version; else deps/caddy/caddy version; fi
+
       # ── The daemon runtime (both apps) ─────────────────────────────────────
       # Both Tauri shells run their Node half (nestd, twigd) on a bundled
       # Node, pinned by version and sha256 in tooling/stage-node.mjs (Windows

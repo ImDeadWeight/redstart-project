@@ -528,6 +528,81 @@ async function main() {
     })
   }
 
+  // -------------------------------------------------------------------------
+  // Chat login rate limit (TLS plan C6; the gap found 2026-11-18)
+  // -------------------------------------------------------------------------
+  console.log('\n-- POST /auth/login is rate limited, per real client --')
+
+  const { resetChatLoginLimiter } = await import('../daemon/gateway/auth-routes.mjs')
+  const { newProxySecret, clearProxySecret } = await import('../daemon/proxy-trust.mjs')
+  const attempt = (host, password, headers = {}) => fetch(`${gw(host)}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify({ username: 'owner', password }),
+  })
+
+  await test('🔍 the 11th wrong password in a minute is 429 with Retry-After', async () => {
+    resetChatLoginLimiter()
+    for (let i = 1; i <= 10; i++) {
+      const r = await attempt('127.0.0.1', 'wrong')
+      assert(r.status === 401, `attempt ${i}: expected 401, got ${r.status}`)
+    }
+    const r = await attempt('127.0.0.1', 'wrong')
+    assert(r.status === 429, `11th attempt: expected 429, got ${r.status}`)
+    assert(Number(r.headers.get('retry-after')) > 0, 'no Retry-After')
+    assert(r.headers.get('access-control-allow-origin') === '*', 'a 429 the chat UI cannot read (no CORS header)')
+  })
+
+  await test('🔍 a forged X-Forwarded-For does not buy a fresh bucket (no proxy secret)', async () => {
+    const r = await attempt('127.0.0.1', 'wrong', { 'X-Forwarded-For': '10.9.9.9' })
+    assert(r.status === 429, `expected 429, got ${r.status}: the client's own header was trusted`)
+  })
+
+  await test('🔍 nor does a guessed X-Redstart-Proxy while Nest\'s Caddy runs', async () => {
+    newProxySecret()
+    try {
+      const r = await attempt('127.0.0.1', 'wrong', { 'X-Redstart-Proxy': 'guess', 'X-Forwarded-For': '10.9.9.9' })
+      assert(r.status === 429, `expected 429, got ${r.status}`)
+    } finally { clearProxySecret() }
+  })
+
+  await test('🔍 through Nest\'s own proxy, each household member has their own bucket', async () => {
+    resetChatLoginLimiter()
+    const s = newProxySecret()
+    try {
+      const via = (ip) => ({ 'X-Redstart-Proxy': s, 'X-Forwarded-For': ip })
+      for (let i = 0; i < 11; i++) await attempt('127.0.0.1', 'wrong', via('192.168.1.66'))
+      const guesser = await attempt('127.0.0.1', 'wrong', via('192.168.1.66'))
+      assert(guesser.status === 429, `the guesser was not limited: ${guesser.status}`)
+      const other = await attempt('127.0.0.1', 'OwnerPass123!', via('192.168.1.20'))
+      assert(other.status === 200, `another household member was locked out by the guesser: ${other.status}`)
+    } finally { clearProxySecret() }
+  })
+
+  if (lanIp) {
+    await test('🔍 the real secret from a non-loopback peer is ignored (only Caddy connects from loopback)', async () => {
+      resetChatLoginLimiter()
+      const s = newProxySecret()
+      try {
+        for (let i = 0; i < 10; i++) await attempt(lanIp, 'wrong')
+        const r = await attempt(lanIp, 'wrong', { 'X-Redstart-Proxy': s, 'X-Forwarded-For': '10.1.2.3' })
+        assert(r.status === 429, `a LAN peer holding the secret got a fresh bucket: ${r.status}`)
+      } finally { clearProxySecret() }
+    })
+  }
+
+  await test('a correct password clears the address\'s count', async () => {
+    resetChatLoginLimiter()
+    for (let i = 0; i < 9; i++) await attempt('127.0.0.1', 'wrong')
+    const ok = await attempt('127.0.0.1', 'OwnerPass123!')
+    assert(ok.status === 200, `expected 200, got ${ok.status}`)
+    for (let i = 0; i < 10; i++) {
+      const r = await attempt('127.0.0.1', 'wrong')
+      assert(r.status === 401, `after a success, attempt ${i + 1} was ${r.status}: the count was not cleared`)
+    }
+    resetChatLoginLimiter()
+  })
+
   await stopGateway()
   await stopMcpServer()
   fs.rmSync(tmpDir, { recursive: true, force: true })

@@ -10,6 +10,7 @@
 	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
+	import { tasksStore } from '$lib/stores/tasks.svelte';
 	import { copyToClipboard } from '$lib/utils';
 	import { tick } from 'svelte';
 	import { fade } from 'svelte/transition';
@@ -134,7 +135,11 @@
 	let displayedModel = $derived(message.model ?? null);
 
 	let isCurrentlyLoading = $derived(isLoading());
-	let isStreaming = $derived(isChatStreaming());
+	// A reply a server run is writing (Send runs on the server since master
+	// plan Phase 7) streams too: the browser's own flag only covers its loop.
+	let isStreaming = $derived(
+		isChatStreaming() || (isLastAssistantMessage && tasksStore.isRunningIn(message?.convId))
+	);
 	let hasNoContent = $derived(!message?.content?.trim());
 	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
 
@@ -187,7 +192,7 @@
 		<ChatMessageAgenticContent
 			{message}
 			{toolMessages}
-			isStreaming={isChatStreaming()}
+			{isStreaming}
 			{isLastAssistantMessage}
 			highlightTurns={highlightAgenticTurns}
 		/>

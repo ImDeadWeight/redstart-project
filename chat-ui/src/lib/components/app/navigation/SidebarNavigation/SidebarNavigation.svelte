@@ -190,7 +190,12 @@
 
 		showEditDialog = false;
 
-		conversationsStore.renameConversationByUser(selectedConversation.id, editedName);
+		// Confirming the dialog without changing the name is not a rename: it
+		// used to mark the title as the user's, and the model then never named
+		// the conversation (found 2026-11-19).
+		if (editedName.trim() !== selectedConversation.name.trim()) {
+			conversationsStore.renameConversationByUser(selectedConversation.id, editedName);
+		}
 		selectedConversation = null;
 	}
 

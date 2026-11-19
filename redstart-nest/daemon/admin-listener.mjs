@@ -82,6 +82,29 @@ export function isLoopbackBind(host) {
 }
 
 /**
+ * Where the admin listener actually binds (2026-11-19: the admin panel over
+ * HTTPS). With HTTPS on (any tls.mode but 'off') the control plane is NEVER
+ * plain HTTP on the LAN: it binds loopback, and the bundled Caddy serves it
+ * to other devices at https://<name>:8443 while HTTPS faces the LAN. This
+ * machine keeps its direct way in (127.0.0.1) whatever Caddy is doing, so a
+ * broken Caddy can never lock the host out. With HTTPS off, the configured
+ * address is used as before.
+ *
+ * @param {string} configured  settings.adminBindHost (or the default)
+ * @param {string} tlsMode     settings.tls.mode
+ */
+export function effectiveAdminBindHost(configured, tlsMode) {
+  const host = configured || DEFAULT_ADMIN_BIND_HOST
+  if (tlsMode && tlsMode !== 'off' && !isLoopbackBind(host)) return DEFAULT_ADMIN_BIND_HOST
+  return host
+}
+
+/** The admin panel is meant to be reachable from other devices (whatever carries it). */
+export function adminExposureRequested(configured) {
+  return !!configured && !isLoopbackBind(configured)
+}
+
+/**
  * Reject a bind address that is not something this host can meaningfully bind.
  *
  * Hostnames are refused rather than resolved: "bind to whatever this name
@@ -94,10 +117,27 @@ export function isLoopbackBind(host) {
 export function bindHostRejection(host) {
   if (typeof host !== 'string' || !host.trim()) return 'A bind address must be a non-empty string.'
   const value = host.trim()
-  if (value === '0.0.0.0' || value === '::') return null
+  if (value === '0.0.0.0') return null
   if (isLoopbackBind(value)) return null
   if (!isIP(value)) return 'A bind address must be an IP address, not a hostname.'
+  // NEVER the internet (2026-11-19, the internet-exposure check). '::' binds
+  // every IPv6 address, the machine's GLOBAL ones included, and those are
+  // reachable from anywhere unless the router blocks them; a public IPv4 is
+  // the same. The control plane spawns processes and edits accounts. Only
+  // addresses that cannot be routed from the internet are accepted.
+  if (value === '::') return 'Not "::": that listens on this machine\'s public IPv6 addresses too. Use 0.0.0.0 for the local network.'
+  if (!isNonRoutableAddress(value)) return 'Only a local-network address: a public address would put the admin panel on the internet.'
   return null
+}
+
+/** Private IPv4 (RFC 1918, CGNAT) or link-local / unique-local IPv6: never routed from the internet. */
+function isNonRoutableAddress(ip) {
+  if (isIP(ip) === 4) {
+    const [a, b] = ip.split('.').map(Number)
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254)
+  }
+  const v = ip.toLowerCase()
+  return /^fe[89ab][0-9a-f]:/.test(v) || /^f[cd][0-9a-f]{2}:/.test(v)
 }
 
 // ---------------------------------------------------------------------------

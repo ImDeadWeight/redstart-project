@@ -7,15 +7,57 @@
 import { getLoginItems, getUpdater } from '../desktop-integration.mjs'
 import {
   startAdminListener, getAdminListenerState, bindHostRejection, isLoopbackBind,
+  effectiveAdminBindHost, adminExposureRequested, DEFAULT_ADMIN_BIND_HOST,
 } from '../admin-listener.mjs'
+import { readTls } from '../tls-settings.mjs'
+import { lanStatus, applyTlsSettings } from '../lan.mjs'
+import { ADMIN_HTTPS_PORT } from '../caddy-config.mjs'
 import { logEvent } from '../logger.mjs'
 import { getGatewayPort } from '../tools-gateway.mjs'
 import { getMcpServerRunning } from '../mcp-server.mjs'
 import { appVersion } from '../build-info.mjs'
 import { apiRevision } from '../admin/api-routes.mjs'
 
-export function getControlPlane() {
-  return getAdminListenerState()
+/**
+ * The control plane as the launcher shows it. With HTTPS on, a request to be
+ * reachable on the network is carried by the bundled Caddy (https://<name>:8443)
+ * and the listener itself is on loopback, so `exposed` reports the REQUEST
+ * (what the toggle shows) and `viaHttps` / `httpsUrl` say how it is carried.
+ * `httpsUrl` is null until Caddy actually faces the LAN.
+ */
+export function controlPlaneState(settings = {}) {
+  const listener = getAdminListenerState()
+  const configured = settings.adminBindHost || DEFAULT_ADMIN_BIND_HOST
+  const tls = readTls(settings)
+  const viaHttps = tls.mode !== 'off' && adminExposureRequested(configured)
+  const name = tls.mode === 'own' ? tls.name : tls.mode === 'redstart' ? tls.automatic?.hostname : null
+  const facing = lanStatus().state === 'lan-https'
+  return {
+    ...listener,
+    exposed: viaHttps ? true : listener.exposed,
+    viaHttps,
+    httpsUrl: viaHttps && name && facing ? `https://${name}:${ADMIN_HTTPS_PORT}` : null,
+  }
+}
+
+export function getControlPlane({ readSettings } = {}) {
+  let settings = {}
+  try { settings = readSettings?.() ?? {} } catch { /* unreadable: the listener alone */ }
+  return controlPlaneState(settings)
+}
+
+/**
+ * Bind the admin listener where effectiveAdminBindHost says, if it is not
+ * there already. Called around every HTTPS change (ipc/tls.mjs): narrowing
+ * BEFORE Caddy starts serving the panel, widening only after it stopped.
+ */
+export async function syncAdminBind({ readSettings }) {
+  const settings = readSettings()
+  const want = effectiveAdminBindHost(settings.adminBindHost, readTls(settings).mode)
+  const { running, bindHost, port } = getAdminListenerState()
+  if (!running || bindHost === want) return
+  await startAdminListener({ bindHost: want, port, allowedOrigins: settings.adminAllowedOrigins })
+  logEvent('admin', 'bind_synced', { loopback: isLoopbackBind(want) })
 }
 
 /**
@@ -76,12 +118,16 @@ export async function setControlPlaneBindHost(host, { readSettings, writeSetting
 
   const bindHost = host.trim()
   const { bindHost: previous, port } = getAdminListenerState()
+  // With HTTPS on, "reachable on the network" means through the bundled
+  // Caddy, and the listener itself stays on loopback (effectiveAdminBindHost).
+  const before = readSettings()
+  const effective = effectiveAdminBindHost(bindHost, readTls(before).mode)
 
   try {
     // The port travels with the rebind. This function changes WHERE the control
     // plane listens, not which port it is on — reading the live port back rather
     // than defaulting to the fixed one keeps that true.
-    await startAdminListener({ bindHost, port })
+    if (effective !== previous) await startAdminListener({ bindHost: effective, port })
   } catch (err) {
     if (previous) {
       try { await startAdminListener({ bindHost: previous, port }) } catch { /* nothing left to fall back to */ }
@@ -93,13 +139,15 @@ export async function setControlPlaneBindHost(host, { readSettings, writeSetting
   const settings = readSettings()
   settings.adminBindHost = bindHost
   writeSettings(settings)
+  // Caddy's config carries the :8443 admin route only while it is wanted.
+  if (readTls(settings).mode !== 'off') await applyTlsSettings()
 
   // Discovery no longer reads the control plane's bind address — mDNS, the
   // only mechanism that used to key on it, is retired. Nothing to re-run
   // here any more.
 
-  logEvent('admin', 'bind_changed', { loopback: isLoopbackBind(bindHost) })
-  return { ok: true, state: getAdminListenerState() }
+  logEvent('admin', 'bind_changed', { loopback: isLoopbackBind(effective), viaHttps: effective !== bindHost })
+  return { ok: true, state: controlPlaneState(settings) }
 }
 
 /**
@@ -299,7 +347,7 @@ export function shutdown({ quitApp }) {
 // like every other route on this table, same as the read.
 export function adminHandlers(deps) {
   return {
-    'admin:get-control-plane': () => getControlPlane(),
+    'admin:get-control-plane': () => getControlPlane(deps ?? {}),
     // A remote admin's full-status readout. deps is the same big
     // collaborator bag every other namespace gets; only serverState is used.
     'admin:get-status': () => getFullStatus(deps ?? {}),

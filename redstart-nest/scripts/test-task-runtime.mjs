@@ -810,6 +810,22 @@ await test('🔍 live tokens: the reply being written arrives as batched delta e
   assert(!store.readEvents(t.id, 0).some((e) => e.type === 'delta'), 'a delta was written to the log')
 })
 
+await test('live deltas carry llama-server\'s latest timings for the readout, and only its numeric fields', async () => {
+  const { liveDeltas } = await import('../daemon/task-ports.mjs')
+  const sent = []
+  const l = liveDeltas('t1', 'm1', (id, e) => sent.push(e))
+  l.onContent('Hi')
+  l.onTimings({ prompt_n: 10, predicted_n: 1, predicted_ms: 5, cache_n: 2, secret: 'x', nested: { a: 1 } })
+  l.onTimings({ prompt_n: 10, predicted_n: 2, predicted_ms: 9, cache_n: 2 })
+  l.flush()
+  eq(sent.length, 1, 'batched into one event')
+  eq(JSON.stringify(sent[0]), JSON.stringify({ type: 'delta', messageId: 'm1', content: 'Hi', timings: { prompt_n: 10, predicted_n: 2, predicted_ms: 9, cache_n: 2 } }), 'event')
+  l.onTimings({ predicted_n: 3 }); l.flush()
+  eq(JSON.stringify(sent[1]?.timings), JSON.stringify({ predicted_n: 3 }), 'timings alone still go out')
+  l.flush()
+  eq(sent.length, 2, 'an empty flush sent an event')
+})
+
 await test('🔍 the event stream sends a live event with no id: line, so Last-Event-ID still names the last stored one', async () => {
   fakeWorld([(body) => new Promise((resolve) => setTimeout(() => resolve(sse(say('slow reply'))), 150))])
   const conv = newConversation()

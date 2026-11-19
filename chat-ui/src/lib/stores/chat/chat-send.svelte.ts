@@ -51,7 +51,33 @@ export class ChatSendController {
 	constructor(
 		private readonly runtime: ChatRuntimeState,
 		private readonly ui: ChatUiState
-	) {}
+	) {
+		// A plain Send is a run on the server (master plan Phase 7). Two things
+		// the browser loop did at its own end had no equivalent there, found
+		// 2026-11-19: the live context / speed readout (fed by llama-server's
+		// timings, now carried on the run's delta events), and naming the
+		// conversation after its first answer.
+		tasksStore.onLiveTimings = (convId, timings) => {
+			const tokensPerSecond =
+				timings.predicted_ms && timings.predicted_n
+					? (timings.predicted_n / timings.predicted_ms) * 1000
+					: 0;
+			this.runtime.updateProcessingStateFromTimings(
+				{
+					prompt_n: timings.prompt_n || 0,
+					prompt_ms: timings.prompt_ms,
+					predicted_n: timings.predicted_n || 0,
+					predicted_per_second: tokensPerSecond,
+					cache_n: timings.cache_n || 0
+				},
+				convId
+			);
+		};
+		tasksStore.onChatRunFinished = (convId) => {
+			this.runtime.setProcessingState(convId, null);
+			void this.nameConversation(convId);
+		};
+	}
 
 	async sendMessage(
 		content: string,

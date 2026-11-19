@@ -37,12 +37,14 @@ import { ensureDefaultCapabilityFolders, getCapabilities } from './tools-storage
 import { stopGateway } from './tools-gateway.mjs'
 import { stopMcpServer } from './mcp-server.mjs'
 import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
-import { startAdminListener, stopAdminListener, DEFAULT_ADMIN_BIND_HOST } from './admin-listener.mjs'
-import { startDiscovery, stopDiscovery, lastKnownDiscovery } from './discovery.mjs'
+import { startAdminListener, stopAdminListener, DEFAULT_ADMIN_BIND_HOST, bindHostRejection, effectiveAdminBindHost } from './admin-listener.mjs'
+import { readTls } from './tls-settings.mjs'
+import { lastKnownDiscovery } from './discovery.mjs'
+import { initLan, lanOwner, stopLanNow, tlsInputsFrom, beaconInfo } from './lan.mjs'
+import { decryptSecret, encryptSecret } from './secrets.mjs'
 import { ensureBootstrapToken } from './bootstrap-token.mjs'
 import { buildAdminApi } from './admin/api-table.mjs'
 import { setAdminApi } from './admin/api-routes.mjs'
-import { ensureFirewallRule } from './firewall.mjs'
 import { getPrimaryLanIp } from './net-interfaces.mjs'
 import { cleanupOldConversations, allConversationIds } from './conversations-storage.mjs'
 import { resumeTasks, suspendAllTasks } from './task-runner.mjs'
@@ -278,9 +280,14 @@ function parseEvalTokensPerSec(line) {
 // ---------------------------------------------------------------------------
 
 async function startDiscoveryBeacon() {
+  // Port and HTTPS origin come from the LAN state (lan.mjs beaconInfo):
+  // behind Caddy the reachable port is 80, not the gateway's.
+  const gatewayPort = () => serverState.lastConfig?.port ?? 19080
   beaconServerInstance = await startBeaconServer(
     () => !!serverState.process,
-    () => serverState.lastConfig?.port ?? 19080,
+    () => beaconInfo(gatewayPort()).port,
+    undefined,
+    () => beaconInfo(gatewayPort()).origin,
   )
   console.log(`Redstart Nest beacon listening on port 8765`)
 }
@@ -313,7 +320,21 @@ async function startAdminPlane() {
   // request that needed it. See bootstrap-token.mjs.
   ensureBootstrapToken()
   const settings = readSettings()
-  const bindHost = settings.adminBindHost || DEFAULT_ADMIN_BIND_HOST
+  // Checked at boot too, not only when set: settings.json is a file, and a
+  // value written by hand, or before 2026-11-19 when "::" was still
+  // accepted, must not put the control plane on a public address. Refused →
+  // loopback (fail closed), and the log says why.
+  let bindHost = settings.adminBindHost || DEFAULT_ADMIN_BIND_HOST
+  // With HTTPS on, the admin panel reaches other devices only through the
+  // bundled Caddy (https://<name>:8443): the listener binds loopback from the
+  // very first moment, before the LAN is set up.
+  bindHost = effectiveAdminBindHost(bindHost, readTls(settings).mode)
+  const refusal = bindHostRejection(bindHost)
+  if (refusal) {
+    logEvent('security', 'admin_bind_refused', { reason: refusal })
+    console.warn(`adminBindHost ${bindHost} refused (${refusal}); the admin panel stays on this machine only.`)
+    bindHost = DEFAULT_ADMIN_BIND_HOST
+  }
   try {
     // Absent on every install, which means no CORS headers at all. It exists
     // for a client that did not come from this origin, which is a thing only
@@ -324,11 +345,15 @@ async function startAdminPlane() {
     logEvent('admin', 'listener_start_failed', { reason: err.code || 'error' })
     if (host.adminBindFailureIsFatal) throw err
   }
-  // Discovery (the port-80 clean URL, discovery.mjs) is a data-plane
-  // convenience keyed on networkMode alone. Started here rather than only
-  // from `llama:launch`, so a box already in network mode gets the clean URL
-  // back at boot even before the next launch.
-  startDiscovery(lastKnownDiscovery(readSettings()))
+  // The LAN front door (lan.mjs): the network-mode owner starts from the last
+  // configuration a launch actually used, so a box already in network mode
+  // gets its port-80 clean URL (and, once HTTPS is configured, its Caddy)
+  // back at boot, before the next launch.
+  initLan({
+    configDir: configDir(), packaged: isPackaged(), resourcesDir: isPackaged() ? resourcesDir() : null,
+    readSettings, writeSettings, decrypt: decryptSecret, encrypt: encryptSecret,
+  })
+  await lanOwner().update({ ...lastKnownDiscovery(readSettings()), ...tlsInputsFrom(readSettings()) })
 }
 
 
@@ -406,7 +431,6 @@ function setupAdminApi() {
     serverState,
     buildArgs,
     parseEvalTokensPerSec,
-    ensureFirewallRule,
     getLocalIp,
     // So the external-MCP validator knows which ports are ours and can refuse a
     // server pointed at Nest itself. Falls back to the documented default when
@@ -534,7 +558,9 @@ export function stopDaemon() {
   void suspendAllTasks()
   stopGateway()
   stopMcpServer()
-  stopDiscovery()
+  // The port-80 proxy and Caddy, signalled now; Caddy is a child to wait for.
+  const caddyPid = stopLanNow()
+  if (caddyPid) childPids.push(caddyPid)
   if (serverState.process) {
     // killOrphanedServers() used to do this job as a side effect of its
     // by-name sweep — this line never actually killed the child itself, only

@@ -267,6 +267,24 @@ await test('the pool evicts the least recently used idle kernel at its cap', asy
 pool.stopAll()
 
 // ---------------------------------------------------------------------------
+// Many changed files (an archive unpacked): summarised, not 300 links
+// ---------------------------------------------------------------------------
+
+await test('🔍 a few changed files are each listed and linked; hundreds are counted per folder', () => {
+  const { summariseChangedFiles, formatResult, LIST_ALL_UP_TO } = pythonTool
+  const few = Array.from({ length: LIST_ALL_UP_TO }, (_, i) => ({ path: `out-${i}.csv`, bytes: 10 }))
+  assert(summariseChangedFiles(few).named.length === LIST_ALL_UP_TO && !summariseChangedFiles(few).groups.length, 'a small set was summarised')
+  const many = [{ path: 'notes.txt', bytes: 5 }]
+  for (let i = 0; i < 400; i++) many.push({ path: `repo/src/f${i}.md`, bytes: 1000 })
+  const s = summariseChangedFiles(many)
+  assert(s.named.map((f) => f.path).join() === 'notes.txt', `only top-level files are named: ${s.named.map((f) => f.path)}`)
+  assert(s.groups.length === 1 && s.groups[0].dir === 'repo' && s.groups[0].count === 400 && s.total === 401, JSON.stringify(s.groups))
+  const text = formatResult({ reply: { stdout: 'ok', result: null }, files: many, wsRel: 'chats/c1', code: '' })
+  assert(/Files changed: 401 in all\. repo\/: 400 files/.test(text) && /notes\.txt/.test(text), text)
+  assert(!/f399\.md/.test(text) && text.length < 1000, `the model was handed every file name (${text.length} chars)`)
+})
+
+// ---------------------------------------------------------------------------
 // The tool end to end: workspace, figures, files changed, caps
 // ---------------------------------------------------------------------------
 

@@ -33,6 +33,7 @@
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { twigShellApi, twigWindowApi } from '$lib/utils/twig';
 	import TwigTitleBar from '$lib/components/app/misc/TwigTitleBar.svelte';
+	import NotEncryptedBanner from '$lib/components/app/misc/NotEncryptedBanner.svelte';
 	import { ROUTES } from '$lib/constants/routes';
 	import { RouterService } from '$lib/services/router.service';
 	import { Toaster } from 'svelte-sonner';
@@ -529,6 +530,9 @@
 	     maximise, and (Windows) the window buttons. -->
 	<TwigTitleBar win={twigWindow} />
 {/if}
+
+<!-- Outside every gate below, so the login page shows it too (TLS plan Q3). -->
+<NotEncryptedBanner />
 
 <!-- PWA update prompt -->
 <div class="fixed right-4 bottom-4 z-9999 flex flex-col items-end gap-1">

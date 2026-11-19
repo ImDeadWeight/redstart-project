@@ -113,6 +113,20 @@ export function ControlPlaneNotice({ state, localIp }: {
   localIp?: string
 }) {
   if (!state?.exposed) return null
+  // Over HTTPS (the bundled Caddy) the password is encrypted on the way; the
+  // panel is still a sign-in page for anyone on the network, so the notice
+  // stays, in a calmer form.
+  if (state.viaHttps) {
+    return (
+      <div className="mt-3 rounded border border-amber-800/70 bg-amber-950/30 p-3">
+        <p className="text-xs font-semibold text-amber-300">Admin panel is reachable on the network, over HTTPS</p>
+        <p className="text-[11px] text-amber-200/80 mt-1 leading-relaxed">
+          Encrypted, and only through the secure address{state.httpsUrl ? <> (<span className="font-mono">{state.httpsUrl}</span>)</> : null}.
+          Anyone on your network can still try to sign in as the owner. This computer keeps its own direct way in.
+        </p>
+      </div>
+    )
+  }
   const reachableAt = localIp ? `${localIp}:${state.port}` : `port ${state.port} on this machine’s LAN address`
 
   return (

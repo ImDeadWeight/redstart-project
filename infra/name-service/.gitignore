@@ -1,0 +1,5 @@
+# Local secrets for `wrangler dev` (CF_API_TOKEN etc.). Never committed.
+.dev.vars
+.dev.vars.*
+# wrangler's local state: the local D1 database, build output, logs.
+.wrangler/

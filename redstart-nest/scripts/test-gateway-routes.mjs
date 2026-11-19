@@ -42,7 +42,8 @@ registerElectronStub()
 await import('./electron-stub.mjs')
 
 const { startGateway, stopGateway } = await import('../daemon/tools-gateway.mjs')
-const { updateGatewayConfig } = await import('../daemon/tools-gateway.mjs')
+const { updateGatewayConfig, builtInMcpUrl } = await import('../daemon/tools-gateway.mjs')
+const { startMcpServer, stopMcpServer } = await import('../daemon/mcp-server.mjs')
 const { observedWireCost, setEmbedPortForTests } = await import('../daemon/tool-filter.mjs')
 const { setAuthRequired, createOwner, createAccount } = await import('../daemon/auth.mjs')
 
@@ -353,6 +354,76 @@ async function main() {
     )
     updateGatewayConfig(baseConfig)
   })
+
+  // The built-in server's URL (TLS plan C6; ported from rescue/deploy-tls
+  // 1f634d6 + d65b7df). The function decides; the route tests below prove the
+  // route uses it.
+  await test('a direct client is told the Host it used, on the MCP port', async () => {
+    const url = builtInMcpUrl({ host: '192.168.1.20:19080' }, 19080)
+    assert(url === 'http://192.168.1.20:19082/mcp', `got ${url}`)
+  })
+
+  await test('🔍 behind a TLS proxy the client is told the proxy origin, not port+2', async () => {
+    // An https page refuses an http URL, so getting this wrong means no built-in tools.
+    const viaHost = builtInMcpUrl({ host: 'nest.lan:8443', 'x-forwarded-proto': 'https' }, 19080)
+    assert(viaHost === 'https://nest.lan:8443/mcp', `got ${viaHost}`)
+    const viaForwardedHost = builtInMcpUrl({
+      host: '127.0.0.1:19080', 'x-forwarded-proto': 'https', 'x-forwarded-host': 'box.tailnet.ts.net',
+    }, 19080)
+    assert(viaForwardedHost === 'https://box.tailnet.ts.net/mcp', `got ${viaForwardedHost}`)
+  })
+
+  await test("🔍 Nest's own Caddy: https://<name>/mcp on 443, http://<ip>/mcp through the :80 fallback", async () => {
+    // Exactly what Caddy sends upstream (test-caddy-live checks it overwrites
+    // a client's copies): Host rewritten to the upstream, X-Forwarded-* set.
+    const tls = builtInMcpUrl({ host: '127.0.0.1:19080', 'x-forwarded-proto': 'https', 'x-forwarded-host': 'k7f3q2.nest.redstartdevelopment.com' }, 19080)
+    assert(tls === 'https://k7f3q2.nest.redstartdevelopment.com/mcp', `got ${tls}`)
+    const fallback = builtInMcpUrl({ host: '127.0.0.1:19080', 'x-forwarded-proto': 'http', 'x-forwarded-host': '192.168.0.213' }, 19080)
+    assert(fallback === 'http://192.168.0.213/mcp', `got ${fallback} — Caddy's :80 routes /mcp, port+2 is loopback`)
+  })
+
+  await test('a proxy chain is read from its client-facing (first) hop', async () => {
+    const url = builtInMcpUrl({
+      host: '127.0.0.1:19080', 'x-forwarded-proto': 'https, http', 'x-forwarded-host': 'chat.example.com, inner.proxy',
+    }, 19080)
+    assert(url === 'https://chat.example.com/mcp', `got ${url}`)
+  })
+
+  await test('🔍 malformed forwarded headers fall back to the direct URL, never echo', async () => {
+    const probes = [
+      { 'x-forwarded-proto': 'javascript' },
+      { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'evil.example/path' },
+      { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'user@evil.example' },
+      { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'a b' },
+      { 'x-forwarded-proto': '' },
+    ]
+    for (const extra of probes) {
+      const url = builtInMcpUrl({ host: '192.168.1.20:19080', ...extra }, 19080)
+      assert(url === 'http://192.168.1.20:19082/mcp', `${JSON.stringify(extra)} produced ${url}`)
+    }
+    return `${probes.length} probes`
+  })
+
+  // The route advertises the built-in server only while it runs.
+  await startMcpServer(GATEWAY_PORT + 2, baseConfig)
+  try {
+    await test('🔍 through the route: proxied, the built-in server is advertised on the proxy origin', async () => {
+      const proxied = await json(await fetch(`${gw}/redstart/mcp-servers`, {
+        headers: { ...bearer(ownerToken), 'X-Forwarded-Proto': 'https', 'X-Forwarded-Host': 'chat.example.com' },
+      }))
+      const builtIn = proxied.servers.find(s => s.name === 'Redstart Built-in')
+      assert(builtIn, `no built-in entry: ${JSON.stringify(proxied.servers)}`)
+      assert(builtIn.url === 'https://chat.example.com/mcp', `got ${builtIn.url}`)
+    })
+
+    await test('through the route: direct, it is advertised on the MCP port as before', async () => {
+      const direct = await json(await fetch(`${gw}/redstart/mcp-servers`, { headers: bearer(ownerToken) }))
+      const builtIn = direct.servers.find(s => s.name === 'Redstart Built-in')
+      assert(builtIn?.url === `http://127.0.0.1:${GATEWAY_PORT + 2}/mcp`, `got ${builtIn?.url}`)
+    })
+  } finally {
+    stopMcpServer()
+  }
 
   // -------------------------------------------------------------------------
   // POST /v1/chat/completions — the one route the gateway REWRITES rather than

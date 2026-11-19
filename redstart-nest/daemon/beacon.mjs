@@ -11,7 +11,23 @@ import { BEACON_PORT } from './ports.mjs'
 
 // bindPort defaults to the well-known beacon port; callers (tests) may pass 0
 // to bind an ephemeral port and avoid colliding with a running instance.
-export function startBeaconServer(getRunning, getPort, bindPort = BEACON_PORT) {
+//
+// getOrigin (TLS plan C7) returns "https://<name>" while Nest's HTTPS is
+// SERVING, else null. Only then does the payload gain `origin`. The name is
+// already public (DNS, certificate transparency logs), so this discloses
+// nothing new, and it is only ever a bare https origin: anything else is
+// dropped rather than sent. Clients must still build their URL from the
+// RESPONDING IP unless that name resolves to it (Twig's network.mjs), so a
+// spoofed beacon gains nothing it could not already do with its own IP.
+const ORIGIN_RE = /^https:\/\/[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/
+
+export function beaconPayload({ running, port, origin = null }) {
+  const body = { app: 'redstart-nest', running: !!running, port }
+  if (typeof origin === 'string' && ORIGIN_RE.test(origin)) body.origin = origin
+  return body
+}
+
+export function startBeaconServer(getRunning, getPort, bindPort = BEACON_PORT, getOrigin = () => null) {
   const server = createServer((req, res) => {
     const running = !!getRunning()
     const port = getPort()
@@ -26,7 +42,9 @@ export function startBeaconServer(getRunning, getPort, bindPort = BEACON_PORT) {
     // The same identity is already broadcast in cleartext over mDNS, so this
     // discloses nothing new. Clients build the connection URL from the
     // responding IP + this port themselves.
-    res.end(JSON.stringify({ app: 'redstart-nest', running, port }))
+    let origin = null
+    try { origin = getOrigin() } catch { /* no origin is always safe */ }
+    res.end(JSON.stringify(beaconPayload({ running, port, origin })))
   })
 
   return new Promise((resolve, reject) => {

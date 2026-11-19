@@ -12,6 +12,8 @@
 // thing nobody notices in review.
 // =============================================================================
 
+import { clientAddress } from '../proxy-trust.mjs'
+
 /** Bodies are small — a config object, a plugin manifest. Anything larger is a
  *  mistake or an attempt to make the daemon hold a lot of memory for free. */
 const MAX_BODY_BYTES = 2 * 1024 * 1024
@@ -66,7 +68,15 @@ export async function readJsonBody(req) {
  * rate-limit.mjs. Trusting the header instead would trade it for a worse one:
  * with no proxy in front, a client that sets its own header gets a fresh bucket
  * per request and the limit stops existing.
+ *
+ * One exception, the same as the data plane's (proxy-trust.mjs): since
+ * 2026-11-19 Nest's own bundled Caddy serves the control plane over HTTPS
+ * (:8443) when it is reachable on the network, and every such request
+ * arrives from loopback. clientAddress() takes the first X-Forwarded-For
+ * hop ONLY for a loopback request carrying the per-launch secret Nest gave
+ * its Caddy, so each device keeps its own login bucket. Without that
+ * secret it is exactly req.socket.remoteAddress, as before.
  */
 export function remoteAddress(req) {
-  return req?.socket?.remoteAddress || 'unknown'
+  return clientAddress(req)
 }

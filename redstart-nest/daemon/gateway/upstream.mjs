@@ -12,6 +12,7 @@
 
 import * as http from 'http'
 import { beginCompletion } from '../completion-activity.mjs'
+import { PROXY_HEADER_NAME } from '../proxy-trust.mjs'
 
 // llama-server reflects the request's Origin back into its own
 // Access-Control-Allow-Origin header. If we spread its headers and then also set
@@ -173,6 +174,16 @@ export function cancelUpstreamOnHangUp(res, proxyReq) {
   })
 }
 
+/**
+ * The bundled Caddy's per-launch secret (proxy-trust.mjs) is for the gateway
+ * alone; llama-server has no use for it and is a separate process that may
+ * log what it is sent. Exported for the test.
+ */
+export function withoutProxySecret(headers) {
+  delete headers[PROXY_HEADER_NAME]
+  return headers
+}
+
 /** Passthrough proxy for every non-completions path. */
 export function passthrough(req, res, internalPort) {
   const options = {
@@ -180,7 +191,7 @@ export function passthrough(req, res, internalPort) {
     port: internalPort,
     path: req.url,
     method: req.method,
-    headers: { ...req.headers, host: `127.0.0.1:${internalPort}` },
+    headers: withoutProxySecret({ ...req.headers, host: `127.0.0.1:${internalPort}` }),
   }
 
   const proxyReq = http.request(options, proxyRes => {

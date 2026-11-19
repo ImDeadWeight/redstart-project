@@ -84,6 +84,40 @@ The MIT license text applying to the above:
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
 
+### Caddy (the TLS front door) and its DNS plugins
+
+Redstart Nest bundles `caddy.exe` (Windows) / `caddy` (macOS) in `bin/`, beside
+llama-server. Nest runs it as a separate process to serve the chat UI over
+HTTPS on the LAN; Caddy obtains and renews the certificate itself. It is built
+by this project from pinned upstream sources by
+[`.github/workflows/caddy.yml`](.github/workflows/caddy.yml) and published as
+the release `caddy-redstart-<version>-<n>`. Each binary there has a `.json`
+beside it listing every Go module compiled into it, with versions and go.sum
+hashes. [`redstart-nest/scripts/fetch-caddy.mjs`](redstart-nest/scripts/fetch-caddy.mjs)
+pins the build by SHA-256.
+
+| Component | Version | License | Source |
+|---|---|---|---|
+| Caddy | v2.11.9 | Apache-2.0 | <https://github.com/caddyserver/caddy> |
+| caddy-dns/desec | v1.1.0 | MIT | <https://github.com/caddy-dns/desec> |
+| caddy-dns/acmedns | v0.7.0 | MIT | <https://github.com/caddy-dns/acmedns> |
+| `dns.providers.duckdns` | this repository | AGPL-3.0-only | [`infra/caddy-dns-duckdns/`](infra/caddy-dns-duckdns/) |
+| libdns/libdns, libdns/desec, libdns/acmedns, libdns/duckdns | v1.1.1, v1.1.0, v0.5.0, v0.3.0 | MIT | <https://github.com/libdns> |
+
+- Caddy: Copyright 2015 Matthew Holt and The Caddy Authors. Licensed under the
+  Apache License, Version 2.0 (<https://www.apache.org/licenses/LICENSE-2.0>).
+- The DuckDNS module is Redstart's own, a thin wrapper over the MIT-licensed
+  `libdns/duckdns`. The community `caddy-dns/duckdns` plugin publishes no
+  license, so it is not used.
+- **Every Go module compiled into the binary** (about 170, almost all
+  MIT/BSD/Apache-2.0) has its license files collected by
+  [`redstart-nest/scripts/caddy-notices.mjs`](redstart-nest/scripts/caddy-notices.mjs)
+  at build time. They ship as `licenses/caddy-NOTICES.txt` in the installer.
+  The build fails if any module carries no license file.
+
+These binaries are not committed to this repository: `redstart-nest/deps/` is
+git-ignored.
+
 ### elevate.exe
 
 Bundled at the installer root and used to create Windows Firewall inbound rules

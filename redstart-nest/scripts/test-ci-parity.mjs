@@ -50,7 +50,14 @@ test('the CI workflow exists where this check expects it', () => {
 })
 
 const ci = fs.existsSync(workflow) ? fs.readFileSync(workflow, 'utf8') : ''
-const ciSuites = new Set([...ci.matchAll(/node (scripts\/[\w.-]+\.mjs)/g)].map(m => m[1]))
+// CI steps that prepare for the suites rather than being one. Listed by name,
+// so a real suite cannot hide here by accident.
+const CI_SETUP_SCRIPTS = new Set([
+  'scripts/fetch-caddy.mjs', // the pinned Caddy that test-caddy-config.mjs validates against
+])
+const ciSuites = new Set(
+  [...ci.matchAll(/node (scripts\/[\w.-]+\.mjs)/g)].map(m => m[1]).filter(s => !CI_SETUP_SCRIPTS.has(s))
+)
 
 test('🔍 every suite in test:security is also a step in CI', () => {
   assert(scriptSuites.size > 0, 'parsed no suites out of test:security — has the script format changed?')

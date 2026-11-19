@@ -31,9 +31,12 @@ correct something.
                                   model process behind it on 19081
 ```
 
-Nest does not do TLS at any layer, and that is settled rather than missing
-(design §3.3). The proxy in front handles certificates and renewal properly;
-building a worse version of that inside Nest was considered and rejected.
+Nest never handles certificates itself; its bundled Caddy does. With HTTPS on
+(Network → Secure address), Caddy fronts the chat UI and MCP server on :443
+and the gateway binds loopback. Use this directory's Caddyfile instead when
+you bring your own proxy, or to put the control plane (:19083) behind TLS,
+which the bundled Caddy never routes. With your own proxy, leave Secure
+address Off (`tls.mode: "off"`): Nest then trusts no forwarded header.
 
 ## Where state lives
 

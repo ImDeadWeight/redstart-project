@@ -1,25 +1,30 @@
 // =============================================================================
 // Server address derivation for the Network panel.
 // =============================================================================
-// Two URLs are offered because no single one reaches every client:
+// Up to three URLs, because no single one reaches every client:
 //
-//   ip       — always works, no name resolution, works fully offline. The only
-//              universal option, and the one behind the QR code.
+//   https    — the HTTPS name (TLS plan C7/C8), once it is SERVING. First,
+//              default, and the one behind the QR code: padlock, no warning,
+//              and the only one a browser treats as a secure context.
+//   ip       — always works, no name resolution, works fully offline. With
+//              HTTPS serving it is labelled "not encrypted" rather than
+//              removed: it is still the fallback when the name will not
+//              resolve (router rebinding protection, no internet DNS).
 //   sslip    — public wildcard DNS that maps an encoded IP back to itself, so
 //              it resolves through the client's normal DNS resolver. This is
-//              what gets Android a working *hostname*. Costs an internet DNS
-//              lookup, and routers with DNS-rebind protection (pfSense, some
-//              OpenWRT/Fritz!Box setups) refuse public names pointing at
-//              private IPs, so it is offered as an option, never a default.
+//              what got Android a working *hostname* before HTTPS existed.
+//              Dropped whenever an HTTPS name exists: that name does the same
+//              job, with a certificate.
 //
-// A third option, mDNS (`redstart.local`), was retired: Android's
-// resolver never answered `.local` lookups for browser navigation, so a name
-// that failed on the one platform most clients are wasn't worth the UDP 5353
-// firewall rule and the elevated-prompt cost of keeping it.
+// A fourth option, mDNS (`redstart.local`), was retired: Android's
+// resolver never answered `.local` lookups for browser navigation.
+//
+// Pure (plain TypeScript, erasable types only) so scripts/test-launcher-tls.mjs
+// can run it under Node.
 // =============================================================================
 
 export type ServerAddress = {
-  key: 'ip' | 'sslip'
+  key: 'https' | 'ip' | 'sslip'
   url: string
   label: string
   note: string
@@ -34,25 +39,49 @@ export function toSslipHost(ip: string): string | null {
 }
 
 // Port 80 is proxied to the gateway when it's free, so the suffix is dropped
-// only when the port actually is 80. Otherwise every URL carries it.
+// only when the port actually is 80. (With HTTPS set up, buildAddresses drops
+// it itself: Caddy owns :80 then.)
 function withPort(host: string, port: number): string {
   return port === 80 ? `http://${host}` : `http://${host}:${port}`
 }
 
-export function buildAddresses(localIp: string, port: number): ServerAddress[] {
+/**
+ * @param https  the HTTPS name when it is set up (null when HTTPS is off);
+ *   .serving whether HTTPS is actually working right now; .requireHttps whether
+ *   plain HTTP is refused while it is not
+ */
+export function buildAddresses(localIp: string, port: number, https: { name: string; serving: boolean; requireHttps?: boolean } | null = null): ServerAddress[] {
   const out: ServerAddress[] = []
+  const lan = !!localIp && localIp !== '127.0.0.1'
 
-  if (localIp && localIp !== '127.0.0.1') {
+  if (https?.serving) {
+    out.push({
+      key: 'https',
+      url: `https://${https.name}`,
+      label: 'Secure',
+      note: 'Encrypted. The address to give people.',
+    })
+  }
+
+  if (lan) {
+    // With HTTPS set up, Caddy owns :80 and proxies it (or redirects it once
+    // serving), so the plain address has no port.
     out.push({
       key: 'ip',
-      url: withPort(localIp, port),
+      url: https ? `http://${localIp}` : withPort(localIp, port),
       label: 'Direct IP',
-      note: 'Works on every device, including Android. No DNS involved.',
+      note: https
+        ? (https.serving
+          ? 'Not encrypted. Redirects to the secure address.'
+          : https.requireHttps
+            ? 'Switched off until the secure address works (Require HTTPS is on).'
+            : 'Not encrypted. Works until the secure address is ready.')
+        : 'Works on every device, including Android. No DNS involved.',
     })
   }
 
   const sslip = toSslipHost(localIp)
-  if (sslip) {
+  if (sslip && !https) {
     out.push({
       key: 'sslip',
       url: withPort(sslip, port),

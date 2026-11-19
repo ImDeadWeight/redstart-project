@@ -8,6 +8,7 @@
 // =============================================================================
 
 import type {
+  TlsStatus, TlsPatch,
   HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup, ToolContextEstimate, RetrievalStatus,
   ExternalMcpServer, LlamaConfig, ClientApp, ControlPlaneState, StartupState, UpdateState, UpdateStatus,
   CatalogModel, ModelDetail, ModelDescription, ModelArtifact, LocalModelFile, DownloadProgress,
@@ -99,6 +100,15 @@ export type RedstartAPI = {
     // null: the shared set used while login is off.
     listGrants: (username: string | null) => Promise<{ ok: true; grants: StandingGrant[] } | { ok: false; error: string }>
     revokeGrant: (id: string) => Promise<{ ok: true; tool: string } | { ok: false; error: string }>
+  }
+  // HTTPS on the LAN: the Network panel's "Secure address" (daemon/ipc/tls.mjs).
+  // `token` goes in on set and never comes back; status.settings.hasToken says
+  // whether one is stored.
+  tls: {
+    get: () => Promise<TlsStatus>
+    set: (patch: TlsPatch) => Promise<{ ok: true; status: TlsStatus } | { ok: false; error: string; status: TlsStatus }>
+    check: () => Promise<TlsStatus>
+    retry: () => Promise<TlsStatus>
   }
   // Every account's background tasks (agent-runtime Phase 3; daemon/ipc/tasks.mjs).
   tasks: {

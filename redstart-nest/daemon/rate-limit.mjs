@@ -3,10 +3,11 @@
 // =============================================================================
 // Redstart Nest — Rate limiting
 // =============================================================================
-// For the two control-plane routes that are reachable WITHOUT a credential and
-// hand one out if you get them right: login, and the bootstrap token. Everything
-// else on that listener is already behind an owner session, where a rate limit
-// would be protecting an attacker who has already won.
+// For the routes that are reachable WITHOUT a credential and hand one out if
+// you get them right: the control plane's login and bootstrap token, and the
+// data plane's chat login (gateway/auth-routes.mjs). Everything else is
+// already behind a session, where a rate limit would be protecting an attacker
+// who has already won.
 //
 // A fixed window, not a token bucket. The thing being bounded is guessing
 // attempts against a secret, and for that the two behave the same; a fixed
@@ -24,6 +25,14 @@
 // automated guessing, not an access control. What actually makes the secrets
 // unguessable is their entropy — 32 CSPRNG bytes for the token, scrypt for the
 // password — and the limit exists so a slow attempt is also a loud one.
+//
+// ONE PROXY IS TRUSTED: NEST'S OWN CADDY (proxy-trust.mjs). The chat login
+// keys on clientAddress(), which takes the first X-Forwarded-For hop only for
+// a loopback request carrying the per-launch secret that Nest gave its Caddy
+// in this process's lifetime. Caddy overwrites both headers, so neither is
+// the client's word. A bring-your-own proxy gets no secret and keeps the
+// shared-bucket behaviour above. The control plane is never proxied (D6), so
+// it stays socket-keyed.
 //
 // No cleanup timer: entries are pruned on the next call for the same key, and
 // the whole map is dropped when a window's worth of keys goes quiet. The set of

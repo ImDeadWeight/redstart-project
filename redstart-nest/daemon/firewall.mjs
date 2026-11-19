@@ -45,10 +45,18 @@ function resolveElevatePath() {
   return fs.existsSync(candidate) ? candidate : null
 }
 
+/**
+ * The rule set's name suffix. Rules are found by NAME, so the LAN-only rules
+ * get new names: an older rule (any remote address) would otherwise be
+ * found and kept. The older ones are inert once nothing listens for them,
+ * and are listed in docs/security.md for removal.
+ */
+export const RULE_SUFFIX = ' (LAN only)'
+
 // Add an inbound allow rule if one by this name isn't already present.
 // Fire-and-forget: a missing rule degrades reachability, it never breaks the
 // server, so nothing here is allowed to reject into a caller's start path.
-export function ensureInboundRule({ name, protocol, port, label = name }) {
+export function ensureInboundRule({ name, protocol, port, program = null, label = name }) {
   if (process.platform !== 'win32') return
 
   execFile(
@@ -71,6 +79,14 @@ export function ensureInboundRule({ name, protocol, port, label = name }) {
           'dir=in', 'action=allow',
           `protocol=${protocol}`,
           `localport=${port}`,
+          // Scoped to one executable when given: the rule then admits that
+          // program on these ports and nothing else that might bind them.
+          ...(program ? [`program=${program}`] : []),
+          // The LAN only, whatever the network profile: Windows itself
+          // refuses any connection from outside this machine's own subnets,
+          // so a forwarded port or a public address still cannot reach Nest
+          // through a rule Nest made (2026-11-19, the internet-exposure check).
+          'remoteip=localsubnet',
         ],
         (err) => {
           if (err) console.warn(`Could not add firewall rule ${label}:`, err.message)
@@ -84,8 +100,20 @@ export function ensureInboundRule({ name, protocol, port, label = name }) {
 // TCP rule for a listening service port (gateway, port-80 proxy, MCP server).
 export function ensureFirewallRule(gatewayPort) {
   ensureInboundRule({
-    name: `RedstartNest Gateway ${gatewayPort}`,
+    name: `RedstartNest Gateway ${gatewayPort}${RULE_SUFFIX}`,
     protocol: 'TCP',
     port: gatewayPort,
   })
+}
+
+/**
+ * The bundled Caddy's rule (TLS plan C6): TCP 80, 443 and 8443 (the admin
+ * panel over HTTPS), for caddy.exe only.
+ * Program-scoped, unlike the gateway's port rules, because these are
+ * well-known ports another program could bind.
+ */
+export function ensureCaddyFirewallRule(caddyPath) {
+  // 8443: the admin panel over HTTPS. A new name, so the wider port set is
+  // created rather than an older 80,443 rule found and kept.
+  ensureInboundRule({ name: `RedstartNest Caddy HTTPS+admin${RULE_SUFFIX}`, protocol: 'TCP', port: '80,443,8443', program: caddyPath })
 }

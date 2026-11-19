@@ -1,0 +1,37 @@
+# The Redstart name service (TLS plan C12). Deployed by hand with wrangler;
+# never shipped in an installer. See README.md for the deploy steps.
+
+name = "redstart-name-service"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+
+# Its own hostname, never the apex (the website's) and never under nest.
+# (device records only). Cloudflare creates this DNS record itself at deploy:
+# do not add it by hand, or the custom-domain step fails.
+routes = [
+  { pattern = "names.redstartdevelopment.com", custom_domain = true },
+]
+# Not reachable on <account>.workers.dev: one address, the one installs know.
+workers_dev = false
+
+[vars]
+ZONE_NAME = "redstartdevelopment.com"
+SERVER_URL = "https://names.redstartdevelopment.com"
+# Filled at deploy: Cloudflare dashboard → the zone's Overview → Zone ID.
+ZONE_ID = "9e0d7acc06c69226e9ca7e10041e660d"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "redstart-names"
+# Filled at deploy, from `wrangler d1 create redstart-names`.
+database_id = "a0d978da-9bdb-4df3-bc23-263d9bdfb34f"
+migrations_dir = "migrations"
+
+# Housekeeping once a day: forget installs unseen for 180 days, un-proxy
+# anything under nest., alert at 700 records.
+[triggers]
+crons = ["17 4 * * *"]
+
+# Secrets (wrangler secret put, never in this file):
+#   CF_API_TOKEN   Zone → DNS → Edit, redstartdevelopment.com only
+#   ALERT_WEBHOOK  optional: where housekeeping alerts are POSTed

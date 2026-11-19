@@ -42,8 +42,8 @@ registerElectronStub()
 // trigger the stub's initPaths() call.
 await import('./electron-stub.mjs')
 
-const { startGateway, stopGateway } = await import('../daemon/tools-gateway.mjs')
-const { startMcpServer, stopMcpServer } = await import('../daemon/mcp-server.mjs')
+const { startGateway, stopGateway, rebindGateway } = await import('../daemon/tools-gateway.mjs')
+const { startMcpServer, stopMcpServer, rebindMcpServer, getMcpServerRunning } = await import('../daemon/mcp-server.mjs')
 const { setAuthRequired } = await import('../daemon/auth.mjs')
 
 // This suite is about reachability, not the auth gate (test-auth.mjs owns
@@ -235,6 +235,53 @@ await test('🔍 default bind is loopback — a caller must ASK for LAN exposure
   } finally {
     stopMcpServer()
   }
+})
+
+// ---------------------------------------------------------------------------
+// Rebinding a running server (network-mode owner, TLS plan C2b)
+// ---------------------------------------------------------------------------
+// The owner moves the gateway and MCP server between loopback and the
+// wildcard WHILE THEY RUN (Caddy starts fronting them; Caddy gives up). The
+// claim is the same as above, a LAN machine can or cannot connect, so it is
+// checked the same way: real connects from the LAN address.
+
+console.log('\n-- rebinding a running server --')
+
+await test('🔍 gateway: loopback → wildcard → loopback, same handler throughout', async () => {
+  if (!LAN_IP) return 'skipped — no non-loopback IPv4 on this host'
+  await startGateway(GATEWAY_PORT, baseConfig, { bindHost: '127.0.0.1' })
+  try {
+    assert(isClosed(await probe(LAN_IP, GATEWAY_PORT)), 'started exposed')
+    assert(await rebindGateway('0.0.0.0') === true, 'rebind reported nothing to do')
+    assert((await probe(LAN_IP, GATEWAY_PORT)) === 'open', 'the wildcard rebind is not reachable from the LAN')
+    const viaLan = await fetch(`http://${LAN_IP}:${GATEWAY_PORT}/auth/config`)
+    assert(viaLan.status === 200, `the rebound listener lost its handler: ${viaLan.status}`)
+    await rebindGateway('127.0.0.1')
+    assert(isClosed(await probe(LAN_IP, GATEWAY_PORT)), 'still on the LAN after narrowing back to loopback')
+    assert((await fetch(`http://127.0.0.1:${GATEWAY_PORT}/auth/config`)).status === 200, 'loopback lost after narrowing')
+    return 'LAN open → closed, handler kept'
+  } finally {
+    stopGateway()
+  }
+})
+
+await test('🔍 MCP server: rebinding keeps it running (plugins and kernels are not stopped)', async () => {
+  if (!LAN_IP) return 'skipped — no non-loopback IPv4 on this host'
+  await startMcpServer(MCP_PORT, baseConfig, { bindHost: '127.0.0.1' })
+  try {
+    await rebindMcpServer('0.0.0.0')
+    assert(getMcpServerRunning(), 'the rebind stopped the MCP server')
+    assert((await probe(LAN_IP, MCP_PORT)) === 'open', 'MCP not reachable from the LAN after widening')
+    await rebindMcpServer('127.0.0.1')
+    assert(getMcpServerRunning() && isClosed(await probe(LAN_IP, MCP_PORT)), 'MCP still on the LAN, or stopped, after narrowing')
+  } finally {
+    stopMcpServer()
+  }
+})
+
+await test('rebinding a server that is not running is a no-op', async () => {
+  assert(await rebindGateway('0.0.0.0') === false && await rebindMcpServer('0.0.0.0') === false, 'rebind started a stopped server')
+  assert(isClosed(await probe('127.0.0.1', GATEWAY_PORT)) && isClosed(await probe('127.0.0.1', MCP_PORT)), 'something is listening')
 })
 
 // ---------------------------------------------------------------------------

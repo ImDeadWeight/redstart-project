@@ -45,6 +45,12 @@ jobs:
         run: npm ci
         working-directory: chat-ui
 
+      # The pinned build (sha256-checked), so test-caddy-config.mjs can run
+      # `caddy validate` on every config Nest generates. Required here: under
+      # CI that test fails rather than skips when the binary is missing.
+      - name: Fetch the pinned Caddy
+        run: node scripts/fetch-caddy.mjs
+
       - name: Typecheck launcher (tsc --noEmit)
         run: npm run typecheck
 
@@ -261,11 +267,47 @@ jobs:
       - name: "Packaging: escaping imports + asar-unpacked assets"
         run: node scripts/test-packaging.mjs
 
+      - name: "Packaging: the bundled Caddy build is pinned and never an app update"
+        run: node scripts/test-caddy-build.mjs
+
+      - name: "Security: the bundled Caddy's config (loopback upstreams, proxy secret, no admin API, caddy validate)"
+        run: node scripts/test-caddy-config.mjs
+
+      - name: "Security: the bundled Caddy's supervisor (env allowlist, secret scrubbing, restart policy)"
+        run: node scripts/test-caddy-server.mjs
+
+      - name: "Security: the bundled Caddy, live (forged proxy header + X-Forwarded-For replaced, /mcp routing, :80 modes)"
+        run: node scripts/test-caddy-live.mjs
+
+      - name: "Security: the LAN state machine (no moment where Caddy and the gateway both face the LAN)"
+        run: node scripts/test-network-mode.mjs
+
+      - name: "Security: the network-mode owner (one owner; rollback; full LAN cycle with the real Caddy)"
+        run: node scripts/test-network-mode-owner.mjs
+
+      - name: "Security: tls settings + tls:* methods (token encrypted, never returned, re-key covered)"
+        run: node scripts/test-tls-settings.mjs
+
+      - name: "Security: name providers (private addresses only, token placement) + address watcher"
+        run: node scripts/test-tls-names.mjs
+
+      - name: "Security: HTTPS health (serving verdict vs warnings, hysteresis, real Caddy)"
+        run: node scripts/test-tls-health.mjs
+
+      - name: "Launcher: Secure address logic (HTTPS address leads only while serving; status sentences)"
+        run: node scripts/test-launcher-tls.mjs
+
+      - name: "Security: Nest is never on the open internet (IPv4-only listeners, LAN-only firewall rules, no port mapping)"
+        run: node scripts/test-lan-exposure.mjs
+
       - name: "Packaging: Tauri release assets + both update manifests (the bridge)"
         run: node scripts/test-shell-manifests.mjs
 
       - name: "Security: auth / sessions / roles"
         run: node scripts/test-auth.mjs
+
+      - name: "Security: proxy trust (only the bundled Caddy's per-launch secret, from loopback)"
+        run: node scripts/test-proxy-trust.mjs
 
       - name: "Security: accounts / beacon / containment gate / download endpoint"
         run: node scripts/test-daemon-security.mjs
@@ -419,6 +461,28 @@ jobs:
       # cannot drift: test-fs-tool (containment, recoverable delete), then
       # test-twigd (the shell pipe contract). No install: no dependencies run.
       - name: Twig suites (npm test)
+        run: npm test
+
+  name-service:
+    # The Redstart name service (infra/name-service, TLS plan C12): a
+    # Cloudflare Worker, tested under Node with node:sqlite standing in for D1
+    # and a fake Cloudflare DNS API. Checks the invariants on what would be
+    # sent to Cloudflare: own records only, nothing outside <id>.nest.,
+    # DNS-only, private addresses only. No install: the tests import only the
+    # Worker's own source (wrangler is needed for dev and deploy, not tests).
+    name: Name service (Worker)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/name-service
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+
+      - name: Name service suite (npm test)
         run: npm test
 
   twig-shell:
