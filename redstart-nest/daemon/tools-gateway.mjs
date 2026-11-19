@@ -332,6 +332,52 @@ function isPublicAsset(urlPath) {
 }
 
 // ---------------------------------------------------------------------------
+// The built-in MCP server's advertised URL
+// ---------------------------------------------------------------------------
+// The chat-ui connects to the MCP server from the BROWSER, at whatever URL
+// /redstart/mcp-servers hands it, so that URL has to be one the browser can
+// reach. Direct, that is the Host the client used with the MCP port swapped
+// in. Behind a TLS proxy (Nest's bundled Caddy, deploy/Caddyfile, Tailscale
+// Serve) it is not: an https page will not call http, and port+2 is on
+// loopback. There the proxy routes /mcp on its own origin, and the URL has to
+// name that origin.
+//
+// The origin comes from X-Forwarded-Proto / X-Forwarded-Host. For Nest's own
+// Caddy those are Caddy's (it overwrites a client's copies; test-caddy-live),
+// so the same reading serves it unchanged: https://<name>/mcp on :443, and
+// http://<ip>/mcp through the :80 fallback, which Caddy also routes. For a
+// bring-your-own proxy, or none, it is a deliberate exception to "Nest trusts
+// no forwarded header" (rate-limit.mjs). That rule exists because a header the
+// client controls is not an IDENTITY, and this is not one: the value only
+// decides what the caller's own client is told, behind an authenticated
+// route, so a spoofed one misdirects nobody but the spoofer. Nothing else may
+// read these headers on the strength of this.
+//
+// Both are validated rather than echoed (proto must be exactly http or https;
+// host must look like a host), so a malformed header falls back to the direct
+// URL instead of producing a URL that is not one. The first value of a
+// comma-separated list is the client-facing hop.
+//
+// Ported from the rescue/deploy-tls branch (1f634d6, d65b7df).
+const FORWARDED_HOST = /^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/
+
+function firstForwardedValue(raw) {
+  if (typeof raw !== 'string') return null
+  const value = raw.split(',')[0].trim()
+  return value || null
+}
+
+export function builtInMcpUrl(headers, publicPort) {
+  const proto = firstForwardedValue(headers['x-forwarded-proto'])?.toLowerCase()
+  if (proto === 'http' || proto === 'https') {
+    const host = firstForwardedValue(headers['x-forwarded-host']) ?? headers.host
+    if (typeof host === 'string' && FORWARDED_HOST.test(host)) return `${proto}://${host}/mcp`
+  }
+  const host = (headers.host || `127.0.0.1:${publicPort}`).split(':')[0]
+  return `http://${host}:${publicPort + 2}/mcp`
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -465,10 +511,9 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       // The built-in server's URL is derived from the Host header the client
       // used to reach us, so it works for both localhost and LAN clients.
       if (req.method === 'GET' && urlPath === '/redstart/mcp-servers') {
-        const host = (req.headers.host || `127.0.0.1:${publicPort}`).split(':')[0]
         const servers = []
         if (getMcpServerRunning()) {
-          servers.push({ name: 'Redstart Built-in', url: `http://${host}:${publicPort + 2}/mcp` })
+          servers.push({ name: 'Redstart Built-in', url: builtInMcpUrl(req.headers, publicPort) })
         }
         for (const s of getExternalServers()) {
           if (s.enabled) servers.push({ name: s.name, url: s.url })
