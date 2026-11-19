@@ -29,7 +29,43 @@ export const TOOL_NAME = 'run_python'
 export const OUTPUT_CAP = 8192   // same as run_javascript's
 export const DEFAULT_TIMEOUT_S = 30
 export const MAX_TIMEOUT_S = 120
-const MAX_LINKS = 20
+/** Up to this many changed files, every one is listed and linked. */
+export const LIST_ALL_UP_TO = 10
+/** Beyond that, top-level files are still listed and linked, up to this many. */
+const MAX_TOP_LEVEL = 10
+const GROUPS_SHOWN = 8
+
+/**
+ * Which changed files to name and link, and a per-folder count of the rest.
+ *
+ * A few files (a chart, a CSV, a report) are what the user asked for, and
+ * each one is listed and linked. Hundreds (an archive unpacked, a project
+ * generated) are not 300 download links and 15 KB of file names in the
+ * model's context: found 2026-11-19, when unpacking the Redstart repo put
+ * 20 arbitrary [file:] links into the chat. Then only loose top-level files,
+ * the likely outputs, are named and linked, and everything under a folder
+ * is a count per folder.
+ *
+ * @param {Array<{ path: string, bytes: number }>} files
+ * @returns {{ named: typeof files, groups: Array<{ dir: string, count: number, bytes: number }>, total: number }}
+ */
+export function summariseChangedFiles(files = []) {
+  if (files.length <= LIST_ALL_UP_TO) return { named: files, groups: [], total: files.length }
+  const named = []
+  const byDir = new Map()
+  for (const f of files) {
+    const p = String(f.path).replace(/\\/g, '/')
+    const slash = p.indexOf('/')
+    if (slash === -1 && named.length < MAX_TOP_LEVEL) { named.push(f); continue }
+    const dir = slash === -1 ? '.' : p.slice(0, slash)
+    const g = byDir.get(dir) ?? { dir, count: 0, bytes: 0 }
+    g.count++
+    g.bytes += f.bytes ?? 0
+    byDir.set(dir, g)
+  }
+  const groups = [...byDir.values()].sort((a, b) => b.count - a.count)
+  return { named, groups, total: files.length }
+}
 
 let pool = new KernelPool()
 const keysThatRan = new Set()
@@ -204,7 +240,16 @@ export function formatResult({ reply, error, timedOut, fresh, ranBefore, files, 
     if (stderr) parts.push(`stderr:\n${stderr}`)
   }
   if (files?.length) {
-    parts.push(`Files changed: ${files.map((f) => `${f.path} (${kb(f.bytes)})`).join(', ')}`)
+    const { named, groups, total } = summariseChangedFiles(files)
+    if (!groups.length) {
+      parts.push(`Files changed: ${named.map((f) => `${f.path} (${kb(f.bytes)})`).join(', ')}`)
+    } else {
+      const shown = groups.slice(0, GROUPS_SHOWN).map((g) => `${g.dir === '.' ? '(top level)' : `${g.dir}/`}: ${g.count} files (${kb(g.bytes)})`)
+      const more = groups.length > GROUPS_SHOWN ? `, and ${groups.length - GROUPS_SHOWN} more folders` : ''
+      parts.push(`Files changed: ${total} in all. ${shown.join('; ')}${more}.`)
+      if (named.length) parts.push(`At the top level: ${named.map((f) => `${f.path} (${kb(f.bytes)})`).join(', ')}`)
+      parts.push('(Too many to link one by one, so only the top-level files are linked. To give the user a particular file, name its path.)')
+    }
     parts.push(`(These are in this conversation's workspace, ${wsRel}/. read_document opens them as "${wsRel}/<name>".)`)
   }
   if (capWarning) parts.push(capWarning)
@@ -261,7 +306,8 @@ export async function callTool(name, args, cfg, ctx) {
   // and the model gets one line per file. Never the bytes, so a chart no
   // longer lands in conversations.json as base64.
   const content = [{ type: 'text', text }]
-  for (const f of files.slice(0, MAX_LINKS)) content.push(fileLink(`${wsRel}/${f.path}`, { bytes: f.bytes }))
+  // Many files (an archive unpacked): only the top-level ones (summariseChangedFiles).
+  for (const f of summariseChangedFiles(files).named) content.push(fileLink(`${wsRel}/${f.path}`, { bytes: f.bytes }))
 
   logEvent('python', 'run', {
     durationMs: Date.now() - startedAt,
