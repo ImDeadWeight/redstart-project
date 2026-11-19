@@ -279,6 +279,9 @@ jobs:
       - name: "Security: the bundled Caddy, live (forged proxy header + X-Forwarded-For replaced, /mcp routing, :80 modes)"
         run: node scripts/test-caddy-live.mjs
 
+      - name: "Security: the LAN state machine (no moment where Caddy and the gateway both face the LAN)"
+        run: node scripts/test-network-mode.mjs
+
       - name: "Packaging: Tauri release assets + both update manifests (the bridge)"
         run: node scripts/test-shell-manifests.mjs
 
