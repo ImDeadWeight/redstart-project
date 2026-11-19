@@ -276,6 +276,9 @@ jobs:
       - name: "Security: the bundled Caddy's supervisor (env allowlist, secret scrubbing, restart policy)"
         run: node scripts/test-caddy-server.mjs
 
+      - name: "Security: the bundled Caddy, live (forged proxy header + X-Forwarded-For replaced, /mcp routing, :80 modes)"
+        run: node scripts/test-caddy-live.mjs
+
       - name: "Packaging: Tauri release assets + both update manifests (the bridge)"
         run: node scripts/test-shell-manifests.mjs
 
