@@ -261,6 +261,9 @@ jobs:
       - name: "Packaging: escaping imports + asar-unpacked assets"
         run: node scripts/test-packaging.mjs
 
+      - name: "Packaging: the bundled Caddy build is pinned and never an app update"
+        run: node scripts/test-caddy-build.mjs
+
       - name: "Packaging: Tauri release assets + both update manifests (the bridge)"
         run: node scripts/test-shell-manifests.mjs
 
