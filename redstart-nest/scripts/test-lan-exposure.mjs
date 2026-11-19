@@ -148,6 +148,16 @@ test('🔍 HTTPS needs no inbound connection from the internet: DNS-01 only', ()
   assert(ch.http.disabled === true && ch['tls-alpn'].disabled === true && ch.dns, JSON.stringify(ch))
 })
 
+test('🔍 certificate verification is never switched off (daemon and scripts)', () => {
+  // CodeQL, 2026-11-19: tls-health.mjs used to switch it off and redo the
+  // checks by hand. Staging certificates are now verified against Let's
+  // Encrypt's staging roots instead (tls-health.mjs trustFor).
+  const files = [...DAEMON, ...sources(path.join(NEST, 'scripts'))]
+  const hits = files.filter((f) => /rejectUnauthorized:\s*false|NODE_TLS_REJECT_UNAUTHORIZED/.test(stripComments(fs.readFileSync(f, 'utf8'))))
+    .filter((f) => path.basename(f) !== 'test-lan-exposure.mjs')
+  assert(hits.length === 0, `verification switched off in: ${hits.map((f) => path.relative(NEST, f)).join(', ')}`)
+})
+
 test('🔍 names only ever point at private addresses (Nest refuses before sending)', () => {
   for (const ip of ['8.8.8.8', '203.0.113.9', '2600::1']) assert(!isPrivateIPv4(ip), ip)
   assert(isPrivateIPv4('192.168.0.213'), 'LAN address refused')

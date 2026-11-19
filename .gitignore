@@ -35,6 +35,9 @@ npm-debug.log*
 .env
 .env.*
 *.pem
+# The one exception: PUBLIC root certificates (Let's Encrypt staging), which
+# tls-health.mjs verifies staging certificates against. No key in it, ever.
+!redstart-nest/daemon/certs/letsencrypt-staging-roots.pem
 *.key
 
 # Runtime user data. These normally live in the Electron userData directory

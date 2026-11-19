@@ -36,6 +36,7 @@ import { buildCaddyConfig, PROXY_SECRET_ENV } from '../daemon/caddy-config.mjs'
 import { createCaddySupervisor } from '../daemon/caddy-server.mjs'
 import { getPrimaryLanIp } from '../daemon/net-interfaces.mjs'
 import { stagedCaddyPath } from './fetch-caddy.mjs'
+import { trustFor } from '../daemon/tls-health.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const arg = (name, fallback) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : fallback }
@@ -46,6 +47,8 @@ const token = process.env.REDSTART_DNS_TOKEN
 const production = flag('--production')
 const httpsPort = Number(arg('--https-port', '443'))
 const httpPort = Number(arg('--http-port', '80'))
+// The roots a check may trust: Node's own, plus Let's Encrypt staging's when testing on staging.
+const trust = trustFor({ allowStaging: !production })
 if (!name || !/\.duckdns\.org$/.test(name)) { console.error('--name <you>.duckdns.org is required'); process.exit(2) }
 if (!token) { console.error('Set REDSTART_DNS_TOKEN to your DuckDNS token first (not on the command line).'); process.exit(2) }
 
@@ -119,12 +122,13 @@ const health = await new Promise((resolve, reject) => {
 console.log(`  /health  ${health}`)
 
 step(`Running. Open https://${name}${httpsPort === 443 ? '' : `:${httpsPort}`} from a phone or browser on this network. Ctrl+C to stop.`)
-if (!production) console.log("  (staging certificate: expect a 'not trusted' warning — that is the CA, not the setup)")
+if (!production) console.log("  (staging certificate: verified here against Let's Encrypt's staging roots; a browser will still warn)")
 
 /** The certificate Caddy presents for the name, or null if there is none yet. */
 function presented(detail = false) {
   return new Promise((resolve) => {
-    const s = tls.connect({ host: '127.0.0.1', port: httpsPort, servername: name, rejectUnauthorized: false }, () => {
+    // Verified (staging roots trusted in staging mode): null until a VALID certificate is served.
+    const s = tls.connect({ host: '127.0.0.1', port: httpsPort, servername: name, rejectUnauthorized: true, ...(trust ? { ca: trust } : {}) }, () => {
       const c = s.getPeerCertificate(); s.destroy(); resolve(c && c.subject ? (detail ? c : true) : null)
     })
     s.on('error', () => resolve(null))
@@ -133,7 +137,7 @@ function presented(detail = false) {
 }
 
 function https_get(urlPath, done) {
-  return tls.connect({ host: '127.0.0.1', port: httpsPort, servername: name, rejectUnauthorized: production }, function () {
+  return tls.connect({ host: '127.0.0.1', port: httpsPort, servername: name, rejectUnauthorized: true, ...(trust ? { ca: trust } : {}) }, function () {
     this.write(`GET ${urlPath} HTTP/1.1\r\nHost: ${name}\r\nConnection: close\r\n\r\n`)
     let buf = ''
     this.on('data', (c) => { buf += c })

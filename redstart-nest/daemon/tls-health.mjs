@@ -1,6 +1,9 @@
 'use strict'
 
+import * as fs from 'node:fs'
 import * as https from 'node:https'
+import * as tls from 'node:tls'
+import { fileURLToPath } from 'node:url'
 import * as dns from 'node:dns'
 
 import { TLS_HEALTH_PATH } from './caddy-config.mjs'
@@ -17,8 +20,8 @@ import { TLS_HEALTH_PATH } from './caddy-config.mjs'
 // Serving = over LOOPBACK with SNI (no DNS involved, so a resolver outage
 // cannot flip it):
 //   1. a certificate is presented for the name: SAN matches, not expired,
-//      and trusted by Node's CA store, or issued by Let's Encrypt STAGING
-//      when the admin chose staging;
+//      and VERIFIED by Node against its CA store, plus Let's Encrypt's
+//      STAGING roots when the admin chose staging (trustFor below);
 //   2. Caddy's own /.well-known/redstart-tls-health answers 200 "ok" over
 //      that connection. Caddy's, not the gateway's: "HTTPS works" must not
 //      depend on whether a model is loaded.
@@ -43,11 +46,55 @@ import { TLS_HEALTH_PATH } from './caddy-config.mjs'
 export const RENEWAL_WARN_DAYS = 14
 const DAY = 86_400_000
 
+// Certificate verification is ALWAYS on (CodeQL, 2026-11-19: it used to be
+// switched off here, with the checks redone by hand so a staging certificate
+// could pass). Instead, when the admin chose "Test certificates", Let's
+// Encrypt's published STAGING roots are added to the roots this check
+// trusts, so a staging certificate is verified like any other: chain,
+// expiry, name. Nothing else ever trusts them.
+const STAGING_ROOTS_FILE = fileURLToPath(new URL('./certs/letsencrypt-staging-roots.pem', import.meta.url))
+let stagingRoots = null
+export function letsEncryptStagingRoots() {
+  if (!stagingRoots) {
+    stagingRoots = fs.readFileSync(STAGING_ROOTS_FILE, 'utf8').match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? []
+  }
+  return stagingRoots
+}
+
+/** The roots a check trusts: Node's own, plus the staging roots only when staging was chosen. */
+export function trustFor({ allowStaging = false } = {}) {
+  return allowStaging ? [...tls.rootCertificates, ...letsEncryptStagingRoots()] : undefined
+}
+
+/** A verification failure, as the panel's sentence. */
+export function tlsErrorReason(code, name) {
+  switch (code) {
+    case 'CERT_HAS_EXPIRED': return 'The certificate has expired'
+    case 'ERR_TLS_CERT_ALTNAME_INVALID': return `The certificate is not for ${name}`
+    case 'CERT_NOT_YET_VALID': return 'The certificate is not valid yet (is this computer\'s clock right?)'
+    case 'UNABLE_TO_VERIFY_LEAF_SIGNATURE':
+    case 'UNABLE_TO_GET_ISSUER_CERT':
+    case 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY':
+    case 'SELF_SIGNED_CERT_IN_CHAIN':
+    case 'DEPTH_ZERO_SELF_SIGNED_CERT':
+    case 'CERT_UNTRUSTED':
+    case 'CERT_SIGNATURE_FAILURE':
+      return 'The certificate is not from a trusted authority'
+    case 'ECONNREFUSED':
+    case 'ETIMEDOUT':
+      return 'HTTPS isn\'t answering yet'
+    default:
+      // Caddy with no certificate for the name ends the handshake with an alert.
+      return /ALERT|EPROTO|ECONNRESET|SSL/i.test(String(code)) ? 'No certificate yet' : 'HTTPS isn\'t answering yet'
+  }
+}
+
 /**
- * One HTTPS request to 127.0.0.1 with SNI = name. Never rejects.
+ * One HTTPS request to 127.0.0.1 with SNI = name, certificate VERIFIED
+ * against `ca` (trustFor). Never rejects: a failure is { ok: false, error: code }.
  * @returns {Promise<{ ok: boolean, status?: number, body?: string, headers?: object, cert?: object, authorized?: boolean, error?: string }>}
  */
-export function loopbackRequest({ name, port = 443, method = 'GET', path = '/', headers = {}, body = null, timeoutMs = 5000, request = https.request }) {
+export function loopbackRequest({ name, port = 443, method = 'GET', path = '/', headers = {}, body = null, timeoutMs = 5000, request = https.request, ca }) {
   return new Promise((resolve) => {
     let done = false
     const finish = (r) => { if (!done) { done = true; resolve(r) } }
@@ -55,7 +102,8 @@ export function loopbackRequest({ name, port = 443, method = 'GET', path = '/', 
     try {
       req = request({
         host: '127.0.0.1', port, method, path, servername: name,
-        headers: { host: name, ...headers }, rejectUnauthorized: false, agent: false, timeout: timeoutMs,
+        headers: { host: name, ...headers }, rejectUnauthorized: true, agent: false, timeout: timeoutMs,
+        ...(ca ? { ca } : {}),
       }, (res) => {
         const cert = res.socket.getPeerCertificate?.() ?? null
         const authorized = res.socket.authorized === true
@@ -86,8 +134,8 @@ function sanIncludes(cert, name) {
  * @returns {Promise<{ serving: boolean, reason: string|null, cert: null | { validTo: string, daysLeft: number, issuer: string, staging: boolean } }>}
  */
 export async function checkServing({ name, port = 443, allowStaging = false, now = Date.now, request }) {
-  const r = await loopbackRequest({ name, port, path: TLS_HEALTH_PATH, request })
-  if (!r.ok) return { serving: false, reason: 'HTTPS isn\'t answering yet', cert: null }
+  const r = await loopbackRequest({ name, port, path: TLS_HEALTH_PATH, request, ca: trustFor({ allowStaging }) })
+  if (!r.ok) return { serving: false, reason: tlsErrorReason(r.error, name), cert: null }
   const c = r.cert
   if (!c || !c.subject) return { serving: false, reason: 'No certificate yet', cert: null }
   const validTo = Date.parse(c.valid_to)
@@ -99,9 +147,9 @@ export async function checkServing({ name, port = 443, allowStaging = false, now
   }
   if (!sanIncludes(c, name)) return { serving: false, reason: `The certificate is not for ${name}`, cert }
   if (!(validTo > now())) return { serving: false, reason: 'The certificate has expired', cert }
-  if (!r.authorized && !(allowStaging && cert.staging)) {
-    return { serving: false, reason: 'The certificate is not from a trusted authority', cert }
-  }
+  // Belt and braces: with verification on, a response only arrives over a
+  // verified connection, so this can only fire for an injected request.
+  if (!r.authorized) return { serving: false, reason: 'The certificate is not from a trusted authority', cert }
   if (r.status !== 200 || r.body !== 'ok') return { serving: false, reason: `HTTPS answered ${r.status}`, cert }
   return { serving: true, reason: null, cert }
 }
@@ -149,19 +197,20 @@ export async function diagnostics({
     const e2e = await fetchName({ name, port, allowStaging })
     if (!e2e.ok) w.push({ kind: 'name', text: `https://${name} doesn't load from this computer: ${e2e.error}` })
   }
-  const chat = await loopbackRequest({ name, port, path: '/health', request })
+  const ca = trustFor({ allowStaging })
+  const chat = await loopbackRequest({ name, port, path: '/health', request, ca })
   if (!chat.ok || chat.status === 502 || chat.status === 503) {
     w.push({ kind: 'chat', text: 'HTTPS works, but chat isn\'t running (no model is loaded).' })
   } else {
     const mcp = await loopbackRequest({
-      name, port, method: 'POST', path: '/mcp', request,
+      name, port, method: 'POST', path: '/mcp', request, ca,
       headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'redstart-tls-health', version: '1' } } }),
     })
     const mcpAnswered = mcp.ok && (mcp.status === 401 || mcp.status === 200)
     if (!mcpAnswered) w.push({ kind: 'mcp', text: 'Chat works; tools are unavailable (the tool server isn\'t answering).' })
     else if (mcp.status === 200 && mcp.headers?.['mcp-session-id']) {
-      void loopbackRequest({ name, port, method: 'DELETE', path: '/mcp', request, headers: { 'mcp-session-id': mcp.headers['mcp-session-id'] } })
+      void loopbackRequest({ name, port, method: 'DELETE', path: '/mcp', request, ca, headers: { 'mcp-session-id': mcp.headers['mcp-session-id'] } })
     }
   }
   return w

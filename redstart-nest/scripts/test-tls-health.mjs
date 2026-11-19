@@ -19,7 +19,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import * as net from 'node:net'
-import { checkServing, diagnostics, createHealthRunner, loopbackRequest, RENEWAL_WARN_DAYS } from '../daemon/tls-health.mjs'
+import { checkServing, diagnostics, createHealthRunner, loopbackRequest, RENEWAL_WARN_DAYS, trustFor, letsEncryptStagingRoots, tlsErrorReason } from '../daemon/tls-health.mjs'
 import { TLS_HEALTH_PATH, buildCaddyConfig, PROXY_SECRET_ENV } from '../daemon/caddy-config.mjs'
 import { createCaddySupervisor } from '../daemon/caddy-server.mjs'
 import { stagedCaddyPath } from './fetch-caddy.mjs'
@@ -92,13 +92,33 @@ await test('🔍 not serving, with one sentence each', async () => {
   return `${cases.length} cases`
 })
 
-await test('🔍 staging: an untrusted STAGING issuer serves only when staging was chosen', async () => {
-  const opts = { authorized: false, cert: certFor({ issuer: { O: '(STAGING) Let\'s Encrypt', CN: '(STAGING) Baloney Bulgur YE2' } }), routes: healthy }
-  assert((await checkServing({ name: NAME, now: () => NOW, request: fakeRequest(opts) })).serving === false, 'staging accepted without being chosen')
-  const r = await checkServing({ name: NAME, now: () => NOW, allowStaging: true, request: fakeRequest(opts) })
-  assert(r.serving && r.cert.staging, JSON.stringify(r))
-  const fake = { ...opts, cert: certFor({ issuer: { O: 'Evil Corp', CN: 'Totally Real CA' } }) }
-  assert(!(await checkServing({ name: NAME, now: () => NOW, allowStaging: true, request: fakeRequest(fake) })).serving, 'staging switch accepted any untrusted issuer')
+await test('🔍 verification is ON for every check; staging roots are trusted only when staging was chosen', async () => {
+  const seen = []
+  await checkServing({ name: NAME, now: () => NOW, request: fakeRequest({ routes: healthy, seen }) })
+  await checkServing({ name: NAME, now: () => NOW, allowStaging: true, request: fakeRequest({ routes: healthy, seen }) })
+  assert(seen.every((o) => o.rejectUnauthorized === true), 'a check ran with certificate verification switched off')
+  assert(seen[0].ca === undefined, 'staging roots trusted without staging being chosen')
+  const roots = letsEncryptStagingRoots()
+  assert(Array.isArray(seen[1].ca) && roots.every((r) => seen[1].ca.includes(r)) && seen[1].ca.length > roots.length, 'staging: not Node\'s roots PLUS the staging roots')
+  assert(trustFor({ allowStaging: false }) === undefined, 'trustFor(false)')
+})
+
+await test('🔍 the staging roots are the two Let\'s Encrypt publishes, pinned by fingerprint', async () => {
+  const { X509Certificate } = await import('node:crypto')
+  const fps = letsEncryptStagingRoots().map((pem) => new X509Certificate(pem).fingerprint256).sort()
+  const want = [
+    'E7:05:70:A9:89:F8:56:5A:AB:DF:7C:AE:27:AB:D1:62:18:72:D6:A3:F8:11:E3:FE:F2:7E:3D:BA:02:91:21:98', // (STAGING) Pretend Pear X1
+    '9B:2A:33:9F:E6:A3:E8:55:85:C4:CD:75:53:6C:B8:C1:CF:7C:D6:03:B9:A6:4B:EC:25:21:85:8A:E4:8D:A8:5D', // (STAGING) Bogus Broccoli X2
+  ].sort()
+  assert(JSON.stringify(fps) === JSON.stringify(want), `staging roots changed: ${fps.join(', ')}`)
+})
+
+await test('verification failures become the panel\'s sentences', () => {
+  const rows = [
+    ['CERT_HAS_EXPIRED', /expired/], ['ERR_TLS_CERT_ALTNAME_INVALID', /not for myhouse/], ['SELF_SIGNED_CERT_IN_CHAIN', /trusted authority/],
+    ['UNABLE_TO_GET_ISSUER_CERT_LOCALLY', /trusted authority/], ['ECONNREFUSED', /isn't answering/], ['ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR', /No certificate yet/],
+  ]
+  for (const [code, re] of rows) assert(re.test(tlsErrorReason(code, NAME)), `${code} → ${tlsErrorReason(code, NAME)}`)
 })
 
 console.log('\n-- diagnostics inform, never decide --')
@@ -210,7 +230,10 @@ if (!fs.existsSync(BIN)) {
     const deadline = Date.now() + 20000
     let r = null
     while (Date.now() < deadline) {
-      r = await loopbackRequest({ name: NAME, port: httpsPort, path: TLS_HEALTH_PATH })
+      // Verified against Caddy's own local root (this test's CA), never with verification off.
+      const rootFile = path.join(dir, 'caddy', 'storage', 'pki', 'authorities', 'local', 'root.crt')
+      const ca = fs.existsSync(rootFile) ? fs.readFileSync(rootFile, 'utf8') : undefined
+      r = await loopbackRequest({ name: NAME, port: httpsPort, path: TLS_HEALTH_PATH, ca })
       if (r.ok && r.cert?.subject) break
       await new Promise((res) => setTimeout(res, 250))
     }
@@ -218,9 +241,9 @@ if (!fs.existsSync(BIN)) {
       assert(r?.ok && r.status === 200 && r.body === 'ok', JSON.stringify({ ok: r?.ok, status: r?.status, body: r?.body, error: r?.error }))
       return `issuer ${r.cert.issuer?.CN}`
     })
-    await test('🔍 the real certificate is parsed, SAN-matched, and its untrusted issuer refused', async () => {
+    await test('🔍 the real certificate from an untrusted issuer is refused by verification itself', async () => {
       const v = await checkServing({ name: NAME, port: httpsPort })
-      assert(!v.serving && /trusted authority/.test(v.reason) && v.cert?.daysLeft >= 0, JSON.stringify(v))
+      assert(!v.serving && /trusted authority/.test(v.reason), JSON.stringify(v))
       const staging = await checkServing({ name: NAME, port: httpsPort, allowStaging: true })
       assert(!staging.serving, 'the staging switch accepted Caddy\'s local CA')
     })

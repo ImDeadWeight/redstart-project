@@ -115,7 +115,7 @@ await test('🔍 binary: bundled when packaged, deps/caddy in dev, then the inst
 
 await test('🔍 child env: allowlist + REDSTART_* secrets only', () => {
   const env = caddyEnv({ base: { SystemRoot: 'S', OPENAI_API_KEY: 'k', AWS_SECRET_ACCESS_KEY: 'a', HOME: '/h' }, secrets: { REDSTART_DNS_TOKEN: 't0ken' } })
-  assert(env.SystemRoot === 'S' && env.HOME === '/h' && env.REDSTART_DNS_TOKEN === 't0ken', JSON.stringify(env))
+  assert(env.SystemRoot === 'S' && env.HOME === '/h' && env.REDSTART_DNS_TOKEN === 't0ken', `env names: ${Object.keys(env).join(', ')}`)
   assert(!('OPENAI_API_KEY' in env) && !('AWS_SECRET_ACCESS_KEY' in env), "Nest's own environment leaked into Caddy")
   let threw = false
   try { caddyEnv({ secrets: { PATH: '/evil' } }) } catch { threw = true }

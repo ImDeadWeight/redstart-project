@@ -220,7 +220,8 @@ try {
 
   await test('🔍 with no certificate yet, TLS fails closed (no self-signed fallback)', async () => {
     const err = await new Promise((resolve) => {
-      const s = tls.connect({ host: '127.0.0.1', port: httpsPort, servername: HOST, rejectUnauthorized: false }, () => { s.destroy(); resolve(null) })
+      // Verification ON: what is checked is that no handshake completes at all.
+      const s = tls.connect({ host: '127.0.0.1', port: httpsPort, servername: HOST, rejectUnauthorized: true }, () => { s.destroy(); resolve(null) })
       s.on('error', (e) => resolve(e))
       s.setTimeout(5000, () => { s.destroy(); resolve(new Error('timeout')) })
     })
