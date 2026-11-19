@@ -120,7 +120,7 @@ export function binaryPathRejection(value, platform = process.platform) {
  * @returns {string|null} the reason to refuse, or null if acceptable.
  */
 /** Held by the bundled Caddy while HTTPS is on (TLS plan C9). */
-const CADDY_PORTS = Object.freeze({ 80: 'HTTPS redirects (the bundled Caddy)', 443: 'HTTPS (the bundled Caddy)' })
+const CADDY_PORTS = Object.freeze({ 80: 'HTTPS redirects (the bundled Caddy)', 443: 'HTTPS (the bundled Caddy)', 8443: 'the admin panel over HTTPS (the bundled Caddy)' })
 
 export function serverPortRejection(port, { httpsFronted = false } = {}) {
   if (!Number.isInteger(port)) return 'A port must be a whole number.'

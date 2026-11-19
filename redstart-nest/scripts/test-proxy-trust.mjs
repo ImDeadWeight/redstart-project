@@ -12,6 +12,7 @@ import {
   newProxySecret, clearProxySecret, hasProxySecret, isFromOwnProxy, clientAddress, PROXY_HEADER_NAME,
 } from '../daemon/proxy-trust.mjs'
 import { withoutProxySecret } from '../daemon/gateway/upstream.mjs'
+import { remoteAddress } from '../daemon/admin/http.mjs'
 
 const results = []
 
@@ -91,6 +92,17 @@ test('🔍 after clearProxySecret the old secret is worthless', () => {
   clearProxySecret()
   const r = req('127.0.0.1', { [PROXY_HEADER_NAME]: s, 'x-forwarded-for': '10.0.0.9' })
   assert(!isFromOwnProxy(r), 'a stopped Caddy\'s secret is still trusted')
+})
+
+console.log('\n-- the control plane, served over HTTPS by the same Caddy --')
+
+test('🔍 the admin login\'s rate-limit key follows the same rule (secret + loopback, else the socket)', () => {
+  const s2 = newProxySecret()
+  try {
+    assert(remoteAddress(req('127.0.0.1', { [PROXY_HEADER_NAME]: s2, 'x-forwarded-for': '192.168.1.30' })) === '192.168.1.30', 'via Caddy: not the device')
+    assert(remoteAddress(req('127.0.0.1', { 'x-forwarded-for': '192.168.1.30' })) === '127.0.0.1', 'no secret: a forwarded header was trusted')
+    assert(remoteAddress(req('192.168.1.9', { [PROXY_HEADER_NAME]: s2, 'x-forwarded-for': '10.0.0.1' })) === '192.168.1.9', 'a LAN peer with the secret was trusted')
+  } finally { clearProxySecret() }
 })
 
 console.log('\n-- the secret stays in the gateway --')

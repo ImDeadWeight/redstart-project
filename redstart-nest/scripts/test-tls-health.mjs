@@ -212,13 +212,19 @@ if (!fs.existsSync(BIN)) {
   else console.log('  SKIPPED: no staged Caddy')
 } else {
   const free = () => new Promise((r) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)) }) })
-  const [httpsPort, httpPort] = [await free(), await free()]
+  const [httpsPort, httpPort, adminHttpsPort] = [await free(), await free(), await free()]
+  // A stand-in for the admin listener on loopback, recording what reaches it.
+  const adminSeen = []
+  const { createServer } = await import('node:http')
+  const adminStub = createServer((req, res) => { adminSeen.push({ url: req.url, secret: req.headers['x-redstart-proxy'] }); res.end('admin-stub') })
+  await new Promise((r) => adminStub.listen(0, '127.0.0.1', r))
+  const adminPort = adminStub.address().port
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-tls-health-'))
   const sup = createCaddySupervisor({ configDir: dir, resolveBinary: () => BIN })
   try {
     const cfg = buildCaddyConfig({
       hostname: NAME, dnsProvider: { name: 'duckdns', api_token: '{env.REDSTART_DNS_TOKEN}' },
-      gatewayPort: 1, mcpPort: 2, httpsServing: false, requireHttps: false, httpsPort, httpPort,
+      gatewayPort: 1, mcpPort: 2, httpsServing: false, requireHttps: false, httpsPort, httpPort, adminPort, adminHttpsPort,
       storageDir: path.join(dir, 'caddy', 'storage'),
     })
     // This test's copy: Caddy's own internal CA, so a real certificate exists with no network.
@@ -229,10 +235,11 @@ if (!fs.existsSync(BIN)) {
     await sup.start({ config: cfg, secrets: { REDSTART_DNS_TOKEN: 'not-real-token', [PROXY_SECRET_ENV]: 'live-secret-0123' } })
     const deadline = Date.now() + 20000
     let r = null
+    let ca
     while (Date.now() < deadline) {
       // Verified against Caddy's own local root (this test's CA), never with verification off.
       const rootFile = path.join(dir, 'caddy', 'storage', 'pki', 'authorities', 'local', 'root.crt')
-      const ca = fs.existsSync(rootFile) ? fs.readFileSync(rootFile, 'utf8') : undefined
+      ca = fs.existsSync(rootFile) ? fs.readFileSync(rootFile, 'utf8') : undefined
       r = await loopbackRequest({ name: NAME, port: httpsPort, path: TLS_HEALTH_PATH, ca })
       if (r.ok && r.cert?.subject) break
       await new Promise((res) => setTimeout(res, 250))
@@ -241,6 +248,17 @@ if (!fs.existsSync(BIN)) {
       assert(r?.ok && r.status === 200 && r.body === 'ok', JSON.stringify({ ok: r?.ok, status: r?.status, body: r?.body, error: r?.error }))
       return `issuer ${r.cert.issuer?.CN}`
     })
+    await test('🔍 the admin panel over HTTPS: Caddy carries it to the loopback listener, with the proxy secret', async () => {
+      const a = await loopbackRequest({ name: NAME, port: adminHttpsPort, path: '/admin/api/x', ca })
+      assert(a.ok && a.status === 200 && a.body === 'admin-stub', JSON.stringify({ ok: a.ok, status: a.status, body: a.body, error: a.error }))
+      assert(adminSeen.at(-1)?.url === '/admin/api/x' && adminSeen.at(-1)?.secret === 'live-secret-0123', JSON.stringify(adminSeen.at(-1)))
+      const plain = await new Promise((resolve) => {
+        const r = (http80) => http80.get({ host: '127.0.0.1', port: adminHttpsPort, path: '/' }, (res) => { res.resume(); resolve(res.statusCode) }).on('error', () => resolve('refused'))
+        import('node:http').then(r)
+      })
+      assert(plain !== 200, `plain HTTP to the admin port answered ${plain}`)
+    })
+
     await test('🔍 the real certificate from an untrusted issuer is refused by verification itself', async () => {
       const v = await checkServing({ name: NAME, port: httpsPort })
       assert(!v.serving && /trusted authority/.test(v.reason), JSON.stringify(v))
@@ -249,6 +267,7 @@ if (!fs.existsSync(BIN)) {
     })
   } finally {
     await sup.stop()
+    adminStub.close()
     fs.rmSync(dir, { recursive: true, force: true })
   }
 }

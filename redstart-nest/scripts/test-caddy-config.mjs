@@ -185,6 +185,21 @@ test('🔍 Caddy answers its own health route on :443 only, before any proxy', (
   }
 })
 
+test('🔍 the admin panel over HTTPS (:8443): only when asked, loopback upstream, the proxy secret, never on plain :80', () => {
+  for (const c of COMBOS) {
+    assert(!('admin' in servers(build(c))), `${label(c)}: an admin server without adminPort`)
+    const s = servers(build({ ...c, adminPort: 19083 }))
+    const admin = s.admin
+    assert(admin, `${label(c)}: no admin server`)
+    assert(JSON.stringify(admin.listen) === JSON.stringify(['tcp4/0.0.0.0:8443']), `listen ${admin.listen}`)
+    assert(JSON.stringify(admin.tls_connection_policies) === JSON.stringify([{ match: { sni: [BASE.hostname] } }]) && admin.strict_sni_host === true, 'not SNI-bound to the name')
+    const p = proxies({ admin })
+    assert(p.length === 1 && p[0].upstreams[0].dial === '127.0.0.1:19083', `upstream ${JSON.stringify(p.map((x) => x.upstreams))}`)
+    assert(p[0].headers.request.set[PROXY_HEADER][0] === `{env.${PROXY_SECRET_ENV}}`, 'admin requests carry no proxy secret')
+    assert(!JSON.stringify(s.http).includes(':19083') && !JSON.stringify(s.https).includes(':19083'), `${label(c)}: the admin listener is reachable through :80 or :443`)
+  }
+})
+
 test('Caddy adds no redirects of its own; :80 runs no automatic HTTPS', () => {
   const s = servers(build())
   assert(s.https.automatic_https?.disable_redirects === true, ':443 automatic redirects not disabled')

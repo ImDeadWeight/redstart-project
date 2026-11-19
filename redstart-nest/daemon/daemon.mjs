@@ -37,7 +37,8 @@ import { ensureDefaultCapabilityFolders, getCapabilities } from './tools-storage
 import { stopGateway } from './tools-gateway.mjs'
 import { stopMcpServer } from './mcp-server.mjs'
 import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
-import { startAdminListener, stopAdminListener, DEFAULT_ADMIN_BIND_HOST, bindHostRejection } from './admin-listener.mjs'
+import { startAdminListener, stopAdminListener, DEFAULT_ADMIN_BIND_HOST, bindHostRejection, effectiveAdminBindHost } from './admin-listener.mjs'
+import { readTls } from './tls-settings.mjs'
 import { lastKnownDiscovery } from './discovery.mjs'
 import { initLan, lanOwner, stopLanNow, tlsInputsFrom, beaconInfo } from './lan.mjs'
 import { decryptSecret, encryptSecret } from './secrets.mjs'
@@ -324,6 +325,10 @@ async function startAdminPlane() {
   // accepted, must not put the control plane on a public address. Refused →
   // loopback (fail closed), and the log says why.
   let bindHost = settings.adminBindHost || DEFAULT_ADMIN_BIND_HOST
+  // With HTTPS on, the admin panel reaches other devices only through the
+  // bundled Caddy (https://<name>:8443): the listener binds loopback from the
+  // very first moment, before the LAN is set up.
+  bindHost = effectiveAdminBindHost(bindHost, readTls(settings).mode)
   const refusal = bindHostRejection(bindHost)
   if (refusal) {
     logEvent('security', 'admin_bind_refused', { reason: refusal })

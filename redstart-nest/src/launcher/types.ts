@@ -313,6 +313,11 @@ export type ControlPlaneState = {
   bindHost: string | null
   port: number
   exposed: boolean
+  // With HTTPS on, "reachable on the network" is carried by the bundled Caddy:
+  // the listener is on loopback and other devices use httpsUrl (null until
+  // HTTPS faces the LAN).
+  viaHttps?: boolean
+  httpsUrl?: string | null
 }
 
 // Reconciled against what the OS actually says

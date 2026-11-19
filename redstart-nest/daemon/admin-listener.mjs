@@ -82,6 +82,29 @@ export function isLoopbackBind(host) {
 }
 
 /**
+ * Where the admin listener actually binds (2026-11-19: the admin panel over
+ * HTTPS). With HTTPS on (any tls.mode but 'off') the control plane is NEVER
+ * plain HTTP on the LAN: it binds loopback, and the bundled Caddy serves it
+ * to other devices at https://<name>:8443 while HTTPS faces the LAN. This
+ * machine keeps its direct way in (127.0.0.1) whatever Caddy is doing, so a
+ * broken Caddy can never lock the host out. With HTTPS off, the configured
+ * address is used as before.
+ *
+ * @param {string} configured  settings.adminBindHost (or the default)
+ * @param {string} tlsMode     settings.tls.mode
+ */
+export function effectiveAdminBindHost(configured, tlsMode) {
+  const host = configured || DEFAULT_ADMIN_BIND_HOST
+  if (tlsMode && tlsMode !== 'off' && !isLoopbackBind(host)) return DEFAULT_ADMIN_BIND_HOST
+  return host
+}
+
+/** The admin panel is meant to be reachable from other devices (whatever carries it). */
+export function adminExposureRequested(configured) {
+  return !!configured && !isLoopbackBind(configured)
+}
+
+/**
  * Reject a bind address that is not something this host can meaningfully bind.
  *
  * Hostnames are refused rather than resolved: "bind to whatever this name

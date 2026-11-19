@@ -16,6 +16,7 @@ import { applyTlsSettings, beginSwitch, checkTlsNow, retryCaddy, lanStatus, rele
 import { lastKnownDiscovery } from '../discovery.mjs'
 import { serverPortRejection } from './validate.mjs'
 import { encryptSecret } from '../secrets.mjs'
+import { syncAdminBind } from './admin.mjs'
 import { logEvent } from '../logger.mjs'
 
 export function getTls() {
@@ -66,7 +67,13 @@ export async function setTls(patch, { readSettings, writeSettings, encrypt = enc
   } else if (from === 'own' && to === 'own' && serving && (before.name !== v.next.name || before.provider !== v.next.provider)) {
     beginSwitch(previousTls, v.next.name)
   }
+  // The admin panel: with HTTPS on it is served by Caddy and the listener
+  // goes to loopback FIRST; with HTTPS off it widens back only AFTER Caddy
+  // has stopped. Never plain HTTP on the LAN while HTTPS is on.
+  const adminDeps = { readSettings }
+  if (v.next.mode !== 'off') await syncAdminBind(adminDeps)
   await applyTlsSettings({ clearFailure: true })
+  if (v.next.mode === 'off') await syncAdminBind(adminDeps)
   return { ok: true, status: lanStatus() }
 }
 

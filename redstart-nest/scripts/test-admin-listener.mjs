@@ -283,6 +283,20 @@ await test('🔍 never the internet: "::" (every IPv6 address, global ones inclu
   }
 })
 
+await test('🔍 with HTTPS on, the admin listener binds loopback (the bundled Caddy carries it); with HTTPS off, as configured', async () => {
+  const { effectiveAdminBindHost } = await import('../daemon/admin-listener.mjs')
+  const rows = [
+    ['0.0.0.0', 'own', '127.0.0.1'], ['0.0.0.0', 'redstart', '127.0.0.1'], ['192.168.1.50', 'own', '127.0.0.1'],
+    ['0.0.0.0', 'off', '0.0.0.0'], ['192.168.1.50', 'off', '192.168.1.50'], ['127.0.0.1', 'own', '127.0.0.1'],
+    [undefined, 'own', '127.0.0.1'], [undefined, 'off', '127.0.0.1'], ['0.0.0.0', undefined, '0.0.0.0'],
+  ]
+  for (const [configured, mode, want] of rows) {
+    const got = effectiveAdminBindHost(configured, mode)
+    assert(got === want, `${configured} + tls ${mode} → ${got}, want ${want}`)
+  }
+  return `${rows.length} rows`
+})
+
 await test('🔍 a hostname is refused — exposure must be stated, not resolved', () => {
   for (const host of ['redstart.local', 'example.com', '', '   ', null, 42]) {
     assert(bindHostRejection(host) !== null, `${JSON.stringify(host)} was accepted as a bind address`)

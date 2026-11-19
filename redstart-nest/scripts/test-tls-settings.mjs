@@ -233,6 +233,17 @@ await test('caddyKey: registering does not change it (no restart mid-start); sta
   assert(caddyKeyOf(save({ mode: 'redstart' })) !== caddyKeyOf(save(own())), 'own vs Automatic')
 })
 
+await test('🔍 the admin panel over HTTPS: proxied only with HTTPS on AND exposure asked for; the Caddy key follows it', async () => {
+  const { adminProxied } = await import('../daemon/tls-settings.mjs')
+  const on = save(own())
+  assert(adminProxied({ ...on, adminBindHost: '0.0.0.0' }) === true, 'HTTPS on + exposed')
+  assert(adminProxied({ ...on, adminBindHost: '127.0.0.1' }) === false && adminProxied(on) === false, 'not exposed')
+  assert(adminProxied({ ...save({ mode: 'off' }), adminBindHost: '0.0.0.0' }) === false, 'HTTPS off: the admin panel is not proxied')
+  assert(caddyKeyOf({ ...on, adminBindHost: '0.0.0.0' }) !== caddyKeyOf(on), 'turning exposure on would not restart Caddy with the :8443 route')
+  const t = tlsRuntime({ ...on, adminBindHost: '0.0.0.0' }, { decrypt: decryptSecret })
+  assert(t.adminProxied === true, 'runtime does not carry it')
+})
+
 await test('🔍 choosing Automatic with network mode OFF calls no name service (invariant 6)', async () => {
   const calls = []
   const realFetch = globalThis.fetch

@@ -192,10 +192,19 @@ export function NetworkPanel({
             <dl className="mt-2 space-y-1 text-[11px]">
               <div className="flex gap-2">
                 <dt className="w-24 shrink-0 text-zinc-600">Admin panel</dt>
-                <dd className="font-mono text-amber-300">
-                  {localIp ? `${localIp}:${controlPlane.port}` : `:${controlPlane.port}`}
-                  <span className="ml-2 font-sans text-zinc-500">your local network</span>
-                </dd>
+                {controlPlane.viaHttps ? (
+                  // HTTPS on: other devices reach the admin panel through the
+                  // bundled Caddy only; this machine keeps 127.0.0.1.
+                  <dd className="font-mono text-emerald-400">
+                    {controlPlane.httpsUrl ?? 'https://… (once Local network is on and HTTPS is working)'}
+                    <span className="ml-2 font-sans text-zinc-500">encrypted, your local network</span>
+                  </dd>
+                ) : (
+                  <dd className="font-mono text-amber-300">
+                    {localIp ? `${localIp}:${controlPlane.port}` : `:${controlPlane.port}`}
+                    <span className="ml-2 font-sans text-zinc-500">your local network, not encrypted</span>
+                  </dd>
+                )}
               </div>
               <div className="flex gap-2">
                 <dt className="w-24 shrink-0 text-zinc-600">Chat API</dt>

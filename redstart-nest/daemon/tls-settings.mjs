@@ -170,9 +170,23 @@ export function caddyDnsFor(provider) {
  * Everything lan.mjs needs to start Caddy, or null when HTTPS is off or
  * unusable (no token, or one that no longer decrypts).
  */
+/**
+ * Caddy also serves the control plane (:8443) when HTTPS is on and the admin
+ * panel is meant to be reachable from other devices. The admin listener then
+ * binds loopback (admin-listener.mjs effectiveAdminBindHost).
+ */
+export function adminProxied(settings) {
+  const host = settings?.adminBindHost
+  return readTls(settings).mode !== 'off' && typeof host === 'string' && !['127.0.0.1', '::1', 'localhost'].includes(host.trim())
+}
+
 export function tlsRuntime(settings, { decrypt }) {
   const t = readTls(settings)
-  if (t.mode === 'redstart') return redstartRuntime(settings, t, { decrypt })
+  const base = t.mode === 'redstart' ? redstartRuntime(settings, t, { decrypt }) : ownRuntime(settings, t, { decrypt })
+  return base ? { ...base, adminProxied: adminProxied(settings) } : null
+}
+
+function ownRuntime(settings, t, { decrypt }) {
   if (t.mode !== 'own' || nameRejection(t.provider, t.name) || !t.hasToken) return null
   let token
   try { token = decrypt(settings.tls.own.tokenEnc) } catch { return null }
@@ -227,7 +241,7 @@ export function caddyKeyOf(settings) {
   // the key anyway.
   void auto
   h.update(JSON.stringify(t.mode === 'redstart'
-    ? ['redstart', t.requireHttps, t.acmeStaging]
-    : [t.provider, t.name, settings?.tls?.own?.tokenEnc ?? '', t.requireHttps, t.acmeStaging]))
+    ? ['redstart', t.requireHttps, t.acmeStaging, adminProxied(settings)]
+    : [t.provider, t.name, settings?.tls?.own?.tokenEnc ?? '', t.requireHttps, t.acmeStaging, adminProxied(settings)]))
   return h.digest('hex').slice(0, 16)
 }

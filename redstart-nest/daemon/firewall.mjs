@@ -107,10 +107,13 @@ export function ensureFirewallRule(gatewayPort) {
 }
 
 /**
- * The bundled Caddy's rule (TLS plan C6): TCP 80 and 443, for caddy.exe only.
+ * The bundled Caddy's rule (TLS plan C6): TCP 80, 443 and 8443 (the admin
+ * panel over HTTPS), for caddy.exe only.
  * Program-scoped, unlike the gateway's port rules, because these are
  * well-known ports another program could bind.
  */
 export function ensureCaddyFirewallRule(caddyPath) {
-  ensureInboundRule({ name: `RedstartNest Caddy HTTPS${RULE_SUFFIX}`, protocol: 'TCP', port: '80,443', program: caddyPath })
+  // 8443: the admin panel over HTTPS. A new name, so the wider port set is
+  // created rather than an older 80,443 rule found and kept.
+  ensureInboundRule({ name: `RedstartNest Caddy HTTPS+admin${RULE_SUFFIX}`, protocol: 'TCP', port: '80,443,8443', program: caddyPath })
 }

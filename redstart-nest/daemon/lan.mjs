@@ -18,6 +18,7 @@ import { nameProvider, createAddressWatcher, registerName, heartbeatName, releas
 import { checkServing, diagnostics, createHealthRunner } from './tls-health.mjs'
 import { getPrimaryLanIp } from './net-interfaces.mjs'
 import { logEvent } from './logger.mjs'
+import { ADMIN_PORT } from './ports.mjs'
 import { setInfrastructureEgress } from './infrastructure-egress.mjs'
 
 // =============================================================================
@@ -178,6 +179,9 @@ function realEffects({ configDir }) {
         requireHttps: t.requireHttps,
         acmeStaging: t.acmeStaging,
         storageDir: caddyPaths(configDir).storageDir,
+        // The control plane over HTTPS on :8443, when it is meant to be
+        // reachable from other devices (the admin listener is on loopback then).
+        adminPort: t.adminProxied ? ADMIN_PORT : null,
       })
       await supervisor.start({ config, secrets: { ...t.secrets, [PROXY_SECRET_ENV]: secret } })
     },

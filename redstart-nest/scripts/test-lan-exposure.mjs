@@ -115,6 +115,23 @@ test('🔍 a stored adminBindHost is re-checked at boot and falls back to loopba
   assert(/bindHostRejection\(bindHost\)[\s\S]{0,300}bindHost = DEFAULT_ADMIN_BIND_HOST/.test(src), 'boot binds a stored value without checking it')
 })
 
+test('🔍 with HTTPS on, the admin panel is never plain HTTP on the LAN (boot, the toggle, and every HTTPS change)', () => {
+  const daemonSrc = stripComments(fs.readFileSync(path.join(NEST, 'daemon', 'daemon.mjs'), 'utf8'))
+  assert(/bindHost = effectiveAdminBindHost\(bindHost, readTls\(settings\)\.mode\)/.test(daemonSrc), 'boot binds the configured admin address without the HTTPS rule')
+  const adminSrc = stripComments(fs.readFileSync(path.join(NEST, 'daemon', 'ipc', 'admin.mjs'), 'utf8'))
+  assert(/effectiveAdminBindHost\(bindHost, readTls\(before\)\.mode\)/.test(adminSrc) && /startAdminListener\(\{ bindHost: effective, port \}\)/.test(adminSrc), 'the toggle binds the configured address directly')
+  const tlsSrc = stripComments(fs.readFileSync(path.join(NEST, 'daemon', 'ipc', 'tls.mjs'), 'utf8'))
+  const i = tlsSrc.indexOf("if (v.next.mode !== 'off') await syncAdminBind")
+  const j = tlsSrc.indexOf('await applyTlsSettings({ clearFailure: true })')
+  const k = tlsSrc.indexOf("if (v.next.mode === 'off') await syncAdminBind")
+  assert(i > 0 && j > i && k > j, 'tls:set must narrow the admin listener BEFORE Caddy starts, and widen it only AFTER Caddy stopped')
+  const cfg = buildCaddyConfig({
+    hostname: 'k7f3q2.nest.redstartdevelopment.com', dnsProvider: { name: 'duckdns', api_token: '{env.T}' },
+    gatewayPort: 19080, mcpPort: 19082, httpsServing: false, requireHttps: false, storageDir: '/s', adminPort: 19083,
+  })
+  assert(cfg.apps.http.servers.admin.listen.every((a) => a.startsWith('tcp4/')), 'the :8443 admin server listens on IPv6')
+})
+
 console.log('\n-- the firewall and the router --')
 
 test('🔍 Nest\'s firewall rules admit the local subnet only, and are named so the narrower rule is created', () => {

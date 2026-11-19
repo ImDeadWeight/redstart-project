@@ -37,6 +37,9 @@
 //     config file Nest writes to disk can never hold one.
 //   DNS-01 only: the HTTP and TLS-ALPN challenges are disabled, because the
 //     name points at a private address no CA can reach.
+//   :8443 (only when the admin panel is set to be reachable on the network):
+//     the control plane, from 127.0.0.1:<adminPort>, same name and certificate,
+//     same proxy secret. No :80 counterpart: admin is never plain HTTP here.
 //   Listens on IPv4 only (tcp4/0.0.0.0), never IPv6: a machine's global IPv6
 //     addresses are reachable from the internet unless the router blocks
 //     them, and Nest must not depend on that (listenOn below).
@@ -45,6 +48,9 @@
 // =============================================================================
 
 export const PROXY_SECRET_ENV = 'REDSTART_PROXY_SECRET'
+
+/** Where Caddy serves the control plane over HTTPS, when the admin panel is reachable on the network. */
+export const ADMIN_HTTPS_PORT = 8443
 
 /** Answered by Caddy itself on :443 (tls-health.mjs's serving check). */
 export const TLS_HEALTH_PATH = '/.well-known/redstart-tls-health'
@@ -169,6 +175,10 @@ function appRoutes({ mcpPort, gatewayPort }) {
 export function buildCaddyConfig({
   hostname, dnsProvider, gatewayPort, mcpPort, httpsServing, requireHttps, storageDir,
   acmeStaging = false, httpsPort = 443, httpPort = 80,
+  // The control plane over HTTPS (2026-11-19): when set, Caddy also serves
+  // the admin listener (on loopback, at adminPort) on adminHttpsPort, same
+  // name, same certificate. Never on :80: there is no plain-HTTP admin route.
+  adminPort = null, adminHttpsPort = ADMIN_HTTPS_PORT,
 }) {
   if (typeof hostname !== 'string' || !HOSTNAME_RE.test(hostname)) throw new Error(`not a hostname: ${JSON.stringify(hostname)}`)
   if (typeof storageDir !== 'string' || !storageDir) throw new Error('storageDir is required')
@@ -179,6 +189,7 @@ export function buildCaddyConfig({
   port('mcpPort', mcpPort)
   port('httpsPort', httpsPort)
   port('httpPort', httpPort)
+  if (adminPort !== null) { port('adminPort', adminPort); port('adminHttpsPort', adminHttpsPort) }
   const provider = checkDnsProvider(dnsProvider)
   const routes = appRoutes({ mcpPort, gatewayPort })
 
@@ -235,6 +246,16 @@ export function buildCaddyConfig({
             routes: plainRoutes,
             automatic_https: { disable: true },
           },
+          ...(adminPort !== null ? {
+            admin: {
+              listen: listenOn(adminHttpsPort),
+              protocols: ['h1', 'h2'],
+              strict_sni_host: true,
+              tls_connection_policies: [{ match: { sni: [hostname] } }],
+              routes: [{ match: [{ host: [hostname] }], handle: [reverseProxy(adminPort)], terminal: true }],
+              automatic_https: { disable_redirects: true },
+            },
+          } : {}),
         },
       },
       tls: {
