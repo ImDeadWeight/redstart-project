@@ -22,6 +22,7 @@ import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseVersion, pickUpdateRelease } from '../../shared/update-feed.mjs'
 import { parseGoVersionM, provenanceRecord, CADDY_MODULE } from './caddy-provenance.mjs'
+import { buildNotices, escapeModulePath } from './caddy-notices.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.join(__dirname, '..', '..')
@@ -71,9 +72,8 @@ test('🔍 nothing is installed or built @latest', () => {
   assert(/go-version: \$\{\{ env\.GO_VERSION \}\}/.test(WORKFLOW), 'setup-go must use GO_VERSION')
 })
 
-test('🔍 exactly the three planned DNS plugins, each pinned', () => {
+test('🔍 exactly the planned DNS modules: two pinned plugins + Redstart\'s own duckdns', () => {
   const plugins = {
-    PLUGIN_DUCKDNS: 'github.com/caddy-dns/duckdns',
     PLUGIN_DESEC: 'github.com/caddy-dns/desec',
     PLUGIN_ACMEDNS: 'github.com/caddy-dns/acmedns',
   }
@@ -83,9 +83,40 @@ test('🔍 exactly the three planned DNS plugins, each pinned', () => {
     assert(/@v\d+\.\d+\.\d+$/.test(v), `${name} must pin an exact tag, got ${v}`)
     assert(WORKFLOW.includes(`--with "$${name}"`), `${name} is defined but not built in`)
   }
+  // Redstart's own modules are built from this checkout, never fetched.
+  const local = envValue('LOCAL_DUCKDNS')
+  assert(local === 'github.com/ImDeadWeight/redstart-project/infra/caddy-dns-duckdns=./infra/caddy-dns-duckdns',
+    `LOCAL_DUCKDNS must replace the module with ./infra/caddy-dns-duckdns, got ${local}`)
   const withs = [...WORKFLOW.matchAll(/--with "\$(\w+)"/g)].map((m) => m[1]).sort()
-  assert(JSON.stringify(withs) === JSON.stringify(Object.keys(plugins).sort()),
+  const expected = [...Object.keys(plugins), 'LOCAL_DUCKDNS'].sort()
+  assert(JSON.stringify(withs) === JSON.stringify(expected),
     `a plugin was added without this test knowing (every plugin is code beside the DNS token): ${withs.join(', ')}`)
+})
+
+test('🔍 the unlicensed community duckdns plugin is never built in again', () => {
+  // caddy-dns/duckdns publishes no license (found 2026-11-19); BUILD 1 carried it.
+  assert(!/github\.com\/caddy-dns\/duckdns/.test(WORKFLOW.replace(/^\s*#.*$/gm, '')), 'caddy-dns/duckdns is back in caddy.yml')
+  const goMod = fs.readFileSync(path.join(REPO, 'infra', 'caddy-dns-duckdns', 'go.mod'), 'utf8')
+  assert(!/caddy-dns\/duckdns/.test(goMod), 'infra/caddy-dns-duckdns depends on caddy-dns/duckdns')
+  assert(/^\s*github\.com\/libdns\/duckdns v\d+\.\d+\.\d+$/m.test(goMod), 'infra/caddy-dns-duckdns must pin libdns/duckdns (MIT)')
+  assert(fs.existsSync(path.join(REPO, 'infra', 'caddy-dns-duckdns', 'go.sum')), 'infra/caddy-dns-duckdns has no go.sum')
+})
+
+test("🔍 Redstart's own module is verified, vetted and tested before the build", () => {
+  const t = WORKFLOW.indexOf('working-directory: infra/caddy-dns-duckdns')
+  const b = WORKFLOW.indexOf('xcaddy build')
+  assert(t > 0 && t < b, 'no test step before the build')
+  const step = WORKFLOW.slice(t, b)
+  for (const cmd of ['go mod verify', 'go vet ./...', 'go test ./...']) assert(step.includes(cmd), `missing ${cmd}`)
+  assert(/- infra\/caddy-dns-\*\/\*\*/.test(WORKFLOW), 'a change to the module does not trigger a build')
+})
+
+test('🔍 license notices are generated for every binary, and the build fails without them', () => {
+  assert(/caddy-notices\.mjs --modcache "\$\(go env GOMODCACHE\)"/.test(WORKFLOW), 'no notices step')
+  assert(/--commit "\$GITHUB_SHA" out\/\*\.json/.test(WORKFLOW), 'notices are not generated for every binary')
+  const notices = WORKFLOW.indexOf('caddy-notices.mjs')
+  const sums = WORKFLOW.indexOf('> SHA256SUMS')
+  assert(notices > 0 && notices < sums, 'notices must exist before SHA256SUMS is written, so they are hashed too')
 })
 
 test('🔍 pure Go, trimmed paths, the three shipped targets', () => {
@@ -186,6 +217,57 @@ test('refuses a binary that is not a Caddy build, and text that is not go versio
   threw = false
   try { parseGoVersionM(SAMPLE.replace('\tbuild\tGOOS', '\tweird\tGOOS')) } catch { threw = true }
   assert(threw, 'an unknown line kind was silently dropped')
+})
+
+console.log('\n-- caddy-notices.mjs --')
+
+/** A fake module cache: { '<dir>': { '<file>': '<text>' } }. */
+function fakeFs(tree) {
+  return {
+    readdir: (dir) => { const d = tree[path.normalize(dir)]; if (!d) throw new Error('ENOENT'); return Object.keys(d) },
+    readFile: (file) => tree[path.dirname(path.normalize(file))][path.basename(file)],
+  }
+}
+
+const MC = path.join('mc')
+const RECORD = {
+  file: 'caddy.exe', caddy: 'v2.11.9', go: 'go1.27.4', xcaddy: 'v0.4.7',
+  modules: [
+    { path: 'github.com/caddyserver/caddy/v2', version: 'v2.11.9' },
+    { path: 'github.com/BurntSushi/toml', version: 'v1.5.0' },
+    { path: 'github.com/ImDeadWeight/redstart-project/infra/caddy-dns-duckdns', version: 'v0.0.0', replacedBy: { path: path.resolve('repo', 'infra', 'caddy-dns-duckdns'), version: '(devel)' } },
+  ],
+}
+const TREE = {
+  [path.join(MC, 'github.com', 'caddyserver', 'caddy', 'v2@v2.11.9')]: { LICENSE: 'Apache License 2.0', 'go.mod': '' },
+  [path.join(MC, 'github.com', '!burnt!sushi', 'toml@v1.5.0')]: { COPYING: 'MIT', 'decode.go': '' },
+}
+
+test('module paths use the cache\'s case encoding', () => {
+  assert(escapeModulePath('github.com/BurntSushi/toml') === 'github.com/!burnt!sushi/toml', escapeModulePath('github.com/BurntSushi/toml'))
+})
+
+test('every module gets its license files; a module in this repo is covered by its LICENSE', () => {
+  const { text, missing, count } = buildNotices({ record: RECORD, modcache: MC, repoRoot: 'repo', commit: 'abc', ...fakeFs(TREE) })
+  assert(missing.length === 0, `missing: ${missing.join(', ')}`)
+  assert(count === 3, `count ${count}`)
+  assert(text.includes('Apache License 2.0') && text.includes('--- COPYING ---\nMIT'), 'license text not copied')
+  assert(/infra\/caddy-dns-duckdns\), covered by the repository's LICENSE/.test(text), 'local module not attributed to the repo')
+  assert(text.includes('/tree/abc/infra/caddy-dns-duckdns'), 'local module source link has no commit')
+  assert(!text.includes('decode.go'), 'a non-license file was copied')
+})
+
+test('🔍 a module with no license file is reported, so the build fails', () => {
+  const rec = { ...RECORD, modules: [...RECORD.modules, { path: 'github.com/caddy-dns/duckdns', version: 'v0.5.0' }] }
+  const tree = { ...TREE, [path.join(MC, 'github.com', 'caddy-dns', 'duckdns@v0.5.0')]: { 'duckdns.go': '', 'README.md': '' } }
+  const { missing } = buildNotices({ record: rec, modcache: MC, repoRoot: 'repo', commit: 'abc', ...fakeFs(tree) })
+  assert(JSON.stringify(missing) === JSON.stringify(['github.com/caddy-dns/duckdns v0.5.0']), JSON.stringify(missing))
+})
+
+test('🔍 a module replaced by a directory outside this repo is not waved through', () => {
+  const rec = { ...RECORD, modules: [{ path: 'x/y', version: 'v1', replacedBy: { path: path.resolve('elsewhere', 'y'), version: '(devel)' } }] }
+  const { missing } = buildNotices({ record: rec, modcache: MC, repoRoot: 'repo', commit: 'abc', ...fakeFs(TREE) })
+  assert(missing.length === 1 && /outside this repository/.test(missing[0]), JSON.stringify(missing))
 })
 
 // ---------------------------------------------------------------------------

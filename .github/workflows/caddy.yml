@@ -30,6 +30,7 @@ on:
   push:
     paths:
       - .github/workflows/caddy.yml
+      - infra/caddy-dns-*/**
 
 permissions:
   contents: read
@@ -42,12 +43,16 @@ env:
   CADDY_VERSION: v2.11.9
   # Third-party plugins (each one is code inside the binary that holds the
   # DNS token). A plugin bump is its own change, and the .json beside each
-  # asset records what went in. All three are on libdns v1, which Caddy 2.10+
+  # asset records what went in. Both are on libdns v1, which Caddy 2.10+
   # requires.
-  PLUGIN_DUCKDNS: github.com/caddy-dns/duckdns@v0.5.0
   PLUGIN_DESEC: github.com/caddy-dns/desec@v1.1.0
   PLUGIN_ACMEDNS: github.com/caddy-dns/acmedns@v0.7.0
-  BUILD: 1
+  # Redstart's own module, built from this checkout. It replaced the
+  # community caddy-dns/duckdns plugin in BUILD 2: that plugin publishes no
+  # license, so it cannot be redistributed. It wraps libdns/duckdns (MIT),
+  # pinned by its go.mod / go.sum.
+  LOCAL_DUCKDNS: github.com/ImDeadWeight/redstart-project/infra/caddy-dns-duckdns=./infra/caddy-dns-duckdns
+  BUILD: 2
 
 jobs:
   build:
@@ -73,6 +78,15 @@ jobs:
         id: name
         run: echo "tag=caddy-redstart-${CADDY_VERSION}-${BUILD}" >> "$GITHUB_OUTPUT"
 
+      # Redstart's own Caddy modules: verified, vetted and tested before they
+      # are built in.
+      - name: Test infra/caddy-dns-duckdns
+        working-directory: infra/caddy-dns-duckdns
+        run: |
+          go mod verify
+          go vet ./...
+          go test ./...
+
       - name: Install xcaddy (pinned)
         run: go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
 
@@ -90,7 +104,7 @@ jobs:
             os="${target%/*}"; arch="${target#*/}"
             ext=""; [ "$os" = windows ] && ext=".exe"
             GOOS="$os" GOARCH="$arch" xcaddy build "$CADDY_VERSION" \
-              --with "$PLUGIN_DUCKDNS" \
+              --with "$LOCAL_DUCKDNS" \
               --with "$PLUGIN_DESEC" \
               --with "$PLUGIN_ACMEDNS" \
               --output "out/${TAG}-${os}-${arch}${ext}"
@@ -111,11 +125,16 @@ jobs:
             grep -qx "$m" <<<"$modules" || { echo "::error::$m missing from the build"; exit 1; }
           done
 
-      - name: Provenance
+      # Provenance, then the license notices of every module in each binary.
+      # caddy-notices.mjs FAILS on a module with no license file, which is
+      # how BUILD 1's unlicensed plugin should have been caught.
+      - name: Provenance and notices
         run: |
           set -euo pipefail
-          node redstart-nest/scripts/caddy-provenance.mjs --xcaddy "$XCADDY_VERSION" \
-            $(ls out/* | grep -v '\.json$')
+          bins=$(ls out/*)
+          node redstart-nest/scripts/caddy-provenance.mjs --xcaddy "$XCADDY_VERSION" $bins
+          node redstart-nest/scripts/caddy-notices.mjs --modcache "$(go env GOMODCACHE)" \
+            --repo-root . --commit "$GITHUB_SHA" out/*.json
           (cd out && sha256sum $(ls | grep -v '\.json$') > SHA256SUMS && cat SHA256SUMS)
 
       - uses: actions/upload-artifact@v4
@@ -147,11 +166,11 @@ jobs:
             exit 0
           fi
           {
-            echo "Caddy ${CADDY_VERSION} with ${PLUGIN_DUCKDNS}, ${PLUGIN_DESEC}, ${PLUGIN_ACMEDNS}."
+            echo "Caddy ${CADDY_VERSION} with ${PLUGIN_DESEC}, ${PLUGIN_ACMEDNS} and Redstart's own infra/caddy-dns-duckdns (over libdns/duckdns)."
             echo "Built with Go ${GO_VERSION} and xcaddy ${XCADDY_VERSION} by .github/workflows/caddy.yml."
             echo
             echo "Not a Redstart release: this is the TLS front door Nest bundles."
-            echo "Each binary's .json is its build provenance (go version -m)."
+            echo "Each binary's .json is its build provenance (go version -m); its .NOTICES.txt holds the license files of every module inside it."
             echo
             echo '```'
             cat out/SHA256SUMS
