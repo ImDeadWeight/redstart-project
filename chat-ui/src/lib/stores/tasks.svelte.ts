@@ -12,6 +12,7 @@ import {
 	type ApprovalDecision,
 	type ClientToolSpec,
 	type TaskToolLimits,
+	type TaskOrigin,
 	type TaskAnswer,
 	type TaskEvent,
 	type TaskRecord
@@ -133,7 +134,7 @@ class TasksStore {
 		conversationId: string,
 		content: string,
 		clientTools?: ClientToolSpec[],
-		opts: { quiet?: boolean; toolLimits?: TaskToolLimits } = {}
+		opts: { quiet?: boolean; toolLimits?: TaskToolLimits; origin?: TaskOrigin } = {}
 	): Promise<TaskRecord | null> {
 		try {
 			const record = await TaskService.start(
@@ -141,7 +142,8 @@ class TasksStore {
 				content,
 				taskGeneration(),
 				clientTools,
-				opts.toolLimits
+				opts.toolLimits,
+				opts.origin
 			);
 			this.follow(record, { registered: true });
 			await conversationsStore.reloadActiveFromServer(conversationId);

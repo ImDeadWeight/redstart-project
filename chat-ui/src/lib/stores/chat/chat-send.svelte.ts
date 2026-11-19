@@ -26,6 +26,7 @@ import * as messageRepo from '$lib/stores/chat/chat-message-repo';
 import { ChatTitleService } from '$lib/services/chat-title.service';
 import { memoryReviewStore } from '$lib/stores/memory-review.svelte';
 import { tasksStore, serverRunsOn } from '$lib/stores/tasks.svelte';
+import { isChatRun } from '$lib/services/task.service';
 import { toast } from 'svelte-sonner';
 import {
 	normalizeModelName,
@@ -157,7 +158,9 @@ export class ChatSendController {
 				const { clientTools, toolLimits } = await agenticStore.prepareServerRun();
 				const task = await tasksStore.start(currentConv.id, messageText, clientTools, {
 					quiet: true,
-					toolLimits
+					toolLimits,
+					// A reply, not a background task: no task bar, Stop cancels it.
+					origin: 'chat'
 				});
 				if (task) {
 					this.runtime.setChatLoading(currentConv.id, false);
@@ -564,6 +567,13 @@ export class ChatSendController {
 	async stopGeneration(): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv) return;
+		// A Send that runs on the server: Stop is that run's Cancel, from the
+		// composer, the sidebar or the keyboard alike. (A real background task
+		// keeps its own Cancel on the task bar.)
+		if (isChatRun(tasksStore.activeFor(activeConv.id))) {
+			await tasksStore.cancel(activeConv.id);
+			return;
+		}
 		await this.stopGenerationForChat(activeConv.id);
 	}
 	async stopGenerationForChat(convId: string): Promise<void> {

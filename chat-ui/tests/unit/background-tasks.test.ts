@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
 	approvalDecisionFor,
+	isChatRun,
 	parseSseFrames,
 	taskStatusLabel,
 	type TaskEvent,
@@ -71,6 +72,13 @@ describe('wire mappings', () => {
 		).toMatch(/asking/);
 		expect(taskStatusLabel({ status: 'waiting_approval', waiting: null })).toMatch(/approval/);
 		expect(taskStatusLabel({ status: 'waiting_client', waiting: null })).toMatch(/this app/);
+	});
+
+	it("only origin 'chat' is a Send's run; none (an older Nest) and 'background' are tasks", () => {
+		expect(isChatRun({ origin: 'chat' })).toBe(true);
+		expect(isChatRun({ origin: 'background' })).toBe(false);
+		expect(isChatRun({})).toBe(false);
+		expect(isChatRun(null)).toBe(false);
 	});
 });
 
@@ -326,10 +334,24 @@ describe('tasksStore', () => {
 				contextCompaction: false
 			}),
 			h.clientTools,
+			undefined,
 			undefined
 		);
 		expect(store.activeFor('c1')?.id).toBe('t1');
 		expect(h.conv.reloadActiveFromServer).toHaveBeenCalledWith('c1');
+	});
+
+	// A plain Send's run is a reply, not a background task (found 2026-11-18:
+	// every Send showed the task bar). The origin rides to the daemon, which
+	// stores it, so a reload or another device reads the same answer.
+	it("a Send's run starts with origin 'chat'; /background sends none", async () => {
+		controllableStream();
+		const store = await freshStore();
+		h.conv.activeConversation = { id: 'c1' };
+		h.svc.start.mockResolvedValue(record({ origin: 'chat' }));
+		await store.start('c1', 'hello', h.clientTools, { quiet: true, origin: 'chat' });
+		expect(h.svc.start.mock.calls[0][5]).toBe('chat');
+		expect(isChatRun(store.activeFor('c1'))).toBe(true);
 	});
 
 	it('an approval is decided on /approvals with the pending id; cancel goes to the task', async () => {

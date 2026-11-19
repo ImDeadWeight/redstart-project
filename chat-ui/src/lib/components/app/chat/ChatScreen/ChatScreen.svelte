@@ -43,6 +43,7 @@
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
 	import ChatScreenTaskBar from './ChatScreenTaskBar.svelte';
 	import { tasksStore } from '$lib/stores/tasks.svelte';
+	import { isChatRun } from '$lib/services/task.service';
 
 	let { showCenteredEmpty = false } = $props();
 
@@ -94,7 +95,11 @@
 	let isServerLoading = $derived(serverLoading());
 	let hasPropsError = $derived(!!serverError());
 
-	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
+	// A plain Send that runs on the server (origin 'chat') is a reply in
+	// progress like the browser loop's: the composer shows Stop, which cancels
+	// the run (chat-send stopGeneration).
+	let chatRunActive = $derived(isChatRun(tasksStore.activeFor(activeConversation()?.id)));
+	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming() || chatRunActive);
 
 	let showProcessingInfo = $derived(
 		isCurrentConversationLoading ||

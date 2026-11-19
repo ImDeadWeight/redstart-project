@@ -6,7 +6,7 @@
 		ChatMessageActionCardPermissionRequest
 	} from '$lib/components/app';
 	import { tasksStore } from '$lib/stores/tasks.svelte';
-	import { approvalDecisionFor, taskStatusLabel } from '$lib/services/task.service';
+	import { approvalDecisionFor, isChatRun, taskStatusLabel } from '$lib/services/task.service';
 	import type { ToolPermissionDecision } from '$lib/enums';
 
 	/**
@@ -16,6 +16,11 @@
 	 * routes instead of the browser loop. Its questions are shown with the
 	 * composer like every chat's (ChatFormQuestion.svelte). Nothing renders for a chat
 	 * with no live task.
+	 *
+	 * A plain Send's run (origin 'chat', master plan Phase 7) is a reply, not a
+	 * background task: it gets no status line or Cancel here (the composer
+	 * shows it in progress, and its Stop cancels it), only the cards when it
+	 * waits on an approval or the turn limit.
 	 */
 	interface Props {
 		conversationId: string | null | undefined;
@@ -25,6 +30,7 @@
 
 	const task = $derived(tasksStore.activeFor(conversationId));
 	const waiting = $derived(task?.waiting ?? null);
+	const background = $derived(!!task && !isChatRun(task));
 	let busy = $state(false);
 
 	async function run(fn: () => Promise<unknown>) {
@@ -56,23 +62,26 @@
 	}
 </script>
 
-{#if task}
+{#if task && (background || waiting?.kind === 'approval' || waiting?.kind === 'continue')}
 	<div class="mx-auto mb-2 flex w-full max-w-3xl flex-col gap-2" data-testid="task-bar">
-		<div
-			class="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/40 px-3 py-2 text-sm"
-		>
-			{#if !waiting || waiting.kind === 'model'}
-				<LoaderCircle class="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
-			{/if}
-			<span class="min-w-0 flex-1 truncate">{taskStatusLabel(task)}</span>
-			<span class="hidden text-xs text-muted-foreground sm:inline">
-				Messages you send go to the task.
-			</span>
-			<Button size="sm" variant="ghost" disabled={busy} onclick={onCancel} title="Cancel the task">
-				<Square class="h-3.5 w-3.5" />
-				Cancel
-			</Button>
-		</div>
+		{#if background}
+			<div
+				class="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/40 px-3 py-2 text-sm"
+				data-testid="task-status"
+			>
+				{#if !waiting || waiting.kind === 'model'}
+					<LoaderCircle class="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+				{/if}
+				<span class="min-w-0 flex-1 truncate">{taskStatusLabel(task)}</span>
+				<span class="hidden text-xs text-muted-foreground sm:inline">
+					Messages you send go to the task.
+				</span>
+				<Button size="sm" variant="ghost" disabled={busy} onclick={onCancel} title="Cancel the task">
+					<Square class="h-3.5 w-3.5" />
+					Cancel
+				</Button>
+			</div>
+		{/if}
 
 		<!-- A question is shown with the composer (ChatFormQuestion.svelte). -->
 		{#if waiting?.kind === 'approval'}

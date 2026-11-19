@@ -54,9 +54,18 @@ export type TaskWaiting =
 	/** A call to a tool this app runs (master plan 7.1). */
 	| { kind: 'client'; callId: string; tool: string };
 
+/**
+ * Who started a task: 'chat' is a plain Send run on the server (master plan
+ * Phase 7), shown as an ordinary reply with the composer's Stop; 'background'
+ * is a task the user sent to the background (/background), shown with the
+ * task bar. A Nest from before the field sends none: read it as background.
+ */
+export type TaskOrigin = 'chat' | 'background';
+
 export interface TaskRecord {
 	id: string;
 	conversationId: string;
+	origin?: TaskOrigin;
 	status: TaskStatus;
 	waiting: TaskWaiting | null;
 	error?: string | null;
@@ -142,6 +151,11 @@ export function taskStatusLabel(record: Pick<TaskRecord, 'status' | 'waiting'>):
 	}
 }
 
+/** A plain Send's run: no task bar, the composer shows it as a reply in progress. */
+export function isChatRun(record: Pick<TaskRecord, 'origin'> | null | undefined): boolean {
+	return record?.origin === 'chat';
+}
+
 export function isTerminal(status: TaskStatus | undefined | null): boolean {
 	return !!status && TERMINAL_TASK_STATES.includes(status);
 }
@@ -207,14 +221,16 @@ export class TaskService {
 		content: string,
 		generation: Record<string, unknown>,
 		clientTools?: ClientToolSpec[],
-		toolLimits?: TaskToolLimits
+		toolLimits?: TaskToolLimits,
+		origin?: TaskOrigin
 	): Promise<TaskRecord> {
 		return post<TaskRecord>('/tasks', {
 			conversationId,
 			content,
 			generation,
 			...(clientTools?.length ? { clientTools } : {}),
-			...(toolLimits ? { toolLimits } : {})
+			...(toolLimits ? { toolLimits } : {}),
+			...(origin ? { origin } : {})
 		});
 	}
 
