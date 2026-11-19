@@ -8,6 +8,8 @@ import type { useUpdateSettings } from '../hooks/useUpdateSettings'
 import type { UpdateState } from '../types'
 import { SectionTitle, TogglePill, btnCls, ControlPlaneNotice } from '../components/ui'
 import { buildAddresses } from './addresses'
+import type { useTls } from '../hooks/useTls'
+import { SecureAddressSection } from './SecureAddressSection'
 
 // Lives in the Configuration tab rather than the sidebar: it sits next to the
 // Host/Port fields it depends on, and the QR code plus address list needs more
@@ -70,7 +72,7 @@ function AddressRow({ url, label, note, primary }: {
 
 export function NetworkPanel({
   networkMode, onToggleNetworkMode, localIp, port,
-  auth, controlPlaneExposure, startup, updates, shutdown,
+  auth, controlPlaneExposure, startup, updates, shutdown, tls,
 }: {
   networkMode: boolean
   onToggleNetworkMode: () => void
@@ -81,8 +83,15 @@ export function NetworkPanel({
   startup: ReturnType<typeof useStartupSettings>
   updates: ReturnType<typeof useUpdateSettings>
   shutdown: ReturnType<typeof useShutdown>
+  tls: ReturnType<typeof useTls>
 }) {
-  const addresses = buildAddresses(localIp, port)
+  // The HTTPS name, once set up, leads the list and the QR code while it is
+  // serving (addresses.ts).
+  const tlsSettings = tls.status?.settings
+  const httpsName = tlsSettings?.mode === 'own' && tlsSettings.name && tls.status?.state !== 'local'
+    ? { name: tlsSettings.name, serving: !!tls.status?.serving, requireHttps: tlsSettings.requireHttps }
+    : null
+  const addresses = buildAddresses(localIp, port, httpsName)
   const primary = addresses[0]
   const [qr, setQr] = useState('')
   const { authRequired, toggleAuthRequired } = auth
@@ -94,9 +103,9 @@ export function NetworkPanel({
   } = updates
   const { confirmShutdown, setConfirmShutdown, shuttingDown, requestShutdown, confirmShutdownNow } = shutdown
 
-  // The QR encodes the direct-IP URL — pointing a phone camera at it needs no
-  // name resolution at all, which is the only approach that works on every
-  // client. Regenerated whenever the IP or port moves.
+  // The QR encodes the first address: the HTTPS name while it is serving, the
+  // direct-IP URL otherwise (no name resolution at all, so it works on every
+  // client). Regenerated whenever that address changes.
   useEffect(() => {
     if (!networkMode || !primary) {
       setQr('')
@@ -119,7 +128,7 @@ export function NetworkPanel({
 
       <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
         <TogglePill checked={networkMode} onToggle={onToggleNetworkMode} />
-        <span className="text-xs text-zinc-300">{networkMode ? 'Local network (HTTP)' : 'Localhost only'}</span>
+        <span className="text-xs text-zinc-300">{networkMode ? (tls.status?.serving ? 'Local network (HTTPS)' : 'Local network (HTTP)') : 'Localhost only'}</span>
       </label>
 
       {networkMode && addresses.length > 0 && (
@@ -137,6 +146,8 @@ export function NetworkPanel({
           </div>
         </div>
       )}
+
+      <SecureAddressSection tls={tls} networkMode={networkMode} />
 
       {/* Access control — merged in from the old sidebar's Accounts panel.
           Belongs here, not off on its own: both toggles govern who can reach
@@ -188,7 +199,8 @@ export function NetworkPanel({
               <div className="flex gap-2">
                 <dt className="w-24 shrink-0 text-zinc-600">Chat API</dt>
                 <dd className="font-mono text-zinc-400">
-                  {networkMode ? `${localIp}:${port}` : `127.0.0.1:${port}`}
+                  {/* Behind Caddy the gateway is on loopback; the LAN reaches it through Caddy. */}
+                  {networkMode ? (httpsName ? (addresses[0]?.url ?? `${localIp}`) : `${localIp}:${port}`) : `127.0.0.1:${port}`}
                   <span className="ml-2 font-sans text-zinc-500">
                     {networkMode ? 'your local network' : 'this machine only — the admin panel does not expose it'}
                   </span>

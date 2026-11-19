@@ -368,3 +368,30 @@ export const DEFAULT_CONFIG: LlamaConfig = {
 export function retrievalOnFor(tools?: ProfileTools): boolean {
   return tools?.retrieval?.enabled !== false
 }
+
+// HTTPS on the LAN (TLS plan C8/C9; daemon/lan.mjs lanStatus()). The token is
+// never part of this: only whether one is stored.
+export type TlsProvider = 'duckdns' | 'desec'
+export type TlsSettingsView = {
+  mode: 'off' | 'own'
+  provider: TlsProvider
+  name: string
+  hasToken: boolean
+  requireHttps: boolean
+  acmeStaging: boolean
+}
+export type TlsLanState = 'local' | 'lan-http' | 'lan-https' | 'lan-https-fallback' | 'stopping'
+export type TlsStatus = {
+  settings: TlsSettingsView | null
+  state: TlsLanState
+  lastError: string | null
+  caddy: { state: 'stopped' | 'starting' | 'running' | 'failed'; reason: string | null; lastAcmeError: string | null; lastCertificateAt: number | null } | null
+  serving: boolean
+  health: { serving: boolean; reason: string | null; cert: { validTo: string; daysLeft: number; issuer: string; staging: boolean } | null } | null
+  warnings: { kind: string; text: string }[]
+  address: { ip: string; ok: boolean; detail: string; at: number } | null
+  switching: { name: string; deadline: number } | null
+  lastSwitchFailure: string | null
+  egress: { host: string; purpose: string }[]
+}
+export type TlsPatch = Partial<{ mode: 'off' | 'own'; provider: TlsProvider; name: string; token: string; requireHttps: boolean; acmeStaging: boolean }>

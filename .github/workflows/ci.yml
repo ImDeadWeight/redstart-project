@@ -294,6 +294,9 @@ jobs:
       - name: "Security: HTTPS health (serving verdict vs warnings, hysteresis, real Caddy)"
         run: node scripts/test-tls-health.mjs
 
+      - name: "Launcher: Secure address logic (HTTPS address leads only while serving; status sentences)"
+        run: node scripts/test-launcher-tls.mjs
+
       - name: "Packaging: Tauri release assets + both update manifests (the bridge)"
         run: node scripts/test-shell-manifests.mjs
 

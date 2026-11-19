@@ -4,6 +4,7 @@ import type { useHardwareAndBinary } from '../hooks/useHardwareAndBinary'
 import type { useAuthSetup } from '../hooks/useAuthSetup'
 import type { useControlPlaneExposure } from '../hooks/useControlPlaneExposure'
 import type { useStartupSettings } from '../hooks/useStartupSettings'
+import type { useTls } from '../hooks/useTls'
 import type { useUpdateSettings } from '../hooks/useUpdateSettings'
 import type { useShutdown } from '../hooks/useShutdown'
 import { SectionTitle, inputCls } from '../components/ui'
@@ -15,7 +16,7 @@ export function ConfigTab({
   config, setConfig, networkMode, onToggleNetworkMode,
   localIp,
   generatedCommand, onGenerateCommand,
-  profilesHook, hw, auth, controlPlaneExposure, startup, updates, shutdown,
+  profilesHook, hw, auth, controlPlaneExposure, startup, updates, shutdown, tls,
 }: {
   config: LlamaConfig
   setConfig: React.Dispatch<React.SetStateAction<LlamaConfig>>
@@ -29,6 +30,7 @@ export function ConfigTab({
   auth: ReturnType<typeof useAuthSetup>
   controlPlaneExposure: ReturnType<typeof useControlPlaneExposure>
   startup: ReturnType<typeof useStartupSettings>
+  tls: ReturnType<typeof useTls>
   updates: ReturnType<typeof useUpdateSettings>
   shutdown: ReturnType<typeof useShutdown>
 }) {
@@ -174,6 +176,7 @@ export function ConfigTab({
         auth={auth}
         controlPlaneExposure={controlPlaneExposure}
         startup={startup}
+        tls={tls}
         updates={updates}
         shutdown={shutdown}
       />
