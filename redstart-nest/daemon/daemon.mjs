@@ -39,7 +39,8 @@ import { stopMcpServer } from './mcp-server.mjs'
 import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
 import { startAdminListener, stopAdminListener, DEFAULT_ADMIN_BIND_HOST } from './admin-listener.mjs'
 import { lastKnownDiscovery } from './discovery.mjs'
-import { initLan, lanOwner, stopLanNow } from './lan.mjs'
+import { initLan, lanOwner, stopLanNow, tlsInputsFrom } from './lan.mjs'
+import { decryptSecret } from './secrets.mjs'
 import { ensureBootstrapToken } from './bootstrap-token.mjs'
 import { buildAdminApi } from './admin/api-table.mjs'
 import { setAdminApi } from './admin/api-routes.mjs'
@@ -328,8 +329,11 @@ async function startAdminPlane() {
   // configuration a launch actually used, so a box already in network mode
   // gets its port-80 clean URL (and, once HTTPS is configured, its Caddy)
   // back at boot, before the next launch.
-  initLan({ configDir: configDir(), packaged: isPackaged(), resourcesDir: isPackaged() ? resourcesDir() : null })
-  await lanOwner().update(lastKnownDiscovery(readSettings()))
+  initLan({
+    configDir: configDir(), packaged: isPackaged(), resourcesDir: isPackaged() ? resourcesDir() : null,
+    readSettings, writeSettings, decrypt: decryptSecret,
+  })
+  await lanOwner().update({ ...lastKnownDiscovery(readSettings()), ...tlsInputsFrom(readSettings()) })
 }
 
 

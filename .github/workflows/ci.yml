@@ -285,6 +285,15 @@ jobs:
       - name: "Security: the network-mode owner (one owner; rollback; full LAN cycle with the real Caddy)"
         run: node scripts/test-network-mode-owner.mjs
 
+      - name: "Security: tls settings + tls:* methods (token encrypted, never returned, re-key covered)"
+        run: node scripts/test-tls-settings.mjs
+
+      - name: "Security: name providers (private addresses only, token placement) + address watcher"
+        run: node scripts/test-tls-names.mjs
+
+      - name: "Security: HTTPS health (serving verdict vs warnings, hysteresis, real Caddy)"
+        run: node scripts/test-tls-health.mjs
+
       - name: "Packaging: Tauri release assets + both update manifests (the bridge)"
         run: node scripts/test-shell-manifests.mjs
 

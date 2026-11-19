@@ -24,7 +24,7 @@ import * as path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { stagedCaddyPath } from './fetch-caddy.mjs'
 import {
-  buildCaddyConfig, checkDnsProvider, PROXY_HEADER, PROXY_SECRET_ENV, ACME_PRODUCTION, ACME_STAGING,
+  buildCaddyConfig, checkDnsProvider, TLS_HEALTH_PATH, PROXY_HEADER, PROXY_SECRET_ENV, ACME_PRODUCTION, ACME_STAGING,
 } from '../daemon/caddy-config.mjs'
 
 const results = []
@@ -81,6 +81,8 @@ function findAll(node, pred, out = []) {
   return out
 }
 
+/** :443's routes after Caddy's own health route. */
+const proxiedRoutes = (cfg) => servers(cfg).https.routes[0].handle[0].routes.filter((r) => !r.match?.[0]?.path?.includes(TLS_HEALTH_PATH))
 const proxies = (cfg) => findAll(cfg, (n) => n.handler === 'reverse_proxy')
 const servers = (cfg) => cfg.apps.http.servers
 
@@ -127,7 +129,7 @@ console.log('\n-- routes --')
 test('🔍 /mcp and /mcp/* go to the MCP server; everything else to the gateway', () => {
   for (const c of COMBOS.filter((x) => !x.requireHttps || x.httpsServing)) {
     const cfg = build(c)
-    const sub = servers(cfg).https.routes[0].handle[0].routes
+    const sub = proxiedRoutes(cfg)
     assert(JSON.stringify(sub[0].match) === JSON.stringify([{ path: ['/mcp', '/mcp/*'] }]), 'first route is not /mcp')
     assert(sub[0].handle[0].upstreams[0].dial === '127.0.0.1:19082', '/mcp not to the MCP port')
     assert(!sub[1].match && sub[1].handle[0].upstreams[0].dial === '127.0.0.1:19080', 'catch-all not to the gateway')
@@ -169,8 +171,18 @@ test('🔍 requireHttps: :80 refuses instead of proxying while HTTPS is not serv
 test('🔍 fallback (not serving, not required): :80 proxies the same routes', () => {
   const cfg = build({ httpsServing: false, requireHttps: false })
   const plain = servers(cfg).http.routes
-  const sub = servers(cfg).https.routes[0].handle[0].routes
+  const sub = proxiedRoutes(cfg)
   assert(JSON.stringify(plain) === JSON.stringify(sub), ':80 fallback routes differ from :443')
+})
+
+test('🔍 Caddy answers its own health route on :443 only, before any proxy', () => {
+  for (const c of COMBOS) {
+    const cfg = build(c)
+    const first = servers(cfg).https.routes[0].handle[0].routes[0]
+    assert(JSON.stringify(first.match) === JSON.stringify([{ path: [TLS_HEALTH_PATH] }]), `${label(c)}: health route is not first`)
+    assert(first.handle[0].handler === 'static_response' && first.handle[0].status_code === 200, 'not a static 200')
+    assert(!JSON.stringify(servers(cfg).http).includes(TLS_HEALTH_PATH), ':80 answers the HTTPS health route: plain HTTP could then pass for HTTPS')
+  }
 })
 
 test('Caddy adds no redirects of its own; :80 runs no automatic HTTPS', () => {

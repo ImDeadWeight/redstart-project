@@ -22,6 +22,7 @@ import { startGateway, stopGateway } from '../tools-gateway.mjs'
 import { startMcpServer, stopMcpServer } from '../mcp-server.mjs'
 import { discoveryRecordFor } from '../discovery.mjs'
 import { lanOwner } from '../lan.mjs'
+import { readTls } from '../tls-settings.mjs'
 import { syncFilesystemProvider, stopFilesystemProvider } from '../filesystem-mcp-provider.mjs'
 import { logEvent } from '../logger.mjs'
 import { serverPortRejection, serverBinaryName } from './validate.mjs'
@@ -137,7 +138,10 @@ async function doLaunchServer(config, deps) {
   // Before the binary is even resolved: config.port claims three ports, and one
   // of them colliding with the always-on beacon or admin listener produces a
   // failure a long way from its cause. See serverPortRejection() in validate.mjs.
-  const portRejection = serverPortRejection(config?.port)
+  // While HTTPS is on, 80 and 443 are Caddy's too (TLS plan C9).
+  let httpsFronted = false
+  try { httpsFronted = readTls(deps.readSettings?.() ?? {}).mode !== 'off' } catch { /* unreadable settings: today's rule */ }
+  const portRejection = serverPortRejection(config?.port, { httpsFronted })
   if (portRejection) {
     logEvent('security', 'launch_rejected', { reason: 'port_reserved', port: config?.port })
     return { success: false, error: portRejection }

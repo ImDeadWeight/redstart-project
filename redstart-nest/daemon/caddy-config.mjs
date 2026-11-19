@@ -14,6 +14,7 @@
 // test in scripts/test-caddy-config.mjs):
 //
 //   :443, SNI and Host = <hostname> only
+//       /.well-known/redstart-tls-health → Caddy's own 200 (the serving check)
 //       /mcp, /mcp/*  → 127.0.0.1:<mcpPort>
 //       everything    → 127.0.0.1:<gatewayPort>
 //     Upstreams are LOOPBACK. The gateway binds loopback while Caddy fronts
@@ -43,6 +44,9 @@
 // =============================================================================
 
 export const PROXY_SECRET_ENV = 'REDSTART_PROXY_SECRET'
+
+/** Answered by Caddy itself on :443 (tls-health.mjs's serving check). */
+export const TLS_HEALTH_PATH = '/.well-known/redstart-tls-health'
 export const PROXY_HEADER = 'X-Redstart-Proxy'
 
 export const ACME_PRODUCTION = 'https://acme-v02.api.letsencrypt.org/directory'
@@ -110,6 +114,19 @@ function reverseProxy(upstreamPort) {
     // as it is produced rather than in buffered chunks.
     flush_interval: -1,
     headers: { request: { set: { [PROXY_HEADER]: [`{env.${PROXY_SECRET_ENV}}`] } } },
+  }
+}
+
+/**
+ * Caddy's own answer on :443, before anything is proxied: "HTTPS works" must
+ * not depend on whether a model happens to be loaded (the gateway only runs
+ * while one is), so tls-health.mjs's serving check asks Caddy, not Nest.
+ */
+function healthRoute() {
+  return {
+    match: [{ path: [TLS_HEALTH_PATH] }],
+    handle: [{ handler: 'static_response', status_code: 200, body: 'ok', headers: { 'Cache-Control': ['no-store'] } }],
+    terminal: true,
   }
 }
 
@@ -194,7 +211,7 @@ export function buildCaddyConfig({
             // The Host header must match the SNI the handshake was made for.
             strict_sni_host: true,
             tls_connection_policies: [{ match: { sni: [hostname] } }],
-            routes: [{ match: [{ host: [hostname] }], handle: [{ handler: 'subroute', routes }], terminal: true }],
+            routes: [{ match: [{ host: [hostname] }], handle: [{ handler: 'subroute', routes: [healthRoute(), ...routes] }], terminal: true }],
             // The :80 server below is ours; Caddy must not add its own.
             automatic_https: { disable_redirects: true },
           },

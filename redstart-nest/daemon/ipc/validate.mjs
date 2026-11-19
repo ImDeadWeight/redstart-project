@@ -115,9 +115,14 @@ export function binaryPathRejection(value, platform = process.platform) {
  * value already sitting in a saved profile from a build that predates this
  * check has never been through it.
  *
+ * With `httpsFronted` (TLS on), 80 and 443 are the bundled Caddy's too.
+ *
  * @returns {string|null} the reason to refuse, or null if acceptable.
  */
-export function serverPortRejection(port) {
+/** Held by the bundled Caddy while HTTPS is on (TLS plan C9). */
+const CADDY_PORTS = Object.freeze({ 80: 'HTTPS redirects (the bundled Caddy)', 443: 'HTTPS (the bundled Caddy)' })
+
+export function serverPortRejection(port, { httpsFronted = false } = {}) {
   if (!Number.isInteger(port)) return 'A port must be a whole number.'
   if (port < 1 || port > 65535) return 'A port must be between 1 and 65535.'
 
@@ -130,7 +135,7 @@ export function serverPortRejection(port) {
     if (claimed > 65535) {
       return `Port ${port} leaves no room for ${what} on ${claimed} — the highest usable port is 65533.`
     }
-    const owner = FIXED_PORTS[claimed]
+    const owner = FIXED_PORTS[claimed] ?? (httpsFronted ? CADDY_PORTS[claimed] : undefined)
     if (owner) collisions.push({ claimed, what, owner })
   }
 

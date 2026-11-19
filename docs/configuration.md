@@ -40,7 +40,7 @@ directory it wants explicitly.
 | `conversations.json` | Server-side conversation history, scoped per account. |
 | `sessions.json` | Live login sessions, stored as SHA-256 hashes of the token — the file cannot be replayed as a credential. Written on sign-in, sign-out and revocation; sliding-expiry updates are batched rather than written per request. |
 | `bootstrap-token.txt` | The setup code for this machine, in plain text. Generated once, on first run. It is the only thing that can create or reset the Owner account over the network — see [Security → The control plane](security.md#the-control-plane). Anyone who can read this directory can read it, which is the same access that could rewrite `accounts.json` directly. |
-| `settings.json` | Launcher-level settings that are not per profile: the llama-server binary override, the models folder, `adminBindHost` (where the control plane listens, default `127.0.0.1`), `startAtLogin`, `autoUpdate` (desktop only, Windows and macOS, set from Configuration → Network → Updates; absent means on, `false` stops the automatic checks but not *Check now*, read before every check so no restart is needed), and `discovery` (the network settings of the last launch, so the app can announce itself at start-up before anything is running). |
+| `settings.json` | Launcher-level settings that are not per profile: the llama-server binary override, the models folder, `adminBindHost` (where the control plane listens, default `127.0.0.1`), `startAtLogin`, `autoUpdate` (desktop only, Windows and macOS, set from Configuration → Network → Updates; absent means on, `false` stops the automatic checks but not *Check now*, read before every check so no restart is needed), `discovery` (the network settings of the last launch, so the app can announce itself at start-up before anything is running), and `tls` (HTTPS on the LAN, below). |
 | `mcp.json` | External MCP servers, with any API key stored as ciphertext (`apiKeyEnc`) and never returned to a client in plaintext. |
 | `plugins.json` | Installed MCP plugins — the registry snapshot taken at install-review time, each tool's permission class, and the per-plugin enable switch. |
 | `prompt-blocks.json` | Admin-authored system-prompt blocks. Absent until you edit one. |
@@ -48,9 +48,35 @@ directory it wants explicitly.
 | `secrets-key.json` | **Windows desktop only.** The key that encrypts stored credentials, **wrapped with DPAPI** for your Windows account, so this file is useless on another account or machine. The first time the daemon split ran on an existing install, it was copied from Electron's `Local State`, so existing secrets read back unchanged. The desktop shell unwraps it and hands it to the daemon at startup. Do not delete it: without it (and without `Local State`), stored secrets cannot be decrypted and must be re-entered. On macOS there is no such file: the key comes from the `redstart Safe Storage` item in your login Keychain. |
 | `shell/` | **Desktop only.** The desktop shell's own files: `redstart.log` (its log, apart from the daemon's), `shell-state.json` (whether the close-window notice has been shown) and `update/` (a downloaded, signature-checked update waiting for a deliberate quit). |
 | `nestd.pid` | The running daemon's own pid, so `npm run daemon:stop` and a service manager can find it without probing a port. Written *after* the control plane binds, so a second daemon that loses the port race cannot overwrite a live entry. |
+| `caddy/` | **HTTPS on (`tls.mode: "own"`) only.** `caddy.json` is the bundled Caddy's generated configuration: no secrets in it, since the DNS token reaches Caddy by environment. `storage/` holds the certificate and its private key, plus the ACME account key. **Leave `caddy/` out of any backup or copy.** Everything in it regenerates: a restored install gets a new certificate by DNS-01 in about a minute, so the private key never has to leave the machine. |
+| `caddy.pid` | The bundled Caddy's pid, for the same reaping as `llama-server.pid`. |
 | `llama-server.pid` | The pid of the model process Nest launched, so a hard-killed Nest can reap exactly its own child at the next start — never by image name. |
 
 Conversations are stored per account (per device ID when login is off) and auto-delete after 30 days of inactivity.
+
+### `tls` in `settings.json`
+
+HTTPS for LAN clients through the bundled Caddy. It is set from the launcher (Network → Secure address) or the control plane's `tls:set`, never by hand: the token has to be encrypted by Nest.
+
+```json
+"tls": {
+  "mode": "own",
+  "own": { "provider": "duckdns", "name": "myhouse.duckdns.org", "tokenEnc": "…" },
+  "requireHttps": false,
+  "acmeStaging": false
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `mode` | `off` (the default): LAN clients use plain HTTP, as before. `own`: Caddy serves `https://<name>` and the gateway and MCP server go back to loopback. (`redstart`, an automatic name, is not available yet.) |
+| `own.provider` | `duckdns` or `desec`, the service that holds your name and proves it to Let's Encrypt (DNS-01). |
+| `own.name` | Your name at that provider (`yourname.duckdns.org`, `yourname.dedyn.io`). Nest points it at this computer's LAN address and keeps it there. Only private addresses are ever published. |
+| `own.tokenEnc` | The provider's token, encrypted. Never returned to a client. Changing the provider drops it. |
+| `requireHttps` | `false`: while HTTPS isn't working yet, LAN clients still get the chat UI over plain HTTP, labelled. `true`: they get a page saying HTTPS isn't working, and nothing in the clear. |
+| `acmeStaging` | Use Let's Encrypt's staging CA, for testing. Browsers will not trust its certificates. |
+
+While `mode` is `own`, ports 80 and 443 belong to Caddy, so a profile port that would land the gateway, llama-server or the MCP server on either is refused.
 
 ---
 
