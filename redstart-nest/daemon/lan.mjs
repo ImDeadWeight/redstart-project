@@ -13,8 +13,8 @@ import { rebindGateway } from './tools-gateway.mjs'
 import { rebindMcpServer } from './mcp-server.mjs'
 import { startPort80Proxy, stopPort80Proxy } from './port80-proxy.mjs'
 import { ensureFirewallRule, ensureCaddyFirewallRule } from './firewall.mjs'
-import { readTls, tlsRuntime, caddyKeyOf } from './tls-settings.mjs'
-import { nameProvider, createAddressWatcher } from './tls-names.mjs'
+import { readTls, tlsRuntime, caddyKeyOf, readRedstart, withRedstart, withoutRedstart } from './tls-settings.mjs'
+import { nameProvider, createAddressWatcher, registerName, heartbeatName, releaseName } from './tls-names.mjs'
 import { checkServing, diagnostics, createHealthRunner } from './tls-health.mjs'
 import { getPrimaryLanIp } from './net-interfaces.mjs'
 import { logEvent } from './logger.mjs'
@@ -59,7 +59,9 @@ let owner = null
 let health = null
 let watcher = null
 let caddyPath = null
-let io = null            // { readSettings, writeSettings, decrypt }
+let io = null            // { readSettings, writeSettings, decrypt, encrypt }
+let heartbeatTimer = null
+export const HEARTBEAT_MS = 7 * 24 * 60 * 60 * 1000
 let lastPublish = null   // the watcher's last result, for the panel
 let lastDiagnostics = []
 let pendingSwitch = null // { previousTls, name, deadline, timer }
@@ -71,9 +73,9 @@ const runtime = () => (io ? tlsRuntime(io.readSettings(), { decrypt: io.decrypt 
  * @param {{ configDir: string, packaged?: boolean, resourcesDir?: string|null,
  *           readSettings?: () => object, writeSettings?: (s: object) => void, decrypt?: (c: string) => string }} p
  */
-export function initLan({ configDir, packaged = false, resourcesDir = null, readSettings, writeSettings, decrypt } = {}) {
+export function initLan({ configDir, packaged = false, resourcesDir = null, readSettings, writeSettings, decrypt, encrypt } = {}) {
   if (owner) return owner
-  if (readSettings && writeSettings && decrypt) io = { readSettings, writeSettings, decrypt }
+  if (readSettings && writeSettings && decrypt) io = { readSettings, writeSettings, decrypt, encrypt }
   const resolveCaddy = () => {
     caddyPath = caddyBinaryCandidates({ packaged, resourcesDir, nestRoot: NEST_ROOT, configDir }).find((p) => fs.existsSync(p)) ?? null
     return caddyPath
@@ -95,7 +97,7 @@ export function initLan({ configDir, packaged = false, resourcesDir = null, read
     update: async (ip) => {
       const t = runtime()
       if (!t) return { ok: false, detail: 'HTTPS is not configured' }
-      return nameProvider({ provider: t.provider, name: t.hostname }).updateAddress(ip, { token: t.token })
+      return nameProvider({ provider: t.provider, name: t.hostname }).updateAddress(ip, { token: t.token, id: t.id })
     },
     onResult: (r) => {
       lastPublish = { ...r, at: Date.now() }
@@ -124,7 +126,7 @@ async function runHealth() {
   } catch (err) {
     lastDiagnostics = [{ kind: 'diagnostics', text: `Couldn't run the checks: ${err.message}` }]
   }
-  if (verdict.serving && pendingSwitch && pendingSwitch.name === t.hostname) commitSwitch()
+  if (verdict.serving && pendingSwitch && (pendingSwitch.name ? pendingSwitch.name === t.hostname : t.provider === 'redstart')) await commitSwitch()
   return verdict
 }
 
@@ -132,6 +134,16 @@ function onOwnerChange(s) {
   const httpsOn = s.state === 'lan-https' || s.state === 'lan-https-fallback'
   if (httpsOn) void watcher.start()
   else watcher.stop()
+  // Automatic: a weekly "still here" (the address watcher's PUT also counts,
+  // but an address can stay the same for months). Only while HTTPS faces the LAN.
+  const automatic = httpsOn && runtime()?.provider === 'redstart'
+  if (automatic && !heartbeatTimer) {
+    heartbeatTimer = setInterval(() => { void sendHeartbeat() }, HEARTBEAT_MS)
+    heartbeatTimer.unref?.()
+  } else if (!automatic && heartbeatTimer) {
+    clearInterval(heartbeatTimer)
+    heartbeatTimer = null
+  }
   if (s.state === 'lan-https') void health.start()
   else health.stop()
 }
@@ -150,6 +162,9 @@ function realEffects({ configDir }) {
       stopPort80Proxy()
     },
     async startCaddy({ serving }) {
+      // Automatic registers HERE, the first time Caddy starts, which only
+      // happens with network mode on: never at the click (invariant 6).
+      await ensureRegistered()
       const t = runtime()
       if (!t) throw new Error('HTTPS is not configured')
       const gatewayPort = owner.status().inputs.gatewayPort
@@ -179,6 +194,47 @@ function realEffects({ configDir }) {
   }
 }
 
+/**
+ * Automatic with no registration yet: register now and store it. Throws
+ * with one sentence when the service cannot be reached or refuses, which
+ * the owner turns into its rollback and the panel into "Couldn't apply".
+ */
+async function ensureRegistered() {
+  if (!io) return
+  const s = io.readSettings()
+  if (readTls(s).mode !== 'redstart' || readRedstart(s)) return
+  if (!io.encrypt) throw new Error('Nest cannot store a name-service credential here')
+  const r = await registerName()
+  if (!r.ok) throw new Error(r.error)
+  io.writeSettings(withRedstart(io.readSettings(), r, { encrypt: io.encrypt }))
+  logEvent('tls', 'name_registered', { hostname: r.hostname })
+}
+
+async function sendHeartbeat() {
+  const t = runtime()
+  if (t?.provider !== 'redstart') return
+  const r = await heartbeatName({ id: t.id, credential: t.token })
+  logEvent('tls', r.ok ? 'name_heartbeat' : 'name_heartbeat_failed', { status: r.status ?? null })
+}
+
+/**
+ * Give the Automatic name back: the service deletes its records, and the
+ * registration is forgotten here. Best effort: if the service cannot be
+ * reached the registration is still forgotten, and the service's own
+ * housekeeping removes the records after 180 days unseen.
+ */
+export async function releaseAutomatic() {
+  if (!io) return { ok: true }
+  const r = readRedstart(io.readSettings())
+  if (!r) return { ok: true }
+  let credential = null
+  try { credential = io.decrypt(r.credentialEnc) } catch { /* undecryptable: nothing to authenticate with */ }
+  const res = credential ? await releaseName({ id: r.id, credential }) : { ok: false }
+  io.writeSettings(withoutRedstart(io.readSettings()))
+  logEvent('tls', res.ok ? 'name_released' : 'name_release_failed', { hostname: r.hostname, status: res.status ?? null })
+  return res
+}
+
 /** The owner's tls inputs from settings.json, as they stand. */
 export function tlsInputsFrom(settings) {
   const t = readTls(settings)
@@ -197,11 +253,12 @@ export function applyTlsSettings({ clearFailure = false } = {}) {
  * Start a try-and-revert switch to the tls block now in settings.
  * @param {object} previousTls the block it replaced
  */
-export function beginSwitch(previousTls, name) {
+export function beginSwitch(previousTls, name, { releaseAutomaticAfter = false } = {}) {
   cancelSwitch()
   const timer = setTimeout(() => { void revertSwitch() }, SWITCH_DEADLINE_MS)
   timer.unref?.()
-  pendingSwitch = { previousTls, name, deadline: Date.now() + SWITCH_DEADLINE_MS, timer }
+  // name null: switching TO Automatic, whose name is not known until it registers.
+  pendingSwitch = { previousTls, name, releaseAutomaticAfter, deadline: Date.now() + SWITCH_DEADLINE_MS, timer }
 }
 
 function cancelSwitch() {
@@ -209,9 +266,13 @@ function cancelSwitch() {
   pendingSwitch = null
 }
 
-function commitSwitch() {
+async function commitSwitch() {
+  const release = pendingSwitch?.releaseAutomaticAfter
   logEvent('tls', 'switch_committed', { name: pendingSwitch?.name })
   cancelSwitch()
+  // Make-before-break (review R6): the Automatic name goes back only now,
+  // once the name that replaces it is serving.
+  if (release) await releaseAutomatic()
 }
 
 async function revertSwitch() {
@@ -221,7 +282,7 @@ async function revertSwitch() {
   logEvent('tls', 'switch_reverted', { name })
   const s = io.readSettings()
   io.writeSettings({ ...s, tls: previousTls })
-  lastSwitchFailure = `${name} didn't start working within ${Math.round(SWITCH_DEADLINE_MS / 60000)} minutes, so the previous name was kept.`
+  lastSwitchFailure = `${name ?? 'The automatic name'} didn't start working within ${Math.round(SWITCH_DEADLINE_MS / 60000)} minutes, so the previous name was kept.`
   await applyTlsSettings()
 }
 
@@ -250,11 +311,13 @@ export function lanStatus() {
     health: health?.latest() ?? null,
     warnings: lastDiagnostics,
     address: lastPublish,
-    switching: pendingSwitch ? { name: pendingSwitch.name, deadline: pendingSwitch.deadline } : null,
+    switching: pendingSwitch ? { name: pendingSwitch.name ?? 'an automatic name', deadline: pendingSwitch.deadline } : null,
     lastSwitchFailure,
-    egress: settings && settings.mode === 'own' && settings.name
-      ? nameProvider({ provider: settings.provider, name: settings.name }).egress()
-      : [],
+    egress: settings?.mode === 'redstart'
+      ? nameProvider({ provider: 'redstart', name: settings.automatic?.hostname ?? '' }).egress()
+      : settings && settings.mode === 'own' && settings.name
+        ? nameProvider({ provider: settings.provider, name: settings.name }).egress()
+        : [],
   }
 }
 
@@ -293,6 +356,7 @@ export function stopLanNow() {
   cancelSwitch()
   health.stop()
   watcher.stop()
+  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null }
   stopPort80Proxy()
   void supervisor.stop()
   clearProxySecret()

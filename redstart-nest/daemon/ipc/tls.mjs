@@ -12,7 +12,7 @@
 // Handler bodies are exported as plain functions, like every namespace.
 
 import { validateTlsPatch, applyTlsPatch, readTls } from '../tls-settings.mjs'
-import { applyTlsSettings, beginSwitch, checkTlsNow, retryCaddy, lanStatus } from '../lan.mjs'
+import { applyTlsSettings, beginSwitch, checkTlsNow, retryCaddy, lanStatus, releaseAutomatic } from '../lan.mjs'
 import { lastKnownDiscovery } from '../discovery.mjs'
 import { serverPortRejection } from './validate.mjs'
 import { encryptSecret } from '../secrets.mjs'
@@ -44,10 +44,28 @@ export async function setTls(patch, { readSettings, writeSettings, encrypt = enc
   const next = applyTlsPatch(settings, v.next, { encrypt })
   writeSettings(next)
   logEvent('tls', 'settings_saved', { mode: v.next.mode, provider: v.next.provider })
-  // Name to name while one is working: try the new one, revert if it never serves.
-  const switching = before.mode === 'own' && v.next.mode === 'own' && lanStatus().serving
-    && (before.name !== v.next.name || before.provider !== v.next.provider)
-  if (switching) beginSwitch(previousTls, v.next.name)
+
+  // Changing where the name comes from (review R6: make before break).
+  //   Automatic → Off: release at once; the admin asked for no name.
+  //   Automatic → own, while serving: try the own name; the Automatic name
+  //     goes back only once the own name serves (commitSwitch). Not serving:
+  //     nothing is being broken, so release now.
+  //   own → Automatic, or own → another own name, while serving: try the
+  //     new one, revert to the old if it never serves. Own names are the
+  //     admin's; there is nothing to release.
+  const serving = lanStatus().serving
+  const from = before.mode
+  const to = v.next.mode
+  if (from === 'redstart' && to === 'off') {
+    await releaseAutomatic()
+  } else if (from === 'redstart' && to === 'own') {
+    if (serving) beginSwitch(previousTls, v.next.name, { releaseAutomaticAfter: true })
+    else await releaseAutomatic()
+  } else if (from === 'own' && to === 'redstart' && serving) {
+    beginSwitch(previousTls, null)
+  } else if (from === 'own' && to === 'own' && serving && (before.name !== v.next.name || before.provider !== v.next.provider)) {
+    beginSwitch(previousTls, v.next.name)
+  }
   await applyTlsSettings({ clearFailure: true })
   return { ok: true, status: lanStatus() }
 }

@@ -95,7 +95,100 @@ export function nameProvider({ provider, name }) {
       },
     }
   }
+  if (provider === 'redstart') {
+    // name here is the registration (tls-settings.mjs readRedstart): { id, hostname }.
+    return {
+      kind: 'redstart',
+      hostname: () => name,
+      egress: () => [
+        { host: new URL(nameServiceUrl()).host, purpose: "Redstart's name service: this computer's LAN address when it changes, a weekly \"still here\", and the record that proves the name for the certificate" },
+        { host: 'acme-v02.api.letsencrypt.org', purpose: 'Issues and renews the HTTPS certificate (about every 60 days)' },
+      ],
+      async updateAddress(ip, { token, id, fetchImpl = fetch, timeoutMs = 15000 } = {}) {
+        if (!isPrivateIPv4(ip)) return { ok: false, detail: `refusing to publish ${ip}: not a private address` }
+        try {
+          const res = await fetchImpl(`${nameServiceUrl()}/v1/ip`, {
+            method: 'PUT',
+            headers: { Authorization: `Bearer ${id}.${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ipv4: ip }),
+            signal: AbortSignal.timeout(timeoutMs),
+          })
+          if (res.status === 200) return { ok: true, detail: 'published' }
+          if (res.status === 401) return { ok: false, detail: 'the name service no longer knows this computer: switch HTTPS off and back to Automatic to get a new name' }
+          return { ok: false, detail: `the name service answered ${res.status}` }
+        } catch (err) {
+          return { ok: false, detail: scrubbed(`couldn't reach the name service: ${err.message}`, token) }
+        }
+      },
+    }
+  }
   throw new Error(`unknown name provider ${provider}`)
+}
+
+// ---------------------------------------------------------------------------
+// The Redstart name service (TLS plan C12 / step 8): register, heartbeat, release
+// ---------------------------------------------------------------------------
+// infra/name-service/ is the server half, live at names.redstartdevelopment.com.
+// Every call here happens only while network mode is on and HTTPS is
+// "Automatic" (lan.mjs): a loopback-only install never calls it (invariant 6).
+
+export const NAME_SERVICE_URL = 'https://names.redstartdevelopment.com'
+export const NAME_ZONE = 'redstartdevelopment.com'
+const ID_RE = /^[abcdefghijkmnpqrstuvwxyz23456789]{6}$/
+const CREDENTIAL_RE = /^[A-Za-z0-9_-]{40,100}$/
+
+/** The service's base URL. REDSTART_NAME_SERVICE_URL is for tests and a staging copy only. */
+export function nameServiceUrl() {
+  const o = process.env.REDSTART_NAME_SERVICE_URL
+  return typeof o === 'string' && /^https?:\/\/[^\s/]+$/.test(o) ? o : NAME_SERVICE_URL
+}
+
+/**
+ * Register this install: a new random name and its credential.
+ * The hostname is COMPUTED from the id, never taken from the answer, so a
+ * misbehaving service cannot hand Nest a name outside nest.<zone>.
+ * @returns {Promise<{ ok: true, id: string, hostname: string, credential: string } | { ok: false, error: string }>}
+ */
+export async function registerName({ fetchImpl = fetch, timeoutMs = 20000 } = {}) {
+  let res
+  try {
+    res = await fetchImpl(`${nameServiceUrl()}/v1/register`, { method: 'POST', signal: AbortSignal.timeout(timeoutMs) })
+  } catch (err) {
+    return { ok: false, error: `Couldn't reach the name service: ${err.message}` }
+  }
+  if (res.status === 429) return { ok: false, error: 'The name service is limiting registrations from this network. Try again in an hour.' }
+  if (res.status !== 201) return { ok: false, error: `The name service answered ${res.status}.` }
+  let body
+  try { body = await res.json() } catch { return { ok: false, error: 'The name service sent an answer Nest does not understand.' } }
+  if (!ID_RE.test(String(body?.id)) || !CREDENTIAL_RE.test(String(body?.credential))) {
+    return { ok: false, error: 'The name service sent an answer Nest does not understand.' }
+  }
+  return { ok: true, id: body.id, hostname: `${body.id}.nest.${NAME_ZONE}`, credential: body.credential }
+}
+
+/** "Still here": keeps the name from being forgotten after 180 days unseen. */
+export async function heartbeatName({ id, credential, fetchImpl = fetch, timeoutMs = 15000 }) {
+  try {
+    const res = await fetchImpl(`${nameServiceUrl()}/v1/heartbeat`, {
+      method: 'POST', headers: { Authorization: `Bearer ${id}.${credential}` }, signal: AbortSignal.timeout(timeoutMs),
+    })
+    return { ok: res.status === 200, status: res.status }
+  } catch (err) {
+    return { ok: false, error: scrubbed(err.message, credential) }
+  }
+}
+
+/** Give the name back: the service deletes every record it holds for it. */
+export async function releaseName({ id, credential, fetchImpl = fetch, timeoutMs = 15000 }) {
+  try {
+    const res = await fetchImpl(`${nameServiceUrl()}/v1/register`, {
+      method: 'DELETE', headers: { Authorization: `Bearer ${id}.${credential}` }, signal: AbortSignal.timeout(timeoutMs),
+    })
+    // 401: already gone (forgotten, or released before). Nothing left to give back.
+    return { ok: res.status === 204 || res.status === 401, status: res.status }
+  } catch (err) {
+    return { ok: false, error: scrubbed(err.message, credential) }
+  }
 }
 
 /**

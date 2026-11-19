@@ -40,7 +40,7 @@ import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
 import { startAdminListener, stopAdminListener, DEFAULT_ADMIN_BIND_HOST } from './admin-listener.mjs'
 import { lastKnownDiscovery } from './discovery.mjs'
 import { initLan, lanOwner, stopLanNow, tlsInputsFrom, beaconInfo } from './lan.mjs'
-import { decryptSecret } from './secrets.mjs'
+import { decryptSecret, encryptSecret } from './secrets.mjs'
 import { ensureBootstrapToken } from './bootstrap-token.mjs'
 import { buildAdminApi } from './admin/api-table.mjs'
 import { setAdminApi } from './admin/api-routes.mjs'
@@ -336,7 +336,7 @@ async function startAdminPlane() {
   // back at boot, before the next launch.
   initLan({
     configDir: configDir(), packaged: isPackaged(), resourcesDir: isPackaged() ? resourcesDir() : null,
-    readSettings, writeSettings, decrypt: decryptSecret,
+    readSettings, writeSettings, decrypt: decryptSecret, encrypt: encryptSecret,
   })
   await lanOwner().update({ ...lastKnownDiscovery(readSettings()), ...tlsInputsFrom(readSettings()) })
 }

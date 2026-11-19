@@ -6,7 +6,7 @@
   "type": "module",
   "description": "Redstart's name service: automatic <id>.nest.redstartdevelopment.com names for Nest installs (TLS plan C12). A Cloudflare Worker.",
   "scripts": {
-    "test": "node --disable-warning=ExperimentalWarning test/service.test.mjs",
+    "test": "node --disable-warning=ExperimentalWarning test/service.test.mjs && node --disable-warning=ExperimentalWarning test/nest-contract.test.mjs",
     "dev": "wrangler dev --local",
     "deploy": "wrangler deploy"
   },

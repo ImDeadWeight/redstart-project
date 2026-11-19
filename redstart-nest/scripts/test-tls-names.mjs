@@ -13,7 +13,7 @@
 // Run:  node scripts/test-tls-names.mjs
 // =============================================================================
 
-import { nameProvider, createAddressWatcher, isPrivateIPv4 } from '../daemon/tls-names.mjs'
+import { nameProvider, createAddressWatcher, isPrivateIPv4, registerName, heartbeatName, releaseName, nameServiceUrl, NAME_SERVICE_URL } from '../daemon/tls-names.mjs'
 
 const results = []
 async function test(name, fn) {
@@ -136,6 +136,77 @@ await test('no LAN address: nothing published; stop() clears the timer', async (
   assert(h.updates.length === 0, 'published null')
   h.w.stop()
   assert(h.timers[0].cleared, 'timer left running')
+})
+
+console.log('\n-- Automatic: the Redstart name service (step 8) --')
+
+const CRED = 'Q'.repeat(43)
+function jsonFetch(status, body) {
+  const calls = []
+  const impl = async (url, opts = {}) => {
+    calls.push({ url: String(url), method: opts.method, headers: opts.headers ?? {}, body: opts.body ?? null })
+    return { status, json: async () => body, text: async () => JSON.stringify(body) }
+  }
+  return { calls, impl }
+}
+
+await test('🔍 registerName: POST /v1/register; the hostname is COMPUTED from the id, not taken from the answer', async () => {
+  const f = jsonFetch(201, { id: 'k7f3q2', credential: CRED, hostname: 'k7f3q2.evil.example' })
+  const r = await registerName({ fetchImpl: f.impl })
+  assert(r.ok && r.hostname === 'k7f3q2.nest.redstartdevelopment.com' && r.credential === CRED, JSON.stringify(r))
+  assert(f.calls[0].url === `${NAME_SERVICE_URL}/v1/register` && f.calls[0].method === 'POST', JSON.stringify(f.calls[0]))
+})
+
+await test('🔍 a misbehaving service cannot hand Nest a name outside nest. or a bad credential', async () => {
+  for (const body of [{ id: '../x', credential: CRED }, { id: 'k7f3q2.evil', credential: CRED }, { id: 'K7F3Q2', credential: CRED }, { id: 'k7f3q2', credential: 'short' }, { id: 'k7f3q2' }, null]) {
+    const r = await registerName({ fetchImpl: jsonFetch(201, body).impl })
+    assert(!r.ok, `accepted ${JSON.stringify(body)}`)
+  }
+  const limited = await registerName({ fetchImpl: jsonFetch(429, {}).impl })
+  assert(!limited.ok && /Try again in an hour/.test(limited.error), limited.error)
+})
+
+await test('🔍 updateAddress (Automatic): PUT /v1/ip, Bearer id.credential, private only; 401 says how to recover', async () => {
+  const p = nameProvider({ provider: 'redstart', name: 'k7f3q2.nest.redstartdevelopment.com' })
+  const f = jsonFetch(200, {})
+  assert((await p.updateAddress('192.168.0.213', { token: CRED, id: 'k7f3q2', fetchImpl: f.impl })).ok, 'ok')
+  const c = f.calls[0]
+  assert(c.url === `${NAME_SERVICE_URL}/v1/ip` && c.method === 'PUT' && c.headers.Authorization === `Bearer k7f3q2.${CRED}`, JSON.stringify(c))
+  assert(JSON.parse(c.body).ipv4 === '192.168.0.213' && !c.url.includes(CRED), 'body / credential in the URL')
+  const pub = jsonFetch(200, {})
+  assert(!(await p.updateAddress('8.8.8.8', { token: CRED, id: 'k7f3q2', fetchImpl: pub.impl })).ok && pub.calls.length === 0, 'a public address was sent')
+  assert(/Automatic to get a new name/.test((await p.updateAddress('10.0.0.1', { token: CRED, id: 'k7f3q2', fetchImpl: jsonFetch(401, {}).impl })).detail), '401 sentence')
+})
+
+await test('heartbeat and release: the right routes; release treats "already gone" (401) as released', async () => {
+  const hb = jsonFetch(200, {})
+  assert((await heartbeatName({ id: 'k7f3q2', credential: CRED, fetchImpl: hb.impl })).ok && hb.calls[0].url.endsWith('/v1/heartbeat'), 'heartbeat')
+  const del = jsonFetch(204, null)
+  assert((await releaseName({ id: 'k7f3q2', credential: CRED, fetchImpl: del.impl })).ok && del.calls[0].method === 'DELETE', 'release')
+  assert((await releaseName({ id: 'k7f3q2', credential: CRED, fetchImpl: jsonFetch(401, {}).impl })).ok, '401 = already gone')
+  assert(!(await releaseName({ id: 'k7f3q2', credential: CRED, fetchImpl: jsonFetch(502, {}).impl })).ok, '502 is not released')
+  const down = await releaseName({ id: 'k7f3q2', credential: CRED, fetchImpl: async (u) => { throw new Error(`fetch failed ${u} ${CRED}`) } })
+  assert(!down.ok && !down.error.includes(CRED), 'a network error carried the credential')
+})
+
+await test('Automatic egress names the name service and Let\'s Encrypt', () => {
+  const e = nameProvider({ provider: 'redstart', name: 'k7f3q2.nest.redstartdevelopment.com' }).egress()
+  assert(e.some((x) => x.host === 'names.redstartdevelopment.com') && e.some((x) => /letsencrypt/.test(x.host)), JSON.stringify(e))
+})
+
+await test('REDSTART_NAME_SERVICE_URL (tests / a staging copy) takes a bare origin only', () => {
+  const was = process.env.REDSTART_NAME_SERVICE_URL
+  try {
+    process.env.REDSTART_NAME_SERVICE_URL = 'http://127.0.0.1:8799'
+    assert(nameServiceUrl() === 'http://127.0.0.1:8799', 'override')
+    for (const bad of ['javascript:x', 'http://a.b/path', 'ftp://x', 'http://a b']) {
+      process.env.REDSTART_NAME_SERVICE_URL = bad
+      assert(nameServiceUrl() === NAME_SERVICE_URL, `accepted ${bad}`)
+    }
+  } finally {
+    if (was === undefined) delete process.env.REDSTART_NAME_SERVICE_URL
+    else process.env.REDSTART_NAME_SERVICE_URL = was
+  }
 })
 
 const failed = results.filter((r) => !r.pass)

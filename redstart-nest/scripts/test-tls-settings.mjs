@@ -57,13 +57,19 @@ const save = (patch, settings = {}) => {
 
 console.log('\n-- validation --')
 
-await test('🔍 accepted: own (DuckDNS, deSEC) and off; Automatic is refused until it exists', () => {
+await test('🔍 accepted: Automatic (no name or token needed), own (DuckDNS, deSEC) and off', () => {
   assert(validateTlsPatch(own(), {}).ok, 'duckdns')
   assert(validateTlsPatch(own({ provider: 'desec', name: 'myhouse.dedyn.io' }), {}).ok, 'desec')
   assert(validateTlsPatch({ mode: 'off' }, {}).ok, 'off')
   const r = validateTlsPatch({ mode: 'redstart' }, {})
-  assert(!r.ok && /not available/.test(r.error), JSON.stringify(r))
+  assert(r.ok && r.next.mode === 'redstart' && r.next.consentAsked === true, JSON.stringify(r))
   assert(!validateTlsPatch({ mode: 'on' }, {}).ok, 'unknown mode')
+})
+
+await test('consentAsked: set by answering (any HTTPS choice, or "Not now"), never cleared by a client', () => {
+  assert(validateTlsPatch({ consentAsked: true }, {}).next.consentAsked === true, '"Not now"')
+  assert(validateTlsPatch({ mode: 'off' }, {}).next.consentAsked === false, 'a plain Off save answered the question')
+  assert(!validateTlsPatch({ consentAsked: false }, {}).ok, 'a client cleared it')
 })
 
 await test('names: a bare DuckDNS subdomain gets its suffix; bad names are refused with a sentence', () => {
@@ -177,6 +183,74 @@ await test('a gateway port of 443 cannot be combined with HTTPS', async () => {
   const r = await setTls({ requireHttps: true }, deps)
   assert(!r.ok && /bundled Caddy/.test(r.error), JSON.stringify(r))
   disk = { ...disk, discovery: undefined }
+})
+
+console.log('\n-- Automatic (step 8) --')
+
+const { readRedstart, withRedstart, withoutRedstart } = await import('../daemon/tls-settings.mjs')
+const CRED = 'C'.repeat(43)
+const registered = () => withRedstart(save({ mode: 'redstart' }), { id: 'k7f3q2', credential: CRED }, { encrypt: encryptSecret, now: 5 })
+
+await test('🔍 the registration: credential encrypted, never in readTls(), hostname DERIVED from the id', () => {
+  const s = registered()
+  assert(!JSON.stringify(s).includes(CRED), 'credential in the clear')
+  const view = readTls(s)
+  assert(view.automatic?.hostname === 'k7f3q2.nest.redstartdevelopment.com' && !JSON.stringify(view).includes(CRED) && !JSON.stringify(view).includes('credentialEnc'), JSON.stringify(view))
+  const forged = { ...s, tls: { ...s.tls, redstart: { ...s.tls.redstart, id: 'x.evil' } } }
+  assert(readRedstart(forged) === null, 'a stored id that is not an id was accepted')
+  let threw = false
+  try { withRedstart({}, { id: 'evil.com', credential: CRED }, { encrypt: encryptSecret }) } catch { threw = true }
+  assert(threw, 'stored a non-id')
+})
+
+await test('🔍 a save of any other field keeps the registration (applyTlsPatch must not drop it)', () => {
+  const s = registered()
+  const after = save({ requireHttps: true }, s)
+  assert(after.tls.redstart?.credentialEnc === s.tls.redstart.credentialEnc, 'the registration was dropped by an unrelated save')
+  assert(readRedstart(withoutRedstart(after)) === null, 'withoutRedstart left it')
+})
+
+await test('🔍 tlsRuntime: acmedns at the name service, id as user and subdomain, the credential by env only', () => {
+  const t = tlsRuntime(registered(), { decrypt: decryptSecret })
+  assert(t.provider === 'redstart' && t.hostname === 'k7f3q2.nest.redstartdevelopment.com' && t.secrets.REDSTART_DNS_TOKEN === CRED, JSON.stringify({ ...t, token: '…', secrets: '…' }))
+  assert(JSON.stringify(t.dnsProvider) === JSON.stringify({ name: 'acmedns', username: 'k7f3q2', password: '{env.REDSTART_DNS_TOKEN}', subdomain: 'k7f3q2', server_url: 'https://names.redstartdevelopment.com' }), JSON.stringify(t.dnsProvider))
+  checkDnsProvider(t.dnsProvider)
+  assert(tlsRuntime(save({ mode: 'redstart' }), { decrypt: decryptSecret }) === null, 'Automatic before registering must be null (lan.mjs registers first)')
+})
+
+await test('🔍 the re-key tool finds tls.redstart.credentialEnc', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-tls-rekey2-'))
+  try {
+    fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(registered()))
+    assert(findSecrets(dir).some((f) => f.pointer.join('.') === 'tls.redstart.credentialEnc'), 'not found')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+await test('caddyKey: registering does not change it (no restart mid-start); staging and requireHttps do', () => {
+  const before = caddyKeyOf(save({ mode: 'redstart' }))
+  assert(caddyKeyOf(registered()) === before, 'registration changed the key: Caddy would restart right after its first start')
+  assert(caddyKeyOf(save({ mode: 'redstart', acmeStaging: true })) !== before, 'staging')
+  assert(caddyKeyOf(save({ mode: 'redstart' })) !== caddyKeyOf(save(own())), 'own vs Automatic')
+})
+
+await test('🔍 choosing Automatic with network mode OFF calls no name service (invariant 6)', async () => {
+  const calls = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url, ...rest) => { calls.push(String(url)); return realFetch(url, ...rest) }
+  try {
+    disk = {}
+    const r = await setTls({ mode: 'redstart' }, deps)
+    assert(r.ok && r.status.state === 'local', JSON.stringify(r).slice(0, 200))
+    assert(!calls.some((u) => /redstartdevelopment|duckdns|dedyn|letsencrypt/.test(u)), `called out: ${calls.join(', ')}`)
+    assert(!readRedstart(disk), 'registered with network mode off')
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+await test('Automatic → Off with nothing registered is a plain save', async () => {
+  const r = await setTls({ mode: 'off' }, deps)
+  assert(r.ok && readTls(disk).mode === 'off' && readTls(disk).consentAsked === true, JSON.stringify(readTls(disk)))
 })
 
 fs.rmSync(tmp, { recursive: true, force: true })
