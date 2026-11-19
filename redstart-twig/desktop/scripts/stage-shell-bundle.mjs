@@ -6,8 +6,8 @@
 // (gitignored), the layout shell/src/paths.rs resolves at
 // <resource_dir>/resources:
 //
-//   node/node(.exe), node/LICENSE    the pinned Node 26, staged by Nest's
-//                                    scripts/stage-node.mjs (one pin for both)
+//   node/node(.exe), node/LICENSE    the pinned Node 26, staged by
+//                                    tooling/stage-node.mjs (one pin for both)
 //   app/twigd/bin, app/twigd/daemon  twigd, three levels below resources/ as in
 //   shared/*.mjs                     the checkout, so `../../../shared` resolves
 //   chat-ui/                         what the shell's `twig` protocol serves
@@ -17,9 +17,9 @@
 // twigd has no npm dependencies: everything it imports is in this repo.
 // Anything missing is an error, so an installer never silently lacks a part.
 //
-// Run after: `npm --prefix ../../redstart-nest/src/chat-ui run build`,
-// `node ../../redstart-nest/scripts/stage-node.mjs`, and
-// `node ../../redstart-nest/scripts/rust-licenses.mjs --shell shell --out licenses/rust-licenses.json`.
+// Run after: `npm --prefix ../../chat-ui run build`,
+// `node ../../tooling/stage-node.mjs`, and
+// `node ../../tooling/rust-licenses.mjs --shell shell --out licenses/rust-licenses.json`.
 // (`npm run build` does all of that.)
 // =============================================================================
 
@@ -27,7 +27,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { stagedBinaryPath, STAGE_DIR } from '../../../redstart-nest/scripts/stage-node.mjs'
+import { stagedBinaryPath, STAGE_DIR } from '../../../tooling/stage-node.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const TWIG = path.join(here, '..')
@@ -80,7 +80,7 @@ export function stage() {
   copyDir(path.join(TWIG, 'bin'), out('app', 'twigd', 'bin'), mjs)
   copyDir(path.join(TWIG, 'daemon'), out('app', 'twigd', 'daemon'), mjs)
   copyDir(path.join(REPO, 'shared'), out('shared'), mjs)
-  copyDir(path.join(REPO, 'redstart-nest', 'src', 'chat-ui', 'dist'), out('chat-ui'))
+  copyDir(path.join(REPO, 'chat-ui', 'dist'), out('chat-ui'))
   need(out('chat-ui', 'index.html'))
 
   fs.copyFileSync(need(path.join(REPO, 'LICENSE')), out('LICENSE.txt'))

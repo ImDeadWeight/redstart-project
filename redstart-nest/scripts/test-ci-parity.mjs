@@ -41,7 +41,7 @@ const testSecurity = pkg.scripts?.['test:security'] ?? ''
 const scriptSuites = new Set(
   [...testSecurity.matchAll(/node (scripts\/[\w.-]+\.mjs)/g)].map(m => m[1])
 )
-const scriptRunsChatUiVitest = /npm --prefix src\/chat-ui run test:security/.test(testSecurity)
+const scriptRunsChatUiVitest = /npm --prefix \.\.\/chat-ui run test:security/.test(testSecurity)
 
 console.log('\n-- test:security vs .github/workflows/ci.yml --')
 
@@ -80,7 +80,7 @@ test('🔍 every referenced suite file actually exists', () => {
 test('the chat-ui vitest security project runs in both places', () => {
   assert(scriptRunsChatUiVitest, 'test:security no longer runs the chat-ui vitest suite')
   assert(
-    /npm --prefix src\/chat-ui run test:security/.test(ci),
+    /npm --prefix \.\.\/chat-ui run test:security/.test(ci),
     'CI no longer runs the chat-ui vitest security suite'
   )
 })

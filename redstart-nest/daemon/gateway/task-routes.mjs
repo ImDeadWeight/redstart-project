@@ -9,7 +9,8 @@
 // caller's, or the answer is 404, so ids cannot be probed.
 //
 //   POST /tasks                  { conversationId, content, generation?, maxTurns?,
-//                                  clientTools?, toolLimits? }
+//                                  clientTools?, toolLimits?, origin? }
+//                                origin: 'chat' (a plain Send) | 'background' (default)
 //                                start one (task-runner.mjs startTask)
 //   GET  /tasks[?conversationId=]  the caller's tasks, newest first
 //   GET  /tasks/:id              one task
@@ -88,6 +89,8 @@ export async function handleTaskRoute(req, res, urlPath, who) {
           clientTools: body.clientTools,
           // Nest tools the client switched off for this chat.
           toolLimits: body.toolLimits,
+          // A plain Send ('chat') or a background task (the default).
+          origin: body.origin,
           timeZone: who.timeZone ?? null,
         })
         if (!r.ok) { sendJson(res, r.status, r.status === 404 ? NOT_FOUND : bad(r.error)); return true }

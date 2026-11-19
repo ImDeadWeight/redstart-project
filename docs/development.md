@@ -18,33 +18,56 @@ Repository layout, dev loops, and how to build the binaries and installers.
 
 ```
 redstart-project/
-├── docs/                  # This documentation, plus contracts and specs
-├── deploy/                # Service units, SCM procedure and Caddyfile for appliance installs
+├── chat-ui/               # The chat app (SvelteKit), shipped by both Nest and Twig
+│   └── android/           # Capacitor Android project (parked: "Settle Android")
 ├── redstart-nest/         # Redstart Nest (server manager)
 │   ├── bin/nestd.mjs      # The daemon's entrypoint (headless, or --shell-pipe under the shell)
 │   ├── daemon/            # The daemon: gateway, MCP server, providers, control plane
 │   │   ├── admin/         # The control plane's HTTP routes (auth, api, events, cors)
 │   │   ├── gateway/       # The data plane's non-proxied routes
 │   │   └── ipc/           # Handler bodies, one module per namespace
-│   ├── scripts/           # Security/contract test suites (npm run test:security)
-│   ├── src/
-│   │   ├── App.tsx        # React UI (the launcher — a browser page, served by :19083)
-│   │   ├── api/http.ts    # The launcher's HTTP client for the control plane
-│   │   └── chat-ui/       # SvelteKit chat frontend (shared with all clients)
-│   │       └── android/   # Capacitor Android project (Redstart Twig for Android)
+│   ├── scripts/           # Test suites (npm run test:security) and Nest's build steps
+│   ├── src/launcher/      # React UI (the launcher — a browser page, served by :19083)
 │   └── shell/             # The desktop shell (Tauri, Rust): window, tray, updater, installer
-├── shared/                # Code shared between nestd and twigd
+├── redstart-twig/
+│   └── desktop/           # Redstart Twig desktop (Windows and macOS)
+│       ├── bin/twigd.mjs  # twigd: Twig's Node half, run by the shell
+│       ├── daemon/        # what twigd does: the granted folder, local MCP, LAN scan
+│       │   └── fs/        # Twig's own local file tools (fs_*) — see below
+│       ├── shell/         # The Tauri shell (Rust): window, chat-ui origin, updater, installer
+│       └── SMOKE.md       # Manual checklist for what the suites cannot reach
+├── shared/                # Modules more than one app imports
+│   ├── agent-core/        # the agent loop (chat-ui, the bench, the daemon)
 │   ├── mcp-stdio-process.mjs   # stdio MCP child-process supervisor
 │   ├── shell-pipe.mjs     # the JSON-lines pipe between a Tauri shell and its Node half
 │   └── update-feed.mjs    # which GitHub release is an app's update
-└── redstart-twig/         # Redstart Twig client apps
-    └── windows/           # Redstart Twig desktop (Windows and macOS, despite the name)
-        ├── bin/twigd.mjs  # twigd: Twig's Node half, run by the shell
-        ├── daemon/        # what twigd does: the granted folder, local MCP, LAN scan
-        │   └── fs/        # Twig's own local file tools (fs_*) — see below
-        ├── shell/         # The Tauri shell (Rust): window, chat-ui origin, updater, installer
-        └── SMOKE.md       # Manual checklist for what the suites cannot reach
+├── tooling/               # Build tools both apps run: icons + mascot, Node staging,
+│                          # Rust licence lists, update manifests
+├── deps/node/             # (gitignored) the pinned Node 26, staged by tooling/stage-node.mjs
+├── deploy/                # Service units, SCM procedure and Caddyfile for appliance installs
+└── docs/                  # This documentation, plus contracts and specs
 ```
+
+### Which app owns what
+
+Three apps and two libraries. **Nothing imports another app's source.**
+
+| Code in | May import | Takes as a build artifact |
+|---|---|---|
+| `chat-ui/` | itself, `shared/` | — |
+| `redstart-nest/` | itself, `shared/`, `tooling/` | `chat-ui/dist` |
+| `redstart-twig/` | itself, `shared/`, `tooling/` | `chat-ui/dist` |
+| `shared/` | itself | — |
+| `tooling/` | itself, `shared/` | — |
+
+chat-ui is its own package (`@redstart/chat-ui`); Nest and Twig each run its
+build (`npm run build:chat`) and copy `chat-ui/dist` into their installers,
+and a dev-mode Nest serves the checkout's `chat-ui/dist`. Code that two apps
+need goes in `shared/`; a build step two apps run goes in `tooling/`. Tests
+may read another app's files as text to check a cross-app contract (one
+signing key, one version, the installer layout); they may not import its
+code. `redstart-nest/scripts/test-boundaries.mjs` enforces the table in
+`test:security` and CI; its header says exactly what it scans.
 
 **Two frontend frameworks, two jobs.** React owns the launcher — the surface that starts and stops the model, configures capabilities and manages accounts. SvelteKit owns the chat UI, served on the data plane and shared by every client (browser, Twig Windows, Twig Android, Blueprints). They share no state, no routing and no auth code, and neither imports from the other.
 
@@ -65,12 +88,12 @@ The launcher and the chat-ui are **two separate npm packages** — you must inst
 ```bash
 cd redstart-nest
 npm install                       # launcher, daemon and Tauri CLI deps
-npm install --prefix src/chat-ui  # the SvelteKit chat-ui is its own package
-node scripts/stage-node.mjs       # the pinned Node 26 the shell runs the daemon on
+npm install --prefix ../chat-ui  # the SvelteKit chat-ui is its own package
+node ../tooling/stage-node.mjs    # the pinned Node 26 (into the repo root's deps/node, shared with Twig)
 npm run dev
 ```
 
-This starts Vite (React launcher UI), the SvelteKit chat-ui dev server, and the Tauri shell in debug (`cargo run` in `shell/`, via `scripts/dev-shell.mjs`), whose window loads Vite. It needs a Rust toolchain (`rustup`, stable). A debug shell runs this checkout's `bin/nestd.mjs`, uses your real `%APPDATA%\redstart` unless `REDSTART_CONFIG_DIR` points elsewhere, and never touches the login item or the updater. (`npm install` in `redstart-nest` does **not** install the chat-ui's dependencies — `npm run dev` launches the chat-ui dev server via `--prefix src/chat-ui`, so its `node_modules` must exist first.)
+This starts Vite (React launcher UI), the SvelteKit chat-ui dev server, and the Tauri shell in debug (`cargo run` in `shell/`, via `scripts/dev-shell.mjs`), whose window loads Vite. It needs a Rust toolchain (`rustup`, stable). A debug shell runs this checkout's `bin/nestd.mjs`, uses your real `%APPDATA%\redstart` unless `REDSTART_CONFIG_DIR` points elsewhere, and never touches the login item or the updater. (`npm install` in `redstart-nest` does **not** install the chat-ui's dependencies — `npm run dev` launches the chat-ui dev server via `--prefix ../chat-ui`, so its `node_modules` must exist first.)
 
 > **Note:** In dev mode the chat-ui runs on its own port (`:5174`). The `--path` flag that serves it through llama-server only applies in production builds.
 
@@ -112,9 +135,9 @@ real hardware yet and say so.
 ## Chat UI only
 
 ```bash
-cd redstart-nest/src/chat-ui
+cd chat-ui
 npm install
-npm run dev:redstart      # Vite on :5174, hot-reloads on save
+npm run dev               # Vite on :5174, hot-reloads on save
 ```
 
 This is the fast loop for UI work: Redstart Nest keeps running and serving the API, the chat-ui hot-reloads, and neither a bundle build nor a shell restart is needed. The dev server proxies the API routes (`/v1`, `/props`, `/models`, `/tools`, `/slots`, `/auth`, `/files`, `/redstart`) to a Nest on `http://localhost:19080`; override with `VITE_PUBLIC_SERVER_ORIGIN`.
@@ -136,7 +159,7 @@ npm run storybook                # interactive, per-component
 cd redstart-nest
 npm run test:security     # the full invariant suite — see docs/security.md
 npm run typecheck         # tsc --noEmit for the launcher
-npm run check:mjs         # node --check across daemon + shared + bin
+npm run check:mjs         # node --check across daemon + shared + bin + tooling
 ```
 
 Two things the suites do not cover, and cannot as they stand:
@@ -165,10 +188,10 @@ Every suite in `test:security` must also appear as a step in `.github/workflows/
 The Windows client has no dev server — it just loads the built chat-ui. Build the chat-ui first, then:
 
 ```bash
-cd redstart-nest/src/chat-ui
+cd chat-ui
 npm run build
 
-cd ../../../redstart-twig/desktop
+cd ../redstart-twig/desktop
 npm run dev
 ```
 
@@ -177,14 +200,14 @@ npm run dev
 ## Redstart Twig Android
 
 ```bash
-cd redstart-nest/src/chat-ui
+cd chat-ui
 npm install
 npm run build
 
 npx cap sync android
 ```
 
-Then open `redstart-nest/src/chat-ui/android` in Android Studio and run on a device or emulator.
+Then open `chat-ui/android` in Android Studio and run on a device or emulator.
 
 ---
 
@@ -230,7 +253,7 @@ Without these, the packaged `llama-server.exe` fails to load on any machine that
 ```bash
 cd redstart-nest
 npm install                       # if not already
-npm install --prefix src/chat-ui  # the build compiles the chat-ui too
+npm install --prefix ../chat-ui  # the build compiles the chat-ui too
 npm run build
 ```
 
@@ -242,7 +265,7 @@ npm run build
 
 ### Redstart Nest
 
-Prerequisites: both packages' dependencies installed (`npm install` in `redstart-nest` **and** `npm install --prefix src/chat-ui`), a Rust toolchain, plus the llama-server binary and `deps/windows/` DLLs in place (see [Building from Source](#building-from-source--llama-server-binary)). The updater signature needs the signing key in the environment, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Without them the build fails, so an installer that cannot be updated never comes out of it.
+Prerequisites: both packages' dependencies installed (`npm install` in `redstart-nest` **and** `npm install --prefix ../chat-ui`), a Rust toolchain, plus the llama-server binary and `deps/windows/` DLLs in place (see [Building from Source](#building-from-source--llama-server-binary)). The updater signature needs the signing key in the environment, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Without them the build fails, so an installer that cannot be updated never comes out of it.
 
 ```bash
 cd redstart-nest
@@ -252,14 +275,14 @@ npm run build
 `npm run build` runs, in order:
 - the chat-ui and launcher builds;
 - the npm and Rust licence lists;
-- `stage-node.mjs` (the pinned Node 26);
+- `tooling/stage-node.mjs` (the pinned Node 26, into the repo root's `deps/node/`);
 - `stage-shell-bundle.mjs`, which assembles `shell/bundle/resources/`: Node, the daemon with its production `node_modules`, `shared/`, the chat-ui, `bin/` and `elevate.exe`;
 - `tauri build`.
 
-Output: `shell/target/release/bundle/nsis/Redstart Nest_<version>_x64-setup.exe` and its `.sig`. The release workflow renames it to `Redstart-Nest-Setup-<version>.exe` and writes the update manifests (`scripts/make-shell-manifests.mjs`).
+Output: `shell/target/release/bundle/nsis/Redstart Nest_<version>_x64-setup.exe` and its `.sig`. The release workflow renames it to `Redstart-Nest-Setup-<version>.exe` and writes the update manifests (`tooling/make-shell-manifests.mjs`).
 
 The version comes from `package.json` (`shell/tauri.conf.json` reads it). Don't bump it by hand — the [release workflow](#releases)
-does that on every merge, in `redstart-nest/package.json` and
+does that each time it is run, in `redstart-nest/package.json` and
 `redstart-twig/desktop/package.json` together (it refuses to run if they
 disagree).
 
@@ -276,13 +299,13 @@ npm run build
 
 Output: `redstart-twig/desktop/shell/target/release/bundle/nsis/Redstart Twig_<version>_x64-setup.exe` (about 32 MB).
 
-Twig is a Tauri app built the way Nest is: `npm run build` builds the chat-ui, stages Nest's pinned Node 26 (one pin for both apps), lists the Rust crates' licences, stages `shell/bundle/resources` (`scripts/stage-shell-bundle.mjs`), and runs `tauri build`, which needs the updater signing key in `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`). Despite the directory name, the same project builds Twig for macOS (Apple Silicon only).
+Twig is a Tauri app built the way Nest is: `npm run build` builds the chat-ui, stages the pinned Node 26 (`tooling/stage-node.mjs`, one pin for both apps), lists the Rust crates' licences, stages `shell/bundle/resources` (`scripts/stage-shell-bundle.mjs`), and runs `tauri build`, which needs the updater signing key in `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`). Despite the directory name, the same project builds Twig for macOS (Apple Silicon only).
 
-`npm run dev` runs the shell from the checkout (`cargo run`): twigd on `REDSTART_NODE` or Nest's staged `deps/node`, and the chat-ui from `redstart-nest/src/chat-ui/dist` (build it first). `TWIG_CONFIG_DIR` points a dev run at a throwaway state folder.
+`npm run dev` runs the shell from the checkout (`cargo run`): twigd on `REDSTART_NODE` or the staged `deps/node` at the repo root, and the chat-ui from `chat-ui/dist` (build it first). `TWIG_CONFIG_DIR` points a dev run at a throwaway state folder.
 
 ### Releases
 
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) runs whenever a pull request is **merged** into `main` (closing one unmerged does nothing), and can be started by hand from the Actions tab. It:
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) runs **only when started by hand**: Actions → Release → *Run workflow*. Merging a pull request into `main` releases nothing, so a release is cut when there is something worth shipping and small PRs cost no installer builds. It works from `main` as it is when started, and:
 
 1. bumps `-alpha.N` in both `package.json` files, commits `chore(release): <version>` to `main` and pushes a matching tag — `1.0.0-alpha.4`, etc.;
 2. builds four installers from that tag: Nest and Twig, each for Windows (NSIS `.exe`) and macOS (`.dmg`);
@@ -290,7 +313,7 @@ Twig is a Tauri app built the way Nest is: `npm run build` builds the chat-ui, s
 
 Things worth knowing:
 
-- **A failed build leaves a tag without a release.** If the failure was transient (a download, a runner), use **Re-run failed jobs** — it keeps the version already chosen; *Re-run all jobs* bumps again and skips a number. If it needs a code change, re-running rebuilds the same broken tag: merge the fix instead, let that cut the next version, and delete the orphaned tag (`git push origin :refs/tags/<version>`).
+- **A failed build leaves a tag without a release.** If the failure was transient (a download, a runner), use **Re-run failed jobs** — it keeps the version already chosen; *Re-run all jobs* bumps again and skips a number. If it needs a code change, re-running rebuilds the same broken tag: merge the fix, run the workflow again to cut the next version, and delete the orphaned tag (`git push origin :refs/tags/<version>`).
 - **Leaving alpha is a manual step.** The bump only understands `X.Y.Z-alpha.N`; anything else stops the workflow with an error, so set the next version by hand in a PR when it is time for a beta or a 1.0.
 - **Nothing is signed with a real identity.** Windows installers are unsigned, as before. macOS apps are ad-hoc signed: each by its `stage-shell-bundle.mjs` (every Mach-O) plus Tauri's `signingIdentity: "-"`. That is enough that Apple Silicon does not call them "damaged", but not enough to pass Gatekeeper without the user's *Open Anyway*.
 - **Both apps' updates ARE signed**, with one updater key (repo secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the public key is in each `shell/tauri.conf.json`, and `test-packaging.mjs` checks they match). Each build job writes a manifest fragment, and the release job merges them into `nest-latest.json` and `twig-latest.json`. The Windows job also writes `nest.yml`, which is how Electron-era installs find the bridge installer. Lose the key and no install can be updated again: keep a backup off the machine.

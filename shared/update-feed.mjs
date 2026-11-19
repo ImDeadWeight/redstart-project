@@ -34,7 +34,7 @@ export const UPDATE_REPO = Object.freeze({ owner: 'ImDeadWeight', repo: 'redstar
 
 /**
  * The update manifest's base name for this app. The release writes
- * `${UPDATE_CHANNEL}.yml` (scripts/make-shell-manifests.mjs) for Electron-era
+ * `${UPDATE_CHANNEL}.yml` (tooling/make-shell-manifests.mjs) for Electron-era
  * installs, and scripts/test-update-feed.mjs checks the two agree.
  */
 export const UPDATE_CHANNEL = 'nest'

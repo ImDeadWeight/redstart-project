@@ -1,0 +1,40 @@
+{
+	"extends": "./.svelte-kit/tsconfig.json",
+	"compilerOptions": {
+		"allowJs": true,
+		// False since chat-ui's tests imported the daemon's .mjs modules by
+		// relative path, which made TS strict-check ~40 untyped daemon files
+		// (484 of a 513-error baseline, none of them defects). Those tests
+		// moved to Nest in master plan Phase 7b, so the reason is gone; turning
+		// this back on is a separate change, because it would also start
+		// checking chat-ui's own .js files (app-boundaries-plan §6).
+		"checkJs": false,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
+		"skipLibCheck": true,
+		"sourceMap": true,
+		"strict": true,
+		"moduleResolution": "bundler"
+	},
+	"include": [
+		".svelte-kit/ambient.d.ts",
+		".svelte-kit/non-ambient.d.ts",
+		".svelte-kit/types/**/$types.d.ts",
+		"vite.config.js",
+		"vite.config.ts",
+		"src/**/*.js",
+		"src/**/*.ts",
+		"src/**/*.svelte",
+		"tests/**/*.ts",
+		"tests/**/*.svelte",
+		".storybook/**/*.ts",
+		".storybook/**/*.svelte"
+	],
+	"exclude": ["src/lib/services/sandbox-worker.js"]
+	// Path aliases are handled by https://svelte.dev/docs/kit/configuration#alias
+	// except $lib which is handled by https://svelte.dev/docs/kit/configuration#files
+	//
+	// If you want to overwrite includes/excludes, make sure to copy over the relevant includes/excludes
+	// from the referenced tsconfig.json - TypeScript does not merge them in
+}

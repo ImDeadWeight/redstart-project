@@ -1,0 +1,701 @@
+/**
+ * chat-send - The send/streaming pipeline for the chat store.
+ *
+ * Drives sendMessage, streamChatCompletion, generation stop/save, and KV-cache
+ * pre-encoding. Depends on ChatRuntimeState + ChatUiState (passed in) plus the
+ * stateless services and helpers it imports directly. Never imports the facade.
+ */
+
+import { DatabaseService } from '$lib/services/database.service';
+import { ChatService } from '$lib/services/chat.service';
+import { areAllSlotsIdle, preEncode } from '$lib/services/chat/chat-slots';
+import { ContextCompactionService } from '$lib/services/context-compaction.service';
+import { PromptService } from '$lib/services/prompt.service';
+import { conversationsStore } from '$lib/stores/conversations.svelte';
+import { config } from '$lib/stores/settings.svelte';
+import { agenticStore } from '$lib/stores/agentic.svelte';
+import { mcpStore } from '$lib/stores/mcp.svelte';
+import { uploadToWorkspace } from '$lib/utils/workspace-upload';
+import { isRouterMode } from '$lib/stores/server.svelte';
+import { selectedModelName, modelsStore } from '$lib/stores/models.svelte';
+import {
+	getApiOptions as computeApiOptions,
+	getConversationModel as computeConversationModel
+} from '$lib/stores/chat/chat-options';
+import * as messageRepo from '$lib/stores/chat/chat-message-repo';
+import { ChatTitleService } from '$lib/services/chat-title.service';
+import { memoryReviewStore } from '$lib/stores/memory-review.svelte';
+import { tasksStore, serverRunsOn } from '$lib/stores/tasks.svelte';
+import { isChatRun } from '$lib/services/task.service';
+import { toast } from 'svelte-sonner';
+import {
+	normalizeModelName,
+	isAbortError,
+	generateConversationTitle,
+	filterByLeafNodeId
+} from '$lib/utils';
+import { createToolResultChain } from '$lib/utils/branching';
+import { ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
+import type {
+	ChatMessageTimings,
+	ChatMessagePromptProgress,
+	ChatStreamCallbacks
+} from '$lib/types/chat';
+import type { DatabaseConversation, DatabaseMessage, DatabaseMessageExtra } from '$lib/types';
+import type { ChatRuntimeState } from '$lib/stores/chat/chat-runtime.svelte';
+import type { ChatUiState } from '$lib/stores/chat/chat-ui-state.svelte';
+
+export class ChatSendController {
+	private preEncodeAbortController: AbortController | null = null;
+
+	constructor(
+		private readonly runtime: ChatRuntimeState,
+		private readonly ui: ChatUiState
+	) {}
+
+	async sendMessage(
+		content: string,
+		extras?: DatabaseMessageExtra[],
+		workspaceFiles?: File[]
+	): Promise<void> {
+		if (!content.trim() && (!extras || extras.length === 0) && !workspaceFiles?.length) return;
+		const activeConv = conversationsStore.activeConversation;
+
+		// A background task holds this chat (agent-runtime Phase 3.9): the
+		// daemon is its only writer, so a message goes to the task, as
+		// steering or as the answer to its open question. Files cannot ride
+		// along: the steer route takes text.
+		if (activeConv && tasksStore.activeFor(activeConv.id)) {
+			if (extras?.length || workspaceFiles?.length) {
+				toast.info(
+					'Files cannot be sent to a background task. Send text, or cancel the task first.'
+				);
+			}
+			if (content.trim()) await tasksStore.steer(activeConv.id, content.trim());
+			return;
+		}
+
+		// If agentic loop is running, inject as a steering message instead of starting a new flow
+		if (activeConv && agenticStore.session.isRunning(activeConv.id)) {
+			agenticStore.session.injectSteeringMessage(activeConv.id, content, extras);
+			return;
+		}
+
+		// If non-agentic streaming is active, queue as a pending message to send after completion
+		if (activeConv && this.runtime.isChatLoadingInternal(activeConv.id)) {
+			this.ui.injectPendingMessage(activeConv.id, content, extras);
+			return;
+		}
+
+		// Cancel any in-flight pre-encode request
+		this.cancelPreEncode();
+
+		// Consume MCP resource attachments - converts them to extras and clears the live store
+		const resourceExtras = mcpStore.consumeResourceAttachmentsAsExtras();
+		const allExtras = resourceExtras.length > 0 ? [...(extras || []), ...resourceExtras] : extras;
+
+		let isNewConversation = false;
+		if (!activeConv) {
+			await conversationsStore.createConversation();
+			isNewConversation = true;
+		}
+		const currentConv = conversationsStore.activeConversation;
+		if (!currentConv) return;
+		this.ui.showErrorDialog(null);
+		this.runtime.setChatLoading(currentConv.id, true);
+		this.runtime.clearChatStreaming(currentConv.id);
+		try {
+			let parentIdForUserMessage: string | undefined;
+			if (isNewConversation) {
+				const rootId = await DatabaseService.createRootMessage(currentConv.id);
+				const currentConfig = config();
+				const systemPrompt = currentConfig.systemMessage?.toString().trim();
+				if (systemPrompt) {
+					const systemMessage = await DatabaseService.createSystemMessage(
+						currentConv.id,
+						systemPrompt,
+						rootId
+					);
+					conversationsStore.addMessageToActive(systemMessage);
+					parentIdForUserMessage = systemMessage.id;
+				} else parentIdForUserMessage = rootId;
+
+				// Record which admin policy and mode this conversation starts
+				// under (spec §5). Best-effort by design: captureSnapshot()
+				// returns null instead of throwing, because a missing provenance
+				// record must never stop someone sending a message.
+				const snapshot = await PromptService.captureSnapshot(conversationsStore.getPromptMode());
+				if (snapshot) {
+					await DatabaseService.updateConversation(currentConv.id, {
+						promptSnapshot: snapshot
+					});
+				}
+			}
+			// Attachments into this conversation's workspace, for run_python. Only
+			// now, because a new conversation has no id until just above. The
+			// note goes into the message the model reads; the title below is
+			// still made from what the user typed.
+			const workspaceNote = workspaceFiles?.length
+				? await uploadToWorkspace(currentConv.id, workspaceFiles)
+				: null;
+			const messageText = workspaceNote
+				? content
+					? `${content}\n\n${workspaceNote}`
+					: workspaceNote
+				: content;
+
+			// Master plan Phase 7: a plain Send is a run on the server, so a
+			// refresh or a closed tab does not end it. The daemon writes the
+			// user's message itself; this app runs its own tools when the run
+			// asks. Images and other extras still go the browser way this
+			// release, and so does a Nest that cannot start one (an older one).
+			if (isNewConversation && content)
+				await conversationsStore.updateConversationName(
+					currentConv.id,
+					generateConversationTitle(content, Boolean(config().titleGenerationUseFirstLine))
+				);
+			if (serverRunsOn() && !allExtras?.length) {
+				const { clientTools, toolLimits } = await agenticStore.prepareServerRun();
+				const task = await tasksStore.start(currentConv.id, messageText, clientTools, {
+					quiet: true,
+					toolLimits,
+					// A reply, not a background task: no task bar, Stop cancels it.
+					origin: 'chat'
+				});
+				if (task) {
+					this.runtime.setChatLoading(currentConv.id, false);
+					return;
+				}
+			}
+
+			const userMessage = await messageRepo.addMessage(
+				MessageRole.USER,
+				messageText,
+				MessageType.TEXT,
+				parentIdForUserMessage ?? '-1',
+				allExtras
+			);
+			const assistantMessage = await messageRepo.createAssistantMessage(userMessage.id);
+			conversationsStore.addMessageToActive(assistantMessage);
+			await this.streamChatCompletion(
+				conversationsStore.activeMessages.slice(0, -1),
+				assistantMessage
+			);
+		} catch (error) {
+			if (isAbortError(error)) {
+				this.runtime.setChatLoading(currentConv.id, false);
+				return;
+			}
+			console.error('Failed to send message:', error);
+			this.runtime.setChatLoading(currentConv.id, false);
+			const dialogType =
+				error instanceof Error && error.name === 'TimeoutError'
+					? ErrorDialogType.TIMEOUT
+					: ErrorDialogType.SERVER;
+			const contextInfo = (
+				error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
+			).contextInfo;
+			this.ui.showErrorDialog({
+				type: dialogType,
+				message: error instanceof Error ? error.message : 'Unknown error',
+				contextInfo
+			});
+		}
+	}
+
+	async streamChatCompletion(
+		allMessages: DatabaseMessage[],
+		assistantMessage: DatabaseMessage,
+		onComplete?: (content: string) => Promise<void>,
+		onError?: (error: Error) => void,
+		modelOverride?: string | null
+	): Promise<void> {
+		// Proactive context compaction: if the assembled history would overflow
+		// the model's context window, fold the oldest turns into a running
+		// summary before anything is sent (see ContextCompactionService). This
+		// single choke point covers both the agentic and plain streaming paths.
+		// The rewrite affects only the API payload — the stored conversation and
+		// visible history are untouched.
+		({ messages: allMessages } = await ContextCompactionService.maybeCompact(
+			assistantMessage.convId,
+			allMessages
+		));
+
+		let effectiveModel = modelOverride;
+
+		if (isRouterMode() && !effectiveModel) {
+			const conversationModel = computeConversationModel(allMessages);
+			effectiveModel = selectedModelName() || conversationModel;
+		}
+
+		if (isRouterMode() && effectiveModel) {
+			if (!modelsStore.getModelProps(effectiveModel))
+				await modelsStore.fetchModelProps(effectiveModel);
+		}
+
+		// Mutable state for the current message being streamed
+		let currentMessageId = assistantMessage.id;
+		let streamedContent = '';
+		let streamedReasoningContent = '';
+		let resolvedModel: string | null = null;
+		let modelPersisted = false;
+		const convId = assistantMessage.convId;
+		// Each tool result hangs off the one before it, so every result of a
+		// reply stays on the path after a reload (utils/branching).
+		const toolResultChain = createToolResultChain();
+
+		const recordModel = (modelName: string | null | undefined, persistImmediately = true): void => {
+			if (!modelName) return;
+			const n = normalizeModelName(modelName);
+			if (!n || n === resolvedModel) return;
+			resolvedModel = n;
+			const idx = conversationsStore.findMessageIndex(currentMessageId);
+			conversationsStore.updateMessageAtIndex(idx, { model: n });
+			if (persistImmediately && !modelPersisted) {
+				modelPersisted = true;
+				DatabaseService.updateMessage(currentMessageId, { model: n }).catch(() => {
+					modelPersisted = false;
+					resolvedModel = null;
+				});
+			}
+		};
+
+		let completionIdRecorded = false;
+		const recordCompletionId = (id: string): void => {
+			if (!id || completionIdRecorded) return;
+			completionIdRecorded = true;
+			const idx = conversationsStore.findMessageIndex(currentMessageId);
+			conversationsStore.updateMessageAtIndex(idx, { completionId: id });
+			DatabaseService.updateMessage(currentMessageId, { completionId: id }).catch(() => {
+				completionIdRecorded = false;
+			});
+		};
+
+		const updateStreamingUI = () => {
+			this.runtime.setChatStreaming(convId, streamedContent, currentMessageId);
+			const idx = conversationsStore.findMessageIndex(currentMessageId);
+			conversationsStore.updateMessageAtIndex(idx, { content: streamedContent });
+		};
+
+		const cleanupStreamingState = () => {
+			this.runtime.setStreamingActive(false);
+			this.runtime.setChatLoading(convId, false);
+			this.runtime.clearChatStreaming(convId);
+			this.runtime.setProcessingState(convId, null);
+		};
+
+		this.runtime.setStreamingActive(true);
+		this.runtime.setActiveProcessingConversation(convId);
+		const abortController = this.runtime.getOrCreateAbortController(convId);
+
+		const streamCallbacks: ChatStreamCallbacks = {
+			onChunk: (chunk: string) => {
+				streamedContent += chunk;
+				updateStreamingUI();
+				this.runtime.setChatReasoning(convId, false);
+			},
+			onReasoningChunk: (chunk: string) => {
+				streamedReasoningContent += chunk;
+				// mark streaming state so a stop mid-thinking can persist the partial reasoning
+				this.runtime.setChatStreaming(convId, streamedContent, currentMessageId);
+				const idx = conversationsStore.findMessageIndex(currentMessageId);
+				conversationsStore.updateMessageAtIndex(idx, {
+					reasoningContent: streamedReasoningContent
+				});
+				this.runtime.setChatReasoning(convId, true);
+			},
+			onToolCallsStreaming: (toolCalls) => {
+				const idx = conversationsStore.findMessageIndex(currentMessageId);
+				conversationsStore.updateMessageAtIndex(idx, {
+					toolCalls: JSON.stringify(toolCalls)
+				});
+			},
+			onAttachments: (messageId: string, extras: DatabaseMessageExtra[]) => {
+				if (!extras.length) return;
+				const idx = conversationsStore.findMessageIndex(messageId);
+				if (idx === -1) return;
+				const msg = conversationsStore.activeMessages[idx];
+				const updatedExtras = [...(msg.extra || []), ...extras];
+				conversationsStore.updateMessageAtIndex(idx, { extra: updatedExtras });
+				DatabaseService.updateMessage(messageId, { extra: updatedExtras }).catch(console.error);
+			},
+			onModel: (modelName: string) => recordModel(modelName),
+			onCompletionId: (id: string) => recordCompletionId(id),
+			onTurnComplete: (intermediateTimings: ChatMessageTimings) => {
+				// Update the first assistant message with cumulative agentic timings
+				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+				conversationsStore.updateMessageAtIndex(idx, { timings: intermediateTimings });
+			},
+			onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
+				const tokensPerSecond =
+					timings?.predicted_ms && timings?.predicted_n
+						? (timings.predicted_n / timings.predicted_ms) * 1000
+						: 0;
+				this.runtime.updateProcessingStateFromTimings(
+					{
+						prompt_n: timings?.prompt_n || 0,
+						prompt_ms: timings?.prompt_ms,
+						predicted_n: timings?.predicted_n || 0,
+						predicted_per_second: tokensPerSecond,
+						cache_n: timings?.cache_n || 0,
+						prompt_progress: promptProgress
+					},
+					convId
+				);
+			},
+			onAssistantTurnComplete: async (
+				content: string,
+				reasoningContent: string | undefined,
+				timings: ChatMessageTimings | undefined,
+				toolCalls: import('$lib/types/api').ApiChatCompletionToolCall[] | undefined
+			) => {
+				const updateData: Record<string, unknown> = {
+					content,
+					reasoningContent: reasoningContent || undefined,
+					toolCalls: toolCalls ? JSON.stringify(toolCalls) : '',
+					timings
+				};
+				if (resolvedModel && !modelPersisted) updateData.model = resolvedModel;
+				await DatabaseService.updateMessage(currentMessageId, updateData);
+				const idx = conversationsStore.findMessageIndex(currentMessageId);
+				const uiUpdate: Partial<DatabaseMessage> = {
+					content,
+					reasoningContent: reasoningContent || undefined,
+					toolCalls: toolCalls ? JSON.stringify(toolCalls) : ''
+				};
+				if (timings) uiUpdate.timings = timings;
+				if (resolvedModel) uiUpdate.model = resolvedModel;
+				conversationsStore.updateMessageAtIndex(idx, uiUpdate);
+				await conversationsStore.updateCurrentNode(currentMessageId);
+			},
+			createToolResultMessage: async (
+				toolCallId: string,
+				content: string,
+				extras?: DatabaseMessageExtra[]
+			) => {
+				const msg = await DatabaseService.createMessageBranch(
+					{
+						convId,
+						type: MessageType.TEXT,
+						role: MessageRole.TOOL,
+						content,
+						toolCallId,
+						timestamp: Date.now(),
+						toolCalls: '',
+						children: [],
+						extra: extras
+					},
+					toolResultChain.parentFor(currentMessageId)
+				);
+				toolResultChain.advance(currentMessageId, msg.id);
+				conversationsStore.addMessageToActive(msg);
+				await conversationsStore.updateCurrentNode(msg.id);
+				return msg;
+			},
+			createAssistantMessage: async () => {
+				// Reset streaming state for new message
+				streamedContent = '';
+				streamedReasoningContent = '';
+
+				const lastMsg =
+					conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1];
+				const msg = await DatabaseService.createMessageBranch(
+					{
+						convId,
+						type: MessageType.TEXT,
+						role: MessageRole.ASSISTANT,
+						content: '',
+						timestamp: Date.now(),
+						toolCalls: '',
+						children: [],
+						model: resolvedModel
+					},
+					lastMsg.id
+				);
+				conversationsStore.addMessageToActive(msg);
+				currentMessageId = msg.id;
+				return msg;
+			},
+			onFlowComplete: (finalTimings?: ChatMessageTimings) => {
+				if (finalTimings) {
+					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+
+					conversationsStore.updateMessageAtIndex(idx, { timings: finalTimings });
+					DatabaseService.updateMessage(assistantMessage.id, {
+						timings: finalTimings
+					}).catch(console.error);
+				}
+
+				cleanupStreamingState();
+
+				if (onComplete) onComplete(streamedContent);
+				if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
+				const finalContent = streamedContent;
+				// Naming goes first: on a single-slot server its request replaces the
+				// slot's cached prompt, and the pre-encode below puts the
+				// conversation back. The other order would throw that work away.
+				// Automatic memory: reviewed once this chat goes quiet (or is left).
+				void memoryReviewStore.scheduleReview(convId);
+				void this.nameConversation(convId, effectiveModel).finally(() => {
+					// Pre-encode conversation in KV cache for faster next turn
+					if (config().preEncodeConversation) {
+						this.triggerPreEncode(
+							allMessages,
+							assistantMessage,
+							finalContent,
+							effectiveModel,
+							!!config().excludeReasoningFromContext
+						);
+					}
+				});
+			},
+			onError: async (error: Error) => {
+				this.runtime.setStreamingActive(false);
+				if (isAbortError(error)) {
+					cleanupStreamingState();
+					// If aborted with a pending message (e.g. "Send immediately"), re-send it
+					const pending = this.ui.consumePendingMessage(convId);
+					if (pending) {
+						this.sendMessage(pending.content, pending.extras);
+					}
+					return;
+				}
+				console.error('Streaming error:', error);
+				// keep whatever was streamed so far, the message stays in memory and in DB
+				await this.savePartialResponseIfNeeded(convId);
+				cleanupStreamingState();
+				this.ui.clearPendingMessage(convId);
+
+				const contextInfo = (
+					error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
+				).contextInfo;
+				this.ui.showErrorDialog({
+					type: error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER,
+					message: error.message,
+					contextInfo
+				});
+				if (onError) onError(error);
+			}
+		};
+
+		// Must go through getAllMcpServerOverrides, not the conversation's raw
+		// array: a conversation that never chose has no entry, and reading the
+		// array directly hides the saved defaults — which is how every
+		// host-provisioned server ended up disabled on the one path that decides
+		// whether tools reach the model.
+		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+
+		{
+			const agenticResult = await agenticStore.runAgenticFlow({
+				conversationId: convId,
+				messages: allMessages,
+				options: {
+					...computeApiOptions(),
+					...(effectiveModel ? { model: effectiveModel } : {})
+				},
+				callbacks: streamCallbacks,
+				signal: abortController.signal,
+				perChatOverrides
+			});
+			if (agenticResult.handled) {
+				// Check if there's a pending steering message to re-send
+				const pending = agenticStore.session.consumePendingSteeringMessage(convId);
+				if (pending) {
+					await this.sendMessage(pending.content, pending.extras);
+				}
+				return;
+			}
+		}
+
+		await ChatService.sendMessage(
+			allMessages,
+			{
+				...computeApiOptions(),
+				...(effectiveModel ? { model: effectiveModel } : {}),
+				stream: true,
+				onChunk: streamCallbacks.onChunk,
+				onReasoningChunk: streamCallbacks.onReasoningChunk,
+				onModel: streamCallbacks.onModel,
+				onCompletionId: streamCallbacks.onCompletionId,
+				onTimings: streamCallbacks.onTimings,
+				onComplete: async (
+					finalContent?: string,
+					reasoningContent?: string,
+					timings?: ChatMessageTimings,
+					toolCalls?: string
+				) => {
+					const content = streamedContent || finalContent || '';
+					const reasoning = streamedReasoningContent || reasoningContent;
+					const updateData: Record<string, unknown> = {
+						content,
+						reasoningContent: reasoning || undefined,
+						toolCalls: toolCalls || '',
+						timings
+					};
+					if (resolvedModel && !modelPersisted) updateData.model = resolvedModel;
+					await DatabaseService.updateMessage(currentMessageId, updateData);
+					const idx = conversationsStore.findMessageIndex(currentMessageId);
+					const uiUpdate: Partial<DatabaseMessage> = {
+						content,
+						reasoningContent: reasoning || undefined,
+						toolCalls: toolCalls || ''
+					};
+					if (timings) uiUpdate.timings = timings;
+					if (resolvedModel) uiUpdate.model = resolvedModel;
+					conversationsStore.updateMessageAtIndex(idx, uiUpdate);
+					await conversationsStore.updateCurrentNode(currentMessageId);
+					cleanupStreamingState();
+					if (onComplete) await onComplete(content);
+					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
+					// Not awaited: a slow model must not hold up a queued message.
+					void this.nameConversation(convId, effectiveModel);
+					void memoryReviewStore.scheduleReview(convId);
+
+					// Check if there's a pending message queued during streaming
+					const pending = this.ui.consumePendingMessage(convId);
+					if (pending) {
+						await this.sendMessage(pending.content, pending.extras);
+					}
+				},
+				onError: streamCallbacks.onError
+			},
+			convId,
+			abortController.signal
+		);
+	}
+
+	async stopGeneration(): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+		if (!activeConv) return;
+		// A Send that runs on the server: Stop is that run's Cancel, from the
+		// composer, the sidebar or the keyboard alike. (A real background task
+		// keeps its own Cancel on the task bar.)
+		if (isChatRun(tasksStore.activeFor(activeConv.id))) {
+			await tasksStore.cancel(activeConv.id);
+			return;
+		}
+		await this.stopGenerationForChat(activeConv.id);
+	}
+	async stopGenerationForChat(convId: string): Promise<void> {
+		await this.savePartialResponseIfNeeded(convId);
+		this.runtime.setStreamingActive(false);
+		this.runtime.abortRequest(convId);
+		this.runtime.setChatLoading(convId, false);
+		this.runtime.clearChatStreaming(convId);
+		this.runtime.setProcessingState(convId, null);
+		this.ui.clearPendingMessage(convId);
+	}
+
+	async savePartialResponseIfNeeded(convId?: string): Promise<void> {
+		const conversationId = convId || conversationsStore.activeConversation?.id;
+		if (!conversationId) return;
+		const streamingState = this.runtime.getChatStreaming(conversationId);
+		if (!streamingState) return;
+		const messages =
+			conversationId === conversationsStore.activeConversation?.id
+				? conversationsStore.activeMessages
+				: await conversationsStore.getConversationMessages(conversationId);
+		if (!messages.length) return;
+		const lastMessage = messages[messages.length - 1];
+		if (lastMessage?.role !== MessageRole.ASSISTANT) return;
+
+		const partialContent = streamingState.response;
+		const partialReasoning = lastMessage.reasoningContent || '';
+
+		// nothing to persist when both content and reasoning are empty (e.g. stop before any token)
+		if (!partialContent.trim() && !partialReasoning.trim()) return;
+
+		try {
+			const updateData: {
+				content: string;
+				reasoningContent?: string;
+				timings?: ChatMessageTimings;
+			} = {
+				content: partialContent
+			};
+			if (partialReasoning) {
+				updateData.reasoningContent = partialReasoning;
+			}
+			const lastKnownState = this.runtime.getProcessingState(conversationId);
+			if (lastKnownState) {
+				updateData.timings = {
+					prompt_n: lastKnownState.promptTokens || 0,
+					prompt_ms: lastKnownState.promptMs,
+					predicted_n: lastKnownState.tokensDecoded || 0,
+					cache_n: lastKnownState.cacheTokens || 0,
+					predicted_ms:
+						lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
+							? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
+							: undefined
+				};
+			}
+			await DatabaseService.updateMessage(lastMessage.id, updateData);
+			lastMessage.content = partialContent;
+			if (updateData.timings) lastMessage.timings = updateData.timings;
+		} catch (error) {
+			lastMessage.content = partialContent;
+			console.error('Failed to save partial response:', error);
+		}
+	}
+
+	/**
+	 * Lets the model name the conversation if it is due a name (first answer,
+	 * and again after the third prompt; see chat-title.service). Never throws:
+	 * the conversation keeps whatever title it has.
+	 */
+	private async nameConversation(convId: string, model?: string | null): Promise<void> {
+		try {
+			let conv: DatabaseConversation | undefined;
+			let messages: readonly DatabaseMessage[];
+			if (conversationsStore.activeConversation?.id === convId) {
+				conv = conversationsStore.activeConversation;
+				messages = conversationsStore.activeMessages;
+			} else {
+				// The user moved to another chat while this one was answering.
+				conv = await DatabaseService.getConversation(convId);
+				messages = conv?.currNode ? filterByLeafNodeId(conv.messages ?? [], conv.currNode) : [];
+			}
+			if (!conv) return;
+			const named = await ChatTitleService.suggest(conv, messages, model);
+			if (named) await conversationsStore.applyAutoTitle(convId, named.title, named.titledAt);
+		} catch (error) {
+			console.warn('[ChatStore] Naming the conversation failed:', error);
+		}
+	}
+
+	cancelPreEncode(): void {
+		if (this.preEncodeAbortController) {
+			this.preEncodeAbortController.abort();
+			this.preEncodeAbortController = null;
+		}
+	}
+
+	private async triggerPreEncode(
+		allMessages: DatabaseMessage[],
+		assistantMessage: DatabaseMessage,
+		assistantContent: string,
+		model?: string | null,
+		excludeReasoning?: boolean
+	): Promise<void> {
+		this.cancelPreEncode();
+		this.preEncodeAbortController = new AbortController();
+
+		const signal = this.preEncodeAbortController.signal;
+
+		try {
+			const allIdle = await areAllSlotsIdle(model, signal);
+			if (!allIdle || signal.aborted) return;
+
+			const messagesWithAssistant: DatabaseMessage[] = [
+				...allMessages,
+				{ ...assistantMessage, content: assistantContent }
+			];
+
+			await preEncode(messagesWithAssistant, model, excludeReasoning, signal);
+		} catch (err) {
+			if (!isAbortError(err)) {
+				console.warn('[ChatStore] Pre-encode failed:', err);
+			}
+		}
+	}
+}

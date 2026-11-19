@@ -597,6 +597,21 @@ await test('a second task on a conversation that has one is refused; an unknown 
   await waitFor(() => ended(t.id), 'end')
 })
 
+// A plain Send run on the server is shown as an ordinary reply, a background
+// task with the task bar: the record says which, so every device and a
+// reload agree (found 2026-11-18: every Send showed "Background task running").
+await test('origin: a Send run is "chat", anything else "background"; an unknown origin is refused', async () => {
+  fakeWorld([say('a'), say('b')])
+  const chat = start(newConversation(), 'hi', { origin: 'chat' })
+  eq(chat.origin, 'chat', 'chat')
+  eq(store.getTask(chat.id).origin, 'chat', 'stored')
+  const bg = start(newConversation(), 'hi')
+  eq(bg.origin, 'background', 'default')
+  const bad = runner.startTask({ account: null, storeAccountId: SCOPE, conversationId: newConversation(), content: 'x', origin: 'tab' })
+  eq([bad.ok, bad.status], [false, 400], 'unknown origin')
+  await waitFor(() => ended(chat.id) && ended(bg.id), 'end')
+})
+
 await test('a deleted conversation cancels its task at the next write', async () => {
   let release
   const gate = new Promise((r) => { release = r })
@@ -954,6 +969,10 @@ await test('POST /tasks starts one (201, no storage scope in the body); bad inpu
   eq((await taskRoute('POST', '/tasks', { conversationId: conv })).status, 400, 'no content')
   eq((await taskRoute('POST', '/tasks', { content: 'x' })).status, 400, 'no conversation')
   eq((await taskRoute('POST', '/tasks', { conversationId: 'nope', content: 'x' })).status, 404, 'unknown')
+  // The route carries origin through to the record the client reads.
+  const sent = await taskRoute('POST', '/tasks', { conversationId: conv, content: 'a send', origin: 'chat' })
+  eq([sent.status, sent.json?.origin], [201, 'chat'], 'origin via the route')
+  await waitFor(() => ended(sent.json.id), 'end of the send')
 })
 
 await test('another scope sees none of it: GET, events and every action are 404', async () => {

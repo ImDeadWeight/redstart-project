@@ -16,7 +16,7 @@
 //!   resources/{shared,bin,chat-ui,elevate.exe}
 //!
 //! A debug build runs the checkout instead: `bin/nestd.mjs` on
-//! REDSTART_NODE or the staged deps/node, with no resources directory.
+//! REDSTART_NODE or the staged deps/node at the repo root, with no resources directory.
 
 use std::path::PathBuf;
 
@@ -65,9 +65,10 @@ pub fn resolve(app: &AppHandle) -> Result<Layout, String> {
             .parent()
             .map(PathBuf::from)
             .ok_or("No checkout above the shell crate")?;
+        // tooling/stage-node.mjs stages one Node for both apps at the repo root.
         let node = std::env::var_os("REDSTART_NODE")
             .map(PathBuf::from)
-            .unwrap_or_else(|| repo.join("deps").join("node").join(node_exe()));
+            .unwrap_or_else(|| repo.join("..").join("deps").join("node").join(node_exe()));
         return Ok(Layout {
             config,
             capability_base,

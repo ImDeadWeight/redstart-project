@@ -1,0 +1,68 @@
+#!/usr/bin/env node
+// =============================================================================
+// Licences of the Rust crates compiled into the Tauri shell
+// =============================================================================
+// The npm side has license:gen (licenses/npm-licenses.json). The shell exe is
+// built from ~300 crates, and their licences ship with it the same way:
+// licenses/rust-licenses.json, one entry per crate that is actually compiled
+// for this platform's build (the resolved dependency graph for TARGET below,
+// normal dependencies only, not build or dev dependencies). The licence field is the crate's own SPDX expression, as
+// published.
+//
+//   node ../tooling/rust-licenses.mjs --shell <crate dir> --out <file>
+//
+// Run from an app before its stage-shell-bundle.mjs. Both arguments are
+// required: this tool belongs to no app, so it has no default to fall back on
+// (Nest: --shell shell --out licenses/rust-licenses.json; Twig the same, from
+// redstart-twig/desktop).
+// =============================================================================
+
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+
+// The crates differ by platform (DPAPI vs Keychain, WebView2 vs WKWebView).
+const TARGET = process.platform === 'darwin' ? 'aarch64-apple-darwin' : 'x86_64-pc-windows-msvc'
+
+export function compiledCrates(metadata) {
+  const byId = new Map(metadata.packages.map((p) => [p.id, p]))
+  const nodes = new Map(metadata.resolve.nodes.map((n) => [n.id, n]))
+  const root = metadata.resolve.root
+  const seen = new Set()
+  const stack = [root]
+  while (stack.length) {
+    const id = stack.pop()
+    if (seen.has(id)) continue
+    seen.add(id)
+    for (const dep of nodes.get(id)?.deps ?? []) {
+      // dep_kinds: kind null = normal. With --filter-platform, cargo has
+      // already dropped what this target never compiles.
+      if (dep.dep_kinds.some((k) => k.kind === null)) stack.push(dep.pkg)
+    }
+  }
+  seen.delete(root)
+  return [...seen]
+    .map((id) => byId.get(id))
+    .map((p) => ({ name: p.name, version: p.version, license: p.license ?? (p.license_file ? `see ${p.license_file}` : 'UNKNOWN'), repository: p.repository ?? null }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version))
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const arg = (name) => { const i = process.argv.indexOf(name); return i > 0 ? path.resolve(process.argv[i + 1]) : null }
+  const shellDir = arg('--shell')
+  const out = arg('--out')
+  if (!shellDir || !out) {
+    console.error('usage: rust-licenses.mjs --shell <crate dir> --out <file>')
+    process.exit(1)
+  }
+  const raw = execFileSync('cargo', ['metadata', '--format-version', '1', '--locked', '--filter-platform', TARGET], {
+    cwd: shellDir,
+    maxBuffer: 256 * 1024 * 1024,
+  })
+  const crates = compiledCrates(JSON.parse(raw.toString()))
+  const unknown = crates.filter((c) => c.license === 'UNKNOWN')
+  fs.mkdirSync(path.dirname(out), { recursive: true })
+  fs.writeFileSync(out, JSON.stringify({ target: TARGET, crates }, null, 2) + '\n')
+  console.log(`Wrote ${crates.length} crates to ${path.relative(process.cwd(), out)}${unknown.length ? `; no licence field: ${unknown.map((c) => c.name).join(', ')}` : ''}`)
+}

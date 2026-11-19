@@ -23,17 +23,18 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 // stale icon in every dev build after the drawing or its rendering changed.
 // shell/build.rs then makes cargo rebuild when build/icon.* changes.
 const built = path.join(here, '..', 'build', 'icon.png')
+const tooling = path.join(here, '..', '..', 'tooling')
 const sources = [
-  path.join(here, '..', 'assets', 'mascot', 'redstart-nest.txt'),
-  path.join(here, 'mascot.mjs'),
-  path.join(here, 'make-icon.mjs'),
+  path.join(tooling, 'mascot', 'redstart-nest.txt'),
+  path.join(tooling, 'mascot.mjs'),
+  path.join(tooling, 'make-icon.mjs'),
 ]
 const mtime = (f) => { try { return fs.statSync(f).mtimeMs } catch { return 0 } }
 if (!fs.existsSync(built) || sources.some((f) => mtime(f) > mtime(built))) {
-  execFileSync(process.execPath, [path.join(here, 'make-icon.mjs')], { stdio: 'inherit' })
+  execFileSync(process.execPath, [path.join(tooling, 'make-icon.mjs')], { stdio: 'inherit' })
 }
 // The chat page is NOT hot-reloaded: llama-server serves the last build in
-// src/chat-ui/dist, and that is what the Nest window's chat opens. On
+// the repo's chat-ui/dist, and that is what the Nest window's chat opens. On
 // 2026-11-11 a chat test ran a dist from before ask_user existed, so Nest
 // never offered the tool and the model rightly said it had none. Say so when
 // the build is older than the source it came from.
@@ -49,12 +50,12 @@ function newestMtime(dir) {
   try { walk(dir) } catch { /* no source tree: nothing to compare */ }
   return newest
 }
-const chatUi = path.join(here, '..', 'src', 'chat-ui')
+const chatUi = path.join(here, '..', '..', 'chat-ui')
 const chatBuilt = mtime(path.join(chatUi, 'dist', 'index.html'))
 const chatSource = Math.max(newestMtime(path.join(chatUi, 'src')), newestMtime(path.join(here, '..', '..', 'shared')))
 if (chatBuilt < chatSource) {
   console.warn(
-    `\n[dev] The chat UI the Nest window opens (src/chat-ui/dist) is older than its source${chatBuilt ? ` (built ${new Date(chatBuilt).toLocaleString()})` : ' (never built)'}.\n` +
+    `\n[dev] The chat UI the Nest window opens (chat-ui/dist) is older than its source${chatBuilt ? ` (built ${new Date(chatBuilt).toLocaleString()})` : ' (never built)'}.\n` +
       '[dev] Run `npm run build:chat`, then reload the chat page. Until then it is not this checkout\'s chat UI.\n'
   )
 }

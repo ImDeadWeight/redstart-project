@@ -284,7 +284,7 @@ The generated `licenses/` folder is included in the installer: through
 through `scripts/stage-shell-bundle.mjs` for the Windows Tauri installer.
 
 The Windows desktop shell (`redstart-nest/shell`) is a Rust binary compiled
-from crates.io crates. `node scripts/rust-licenses.mjs` writes
+from crates.io crates. `tooling/rust-licenses.mjs` writes
 `licenses/rust-licenses.json`: every crate compiled into it for
 `x86_64-pc-windows-msvc`, with its version, its SPDX licence expression and
 its repository. At the time of writing that is 287 crates, all under
@@ -300,7 +300,7 @@ the listed version. Node.js itself (MIT) ships its own `LICENSE` beside
 
 ### Chat UI (llama.cpp web UI)
 
-[`redstart-nest/src/chat-ui/`](redstart-nest/src/chat-ui/) began as a fork of
+[`chat-ui/`](chat-ui/) began as a fork of
 the llama.cpp server's web UI and has been heavily modified since. The code
 taken from upstream remains under its MIT license. Redstart's changes and
 additions to it are under AGPL-3.0, like the rest of Redstart.
@@ -348,7 +348,7 @@ license text quoted above:
 `LICENSE.txt` and isn't complete. The npm appendix in section 2 is generated
 from Nest's `package.json` only, so the chat UI's other runtime dependencies
 aren't enumerated anywhere. Closing this means running `license:gen` against
-`redstart-nest/src/chat-ui` as well and shipping its output in `licenses/`.
+`chat-ui` as well and shipping its output in `licenses/`.
 
 ---
 

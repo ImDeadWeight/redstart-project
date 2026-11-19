@@ -30,20 +30,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           # 26: the Node the desktop shell bundles and runs nestd on
-          # (scripts/stage-node.mjs), so the suites run where the daemon does.
+          # (tooling/stage-node.mjs), so the suites run where the daemon does.
           # chat-ui's @capacitor/cli needs >= 22 under engine-strict anyway.
           node-version: 26
           cache: npm
           cache-dependency-path: |
             redstart-nest/package-lock.json
-            redstart-nest/src/chat-ui/package-lock.json
+            chat-ui/package-lock.json
 
       - name: Install launcher / main-process deps
         run: npm ci
 
       - name: Install chat-ui deps
         run: npm ci
-        working-directory: redstart-nest/src/chat-ui
+        working-directory: chat-ui
 
       - name: Typecheck launcher (tsc --noEmit)
         run: npm run typecheck
@@ -60,6 +60,11 @@ jobs:
       # pre-existing test-file type errors unrelated to these guarantees.
       - name: "Security: CI parity (this list vs test:security)"
         run: node scripts/test-ci-parity.mjs
+
+      # Each app imports only itself and shared/ (docs/development.md, "Which
+      # app owns what"). Scans chat-ui/, both apps, shared/ and tooling/.
+      - name: "Boundaries: no app reaches into another app's source"
+        run: node scripts/test-boundaries.mjs
 
       - name: "Security: path containment (path-scope)"
         run: node scripts/test-path-scope.mjs
@@ -184,6 +189,9 @@ jobs:
       - name: "Security: document search is per account; index, citations, sync"
         run: node scripts/test-document-search.mjs
 
+      - name: "Documents: formats written verbatim, tables, the [FILE:] marker"
+        run: node scripts/test-document-formats.mjs
+
       - name: "Security: external MCP endpoint validation"
         run: node scripts/test-external-mcp-url.mjs
 
@@ -259,6 +267,9 @@ jobs:
       - name: "Security: auth / sessions / roles"
         run: node scripts/test-auth.mjs
 
+      - name: "Security: accounts / beacon / containment gate / download endpoint"
+        run: node scripts/test-daemon-security.mjs
+
       - name: "Security: session persistence / plane binding"
         run: node scripts/test-sessions.mjs
 
@@ -314,15 +325,15 @@ jobs:
       - name: "Daemon: nestd under a shell (pipe protocol, shell's key, EOF stops it)"
         run: node scripts/test-shell-pipe.mjs
 
-      - name: "Security: containment / SSRF / beacon / download endpoint (vitest)"
-        run: npm --prefix src/chat-ui run test:security
+      - name: "Security: chat-ui tool display names / file markers (vitest)"
+        run: npm --prefix ../chat-ui run test:security
 
       # The security-focused vitest step above runs only security.test.ts. The
       # rest of the unit project guards behavior that has silently regressed
-      # before — document table rendering, the tool-call fallback parser — so it
+      # before — the tool-call fallback parser, stored-message parity — so it
       # runs here too rather than only on developer machines.
       - name: "Unit tests (vitest)"
-        run: npm --prefix src/chat-ui run test:unit -- --run
+        run: npm --prefix ../chat-ui run test:unit -- --run
 
       # Real-browser mount coverage. The node suites prove the HTTP layer and
       # svelte-check proves the types, but neither catches a component that
@@ -334,16 +345,16 @@ jobs:
       # so the count is pinned by a guard script. The previous baseline reached
       # 513 because nothing ran this at all.
       - name: "Types: svelte-check baseline"
-        run: npm --prefix src/chat-ui run check:baseline
+        run: npm --prefix ../chat-ui run check:baseline
 
       # npm ci installs the playwright package but not its browser binaries,
       # and the client project drives a real Chromium.
       - name: Install Chromium for browser tests
         run: npx playwright install --with-deps chromium
-        working-directory: redstart-nest/src/chat-ui
+        working-directory: chat-ui
 
       - name: "Client render tests (vitest browser)"
-        run: npm --prefix src/chat-ui run test:client -- --run
+        run: npm --prefix ../chat-ui run test:client -- --run
 
   shell:
     # The Tauri desktop shell (daemon split T2/T3). The Windows unit tests
@@ -373,7 +384,7 @@ jobs:
       # tauri::generate_context!() embeds the app icons at compile time, and
       # build/ is generated (gitignored), as `npm run build` does first.
       - name: Generate the app icons
-        run: node ../scripts/make-icon.mjs
+        run: node ../../tooling/make-icon.mjs
 
       - name: Build
         run: cargo build --locked
@@ -434,10 +445,10 @@ jobs:
             redstart-twig/desktop/shell/target
           key: twig-shell-${{ runner.os }}-${{ hashFiles('redstart-twig/desktop/shell/Cargo.lock') }}
 
-      # generate_context!() embeds the icons, which Nest's make-icon generates
+      # generate_context!() embeds the icons, which tooling/make-icon generates
       # into this app's own build/ (the perched-bird drawing).
       - name: Generate the app icons
-        run: node ../../../redstart-nest/scripts/make-icon.mjs --variant twig
+        run: node ../../../tooling/make-icon.mjs --variant twig
 
       - name: Build
         run: cargo build --locked

@@ -6,7 +6,7 @@
 //     /files/download route, relative, with the path encoded
 //   - linkText(): the one-line model copy, `[file: <path>, <mime>, <size>]`,
 //     byte-for-byte what chat-ui's resourceLinkText produces (the same strings
-//     are asserted in src/chat-ui/tests/unit/resource-links.test.ts)
+//     are asserted in chat-ui/tests/unit/resource-links.test.ts)
 //   - another server's link is never read as one of ours
 //   - create_document returns a link to what it wrote, beside the [FILE:]
 //     line older clients use

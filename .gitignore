@@ -13,6 +13,8 @@ build/
 redstart-nest/llama-cpp-turboquant/
 redstart-nest/llama-server.exe
 redstart-nest/deps/
+# The pinned Node both apps run their daemon on (tooling/stage-node.mjs).
+/deps/
 
 # Generated npm license attribution appendix (THIRD-PARTY-NOTICES.md ->
 # "Full attribution appendix"). Regenerated fresh at build time so it can
@@ -20,10 +22,10 @@ redstart-nest/deps/
 redstart-nest/licenses/
 
 # Android build artifacts
-redstart-nest/src/chat-ui/android/.gradle/
-redstart-nest/src/chat-ui/android/app/build/
-redstart-nest/src/chat-ui/android/build/
-redstart-nest/src/chat-ui/android/local.properties
+chat-ui/android/.gradle/
+chat-ui/android/app/build/
+chat-ui/android/build/
+chat-ui/android/local.properties
 
 # Logs
 *.log

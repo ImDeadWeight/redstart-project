@@ -20,7 +20,7 @@
 // the desktop app, so process.execPath is right there. A dev tree or a headless
 // box may run a system Node 24, and on that runtime the sandbox would have no
 // network denial at all. So: the daemon's own Node if it qualifies, else the
-// staged deps/node binary (dev trees), else UNAVAILABLE. There is deliberately
+// staged deps/node binary at the repo root (dev trees), else UNAVAILABLE. There is deliberately
 // no fallback to the weaker sandbox. See chat-tooling-plan.md §R.
 // =============================================================================
 
@@ -177,9 +177,9 @@ function nodeMajor(versionString) {
 }
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-// deps/node is gitignored and staged by scripts/stage-node.mjs. In a packaged
-// install it does not exist, and process.execPath IS that binary.
-const STAGED_NODE = path.join(here, '..', 'deps', 'node', process.platform === 'win32' ? 'node.exe' : 'node')
+// The repo root's deps/node is gitignored and staged by tooling/stage-node.mjs.
+// In a packaged install it does not exist, and process.execPath IS that binary.
+const STAGED_NODE = path.join(here, '..', '..', 'deps', 'node', process.platform === 'win32' ? 'node.exe' : 'node')
 
 let cachedNode
 

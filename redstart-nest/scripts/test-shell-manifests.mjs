@@ -14,7 +14,7 @@ import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { windowsAssets, macosAssets, mergeManifests, installerName, dmgName, macUpdateName } from './make-shell-manifests.mjs'
+import { windowsAssets, macosAssets, mergeManifests, installerName, dmgName, macUpdateName } from '../../tooling/make-shell-manifests.mjs'
 import { pickUpdateRelease } from '../../shared/update-feed.mjs'
 
 const results = []

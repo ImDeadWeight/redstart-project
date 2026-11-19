@@ -93,8 +93,8 @@ async function main() {
     capabilityBase: daemonPaths.capabilityBase,
     // Packaged only when a shell names the resources directory (--resources):
     // plain Node has no process.resourcesPath, so without it each consumer
-    // falls through to a headless-appropriate path instead (src/chat-ui/dist
-    // for the chat UI, <config>/bin for llama-server).
+    // falls through to a headless-appropriate path instead (the repo's
+    // chat-ui/dist for the chat UI, <config>/bin for llama-server).
     isPackaged: daemonPaths.resources !== null,
     resources: daemonPaths.resources,
   })

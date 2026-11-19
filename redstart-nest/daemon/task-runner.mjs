@@ -169,12 +169,17 @@ function pickGeneration(gen) {
  * once the task exists; the run goes on without the caller.
  *
  * @param {{ account: object | null, surface?: string | null, storeAccountId: string, conversationId: string,
- *   content: string, generation?: object, timeZone?: string | null, maxTurns?: number }} req
+ *   content: string, generation?: object, timeZone?: string | null, maxTurns?: number,
+ *   origin?: 'chat' | 'background' }} req
+ *   origin: 'chat' for a plain Send run on the server; absent means 'background'
  * @returns {{ ok: true, task: object } | { ok: false, status: number, error: string }}
  */
 export function startTask(req) {
   const content = typeof req.content === 'string' ? req.content.trim() : ''
   if (!content) return { ok: false, status: 400, error: 'content is required' }
+  if (req.origin !== undefined && req.origin !== 'chat' && req.origin !== 'background') {
+    return { ok: false, status: 400, error: "origin must be 'chat' or 'background'" }
+  }
   // Tools the client runs itself (master plan 7.1), held in memory for this
   // run only: a restart has no client, so they are not stored.
   const client = cleanClientTools(req.clientTools)
@@ -197,6 +202,7 @@ export function startTask(req) {
     storeAccountId: req.storeAccountId,
     conversationId: req.conversationId,
     surface: req.surface ?? null,
+    origin: req.origin,
     limits: { maxTurns: req.maxTurns },
     timeZone: req.timeZone ?? null,
     toolLimits: limits.limits,

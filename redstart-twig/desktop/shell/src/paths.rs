@@ -4,18 +4,20 @@
 //!              ~/Library/Application Support/…   name came from package.json
 //!                                                `name`), so twig-fs-config.json
 //!                                                and twig-mcp.json are found
-//!                                                unchanged
+//!                                                unchanged. The package is
+//!                                                `redstart-twig` now (Phase 7b);
+//!                                                this folder name stays frozen.
 //!   shell dir  <config>/shell                    this process's own files
 //!
 //! Packaged, under `<resource_dir>/resources`:
 //!
-//!   node/node(.exe)                 the pinned Node 26 (Nest's stage-node.mjs)
+//!   node/node(.exe)                 the pinned Node 26 (tooling/stage-node.mjs)
 //!   app/twigd/{bin,daemon}          twigd, at the depth the checkout has it,
 //!   shared/*.mjs                    so its `../../../shared` imports resolve here
 //!   chat-ui/                        what the `twig` protocol serves
 //!
 //! A debug build runs the checkout: bin/twigd.mjs on REDSTART_NODE or the Node
-//! Nest stages (redstart-nest/deps/node), and Nest's chat-ui dist.
+//! staged at the repo root (deps/node), and the repo's chat-ui/dist.
 
 use std::path::{Path, PathBuf};
 
@@ -53,16 +55,16 @@ pub fn resolve(app: &AppHandle) -> Result<Layout, String> {
             .parent()
             .map(PathBuf::from)
             .ok_or("No checkout above the shell crate")?;
-        let nest = twig.join("..").join("..").join("redstart-nest");
+        let repo = twig.join("..").join("..");
         let node = std::env::var_os("REDSTART_NODE")
             .map(PathBuf::from)
-            .unwrap_or_else(|| nest.join("deps").join("node").join(node_exe()));
+            .unwrap_or_else(|| repo.join("deps").join("node").join(node_exe()));
         return Ok(Layout {
             config,
             shell_dir,
             node,
             twigd: twig.join("bin").join("twigd.mjs"),
-            chat_ui: nest.join("src").join("chat-ui").join("dist"),
+            chat_ui: repo.join("chat-ui").join("dist"),
             packaged: false,
         });
     }

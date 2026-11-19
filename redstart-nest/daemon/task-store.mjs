@@ -73,6 +73,7 @@ const subscribers = new Map()
  * @typedef {{
  *   id: string, accountKey: string, accountId: string | null, storeAccountId: string,
  *   conversationId: string, surface: string | null, status: string, waiting: object | null,
+ *   origin: 'chat' | 'background',
  *   limits: { maxTurns: number }, timeZone: string | null, error: string | null,
  *   inFlight: { callId: string, name: string } | null,
  *   createdAt: number, updatedAt: number, endedAt: number | null
@@ -81,7 +82,8 @@ const subscribers = new Map()
 
 /**
  * @param {{ accountKey: string, accountId?: string | null, storeAccountId: string, conversationId: string,
- *   surface?: string | null, limits?: { maxTurns?: number }, timeZone?: string | null }} spec
+ *   surface?: string | null, origin?: 'chat' | 'background', limits?: { maxTurns?: number },
+ *   timeZone?: string | null }} spec
  * @returns {TaskRecord}
  */
 export function createTask(spec) {
@@ -97,6 +99,11 @@ export function createTask(spec) {
     storeAccountId: spec.storeAccountId,
     conversationId: spec.conversationId,
     surface: spec.surface ?? null,
+    // Who started it: 'chat' is a plain Send run on the server (master plan
+    // Phase 7), shown as an ordinary reply; 'background' is a task the user
+    // asked to run in the background (/background), shown with the task bar.
+    // A record from before this field reads as background.
+    origin: spec.origin === 'chat' ? 'chat' : 'background',
     status: 'queued',
     waiting: null,
     limits: { maxTurns: Number.isInteger(spec.limits?.maxTurns) && spec.limits.maxTurns > 0 ? spec.limits.maxTurns : 100 },

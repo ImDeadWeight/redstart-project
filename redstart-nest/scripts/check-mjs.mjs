@@ -17,7 +17,9 @@ const base = 'daemon'
 // 'bin' is the headless daemon entrypoint (Phase 8A.2). It is the one file in
 // the tree that no test imports and no bundler compiles, so a syntax error in
 // it would otherwise surface only when someone actually ran the daemon.
-const dirs = [base, path.join(base, 'ipc'), path.join(base, 'gateway'), path.join(base, 'admin'), '../shared', path.join('..', 'shared', 'agent-core'), 'bin']
+// ../tooling holds the build tools both apps run (Phase 7b); a syntax error
+// there would otherwise surface only in a release build.
+const dirs = [base, path.join(base, 'ipc'), path.join(base, 'gateway'), path.join(base, 'admin'), '../shared', path.join('..', 'shared', 'agent-core'), 'bin', '../tooling']
 
 let count = 0
 for (const dir of dirs) {
@@ -28,4 +30,4 @@ for (const dir of dirs) {
   }
 }
 
-console.log(`node --check clean: ${count} files under daemon + shared + bin`)
+console.log(`node --check clean: ${count} files under daemon + shared + bin + tooling`)
