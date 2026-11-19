@@ -282,7 +282,7 @@ npm run build
 Output: `shell/target/release/bundle/nsis/Redstart Nest_<version>_x64-setup.exe` and its `.sig`. The release workflow renames it to `Redstart-Nest-Setup-<version>.exe` and writes the update manifests (`tooling/make-shell-manifests.mjs`).
 
 The version comes from `package.json` (`shell/tauri.conf.json` reads it). Don't bump it by hand — the [release workflow](#releases)
-does that on every merge, in `redstart-nest/package.json` and
+does that each time it is run, in `redstart-nest/package.json` and
 `redstart-twig/desktop/package.json` together (it refuses to run if they
 disagree).
 
@@ -305,7 +305,7 @@ Twig is a Tauri app built the way Nest is: `npm run build` builds the chat-ui, s
 
 ### Releases
 
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) runs whenever a pull request is **merged** into `main` (closing one unmerged does nothing), and can be started by hand from the Actions tab. It:
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) runs **only when started by hand**: Actions → Release → *Run workflow*. Merging a pull request into `main` releases nothing, so a release is cut when there is something worth shipping and small PRs cost no installer builds. It works from `main` as it is when started, and:
 
 1. bumps `-alpha.N` in both `package.json` files, commits `chore(release): <version>` to `main` and pushes a matching tag — `1.0.0-alpha.4`, etc.;
 2. builds four installers from that tag: Nest and Twig, each for Windows (NSIS `.exe`) and macOS (`.dmg`);
@@ -313,7 +313,7 @@ Twig is a Tauri app built the way Nest is: `npm run build` builds the chat-ui, s
 
 Things worth knowing:
 
-- **A failed build leaves a tag without a release.** If the failure was transient (a download, a runner), use **Re-run failed jobs** — it keeps the version already chosen; *Re-run all jobs* bumps again and skips a number. If it needs a code change, re-running rebuilds the same broken tag: merge the fix instead, let that cut the next version, and delete the orphaned tag (`git push origin :refs/tags/<version>`).
+- **A failed build leaves a tag without a release.** If the failure was transient (a download, a runner), use **Re-run failed jobs** — it keeps the version already chosen; *Re-run all jobs* bumps again and skips a number. If it needs a code change, re-running rebuilds the same broken tag: merge the fix, run the workflow again to cut the next version, and delete the orphaned tag (`git push origin :refs/tags/<version>`).
 - **Leaving alpha is a manual step.** The bump only understands `X.Y.Z-alpha.N`; anything else stops the workflow with an error, so set the next version by hand in a PR when it is time for a beta or a 1.0.
 - **Nothing is signed with a real identity.** Windows installers are unsigned, as before. macOS apps are ad-hoc signed: each by its `stage-shell-bundle.mjs` (every Mach-O) plus Tauri's `signingIdentity: "-"`. That is enough that Apple Silicon does not call them "damaged", but not enough to pass Gatekeeper without the user's *Open Anyway*.
 - **Both apps' updates ARE signed**, with one updater key (repo secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the public key is in each `shell/tauri.conf.json`, and `test-packaging.mjs` checks they match). Each build job writes a manifest fragment, and the release job merges them into `nest-latest.json` and `twig-latest.json`. The Windows job also writes `nest.yml`, which is how Electron-era installs find the bridge installer. Lose the key and no install can be updated again: keep a backup off the machine.

@@ -1,13 +1,19 @@
 name: Release
 
-# Every merged pull request into main cuts a prerelease: bump -alpha.N, tag,
-# build Nest and Twig for Windows (NSIS .exe) and macOS (.dmg), publish.
+# Cuts a prerelease from main, BY HAND: Actions → Release → "Run workflow".
+# It bumps -alpha.N, tags, builds Nest and Twig for Windows (NSIS .exe) and
+# macOS (.dmg), and publishes.
+#
+# Manual since 2026-11-18 (the user): it used to run on every merged pull
+# request, which spent four installer builds on every small PR and meant PRs
+# had to be planned around releases. Merging now ships nothing; a release is
+# cut when there is something worth shipping, from whatever main holds.
 #
 # Order of operations, and why:
 #   1. version — bumps both package.json files, commits to main, pushes a tag.
-#      Done FIRST, within seconds of the merge, so the window in which another
-#      merge can move main underneath it is seconds rather than the length of
-#      a build. The cost: a failed build leaves a tag with no release. Recover
+#      Done FIRST, within seconds of the start, so the window in which a merge
+#      can move main underneath it is seconds rather than the length of a
+#      build. The cost: a failed build leaves a tag with no release. Recover
 #      with "Re-run failed jobs" (which keeps this job's outputs), never
 #      "Re-run all jobs" (which bumps again and skips a number).
 #   2. build — four jobs, each checked out AT THE TAG, so every installer is
@@ -18,10 +24,7 @@ name: Release
 # do not trigger workflows — so it cannot re-trigger CI or this workflow.
 
 on:
-  pull_request:
-    types: [closed]
-    branches: [main]
-  # Manual escape hatch: cut a release from main without a PR.
+  # Manual only: a merge into main does not release.
   workflow_dispatch:
 
 permissions:
@@ -51,18 +54,14 @@ env:
 jobs:
   version:
     name: Bump version and tag
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    # Serialise the bump, so two PRs merged back to back produce alpha.N and
-    # alpha.N+1 rather than two runs racing to push alpha.N. On this job, not
-    # the workflow: GitHub keeps only ONE pending run per group and cancels the
-    # older one, so a workflow-level group would let closing an unrelated
-    # (unmerged) PR cancel a queued release. A job whose `if` is false never
-    # enters the group. Three merges inside one bump (~30s) can still cancel
-    # the middle run's bump — its changes then ship in the next release, and
-    # nothing is lost but a version number.
+    # Serialise the bump, so two runs started back to back produce alpha.N and
+    # alpha.N+1 rather than racing to push alpha.N. GitHub keeps only ONE
+    # pending run per group and cancels the older one, so three runs inside
+    # one bump (~30s) can still cancel the middle one's bump — nothing is lost
+    # but a version number.
     concurrency:
       group: release-version
       cancel-in-progress: false
@@ -376,11 +375,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           set -euo pipefail
           {
-            if [ -n "${PR_URL:-}" ]; then echo "Cut automatically from $PR_URL."; echo; fi
             cat <<'EOF'
           ## Installing
 
