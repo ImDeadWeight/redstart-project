@@ -38,11 +38,11 @@ import { stopGateway } from './tools-gateway.mjs'
 import { stopMcpServer } from './mcp-server.mjs'
 import { startBeaconServer, stopBeaconServer } from './beacon.mjs'
 import { startAdminListener, stopAdminListener, DEFAULT_ADMIN_BIND_HOST } from './admin-listener.mjs'
-import { startDiscovery, stopDiscovery, lastKnownDiscovery } from './discovery.mjs'
+import { lastKnownDiscovery } from './discovery.mjs'
+import { initLan, lanOwner, stopLanNow } from './lan.mjs'
 import { ensureBootstrapToken } from './bootstrap-token.mjs'
 import { buildAdminApi } from './admin/api-table.mjs'
 import { setAdminApi } from './admin/api-routes.mjs'
-import { ensureFirewallRule } from './firewall.mjs'
 import { getPrimaryLanIp } from './net-interfaces.mjs'
 import { cleanupOldConversations, allConversationIds } from './conversations-storage.mjs'
 import { resumeTasks, suspendAllTasks } from './task-runner.mjs'
@@ -324,11 +324,12 @@ async function startAdminPlane() {
     logEvent('admin', 'listener_start_failed', { reason: err.code || 'error' })
     if (host.adminBindFailureIsFatal) throw err
   }
-  // Discovery (the port-80 clean URL, discovery.mjs) is a data-plane
-  // convenience keyed on networkMode alone. Started here rather than only
-  // from `llama:launch`, so a box already in network mode gets the clean URL
-  // back at boot even before the next launch.
-  startDiscovery(lastKnownDiscovery(readSettings()))
+  // The LAN front door (lan.mjs): the network-mode owner starts from the last
+  // configuration a launch actually used, so a box already in network mode
+  // gets its port-80 clean URL (and, once HTTPS is configured, its Caddy)
+  // back at boot, before the next launch.
+  initLan({ configDir: configDir(), packaged: isPackaged(), resourcesDir: isPackaged() ? resourcesDir() : null })
+  await lanOwner().update(lastKnownDiscovery(readSettings()))
 }
 
 
@@ -406,7 +407,6 @@ function setupAdminApi() {
     serverState,
     buildArgs,
     parseEvalTokensPerSec,
-    ensureFirewallRule,
     getLocalIp,
     // So the external-MCP validator knows which ports are ours and can refuse a
     // server pointed at Nest itself. Falls back to the documented default when
@@ -534,7 +534,9 @@ export function stopDaemon() {
   void suspendAllTasks()
   stopGateway()
   stopMcpServer()
-  stopDiscovery()
+  // The port-80 proxy and Caddy, signalled now; Caddy is a child to wait for.
+  const caddyPid = stopLanNow()
+  if (caddyPid) childPids.push(caddyPid)
   if (serverState.process) {
     // killOrphanedServers() used to do this job as a side effect of its
     // by-name sweep — this line never actually killed the child itself, only

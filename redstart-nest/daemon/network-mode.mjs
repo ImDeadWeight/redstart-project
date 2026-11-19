@@ -44,6 +44,8 @@
 //      nothing listens on the wildcard; the existing policy, ipc/server.mjs).
 // =============================================================================
 
+import { discoveryPlan } from './discovery.mjs'
+
 export const LOOPBACK = '127.0.0.1'
 export const WILDCARD = '0.0.0.0'
 
@@ -80,9 +82,9 @@ export function targetState(i) {
   return 'lan-https'
 }
 
-/** Whether lan-http also runs the port-80 clean-URL proxy (discovery.mjs's rule). */
+/** Whether lan-http also runs the port-80 clean-URL proxy: discovery.mjs's rule, not a copy of it. */
 function wantsPort80Proxy({ platform, gatewayPort }) {
-  return platform === 'win32' && gatewayPort !== 80
+  return discoveryPlan({ networkMode: true, platform }).advertise && gatewayPort !== 80
 }
 
 /**
@@ -123,7 +125,7 @@ export const INITIAL_FACTS = Object.freeze({ host: LOOPBACK, port80Proxy: false,
  *
  * @param {Facts} from
  * @param {Facts} to
- * @returns {Array<{ op: string, host?: string, rule?: string, serving?: boolean }>}
+ * @returns {Array<{ op: string, host?: string, rule?: string, serving?: boolean, key?: string }>}
  */
 export function planSteps(from, to) {
   const steps = []
@@ -137,7 +139,7 @@ export function planSteps(from, to) {
   // 3. Starts. (caddy:start on a running Caddy restarts it with the new
   //    config: the admin API is off, so a restart is how config changes.)
   if (to.port80Proxy && !from.port80Proxy) steps.push({ op: 'port80:start' })
-  if (caddyChanged) steps.push({ op: 'caddy:start', serving: to.caddy.serving })
+  if (caddyChanged) steps.push({ op: 'caddy:start', serving: to.caddy.serving, key: to.caddy.key })
   // 4. Firewall, after the binds.
   const have = new Set(from.firewall)
   for (const rule of to.firewall) if (!have.has(rule)) steps.push({ op: 'firewall:ensure', rule })
@@ -155,6 +157,24 @@ export function appliedFacts(from, to) {
     port80Proxy: to.port80Proxy,
     caddy: to.caddy ? { ...to.caddy } : null,
     firewall: [...new Set([...from.firewall, ...to.firewall])],
+  }
+}
+
+/**
+ * The facts after ONE step, so the executor knows exactly what is up when a
+ * later step fails (and rolls back from there, not from where it hoped to be).
+ * @param {Facts} f @param {{ op: string, host?: string, rule?: string, serving?: boolean, key?: string }} step
+ * @returns {Facts}
+ */
+export function applyStep(f, step) {
+  switch (step.op) {
+    case 'caddy:stop': return { ...f, caddy: null }
+    case 'port80:stop': return { ...f, port80Proxy: false }
+    case 'dataplane:bind': return { ...f, host: step.host }
+    case 'port80:start': return { ...f, port80Proxy: true }
+    case 'caddy:start': return { ...f, caddy: { serving: !!step.serving, key: String(step.key ?? '') } }
+    case 'firewall:ensure': return { ...f, firewall: [...new Set([...f.firewall, step.rule])] }
+    default: throw new Error(`unknown step ${step.op}`)
   }
 }
 

@@ -28,6 +28,7 @@ import { catalogContents, isDeferredTool } from './tool-deferral.mjs'
 import { handleFilesRequest } from './files-api.mjs'
 import { resolveProject, injectSystemContext, clientToolNamesIn, toolNamesIn } from './completion-prompt.mjs'
 import { isCompletionRoute, handleCompletionRoute } from './gateway/completion-route.mjs'
+import { rebindHttpServer } from './listener-rebind.mjs'
 import { passthrough } from './gateway/upstream.mjs'
 import { handleAuthRoute } from './gateway/auth-routes.mjs'
 import { isConversationRoute, handleConversationRoute } from './gateway/conversation-routes.mjs'
@@ -600,6 +601,20 @@ export function stopGateway() {
   }
   activeConfig = null
   setUpstreamPort(null)
+}
+
+/**
+ * Move the running gateway to another bind host, keeping its handler, config
+ * and upstream (network-mode owner, C2b). A no-op when it is not running: the
+ * next startGateway() takes the owner's host anyway. Resolves once the new
+ * listener is bound; rejects (with the old one closed) if it cannot bind.
+ */
+export async function rebindGateway(bindHost) {
+  if (!gatewayServer) return false
+  const old = gatewayServer
+  gatewayServer = null
+  gatewayServer = await rebindHttpServer(old, bindHost)
+  return true
 }
 
 export function updateGatewayConfig(config) {

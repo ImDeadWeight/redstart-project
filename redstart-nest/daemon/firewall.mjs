@@ -48,7 +48,7 @@ function resolveElevatePath() {
 // Add an inbound allow rule if one by this name isn't already present.
 // Fire-and-forget: a missing rule degrades reachability, it never breaks the
 // server, so nothing here is allowed to reject into a caller's start path.
-export function ensureInboundRule({ name, protocol, port, label = name }) {
+export function ensureInboundRule({ name, protocol, port, program = null, label = name }) {
   if (process.platform !== 'win32') return
 
   execFile(
@@ -71,6 +71,9 @@ export function ensureInboundRule({ name, protocol, port, label = name }) {
           'dir=in', 'action=allow',
           `protocol=${protocol}`,
           `localport=${port}`,
+          // Scoped to one executable when given: the rule then admits that
+          // program on these ports and nothing else that might bind them.
+          ...(program ? [`program=${program}`] : []),
         ],
         (err) => {
           if (err) console.warn(`Could not add firewall rule ${label}:`, err.message)
@@ -88,4 +91,13 @@ export function ensureFirewallRule(gatewayPort) {
     protocol: 'TCP',
     port: gatewayPort,
   })
+}
+
+/**
+ * The bundled Caddy's rule (TLS plan C6): TCP 80 and 443, for caddy.exe only.
+ * Program-scoped, unlike the gateway's port rules, because these are
+ * well-known ports another program could bind.
+ */
+export function ensureCaddyFirewallRule(caddyPath) {
+  ensureInboundRule({ name: 'RedstartNest Caddy (HTTPS)', protocol: 'TCP', port: '80,443', program: caddyPath })
 }

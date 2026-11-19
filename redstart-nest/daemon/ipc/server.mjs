@@ -18,9 +18,10 @@
 // index.mjs, rather than the only possible reader hard-coded at each site.
 import { spawn } from 'child_process'
 import * as path from 'path'
-import { startGateway, stopGateway, getGatewayPort } from '../tools-gateway.mjs'
-import { startMcpServer, stopMcpServer, getMcpServerRunning } from '../mcp-server.mjs'
-import { startDiscovery, discoveryRecordFor } from '../discovery.mjs'
+import { startGateway, stopGateway } from '../tools-gateway.mjs'
+import { startMcpServer, stopMcpServer } from '../mcp-server.mjs'
+import { discoveryRecordFor } from '../discovery.mjs'
+import { lanOwner } from '../lan.mjs'
 import { syncFilesystemProvider, stopFilesystemProvider } from '../filesystem-mcp-provider.mjs'
 import { logEvent } from '../logger.mjs'
 import { serverPortRejection, serverBinaryName } from './validate.mjs'
@@ -124,8 +125,8 @@ async function doLaunchServer(config, deps) {
     buildArgs,
     parseEvalTokensPerSec,
     buildGatewayConfig,
-    ensureFirewallRule,
     userDataDir,
+    networkOwner = lanOwner(),
   } = deps
 
   // Not the concurrency guard above (that already prevented re-entry while a
@@ -240,25 +241,21 @@ Place it in the build output directory or the project root, or set a custom path
     // context into every completions request and proxies everything else
     // through to llama-server on config.port + 1 (localhost only).
     const gwConfig = buildGatewayConfig(config)
-    // LAN exposure is a bind decision, not a firewall decision. With network
-    // mode off both public listeners stay on loopback, so a LAN client gets
-    // connection-refused rather than a login screen — and that holds whatever
-    // the host's firewall is doing. Firewall rules are only added when we
-    // actually want the LAN in, matching how the port-80 proxy already works.
+    // LAN exposure is a bind decision, not a firewall decision, and since TLS
+    // step 3 it is not this function's: the network-mode owner (C2b,
+    // network-mode-owner.mjs) decides the bind host, the port-80 proxy, Caddy
+    // and the firewall rules, from the inputs this launch reports. With
+    // network mode off both public listeners stay on loopback; with Caddy
+    // fronting them they ALSO stay on loopback, and only Caddy faces the LAN.
+    // Firewall rules are added by the owner and never removed (elevation).
     //
-    // Rules are deliberately NOT removed when network mode goes off: deleting
-    // one needs elevation, so a settings toggle would fire a UAC prompt, and a
-    // leftover rule is inert once nothing is listening on the wildcard.
-    //
-    // networkMode only reaches the main process here, at server start (it is
-    // launcher state folded into config), so a change to it takes effect at the
-    // next launch. Discovery used to share that restart semantics and no longer
-    // does — it is refreshed below and otherwise lives with the daemon.
-    const bindHost = config.networkMode ? '0.0.0.0' : '127.0.0.1'
+    // networkMode reaches the daemon here, at server start (it is launcher
+    // state folded into config), so a change to it takes effect at the next
+    // launch, as before.
+    await networkOwner.update({ networkMode: config.networkMode === true, gatewayPort: config.port })
+    const bindHost = networkOwner.dataPlaneHost()
     try {
       await startGateway(config.port, gwConfig, { bindHost })
-      const gwPort = getGatewayPort(config.port)
-      if (config.networkMode && gwPort) ensureFirewallRule(gwPort)
     } catch (err) {
       console.warn('Tool gateway failed to start:', err.message)
       // Non-fatal — server still works, just without tool interception
@@ -269,19 +266,15 @@ Place it in the build output directory or the project root, or set a custom path
     try {
       const mcpPort = config.port + 2
       await startMcpServer(mcpPort, gwConfig, { bindHost })
-      if (config.networkMode && getMcpServerRunning()) ensureFirewallRule(mcpPort)
     } catch (err) {
       console.warn('MCP server failed to start:', err.message)
     }
 
-    // Discovery is NOT started here any more — it starts with the daemon (see
-    // discovery.mjs and index.mjs). What a launch still does is push the values
-    // it just used, so a changed port takes effect now rather than at next
-    // boot, and so the next boot has something to read: the two fields
-    // discovery needs are launcher state folded into the llama config and live
-    // nowhere else on disk.
+    // The owner already applied this launch's networkMode/port above (the
+    // port-80 proxy included). What is left is to record them, so the next
+    // boot starts where this left off: they are launcher state folded into
+    // the llama config and live nowhere else on disk.
     rememberDiscovery(config, deps)
-    startDiscovery(discoveryRecordFor(config))
 
     // File System capability's child process — fire-and-forget, since spawn
     // + MCP handshake takes a moment and this handler already returned

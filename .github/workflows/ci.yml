@@ -282,6 +282,9 @@ jobs:
       - name: "Security: the LAN state machine (no moment where Caddy and the gateway both face the LAN)"
         run: node scripts/test-network-mode.mjs
 
+      - name: "Security: the network-mode owner (one owner; rollback; full LAN cycle with the real Caddy)"
+        run: node scripts/test-network-mode-owner.mjs
+
       - name: "Packaging: Tauri release assets + both update manifests (the bridge)"
         run: node scripts/test-shell-manifests.mjs
 

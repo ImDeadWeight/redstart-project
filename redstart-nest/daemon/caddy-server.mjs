@@ -156,10 +156,10 @@ export function explainFailure(line) {
  * @param {number[]} failureTimes  every unexpected exit so far (ms)
  * @param {number} now
  */
-export function nextRestartDelay(failureTimes, now) {
+export function nextRestartDelay(failureTimes, now, delays = RESTART_DELAYS_MS) {
   const recent = failureTimes.filter((t) => now - t < FAILURE_WINDOW_MS).length
   if (recent >= MAX_FAILURES_IN_WINDOW) return null
-  return RESTART_DELAYS_MS[Math.min(Math.max(recent - 1, 0), RESTART_DELAYS_MS.length - 1)]
+  return delays[Math.min(Math.max(recent - 1, 0), delays.length - 1)]
 }
 
 /**
@@ -175,12 +175,13 @@ export function nextRestartDelay(failureTimes, now) {
  *   clearTimer?: typeof clearTimeout,
  *   baseEnv?: Record<string,string|undefined>,
  *   stopTimeoutMs?: number,
+ *   restartDelaysMs?: number[],   // tests only: the production backoff is the default
  * }} deps
  */
 export function createCaddySupervisor({
   resolveBinary, configDir, onStateChange = () => {}, spawn = nodeSpawn,
   now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, baseEnv = process.env,
-  stopTimeoutMs = STOP_TIMEOUT_MS,
+  stopTimeoutMs = STOP_TIMEOUT_MS, restartDelaysMs = RESTART_DELAYS_MS,
 }) {
   const st = {
     state: 'stopped',
@@ -300,7 +301,7 @@ export function createCaddySupervisor({
     failures.push(t)
     const reason = spawnError ?? explainFailure(lastErrorLine())
     logEvent('tls', 'caddy_exited', { code, signal, reason })
-    const delay = nextRestartDelay(failures, t)
+    const delay = nextRestartDelay(failures, t, restartDelaysMs)
     if (delay == null) {
       wanted = null
       set({ state: 'failed', reason: `${reason} (gave up after ${failures.length} failures in 5 minutes)` })

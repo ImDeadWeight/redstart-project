@@ -19,6 +19,9 @@
 // actually used) rather than only from the next launch is simpler than
 // having two different lifecycles for the same setting.
 //
+// WHO STARTS IT: the network-mode owner (network-mode-owner.mjs), since TLS
+// step 3. This module keeps the POLICY (discoveryPlan) and the boot record.
+//
 // WHAT DECIDES WHETHER IT STARTS. `networkMode`, full stop — this is purely a
 // data-plane convenience now. (Historical note: this used to be "the union of
 // both planes," because an exposed control plane was also a reason to
@@ -26,10 +29,8 @@
 // is only "this starts with the daemon, not from inside `llama:launch`.")
 // =============================================================================
 
-import { startPort80Proxy, stopPort80Proxy } from './port80-proxy.mjs'
-import { ensureFirewallRule } from './firewall.mjs'
+import { stopPort80Proxy } from './port80-proxy.mjs'
 import { DEFAULT_GATEWAY_PORT } from './ports.mjs'
-import { logEvent } from './logger.mjs'
 
 /**
  * The last network configuration a launch actually used, normalised.
@@ -89,48 +90,13 @@ export function discoveryPlan({ networkMode, platform = process.platform } = {})
   return { advertise: true, reason: 'data-plane' }
 }
 
-let advertising = false
-
 /**
- * Start (or restart) the port-80 proxy.
- *
- * Idempotent and safe to call again with a new port — that is how a launch
- * pushes a changed port through without the whole thing being tied to the
- * launch's lifecycle.
- *
- * @param {object} input
- * @param {boolean} input.networkMode  the data plane's LAN exposure
- * @param {number} input.gatewayPort   the port the proxy forwards to
- * @returns {{ advertise: boolean, reason: string }} the plan that was applied
+ * Stop the port-80 proxy. Starting it is the network-mode owner's job since
+ * TLS step 3 (network-mode-owner.mjs, through lan.mjs), because with Caddy in
+ * the picture the proxy and Caddy must never both hold :80, and only one
+ * module may decide which runs. The policy above is still this module's:
+ * network-mode.mjs asks discoveryPlan() rather than keeping a copy.
  */
-export function startDiscovery(input = {}) {
-  const plan = discoveryPlan(input)
-
-  if (!plan.advertise) {
-    stopDiscovery()
-    return plan
-  }
-
-  const { gatewayPort } = input
-  const port = Number.isInteger(gatewayPort) ? gatewayPort : DEFAULT_GATEWAY_PORT
-
-  // Skipped when the gateway is already on 80 — there would be nothing to
-  // proxy. The firewall rule is checked unelevated and short-circuits when it
-  // already exists, so this prompts at most once ever (firewall.mjs); moving
-  // this to boot moves that one prompt from the first launch to the first
-  // exposed start, which is the price of the lifecycle being correct.
-  if (port !== 80) {
-    ensureFirewallRule(80)
-    startPort80Proxy({ targetPort: port })
-  }
-
-  if (!advertising) logEvent('discovery', 'started', { reason: plan.reason, port })
-  advertising = true
-  return plan
-}
-
 export function stopDiscovery() {
   stopPort80Proxy()
-  if (advertising) logEvent('discovery', 'stopped', {})
-  advertising = false
 }

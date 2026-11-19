@@ -65,6 +65,7 @@ import {
   StreamableHTTPServerTransport
 } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
+import { rebindHttpServer } from './listener-rebind.mjs'
 
 // searchToolsProvider is LAST, and deliberately: it is the only provider whose
 // job is to describe the others, so it must never shadow one of them on a name
@@ -683,6 +684,23 @@ export function stopMcpServer() {
   // Plugin children are separate OS processes; without this they outlive the
   // server that spawned them.
   stopAllPlugins()
+}
+
+/**
+ * Move the running MCP server to another bind host WITHOUT stopping it: the
+ * plugin children, Python kernels and tool config stay up (stopMcpServer()
+ * would kill them). Open sessions are dropped with the old listener and
+ * clients re-initialise. A no-op when not running.
+ */
+export async function rebindMcpServer(bindHost) {
+  if (!mcpServer) return false
+  const old = mcpServer
+  mcpServer = null
+  for (const transport of [...transports.values()]) transport.close().catch(() => {})
+  transports.clear()
+  mcpServer = await rebindHttpServer(old, bindHost)
+  logEvent('mcp', 'rebound', { bindHost })
+  return true
 }
 
 export function updateMcpConfig(config) {
