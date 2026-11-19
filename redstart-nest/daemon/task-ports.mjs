@@ -139,27 +139,46 @@ export const DELTA_BATCH_MS = 50
 
 /**
  * The tokens of the reply being written, as live events (master plan 7.1):
- * `{ type: 'delta', messageId, content?, reasoning? }`, batched so a fast
- * model is tens of events a second, not hundreds. Nothing is stored: the
+ * `{ type: 'delta', messageId, content?, reasoning?, timings? }`, batched so a
+ * fast model is tens of events a second, not hundreds. Nothing is stored: the
  * message itself is, once the turn is complete. `flush` sends what is left.
+ *
+ * `timings` is llama-server's latest per-chunk timings (prompt_n,
+ * predicted_n, ...), the numbers the chat UI's live context / speed readout
+ * shows. Without them a server-run reply showed none (found 2026-11-19).
+ * Only the latest is sent; they are cumulative for the turn.
  */
-function liveDeltas(taskId, messageId) {
+export function liveDeltas(taskId, messageId, emit = (id, e) => store.emitLive(id, e)) {
   let content = ''
   let reasoning = ''
+  let timings = null
   let timer = null
   const send = () => {
     timer = null
-    if (!content && !reasoning) return
-    store.emitLive(taskId, { type: 'delta', messageId, ...(content ? { content } : {}), ...(reasoning ? { reasoning } : {}) })
+    if (!content && !reasoning && !timings) return
+    emit(taskId, {
+      type: 'delta', messageId,
+      ...(content ? { content } : {}), ...(reasoning ? { reasoning } : {}), ...(timings ? { timings } : {}),
+    })
     content = ''
     reasoning = ''
+    timings = null
   }
   const schedule = () => { if (!timer) timer = setTimeout(send, DELTA_BATCH_MS) }
   return {
     onContent: (t) => { content += t; schedule() },
     onReasoning: (t) => { reasoning += t; schedule() },
+    onTimings: (t) => { if (t && typeof t === 'object') { timings = pickTimings(t); schedule() } },
     flush: () => { if (timer) clearTimeout(timer); send() },
   }
+}
+
+/** The numeric fields the readout uses, and nothing else from the server's object. */
+const TIMING_FIELDS = ['prompt_n', 'prompt_ms', 'predicted_n', 'predicted_ms', 'cache_n']
+function pickTimings(t) {
+  const out = {}
+  for (const k of TIMING_FIELDS) if (Number.isFinite(t[k])) out[k] = t[k]
+  return out
 }
 
 // ---------------------------------------------------------------------------
@@ -450,7 +469,7 @@ export function modelPort(pass) {
             if (sig?.aborted) throw err
             throw new ModelGone(err?.message ?? 'The model could not be reached.')
           }
-          const r = await readChatStream(res, acc, { signal: sig, onContent: live.onContent, onReasoning: live.onReasoning })
+          const r = await readChatStream(res, acc, { signal: sig, onContent: live.onContent, onReasoning: live.onReasoning, onTimings: live.onTimings })
           turnCtx.model = r?.model ?? turnCtx.model
         } finally {
           live.flush()

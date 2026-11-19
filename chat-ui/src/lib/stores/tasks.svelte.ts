@@ -9,6 +9,7 @@ import { MessageRole, MessageType } from '$lib/enums';
 import {
 	TaskService,
 	isTerminal,
+	isChatRun,
 	type ApprovalDecision,
 	type ClientToolSpec,
 	type TaskToolLimits,
@@ -90,6 +91,27 @@ class TasksStore {
 			else void this.watch(id, { force: true });
 		});
 	}
+
+	/**
+	 * A run is writing a reply in this conversation right now (running, not
+	 * waiting on anyone). The message UI treats this like its own streaming:
+	 * without it an open reasoning block read "Cancelled" while it was still
+	 * filling, because only the browser loop set the streaming flag
+	 * (found 2026-11-19).
+	 */
+	isRunningIn(conversationId: string | null | undefined): boolean {
+		if (!conversationId) return false;
+		return this.records[conversationId]?.status === 'running';
+	}
+
+	/**
+	 * Hooks the chat store sets (tasks cannot import it: chat-send imports
+	 * this store). onLiveTimings: llama-server's timings from a delta, for the
+	 * live context / speed readout. onChatRunFinished: a chat-origin run
+	 * ended, so the conversation can be named as the browser loop does.
+	 */
+	onLiveTimings: ((conversationId: string, timings: Record<string, number>) => void) | null = null;
+	onChatRunFinished: ((conversationId: string, record: TaskRecord) => void) | null = null;
 
 	/** The live task holding this conversation, or null. */
 	activeFor(conversationId: string | null | undefined): TaskRecord | null {
@@ -307,6 +329,13 @@ class TasksStore {
 		if (f.live?.messageId !== messageId) f.live = { messageId, content: '', reasoning: '' };
 		if (typeof e.content === 'string') f.live.content += e.content;
 		if (typeof e.reasoning === 'string') f.live.reasoning += e.reasoning;
+		if (e.timings && typeof e.timings === 'object') {
+			try {
+				this.onLiveTimings?.(f.conversationId, e.timings as Record<string, number>);
+			} catch {
+				/* a readout is not worth breaking the stream for */
+			}
+		}
 		this.showLive(f);
 	}
 
@@ -373,7 +402,13 @@ class TasksStore {
 		this.stopFollowing();
 		if (this.reloadTimer) clearTimeout(this.reloadTimer);
 		this.reloadTimer = null;
-		void conversationsStore.reloadActiveFromServer(f.conversationId);
+		const reloaded = conversationsStore.reloadActiveFromServer(f.conversationId);
+		// After the reload, so the namer reads the finished conversation.
+		if (record && isChatRun(record)) {
+			void Promise.resolve(reloaded)
+				.catch(() => undefined)
+				.then(() => this.onChatRunFinished?.(f.conversationId, record));
+		}
 	}
 
 	private scheduleReload(conversationId: string): void {

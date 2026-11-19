@@ -517,3 +517,60 @@ describe('tasksStore', () => {
 		expect(h.svc.clientResult).toHaveBeenCalledWith('t1', 'call-1', 'file text', false);
 	});
 });
+
+// Found 2026-11-19 (a real chat over HTTPS): a server-run reply showed its
+// open reasoning block as "Cancelled", had no live context readout, and the
+// conversation was never named. The tasks store now reports all three.
+describe('tasksStore: a chat run as the message UI needs it', () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+		for (const f of Object.values(h.svc)) f.mockReset();
+		h.conv.reloadActiveFromServer.mockReset().mockResolvedValue(undefined);
+		h.conv.activeConversation = { id: 'c1', activeTaskId: 't1' };
+		h.conv.activeMessages = [];
+	});
+	afterEach(() => vi.useRealTimers());
+
+	it('isRunningIn: true while running, false while it waits on someone, false once done', async () => {
+		const stream = controllableStream();
+		const store = await freshStore();
+		h.svc.get.mockResolvedValue(record({ origin: 'chat' }));
+		await store.watch('c1');
+		expect(store.isRunningIn('c1')).toBe(true);
+		expect(store.isRunningIn('other')).toBe(false);
+		stream.push({ seq: 1, type: 'status', status: 'waiting_user', waiting: null });
+		expect(store.isRunningIn('c1')).toBe(false);
+		stream.push({ seq: 2, type: 'status', status: 'running', waiting: null });
+		expect(store.isRunningIn('c1')).toBe(true);
+		stream.push({ seq: 3, type: 'status', status: 'done', waiting: null });
+		expect(store.isRunningIn('c1')).toBe(false);
+	});
+
+	it('a live delta with timings feeds the readout hook', async () => {
+		const stream = controllableStream();
+		const store = await freshStore();
+		const seen: unknown[] = [];
+		store.onLiveTimings = (conv, t) => seen.push([conv, t]);
+		h.svc.get.mockResolvedValue(record({ origin: 'chat' }));
+		await store.watch('c1');
+		stream.push({ seq: 0, type: 'delta', live: true, messageId: 'm1', content: 'Hi', timings: { prompt_n: 12, predicted_n: 3 } });
+		expect(seen).toEqual([['c1', { prompt_n: 12, predicted_n: 3 }]]);
+		expect(h.conv.activeMessages[0]?.content).toBe('Hi');
+	});
+
+	it('a finished CHAT run is reported after the reload (so it can be named); a background task is not', async () => {
+		for (const origin of ['chat', 'background'] as const) {
+			const stream = controllableStream();
+			const store = await freshStore();
+			const finished: string[] = [];
+			store.onChatRunFinished = (conv) => finished.push(conv);
+			h.svc.get.mockResolvedValue(record({ origin }));
+			await store.watch('c1');
+			h.svc.get.mockResolvedValue(record({ origin, status: 'done' }));
+			stream.end();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(h.conv.reloadActiveFromServer).toHaveBeenCalledWith('c1');
+			expect(finished).toEqual(origin === 'chat' ? ['c1'] : []);
+		}
+	});
+});
