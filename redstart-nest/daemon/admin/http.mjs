@@ -66,6 +66,10 @@ export async function readJsonBody(req) {
  * rate-limit.mjs. Trusting the header instead would trade it for a worse one:
  * with no proxy in front, a client that sets its own header gets a fresh bucket
  * per request and the limit stops existing.
+ *
+ * Nest's bundled Caddy never routes the control plane (D6), so the data
+ * plane's proxy-trust.mjs (which trusts that Caddy's secret header) has no
+ * business here.
  */
 export function remoteAddress(req) {
   return req?.socket?.remoteAddress || 'unknown'

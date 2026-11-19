@@ -25,6 +25,16 @@ import { logEvent, logPolicy } from '../logger.mjs'
 import { closeAllMcpSessions } from '../mcp-server.mjs'
 import { SURFACE_IDS } from '../system-prompt.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
+import { createRateLimiter } from '../rate-limit.mjs'
+import { clientAddress } from '../proxy-trust.mjs'
+
+// Same limits as the control plane's login (admin/auth-routes.mjs).
+const chatLoginLimiter = createRateLimiter({ limit: 10, windowMs: 60 * 1000 })
+
+/** Test seam: suites that log in many times from one address start clean. */
+export function resetChatLoginLimiter() {
+  chatLoginLimiter.reset()
+}
 
 /** Each grantable capability's root folder, from the capability settings. */
 function grantRoots() {
@@ -55,6 +65,21 @@ export async function handleAuthRoute(req, res, urlPath) {
   }
 
   if (req.method === 'POST' && urlPath === '/auth/login') {
+    // Rate limited like the control plane's login (found missing 2026-11-18).
+    // Keyed on clientAddress(), which behind Nest's own Caddy is the real
+    // client rather than 127.0.0.1. Keyed on the socket, one guesser on the
+    // LAN would lock the whole household out.
+    const from = clientAddress(req)
+    const limit = chatLoginLimiter.check(from)
+    if (!limit.ok) {
+      logEvent('auth', 'login_rate_limited', {})
+      res.writeHead(429, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Retry-After': String(Math.ceil(limit.retryAfterMs / 1000)),
+      })
+      return res.end(JSON.stringify({ error: 'Too many attempts. Try again shortly.' }))
+    }
     const body = await readJsonBody(req)
     if (!body?.username || !body?.password) return sendJson(res, 400, { error: 'Username and password required' })
     const result = login(body.username, body.password)
@@ -63,6 +88,7 @@ export async function handleAuthRoute(req, res, urlPath) {
       logEvent('auth', 'login_failed', { username: String(body.username).slice(0, 64) })
       return sendJson(res, 401, { error: result.error })
     }
+    chatLoginLimiter.clear(from)
     logEvent('auth', 'login_ok', { username: result.user?.username, role: result.user?.role })
     return sendJson(res, 200, { token: result.token, user: result.user })
   }

@@ -285,6 +285,9 @@ jobs:
       - name: "Security: auth / sessions / roles"
         run: node scripts/test-auth.mjs
 
+      - name: "Security: proxy trust (only the bundled Caddy's per-launch secret, from loopback)"
+        run: node scripts/test-proxy-trust.mjs
+
       - name: "Security: accounts / beacon / containment gate / download endpoint"
         run: node scripts/test-daemon-security.mjs
 
