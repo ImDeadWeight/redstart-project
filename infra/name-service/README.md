@@ -5,6 +5,9 @@ pointing at the install's **private** LAN address, with the DNS-01 challenge
 Let's Encrypt needs to issue it a certificate. A Cloudflare Worker with a D1
 database. Deployed by hand; never shipped in an installer.
 
+**Live since 2026-11-19** at `https://names.redstartdevelopment.com` (D1
+`redstart-names`, region WNAM). `node test/live-check.mjs` re-checks it end to end.
+
 The design (routes, invariants, limits) is TLS plan component C12. In short:
 
 | Route | Auth | Does |
@@ -43,6 +46,9 @@ is unreachable from the internet.
 npm test                                   # the suite (Node 22.13+, no install)
 node test/caddy-acmedns-interop.mjs        # manual: the REAL Caddy acmedns plugin
                                            # against the service (LE staging; network)
+node test/live-check.mjs                   # manual: the DEPLOYED service end to end:
+                                           # register, A record in public DNS, a real
+                                           # staging certificate, unregister (always)
 npm install && npx wrangler d1 migrations apply redstart-names --local && npm run dev
                                            # the Worker under workerd, local D1
 ```
