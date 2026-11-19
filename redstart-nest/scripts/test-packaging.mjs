@@ -334,7 +334,8 @@ test("🔍 Nest's mac build stages llama-server and its dylibs where daemon.mjs 
 // The bundled Caddy (TLS plan C1)
 // ---------------------------------------------------------------------------
 
-const { CADDY_TAG, CADDY_ASSETS } = await import('./fetch-caddy.mjs')
+const { CADDY_TAG, CADDY_ASSETS, stagedCaddyPath } = await import('./fetch-caddy.mjs')
+const { caddyBinaryCandidates, caddyBinaryName } = await import('../daemon/caddy-server.mjs')
 const CADDY_YML = fs.readFileSync(path.join(REPO, '.github', 'workflows', 'caddy.yml'), 'utf8')
 const RELEASE_YML = fs.readFileSync(path.join(REPO, '.github', 'workflows', 'release.yml'), 'utf8')
 
@@ -355,6 +356,12 @@ test('🔍 the Caddy pin names the build caddy.yml publishes', () => {
 test('🔍 Caddy is staged into resources/bin, where the packaged lookup looks, after re-checking its hash', () => {
   assert(/fetch-caddy\.mjs'\), '--check'\]/.test(STAGE_SRC), 'stage-shell-bundle.mjs must run fetch-caddy.mjs --check before copying')
   assert(/copyFileSync\(need\(stagedCaddyPath\(\)\), out\('bin', caddyName\)\)/.test(STAGE_SRC), 'Caddy is not copied into bin/')
+  // ...and that is where the supervisor looks first in an install.
+  for (const platform of ['win32', 'darwin']) {
+    const first = caddyBinaryCandidates({ packaged: true, resourcesDir: 'RES', nestRoot: 'N', configDir: 'C', platform })[0]
+    assert(first === path.join('RES', 'bin', caddyBinaryName(platform)), `${platform}: packaged lookup is ${first}`)
+    assert(caddyBinaryName(platform) === path.basename(stagedCaddyPath(platform)), `${platform}: staged name differs from looked-up name`)
+  }
   assert(/- name: Stage Caddy\n\s+if: matrix\.app == 'nest'[\s\S]{0,300}node scripts\/fetch-caddy\.mjs/.test(RELEASE_YML),
     'release.yml must fetch Caddy for the Nest builds')
 })
