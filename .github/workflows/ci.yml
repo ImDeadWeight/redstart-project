@@ -45,6 +45,12 @@ jobs:
         run: npm ci
         working-directory: chat-ui
 
+      # The pinned build (sha256-checked), so test-caddy-config.mjs can run
+      # `caddy validate` on every config Nest generates. Required here: under
+      # CI that test fails rather than skips when the binary is missing.
+      - name: Fetch the pinned Caddy
+        run: node scripts/fetch-caddy.mjs
+
       - name: Typecheck launcher (tsc --noEmit)
         run: npm run typecheck
 

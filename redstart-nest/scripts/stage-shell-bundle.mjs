@@ -17,7 +17,8 @@
 //   app/node_modules                 production dependencies only (npm ci)
 //   shared/*.mjs                     ../../../shared from app/daemon
 //   chat-ui/                         the chat UI llama-server serves
-//   bin/                             llama-server + the DLLs it loads
+//   bin/                             llama-server + the DLLs it loads,
+//                                    and caddy(.exe) (scripts/fetch-caddy.mjs)
 //   elevate.exe                      firewall rules with UAC
 //   LICENSE.txt (the repo's LICENSE), THIRD-PARTY-NOTICES.md,
 //   TRADEMARKS.md, licenses/
@@ -36,6 +37,7 @@ import * as path from 'node:path'
 import { execFileSync, execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { stagedBinaryPath, STAGE_DIR } from '../../tooling/stage-node.mjs'
+import { stagedCaddyPath } from './fetch-caddy.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const NEST = path.join(here, '..')
@@ -122,6 +124,15 @@ function main() {
       (p) => /\.dylib$/.test(p) || path.basename(p) === 'llama-server')
     need(out('bin', 'llama-server'))
   }
+
+  // The TLS front door (TLS plan C1), beside llama-server where
+  // caddy-server.mjs's packaged lookup lands. fetch-caddy.mjs placed it and
+  // checked its sha256; --check re-verifies it here, so a stale or tampered
+  // deps/caddy never reaches an installer.
+  execFileSync(process.execPath, [path.join(here, 'fetch-caddy.mjs'), '--check'], { stdio: 'inherit' })
+  const caddyName = path.basename(stagedCaddyPath())
+  fs.copyFileSync(need(stagedCaddyPath()), out('bin', caddyName))
+  if (!win) fs.chmodSync(out('bin', caddyName), 0o755)
 
   fs.copyFileSync(need(path.join(REPO, 'LICENSE')), out('LICENSE.txt'))
   fs.copyFileSync(need(path.join(REPO, 'THIRD-PARTY-NOTICES.md')), out('THIRD-PARTY-NOTICES.md'))

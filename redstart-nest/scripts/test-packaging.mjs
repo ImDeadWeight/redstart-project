@@ -330,6 +330,35 @@ test("🔍 Nest's mac build stages llama-server and its dylibs where daemon.mjs 
     'llama-server on macOS loads libllama/libggml*.dylib beside it; the executable alone dies with "Library not loaded"')
 })
 
+// ---------------------------------------------------------------------------
+// The bundled Caddy (TLS plan C1)
+// ---------------------------------------------------------------------------
+
+const { CADDY_TAG, CADDY_ASSETS } = await import('./fetch-caddy.mjs')
+const CADDY_YML = fs.readFileSync(path.join(REPO, '.github', 'workflows', 'caddy.yml'), 'utf8')
+const RELEASE_YML = fs.readFileSync(path.join(REPO, '.github', 'workflows', 'release.yml'), 'utf8')
+
+test('🔍 the Caddy pin names the build caddy.yml publishes', () => {
+  const v = /^  CADDY_VERSION: *(\S+)$/m.exec(CADDY_YML)?.[1]
+  const n = /^  BUILD: *(\d+)$/m.exec(CADDY_YML)?.[1]
+  assert(CADDY_TAG === `caddy-redstart-${v}-${n}`,
+    `fetch-caddy.mjs pins ${CADDY_TAG} but caddy.yml builds caddy-redstart-${v}-${n}: bump both in one commit`)
+  const targets = { 'win32-x64': 'windows-amd64.exe', 'darwin-arm64': 'darwin-arm64', 'linux-x64': 'linux-amd64' }
+  for (const [key, suffix] of Object.entries(targets)) {
+    const a = CADDY_ASSETS[key]
+    assert(a && a.file === `${CADDY_TAG}-${suffix}`, `${key}: asset ${a?.file}`)
+    assert(/^[0-9a-f]{64}$/.test(a.sha256), `${key}: sha256 must be 64 hex chars — copy it from the release's SHA256SUMS`)
+  }
+  return CADDY_TAG
+})
+
+test('🔍 Caddy is staged into resources/bin, where the packaged lookup looks, after re-checking its hash', () => {
+  assert(/fetch-caddy\.mjs'\), '--check'\]/.test(STAGE_SRC), 'stage-shell-bundle.mjs must run fetch-caddy.mjs --check before copying')
+  assert(/copyFileSync\(need\(stagedCaddyPath\(\)\), out\('bin', caddyName\)\)/.test(STAGE_SRC), 'Caddy is not copied into bin/')
+  assert(/- name: Stage Caddy\n\s+if: matrix\.app == 'nest'[\s\S]{0,300}node scripts\/fetch-caddy\.mjs/.test(RELEASE_YML),
+    'release.yml must fetch Caddy for the Nest builds')
+})
+
 test('🔍 every mac build is ad-hoc signed, or Apple Silicon calls it damaged', () => {
   // Nest (Tauri): every staged Mach-O is signed, and the .app ad-hoc.
   assert(/adhocSignMachO\(BUNDLE_DIR\)/.test(STAGE_SRC) && /'codesign'/.test(STAGE_SRC), 'Nest: staged Mach-O files are not signed')
