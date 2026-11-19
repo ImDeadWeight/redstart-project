@@ -101,17 +101,19 @@ pins the build by SHA-256.
 | Caddy | v2.11.9 | Apache-2.0 | <https://github.com/caddyserver/caddy> |
 | caddy-dns/desec | v1.1.0 | MIT | <https://github.com/caddy-dns/desec> |
 | caddy-dns/acmedns | v0.7.0 | MIT | <https://github.com/caddy-dns/acmedns> |
-| caddy-dns/duckdns | v0.5.0 | **none published** (see below) | <https://github.com/caddy-dns/duckdns> |
+| `dns.providers.duckdns` | this repository | AGPL-3.0-only | [`infra/caddy-dns-duckdns/`](infra/caddy-dns-duckdns/) |
 | libdns/libdns, libdns/desec, libdns/acmedns, libdns/duckdns | v1.1.1, v1.1.0, v0.5.0, v0.3.0 | MIT | <https://github.com/libdns> |
 
 - Caddy: Copyright 2015 Matthew Holt and The Caddy Authors. Licensed under the
   Apache License, Version 2.0 (<https://www.apache.org/licenses/LICENSE-2.0>).
-- **Open item:** the `caddy-dns/duckdns` repository has no license file. That
-  has to be resolved, or the plugin replaced, before a release ships this
-  binary.
-- **Open item:** Caddy pulls in about 160 further Go modules, almost all
-  MIT/BSD/Apache-2.0. Their notices are to be generated per build and shipped
-  beside the binary. The provenance `.json` already lists them.
+- The DuckDNS module is Redstart's own, a thin wrapper over the MIT-licensed
+  `libdns/duckdns`. The community `caddy-dns/duckdns` plugin publishes no
+  license, so it is not used.
+- **Every Go module compiled into the binary** (about 170, almost all
+  MIT/BSD/Apache-2.0) has its license files collected by
+  [`redstart-nest/scripts/caddy-notices.mjs`](redstart-nest/scripts/caddy-notices.mjs)
+  at build time. They ship as `licenses/caddy-NOTICES.txt` in the installer.
+  The build fails if any module carries no license file.
 
 These binaries are not committed to this repository: `redstart-nest/deps/` is
 git-ignored.

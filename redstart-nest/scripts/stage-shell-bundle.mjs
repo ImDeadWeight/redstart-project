@@ -37,7 +37,7 @@ import * as path from 'node:path'
 import { execFileSync, execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { stagedBinaryPath, STAGE_DIR } from '../../tooling/stage-node.mjs'
-import { stagedCaddyPath } from './fetch-caddy.mjs'
+import { stagedCaddyPath, STAGED_NOTICES } from './fetch-caddy.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const NEST = path.join(here, '..')
@@ -140,6 +140,9 @@ function main() {
   // npm-licenses.json (license:gen) and rust-licenses.json (rust-licenses.mjs).
   need(path.join(NEST, 'licenses', 'rust-licenses.json'))
   copyDir(path.join(NEST, 'licenses'), out('licenses'))
+  // Every Go module inside the bundled Caddy, with its license files
+  // (scripts/caddy-notices.mjs; hash-pinned with the binary by fetch-caddy).
+  fs.copyFileSync(need(STAGED_NOTICES), out('licenses', 'caddy-NOTICES.txt'))
 
   if (!win) adhocSignMachO(BUNDLE_DIR)
   console.log(`Staged ${path.relative(REPO, BUNDLE_DIR)}`)

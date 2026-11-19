@@ -349,6 +349,8 @@ test('🔍 the Caddy pin names the build caddy.yml publishes', () => {
     const a = CADDY_ASSETS[key]
     assert(a && a.file === `${CADDY_TAG}-${suffix}`, `${key}: asset ${a?.file}`)
     assert(/^[0-9a-f]{64}$/.test(a.sha256), `${key}: sha256 must be 64 hex chars — copy it from the release's SHA256SUMS`)
+    assert(a.notices?.file === `${a.file}.NOTICES.txt` && /^[0-9a-f]{64}$/.test(a.notices.sha256),
+      `${key}: the binary's license notices must be pinned beside it (caddy-notices.mjs output)`)
   }
   return CADDY_TAG
 })
@@ -356,6 +358,8 @@ test('🔍 the Caddy pin names the build caddy.yml publishes', () => {
 test('🔍 Caddy is staged into resources/bin, where the packaged lookup looks, after re-checking its hash', () => {
   assert(/fetch-caddy\.mjs'\), '--check'\]/.test(STAGE_SRC), 'stage-shell-bundle.mjs must run fetch-caddy.mjs --check before copying')
   assert(/copyFileSync\(need\(stagedCaddyPath\(\)\), out\('bin', caddyName\)\)/.test(STAGE_SRC), 'Caddy is not copied into bin/')
+  assert(/copyFileSync\(need\(STAGED_NOTICES\), out\('licenses', 'caddy-NOTICES\.txt'\)\)/.test(STAGE_SRC),
+    "the Go modules' license notices are not shipped in licenses/")
   // ...and that is where the supervisor looks first in an install.
   for (const platform of ['win32', 'darwin']) {
     const first = caddyBinaryCandidates({ packaged: true, resourcesDir: 'RES', nestRoot: 'N', configDir: 'C', platform })[0]
