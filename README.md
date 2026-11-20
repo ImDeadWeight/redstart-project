@@ -19,10 +19,70 @@ LM Studio, Jan and Ollama are model runners — very good ones — aimed at gett
 
 ## Screenshots
 
-**Redstart Nest — server launcher**
+<p align="center">
+  <img src="docs/screenshots/tour.png" width="100%" alt="A tour of Redstart, advancing every few seconds: a chat answering with a comparison table, then the Nest admin panel's Overview, Tools, Model, Network & access and Terminal pages, then the chat's Accounts, Roles and Workflows settings." />
+</p>
+<p align="center"><sub>A short tour that advances on its own: the chat, the Nest admin panel, then the chat's admin settings. Every image below opens full size when clicked.</sub></p>
 
-| Configuration | Models | Tools | Server |
-|---|---|---|---|
+**The chat** — served by Nest to any browser on your network, or through Redstart Twig.
+
+<a href="docs/screenshots/chat-conversation.png"><img src="docs/screenshots/chat-conversation.png" width="100%" alt="The chat UI answering a question with a comparison table, with recent conversations and a project in the sidebar." /></a>
+
+**Redstart Nest** — the admin panel: status and Start/Stop on top, every setting in six sections down the side.
+
+<a href="docs/screenshots/nest-overview.png"><img src="docs/screenshots/nest-overview.png" width="100%" alt="Nest's Overview page: the model in use, who can connect, tools on, a setup checklist and a QR code for phones." /></a>
+
+<details>
+<summary><b>More of Redstart Nest</b> — Model, Tools, Network &amp; access, Terminal</summary>
+<br>
+
+**Model** — your models, the hardware, and memory settings in plain words; the llama.cpp flags sit under Advanced.
+
+<a href="docs/screenshots/nest-model.png"><img src="docs/screenshots/nest-model.png" width="100%" alt="Nest's Model page listing downloaded models with the one in use highlighted." /></a>
+
+**Tools** — one row per tool with its switch; opening a row shows its settings.
+
+<a href="docs/screenshots/nest-tools.png"><img src="docs/screenshots/nest-tools.png" width="100%" alt="Nest's Tools page: a compact list of tools with on/off switches, with Documents opened to show its folder." /></a>
+
+**Network &amp; access** — who can connect, the addresses and QR code, HTTPS, and sign-in.
+
+<a href="docs/screenshots/nest-network.png"><img src="docs/screenshots/nest-network.png" width="100%" alt="Nest's Network & access page with the direct IP address, its QR code, and the secure address setup." /></a>
+
+**Terminal** — the model server's own output, live.
+
+<a href="docs/screenshots/nest-terminal.png"><img src="docs/screenshots/nest-terminal.png" width="100%" alt="Nest's Terminal page showing llama-server loading the model onto the GPU." /></a>
+
+</details>
+
+<details>
+<summary><b>More of the chat</b> — on a phone, Accounts, Roles, Workflows, System prompt</summary>
+<br>
+
+**On a phone** — the same chat, no app needed.
+
+<p align="center"><a href="docs/screenshots/chat-phone.png"><img src="docs/screenshots/chat-phone.png" width="390" alt="The chat on a phone-sized screen." /></a></p>
+
+**Accounts** — each person signs in with their own account, and their files and history are theirs alone.
+
+<a href="docs/screenshots/chat-accounts.png"><img src="docs/screenshots/chat-accounts.png" width="100%" alt="Settings → Accounts listing the owner, two users with the Intake staff role, and an admin." /></a>
+
+**Roles** — what an account may reach: a role only ever takes away.
+
+<a href="docs/screenshots/chat-roles.png"><img src="docs/screenshots/chat-roles.png" width="100%" alt="Settings → Roles with the built-in Full Access and Restricted roles and a custom Intake staff role." /></a>
+
+**Workflows** — saved instructions for recurring work, personal or shared, run by typing <code>/</code>.
+
+<a href="docs/screenshots/chat-workflows.png"><img src="docs/screenshots/chat-workflows.png" width="100%" alt="The Workflows page with a personal weekly-update workflow and an organisation case-note-summary workflow." /></a>
+
+**System prompt** — the organisation's context, policy and format, composed by the server for every client.
+
+<a href="docs/screenshots/chat-system-prompt.png"><img src="docs/screenshots/chat-system-prompt.png" width="100%" alt="Settings → System Prompt with fields for context, behavioural guidelines and output format." /></a>
+
+</details>
+
+<sub>Captured from this repository's own code against a stand-in model server, so the model's answers are scripted. The hardware line shows the tested configuration below.</sub>
+
+---|---|---|---|
 | ![Nest configuration tab](docs/screenshot-redstart-nest.png) | ![Nest models tab — local storage and Hugging Face browser](docs/screenshot-nest-models.png) | ![Nest tools tab — capabilities like web access, Postgres, Documents, SQLite, Vault](docs/screenshot-nest-tools.png) | ![Nest server tab — live server terminal](docs/screenshot-nest-server.png) |
 
 **Redstart Twig / chat UI**

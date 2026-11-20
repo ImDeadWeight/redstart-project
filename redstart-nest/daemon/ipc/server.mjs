@@ -329,8 +329,14 @@ async function doStopServer({ serverState }) {
 
 export async function getServerStatus(config, { serverState }) {
   if (!serverState.process) return { running: false, health: null }
+  // Ask llama-server itself, on its loopback port (configured port + 1), not
+  // the gateway: with sign-in required (the default) the gateway answers this
+  // unauthenticated probe with a 401, and the launcher showed "—" instead of
+  // the model's health. The port is the one the model was launched with, not
+  // whatever the launcher's form says now.
+  const gatewayPort = serverState.lastConfig?.port || config?.port || 19080
   try {
-    const res = await fetch(`http://127.0.0.1:${config?.port || 19080}/health`, {
+    const res = await fetch(`http://127.0.0.1:${gatewayPort + 1}/health`, {
       signal: AbortSignal.timeout(1500),
     })
     const data = await res.json()

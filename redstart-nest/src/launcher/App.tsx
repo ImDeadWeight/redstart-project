@@ -36,7 +36,6 @@ import { useHardwareAndBinary } from './hooks/useHardwareAndBinary'
 import { useModelCatalog } from './hooks/useModelCatalog'
 import { useProfiles } from './hooks/useProfiles'
 import { useServerLifecycle } from './hooks/useServerLifecycle'
-import { healthDisplay } from './tabs/ServerTab'
 import { Sidebar, type SectionId } from './sections/Sidebar'
 import { OverviewSection } from './sections/OverviewSection'
 import { ModelSection } from './sections/ModelSection'
@@ -114,7 +113,6 @@ export default function App() {
   const isRunning = serverState === 'running'
   const isStopping = serverState === 'stopping'
   const isStarting = serverState === 'starting'
-  const { label: healthLabel } = healthDisplay(health)
   const modelName = config.modelPath ? (config.modelPath.split(/[\\/]/).pop() || config.modelPath) : ''
   const addresses = addressesFor(tls, localIp, config.port, networkMode)
   const chatAddress = addresses[0]?.url ?? localAddress(config.port)
@@ -161,9 +159,9 @@ export default function App() {
       >
         <StatusPill
           tone={isRunning ? 'on' : isStopping || isStarting ? 'pending' : 'off'}
-          label={isRunning ? (healthLabel === 'Idle' ? 'Running' : healthLabel) : isStopping ? 'Stopping…' : isStarting ? 'Starting…' : 'Stopped'}
+          label={isRunning ? (health === 'no slot available' ? 'Busy' : health === 'unreachable' ? 'Not responding' : 'Running') : isStopping ? 'Stopping…' : isStarting ? 'Starting…' : 'Stopped'}
           detail={isRunning || isStarting ? modelName : undefined}
-          tip={isRunning ? `Serving ${modelName}${healthLabel === 'Processing' ? ', busy answering' : ''}` : config.modelPath ? 'Press Start to load the model' : 'No model chosen yet'}
+          tip={isRunning ? `Serving ${modelName}${health === 'no slot available' ? ', busy answering' : ''}` : config.modelPath ? 'Press Start to load the model' : 'No model chosen yet'}
         />
         <label className="hidden items-center gap-2 text-[13px] text-zinc-400 lg:flex">
           Profile

@@ -106,7 +106,7 @@ export function ModelSection({
               <div className="text-lg font-semibold text-zinc-300">No model chosen yet</div>
             )}
           </div>
-          {isRunning && modelPath && <Chip tone="info">A new choice applies when the model restarts</Chip>}
+          {isRunning && modelPath && <span className="text-[13px] text-zinc-500">Changes here apply the next time the model starts.</span>}
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-zinc-800 pt-4 text-[13px] text-zinc-400">
           <span>This computer: {hwLine ? <span className="text-zinc-200">{hwLine}</span> : 'not checked yet'}</span>
