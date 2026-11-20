@@ -195,7 +195,7 @@ MCP says how a tool is called, not where it runs, so Redstart has tool hosts on 
 | 19083 | Admin listener — the control plane. Fixed, not configurable, and up whenever Redstart Nest is, whether or not a model is running. Bound to `127.0.0.1` unless `adminBindHost` says otherwise. See [The control plane](security.md#the-control-plane) |
 | 19084 | Embedding server — a second, small llama-server used for tool and document search ranking. Bound to `127.0.0.1` only |
 | 80 / 443 | The bundled Caddy, **only while HTTPS is on**: 443 serves `https://<name>` (the chat UI and MCP server), 80 redirects to it. With HTTPS off, Windows uses 80 for the clean-URL proxy instead |
-| 8443 | The bundled Caddy serving the control plane over HTTPS, only while HTTPS is on **and** the admin panel is reachable on the network |
+| 8443 | The bundled Caddy serving the control plane over HTTPS, only while HTTPS is on **and** the admin panel is reachable on the network. An Automatic name also gets it on :443 as `admin.<name>` |
 | 8765 | Beacon — Redstart Nest identity broadcast, always bound to `0.0.0.0` for LAN discovery |
 
 **Two planes, two lifecycles.** 19080/19081/19082 are the *data* plane: they exist

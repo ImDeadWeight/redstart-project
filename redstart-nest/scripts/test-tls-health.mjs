@@ -20,7 +20,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import * as net from 'node:net'
 import { checkServing, diagnostics, createHealthRunner, loopbackRequest, RENEWAL_WARN_DAYS, trustFor, letsEncryptStagingRoots, tlsErrorReason } from '../daemon/tls-health.mjs'
-import { TLS_HEALTH_PATH, buildCaddyConfig, PROXY_SECRET_ENV } from '../daemon/caddy-config.mjs'
+import { TLS_HEALTH_PATH, buildCaddyConfig, PROXY_SECRET_ENV, adminHostnameFor } from '../daemon/caddy-config.mjs'
 import { createCaddySupervisor } from '../daemon/caddy-server.mjs'
 import { stagedCaddyPath } from './fetch-caddy.mjs'
 
@@ -225,6 +225,7 @@ if (!fs.existsSync(BIN)) {
     const cfg = buildCaddyConfig({
       hostname: NAME, dnsProvider: { name: 'duckdns', api_token: '{env.REDSTART_DNS_TOKEN}' },
       gatewayPort: 1, mcpPort: 2, httpsServing: false, requireHttps: false, httpsPort, httpPort, adminPort, adminHttpsPort,
+      adminHostname: adminHostnameFor(NAME),
       storageDir: path.join(dir, 'caddy', 'storage'),
     })
     // This test's copy: Caddy's own internal CA, so a real certificate exists with no network.
@@ -257,6 +258,33 @@ if (!fs.existsSync(BIN)) {
         import('node:http').then(r)
       })
       assert(plain !== 200, `plain HTTP to the admin port answered ${plain}`)
+    })
+
+    await test('🔍 the admin panel on its own name: :443 by Host to the loopback listener, on the WILDCARD certificate', async () => {
+      const ADMIN = adminHostnameFor(NAME)
+      let a = null
+      const until = Date.now() + 20000
+      while (Date.now() < until) {
+        a = await loopbackRequest({ name: ADMIN, port: httpsPort, path: '/admin/api/y', ca })
+        if (a.ok) break
+        await new Promise((res) => setTimeout(res, 250))
+      }
+      assert(a?.ok && a.status === 200 && a.body === 'admin-stub', JSON.stringify({ ok: a?.ok, status: a?.status, body: a?.body, error: a?.error }))
+      assert(adminSeen.at(-1)?.url === '/admin/api/y' && adminSeen.at(-1)?.secret === 'live-secret-0123', JSON.stringify(adminSeen.at(-1)))
+      // The certificate is *.<name>, never one of admin.<name>'s own (whose
+      // challenge the name service could not answer).
+      const san = String(a.cert?.subjectaltname ?? '')
+      assert(san.split(/,\s*/).includes(`DNS:*.${NAME}`) && !san.includes(`DNS:${ADMIN}`), `SAN ${san}`)
+      // The device name still serves the chat side, not the admin listener.
+      const before = adminSeen.length
+      const chat = await loopbackRequest({ name: NAME, port: httpsPort, path: '/admin/api/z', ca })
+      assert(chat.ok && adminSeen.length === before, `the device name reached the admin listener (${JSON.stringify(adminSeen.at(-1))})`)
+      // Plain :80 under the admin name: refused (HTTPS not serving here), never proxied.
+      const plain = await new Promise((resolve) => {
+        import('node:http').then((http80) => http80.get({ host: '127.0.0.1', port: httpPort, path: '/admin/api/w', headers: { host: ADMIN } }, (res) => { res.resume(); resolve(res.statusCode) }).on('error', () => resolve('refused')))
+      })
+      assert(plain === 503 && adminSeen.length === before, `plain :80 under the admin name answered ${plain}`)
+      return san
     })
 
     await test('🔍 the real certificate from an untrusted issuer is refused by verification itself', async () => {

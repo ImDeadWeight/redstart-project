@@ -132,6 +132,22 @@ test('🔍 with HTTPS on, the admin panel is never plain HTTP on the LAN (boot, 
   assert(cfg.apps.http.servers.admin.listen.every((a) => a.startsWith('tcp4/')), 'the :8443 admin server listens on IPv6')
 })
 
+test('🔍 the admin panel\'s own name (admin.<name> on :443) only while it is meant to face the LAN, and only for an Automatic name', () => {
+  // Same gate as :8443 (adminProxied), narrowed to the name service's names:
+  // it is the one provider known to publish admin.<id> and answer the
+  // wildcard's challenge.
+  const lanSrc = stripComments(fs.readFileSync(path.join(NEST, 'daemon', 'lan.mjs'), 'utf8'))
+  assert(/adminHostname: t\.adminProxied && t\.provider === 'redstart' \? adminHostnameFor\(t\.hostname\) : null/.test(lanSrc), 'lan.mjs gives Caddy the admin name without both gates')
+  const cfg = buildCaddyConfig({
+    hostname: 'k7f3q2.nest.redstartdevelopment.com', dnsProvider: { name: 'acmedns', username: 'k7f3q2', password: '{env.T}', subdomain: 'k7f3q2', server_url: 'https://names.redstartdevelopment.com' },
+    gatewayPort: 19080, mcpPort: 19082, httpsServing: true, requireHttps: false, storageDir: '/s', adminPort: 19083,
+    adminHostname: 'admin.k7f3q2.nest.redstartdevelopment.com',
+  })
+  for (const [name, s] of Object.entries(cfg.apps.http.servers)) {
+    assert(s.listen.every((a) => /^tcp4\/0\.0\.0\.0:\d+$/.test(a)), `${name} listens beyond IPv4: ${s.listen}`)
+  }
+})
+
 console.log('\n-- the firewall and the router --')
 
 test('🔍 Nest\'s firewall rules admit the local subnet only, and are named so the narrower rule is created', () => {

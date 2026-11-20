@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 import { createNetworkModeOwner } from './network-mode-owner.mjs'
 import { createCaddySupervisor, caddyBinaryCandidates, caddyPaths } from './caddy-server.mjs'
-import { buildCaddyConfig, PROXY_SECRET_ENV } from './caddy-config.mjs'
+import { buildCaddyConfig, PROXY_SECRET_ENV, adminHostnameFor } from './caddy-config.mjs'
 import { newProxySecret, clearProxySecret } from './proxy-trust.mjs'
 import { rebindGateway } from './tools-gateway.mjs'
 import { rebindMcpServer } from './mcp-server.mjs'
@@ -182,6 +182,11 @@ function realEffects({ configDir }) {
         // The control plane over HTTPS on :8443, when it is meant to be
         // reachable from other devices (the admin listener is on loopback then).
         adminPort: t.adminProxied ? ADMIN_PORT : null,
+        // And on its own name, admin.<name>, for an Automatic name: the name
+        // service publishes that record and the wildcard certificate's
+        // challenge is the one it already answers. Own names keep :8443 only
+        // (controlPlaneState in ipc/admin.mjs tells the launcher the same).
+        adminHostname: t.adminProxied && t.provider === 'redstart' ? adminHostnameFor(t.hostname) : null,
       })
       await supervisor.start({ config, secrets: { ...t.secrets, [PROXY_SECRET_ENV]: secret } })
     },
