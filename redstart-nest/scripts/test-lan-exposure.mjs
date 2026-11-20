@@ -155,6 +155,12 @@ test('🔍 Nest\'s firewall rules admit the local subnet only, and are named so 
   const add = /'add', 'rule',[\s\S]*?\(err\) =>/.exec(src)?.[0] ?? ''
   assert(/'remoteip=localsubnet'/.test(add), 'the netsh add rule arguments do not restrict remoteip')
   assert(/RULE_SUFFIX = ' \(LAN only\)'/.test(src) && (src.match(/\$\{RULE_SUFFIX\}/g) ?? []).length >= 2, 'a rule kept an old name')
+  // The desktop shell's elevated helper adds the same rules itself
+  // (2026-11-20). It must fix the scope, not take one from its caller.
+  const rs = fs.readFileSync(path.join(NEST, 'shell', 'src', 'firewall.rs'), 'utf8')
+  const fn = /pub fn netsh_add_args[\s\S]*?\r?\n\}/.exec(rs)?.[0] ?? ''
+  assert(/a\.push\("remoteip=localsubnet"\.into\(\)\)/.test(fn), 'firewall.rs does not pin remoteip=localsubnet')
+  assert(!/remoteip=\{/.test(fn) && !/r\.remote/.test(fn), 'firewall.rs takes the remote scope from its caller')
 })
 
 test('🔍 nothing asks a router to forward a port (no UPnP / NAT-PMP / PCP code or dependencies)', () => {

@@ -285,6 +285,9 @@ jobs:
       - name: "Security: the network-mode owner (one owner; rollback; full LAN cycle with the real Caddy)"
         run: node scripts/test-network-mode-owner.mjs
 
+      - name: "Security: firewall rules (one batched UAC request through the shell; re-checked, never rejects)"
+        run: node scripts/test-firewall.mjs
+
       - name: "Security: tls settings + tls:* methods (token encrypted, never returned, re-key covered)"
         run: node scripts/test-tls-settings.mjs
 
