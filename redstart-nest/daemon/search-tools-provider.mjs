@@ -232,6 +232,7 @@ async function proxyCall(searchable, args, ctx) {
   const inner = args?.arguments && typeof args.arguments === 'object' && !Array.isArray(args.arguments) ? args.arguments : {}
   const result = await toolCaller(ctx?.account ?? null, tool.name, inner, {
     conversationId: ctx?.conversationId,
+    projectId: ctx?.projectId,
     session: ctx?.session,
     approvalId: ctx?.approvalId,
     enforceApproval: approvalRule(tool.name) !== 'none',

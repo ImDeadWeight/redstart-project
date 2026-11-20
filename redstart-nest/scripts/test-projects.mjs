@@ -334,6 +334,47 @@ await test('memory tool: the project comes from the conversation, never an argum
   assert(!gone.isError && !memory.getMemory(ALICE, pm.id, { projectId: p.id }), 'forget did not reach the project scope')
 })
 
+await test('memory tool: a client with no Nest conversation names its project in _meta (Yellowscript)', async () => {
+  const { verifiedProjectId, callToolAs, META_PROJECT_KEY } = await import('../daemon/mcp-server.mjs')
+  assert(META_PROJECT_KEY === 'redstart/projectId', 'the key Yellowscript sends')
+  const p = store.createProject(ALICE, { name: 'Editor project' }).project
+  const other = store.createProject(ALICE, { name: 'Other project' }).project
+
+  // The claim is checked like the conversation id: alice's own project only.
+  assert(verifiedProjectId(ALICE, p.id) === p.id, 'alice cannot name her own project')
+  assert(verifiedProjectId(BOB, p.id) === null, 'bob named alice\'s project')
+  assert(verifiedProjectId(ALICE, 'not a project id!') === null, 'a malformed id was taken')
+  assert(verifiedProjectId(ALICE, undefined) === null, 'no claim is no project')
+
+  // With no conversation, a project save goes to the named project.
+  const ctx = { account: ALICE, conversationId: null, projectId: p.id }
+  const saved = await memoryTool.callTool('memory_save', { text: 'Deploys with Caddy', scope: 'project' }, CFG, ctx)
+  assert(!saved.isError && saved.content[0].text.split('\n')[0].includes(`project:${p.id}`), saved.content[0].text)
+  assert(memory.listMemories(ALICE, { projectId: p.id }).some((m) => m.text === 'Deploys with Caddy'), 'not saved in the project')
+  const found = await memoryTool.callTool('memory_search', { query: 'caddy' }, CFG, ctx)
+  assert(found.content[0].text.includes('Caddy'), 'search does not cover the named project')
+
+  // A ctx that names a project the caller may not write resolves to none,
+  // even if something upstream forgot to verify it.
+  const forged = await memoryTool.callTool('memory_save', { text: 'Bob via meta', scope: 'project' }, CFG, { account: BOB, conversationId: null, projectId: p.id })
+  assert(forged.isError && !memory.listMemories(ALICE, { projectId: p.id }).some((m) => m.text === 'Bob via meta'), 'bob wrote into alice\'s project via _meta')
+
+  // A stored conversation's project wins over the named one.
+  convs.createConversation('alice-1', { id: 'meta-conv', name: 'm', projectId: other.id, messages: [] })
+  const both = await memoryTool.callTool('memory_save', { text: 'Belongs to the chat', scope: 'project' }, CFG, { account: ALICE, conversationId: 'meta-conv', projectId: p.id })
+  assert(both.content[0].text.includes(`project:${other.id}`), 'the named project beat the conversation\'s')
+
+  // Through the MCP entry point: the claimed id is verified there, then used.
+  const viaMcp = await callToolAs(ALICE, 'memory_save', { text: 'Through callToolAs', scope: 'project' }, { projectId: p.id })
+  if (viaMcp && !viaMcp.isError) {
+    assert(memory.listMemories(ALICE, { projectId: p.id }).some((m) => m.text === 'Through callToolAs'), 'callToolAs dropped the project')
+    const bobViaMcp = await callToolAs(BOB, 'memory_save', { text: 'Bob through callToolAs', scope: 'project' }, { projectId: p.id })
+    assert(!memory.listMemories(ALICE, { projectId: p.id }).some((m) => m.text === 'Bob through callToolAs'), 'bob reached alice\'s project through callToolAs')
+    return 'callToolAs checked too'
+  }
+  return `callToolAs not exercised here (${viaMcp?.content?.[0]?.text?.slice(0, 60) ?? 'no provider'})`
+})
+
 await test('/memories?projectId=: only a readable project, and a foreign one is 404', async () => {
   const p = store.createProject(ALICE, { name: 'Route project' }).project
   const call = async (method, url, account, body) => {

@@ -28,7 +28,7 @@
 // =============================================================================
 
 import * as memory from './memory-storage.mjs'
-import { projectForConversation } from './projects-storage.mjs'
+import { projectForCall } from './projects-storage.mjs'
 import { embedTexts, embedServerStatus } from './embed-server.mjs'
 import { logEvent } from './logger.mjs'
 
@@ -116,10 +116,11 @@ export async function callTool(name, args, cfg, ctx) {
   const account = ctx?.account ?? null
 
   try {
-    // The project comes from the VERIFIED conversation (ctx.conversationId is
-    // checked by mcp-server before it gets here), never from an argument:
-    // the model can pick a scope, not a project (projects-plan D10).
-    const project = projectForConversation(account, ctx?.conversationId ?? null)
+    // The project comes from the VERIFIED conversation, or for a client with
+    // no Nest conversation the VERIFIED project it named (both checked by
+    // mcp-server before they get here), never from an argument: the model can
+    // pick a scope, not a project (projects-plan D10).
+    const project = projectForCall(account, ctx)
 
     if (name === 'memory_save') {
       // Guidance (how the assistant should work) is followed like project

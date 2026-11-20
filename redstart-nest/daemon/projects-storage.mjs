@@ -234,6 +234,22 @@ export function projectForConversation(account, conversationId) {
   return conv?.projectId ? getProject(account, conv.projectId) : null
 }
 
+/**
+ * The project a tool call works in. Its conversation's, when Nest stores it;
+ * otherwise the project the client named in _meta['redstart/projectId'] (a
+ * client whose chats are its own, like Yellowscript), which mcp-server has
+ * already checked (verifiedProjectId). Checked again here, so a ctx built
+ * anywhere else cannot name a project the caller may not write. The
+ * conversation wins: a stored chat's project is not the client's to change.
+ */
+export function projectForCall(account, ctx) {
+  const fromConversation = projectForConversation(account, ctx?.conversationId ?? null)
+  if (fromConversation) return fromConversation
+  if (!ctx?.projectId) return null
+  const project = getProject(account, ctx.projectId)
+  return project && canWrite(project, account) ? project : null
+}
+
 /** Removes the record only. The route detaches chats and drops project memory. */
 export function deleteProject(account, id) {
   const data = read()
