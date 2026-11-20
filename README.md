@@ -49,13 +49,14 @@ agent — is a client that connects and gets whatever the admin configured once.
 - **Owns accounts and roles.** Login is on by default with no localhost exemption, roles are assigned per account, and each account's files are structurally isolated from every other's.
 - **Owns the tool policy.** Capabilities and plugins are configured once on the server and apply to every client. Each client authenticates with a per-connector key that carries its own *surface*, so the server knows which app is calling from the credential rather than from a header it could fake.
 - **Keeps control separate from chat.** The admin plane is a different port, a different lifetime and a different login: signing in to the chat UI does not give you process control.
+- **Serves HTTPS on the LAN if you want it.** Turn on *Secure address* and Nest's bundled Caddy serves the chat UI at `https://<name>` with a real Let's Encrypt certificate: an Automatic name from Redstart's name service, or your own DuckDNS or deSEC name. Certificates come by DNS challenge, so nothing on the internet ever connects in. Off by default; while it is off, the chat UI says the connection is not encrypted.
 - **Controls egress explicitly, and will tell you.** Nothing about a conversation leaves by default; what can leave is exactly what an admin turned on, and `GET /egress` returns the live answer.
 
 ### Redstart Twig
 
 The chat client that ships in this repo — a lightweight app that finds Nest on
-the LAN and signs in, with no hostname to type. **Windows works. The Android
-build is out of date and paused** ([see note](#redstart-twig-android)); a phone
+the LAN and signs in, with no hostname to type. **Windows works; the macOS
+build is new and has never run on a Mac. The Android build is out of date and paused** ([see note](#redstart-twig-android)); a phone
 browser against the chat UI is the working substitute in the meantime.
 
 Since llama-server speaks the OpenAI API, [coding agents](#using-as-a-coding-agent-kilo-code--continue--etc) and any other OpenAI-compatible application are clients too, with no Redstart-specific code.
@@ -64,12 +65,12 @@ Since llama-server speaks the OpenAI API, [coding agents](#using-as-a-coding-age
 
 ## What the assistant can do
 
-The chat is an agent, not just a text box: it works with tools on your own data, asks before it changes anything, and keeps going when the page is closed. Every capability is off until an admin turns it on, and a role can withhold any of them from an account.
+The chat is an agent, not just a text box: it works with tools on your own data, asks before it changes anything, and keeps going when the page is closed. Every capability is off until an admin turns it on, and a role can withhold any of them from an account or narrow a shared folder to some of its subfolders.
 
 **Work with your data** ([Capabilities](docs/capabilities.md))
 - **Files and documents.** Read PDFs, Word, Excel, CSV and Markdown; create `.docx`, `.pdf` and `.md` files that appear in the chat as downloads. Each account's files are its own.
 - **Run Python.** `run_python` runs numpy, pandas and matplotlib in a WebAssembly sandbox with no network and no access outside the conversation's own folder. Charts come back as images.
-- **Search your own files with citations.** Hybrid word and embedding search over uploads, attachments and created documents, with numbered sources linked back to each file.
+- **Search your own files with citations.** Hybrid word and embedding search over uploads, attachments and created documents, with numbered sources linked back to each file. An admin can add a **Shared Documents** folder (policy manuals, templates, reference material) that everyone searches read-only, as far as their role allows.
 - **Query databases and repositories, read-only.** Postgres and SQLite (enforced by a read-only transaction, not by inspecting the SQL), a folder of Markdown notes, local Git repositories.
 - **Reach the web, only where allowed.** Fetch from approved sources, search, and look up academic papers (OpenAlex, arXiv, PubMed).
 - **Add more.** Install a third-party MCP server as a [plugin](docs/capabilities.md#plugins); its tools get the same policy as the built-ins.
@@ -78,8 +79,8 @@ The chat is an agent, not just a text box: it works with tools on your own data,
 - **Asks instead of guessing.** When a task depends on something only you know, it asks: up to four questions at once, as a card with choices.
 - **Plans longer work.** Multi-step tasks get a checklist in the chat that it ticks off as it goes.
 - **Asks before it changes anything.** Writes and deletes stop at an approval card in the chat, checked by the server for every client, not just this one. "Always allow" makes a standing grant for a tool (never for deletion), and the launcher's Activity tab shows every decision. Deletions go to the Recycle Bin.
-- **Runs in the background.** `/task <request>` hands a job to the server. It keeps going with the page closed, survives a restart, and waits for you in the chat when it needs an answer or an approval.
-- **Sends only the tools a chat needs** (optional). A small local embedding model picks the relevant tools for each turn, so a dozen capabilities don't crowd a small model's context.
+- **Keeps going when you close the page.** Chats run on the server by default, so a refresh, a closed tab or a sleeping phone doesn't end the reply. `/task <request>` hands a longer job to the server outright. Both survive a restart and wait for you in the chat when they need an answer or an approval.
+- **Sends only the tools a chat needs.** Capabilities marked catalog-only stay out of the prompt, and the model finds them with `search_tools` when it needs one, ranked by a small local embedding model. A dozen capabilities don't crowd a small model's context. On by default; per profile on the Tools tab.
 
 **Remember what matters** ([Memory](docs/security.md#memory))
 - **Three kinds of memory:** facts about you, how you want it to work (followed, with your reason), and where a piece of work stands (dated, and flagged when old).
@@ -87,9 +88,9 @@ The chat is an agent, not just a text box: it works with tools on your own data,
 - `/remember guidance: put the command first because I paste it straight into a terminal` saves one yourself. Settings → Memory shows, edits and deletes all of them.
 
 **Organise the work**
-- **Projects** group chats with their own instructions and their own memories.
-- **Workflows** are saved instructions for recurring tasks, personal or shared across the organisation, run by typing `/`.
-- **Slash commands** for the rest: `/new`, `/model`, `/mode`, `/project`, `/compact`, `/task`, `/remember`, `/memory`.
+- **Projects** group chats with their own instructions, files and memories. A project's instructions import from and export to `AGENTS.md`.
+- **Workflows** are saved instructions for recurring tasks, personal or shared across the organisation, run by typing `/`. They are stored as Agent Skills (`SKILL.md`), import and export as `.zip` or `SKILL.md`, and the model can load one itself with `use_skill` when it fits the task.
+- **Slash commands** for the rest: `/new`, `/model`, `/mode`, `/project`, `/compact`, `/task`, `/remember`, `/memory`, `/retry`, `/copy`, `/rename`, `/export`, `/help`.
 
 **Measured, not assumed.** The repo carries an agent benchmark (32 tasks against a real Nest) and a memory benchmark (32 cases, including prompt-injection attempts), and the numbers on each model are recorded before a change ships.
 
@@ -135,7 +136,7 @@ Accounts are **on by default** with no localhost exemption, and each account's f
 
 **Redstart Twig (Android)** — Android 10 or later, on the same Wi-Fi network as the Nest PC. **Not currently working** — [see note](#redstart-twig-android).
 
-**Redstart Twig (Windows)** — Windows 10/11, on the same network as the Nest PC (or on the same machine).
+**Redstart Twig (desktop)** — Windows 10/11, or macOS on Apple Silicon (untested), on the same network as the Nest PC (or on the same machine).
 
 ---
 
@@ -176,8 +177,10 @@ Accounts are **on by default** with no localhost exemption, and each account's f
 4. Open the app — it finds the server automatically by scanning the LAN for the beacon on port 8765; no hostname or QR code needed
 
 ### Redstart Twig (Windows)
-1. Download the latest `Redstart Twig Setup 1.0.0-alpha.N.exe` from [Releases](../../releases)
+1. Download the latest `Redstart-Twig-Setup-1.0.0-alpha.N.exe` from [Releases](../../releases)
 2. Install and open — it scans your network automatically
+
+Twig updates itself from then on: it downloads a new release in the background and installs it when you close it.
 
 ### macOS (experimental)
 
@@ -228,9 +231,10 @@ The short list; the [full set is in the roadmap](docs/roadmap.md#known-limitatio
 - **Unsigned installers** — both will trigger Windows Defender SmartScreen; the macOS builds are not notarized, so Gatekeeper blocks their first launch.
 - **Windows is the only supported server platform** — the daemon itself runs headless under plain Node and `deploy/` carries a systemd unit, and releases now include macOS `.dmg` builds, but neither the Mac builds nor any of the Linux artifacts has been run on real hardware yet. The port-80 proxy is Windows-only.
 - **The deployment artifacts are a first draft** — `deploy/` (systemd, Windows SCM, Caddy) was written from the design and reviewed, not executed. Read each command before running it.
-- **HTTP only on the LAN** — self-signed TLS was tried and abandoned; Android WebView rejects it. For a deployment that needs TLS, `deploy/Caddyfile` terminates it in front of Nest.
+- **HTTPS on the LAN is opt-in and new** — with *Secure address* off (the default), LAN traffic, passwords included, is plain HTTP, and the chat UI says so. Turning it on gets a real certificate, but it has not yet run in many homes.
+- **External MCP servers that need a key or OAuth don't work from the chat** — a saved API key is used only by Nest's connection test, and OAuth isn't supported. See [Capabilities](docs/capabilities.md#external-mcp-servers).
 - **mDNS / `redstart.local` has been retired** — Android's resolver never answered `.local` lookups for browser navigation, so the name failed on the platform most clients are. Use the IP or the QR code; Twig's beacon scan never needed a name.
-- **Shared capabilities are all-or-nothing** — Vault, Git, SQLite and Postgres are shared across every account, with no per-account grants yet.
+- **Postgres sharing is all-or-nothing** — a role can narrow Vault, Git, SQLite and Shared Documents to some of their folders, but Postgres has one connection, so a role can only withhold it whole.
 
 ---
 
@@ -272,9 +276,9 @@ Redstart's niche is the thing those don't try to be: a server for a group of peo
 
 ## Direction
 
-Nest's own roadmap — folder access grants, crash recovery, signed installers,
-document querying, macOS — is in [Roadmap](docs/roadmap.md), along with the
-limitations it hasn't cleared yet.
+Nest's own roadmap — crash recovery, signed installers, guided onboarding,
+macOS and Linux support, OAuth for external tool servers — is in
+[Roadmap](docs/roadmap.md), along with the limitations it hasn't cleared yet.
 
 Beyond Nest and Twig, the same server is what these are being built against.
 They live in their own repos and are **not** required to use Redstart:

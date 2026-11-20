@@ -8,12 +8,13 @@ The [project README](../README.md) covers what Redstart is, how to install it, a
 |---|---|
 | [Mission & Origin](mission.md) | Why the project exists, who it is for, where the name came from |
 | [Architecture](architecture.md) | The apps, the gateway/llama-server/MCP topology, the control plane, the provider model, discovery, ports |
-| [Security & Trust Boundaries](security.md) | Accounts, keys and surfaces, path containment, tool bans, destructive operations, SSRF, the system prompt, egress, the test suite |
-| [Tools & Capabilities](capabilities.md) | The seven local capabilities, source groups, external MCP servers, configuring it all |
-| [Configuration](configuration.md) | State files, what a profile is, `tools.json` schema |
+| [Security & Trust Boundaries](security.md) | Accounts, roles and grants, the control plane, HTTPS, path containment, approvals, run_python's sandbox, memory, workflows and projects, tool bans, SSRF, plugins, the system prompt, egress, the test suite, known gaps |
+| [Tools & Capabilities](capabilities.md) | The ten local capabilities, source groups, external MCP servers, plugins, configuring it all |
+| [Configuration](configuration.md) | The two state directories, every file Nest keeps, HTTPS settings, what a profile is, the `tools.json` schema |
 | [Development](development.md) | Repo layout, dev loops, tests, building the binary and installers |
 | [Roadmap & Known Limitations](roadmap.md) | What works, what doesn't, and what's planned |
-| [Deployment](../deploy/README.md) | Running Nest as an appliance: systemd, the Windows SCM, TLS in front. Written from the design, **not yet run on real hardware** |
+| [Deployment](../deploy/README.md) | Running Nest as an appliance: systemd, the Windows SCM, your own TLS proxy. Written from the design, **not yet run on real hardware** |
+| [Name service](../infra/name-service/README.md) | The service behind Automatic HTTPS names: what it stores and what trusting it means |
 
 ## Contracts
 

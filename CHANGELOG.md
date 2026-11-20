@@ -4,6 +4,14 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ---
 
+## 2026-11-20
+
+- **The docs caught up with the code.** An accuracy pass over the README, `docs/` and `deploy/` against what the daemon actually does after the TLS, grants, skills and server-run-chat work. The corrections that matter for troubleshooting:
+  - **External MCP API keys never reach the chat.** Clients connect to an external server directly and `GET /redstart/mcp-servers` gives them only a name and URL, so a saved key is used by Nest's connection test alone. A server that needs a key passes the test and then refuses the chat. `capabilities.md`, `security.md` and the roadmap now say so; the fix is Nest forwarding external servers, which is also what OAuth needs.
+  - **The bundled Caddy does serve the control plane**, at `https://<name>:8443` when the admin panel is reachable on the network. `deploy/README.md` and `deploy/Caddyfile` said it never did.
+  - **`mcp.json` doesn't exist**: external servers and their encrypted keys are in `tools.json`. `configuration.md` now lists the files Nest really keeps (projects, memories, approvals, skills, tasks, the document index, runtimes, logs).
+  - **Shipped, and now marked so:** folder grants, document querying (Document search plus Shared Documents), HTTPS on the LAN, chats running on the server, workflows as Agent Skills. The system prompt spec is marked implemented and lists the `skills` block.
+
 ## 2026-11-11
 
 - **Redstart is AGPL-3.0 now, not MIT.** Anyone can still use, fork and redistribute it, but a distributed modified version, or one offered to people over a network, has to publish its full source under AGPL-3.0. That's what makes a closed commercial clone impractical. Releases up to and including `1.0.0-alpha.12` stay under MIT, since a license can't be withdrawn from copies already published. `AGPL-3.0-only`, not `-or-later`, so a future AGPL version from the FSF doesn't apply to Redstart without a decision to adopt it.

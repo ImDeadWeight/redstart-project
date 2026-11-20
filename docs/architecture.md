@@ -15,7 +15,7 @@ Redstart is an **ecosystem of applications** around one idea: a model you own, r
 | App | Platform | Role | Status |
 |---|---|---|---|
 | **Redstart Nest** | Windows and macOS (Tauri shell, daemon on Node 26); the daemon also runs headless | Server manager — runs the model, hosts the tools, accounts and policy, and broadcasts itself on the LAN | In this repo |
-| **Redstart Twig** | Android & Windows | Lightweight chat client; finds Nest automatically, no configuration | In this repo |
+| **Redstart Twig** | Windows and macOS (Tauri shell, `twigd` on Node 26); Android paused | Lightweight chat client; finds Nest automatically, no configuration | In this repo |
 | **[Redstart Blueprints](https://github.com/ImDeadWeight/redstart-blueprints)** | Windows (Electron) | A local-first SQL data workbench with optional AI assistance — register flat files, query them with DuckDB, build notebooks with charts and dashboards. The workbench works fully without a model; the assistant is a dockable panel you summon | Separate repo |
 | **[Redstart Yellowscript](https://github.com/ImDeadWeight/redstart-yellowscript)** | VS Code extension | A coding agent that talks to a local Nest instead of a cloud — zero-config discovery, Redstart login, and workspace-aware tools | Separate repo |
 | **[Redstart Greenhouse](https://github.com/ImDeadWeight/redstart-greenhouse)** | Windows (Electron), planned | Project management, built the way Blueprints is built — the tool works fully on its own and the model is an optional assistant. Where Blueprints is the analytics application, Greenhouse is the planning one | Separate repo, not yet started |
@@ -34,7 +34,7 @@ Nest, Twig and Blueprints share the same [SvelteKit](https://kit.svelte.dev/) fr
   ├─ Gateway     :19080 (LAN in network mode) ├─ Scans LAN on port 8765
   │   └─ Injects Redstart context      ├─ Finds Redstart Nest automatically
   ├─ llama-server :19081 (localhost)   └─ Connects to http://IP:19080
-  ├─ MCP server   :19082 (web_fetch, web_search, Postgres, Documents, SQLite, Vault, Git, File System, Scholar)
+  ├─ MCP server   :19082 (web, Documents, Python, document search, Memory, File System, SQLite, Postgres, Vault, Git, Scholar, plugins)
   ├─ Admin plane :19083 (the launcher UI in a browser — owner only, loopback by default)
   └─ Beacon      :8765
 ```
@@ -172,7 +172,9 @@ Providers need not run in-process. File System is spawned as a stdio child and w
 
 Every provider must pass the same invariant battery — `scripts/test-provider-conformance.mjs` drives each one over a real MCP connection and asserts that a disabled provider advertises nothing, refuses a direct `tools/call` anyway, and turns malformed input into an error result rather than a crash. Adding a provider to that registry gives it those guarantees for free.
 
-The chat-ui's agentic loop runs the full cycle — model emits a tool call, the chat-ui executes it through the MCP server, the result feeds the next turn — with streaming preserved throughout. The loop itself is host-agnostic code in `shared/agent-core/` (plain ESM, no DOM, no Node built-ins); chat-ui hosts it by supplying ports for the model stream, the tool executors, the permission prompt, the turn-limit prompt and steering, so a second host (a Node benchmark, and later the daemon) runs the same loop rather than a copy.
+The agent loop runs the full cycle — model emits a tool call, the tool runs, the result feeds the next turn — with streaming preserved throughout. The loop itself is host-agnostic code in `shared/agent-core/` (plain ESM, no DOM, no Node built-ins). Each host supplies ports for the model stream, the tool executors, the permission prompt, the turn-limit prompt and steering, so the chat-ui, the Node benchmark and the daemon all run the same loop rather than copies of it.
+
+**Chats run on the server by default.** With *Run chats on the server* on (Settings → General, the default), a plain Send starts a task in the daemon (`task-runner.mjs`) and the page follows it over an event stream: live tokens, then the stored message. A refresh, a closed tab or a sleeping phone no longer ends the reply. Tools that only the client can run (Twig's `fs_*` tools, its local MCP servers) are registered with the run, and the daemon sends each such call back to exactly one connected client, which shows the approval card, runs it and posts the result. A run with nobody connected to answer waits (`waiting_client`). Messages with images, and edit, regenerate and branch, still use the browser loop for now, as does a Nest that cannot start a task. `/task` is the same machinery with no page following it.
 
 ### Where a tool server lives
 
@@ -189,8 +191,11 @@ MCP says how a tool is called, not where it runs, so Redstart has tool hosts on 
 |---|---|
 | 19080 | Gateway — all clients connect here (default, configurable in Redstart Nest). Bound to `127.0.0.1` unless network mode is on |
 | 19081 | llama-server — internal only, bound to `127.0.0.1` in both modes; never reachable from LAN |
-| 19082 | MCP server — built-in tool endpoint (web_fetch, web_search, Postgres, Documents, SQLite, Vault, Git, File System, Scholar) plus any installed [plugins](capabilities.md#plugins). Bound to `127.0.0.1` unless network mode is on |
+| 19082 | MCP server — built-in tool endpoint (web_fetch, web_search, Documents, run_python, search_documents, Memory, File System, SQLite, Postgres, Vault, Git, Scholar, skills) plus any installed [plugins](capabilities.md#plugins). Bound to `127.0.0.1` unless network mode is on |
 | 19083 | Admin listener — the control plane. Fixed, not configurable, and up whenever Redstart Nest is, whether or not a model is running. Bound to `127.0.0.1` unless `adminBindHost` says otherwise. See [The control plane](security.md#the-control-plane) |
+| 19084 | Embedding server — a second, small llama-server used for tool and document search ranking. Bound to `127.0.0.1` only |
+| 80 / 443 | The bundled Caddy, **only while HTTPS is on**: 443 serves `https://<name>` (the chat UI and MCP server), 80 redirects to it. With HTTPS off, Windows uses 80 for the clean-URL proxy instead |
+| 8443 | The bundled Caddy serving the control plane over HTTPS, only while HTTPS is on **and** the admin panel is reachable on the network |
 | 8765 | Beacon — Redstart Nest identity broadcast, always bound to `0.0.0.0` for LAN discovery |
 
 **Two planes, two lifecycles.** 19080/19081/19082 are the *data* plane: they exist

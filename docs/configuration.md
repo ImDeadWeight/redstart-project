@@ -36,12 +36,20 @@ directory it wants explicitly.
 | `profiles.json` | Per profile: model path, context/batch/threads, GPU layers, port, network mode, and web source config. Also the per-profile `tools` block — whether tools are on, the whitelist and active sources/groups, the general web search engine (`webSearchEngine`: `none`, `searxng` or `brave`), activated capabilities (`activeToolIds`) and banned tools (`disabledToolIds`). |
 | `tools.json` | User-defined tools, groups, external MCP servers, and global capability config (schema below). |
 | `accounts.json` | Accounts, when login is enabled. Passwords and API keys are stored only as hashes. Each account carries a `tier` (`owner`/`admin`/`user`) and a `roleId` (`null` = Full Access). |
-| `roles.json` | Admin-defined capability roles. Built-in roles live in code and are merged in at read time, so this file holds only the ones you create. Absent until you create one. |
+| `roles.json` | Admin-defined capability roles, including any folder grants that narrow a shared capability (Vault, Git, SQLite, Shared Documents) to some of its folders. Built-in roles live in code and are merged in at read time, so this file holds only the ones you create. Absent until you create one. |
 | `conversations.json` | Server-side conversation history, scoped per account. |
+| `projects.json` | Projects: their names, instructions and which chats belong to them, per account. |
+| `memories.json` | Saved memories (facts, guidance, state), keyed by account. |
+| `memory-review.json` | The automatic memory review's own bookkeeping: which chats it has reviewed and the suggestions waiting for an answer. Kept apart from `memories.json` because that file is the user's data. |
+| `approvals.json` | Standing "Always allow" grants, per account and tool. Deletion is never granted this way. |
+| `skills/` | Workflows, stored as Agent Skill folders (`SKILL.md` plus any files): `skills/personal/<account>/` and `skills/org/`. Migrated once from the old `workflows.json`, which is left in place. |
+| `tasks/` | One folder per background task or server-run chat: `task.json` (its state) and `events.jsonl` (everything it did, in order), so a run survives a restart. |
+| `document-index.sqlite` | The document search index: extracted text and embedding vectors for every account's files, each passage stored under its account. Rebuildable from *Profile → Files → Rebuild search index*. |
+| `runtimes/` | Downloaded runtimes, today only `pyodide-<version>/` for `run_python`, checked file by file against pinned hashes. |
+| `redstart.log`, `policy.jsonl` | The daemon's log, and the policy decision log (approvals, refusals, deletions) the launcher's Activity tab reads. |
 | `sessions.json` | Live login sessions, stored as SHA-256 hashes of the token — the file cannot be replayed as a credential. Written on sign-in, sign-out and revocation; sliding-expiry updates are batched rather than written per request. |
 | `bootstrap-token.txt` | The setup code for this machine, in plain text. Generated once, on first run. It is the only thing that can create or reset the Owner account over the network — see [Security → The control plane](security.md#the-control-plane). Anyone who can read this directory can read it, which is the same access that could rewrite `accounts.json` directly. |
 | `settings.json` | Launcher-level settings that are not per profile: the llama-server binary override, the models folder, `adminBindHost` (where the control plane listens, default `127.0.0.1`), `startAtLogin`, `autoUpdate` (desktop only, Windows and macOS, set from Configuration → Network → Updates; absent means on, `false` stops the automatic checks but not *Check now*, read before every check so no restart is needed), `discovery` (the network settings of the last launch, so the app can announce itself at start-up before anything is running), and `tls` (HTTPS on the LAN, below). |
-| `mcp.json` | External MCP servers, with any API key stored as ciphertext (`apiKeyEnc`) and never returned to a client in plaintext. |
 | `plugins.json` | Installed MCP plugins — the registry snapshot taken at install-review time, each tool's permission class, and the per-plugin enable switch. |
 | `prompt-blocks.json` | Admin-authored system-prompt blocks. Absent until you edit one. |
 | `secret.key` | The daemon-owned AES-256-GCM key, **headless deployments only**. The desktop build writes no such file. Whoever can read this file can read every stored credential. |
@@ -78,7 +86,7 @@ HTTPS for LAN clients through the bundled Caddy. It is set from the launcher (Ne
 | `requireHttps` | `false`: while HTTPS isn't working yet, LAN clients still get the chat UI over plain HTTP, labelled. `true`: they get a page saying HTTPS isn't working, and nothing in the clear. |
 | `acmeStaging` | Use Let's Encrypt's staging CA, for testing. Browsers will not trust its certificates. |
 
-While `mode` is `own`, ports 80 and 443 belong to Caddy, so a profile port that would land the gateway, llama-server or the MCP server on either is refused.
+While HTTPS is on (`mode` is `redstart` or `own`), ports 80, 443 and 8443 belong to Caddy, so a profile port that would land the gateway, llama-server or the MCP server on any of them is refused.
 
 ---
 
@@ -92,7 +100,7 @@ A **profile** bundles three things that are convenient to switch together but ar
 
 Two consequences worth being explicit about:
 
-- **A profile is global server state.** One profile is active at a time, and it applies to every account the server serves. A tool ban is not a per-account setting; per-account grants are [planned work](roadmap.md), not a current capability.
+- **A profile is global server state.** One profile is active at a time, and it applies to every account the server serves. A tool ban applies to everyone. Narrowing it per account is the job of [roles](security.md#roles): a role can withhold capabilities from an account and narrow a shared folder to some of its subfolders, but it can only take away from what the profile enables, never add to it.
 - **Profile changes take effect without a restart for tool policy** — capability config changes are pushed to the running gateway and MCP server — but **network mode is read at server start**, so changing it requires stopping and starting the server.
 
 ---
@@ -103,7 +111,7 @@ Two consequences worth being explicit about:
 {
   "tools": [ { "id": "...", "name": "...", "baseUrl": "...", "description": "..." } ],
   "groups": [ { "id": "...", "name": "...", "description": "...", "toolIds": ["..."] } ],
-  "externalServers": [ { "id": "...", "name": "...", "url": "...", "enabled": true } ],
+  "externalServers": [ { "id": "...", "name": "...", "url": "...", "enabled": true, "apiKeyEnc": null } ],
   "capabilities": {
     "postgres":    { "enabled": false, "connectionStringEnc": "...", "maxRows": 200 },
     "documents":   { "enabled": false, "outputDir": "..." },
@@ -114,7 +122,7 @@ Two consequences worth being explicit about:
     "scholar":     { "enabled": false, "venueFilter": null },
     "python":      { "enabled": false, "maxKernels": 2, "timeoutS": 30, "workspaceCapMb": 200, "accountCapMb": 2048 },
     "memory":      { "enabled": false, "promptBudgetChars": 1200 },
-    "document_search": { "enabled": false },
+    "document_search": { "enabled": false, "sharedRootDir": null },
     "web_search":  { "searxngUrl": null, "braveApiKeyEnc": null }
   },
   "deferral": { "git": false }
@@ -123,7 +131,7 @@ Two consequences worth being explicit about:
 
 `deferral` overrides which capabilities are catalog-only: a deferred capability's tools are left out of the model's tool list and reached through `search_tools` and `call_tool` instead. It is keyed by capability or plugin id; an absent id takes the default, which is deferred for File System, Git, SQLite, Postgres, Vault, Scholar and every plugin. It takes effect only when the profile's `tools.retrieval.mode` is `catalog`. Set it in the Tools tab (Catalog-only tools).
 
-`memory.promptBudgetChars` is how much of each request the newest memories may take (1200 characters ≈ 300 tokens). The memories themselves are in `memories.json` beside `conversations.json`, keyed by account. `python` holds run_python's limits: warm kernels (each ≈ 457 MB of RAM), the default wall-clock timeout (a call can ask for up to 120 s), and the per-conversation and per-account workspace caps. Its runtime lives in `<config>/runtimes/pyodide-<version>/` and is checked file by file against hashes pinned in `daemon/python-runtime.mjs`; nothing in `tools.json` records whether it is installed. `allowDestructive` is the switch that permits `delete_file` — off by default, meaning the tool is neither advertised nor executable. `web_search` is not a capability: it says where each general web search engine lives (a SearXNG base URL, a Brave Search API key). Which engine a profile uses, if any, is that profile's `tools.webSearchEngine` (`none` when absent). See [the general web search engine](security.md#the-general-web-search-engine-opt-in). The Postgres connection string and the Brave key are the secrets in the file, and they are encrypted through whichever provider the entrypoint wired up: Electron's `safeStorage` (DPAPI) on the desktop, an AES-256-GCM key file on a headless box. Stored values are tagged `v1.<provider>.<payload>` so a file records what wrote it, and a re-key driver re-encrypts an existing tree when the provider changes. Encryption being unavailable is a refusal to store, never a silent fallback to plaintext. Profiles are managed (save, load, delete) in the Redstart Nest UI.
+`memory.promptBudgetChars` is how much of each request the newest memories may take (1200 characters ≈ 300 tokens). The memories themselves are in `memories.json` beside `conversations.json`, keyed by account. `python` holds run_python's limits: warm kernels (each ≈ 457 MB of RAM), the default wall-clock timeout (a call can ask for up to 120 s), and the per-conversation and per-account workspace caps. Its runtime lives in `<config>/runtimes/pyodide-<version>/` and is checked file by file against hashes pinned in `daemon/python-runtime.mjs`; nothing in `tools.json` records whether it is installed. `allowDestructive` is the switch that permits `delete_file` — off by default, meaning the tool is neither advertised nor executable. `web_search` is not a capability: it says where each general web search engine lives (a SearXNG base URL, a Brave Search API key). Which engine a profile uses, if any, is that profile's `tools.webSearchEngine` (`none` when absent). See [the general web search engine](security.md#the-general-web-search-engine-opt-in). `document_search.sharedRootDir` is the optional Shared Documents folder: `search_documents` and the file explorer also read it, read-only, as far as a role's grants allow. The Postgres connection string, the Brave key and any external server's API key (`apiKeyEnc`) are the secrets in the file. They are encrypted through whichever provider the entrypoint wired up: on the desktop, the key the shell unwraps (DPAPI on Windows, the Keychain on macOS) in the same format Electron's `safeStorage` wrote; on a headless box, an AES-256-GCM key file. Stored values are tagged `v1.<provider>.<payload>` so a file records what wrote it, and a re-key driver re-encrypts an existing tree when the provider changes. Encryption being unavailable is a refusal to store, never a silent fallback to plaintext. Profiles are managed (save, load, delete) in the Redstart Nest UI.
 
 ---
 
