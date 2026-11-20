@@ -287,6 +287,10 @@ jobs:
           node scripts/stage-shell-bundle.mjs
           manifests=../../tooling/make-shell-manifests.mjs
           b=shell/target/release/bundle
+          # shell/target is cached (see above) and the cache would bring back
+          # the previous release's installer, so the globs below would match
+          # two files. Clear the bundles; the compiled crates stay cached.
+          rm -rf "$b"
           if [ "$RUNNER_OS" = Windows ]; then
             (cd shell && npx tauri build --config tauri.bundle.conf.json --bundles nsis)
             node "$manifests" windows "$VERSION" "$(ls $b/nsis/*-setup.exe)" "release/$VERSION" --app twig
@@ -311,6 +315,7 @@ jobs:
           node ../tooling/rust-licenses.mjs --shell shell --out licenses/rust-licenses.json
           node scripts/stage-shell-bundle.mjs
           b=shell/target/release/bundle
+          rm -rf "$b"   # stale bundles from the cache; see the Twig step
           if [ "$RUNNER_OS" = Windows ]; then
             (cd shell && npx tauri build --config tauri.bundle.conf.json --bundles nsis)
             node ../tooling/make-shell-manifests.mjs windows "$VERSION" "$(ls $b/nsis/*-setup.exe)" "release/$VERSION"
