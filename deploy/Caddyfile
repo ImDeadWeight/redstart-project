@@ -2,9 +2,9 @@
 #
 # BRING-YOUR-OWN-PROXY reference. Nest never handles certificates itself; its
 # BUNDLED Caddy does, for the chat UI and MCP server (Network → Secure address,
-# daemon/caddy-config.mjs). Use this file instead when you run your own proxy
-# (then keep Secure address Off), or to put the control plane (:19083) behind
-# TLS, which the bundled Caddy never routes.
+# daemon/caddy-config.mjs), and for the control plane too (:8443) when the
+# admin panel is reachable on the network. Use this file instead when you run
+# your own proxy (then keep Secure address Off).
 #
 # On an appliance this ships IN THE IMAGE, preconfigured, so the box arrives
 # with working HTTPS and nobody had to know anything.

@@ -1,9 +1,11 @@
 # Redstart System Prompt — Design Spec
 
-Status: **draft, not implemented.** Supersedes the authoring model in
-`redstart-system-prompt-template.md`, which remains valid as the guide for the
-*text admins write*. This document specifies how that text is assembled,
-where it runs, and what it may claim.
+Status: **implemented**, as `composePrompt()` in `redstart-nest/daemon/system-prompt.mjs`,
+and held to by `scripts/test-system-prompt.mjs`. Code in the daemon and the chat-ui
+cites its sections as "spec §N". Two parts are still ahead of the code and are marked
+where they appear: the user `preferences` block (§3, block 9) and the migration
+order in §12, which is kept as the record of how it was built. This document
+specifies how the prompt is assembled, where it runs, and what it may claim.
 
 ---
 
@@ -27,7 +29,9 @@ Everything about egress in this spec follows from that.
 
 ---
 
-## 1. Current state
+## 1. Where this started
+
+*The state of the code when this spec was written, kept because the decisions below refer to it. Line numbers are from then.*
 
 More of this spec is already built than first assumed. `daemon/tools-gateway.mjs`
 is a real gateway: llama-server binds to `127.0.0.1:port+1` and is not
@@ -96,12 +100,13 @@ Assembled in this order. Every block is optional except `identity` and `session`
 | 6c | `locality` | derived | per-request | Which computer a tool acts on. Emitted only when the request carries client-side tools (§7b). |
 | 7 | `style` | admin | snapshot | Template §3 — format conventions. |
 | 8 | `data_handling` | derived | per-request | §7. Generated from config, never hand-written. |
-| 9 | `preferences` | user | snapshot | Tone and formatting only. |
+| 9 | `preferences` | user | snapshot | Tone and formatting only. **Not emitted yet.** |
 | 10 | `session` | runtime | per-request | Date, username, role. |
 | — | *precedence clause* | code | static | §4. Everything below is user-tier. |
 | 11 | `project` | user | per-chat | The chat's project name, and its instructions when it has any (followed, within the guidelines). |
 | 12 | `memories` | user | per-chat | The account's memories by kind (below). |
 | 13 | `project_memories` | user | per-chat | The project's memories, split the same way, on their own budget. |
+| 14 | `skills` | user | per-chat | The skills (workflows) the account can load with `use_skill`, one line each: name and description. User-tier because the user or their organization wrote them. |
 
 `context`, `policy`, and `style` are the template's static sections and are
 edited as discrete fields in Settings — never as one blob.
@@ -463,9 +468,9 @@ inward from the edges; authored prose stays central.**
 
 ## 15. Open
 
-- Where `composePrompt()` lives so connectors share it — `shared/` currently
-  holds a single file and has no established module convention. Note §14
-  reduces this: if apps only send structured declarations, there is much less
+- Where `composePrompt()` lives so connectors share it — it is in the daemon
+  today, and `shared/` (which now holds the agent loop and a few process
+  helpers) is where it would move. Note §14 reduces this: if apps only send structured declarations, there is much less
   to share than if each composed prose.
 - Whether `preferences` is per-user-global or per-user-per-surface.
 - Whether unknown-terms endpoints should warn at *configuration* time in the

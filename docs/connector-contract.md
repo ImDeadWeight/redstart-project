@@ -44,6 +44,14 @@ Everything is served by the Redstart gateway on the deployment's public port.
 llama-server itself is bound to `127.0.0.1` on `port + 1` and is **not**
 reachable; do not attempt to address it.
 
+**When the deployment serves HTTPS** (Network & access → Secure address), the gateway
+moves to loopback and the LAN reaches it only through `https://<name>` on
+port 443, served by Nest's bundled Caddy with a real certificate. The beacon
+(HTTP on port 8765) then carries `origin: "https://<name>"`; a connector that
+discovers Nest by beacon should prefer that origin over `http://<ip>:<port>`,
+and verify the certificate as normal (Twig does). A plain-HTTP address may
+still answer while HTTPS is coming up, unless the admin set Require HTTPS.
+
 | | |
 |---|---|
 | Auth | `Authorization: Bearer <token-or-api-key>` |

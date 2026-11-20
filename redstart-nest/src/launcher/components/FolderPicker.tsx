@@ -18,7 +18,15 @@
 
 import { useEffect, useState } from 'react'
 import { api } from '../api/redstart'
-import { btnCls, inputCls } from './ui'
+import { btnCls, inputCls, Modal } from './ui'
+
+function FolderIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true" className="shrink-0 text-zinc-400">
+      <path d="M3 6h6l2 2h10v11H3z" />
+    </svg>
+  )
+}
 
 export type FolderPickerProps = {
   mode: 'file' | 'directory'
@@ -161,99 +169,102 @@ function BrowserModal({
     }
   }
 
+  const canConfirm = !!path && access.readable !== false && !(mode === 'file' && !fileName.trim())
+  const confirm = () => {
+    if (!path || !canConfirm) return
+    const sep = path.endsWith('\\') || path.endsWith('/') ? '' : (path.includes('\\') ? '\\' : '/')
+    onConfirm(mode === 'file' ? `${path}${sep}${fileName.trim()}` : path)
+  }
+
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-zinc-900 border border-zinc-700 rounded-lg w-full max-w-lg max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-          <p className="font-medium text-zinc-200 text-sm">{title || (mode === 'file' ? 'Choose a file location' : 'Choose a folder')}</p>
-          <button onClick={onCancel} className={btnCls.subtle}>Cancel</button>
-        </div>
-
-        <div className="px-4 py-2 border-b border-zinc-800 flex items-center gap-2 min-w-0">
+    <Modal
+      open
+      title={title || (mode === 'file' ? 'Choose a file' : 'Choose a folder')}
+      onClose={onCancel}
+      footer={<>
+        {allowCreate && path !== null && !creating && (
+          <button type="button" onClick={() => setCreating(true)} className={`${btnCls.secondary} mr-auto`}>New folder</button>
+        )}
+        {allowCreate && creating && (
+          <div className="mr-auto flex items-center gap-2">
+            <input autoFocus value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') createFolder(); if (e.key === 'Escape') { e.stopPropagation(); setCreating(false) } }}
+              aria-label="New folder name" placeholder="Folder name" className={inputCls.sm} />
+            <button type="button" onClick={createFolder} className={btnCls.secondary}>Create</button>
+          </div>
+        )}
+        <button type="button" onClick={onCancel} className={btnCls.secondary}>Cancel</button>
+        <button type="button" disabled={!canConfirm} onClick={confirm} className={btnCls.primary}>
+          {mode === 'file' ? 'Use this file' : 'Use this folder'}
+        </button>
+      </>}>
+      <div className="flex flex-col gap-3">
+        <div className="flex min-w-0 items-center gap-2">
           {path !== null && (
-            <button onClick={() => load(parent === null ? null : parent)} className={btnCls.subtle} title="Up">↑</button>
+            <button type="button" onClick={() => load(parent === null ? null : parent)} className={btnCls.secondary}
+              aria-label="Up one folder" data-tip="Up one folder">↑</button>
           )}
-          <p className="text-xs text-zinc-400 truncate flex-1">{path ?? 'Select a starting point'}</p>
+          <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-[13px] text-zinc-300">
+            {path ?? 'Choose where to start'}
+          </code>
         </div>
 
-        <div className="overflow-y-auto flex-1 p-2">
-          {loading && <p className="text-xs text-zinc-500 p-2">Loading…</p>}
+        <div className="max-h-72 overflow-y-auto rounded-lg border border-zinc-800">
+          {loading && <p className="p-3 text-sm text-zinc-500">Loading…</p>}
 
           {!loading && path === null && roots.map((r) => (
-            <button key={r.path} onClick={() => load(r.path)}
-              className="w-full text-left px-3 py-2 rounded hover:bg-zinc-800 text-sm text-zinc-200">
-              📁 {r.label}
+            <button key={r.path} type="button" onClick={() => load(r.path)}
+              className="flex w-full items-center gap-2.5 border-b border-zinc-800/70 px-3 py-2 text-left text-sm text-zinc-200 last:border-b-0 hover:bg-zinc-800">
+              <FolderIcon /> {r.label}
             </button>
           ))}
 
           {!loading && path !== null && reason && (
-            <p className="text-xs text-red-400 p-2">Can&apos;t open this folder: {reason}</p>
+            <p className="p-3 text-sm text-red-400">Can&apos;t open this folder: {reason}</p>
           )}
 
           {!loading && path !== null && !reason && entries.length === 0 && (
-            <p className="text-xs text-zinc-500 p-2">No subfolders here.</p>
+            <p className="p-3 text-sm text-zinc-500">No folders here.</p>
           )}
 
           {!loading && path !== null && entries.map((e) => (
-            <button key={e.name} onClick={() => load(`${path}${path.endsWith('\\') || path.endsWith('/') ? '' : '/'}${e.name}`)}
-              className="w-full text-left px-3 py-2 rounded hover:bg-zinc-800 text-sm text-zinc-200">
-              📁 {e.name}
+            <button key={e.name} type="button" onClick={() => load(`${path}${path.endsWith('\\') || path.endsWith('/') ? '' : '/'}${e.name}`)}
+              className="flex w-full items-center gap-2.5 border-b border-zinc-800/70 px-3 py-2 text-left text-sm text-zinc-200 last:border-b-0 hover:bg-zinc-800">
+              <FolderIcon /> {e.name}
             </button>
           ))}
         </div>
 
-        {/* The one hard requirement: say it HERE,
-            while the admin is still looking at the picker, rather than letting
-            the path be saved and fail later inside a tool call - where the
-            error reaches the user as a confused model instead of as a
-            permissions problem. Only fires at level 3, where the daemon runs
-            as a service account that was never granted this folder. */}
+        {/* The one hard requirement: say it HERE, while the admin is still
+            looking at the picker, rather than letting the path be saved and
+            fail later inside a tool call - where the error reaches the user as
+            a confused model instead of as a permissions problem. Only fires at
+            level 3, where the daemon runs as a service account that was never
+            granted this folder. */}
         {!loading && path !== null && access.readable === false && (
-          <p className="text-xs text-red-400 px-4 pb-2">
+          <p className="text-sm text-red-400">
             Redstart cannot read this folder. Grant its account access, or choose another one.
           </p>
         )}
         {!loading && path !== null && access.readable !== false && access.writable === false && (
-          <p className="text-xs text-amber-500 px-4 pb-2">
+          <p className="text-sm text-amber-400">
             Redstart can read this folder but not write to it. Fine for read-only use; anything
             that saves a file here will fail.
           </p>
         )}
 
-        {error && <p className="text-xs text-red-400 px-4 pb-2">{error}</p>}
+        {error && <p className="text-sm text-red-400">{error}</p>}
 
         {mode === 'file' && path !== null && (
-          <div className="px-4 py-2 border-t border-zinc-800">
+          <label className="flex flex-col gap-1.5 text-[13px] text-zinc-400">
+            File name in this folder
             <input value={fileName} onChange={(e) => setFileName(e.target.value)}
-              placeholder="File name" className={inputCls.sm} />
-          </div>
+              onKeyDown={(e) => { if (e.key === 'Enter') confirm() }}
+              placeholder="e.g. model.gguf" className={`${inputCls.sm} font-mono`} />
+            <span className="text-zinc-500">Folders on the server are listed, not files, so type the file&rsquo;s name.</span>
+          </label>
         )}
-
-        <div className="px-4 py-3 border-t border-zinc-800 flex items-center gap-2">
-          {allowCreate && path !== null && !creating && (
-            <button onClick={() => setCreating(true)} className={btnCls.subtle}>New folder</button>
-          )}
-          {allowCreate && creating && (
-            <div className="flex items-center gap-2 flex-1">
-              <input autoFocus value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && createFolder()}
-                placeholder="Folder name" className={inputCls.sm} />
-              <button onClick={createFolder} className={btnCls.secondary}>Create</button>
-            </div>
-          )}
-          <div className="flex-1" />
-          <button
-            disabled={!path || access.readable === false || (mode === 'file' && !fileName.trim())}
-            onClick={() => {
-              if (!path) return
-              const sep = path.endsWith('\\') || path.endsWith('/') ? '' : (path.includes('\\') ? '\\' : '/')
-              onConfirm(mode === 'file' ? `${path}${sep}${fileName.trim()}` : path)
-            }}
-            className={btnCls.primary}>
-            {mode === 'file' ? 'Choose this file' : 'Choose this folder'}
-          </button>
-        </div>
       </div>
-    </div>
+    </Modal>
   )
 }

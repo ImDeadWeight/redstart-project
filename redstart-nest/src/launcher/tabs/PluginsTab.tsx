@@ -62,24 +62,23 @@ export function PluginsTab({ plugins }: Props) {
   }
 
   return (
-    <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
+    <section className="bg-zinc-900 rounded-xl p-5 border border-zinc-800">
       <div className="flex items-center justify-between mb-1">
-        <SectionTitle className="">Plugins</SectionTitle>
-        <button onClick={() => setShowAdd(true)} className={btnCls.primary}>Add tool</button>
+        <SectionTitle className="">Plugins installed on this server</SectionTitle>
+        <button onClick={() => setShowAdd(true)} className={btnCls.primary}>Add a plugin</button>
       </div>
-      <p className="text-xs text-zinc-600 mb-4">
-        Third-party MCP servers — not the External MCP Servers on the Tools tab, which are client-executed and never run on this machine.
-        Installing here does not turn a plugin on for any profile; that happens on the Tools tab once it's enabled below.
+      <p className="text-xs text-zinc-500 mb-4">
+        Third-party MCP servers that run on this computer. Not the same as tool servers on other computers, which each person&rsquo;s app runs. Installing one here, or allowing it below, does not turn it on for any profile: that happens under For this profile.
       </p>
 
-      {loading && list.length === 0 && <p className="text-xs text-zinc-600">Loading…</p>}
+      {loading && list.length === 0 && <p className="text-xs text-zinc-500">Loading…</p>}
       {!loading && list.length === 0 && (
-        <p className="text-xs text-zinc-600">No plugins installed. "Add tool" installs a third-party MCP server and lets you classify its tools before anything runs.</p>
+        <p className="text-xs text-zinc-500">No plugins installed. "Add a plugin" installs a third-party MCP server and lets you classify its tools before anything runs.</p>
       )}
 
       <div className="space-y-2">
         {list.map((p) => (
-          <div key={p.id} className="bg-zinc-800/40 rounded px-3 py-2.5">
+          <div key={p.id} className="bg-zinc-950/40 border border-zinc-800 rounded-lg px-4 py-3">
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
@@ -98,24 +97,24 @@ export function PluginsTab({ plugins }: Props) {
                   ) : (
                     <button
                       onClick={() => setRenaming(p.id)}
-                      title="Rename — display only; the plugin's id and its tools' names do not change"
+                      data-tip="Rename. Display only: the plugin's id and its tools' names do not change"
                       className="text-sm text-zinc-200 truncate hover:text-orange-400 text-left"
                     >{p.displayName}</button>
                   )}
                   {p.lastError ? (
-                    <span className="text-xs text-red-400 flex-shrink-0" title={p.lastErrorAt || undefined}>● unhealthy</span>
+                    <span className="text-xs text-red-400 flex-shrink-0" tabIndex={0} data-tip={p.lastErrorAt ? `Last failed ${new Date(p.lastErrorAt).toLocaleString()}` : undefined}>● unhealthy</span>
                   ) : (
                     <span className="text-xs text-green-400 flex-shrink-0">● healthy</span>
                   )}
                 </div>
-                <p className="text-xs text-zinc-600 truncate">
+                <p className="text-xs text-zinc-500 truncate">
                   {sourceLabel(p.source)}{p.resolvedVersion ? ` (resolved ${p.resolvedVersion})` : ''} · {p.toolCount} tool{p.toolCount === 1 ? '' : 's'}
                   {p.hasSecret ? ' · holds a credential' : ''}
                 </p>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
-                <span className={`text-xs ${p.enabled ? 'text-green-400' : 'text-zinc-500'}`}>{p.enabled ? 'Enabled' : 'Disabled'}</span>
-                <TogglePill checked={p.enabled} onToggle={() => setEnabled(p.id, !p.enabled)} />
+                <span className={`text-xs ${p.enabled ? 'text-green-400' : 'text-zinc-500'}`}>{p.enabled ? 'Allowed on this server' : 'Not allowed'}</span>
+                <TogglePill checked={p.enabled} onToggle={() => setEnabled(p.id, !p.enabled)} label={`Allow ${p.displayName} on this server`} />
               </div>
             </div>
 
@@ -196,7 +195,7 @@ function ToolClassificationEditor({ pluginId, plugins }: { pluginId: string; plu
 
   if (tools === null) {
     api().plugins.get(pluginId).then((p) => setTools(p?.tools ?? []))
-    return <p className="text-xs text-zinc-600 mt-2">Loading…</p>
+    return <p className="text-xs text-zinc-500 mt-2">Loading…</p>
   }
 
   const counts = tools.reduce(
@@ -245,7 +244,7 @@ function ToolClassificationEditor({ pluginId, plugins }: { pluginId: string; plu
         <button onClick={applyBulk} disabled={bulkApplying} className={btnCls.chip + ' disabled:opacity-50'}>
           {bulkApplying ? 'Applying…' : 'Apply to all'}
         </button>
-        <span className="text-xs text-zinc-600">then adjust individual rows below as needed</span>
+        <span className="text-xs text-zinc-500">then adjust individual rows below as needed</span>
       </div>
       <div className="divide-y divide-zinc-800">
         {tools.map((t) => (

@@ -32,21 +32,20 @@ export function DeferralCard({ entries, retrievalOn, onChanged }: {
   }
 
   return (
-    <div className="bg-zinc-800/40 rounded px-3 py-2.5">
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-sm text-zinc-200">Catalog-only tools</span>
-        <span className={`text-xs ${retrievalOn ? 'text-green-400' : 'text-zinc-500'}`}>
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-3">
+        <span className="text-sm font-medium text-zinc-100">Which tools stay out</span>
+        <span className={`text-[13px] ${retrievalOn ? 'text-green-400' : 'text-zinc-500'}`}>
           {retrievalOn ? 'In effect' : 'Not in effect'}
         </span>
       </div>
-      <p className="text-xs text-zinc-500 mb-2">
-        A ticked capability's tools are left out of the assistant's tool list. It finds them by searching
-        and calls them through call_tool, so the list never changes mid-conversation.
-        {!retrievalOn && ' This applies only while tool retrieval is on.'}
+      <p className="mb-2.5 text-[13px] text-zinc-500">
+        A ticked capability&rsquo;s tools are left out of the list; the assistant finds them by searching and calls them through call_tool.
+        {!retrievalOn && ' Applies only while the switch above is on.'}
       </p>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+      <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-3">
         {entries.map((e) => (
-          <label key={e.id} className="flex items-center gap-2 text-xs text-zinc-300">
+          <label key={e.id} className="flex items-center gap-2 text-[13px] text-zinc-300">
             <input
               type="checkbox"
               checked={e.deferred}
@@ -57,7 +56,7 @@ export function DeferralCard({ entries, retrievalOn, onChanged }: {
           </label>
         ))}
       </div>
-      {error && <p className="text-xs text-red-400 mt-1.5">{error}</p>}
+      {error && <p className="mt-1.5 text-[13px] text-red-400">{error}</p>}
     </div>
   )
 }

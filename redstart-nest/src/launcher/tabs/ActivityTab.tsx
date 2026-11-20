@@ -114,7 +114,7 @@ function TasksSection() {
   }
 
   return (
-    <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+    <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
       <div className="flex items-center justify-between mb-2">
         <SectionTitle className="">Background tasks</SectionTitle>
         <button className={btnCls.subtle} onClick={() => void load()} disabled={loading}>
@@ -233,7 +233,7 @@ export function ActivityTab() {
     <div className="flex flex-col gap-5">
       <TasksSection />
 
-      <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+      <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
         <div className="flex items-center justify-between mb-2">
           <SectionTitle className="">Decision log</SectionTitle>
           <button className={btnCls.subtle} onClick={() => void load()} disabled={loading}>
@@ -288,15 +288,16 @@ export function ActivityTab() {
         )}
       </section>
 
-      <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+      <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
         <SectionTitle>Standing grants</SectionTitle>
         <p className="text-xs text-zinc-500 mb-3">
           The tools an account runs without the approval card ("Always allow"). Deletes and memory removals can
           never be on this list. Leave the name empty to see the shared list used while login is off.
         </p>
-        <div className="flex gap-2 mb-3">
+        <div className="flex max-w-md gap-2 mb-3">
           <input
             className={inputCls.sm}
+            aria-label="Username"
             placeholder="Username"
             value={username}
             onChange={(e) => setUsername(e.target.value)}

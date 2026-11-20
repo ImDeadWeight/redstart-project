@@ -75,7 +75,7 @@ function Shell({ title, subtitle, status, children }: {
   const overlay = useWindowControlsOverlay()
 
   return (
-    <div className="flex flex-col h-screen bg-zinc-950 text-white font-mono text-sm">
+    <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100 text-sm">
       {/* The same bar App.tsx renders, not a stand-in for it. This screen used
           to cover the whole window and lay an invisible drag strip over the top
           48px, so the strip that everywhere else reads "Redstart Nest" was
@@ -91,10 +91,12 @@ function Shell({ title, subtitle, status, children }: {
           first run — so the bar keeps its shape without inventing a fact. */}
       <TopBar overlay={overlay} right={<StatusPill tone="off" label={status} />} />
       <div className="flex flex-1 items-center justify-center px-4 overflow-y-auto">
-        <div className="w-full max-w-sm py-8">
-          <p className="text-xs uppercase tracking-widest text-zinc-500 mb-1">{title}</p>
-          <p className="text-xs text-zinc-500 mb-5 leading-relaxed">{subtitle}</p>
-          {children}
+        <div className="w-full max-w-md py-8">
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-7">
+            <h1 className="text-xl font-semibold tracking-tight text-zinc-50 mb-1.5">{title}</h1>
+            <p className="text-sm text-zinc-400 mb-6 leading-relaxed">{subtitle}</p>
+            {children}
+          </div>
         </div>
       </div>
     </div>
@@ -160,7 +162,7 @@ export function AdminGate({ children }: { children: React.ReactNode }) {
   if (phase === 'ready') return <>{children}</>
 
   if (phase === 'checking') {
-    return <Shell title="Control plane" subtitle="Connecting…" status="Connecting…"><div /></Shell>
+    return <Shell title="Redstart Nest" subtitle="Connecting…" status="Connecting…"><div /></Shell>
   }
 
   async function signIn(event: React.FormEvent) {
@@ -214,45 +216,54 @@ export function AdminGate({ children }: { children: React.ReactNode }) {
 
   const fields = (
     <>
-      <input
-        value={username}
-        onChange={e => setUsername(e.target.value)}
-        placeholder="Owner username"
-        autoComplete="username"
-        className={inputCls.sm}
-      />
-      <input
-        type="password"
-        value={password}
-        onChange={e => setPassword(e.target.value)}
-        placeholder="Owner password"
-        autoComplete={phase === 'setup' ? 'new-password' : 'current-password'}
-        className={inputCls.sm}
-      />
+      <label className="flex flex-col gap-1.5 text-[13px] text-zinc-400">
+        {phase === 'setup' ? 'Choose a username' : 'Username'}
+        <input
+          value={username}
+          onChange={e => setUsername(e.target.value)}
+          placeholder="owner"
+          autoComplete="username"
+          className={inputCls.sm}
+        />
+      </label>
+      <label className="flex flex-col gap-1.5 text-[13px] text-zinc-400">
+        {phase === 'setup' ? 'Choose a password' : 'Password'}
+        <input
+          type="password"
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+          autoComplete={phase === 'setup' ? 'new-password' : 'current-password'}
+          className={inputCls.sm}
+        />
+      </label>
     </>
   )
 
   if (phase === 'setup') {
     return (
       <Shell
-        title="Set up this box"
-        subtitle="No owner account exists yet. Enter the setup code printed on this machine, then choose the credential you will sign in with."
+        title="Set up this Nest"
+        subtitle="Create the Owner account. It is the only account that can manage this panel; people who chat get their own accounts later, in the chat’s Settings."
         status="First run"
       >
-        <form onSubmit={setUp} className="space-y-2">
-          <input
-            value={token}
-            onChange={e => setToken(e.target.value.toUpperCase())}
-            placeholder="Setup code"
-            spellCheck={false}
-            className={`${inputCls.sm} tracking-widest`}
-          />
+        <form onSubmit={setUp} className="space-y-4">
+          <label className="flex flex-col gap-1.5 text-[13px] text-zinc-400">
+            Setup code
+            <input
+              value={token}
+              onChange={e => setToken(e.target.value.toUpperCase())}
+              placeholder="XXXX-XXXX-XXXX"
+              spellCheck={false}
+              autoComplete="off"
+              className={`${inputCls.sm} font-mono tracking-widest`}
+            />
+          </label>
           {fields}
-          {error && <p className="text-xs text-red-400 leading-relaxed">{error}</p>}
+          {error && <p role="alert" className="rounded-lg bg-red-950/60 px-3 py-2 text-[13px] text-red-300 leading-relaxed">{error}</p>}
           <button type="submit" disabled={busy || !token.trim() || !username.trim() || !password} className={btnCls.primaryBlock}>
             {busy ? 'Setting up…' : 'Create owner account'}
           </button>
-          <p className="text-[11px] text-zinc-600 leading-relaxed pt-1">
+          <p className="text-[13px] text-zinc-500 leading-relaxed">
             The setup code lives in Redstart Nest&rsquo;s data folder on the machine itself, in
             <span className="font-mono"> bootstrap-token.txt</span>. It is also how you recover this box if the
             owner password is ever lost.
@@ -263,10 +274,10 @@ export function AdminGate({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <Shell title="Sign in" subtitle="This is the Redstart Nest control plane. Only the owner account can sign in here." status="Signed out">
-      <form onSubmit={signIn} className="space-y-2">
+    <Shell title="Sign in to Nest" subtitle="Owner account only. Chat accounts can’t sign in here." status="Signed out">
+      <form onSubmit={signIn} className="space-y-4">
         {fields}
-        {error && <p className="text-xs text-red-400 leading-relaxed">{error}</p>}
+        {error && <p role="alert" className="rounded-lg bg-red-950/60 px-3 py-2 text-[13px] text-red-300 leading-relaxed">{error}</p>}
         <button type="submit" disabled={busy || !username.trim() || !password} className={btnCls.primaryBlock}>
           {busy ? 'Signing in…' : 'Sign in'}
         </button>

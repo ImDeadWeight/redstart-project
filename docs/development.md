@@ -8,7 +8,8 @@ Repository layout, dev loops, and how to build the binaries and installers.
 
 ## Prerequisites
 
-- [Node.js](https://nodejs.org/) 22+ (the chat-ui's `@capacitor/cli` requires Node ≥ 22)
+- [Node.js](https://nodejs.org/) 22+ (the chat-ui's `@capacitor/cli` requires Node ≥ 22). The daemon itself runs on a pinned Node 26 that `tooling/stage-node.mjs` downloads, so the Node on your `PATH` only runs the build tools
+- A [Rust](https://rustup.rs/) toolchain (stable) for either desktop shell, Nest's or Twig's
 - [Android Studio](https://developer.android.com/studio) (for Android builds only)
 - [Java 17+](https://adoptium.net/) (for Android builds only)
 
@@ -38,11 +39,15 @@ redstart-project/
 │       └── SMOKE.md       # Manual checklist for what the suites cannot reach
 ├── shared/                # Modules more than one app imports
 │   ├── agent-core/        # the agent loop (chat-ui, the bench, the daemon)
+│   ├── command-exec.mjs   # running a child program with no shell, for both apps
 │   ├── mcp-stdio-process.mjs   # stdio MCP child-process supervisor
 │   ├── shell-pipe.mjs     # the JSON-lines pipe between a Tauri shell and its Node half
 │   └── update-feed.mjs    # which GitHub release is an app's update
 ├── tooling/               # Build tools both apps run: icons + mascot, Node staging,
 │                          # Rust licence lists, update manifests
+├── infra/                 # Things Redstart runs or builds outside the apps
+│   ├── caddy-dns-duckdns/ # Redstart's own DuckDNS module for the bundled Caddy (Go)
+│   └── name-service/      # the Automatic HTTPS name service (a Cloudflare Worker)
 ├── deps/node/             # (gitignored) the pinned Node 26, staged by tooling/stage-node.mjs
 ├── deploy/                # Service units, SCM procedure and Caddyfile for appliance installs
 └── docs/                  # This documentation, plus contracts and specs
@@ -69,7 +74,7 @@ signing key, one version, the installer layout); they may not import its
 code. `redstart-nest/scripts/test-boundaries.mjs` enforces the table in
 `test:security` and CI; its header says exactly what it scans.
 
-**Two frontend frameworks, two jobs.** React owns the launcher — the surface that starts and stops the model, configures capabilities and manages accounts. SvelteKit owns the chat UI, served on the data plane and shared by every client (browser, Twig Windows, Twig Android, Blueprints). They share no state, no routing and no auth code, and neither imports from the other.
+**Two frontend frameworks, two jobs.** React owns the launcher — the surface that starts and stops the model, configures capabilities and manages accounts. SvelteKit owns the chat UI, served on the data plane and shared by every client (browser, Twig desktop, Twig Android, Blueprints). They share no state, no routing and no auth code, and neither imports from the other.
 
 **The launcher talks HTTP, not IPC.** The launcher has to be servable to a browser, so it reaches the daemon only over HTTP: `src/launcher/api/http.ts` implements the `RedstartAPI` surface against `POST /admin/api/<namespace>/<method>` on the control plane, and the desktop window and a browser on another machine are the same client over the same transport. The one exception is window chrome: inside the Tauri shell the page's own minimise/maximise/close call Tauri's window API, which `shell/capabilities/window-controls.json` allows for the admin origin only. `scripts/test-admin-api.mjs` holds the two halves together: every method the type declares must have a route, and every route must be gated.
 
@@ -183,9 +188,9 @@ Every suite in `test:security` must also appear as a step in `.github/workflows/
 
 ---
 
-## Redstart Twig Windows (dev mode)
+## Redstart Twig desktop (dev mode)
 
-The Windows client has no dev server — it just loads the built chat-ui. Build the chat-ui first, then:
+The desktop client has no dev server — it just loads the built chat-ui. Build the chat-ui first, then:
 
 ```bash
 cd chat-ui
@@ -223,7 +228,7 @@ Redstart Nest does **not** commit the inference binary or its runtime DLLs — t
 
 ### 1. Build the TurboQuant `llama-server`
 
-Clone [TurboQuant](https://github.com/TheTom/llama-cpp-turboquant) **into `redstart-nest/llama-cpp-turboquant/`** (that exact path — it's where both the dev binary lookup and `electron-builder` expect it) and build it there:
+Clone [TurboQuant](https://github.com/TheTom/llama-cpp-turboquant) **into `redstart-nest/llama-cpp-turboquant/`** (that exact path — it's where both the dev binary lookup and `stage-shell-bundle.mjs` expect it) and build it there:
 
 ```bash
 cd redstart-nest
@@ -276,7 +281,8 @@ npm run build
 - the chat-ui and launcher builds;
 - the npm and Rust licence lists;
 - `tooling/stage-node.mjs` (the pinned Node 26, into the repo root's `deps/node/`);
-- `stage-shell-bundle.mjs`, which assembles `shell/bundle/resources/`: Node, the daemon with its production `node_modules`, `shared/`, the chat-ui, `bin/` and `elevate.exe`;
+- `scripts/fetch-caddy.mjs` (the pinned Caddy build that serves HTTPS, checked by SHA-256, into `redstart-nest/deps/caddy/`; it is built by [`.github/workflows/caddy.yml`](../.github/workflows/caddy.yml) with Redstart's DNS modules);
+- `stage-shell-bundle.mjs`, which assembles `shell/bundle/resources/`: Node, the daemon with its production `node_modules`, `shared/`, the chat-ui, `bin/`, Caddy and `elevate.exe`;
 - `tauri build`.
 
 Output: `shell/target/release/bundle/nsis/Redstart Nest_<version>_x64-setup.exe` and its `.sig`. The release workflow renames it to `Redstart-Nest-Setup-<version>.exe` and writes the update manifests (`tooling/make-shell-manifests.mjs`).
@@ -290,7 +296,7 @@ On a Mac, `npm run build` produces `shell/target/release/bundle/dmg/*.dmg`
 and the updater's `.app.tar.gz`, ad-hoc signed. Nest is Apple Silicon only,
 because the only prebuilt Metal binary is arm64.
 
-### Redstart Twig Windows
+### Redstart Twig desktop
 
 ```bash
 cd redstart-twig/desktop

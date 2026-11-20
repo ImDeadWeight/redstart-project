@@ -7,9 +7,11 @@
 // before this ever renders). All calls go through the RedstartAPI
 // implementation installed by AdminGate (see api/redstart.ts).
 //
-// App itself is just the shell: layout, tab switching, and wiring the domain
-// hooks (src/launcher/hooks/) into the panel/tab components (src/launcher/panels/, src/launcher/tabs/).
-// Each hook owns one slice of state and its IPC calls; each component owns
+// App itself is just the shell: the title bar (status, profile, chat address,
+// Start/Stop), the section list, and wiring the domain hooks
+// (src/launcher/hooks/) into the six sections (src/launcher/sections/), which
+// in turn reuse the panels and tabs in src/launcher/panels/ and tabs/.
+// Each hook owns one slice of state and its API calls; each component owns
 // its own markup. Shared visual primitives live in components/ui.tsx.
 // =============================================================================
 
@@ -25,7 +27,7 @@ import { useTls } from './hooks/useTls'
 import { useUpdateSettings } from './hooks/useUpdateSettings'
 import { useShutdown } from './hooks/useShutdown'
 import { useWindowControlsOverlay } from './hooks/useWindowControlsOverlay'
-import { TopBar, StatusPill } from './components/ui'
+import { TopBar, StatusPill, ConfirmDialog, btnCls } from './components/ui'
 import { useExternalMcp } from './hooks/useExternalMcp'
 import { useToolsCatalog } from './hooks/useToolsCatalog'
 import { useCapabilities } from './hooks/useCapabilities'
@@ -34,20 +36,22 @@ import { useHardwareAndBinary } from './hooks/useHardwareAndBinary'
 import { useModelCatalog } from './hooks/useModelCatalog'
 import { useProfiles } from './hooks/useProfiles'
 import { useServerLifecycle } from './hooks/useServerLifecycle'
-import { ConfigTab } from './tabs/ConfigTab'
-import { ToolsTab } from './tabs/ToolsTab'
-import { PluginsTab } from './tabs/PluginsTab'
-import { ModelsTab } from './tabs/ModelsTab'
-import { ServerTab, healthDisplay } from './tabs/ServerTab'
-import { ActivityTab } from './tabs/ActivityTab'
-import { LaunchControls } from './components/LaunchControls'
+import { Sidebar, type SectionId } from './sections/Sidebar'
+import { OverviewSection } from './sections/OverviewSection'
+import { ModelSection } from './sections/ModelSection'
+import { ToolsSection } from './sections/ToolsSection'
+import { NetworkSection } from './sections/NetworkSection'
+import { ActivitySection } from './sections/ActivitySection'
+import { TerminalSection } from './sections/TerminalSection'
+import { SystemSection } from './sections/SystemSection'
+import { addressesFor, localAddress, CopyButton } from './sections/connect'
 
 export default function App() {
   const [config, setConfig] = useState<LlamaConfig>(DEFAULT_CONFIG)
   const [generatedCommand, setGeneratedCommand] = useState('')
   const [networkMode, setNetworkMode] = useState(true)
   const [localIp, setLocalIp] = useState('')
-  const [activeTab, setActiveTab] = useState<'config' | 'models' | 'tools' | 'plugins' | 'activity' | 'server'>('config')
+  const [section, setSection] = useState<SectionId>('overview')
 
   const { statusMsg, show: showStatus, clear: clearStatus } = useStatusMessage()
 
@@ -74,7 +78,8 @@ export default function App() {
   const profilesHook = useProfiles(config, setConfig, showStatus)
   const server = useServerLifecycle({
     config, showStatus, clearStatus,
-    onLaunchStarted: () => setActiveTab('server'),
+    // Launch output is the first place to look if a start goes wrong.
+    onLaunchStarted: () => setSection('terminal'),
     selectedProfile: profilesHook.selectedProfile,
   })
   const toolsCatalog = useToolsCatalog(config, setConfig, server.syncToolsIfLive)
@@ -104,131 +109,151 @@ export default function App() {
 
   // --- Derived state ---
 
-  const { serverState, health, tokensPerMin } = server
+  const { serverState, health } = server
   const isRunning = serverState === 'running'
   const isStopping = serverState === 'stopping'
   const isStarting = serverState === 'starting'
-  const { label: healthLabel } = healthDisplay(health)
+  const modelName = config.modelPath ? (config.modelPath.split(/[\\/]/).pop() || config.modelPath) : ''
+  const addresses = addressesFor(tls, localIp, config.port, networkMode)
+  const chatAddress = addresses[0]?.url ?? localAddress(config.port)
+  const { profiles, selectedProfile, selectProfile } = profilesHook
+
+  async function switchProfile(name: string) {
+    if (!name) return
+    await selectProfile(name)
+    showStatus(isRunning
+      ? `Loaded "${name}". The model keeps its current settings until you stop and start it again.`
+      : `Loaded "${name}". It takes effect when you press Start.`, 6000)
+  }
 
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="flex flex-col h-screen bg-zinc-950 text-white font-mono text-sm overflow-hidden">
+    <div className="flex h-screen flex-col overflow-hidden bg-zinc-950 text-sm text-zinc-100">
 
-      {/* Also the window's title bar in Electron — see TopBar in
+      {/* Also the window's title bar in the desktop shell — see TopBar in
           components/ui.tsx, which the sign-in screen shares so the bar does not
-          appear only after signing in. */}
+          change shape at the moment someone signs in. */}
       <TopBar
         overlay={overlay}
         right={<>
-          <StatusPill
-            tone={isRunning ? 'on' : isStopping || isStarting ? 'pending' : 'off'}
-            label={serverState === 'running' ? healthLabel : serverState === 'stopping' ? 'Stopping…' : serverState === 'starting' ? 'Starting…' : 'Stopped'}
-          />
-          {isRunning && (
-            <div className="text-xs text-zinc-400">
-              <span className="text-orange-400 font-semibold">{tokensPerMin.toLocaleString()}</span> tok/min
-            </div>
-          )}
-        </>}
-      />
-
-      <div className="flex flex-1 overflow-hidden">
-
-        {/* ── Main content ──
-            No sidebar (retired 2026-09-02): with only Profiles, Server
-            Binary, Model, and Accounts living there, a fixed 256px rail was
-            more chrome than content. Each moved to the tab that already
-            governs the setting: Profiles + Server Binary into Configuration
-            (profile at the top, since it's what everything below describes),
-            Model selection + hardware scan into Models, and the two Accounts
-            toggles into Configuration's Network card, which already showed
-            the control-plane exposure warning they govern. */}
-        <main className="flex-1 flex flex-col overflow-y-auto px-5 pb-5 gap-5">
-
-          {/* ── Tab bar (browser-style) ──
-              No top padding on <main> above — the tab bar is the first child
-              and owns its own pt-5, so it sits flush at the scrollport's true
-              top edge. Combining `sticky top-0` with a negative top margin
-              (the previous approach) shifts the stuck offset itself, which is
-              why lower content bled through above it when scrolled. */}
-          <div className="flex items-end gap-1 border-b border-zinc-800 -mx-5 px-5 pt-5 sticky top-0 bg-zinc-950 z-20">
-            {([
-              ['config', 'Configuration'],
-              ['models', 'Models'],
-              ['plugins', 'Plugins'],
-              ['tools', 'Tools'],
-              ['activity', 'Activity'],
-              ['server', 'Server'],
-            ] as const).map(([id, label]) => (
-              <button
-                key={id}
-                onClick={() => setActiveTab(id)}
-                className={`px-4 py-2 rounded-t-lg text-sm border border-b-0 transition-colors flex items-center gap-2 ${
-                  activeTab === id
-                    ? 'bg-zinc-900 border-zinc-800 text-white'
-                    : 'bg-transparent border-transparent text-zinc-500 hover:text-zinc-300'
-                }`}>
-                {label}
-                {id === 'server' && serverState !== 'stopped' && (
-                  <span className={`w-1.5 h-1.5 rounded-full ${serverState === 'running' ? 'bg-green-400' : 'bg-amber-400 animate-pulse'}`} />
-                )}
-              </button>
-            ))}
+          <div className="hidden items-center gap-2 xl:flex">
+            <span className="text-[13px] text-zinc-400">Chat address</span>
+            <code className="max-w-[18rem] truncate rounded-md border border-zinc-800 bg-zinc-950/60 px-2 py-1 text-[12.5px] text-zinc-200">{chatAddress}</code>
+            <CopyButton text={chatAddress} tip="Copy the chat address" />
           </div>
-
-          {activeTab === 'config' && (
-            <ConfigTab
-              config={config}
-              setConfig={setConfig}
-              networkMode={networkMode}
-              onToggleNetworkMode={() => setNetworkMode(v => !v)}
-              localIp={localIp}
-              generatedCommand={generatedCommand}
-              onGenerateCommand={generateCommand}
-              profilesHook={profilesHook}
-              hw={hw}
-              auth={auth}
-              controlPlaneExposure={controlPlaneExposure}
-              startup={startup}
-              tls={tls}
-              updates={updates}
-              shutdown={shutdown}
-            />
+          {serverState === 'stopped' && (
+            <button type="button" onClick={server.launchServer} disabled={!config.modelPath}
+              data-tip={config.modelPath ? 'Load the model so people can chat' : 'Choose a model first'} data-tip-end=""
+              className={`${btnCls.primary} px-5`}>Start</button>
           )}
-
-          {activeTab === 'models' && (
-            <ModelsTab
-              catalog={modelCatalog}
-              hw={hw}
-              modelPath={config.modelPath}
-              onGenerateDefaultProfiles={() => profilesHook.generateDefaultProfiles(hw.hardware)}
-            />
+          {isStarting && <button type="button" disabled className={`${btnCls.secondary} px-4`}>Starting…</button>}
+          {isRunning && (
+            <button type="button" onClick={server.requestStopServer} data-tip="Stop the model for everyone" data-tip-end=""
+              className={`${btnCls.secondary} px-5 font-semibold`}>Stop</button>
           )}
-
-          {activeTab === 'plugins' && (
-            <PluginsTab plugins={plugins} />
+          {isStopping && <button type="button" disabled className={`${btnCls.secondary} px-4`}>Stopping…</button>}
+        </>}
+      >
+        <StatusPill
+          tone={isRunning ? 'on' : isStopping || isStarting ? 'pending' : 'off'}
+          label={isRunning ? (health === 'no slot available' ? 'Busy' : health === 'unreachable' ? 'Not responding' : 'Running') : isStopping ? 'Stopping…' : isStarting ? 'Starting…' : 'Stopped'}
+          detail={isRunning || isStarting ? modelName : undefined}
+          tip={isRunning ? `Serving ${modelName}${health === 'no slot available' ? ', busy answering' : ''}` : config.modelPath ? 'Press Start to load the model' : 'No model chosen yet'}
+        />
+        <label className="hidden items-center gap-2 text-[13px] text-zinc-400 lg:flex">
+          Profile
+          {profiles.length > 0 ? (
+            <select value={selectedProfile} onChange={e => switchProfile(e.target.value)}
+              className="min-w-[10rem] max-w-[14rem] rounded-lg border border-zinc-800 bg-zinc-950/60 px-2.5 py-1 text-[13px] text-zinc-100 hover:border-zinc-600 focus:border-orange-500 focus:outline-none">
+              <option value="">Choose a profile…</option>
+              {profiles.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+          ) : (
+            <button type="button" onClick={() => setSection('system')} data-tip="Save your settings as a profile on the System page"
+              className="rounded-lg border border-dashed border-zinc-700 px-2.5 py-1 text-[13px] text-zinc-400 hover:border-zinc-500">No profiles yet</button>
           )}
+        </label>
+      </TopBar>
 
-          {activeTab === 'tools' && (
-            <ToolsTab config={config} toolsCatalog={toolsCatalog} caps={caps} mcp={mcp} plugins={plugins} />
-          )}
+      {statusMsg && (
+        <div role="status" className="flex shrink-0 items-center gap-3 border-b border-zinc-800 bg-[#14211a] px-5 py-2 text-sm text-green-100">
+          <span className="min-w-0 flex-1">{statusMsg}</span>
+          <button type="button" onClick={clearStatus} aria-label="Dismiss" data-tip="Dismiss" data-tip-end=""
+            className="rounded-md px-2 text-lg leading-none text-green-200/70 hover:text-green-50">×</button>
+        </div>
+      )}
 
-          {activeTab === 'activity' && <ActivityTab />}
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        <Sidebar
+          active={section}
+          onSelect={setSection}
+          badges={{
+            overview: updates.update?.state === 'ready' ? 'warn' : undefined,
+            terminal: isRunning ? 'live' : undefined,
+          }}
+        />
 
-          {/* Status message */}
-          {statusMsg && (
-            <div className="text-xs text-center text-zinc-400 px-4">{statusMsg}</div>
-          )}
-
-          <LaunchControls server={server} modelPath={config.modelPath} />
-
-          {activeTab === 'server' && <ServerTab server={server} />}
-
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+          <div className={`mx-auto max-w-5xl px-4 pt-6 sm:px-8 sm:pt-8 ${section === 'terminal' ? 'flex h-full flex-col pb-6' : 'pb-12'}`}>
+            {section === 'overview' && (
+              <OverviewSection
+                config={config}
+                modelChosen={!!config.modelPath}
+                binaryFound={!!hw.binaryPath}
+                networkMode={networkMode}
+                authRequired={auth.authRequired}
+                tls={tls}
+                addresses={addresses}
+                updates={updates}
+                onNavigate={setSection}
+              />
+            )}
+            {section === 'model' && (
+              <ModelSection
+                config={config}
+                setConfig={setConfig}
+                networkMode={networkMode}
+                hw={hw}
+                catalog={modelCatalog}
+                isRunning={isRunning}
+                generatedCommand={generatedCommand}
+                onGenerateCommand={generateCommand}
+              />
+            )}
+            {section === 'tools' && (
+              <ToolsSection config={config} toolsCatalog={toolsCatalog} caps={caps} mcp={mcp} plugins={plugins} />
+            )}
+            {section === 'network' && (
+              <NetworkSection
+                networkMode={networkMode}
+                onSetNetworkMode={setNetworkMode}
+                localIp={localIp}
+                port={config.port}
+                auth={auth}
+                controlPlaneExposure={controlPlaneExposure}
+                tls={tls}
+              />
+            )}
+            {section === 'activity' && <ActivitySection />}
+            {section === 'terminal' && <TerminalSection server={server} />}
+            {section === 'system' && (
+              <SystemSection profilesHook={profilesHook} hw={hw} startup={startup} shutdown={shutdown} />
+            )}
+          </div>
         </main>
       </div>
+
+      <ConfirmDialog
+        open={isRunning && server.confirmStop}
+        title="Stop the model for everyone?"
+        confirmLabel="Stop the model"
+        onConfirm={server.confirmStopServer}
+        onCancel={() => server.setConfirmStop(false)}>
+        <p>Anyone chatting loses the reply being written now, and nobody can chat until the model starts again.</p>
+      </ConfirmDialog>
     </div>
   )
 }

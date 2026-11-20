@@ -57,7 +57,7 @@ The primary target is **small businesses and organizations** that want an intern
 
 **Developers** are the other group this already serves well today: an AI coding assistant that can work against a local development environment without giving a third-party service unrestricted access to it.
 
-**On consumer use.** The same properties that make Redstart useful to a small office should make it useful in a home — a household running an assistant on its own hardware, where a parent decides which models are available, who can sign in, and which tools and external resources are reachable. That direction matters because it is the clearest test of whether this is genuinely usable by non-specialists rather than only by people who enjoy configuring servers. Today Nest supports accounts and per-account file isolation, but tool and capability grants are still server-wide rather than per-account, so the fine-grained version of that story is intent and direction, not a shipped feature. See the [roadmap](roadmap.md#known-limitations).
+**On consumer use.** The same properties that make Redstart useful to a small office should make it useful in a home — a household running an assistant on its own hardware, where a parent decides which models are available, who can sign in, and which tools and external resources are reachable. That direction matters because it is the clearest test of whether this is genuinely usable by non-specialists rather than only by people who enjoy configuring servers. Much of that exists today: accounts with per-account file isolation, roles that withhold capabilities and web sources from an account, folder grants that narrow a shared folder, and approvals before anything is changed or deleted. What it still asks for is someone comfortable in an admin panel, which is why guided onboarding is on the [roadmap](roadmap.md).
 
 ---
 
@@ -65,7 +65,7 @@ The primary target is **small businesses and organizations** that want an intern
 
 Redstart is designed around local inference and administrator-controlled access, not the assumption that nothing can ever communicate outside the machine.
 
-Inference runs on your hardware, so the default path for a conversation is that nothing is transmitted anywhere — no third party, no terms-of-service clause to parse. What leaves the building is exactly what an administrator turns on: approved web sources, academic search, or an external tool server. Each is an explicit, auditable choice rather than a condition of using the software.
+Inference runs on your hardware, so the default path for a conversation is that nothing is transmitted anywhere — no third party, no terms-of-service clause to parse. What leaves the building is exactly what an administrator turns on: approved web sources, a general web search engine, academic search, an external tool server, or a plugin holding a credential. Each is an explicit, auditable choice rather than a condition of using the software.
 
 That means the operator decides which models are available, which applications and users can connect, which tools and MCP servers can be used, which resources those tools can reach, and whether external connections are permitted at all.
 
