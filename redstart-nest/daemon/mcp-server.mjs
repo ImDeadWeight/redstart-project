@@ -36,6 +36,7 @@ import * as memoryTool from './memory-tool.mjs'
 import * as documentSearchTool from './document-search-tool.mjs'
 import * as skillsTool from './skills-tool.mjs'
 import { getConversation } from './conversations-storage.mjs'
+import { canWrite, getProject, isProjectId } from './projects-storage.mjs'
 import { isWellFormedConversationId } from './conversation-workspace.mjs'
 import * as searchToolsProvider from './search-tools-provider.mjs'
 import * as interactionTools from './interaction-tools.mjs'
@@ -292,6 +293,26 @@ export function verifiedConversationId(account, claimed) {
   return getConversation(account.id, claimed) ? claimed : null
 }
 
+// ---------------------------------------------------------------------------
+// The project a tool call belongs to, for a client with no Nest conversation.
+//
+// Yellowscript keeps its chats in the editor, so it cannot name a stored
+// conversation; it sends the workspace's linked project as
+// params._meta['redstart/projectId'] instead. Like the conversation id it is
+// a CLAIM: it must be a project this account may write, or it resolves to
+// none. A forged id resolves inside the caller's own scope (getProject never
+// returns another account's project). Tools take the conversation's project
+// first (projects-storage projectForCall).
+// ---------------------------------------------------------------------------
+export const META_PROJECT_KEY = 'redstart/projectId'
+
+export function verifiedProjectId(account, claimed) {
+  if (!isProjectId(claimed)) return null
+  if (!account && getAuthRequired()) return null
+  const project = getProject(account, claimed)
+  return project && canWrite(project, account) ? project.id : null
+}
+
 let mcpServer = null
 let activeToolsConfig = null   // { webFetch: {...}, postgres: {...}, documents: {...} }
 
@@ -349,12 +370,12 @@ export function toolCatalogFor(account, { hostTools = [], toolTextArm = null } =
  * @param {any} account null only with auth off
  * @param {string} toolName
  * @param {any} args
- * @param {{ conversationId?: string, approvalId?: string, session?: object, enforceApproval?: boolean }} [opts]
- *   conversationId is a claim, verified against the account here.
+ * @param {{ conversationId?: string, projectId?: string, approvalId?: string, session?: object, enforceApproval?: boolean }} [opts]
+ *   conversationId and projectId are claims, verified against the account here.
  *   enforceApproval is set by call_tool's dispatcher only (U-S6), never from
  *   anything a client sends.
  */
-export async function callToolAs(account, toolName, args, { conversationId, approvalId, session, enforceApproval = false } = {}) {
+export async function callToolAs(account, toolName, args, { conversationId, projectId, approvalId, session, enforceApproval = false } = {}) {
   const cfg = configFor(account)
   const ctx = { account, session }
 
@@ -387,7 +408,7 @@ export async function callToolAs(account, toolName, args, { conversationId, appr
   // approvalId rides along for call_tool alone (search-tools-provider
   // proxyCall), which hands it to the inner call's gate. A provider that is
   // not a dispatcher never reads it.
-  const callCtx = { ...ctx, conversationId: verifiedConversationId(account, conversationId), approvalId }
+  const callCtx = { ...ctx, conversationId: verifiedConversationId(account, conversationId), projectId: verifiedProjectId(account, projectId), approvalId }
 
   const startedAt = Date.now()
   for (const provider of resolveProviders()) {
@@ -480,6 +501,7 @@ async function handleRpc(msg, send, ctx = { account: null }) {
     const toolName = params?.name
     const result = await callToolAs(ctx.account, toolName, params?.arguments ?? {}, {
       conversationId: params?._meta?.[META_CONVERSATION_KEY],
+      projectId: params?._meta?.[META_PROJECT_KEY],
       approvalId: params?._meta?.[APPROVAL_ID_META_KEY],
       session: ctx.session,
     })

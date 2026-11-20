@@ -32,7 +32,7 @@ import { embedTexts, embedServerStatus } from './embed-server.mjs'
 import { fileLink } from './tool-result-links.mjs'
 import { configDir } from './platform-paths.mjs'
 import { logEvent } from './logger.mjs'
-import { projectForConversation, projectFolder } from './projects-storage.mjs'
+import { projectForCall, projectFolder } from './projects-storage.mjs'
 
 export const TOOL_NAME = 'search_documents'
 const SNIPPET_CHARS = 900
@@ -168,11 +168,12 @@ export async function callTool(name, args, cfg, ctx) {
     if (Array.isArray(v) && v[0]) queryVector = v[0]
   }
   // A project chat searches the project's files first (projects-plan D14).
-  // The project comes from the VERIFIED conversation, never an argument; the
+  // The project comes from the VERIFIED conversation (or a client's verified
+  // project, for one with no Nest conversation), never an argument; the
   // model can only widen back to everything with scope "all". When the
   // project's files have nothing, the whole folder is searched and the
   // answer says so, so "nothing found" is never claimed too early.
-  const project = projectForConversation(ctx?.account ?? null, ctx?.conversationId ?? null)
+  const project = projectForCall(ctx?.account ?? null, ctx)
   const pathPrefix = project && args?.scope !== 'all' ? projectFolder(project) : null
   // A project search stays in the project's own files; "all" and the
   // fallback also take the shared folder.
