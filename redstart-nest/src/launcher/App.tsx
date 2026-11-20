@@ -42,7 +42,8 @@ import { OverviewSection } from './sections/OverviewSection'
 import { ModelSection } from './sections/ModelSection'
 import { ToolsSection } from './sections/ToolsSection'
 import { NetworkSection } from './sections/NetworkSection'
-import { ActivitySection, type ActivityView } from './sections/ActivitySection'
+import { ActivitySection } from './sections/ActivitySection'
+import { TerminalSection } from './sections/TerminalSection'
 import { SystemSection } from './sections/SystemSection'
 import { addressesFor, localAddress, CopyButton } from './sections/connect'
 
@@ -52,7 +53,6 @@ export default function App() {
   const [networkMode, setNetworkMode] = useState(true)
   const [localIp, setLocalIp] = useState('')
   const [section, setSection] = useState<SectionId>('overview')
-  const [activityView, setActivityView] = useState<ActivityView>('activity')
 
   const { statusMsg, show: showStatus, clear: clearStatus } = useStatusMessage()
 
@@ -80,7 +80,7 @@ export default function App() {
   const server = useServerLifecycle({
     config, showStatus, clearStatus,
     // Launch output is the first place to look if a start goes wrong.
-    onLaunchStarted: () => { setSection('activity'); setActivityView('log') },
+    onLaunchStarted: () => setSection('terminal'),
     selectedProfile: profilesHook.selectedProfile,
   })
   const toolsCatalog = useToolsCatalog(config, setConfig, server.syncToolsIfLive)
@@ -194,12 +194,12 @@ export default function App() {
           onSelect={setSection}
           badges={{
             overview: updates.update?.state === 'ready' ? 'warn' : undefined,
-            activity: isRunning ? 'live' : undefined,
+            terminal: isRunning ? 'live' : undefined,
           }}
         />
 
         <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-5xl px-4 pb-12 pt-6 sm:px-8 sm:pt-8">
+          <div className={`mx-auto max-w-5xl px-4 pt-6 sm:px-8 sm:pt-8 ${section === 'terminal' ? 'flex h-full flex-col pb-6' : 'pb-12'}`}>
             {section === 'overview' && (
               <OverviewSection
                 config={config}
@@ -239,7 +239,8 @@ export default function App() {
                 tls={tls}
               />
             )}
-            {section === 'activity' && <ActivitySection server={server} view={activityView} onView={setActivityView} />}
+            {section === 'activity' && <ActivitySection />}
+            {section === 'terminal' && <TerminalSection server={server} />}
             {section === 'system' && (
               <SystemSection profilesHook={profilesHook} hw={hw} startup={startup} shutdown={shutdown} />
             )}

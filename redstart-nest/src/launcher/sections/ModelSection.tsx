@@ -41,9 +41,9 @@ const KV_HELP: Record<NonNullable<LlamaConfig['kvCache']>, string> = {
   aggressive: 'Holds the most. Best for mixture-of-experts models such as Qwen3.6; check the answers on your model.',
 }
 
-function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
+function Field({ label, children, hint, className = '' }: { label: string; children: React.ReactNode; hint?: string; className?: string }) {
   return (
-    <label className="flex flex-col gap-1.5 text-[13px] text-zinc-400">
+    <label className={`flex flex-col gap-1.5 text-[13px] text-zinc-400 ${className}`}>
       {label}
       {children}
       {hint && <span className="text-zinc-500">{hint}</span>}
@@ -181,7 +181,7 @@ export function ModelSection({
       {/* ── How it runs ── */}
       <Card>
         <SectionTitle className="mb-4">How it runs</SectionTitle>
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid max-w-3xl gap-4 md:grid-cols-2">
           <Field label="Memory for each conversation" hint="Longer lets it read bigger documents and use more tools, and uses more GPU memory.">
             <select value={config.ctxSize} onChange={e => set('ctxSize', parseInt(e.target.value) || config.ctxSize)} className={inputCls.sm}>
               {!ctxIsPreset && <option value={config.ctxSize}>Custom ({config.ctxSize.toLocaleString()} tokens)</option>}
@@ -211,50 +211,50 @@ export function ModelSection({
             <span className="font-normal text-zinc-500">— for people who know llama.cpp</span>
           </button>
           {advanced && (
-            <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <Field label="Context size (tokens)">
+            <div className="mt-4 flex flex-wrap items-start gap-x-5 gap-y-4">
+              <Field label="Context size (tokens)" className="w-36">
                 <input type="number" value={config.ctxSize} onChange={e => set('ctxSize', parseInt(e.target.value) || 0)} className={`${inputCls.sm} font-mono`} />
               </Field>
-              <Field label="Batch size">
+              <Field label="Batch size" className="w-28">
                 <input type="number" value={config.batchSize} onChange={e => set('batchSize', parseInt(e.target.value) || 0)} className={`${inputCls.sm} font-mono`} />
               </Field>
-              <Field label="Threads">
+              <Field label="Threads" className="w-24">
                 <input type="number" value={config.threads} onChange={e => set('threads', parseInt(e.target.value) || 0)} className={`${inputCls.sm} font-mono`} />
               </Field>
-              <Field label="GPU layers" hint="Blank lets llama-server decide (recommended).">
+              <Field label="GPU layers" hint="Blank lets llama-server decide." className="w-44">
                 <input type="number" value={config.gpuLayers ?? ''} placeholder="Automatic"
                   onChange={e => { const v = parseInt(e.target.value); set('gpuLayers', isNaN(v) || v < 0 ? undefined : v) }}
                   className={`${inputCls.sm} font-mono`} />
               </Field>
-              <Field label="Experts on the CPU (N-CPU-MoE)" hint="Mixture-of-experts models only. Blank is automatic.">
+              <Field label="Experts on the CPU (N-CPU-MoE)" hint="MoE models only. Blank is automatic." className="w-60">
                 <input type="number" value={config.nCpuMoe ?? ''} placeholder="Automatic"
                   onChange={e => { const v = parseInt(e.target.value); set('nCpuMoe', isNaN(v) || v < 0 ? undefined : v) }}
                   className={`${inputCls.sm} font-mono`} />
               </Field>
-              <Field label="Process priority">
+              <Field label="Process priority" className="w-36">
                 <select value={config.priority ?? 'normal'} onChange={e => set('priority', e.target.value === 'high' ? 'high' : undefined)} className={inputCls.sm}>
                   <option value="normal">Normal</option>
                   <option value="high">High</option>
                 </select>
               </Field>
-              <Field label="Port" hint="The chat address uses this port; the next two are used internally.">
+              <Field label="Port" hint="The next two are used internally." className="w-56">
                 <input type="number" value={config.port} onChange={e => set('port', parseInt(e.target.value) || 0)} className={`${inputCls.sm} font-mono`} />
               </Field>
-              <Field label="Host" hint={networkMode ? 'Set by "Everyone on my network".' : undefined}>
+              <Field label="Host" hint={networkMode ? 'Set by "Everyone on my network".' : undefined} className="w-56">
                 <input type="text" value={networkMode ? '0.0.0.0' : config.host} readOnly={networkMode}
                   onChange={e => set('host', e.target.value)} className={`${inputCls.sm} font-mono read-only:opacity-60`} />
               </Field>
-              <label className="flex items-center gap-2.5 self-end pb-2 text-sm text-zinc-200">
+              <label className="flex items-center gap-2.5 self-center pt-5 text-sm text-zinc-200">
                 <input type="checkbox" checked={!!config.noMmap} onChange={e => set('noMmap', e.target.checked)} className="h-4 w-4" />
                 Disable memory-mapping (--no-mmap)
               </label>
-              <div className="sm:col-span-2 lg:col-span-3">
+              <div className="w-full max-w-2xl">
                 <Field label="Extra llama-server flags">
                   <input type="text" value={config.additionalArgs ?? ''} placeholder="e.g. --flash-attn on"
                     onChange={e => set('additionalArgs', e.target.value)} className={`${inputCls.sm} font-mono`} />
                 </Field>
               </div>
-              <div className="sm:col-span-2 lg:col-span-3">
+              <div className="w-full">
                 <div className="mb-1.5 flex items-center justify-between gap-3">
                   <span className="text-[13px] text-zinc-400">The command Nest will run</span>
                   <button type="button" onClick={onGenerateCommand} className={btnCls.chip}>{generatedCommand ? 'Refresh' : 'Show'}</button>

@@ -116,7 +116,7 @@ export function SecureAddressSection({ tls, networkMode }: { tls: ReturnType<typ
 
           {radio('own', 'My own name')}
           {draft.mode === 'own' && (
-            <div className="ml-6 space-y-2">
+            <div className="ml-6 max-w-2xl space-y-2">
               <div className="flex flex-wrap gap-2">
                 <select
                   value={draft.provider}

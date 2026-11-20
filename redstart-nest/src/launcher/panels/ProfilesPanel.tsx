@@ -39,7 +39,7 @@ export function ProfilesPanel({ profilesHook, hardware }: {
 
       {showSaveInput && (
         <div className="flex flex-wrap items-end gap-2 border-t border-zinc-800 py-3">
-          <label className="flex min-w-[14rem] flex-1 flex-col gap-1.5 text-[13px] text-zinc-400">
+          <label className="flex w-72 max-w-full flex-col gap-1.5 text-[13px] text-zinc-400">
             Profile name
             <input
               autoFocus

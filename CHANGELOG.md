@@ -14,7 +14,9 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
   - **Deliberately kept**: model sizes stay facts beside the machine's VRAM and RAM, not a "fits your GPU" verdict (the reasoning is in `ModelSection.tsx`), and a profile still never changes who can connect.
   - **Small fixes on the way**: the file picker no longer pre-fills a folder's name as the file name when it starts in the models folder; profiles can be deleted (the API always could); a model file's delete now asks first.
   - Docs now name the new places (Network & access, Overview → Updates, Tools → Plugins).
-  - Not yet: the Tools view is the existing card list restyled, not the mockup's compact list with a detail panel.
+  - **Tools is a compact list.** One row per tool: name, one line on what it does, a status chip (On, Off, Needs a folder, Needs a connection, Not ready, Unhealthy) and a switch for this profile. Opening a row shows that tool's existing settings under it, one row at a time. Keeping tools out of the prompt, tool servers on other computers and blocked tools fold away below the list. With everything closed the page is about 1,300px tall, down from about 3,300.
+  - **Terminal has its own page**, full window height, and opens by itself when a model starts. Activity is tasks and approvals only.
+  - **Fields are sized to what they hold**: number fields fit their numbers, long inputs are capped (about 42rem), and nothing stretches across the page without need.
 
 - **The docs caught up with the code.** An accuracy pass over the README, `docs/` and `deploy/` against what the daemon actually does after the TLS, grants, skills and server-run-chat work. The corrections that matter for troubleshooting:
   - **External MCP API keys never reach the chat.** Clients connect to an external server directly and `GET /redstart/mcp-servers` gives them only a name and URL, so a saved key is used by Nest's connection test alone. A server that needs a key passes the test and then refuses the chat. `capabilities.md`, `security.md` and the roadmap now say so; the fix is Nest forwarding external servers, which is also what OAuth needs.

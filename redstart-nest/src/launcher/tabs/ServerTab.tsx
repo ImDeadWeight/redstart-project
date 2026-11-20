@@ -74,14 +74,14 @@ export function ServerTab({ server }: { server: ReturnType<typeof useServerLifec
         </div>
       )}
 
-      <section aria-label="Server log" className="flex flex-col h-[min(70vh,44rem)] min-h-64 bg-black rounded-xl border border-zinc-800 overflow-hidden">
+      <section aria-label="Server log" className="flex min-h-[20rem] flex-1 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-black">
         <div className="flex items-center justify-between px-4 py-2 bg-zinc-900 border-b border-zinc-800 shrink-0">
           <span className="text-sm font-medium text-zinc-300">llama-server output</span>
           <button onClick={clearLog} className="text-sm text-orange-400 hover:text-orange-300 transition-colors">
             Clear
           </button>
         </div>
-        <div tabIndex={0} className="flex-1 min-h-56 overflow-auto p-3 font-mono text-xs leading-relaxed">
+        <div tabIndex={0} className="min-h-0 flex-1 overflow-auto p-3 font-mono text-xs leading-relaxed">
           {serverState === 'stopped' && logLines.length === 0 ? (
             <span className="text-zinc-500">The model isn't running. Press Start to see its output here.</span>
           ) : logLines.length === 0 ? (

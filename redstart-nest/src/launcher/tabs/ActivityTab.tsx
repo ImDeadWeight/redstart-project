@@ -294,9 +294,10 @@ export function ActivityTab() {
           The tools an account runs without the approval card ("Always allow"). Deletes and memory removals can
           never be on this list. Leave the name empty to see the shared list used while login is off.
         </p>
-        <div className="flex gap-2 mb-3">
+        <div className="flex max-w-md gap-2 mb-3">
           <input
             className={inputCls.sm}
+            aria-label="Username"
             placeholder="Username"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
