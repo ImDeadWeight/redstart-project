@@ -78,9 +78,9 @@ The chat is an agent, not just a text box: it works with tools on your own data,
 **Work like an agent**
 - **Asks instead of guessing.** When a task depends on something only you know, it asks: up to four questions at once, as a card with choices.
 - **Plans longer work.** Multi-step tasks get a checklist in the chat that it ticks off as it goes.
-- **Asks before it changes anything.** Writes and deletes stop at an approval card in the chat, checked by the server for every client, not just this one. "Always allow" makes a standing grant for a tool (never for deletion), and the launcher's Activity tab shows every decision. Deletions go to the Recycle Bin.
+- **Asks before it changes anything.** Writes and deletes stop at an approval card in the chat, checked by the server for every client, not just this one. "Always allow" makes a standing grant for a tool (never for deletion), and the launcher's Activity page shows every decision. Deletions go to the Recycle Bin.
 - **Keeps going when you close the page.** Chats run on the server by default, so a refresh, a closed tab or a sleeping phone doesn't end the reply. `/task <request>` hands a longer job to the server outright. Both survive a restart and wait for you in the chat when they need an answer or an approval.
-- **Sends only the tools a chat needs.** Capabilities marked catalog-only stay out of the prompt, and the model finds them with `search_tools` when it needs one, ranked by a small local embedding model. A dozen capabilities don't crowd a small model's context. On by default; per profile on the Tools tab.
+- **Sends only the tools a chat needs.** Capabilities marked catalog-only stay out of the prompt, and the model finds them with `search_tools` when it needs one, ranked by a small local embedding model. A dozen capabilities don't crowd a small model's context. On by default; per profile on the Tools page.
 
 **Remember what matters** ([Memory](docs/security.md#memory))
 - **Three kinds of memory:** facts about you, how you want it to work (followed, with your reason), and where a piece of work stands (dated, and flagged when old).
@@ -153,11 +153,11 @@ Accounts are **on by default** with no localhost exemption, and each account's f
 
    The setup code is a **recovery credential, not a password** — it is deliberately stored in plain text and meant to be readable by whoever has physical access to the box, like the sticker on the bottom of a router. It is also the way back in if the Owner password is lost: the same screen re-keys the Owner account, which signs out every existing session.
 4. Point it at a `.gguf` model file and click **Start Server**
-5. In **Configuration → Network**, turn on **Local network** mode to make the server reachable from other devices — each person signs in with an account the Owner/Admins create. The same panel shows the addresses to browse to, including a QR code to scan from a phone
+5. In **Network & access**, choose **Everyone on my network** to make the server reachable from other devices — each person signs in with an account the Owner/Admins create. The same panel shows the addresses to browse to, including a QR code to scan from a phone
 
 **Closing the window does not stop the server.** Redstart Nest keeps running in the tray so the model stays available to everyone else on the network; reopening the window reconnects to the daemon that was already running. To actually stop it, use **Shut down** in the launcher or **Quit Redstart** in the tray menu.
 
-**Administering it from another device** is off by default. The same Network panel has a second switch for the admin panel itself — separate from the one above, because making the chat UI reachable and making *process control* reachable are different decisions. Turn it on and the launcher interface is available at `http://<nest-ip>:19083`, Owner account only.
+**Administering it from another device** is off by default. The same Network & access page has a second switch for the admin panel itself — separate from the one above, because making the chat UI reachable and making *process control* reachable are different decisions. Turn it on and the launcher interface is available at `http://<nest-ip>:19083`, Owner account only.
 
 ### Redstart Twig (Android)
 
@@ -168,7 +168,7 @@ Accounts are **on by default** with no localhost exemption, and each account's f
 >
 > **In the meantime, use a phone browser instead.** The chat UI is served directly
 > by Nest, so browsing to `http://<nest-ip>:19080` — or scanning the QR code in
-> **Configuration → Network** — gives you the same interface on Android with no app
+> **Network & access** — gives you the same interface on Android with no app
 > installed. Redstart Twig for Windows is unaffected and works normally.
 
 1. Download `redstart-twig.apk` from [Releases](../../releases)

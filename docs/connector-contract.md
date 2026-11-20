@@ -44,7 +44,7 @@ Everything is served by the Redstart gateway on the deployment's public port.
 llama-server itself is bound to `127.0.0.1` on `port + 1` and is **not**
 reachable; do not attempt to address it.
 
-**When the deployment serves HTTPS** (Network → Secure address), the gateway
+**When the deployment serves HTTPS** (Network & access → Secure address), the gateway
 moves to loopback and the LAN reaches it only through `https://<name>` on
 port 443, served by Nest's bundled Caddy with a real certificate. The beacon
 (HTTP on port 8765) then carries `origin: "https://<name>"`; a connector that

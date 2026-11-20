@@ -9,7 +9,7 @@ import { useState } from 'react'
 import { api } from '../api/redstart'
 import type { PluginToolInfo, RegistrySearchResult } from '../api/redstart'
 import type { usePlugins } from '../hooks/usePlugins'
-import { btnCls, inputCls, TruncatedText } from './ui'
+import { btnCls, inputCls, TruncatedText, Modal } from './ui'
 import { FolderPicker } from './FolderPicker'
 
 // A fixed-width sibling of inputCls.xs for the per-tool class picker. Deliberately
@@ -269,15 +269,8 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
   const hasSecretValue = Object.values(buildEnvPayload()).some((e) => e.isSecret)
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-zinc-900 border border-zinc-700 rounded-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-800 sticky top-0 bg-zinc-900">
-          <p className="font-medium text-zinc-200">Add tool</p>
-          <button onClick={close} className={btnCls.subtle}>Cancel</button>
-        </div>
-
-        <div className="p-5">
-          <p className="text-xs text-zinc-500 mb-4">Step {s.step} of 5</p>
+    <Modal open title="Add a plugin" subtitle={`Step ${s.step} of 5`} onClose={close} size="lg">
+        <div>
 
           {/* Step 1 — Source */}
           {s.step === 1 && (
@@ -323,7 +316,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
 
               {s.sourceKind === 'pypi' && (
                 <div className="space-y-2">
-                  <p className="text-xs text-zinc-600">Installed as an isolated uv tool — needs uv on this machine (uv.exe, not pip).</p>
+                  <p className="text-xs text-zinc-500">Installed as an isolated uv tool — needs uv on this machine (uv.exe, not pip).</p>
                   <label className="block text-xs text-zinc-400">Package identifier</label>
                   <input className={inputCls.sm} placeholder="armor-mcp" value={s.npmPackage}
                     onChange={(e) => set('npmPackage', e.target.value)} />
@@ -393,7 +386,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
                       <label className="block text-xs text-zinc-300 mb-1">
                         {f.name}{f.isRequired && <span className="text-red-400"> *</span>}
                       </label>
-                      {f.description && <p className="text-xs text-zinc-600 mb-1">{f.description}</p>}
+                      {f.description && <p className="text-xs text-zinc-500 mb-1">{f.description}</p>}
                       {f.format === 'boolean' ? (
                         <select className={inputCls.sm} value={s.values[f.name] ?? f.default ?? 'false'}
                           onChange={(e) => setState((prev) => ({ ...prev, values: { ...prev.values, [f.name]: e.target.value } }))}>
@@ -529,7 +522,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
                 {hasSecretValue && (
                   <p className="text-yellow-500/90">• A credential is configured. This plugin will be declared as a data path to users and to the model — its queries can leave this machine.</p>
                 )}
-                <p>• Saved disabled. Enable it on the Plugins tab, then activate it per profile on the Tools tab.</p>
+                <p>• Saved switched off. Allow it on this server under Tools → Plugins, then turn it on for a profile under Tools → For this profile.</p>
               </div>
               {s.confirmError && <p className="text-xs text-red-400">{s.confirmError}</p>}
               <div className="flex justify-between pt-2">
@@ -541,8 +534,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -566,8 +558,8 @@ function RegistryResults({ results, error, onPick, selected, searched }: {
   searched: boolean
 }) {
   if (error) return <p className="text-xs text-red-400">Registry unavailable ({error}) — install by package name instead.</p>
-  if (!searched) return <p className="text-xs text-zinc-600">Search above, or switch to "npm package" / "Local folder" / "Advanced".</p>
-  if (results.length === 0) return <p className="text-xs text-zinc-600">No results.</p>
+  if (!searched) return <p className="text-xs text-zinc-500">Search above, or switch to "npm package" / "Local folder" / "Advanced".</p>
+  if (results.length === 0) return <p className="text-xs text-zinc-500">No results.</p>
   return <RegistryResultList results={results} onPick={onPick} selected={selected} />
 }
 
@@ -611,13 +603,13 @@ function RegistryResultList({ results, onPick, selected }: {
                     {r.description || '(no description provided by the registry)'}
                   </span>
                   {(r.packageName || r.registryType) && (
-                    <span className="block text-zinc-600 break-all">
+                    <span className="block text-zinc-500 break-all">
                       {r.registryType ? `${r.registryType} · ` : ''}{r.packageName ?? ''}{r.version ? `@${r.version}` : ''}
                     </span>
                   )}
                 </span>
               ) : (
-                <span className="block text-zinc-600 truncate pl-4">{r.description}</span>
+                <span className="block text-zinc-500 truncate pl-4">{r.description}</span>
               )}
             </span>
             <span className={`flex-shrink-0 ${v.installable ? 'text-green-400' : 'text-zinc-500'}`}>{v.text}</span>

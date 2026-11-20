@@ -20,7 +20,7 @@
       So the same bar exists twice, deliberately, and this copy is markup
       rather than a component because its whole purpose is to be on screen
       before any component can be. createRoot().render() clears #root, so React
-      replaces it on mount; both are 48px of zinc-900 carrying the same title,
+      replaces it on mount; both are 48px of #111113 carrying the same logo and title,
       which is what makes the swap invisible.
 
       INLINE styles, not classes: Tailwind's stylesheet is a separate request
@@ -35,37 +35,24 @@
         box-sizing: border-box;
         display: flex;
         align-items: center;
-        padding: 0 20px;
-        background-color: #18181b;
+        gap: 10px;
+        padding: 0 16px;
+        background-color: #111113;
         border-bottom: 1px solid #27272a;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-        font-size: 1.125rem;
+        font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+        font-size: 15px;
         font-weight: 700;
-        letter-spacing: 0.025em;
-        color: #f97316;
+        letter-spacing: -0.01em;
+        color: #fafafa;
         -webkit-app-region: drag;
-        justify-content: space-between;
         /* Clear of the caption buttons, which are painted over this bar and
            are about 138 CSS px wide. React measures the real inset once it is
            running (useWindowControlsOverlay); static markup cannot, so this
-           errs wide — too much padding is a status sitting slightly left for a
-           moment, too little is one underneath the close button. */
+           errs wide. */
         padding-right: 160px;
       ">
+        <img src="/redstart.svg" alt="" width="28" height="28" style="width: 28px; height: 28px; image-rendering: pixelated;">
         <span>Redstart Nest</span>
-        <span style="
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          font-size: 0.75rem;
-          font-weight: 400;
-          letter-spacing: 0.1em;
-          text-transform: uppercase;
-          color: #a1a1aa;
-        ">
-          <span style="width: 8px; height: 8px; border-radius: 9999px; background-color: #52525b;"></span>
-          Connecting…
-        </span>
       </div>
     </div>
     <script type="module" src="/src/launcher/main.tsx"></script>

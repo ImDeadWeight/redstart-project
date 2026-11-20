@@ -41,21 +41,21 @@ const draftFrom = (s: TlsSettingsView): Draft => ({ mode: s.mode, provider: s.pr
 
 function ConsentCard({ onChoose, saving }: { onChoose: (choice: 'automatic' | 'own' | 'later') => void; saving: boolean }) {
   return (
-    <div className="mt-3 rounded-lg border border-zinc-700 bg-zinc-950/60 p-4" role="dialog" aria-label="Choose how devices connect securely">
-      <p className="text-xs text-zinc-200 font-medium">Give this computer a secure address?</p>
-      <p className="mt-2 text-xs text-zinc-400">
+    <div className="mt-3 rounded-xl border border-zinc-700 bg-zinc-950/60 p-4" role="group" aria-label="Choose how devices connect securely">
+      <p className="text-sm text-zinc-100 font-medium">Give this computer a secure address?</p>
+      <p className="mt-2 text-sm text-zinc-400">
         Phones and laptops on your network can connect over HTTPS, with a padlock and no warnings. The simplest way is an
         automatic name like <span className="font-mono text-zinc-300">k7f3q2.nest.redstartdevelopment.com</span>, from Redstart's name service.
       </p>
-      <p className="mt-2 text-[11px] text-zinc-500">
+      <p className="mt-2 text-[13px] text-zinc-500">
         <span className="text-zinc-400">What Automatic sends:</span> {AUTOMATIC_SENDS}
       </p>
       <div className="mt-3 flex flex-wrap gap-2">
-        <button disabled={saving} onClick={() => onChoose('automatic')} className={`${btnCls.primary} text-white disabled:opacity-50`}>Use an automatic name</button>
+        <button disabled={saving} onClick={() => onChoose('automatic')} className={btnCls.primary}>Use an automatic name</button>
         <button disabled={saving} onClick={() => onChoose('own')} className={`${btnCls.secondary} disabled:opacity-50`}>I'll use my own name</button>
         <button disabled={saving} onClick={() => onChoose('later')} className={`${btnCls.subtle} disabled:opacity-50`}>Not now</button>
       </div>
-      <p className="mt-2 text-[11px] text-zinc-600">You can change this any time below. "Not now" keeps plain HTTP and sends nothing.</p>
+      <p className="mt-2 text-[13px] text-zinc-500">You can change this any time below. "Not now" keeps plain HTTP and sends nothing.</p>
     </div>
   )
 }
@@ -99,20 +99,20 @@ export function SecureAddressSection({ tls, networkMode }: { tls: ReturnType<typ
   const radio = (mode: TlsMode, label: React.ReactNode) => (
     <label className="flex items-start gap-2 cursor-pointer">
       <input type="radio" name="tls-mode" className="mt-0.5 accent-orange-500" checked={draft.mode === mode} onChange={() => edit({ mode })} />
-      <span className="text-xs text-zinc-300">{label}</span>
+      <span className="text-sm text-zinc-200">{label}</span>
     </label>
   )
 
   return (
-    <div className="mt-5 pt-4 border-t border-zinc-800">
-      <h3 className="text-xs text-zinc-300 font-medium">Secure address (HTTPS)</h3>
+    <div>
+      <h2 className="text-base font-semibold text-zinc-100">Secure address (HTTPS)</h2>
 
       {askConsent ? <ConsentCard onChoose={choose} saving={saving} /> : (
         <div className="mt-3 space-y-3">
           {radio('redstart', <>Automatic {stored.automatic
             ? <span className="font-mono text-zinc-400">{stored.automatic.hostname}</span>
-            : <span className="text-zinc-600">(a name is created when HTTPS starts)</span>}</>)}
-          {draft.mode === 'redstart' && <p className="ml-6 text-[11px] text-zinc-600">{AUTOMATIC_SENDS}</p>}
+            : <span className="text-zinc-500">(a name is created when HTTPS starts)</span>}</>)}
+          {draft.mode === 'redstart' && <p className="ml-6 text-[13px] text-zinc-500">{AUTOMATIC_SENDS}</p>}
 
           {radio('own', 'My own name')}
           {draft.mode === 'own' && (
@@ -121,7 +121,7 @@ export function SecureAddressSection({ tls, networkMode }: { tls: ReturnType<typ
                 <select
                   value={draft.provider}
                   onChange={(e) => edit({ provider: e.target.value as TlsProvider, token: '' })}
-                  className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200">
+                  className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200">
                   {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
                 </select>
                 <input
@@ -129,39 +129,39 @@ export function SecureAddressSection({ tls, networkMode }: { tls: ReturnType<typ
                   onChange={(e) => edit({ name: e.target.value })}
                   placeholder={provider.placeholder}
                   spellCheck={false}
-                  className="flex-1 min-w-[12rem] bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs font-mono text-zinc-200" />
+                  className="flex-1 min-w-[12rem] bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm font-mono text-zinc-200" />
                 <input
                   type="password"
                   value={draft.token}
                   onChange={(e) => edit({ token: e.target.value })}
                   placeholder={tokenKept ? 'Token stored (leave blank to keep it)' : `${provider.label} token`}
                   autoComplete="off"
-                  className="flex-1 min-w-[12rem] bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs font-mono text-zinc-200" />
+                  className="flex-1 min-w-[12rem] bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm font-mono text-zinc-200" />
               </div>
-              <p className="text-[11px] text-zinc-600">{provider.help}</p>
+              <p className="text-[13px] text-zinc-500">{provider.help}</p>
             </div>
           )}
 
-          {radio('off', <>Off <span className="text-zinc-600">(devices on your network use plain HTTP, not encrypted)</span></>)}
+          {radio('off', <>Off <span className="text-zinc-500">(devices on your network use plain HTTP, not encrypted)</span></>)}
 
           {draft.mode !== 'off' && (
             <div className="space-y-2">
               <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
                 <TogglePill checked={draft.requireHttps} onToggle={() => edit({ requireHttps: !draft.requireHttps })} />
-                <span className="text-xs text-zinc-300">Require HTTPS</span>
+                <span className="text-sm text-zinc-200">Require HTTPS</span>
               </label>
-              <p className="text-[11px] text-zinc-600 -mt-1">
+              <p className="text-[13px] text-zinc-500 -mt-1">
                 Off: while HTTPS isn't working, devices still get chat over plain HTTP, labelled. On: they get nothing until it works.
               </p>
               <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
                 <TogglePill checked={draft.acmeStaging} onToggle={() => edit({ acmeStaging: !draft.acmeStaging })} />
-                <span className="text-xs text-zinc-300">Test certificates (Let's Encrypt staging)</span>
+                <span className="text-sm text-zinc-200">Test certificates (Let's Encrypt staging)</span>
               </label>
             </div>
           )}
 
           <div className="flex flex-wrap items-center gap-2">
-            <button onClick={submit} disabled={saving || !dirty} className={`${btnCls.primary} text-white disabled:opacity-50 disabled:cursor-not-allowed`}>
+            <button onClick={submit} disabled={saving || !dirty} className={btnCls.primary}>
               {saving ? 'Saving…' : 'Save'}
             </button>
             {dirty && (
@@ -171,24 +171,24 @@ export function SecureAddressSection({ tls, networkMode }: { tls: ReturnType<typ
             {failed && <button onClick={retry} className={btnCls.secondary}>Try again</button>}
           </div>
           {draft.mode === 'off' && stored.mode === 'redstart' && dirty && (
-            <p className="text-[11px] text-amber-400/90">Turning HTTPS off gives the automatic name back. Turning Automatic on again later gets a new one.</p>
+            <p className="text-[13px] text-amber-400/90">Turning HTTPS off gives the automatic name back. Turning Automatic on again later gets a new one.</p>
           )}
         </div>
       )}
 
-      {!askConsent && <p className={`mt-3 text-xs ${TONE[line.tone]}`} role="status">{line.text}</p>}
+      {!askConsent && <p className={`mt-3 text-sm ${TONE[line.tone]}`} role="status">{line.text}</p>}
 
       {!askConsent && stored.mode !== 'off' && status.warnings.length > 0 && (
         <ul className="mt-2 space-y-1">
-          {status.warnings.map((w) => <li key={w.kind} className="text-[11px] text-amber-400/90">{w.text}</li>)}
+          {status.warnings.map((w) => <li key={w.kind} className="text-[13px] text-amber-400/90">{w.text}</li>)}
         </ul>
       )}
 
       {!askConsent && stored.mode !== 'off' && status.address && !status.address.ok && (
-        <p className="mt-1 text-[11px] text-amber-400/90">Couldn't update the name: {status.address.detail}</p>
+        <p className="mt-1 text-[13px] text-amber-400/90">Couldn't update the name: {status.address.detail}</p>
       )}
 
-      {!askConsent && egressSentence(status) && <p className="mt-2 text-[11px] text-zinc-600">{egressSentence(status)}</p>}
+      {!askConsent && egressSentence(status) && <p className="mt-2 text-[13px] text-zinc-500">{egressSentence(status)}</p>}
     </div>
   )
 }

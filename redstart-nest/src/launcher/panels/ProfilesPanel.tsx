@@ -1,45 +1,91 @@
 import type { useProfiles } from '../hooks/useProfiles'
-import { SectionTitle } from '../components/ui'
+import type { HardwareSpecs } from '../types'
+import { Card, Chip, SectionTitle, btnCls, inputCls } from '../components/ui'
 
-export function ProfilesPanel({ profilesHook }: { profilesHook: ReturnType<typeof useProfiles> }) {
+// Profiles, managed: the list, Use, Delete, Save current settings as…, and
+// starting profiles sized from the hardware scan. Switching also lives in the
+// top bar; this is where profiles are kept.
+//
+// What a profile holds is the MODEL configuration and the tools (useProfiles
+// strips machine state on load). Who can connect and whether the admin panel
+// is reachable belong to the computer, and the copy says so, because a label
+// that promised more is how a profile once changed network exposure.
+export function ProfilesPanel({ profilesHook, hardware }: {
+  profilesHook: ReturnType<typeof useProfiles>
+  hardware: HardwareSpecs | null
+}) {
   const {
     profiles, selectedProfile, saveProfileName, setSaveProfileName,
     showSaveInput, setShowSaveInput, selectProfile, saveProfile,
+    generateDefaultProfiles, deleteProfile,
   } = profilesHook
+  const trimmed = saveProfileName.trim()
+  const overwrites = !!trimmed && profiles.includes(trimmed)
 
   return (
-    <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
-      <SectionTitle className="mb-4">Profile</SectionTitle>
-      {profiles.length > 0 ? (
-        <select
-          value={selectedProfile}
-          onChange={e => selectProfile(e.target.value)}
-          className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-orange-500">
-          <option value="">— select profile —</option>
-          {profiles.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
-      ) : (
-        <p className="text-xs text-zinc-600">No profiles saved yet.</p>
-      )}
-      {!showSaveInput ? (
-        <button onClick={() => { setSaveProfileName(selectedProfile); setShowSaveInput(true) }}
-          className="mt-2 w-full px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded text-xs transition-colors">
-          Save Current as Profile
-        </button>
-      ) : (
-        <div className="mt-2 flex gap-1">
-          <input
-            autoFocus
-            value={saveProfileName}
-            onChange={e => setSaveProfileName(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') saveProfile(); if (e.key === 'Escape') setShowSaveInput(false) }}
-            placeholder="Profile name"
-            className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-orange-500"
-          />
-          <button onClick={saveProfile} className="px-2 py-1 bg-orange-500 hover:bg-orange-400 rounded text-xs transition-colors">✓</button>
-          <button onClick={() => setShowSaveInput(false)} className="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors">✕</button>
+    <Card>
+      <div className="mb-1 flex flex-wrap items-center gap-3">
+        <SectionTitle className="flex-1">Profiles</SectionTitle>
+        {!showSaveInput && (
+          <button type="button" onClick={() => { setSaveProfileName(selectedProfile); setShowSaveInput(true) }} className={btnCls.secondary}>
+            Save current settings as…
+          </button>
+        )}
+      </div>
+      <p className="mb-3 text-sm text-zinc-400">
+        A profile remembers the model, how it runs, and which tools are on. Switch from the top bar.
+        Who can connect belongs to this computer, so switching never changes it.
+      </p>
+
+      {showSaveInput && (
+        <div className="flex flex-wrap items-end gap-2 border-t border-zinc-800 py-3">
+          <label className="flex min-w-[14rem] flex-1 flex-col gap-1.5 text-[13px] text-zinc-400">
+            Profile name
+            <input
+              autoFocus
+              value={saveProfileName}
+              onChange={e => setSaveProfileName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') saveProfile(); if (e.key === 'Escape') setShowSaveInput(false) }}
+              placeholder="e.g. Long documents"
+              className={inputCls.sm}
+            />
+          </label>
+          <button type="button" onClick={saveProfile} disabled={!trimmed} className={btnCls.primary}>Save</button>
+          <button type="button" onClick={() => setShowSaveInput(false)} className={btnCls.secondary}>Cancel</button>
+          {overwrites && <p className="w-full text-[13px] text-amber-300">A profile with this name exists. Saving replaces it.</p>}
         </div>
       )}
-    </section>
+
+      {profiles.length > 0 ? (
+        <ul className="max-h-80 overflow-y-auto">
+          {profiles.map(name => {
+            const inUse = name === selectedProfile
+            return (
+              <li key={name} className="flex flex-wrap items-center gap-3 border-t border-zinc-800 px-1 py-2.5 text-sm">
+                <span className="min-w-0 flex-1 break-all text-zinc-100">{name}</span>
+                {inUse
+                  ? <Chip tone="ok">In use</Chip>
+                  : <button type="button" onClick={() => selectProfile(name)} className={btnCls.chip}>Use</button>}
+                <button type="button" onClick={() => deleteProfile(name)} className={btnCls.subtle} data-tip-end=""
+                  data-tip={inUse ? 'Delete the saved profile. Your current settings stay as they are.' : 'Delete this profile'}>
+                  Delete
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      ) : (
+        <p className="border-t border-zinc-800 py-3 text-sm text-zinc-500">
+          No profiles saved yet. Save your current settings, or start from profiles sized for this computer.
+        </p>
+      )}
+
+      <div className="border-t border-zinc-800 pt-3">
+        <button type="button" onClick={() => generateDefaultProfiles(hardware)} disabled={!hardware} className={btnCls.subtle}
+          data-tip={hardware ? `Sized for ${hardware.gpu.name || 'this GPU'} and ${hardware.memory.total.toFixed(0)} GB of memory` : 'Check the hardware on the Model page first'}>
+          Add starting profiles for this computer
+        </button>
+      </div>
+    </Card>
   )
 }

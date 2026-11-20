@@ -32,7 +32,7 @@ export function DeferralCard({ entries, retrievalOn, onChanged }: {
   }
 
   return (
-    <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+    <div className="bg-zinc-950/40 border border-zinc-800 rounded-lg px-4 py-3">
       <div className="flex items-center justify-between mb-1">
         <span className="text-sm text-zinc-200">Catalog-only tools</span>
         <span className={`text-xs ${retrievalOn ? 'text-green-400' : 'text-zinc-500'}`}>

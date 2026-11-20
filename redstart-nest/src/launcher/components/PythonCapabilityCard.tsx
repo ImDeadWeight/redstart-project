@@ -68,7 +68,7 @@ export function PythonCapabilityCard({ status, documentsConfigured, active, onTo
         : null
 
   return (
-    <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+    <div className="bg-zinc-950/40 border border-zinc-800 rounded-lg px-4 py-3">
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm text-zinc-200">Python</span>
         <div className="flex items-center gap-2 flex-shrink-0">
@@ -106,7 +106,7 @@ export function PythonCapabilityCard({ status, documentsConfigured, active, onTo
 
       {error && <p className="text-xs text-red-400 mb-1.5">{error}</p>}
 
-      <p className="text-xs text-zinc-600 mt-1.5">
+      <p className="text-xs text-zinc-500 mt-1.5">
         Lets the model run Python {status.pythonVersion} ({status.packages.join(', ')}) against the files in each conversation's workspace
         (Documents → chats/&lt;conversation&gt;), and show charts. It runs in WebAssembly under Node's permission model{status.sandboxNode ? ` (Node ${status.sandboxNode})` : ''}:
         no network, no programs, and no files outside that workspace. One kernel per active conversation, stopped after 10 idle minutes.

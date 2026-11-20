@@ -64,8 +64,8 @@ export function ServerTab({ server }: { server: ReturnType<typeof useServerLifec
   return (
     <>
       {serverState === 'running' && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 flex items-center justify-between text-xs">
-          <span className="text-zinc-500">Server health</span>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-sm">
+          <span className="text-zinc-400">Model health</span>
           <span className="flex items-center gap-3">
             {uptimeMs !== null && <span className="text-zinc-500">Up {formatUptime(uptimeMs)}</span>}
             {bindings?.gatewayPort && <span className="text-zinc-500">Gateway :{bindings.gatewayPort}</span>}
@@ -74,18 +74,18 @@ export function ServerTab({ server }: { server: ReturnType<typeof useServerLifec
         </div>
       )}
 
-      <section className="flex flex-col flex-1 min-h-64 bg-black rounded-lg border border-zinc-800 overflow-hidden">
-        <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900 border-b border-zinc-800 shrink-0">
-          <span className="text-xs text-zinc-500 uppercase tracking-widest">Server Terminal</span>
-          <button onClick={clearLog} className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">
+      <section aria-label="Server log" className="flex flex-col h-[min(70vh,44rem)] min-h-64 bg-black rounded-xl border border-zinc-800 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-2 bg-zinc-900 border-b border-zinc-800 shrink-0">
+          <span className="text-sm font-medium text-zinc-300">llama-server output</span>
+          <button onClick={clearLog} className="text-sm text-orange-400 hover:text-orange-300 transition-colors">
             Clear
           </button>
         </div>
-        <div className="flex-1 min-h-56 overflow-y-auto p-3 font-mono text-xs leading-relaxed">
+        <div tabIndex={0} className="flex-1 min-h-56 overflow-auto p-3 font-mono text-xs leading-relaxed">
           {serverState === 'stopped' && logLines.length === 0 ? (
-            <span className="text-zinc-600">Server is not running. Launch it to see output here.</span>
+            <span className="text-zinc-500">The model isn't running. Press Start to see its output here.</span>
           ) : logLines.length === 0 ? (
-            <span className="text-zinc-600">Waiting for output…</span>
+            <span className="text-zinc-500">Waiting for output…</span>
           ) : (
             logLines.map((line, i) => (
               <div key={i} className={`whitespace-pre-wrap break-all ${

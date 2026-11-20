@@ -67,9 +67,20 @@ export function useProfiles(
     showStatus('Default profiles generated from hardware scan.')
   }
 
+  // Deleting the profile in use leaves the current settings exactly as they
+  // are; only the saved copy goes. The selection clears so the header does not
+  // name a profile that no longer exists.
+  async function deleteProfile(name: string) {
+    const ok = await api().profiles.delete(name)
+    if (!ok) { showStatus(`Could not delete "${name}".`); return }
+    if (selectedProfile === name) setSelectedProfile('')
+    await loadProfiles()
+    showStatus(`Deleted "${name}".`)
+  }
+
   return {
     profiles, selectedProfile, saveProfileName, setSaveProfileName,
     showSaveInput, setShowSaveInput,
-    selectProfile, saveProfile, generateDefaultProfiles,
+    selectProfile, saveProfile, generateDefaultProfiles, deleteProfile,
   }
 }

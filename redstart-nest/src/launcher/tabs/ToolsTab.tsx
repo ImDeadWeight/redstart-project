@@ -85,11 +85,11 @@ function FolderCapabilityCard({ caps, cap, title, emptyText, description, active
 }) {
   const dir = capDir(caps, cap)
   return (
-    <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+    <div className="bg-zinc-950/40 border border-zinc-800 rounded-lg px-4 py-3">
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm text-zinc-200">{title}</span>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <span className={`text-xs ${!dir ? 'text-zinc-600' : active ? 'text-green-400' : 'text-zinc-500'}`}>
+          <span className={`text-xs ${!dir ? 'text-zinc-500' : active ? 'text-green-400' : 'text-zinc-500'}`}>
             {!dir ? 'Not configured' : active ? 'Configured · Enabled' : 'Configured · Disabled'}
           </span>
           <button onClick={onToggle} className={btnCls.chip}>
@@ -128,7 +128,7 @@ function FolderCapabilityCard({ caps, cap, title, emptyText, description, active
           <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
             <span className="min-w-0">
               <span className="text-xs text-zinc-300">Allow writes</span>
-              <span className="block text-xs text-zinc-600">Create and edit files. Off = read-only access.</span>
+              <span className="block text-xs text-zinc-500">Create and edit files. Off = read-only access.</span>
             </span>
             <TogglePill
               checked={caps.capabilityConfig.file_system.allowWrite !== false}
@@ -139,7 +139,7 @@ function FolderCapabilityCard({ caps, cap, title, emptyText, description, active
           <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
             <span className="min-w-0">
               <span className="text-xs text-zinc-300">Allow destructive operations</span>
-              <span className="block text-xs text-zinc-600">Lets the model delete files in its own storage. Deletions go to the Recycle Bin and can be recovered, and the user approves every single one on the chat's approval card — "always allow" is never offered for deletion.</span>
+              <span className="block text-xs text-zinc-500">Lets the model delete files in its own storage. Deletions go to the Recycle Bin and can be recovered, and the user approves every single one on the chat's approval card — "always allow" is never offered for deletion.</span>
             </span>
             <TogglePill
               checked={!!caps.capabilityConfig.file_system.allowDestructive}
@@ -153,7 +153,7 @@ function FolderCapabilityCard({ caps, cap, title, emptyText, description, active
         </div>
       )}
 
-      <p className="text-xs text-zinc-600 mt-1.5">{description}</p>
+      <p className="text-xs text-zinc-500 mt-1.5">{description}</p>
     </div>
   )
 }
@@ -214,9 +214,9 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
     : 'Brave Search (api.search.brave.com)'
 
   return (
-    <section className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
+    <section className="bg-zinc-900 rounded-xl p-5 border border-zinc-800">
       <div className="flex items-center justify-between mb-4">
-        <SectionTitle className="">Tools</SectionTitle>
+        <SectionTitle className="">Tools for this profile</SectionTitle>
         <label className="flex items-center gap-2 cursor-pointer select-none">
           <span className="text-xs text-zinc-400">{config.tools?.enabled ? 'Enabled' : 'Disabled'}</span>
           <TogglePill checked={!!config.tools?.enabled} onToggle={() => setToolsField('enabled', !(config.tools?.enabled))} />
@@ -246,7 +246,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
               Same card shape as the capability cards below: one Enable/Disable
               for this profile, with its setup nested inside. Its on/off lives in
               webAccessEnabled rather than activeToolIds — see types.ts. */}
-          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+          <div className="bg-zinc-950/40 border border-zinc-800 rounded-lg px-4 py-3">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm text-zinc-200">Web Access</span>
               <div className="flex items-center gap-2 flex-shrink-0">
@@ -265,7 +265,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
               <div className="flex items-center justify-between gap-2 py-2 border-t border-zinc-700/50">
                 <span className="min-w-0">
                   <span className="text-xs text-zinc-300">Restrict to approved sources</span>
-                  <span className="block text-xs text-zinc-600">
+                  <span className="block text-xs text-zinc-500">
                     {restrictOn
                       ? 'The model can only fetch from the sources selected below.'
                       : 'The model can fetch any public website. Local network addresses are always blocked.'}
@@ -288,7 +288,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-3">
                   {/* Left column: Groups */}
                   <div>
-                    <p className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Source Groups</p>
+                    <p className="text-sm font-medium text-zinc-200 mb-2">Source groups</p>
 
                     <div className="space-y-2 mb-4">
                       {allGroups.filter(g => g.builtIn).map(group => {
@@ -320,7 +320,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                                 <input type="checkbox" checked={active} onChange={() => toggleGroup(group.id)} className="accent-orange-500" />
                                 <span className="text-sm text-zinc-200">{group.name}</span>
                               </label>
-                              <button onClick={() => deleteCustomGroup(group.id)} className="text-xs text-zinc-600 hover:text-red-400 transition-colors px-1">✕</button>
+                              <button onClick={() => deleteCustomGroup(group.id)} className="text-xs text-zinc-500 hover:text-red-400 transition-colors px-1">✕</button>
                             </div>
                           )
                         })}
@@ -358,7 +358,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
 
                   {/* Right column: Individual sources */}
                   <div>
-                    <p className="text-xs uppercase tracking-widest text-zinc-500 mb-2">Individual Sources</p>
+                    <p className="text-sm font-medium text-zinc-200 mb-2">Individual sources</p>
                     <div className="space-y-1.5 mb-4">
                       {allTools.filter(t => t.kind === 'web').map(tool => {
                         const inActiveGroup = (config.tools?.activeGroupIds ?? []).some(gid => {
@@ -373,14 +373,14 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                                 onChange={() => toggleTool(tool.id)} className="accent-orange-500" />
                               <div className="min-w-0">
                                 <span className="text-sm text-zinc-200">{tool.name}</span>
-                                {inActiveGroup && <span className="text-xs text-zinc-600 ml-2">(via group)</span>}
-                                {tool.builtIn && !inActiveGroup && <span className="text-xs text-zinc-600 ml-2">{tool.baseUrl}</span>}
+                                {inActiveGroup && <span className="text-xs text-zinc-500 ml-2">(via group)</span>}
+                                {tool.builtIn && !inActiveGroup && <span className="text-xs text-zinc-500 ml-2">{tool.baseUrl}</span>}
                               </div>
                             </label>
                             {!tool.builtIn && (
                               <span className="flex items-center gap-1 flex-shrink-0">
-                                <button onClick={() => startEditTool(tool)} className="text-xs text-zinc-600 hover:text-zinc-300 transition-colors px-1">Edit</button>
-                                <button onClick={() => deleteCustomTool(tool.id)} className="text-xs text-zinc-600 hover:text-red-400 transition-colors px-1">✕</button>
+                                <button onClick={() => startEditTool(tool)} className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-1">Edit</button>
+                                <button onClick={() => deleteCustomTool(tool.id)} className="text-xs text-zinc-500 hover:text-red-400 transition-colors px-1">✕</button>
                               </span>
                             )}
                           </div>
@@ -418,7 +418,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                 <div className="flex items-center justify-between gap-2">
                   <span className="min-w-0">
                     <span className="text-xs text-zinc-300">Web search engine</span>
-                    <span className="block text-xs text-zinc-600">
+                    <span className="block text-xs text-zinc-500">
                       {searchEngine === 'none'
                         ? 'Off. The model can only search the specific sources above.'
                         : searchEngineReady
@@ -451,7 +451,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                   </div>
                 )}
                 {searchEngine === 'searxng' && (
-                  <p className="text-xs text-zinc-600">The instance must allow JSON results (settings.yml → search.formats: json). Shared by every profile.</p>
+                  <p className="text-xs text-zinc-500">The instance must allow JSON results (settings.yml → search.formats: json). Shared by every profile.</p>
                 )}
 
                 {searchEngine === 'brave' && (
@@ -476,23 +476,23 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                   onChange={e => setToolsField('maxFetchTokens', Math.max(500, Math.min(8000, parseInt(e.target.value) || 2000)))}
                   className="w-24 bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500"
                 />
-                <span className="text-xs text-zinc-600">of {config.ctxSize} ctx tokens</span>
+                <span className="text-xs text-zinc-500">of {config.ctxSize} ctx tokens</span>
               </div>
             </>)}
 
-            <p className="text-xs text-zinc-600 mt-1.5">
+            <p className="text-xs text-zinc-500 mt-1.5">
               Look things up on the web: <span className="text-zinc-500">web_fetch</span> reads a page, <span className="text-zinc-500">web_search</span> searches a source's own search endpoint. Private and local network addresses are always blocked.
             </p>
           </div>
 
           {/* ---- Postgres ---- */}
-          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+          <div className="bg-zinc-950/40 border border-zinc-800 rounded-lg px-4 py-3">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm text-zinc-200">Postgres</span>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <span className={`text-xs ${
                   !capabilityConfig?.postgres.hasConnectionString
-                    ? 'text-zinc-600'
+                    ? 'text-zinc-500'
                     : isActive('postgres') ? 'text-green-400' : 'text-zinc-500'
                 }`}>
                   {!capabilityConfig?.postgres.hasConnectionString
@@ -529,7 +529,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                 <span className={`text-xs ${pgTestResult.ok ? 'text-green-400' : 'text-red-400'}`}>{pgTestResult.message}</span>
               )}
             </div>
-            <p className="text-xs text-zinc-600 mt-1.5">Queries run read-only. Use a database role with read-only grants for defense in depth.</p>
+            <p className="text-xs text-zinc-500 mt-1.5">Queries run read-only. Use a database role with read-only grants for defense in depth.</p>
           </div>
 
           {FOLDER_CARDS.map(card => (
@@ -551,7 +551,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
           />
 
           {/* ---- Document search ---- */}
-          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+          <div className="bg-zinc-950/40 border border-zinc-800 rounded-lg px-4 py-3">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm text-zinc-200">Document search</span>
               <div className="flex items-center gap-2 flex-shrink-0">
@@ -564,7 +564,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
               </div>
             </div>
             {!capabilityConfig?.documents.outputDir && <p className="text-xs text-amber-400 mb-1.5">Choose a Documents folder first: this searches each user's files there.</p>}
-            <p className="text-xs text-zinc-600 mt-1.5">Gives the assistant search_documents: it finds the passages in a user's own files (uploads, chat attachments, conversation workspaces, created documents) that answer a question, and cites them. Private per account; nothing leaves the machine. The index is kept in Redstart's config folder and catches up on each search. Ranking uses the embedding model when it runs (it starts with tool retrieval) and word matching otherwise.</p>
+            <p className="text-xs text-zinc-500 mt-1.5">Gives the assistant search_documents: it finds the passages in a user's own files (uploads, chat attachments, conversation workspaces, created documents) that answer a question, and cites them. Private per account; nothing leaves the machine. The index is kept in Redstart's config folder and catches up on each search. Ranking uses the embedding model when it runs (it starts with tool retrieval) and word matching otherwise.</p>
             {/* Shared Documents (master plan 6.2): one folder every account
                 searches too, read-only, limited per role on the Roles page. */}
             <div className="flex items-center gap-2 mt-2">
@@ -589,11 +589,11 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                 </button>
               )}
             </div>
-            <p className="text-xs text-zinc-600 mt-1">Read-only: search_documents cites a passage from it as "Shared:", and the file explorer shows it. A role can limit an account to some of its folders (Settings, Roles).</p>
+            <p className="text-xs text-zinc-500 mt-1">Read-only: search_documents cites a passage from it as "Shared:", and the file explorer shows it. A role can limit an account to some of its folders (Settings, Roles).</p>
           </div>
 
           {/* ---- Memory ---- */}
-          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+          <div className="bg-zinc-950/40 border border-zinc-800 rounded-lg px-4 py-3">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm text-zinc-200">Memory</span>
               <div className="flex items-center gap-2 flex-shrink-0">
@@ -605,12 +605,12 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                 </button>
               </div>
             </div>
-            <p className="text-xs text-zinc-600 mt-1.5">Lets the assistant remember durable facts each user tells it about themselves (their tools, preferences, role) across chats. Private per account; the newest (about 300 tokens' worth) ride along with every request. Every save appears in the chat with Undo, users see, edit and delete all of theirs under Settings → Memory, and a save made while the assistant was reading the web is flagged. Withhold it from a role with the capability list.</p>
+            <p className="text-xs text-zinc-500 mt-1.5">Lets the assistant remember durable facts each user tells it about themselves (their tools, preferences, role) across chats. Private per account; the newest (about 300 tokens' worth) ride along with every request. Every save appears in the chat with Undo, users see, edit and delete all of theirs under Settings → Memory, and a save made while the assistant was reading the web is flagged. Withhold it from a role with the capability list.</p>
             {isActive('memory') && (
               <label className="flex items-center justify-between gap-2 cursor-pointer select-none mt-2">
                 <span className="min-w-0">
                   <span className="text-xs text-zinc-300">Think before suggesting memories</span>
-                  <span className="block text-xs text-zinc-600">After a chat goes quiet, the model reviews it for things worth remembering. With this on it reasons first: better suggestions on some models (Ornith 9B), none on others (Qwen3-4B), and each review takes longer. It runs only while no one is waiting on a reply.</span>
+                  <span className="block text-xs text-zinc-500">After a chat goes quiet, the model reviews it for things worth remembering. With this on it reasons first: better suggestions on some models (Ornith 9B), none on others (Qwen3-4B), and each review takes longer. It runs only while no one is waiting on a reply.</span>
                 </span>
                 <TogglePill
                   checked={config.tools?.memoryReview?.think === true}
@@ -622,7 +622,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
           </div>
 
           {/* ---- Scholar ---- */}
-          <div className="bg-zinc-800/40 rounded px-3 py-2.5">
+          <div className="bg-zinc-950/40 border border-zinc-800 rounded-lg px-4 py-3">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm text-zinc-200">Scholar</span>
               <div className="flex items-center gap-2 flex-shrink-0">
@@ -638,10 +638,10 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
               <input
                 type="text" value={scholarVenueFilter} onChange={e => setScholarVenueFilter(e.target.value)}
                 placeholder="Optional venue whitelist: journal ISSNs and/or arXiv categories (e.g. 1932-6203, cs.CL)"
-                className="flex-1 min-w-0 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500 placeholder:text-zinc-600" />
+                className="flex-1 min-w-0 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-orange-500 placeholder:text-zinc-500" />
               <button onClick={saveScholarVenueFilter} className={btnCls.chip}>Save filter</button>
             </div>
-            <p className="text-xs text-zinc-600 mt-1.5">Search open academic literature (OpenAlex, arXiv, PubMed) and save open-access PDFs into the Documents folder. Leave the whitelist empty for all venues; when set, searches and downloads are restricted to those journals/categories at the API level.</p>
+            <p className="text-xs text-zinc-500 mt-1.5">Search open academic literature (OpenAlex, arXiv, PubMed) and save open-access PDFs into the Documents folder. Leave the whitelist empty for all venues; when set, searches and downloads are restricted to those journals/categories at the API level.</p>
           </div>
 
           {/* ---- Installed plugins ----
@@ -652,7 +652,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
               registry `enabled` switch itself lives on the Plugins tab, not here —
               see [Two tabs, not one section] in the plan. */}
           {plugins.plugins.filter((p) => p.enabled).map((p) => (
-            <div key={p.id} className="bg-zinc-800/40 rounded px-3 py-2.5">
+            <div key={p.id} className="bg-zinc-950/40 border border-zinc-800 rounded-lg px-4 py-3">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-sm text-zinc-200">{p.displayName}</span>
                 <div className="flex items-center gap-2 flex-shrink-0">
@@ -664,8 +664,8 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                   </button>
                 </div>
               </div>
-              <p className="text-xs text-zinc-600">
-                {p.toolCount} tool{p.toolCount === 1 ? '' : 's'} · third-party plugin — manage installation, health and classification on the Plugins tab.
+              <p className="text-xs text-zinc-500">
+                {p.toolCount} tool{p.toolCount === 1 ? '' : 's'} · third-party plugin — manage installation, health and classification under Plugins at the top of this page.
               </p>
               {p.lastError && (
                 <p className="text-xs text-red-400 mt-1">⚠ Unhealthy: {p.lastError}</p>
@@ -692,11 +692,11 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
           const starting = retrievalStatus?.server.state === 'starting'
           const pct = dl && dl.totalBytes > 0 ? Math.min(100, Math.round((dl.receivedBytes / dl.totalBytes) * 100)) : 0
           return (
-            <div className="bg-zinc-800/40 rounded px-3 py-2.5 mt-4">
+            <div className="bg-zinc-950/40 border border-zinc-800 rounded-lg px-4 py-3 mt-4">
               <div className="flex items-center justify-between gap-2">
                 <span className="min-w-0">
                   <span className="text-sm text-zinc-200">Keep catalog-only tools out of every message</span>
-                  <span className="block text-xs text-zinc-600 mt-0.5">
+                  <span className="block text-xs text-zinc-500 mt-0.5">
                     The capabilities ticked below stay out of the tool list, which is the same on every message, so
                     the model never re-reads the conversation. It finds them with search_tools and calls them
                     through call_tool. Search runs a small model locally
@@ -748,7 +748,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
               )}
 
               {on && !config.tools?.enabled && (
-                <p className="text-xs mt-2 text-zinc-600">Tools are switched off for this profile, so there is nothing to keep out.</p>
+                <p className="text-xs mt-2 text-zinc-500">Tools are switched off for this profile, so there is nothing to keep out.</p>
               )}
             </div>
           )
@@ -810,13 +810,13 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
           )
         })()}
       </>) : (
-        <p className="text-xs text-zinc-600">Enable tools to let the model use web access and local capabilities via the built-in MCP server. Settings are saved with the active profile.</p>
+        <p className="text-xs text-zinc-500">Enable tools to let the model use web access and local capabilities via the built-in MCP server. Settings are saved with the active profile.</p>
       )}
 
       {/* External MCP Servers */}
       <div className="mt-6 pt-4 border-t border-zinc-700">
         <div className="flex items-center justify-between mb-3">
-          <p className="text-xs uppercase tracking-widest text-zinc-500">External MCP Servers</p>
+          <p className="text-base font-semibold text-zinc-100">Tool servers on other computers</p>
           {!showAddExternal && (
             <button onClick={() => setShowAddExternal(true)} className={btnCls.subtle}>
               + Add server
@@ -828,12 +828,12 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
           <span className="text-zinc-300 font-medium">Built-in Redstart MCP:</span>{' '}
           {config.tools?.enabled
             ? <span className="text-green-400">http://localhost:{(config.port ?? 19080) + 2}/mcp</span>
-            : <span className="text-zinc-600">Starts with server (enable tools above)</span>
+            : <span className="text-zinc-500">Starts with server (enable tools above)</span>
           }
         </div>
 
         {externalServers.length === 0 && !showAddExternal && (
-          <p className="text-xs text-zinc-600">No external MCP servers configured. Add a server URL to connect to an MCP server on another device.</p>
+          <p className="text-xs text-zinc-500">No external MCP servers configured. Add a server URL to connect to an MCP server on another device.</p>
         )}
 
         <div className="space-y-2">
@@ -843,7 +843,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                 <span className="text-sm text-zinc-200">{server.name}</span>
                 <span className="text-xs text-zinc-500 ml-2 break-all">{server.url}</span>
                 {server.hasApiKey && (
-                  <span className="text-xs text-zinc-600 ml-2" title="An API key is stored for this server">🔑</span>
+                  <span className="text-xs text-zinc-500 ml-2" tabIndex={0} role="img" aria-label="An API key is stored for this server" data-tip="An API key is stored for this server">🔑</span>
                 )}
                 {mcpTestResults[server.id] && (
                   <span className={`block text-xs mt-0.5 ${mcpTestResults[server.id].ok ? 'text-green-400' : 'text-red-400'}`}>
@@ -863,7 +863,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
               </button>
               <button
                 onClick={() => removeExternalMcpServer(server.id)}
-                className="text-xs text-zinc-600 hover:text-red-400 transition-colors px-1 flex-shrink-0">
+                className="text-xs text-zinc-500 hover:text-red-400 transition-colors px-1 flex-shrink-0">
                 ✕
               </button>
             </div>
@@ -926,8 +926,8 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
           names meaning opposite things — while the set that genuinely needs
           banning could not be named at all. */}
       <div className="mt-6 pt-4 border-t border-zinc-700">
-        <p className="text-xs uppercase tracking-widest text-zinc-500 mb-1">Banned Tools</p>
-        <p className="text-xs text-zinc-600 mb-3">
+        <p className="text-base font-semibold text-zinc-100 mb-1">Blocked tools</p>
+        <p className="text-xs text-zinc-500 mb-3">
           Client apps bring their own tools, which arrive already inside the request — this server never offers them, so it cannot withhold them either. Banning strips them by name from every request this profile serves, and clients cannot re-enable them. Applies to <span className="text-zinc-500">this profile</span>; other profiles have their own list.
         </p>
         <div className="space-y-2.5">
@@ -942,14 +942,14 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
                 />
                 <span className="min-w-0">
                   <span className="text-sm text-zinc-200">{app.name}</span>
-                  <span className="text-xs text-zinc-600 ml-1.5">({app.toolNames.length} tools)</span>
-                  <span className="block text-xs text-zinc-600">{app.description}</span>
+                  <span className="text-xs text-zinc-500 ml-1.5">({app.toolNames.length} tools)</span>
+                  <span className="block text-xs text-zinc-500">{app.description}</span>
                 </span>
               </label>
             )
           })}
         </div>
-        <p className="text-xs text-zinc-600 mt-3">
+        <p className="text-xs text-zinc-500 mt-3">
           To turn off one of this server's own capabilities, disable its card above — that stops it being served at all. To make the File System capability read-only, use its "Allow writes" toggle rather than banning the whole thing.
         </p>
       </div>

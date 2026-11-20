@@ -32,7 +32,7 @@ correct something.
 ```
 
 Nest never handles certificates itself; its bundled Caddy does. With HTTPS on
-(Network → Secure address), Caddy fronts the chat UI and MCP server on :443
+(Network & access → Secure address), Caddy fronts the chat UI and MCP server on :443
 and the gateway binds loopback. When the admin panel is also set to be
 reachable on the network, the bundled Caddy serves the control plane too, at
 `https://<name>:8443`, and never over plain HTTP. Use this directory's
