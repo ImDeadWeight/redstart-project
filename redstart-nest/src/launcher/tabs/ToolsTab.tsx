@@ -4,7 +4,6 @@ import { retrievalOnFor } from '../types'
 import type { useToolsCatalog } from '../hooks/useToolsCatalog'
 import type { useCapabilities, FolderCap } from '../hooks/useCapabilities'
 import { folderCapAllowCreate } from '../hooks/useCapabilities'
-import type { useExternalMcp } from '../hooks/useExternalMcp'
 import type { usePlugins } from '../hooks/usePlugins'
 import { Card, Chip, TogglePill, btnCls, inputCls } from '../components/ui'
 import { FolderPicker } from '../components/FolderPicker'
@@ -20,7 +19,8 @@ import { DeferralCard } from '../components/DeferralCard'
 // webAccessEnabled, see types.ts). Opening a row shows that tool's settings
 // directly under it, one at a time, so the page stays short however many
 // capabilities exist. The rarely touched parts (keeping tools out of the
-// prompt, tool servers elsewhere, blocked tools) fold away below the list.
+// prompt, blocked tools) fold away below the list. Tool servers on other
+// computers are their own view, Tools → External MCP (ExternalMcpTab.tsx).
 // ---------------------------------------------------------------------------
 
 type FolderCardDef = { cap: FolderCap; title: string; short: string; emptyText: string; description: string }
@@ -184,11 +184,10 @@ function FolderSettings({ caps, cap, title, emptyText, description }: {
 // Tools for this profile
 // ---------------------------------------------------------------------------
 
-export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
+export function ToolsTab({ config, toolsCatalog, caps, plugins }: {
   config: LlamaConfig
   toolsCatalog: ReturnType<typeof useToolsCatalog>
   caps: ReturnType<typeof useCapabilities>
-  mcp: ReturnType<typeof useExternalMcp>
   plugins: ReturnType<typeof usePlugins>
 }) {
   const {
@@ -209,13 +208,6 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
     saveWebSearchConfig, clearBraveApiKey,
     toolContextEstimate, retrievalStatus, applyRetrieval,
   } = caps
-  const {
-    externalServers, showAddExternal, setShowAddExternal,
-    newExtName, setNewExtName, newExtUrl, setNewExtUrl, mcpTestResults,
-    newExtApiKey, setNewExtApiKey, editingServerId, startEditServer, cancelServerForm,
-    addExternalError, addExternalWarnings,
-    addExternalMcpServer, removeExternalMcpServer, testExternalMcpServer,
-  } = mcp
   const [openId, setOpenId] = useState<string | null>(null)
   const openRow = (id: string) => setOpenId(prev => prev === id ? null : id)
 
@@ -781,105 +773,6 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
           </div>
         </Fold>
       )}
-
-      <Fold title="Tool servers on other computers" summary={externalServers.length ? `${externalServers.length} added` : 'None'}>
-        {!showAddExternal && (
-          <button onClick={() => setShowAddExternal(true)} className={`${btnCls.secondary} mb-3`}>Add a server</button>
-        )}
-        <div className="mb-3 rounded-lg bg-zinc-950/50 px-3 py-2 text-[13px] text-zinc-400">
-          <span className="text-zinc-300 font-medium">Built-in Redstart MCP:</span>{' '}
-          {config.tools?.enabled
-            ? <span className="text-green-400">http://localhost:{(config.port ?? 19080) + 2}/mcp</span>
-            : <span className="text-zinc-500">Starts with server (enable tools above)</span>
-          }
-        </div>
-
-        {externalServers.length === 0 && !showAddExternal && (
-          <p className="text-xs text-zinc-500">No external MCP servers configured. Add a server URL to connect to an MCP server on another device.</p>
-        )}
-
-        <div className="space-y-2">
-          {externalServers.map(server => (
-            <div key={server.id} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2">
-              <div className="flex-1 min-w-0">
-                <span className="text-sm text-zinc-200">{server.name}</span>
-                <span className="text-xs text-zinc-500 ml-2 break-all">{server.url}</span>
-                {server.hasApiKey && (
-                  <span className="text-xs text-zinc-500 ml-2" tabIndex={0} role="img" aria-label="An API key is stored for this server" data-tip="An API key is stored for this server">🔑</span>
-                )}
-                {mcpTestResults[server.id] && (
-                  <span className={`block text-xs mt-0.5 ${mcpTestResults[server.id].ok ? 'text-green-400' : 'text-red-400'}`}>
-                    {mcpTestResults[server.id].message}
-                  </span>
-                )}
-              </div>
-              <button
-                onClick={() => testExternalMcpServer(server.id, server.url)}
-                className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-1 flex-shrink-0">
-                Test
-              </button>
-              <button
-                onClick={() => startEditServer(server)}
-                className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-1 flex-shrink-0">
-                Edit
-              </button>
-              <button
-                onClick={() => removeExternalMcpServer(server.id)}
-                className="text-xs text-zinc-500 hover:text-red-400 transition-colors px-1 flex-shrink-0">
-                ✕
-              </button>
-            </div>
-          ))}
-        </div>
-
-        {/* Cautions about the server that was just added — plaintext to a remote
-            host, egress, an endpoint that doesn't look like /sse. Non-blocking
-            by design: the main process accepted it, and an admin at the console
-            is allowed to make these choices. See external-mcp-url.mjs. */}
-        {addExternalWarnings.length > 0 && (
-          <div className="mt-2 text-xs text-amber-300/90 bg-amber-950/30 border border-amber-900/60 rounded p-2 space-y-1">
-            {addExternalWarnings.map((w, i) => <p key={i}>⚠ {w}</p>)}
-          </div>
-        )}
-
-        {showAddExternal && (
-          <div className="mt-3 max-w-xl space-y-2 rounded-lg border border-zinc-700 bg-zinc-950/40 p-3">
-            <input
-              value={newExtName} onChange={e => setNewExtName(e.target.value)}
-              placeholder="Server name (e.g. Legal DB Server)"
-              className={inputCls.dark} />
-            <input
-              value={newExtUrl} onChange={e => setNewExtUrl(e.target.value)}
-              placeholder="Address (e.g. http://10.0.0.5:9000/mcp)"
-              className={inputCls.dark} />
-            <input
-              type="password"
-              value={newExtApiKey} onChange={e => setNewExtApiKey(e.target.value)}
-              placeholder={
-                editingServerId && externalServers.find(s => s.id === editingServerId)?.hasApiKey
-                  ? 'API key (leave blank to keep the current one)'
-                  : 'API key (optional — sent as Authorization: Bearer …)'
-              }
-              className={inputCls.dark} />
-            {/* A refusal from the main process. Without this the Add button
-                would simply do nothing on a rejected URL, which reads as a
-                broken button rather than a policy decision. */}
-            {addExternalError && (
-              <p className="text-xs text-red-400 bg-red-950/30 border border-red-900/60 rounded p-2">
-                {addExternalError}
-              </p>
-            )}
-            <div className="flex gap-2 pt-1">
-              <button onClick={addExternalMcpServer} className={btnCls.primary}>
-                {editingServerId ? 'Save changes' : 'Add server'}
-              </button>
-              <button onClick={cancelServerForm} className={btnCls.secondary}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-      </Fold>
 
       {/* Banned tools — the only control that reaches tools this server does
           not provide. Deliberately NOT a second list of the rows above: for a
