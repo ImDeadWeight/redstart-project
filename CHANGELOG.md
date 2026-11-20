@@ -6,6 +6,14 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ## 2026-11-20
 
+- **Vision models can see.** The chat UI already sent images (attachments, pastes, images in tool results) to any model whose `/props` reports vision, but Nest never passed `--mmproj`, so no model ever did. Now:
+  - **The catalog** no longer lists `mmproj-*.gguf` as a quant (`parseQuant` read `mmproj-F16` as "F16"). A vision repo's projector rides along with every quant instead, F16 preferred, then BF16, Q8_0, F32. Search rows say `vision`.
+  - **Downloads** fetch it after the model, checked against its sha256 like the model, saved under a repo-qualified name, and paired in `projectors.json` in the models folder. Deleting either side drops the pairing.
+  - **Launch** resolves the projector (`projector.mjs`): the profile's `vision: false`, then its `mmprojPath`, then the pairing. The run log and the admin status (`admin:get-status`) say which. The command preview uses the same path.
+  - **The launcher** hides projectors from the model picker (they are under "other files") and marks a paired model "sees images".
+  - Checked against the live Hub and the real TurboQuant+ build: `unsloth/Qwen3-VL-2B-Instruct-GGUF` Q4_K_M downloaded with `mmproj-F16.gguf`, launched with `--mmproj`, `/props` reported `vision: true`, and it described a test image correctly.
+  - Tests: `test-projector.mjs` (new, in `test:security` and CI), five new cases in `test-model-download.mjs`.
+
 - **The Nest launcher is redesigned: a status bar on top, six sections down the side.** The old six tabs mixed unrelated things (Configuration alone held profiles, the binary, every llama-server flag, the network, HTTPS, sign-in, updates and Shut down), every card looked the same, and the one control that matters most, Start/Stop, was a grey bar repeated under every tab.
   - **The title bar** now carries the status (with the model's name), the profile switcher, the chat address with Copy, and one Start/Stop button. Stop asks first, in a popup. It is still `h-12`, and `index.html`'s pre-mount bar draws the same logo and title, so test-packaging's 48px check holds.
   - **Sections** (`src/launcher/sections/`): Overview (status, a setup checklist derived from live state, connect a phone, and Updates, moved here from Network), Model (the model in use, your models, Hugging Face as a popup, plain-language memory settings with the llama.cpp flags under Advanced), Tools (For this profile / Plugins as separate views, keeping the plugin plan's two switches apart), Network & access, Activity (tasks and approvals / server log), and System (profiles with Use and Delete, the engine, start at login, Shut down behind a popup).

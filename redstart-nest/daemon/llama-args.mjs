@@ -77,6 +77,13 @@ export function buildArgs(config, raw = false) {
   } else if (config.chatTemplate?.trim()) {
     args.push('--chat-template', q(config.chatTemplate.trim()))
   }
+  // Vision projector. Set only by projector.mjs's resolveProjector(), which
+  // ipc/server.mjs applies before calling this — so the preview and the launch
+  // agree. With it, llama-server reports modalities.vision in /props and the
+  // chat UI starts sending images.
+  if (config.mmprojPath?.trim()) {
+    args.push('--mmproj', q(config.mmprojPath.trim()))
+  }
   // gpuLayers/nCpuMoe are omitted when unset rather than defaulted here —
   // llama-server's own --fit (on by default) only auto-adjusts arguments that
   // are still at their default value, so leaving these unset lets it compute

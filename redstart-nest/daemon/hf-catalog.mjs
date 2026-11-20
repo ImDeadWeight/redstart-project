@@ -14,6 +14,7 @@
 // =============================================================================
 
 import { fetchFollowingRedirects } from './http-redirects.mjs'
+import { isProjectorFile, pickProjector } from './projector.mjs'
 
 const API_ORIGIN = 'https://huggingface.co'
 const USER_AGENT = 'Redstart/1.0 (local AI assistant)'
@@ -168,9 +169,10 @@ export async function searchModels({ query = '', publisher = '', limit = 24 } = 
   if (!Array.isArray(raw)) return []
 
   return raw.filter(m => isValidRepoId(m?.id)).map(m => {
-    const ggufFiles = (m.siblings || [])
+    const allGguf = (m.siblings || [])
       .map(s => s?.rfilename)
       .filter(f => typeof f === 'string' && f.toLowerCase().endsWith('.gguf'))
+    const ggufFiles = allGguf.filter(f => !isProjectorFile(f))
     // Distinct quant labels, so a row can say "Q3_K_XL, Q4_K_M, Q8_0" without
     // the caller re-deriving it.
     const quants = [...new Set(ggufFiles.map(parseQuant).filter(Boolean))]
@@ -183,6 +185,7 @@ export async function searchModels({ query = '', publisher = '', limit = 24 } = 
       gated: !!m.gated,
       quants,
       ggufFileCount: ggufFiles.length,
+      vision: allGguf.length > ggufFiles.length,
     }
   })
 }
@@ -440,10 +443,14 @@ export async function getModelDescription(repoId, { detail = null } = {}) {
 // shard sets folded into a single multi-file entry.
 export function buildArtifacts(siblings) {
   const groups = new Map()
+  // A vision repo's projector is not a quant (parseQuant reads mmproj-F16 as
+  // "F16"); it rides along with every quant instead. See projector.mjs.
+  const projector = pickProjector(siblings)
 
   for (const s of siblings) {
     const rfilename = s?.rfilename
     if (typeof rfilename !== 'string' || !rfilename.toLowerCase().endsWith('.gguf')) continue
+    if (isProjectorFile(rfilename)) continue
 
     const shard = shardKey(rfilename)
     // Group by the shard base when split, otherwise by the file's own path, so
@@ -481,6 +488,9 @@ export function buildArtifacts(siblings) {
       // A set missing a part cannot be downloaded into something loadable.
       complete: g.files.length === g.shardTotal,
       verifiable: g.files.every(f => !!f.sha256),
+      // Downloaded with the quant, saved under a repo-qualified name, and
+      // paired with it for --mmproj. Null for a text-only repo.
+      projector,
     }
   }).sort((a, b) => (a.totalBytes ?? Infinity) - (b.totalBytes ?? Infinity))
 }

@@ -85,6 +85,9 @@ export function getFullStatus({ serverState }) {
     // 'skipped' (a bundled override that did not fit the model) or
     // 'user-override'. No path. See chat-template-choice.mjs.
     chatTemplate: running ? (serverState.chatTemplate ?? null) : null,
+    // Whether the running model got a vision projector: { source: 'profile' |
+    // 'paired' | 'none', projector: <file name>, warning }. See projector.mjs.
+    vision: running ? (serverState.vision ?? null) : null,
     port: config?.port ?? null,
     networkMode: config ? !!config.networkMode : null,
     gateway: { port: config ? getGatewayPort(config.port) : null },

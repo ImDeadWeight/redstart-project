@@ -94,9 +94,11 @@ While HTTPS is on (`mode` is `redstart` or `own`), ports 80, 443 and 8443 belong
 
 A **profile** bundles three things that are convenient to switch together but are not the same kind of thing:
 
-1. **Model configuration** — model path, context/batch/threads, GPU layers, KV-cache preset, port.
+1. **Model configuration** — model path, context/batch/threads, GPU layers, KV-cache preset, port, and vision (below).
 2. **Deployment configuration** — network mode.
 3. **Security policy** — which capabilities are active, which web sources are approved, and which tools are banned.
+
+**Vision.** A vision model in GGUF form comes with a projector file (`mmproj-*.gguf`), which llama-server loads with `--mmproj`. Only then can it read images. A model downloaded from Model → Hugging Face brings its repo's projector with it: saved as `<owner>_<repo>.<file>` (every repo calls its own `mmproj-F16.gguf`), and paired with the model in `projectors.json` in the models folder, which the model listing and the launch both read. Two optional profile fields override that: `mmprojPath` (a projector to use instead, for a model from elsewhere) and `vision: false` (launch without one). A missing projector file is logged and skipped, never passed. The server log says which projector a launch got, and the admin status (`admin:get-status`) reports it as `vision`.
 
 Two consequences worth being explicit about:
 

@@ -30,6 +30,7 @@ import { writePidFile, deletePidFile } from '../process-supervision.mjs'
 import { publish } from '../event-broker.mjs'
 import { startRun, appendLine, endRun } from '../process-log.mjs'
 import { chooseChatTemplate } from '../chat-template-choice.mjs'
+import { resolveProjector } from '../projector.mjs'
 
 // EMA smoothing factor for the tokens/sec readout (moved here with its sole
 // consumer, the launch handler's stdout parser).
@@ -55,7 +56,7 @@ function rememberDiscovery(config, { readSettings, writeSettings }) {
 // The preview applies the same chat-template choice as the launch, so a
 // skipped override is missing from the preview too.
 export function generateLlamaCommand(config, { buildArgs }) {
-  const args = buildArgs(chooseChatTemplate(config).config)
+  const args = buildArgs(resolveProjector(chooseChatTemplate(config).config).config)
   return `${serverBinaryName()} ${args.join(' ')}`
 }
 
@@ -158,7 +159,10 @@ Place it in the build output directory or the project root, or set a custom path
   // applied; see chat-template-choice.mjs. The decision goes into the run's
   // log below, and into the status (source only, no paths).
   const template = chooseChatTemplate(config)
-  const spawnArgs = buildArgs(template.config, true)
+  // Then the vision projector, on the template's output, the same order the
+  // preview uses. See projector.mjs.
+  const projector = resolveProjector(template.config)
+  const spawnArgs = buildArgs(projector.config, true)
 
   try {
     // --- Piped mode (in-app log + token tracking) ---
@@ -183,6 +187,8 @@ Place it in the build output directory or the project root, or set a custom path
     // in this file (llama-server prints it), and this log is admin-only.
     appendLine(template.logLine)
     publish('server:log', template.logLine)
+    appendLine(projector.logLine)
+    publish('server:log', projector.logLine)
     appendLine(`[redstart] args: ${spawnArgs.join(' ')}`)
 
     const forwardLines = (chunk) => {
@@ -222,6 +228,7 @@ Place it in the build output directory or the project root, or set a custom path
       serverState.ema = 0
       serverState.lastConfig = null
       serverState.chatTemplate = null
+      serverState.vision = null
       serverState.startedAt = null
       endRun()
       deletePidFile(userDataDir)
@@ -235,6 +242,7 @@ Place it in the build output directory or the project root, or set a custom path
       architecture: template.decision.architecture,
       warning: template.decision.warning,
     }
+    serverState.vision = projector.decision
     serverState.startedAt = Date.now()
     // Recorded so a hard-killed Nest (Task Manager, power loss — anything
     // that skips the exit handler above) can be reaped by PID, not by name,

@@ -193,6 +193,7 @@ function ArtifactRow({ artifact, gated, already, busy, active, progress, onDownl
               and a hopeful one, so its absence is stated rather than hidden. */}
           {artifact.verifiable ? 'checked against its sha256 on download' : 'no checksum published'}
           {!artifact.complete && <span className="text-amber-300"> · file set incomplete on Hugging Face</span>}
+          {artifact.projector && <span data-tip={`${artifact.projector.rfilename} is downloaded with it and loaded with --mmproj`}> · + vision projector ({gb(artifact.projector.size)})</span>}
         </span>
         {already ? (
           <span className="shrink-0 text-[13px] font-medium text-green-400">Downloaded</span>

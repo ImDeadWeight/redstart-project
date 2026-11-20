@@ -141,6 +141,9 @@ jobs:
       - name: "Security: model downloads (host allowlist, containment, checksums)"
         run: node scripts/test-model-download.mjs
 
+      - name: "Security: vision projectors (saved names, pairing, --mmproj)"
+        run: node scripts/test-projector.mjs
+
       - name: "Security: LAN exposure is a socket bind, not a firewall rule"
         run: node scripts/test-network-binding.mjs
 

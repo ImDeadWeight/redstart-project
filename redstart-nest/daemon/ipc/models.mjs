@@ -24,6 +24,7 @@ import * as path from 'path'
 import { searchModels, getModelDetail, getModelDescription, TRUSTED_PUBLISHERS } from '../hf-catalog.mjs'
 import { downloadArtifact, diskSpaceFor, discardPartials, PART_SUFFIX } from '../model-download.mjs'
 import { EMBED_MODEL } from '../embed-model.mjs'
+import { isProjectorFile, readProjectorIndex, forgetProjectorPairing } from '../projector.mjs'
 
 // Shard 2..N of a split GGUF ("-00002-of-00003.gguf"). Only shard 1 is a
 // loadable path — llama-server finds the rest itself — so the others must not
@@ -77,6 +78,7 @@ export async function listLocalModels({ resolveModelsDir, ensureModelsDir }) {
   try {
     ensureModelsDir?.()
     const entries = await fsp.readdir(dir, { withFileTypes: true })
+    const pairings = readProjectorIndex(dir)
     const files = []
     for (const e of entries) {
       if (!e.isFile()) continue
@@ -97,6 +99,10 @@ export async function listLocalModels({ resolveModelsDir, ensureModelsDir }) {
         // later shard is not a loadable path.
         embedding: e.name === EMBED_MODEL.rfilename,
         extraShard: Number(LATER_SHARD.exec(e.name)?.[1] ?? 1) > 1,
+        // A vision projector is not a chat model; a model paired with one
+        // launches with --mmproj (projector.mjs).
+        projector: isProjectorFile(e.name),
+        visionProjector: pairings[e.name] ?? null,
       })
     }
     files.sort((a, b) => b.modified - a.modified)
@@ -143,6 +149,7 @@ export async function deleteLocalModel(name, { resolveModelsDir }) {
     // a model is a multi-gigabyte re-download.
     if (hasRecycleBin()) {
       await moveToRecycleBin(target)
+      forgetProjectorPairing(dir, name)
       return { ok: true }
     }
     // Headless, there is no recycle bin — and unlike trash.mjs (which moves a
@@ -153,6 +160,7 @@ export async function deleteLocalModel(name, { resolveModelsDir }) {
     // re-downloadable in a way a user's own file is not. Deliberate
     // divergence from the recoverable-delete rule, for this one file type.
     await fsp.unlink(target)
+    forgetProjectorPairing(dir, name)
     return { ok: true }
   } catch (err) {
     return { ok: false, error: err.message }
@@ -209,7 +217,7 @@ export async function startModelDownload(req, { resolveModelsDir, sendProgress }
     if (cancelled) {
       // User cancellation discards the staging file. A network failure does
       // NOT — that .part is what makes the retry a resume.
-      await discardPartials(modelsDir, artifact).catch(() => {})
+      await discardPartials(modelsDir, artifact, repoId).catch(() => {})
     }
     sendProgress({
       repoId, artifactId: artifact?.id,

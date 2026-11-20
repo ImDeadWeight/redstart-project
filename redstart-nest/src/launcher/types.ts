@@ -31,6 +31,8 @@ export type CatalogModel = {
   gated: boolean
   quants: string[]
   ggufFileCount: number
+  /** The repo ships a vision projector (mmproj). Absent from an older daemon. */
+  vision?: boolean
 }
 
 export type ModelArtifact = {
@@ -42,6 +44,8 @@ export type ModelArtifact = {
   totalBytes: number | null
   complete: boolean
   verifiable: boolean
+  /** The vision projector downloaded with this quant, or null for a text-only repo. Absent from an older daemon. */
+  projector?: { rfilename: string; size: number | null; sha256: string | null } | null
 }
 
 export type ModelDetail = {
@@ -83,6 +87,10 @@ export type LocalModelFile = {
   embedding?: boolean
   /** Shard 2..N of a split GGUF — not a loadable path on its own. Absent from an older daemon. */
   extraShard?: boolean
+  /** A vision projector (mmproj) — loaded with its model, not on its own. Absent from an older daemon. */
+  projector?: boolean
+  /** The projector this model launches with (--mmproj), or null. Absent from an older daemon. */
+  visionProjector?: string | null
 }
 
 export type DownloadProgress = {

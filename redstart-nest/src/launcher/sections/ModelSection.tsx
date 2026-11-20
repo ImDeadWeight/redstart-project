@@ -76,8 +76,8 @@ export function ModelSection({
   useEffect(() => { openTab() }, [openTab])
 
   const modelPath = config.modelPath
-  const usable = localFiles.filter(f => !f.partial && !f.embedding && !f.extraShard).sort((a, b) => a.name.localeCompare(b.name))
-  const others = localFiles.filter(f => f.partial || f.embedding || f.extraShard)
+  const usable = localFiles.filter(f => !f.partial && !f.embedding && !f.extraShard && !f.projector).sort((a, b) => a.name.localeCompare(b.name))
+  const others = localFiles.filter(f => f.partial || f.embedding || f.extraShard || f.projector)
   const inUse = usable.find(f => modelPath && samePath(f.path, modelPath))
   const set = <K extends keyof LlamaConfig>(k: K, v: LlamaConfig[K]) => setConfig(prev => ({ ...prev, [k]: v }))
   const ctxIsPreset = CONTEXT_PRESETS.some(p => p.value === config.ctxSize)
@@ -135,7 +135,7 @@ export function ModelSection({
                 <div key={f.path} className={`flex flex-wrap items-center gap-3 rounded-xl border px-3.5 py-2.5 ${active ? 'border-orange-500/70 bg-orange-500/5' : 'border-zinc-800 bg-zinc-950/40'}`}>
                   <div className="min-w-[14rem] flex-1">
                     <div className="break-all text-sm font-medium text-zinc-100">{f.name}</div>
-                    <div className="text-[13px] text-zinc-500">{gb(f.size)}</div>
+                    <div className="text-[13px] text-zinc-500">{gb(f.size)}{f.visionProjector && <span data-tip={`Loads with ${f.visionProjector}, so it can see images`}> · sees images</span>}</div>
                   </div>
                   {active
                     ? <Chip tone="ok">In use</Chip>
@@ -154,12 +154,12 @@ export function ModelSection({
 
         {others.length > 0 && (
           <details className="mt-3">
-            <summary className="flex items-center gap-2 text-[13px] text-zinc-400"><span className="chev">›</span>{others.length} other file{others.length === 1 ? '' : 's'} (incomplete downloads, extra parts, the search model)</summary>
+            <summary className="flex items-center gap-2 text-[13px] text-zinc-400"><span className="chev">›</span>{others.length} other file{others.length === 1 ? '' : 's'} (incomplete downloads, extra parts, vision projectors, the search model)</summary>
             <ul className="mt-2 space-y-1">
               {others.map(f => (
                 <li key={f.name} className="flex items-center gap-3 text-[13px]">
                   <span className={`min-w-0 flex-1 break-all ${f.partial ? 'text-amber-300' : 'text-zinc-400'}`}>
-                    {f.name}{f.partial ? ' — incomplete download' : f.embedding ? ' — used by document and tool search' : ' — part of a split model'}
+                    {f.name}{f.partial ? ' — incomplete download' : f.embedding ? ' — used by document and tool search' : f.projector ? ' — vision projector, loaded with its model' : ' — part of a split model'}
                   </span>
                   <span className="text-zinc-500">{gb(f.size)}</span>
                   {f.partial && <button type="button" onClick={() => deleteLocal(f.name)} className={btnCls.subtle}>Delete</button>}
