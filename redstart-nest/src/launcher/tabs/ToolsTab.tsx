@@ -187,8 +187,9 @@ function FolderSettings({ caps, cap, title, emptyText, description }: {
 // Tools for this profile
 // ---------------------------------------------------------------------------
 
-export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
+export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins, onOpenImages }: {
   config: LlamaConfig
+  onOpenImages: () => void
   toolsCatalog: ReturnType<typeof useToolsCatalog>
   caps: ReturnType<typeof useCapabilities>
   mcp: ReturnType<typeof useExternalMcp>
@@ -519,7 +520,7 @@ export function ToolsTab({ config, toolsCatalog, caps, mcp, plugins }: {
               status={statusOf(isActive('image_generation'), docsDir, 'Needs Documents')} on={isActive('image_generation')}
               onToggle={() => toggleTool('image_generation')}
               open={openId === 'image_generation'} onOpen={() => openRow('image_generation')}>
-              <ImageGenerationCard documentsConfigured={docsDir} />
+              <ImageGenerationCard documentsConfigured={docsDir} onOpenImages={onOpenImages} />
             </ToolRow>
 
             <ToolRow name="Document search" short="Find answers in people&rsquo;s own files, with sources"

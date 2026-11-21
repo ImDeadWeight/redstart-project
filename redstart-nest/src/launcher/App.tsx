@@ -40,6 +40,7 @@ import { Sidebar, type SectionId } from './sections/Sidebar'
 import { OverviewSection } from './sections/OverviewSection'
 import { ModelSection } from './sections/ModelSection'
 import { ToolsSection } from './sections/ToolsSection'
+import { ImagesSection } from './sections/ImagesSection'
 import { NetworkSection } from './sections/NetworkSection'
 import { ActivitySection } from './sections/ActivitySection'
 import { TerminalSection } from './sections/TerminalSection'
@@ -227,8 +228,11 @@ export default function App() {
                 onGenerateCommand={generateCommand}
               />
             )}
+            {section === 'images' && (
+              <ImagesSection config={config} documentsConfigured={!!caps.capabilityConfig?.documents.outputDir} onNavigate={setSection} />
+            )}
             {section === 'tools' && (
-              <ToolsSection config={config} toolsCatalog={toolsCatalog} caps={caps} mcp={mcp} plugins={plugins} />
+              <ToolsSection config={config} toolsCatalog={toolsCatalog} caps={caps} mcp={mcp} plugins={plugins} onOpenImages={() => setSection('images')} />
             )}
             {section === 'network' && (
               <NetworkSection

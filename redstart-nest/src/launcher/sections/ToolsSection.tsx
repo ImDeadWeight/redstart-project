@@ -18,8 +18,10 @@ import { PageHeader, Segmented } from '../components/ui'
 import { ToolsTab } from '../tabs/ToolsTab'
 import { PluginsTab } from '../tabs/PluginsTab'
 
-export function ToolsSection({ config, toolsCatalog, caps, mcp, plugins }: {
+export function ToolsSection({ config, toolsCatalog, caps, mcp, plugins, onOpenImages }: {
   config: LlamaConfig
+  /** The Images page, where image generation is set up (its row here links there). */
+  onOpenImages: () => void
   toolsCatalog: ReturnType<typeof useToolsCatalog>
   caps: ReturnType<typeof useCapabilities>
   mcp: ReturnType<typeof useExternalMcp>
@@ -43,7 +45,7 @@ export function ToolsSection({ config, toolsCatalog, caps, mcp, plugins }: {
         ]}
       />
       {view === 'profile'
-        ? <ToolsTab config={config} toolsCatalog={toolsCatalog} caps={caps} mcp={mcp} plugins={plugins} />
+        ? <ToolsTab config={config} toolsCatalog={toolsCatalog} caps={caps} mcp={mcp} plugins={plugins} onOpenImages={onOpenImages} />
         : <PluginsTab plugins={plugins} />}
     </div>
   )

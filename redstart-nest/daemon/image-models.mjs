@@ -227,7 +227,7 @@ export function deleteImageModel(modelsDir, file) {
 export function resolveImageModel(capCfg, modelsDir) {
   const index = readImageIndex(modelsDir)
   const chosen = capCfg?.model && index[capCfg.model] ? capCfg.model : null
-  if (!chosen) throw new Error('No image model is chosen on this server. An admin picks one in Nest under Tools → Image generation.')
+  if (!chosen) throw new Error('No image model is chosen on this server. An admin picks one on the Images page in Nest.')
   const m = index[chosen]
   const fam = FAMILIES[m.family]
   const main = resolveWithinRoot(imageDir(modelsDir), chosen)
@@ -235,7 +235,7 @@ export function resolveImageModel(capCfg, modelsDir) {
   const components = { [fam.slot]: main }
   for (const key of fam.companions) {
     const p = companionPath(modelsDir, key)
-    if (!fs.existsSync(p)) throw new Error(`The image model's ${COMPANIONS[key].slot} file is missing; download the model again from Tools → Image generation.`)
+    if (!fs.existsSync(p)) throw new Error(`The image model's ${COMPANIONS[key].slot} file is missing; download the model again from the Images page in Nest.`)
     components[COMPANIONS[key].slot] = p
   }
   return { file: chosen, family: m.family, familyLabel: fam.label, components, defaults: fam.defaults, maxSteps: fam.maxSteps }
