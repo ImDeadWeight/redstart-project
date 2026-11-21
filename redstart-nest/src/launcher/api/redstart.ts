@@ -11,8 +11,7 @@ import type {
   TlsStatus, TlsPatch,
   HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup, ToolContextEstimate, RetrievalStatus,
   ExternalMcpServer, LlamaConfig, ClientApp, ControlPlaneState, StartupState, UpdateState, UpdateStatus,
-  CatalogModel, ModelDetail, ModelDescription, ModelArtifact, LocalModelFile, DownloadProgress,
-} from '../types'
+  CatalogModel, ModelDetail, ModelDescription, ModelArtifact, LocalModelFile, DownloadProgress, ImageGenerationStatus, ImageCatalogModel, ImageRepoDetail, ImageProgress, ImageTransferProgress } from '../types'
 
 export type RedstartAPI = {
   hardware: {
@@ -208,6 +207,15 @@ export type RedstartAPI = {
     setDeferred: (config: { id: string; deferred: boolean | null }) => Promise<{ ok: boolean; error?: string }>
     // Shared Documents' folder (master plan 6.2); { clear: true } removes it.
     setSharedDocuments: (config: { rootDir?: string; clear?: boolean }) => Promise<{ ok: boolean; error?: string }>
+    // Image generation (ipc/image-generation.mjs).
+    imageGeneration: () => Promise<ImageGenerationStatus>
+    setImageGeneration: (config: { model?: string | null; backend?: ImageGenerationStatus['backend']; timeoutS?: number }) => Promise<{ ok: boolean; error?: string }>
+    installImageEngine: () => Promise<{ ok: boolean; error?: string }>
+    searchImageModels: (opts: { query: string }) => Promise<{ ok: boolean; error?: string; results: ImageCatalogModel[] }>
+    imageRepo: (repoId: string) => Promise<ImageRepoDetail>
+    downloadImageModel: (req: { repoId: string; rfilename: string; family: string }) => Promise<{ ok: boolean; error?: string; cancelled?: boolean; file?: string }>
+    cancelImageDownload: () => Promise<{ ok: boolean }>
+    deleteImageModel: (file: string) => Promise<{ ok: boolean; error?: string }>
   }
   plugins: {
     list: () => Promise<PluginSummary[]>
@@ -279,6 +287,17 @@ export type RedstartAPI = {
     offServerStarted: () => void
     onModelDownloadProgress: (cb: (p: DownloadProgress) => void) => void
     offModelDownloadProgress: () => void
+    // The chat model paused for image generation, and back (ipc/server.mjs).
+    onServerSuspended: (cb: () => void) => void
+    offServerSuspended: () => void
+    onServerResumed: (cb: () => void) => void
+    offServerResumed: () => void
+    onImageProgress: (cb: (p: ImageProgress) => void) => void
+    offImageProgress: () => void
+    onImageDownloadProgress: (cb: (p: ImageTransferProgress) => void) => void
+    offImageDownloadProgress: () => void
+    onImageRuntimeProgress: (cb: (p: ImageTransferProgress) => void) => void
+    offImageRuntimeProgress: () => void
     onPluginInstallProgress: (cb: (p: PluginInstallProgress) => void) => void
     offPluginInstallProgress: () => void
     // Every change in the updater's state, to every admin UI. A remote admin

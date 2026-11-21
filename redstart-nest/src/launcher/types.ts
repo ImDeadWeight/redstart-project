@@ -413,3 +413,64 @@ export type TlsStatus = {
   egress: { host: string; purpose: string }[]
 }
 export type TlsPatch = Partial<{ mode: TlsMode; provider: TlsProvider; name: string; token: string; requireHttps: boolean; acmeStaging: boolean; consentAsked: true }>
+
+// ---------------------------------------------------------------------------
+// Image generation (ipc/image-generation.mjs)
+// ---------------------------------------------------------------------------
+
+export type ImageModelEntry = {
+  file: string
+  repoId: string
+  revision: string
+  rfilename: string
+  family: string
+  familyLabel: string
+  bytes: number
+  ready: boolean
+  missingCompanions: string[]
+}
+
+export type ImageFamily = {
+  id: string
+  label: string
+  note: string
+  defaults: { steps: number; cfgScale: number; sampler: string; width: number; height: number }
+  companionBytes: number
+}
+
+export type ImageGenerationStatus = {
+  enabled: boolean
+  model: string | null
+  backend: 'auto' | 'cuda' | 'vulkan' | 'metal'
+  timeoutS: number
+  models: ImageModelEntry[]
+  families: ImageFamily[]
+  engine: {
+    release: string
+    nvidia: boolean
+    buildKey: string | null
+    label: string | null
+    installed: boolean
+    downloadBytes: number
+    installing: boolean
+    available: string[]
+  }
+  downloading: { repoId: string; rfilename: string } | null
+  busy: { reason: string; since: number; paused: boolean } | null
+}
+
+export type ImageCatalogModel = { repoId: string; author: string; downloads: number; likes: number; gated: boolean; weightFileCount: number }
+
+export type ImageRepoDetail = {
+  ok: boolean
+  error?: string
+  repoId: string
+  revision: string | null
+  gated: boolean
+  license: string | null
+  family: string | null
+  files: { rfilename: string; size: number | null; sha256: string | null }[]
+}
+
+export type ImageProgress = { phase: string; step?: number; steps?: number; image?: number; count?: number }
+export type ImageTransferProgress = { state: string; receivedBytes?: number; totalBytes?: number; file?: string; error?: string | null }

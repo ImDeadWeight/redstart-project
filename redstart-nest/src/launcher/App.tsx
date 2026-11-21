@@ -109,7 +109,11 @@ export default function App() {
 
   // --- Derived state ---
 
-  const { serverState, health } = server
+  const { serverState, health, imageProgress } = server
+  const paused = health === 'suspended'
+  const imageStep = imageProgress?.step && imageProgress.steps
+    ? `step ${imageProgress.step}/${imageProgress.steps}${(imageProgress.count ?? 1) > 1 ? `, image ${imageProgress.image ?? 1} of ${imageProgress.count}` : ''}`
+    : imageProgress?.phase === 'decoding' || imageProgress?.phase === 'saving' ? 'finishing' : 'loading'
   const isRunning = serverState === 'running'
   const isStopping = serverState === 'stopping'
   const isStarting = serverState === 'starting'
@@ -158,10 +162,10 @@ export default function App() {
         </>}
       >
         <StatusPill
-          tone={isRunning ? 'on' : isStopping || isStarting ? 'pending' : 'off'}
-          label={isRunning ? (health === 'no slot available' ? 'Busy' : health === 'unreachable' ? 'Not responding' : 'Running') : isStopping ? 'Stopping…' : isStarting ? 'Starting…' : 'Stopped'}
-          detail={isRunning || isStarting ? modelName : undefined}
-          tip={isRunning ? `Serving ${modelName}${health === 'no slot available' ? ', busy answering' : ''}` : config.modelPath ? 'Press Start to load the model' : 'No model chosen yet'}
+          tone={paused ? 'pending' : isRunning ? 'on' : isStopping || isStarting ? 'pending' : 'off'}
+          label={paused ? 'Paused' : isRunning ? (health === 'no slot available' ? 'Busy' : health === 'unreachable' ? 'Not responding' : 'Running') : isStopping ? 'Stopping…' : isStarting ? 'Starting…' : 'Stopped'}
+          detail={paused ? `making an image, ${imageStep}` : isRunning || isStarting ? modelName : undefined}
+          tip={paused ? `${modelName} is paused while an image is made; it reloads by itself, and chats wait for it` : isRunning ? `Serving ${modelName}${health === 'no slot available' ? ', busy answering' : ''}` : config.modelPath ? 'Press Start to load the model' : 'No model chosen yet'}
         />
         <label className="hidden items-center gap-2 text-[13px] text-zinc-400 lg:flex">
           Profile
