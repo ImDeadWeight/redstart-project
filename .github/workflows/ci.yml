@@ -150,6 +150,9 @@ jobs:
       - name: "Security: model pause/resume for image generation (gateway stays up, Stop wins)"
         run: node scripts/test-model-suspend.mjs
 
+      - name: "Security: GPU lease (one holder, always resumes, crash recovery)"
+        run: node scripts/test-gpu-lease.mjs
+
       - name: "Security: LAN exposure is a socket bind, not a firewall rule"
         run: node scripts/test-network-binding.mjs
 

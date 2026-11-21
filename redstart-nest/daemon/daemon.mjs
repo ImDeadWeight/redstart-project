@@ -52,6 +52,8 @@ import { sweepOrphanWorkspaces } from './conversation-workspace.mjs'
 import { initLogger, closeLogger, logEvent } from './logger.mjs'
 import { initProcessLog } from './process-log.mjs'
 import { reapStaleProcess, deletePidFile } from './process-supervision.mjs'
+import { initGpuLease, recoverGpuLease } from './gpu-lease.mjs'
+import { suspendModel, resumeModel, launchServer } from './ipc/server.mjs'
 import { startEmbedServer, stopEmbedServer, embedServerStatus } from './embed-server.mjs'
 import { embedModelPath, hasEmbedModel } from './embed-model.mjs'
 import { writeDaemonPid, clearDaemonPid } from './daemon-pidfile.mjs'
@@ -447,7 +449,21 @@ function setupAdminApi() {
   }
 
   setAdminApi(buildAdminApi(deps))
+
+  // Image generation's hold on the GPU (gpu-lease.mjs): pause and resume the
+  // chat model through the same lifecycle chain as Start and Stop.
+  serverDeps = deps
+  initGpuLease({
+    suspend: (opts) => suspendModel(deps, opts),
+    resume: () => resumeModel(deps),
+    markerDir: userDataDir,
+    currentConfig: () => serverState.lastConfig ?? null,
+  })
 }
+
+// The deps table setupAdminApi() built, for startup steps that drive the
+// server lifecycle themselves (recoverGpuLease's relaunch).
+let serverDeps = null
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -508,6 +524,19 @@ export async function startDaemon(entrypoint = {}) {
   setupAdminApi()
   await startDiscoveryBeacon()
   await startAdminPlane()
+  // A daemon that died while an image was being generated left the GPU lease
+  // marker behind and its model paused: bring that model back (plan decision
+  // U-IG4). After the control plane is up, so a launch failure is visible to
+  // an admin. Never throws.
+  const lease = await recoverGpuLease({
+    markerDir: configDir(),
+    relaunch: (config) => launchServer(config, serverDeps),
+  })
+  if (lease.found) {
+    console.log(lease.relaunched
+      ? 'Reloaded the model that was paused for image generation when Nest last stopped'
+      : `Cleared an image-generation GPU lease left by the last session${lease.error ? `: ${lease.error}` : ''}`)
+  }
   // LAST, and only once the control plane is actually bound. A second daemon
   // started while one is already running fails at that bind; had it recorded
   // its pid on the way in, it would have overwritten the live daemon's entry
