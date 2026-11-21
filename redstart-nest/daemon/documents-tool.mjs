@@ -31,6 +31,7 @@ import ExcelJS from 'exceljs'
 import { resolveWithinRoot } from './path-scope.mjs'
 import { resolveUserRoot } from './user-scope.mjs'
 import { fileLink } from './tool-result-links.mjs'
+import { inspectImageFile } from './image-info.mjs'
 import { isWellFormedConversationId, workspaceRelative } from './conversation-workspace.mjs'
 
 const FORMATS = [
@@ -38,7 +39,7 @@ const FORMATS = [
   'text', 'csv', 'json', 'html',
   'python', 'javascript', 'powershell',
 ]
-const TOOL_NAMES = ['create_document', 'read_document', 'list_documents']
+const TOOL_NAMES = ['create_document', 'read_document', 'list_documents', 'view_image']
 // Code, config and data files are text (2026-11-18): Ornith's runs hit 103
 // "Unsupported file type .mjs" errors reading a small Node project, a file
 // any reader of text could open. extractText also reads an unlisted file
@@ -541,6 +542,51 @@ async function readDocument(docCfg, args, conversationId) {
   return { content: [{ type: 'text', text: out }] }
 }
 
+/**
+ * The largest image the chat UI will fetch and send to a vision model
+ * (MAX_LINKED_IMAGE_BYTES in chat-ui's agentic-tool-exec.ts, and the task
+ * runner's own copy in task-ports.mjs). A bigger one is still linked, but the
+ * model is told it will not be shown, rather than being told to look at
+ * nothing.
+ */
+export const VIEW_IMAGE_MAX_BYTES = 4 * 1024 * 1024
+
+/**
+ * view_image: an image in the caller's documents folder or this chat's
+ * workspace, as a resource link. The bytes never enter the result: the host
+ * (chat UI, or the task runner) fetches a linked image for a model that can
+ * see, for that request only, so the transcript holds one line, not base64.
+ */
+function viewImage(docCfg, args, conversationId) {
+  const imgPath = args?.path
+  if (!imgPath || typeof imgPath !== 'string') {
+    return { isError: true, content: [{ type: 'text', text: 'Missing required argument: path' }] }
+  }
+  let filePath
+  try {
+    filePath = resolveWithinRoot(docCfg.outputDir, imgPath)
+  } catch {
+    return { isError: true, content: [{ type: 'text', text: 'Path is outside the configured documents folder' }] }
+  }
+  if (!isFile(filePath)) filePath = inConversationWorkspace(docCfg, imgPath, conversationId)
+  if (!filePath) {
+    return { isError: true, content: [{ type: 'text', text: `File not found: ${imgPath}. Use list_documents to see available files.` }] }
+  }
+  const info = inspectImageFile(filePath)
+  if (!info.ok) return { isError: true, content: [{ type: 'text', text: `${imgPath}: ${info.reason}` }] }
+
+  const relativePath = path.relative(docCfg.outputDir, filePath).split(path.sep).join('/')
+  const size = info.width && info.height ? `${info.width}×${info.height} ` : ''
+  const kb = Math.round(info.bytes / 1024)
+  const lines = [`${relativePath}: ${size}${info.mimeType.slice(6).toUpperCase()}, ${kb} KB.`]
+  if (info.bytes > VIEW_IMAGE_MAX_BYTES) {
+    lines.push(`It is larger than ${VIEW_IMAGE_MAX_BYTES / 1048576} MB, so it is not shown to you. Describe it from its name and size, or make a smaller copy with run_python and view that.`)
+  } else {
+    lines.push('The picture is attached to this result for you to look at. If you cannot see it, the model loaded on this server cannot read images: say so rather than guessing.')
+  }
+  return { content: [{ type: 'text', text: lines.join('\n') }, fileLink(relativePath, { bytes: info.bytes, mimeType: info.mimeType })] }
+}
+
 function listDocuments(docCfg) {
   const root = path.resolve(docCfg.outputDir)
   const entries = []
@@ -605,6 +651,17 @@ export function toolDefs(cfg) {
       },
     },
     {
+      name: 'view_image',
+      description: 'Look at an image (PNG, JPEG, WebP or GIF) in your documents folder on the Redstart server or attached to this conversation: a photo, a screenshot, a chart run_python made, a generated picture. The image is shown to you with the result, so you can describe it, read text in it, or check your own work. Only works when the loaded model can read images.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Image path relative to the documents folder (e.g. "photos/receipt.jpg"). A file attached to this conversation, or made in it, can be given by its name alone.' },
+        },
+        required: ['path'],
+      },
+    },
+    {
       name: 'list_documents',
       // The File System sentence (2026-11-18): asked to delete a file in the
       // File System folder, Ornith listed this folder twice, did not see it,
@@ -664,6 +721,13 @@ export async function callTool(name, args, cfg, ctx) {
       return await readDocument(docCfg, args, ctx?.conversationId)
     } catch (err) {
       return { isError: true, content: [{ type: 'text', text: `Failed to read document: ${err.message}` }] }
+    }
+  }
+  if (name === 'view_image') {
+    try {
+      return viewImage(docCfg, args, ctx?.conversationId)
+    } catch (err) {
+      return { isError: true, content: [{ type: 'text', text: `Failed to open image: ${err.message}` }] }
     }
   }
   if (name === 'list_documents') {

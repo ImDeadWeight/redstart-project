@@ -19,6 +19,7 @@
 // are retired, replaced by a native picker that itself retired — FolderPicker.tsx
 // now only ever uses admin/browse-routes.mjs.
 import { getCapabilities, setCapabilityConfig, getDeferralOverrides, setDeferralOverride } from '../tools-storage.mjs'
+import { imageGenerationHandlers } from './image-generation.mjs'
 import { BUILTIN_CAPABILITIES } from '../tools-definitions.mjs'
 import { listPlugins } from '../plugin-registry.mjs'
 import { DEFERRED_BY_DEFAULT } from '../tool-deferral.mjs'
@@ -354,6 +355,8 @@ export function capabilitiesHandlers(deps) {
     'capabilities:set-deferred': (config) => setDeferredConfig(config, deps),
     'capabilities:set-shared-documents': (config) => setSharedDocumentsConfig(config, deps),
     'capabilities:install-python': async () => installPythonRuntime(deps),
+    // Image generation: settings, the engine, image models (ipc/image-generation.mjs).
+    ...imageGenerationHandlers(deps),
   }
 
   // Built in a loop, and that is exactly why the contract tests scan the real

@@ -31,6 +31,8 @@ export type CatalogModel = {
   gated: boolean
   quants: string[]
   ggufFileCount: number
+  /** The repo ships a vision projector (mmproj). Absent from an older daemon. */
+  vision?: boolean
 }
 
 export type ModelArtifact = {
@@ -42,6 +44,8 @@ export type ModelArtifact = {
   totalBytes: number | null
   complete: boolean
   verifiable: boolean
+  /** The vision projector downloaded with this quant, or null for a text-only repo. Absent from an older daemon. */
+  projector?: { rfilename: string; size: number | null; sha256: string | null } | null
 }
 
 export type ModelDetail = {
@@ -83,6 +87,10 @@ export type LocalModelFile = {
   embedding?: boolean
   /** Shard 2..N of a split GGUF — not a loadable path on its own. Absent from an older daemon. */
   extraShard?: boolean
+  /** A vision projector (mmproj) — loaded with its model, not on its own. Absent from an older daemon. */
+  projector?: boolean
+  /** The projector this model launches with (--mmproj), or null. Absent from an older daemon. */
+  visionProjector?: string | null
 }
 
 export type DownloadProgress = {
@@ -405,3 +413,69 @@ export type TlsStatus = {
   egress: { host: string; purpose: string }[]
 }
 export type TlsPatch = Partial<{ mode: TlsMode; provider: TlsProvider; name: string; token: string; requireHttps: boolean; acmeStaging: boolean; consentAsked: true }>
+
+// ---------------------------------------------------------------------------
+// Image generation (ipc/image-generation.mjs)
+// ---------------------------------------------------------------------------
+
+export type ImageModelEntry = {
+  file: string
+  repoId: string
+  revision: string
+  rfilename: string
+  family: string
+  familyLabel: string
+  bytes: number
+  ready: boolean
+  missingCompanions: string[]
+}
+
+export type ImageFamily = {
+  id: string
+  label: string
+  note: string
+  defaults: { steps: number; cfgScale: number; sampler: string; width: number; height: number }
+  companionBytes: number
+}
+
+export type ImageGenerationStatus = {
+  enabled: boolean
+  model: string | null
+  backend: 'auto' | 'cuda' | 'vulkan' | 'metal'
+  timeoutS: number
+  models: ImageModelEntry[]
+  families: ImageFamily[]
+  engine: {
+    release: string
+    nvidia: boolean
+    buildKey: string | null
+    label: string | null
+    installed: boolean
+    downloadBytes: number
+    installing: boolean
+    available: string[]
+  }
+  downloading: { repoId: string; rfilename: string } | null
+  publishers: { id: string; label: string; note: string }[]
+  busy: { reason: string; since: number; paused: boolean } | null
+}
+
+export type ImageCatalogModel = { repoId: string; author: string; downloads: number; likes: number; lastModified: string | null; gated: boolean; weightFileCount: number; quants: string[] }
+
+export type ImageRepoDetail = {
+  ok: boolean
+  error?: string
+  repoId: string
+  revision: string | null
+  gated: boolean
+  downloads: number
+  likes: number
+  license: string | null
+  baseModels: string[]
+  family: string | null
+  description: ModelDescription | null
+  files: { rfilename: string; size: number | null; sha256: string | null; quantLabel: string; quantRecognized: boolean }[]
+}
+
+export type ImageProgress = { phase: string; step?: number; steps?: number; image?: number; count?: number }
+export type ImageTransferProgress = { state: string; receivedBytes?: number; totalBytes?: number; file?: string; error?: string | null }

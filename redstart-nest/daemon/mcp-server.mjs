@@ -32,6 +32,7 @@ import * as filesystemProvider from './filesystem-mcp-provider.mjs'
 import * as fsDeleteTool from './fs-delete-tool.mjs'
 import * as scholarTool from './scholar-tool.mjs'
 import * as pythonTool from './python-tool.mjs'
+import * as imageGenTool from './image-gen-tool.mjs'
 import * as memoryTool from './memory-tool.mjs'
 import * as documentSearchTool from './document-search-tool.mjs'
 import * as skillsTool from './skills-tool.mjs'
@@ -71,7 +72,7 @@ import { rebindHttpServer } from './listener-rebind.mjs'
 // searchToolsProvider is LAST, and deliberately: it is the only provider whose
 // job is to describe the others, so it must never shadow one of them on a name
 // collision, and its own tool must never appear in the catalog it searches.
-const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, memoryTool, documentSearchTool, skillsTool, interactionTools, searchToolsProvider]
+const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, imageGenTool, memoryTool, documentSearchTool, skillsTool, interactionTools, searchToolsProvider]
 
 // Resolved per call, never captured in a const: a plugin installed or removed
 // while Nest is running must take effect without a restart. Built-ins come

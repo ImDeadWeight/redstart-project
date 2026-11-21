@@ -91,6 +91,11 @@ const EVENT_CHANNELS: Record<string, string> = {
   onServerStopped: 'server:stopped',
   onServerStarted: 'server:started',
   onModelDownloadProgress: 'models:download-progress',
+  onServerSuspended: 'server:suspended',
+  onServerResumed: 'server:resumed',
+  onImageProgress: 'image:progress',
+  onImageDownloadProgress: 'image:download-progress',
+  onImageRuntimeProgress: 'image:runtime-progress',
   onPluginInstallProgress: 'plugins:install-progress',
   onUpdateStatus: 'update:status',
 }

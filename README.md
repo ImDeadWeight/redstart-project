@@ -20,29 +20,37 @@ LM Studio, Jan and Ollama are model runners — very good ones — aimed at gett
 ## Screenshots
 
 <p align="center">
-  <img src="docs/screenshots/tour.png" width="100%" alt="A tour of Redstart, advancing every few seconds: a chat answering with a comparison table, then the Nest admin panel's Overview, Tools, Model, Network & access and Terminal pages, then the chat's Accounts, Roles and Workflows settings." />
+  <img src="docs/screenshots/tour.png" width="100%" alt="A tour of Redstart, advancing every few seconds: a chat answering with a comparison table; the Nest admin panel's Overview, Model and Images pages; Nest paused while it makes a picture, and the picture in the chat; Nest's Tools, Network & access and Terminal pages; then the chat's Accounts, Roles and Workflows settings." />
 </p>
-<p align="center"><sub>A short tour that advances on its own: the chat, the Nest admin panel, then the chat's admin settings. Every image below opens full size when clicked.</sub></p>
+<p align="center"><sub>A short tour that advances on its own: the chat, the Nest admin panel, a picture being made, then the chat's admin settings. Every image below opens full size when clicked.</sub></p>
 
 **The chat** — served by Nest to any browser on your network, or through Redstart Twig.
 
 <a href="docs/screenshots/chat-conversation.png"><img src="docs/screenshots/chat-conversation.png" width="100%" alt="The chat UI answering a question with a comparison table, with recent conversations and a project in the sidebar." /></a>
 
-**Redstart Nest** — the admin panel: status and Start/Stop on top, every setting in six sections down the side.
+**Pictures, made on your GPU** — asked for a picture, the model calls `generate_image`; Nest pauses the chat model, makes it with the image model you chose, and brings the chat model back.
+
+<a href="docs/screenshots/chat-image.png"><img src="docs/screenshots/chat-image.png" width="100%" alt="The chat showing a picture of a robin on a mossy branch that the model just made with generate_image, with a download chip under it." /></a>
+
+**Redstart Nest** — the admin panel: status and Start/Stop on top, every setting in seven sections down the side.
 
 <a href="docs/screenshots/nest-overview.png"><img src="docs/screenshots/nest-overview.png" width="100%" alt="Nest's Overview page: the model in use, who can connect, tools on, a setup checklist and a QR code for phones." /></a>
 
 <details>
-<summary><b>More of Redstart Nest</b> — Model, Tools, Network &amp; access, Terminal</summary>
+<summary><b>More of Redstart Nest</b> — Model, Images, Tools, Network &amp; access, Terminal</summary>
 <br>
 
 **Model** — your models, the hardware, and memory settings in plain words; the llama.cpp flags sit under Advanced.
 
-<a href="docs/screenshots/nest-model.png"><img src="docs/screenshots/nest-model.png" width="100%" alt="Nest's Model page listing downloaded models with the one in use highlighted." /></a>
+<a href="docs/screenshots/nest-model.png"><img src="docs/screenshots/nest-model.png" width="100%" alt="Nest's Model page: the model in use, the hardware line, and the models folder with a vision model marked as seeing images." /></a>
+
+**Images** — the picture model, the way Model is the chat model: the image model in use, your image models, finding one on Hugging Face, and the engine.
+
+<a href="docs/screenshots/nest-images.png"><img src="docs/screenshots/nest-images.png" width="100%" alt="Nest's Images page: FLUX.1 schnell in use and ready, the image models list, and the stable-diffusion.cpp engine installed with its CUDA build." /></a>
 
 **Tools** — one row per tool with its switch; opening a row shows its settings.
 
-<a href="docs/screenshots/nest-tools.png"><img src="docs/screenshots/nest-tools.png" width="100%" alt="Nest's Tools page: a compact list of tools with on/off switches, with Documents opened to show its folder." /></a>
+<a href="docs/screenshots/nest-tools.png"><img src="docs/screenshots/nest-tools.png" width="100%" alt="Nest's Tools page: a compact list of tools with on/off switches, with Image generation opened to show it is ready and links to the Images page." /></a>
 
 **Network &amp; access** — who can connect, the addresses and QR code, HTTPS, and sign-in.
 
@@ -80,20 +88,7 @@ LM Studio, Jan and Ollama are model runners — very good ones — aimed at gett
 
 </details>
 
-<sub>Captured from this repository's own code against a stand-in model server, so the model's answers are scripted. The hardware line shows the tested configuration below.</sub>
-
----|---|---|---|
-| ![Nest configuration tab](docs/screenshot-redstart-nest.png) | ![Nest models tab — local storage and Hugging Face browser](docs/screenshot-nest-models.png) | ![Nest tools tab — capabilities like web access, Postgres, Documents, SQLite, Vault](docs/screenshot-nest-tools.png) | ![Nest server tab — live server terminal](docs/screenshot-nest-server.png) |
-
-**Redstart Twig / chat UI**
-
-| Login | Chat | Settings — General | Settings — Tools | Settings — Accounts |
-|---|---|---|---|---|
-| ![Login screen](docs/screenshot-login.png) | ![Chat UI](docs/screenshot-chat-ui.png) | ![Settings — General](docs/screenshot-chat-settings-general.png) | ![Settings — Tools, per-tool enable and always-allow](docs/screenshot-chat-settings-tools.png) | ![Settings — Accounts, with per-account roles](docs/screenshot-chat-settings-accounts.png) |
-
-| Settings — Roles | Settings — System Prompt | Settings — Connectors | Your account | Your files |
-|---|---|---|---|---|
-| ![Settings — Roles](docs/screenshot-chat-settings-roles.png) | ![Settings — System Prompt](docs/screenshot-chat-settings-system-prompt.png) | ![Settings — Connectors, per-app API keys](docs/screenshot-chat-settings-connectors.png) | ![Your account page](docs/screenshot-chat-account.png) | ![Your files on the server](docs/screenshot-chat-files.png) |
+<sub>All captured from this repository's own code. The Nest pages and the picture are from a real run on the tested hardware below: Qwen3.6-35B-A3B answering, FLUX.1 schnell drawing, the network address replaced with a stand-in. The other chat screens were captured earlier against a stand-in model server, so those answers are scripted.</sub>
 
 ---
 
@@ -130,6 +125,8 @@ The chat is an agent, not just a text box: it works with tools on your own data,
 **Work with your data** ([Capabilities](docs/capabilities.md))
 - **Files and documents.** Read PDFs, Word, Excel, CSV and Markdown; create `.docx`, `.pdf` and `.md` files that appear in the chat as downloads. Each account's files are its own.
 - **Run Python.** `run_python` runs numpy, pandas and matplotlib in a WebAssembly sandbox with no network and no access outside the conversation's own folder. Charts come back as images.
+- **See images.** With a vision model (Qwen3-VL, Gemma 3 and others), it reads photos and screenshots you attach, and looks at image files with `view_image`. Nest downloads a vision model's projector with it and loads it automatically.
+- **Make pictures.** `generate_image` draws with an image model you pick on Hugging Face (FLUX.1 schnell is the tested one; FLUX.1 dev, SDXL and SD 1.x checkpoints work the same way), on this machine's GPU with stable-diffusion.cpp. A 12 GB card cannot hold both models, so the chat model pauses for the 20 to 60 seconds a picture takes and comes back by itself; other chats wait rather than fail. Set up on Nest's Images page.
 - **Search your own files with citations.** Hybrid word and embedding search over uploads, attachments and created documents, with numbered sources linked back to each file. An admin can add a **Shared Documents** folder (policy manuals, templates, reference material) that everyone searches read-only, as far as their role allows.
 - **Query databases and repositories, read-only.** Postgres and SQLite (enforced by a read-only transaction, not by inspecting the SQL), a folder of Markdown notes, local Git repositories.
 - **Reach the web, only where allowed.** Fetch from approved sources, search, and look up academic papers (OpenAlex, arXiv, PubMed).
@@ -164,7 +161,7 @@ The chat is an agent, not just a text box: it works with tools on your own data,
   ├─ Gateway     :19080 (LAN in network mode) ├─ Scans LAN on port 8765
   │   └─ Injects Redstart context      ├─ Finds Redstart Nest automatically
   ├─ llama-server :19081 (localhost)   └─ Connects to http://IP:19080
-  ├─ MCP server   :19082 (web, Documents, Python, document search, Memory, File System, SQLite, Postgres, Vault, Git, Scholar, plugins)
+  ├─ MCP server   :19082 (web, Documents, Python, Image generation, document search, Memory, File System, SQLite, Postgres, Vault, Git, Scholar, plugins)
   ├─ Admin plane :19083 (the launcher UI, in a browser — owner only, loopback by default)
   └─ Beacon      :8765
 ```
@@ -193,6 +190,7 @@ Accounts are **on by default** with no localhost exemption, and each account's f
 - Windows 10/11
 - A GPU with at least 6 GB VRAM (NVIDIA recommended; llama.cpp supports CUDA and Vulkan)
 - A GGUF model file
+- For pictures: an image model (FLUX.1 schnell Q4_K is about 10 GB with its shared files; it peaks near 11 GB of VRAM while drawing, with the chat model paused)
 
 **Redstart Twig (Android)** — Android 10 or later, on the same Wi-Fi network as the Nest PC. **Not currently working** — [see note](#redstart-twig-android).
 

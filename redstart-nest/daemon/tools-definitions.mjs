@@ -140,6 +140,12 @@ export const BUILTIN_CAPABILITIES = [
     description: 'Run model-written Python (numpy, pandas, matplotlib) in a sandbox with no network, against files in the conversation workspace. Needs Documents configured, and a one-time ~30 MB runtime download',
   },
   {
+    id: 'image_generation',
+    name: 'Image generation',
+    kind: 'capability',
+    description: 'Lets the assistant make pictures with an image model you choose (FLUX, SDXL, SD 1.x) on this machine\'s GPU. The chat model pauses while an image is made. Needs Documents configured, an image model, and a one-time engine download (30 MB to 1 GB)',
+  },
+  {
     id: 'document_search',
     name: 'Document search',
     kind: 'capability',
@@ -167,7 +173,7 @@ export const BUILTIN_CAPABILITIES = [
 // they're intentionally absent here.
 export const BUILTIN_CAPABILITY_TOOL_NAMES = {
   postgres: ['postgres_query', 'postgres_list_tables', 'postgres_describe_table'],
-  documents: ['create_document', 'read_document', 'list_documents'],
+  documents: ['create_document', 'read_document', 'list_documents', 'view_image'],
   sqlite: ['sqlite_list_databases', 'sqlite_query', 'sqlite_list_tables', 'sqlite_describe_table'],
   vault: ['vault_search', 'vault_get', 'vault_tags'],
   git: ['git_list_repos', 'git_status', 'git_log', 'git_diff'],
@@ -188,6 +194,7 @@ export const BUILTIN_CAPABILITY_TOOL_NAMES = {
   ],
   scholar: ['scholar_search', 'scholar_get', 'scholar_save_pdf'],
   python: ['run_python'],
+  image_generation: ['generate_image'],
   memory: ['memory_save', 'memory_search', 'memory_forget'],
   document_search: ['search_documents'],
 }
@@ -379,6 +386,9 @@ export const TOOL_CLASSES = {
   // Documents — create is a write; read/list are reads
   create_document: 'write',
   read_document: 'read',
+  // Opens an image in the caller's own folder or chat workspace as a link;
+  // the host fetches it for a vision model. Writes nothing.
+  view_image: 'read',
   list_documents: 'read',
   // SQLite — read-only SQL
   sqlite_list_databases: 'read',
@@ -421,6 +431,11 @@ export const TOOL_CLASSES = {
   // files, it has no network (python-child.mjs), and nothing it does reaches
   // outside the workspace.
   run_python: 'write',
+  // Image generation — writes PNGs into the conversation workspace, no
+  // network at generation time. 'write', like run_python. It also pauses the
+  // chat model for everyone, which is why it is its own capability an admin
+  // turns on and a role can withhold.
+  generate_image: 'write',
   // Memory — per-account facts. Saving writes; forgetting deletes with no
   // recycle bin behind it, so it is destructive and goes under the prompt's
   // confirm-every-time rule and chat-ui's always-prompt.

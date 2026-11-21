@@ -796,6 +796,79 @@ await test('non-GGUF siblings are ignored', () => {
   assert(arts.length === 1, `expected only the GGUF, got ${arts.length}`)
 })
 
+// ---------------------------------------------------------------------------
+// Vision projectors (projector.mjs) — ride along with a quant, never one
+// ---------------------------------------------------------------------------
+
+await test('🔍 a vision projector is not offered as a quant; it rides along with every quant', () => {
+  const arts = buildArtifacts([
+    { rfilename: 'mmproj-Q8_0.gguf', size: 5, lfs: { sha256: 'p8' } },
+    { rfilename: 'mmproj-F16.gguf', size: 9, lfs: { sha256: 'p16' } },
+    { rfilename: 'm-Q4_K_M.gguf', size: 30, lfs: { sha256: 'c' } },
+    { rfilename: 'm-Q8_0.gguf', size: 60, lfs: { sha256: 'd' } },
+  ])
+  assert(arts.length === 2, `the projector became a quant row: ${arts.map(a => a.quantLabel)}`)
+  for (const a of arts) {
+    assert(a.projector?.rfilename === 'mmproj-F16.gguf', `${a.quantLabel}: projector ${a.projector?.rfilename} (F16 preferred)`)
+    assert(a.projector.sha256 === 'p16' && a.projector.size === 9, 'projector checksum/size not carried')
+  }
+  assert(arts[0].totalBytes === 30, 'the projector was folded into the quant\'s own size')
+  const text = buildArtifacts([{ rfilename: 'm-Q4_K_M.gguf', size: 30 }])
+  assert(text[0].projector === null, 'a text-only repo got a projector')
+})
+
+await test('🔍 a projector downloads under a repo-qualified name and is paired with its model', async () => {
+  const model = Buffer.from('M'.repeat(300))
+  const proj = Buffer.from('P'.repeat(120))
+  reset()
+  routes.set('https://huggingface.co/', (url) => {
+    const buf = url.includes('mmproj') ? proj : model
+    return okResponse(buf)
+  })
+  const art = { ...artifactFor('vis-Q4_K_M.gguf', model), projector: { rfilename: 'sub/mmproj-F16.gguf', size: proj.length, sha256: sha256(proj) } }
+  const res = await downloadArtifact({ repoId: REPO, revision: REV, artifact: art, modelsDir })
+  const expected = path.join(modelsDir, 'unsloth_Test-Model-GGUF.mmproj-F16.gguf')
+  assert(res.modelPath === path.join(modelsDir, 'vis-Q4_K_M.gguf'), `modelPath is ${res.modelPath} — the projector displaced the model`)
+  assert(res.projectorPath === expected, `projector saved as ${res.projectorPath}`)
+  assert(fs.readFileSync(expected).equals(proj), 'projector bytes wrong')
+  assert(!fs.existsSync(path.join(modelsDir, 'mmproj-F16.gguf')), 'saved under the bare Hub name, which every repo shares')
+  const index = JSON.parse(fs.readFileSync(path.join(modelsDir, 'projectors.json'), 'utf8'))
+  assert(index['vis-Q4_K_M.gguf'] === 'unsloth_Test-Model-GGUF.mmproj-F16.gguf', `pairing: ${JSON.stringify(index)}`)
+  return path.basename(expected)
+})
+
+await test('🔍 a projector with a bad checksum is never renamed into place, and nothing is paired', async () => {
+  const model = Buffer.from('N'.repeat(200))
+  const proj = Buffer.from('Q'.repeat(80))
+  reset()
+  routes.set('https://huggingface.co/', (url) => okResponse(url.includes('mmproj') ? proj : model))
+  const art = { ...artifactFor('vis2-Q4_K_M.gguf', model), projector: { rfilename: 'mmproj-BF16.gguf', size: proj.length, sha256: 'f'.repeat(64) } }
+  await expectReject(() => downloadArtifact({ repoId: 'other/Vis-GGUF', revision: REV, artifact: art, modelsDir }), /Checksum mismatch/, 'bad projector checksum')
+  assert(!fs.existsSync(path.join(modelsDir, 'other_Vis-GGUF.mmproj-BF16.gguf')), 'a mismatched projector was renamed into place')
+  const index = JSON.parse(fs.readFileSync(path.join(modelsDir, 'projectors.json'), 'utf8'))
+  assert(!('vis2-Q4_K_M.gguf' in index), 'a model was paired with a projector that failed')
+  fs.rmSync(path.join(modelsDir, 'other_Vis-GGUF.mmproj-BF16.gguf' + PART_SUFFIX), { force: true })
+})
+
+await test('🔍 a "projector" that is not an mmproj GGUF is refused before any request', async () => {
+  const model = Buffer.from('R'.repeat(50))
+  routeFile(model)
+  for (const rfilename of ['mmproj-F16.exe', 'config.json', '../../mmproj.txt']) {
+    const art = { ...artifactFor('vis3-Q4_K_M.gguf', model), projector: { rfilename, size: 1, sha256: 'a'.repeat(64) } }
+    requested.length = 0
+    await expectReject(() => downloadArtifact({ repoId: REPO, revision: REV, artifact: art, modelsDir }), /projector|GGUF/i, rfilename)
+    assert(requested.length === 0, `${rfilename}: ${requested.length} request(s) made before refusing`)
+  }
+})
+
+await test('cancelling discards the projector\'s staging file too', async () => {
+  const art = { ...artifactFor('vis4-Q4_K_M.gguf', Buffer.from('z')), projector: { rfilename: 'mmproj-F16.gguf', size: 10, sha256: null } }
+  const part = path.join(modelsDir, 'unsloth_Test-Model-GGUF.mmproj-F16.gguf' + PART_SUFFIX)
+  fs.writeFileSync(part, 'half')
+  await discardPartials(modelsDir, art, REPO)
+  assert(!fs.existsSync(part), 'the projector .part survived a cancel')
+})
+
 // ===========================================================================
 // Model cards — the description the Hub's JSON does not carry
 // ===========================================================================

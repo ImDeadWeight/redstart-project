@@ -33,6 +33,7 @@ import { fetchFollowingRedirects } from './http-redirects.mjs'
 import { nodeFetch } from './node-fetch-transport.mjs'
 import { resolveWithinRoot } from './path-scope.mjs'
 import { isHuggingFaceUrl, buildDownloadUrl } from './hf-catalog.mjs'
+import { projectorDestName, recordProjector } from './projector.mjs'
 
 const USER_AGENT = 'Redstart/1.0 (local AI assistant)'
 // Two bounds, never a total-duration one: a 20 GB transfer legitimately
@@ -281,6 +282,11 @@ export async function downloadArtifact({
     destPath: destinationFor(modelsDir, f.rfilename),
     url: buildDownloadUrl(repoId, revision, f.rfilename),
   }))
+  // A vision model's projector goes LAST, so results[0] stays the model's
+  // first shard. Saved under a repo-qualified name (every repo calls its own
+  // mmproj-F16.gguf), contained like every other destination.
+  const projector = projectorTarget(modelsDir, repoId, revision, artifact.projector)
+  if (projector) targets.push(projector)
 
   // Disk check against what is still outstanding: files already downloaded, and
   // the bytes already sitting in a .part, do not need to be paid for twice.
@@ -298,7 +304,10 @@ export async function downloadArtifact({
     }
   }
 
-  const totalBytes = artifact.totalBytes ?? targets.reduce((a, t) => a + (t.size || 0), 0)
+  // The artifact's own total is the model's; the projector is added on top.
+  const totalBytes = artifact.totalBytes != null
+    ? artifact.totalBytes + (projector?.size || 0)
+    : targets.reduce((a, t) => a + (t.size || 0), 0)
   // Bytes accounted for by files finished in earlier iterations, so the overall
   // percentage does not restart at each shard.
   let completedBytes = 0
@@ -346,6 +355,13 @@ export async function downloadArtifact({
     results.push({ rfilename: t.rfilename, destPath: t.destPath, ...res })
   }
 
+  const modelPath = results[0].destPath
+  let projectorPath = null
+  if (projector) {
+    projectorPath = projector.destPath
+    recordProjector(modelsDir, path.basename(modelPath), path.basename(projectorPath))
+  }
+
   return {
     repoId,
     revision,
@@ -353,8 +369,24 @@ export async function downloadArtifact({
     files: results,
     // The path to hand the user — the first shard is what llama-server is
     // pointed at; it finds the rest of the set itself.
-    modelPath: results[0].destPath,
+    modelPath,
+    projectorPath,
     totalBytes: completedBytes,
+  }
+}
+
+/**
+ * The download target for an artifact's projector, or null when it has none.
+ * Throws (before anything is fetched) on a name that is not a projector GGUF.
+ */
+export function projectorTarget(modelsDir, repoId, revision, projector) {
+  if (!projector?.rfilename) return null
+  return {
+    rfilename: projector.rfilename,
+    size: typeof projector.size === 'number' ? projector.size : null,
+    sha256: projector.sha256 || null,
+    destPath: resolveWithinRoot(modelsDir, projectorDestName(repoId, projector.rfilename)),
+    url: buildDownloadUrl(repoId, revision, projector.rfilename),
   }
 }
 
@@ -365,13 +397,18 @@ function fmtGb(bytes) {
 // Remove the staging file for an artifact — used when the user cancels, where
 // keeping a .part would silently consume disk for a download they abandoned.
 // A network FAILURE deliberately leaves the .part so a retry can resume.
-export async function discardPartials(modelsDir, artifact) {
+export async function discardPartials(modelsDir, artifact, repoId = null) {
   const removed = []
+  const paths = []
   for (const f of artifact?.files || []) {
-    try {
-      const p = destinationFor(modelsDir, f.rfilename) + PART_SUFFIX
-      if (fs.existsSync(p)) { await fsp.rm(p, { force: true }); removed.push(p) }
-    } catch { /* an unresolvable name has nothing to clean up */ }
+    try { paths.push(destinationFor(modelsDir, f.rfilename)) } catch { /* an unresolvable name has nothing to clean up */ }
+  }
+  if (repoId && artifact?.projector?.rfilename) {
+    try { paths.push(resolveWithinRoot(modelsDir, projectorDestName(repoId, artifact.projector.rfilename))) } catch { /* same */ }
+  }
+  for (const dest of paths) {
+    const p = dest + PART_SUFFIX
+    if (fs.existsSync(p)) { await fsp.rm(p, { force: true }); removed.push(p) }
   }
   return removed
 }

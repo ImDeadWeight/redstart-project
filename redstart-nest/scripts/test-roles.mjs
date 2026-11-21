@@ -100,6 +100,7 @@ function randomConfig() {
     python: cap(),
     memory: cap(),
     documentSearch: cap(),
+    imageGeneration: cap(),
     fileSystem: {
       enabled: chance(0.6),
       rootDir: 'C:/root',

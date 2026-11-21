@@ -14,6 +14,7 @@
 // =============================================================================
 
 import { fetchFollowingRedirects } from './http-redirects.mjs'
+import { isProjectorFile, pickProjector } from './projector.mjs'
 
 const API_ORIGIN = 'https://huggingface.co'
 const USER_AGENT = 'Redstart/1.0 (local AI assistant)'
@@ -168,9 +169,10 @@ export async function searchModels({ query = '', publisher = '', limit = 24 } = 
   if (!Array.isArray(raw)) return []
 
   return raw.filter(m => isValidRepoId(m?.id)).map(m => {
-    const ggufFiles = (m.siblings || [])
+    const allGguf = (m.siblings || [])
       .map(s => s?.rfilename)
       .filter(f => typeof f === 'string' && f.toLowerCase().endsWith('.gguf'))
+    const ggufFiles = allGguf.filter(f => !isProjectorFile(f))
     // Distinct quant labels, so a row can say "Q3_K_XL, Q4_K_M, Q8_0" without
     // the caller re-deriving it.
     const quants = [...new Set(ggufFiles.map(parseQuant).filter(Boolean))]
@@ -183,6 +185,7 @@ export async function searchModels({ query = '', publisher = '', limit = 24 } = 
       gated: !!m.gated,
       quants,
       ggufFileCount: ggufFiles.length,
+      vision: allGguf.length > ggufFiles.length,
     }
   })
 }
@@ -440,10 +443,14 @@ export async function getModelDescription(repoId, { detail = null } = {}) {
 // shard sets folded into a single multi-file entry.
 export function buildArtifacts(siblings) {
   const groups = new Map()
+  // A vision repo's projector is not a quant (parseQuant reads mmproj-F16 as
+  // "F16"); it rides along with every quant instead. See projector.mjs.
+  const projector = pickProjector(siblings)
 
   for (const s of siblings) {
     const rfilename = s?.rfilename
     if (typeof rfilename !== 'string' || !rfilename.toLowerCase().endsWith('.gguf')) continue
+    if (isProjectorFile(rfilename)) continue
 
     const shard = shardKey(rfilename)
     // Group by the shard base when split, otherwise by the file's own path, so
@@ -481,6 +488,9 @@ export function buildArtifacts(siblings) {
       // A set missing a part cannot be downloaded into something loadable.
       complete: g.files.length === g.shardTotal,
       verifiable: g.files.every(f => !!f.sha256),
+      // Downloaded with the quant, saved under a repo-qualified name, and
+      // paired with it for --mmproj. Null for a text-only repo.
+      projector,
     }
   }).sort((a, b) => (a.totalBytes ?? Infinity) - (b.totalBytes ?? Infinity))
 }
@@ -496,4 +506,92 @@ export function buildDownloadUrl(repoId, revision, rfilename) {
   // model-download.mjs.
   const encoded = rfilename.split('/').map(encodeURIComponent).join('/')
   return `${API_ORIGIN}/${repoId}/resolve/${revision}/${encoded}`
+}
+
+// ---------------------------------------------------------------------------
+// Image models (image-models.mjs)
+// ---------------------------------------------------------------------------
+// Image weights ship as .gguf OR .safetensors, often beside diffusers folders
+// (transformer/, text_encoder/, vae/) that sd-cli does not load as a model.
+// Only top-level single files are offered; the family recipe supplies the
+// rest. Search is the Hub's own text-to-image pipeline tag.
+
+const IMAGE_WEIGHT_RE = /\.(gguf|safetensors)$/i
+const isTopLevelWeight = (name) => typeof name === 'string' && !name.includes('/') && IMAGE_WEIGHT_RE.test(name)
+
+// The image counterpart of TRUSTED_PUBLISHERS: who converts image models to
+// files stable-diffusion.cpp loads. The default view, not a filter on search.
+export const IMAGE_PUBLISHERS = [
+  { id: 'leejet', label: 'leejet', note: 'The stable-diffusion.cpp author: GGUF conversions it is tested with' },
+  { id: 'city96', label: 'city96', note: 'GGUF quants of FLUX, SD 3.5 and others' },
+  { id: 'unsloth', label: 'Unsloth', note: 'GGUF quants of FLUX and newer models' },
+  { id: 'second-state', label: 'second-state', note: 'GGUF quants, many families' },
+]
+
+/** A weight file's quant label (Q4_K_S, F16, …), or its name without the extension. */
+export function imageQuantLabel(rfilename) {
+  return parseQuant(rfilename) || String(rfilename).replace(IMAGE_WEIGHT_RE, '')
+}
+
+export async function searchImageModels({ query = '', publisher = '', limit = 24 } = {}) {
+  const params = new URLSearchParams({
+    pipeline_tag: 'text-to-image',
+    sort: 'downloads',
+    direction: '-1',
+    limit: String(Math.min(Math.max(1, Number(limit) || 24), 100)),
+    full: 'false',
+  })
+  if (String(query).trim()) params.set('search', String(query).trim())
+  if (String(publisher).trim()) params.set('author', String(publisher).trim())
+  const raw = await apiGet(`/api/models?${params}`)
+  if (!Array.isArray(raw)) return []
+  return raw.filter(m => isValidRepoId(m?.id)).map(m => {
+    const weights = (m.siblings || []).map(s => s?.rfilename).filter(isTopLevelWeight)
+    return {
+      repoId: m.id,
+      author: m.author || m.id.split('/')[0],
+      downloads: m.downloads || 0,
+      likes: m.likes || 0,
+      lastModified: m.lastModified || null,
+      gated: !!m.gated,
+      weightFileCount: weights.length,
+      // Distinct labels, so a row can say "Q4_K_S · Q8_0 · F16" before it is opened.
+      quants: [...new Set(weights.map(imageQuantLabel))],
+    }
+  })
+}
+
+/**
+ * One image repo: its pinned revision, what it is derived from, and its
+ * top-level weight files with sizes and checksums.
+ */
+export async function getImageRepo(repoId) {
+  assertValidRepoId(repoId)
+  const raw = await apiGet(`/api/models/${repoId}?blobs=true`)
+  const tags = (raw.tags || []).filter(t => typeof t === 'string')
+  const baseRaw = raw.cardData?.base_model
+  const baseModels = (Array.isArray(baseRaw) ? baseRaw : [baseRaw]).filter(isValidRepoId)
+  return {
+    repoId: raw.id || repoId,
+    revision: raw.sha || null,
+    gated: !!raw.gated,
+    downloads: raw.downloads || 0,
+    likes: raw.likes || 0,
+    lastModified: raw.lastModified || null,
+    license: tags.find(t => t.startsWith('license:'))?.slice('license:'.length) || raw.cardData?.license || null,
+    pipelineTag: typeof raw.pipeline_tag === 'string' ? raw.pipeline_tag : null,
+    tags,
+    baseModels,
+    // Smallest first, like the chat model's quant rows.
+    files: (raw.siblings || [])
+      .filter(s => isTopLevelWeight(s?.rfilename))
+      .map(s => ({
+        rfilename: s.rfilename,
+        size: typeof s.size === 'number' ? s.size : (s.lfs?.size ?? null),
+        sha256: s.lfs?.sha256 || null,
+        quantLabel: imageQuantLabel(s.rfilename),
+        quantRecognized: parseQuant(s.rfilename) !== null,
+      }))
+      .sort((a, b) => (a.size ?? Infinity) - (b.size ?? Infinity)),
+  }
 }

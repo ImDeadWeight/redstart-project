@@ -148,6 +148,22 @@
       }
     },
     {
+      "name": "view_image",
+      "description": "Look at an image (PNG, JPEG, WebP or GIF) in your documents folder on the Redstart server or attached to this conversation: a photo, a screenshot, a chart run_python made, a generated picture. The image is shown to you with the result, so you can describe it, read text in it, or check your own work. Only works when the loaded model can read images.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Image path relative to the documents folder (e.g. \"photos/receipt.jpg\"). A file attached to this conversation, or made in it, can be given by its name alone."
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    },
+    {
       "name": "list_documents",
       "description": "List the files in your documents folder on the Redstart server that read_document can read (text, code, data, .pdf, .docx, .xlsx), with sizes. This is not the File System folder: a file there does not show up here, and reading, writing, moving or deleting it takes the File System tools (list_directory, read_text_file, write_file, delete_file).",
       "inputSchema": {

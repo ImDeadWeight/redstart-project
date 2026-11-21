@@ -137,6 +137,12 @@ const DEFAULT_CAPABILITIES = {
   // Documents capability's per-account chats/ tree. The runtime is not
   // recorded here; python-runtime.mjs checks the files themselves.
   python:      { enabled: false, maxKernels: 2, timeoutS: 30, workspaceCapMb: 200, accountCapMb: 2048 },
+  // generate_image (docs/notes/image-generation-plan.md). model: a file name in
+  // <models>/image/ (image-models.mjs index), null until an admin picks one.
+  // backend: 'auto' (CUDA with an NVIDIA GPU, else Vulkan/Metal) or forced.
+  // Its PNGs land in the Documents capability's per-account chats/ tree, under
+  // the same workspace caps as run_python.
+  image_generation: { enabled: false, model: null, backend: 'auto', timeoutS: 240 },
   // Memory (chat-tooling Phase 3). Nothing to configure but the size of the
   // prompt block: ≈300 tokens of the most recent memories (plan §3).
   memory:      { enabled: false, promptBudgetChars: 1200 },

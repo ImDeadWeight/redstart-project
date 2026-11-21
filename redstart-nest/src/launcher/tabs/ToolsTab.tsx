@@ -9,6 +9,7 @@ import { Card, Chip, TogglePill, btnCls, inputCls } from '../components/ui'
 import { FolderPicker } from '../components/FolderPicker'
 import { api } from '../api/redstart'
 import { PythonCapabilityCard, pythonBlocker } from '../components/PythonCapabilityCard'
+import { ImageGenerationCard } from '../components/ImageGenerationCard'
 import { DeferralCard } from '../components/DeferralCard'
 
 // ---------------------------------------------------------------------------
@@ -70,6 +71,8 @@ function isCapabilityReady(cc: CapabilityConfig, id: string): boolean {
     case 'memory': return true   // nothing to configure
     case 'document_search': return !!cc.documents.outputDir
     case 'python': return !!cc.documents.outputDir && cc.python.runtimeInstalled && cc.python.sandboxAvailable
+    // The card says what is missing (model, engine); here only the folder.
+    case 'image_generation': return !!cc.documents.outputDir
     case 'sqlite':
     case 'vault':
     case 'git':
@@ -184,8 +187,9 @@ function FolderSettings({ caps, cap, title, emptyText, description }: {
 // Tools for this profile
 // ---------------------------------------------------------------------------
 
-export function ToolsTab({ config, toolsCatalog, caps, plugins }: {
+export function ToolsTab({ config, toolsCatalog, caps, plugins, onOpenImages }: {
   config: LlamaConfig
+  onOpenImages: () => void
   toolsCatalog: ReturnType<typeof useToolsCatalog>
   caps: ReturnType<typeof useCapabilities>
   plugins: ReturnType<typeof usePlugins>
@@ -502,6 +506,13 @@ export function ToolsTab({ config, toolsCatalog, caps, plugins }: {
               onToggle={() => toggleTool('python')}
               open={openId === 'python'} onOpen={() => openRow('python')}>
               <PythonCapabilityCard status={capabilityConfig?.python ?? null} documentsConfigured={docsDir} onChanged={caps.loadCapabilities} />
+            </ToolRow>
+
+            <ToolRow name="Image generation" short="Make pictures with an image model you choose"
+              status={statusOf(isActive('image_generation'), docsDir, 'Needs Documents')} on={isActive('image_generation')}
+              onToggle={() => toggleTool('image_generation')}
+              open={openId === 'image_generation'} onOpen={() => openRow('image_generation')}>
+              <ImageGenerationCard documentsConfigured={docsDir} onOpenImages={onOpenImages} />
             </ToolRow>
 
             <ToolRow name="Document search" short="Find answers in people&rsquo;s own files, with sources"

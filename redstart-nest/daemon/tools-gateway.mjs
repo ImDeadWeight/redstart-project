@@ -44,6 +44,7 @@ import { handleDownloadRoute } from './gateway/download-route.mjs'
 import { recordWireCost, retrievalConfigSummary, retrievalEnabled } from './tool-filter.mjs'
 import { toolName } from './tool-retrieval.mjs'
 import { TOOL_TEXT_ARM_FIELD, toolTextArm, toolTextArmOf } from './tool-text-arms.mjs'
+import { holdWhilePaused } from './gateway/model-hold.mjs'
 
 // Exported from here before master plan Phase 4 split them out; importers
 // keep reading them from here.
@@ -429,6 +430,8 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       // can't appear until the SPA loads. See isPublicAsset() for the
       // fail-closed rationale. Same passthrough target as the catch-all below.
       if (req.method === 'GET' && isPublicAsset(urlPath)) {
+        // llama-server serves these (--path), so a paused model holds them too.
+        if (!await holdWhilePaused(req, res)) return
         return passthrough(req, res, internalPort)
       }
 
@@ -561,6 +564,12 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
 
       // Completions: rewritten, then forwarded (gateway/completion-route.mjs).
       // Account and surface from authResult, i.e. from the credential.
+      // While image generation has the GPU there is no llama-server behind
+      // the gateway; what would go to it waits (gateway/model-hold.mjs).
+      // Checked after auth and the gateway's own routes, so only traffic
+      // bound for the model ever waits.
+      if (!await holdWhilePaused(req, res)) return
+
       if (isCompletionRoute(req)) {
         return await handleCompletionRoute(req, res, {
           internalPort,

@@ -97,6 +97,11 @@ const defaults = {
   },
   upstreamPort: () => getUpstreamPort(),
   completionsInFlight: () => completionsInFlight(),
+  /** Whether the model behind the port reads images (linked-images.mjs). */
+  async modelHasVision(port) {
+    const { modelHasVision } = await import('./linked-images.mjs')
+    return modelHasVision(port)
+  },
   async fetchCompletion(port, body, signal) {
     return fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
       method: 'POST',

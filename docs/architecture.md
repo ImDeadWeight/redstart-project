@@ -34,7 +34,7 @@ Nest, Twig and Blueprints share the same [SvelteKit](https://kit.svelte.dev/) fr
   ├─ Gateway     :19080 (LAN in network mode) ├─ Scans LAN on port 8765
   │   └─ Injects Redstart context      ├─ Finds Redstart Nest automatically
   ├─ llama-server :19081 (localhost)   └─ Connects to http://IP:19080
-  ├─ MCP server   :19082 (web, Documents, Python, document search, Memory, File System, SQLite, Postgres, Vault, Git, Scholar, plugins)
+  ├─ MCP server   :19082 (web, Documents, Python, Image generation, document search, Memory, File System, SQLite, Postgres, Vault, Git, Scholar, plugins)
   ├─ Admin plane :19083 (the launcher UI in a browser — owner only, loopback by default)
   └─ Beacon      :8765
 ```
@@ -42,6 +42,8 @@ Nest, Twig and Blueprints share the same [SvelteKit](https://kit.svelte.dev/) fr
 Starting the server launches three services alongside the model — the gateway (`:19080`), llama-server (`:19081`, localhost-only) and the MCP server (`:19082`). The admin listener (`:19083`) and the beacon (`:8765`) are already up before any of that: they belong to the app, not to the model. See [Ports used](#ports-used).
 
 **The gateway is the only thing clients talk to.** It intercepts every `POST /v1/chat/completions`, prepends the server-composed system prompt, strips banned tools, and pipes the request and response straight through — streaming included. Everything else is a transparent passthrough to llama-server. llama-server itself never accepts a LAN connection; see [Security](security.md#the-llama-server-boundary).
+
+**Image generation pauses the model.** A 12 GB card cannot hold a chat model and an image model at once, so `generate_image` takes the GPU for its job: new requests to the model are held at the gateway, replies already streaming finish, llama-server alone is stopped (the gateway, MCP server and file-system provider stay up), one stable-diffusion.cpp process makes the picture and exits, and llama-server is started again with the same settings. Held requests are answered then. One image job runs at a time; the rest queue. See [Security → Image generation](security.md#image-generation).
 
 **Discovery:** Redstart Nest broadcasts a JSON beacon on port 8765. Redstart Twig (both Android and Windows) scans the local subnet on startup and connects automatically if a running server is found — the beacon scan needs no hostname. (mDNS/`redstart.local` was retired: Android's resolver never answered `.local` lookups for browser navigation, and Twig never depended on it either — see [Known limitations](roadmap.md#known-limitations).)
 

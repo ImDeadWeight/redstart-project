@@ -38,6 +38,7 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import { toast } from 'svelte-sonner';
 	import ToolResultResource from './ToolResultResource.svelte';
+	import { resourceKind, type ToolResultResource as ToolResultResourceLine } from '$lib/utils/resource-links';
 	import MemorySavedChip from './MemorySavedChip.svelte';
 
 	/**
@@ -150,8 +151,26 @@
 	// producing a file, the one control the user wants is the one they have to
 	// go hunting for. This surfaces the same downloads at the end of the turn,
 	// where the deliverable actually is.
-	const createdFiles = $derived.by(() => {
+	//
+	// Images are the exception: a picture a tool made (generate_image, a
+	// run_python chart) is the answer itself, so it is drawn here, not left as
+	// a download chip with the picture folded away inside the tool block.
+	const createdImages = $derived.by(() => {
 		const seen = new Set<string>();
+		const images: ToolResultResourceLine[] = [];
+		for (const section of sectionsParsed) {
+			for (const line of section.parsedLines) {
+				if (line.resource && resourceKind(line.resource.mimeType) === 'image' && !seen.has(line.resource.path)) {
+					seen.add(line.resource.path);
+					images.push(line.resource);
+				}
+			}
+		}
+		return images;
+	});
+
+	const createdFiles = $derived.by(() => {
+		const seen = new Set<string>(createdImages.map((r) => r.path));
 		const files: string[] = [];
 
 		for (const section of sectionsParsed) {
@@ -455,6 +474,10 @@
 	<!-- Deliverables produced by this message, repeated here at the end of the
 	     turn. The same buttons still appear inside each tool block; this is the
 	     copy that is still on screen once the model has finished writing. -->
+	{#each createdImages as image (image.path)}
+		<ToolResultResource resource={image} onDownload={handleDownload} />
+	{/each}
+
 	{#if createdFiles.length > 0}
 		<div class="mt-1 flex flex-wrap items-center gap-2">
 			<span class="text-xs text-muted-foreground">

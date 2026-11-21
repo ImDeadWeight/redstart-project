@@ -18,6 +18,7 @@
 // =============================================================================
 
 import * as crypto from 'node:crypto'
+import { linkedImagePaths, linkedImageParts } from './linked-images.mjs'
 import { readChatStream } from '../../shared/agent-core/chat-stream.mjs'
 import { wireSafeToolCalls } from '../../shared/agent-core/tool-calls.mjs'
 import { formatMcpToolResult } from '../../shared/agent-core/tool-result.mjs'
@@ -510,6 +511,14 @@ export function toolsPort(pass) {
         : { text: formatMcpToolResult(result), isError: !!result.isError }
       store.appendEvent(task.id, { type: 'tool_result', callId: call.id, name, isError: out.isError, preview: preview(out.text) })
       return out
+    },
+    // Images the result linked (view_image, charts, generated pictures), sent
+    // with it to a model that can see — what chat-ui does in the browser.
+    // For this request only; the stored result keeps its [file: ...] line.
+    extraParts: async (text) => {
+      if (linkedImagePaths(text).length === 0) return []
+      if (!await seams.modelHasVision(seams.upstreamPort())) return []
+      return linkedImageParts(text, { documentsRoot: turnCtx.config?.documents?.outputDir, account: turnCtx.account })
     },
   }
 }

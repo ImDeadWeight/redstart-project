@@ -44,6 +44,7 @@ export const TOOL_CATEGORIES = Object.freeze([
   'memory',      // what the assistant remembers about the user
   'interaction', // talking to the user, planning
   'discovery',   // finding other tools
+  'images',      // making pictures (generate_image)
   'other',       // an MCP or client tool that declared nothing
 ])
 
@@ -82,6 +83,7 @@ export const BUILTIN_TOOL_METADATA = Object.freeze({
 
   // documents
   create_document: { category: 'documents', store: S.documents, tags: ['write', 'save', 'report', 'docx', 'pdf', 'spreadsheet', 'export', 'csv'], useWhen: 'the user wants a file they can download' },
+  view_image: { category: 'documents', store: S.documents, tags: ['image', 'picture', 'photo', 'screenshot', 'chart', 'png', 'jpg', 'look at', 'see', 'describe'], useWhen: 'looking at an image file: describing it, reading text in it, checking a chart or generated picture' },
   read_document: { category: 'documents', store: S.documents, tags: ['attachment', 'attached file', 'uploaded file', 'pdf', 'docx', 'xlsx', 'csv', 'spreadsheet', 'open'], useWhen: 'reading a file the user attached or a document in the library' },
   list_documents: { category: 'documents', store: S.documents, tags: ['files', 'uploads', 'attachments', 'what documents'], useWhen: 'finding which documents exist' },
   search_documents: { category: 'documents', store: S.documents, tags: ['find in documents', 'policy', 'handbook', 'look up', 'which document says'], useWhen: 'a fact is somewhere in the user\'s own documents' },
@@ -96,6 +98,7 @@ export const BUILTIN_TOOL_METADATA = Object.freeze({
   delete_file: { category: 'files', store: S.fileSystem, tags: ['delete', 'remove', 'rm', 'recycle bin', 'trash'], useWhen: 'deleting a file in the File System folder' },
 
   // code
+  generate_image: { category: 'images', store: S.workspace, tags: ['image', 'picture', 'draw', 'paint', 'illustration', 'photo', 'generate', 'create', 'render', 'art', 'logo'], useWhen: 'the user asks for a picture to be made' },
   run_python: { category: 'code', store: S.workspace, tags: ['python', 'calculate', 'compute', 'math', 'arithmetic', 'exact number', 'chart', 'plot', 'parse', 'csv', 'script', 'unzip'], useWhen: 'computing, transforming data or working on attached files' },
 
   // data

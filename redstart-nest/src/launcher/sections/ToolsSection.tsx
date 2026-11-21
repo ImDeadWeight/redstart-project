@@ -20,8 +20,10 @@ import { ToolsTab } from '../tabs/ToolsTab'
 import { PluginsTab } from '../tabs/PluginsTab'
 import { ExternalMcpTab } from '../tabs/ExternalMcpTab'
 
-export function ToolsSection({ config, toolsCatalog, caps, mcp, plugins }: {
+export function ToolsSection({ config, toolsCatalog, caps, mcp, plugins, onOpenImages }: {
   config: LlamaConfig
+  /** The Images page, where image generation is set up (its row here links there). */
+  onOpenImages: () => void
   toolsCatalog: ReturnType<typeof useToolsCatalog>
   caps: ReturnType<typeof useCapabilities>
   mcp: ReturnType<typeof useExternalMcp>
@@ -46,7 +48,7 @@ export function ToolsSection({ config, toolsCatalog, caps, mcp, plugins }: {
           { id: 'external', label: <>External MCP{externalCount ? <span className="ml-1.5 text-zinc-500">{externalCount}</span> : null}</> },
         ]}
       />
-      {view === 'profile' && <ToolsTab config={config} toolsCatalog={toolsCatalog} caps={caps} plugins={plugins} />}
+      {view === 'profile' && <ToolsTab config={config} toolsCatalog={toolsCatalog} caps={caps} plugins={plugins} onOpenImages={onOpenImages} />}
       {view === 'plugins' && <PluginsTab plugins={plugins} />}
       {view === 'external' && <ExternalMcpTab config={config} mcp={mcp} />}
     </div>

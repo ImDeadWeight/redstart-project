@@ -2,11 +2,12 @@
 // The section list down the left (a row of buttons on a narrow window).
 // =============================================================================
 
-export type SectionId = 'overview' | 'model' | 'tools' | 'network' | 'activity' | 'terminal' | 'system'
+export type SectionId = 'overview' | 'model' | 'images' | 'tools' | 'network' | 'activity' | 'terminal' | 'system'
 
 const ICONS: Record<SectionId, React.ReactNode> = {
   overview: <><path d="M3 11l9-7 9 7" /><path d="M5 10v10h14V10" /></>,
   model: <><rect x="6" y="6" width="12" height="12" rx="2" /><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" /></>,
+  images: <><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="M21 16l-5-5-9 9" /></>,
   tools: <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z" />,
   network: <><path d="M2 9a16 16 0 0 1 20 0" /><path d="M5 13a11 11 0 0 1 14 0" /><path d="M8.5 16.5a6 6 0 0 1 7 0" /><circle cx="12" cy="20" r="1" /></>,
   activity: <path d="M3 12h4l3-8 4 16 3-8h4" />,
@@ -17,6 +18,7 @@ const ICONS: Record<SectionId, React.ReactNode> = {
 export const SECTIONS: { id: SectionId; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'model', label: 'Model' },
+  { id: 'images', label: 'Images' },
   { id: 'tools', label: 'Tools' },
   { id: 'network', label: 'Network & access' },
   { id: 'activity', label: 'Activity' },

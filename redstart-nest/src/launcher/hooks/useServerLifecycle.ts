@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, getAPI } from '../api/redstart'
-import type { LlamaConfig, ServerState } from '../types'
+import type { ImageProgress, LlamaConfig, ServerState } from '../types'
 
 // The llama-server process lifecycle as seen from the renderer: launch/stop,
 // health polling, the tok/min meter, and the log buffer. Owns every event
@@ -18,6 +18,9 @@ export function useServerLifecycle(opts: {
   const [health, setHealth] = useState<string | null>(null)
   const [tokensPerMin, setTokensPerMin] = useState<number>(0)
   const [logLines, setLogLines] = useState<string[]>([])
+  // While image generation has the GPU the model is paused (health
+  // 'suspended'); imageProgress is the job's step, for the title bar.
+  const [imageProgress, setImageProgress] = useState<ImageProgress | null>(null)
   const [confirmStop, setConfirmStop] = useState(false)
   // Which profile NAME actually launched the running server — captured once
   // at launch, deliberately NOT kept in sync with selectedProfile afterward.
@@ -91,6 +94,9 @@ export function useServerLifecycle(opts: {
       setHealth('starting')
       startStatusPoll()
     })
+    a.events.onServerSuspended(() => setHealth('suspended'))
+    a.events.onServerResumed(() => { setHealth('ok'); setImageProgress(null) })
+    a.events.onImageProgress((p) => setImageProgress(p.phase === 'done' ? null : p))
     a.events.onServerStopped(() => {
       setServerState('stopped')
       setHealth(null)
@@ -109,6 +115,9 @@ export function useServerLifecycle(opts: {
       a.events.offTokensPerMinute()
       a.events.offServerStarted()
       a.events.offServerStopped()
+      a.events.offServerSuspended()
+      a.events.offServerResumed()
+      a.events.offImageProgress()
       a.events.offServerLog()
       stopStatusPoll()
     }
@@ -168,7 +177,7 @@ export function useServerLifecycle(opts: {
   }
 
   return {
-    serverState, health, tokensPerMin, logLines, clearLog,
+    serverState, health, imageProgress, tokensPerMin, logLines, clearLog,
     confirmStop, setConfirmStop,
     launchServer, requestStopServer, confirmStopServer,
     runningProfileName, syncToolsIfLive,
