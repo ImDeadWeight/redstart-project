@@ -35,7 +35,8 @@ Nest never handles certificates itself; its bundled Caddy does. With HTTPS on
 (Network & access → Secure address), Caddy fronts the chat UI and MCP server on :443
 and the gateway binds loopback. When the admin panel is also set to be
 reachable on the network, the bundled Caddy serves the control plane too, at
-`https://<name>:8443`, and never over plain HTTP. Use this directory's
+`https://<name>:8443` (and, for an Automatic name, at `https://admin.<name>` with
+no port), and never over plain HTTP. Use this directory's
 Caddyfile instead when you bring your own proxy. With your own proxy, leave Secure
 address Off (`tls.mode: "off"`): Nest then trusts no forwarded header.
 

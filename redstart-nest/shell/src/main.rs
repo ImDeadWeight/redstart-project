@@ -16,6 +16,7 @@
 
 mod daemon;
 mod dpapi;
+mod firewall;
 mod job;
 mod keychain;
 mod log;
@@ -60,6 +61,11 @@ pub fn app_handle() -> Option<&'static AppHandle> {
 }
 
 fn main() {
+    // The elevated firewall helper (firewall.rs) is this same exe. It must
+    // exit before the single-instance check or anything else starts.
+    if let Some(code) = firewall::elevated_entry() {
+        std::process::exit(code);
+    }
     let background = std::env::args().any(|a| a == "--background");
 
     let app = tauri::Builder::default()

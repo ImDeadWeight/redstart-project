@@ -121,8 +121,9 @@ git-ignored.
 ### elevate.exe
 
 Bundled at the installer root and used to create Windows Firewall inbound rules
-when network mode is enabled, so UAC prompts once per rule rather than
-repeatedly.
+when a headless `nestd` enables network mode, so UAC prompts once per rule
+rather than repeatedly. Under the desktop app the app elevates itself instead,
+so the prompt names Redstart Nest.
 
 Identified from the shipped binary's own version resource
 (`redstart-nest/deps/windows/elevate.exe`: CompanyName "Johannes Passing",

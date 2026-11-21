@@ -42,12 +42,20 @@
 //   4. Firewall rules follow the bind, never lead it. They are only ever
 //      added (removing one needs elevation; a leftover rule is inert once
 //      nothing listens on the wildcard; the existing policy, ipc/server.mjs).
+//      One exception, LEADING_RULES: Caddy's rule goes just BEFORE
+//      caddy:start. It names caddy.exe (program-scoped), so it admits
+//      nothing while Caddy is down. If it is not there when caddy.exe first
+//      listens, Windows shows its own "allow access?" alert for Caddy on
+//      top of Nest's UAC prompt (2026-11-20).
 // =============================================================================
 
 import { discoveryPlan } from './discovery.mjs'
 
 export const LOOPBACK = '127.0.0.1'
 export const WILDCARD = '0.0.0.0'
+
+/** Rules added before their listener starts (ordering rule 4's exception). */
+export const LEADING_RULES = Object.freeze(new Set(['caddy']))
 
 export const STATES = Object.freeze(['local', 'lan-http', 'lan-https', 'lan-https-fallback', 'stopping'])
 export const TLS_MODES = Object.freeze(['off', 'own', 'redstart'])
@@ -136,13 +144,16 @@ export function planSteps(from, to) {
   if (from.port80Proxy && !to.port80Proxy) steps.push({ op: 'port80:stop' })
   // 2. The data plane's bind.
   if (to.host && to.host !== from.host) steps.push({ op: 'dataplane:bind', host: to.host })
+  const have = new Set(from.firewall)
+  const wanted = to.firewall.filter((rule) => !have.has(rule))
   // 3. Starts. (caddy:start on a running Caddy restarts it with the new
   //    config: the admin API is off, so a restart is how config changes.)
+  //    Caddy's own rule leads it (rule 4's exception).
   if (to.port80Proxy && !from.port80Proxy) steps.push({ op: 'port80:start' })
+  for (const rule of wanted) if (LEADING_RULES.has(rule)) steps.push({ op: 'firewall:ensure', rule })
   if (caddyChanged) steps.push({ op: 'caddy:start', serving: to.caddy.serving, key: to.caddy.key })
   // 4. Firewall, after the binds.
-  const have = new Set(from.firewall)
-  for (const rule of to.firewall) if (!have.has(rule)) steps.push({ op: 'firewall:ensure', rule })
+  for (const rule of wanted) if (!LEADING_RULES.has(rule)) steps.push({ op: 'firewall:ensure', rule })
   return steps
 }
 

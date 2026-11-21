@@ -12,7 +12,10 @@
 //   - /mcp goes to the MCP server and nothing else does;
 //   - :80 redirects exactly when httpsServing, and serves the refusal page
 //     instead of proxying when requireHttps;
-//   - only the hostname has a TLS connection policy (no other SNI answers);
+//   - only the hostname has a TLS connection policy (no other SNI answers),
+//     plus admin.<hostname> when the admin panel has its own name;
+//   - the admin name: loopback admin upstream on :443 by Host, a wildcard
+//     certificate and never its own, and on :80 only a redirect or a refusal;
 //   - DNS-01 only.
 //
 // Run:  node scripts/test-caddy-config.mjs
@@ -25,6 +28,7 @@ import { execFileSync } from 'node:child_process'
 import { stagedCaddyPath } from './fetch-caddy.mjs'
 import {
   buildCaddyConfig, checkDnsProvider, TLS_HEALTH_PATH, PROXY_HEADER, PROXY_SECRET_ENV, ACME_PRODUCTION, ACME_STAGING,
+  adminHostnameFor,
 } from '../daemon/caddy-config.mjs'
 
 const results = []
@@ -200,6 +204,61 @@ test('🔍 the admin panel over HTTPS (:8443): only when asked, loopback upstrea
   }
 })
 
+const ADMIN_NAME = adminHostnameFor(BASE.hostname)
+const withAdminName = (c = {}) => build({ ...c, adminPort: 19083, adminHostname: ADMIN_NAME })
+
+test('🔍 the admin panel on its own name (admin.<hostname>): :443 by Host to the loopback admin listener, the proxy secret', () => {
+  assert(ADMIN_NAME === `admin.${BASE.hostname}`, ADMIN_NAME)
+  for (const c of COMBOS) {
+    const s = servers(withAdminName(c))
+    assert(JSON.stringify(s.https.tls_connection_policies) === JSON.stringify([{ match: { sni: [BASE.hostname, ADMIN_NAME] } }]), `${label(c)}: SNI ${JSON.stringify(s.https.tls_connection_policies)}`)
+    assert(s.https.strict_sni_host === true, 'strict SNI off')
+    const [first, second] = s.https.routes
+    assert(JSON.stringify(first.match) === JSON.stringify([{ host: [ADMIN_NAME] }]) && first.terminal === true, `first route ${JSON.stringify(first.match)}`)
+    assert(first.handle.length === 1 && first.handle[0].upstreams[0].dial === '127.0.0.1:19083', `admin upstream ${JSON.stringify(first.handle)}`)
+    assert(first.handle[0].headers.request.set[PROXY_HEADER][0] === `{env.${PROXY_SECRET_ENV}}`, 'admin-name requests carry no proxy secret')
+    assert(JSON.stringify(second.match) === JSON.stringify([{ host: [BASE.hostname] }]), 'the device name lost its route')
+    assert(!JSON.stringify(second).includes(':19083'), 'the admin listener is reachable under the device name on :443')
+    assert(s.admin && JSON.stringify(s.admin.listen) === JSON.stringify(['tcp4/0.0.0.0:8443']), ':8443 is gone (it stays, for bookmarks and own names)')
+  }
+})
+
+test('🔍 the admin name rides on a wildcard certificate: *.<hostname> managed, admin.<hostname> never asked for itself', () => {
+  // A certificate for admin.<hostname> itself would be challenged at
+  // _acme-challenge.admin.<hostname>, which the name service never writes.
+  const cfg = withAdminName()
+  assert(JSON.stringify(cfg.apps.tls.certificates?.automate) === JSON.stringify([`*.${BASE.hostname}`]), JSON.stringify(cfg.apps.tls.certificates))
+  assert(JSON.stringify(cfg.apps.tls.automation.policies[0].subjects) === JSON.stringify([BASE.hostname, `*.${BASE.hostname}`]), JSON.stringify(cfg.apps.tls.automation.policies[0].subjects))
+  assert(JSON.stringify(servers(cfg).https.automatic_https.skip_certificates) === JSON.stringify([ADMIN_NAME]), JSON.stringify(servers(cfg).https.automatic_https))
+  assert(servers(cfg).https.automatic_https.disable_redirects === true, 'redirects re-enabled')
+  const dns = cfg.apps.tls.automation.policies[0].issuers[0].challenges
+  assert(dns.http.disabled && dns['tls-alpn'].disabled && dns.dns, 'not DNS-01 only')
+  // Without it, nothing changes.
+  const plain = build({ adminPort: 19083 })
+  assert(!plain.apps.tls.certificates && JSON.stringify(plain.apps.tls.automation.policies[0].subjects) === JSON.stringify([BASE.hostname]), 'a wildcard without the admin name')
+  assert(!('skip_certificates' in servers(plain).https.automatic_https), 'skip_certificates without the admin name')
+})
+
+test('🔍 on :80 the admin name only redirects to HTTPS (serving) or is refused: never proxied in plain text', () => {
+  for (const c of COMBOS) {
+    const http = servers(withAdminName(c)).http
+    const first = http.routes[0]
+    assert(JSON.stringify(first.match) === JSON.stringify([{ host: [ADMIN_NAME] }]) && first.terminal === true, `${label(c)}: admin name is not matched first on :80`)
+    const h = first.handle[0]
+    assert(h.handler === 'static_response', `${label(c)}: admin name on :80 is ${h.handler}`)
+    if (c.httpsServing) assert(h.status_code === 308 && h.headers.Location[0] === `https://${ADMIN_NAME}{http.request.uri}`, `${label(c)}: ${JSON.stringify(h)}`)
+    else assert(h.status_code === 503, `${label(c)}: ${h.status_code}`)
+    assert(!JSON.stringify(http).includes(':19083'), `${label(c)}: the admin listener is reachable over plain :80`)
+  }
+})
+
+test('the admin name is refused without adminPort, or when it is not admin.<hostname>', () => {
+  throws(() => build({ adminHostname: ADMIN_NAME }), /needs adminPort/, 'no adminPort')
+  for (const bad of ['admin.example.com', `x.admin.${BASE.hostname}`, `chat.${BASE.hostname}`, BASE.hostname, '*.' + BASE.hostname]) {
+    throws(() => build({ adminPort: 19083, adminHostname: bad }), /adminHostname must be/, bad)
+  }
+})
+
 test('Caddy adds no redirects of its own; :80 runs no automatic HTTPS', () => {
   const s = servers(build())
   assert(s.https.automatic_https?.disable_redirects === true, ':443 automatic redirects not disabled')
@@ -295,6 +354,7 @@ test('🔍 `caddy validate` accepts every mode (staged binary; required under CI
     return 'SKIPPED locally: run node scripts/fetch-caddy.mjs'
   }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-caddy-validate-'))
+  let n = 0
   try {
     for (const c of COMBOS) {
       for (const dnsProvider of [
@@ -303,19 +363,24 @@ test('🔍 `caddy validate` accepts every mode (staged binary; required under CI
         { name: 'acmedns', username: 'k7f3q2', password: '{env.REDSTART_DNS_TOKEN}', subdomain: 'k7f3q2', server_url: 'https://ns.example.invalid' },
       ]) {
         const file = path.join(dir, 'caddy.json')
-        fs.writeFileSync(file, JSON.stringify(build({ ...c, dnsProvider, acmeStaging: true, storageDir: path.join(dir, 'storage') })))
-        try {
-          execFileSync(bin, ['validate', '--config', file], {
-            env: { ...process.env, REDSTART_DNS_TOKEN: 'placeholder', [PROXY_SECRET_ENV]: 'placeholder' },
-            stdio: 'pipe',
-          })
-        } catch (err) {
-          throw new Error(`${label(c)} ${dnsProvider.name}: ${String(err.stderr || err.message).trim().split('\n').pop()}`)
+        // Automatic (acmedns) also with the admin panel on its own name.
+        const variants = dnsProvider.name === 'acmedns' ? [{}, { adminPort: 19083, adminHostname: ADMIN_NAME }] : [{}]
+        for (const v of variants) {
+          fs.writeFileSync(file, JSON.stringify(build({ ...c, ...v, dnsProvider, acmeStaging: true, storageDir: path.join(dir, 'storage') })))
+          try {
+            execFileSync(bin, ['validate', '--config', file], {
+              env: { ...process.env, REDSTART_DNS_TOKEN: 'placeholder', [PROXY_SECRET_ENV]: 'placeholder' },
+              stdio: 'pipe',
+            })
+          } catch (err) {
+            throw new Error(`${label(c)} ${dnsProvider.name}${v.adminHostname ? ' +admin name' : ''}: ${String(err.stderr || err.message).trim().split('\n').pop()}`)
+          }
+          n++
         }
       }
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
-  return `${COMBOS.length * 3} configs`
+  return `${n} configs`
 })
 
 test('the output is plain JSON (round-trips unchanged)', () => {

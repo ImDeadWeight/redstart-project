@@ -8,14 +8,16 @@
 //   - Caddy and the port-80 proxy never run at once (both want :80);
 //   - Caddy never runs while the gateway is on 0.0.0.0 (a LAN client could
 //     go around it in the clear);
-//   - a firewall rule is never added before its listener is up;
+//   - a firewall rule is never added before its listener is up, except
+//     Caddy's program-scoped rule, which is always added BEFORE Caddy first
+//     starts (so Windows never shows its own alert for caddy.exe);
 //   - stopping never binds or starts anything.
 //
 // Run:  node scripts/test-network-mode.mjs
 // =============================================================================
 
 import {
-  targetState, factsFor, planSteps, appliedFacts, next, INITIAL_FACTS, STATES, LOOPBACK, WILDCARD,
+  targetState, factsFor, planSteps, appliedFacts, next, INITIAL_FACTS, STATES, LOOPBACK, WILDCARD, LEADING_RULES,
 } from '../daemon/network-mode.mjs'
 
 const results = []
@@ -90,9 +92,9 @@ console.log('\n-- specific transitions --')
 
 const at = (state, over = {}) => appliedFacts(INITIAL_FACTS, factsFor(state, inp(over)))
 
-test('🔍 lan-http → lan-https: proxy stops, data plane narrows, THEN Caddy starts, then its rule', () => {
+test('🔍 lan-http → lan-https: proxy stops, data plane narrows, then the Caddy rule, THEN Caddy starts', () => {
   const got = ops(next(at('lan-http'), inp()).steps)
-  assert(got === 'port80:stop → dataplane:bind(127.0.0.1) → caddy:start(serving=false) → firewall:ensure(caddy)', got)
+  assert(got === 'port80:stop → dataplane:bind(127.0.0.1) → firewall:ensure(caddy) → caddy:start(serving=false)', got)
 })
 
 test('🔍 lan-https → lan-http: Caddy stops, THEN the data plane widens, then the proxy', () => {
@@ -114,7 +116,7 @@ test('🔍 the failed latch under requireHttps does not thrash: no steps at all'
 
 test('a retry (new caddyKey) from fallback narrows and starts Caddy again', () => {
   const got = ops(next(at('lan-https-fallback'), inp({ caddyKey: 'k2' })).steps)
-  assert(got === 'dataplane:bind(127.0.0.1) → caddy:start(serving=false) → firewall:ensure(caddy)', got)
+  assert(got === 'dataplane:bind(127.0.0.1) → firewall:ensure(caddy) → caddy:start(serving=false)', got)
 })
 
 test('🔍 HTTPS starts serving: only Caddy is reconfigured (:80 becomes the redirect)', () => {
@@ -129,7 +131,7 @@ test('a Caddy config change (new name, provider) restarts Caddy and nothing else
 
 test('local → lan-https never binds wide, never starts the port-80 proxy', () => {
   const got = ops(next(INITIAL_FACTS, inp()).steps)
-  assert(got === 'caddy:start(serving=false) → firewall:ensure(caddy)', got)
+  assert(got === 'firewall:ensure(caddy) → caddy:start(serving=false)', got)
 })
 
 test('🔍 stopping from every state: releases only, no bind, no start, no firewall', () => {
@@ -173,9 +175,12 @@ function simulate(from, steps) {
     else if (st.op === 'port80:stop') w.port80 = false
     else if (st.op === 'dataplane:bind') w.host = st.host
     else if (st.op === 'port80:start') w.port80 = true
-    else if (st.op === 'caddy:start') w.caddy = true
-    else if (st.op === 'firewall:ensure') {
-      assert(listening[st.rule]?.(), `${where}: rule ${st.rule} added before its listener is up`)
+    else if (st.op === 'caddy:start') {
+      assert(w.rules.has('caddy'), `${where}: Caddy started before its firewall rule (Windows would raise its own alert)`)
+      w.caddy = true
+    } else if (st.op === 'firewall:ensure') {
+      if (LEADING_RULES.has(st.rule)) assert(!w.caddy, `${where}: rule ${st.rule} added after Caddy was already up`)
+      else assert(listening[st.rule]?.(), `${where}: rule ${st.rule} added before its listener is up`)
       w.rules.add(st.rule)
     } else throw new Error(`unknown op ${st.op}`)
     check(where)
@@ -204,12 +209,13 @@ test('🔍 no unsafe moment in any transition between any two states', () => {
   return `${pairs} transitions`
 })
 
-test('🔍 every step list is releases → bind → starts → firewall, in that order', () => {
-  const rank = { 'caddy:stop': 0, 'port80:stop': 0, 'dataplane:bind': 1, 'port80:start': 2, 'caddy:start': 2, 'firewall:ensure': 3 }
+test('🔍 every step list is releases → bind → starts → firewall, in that order (the Caddy rule just ahead of Caddy)', () => {
+  const rank = { 'caddy:stop': 0, 'port80:stop': 0, 'dataplane:bind': 1, 'port80:start': 2, 'caddy:start': 2.5, 'firewall:ensure': 3 }
+  const rankOf = (st) => (st.op === 'firewall:ensure' && LEADING_RULES.has(st.rule) ? 2.4 : rank[st.op])
   for (const a of ALL) for (const b of ALL) {
     const steps = next(appliedFacts(INITIAL_FACTS, factsFor(a.s, inp(a.v))), inp(b.v)).steps
     for (let i = 1; i < steps.length; i++) {
-      assert(rank[steps[i - 1].op] <= rank[steps[i].op], `${a.s} → ${b.s}: ${ops(steps)}`)
+      assert(rankOf(steps[i - 1]) <= rankOf(steps[i]), `${a.s} → ${b.s}: ${ops(steps)}`)
     }
   }
 })

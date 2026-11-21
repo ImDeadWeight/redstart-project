@@ -11,7 +11,7 @@ import {
 } from '../admin-listener.mjs'
 import { readTls } from '../tls-settings.mjs'
 import { lanStatus, applyTlsSettings } from '../lan.mjs'
-import { ADMIN_HTTPS_PORT } from '../caddy-config.mjs'
+import { ADMIN_HTTPS_PORT, adminHostnameFor } from '../caddy-config.mjs'
 import { logEvent } from '../logger.mjs'
 import { getGatewayPort } from '../tools-gateway.mjs'
 import { getMcpServerRunning } from '../mcp-server.mjs'
@@ -23,7 +23,9 @@ import { apiRevision } from '../admin/api-routes.mjs'
  * reachable on the network is carried by the bundled Caddy (https://<name>:8443)
  * and the listener itself is on loopback, so `exposed` reports the REQUEST
  * (what the toggle shows) and `viaHttps` / `httpsUrl` say how it is carried.
- * `httpsUrl` is null until Caddy actually faces the LAN.
+ * `httpsUrl` is null until Caddy actually faces the LAN. An Automatic name
+ * gets the panel on its own name, https://admin.<name> (no port); an own
+ * name keeps https://<name>:8443, which also still works for Automatic.
  */
 export function controlPlaneState(settings = {}) {
   const listener = getAdminListenerState()
@@ -36,7 +38,9 @@ export function controlPlaneState(settings = {}) {
     ...listener,
     exposed: viaHttps ? true : listener.exposed,
     viaHttps,
-    httpsUrl: viaHttps && name && facing ? `https://${name}:${ADMIN_HTTPS_PORT}` : null,
+    httpsUrl: viaHttps && name && facing
+      ? (tls.mode === 'redstart' ? `https://${adminHostnameFor(name)}` : `https://${name}:${ADMIN_HTTPS_PORT}`)
+      : null,
   }
 }
 

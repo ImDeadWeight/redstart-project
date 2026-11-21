@@ -21,6 +21,13 @@ import { SectionTitle, btnCls, inputCls } from '../components/ui'
 
 const PAGE = 50
 
+// Both tables sit in a box of their own: capped in height so a long history
+// scrolls inside the card instead of stretching the page, and scrollable
+// sideways as the last resort on a very narrow window, so neither the text
+// nor the row dividers run off the card's edge. The header stays put.
+const TABLE_BOX = 'max-h-80 overflow-auto rounded-lg border border-zinc-800 px-2'
+const TABLE_HEAD = 'sticky top-0 z-[1] bg-zinc-900'
+
 const EVENT_LABEL: Record<PolicyRecord['event'], string> = {
   'approval.denied': 'Denied',
   'approval.refused': 'Approval refused',
@@ -114,7 +121,7 @@ function TasksSection() {
   }
 
   return (
-    <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+    <section className="min-w-0 bg-zinc-900 border border-zinc-800 rounded-xl p-5">
       <div className="flex items-center justify-between mb-2">
         <SectionTitle className="">Background tasks</SectionTitle>
         <button className={btnCls.subtle} onClick={() => void load()} disabled={loading}>
@@ -133,8 +140,9 @@ function TasksSection() {
       )}
 
       {tasks.length > 0 && (
+        <div className={TABLE_BOX}>
         <table className="w-full text-xs">
-          <thead>
+          <thead className={TABLE_HEAD}>
             <tr className="text-left text-zinc-500">
               <th className="font-normal py-1 pr-3">Started</th>
               <th className="font-normal py-1 pr-3">Account</th>
@@ -147,12 +155,13 @@ function TasksSection() {
             {tasks.map((t) => (
               <tr key={t.id} className="border-t border-zinc-800 align-top">
                 <td className="py-1.5 pr-3 text-zinc-400 whitespace-nowrap">{new Date(t.createdAt).toLocaleString()}</td>
-                <td className="py-1.5 pr-3 text-zinc-300">{t.account ?? '(login off)'}</td>
+                <td className="py-1.5 pr-3 text-zinc-300 [overflow-wrap:anywhere]">{t.account ?? '(login off)'}</td>
                 <td className={`py-1.5 pr-3 whitespace-nowrap ${TASK_TONE[t.status] ?? 'text-zinc-300'}`}>
                   {TASK_LABEL[t.status] ?? t.status}
                 </td>
-                <td className="py-1.5 pr-3 text-zinc-500">
+                <td className="py-1.5 pr-3 text-zinc-500 break-words [overflow-wrap:anywhere]">
                   {t.tool ? <span className="font-mono text-zinc-300">{t.tool}</span> : null}
+                  {t.tool && t.error ? ' ' : null}
                   {t.error ? <span>{t.error}</span> : null}
                 </td>
                 <td className="py-1.5 text-right">
@@ -166,6 +175,7 @@ function TasksSection() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </section>
   )
@@ -233,7 +243,7 @@ export function ActivityTab() {
     <div className="flex flex-col gap-5">
       <TasksSection />
 
-      <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+      <section className="min-w-0 bg-zinc-900 border border-zinc-800 rounded-xl p-5">
         <div className="flex items-center justify-between mb-2">
           <SectionTitle className="">Decision log</SectionTitle>
           <button className={btnCls.subtle} onClick={() => void load()} disabled={loading}>
@@ -252,8 +262,9 @@ export function ActivityTab() {
         )}
 
         {records.length > 0 && (
+          <div className={TABLE_BOX}>
           <table className="w-full text-xs">
-            <thead>
+            <thead className={TABLE_HEAD}>
               <tr className="text-left text-zinc-500">
                 <th className="font-normal py-1 pr-3">When</th>
                 <th className="font-normal py-1 pr-3">What</th>
@@ -269,13 +280,14 @@ export function ActivityTab() {
                   <td className={`py-1.5 pr-3 whitespace-nowrap ${EVENT_TONE[r.event] ?? 'text-zinc-300'}`}>
                     {EVENT_LABEL[r.event] ?? r.event}
                   </td>
-                  <td className="py-1.5 pr-3 text-zinc-300">{r.account ?? '—'}</td>
-                  <td className="py-1.5 pr-3 font-mono text-zinc-200">{r.tool ?? '—'}</td>
-                  <td className="py-1.5 text-zinc-500">{detail(r)}</td>
+                  <td className="py-1.5 pr-3 text-zinc-300 [overflow-wrap:anywhere]">{r.account ?? '—'}</td>
+                  <td className="py-1.5 pr-3 font-mono text-zinc-200 [overflow-wrap:anywhere]">{r.tool ?? '—'}</td>
+                  <td className="py-1.5 text-zinc-500 [overflow-wrap:anywhere]">{detail(r)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
         )}
 
         {more && (
@@ -288,7 +300,7 @@ export function ActivityTab() {
         )}
       </section>
 
-      <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+      <section className="min-w-0 bg-zinc-900 border border-zinc-800 rounded-xl p-5">
         <SectionTitle>Standing grants</SectionTitle>
         <p className="text-xs text-zinc-500 mb-3">
           The tools an account runs without the approval card ("Always allow"). Deletes and memory removals can
@@ -320,7 +332,7 @@ export function ActivityTab() {
           <ul className="flex flex-col gap-1">
             {grants.map((g) => (
               <li key={g.id} className="flex items-center justify-between gap-3 border-t border-zinc-800 pt-1.5">
-                <span className="font-mono text-xs text-zinc-200">{g.tool}</span>
+                <span className="min-w-0 font-mono text-xs text-zinc-200 [overflow-wrap:anywhere]">{g.tool}</span>
                 <span className="text-xs text-zinc-500 flex-1">
                   since {new Date(g.createdAt).toLocaleDateString()}
                   {g.source === 'import' ? ' · imported from the browser' : ''}

@@ -310,7 +310,8 @@ console.log('\n-- resources the daemon reaches for at runtime --')
 
 test('🔍 Nest stages elevate.exe, which firewall.mjs resolves from the resources dir', () => {
   assert(STAGE_SRC.includes("out('elevate.exe')"),
-    'firewall.mjs looks for <resources>/elevate.exe to add inbound rules with UAC. It fails SOFT when the ' +
+    'firewall.mjs looks for <resources>/elevate.exe to add inbound rules with UAC when no desktop shell is ' +
+      'there to elevate itself (a headless nestd). It fails SOFT when the ' +
       'file is absent (logs a warning, skips the rule), so LAN mode would appear broken for no visible reason.')
   return 'staged'
 })

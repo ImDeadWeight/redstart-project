@@ -1,6 +1,7 @@
 # Redstart name service
 
-Automatic HTTPS names for Redstart Nest installs: `<id>.nest.redstartdevelopment.com`,
+Automatic HTTPS names for Redstart Nest installs: `<id>.nest.redstartdevelopment.com`
+(and `admin.<id>.nest.redstartdevelopment.com` for the admin panel, same address),
 pointing at the install's **private** LAN address, with the DNS-01 challenge
 Let's Encrypt needs to issue it a certificate. A Cloudflare Worker with a D1
 database. Deployed by hand; never shipped in an installer.
@@ -13,7 +14,7 @@ The design (routes, invariants, limits) is TLS plan component C12. In short:
 | Route | Auth | Does |
 |---|---|---|
 | `POST /v1/register` | none, 5/hour per network | mint an `id` and a credential (returned once, stored only as SHA-256) |
-| `PUT /v1/ip` | `Bearer <id>.<credential>` | publish the LAN address: A (private IPv4 only), AAAA (ULA `fd00::/8` only) |
+| `PUT /v1/ip` | `Bearer <id>.<credential>` | publish the LAN address on `<id>.nest` and `admin.<id>.nest`: A (private IPv4 only), AAAA (ULA `fd00::/8` only) |
 | `POST /update` | `X-Api-User` / `X-Api-Key` | the acme-dns protocol Caddy's acmedns plugin speaks: set `_acme-challenge.<id>.nest` TXT, keeping the newest two |
 | `POST /v1/heartbeat` | Bearer | still here |
 | `DELETE /v1/register` | Bearer | remove every record and forget the install |
@@ -21,14 +22,16 @@ The design (routes, invariants, limits) is TLS plan component C12. In short:
 
 **Invariants**, each a test in `test/service.test.mjs`:
 - A credential touches only its own `<id>.nest.` records.
-- Nothing is ever written outside `<id>.nest.` and `_acme-challenge.<id>.nest.`.
+- Nothing is ever written outside `<id>.nest.`, `admin.<id>.nest.` (A/AAAA only) and
+  `_acme-challenge.<id>.nest.`. The admin name is one label under the device name so
+  the install's wildcard certificate covers it with the same challenge TXT.
 - Every record is **DNS-only** (`proxied: false`). A proxied record would send
   the household's traffic through Cloudflare. The daily job flips any it finds
   back, and reports it.
 - Only private addresses are published.
 
 A daily job also forgets installs unseen for 180 days and alerts at 700 zone
-records (Cloudflare Free allows 1,000; about 3 per install).
+records (Cloudflare Free allows 1,000; about 4 per install: two A, two TXT).
 
 ## Privacy
 

@@ -5,11 +5,14 @@
 // Against https://names.redstartdevelopment.com (or --server <url>):
 //   1. register one install;
 //   2. publish a PRIVATE test address (10.255.255.1, unused) and see the A
-//      record in public DNS (1.1.1.1);
+//      record in public DNS (1.1.1.1), on the device name AND on its admin
+//      name, admin.<id>.nest (2026-11-20);
 //   3. the pinned bundled Caddy, configured by Nest's own buildCaddyConfig
-//      with the acmedns provider pointed at the service, obtains a
-//      certificate from Let's Encrypt STAGING: the challenge TXT is set by
-//      the service in REAL DNS, and LE validates it;
+//      with the acmedns provider pointed at the service and the admin panel
+//      on its own name, obtains TWO certificates from Let's Encrypt STAGING,
+//      the device name's and the wildcard *.<id>.nest the admin name rides
+//      on: both challenge TXTs are set by the service in REAL DNS at the
+//      same _acme-challenge.<id>.nest, and LE validates them;
 //   4. ALWAYS unregister at the end, so no test records are left.
 //
 // Writes real (DNS-only, private) records to the zone for a minute or two.
@@ -28,7 +31,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const NEST = path.join(here, '..', '..', '..', 'redstart-nest')
 const nestUrl = (...p) => pathToFileURL(path.join(...p)).href
-const { buildCaddyConfig, PROXY_SECRET_ENV } = await import(nestUrl(NEST, 'daemon', 'caddy-config.mjs'))
+const { buildCaddyConfig, PROXY_SECRET_ENV, adminHostnameFor } = await import(nestUrl(NEST, 'daemon', 'caddy-config.mjs'))
 const { createCaddySupervisor } = await import(nestUrl(NEST, 'daemon', 'caddy-server.mjs'))
 const { stagedCaddyPath } = await import(nestUrl(NEST, 'scripts', 'fetch-caddy.mjs'))
 
@@ -65,27 +68,44 @@ try {
   console.log(`  PUT /v1/ip → ${ip.status}`)
   results.a = await until(async () => (await resolver.resolve4(reg.hostname)).includes(TEST_IP), 90_000)
   console.log(`  public DNS (1.1.1.1): ${results.a ? `${reg.hostname} → ${TEST_IP}` : 'not visible within 90 s'}`)
+  const adminName = adminHostnameFor(reg.hostname)
+  results.adminA = await until(async () => (await resolver.resolve4(adminName)).includes(TEST_IP), 90_000)
+  console.log(`  public DNS (1.1.1.1): ${results.adminA ? `${adminName} → ${TEST_IP}` : `${adminName} not visible within 90 s (is the Worker deployed with admin names?)`}`)
 
   const pub = await fetch(`${SERVER}/v1/ip`, { method: 'PUT', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ ipv4: '8.8.8.8' }) })
   results.publicRefused = pub.status === 400
   console.log(`  a public address → ${pub.status} (refused: ${results.publicRefused})`)
 
   step('the real Caddy obtains a STAGING certificate through the service')
-  const [httpsPort, httpPort] = [await free(), await free()]
+  const [httpsPort, httpPort, adminHttpsPort] = [await free(), await free(), await free()]
+  const storageDir = path.join(dir, 'caddy', 'storage')
   const config = buildCaddyConfig({
     hostname: reg.hostname,
     dnsProvider: { name: 'acmedns', username: reg.acmedns.username, password: '{env.REDSTART_DNS_TOKEN}', subdomain: reg.acmedns.subdomain, server_url: reg.acmedns.server_url },
     gatewayPort: 1, mcpPort: 2, httpsServing: false, requireHttps: false, httpsPort, httpPort, acmeStaging: true,
-    storageDir: path.join(dir, 'caddy', 'storage'),
+    adminPort: 3, adminHttpsPort, adminHostname: adminName,
+    storageDir,
   })
+  /** The certificate files Caddy has stored, by subject (certmagic writes *. as wildcard_.). */
+  const stored = () => {
+    const out = new Set()
+    const walk = (d) => { for (const e of fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }) : []) { if (e.isDirectory()) walk(path.join(d, e.name)); else if (e.name.endsWith('.crt')) out.add(e.name.slice(0, -4)) } }
+    walk(path.join(storageDir, 'certificates'))
+    return out
+  }
   await sup.start({ config, secrets: { REDSTART_DNS_TOKEN: reg.credential, [PROXY_SECRET_ENV]: 'live-check-secret-0123' } })
   let lastErr = null
   results.cert = await until(async () => {
     const s = sup.status()
     if (s.lastAcmeError && s.lastAcmeError !== lastErr) { lastErr = s.lastAcmeError; console.log(`  acme: ${lastErr.slice(0, 160)}`) }
-    return s.lastCertificateAt ? true : null
-  }, 6 * 60_000, 2000)
-  console.log(`  certificate: ${results.cert ? 'OBTAINED (Let\'s Encrypt staging, DNS-01 via the name service)' : 'not within 6 minutes'}`)
+    const have = stored()
+    return have.has(reg.hostname) && have.has(`wildcard_.${reg.hostname}`) ? true : null
+  }, 8 * 60_000, 2000)
+  const have = stored()
+  results.cert = have.has(reg.hostname)
+  results.wildcard = have.has(`wildcard_.${reg.hostname}`)
+  results.noAdminOwnCert = !have.has(adminName)
+  console.log(`  certificates: ${[...have].join(', ') || 'none'} (Let's Encrypt staging, DNS-01 via the name service)`)
 } finally {
   await sup.stop()
   step('unregister (always)')
@@ -95,6 +115,6 @@ try {
   fs.rmSync(dir, { recursive: true, force: true })
 }
 
-const pass = results.a && results.publicRefused && results.cert && results.unregistered
+const pass = results.a && results.adminA && results.publicRefused && results.cert && results.wildcard && results.noAdminOwnCert && results.unregistered
 console.log(`\n${pass ? 'PASS' : 'FAIL'}: ${JSON.stringify(results)}`)
 process.exit(pass ? 0 : 1)

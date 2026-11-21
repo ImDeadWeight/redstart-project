@@ -76,13 +76,13 @@ await test('boot with network mode on, HTTPS off: today\'s lan-http, in order', 
   assert(fx.calls.join(' ') === 'bind(0.0.0.0) port80+ fw(gateway) fw(mcp) fw(port80)', fx.calls.join(' '))
 })
 
-await test('🔍 HTTPS on: the effects run proxy-off → narrow → Caddy → rule', async () => {
+await test('🔍 HTTPS on: the effects run proxy-off → narrow → rule → Caddy', async () => {
   const fx = fakeEffects(); const o = owner(fx)
   await o.update({ networkMode: true })
   fx.calls.length = 0
   const s = await o.update({ tlsMode: 'own', caddyKey: 'name-a' })
   assert(s.state === 'lan-https' && o.dataPlaneHost() === '127.0.0.1', JSON.stringify(s))
-  assert(fx.calls.join(' ') === 'port80- bind(127.0.0.1) caddy+(serving=false) fw(caddy)', fx.calls.join(' '))
+  assert(fx.calls.join(' ') === 'port80- bind(127.0.0.1) fw(caddy) caddy+(serving=false)', fx.calls.join(' '))
 })
 
 await test('🔍 Caddy gives up: the fallback, once, and no restart loop afterwards', async () => {
@@ -133,7 +133,7 @@ await test('🔍 a failed step rolls back to the previous state, through local',
   const s = await o.update({ tlsMode: 'own', caddyKey: 'a' })
   assert(s.state === 'lan-http' && o.dataPlaneHost() === '0.0.0.0' && s.port80Proxy, JSON.stringify(s))
   assert(/caddy\+ failed/.test(s.lastError ?? ''), `lastError ${s.lastError}`)
-  assert(fx.calls.join(' ') === 'port80- bind(127.0.0.1) caddy+(serving=false) bind(0.0.0.0) port80+', fx.calls.join(' '))
+  assert(fx.calls.join(' ') === 'port80- bind(127.0.0.1) fw(caddy) caddy+(serving=false) bind(0.0.0.0) port80+', fx.calls.join(' '))
 })
 
 await test('🔍 if the rollback fails too, it stays local (loopback only)', async () => {
@@ -162,7 +162,7 @@ await test('🔍 updates are serialised: two at once never interleave their step
   const fx = fakeEffects({ delayMs: 15 }); const o = owner(fx)
   await Promise.all([o.update({ networkMode: true }), o.update({ tlsMode: 'own', caddyKey: 'a' })])
   const seq = fx.calls.join(' ')
-  assert(seq === 'bind(0.0.0.0) port80+ fw(gateway) fw(mcp) fw(port80) port80- bind(127.0.0.1) caddy+(serving=false) fw(caddy)', seq)
+  assert(seq === 'bind(0.0.0.0) port80+ fw(gateway) fw(mcp) fw(port80) port80- bind(127.0.0.1) fw(caddy) caddy+(serving=false)', seq)
 })
 
 await test('HTTPS off clears the latch, so turning it back on tries Caddy again', async () => {

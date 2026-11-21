@@ -1,8 +1,9 @@
 // The Cloudflare DNS API, behind one guard (TLS plan C12, invariants 7 + 10).
 //
 // Every write the service can make passes writable(): the name must be
-// exactly <id>.nest.<zone> or _acme-challenge.<id>.nest.<zone> for the
-// install that is asking, the type A, AAAA or TXT, and the record is always
+// exactly <id>.nest.<zone>, admin.<id>.nest.<zone> (the install's admin
+// panel, same address) or _acme-challenge.<id>.nest.<zone> for the install
+// that is asking, the type A, AAAA or TXT, and the record is always
 // DNS-only (proxied: false, the grey cloud). A proxied record would route
 // the household's traffic through Cloudflare and terminate TLS there, which
 // is conversation data leaving the house: the exact thing this design
@@ -19,6 +20,13 @@ const COMMENT = 'redstart-name-service'
 /** The device name for an id. */
 export const hostnameFor = (id, zone) => `${id}.${SUBZONE}.${zone}`
 export const challengeNameFor = (id, zone) => `_acme-challenge.${hostnameFor(id, zone)}`
+/**
+ * The admin panel's name: one label under the device name, so the install's
+ * wildcard certificate (*.<id>.nest.<zone>) covers it and its DNS-01
+ * challenge is the same _acme-challenge.<id>.nest.<zone> TXT (2026-11-20).
+ */
+export const ADMIN_LABEL = 'admin'
+export const adminHostnameFor = (id, zone) => `${ADMIN_LABEL}.${hostnameFor(id, zone)}`
 
 /**
  * May the install `id` write a `type` record called `name`? Throws if not.
@@ -27,9 +35,8 @@ export const challengeNameFor = (id, zone) => `_acme-challenge.${hostnameFor(id,
 export function writable({ id, name, type, zone }) {
   if (!ID_RE.test(String(id))) throw new Error('refused: not an install id')
   if (!TYPES.has(type)) throw new Error(`refused: ${type} records are not written`)
-  const own = hostnameFor(id, zone)
-  const allowed = type === 'TXT' ? challengeNameFor(id, zone) : own
-  if (name !== allowed) throw new Error(`refused: ${name} is not ${allowed}`)
+  const allowed = type === 'TXT' ? [challengeNameFor(id, zone)] : [hostnameFor(id, zone), adminHostnameFor(id, zone)]
+  if (!allowed.includes(name)) throw new Error(`refused: ${name} is not ${allowed.join(' or ')}`)
   return true
 }
 
@@ -90,7 +97,7 @@ export function cloudflareDns({ token, zoneId, zone, fetch: fetchImpl = fetch, b
     },
     /** Housekeeping only: turn a proxied record back to DNS-only, keeping its content. */
     async unproxy(record) {
-      const m = new RegExp(`^(?:_acme-challenge\\.)?([^.]+)\\.${SUBZONE}\\.`).exec(record.name)
+      const m = new RegExp(`^(?:_acme-challenge\\.|${ADMIN_LABEL}\\.)?([^.]+)\\.${SUBZONE}\\.`).exec(record.name)
       const id = m?.[1]
       return this.update(record.id, { id, name: record.name, type: record.type, content: record.content })
     },

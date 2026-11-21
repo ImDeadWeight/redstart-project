@@ -68,7 +68,7 @@ Redstart Nest can also treat an MCP endpoint on **another device** (e.g. `http:/
 
 Clients fetch the full list from Redstart Nest directly, so every device on the LAN discovers built-in and external tools alike.
 
-An external server is a distinct trust boundary — read [External MCP servers](security.md#external-mcp-servers) before registering one.
+They are added on the launcher's **Tools → External MCP** view. An external server is a distinct trust boundary — read [External MCP servers](security.md#external-mcp-servers) before registering one.
 
 **Editing.** An existing entry can be edited in place (name, URL, API key) rather than deleted and re-added — the Edit button reopens the same form pre-filled.
 
@@ -106,7 +106,7 @@ A plugin is a separate program that talks to Nest over MCP, so Nest's AGPL-3.0 l
 
 ## Configuring in Redstart Nest
 
-The launcher's **Tools** page (its **For this profile** view) lists one row per tool, with a status chip and a switch that turns it on for the profile being edited; opening a row shows its settings: **Web Access** (web_fetch/web_search — its own card, with source groups, individual sources, custom sources, the approved-sources whitelist toggle, the optional general web search engine (off, a self-hosted SearXNG, or the Brave Search API, which adds a `web` source to `web_search`; see [security](security.md#the-general-web-search-engine-opt-in)), and the per-fetch token budget nested inside when enabled), **Postgres**, **Documents**, **SQLite**, **Vault**, **Git**, **File System**, and **Scholar**, plus one card per installed-and-enabled [plugin](#plugins), followed by **External MCP Servers** and **Banned Tools** (see [Tool bans](security.md#tool-bans)). Installing, uninstalling, and classifying a plugin's tools all happen on **Tools → Plugins** — see [Plugins](#plugins) above for why that split is deliberate.
+The launcher's **Tools** page (its **For this profile** view) lists one row per tool, with a status chip and a switch that turns it on for the profile being edited; opening a row shows its settings: **Web Access** (web_fetch/web_search — its own card, with source groups, individual sources, custom sources, the approved-sources whitelist toggle, the optional general web search engine (off, a self-hosted SearXNG, or the Brave Search API, which adds a `web` source to `web_search`; see [security](security.md#the-general-web-search-engine-opt-in)), and the per-fetch token budget nested inside when enabled), **Postgres**, **Documents**, **SQLite**, **Vault**, **Git**, **File System**, and **Scholar**, plus one card per installed-and-enabled [plugin](#plugins), followed by **Banned Tools** (see [Tool bans](security.md#tool-bans)). External MCP servers have their own view, **Tools → External MCP**. Installing, uninstalling, and classifying a plugin's tools all happen on **Tools → Plugins** — see [Plugins](#plugins) above for why that split is deliberate.
 
 Capabilities are configured with a native folder picker, except Postgres, which takes a connection string — encrypted at rest via the OS secret store (DPAPI on Windows) and never re-displayed. File System carries two policy toggles: **Allow writes** (on) and **Allow destructive operations** (off).
 
