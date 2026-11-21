@@ -144,6 +144,9 @@ jobs:
       - name: "Security: vision projectors (saved names, pairing, --mmproj)"
         run: node scripts/test-projector.mjs
 
+      - name: "Security: view_image and linked images (byte-sniffed, own folder only)"
+        run: node scripts/test-view-image.mjs
+
       - name: "Security: LAN exposure is a socket bind, not a firewall rule"
         run: node scripts/test-network-binding.mjs
 

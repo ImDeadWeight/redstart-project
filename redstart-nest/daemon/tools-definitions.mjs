@@ -167,7 +167,7 @@ export const BUILTIN_CAPABILITIES = [
 // they're intentionally absent here.
 export const BUILTIN_CAPABILITY_TOOL_NAMES = {
   postgres: ['postgres_query', 'postgres_list_tables', 'postgres_describe_table'],
-  documents: ['create_document', 'read_document', 'list_documents'],
+  documents: ['create_document', 'read_document', 'list_documents', 'view_image'],
   sqlite: ['sqlite_list_databases', 'sqlite_query', 'sqlite_list_tables', 'sqlite_describe_table'],
   vault: ['vault_search', 'vault_get', 'vault_tags'],
   git: ['git_list_repos', 'git_status', 'git_log', 'git_diff'],
@@ -379,6 +379,9 @@ export const TOOL_CLASSES = {
   // Documents — create is a write; read/list are reads
   create_document: 'write',
   read_document: 'read',
+  // Opens an image in the caller's own folder or chat workspace as a link;
+  // the host fetches it for a vision model. Writes nothing.
+  view_image: 'read',
   list_documents: 'read',
   // SQLite — read-only SQL
   sqlite_list_databases: 'read',
