@@ -507,3 +507,62 @@ export function buildDownloadUrl(repoId, revision, rfilename) {
   const encoded = rfilename.split('/').map(encodeURIComponent).join('/')
   return `${API_ORIGIN}/${repoId}/resolve/${revision}/${encoded}`
 }
+
+// ---------------------------------------------------------------------------
+// Image models (image-models.mjs)
+// ---------------------------------------------------------------------------
+// Image weights ship as .gguf OR .safetensors, often beside diffusers folders
+// (transformer/, text_encoder/, vae/) that sd-cli does not load as a model.
+// Only top-level single files are offered; the family recipe supplies the
+// rest. Search is the Hub's own text-to-image pipeline tag.
+
+const IMAGE_WEIGHT_RE = /\.(gguf|safetensors)$/i
+
+export async function searchImageModels({ query = '', limit = 24 } = {}) {
+  const params = new URLSearchParams({
+    pipeline_tag: 'text-to-image',
+    sort: 'downloads',
+    direction: '-1',
+    limit: String(Math.min(Math.max(1, Number(limit) || 24), 100)),
+    full: 'false',
+  })
+  if (String(query).trim()) params.set('search', String(query).trim())
+  const raw = await apiGet(`/api/models?${params}`)
+  if (!Array.isArray(raw)) return []
+  return raw.filter(m => isValidRepoId(m?.id)).map(m => ({
+    repoId: m.id,
+    author: m.author || m.id.split('/')[0],
+    downloads: m.downloads || 0,
+    likes: m.likes || 0,
+    gated: !!m.gated,
+    weightFileCount: (m.siblings || []).filter(s => typeof s?.rfilename === 'string' && !s.rfilename.includes('/') && IMAGE_WEIGHT_RE.test(s.rfilename)).length,
+  }))
+}
+
+/**
+ * One image repo: its pinned revision, what it is derived from, and its
+ * top-level weight files with sizes and checksums.
+ */
+export async function getImageRepo(repoId) {
+  assertValidRepoId(repoId)
+  const raw = await apiGet(`/api/models/${repoId}?blobs=true`)
+  const tags = (raw.tags || []).filter(t => typeof t === 'string')
+  const baseRaw = raw.cardData?.base_model
+  const baseModels = (Array.isArray(baseRaw) ? baseRaw : [baseRaw]).filter(isValidRepoId)
+  return {
+    repoId: raw.id || repoId,
+    revision: raw.sha || null,
+    gated: !!raw.gated,
+    license: tags.find(t => t.startsWith('license:'))?.slice('license:'.length) || raw.cardData?.license || null,
+    pipelineTag: typeof raw.pipeline_tag === 'string' ? raw.pipeline_tag : null,
+    tags,
+    baseModels,
+    files: (raw.siblings || [])
+      .filter(s => typeof s?.rfilename === 'string' && !s.rfilename.includes('/') && IMAGE_WEIGHT_RE.test(s.rfilename))
+      .map(s => ({
+        rfilename: s.rfilename,
+        size: typeof s.size === 'number' ? s.size : (s.lfs?.size ?? null),
+        sha256: s.lfs?.sha256 || null,
+      })),
+  }
+}

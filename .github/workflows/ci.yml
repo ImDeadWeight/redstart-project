@@ -156,6 +156,9 @@ jobs:
       - name: "Security: image engine download and sd-cli arguments (pinned, verified, no paths from the model)"
         run: node scripts/test-sd-runtime.mjs
 
+      - name: "Security: image models (family recipes, pinned companions, Hub-sourced checksums)"
+        run: node scripts/test-image-models.mjs
+
       - name: "Security: LAN exposure is a socket bind, not a firewall rule"
         run: node scripts/test-network-binding.mjs
 
