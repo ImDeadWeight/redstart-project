@@ -46,7 +46,9 @@ This is an honest work-in-progress. The project started as a personal home tool 
 - [x] Built-in MCP server — provider-driven, in-process or supervised stdio children, whitelist enforced at the server level
 - [x] Centralized MCP management — configured once in Nest, auto-discovered by every client; per-device config removed
 - [x] Source groups, custom sources, and external MCP servers on other devices
-- [x] Ten local capabilities — Postgres, SQLite, Vault, Git, Documents, File System, Python, Document search, Memory, Scholar
+- [x] Eleven local capabilities — Postgres, SQLite, Vault, Git, Documents, File System, Python, Image generation, Document search, Memory, Scholar
+- [x] **Vision** — a vision model's projector (`mmproj`) is downloaded with it and loaded with `--mmproj`, so attached images, `view_image` and images in tool results reach the model
+- [x] **Image generation** — `generate_image` with an image model you choose (FLUX.1, SDXL, SD 1.x families) on stable-diffusion.cpp, downloaded on first use; the chat model pauses while a picture is made and reloads by itself. Its own Images page in Nest
 - [x] **HTTPS on the LAN** (opt-in) — a bundled Caddy with a real Let's Encrypt certificate, by DNS-01, for an Automatic name from Redstart's name service or your own DuckDNS/deSEC name; nothing on the internet connects in
 - [x] **Chats run on the server** — a plain Send is a task in the daemon that the page follows, so a refresh or a sleeping phone doesn't end the reply
 - [x] **Workflows are Agent Skills** — stored as `SKILL.md` folders, imported and exported as `.zip` or `SKILL.md`, and loaded by the model itself with `use_skill`

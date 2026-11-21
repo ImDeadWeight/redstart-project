@@ -34,7 +34,7 @@ Nest, Twig and Blueprints share the same [SvelteKit](https://kit.svelte.dev/) fr
   ├─ Gateway     :19080 (LAN in network mode) ├─ Scans LAN on port 8765
   │   └─ Injects Redstart context      ├─ Finds Redstart Nest automatically
   ├─ llama-server :19081 (localhost)   └─ Connects to http://IP:19080
-  ├─ MCP server   :19082 (web, Documents, Python, document search, Memory, File System, SQLite, Postgres, Vault, Git, Scholar, plugins)
+  ├─ MCP server   :19082 (web, Documents, Python, Image generation, document search, Memory, File System, SQLite, Postgres, Vault, Git, Scholar, plugins)
   ├─ Admin plane :19083 (the launcher UI in a browser — owner only, loopback by default)
   └─ Beacon      :8765
 ```
