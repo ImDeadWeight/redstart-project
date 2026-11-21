@@ -61,8 +61,7 @@ pub fn parse_rule(v: &Value) -> Result<Rule, String> {
     let program = match &v["program"] {
         Value::Null => None,
         Value::String(p) => {
-            let path = std::path::Path::new(p);
-            if !path.is_absolute() || p.contains('"') || !p.to_ascii_lowercase().ends_with(".exe") {
+            if !is_windows_absolute(p) || p.contains('"') || !p.to_ascii_lowercase().ends_with(".exe") {
                 return Err(format!("rule: refused program {p:?}"));
             }
             Some(p.clone())
@@ -70,6 +69,14 @@ pub fn parse_rule(v: &Value) -> Result<Rule, String> {
         _ => return Err("rule: program must be a path".into()),
     };
     Ok(Rule { name: name.to_string(), protocol: protocol.to_string(), port, program })
+}
+
+/// `C:\...` or `\\server\share\...`. The path is always for Windows netsh, so
+/// this judges it by Windows rules on every host. `Path::is_absolute` uses the
+/// host's rules and calls `C:\...` relative on macOS and Linux.
+fn is_windows_absolute(p: &str) -> bool {
+    let b = p.as_bytes();
+    (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\') || p.starts_with("\\\\")
 }
 
 pub fn parse_rules(v: &Value) -> Result<Vec<Rule>, String> {
@@ -269,7 +276,7 @@ mod tests {
         for port in [json!(0), json!(70000), json!("80,"), json!("1-65535"), json!("80 remoteip=any")] {
             assert!(rule(json!({ "name": "RedstartNest x", "protocol": "TCP", "port": port })).is_err(), "{port}");
         }
-        for program in ["caddy.exe", "C:\\x\\caddy.exe\" remoteip=any", "C:\\x\\script.ps1"] {
+        for program in ["caddy.exe", "C:caddy.exe", "/usr/bin/caddy.exe","C:\\x\\caddy.exe\" remoteip=any", "C:\\x\\script.ps1"] {
             assert!(rule(json!({ "name": "RedstartNest x", "protocol": "TCP", "port": 80, "program": program })).is_err(), "{program}");
         }
         assert!(parse_rules(&json!([])).is_err());
