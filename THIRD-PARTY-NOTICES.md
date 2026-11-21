@@ -386,6 +386,26 @@ aren't enumerated anywhere. Closing this means running `license:gen` against
 
 ---
 
+## 4. Downloaded at runtime, not shipped
+
+Not in the installer, so not covered by the release checklist below, but
+fetched by Nest on request and run on your machine:
+
+- **stable-diffusion.cpp** (`sd-cli` and its libraries, the image engine
+  behind `generate_image`): MIT, Copyright (c) 2023 leejet. One pinned
+  release from github.com/leejet/stable-diffusion.cpp, each zip checked against
+  a SHA-256 in `redstart-nest/daemon/sd-runtime.mjs`. Its own licence text
+  (`stable-diffusion.cpp.txt`) and ggml's (`ggml.txt`) are unpacked with it.
+  The Windows CUDA build includes NVIDIA's CUDA runtime (`cudart64_12.dll`,
+  `cublas64_12.dll`, `cublasLt64_12.dll`) under the NVIDIA CUDA Toolkit EULA,
+  as redistributed by that project.
+- **Image models** you choose on Hugging Face carry their own licences
+  (FLUX.1 schnell: Apache-2.0; FLUX.1 dev: non-commercial; SDXL: CreativeML
+  OpenRAIL++-M). The launcher shows each repo's licence before download. The
+  FLUX family's shared files (CLIP-L, T5-XXL, the FLUX VAE) are Apache-2.0.
+
+---
+
 ## Verifying this file is accurate
 
 Attribution that lives only in the repository does not satisfy a distribution
