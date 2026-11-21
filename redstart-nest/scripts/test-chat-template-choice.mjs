@@ -203,7 +203,11 @@ await test('the command preview omits a skipped override', async () => {
 await test('the launch builds its args from the chosen config, never the raw profile', async () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'daemon', 'ipc', 'server.mjs'), 'utf8')
   assert(!/buildArgs\(config\b/.test(src), 'server.mjs calls buildArgs(config...) directly, bypassing chooseChatTemplate')
-  assert(/buildArgs\(template\.config, true\)/.test(src), 'the launch does not use template.config')
+  // Since the vision projector (projector.mjs), the chosen config passes
+  // through resolveProjector() on its way to buildArgs: still template.config,
+  // never the raw profile.
+  assert(/resolveProjector\(template\.config\)/.test(src) && /buildArgs\(projector\.config, true\)/.test(src),
+    'the launch does not build its args from template.config (through resolveProjector)')
   assert(/appendLine\(template\.logLine\)/.test(src), 'the decision is not written to the run log')
 })
 
