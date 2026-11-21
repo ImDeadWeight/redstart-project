@@ -73,10 +73,13 @@ export async function syncAdminBind({ readSettings }) {
  * time, and that pairing lives only in the renderer, unpersisted.
  */
 export function getFullStatus({ serverState }) {
-  const running = !!serverState.process
+  // Paused for image generation counts as running: the gateway and tools are
+  // up, and the model reloads by itself (ipc/server.mjs suspendModel).
+  const running = !!serverState.process || !!serverState.suspended
   const config = serverState.lastConfig
   return {
     running,
+    suspended: serverState.suspended ? { since: serverState.suspended.since, reason: serverState.suspended.reason } : null,
     pid: serverState.process?.pid ?? null,
     startedAt: serverState.startedAt ?? null,
     uptimeMs: running && serverState.startedAt ? Date.now() - serverState.startedAt : null,

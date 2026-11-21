@@ -147,6 +147,9 @@ jobs:
       - name: "Security: view_image and linked images (byte-sniffed, own folder only)"
         run: node scripts/test-view-image.mjs
 
+      - name: "Security: model pause/resume for image generation (gateway stays up, Stop wins)"
+        run: node scripts/test-model-suspend.mjs
+
       - name: "Security: LAN exposure is a socket bind, not a firewall rule"
         run: node scripts/test-network-binding.mjs
 

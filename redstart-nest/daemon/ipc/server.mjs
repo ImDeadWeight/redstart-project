@@ -31,6 +31,7 @@ import { publish } from '../event-broker.mjs'
 import { startRun, appendLine, endRun } from '../process-log.mjs'
 import { chooseChatTemplate } from '../chat-template-choice.mjs'
 import { resolveProjector } from '../projector.mjs'
+import { getUpstreamPort, setUpstreamPort, beginModelSuspension, endModelSuspension } from '../completion-activity.mjs'
 
 // EMA smoothing factor for the tokens/sec readout (moved here with its sole
 // consumer, the launch handler's stdout parser).
@@ -120,12 +121,130 @@ export async function launchServer(config, deps) {
   }
 }
 
+/**
+ * Spawn llama-server for `config` and wire its output, exit and pidfile into
+ * serverState. Shared by a launch and by a resume after image generation
+ * (resumeModel), so both run exactly the same arguments, template choice,
+ * projector and run log. Throws only if spawn() itself throws.
+ *
+ * The exit handler tells a SUSPEND apart from a stop or a crash by
+ * serverState.suspending, which suspendModel() sets before the kill: a
+ * suspended model keeps lastConfig (the resume needs it), and nothing
+ * publishes server:stopped, because the server has not stopped — the gateway,
+ * MCP server and file-system provider are all still up.
+ */
+function spawnLlama(config, deps, binaryPath) {
+  const { serverState, buildArgs, parseEvalTokensPerSec, userDataDir } = deps
+  const binaryDir = path.dirname(binaryPath)
+  // A bundled template override is checked against the model before it is
+  // applied; see chat-template-choice.mjs. The decision goes into the run's
+  // log below, and into the status (source only, no paths).
+  const template = chooseChatTemplate(config)
+  // Then the vision projector, on the template's output, the same order the
+  // preview uses. See projector.mjs.
+  const projector = resolveProjector(template.config)
+  const spawnArgs = buildArgs(projector.config, true)
+
+  // --- Piped mode (in-app log + token tracking) ---
+  serverState.ema = 0
+  serverState.lastError = null
+  // cwd = binary dir so Windows DLL search finds companion DLLs.
+  // detached (POSIX only) puts the child in its own process group, so
+  // killByPid's negative-pid signal in process-supervision.mjs reaches
+  // any grandchildren too, not just this one process. Windows tree-kill
+  // goes through `taskkill /T` instead and does not need this.
+  const child = spawn(binaryPath, spawnArgs, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: binaryDir,
+    detached: process.platform !== 'win32',
+  })
+
+  // One file per launch — started here so even a launch that fails
+  // before the first stdout line still leaves a file behind to look at.
+  startRun()
+  // What llama-server does not say for itself: which template Redstart
+  // chose and why, and the exact argument list. The model path is already
+  // in this file (llama-server prints it), and this log is admin-only.
+  appendLine(template.logLine)
+  publish('server:log', template.logLine)
+  appendLine(projector.logLine)
+  publish('server:log', projector.logLine)
+  appendLine(`[redstart] args: ${spawnArgs.join(' ')}`)
+
+  const forwardLines = (chunk) => {
+    for (const line of chunk.toString().split('\n')) {
+      const tps = parseEvalTokensPerSec(line)
+      if (tps !== null) {
+        serverState.ema = serverState.ema === 0 ? tps : EMA_ALPHA * tps + (1 - EMA_ALPHA) * serverState.ema
+        publish('server:tpm', Math.round(serverState.ema * 60))
+      }
+      appendLine(line)
+      publish('server:log', line)
+    }
+  }
+
+  child.stdout.on('data', forwardLines)
+  child.stderr.on('data', forwardLines)
+
+  child.on('error', err => {
+    serverState.lastError = err.message
+    appendLine(`SPAWN ERROR: ${err.message}`)
+    publish('server:log', `SPAWN ERROR: ${err.message}`)
+    publish('server:stopped')
+    serverState.process = null
+    serverState.startedAt = null
+    endRun()
+    deletePidFile(userDataDir)
+  })
+
+  child.on('exit', (code, signal) => {
+    if (serverState.suspending) {
+      // Killed on purpose to free the GPU (suspendModel). Not a stop.
+      serverState.process = null
+      serverState.ema = 0
+      serverState.startedAt = null
+      appendLine('[redstart] model paused to free the GPU for image generation')
+      endRun()
+      deletePidFile(userDataDir)
+      return
+    }
+    if (code !== 0) {
+      const line = `Process exited with code ${code} (signal: ${signal})`
+      serverState.lastError = line
+      appendLine(line)
+      publish('server:log', line)
+    }
+    serverState.process = null
+    serverState.ema = 0
+    serverState.lastConfig = null
+    serverState.chatTemplate = null
+    serverState.vision = null
+    serverState.startedAt = null
+    endRun()
+    deletePidFile(userDataDir)
+    publish('server:stopped')
+  })
+
+  serverState.process = child
+  serverState.lastConfig = config
+  serverState.chatTemplate = {
+    source: template.decision.source,
+    architecture: template.decision.architecture,
+    warning: template.decision.warning,
+  }
+  serverState.vision = projector.decision
+  serverState.startedAt = Date.now()
+  // Recorded so a hard-killed Nest (Task Manager, power loss — anything
+  // that skips the exit handler above) can be reaped by PID, not by name,
+  // the next time Nest starts. See process-supervision.mjs.
+  writePidFile(userDataDir, { pid: child.pid, binaryPath, startedAt: serverState.startedAt })
+  return child
+}
+
 async function doLaunchServer(config, deps) {
   const {
     serverState,
     resolveBinary,
-    buildArgs,
-    parseEvalTokensPerSec,
     buildGatewayConfig,
     userDataDir,
     networkOwner = lanOwner(),
@@ -135,6 +254,9 @@ async function doLaunchServer(config, deps) {
   // launch is in flight) — this is the ordinary case of a launch requested
   // while a PRIOR, already-completed launch is still running.
   if (serverState.process) return { success: false, error: 'Server is already running' }
+  // Paused for image generation: the gateway is still up, and the model comes
+  // back by itself when the image is done.
+  if (serverState.suspended) return { success: false, error: 'The model is paused while an image is generated; it reloads by itself when the image is done.' }
 
   // Before the binary is even resolved: config.port claims three ports, and one
   // of them colliding with the always-on beacon or admin listener produces a
@@ -153,101 +275,8 @@ async function doLaunchServer(config, deps) {
     return { success: false, error: `${serverBinaryName()} not found.
 Place it in the build output directory or the project root, or set a custom path via Settings.` }
   }
-  const binaryDir = path.dirname(binaryPath)
-
-  // A bundled template override is checked against the model before it is
-  // applied; see chat-template-choice.mjs. The decision goes into the run's
-  // log below, and into the status (source only, no paths).
-  const template = chooseChatTemplate(config)
-  // Then the vision projector, on the template's output, the same order the
-  // preview uses. See projector.mjs.
-  const projector = resolveProjector(template.config)
-  const spawnArgs = buildArgs(projector.config, true)
-
   try {
-    // --- Piped mode (in-app log + token tracking) ---
-    serverState.ema = 0
-    serverState.lastError = null
-    // cwd = binary dir so Windows DLL search finds companion DLLs.
-    // detached (POSIX only) puts the child in its own process group, so
-    // killByPid's negative-pid signal in process-supervision.mjs reaches
-    // any grandchildren too, not just this one process. Windows tree-kill
-    // goes through `taskkill /T` instead and does not need this.
-    const child = spawn(binaryPath, spawnArgs, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      cwd: binaryDir,
-      detached: process.platform !== 'win32',
-    })
-
-    // One file per launch — started here so even a launch that fails
-    // before the first stdout line still leaves a file behind to look at.
-    startRun()
-    // What llama-server does not say for itself: which template Redstart
-    // chose and why, and the exact argument list. The model path is already
-    // in this file (llama-server prints it), and this log is admin-only.
-    appendLine(template.logLine)
-    publish('server:log', template.logLine)
-    appendLine(projector.logLine)
-    publish('server:log', projector.logLine)
-    appendLine(`[redstart] args: ${spawnArgs.join(' ')}`)
-
-    const forwardLines = (chunk) => {
-      for (const line of chunk.toString().split('\n')) {
-        const tps = parseEvalTokensPerSec(line)
-        if (tps !== null) {
-          serverState.ema = serverState.ema === 0 ? tps : EMA_ALPHA * tps + (1 - EMA_ALPHA) * serverState.ema
-          publish('server:tpm', Math.round(serverState.ema * 60))
-        }
-        appendLine(line)
-        publish('server:log', line)
-      }
-    }
-
-    child.stdout.on('data', forwardLines)
-    child.stderr.on('data', forwardLines)
-
-    child.on('error', err => {
-      serverState.lastError = err.message
-      appendLine(`SPAWN ERROR: ${err.message}`)
-      publish('server:log', `SPAWN ERROR: ${err.message}`)
-      publish('server:stopped')
-      serverState.process = null
-      serverState.startedAt = null
-      endRun()
-      deletePidFile(userDataDir)
-    })
-
-    child.on('exit', (code, signal) => {
-      if (code !== 0) {
-        const line = `Process exited with code ${code} (signal: ${signal})`
-        serverState.lastError = line
-        appendLine(line)
-        publish('server:log', line)
-      }
-      serverState.process = null
-      serverState.ema = 0
-      serverState.lastConfig = null
-      serverState.chatTemplate = null
-      serverState.vision = null
-      serverState.startedAt = null
-      endRun()
-      deletePidFile(userDataDir)
-      publish('server:stopped')
-    })
-
-    serverState.process = child
-    serverState.lastConfig = config
-    serverState.chatTemplate = {
-      source: template.decision.source,
-      architecture: template.decision.architecture,
-      warning: template.decision.warning,
-    }
-    serverState.vision = projector.decision
-    serverState.startedAt = Date.now()
-    // Recorded so a hard-killed Nest (Task Manager, power loss — anything
-    // that skips the exit handler above) can be reaped by PID, not by name,
-    // the next time Nest starts. See process-supervision.mjs.
-    writePidFile(userDataDir, { pid: child.pid, binaryPath, startedAt: serverState.startedAt })
+    const child = spawnLlama(config, deps, binaryPath)
 
     // Start the gateway on the public port. It injects the Redstart system
     // context into every completions request and proxies everything else
@@ -308,6 +337,146 @@ Place it in the build output directory or the project root, or set a custom path
   }
 }
 
+// ---------------------------------------------------------------------------
+// Pause and resume, for image generation (gpu-lease.mjs)
+// ---------------------------------------------------------------------------
+// A 12 GB card cannot hold a chat model and a diffusion model at once
+// (docs/notes/image-generation-plan.md §8: Flux schnell peaks at 11.2 GB on its
+// own). So the GPU lease pauses the model: ONLY the llama-server child is
+// killed. The gateway, the built-in MCP server and the file-system provider
+// stay up, because the tool call that asked for the image arrived through the
+// MCP server and its answer goes back the same way; stopServer() would cut it
+// off. Completions that arrive meanwhile are held by the gateway
+// (completion-activity.mjs whenModelReady), and the upstream port reads null,
+// so tasks wait for a model and the memory review stays idle.
+//
+// Both go on the lifecycle chain, so a user's Stop or Launch cannot interleave
+// with a pause or a resume. Stop while paused wins: doStopServer clears
+// serverState.suspended, and the resume that follows finds nothing to do.
+
+const SUSPEND_EXIT_TIMEOUT_MS = 15_000
+const RESUME_READY_TIMEOUT_MS = 180_000
+const RESUME_POLL_MS = 250
+// A failed resume ends in a full stop, but not at once: the stop force-closes
+// every connection, including the one carrying the image tool's own answer.
+const FAILED_RESUME_STOP_DELAY_MS = 3_000
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Pause the chat model to free the GPU. Resolves once the process has exited.
+ *
+ * @returns {Promise<{ ok: true, already?: true } | { ok: false, notRunning?: true, error?: string }>}
+ */
+export async function suspendModel(deps, { reason = 'image generation', exitTimeoutMs = SUSPEND_EXIT_TIMEOUT_MS } = {}) {
+  return runExclusive(() => doSuspendModel(deps, reason, exitTimeoutMs))
+}
+
+async function doSuspendModel({ serverState }, reason, exitTimeoutMs) {
+  if (serverState.suspended) return { ok: true, already: true }
+  const child = serverState.process
+  if (!child) return { ok: false, notRunning: true }
+
+  const since = Date.now()
+  const savedPort = getUpstreamPort()
+  serverState.suspending = true
+  setUpstreamPort(null)
+  beginModelSuspension({ since, reason })
+
+  const exited = new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) resolve()
+    else child.once('exit', () => resolve())
+  })
+  const waitExit = (ms) => Promise.race([exited.then(() => true), sleep(ms).then(() => false)])
+  child.kill()
+  let gone = await waitExit(exitTimeoutMs)
+  if (!gone) {
+    try { child.kill('SIGKILL') } catch { /* already going */ }
+    gone = await waitExit(5_000)
+  }
+  serverState.suspending = false
+  if (!gone) {
+    // Still holding the GPU. Do not pretend otherwise: undo the pause, and
+    // the image job is refused rather than run into an out-of-memory.
+    setUpstreamPort(savedPort)
+    endModelSuspension(true)
+    logEvent('server', 'model_suspend_failed', { reason })
+    return { ok: false, error: 'The chat model did not exit, so the GPU could not be freed.' }
+  }
+  serverState.suspended = { since, reason, upstreamPort: savedPort }
+  logEvent('server', 'model_suspended', { reason })
+  publish('server:suspended', { reason, since })
+  return { ok: true }
+}
+
+/**
+ * Bring the paused model back with the config it was running, and wait until
+ * it answers /health. A no-op when nothing is paused (it was stopped).
+ *
+ * @returns {Promise<{ ok: true, skipped?: true, ms?: number } | { ok: false, error: string }>}
+ */
+export async function resumeModel(deps, { readyTimeoutMs = RESUME_READY_TIMEOUT_MS, fetchImpl = fetch } = {}) {
+  return runExclusive(() => doResumeModel(deps, readyTimeoutMs, fetchImpl))
+}
+
+async function doResumeModel(deps, readyTimeoutMs, fetchImpl) {
+  const { serverState, resolveBinary } = deps
+  const paused = serverState.suspended
+  if (!paused) return { ok: true, skipped: true }
+  const config = serverState.lastConfig
+  const started = Date.now()
+
+  const fail = (error) => {
+    serverState.suspended = null
+    serverState.lastError = error
+    serverState.lastConfig = null
+    serverState.chatTemplate = null
+    serverState.vision = null
+    endModelSuspension(false)
+    appendLine(`[redstart] ${error}`)
+    publish('server:log', `[redstart] ${error}`)
+    logEvent('server', 'model_resume_failed', {})
+    const t = setTimeout(() => { stopServer(deps).catch(() => {}) }, FAILED_RESUME_STOP_DELAY_MS)
+    t.unref?.()
+    return { ok: false, error }
+  }
+
+  const binaryPath = resolveBinary()
+  if (!config || !binaryPath) return fail('The chat model could not be reloaded after image generation: its configuration or binary is gone.')
+
+  let child
+  try {
+    child = spawnLlama(config, deps, binaryPath)
+  } catch (err) {
+    return fail(`The chat model could not be reloaded after image generation: ${err.message}`)
+  }
+
+  const port = config.port + 1
+  const deadline = started + readyTimeoutMs
+  let ready = false
+  while (Date.now() < deadline && serverState.process === child) {
+    try {
+      const res = await fetchImpl(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1000) })
+      if (res.ok) { ready = true; break }
+    } catch { /* still loading */ }
+    await sleep(RESUME_POLL_MS)
+  }
+  if (!ready) {
+    if (serverState.process === child) { try { child.kill() } catch { /* gone */ } }
+    return fail(serverState.lastError
+      ? `The chat model did not come back after image generation: ${serverState.lastError}`
+      : `The chat model did not come back within ${Math.round(readyTimeoutMs / 1000)} s after image generation.`)
+  }
+
+  serverState.suspended = null
+  setUpstreamPort(paused.upstreamPort ?? port)
+  endModelSuspension(true)
+  const ms = Date.now() - started
+  logEvent('server', 'model_resumed', { ms, pausedMs: Date.now() - paused.since })
+  publish('server:resumed', { ms })
+  return { ok: true, ms }
+}
+
 // Discovery is deliberately absent here. Stopping the model used to unpublish
 // the `.local` name and drop the clean URL, which is the lifecycle bug from the
 // other side: an admin who stops the server to reconfigure it would lose the
@@ -326,6 +495,19 @@ async function doStopServer({ serverState }) {
   stopGateway()
   stopMcpServer()
   stopFilesystemProvider()
+  // Stopped while paused for image generation: there is no process to kill,
+  // and the pending resume must find nothing to resume. Held completions are
+  // told the model is not coming back.
+  if (serverState.suspended) {
+    serverState.suspended = null
+    serverState.lastConfig = null
+    serverState.chatTemplate = null
+    serverState.vision = null
+    endModelSuspension(false)
+    logEvent('server', 'model_stopped', { whileSuspended: true })
+    publish('server:stopped')
+    return { success: true }
+  }
   if (!serverState.process) return { success: true }
   serverState.process.kill()
   serverState.process = null
@@ -336,6 +518,12 @@ async function doStopServer({ serverState }) {
 }
 
 export async function getServerStatus(config, { serverState }) {
+  // Paused for image generation: the server is up (gateway and tools serve),
+  // the model is not loaded. Not "stopped", which the launcher would offer to
+  // start.
+  if (serverState.suspended) {
+    return { running: true, health: 'suspended', suspended: { since: serverState.suspended.since, reason: serverState.suspended.reason } }
+  }
   if (!serverState.process) return { running: false, health: null }
   // Ask llama-server itself, on its loopback port (configured port + 1), not
   // the gateway: with sign-in required (the default) the gateway answers this
