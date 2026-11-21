@@ -53,6 +53,7 @@ import { initLogger, closeLogger, logEvent } from './logger.mjs'
 import { initProcessLog } from './process-log.mjs'
 import { reapStaleProcess, deletePidFile } from './process-supervision.mjs'
 import { initGpuLease, recoverGpuLease } from './gpu-lease.mjs'
+import { SD_PID_FILE } from './sd-job.mjs'
 import { suspendModel, resumeModel, launchServer } from './ipc/server.mjs'
 import { startEmbedServer, stopEmbedServer, embedServerStatus } from './embed-server.mjs'
 import { embedModelPath, hasEmbedModel } from './embed-model.mjs'
@@ -501,6 +502,9 @@ export async function startDaemon(entrypoint = {}) {
   // by-name sweep. See process-supervision.mjs for why this replaced
   // killOrphanedServers().
   await reapStaleProcess(configDir())
+  // And an image job (sd-cli) left running the same way, by its own pidfile:
+  // it would hold the GPU the next model needs.
+  await reapStaleProcess(configDir(), { name: SD_PID_FILE })
   const cleanedConversations = cleanupOldConversations()
   if (cleanedConversations > 0) console.log(`Cleaned ${cleanedConversations} conversations older than 30 days`)
   // Background tasks that had not ended when the daemon last stopped (agent-

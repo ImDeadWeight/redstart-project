@@ -153,6 +153,9 @@ jobs:
       - name: "Security: GPU lease (one holder, always resumes, crash recovery)"
         run: node scripts/test-gpu-lease.mjs
 
+      - name: "Security: image engine download and sd-cli arguments (pinned, verified, no paths from the model)"
+        run: node scripts/test-sd-runtime.mjs
+
       - name: "Security: LAN exposure is a socket bind, not a firewall rule"
         run: node scripts/test-network-binding.mjs
 
