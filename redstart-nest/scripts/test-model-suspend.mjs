@@ -253,6 +253,130 @@ await test('a pause and a Stop requested together are ordered, not interleaved',
 })
 
 // ---------------------------------------------------------------------------
+console.log('\n-- draining, and holding requests at the gateway --')
+
+const http = await import('node:http')
+const { holdWhilePaused } = await import('../daemon/gateway/model-hold.mjs')
+
+await test('🔍 the pause holds new requests FIRST, then waits for replies already streaming, then kills', async () => {
+  const deps = makeDeps()
+  try {
+    assert((await launchServer(CONFIG, deps)).success, 'launch')
+    assert(await untilHealthy(PORT + 1), 'fake model never came up')
+    let streaming = 1
+    const t0 = Date.now()
+    const pausing = suspendModel(deps, { inFlight: () => streaming })
+    await sleep(50)
+    assert(modelSuspension() !== null, 'new requests are not held while the pause drains')
+    assert(deps.serverState.process !== null, 'the model was killed with a reply still streaming')
+    await sleep(250)
+    streaming = 0
+    const r = await pausing
+    assert(r.ok && Date.now() - t0 >= 300, `${JSON.stringify(r)} after ${Date.now() - t0} ms`)
+    assert(deps.serverState.process === null, 'not killed after the drain')
+  } finally {
+    await stopAndWait(deps)
+  }
+})
+
+await test('🔍 a reply that will not finish within the drain time: the GPU is not taken, and nothing changes', async () => {
+  const deps = makeDeps()
+  try {
+    assert((await launchServer(CONFIG, deps)).success, 'launch')
+    assert(await untilHealthy(PORT + 1), 'fake model never came up')
+    const pid = deps.serverState.process.pid
+    const r = await suspendModel(deps, { inFlight: () => 1, drainTimeoutMs: 200 })
+    assert(r.ok === false && r.busy === true, JSON.stringify(r))
+    assert(deps.serverState.process?.pid === pid && deps.serverState.suspended == null, 'the model was paused anyway')
+    assert(modelSuspension() === null && getUpstreamPort() === PORT + 1, 'pause state or port not restored')
+  } finally {
+    await stopAndWait(deps)
+  }
+})
+
+await test('🔍 a request to the gateway during the pause waits, and is answered once the model is back', async () => {
+  const deps = makeDeps((c) => fakeLlama(c, 200))
+  try {
+    assert((await launchServer(CONFIG, deps)).success, 'launch')
+    assert(await untilHealthy(PORT + 1), 'fake model never came up')
+    await suspendModel(deps)
+    const t0 = Date.now()
+    const held = fetch(`http://127.0.0.1:${PORT}/index.html`).then(async (r) => ({ status: r.status, ms: Date.now() - t0 }))
+    await sleep(400)
+    const r = await resumeModel(deps)
+    assert(r.ok, JSON.stringify(r))
+    const got = await held
+    assert(got.status === 200 && got.ms >= 400, `held request: ${JSON.stringify(got)}`)
+    return `answered after ${got.ms} ms`
+  } finally {
+    await stopAndWait(deps)
+  }
+})
+
+// holdWhilePaused on its own server, so the 503 shapes and the hang-up can be
+// driven with short timeouts.
+let lastHold = null
+const holdServer = http.createServer(async (req, res) => {
+  lastHold = await holdWhilePaused(req, res, { holdMs: Number(new URL(req.url, 'http://x').searchParams.get('hold') || 100) })
+  if (lastHold) res.end('forwarded')
+})
+await new Promise((r) => holdServer.listen(0, '127.0.0.1', r))
+const holdUrl = (p) => `http://127.0.0.1:${holdServer.address().port}${p}`
+
+await test('🔍 a hold that runs out answers 503: OpenAI-shaped for the API, text for a page', async () => {
+  const deps = makeDeps()
+  try {
+    assert((await launchServer(CONFIG, deps)).success, 'launch')
+    assert(await untilHealthy(PORT + 1), 'fake model never came up')
+    await suspendModel(deps)
+    const api = await fetch(holdUrl('/v1/chat/completions?hold=80'), { method: 'POST', body: '{}' })
+    const body = await api.json()
+    assert(api.status === 503 && body.error?.type === 'model_paused' && api.headers.get('retry-after'), `${api.status} ${JSON.stringify(body)}`)
+    const page = await fetch(holdUrl('/index.html?hold=80'))
+    assert(page.status === 503 && /paused/.test(await page.text()), `page: ${page.status}`)
+  } finally {
+    await stopAndWait(deps)
+  }
+  const after = await fetch(holdUrl('/index.html'))
+  assert(await after.text() === 'forwarded', 'not paused, yet held')
+})
+
+await test('a client that hangs up stops waiting', async () => {
+  const deps = makeDeps()
+  try {
+    assert((await launchServer(CONFIG, deps)).success, 'launch')
+    assert(await untilHealthy(PORT + 1), 'fake model never came up')
+    await suspendModel(deps)
+    lastHold = null
+    const ac = new AbortController()
+    const p = fetch(holdUrl('/index.html?hold=30000'), { signal: ac.signal }).catch(() => 'aborted')
+    await sleep(100)
+    ac.abort()
+    await p
+    await sleep(100)
+    assert(lastHold === false, `the hold did not end on hang-up (${lastHold})`)
+  } finally {
+    await stopAndWait(deps)
+  }
+})
+
+await test('🔍 Stop during a hold answers the held request at once, saying the model is not running', async () => {
+  const deps = makeDeps()
+  assert((await launchServer(CONFIG, deps)).success, 'launch')
+  assert(await untilHealthy(PORT + 1), 'fake model never came up')
+  await suspendModel(deps)
+  const t0 = Date.now()
+  const held = fetch(holdUrl('/v1/chat/completions?hold=30000'), { method: 'POST', body: '{}' })
+  await sleep(100)
+  await stopServer(deps)
+  const res = await held
+  const body = await res.json()
+  assert(res.status === 503 && /not running/.test(body.error.message) && Date.now() - t0 < 5000, `${res.status} ${body.error?.message}`)
+})
+
+holdServer.close()
+
+// ---------------------------------------------------------------------------
 
 await sleep(200)
 fs.rmSync(dir, { recursive: true, force: true })

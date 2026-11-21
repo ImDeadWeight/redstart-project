@@ -31,7 +31,7 @@ import { publish } from '../event-broker.mjs'
 import { startRun, appendLine, endRun } from '../process-log.mjs'
 import { chooseChatTemplate } from '../chat-template-choice.mjs'
 import { resolveProjector } from '../projector.mjs'
-import { getUpstreamPort, setUpstreamPort, beginModelSuspension, endModelSuspension } from '../completion-activity.mjs'
+import { getUpstreamPort, setUpstreamPort, beginModelSuspension, endModelSuspension, completionsInFlight } from '../completion-activity.mjs'
 
 // EMA smoothing factor for the tokens/sec readout (moved here with its sole
 // consumer, the launch handler's stdout parser).
@@ -355,6 +355,9 @@ Place it in the build output directory or the project root, or set a custom path
 // serverState.suspended, and the resume that follows finds nothing to do.
 
 const SUSPEND_EXIT_TIMEOUT_MS = 15_000
+// How long a pause waits for replies already being generated (plan U-IG5).
+const SUSPEND_DRAIN_TIMEOUT_MS = 60_000
+const DRAIN_POLL_MS = 100
 const RESUME_READY_TIMEOUT_MS = 180_000
 const RESUME_POLL_MS = 250
 // A failed resume ends in a full stop, but not at once: the stop force-closes
@@ -368,21 +371,45 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
  *
  * @returns {Promise<{ ok: true, already?: true } | { ok: false, notRunning?: true, error?: string }>}
  */
-export async function suspendModel(deps, { reason = 'image generation', exitTimeoutMs = SUSPEND_EXIT_TIMEOUT_MS } = {}) {
-  return runExclusive(() => doSuspendModel(deps, reason, exitTimeoutMs))
+export async function suspendModel(deps, {
+  reason = 'image generation',
+  exitTimeoutMs = SUSPEND_EXIT_TIMEOUT_MS,
+  drainTimeoutMs = SUSPEND_DRAIN_TIMEOUT_MS,
+  inFlight = completionsInFlight,
+} = {}) {
+  return runExclusive(() => doSuspendModel(deps, reason, exitTimeoutMs, drainTimeoutMs, inFlight))
 }
 
-async function doSuspendModel({ serverState }, reason, exitTimeoutMs) {
+async function doSuspendModel({ serverState }, reason, exitTimeoutMs, drainTimeoutMs, inFlight) {
   if (serverState.suspended) return { ok: true, already: true }
   const child = serverState.process
   if (!child) return { ok: false, notRunning: true }
 
   const since = Date.now()
   const savedPort = getUpstreamPort()
-  serverState.suspending = true
   setUpstreamPort(null)
   beginModelSuspension({ since, reason })
 
+  // ORDER MATTERS. The pause is marked first, so the gateway holds anything
+  // new (gateway/model-hold.mjs) and tasks see no upstream port; THEN the
+  // replies already streaming are let finish. Checking "nothing in flight"
+  // before marking would leave a gap in which a request is forwarded to a
+  // process about to be killed.
+  const drainDeadline = Date.now() + drainTimeoutMs
+  while (inFlight() > 0 && Date.now() < drainDeadline) await sleep(DRAIN_POLL_MS)
+  if (inFlight() > 0) {
+    setUpstreamPort(savedPort)
+    endModelSuspension(true)
+    logEvent('server', 'model_suspend_busy', { reason, inFlight: inFlight() })
+    return { ok: false, busy: true, error: `The model is still answering after ${Math.round(drainTimeoutMs / 1000)} s, so the GPU was not taken.` }
+  }
+  if (serverState.process !== child) {
+    // Exited (crashed, or stopped) while draining: nothing to pause.
+    endModelSuspension(false)
+    return { ok: false, notRunning: true }
+  }
+
+  serverState.suspending = true
   const exited = new Promise((resolve) => {
     if (child.exitCode !== null || child.signalCode !== null) resolve()
     else child.once('exit', () => resolve())
