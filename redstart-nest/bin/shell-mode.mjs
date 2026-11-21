@@ -42,6 +42,7 @@ import { getAdminListenerState } from '../daemon/admin-listener.mjs'
 import { hasOwner } from '../daemon/auth.mjs'
 import { readBootstrapToken } from '../daemon/bootstrap-token.mjs'
 import { stopServer } from '../daemon/ipc/server.mjs'
+import { setFirewallElevator } from '../daemon/firewall.mjs'
 import { logEvent, whenLoggerClosed } from '../daemon/logger.mjs'
 import { portConflictMessage } from '../daemon/ports.mjs'
 import { createPeer, PROTOCOL_VERSION } from '../../shared/shell-pipe.mjs'
@@ -54,6 +55,9 @@ const HELLO_TIMEOUT_MS = 15_000
 // admin Shut down asks the shell to quit (it may install an update first). If
 // the shell never acts on it, stop anyway: the admin asked for a stop.
 const QUIT_FALLBACK_MS = 15_000
+// The UAC prompt for firewall rules waits on a person. The shell's own wait
+// for the elevated helper is 120 s (firewall.rs), after the prompt is answered.
+const FIREWALL_PROMPT_MS = 5 * 60_000
 
 // Broker channels the shell's tray reflects.
 const FORWARDED_EVENTS = new Set(['server:started', 'server:stopped'])
@@ -158,6 +162,13 @@ export async function runShellMode(argv) {
         return true
       },
     })
+  }
+
+  // Windows: the shell adds firewall rules by elevating ITSELF, so the UAC
+  // prompt names Redstart Nest (firewall.mjs, shell/src/firewall.rs). The
+  // timeout covers someone reading the prompt; the shell waits on its own.
+  if (hello.firewall) {
+    setFirewallElevator((rules) => peer.request('firewall-add', { rules }, { timeoutMs: FIREWALL_PROMPT_MS }))
   }
 
   // The Tauri shell's updater asks which release is its update. The answer

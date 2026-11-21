@@ -15,14 +15,15 @@
 //
 // Invariants (each a test): a credential touches only its own records
 // (dns.js writable()); only private addresses (net.js); every record DNS-only;
-// nothing is ever written outside <id>.nest.
+// nothing is ever written outside <id>.nest. (its admin.<id>.nest. A/AAAA
+// included: the admin panel's name, the same address as the device name).
 //
 // Pure apart from `db` (D1, or node:sqlite in the tests) and `dns`
 // (dns.js, or a fake): createService takes both.
 
 import { newId, newCredential, sha256Hex, sameHex, ID_RE } from './ids.js'
 import { isPrivateIPv4, ulaIPv6 } from './net.js'
-import { hostnameFor, challengeNameFor, reconcile } from './dns.js'
+import { hostnameFor, adminHostnameFor, challengeNameFor, reconcile } from './dns.js'
 
 export const REGISTER_LIMIT = 5
 export const REGISTER_WINDOW_MS = 60 * 60 * 1000
@@ -105,10 +106,15 @@ export function createService({ db, dns, zone, serverUrl, now = Date.now, log = 
       if (!ipv6) return err(400, 'ipv6 must be a unique-local address (fd00::/8). A global address is never published.')
     }
     const name = hostnameFor(install.id, zone)
-    await reconcile(dns, { id: install.id, name, type: 'A', contents: [ipv4] })
-    await reconcile(dns, { id: install.id, name, type: 'AAAA', contents: ipv6 ? [ipv6] : [] })
+    const adminName = adminHostnameFor(install.id, zone)
+    // The device name and the admin panel's name always carry the same
+    // address: one machine, two names, one wildcard certificate.
+    for (const n of [name, adminName]) {
+      await reconcile(dns, { id: install.id, name: n, type: 'A', contents: [ipv4] })
+      await reconcile(dns, { id: install.id, name: n, type: 'AAAA', contents: ipv6 ? [ipv6] : [] })
+    }
     await db.prepare('UPDATE installs SET ipv4 = ?, ipv6 = ?, last_seen = ? WHERE id = ?').bind(ipv4, ipv6, now(), install.id).run()
-    return json(200, { hostname: name, ipv4, ipv6 })
+    return json(200, { hostname: name, adminHostname: adminName, ipv4, ipv6 })
   }
 
   async function acmeUpdate(req) {
@@ -133,9 +139,10 @@ export function createService({ db, dns, zone, serverUrl, now = Date.now, log = 
 
   /** Every record the install owns, then the install. Also housekeeping's. */
   async function forget(id) {
-    const name = hostnameFor(id, zone)
-    await reconcile(dns, { id, name, type: 'A', contents: [] })
-    await reconcile(dns, { id, name, type: 'AAAA', contents: [] })
+    for (const name of [hostnameFor(id, zone), adminHostnameFor(id, zone)]) {
+      await reconcile(dns, { id, name, type: 'A', contents: [] })
+      await reconcile(dns, { id, name, type: 'AAAA', contents: [] })
+    }
     await reconcile(dns, { id, name: challengeNameFor(id, zone), type: 'TXT', contents: [] })
     await db.prepare('DELETE FROM installs WHERE id = ?').bind(id).run()
   }

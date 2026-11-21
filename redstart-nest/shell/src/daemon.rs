@@ -3,9 +3,9 @@
 //! Spawns `node nestd.mjs --shell-pipe --config … --capability-base …
 //! [--resources …]`, puts it in the Job Object, says hello with the
 //! unwrapped key, and turns what the daemon says into `DaemonEvent`s for the
-//! app. Requests the daemon makes (trash, login-item-set, update-check) are
-//! answered here, each on its own thread so a slow recycle-bin move never
-//! holds up the pipe.
+//! app. Requests the daemon makes (trash, login-item-set, update-check,
+//! firewall-add) are answered here, each on its own thread so a slow
+//! recycle-bin move, or a UAC prompt, never holds up the pipe.
 //!
 //! LIFETIME (plan D2): `stop()` asks for a shutdown and waits, ending the
 //! job after the timeout. If the shell dies, the job ends the tree.
@@ -217,6 +217,8 @@ impl DaemonHost {
             "keyFormat": hello.key_format,
             "loginItem": hello.login_item.map(|enabled| json!({ "enabled": enabled })),
             "updater": hello.updater,
+            // The shell answers firewall-add (firewall.rs) on Windows only.
+            "firewall": cfg!(windows),
         }));
         Ok(host)
     }
@@ -348,6 +350,11 @@ fn handle_request(method: &str, params: &Value) -> Result<Value, String> {
             }
             crate::update::check_now(app, params["manual"].as_bool().unwrap_or(true));
             Ok(json!(true))
+        }
+        "firewall-add" => {
+            let result = crate::firewall::request(params);
+            log::event("app", "firewall_add", json!({ "ok": result.is_ok() }));
+            result
         }
         other => Err(format!("Unknown method: {other}")),
     }

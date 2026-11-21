@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 import { createNetworkModeOwner } from './network-mode-owner.mjs'
 import { createCaddySupervisor, caddyBinaryCandidates, caddyPaths } from './caddy-server.mjs'
-import { buildCaddyConfig, PROXY_SECRET_ENV } from './caddy-config.mjs'
+import { buildCaddyConfig, PROXY_SECRET_ENV, adminHostnameFor } from './caddy-config.mjs'
 import { newProxySecret, clearProxySecret } from './proxy-trust.mjs'
 import { rebindGateway } from './tools-gateway.mjs'
 import { rebindMcpServer } from './mcp-server.mjs'
@@ -60,6 +60,9 @@ let owner = null
 let health = null
 let watcher = null
 let caddyPath = null
+let resolveCaddyPath = null // initLan's resolver, for the rule that runs before Caddy starts
+/** How long Caddy's start waits on its firewall rule's UAC prompt. */
+export const CADDY_RULE_WAIT_MS = 90_000
 let io = null            // { readSettings, writeSettings, decrypt, encrypt }
 let heartbeatTimer = null
 export const HEARTBEAT_MS = 7 * 24 * 60 * 60 * 1000
@@ -81,6 +84,7 @@ export function initLan({ configDir, packaged = false, resourcesDir = null, read
     caddyPath = caddyBinaryCandidates({ packaged, resourcesDir, nestRoot: NEST_ROOT, configDir }).find((p) => fs.existsSync(p)) ?? null
     return caddyPath
   }
+  resolveCaddyPath = resolveCaddy
   supervisor = createCaddySupervisor({
     configDir,
     resolveBinary: resolveCaddy,
@@ -182,6 +186,11 @@ function realEffects({ configDir }) {
         // The control plane over HTTPS on :8443, when it is meant to be
         // reachable from other devices (the admin listener is on loopback then).
         adminPort: t.adminProxied ? ADMIN_PORT : null,
+        // And on its own name, admin.<name>, for an Automatic name: the name
+        // service publishes that record and the wildcard certificate's
+        // challenge is the one it already answers. Own names keep :8443 only
+        // (controlPlaneState in ipc/admin.mjs tells the launcher the same).
+        adminHostname: t.adminProxied && t.provider === 'redstart' ? adminHostnameFor(t.hostname) : null,
       })
       await supervisor.start({ config, secrets: { ...t.secrets, [PROXY_SECRET_ENV]: secret } })
     },
@@ -190,10 +199,26 @@ function realEffects({ configDir }) {
       clearProxySecret()
     },
     async ensureFirewall(rule, { gatewayPort }) {
-      if (rule === 'gateway') ensureFirewallRule(gatewayPort)
-      else if (rule === 'mcp') ensureFirewallRule(gatewayPort + 2)
-      else if (rule === 'port80') ensureFirewallRule(80)
-      else if (rule === 'caddy' && caddyPath) ensureCaddyFirewallRule(caddyPath)
+      // Not awaited: these follow their listeners, and firewall.mjs batches
+      // requests made together into one UAC prompt, which awaiting each
+      // one in turn would split up again.
+      if (rule === 'gateway') void ensureFirewallRule(gatewayPort)
+      else if (rule === 'mcp') void ensureFirewallRule(gatewayPort + 2)
+      else if (rule === 'port80') void ensureFirewallRule(80)
+      else if (rule === 'caddy') {
+        // Awaited: this runs BEFORE caddy:start (network-mode.mjs, rule 4's
+        // exception), and Caddy must not listen until the rule exists, or
+        // Windows shows its own alert. Bounded, so an unanswered prompt
+        // holds the owner's queue for at most CADDY_RULE_WAIT_MS; Caddy then
+        // starts anyway and the alert is the fallback. Never throws.
+        const p = caddyPath ?? resolveCaddyPath?.()
+        if (!p) return
+        let timer
+        const waited = new Promise((resolve) => { timer = setTimeout(() => resolve('timeout'), CADDY_RULE_WAIT_MS) })
+        const r = await Promise.race([ensureCaddyFirewallRule(p), waited])
+        clearTimeout(timer)
+        if (r !== true) logEvent('network', 'caddy_rule_missing', { reason: r === 'timeout' ? 'timeout' : 'not-added' })
+      }
     },
   }
 }

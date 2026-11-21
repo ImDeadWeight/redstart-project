@@ -5,7 +5,8 @@
 // switches: "allowed on this server" (Plugins) and "on for this profile" (For
 // this profile, beside the built-in capabilities). Side by side they read as
 // redundancy someone will try to collapse, and collapsing them breaks the
-// model. Same page, separate views.
+// model. Same page, separate views. External MCP (tool servers on other
+// computers) is a third view: reached over the network, never installed here.
 // =============================================================================
 
 import { useState } from 'react'
@@ -17,6 +18,7 @@ import type { usePlugins } from '../hooks/usePlugins'
 import { PageHeader, Segmented } from '../components/ui'
 import { ToolsTab } from '../tabs/ToolsTab'
 import { PluginsTab } from '../tabs/PluginsTab'
+import { ExternalMcpTab } from '../tabs/ExternalMcpTab'
 
 export function ToolsSection({ config, toolsCatalog, caps, mcp, plugins }: {
   config: LlamaConfig
@@ -25,8 +27,9 @@ export function ToolsSection({ config, toolsCatalog, caps, mcp, plugins }: {
   mcp: ReturnType<typeof useExternalMcp>
   plugins: ReturnType<typeof usePlugins>
 }) {
-  const [view, setView] = useState<'profile' | 'plugins'>('profile')
+  const [view, setView] = useState<'profile' | 'plugins' | 'external'>('profile')
   const pluginCount = plugins.plugins.length
+  const externalCount = mcp.externalServers.length
 
   return (
     <div className="flex flex-col gap-6">
@@ -40,11 +43,12 @@ export function ToolsSection({ config, toolsCatalog, caps, mcp, plugins }: {
         options={[
           { id: 'profile', label: 'For this profile' },
           { id: 'plugins', label: <>Plugins{pluginCount ? <span className="ml-1.5 text-zinc-500">{pluginCount}</span> : null}</> },
+          { id: 'external', label: <>External MCP{externalCount ? <span className="ml-1.5 text-zinc-500">{externalCount}</span> : null}</> },
         ]}
       />
-      {view === 'profile'
-        ? <ToolsTab config={config} toolsCatalog={toolsCatalog} caps={caps} mcp={mcp} plugins={plugins} />
-        : <PluginsTab plugins={plugins} />}
+      {view === 'profile' && <ToolsTab config={config} toolsCatalog={toolsCatalog} caps={caps} plugins={plugins} />}
+      {view === 'plugins' && <PluginsTab plugins={plugins} />}
+      {view === 'external' && <ExternalMcpTab config={config} mcp={mcp} />}
     </div>
   )
 }

@@ -310,7 +310,8 @@ console.log('\n-- resources the daemon reaches for at runtime --')
 
 test('🔍 Nest stages elevate.exe, which firewall.mjs resolves from the resources dir', () => {
   assert(STAGE_SRC.includes("out('elevate.exe')"),
-    'firewall.mjs looks for <resources>/elevate.exe to add inbound rules with UAC. It fails SOFT when the ' +
+    'firewall.mjs looks for <resources>/elevate.exe to add inbound rules with UAC when no desktop shell is ' +
+      'there to elevate itself (a headless nestd). It fails SOFT when the ' +
       'file is absent (logs a warning, skips the rule), so LAN mode would appear broken for no visible reason.')
   return 'staged'
 })
@@ -336,8 +337,11 @@ test("🔍 Nest's mac build stages llama-server and its dylibs where daemon.mjs 
 
 const { CADDY_TAG, CADDY_ASSETS, stagedCaddyPath } = await import('./fetch-caddy.mjs')
 const { caddyBinaryCandidates, caddyBinaryName } = await import('../daemon/caddy-server.mjs')
-const CADDY_YML = fs.readFileSync(path.join(REPO, '.github', 'workflows', 'caddy.yml'), 'utf8')
-const RELEASE_YML = fs.readFileSync(path.join(REPO, '.github', 'workflows', 'release.yml'), 'utf8')
+// LF-normalised: the checks below match line by line, and a Windows checkout
+// with core.autocrlf=true has CRLF here while CI's has LF.
+const readYml = (name) => fs.readFileSync(path.join(REPO, '.github', 'workflows', name), 'utf8').replace(/\r\n/g, '\n')
+const CADDY_YML = readYml('caddy.yml')
+const RELEASE_YML = readYml('release.yml')
 
 test('🔍 the Caddy pin names the build caddy.yml publishes', () => {
   const v = /^  CADDY_VERSION: *(\S+)$/m.exec(CADDY_YML)?.[1]

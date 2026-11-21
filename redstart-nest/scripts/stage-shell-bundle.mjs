@@ -19,7 +19,7 @@
 //   chat-ui/                         the chat UI llama-server serves
 //   bin/                             llama-server + the DLLs it loads,
 //                                    and caddy(.exe) (scripts/fetch-caddy.mjs)
-//   elevate.exe                      firewall rules with UAC
+//   elevate.exe                      firewall rules with UAC (headless nestd)
 //   LICENSE.txt (the repo's LICENSE), THIRD-PARTY-NOTICES.md,
 //   TRADEMARKS.md, licenses/
 //
