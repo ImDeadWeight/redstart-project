@@ -31,7 +31,11 @@ export function useImageGeneration() {
       if (p.state === 'error' && p.error) setError(p.error)
       if (p.state !== 'downloading') load()
     })
-    return () => { a.events.offImageRuntimeProgress(); a.events.offImageDownloadProgress() }
+    // A picture being made (status.busy) has no event of its own here — the
+    // pause events belong to useServerLifecycle — so the page re-reads its
+    // status while it is open.
+    const poll = setInterval(load, 4000)
+    return () => { clearInterval(poll); a.events.offImageRuntimeProgress(); a.events.offImageDownloadProgress() }
   }, [load])
 
   /** Run an action, show its error, then reload the status. */

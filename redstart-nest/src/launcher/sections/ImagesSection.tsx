@@ -58,7 +58,7 @@ export function ImagesSection({ config, documentsConfigured, onNavigate }: {
               )}
             </div>
             <div className="flex flex-col items-end gap-2">
-              {blocker ? <Chip tone="warn">Not ready</Chip> : toolOn ? <Chip tone="ok">Ready</Chip> : <Chip tone="off">Ready, tool off</Chip>}
+              {status.busy ? <Chip tone="info">Making a picture</Chip> : blocker ? <Chip tone="warn">Not ready</Chip> : toolOn ? <Chip tone="ok">Ready</Chip> : <Chip tone="off">Ready, tool off</Chip>}
             </div>
           </div>
           <div className="mt-4 space-y-2 border-t border-zinc-800 pt-4 text-[13px] text-zinc-400">
