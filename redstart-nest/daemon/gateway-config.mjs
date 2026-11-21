@@ -105,6 +105,7 @@ export function buildGatewayConfig(llamaConfig) {
       git:       { enabled: false },
       scholar: { enabled: false },
       python: { enabled: false },
+      imageGeneration: { enabled: false },
       memory: { enabled: false },
       documentSearch: { enabled: false },
       ...Object.fromEntries(listPlugins().map((p) => [p.id, { enabled: false, isPlugin: true }])),
@@ -228,6 +229,18 @@ export function buildGatewayConfig(llamaConfig) {
       documentsRoot: capabilities.documents.outputDir,
       maxKernels: capabilities.python.maxKernels,
       timeoutS: capabilities.python.timeoutS,
+      workspaceCapBytes: capabilities.python.workspaceCapMb * 1024 * 1024,
+      accountCapBytes: capabilities.python.accountCapMb * 1024 * 1024,
+    },
+    // Image generation needs Documents (its PNGs go to the chat workspace) and
+    // a chosen model; whether the model files and the engine are really there
+    // is image-gen-tool.mjs's to say, with a reason the model can relay.
+    imageGeneration: {
+      enabled: toolIdSet.has('image_generation') && !!capabilities.documents.outputDir && !!capabilities.image_generation.model,
+      documentsRoot: capabilities.documents.outputDir,
+      model: capabilities.image_generation.model,
+      backend: capabilities.image_generation.backend,
+      timeoutS: capabilities.image_generation.timeoutS,
       workspaceCapBytes: capabilities.python.workspaceCapMb * 1024 * 1024,
       accountCapBytes: capabilities.python.accountCapMb * 1024 * 1024,
     },

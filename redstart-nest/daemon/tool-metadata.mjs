@@ -97,6 +97,7 @@ export const BUILTIN_TOOL_METADATA = Object.freeze({
   delete_file: { category: 'files', store: S.fileSystem, tags: ['delete', 'remove', 'rm', 'recycle bin', 'trash'], useWhen: 'deleting a file in the File System folder' },
 
   // code
+  generate_image: { category: 'image', store: S.workspace, tags: ['image', 'picture', 'draw', 'paint', 'illustration', 'photo', 'generate', 'create', 'render', 'art', 'logo'], useWhen: 'the user asks for a picture to be made' },
   run_python: { category: 'code', store: S.workspace, tags: ['python', 'calculate', 'compute', 'math', 'arithmetic', 'exact number', 'chart', 'plot', 'parse', 'csv', 'script', 'unzip'], useWhen: 'computing, transforming data or working on attached files' },
 
   // data

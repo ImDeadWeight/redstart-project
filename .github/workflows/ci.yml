@@ -159,6 +159,9 @@ jobs:
       - name: "Security: image models (family recipes, pinned companions, Hub-sourced checksums)"
         run: node scripts/test-image-models.mjs
 
+      - name: "Security: generate_image (refused before the GPU, always resumes, own workspace)"
+        run: node scripts/test-image-gen-tool.mjs
+
       - name: "Security: LAN exposure is a socket bind, not a firewall rule"
         run: node scripts/test-network-binding.mjs
 

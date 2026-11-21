@@ -54,6 +54,7 @@ import { initProcessLog } from './process-log.mjs'
 import { reapStaleProcess, deletePidFile } from './process-supervision.mjs'
 import { initGpuLease, recoverGpuLease } from './gpu-lease.mjs'
 import { SD_PID_FILE } from './sd-job.mjs'
+import { initImageGenTool } from './image-gen-tool.mjs'
 import { suspendModel, resumeModel, launchServer } from './ipc/server.mjs'
 import { startEmbedServer, stopEmbedServer, embedServerStatus } from './embed-server.mjs'
 import { embedModelPath, hasEmbedModel } from './embed-model.mjs'
@@ -454,6 +455,7 @@ function setupAdminApi() {
   // Image generation's hold on the GPU (gpu-lease.mjs): pause and resume the
   // chat model through the same lifecycle chain as Start and Stop.
   serverDeps = deps
+  initImageGenTool({ resolveModelsDir, baseDir: userDataDir })
   initGpuLease({
     suspend: (opts) => suspendModel(deps, opts),
     resume: () => resumeModel(deps),
