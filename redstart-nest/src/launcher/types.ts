@@ -456,10 +456,11 @@ export type ImageGenerationStatus = {
     available: string[]
   }
   downloading: { repoId: string; rfilename: string } | null
+  publishers: { id: string; label: string; note: string }[]
   busy: { reason: string; since: number; paused: boolean } | null
 }
 
-export type ImageCatalogModel = { repoId: string; author: string; downloads: number; likes: number; gated: boolean; weightFileCount: number }
+export type ImageCatalogModel = { repoId: string; author: string; downloads: number; likes: number; lastModified: string | null; gated: boolean; weightFileCount: number; quants: string[] }
 
 export type ImageRepoDetail = {
   ok: boolean
@@ -467,9 +468,13 @@ export type ImageRepoDetail = {
   repoId: string
   revision: string | null
   gated: boolean
+  downloads: number
+  likes: number
   license: string | null
+  baseModels: string[]
   family: string | null
-  files: { rfilename: string; size: number | null; sha256: string | null }[]
+  description: ModelDescription | null
+  files: { rfilename: string; size: number | null; sha256: string | null; quantLabel: string; quantRecognized: boolean }[]
 }
 
 export type ImageProgress = { phase: string; step?: number; steps?: number; image?: number; count?: number }

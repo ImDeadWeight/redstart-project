@@ -229,7 +229,8 @@ export default function App() {
               />
             )}
             {section === 'images' && (
-              <ImagesSection config={config} documentsConfigured={!!caps.capabilityConfig?.documents.outputDir} onNavigate={setSection} />
+              <ImagesSection config={config} documentsConfigured={!!caps.capabilityConfig?.documents.outputDir} onNavigate={setSection}
+                hardware={hw.hardware} diskFreeBytes={modelCatalog.disk.freeBytes} />
             )}
             {section === 'tools' && (
               <ToolsSection config={config} toolsCatalog={toolsCatalog} caps={caps} mcp={mcp} plugins={plugins} onOpenImages={() => setSection('images')} />

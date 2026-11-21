@@ -18,7 +18,7 @@ import { configDir } from '../platform-paths.mjs'
 import { logEvent } from '../logger.mjs'
 import { publish } from '../event-broker.mjs'
 import { isPlainObject } from './validate.mjs'
-import { searchImageModels, getImageRepo } from '../hf-catalog.mjs'
+import { searchImageModels, getImageRepo, getModelDescription, IMAGE_PUBLISHERS } from '../hf-catalog.mjs'
 import {
   FAMILIES, COMPANIONS, detectFamily, listImageModels, downloadImageModel, deleteImageModel, readImageIndex,
 } from '../image-models.mjs'
@@ -66,6 +66,7 @@ export async function getImageGenerationStatus({ resolveModelsDir }) {
       available: Object.keys(SD_BUILDS),
     },
     downloading: download ? { repoId: download.repoId, rfilename: download.rfilename } : null,
+    publishers: IMAGE_PUBLISHERS,
     busy: gpuLeaseHolder(),
   }
 }
@@ -109,7 +110,8 @@ export async function installImageEngine() {
 
 export async function searchImageModelCatalog(opts) {
   try {
-    return { ok: true, results: await searchImageModels({ query: isPlainObject(opts) ? String(opts.query ?? '') : '' }) }
+    const o = isPlainObject(opts) ? opts : {}
+    return { ok: true, results: await searchImageModels({ query: String(o.query ?? ''), publisher: String(o.publisher ?? '') }) }
   } catch (err) {
     return { ok: false, error: err.message, results: [] }
   }
@@ -118,7 +120,11 @@ export async function searchImageModelCatalog(opts) {
 export async function getImageRepoDetail(repoId) {
   try {
     const info = await getImageRepo(repoId)
-    return { ok: true, ...info, family: detectFamily(info) }
+    // The upstream model's card first (what the model is), this repo's second
+    // (often only how it was converted). Never fails the lookup.
+    let description = null
+    try { description = await getModelDescription(info.repoId, { detail: { baseModel: info.baseModels[0] ?? null, revision: info.revision } }) } catch { /* none */ }
+    return { ok: true, ...info, family: detectFamily(info), description }
   } catch (err) {
     return { ok: false, error: err.message }
   }

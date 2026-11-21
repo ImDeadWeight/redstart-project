@@ -84,6 +84,16 @@ await test('🔍 every companion is pinned, and every family names only pinned c
   }
 })
 
+await test('quant labels read like the chat model\'s, and every image publisher is a valid author', async () => {
+  const { imageQuantLabel, IMAGE_PUBLISHERS, isValidRepoId } = await import('../daemon/hf-catalog.mjs')
+  const cases = [
+    ['flux1-schnell-Q4_K_S.gguf', 'Q4_K_S'], ['flux1-schnell-q4_k.gguf', 'Q4_K'], ['flux1-schnell-BF16.gguf', 'BF16'],
+    ['t5-v1_1-xxl-encoder-Q8_0.gguf', 'Q8_0'], ['flux1-schnell-fp8.safetensors', 'flux1-schnell-fp8'], ['sd_xl_base_1.0.safetensors', 'sd_xl_base_1.0'],
+  ]
+  for (const [f, want] of cases) assert(imageQuantLabel(f) === want, `${f}: ${imageQuantLabel(f)}`)
+  assert(IMAGE_PUBLISHERS.length > 0 && IMAGE_PUBLISHERS.every((p) => isValidRepoId(`${p.id}/x`) && p.label && p.note), JSON.stringify(IMAGE_PUBLISHERS))
+})
+
 await test('🔍 saved names are one safe component, qualified by repo', () => {
   assert(savedName('leejet/FLUX.1-schnell-gguf', 'flux1-schnell-q4_k.gguf') === 'leejet_FLUX.1-schnell-gguf.flux1-schnell-q4_k.gguf', 'basic')
   for (const [r, f] of [['a/b', '../../x.gguf'], ['a/b', 'dir\\x.safetensors'], ['../x', 'm.gguf'], ['a/b', 'we ird?.safetensors']]) {

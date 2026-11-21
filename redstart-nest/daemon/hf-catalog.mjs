@@ -517,8 +517,23 @@ export function buildDownloadUrl(repoId, revision, rfilename) {
 // rest. Search is the Hub's own text-to-image pipeline tag.
 
 const IMAGE_WEIGHT_RE = /\.(gguf|safetensors)$/i
+const isTopLevelWeight = (name) => typeof name === 'string' && !name.includes('/') && IMAGE_WEIGHT_RE.test(name)
 
-export async function searchImageModels({ query = '', limit = 24 } = {}) {
+// The image counterpart of TRUSTED_PUBLISHERS: who converts image models to
+// files stable-diffusion.cpp loads. The default view, not a filter on search.
+export const IMAGE_PUBLISHERS = [
+  { id: 'leejet', label: 'leejet', note: 'The stable-diffusion.cpp author: GGUF conversions it is tested with' },
+  { id: 'city96', label: 'city96', note: 'GGUF quants of FLUX, SD 3.5 and others' },
+  { id: 'unsloth', label: 'Unsloth', note: 'GGUF quants of FLUX and newer models' },
+  { id: 'second-state', label: 'second-state', note: 'GGUF quants, many families' },
+]
+
+/** A weight file's quant label (Q4_K_S, F16, …), or its name without the extension. */
+export function imageQuantLabel(rfilename) {
+  return parseQuant(rfilename) || String(rfilename).replace(IMAGE_WEIGHT_RE, '')
+}
+
+export async function searchImageModels({ query = '', publisher = '', limit = 24 } = {}) {
   const params = new URLSearchParams({
     pipeline_tag: 'text-to-image',
     sort: 'downloads',
@@ -527,16 +542,23 @@ export async function searchImageModels({ query = '', limit = 24 } = {}) {
     full: 'false',
   })
   if (String(query).trim()) params.set('search', String(query).trim())
+  if (String(publisher).trim()) params.set('author', String(publisher).trim())
   const raw = await apiGet(`/api/models?${params}`)
   if (!Array.isArray(raw)) return []
-  return raw.filter(m => isValidRepoId(m?.id)).map(m => ({
-    repoId: m.id,
-    author: m.author || m.id.split('/')[0],
-    downloads: m.downloads || 0,
-    likes: m.likes || 0,
-    gated: !!m.gated,
-    weightFileCount: (m.siblings || []).filter(s => typeof s?.rfilename === 'string' && !s.rfilename.includes('/') && IMAGE_WEIGHT_RE.test(s.rfilename)).length,
-  }))
+  return raw.filter(m => isValidRepoId(m?.id)).map(m => {
+    const weights = (m.siblings || []).map(s => s?.rfilename).filter(isTopLevelWeight)
+    return {
+      repoId: m.id,
+      author: m.author || m.id.split('/')[0],
+      downloads: m.downloads || 0,
+      likes: m.likes || 0,
+      lastModified: m.lastModified || null,
+      gated: !!m.gated,
+      weightFileCount: weights.length,
+      // Distinct labels, so a row can say "Q4_K_S · Q8_0 · F16" before it is opened.
+      quants: [...new Set(weights.map(imageQuantLabel))],
+    }
+  })
 }
 
 /**
@@ -553,16 +575,23 @@ export async function getImageRepo(repoId) {
     repoId: raw.id || repoId,
     revision: raw.sha || null,
     gated: !!raw.gated,
+    downloads: raw.downloads || 0,
+    likes: raw.likes || 0,
+    lastModified: raw.lastModified || null,
     license: tags.find(t => t.startsWith('license:'))?.slice('license:'.length) || raw.cardData?.license || null,
     pipelineTag: typeof raw.pipeline_tag === 'string' ? raw.pipeline_tag : null,
     tags,
     baseModels,
+    // Smallest first, like the chat model's quant rows.
     files: (raw.siblings || [])
-      .filter(s => typeof s?.rfilename === 'string' && !s.rfilename.includes('/') && IMAGE_WEIGHT_RE.test(s.rfilename))
+      .filter(s => isTopLevelWeight(s?.rfilename))
       .map(s => ({
         rfilename: s.rfilename,
         size: typeof s.size === 'number' ? s.size : (s.lfs?.size ?? null),
         sha256: s.lfs?.sha256 || null,
-      })),
+        quantLabel: imageQuantLabel(s.rfilename),
+        quantRecognized: parseQuant(s.rfilename) !== null,
+      }))
+      .sort((a, b) => (a.size ?? Infinity) - (b.size ?? Infinity)),
   }
 }

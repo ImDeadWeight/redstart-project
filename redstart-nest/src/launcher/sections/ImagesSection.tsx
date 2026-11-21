@@ -15,18 +15,22 @@
 
 import { useState } from 'react'
 import { getAPI } from '../api/redstart'
-import type { ImageCatalogModel, ImageGenerationStatus, ImageRepoDetail, ImageTransferProgress, LlamaConfig } from '../types'
+import type { HardwareSpecs, ImageGenerationStatus, ImageTransferProgress, LlamaConfig } from '../types'
 import type { SectionId } from './Sidebar'
 import { useImageGeneration, imageBlocker } from '../hooks/useImageGeneration'
 import { Card, Chip, ConfirmDialog, Modal, PageHeader, SectionTitle, btnCls, inputCls } from '../components/ui'
+import { ImageModelBrowser } from './ImageModelBrowser'
 
 const size = (n: number | null | undefined) => typeof n === 'number' ? (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${Math.round(n / 1024 ** 2)} MB`) : '—'
 const pct = (p: ImageTransferProgress | null) => p?.totalBytes ? Math.min(100, Math.round(((p.receivedBytes ?? 0) / p.totalBytes) * 100)) : 0
 
-export function ImagesSection({ config, documentsConfigured, onNavigate }: {
+export function ImagesSection({ config, documentsConfigured, onNavigate, hardware, diskFreeBytes }: {
   config: LlamaConfig
   documentsConfigured: boolean
   onNavigate: (s: SectionId) => void
+  /** For the browser's "Your computer" line: facts beside each download. */
+  hardware: HardwareSpecs | null
+  diskFreeBytes?: number
 }) {
   const { status, error, engineProgress, downloadProgress, run } = useImageGeneration()
   const [finding, setFinding] = useState(false)
@@ -79,7 +83,7 @@ export function ImagesSection({ config, documentsConfigured, onNavigate }: {
         <Card>
           <div className="mb-3 flex flex-wrap items-center gap-3">
             <SectionTitle className="mb-0 flex-1">Your image models</SectionTitle>
-            <button type="button" className={btnCls.secondary} onClick={() => setFinding(true)} disabled={!!status.downloading}>Find one on Hugging Face</button>
+            <button type="button" className={btnCls.secondary} onClick={() => setFinding(true)}>Find one on Hugging Face</button>
           </div>
           {status.models.length === 0 && !status.downloading && (
             <p className="text-sm text-zinc-500">None yet. FLUX.1 schnell is a good first choice: Apache-2.0, about 10 GB with its shared files, four steps per picture. Search &ldquo;flux schnell gguf&rdquo;.</p>
@@ -146,8 +150,12 @@ export function ImagesSection({ config, documentsConfigured, onNavigate }: {
           <p className="mt-2 text-[13px] text-zinc-500">On an RTX 3060, CUDA made a FLUX schnell picture in 17 s, Vulkan in 37 s.</p>
         </Card>
 
-        <FindImageModel open={finding} status={status} onClose={() => setFinding(false)}
-          onDownload={async (req) => { setFinding(false); await run(api.capabilities.downloadImageModel(req)) }} />
+        <Modal open={finding} title="Find image models on Hugging Face" onClose={() => setFinding(false)} size="lg"
+          footer={<button type="button" onClick={() => setFinding(false)} className={btnCls.secondary}>Done</button>}>
+          <ImageModelBrowser status={status} hardware={hardware} diskFreeBytes={diskFreeBytes} progress={downloadProgress}
+            onDownload={(req) => { void run(api.capabilities.downloadImageModel(req)) }}
+            onCancel={() => { void run(api.capabilities.cancelImageDownload()) }} />
+        </Modal>
 
         <ConfirmDialog open={!!confirmDelete} title="Delete this image model?" confirmLabel="Delete"
           onCancel={() => setConfirmDelete(null)}
@@ -159,93 +167,3 @@ export function ImagesSection({ config, documentsConfigured, onNavigate }: {
   )
 }
 
-function FindImageModel({ open, status, onClose, onDownload }: {
-  open: boolean
-  status: ImageGenerationStatus
-  onClose: () => void
-  onDownload: (req: { repoId: string; rfilename: string; family: string }) => void
-}) {
-  const [query, setQuery] = useState('flux schnell gguf')
-  const [results, setResults] = useState<ImageCatalogModel[]>([])
-  const [repo, setRepo] = useState<ImageRepoDetail | null>(null)
-  const [file, setFile] = useState('')
-  const [family, setFamily] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const api = getAPI()
-
-  async function search() {
-    if (!api) return
-    setBusy(true); setError(null); setRepo(null)
-    const r = await api.capabilities.searchImageModels({ query })
-    setResults(r.results); if (!r.ok) setError(r.error ?? 'Search failed')
-    setBusy(false)
-  }
-
-  async function openRepo(repoId: string) {
-    if (!api) return
-    setBusy(true); setError(null)
-    const r = await api.capabilities.imageRepo(repoId)
-    setBusy(false)
-    if (!r.ok) { setError(r.error ?? 'Could not open that model'); return }
-    setRepo(r)
-    setFamily(r.family ?? '')
-    // A mid-size quant when there is a choice: q4_k is the tested default.
-    const pick = r.files.find(f => /q4_k/i.test(f.rfilename)) ?? r.files[0]
-    setFile(pick?.rfilename ?? '')
-  }
-
-  const fam = status.families.find(f => f.id === family)
-  const chosen = repo?.files.find(f => f.rfilename === file)
-  const total = (chosen?.size ?? 0) + (fam?.companionBytes ?? 0)
-
-  return (
-    <Modal open={open} title="Find an image model" subtitle="Text-to-image models on Hugging Face" onClose={onClose} size="lg"
-      footer={repo ? (
-        <div className="flex w-full flex-wrap items-center gap-3">
-          <span className="flex-1 text-[13px] text-zinc-400">{fam && chosen ? `About ${size(total)} with the ${fam.label} shared files (fetched once per family).` : 'Choose a file and its family.'}</span>
-          <button type="button" className={btnCls.secondary} onClick={() => setRepo(null)}>Back</button>
-          <button type="button" className={btnCls.primary} disabled={!file || !family || repo.gated}
-            onClick={() => onDownload({ repoId: repo.repoId, rfilename: file, family })}>Download</button>
-        </div>
-      ) : <button type="button" className={btnCls.secondary} onClick={onClose}>Done</button>}>
-      {error && <p className="mb-2 text-[13px] text-red-400">{error}</p>}
-      {!repo ? (
-        <div className="space-y-3">
-          <form className="flex gap-2" onSubmit={e => { e.preventDefault(); search() }}>
-            <input value={query} onChange={e => setQuery(e.target.value)} className={`${inputCls.sm} flex-1`} placeholder="flux schnell gguf, sdxl, …" />
-            <button type="submit" className={btnCls.secondary} disabled={busy}>Search</button>
-          </form>
-          {results.length === 0 && !busy && <p className="text-[13px] text-zinc-500">Search the Hub&rsquo;s text-to-image models. Nest contacts Hugging Face only when you press Search.</p>}
-          <ul className="space-y-1.5">
-            {results.map(m => (
-              <li key={m.repoId}>
-                <button type="button" onClick={() => openRepo(m.repoId)} disabled={busy || m.weightFileCount === 0}
-                  className="flex w-full items-center gap-3 rounded-lg border border-zinc-800 px-3 py-2 text-left hover:border-zinc-600 disabled:opacity-50">
-                  <span className="min-w-0 flex-1 break-all text-sm text-zinc-100">{m.repoId}</span>
-                  <span className="text-[12px] text-zinc-500">{m.weightFileCount} file{m.weightFileCount === 1 ? '' : 's'}{m.gated ? ' · needs a Hugging Face account' : ''}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          <div className="text-sm text-zinc-100">{repo.repoId} <span className="text-zinc-500">{repo.license ? `· ${repo.license}` : ''}</span></div>
-          {repo.gated && <p className="text-[13px] text-amber-300">This model needs a Hugging Face account to download, which Nest does not sign in to. Look for a copy that does not.</p>}
-          <label className="block text-[13px] text-zinc-400">File
-            <select value={file} onChange={e => setFile(e.target.value)} className={`${inputCls.sm} mt-1 w-full`}>
-              {repo.files.map(f => <option key={f.rfilename} value={f.rfilename}>{f.rfilename} — {size(f.size)}</option>)}
-            </select>
-          </label>
-          <label className="block text-[13px] text-zinc-400">Family {repo.family ? '(read from the model card)' : '(the card does not say; choose)'}
-            <select value={family} onChange={e => setFamily(e.target.value)} className={`${inputCls.sm} mt-1 w-full`}>
-              <option value="">Choose…</option>
-              {status.families.map(f => <option key={f.id} value={f.id}>{f.label} — {f.note}</option>)}
-            </select>
-          </label>
-        </div>
-      )}
-    </Modal>
-  )
-}
