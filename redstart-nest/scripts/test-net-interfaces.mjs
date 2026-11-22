@@ -17,7 +17,11 @@
 import {
   listLanInterfaces,
   getPrimaryLanIp,
+  probeRouteIp,
+  lanScanInfo,
+  _setRouteIpForTests,
 } from '../daemon/net-interfaces.mjs'
+import { EventEmitter } from 'node:events'
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -158,6 +162,94 @@ test('IPv6 and internal entries are ignored', () => {
   assert(lan.length === 1 && lan[0].address === '192.168.0.7',
     `got ${lan.map(i => i.address).join(', ')}`)
   return 'IPv4-only, non-internal'
+})
+
+// ---------------------------------------------------------------------------
+// Route probe + the wider virtual-adapter list (shared/net-interfaces.mjs)
+// ---------------------------------------------------------------------------
+
+test('the routed adapter wins over listing order when both are physical', () => {
+  // Two real adapters: Ethernet on an old network, Wi-Fi on the LAN. Order
+  // alone picked Ethernet; the routing table says Wi-Fi.
+  const ifaces = { 'Ethernet': v4('192.168.50.4', 'a8:a1:59:00:00:01'), 'Wi-Fi': v4('192.168.1.23', 'a8:a1:59:00:00:02') }
+  _setRouteIpForTests('192.168.1.23')
+  try {
+    assert(getPrimaryLanIp(ifaces) === '192.168.1.23', getPrimaryLanIp(ifaces))
+  } finally { _setRouteIpForTests(null) }
+})
+
+test('a routed VPN address does NOT win (a full-tunnel VPN owns the default route)', () => {
+  const ifaces = { 'ProtonVPN': v4('10.2.0.2'), 'Wi-Fi': v4('192.168.1.23', 'a8:a1:59:00:00:02') }
+  _setRouteIpForTests('10.2.0.2')
+  try {
+    assert(getPrimaryLanIp(ifaces) === '192.168.1.23', getPrimaryLanIp(ifaces))
+  } finally { _setRouteIpForTests(null) }
+})
+
+test('a stale route address (adapter gone) is ignored', () => {
+  _setRouteIpForTests('192.168.9.9')
+  try {
+    assert(getPrimaryLanIp({ 'Wi-Fi': v4('192.168.1.23') }) === '192.168.1.23', 'used an address no adapter has')
+  } finally { _setRouteIpForTests(null) }
+})
+
+test('macOS bridge/AirDrop/hotspot adapters are skipped; en0 is kept', () => {
+  const ifaces = { bridge100: v4('192.168.2.1'), awdl0: v4('192.168.3.1'), ap1: v4('192.168.4.1'), en0: v4('192.168.1.40') }
+  const lan = listLanInterfaces(ifaces).map(i => i.name)
+  assert(lan.length === 1 && lan[0] === 'en0', lan.join(', '))
+})
+
+test('a name fragment does not catch real adapters ("Laptop1", "Ethernet 2")', () => {
+  const lan = listLanInterfaces({ 'Laptop1': v4('192.168.1.5'), 'Ethernet 2': v4('192.168.1.6') })
+  assert(lan.length === 2, lan.map(i => i.name).join(', '))
+})
+
+test('VPN clients and Linux container bridges are skipped', () => {
+  const names = ['NordVPN', 'Mullvad', 'Cisco AnyConnect Secure Mobility Client', 'PANGP Virtual Ethernet Adapter', 'virbr0', 'br-3f2a9c1d', 'veth12ab', 'podman0']
+  const ifaces = Object.fromEntries(names.map((n, i) => [n, v4(`10.9.${i}.2`)]))
+  ifaces['Ethernet'] = v4('192.168.1.7')
+  const lan = listLanInterfaces(ifaces).map(i => i.name)
+  assert(lan.length === 1 && lan[0] === 'Ethernet', lan.join(', '))
+})
+
+test('lanScanInfo gives the /24 of the primary address, not of the first adapter', () => {
+  const info = lanScanInfo({ 'vEthernet (WSL)': v4('172.24.0.1'), 'Wi-Fi': v4('192.168.1.23') })
+  assert(info && info.subnet === '192.168.1' && info.ip === '192.168.1.23', JSON.stringify(info))
+  assert(lanScanInfo({}) === null, 'no adapters should give null')
+})
+
+// probeRouteIp is async; run its cases after the sync ones above.
+function fakeSocket({ address = '192.168.1.23', fail = false } = {}) {
+  const s = new EventEmitter()
+  s.connect = (_port, _host, cb) => { setImmediate(() => (fail ? s.emit('error', new Error('ENETUNREACH')) : cb())) }
+  s.address = () => ({ address, family: 'IPv4', port: 50000 })
+  s.close = () => { s.closed = true }
+  s.send = () => { throw new Error('the probe must never send') }
+  return s
+}
+async function asyncTest(name, fn) {
+  try {
+    const detail = await fn()
+    results.push({ name, pass: true, detail })
+    console.log(`  ok  - ${name}${detail ? `  (${detail})` : ''}`)
+  } catch (err) {
+    results.push({ name, pass: false, detail: err.message })
+    console.log(`FAIL  - ${name}\n        ${err.message}`)
+  }
+}
+await asyncTest('probeRouteIp reads the routed source address and closes the socket, sending nothing', async () => {
+  const sock = fakeSocket()
+  const ip = await probeRouteIp({ createSocket: () => sock })
+  assert(ip === '192.168.1.23', String(ip))
+  assert(sock.closed, 'socket left open')
+})
+await asyncTest('probeRouteIp answers null with no route', async () => {
+  assert(await probeRouteIp({ createSocket: () => fakeSocket({ fail: true }) }) === null, 'expected null')
+  assert(await probeRouteIp({ createSocket: () => fakeSocket({ address: '0.0.0.0' }) }) === null, 'expected null for 0.0.0.0')
+})
+await asyncTest('probeRouteIp against the real stack never throws', async () => {
+  const ip = await probeRouteIp()
+  return `routed address here: ${ip ?? 'none'}`
 })
 
 // ---------------------------------------------------------------------------
