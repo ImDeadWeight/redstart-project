@@ -11,6 +11,15 @@ vi.mock('$lib/services/chat.service', () => ({
 }));
 
 const { agenticStore } = await import('$lib/stores/agentic.svelte');
+const { mcpStore } = await import('$lib/stores/mcp.svelte');
+
+// The flows below call a tool named "t". It has to be one an MCP server
+// holds, or the gate treats it as a name nothing owns and lets it through
+// without the permission card these tests park on (see the last describe).
+const realHasTool = mcpStore.hasTool.bind(mcpStore);
+vi.spyOn(mcpStore, 'hasTool').mockImplementation(
+	(name: string) => name === 't' || realHasTool(name)
+);
 
 /**
  * agentic-loop - the exit paths of executeAgenticLoop
@@ -532,5 +541,48 @@ describe('update_plan through the browser plan port', () => {
 			save.mockRestore();
 			get.mockRestore();
 		}
+	});
+});
+
+/**
+ * A tool name nothing here owns, usually a habit from training (read_file):
+ * no permission card, nothing run, and the result names the real tool
+ * (shared/agent-core/teaching.mjs).
+ */
+describe('a call to a tool that does not exist', () => {
+	it('is answered with the teaching text, without asking the person', async () => {
+		const sent: unknown[][] = [];
+		let turn = 0;
+		sendMessage.mockImplementation(
+			async (messages: unknown[], opts: Record<string, (s: string) => void>) => {
+				sent.push(structuredClone(messages));
+				turn += 1;
+				if (turn === 1) {
+					opts.onToolCallChunk?.(
+						JSON.stringify([
+							{
+								id: 'u1',
+								type: 'function',
+								function: { name: 'read_file', arguments: '{"path":"a.txt"}' }
+							}
+						])
+					);
+					return undefined;
+				}
+				opts.onChunk?.('done');
+				return undefined;
+			}
+		);
+		const { done } = runLoop();
+		await done;
+
+		expect(agenticStore.session.pendingPermissionRequest('conv-loop')).toBeNull();
+		expect(sent).toHaveLength(2);
+		const result = (sent[1] as Array<{ role: string; content: unknown }>).find(
+			(m) => m.role === 'tool'
+		)?.content;
+		expect(result).toMatch(
+			/^Error: there is no tool named "read_file" here, so nothing was run\./
+		);
 	});
 });

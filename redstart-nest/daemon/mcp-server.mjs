@@ -68,6 +68,7 @@ import {
 } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 import { rebindHttpServer } from './listener-rebind.mjs'
+import { unknownToolText } from '../../shared/agent-core/teaching.mjs'
 
 // searchToolsProvider is LAST, and deliberately: it is the only provider whose
 // job is to describe the others, so it must never shadow one of them on a name
@@ -506,8 +507,11 @@ async function handleRpc(msg, send, ctx = { account: null }) {
       approvalId: params?._meta?.[APPROVAL_ID_META_KEY],
       session: ctx.session,
     })
+    // Still a JSON-RPC error, as the protocol has it, but one that names the
+    // caller's real tool for the job (shared/agent-core/teaching.mjs).
+    const unknown = () => unknownToolText(toolName, toolCatalogFor(ctx.account, { hostTools: ctx.session?.hostTools, toolTextArm: ctx.session?.toolTextArm }).map((t) => t.name))
     send(result === null
-      ? { jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown tool: ${toolName}` } }
+      ? { jsonrpc: '2.0', id, error: { code: -32601, message: unknown() } }
       : { jsonrpc: '2.0', id, result })
     return
   }

@@ -102,6 +102,13 @@ for (const [format, filename, content] of verbatim) {
   })
 }
 
+await test('read_document on an unreadable type says what to do instead', async () => {
+  const { unsupportedTypeHint } = tool
+  assert(/open it with view_image \{"path": "pics\/a\.PNG"\}/.test(unsupportedTypeHint('pics/a.PNG')), unsupportedTypeHint('pics/a.PNG'))
+  assert(/do not try it again/.test(unsupportedTypeHint('a.bin')), unsupportedTypeHint('a.bin'))
+  assert(/do not try it again/.test(unsupportedTypeHint(undefined)), 'no path')
+})
+
 await test('writes json that parses back as json', async () => {
   const profile = { name: 'Local', model: 'qwen3.6-35b', contextSize: 32768 }
   await callDocumentTool('create_document', {

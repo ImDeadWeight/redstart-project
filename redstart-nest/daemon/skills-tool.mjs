@@ -28,6 +28,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { listSkills, getSkillByName, readSkillFile } from './skills-storage.mjs'
 import { ORG_PREFIX } from './workflows-storage.mjs'
+import { TOOL_CLASSES, HOST_RESOLVED_TOOL_NAMES, capabilityForTool } from './tools-definitions.mjs'
 import { workspaceDir, workspaceRelative, checkCaps } from './conversation-workspace.mjs'
 
 export const TOOL_NAME = 'use_skill'
@@ -131,6 +132,32 @@ function stageScripts(skill, as, cfg, ctx) {
   return `Its Python scripts are copied into this conversation's workspace (${workspaceRelative(conversationId)}/skills/${as}/): run them with run_python, e.g. exec(open('skills/${as}/${scripts[0]}').read()). Nowhere else.`
 }
 
+/** How many skill names a "no such skill" answer lists. */
+const NAMES_LISTED = 12
+
+/**
+ * The answer for a skill name that matches nothing, in the teaching pattern
+ * (shared/agent-core/teaching.mjs). The bench saw use_skill called with a
+ * TOOL's name (ask_user, run_python), a habit from harnesses where skills and
+ * tools share one namespace. That gets its own line. Either way the real
+ * names come along, so the next call needs no listing call first.
+ * Exported for the suite.
+ *
+ * @param {string} name @param {any} account
+ */
+export function noSkillText(name, account) {
+  const shown = name.trim().slice(0, 80)
+  const isTool = !!(TOOL_CLASSES[shown] || HOST_RESOLVED_TOOL_NAMES.includes(shown) || capabilityForTool(shown))
+  const head = isTool
+    ? `"${shown}" is a tool, not a skill, so nothing was loaded. Call ${shown} itself, with its own arguments, not through use_skill.`
+    : `No skill named "${shown}", so nothing was loaded.`
+  let names = []
+  try { names = reachable(account).map((e) => e.as) } catch { names = [] }
+  if (names.length === 0) return `${head} There are no saved skills.`
+  const listed = names.slice(0, NAMES_LISTED).join(', ')
+  return `${head} The skills: ${listed}${names.length > NAMES_LISTED ? ' (use_skill with no name lists them all)' : ''}.`
+}
+
 export async function callTool(name, args, cfg, ctx) {
   if (name !== TOOL_NAME) return null
   const account = ctx?.account ?? null
@@ -142,7 +169,7 @@ export async function callTool(name, args, cfg, ctx) {
   }
 
   const skill = resolve(account, args.name)
-  if (!skill) return fail(`No skill named "${String(args.name).slice(0, 80)}". use_skill with no name lists them.`)
+  if (!skill) return fail(noSkillText(String(args.name), account))
   const as = String(args.name).trim().startsWith(ORG_PREFIX) ? `${ORG_PREFIX}${skill.name}` : skill.name
 
   if (args.file !== undefined && args.file !== null && args.file !== '') {

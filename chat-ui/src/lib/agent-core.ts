@@ -42,6 +42,7 @@ export {
 	streamErrorMessage
 } from '../../../shared/agent-core/chat-stream.mjs';
 export { attachmentNote } from '../../../shared/agent-core/attachment-note.mjs';
+export { unknownToolText, suggestTools } from '../../../shared/agent-core/teaching.mjs';
 export {
 	ASK_USER_TOOL,
 	DISMISSED_RESULT,

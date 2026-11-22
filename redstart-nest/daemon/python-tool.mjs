@@ -165,6 +165,26 @@ export function escapedNewlineHint(errorText, code) {
     'Send the code with real line breaks, written once in the JSON as \\n, not \\\\n.)'
 }
 
+/**
+ * The hint for code that tried to start another program, or null.
+ *
+ * Coding agents are trained with a shell, so a small model reaches for
+ * subprocess, os.system or `!pip` even after reading the tool description: 55
+ * of 327 Ornith runs in the agent bench (2026-11-18, misuse.mjs). The error
+ * Python gives ("emscripten does not support processes") names the platform,
+ * not the remedy, and the usual next call was the same command another way.
+ *
+ * @param {string} errorText @param {string | undefined} code
+ */
+export function subprocessHint(errorText, code) {
+  const err = errorText ?? ''
+  const tried = /does not support processes|Exec format error/.test(err) ||
+    (/OSError|PermissionError|NotImplementedError|FileNotFoundError/.test(err) && /\b(subprocess|os\.(system|popen|exec\w*|spawn\w*)|pty)\b/.test(code ?? ''))
+  if (!tried) return null
+  return '(This sandbox cannot start other programs, so subprocess, os.system, a shell, pip, git and node always fail here. ' +
+    'Do the work in Python itself with the standard library and the installed packages: open() or pandas instead of cat, grep or csvkit. Do not try another way to run the command.)'
+}
+
 // Python statements that are a bare word and have no value to show.
 const PY_BARE_KEYWORDS = new Set(['pass', 'break', 'continue', 'return', 'raise', 'None', 'True', 'False', 'Ellipsis'])
 
@@ -230,7 +250,7 @@ export function formatResult({ reply, error, timedOut, fresh, ranBefore, files, 
     if (reply.result !== null && reply.result !== undefined) parts.push(`Result: ${reply.result}`)
     if (reply.error) {
       parts.push(clip(reply.error.trimEnd(), 4000))
-      const hint = workspacePrefixHint(reply.error, code, wsRel) ?? escapedNewlineHint(reply.error, code)
+      const hint = workspacePrefixHint(reply.error, code, wsRel) ?? escapedNewlineHint(reply.error, code) ?? subprocessHint(reply.error, code)
       if (hint) parts.push(hint)
     } else {
       const unshown = unshownValuesHint(code)

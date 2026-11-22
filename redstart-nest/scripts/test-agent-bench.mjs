@@ -705,12 +705,12 @@ await test('--arms and --set: parsed and checked', async () => {
 
 await test('armsComparison: a row per arm and the tasks that differ', async () => {
   const t = (taskId, group, passes) => ({ taskId, group, runs: 3, passes })
-  const s = (tasks) => ({ runs: 6, tasks, askCalls: 2, misuse: { proseAskRuns: 1, lookups: 0, subprocess: 4, unsupportedRead: 0, skillAsTool: 0 } })
+  const s = (tasks) => ({ runs: 6, tasks, askCalls: 2, misuse: { proseAskRuns: 1, lookups: 0, subprocess: 4, unsupportedRead: 0, skillAsTool: 0, unknownTool: 2, repeatedAfterError: 1 } })
   const md = armsComparison([
     { arm: 'a', summary: s([t('x', 'phase1', 1), t('y', 'compute', 3)]) },
     { arm: 'b', summary: s([t('x', 'phase1', 3), t('y', 'compute', 3)]) },
   ])
-  assert(md.includes('| A | 4/6 | 1/3 | 2 | 1 | 0 | 4 | 0 | 0 |') && md.includes('| B | 6/6 | 3/3 |'), md)
+  assert(md.includes('| A | 4/6 | 1/3 | 2 | 1 | 0 | 4 | 0 | 0 | 2 | 1 |') && md.includes('| B | 6/6 | 3/3 |'), md)
   assert(md.includes('| x | 1/3 | 3/3 |') && !md.includes('| y |'), md)
 })
 
@@ -1449,19 +1449,28 @@ await test('trained habits: each is counted from the log, and none on a clean ru
     call('run_python'), err('run_python', 'OSError: [Errno 138] emscripten does not support processes'),
     call('read_document', { path: 'a.mjs' }), err('read_document', 'Failed to read document: Unsupported file type ".mjs"'),
     call('use_skill', { name: 'ask_user' }),
+    call('read_file', { path: 'a.txt' }), err('read_file', 'Error: there is no tool named "read_file" here, so nothing was run. To read a file here, use read_document.'),
+    call('read_file', { path: 'a.txt' }), err('read_file', 'Error: Unknown tool: read_file'),
     { type: 'end', finalText: 'I need two things.\n\n**What is your hourly rate?**' },
   ])
-  eq(bad, { proseAsk: true, lookups: 2, subprocess: 1, unsupportedRead: 1, skillAsTool: 1 }, 'every habit')
+  eq(bad, { proseAsk: true, lookups: 2, subprocess: 1, unsupportedRead: 1, skillAsTool: 1, unknownTool: 2, repeatedAfterError: 1 }, 'every habit')
   // Asking through the tool, then a closing question, is not a prose ask;
   // use_skill with a real skill name is not a mix-up.
   const ok = misuseOf([
     { type: 'tools_sent', names: ['ask_user', 'use_skill'] }, call('ask_user', { question: 'Which?' }), call('use_skill', { name: 'weekly-report' }),
     { type: 'end', finalText: 'Done. Anything else?' },
   ])
-  eq(ok, { proseAsk: false, lookups: 0, subprocess: 0, unsupportedRead: 0, skillAsTool: 0 }, 'a clean run')
+  eq(ok, { proseAsk: false, lookups: 0, subprocess: 0, unsupportedRead: 0, skillAsTool: 0, unknownTool: 0, repeatedAfterError: 0 }, 'a clean run')
+  // The same call again after a SUCCESS is not a repeat after an error, and a
+  // changed retry after a failure is what the teaching is for.
+  const retried = misuseOf([
+    call('run_python', { code: 'x' }), { type: 'tool_result', name: 'run_python', isError: false, text: 'ok' }, call('run_python', { code: 'x' }),
+    call('read_document', { path: 'a.png' }), err('read_document', 'Failed'), call('view_image', { path: 'a.png' }),
+  ])
+  eq(retried.repeatedAfterError, 0, 'a repeat after success, and a changed retry, are not counted')
   // call_tool's inner name counts like a direct call.
   eq(misuseOf([call('call_tool', { name: 'web_fetch', arguments: { url: 'x' } })]).lookups, 1, 'through call_tool')
-  eq(misuseSummary([{ misuse: bad }, { misuse: ok }, {}]), { proseAskRuns: 1, lookups: 2, subprocess: 1, unsupportedRead: 1, skillAsTool: 1 }, 'totals; an old row counts 0')
+  eq(misuseSummary([{ misuse: bad }, { misuse: ok }, {}]), { proseAskRuns: 1, lookups: 2, subprocess: 1, unsupportedRead: 1, skillAsTool: 1, unknownTool: 2, repeatedAfterError: 1 }, 'totals; an old row counts 0')
 })
 
 fs.rmSync(outDir, { recursive: true, force: true })
