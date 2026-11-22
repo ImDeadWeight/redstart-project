@@ -271,23 +271,31 @@ The same pattern applies to [Continue](https://continue.dev/), [Aider](https://a
 
 ## Tested configuration
 
-This is the hardware and model used during development. Results will vary by GPU, quantization level, and task type.
+The hardware and models used during development, all on one machine. Results will vary by GPU, quantization level, and task type; nothing here has been run on macOS, Linux, or an AMD or Apple GPU yet.
 
 | | |
 |---|---|
 | **CPU** | AMD Ryzen 7 7700X |
 | **GPU** | NVIDIA RTX 3060 12 GB |
 | **RAM** | 32 GB DDR5 |
-| **Model** | [Qwen3.6-35B-A3B-UD-Q3_K_XL](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) |
-| **Speed** | ~25–30 tokens/sec on light coding tasks and summarization; 41–45 tokens/sec generating a 5-page report (29s total) after letting llama-server's own `--fit` auto-size GPU/CPU offload instead of a fixed manual split |
+| **OS** | Windows |
+| **Engine** | llama-server, the bundled TurboQuant+ build |
 
-**The model:** Qwen3.6-35B-A3B is an Alibaba model with a hybrid Gated DeltaNet and Gated Attention architecture, 256 experts with 8 routed and 1 shared active at a time — totalling ~3B active parameters out of 35B. That's why it fits and runs at useful speed on a 12 GB card that would be completely unusable with a dense 35B model.
+| Model | Quant | Measured |
+|---|---|---|
+| [Qwen3.6-35B-A3B](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) | `UD-Q3_K_XL` | 41–45 tokens/sec writing a 5-page report (29 s in all), with llama-server's `--fit` placing the layers and **Disable memory-mapping** on (Model page, advanced); ~25–30 tokens/sec before `--fit` replaced a fixed manual split. The best agent-bench scores (21/24 on the early task set) |
+| Ornith 1.5 9B | `Q6_K` | ~40 tokens/sec alone, 35–36 each with two requests at once; up to 128k context on the 12 GB card. Most of the agent runtime was tuned on it: 76–81% of the 32-task agent bench |
+| [Qwen3-4B-Instruct-2507](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) | `UD-Q4_K_XL` | The small-model floor: 58–67% of the earlier 24-task agent bench. Needs its own embedded chat template, which Nest now checks for |
 
-**The quantization:** The `UD` prefix stands for Unsloth Dynamic — [Unsloth AI](https://huggingface.co/unsloth) applies different quantization levels to different layers intelligently rather than a flat bit-depth across the whole model. This gives meaningfully better output quality at the same file size compared to a standard K-quant.
+The benchmark rows, what each model taught the code, and how to run the benches yourself: [Models tested](docs/model-testing.md).
 
-**Also tested, small models:** most of the agent runtime was tuned on **Ornith 1.5 9B** (`Q6_K`, up to 128k context on the same 12 GB card, ~40 tokens/sec) and **Qwen3-4B-Instruct-2507** (`UD-Q4_K_XL`). On the agent bench Ornith passes 76 to 81% of the 32-task set; the 4B passed 58 to 67% of the earlier 24-task set. Results, what each model taught the code, and how to run the benches yourself: [Models tested](docs/model-testing.md).
+**The 35B model:** Qwen3.6-35B-A3B is an Alibaba mixture-of-experts model (llama.cpp architecture `qwen35moe`) with a hybrid Gated DeltaNet and Gated Attention design, 256 experts with 8 routed and 1 shared active at a time — about 3B active parameters out of 35B. That is why it runs at a useful speed on a 12 GB card where a dense 35B would not.
 
-**Finding GGUF models:** [Hugging Face](https://huggingface.co) is the easiest source — [unsloth](https://huggingface.co/unsloth) and [bartowski](https://huggingface.co/bartowski) are both reliable for well-quantized GGUF files across many model families. The `UD-Q3_K_XL` tested here fits comfortably in 12 GB of VRAM.
+**It does not fit in 12 GB of VRAM on its own.** `--fit` (llama-server's default, which Nest leaves alone unless you set GPU layers) measures free VRAM at load and keeps part of the expert tensors in system RAM. That is what the 32 GB of RAM is for, and why **Disable memory-mapping** helps: llama-server itself recommends `--no-mmap` when expert tensors are placed on the CPU. It is off by default in Nest.
+
+**The quantization:** The `UD` prefix stands for Unsloth Dynamic — [Unsloth AI](https://huggingface.co/unsloth) applies different quantization levels to different layers rather than a flat bit-depth across the whole model, for better output quality at the same file size than a standard K-quant.
+
+**Finding GGUF models:** [Hugging Face](https://huggingface.co) is the easiest source — [unsloth](https://huggingface.co/unsloth) and [bartowski](https://huggingface.co/bartowski) are both reliable for well-quantized GGUF files across many model families. Nest's Model page can search and download from both.
 
 ---
 
