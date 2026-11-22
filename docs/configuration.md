@@ -14,7 +14,7 @@ to start if they overlap:
 | Directory | Holds | Desktop (Windows) | Headless daemon |
 |---|---|---|---|
 | **config** | Nest's own state — accounts, roles, tools, plugins, profiles, settings, logs, the secret key | `%APPDATA%\redstart\` | `<nest dir>/config` |
-| **capability base** | User content for the five folder-scoped capabilities (Documents, SQLite, Vault, Git, File System) | `Documents\Redstart\` | `<nest dir>/data` |
+| **capability base** | User content for the five folder-scoped capabilities (Documents, SQLite, Vault, Git, File System) | `Documents\Redstart\` (macOS: `~/Redstart/`, unless `~/Documents/Redstart/` already exists) | `<nest dir>/data` |
 
 The split is not tidiness. A last-resort reset — stop the daemon, delete
 `accounts.json`, re-bootstrap — operates on the config tree, and it must never be

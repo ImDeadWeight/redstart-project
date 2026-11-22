@@ -86,7 +86,7 @@ function UpdatesCard({ updates }: { updates: ReturnType<typeof useUpdateSettings
         onConfirm={confirmInstallNow}
         onCancel={() => setConfirmInstall(false)}>
         <p>The model stops and every device disconnects for a minute or two while the update installs.</p>
-        <p>If Redstart was installed for all users, Windows asks for permission on this computer&rsquo;s screen first, and the update waits until someone there answers.</p>
+        <p>On Windows, if Redstart was installed for all users, Windows asks for permission on this computer&rsquo;s screen first, and the update waits until someone there answers. On a Mac, Redstart replaces itself in Applications and reopens.</p>
       </ConfirmDialog>
     </Card>
   )

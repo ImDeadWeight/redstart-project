@@ -27,7 +27,7 @@ export function HuggingFaceBrowser({ catalog, hardware }: { catalog: ModelCatalo
 
   const hwLine = hardware ? [
     hardware.gpu.name
-      ? `GPU ${(hardware.gpu.vram / 1024).toFixed(0)} GB${hardware.gpu.vramFree ? ` (${(hardware.gpu.vramFree / 1024).toFixed(1)} free)` : ''}`
+      ? `GPU ${hardware.gpu.unifiedMemory ? 'up to ' : ''}${(hardware.gpu.vram / 1024).toFixed(0)} GB${hardware.gpu.unifiedMemory ? ' (shared with RAM)' : hardware.gpu.vramFree ? ` (${(hardware.gpu.vramFree / 1024).toFixed(1)} free)` : ''}`
       : null,
     `RAM ${hardware.memory.total.toFixed(0)} GB${hardware.memory.available ? ` (${hardware.memory.available.toFixed(0)} free)` : ''}`,
     disk.freeBytes ? `Disk ${gb(disk.freeBytes)} free` : null,

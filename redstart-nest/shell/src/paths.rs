@@ -3,7 +3,8 @@
 //! unchanged.
 //!
 //!   config           %APPDATA%\redstart          (Electron's userData)
-//!   capability base  Documents\Redstart
+//!   capability base  Documents\Redstart (Windows); ~/Redstart (macOS, see
+//!                    default_capability_base)
 //!   shell dir        <config>\shell              (this process's own files)
 //!
 //! Packaged, the daemon and its runtime sit under `<resource_dir>/resources`,
@@ -18,7 +19,7 @@
 //! A debug build runs the checkout instead: `bin/nestd.mjs` on
 //! REDSTART_NODE or the staged deps/node at the repo root, with no resources directory.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Manager};
 
@@ -45,6 +46,25 @@ fn dev_override(name: &str) -> Option<PathBuf> {
     }
 }
 
+/// Where the models folder and the Documents, SQLite and Vault folders live.
+///
+/// macOS guards ~/Documents (and Desktop, Downloads) behind a per-app privacy
+/// prompt. Answering "Don't Allow" once, or the prompt going to the
+/// background daemon rather than the window, left every model download and
+/// tool folder failing with EPERM. Because the builds are only ad-hoc signed,
+/// macOS can also treat an update as a new app and ask again. ~/Redstart is
+/// visible in Finder like Documents is, and nothing guards it.
+///
+/// An install that already has ~/Documents/Redstart keeps it, so nobody's
+/// models or files move out from under them.
+pub fn default_capability_base(documents: &Path, home: Option<&Path>, is_macos: bool) -> PathBuf {
+    let in_documents = documents.join("Redstart");
+    match home {
+        Some(home) if is_macos && !in_documents.exists() => home.join("Redstart"),
+        _ => in_documents,
+    }
+}
+
 pub fn resolve(app: &AppHandle) -> Result<Layout, String> {
     // %APPDATA% on Windows, ~/Library/Application Support on macOS: where
     // Electron's userData lived (app name "redstart").
@@ -55,8 +75,9 @@ pub fn resolve(app: &AppHandle) -> Result<Layout, String> {
         .map_err(|e| format!("No Documents folder: {e}"))?;
 
     let config = dev_override("REDSTART_CONFIG_DIR").unwrap_or_else(|| appdata.join("redstart"));
-    let capability_base =
-        dev_override("REDSTART_CAPABILITY_BASE").unwrap_or_else(|| documents.join("Redstart"));
+    let home = app.path().home_dir().ok();
+    let capability_base = dev_override("REDSTART_CAPABILITY_BASE")
+        .unwrap_or_else(|| default_capability_base(&documents, home.as_deref(), cfg!(target_os = "macos")));
     let shell_dir = config.join("shell");
 
     if cfg!(debug_assertions) {
@@ -147,5 +168,33 @@ mod tests {
         assert_eq!(plain_path(PathBuf::from(r"\\?\C:\Apps\Nest\resources")), PathBuf::from(r"C:\Apps\Nest\resources"));
         assert_eq!(plain_path(PathBuf::from(r"C:\Apps")), PathBuf::from(r"C:\Apps"));
         assert_eq!(plain_path(PathBuf::from(r"\\?\UNC\srv\share")), PathBuf::from(r"\\?\UNC\srv\share"));
+    }
+}
+
+#[cfg(test)]
+mod capability_base_tests {
+    use super::default_capability_base;
+
+    #[test]
+    fn windows_and_linux_keep_documents() {
+        let d = std::env::temp_dir().join("redstart-paths-test-none");
+        let home = std::env::temp_dir();
+        assert_eq!(default_capability_base(&d, Some(&home), false), d.join("Redstart"));
+    }
+
+    #[test]
+    fn macos_defaults_to_home_when_documents_has_nothing() {
+        let d = std::env::temp_dir().join("redstart-paths-test-empty-docs");
+        let home = std::env::temp_dir().join("redstart-paths-test-home");
+        assert_eq!(default_capability_base(&d, Some(&home), true), home.join("Redstart"));
+    }
+
+    #[test]
+    fn macos_keeps_an_existing_documents_folder() {
+        let d = std::env::temp_dir().join("redstart-paths-test-existing");
+        std::fs::create_dir_all(d.join("Redstart")).unwrap();
+        let home = std::env::temp_dir().join("redstart-paths-test-home2");
+        assert_eq!(default_capability_base(&d, Some(&home), true), d.join("Redstart"));
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

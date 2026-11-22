@@ -316,7 +316,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
 
               {s.sourceKind === 'pypi' && (
                 <div className="space-y-2">
-                  <p className="text-xs text-zinc-500">Installed as an isolated uv tool — needs uv on this machine (uv.exe, not pip).</p>
+                  <p className="text-xs text-zinc-500">Installed as an isolated uv tool — needs uv on this machine (the uv command, not pip).</p>
                   <label className="block text-xs text-zinc-400">Package identifier</label>
                   <input className={inputCls.sm} placeholder="armor-mcp" value={s.npmPackage}
                     onChange={(e) => set('npmPackage', e.target.value)} />
@@ -330,7 +330,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
                 <div className="space-y-2">
                   <label className="block text-xs text-zinc-400">Local folder or entry script, already on this machine</label>
                   <div className="flex gap-2">
-                    <input className={inputCls.sm} placeholder="C:\path\to\server" value={s.localPath}
+                    <input className={inputCls.sm} placeholder="/path/to/server or C:\path\to\server" value={s.localPath}
                       onChange={(e) => set('localPath', e.target.value)} />
                     <FolderPicker mode="directory" startPath={s.localPath || undefined} onPick={(dir) => set('localPath', dir)} className={btnCls.secondary}>Browse…</FolderPicker>
                   </div>
@@ -341,7 +341,7 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
                 <div className="space-y-2">
                   <p className="text-xs text-yellow-500/90">Advanced. Redstart runs this exactly as typed — only use a command you trust.</p>
                   <label className="block text-xs text-zinc-400">Command</label>
-                  <input className={inputCls.sm} placeholder="C:\path\to\server.exe" value={s.command}
+                  <input className={inputCls.sm} placeholder="/path/to/server or C:\path\to\server.exe" value={s.command}
                     onChange={(e) => set('command', e.target.value)} />
                   <label className="block text-xs text-zinc-400">Arguments (space-separated)</label>
                   <input className={inputCls.sm} value={s.commandArgs} onChange={(e) => set('commandArgs', e.target.value)} />

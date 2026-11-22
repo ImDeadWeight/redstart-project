@@ -16,7 +16,7 @@ import { ensureFirewallRule, ensureCaddyFirewallRule } from './firewall.mjs'
 import { readTls, tlsRuntime, caddyKeyOf, readRedstart, withRedstart, withoutRedstart } from './tls-settings.mjs'
 import { nameProvider, createAddressWatcher, registerName, heartbeatName, releaseName } from './tls-names.mjs'
 import { checkServing, diagnostics, createHealthRunner } from './tls-health.mjs'
-import { getPrimaryLanIp } from './net-interfaces.mjs'
+import { getPrimaryLanIp, refreshRouteIp } from './net-interfaces.mjs'
 import { logEvent } from './logger.mjs'
 import { ADMIN_PORT } from './ports.mjs'
 import { setInfrastructureEgress } from './infrastructure-egress.mjs'
@@ -135,9 +135,15 @@ async function runHealth() {
   return verdict
 }
 
+let ownerGeneration = 0
+
 function onOwnerChange(s) {
   const httpsOn = s.state === 'lan-https' || s.state === 'lan-https-fallback'
-  if (httpsOn) void watcher.start()
+  // Ask the routing table first, so the first address published is the
+  // routed one rather than the first adapter in listing order.
+  // `generation` drops a start whose HTTPS was switched off meanwhile.
+  const generation = ++ownerGeneration
+  if (httpsOn) void refreshRouteIp().catch(() => null).then(() => { if (generation === ownerGeneration) void watcher.start() })
   else watcher.stop()
   // Automatic: a weekly "still here" (the address watcher's PUT also counts,
   // but an address can stay the same for months). Only while HTTPS faces the LAN.

@@ -4,6 +4,30 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ---
 
+## 2026-11-22
+
+- **Mac testing has started.** Nest was run on an Apple Silicon MacBook for the first time. It turned up two problems, both fixed below: the hardware check reported 0 GB of memory, and a model outside the models folder could not be chosen. A pass over the code for other Mac issues found four more (folders in `~/Documents`, Twig's scan, the LAN adapter choice, Windows-only wording). None of the fixes has been re-tested on a Mac yet. The README's macOS section now has a "Mac testing so far" table.
+- **LAN addresses: the right adapter, in Nest and in Twig.**
+  - **Twig's "find my Nest" scan** took the first non-internal IPv4, so a VPN, WSL, Hyper-V or Docker adapter sent it to the wrong subnet. It also opened all 254 probes at once, over macOS's default limit of 256 open files, so on a Mac most failed and it found nothing. It now uses Nest's adapter choice and runs 32 probes at a time (about 3 s for a full /24).
+  - **The adapter choice** (`net-interfaces.mjs`, moved to `shared/` so both apps use it) now asks the routing table: `connect()` on a UDP socket picks the source address the OS would route from, and sends no packet. That address wins when it is on a physical adapter, so two real adapters (Ethernet on an old network plus Wi-Fi on the LAN) no longer pick by listing order, and a full-tunnel VPN still does not win. Nest re-checks every 30 s, and once more before the first address it publishes for its HTTPS name, so DuckDNS, deSEC and the Redstart name service get the routed address.
+  - **More adapters recognised as virtual:** VPN clients by name (NordVPN, Proton, Mullvad, Cisco AnyConnect, GlobalProtect and more); macOS `bridge100`, `awdl0`, `llw0`, `anpi0`, `ap1`; Linux `virbr0`, `veth*`, `br-<id>`, `podman0`. The macOS and Linux names are matched whole, so an adapter named "Laptop1" is not caught by `ap1`.
+  - Tests: nine new cases in `test-net-interfaces.mjs`; `redstart-twig/desktop/scripts/test-network-scan.mjs` (new, in Twig's `npm test`, which CI runs).
+- **macOS: models and tool folders default to `~/Redstart`**, not `~/Documents/Redstart`. macOS asks permission for Documents, and a "Don't Allow" (or the prompt going to the background daemon) left downloads and tool folders failing. An install that already has `~/Documents/Redstart` keeps it. Windows is unchanged. `shell/src/paths.rs` `default_capability_base`, with three unit tests.
+- **Text that assumed Windows:** the Add tool dialog's example paths and `uv.exe` hint, and the update dialog's permission note, now cover macOS too. The README's macOS section says what to expect (folder location, the firewall prompt, pasting paths to hidden model folders, privacy permissions); notarization still needs an Apple Developer ID.
+- **Hardware check on macOS and Linux: no more "0 GB memory".** The scan was one PowerShell script, so off Windows it failed without a word and every figure stayed 0. Reported by someone trying Nest on a MacBook. `hardware.mjs` now has a branch per platform, each starting from Node's `os.totalmem()`/`os.cpus()`, so a failed probe means less detail, never zero.
+  - **macOS:** `sysctl` (chip name, cores, `hw.memsize`) and `vm_stat` (free + inactive + speculative + purgeable pages; `os.freemem()` alone is misleadingly small on a Mac). On Apple Silicon the GPU is reported with `unifiedMemory: true`, and `gpu.vram` is the share Metal lets it use: `iogpu.wired_limit_mb` if set, else macOS's default of about 2/3 of RAM up to 36 GB, 3/4 above. The Model, Hugging Face and Images pages say "up to N GB of M GB unified memory" / "shared with RAM" rather than listing two pools. Intel Macs use `system_profiler` for the GPU.
+  - **Linux:** `/proc/meminfo` (`MemAvailable`), `/proc/cpuinfo` (cores, AVX), `nvidia-smi`.
+  - Windows is unchanged, except that a failed PowerShell call keeps the os baseline instead of reporting 0.
+  - The fix itself has not been run on a Mac yet (the figures in the tests come from faked tool output); it is waiting for the same MacBook to re-test.
+  - Tests: `test-hardware-scan.mjs` (new, in `test:security` and CI).
+- **The file picker shows files.** Picking a model outside the models folder meant opening a folder and typing the file's name, because `browse:list` returned folders only. Now:
+  - `browse:list` takes `extensions` and returns matching files as `kind: 'file'` (name and access flags only, never contents, size or link target). Without `extensions` it returns folders only, as before.
+  - A symlink to a matching file is listed. The Hugging Face cache stores every model as a symlink into `blobs/`, so those models could not be picked before. A symlink to a folder is still not followed.
+  - `exe` matches extensionless executables off Windows, so "Choose llama-server" works on a Mac.
+  - The picker's location bar can be typed or pasted into (Enter to go). A pasted path to a `.gguf` opens its folder with the file selected. This is how to reach hidden folders like `~/.lmstudio/models` and `~/.cache/huggingface`, which the listing still hides.
+  - macOS adds an "External drives (/Volumes)" starting point. A folder macOS privacy blocks (Downloads, Desktop and Documents until allowed) now says where to grant access instead of showing a bare `EPERM`, and is marked unreadable.
+  - Tests: six new cases in `test-browse-routes.mjs`.
+
 ## 2026-11-20
 
 - **Vision models can see.** The chat UI already sent images (attachments, pastes, images in tool results) to any model whose `/props` reports vision, but Nest never passed `--mmproj`, so no model ever did. Now:

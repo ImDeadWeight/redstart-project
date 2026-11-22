@@ -179,6 +179,12 @@ Two things the suites do not cover, and cannot as they stand:
   it, and `test-packaging.mjs` checks the staging script and Tauri config
   statically. Installing it, and the bridge from an Electron-era install, were
   run by hand (see the implementation notes).
+- **How well a real model does is not a CI question.** The agent bench and
+  the memory bench need a running Nest with a model loaded. CI runs only
+  their checks against fixed right and wrong answers
+  (`test-agent-bench-tasks.mjs`, `test-memory-bench.mjs`). The results so
+  far, on Ornith 1.5 9B, Qwen3-4B and Qwen3.6-35B, and how to run the
+  benches: [Models tested](model-testing.md).
 
 Running Nest as a service is documented in [`deploy/`](../deploy/README.md),
 which states its own gap: none of those artifacts have been run on real

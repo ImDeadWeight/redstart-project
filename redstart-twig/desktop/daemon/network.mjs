@@ -12,9 +12,18 @@ import * as dns from 'node:dns'
 import * as http from 'node:http'
 import * as os from 'node:os'
 
+import { lanScanInfo, refreshRouteIp } from '../../../shared/net-interfaces.mjs'
+
 // Must match the beacon port in Redstart Nest. Not configurable on purpose:
 // the point is zero-configuration discovery.
 export const BEACON_PORT = 8765
+
+// How many beacon probes are in flight at once. All 254 used to start
+// together: on macOS a process may hold 256 open files by default (ulimit -n),
+// so most connects failed with EMFILE, which a probe reads as "no Nest
+// here", and the scan found nothing. On Windows, that many half-open
+// connections also trips some antivirus "port scan" heuristics.
+export const SCAN_CONCURRENCY = 32
 
 const ORIGIN_RE = /^https:\/\/([a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?)$/
 
@@ -82,21 +91,16 @@ export function probeBeacon(ip, timeout, port = BEACON_PORT, deps = {}) {
 }
 
 export const handlers = {
-  'network:get-info': () => {
-    const interfaces = os.networkInterfaces()
-    for (const name of Object.keys(interfaces)) {
-      for (const iface of interfaces[name] ?? []) {
-        if (iface.family === 'IPv4' && !iface.internal) {
-          const parts = iface.address.split('.')
-          return {
-            ip: iface.address,
-            subnet: `${parts[0]}.${parts[1]}.${parts[2]}`,
-            gateway: `${parts[0]}.${parts[1]}.${parts[2]}.1`,
-          }
-        }
-      }
-    }
-    throw new Error('No active network interface found')
+  // The subnet to scan comes from the same adapter choice Nest makes
+  // (shared/net-interfaces.mjs): the route the OS would use, skipping VPN,
+  // WSL, Hyper-V, Docker and macOS bridge adapters. It used to be the first
+  // non-internal IPv4, so a machine with any of those scanned the wrong
+  // network and never found Nest.
+  'network:get-info': async () => {
+    await refreshRouteIp()
+    const info = lanScanInfo(os.networkInterfaces())
+    if (!info) throw new Error('No active network interface found')
+    return info
   },
 
   'network:scan': async ({ subnet, timeout = 400 } = {}) => {
@@ -106,11 +110,24 @@ export const handlers = {
     const found = []
     // 127.0.0.1 first, for Nest and Twig on one machine in localhost-only
     // mode, where Nest is not bound to the LAN address.
-    const probes = [probeBeacon('127.0.0.1', timeout).then((s) => s && found.push(s))]
-    for (let i = 1; i <= 254; i++) {
-      probes.push(probeBeacon(`${subnet}.${i}`, timeout).then((s) => s && found.push(s)))
-    }
-    await Promise.all(probes)
+    const targets = ['127.0.0.1']
+    for (let i = 1; i <= 254; i++) targets.push(`${subnet}.${i}`)
+    await runLimited(targets, SCAN_CONCURRENCY, async (ip) => {
+      const s = await probeBeacon(ip, timeout)
+      if (s) found.push(s)
+    })
     return { servers: found }
   },
+}
+
+/** Run `fn` over `items`, at most `limit` at a time. */
+export async function runLimited(items, limit, fn) {
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const item = items[next++]
+      await fn(item)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
 }

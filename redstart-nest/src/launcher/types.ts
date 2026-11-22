@@ -15,7 +15,9 @@
 // daemon/ipc/hardware.mjs before building anything that decides.
 export type HardwareSpecs = {
   cpu: { name: string; cores: number; threads: number; architecture: string; supportsAVX: boolean }
-  gpu: { name: string; vram: number; vramFree: number; cudaAvailable: boolean }
+  // unifiedMemory: Apple Silicon — the GPU shares system RAM, so vram is the
+  // share of memory.total the GPU may use, not a separate pool.
+  gpu: { name: string; vram: number; vramFree: number; cudaAvailable: boolean; unifiedMemory?: boolean }
   memory: { total: number; available: number }
   os: { platform: string; arch: string }
 }

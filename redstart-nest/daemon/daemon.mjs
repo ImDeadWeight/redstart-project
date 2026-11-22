@@ -45,7 +45,7 @@ import { decryptSecret, encryptSecret } from './secrets.mjs'
 import { ensureBootstrapToken } from './bootstrap-token.mjs'
 import { buildAdminApi } from './admin/api-table.mjs'
 import { setAdminApi } from './admin/api-routes.mjs'
-import { getPrimaryLanIp } from './net-interfaces.mjs'
+import { getPrimaryLanIp, startRouteProbe, stopRouteProbe } from './net-interfaces.mjs'
 import { cleanupOldConversations, allConversationIds } from './conversations-storage.mjs'
 import { resumeTasks, suspendAllTasks } from './task-runner.mjs'
 import { sweepOrphanWorkspaces } from './conversation-workspace.mjs'
@@ -488,6 +488,10 @@ export async function startDaemon(entrypoint = {}) {
   // step below it is captured.
   initLogger(configDir())
   logEvent('app', 'ready', { platform: process.platform })
+  // Which adapter the LAN is on, asked of the routing table (no packet is
+  // sent; shared/net-interfaces.mjs). Feeds the shown address, the QR code
+  // and the address published for the HTTPS name.
+  startRouteProbe()
   // llama-server's own output — a separate stream from the structured event
   // log above, see process-log.mjs's header for why.
   initProcessLog(configDir())
@@ -586,6 +590,7 @@ export function stopDaemon() {
   if (daemonStopped) return { childPids: [] }
   daemonStopped = true
   const childPids = []
+  stopRouteProbe()
   logEvent('app', 'quit', {})
   // Background tasks stop where they are, unended, so the next start resumes
   // them (task-runner.mjs). Not awaited: stopDaemon is synchronous, and a run
