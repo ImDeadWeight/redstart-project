@@ -111,7 +111,7 @@ agent — is a client that connects and gets whatever the admin configured once.
 
 The chat client that ships in this repo — a lightweight app that finds Nest on
 the LAN and signs in, with no hostname to type. **Windows works; the macOS
-build is new and has never run on a Mac. The Android build is out of date and paused** ([see note](#redstart-twig-android)); a phone
+build has not been run on a Mac yet** (Nest has: [Mac testing so far](#mac-testing-so-far)). **The Android build is out of date and paused** ([see note](#redstart-twig-android)); a phone
 browser against the chat UI is the working substitute in the meantime.
 
 Since llama-server speaks the OpenAI API, [coding agents](#using-as-a-coding-agent-kilo-code--continue--etc) and any other OpenAI-compatible application are clients too, with no Redstart-specific code.
@@ -194,7 +194,7 @@ Accounts are **on by default** with no localhost exemption, and each account's f
 
 **Redstart Twig (Android)** — Android 10 or later, on the same Wi-Fi network as the Nest PC. **Not currently working** — [see note](#redstart-twig-android).
 
-**Redstart Twig (desktop)** — Windows 10/11, or macOS on Apple Silicon (untested), on the same network as the Nest PC (or on the same machine).
+**Redstart Twig (desktop)** — Windows 10/11, or macOS on Apple Silicon (not yet run on a Mac; Nest has been), on the same network as the Nest PC (or on the same machine).
 
 ---
 
@@ -242,7 +242,7 @@ Twig updates itself from then on: it downloads a new release in the background a
 
 ### macOS (experimental)
 
-Each release also carries `.dmg` installers — Nest for Apple Silicon, Twig for Apple Silicon (`arm64`) too. **They are built automatically and have never been run on a Mac**, so treat them as a preview. They are not notarized: after dragging the app to Applications, the first launch is blocked until you choose **Open Anyway** in System Settings → Privacy & Security.
+Each release also carries `.dmg` installers — Nest for Apple Silicon, Twig for Apple Silicon (`arm64`) too. **Mac testing has started:** Nest has been run on an Apple Silicon MacBook, and the issues it turned up are listed below. Twig has not been run on a Mac yet. Treat both as a preview. They are not notarized: after dragging the app to Applications, the first launch is blocked until you choose **Open Anyway** in System Settings → Privacy & Security.
 
 What else to expect on a Mac:
 - **Models and files live in `~/Redstart`** (Models, Documents, SQLite, Vault), not in `~/Documents`, which macOS asks permission for. An install that already used `~/Documents/Redstart` keeps it.
@@ -251,6 +251,19 @@ What else to expect on a Mac:
 - If a folder says macOS blocked access, allow Redstart Nest in System Settings → Privacy & Security → Files and Folders.
 
 Removing the first-launch block needs an Apple Developer ID certificate and notarization, tracked in [roadmap → Signed installers](docs/roadmap.md).
+
+#### Mac testing so far
+
+The first hands-on test (Nest on an Apple Silicon MacBook, reported 2026-11-22) found two problems. Both are fixed in code and **waiting for a re-test on a Mac**:
+
+| Found on the Mac | Cause | Fix |
+|---|---|---|
+| The Model page said the machine had **0 GB of memory** | The hardware check was a Windows PowerShell script; on macOS it failed silently. Unified memory was never read | A macOS check (`sysctl`, `vm_stat`). On Apple Silicon the GPU is shown as sharing the system's memory: "up to N GB of M GB unified memory" |
+| **Couldn't choose a model outside the models folder** | The file picker listed folders only and asked for the file name to be typed; it skipped symlinked files and could not reach hidden folders | The picker lists `.gguf` files (symlinked ones included) and takes a pasted path |
+
+Going through the code for anything else Mac-specific turned up four more, fixed in the same pass and not yet seen on a Mac either: the default folders moved out of `~/Documents` (macOS asks permission for it); Twig's "find my Nest" scan opened more connections at once than a Mac allows one app and could find nothing; both apps could pick a VPN or bridge adapter as the LAN address; and some wording assumed Windows. Details are in the [changelog](CHANGELOG.md) under 2026-11-22.
+
+Not tried on a Mac yet: loading and chatting with a model on the Metal engine, image generation, network mode and HTTPS, auto-update, and Twig.
 
 ---
 
@@ -271,7 +284,7 @@ The same pattern applies to [Continue](https://continue.dev/), [Aider](https://a
 
 ## Tested configuration
 
-The hardware and models used during development, all on one machine. Results will vary by GPU, quantization level, and task type; nothing here has been run on macOS, Linux, or an AMD or Apple GPU yet.
+The hardware and models used during development, all on one machine. Results will vary by GPU, quantization level, and task type; no model has been benchmarked on macOS, Linux, or an AMD or Apple GPU yet (Mac testing of the app itself has started: [Mac testing so far](#mac-testing-so-far)).
 
 | | |
 |---|---|
@@ -305,7 +318,7 @@ The short list; the [full set is in the roadmap](docs/roadmap.md#known-limitatio
 
 - **Twig for Android is out of date and not working** — the Android client hasn't been rebuilt against recent server changes. Use a phone browser against the chat UI instead. Paused, not abandoned; see [the note above](#redstart-twig-android).
 - **Unsigned installers** — both will trigger Windows Defender SmartScreen; the macOS builds are not notarized, so Gatekeeper blocks their first launch.
-- **Windows is the only supported server platform** — the daemon itself runs headless under plain Node and `deploy/` carries a systemd unit, and releases now include macOS `.dmg` builds, but neither the Mac builds nor any of the Linux artifacts has been run on real hardware yet. The port-80 proxy is Windows-only.
+- **Windows is the only supported server platform** — the daemon itself runs headless under plain Node and `deploy/` carries a systemd unit, and releases now include macOS `.dmg` builds. Mac testing has started ([what it found](#mac-testing-so-far)), but the Linux artifacts have not been run on real hardware yet. The port-80 proxy is Windows-only.
 - **The deployment artifacts are a first draft** — `deploy/` (systemd, Windows SCM, Caddy) was written from the design and reviewed, not executed. Read each command before running it.
 - **HTTPS on the LAN is opt-in and new** — with *Secure address* off (the default), LAN traffic, passwords included, is plain HTTP, and the chat UI says so. Turning it on gets a real certificate, but it has not yet run in many homes.
 - **External MCP servers that need a key or OAuth don't work from the chat** — a saved API key is used only by Nest's connection test, and OAuth isn't supported. See [Capabilities](docs/capabilities.md#external-mcp-servers).

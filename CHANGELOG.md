@@ -6,6 +6,7 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ## 2026-11-22
 
+- **Mac testing has started.** Nest was run on an Apple Silicon MacBook for the first time. It turned up two problems, both fixed below: the hardware check reported 0 GB of memory, and a model outside the models folder could not be chosen. A pass over the code for other Mac issues found four more (folders in `~/Documents`, Twig's scan, the LAN adapter choice, Windows-only wording). None of the fixes has been re-tested on a Mac yet. The README's macOS section now has a "Mac testing so far" table.
 - **LAN addresses: the right adapter, in Nest and in Twig.**
   - **Twig's "find my Nest" scan** took the first non-internal IPv4, so a VPN, WSL, Hyper-V or Docker adapter sent it to the wrong subnet. It also opened all 254 probes at once, over macOS's default limit of 256 open files, so on a Mac most failed and it found nothing. It now uses Nest's adapter choice and runs 32 probes at a time (about 3 s for a full /24).
   - **The adapter choice** (`net-interfaces.mjs`, moved to `shared/` so both apps use it) now asks the routing table: `connect()` on a UDP socket picks the source address the OS would route from, and sends no packet. That address wins when it is on a physical adapter, so two real adapters (Ethernet on an old network plus Wi-Fi on the LAN) no longer pick by listing order, and a full-tunnel VPN still does not win. Nest re-checks every 30 s, and once more before the first address it publishes for its HTTPS name, so DuckDNS, deSEC and the Redstart name service get the routed address.
@@ -17,7 +18,7 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
   - **macOS:** `sysctl` (chip name, cores, `hw.memsize`) and `vm_stat` (free + inactive + speculative + purgeable pages; `os.freemem()` alone is misleadingly small on a Mac). On Apple Silicon the GPU is reported with `unifiedMemory: true`, and `gpu.vram` is the share Metal lets it use: `iogpu.wired_limit_mb` if set, else macOS's default of about 2/3 of RAM up to 36 GB, 3/4 above. The Model, Hugging Face and Images pages say "up to N GB of M GB unified memory" / "shared with RAM" rather than listing two pools. Intel Macs use `system_profiler` for the GPU.
   - **Linux:** `/proc/meminfo` (`MemAvailable`), `/proc/cpuinfo` (cores, AVX), `nvidia-smi`.
   - Windows is unchanged, except that a failed PowerShell call keeps the os baseline instead of reporting 0.
-  - Not yet run on a real Mac. The figures come from tool output that was faked in tests.
+  - The fix itself has not been run on a Mac yet (the figures in the tests come from faked tool output); it is waiting for the same MacBook to re-test.
   - Tests: `test-hardware-scan.mjs` (new, in `test:security` and CI).
 - **The file picker shows files.** Picking a model outside the models folder meant opening a folder and typing the file's name, because `browse:list` returned folders only. Now:
   - `browse:list` takes `extensions` and returns matching files as `kind: 'file'` (name and access flags only, never contents, size or link target). Without `extensions` it returns folders only, as before.

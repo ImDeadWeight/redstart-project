@@ -76,7 +76,7 @@ The fixes the runs forced, so it is clear why the code is the way it is:
 - `p1-two-unknowns` has not been run on the 4B, and no model has used `ask_user`'s several-question list yet.
 - A background task that compacts its context has not been run against a real model (the compaction profile, "Ornith 9B · 12k", exists for it).
 - `p4-git-log` and `p4-exit-code` are expected to fail on every model: Nest has no terminal. Their transcripts are read for whether the model says so or invents a result.
-- None of this has been run on macOS or Linux, or on an AMD or Apple GPU.
+- No benchmark has been run on macOS or Linux, or on an AMD or Apple GPU. Mac testing of the app itself started on 2026-11-22 ([what it found](../README.md#mac-testing-so-far)).
 
 ## Running it yourself
 
