@@ -51,6 +51,11 @@ function posixRoots() {
   const roots = [{ path: '/', label: '/' }]
   const home = os.homedir()
   if (home && home !== '/') roots.push({ path: home, label: `${home} (home)` })
+  // macOS mounts external and network drives under /Volumes. They can be
+  // reached from `/` too, but that is not where a Mac user looks for them.
+  if (process.platform === 'darwin' && fs.existsSync('/Volumes')) {
+    roots.push({ path: '/Volumes', label: 'External drives (/Volumes)' })
+  }
   return roots
 }
 
@@ -83,10 +88,66 @@ function parentOf(target) {
  * follows one out of `target`, by construction rather than by a guard that
  * could be forgotten.
  */
-export function listDirectory(targetPath) {
+/**
+ * FILES (opt-in). With `opts.extensions` (e.g. ['gguf']) the listing also
+ * returns matching FILES as `kind: 'file'` entries, so a file picker can show
+ * the .gguf it is looking for instead of making the admin type its name. Same
+ * shape as a directory entry: a name and access flags, never contents, never
+ * a size, never a symlink target. Without `extensions` the listing is
+ * directories-only, exactly as before.
+ *
+ * A symlink IS listed when it resolves to a matching regular file. That is a
+ * deliberate exception to the directory rule above: the Hugging Face cache
+ * (and tools that share it, like LM Studio's imports) stores every model as a
+ * symlink into a blobs folder, so skipping symlinked files made those models
+ * impossible to pick. A file is a leaf — listing its NAME cannot walk the
+ * browser out of `target`, which is the thing the directory rule exists to
+ * prevent — and its target path is still never returned.
+ *
+ * 'exe' is the one platform-dependent extension: on Windows it matches .exe;
+ * elsewhere executables have no extension, so it matches any file with an
+ * execute bit (what llama-server is on macOS and Linux).
+ */
+function wantsFile(fullPath, name, dirent, extensions) {
+  let isFile = dirent.isFile()
+  if (!isFile && dirent.isSymbolicLink()) {
+    try { isFile = fs.statSync(fullPath).isFile() } catch { isFile = false }
+  }
+  if (!isFile) return false
+  const lower = name.toLowerCase()
+  return extensions.some(ext => {
+    if (ext === 'exe' && process.platform !== 'win32') {
+      return !lower.includes('.') && canAccess(fullPath, fs.constants.X_OK)
+    }
+    return lower.endsWith(`.${ext}`)
+  })
+}
+
+function normalizeExtensions(extensions) {
+  if (!Array.isArray(extensions)) return null
+  const clean = extensions
+    .filter(e => typeof e === 'string')
+    .map(e => e.trim().replace(/^\./, '').toLowerCase())
+    .filter(e => e && /^[a-z0-9]+$/.test(e))
+  return clean.length ? clean : null
+}
+
+// macOS privacy protection (TCC) guards Desktop, Documents, Downloads,
+// iCloud Drive and removable volumes per app. A denial arrives as EPERM even
+// though access() still says readable, so the raw code meant nothing to the
+// person looking at it — say what it is and where to fix it.
+function reasonFor(err) {
+  if (process.platform === 'darwin' && err.code === 'EPERM') {
+    return 'macOS blocked access to this folder. Allow Redstart in System Settings → Privacy & Security → Files and Folders (or Full Disk Access), then try again.'
+  }
+  return err.code || err.message
+}
+
+export function listDirectory(targetPath, opts = {}) {
   if (typeof targetPath !== 'string' || !targetPath) {
     return { path: targetPath ?? '', parent: null, entries: [], reason: 'No path given' }
   }
+  const extensions = normalizeExtensions(opts?.extensions)
 
   let dirents
   try {
@@ -105,8 +166,11 @@ export function listDirectory(targetPath) {
       path: targetPath,
       parent: parentOf(targetPath),
       entries: [],
-      reason: err.code || err.message,
+      reason: reasonFor(err),
       ...accessOf(targetPath),
+      // A listing that just failed with a permission error is unreadable,
+      // whatever access() claims (macOS TCC answers R_OK yes, readdir no).
+      ...(err.code === 'EPERM' || err.code === 'EACCES' ? { readable: false } : {}),
     }
   }
 
@@ -114,6 +178,14 @@ export function listDirectory(targetPath) {
     .filter(d => d.isDirectory() && !d.name.startsWith('.')) // hidden entries excluded
     .map(d => ({ name: d.name, kind: 'directory', ...accessOf(path.join(targetPath, d.name)) }))
     .sort((a, b) => a.name.localeCompare(b.name))
+
+  if (extensions) {
+    const files = dirents
+      .filter(d => !d.name.startsWith('.') && wantsFile(path.join(targetPath, d.name), d.name, d, extensions))
+      .map(d => ({ name: d.name, kind: 'file', ...accessOf(path.join(targetPath, d.name)) }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+    entries.push(...files)
+  }
 
   return { path: targetPath, parent: parentOf(targetPath), entries, ...accessOf(targetPath) }
 }
@@ -192,7 +264,7 @@ export function browseMkdir({ path: parentPath, name }) {
 export function browseRouteHandlers() {
   return {
     'browse:roots': () => browseRoots(),
-    'browse:list': (opts) => listDirectory(opts?.path),
+    'browse:list': (opts) => listDirectory(opts?.path, { extensions: opts?.extensions }),
     'browse:mkdir': (opts) => browseMkdir(opts ?? {}),
   }
 }

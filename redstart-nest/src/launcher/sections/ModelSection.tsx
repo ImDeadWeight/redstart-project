@@ -84,8 +84,10 @@ export function ModelSection({
 
   const hwLine = hardware
     ? [
-        hardware.gpu.name ? `${hardware.gpu.name}, ${(hardware.gpu.vram / 1024).toFixed(0)} GB` : null,
-        `${hardware.memory.total.toFixed(0)} GB memory`,
+        hardware.gpu.unifiedMemory
+          ? `${hardware.gpu.name}, up to ${(hardware.gpu.vram / 1024).toFixed(0)} GB of ${hardware.memory.total.toFixed(0)} GB unified memory`
+          : hardware.gpu.name ? `${hardware.gpu.name}, ${(hardware.gpu.vram / 1024).toFixed(0)} GB` : null,
+        hardware.gpu.unifiedMemory ? null : `${hardware.memory.total.toFixed(0)} GB memory`,
         disk.freeBytes !== undefined ? `${gb(disk.freeBytes)} free on the models drive` : null,
       ].filter(Boolean).join(' · ')
     : null

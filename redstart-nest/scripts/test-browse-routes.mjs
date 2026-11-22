@@ -147,6 +147,73 @@ await test('parent is null at a root, non-null one level in', () => {
 // browse:mkdir
 // ---------------------------------------------------------------------------
 
+console.log('\n--- listDirectory: files (opt-in) ---')
+
+// A model picker has to SHOW the .gguf it is looking for. Before this, file
+// mode listed folders only and asked the admin to type the file name, which
+// is how a Mac user ended up unable to pick a model outside the models folder.
+const filesDir = path.join(base, 'files')
+fs.mkdirSync(path.join(filesDir, 'sub'), { recursive: true })
+fs.writeFileSync(path.join(filesDir, 'model-a.gguf'), 'GGUF')
+fs.writeFileSync(path.join(filesDir, 'Model-B.GGUF'), 'GGUF')
+fs.writeFileSync(path.join(filesDir, 'notes.txt'), 'not a model')
+fs.writeFileSync(path.join(filesDir, '.hidden.gguf'), 'GGUF')
+const blob = path.join(outside, 'blob-1234')
+fs.writeFileSync(blob, 'GGUF')
+let fileLinkSupported = false
+try {
+  fs.symlinkSync(blob, path.join(filesDir, 'linked.gguf'), 'file')
+  fs.symlinkSync(outside, path.join(filesDir, 'dir-link.gguf'), 'dir')
+  fileLinkSupported = true
+} catch {}
+
+await test('without extensions the listing is directories only, as before', () => {
+  const result = listDirectory(filesDir)
+  assert(result.entries.every(e => e.kind === 'directory'), 'a file appeared without being asked for')
+})
+
+await test('with extensions, matching files are listed after folders, case-insensitively', () => {
+  const result = listDirectory(filesDir, { extensions: ['gguf'] })
+  const files = result.entries.filter(e => e.kind === 'file').map(e => e.name)
+  assert(files.includes('model-a.gguf') && files.includes('Model-B.GGUF'), `got ${files.join(', ')}`)
+  assert(!files.includes('notes.txt'), 'a non-matching file was listed')
+  assert(!files.includes('.hidden.gguf'), 'a hidden file was listed')
+  assert(result.entries[0].kind === 'directory', 'folders should come first')
+  assert(
+    result.entries.every(e => Object.keys(e).sort().join(',') === 'kind,name,readable,writable'),
+    'a file entry carried unexpected fields (contents, size or a link target)',
+  )
+})
+
+await test('a symlink to a matching FILE is listed (Hugging Face cache), a symlink to a directory is not', () => {
+  if (!fileLinkSupported) return 'symlinks not creatable here'
+  const result = listDirectory(filesDir, { extensions: ['gguf'] })
+  const names = result.entries.map(e => e.name)
+  assert(names.includes('linked.gguf'), 'a symlinked model file was hidden')
+  assert(!names.includes('dir-link.gguf'), 'a symlink to a directory was listed')
+  assert(!JSON.stringify(result).includes('blob-1234'), 'the symlink target leaked into the listing')
+})
+
+await test('junk extensions are ignored rather than trusted', () => {
+  const result = listDirectory(filesDir, { extensions: ['../x', 42, ''] })
+  assert(result.entries.every(e => e.kind === 'directory'), 'junk extensions produced file entries')
+})
+
+await test('"exe" matches executables without an extension off Windows', () => {
+  if (process.platform === 'win32') return 'Windows matches .exe instead'
+  const bin = path.join(filesDir, 'llama-server')
+  fs.writeFileSync(bin, '#!/bin/sh\n')
+  fs.chmodSync(bin, 0o755)
+  const names = listDirectory(filesDir, { extensions: ['exe'] }).entries.filter(e => e.kind === 'file').map(e => e.name)
+  assert(names.includes('llama-server'), `got ${names.join(', ')}`)
+  assert(!names.includes('notes.txt'), 'a non-executable was listed')
+})
+
+await test('browse:list forwards extensions through the route table', () => {
+  const result = browseRouteHandlers()['browse:list']({ path: filesDir, extensions: ['gguf'] })
+  assert(result.entries.some(e => e.kind === 'file'), 'the route dropped extensions')
+})
+
 console.log('\n--- browseMkdir ---')
 
 await test('creates a new folder directly under an existing path', () => {

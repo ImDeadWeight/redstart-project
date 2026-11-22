@@ -59,7 +59,7 @@ export function ImageModelBrowser({ status, hardware, diskFreeBytes, progress, o
   }
 
   const hwLine = [
-    hardware?.gpu.name ? `GPU ${(hardware.gpu.vram / 1024).toFixed(0)} GB` : null,
+    hardware?.gpu.name ? `GPU ${hardware.gpu.unifiedMemory ? 'up to ' : ''}${(hardware.gpu.vram / 1024).toFixed(0)} GB${hardware.gpu.unifiedMemory ? ' (shared with RAM)' : ''}` : null,
     hardware ? `RAM ${hardware.memory.total.toFixed(0)} GB` : null,
     diskFreeBytes ? `Disk ${size(diskFreeBytes)} free` : null,
   ].filter(Boolean).join(' · ')

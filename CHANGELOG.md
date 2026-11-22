@@ -4,6 +4,22 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ---
 
+## 2026-11-22
+
+- **Hardware check on macOS and Linux: no more "0 GB memory".** The scan was one PowerShell script, so off Windows it failed without a word and every figure stayed 0. Reported by someone trying Nest on a MacBook. `hardware.mjs` now has a branch per platform, each starting from Node's `os.totalmem()`/`os.cpus()`, so a failed probe means less detail, never zero.
+  - **macOS:** `sysctl` (chip name, cores, `hw.memsize`) and `vm_stat` (free + inactive + speculative + purgeable pages; `os.freemem()` alone is misleadingly small on a Mac). On Apple Silicon the GPU is reported with `unifiedMemory: true`, and `gpu.vram` is the share Metal lets it use: `iogpu.wired_limit_mb` if set, else macOS's default of about 2/3 of RAM up to 36 GB, 3/4 above. The Model, Hugging Face and Images pages say "up to N GB of M GB unified memory" / "shared with RAM" rather than listing two pools. Intel Macs use `system_profiler` for the GPU.
+  - **Linux:** `/proc/meminfo` (`MemAvailable`), `/proc/cpuinfo` (cores, AVX), `nvidia-smi`.
+  - Windows is unchanged, except that a failed PowerShell call keeps the os baseline instead of reporting 0.
+  - Not yet run on a real Mac. The figures come from tool output that was faked in tests.
+  - Tests: `test-hardware-scan.mjs` (new, in `test:security` and CI).
+- **The file picker shows files.** Picking a model outside the models folder meant opening a folder and typing the file's name, because `browse:list` returned folders only. Now:
+  - `browse:list` takes `extensions` and returns matching files as `kind: 'file'` (name and access flags only, never contents, size or link target). Without `extensions` it returns folders only, as before.
+  - A symlink to a matching file is listed. The Hugging Face cache stores every model as a symlink into `blobs/`, so those models could not be picked before. A symlink to a folder is still not followed.
+  - `exe` matches extensionless executables off Windows, so "Choose llama-server" works on a Mac.
+  - The picker's location bar can be typed or pasted into (Enter to go). A pasted path to a `.gguf` opens its folder with the file selected. This is how to reach hidden folders like `~/.lmstudio/models` and `~/.cache/huggingface`, which the listing still hides.
+  - macOS adds an "External drives (/Volumes)" starting point. A folder macOS privacy blocks (Downloads, Desktop and Documents until allowed) now says where to grant access instead of showing a bare `EPERM`, and is marked unreadable.
+  - Tests: six new cases in `test-browse-routes.mjs`.
+
 ## 2026-11-20
 
 - **Vision models can see.** The chat UI already sent images (attachments, pastes, images in tool results) to any model whose `/props` reports vision, but Nest never passed `--mmproj`, so no model ever did. Now:

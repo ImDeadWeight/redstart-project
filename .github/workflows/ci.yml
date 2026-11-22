@@ -354,6 +354,9 @@ jobs:
       - name: "Security: server-side directory browser (Phase 4)"
         run: node scripts/test-browse-routes.mjs
 
+      - name: "Hardware scan: macOS unified memory, Linux, Windows fallback"
+        run: node scripts/test-hardware-scan.mjs
+
       - name: "Security: shared event broker (Phase 5)"
         run: node scripts/test-event-broker.mjs
 

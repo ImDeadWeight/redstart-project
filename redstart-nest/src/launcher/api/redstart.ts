@@ -121,7 +121,8 @@ export type RedstartAPI = {
     // Windows W_OK reflects the read-only attribute rather than the ACL), but
     // a definite `false` is what lets the picker refuse a folder the daemon
     // cannot use while the admin is still looking at it.
-    list: (opts: { path: string }) => Promise<{ path: string; parent: string | null; entries: { name: string; kind: 'directory'; readable?: boolean; writable?: boolean }[]; reason?: string; readable?: boolean; writable?: boolean }>
+    // extensions (e.g. ['gguf']) also returns matching files as kind 'file'.
+    list: (opts: { path: string; extensions?: string[] }) => Promise<{ path: string; parent: string | null; entries: { name: string; kind: 'directory' | 'file'; readable?: boolean; writable?: boolean }[]; reason?: string; readable?: boolean; writable?: boolean }>
     mkdir: (opts: { path: string; name: string }) => Promise<{ ok: boolean; path?: string; error?: string }>
   }
   profiles: {

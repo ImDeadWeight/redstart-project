@@ -10,10 +10,13 @@
 // the moment a browser or remote launcher is the caller" stopped being a
 // branch to gate and became simply true of every caller, always.
 //
-// FILE MODE: browse:list is directories-only by design (it never
-// returns file contents, and a filename is not a directory to click into).
-// So picking a FILE is "navigate to the folder, then type the filename"
-// rather than a clickable file list.
+// FILE MODE: browse:list is called with `extensions`, so matching files are
+// listed (names and access flags only, never contents) and can be clicked.
+// The filename box stays for anything the filter does not match.
+//
+// The location bar is editable: type or paste a path and press Enter. Hidden
+// folders are not listed (macOS's ~/.lmstudio, ~/.cache/huggingface), and
+// pasting a path (Finder: Option-Command-C copies one) is the way into them.
 // =============================================================================
 
 import { useEffect, useState } from 'react'
@@ -28,9 +31,17 @@ function FolderIcon() {
   )
 }
 
+function FileIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true" className="shrink-0 text-zinc-400">
+      <path d="M6 3h8l4 4v14H6z" /><path d="M14 3v4h4" />
+    </svg>
+  )
+}
+
 export type FolderPickerProps = {
   mode: 'file' | 'directory'
-  /** File mode only, e.g. ['gguf']. Unused now that there is no native filter to apply — kept on the props so call sites don't need to change if a filtered remote listing is ever added. */
+  /** File mode only, e.g. ['gguf']. Matching files are listed by the daemon; 'exe' also matches extensionless executables off Windows. */
   extensions?: string[]
   extensionLabel?: string
   /** Directory mode only — offers a "New folder" affordance. */
@@ -46,7 +57,7 @@ export type FolderPickerProps = {
 }
 
 export function FolderPicker({
-  mode, allowCreate, title, startPath, onPick, children, className, disabled,
+  mode, extensions, allowCreate, title, startPath, onPick, children, className, disabled,
 }: FolderPickerProps) {
   const [open, setOpen] = useState(false)
 
@@ -62,6 +73,7 @@ export function FolderPicker({
       {open && (
         <BrowserModal
           mode={mode}
+          extensions={extensions}
           allowCreate={allowCreate}
           title={title}
           startPath={startPath}
@@ -78,7 +90,7 @@ export function FolderPicker({
 // readable/writable come from the daemon's own access() probe,
 // not from anything the browser can work out. They are what makes "the picker
 // refuses a folder it cannot use" possible at all.
-type Entry = { name: string; kind: 'directory'; readable?: boolean; writable?: boolean }
+type Entry = { name: string; kind: 'directory' | 'file'; readable?: boolean; writable?: boolean }
 
 // In file mode the caller's startPath is the CURRENT FILE (e.g. the selected
 // .gguf), which browse:list cannot open — it answered ENOTDIR. Split it into
@@ -94,9 +106,10 @@ export function splitFilePath(p: string): { dir: string; name: string } {
 type Root = { path: string; label: string }
 
 function BrowserModal({
-  mode, allowCreate, title, startPath, onCancel, onConfirm,
+  mode, extensions, allowCreate, title, startPath, onCancel, onConfirm,
 }: {
   mode: 'file' | 'directory'
+  extensions?: string[]
   allowCreate?: boolean
   title?: string
   startPath?: string
@@ -114,6 +127,7 @@ function BrowserModal({
   const [newFolderName, setNewFolderName] = useState('')
   const [fileName, setFileName] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [typedPath, setTypedPath] = useState('')
 
   async function load(target: string | null) {
     setLoading(true)
@@ -123,13 +137,15 @@ function BrowserModal({
         const r = await api().browse.roots()
         setRoots(r)
         setPath(null)
+        setTypedPath('')
         setEntries([])
         setParent(null)
         setReason(null)
         setAccess({})
       } else {
-        const result = await api().browse.list({ path: target })
+        const result = await api().browse.list({ path: target, ...(mode === 'file' && extensions?.length ? { extensions } : {}) })
         setPath(result.path)
+        setTypedPath(result.path)
         setParent(result.parent)
         setEntries(result.entries)
         setReason(result.reason ?? null)
@@ -170,10 +186,26 @@ function BrowserModal({
   }
 
   const canConfirm = !!path && access.readable !== false && !(mode === 'file' && !fileName.trim())
-  const confirm = () => {
-    if (!path || !canConfirm) return
-    const sep = path.endsWith('\\') || path.endsWith('/') ? '' : (path.includes('\\') ? '\\' : '/')
-    onConfirm(mode === 'file' ? `${path}${sep}${fileName.trim()}` : path)
+  const joinPath = (dir: string, name: string) => {
+    const sep = dir.endsWith('\\') || dir.endsWith('/') ? '' : (dir.includes('\\') ? '\\' : '/')
+    return `${dir}${sep}${name}`
+  }
+  const confirm = (name = fileName) => {
+    if (!path || access.readable === false || (mode === 'file' && !name.trim())) return
+    onConfirm(mode === 'file' ? joinPath(path, name.trim()) : path)
+  }
+  // A typed path may name a FILE in file mode (pasted from Finder or
+  // Explorer): open its folder and pre-select it, as startPath does.
+  const goTyped = () => {
+    const t = typedPath.trim()
+    if (!t || t === path) return
+    if (mode === 'file' && extensions?.some(ext => t.toLowerCase().endsWith(`.${ext.toLowerCase()}`))) {
+      const { dir, name } = splitFilePath(t)
+      setFileName(name)
+      load(dir || null)
+      return
+    }
+    load(t)
   }
 
   return (
@@ -194,7 +226,7 @@ function BrowserModal({
           </div>
         )}
         <button type="button" onClick={onCancel} className={btnCls.secondary}>Cancel</button>
-        <button type="button" disabled={!canConfirm} onClick={confirm} className={btnCls.primary}>
+        <button type="button" disabled={!canConfirm} onClick={() => confirm()} className={btnCls.primary}>
           {mode === 'file' ? 'Use this file' : 'Use this folder'}
         </button>
       </>}>
@@ -204,9 +236,15 @@ function BrowserModal({
             <button type="button" onClick={() => load(parent === null ? null : parent)} className={btnCls.secondary}
               aria-label="Up one folder" data-tip="Up one folder">↑</button>
           )}
-          <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-[13px] text-zinc-300">
-            {path ?? 'Choose where to start'}
-          </code>
+          <input value={typedPath} onChange={(e) => setTypedPath(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); goTyped() } }}
+            onBlur={() => { if (path !== null && !typedPath.trim()) setTypedPath(path) }}
+            aria-label="Folder path" spellCheck={false}
+            placeholder={path === null ? 'Choose where to start, or paste a path and press Enter' : ''}
+            className="min-w-0 flex-1 rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 font-mono text-[13px] text-zinc-300 placeholder:font-sans placeholder:text-zinc-500" />
+          {typedPath.trim() && typedPath.trim() !== path && (
+            <button type="button" onClick={goTyped} className={btnCls.secondary}>Go</button>
+          )}
         </div>
 
         <div className="max-h-72 overflow-y-auto rounded-lg border border-zinc-800">
@@ -224,11 +262,17 @@ function BrowserModal({
           )}
 
           {!loading && path !== null && !reason && entries.length === 0 && (
-            <p className="p-3 text-sm text-zinc-500">No folders here.</p>
+            <p className="p-3 text-sm text-zinc-500">{mode === 'file' && extensions?.length ? 'No folders or matching files here.' : 'No folders here.'}</p>
           )}
 
-          {!loading && path !== null && entries.map((e) => (
-            <button key={e.name} type="button" onClick={() => load(`${path}${path.endsWith('\\') || path.endsWith('/') ? '' : '/'}${e.name}`)}
+          {!loading && path !== null && entries.map((e) => e.kind === 'file' ? (
+            <button key={`f:${e.name}`} type="button" onClick={() => setFileName(e.name)} onDoubleClick={() => confirm(e.name)}
+              aria-pressed={fileName === e.name}
+              className={`flex w-full items-center gap-2.5 border-b border-zinc-800/70 px-3 py-2 text-left text-sm last:border-b-0 hover:bg-zinc-800 ${fileName === e.name ? 'bg-orange-500/10 text-orange-200' : 'text-zinc-200'}`}>
+              <FileIcon /> {e.name}
+            </button>
+          ) : (
+            <button key={`d:${e.name}`} type="button" onClick={() => load(joinPath(path, e.name))}
               className="flex w-full items-center gap-2.5 border-b border-zinc-800/70 px-3 py-2 text-left text-sm text-zinc-200 last:border-b-0 hover:bg-zinc-800">
               <FolderIcon /> {e.name}
             </button>
@@ -261,7 +305,7 @@ function BrowserModal({
             <input value={fileName} onChange={(e) => setFileName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') confirm() }}
               placeholder="e.g. model.gguf" className={`${inputCls.sm} font-mono`} />
-            <span className="text-zinc-500">Folders on the server are listed, not files, so type the file&rsquo;s name.</span>
+            <span className="text-zinc-500">Click a file above (double-click to use it), or type its name.</span>
           </label>
         )}
       </div>
