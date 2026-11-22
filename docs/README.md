@@ -12,6 +12,7 @@ The [project README](../README.md) covers what Redstart is, how to install it, a
 | [Tools & Capabilities](capabilities.md) | The ten local capabilities, source groups, external MCP servers, plugins, configuring it all |
 | [Configuration](configuration.md) | The two state directories, every file Nest keeps, HTTPS settings, what a profile is, the `tools.json` schema |
 | [Development](development.md) | Repo layout, dev loops, tests, building the binary and installers |
+| [Models tested](model-testing.md) | Ornith 1.5 9B, Qwen3-4B and Qwen3.6-35B on the agent and memory benches: results, what they changed, how to run them |
 | [Roadmap & Known Limitations](roadmap.md) | What works, what doesn't, and what's planned |
 | [Deployment](../deploy/README.md) | Running Nest as an appliance: systemd, the Windows SCM, your own TLS proxy. Written from the design, **not yet run on real hardware** |
 | [Name service](../infra/name-service/README.md) | The service behind Automatic HTTPS names: what it stores and what trusting it means |

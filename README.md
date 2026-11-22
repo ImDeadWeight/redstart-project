@@ -285,6 +285,8 @@ This is the hardware and model used during development. Results will vary by GPU
 
 **The quantization:** The `UD` prefix stands for Unsloth Dynamic — [Unsloth AI](https://huggingface.co/unsloth) applies different quantization levels to different layers intelligently rather than a flat bit-depth across the whole model. This gives meaningfully better output quality at the same file size compared to a standard K-quant.
 
+**Also tested, small models:** most of the agent runtime was tuned on **Ornith 1.5 9B** (`Q6_K`, up to 128k context on the same 12 GB card, ~40 tokens/sec) and **Qwen3-4B-Instruct-2507** (`UD-Q4_K_XL`). On the agent bench Ornith passes 76 to 81% of the 32-task set; the 4B passed 58 to 67% of the earlier 24-task set. Results, what each model taught the code, and how to run the benches yourself: [Models tested](docs/model-testing.md).
+
 **Finding GGUF models:** [Hugging Face](https://huggingface.co) is the easiest source — [unsloth](https://huggingface.co/unsloth) and [bartowski](https://huggingface.co/bartowski) are both reliable for well-quantized GGUF files across many model families. The `UD-Q3_K_XL` tested here fits comfortably in 12 GB of VRAM.
 
 ---
