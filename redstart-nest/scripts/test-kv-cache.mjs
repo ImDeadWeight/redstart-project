@@ -42,7 +42,8 @@ function flagValue(args, flag) {
   return i === -1 ? undefined : args[i + 1]
 }
 
-// The -ctk/-ctv entries as each project's llama-server --help prints them.
+// The -ctk/-ctv entries as each project's llama-server --help prints them
+// (upstream: common/arg.cpp at b12651; the fork's adds the turbo types).
 const UPSTREAM_HELP = [
   '-fa,   --flash-attn [on|off|auto]      set Flash Attention use (\'on\', \'off\', or \'auto\', default: \'auto\')',
   '-ctk,  --cache-type-k TYPE             KV cache data type for K',
@@ -53,7 +54,7 @@ const UPSTREAM_HELP = [
   '                                       allowed values: f32, f16, bf16, f8_e4m3, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1',
   '                                       (default: f16)',
   '                                       (env: LLAMA_ARG_CACHE_TYPE_V)',
-  '-dt,   --defrag-thold N                KV cache defragmentation threshold (DEPRECATED)',
+  '-np,   --parallel N                    number of server slots (default: -1, -1 = auto)',
 ].join('\n')
 const TURBO_HELP = UPSTREAM_HELP.replace(/q5_1\n/g, 'q5_1, turbo2, turbo3, turbo4\n')
 
@@ -79,7 +80,7 @@ await test('Windows line endings parse the same', async () => {
 })
 
 await test('no --cache-type-v entry, empty or non-string input → null', async () => {
-  for (const x of ['', 'usage: something else', null, undefined, 42, '-ctv, --cache-type-v TYPE\n-dt, --defrag N  allowed values: a, b']) {
+  for (const x of ['', 'usage: something else', null, undefined, 42, '-ctv, --cache-type-v TYPE\n-np, --parallel N  allowed values: a, b']) {
     assert(parseCacheTypes(x) === null, `expected null for ${JSON.stringify(x)}`)
   }
 })
