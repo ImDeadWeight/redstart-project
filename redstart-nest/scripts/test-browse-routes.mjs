@@ -12,7 +12,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
-  browseRoots, listDirectory, browseMkdir, browseRouteHandlers,
+  browseRoots, listDirectory, browseMkdir, browseRouteHandlers, macDrives,
 } from '../daemon/admin/browse-routes.mjs'
 import { isLocalOnly } from '../daemon/ipc/transport.mjs'
 
@@ -77,6 +77,71 @@ await test('returns at least one root, each with a path and a label', () => {
   return `${roots.length} root(s)`
 })
 
+await test('roots come grouped: libraries, then quick folders, then drives', () => {
+  const roots = browseRoots()
+  const order = { library: 0, quick: 1, drive: 2 }
+  for (const r of roots) assert(r.group in order, `unknown group on ${JSON.stringify(r)}`)
+  for (let i = 1; i < roots.length; i++) {
+    assert(order[roots[i - 1].group] <= order[roots[i].group], `out of order: ${roots[i - 1].label} before ${roots[i].label}`)
+  }
+  assert(roots.some(r => r.group === 'drive'), 'no drives')
+  const home = roots.find(r => r.kind === 'home')
+  assert(home && home.path === os.homedir(), `Home should be ${os.homedir()}, got ${home?.path}`)
+  for (const r of roots) {
+    assert(fs.statSync(r.path).isDirectory(), `${r.path} listed but not a directory`)
+  }
+})
+
+await test('a drive answers with free and total bytes', () => {
+  const drive = browseRoots().find(r => r.group === 'drive' && typeof r.total === 'number')
+  assert(drive, 'no drive reported its size')
+  assert(drive.free >= 0 && drive.free <= drive.total, `free ${drive.free} / total ${drive.total}`)
+})
+
+await test('HF_HUB_CACHE, when set to a real folder, appears as the Hugging Face library', () => {
+  const hub = path.join(base, 'hf-hub')
+  fs.mkdirSync(hub, { recursive: true })
+  const before = process.env.HF_HUB_CACHE
+  process.env.HF_HUB_CACHE = hub
+  try {
+    const lib = browseRoots().filter(r => r.group === 'library')
+    assert(lib.some(r => r.path === hub && r.label === 'Hugging Face cache'), `got ${JSON.stringify(lib)}`)
+    process.env.HF_HUB_CACHE = path.join(base, 'no-such-hub')
+    assert(!browseRoots().some(r => r.path === process.env.HF_HUB_CACHE), 'a missing cache folder was listed')
+  } finally {
+    if (before === undefined) delete process.env.HF_HUB_CACHE
+    else process.env.HF_HUB_CACHE = before
+  }
+})
+
+// macOS's /Volumes, staged: the startup disk is a symlink back to `/` (here,
+// a fake root), each other volume a real directory. Runs on every platform —
+// directory junctions stand in for the symlink on Windows.
+await test('macOS drives: the startup disk takes its /Volumes name and is not listed twice', () => {
+  const fakeRoot = path.join(base, 'mac-root')
+  const volumes = path.join(base, 'mac-volumes')
+  fs.mkdirSync(fakeRoot, { recursive: true })
+  fs.mkdirSync(path.join(volumes, 'USB Stick'), { recursive: true })
+  fs.mkdirSync(path.join(volumes, '.timemachine'), { recursive: true })
+  try {
+    fs.symlinkSync(fakeRoot, path.join(volumes, 'Macintosh HD'), process.platform === 'win32' ? 'junction' : 'dir')
+  } catch {
+    return 'skipped — could not create a link in this environment'
+  }
+  const drives = macDrives(volumes, fakeRoot)
+  assert(drives[0].path === fakeRoot && drives[0].label === 'Macintosh HD', `startup disk: ${JSON.stringify(drives[0])}`)
+  const labels = drives.map(d => d.label)
+  assert(labels.includes('USB Stick'), `volumes: ${labels.join(', ')}`)
+  assert(labels.filter(l => l === 'Macintosh HD').length === 1, 'the startup disk was listed twice')
+  assert(!labels.includes('.timemachine'), 'a hidden volume was listed')
+  assert(drives.every(d => d.group === 'drive' && d.kind === 'drive'), 'a drive lacked its group/kind')
+})
+
+await test('macOS drives: no /Volumes still gives the startup disk', () => {
+  const drives = macDrives(path.join(base, 'no-volumes-here'), path.join(base, 'mac-root'))
+  assert(drives.length === 1 && drives[0].label === 'Startup disk', JSON.stringify(drives))
+})
+
 // ---------------------------------------------------------------------------
 // browse:list
 // ---------------------------------------------------------------------------
@@ -99,8 +164,12 @@ await test('lists directories only, sorted, never file contents', () => {
   // change. They are booleans about ACCESS, not about content — the
   // invariant this line guards (never file contents, never a symlink's
   // target) is untouched.
+  //
+  // The file-explorer pass (2026-11-23) added `modified`, and this is that
+  // deliberate change too: a timestamp is metadata, not content. A folder
+  // gets no size (and no item count — see SIZE AND DATE in browse-routes).
   assert(
-    result.entries.every(e => Object.keys(e).sort().join(',') === 'kind,name,readable,writable'),
+    result.entries.every(e => Object.keys(e).sort().join(',') === 'kind,modified,name,readable,writable'),
     'an entry carried unexpected fields',
   )
   const sorted = [...names].sort((a, b) => a.localeCompare(b))
@@ -180,9 +249,67 @@ await test('with extensions, matching files are listed after folders, case-insen
   assert(!files.includes('.hidden.gguf'), 'a hidden file was listed')
   assert(result.entries[0].kind === 'directory', 'folders should come first')
   assert(
-    result.entries.every(e => Object.keys(e).sort().join(',') === 'kind,name,readable,writable'),
-    'a file entry carried unexpected fields (contents, size or a link target)',
+    result.entries.every(e => Object.keys(e).sort().join(',') === (e.kind === 'file'
+      ? 'kind,modified,name,readable,size,writable'
+      : 'kind,modified,name,readable,writable')),
+    'an entry carried unexpected fields (contents or a link target)',
   )
+})
+
+await test('a file reports its size in bytes and a modification time; a folder only the time', () => {
+  const result = listDirectory(filesDir, { extensions: ['gguf'] })
+  const file = result.entries.find(e => e.name === 'model-a.gguf')
+  assert(file.size === 4, `expected 4 bytes, got ${file.size}`)
+  assert(typeof file.modified === 'number' && Math.abs(file.modified - Date.now()) < 3_600_000, `odd modified: ${file.modified}`)
+  const dir = result.entries.find(e => e.name === 'sub')
+  assert(dir.size === undefined, 'a folder carried a size')
+  assert(typeof dir.modified === 'number', 'a folder carried no modified time')
+})
+
+await test('allFiles lists every file with a match flag; without it, only matches', () => {
+  const all = listDirectory(filesDir, { extensions: ['gguf'], allFiles: true })
+  const notes = all.entries.find(e => e.name === 'notes.txt')
+  assert(notes && notes.match === false, `notes.txt: ${JSON.stringify(notes)}`)
+  assert(all.entries.find(e => e.name === 'model-a.gguf')?.match === true, 'a matching file lacked match: true')
+  assert(!all.entries.some(e => e.name === '.hidden.gguf'), 'allFiles should not imply hidden files')
+  const only = listDirectory(filesDir, { extensions: ['gguf'] })
+  assert(only.entries.every(e => e.match === undefined), 'match leaked into a listing that did not ask for it')
+})
+
+await test('allFiles without extensions is ignored: still folders only', () => {
+  const result = listDirectory(filesDir, { allFiles: true })
+  assert(result.entries.every(e => e.kind === 'directory'), 'allFiles listed files with no extensions given')
+})
+
+await test('showHidden includes dot entries, off by default', () => {
+  const off = listDirectory(root)
+  assert(!off.entries.some(e => e.name === '.hidden'), 'a hidden directory was listed by default')
+  const on = listDirectory(root, { showHidden: true })
+  assert(on.entries.some(e => e.name === '.hidden'), 'showHidden did not include .hidden')
+  const files = listDirectory(filesDir, { extensions: ['gguf'], showHidden: true })
+  assert(files.entries.some(e => e.name === '.hidden.gguf'), 'showHidden did not include a hidden matching file')
+})
+
+await test('showHidden still never follows a symlinked directory', () => {
+  if (!symlinkSupported) return 'skipped — could not create a symlink in this environment'
+  const result = listDirectory(root, { showHidden: true })
+  assert(!result.entries.some(e => e.name === 'escape-link'), 'showHidden let a symlinked directory through')
+})
+
+await test('a symlinked model reports its target\'s size, never its target\'s path', () => {
+  if (!fileLinkSupported) return 'symlinks not creatable here'
+  const result = listDirectory(filesDir, { extensions: ['gguf'] })
+  const linked = result.entries.find(e => e.name === 'linked.gguf')
+  assert(linked.size === 4, `expected the blob's 4 bytes, got ${linked.size}`)
+  assert(!JSON.stringify(result).includes('blob-1234') && !JSON.stringify(result).includes(outside), 'the target path leaked')
+})
+
+await test('browse:list forwards allFiles and showHidden through the route table', () => {
+  const table = browseRouteHandlers()
+  const all = table['browse:list']({ path: filesDir, extensions: ['gguf'], allFiles: true })
+  assert(all.entries.some(e => e.name === 'notes.txt'), 'the route dropped allFiles')
+  const hidden = table['browse:list']({ path: root, showHidden: true })
+  assert(hidden.entries.some(e => e.name === '.hidden'), 'the route dropped showHidden')
 })
 
 await test('a symlink to a matching FILE is listed (Hugging Face cache), a symlink to a directory is not', () => {

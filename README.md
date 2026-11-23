@@ -247,7 +247,7 @@ Each release also carries `.dmg` installers — Nest for Apple Silicon, Twig for
 What else to expect on a Mac:
 - **Models and files live in `~/Redstart`** (Models, Documents, SQLite, Vault), not in `~/Documents`, which macOS asks permission for. An install that already used `~/Documents/Redstart` keeps it.
 - **"Allow incoming connections?"** appears the first time network mode is on, if the macOS firewall is turned on (it is off by default). Choose Allow, or other devices can't reach Nest. Because the builds are not notarized, macOS may ask again after an update.
-- **Models in other folders:** the model picker lists `.gguf` files, and you can paste a path into its location bar. Hidden folders like `~/.lmstudio/models` or `~/.cache/huggingface` can only be reached by pasting a path (in Finder, Option-Command-C copies one).
+- **Models in other folders:** the file picker has a sidebar like Finder's: the models folder, recent folders, LM Studio's and the Hugging Face cache's model folders when they exist, Home, Desktop, Documents, Downloads, and each volume under `/Volumes`. **Show hidden folders** reveals the rest, and **Type path** takes a pasted path (in Finder, Option-Command-C copies one). ⌘↑, ⌘[ and ⌘] go up, back and forward.
 - If a folder says macOS blocked access, allow Redstart Nest in System Settings → Privacy & Security → Files and Folders.
 
 Removing the first-launch block needs an Apple Developer ID certificate and notarization, tracked in [roadmap → Signed installers](docs/roadmap.md).

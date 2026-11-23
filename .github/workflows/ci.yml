@@ -354,6 +354,9 @@ jobs:
       - name: "Security: server-side directory browser (Phase 4)"
         run: node scripts/test-browse-routes.mjs
 
+      - name: "File picker: breadcrumbs and paths, Windows and macOS"
+        run: node scripts/test-picker-paths.mjs
+
       - name: "Hardware scan: macOS unified memory, Linux, Windows fallback"
         run: node scripts/test-hardware-scan.mjs
 
