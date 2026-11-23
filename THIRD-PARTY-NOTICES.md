@@ -84,6 +84,25 @@ The MIT license text applying to the above:
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
 
+### OpenSSL (macOS only)
+
+The macOS installer bundles `libssl.3.dylib` and `libcrypto.3.dylib` in
+`bin/`, beside llama-server. TurboQuant+'s prebuilt `macos-arm64-metal`
+llama-server links them by absolute Homebrew path, so the release job copies
+them from the build runner's Homebrew `openssl@3` and relinks them to
+`@loader_path` ([`bundle-mac-dylibs.mjs`](redstart-nest/scripts/bundle-mac-dylibs.mjs)).
+Their install names are changed and they are re-signed ad hoc; the code is
+unmodified. The Windows build does not use them.
+
+- Project: OpenSSL — <https://www.openssl.org/>
+- License: Apache License, Version 2.0 —
+  <https://www.apache.org/licenses/LICENSE-2.0>
+- Copyright (c) 1998-2025 The OpenSSL Project Authors
+
+OpenSSL 3 ships no `NOTICE` file. The version is whatever `openssl@3` the
+runner image carries at build time; it is not pinned (see
+[docs/development.md](docs/development.md)).
+
 ### Caddy (the TLS front door) and its DNS plugins
 
 Redstart Nest bundles `caddy.exe` (Windows) / `caddy` (macOS) in `bin/`, beside

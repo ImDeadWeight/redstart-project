@@ -27,6 +27,27 @@ export function loadProfile(name, { readProfiles }) {
 export function deleteProfile(name, { readProfiles, writeProfiles }) {
   const data = readProfiles()
   delete data.profiles[name]
+  // The working settings stay; only the claim that they came from this
+  // profile goes, so the next open does not name a profile that is gone.
+  if (data.last?.profile === name) data.last.profile = null
+  writeProfiles(data)
+  return true
+}
+
+// The launcher's working settings, kept beside the profiles so closing Nest
+// (or the browser tab) never loses them. `profile` is the one they were last
+// loaded from or saved to, or null; whether they still match it is the
+// launcher's to work out, against the profile's own saved copy.
+export function getLastSettings({ readProfiles }) {
+  const last = readProfiles().last
+  if (!last || typeof last !== 'object' || !last.config || typeof last.config !== 'object') return null
+  return { profile: typeof last.profile === 'string' ? last.profile : null, config: last.config }
+}
+
+export function setLastSettings(profile, config, { readProfiles, writeProfiles }) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return false
+  const data = readProfiles()
+  data.last = { profile: typeof profile === 'string' && profile ? profile : null, config }
   writeProfiles(data)
   return true
 }
@@ -86,5 +107,7 @@ export function profilesHandlers(deps) {
     'profiles:load': (name) => loadProfile(name, deps),
     'profiles:delete': (name) => deleteProfile(name, deps),
     'profiles:generate-defaults': (hardware) => generateDefaultProfiles(hardware, deps),
+    'profiles:get-last': () => getLastSettings(deps),
+    'profiles:set-last': (profile, config) => setLastSettings(profile, config, deps),
   }
 }

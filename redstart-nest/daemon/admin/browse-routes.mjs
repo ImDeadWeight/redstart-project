@@ -22,8 +22,9 @@
 // reach is narrowed by the OS and the question changes shape.
 //
 // Whichever way that is decided, two rules hold regardless and are enforced
-// below: `browse:list` never returns anything but names and kind (never file
-// contents, never a symlink's target path), and it never lists what a symlink
+// below: `browse:list` never returns anything but names, kind, access flags and
+// size/date metadata (never file contents, never a symlink's target path —
+// see SIZE AND DATE at listDirectory()), and it never lists what a symlink
 // points to — see the comment at listDirectory() for why that falls out of
 // `withFileTypes` for free rather than needing a check.
 // =============================================================================
@@ -32,35 +33,139 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-// --- roots -------------------------------------------------------------
+// --- roots (the picker's sidebar) ---------------------------------------
+//
+// Not just "where can browsing start" any more: the picker's sidebar of
+// places. Each root is { path, label, group, kind } plus, for a drive, `free`
+// and `total` bytes. Groups, in the order returned:
+//   'library' — model folders other tools keep (Hugging Face cache, LM
+//               Studio), listed only when they exist. Both live in hidden
+//               folders the listing never shows, so without this they were
+//               reachable only by pasting a path.
+//   'quick'   — Home, Desktop, Documents, Downloads.
+//   'drive'   — drive letters on Windows; on macOS the startup disk plus
+//               each volume under /Volumes; on Linux `/` plus /media, /mnt.
+//
+// ONLY EXISTENCE IS CHECKED, never contents. That matters on macOS: reading
+// inside Desktop, Documents or Downloads is what triggers the privacy (TCC)
+// prompt, and a sidebar that asked for three folders before the admin had
+// clicked anything would be a sidebar of permission dialogs. A stat of the
+// folder itself does not.
 
-// Windows has no single filesystem root — "where do I start browsing from" is
-// answered by enumerating drive letters. No native dependency needed (rule 1):
-// a bare existence check on each of the 26 possible roots is cheap and exact.
-function windowsRoots() {
-  const roots = []
-  for (let code = 'A'.charCodeAt(0); code <= 'Z'.charCodeAt(0); code++) {
-    const letter = String.fromCharCode(code)
-    const drive = `${letter}:\\`
-    if (fs.existsSync(drive)) roots.push({ path: drive, label: drive })
+function isDir(p) {
+  try { return fs.statSync(p).isDirectory() } catch { return false }
+}
+
+// statfs on a drive that is gone (a pulled USB stick, a dropped share) throws,
+// which simply leaves the numbers off.
+function spaceOf(p) {
+  try {
+    const s = fs.statfsSync(p)
+    return { free: s.bavail * s.bsize, total: s.blocks * s.bsize }
+  } catch {
+    return {}
+  }
+}
+
+// Windows redirects Desktop and Documents into OneDrive when backup is on;
+// look there too before deciding the folder is not there.
+function knownFolder(home, name) {
+  const direct = path.join(home, name)
+  if (isDir(direct)) return direct
+  if (process.platform === 'win32') {
+    for (const od of [process.env.OneDrive, process.env.OneDriveConsumer, path.join(home, 'OneDrive')]) {
+      if (od && isDir(path.join(od, name))) return path.join(od, name)
+    }
+  }
+  return null
+}
+
+function quickRoots(home) {
+  if (!home || !isDir(home)) return []
+  const roots = [{ path: home, label: 'Home', group: 'quick', kind: 'home' }]
+  for (const name of ['Desktop', 'Documents', 'Downloads']) {
+    const p = knownFolder(home, name)
+    if (p) roots.push({ path: p, label: name, group: 'quick', kind: 'folder' })
   }
   return roots
 }
 
-function posixRoots() {
-  const roots = [{ path: '/', label: '/' }]
-  const home = os.homedir()
-  if (home && home !== '/') roots.push({ path: home, label: `${home} (home)` })
-  // macOS mounts external and network drives under /Volumes. They can be
-  // reached from `/` too, but that is not where a Mac user looks for them.
-  if (process.platform === 'darwin' && fs.existsSync('/Volumes')) {
-    roots.push({ path: '/Volumes', label: 'External drives (/Volumes)' })
+// HF_HUB_CACHE, then HF_HOME/hub, then the default — the order huggingface_hub
+// itself resolves them. LM Studio moved its folder once; both are checked.
+function libraryRoots(home) {
+  const roots = []
+  const hf = process.env.HF_HUB_CACHE
+    || (process.env.HF_HOME ? path.join(process.env.HF_HOME, 'hub') : home && path.join(home, '.cache', 'huggingface', 'hub'))
+  if (hf && isDir(hf)) roots.push({ path: hf, label: 'Hugging Face cache', group: 'library', kind: 'library' })
+  if (home) {
+    const lms = [path.join(home, '.lmstudio', 'models'), path.join(home, '.cache', 'lm-studio', 'models')].find(isDir)
+    if (lms) roots.push({ path: lms, label: 'LM Studio', group: 'library', kind: 'library' })
+  }
+  return roots
+}
+
+// Windows has no single filesystem root — drive letters are enumerated. No
+// native dependency needed (rule 1): a bare existence check on each of the 26
+// possible roots is cheap and exact.
+function windowsDrives() {
+  const roots = []
+  for (let code = 'A'.charCodeAt(0); code <= 'Z'.charCodeAt(0); code++) {
+    const drive = `${String.fromCharCode(code)}:\\`
+    if (fs.existsSync(drive)) roots.push({ path: drive, label: `${drive.slice(0, 2)} drive`, group: 'drive', kind: 'drive', ...spaceOf(drive) })
+  }
+  return roots
+}
+
+// /Volumes holds one entry per mounted volume, and the startup disk appears
+// there as a symlink back to `/`. That symlink is how the startup disk gets
+// its real name ("Macintosh HD") rather than a bare "/"; it is then skipped so
+// the same disk is not listed twice. Other symlinks are skipped too — a
+// volume is a mount point, which is a real directory.
+//
+// The two folders are parameters only so scripts/test-browse-routes.mjs can
+// exercise this on a machine that is not a Mac; the daemon calls it bare.
+export function macDrives(volumesDir = '/Volumes', bootRoot = '/') {
+  let bootName = 'Startup disk'
+  const volumes = []
+  const realBoot = (() => { try { return fs.realpathSync(bootRoot) } catch { return bootRoot } })()
+  try {
+    for (const d of fs.readdirSync(volumesDir, { withFileTypes: true })) {
+      if (d.name.startsWith('.')) continue
+      const full = path.join(volumesDir, d.name)
+      if (d.isSymbolicLink()) {
+        try { if (fs.realpathSync(full) === realBoot) bootName = d.name } catch {}
+        continue
+      }
+      if (d.isDirectory()) volumes.push({ path: full, label: d.name, group: 'drive', kind: 'drive', ...spaceOf(full) })
+    }
+  } catch {}
+  return [{ path: bootRoot, label: bootName, group: 'drive', kind: 'drive', ...spaceOf(bootRoot) }, ...volumes]
+}
+
+// Where desktop Linux mounts removable media: /media/<user>/<label> (udisks),
+// or /media/<label> and /mnt/<label> by hand.
+function linuxDrives() {
+  const roots = [{ path: '/', label: 'Computer', group: 'drive', kind: 'drive', ...spaceOf('/') }]
+  const user = os.userInfo().username
+  for (const dir of [path.join('/media', user), '/media', '/mnt']) {
+    let dirents = []
+    try { dirents = fs.readdirSync(dir, { withFileTypes: true }) } catch { continue }
+    for (const d of dirents) {
+      const full = path.join(dir, d.name)
+      if (!d.isDirectory() || d.name.startsWith('.') || full === path.join('/media', user)) continue
+      if (roots.some(r => r.path === full)) continue
+      roots.push({ path: full, label: d.name, group: 'drive', kind: 'drive', ...spaceOf(full) })
+    }
   }
   return roots
 }
 
 export function browseRoots() {
-  return process.platform === 'win32' ? windowsRoots() : posixRoots()
+  const home = os.homedir()
+  const drives = process.platform === 'win32' ? windowsDrives()
+    : process.platform === 'darwin' ? macDrives()
+      : linuxDrives()
+  return [...libraryRoots(home), ...quickRoots(home), ...drives]
 }
 
 // --- list ----------------------------------------------------------------
@@ -92,9 +197,25 @@ function parentOf(target) {
  * FILES (opt-in). With `opts.extensions` (e.g. ['gguf']) the listing also
  * returns matching FILES as `kind: 'file'` entries, so a file picker can show
  * the .gguf it is looking for instead of making the admin type its name. Same
- * shape as a directory entry: a name and access flags, never contents, never
- * a size, never a symlink target. Without `extensions` the listing is
- * directories-only, exactly as before.
+ * shape as a directory entry: a name, access flags, `modified`, and for a file
+ * its `size` — never contents, never a symlink target. Without `extensions`
+ * the listing is directories-only, exactly as before.
+ *
+ * `opts.allFiles` (with `extensions`) lists every file, each carrying
+ * `match: true|false`, so the picker's "Only .gguf files" switch can be turned
+ * off to see what else is in a folder. A non-matching file is shown, never
+ * selectable.
+ *
+ * `opts.showHidden` includes dot-prefixed entries (~/.cache, ~/.lmstudio).
+ * Off by default, as before.
+ *
+ * SIZE AND DATE. A file's size in bytes and an entry's modification time (ms)
+ * are metadata, not contents: the Owner sees them in any file manager on the
+ * same machine, and a 7 GB quant versus a 2 GB one is exactly what an admin
+ * choosing a model needs to see. A symlinked file reports its TARGET's size
+ * (stat follows the link) and still never the target's path. A folder gets no
+ * item count: counting means reading inside every subfolder, which on macOS
+ * is a privacy prompt per protected folder before anything was clicked.
  *
  * A symlink IS listed when it resolves to a matching regular file. That is a
  * deliberate exception to the directory rule above: the Hugging Face cache
@@ -108,12 +229,13 @@ function parentOf(target) {
  * elsewhere executables have no extension, so it matches any file with an
  * execute bit (what llama-server is on macOS and Linux).
  */
-function wantsFile(fullPath, name, dirent, extensions) {
-  let isFile = dirent.isFile()
-  if (!isFile && dirent.isSymbolicLink()) {
-    try { isFile = fs.statSync(fullPath).isFile() } catch { isFile = false }
-  }
-  if (!isFile) return false
+function isFileEntry(fullPath, dirent) {
+  if (dirent.isFile()) return true
+  if (!dirent.isSymbolicLink()) return false
+  try { return fs.statSync(fullPath).isFile() } catch { return false }
+}
+
+function matchesExtension(fullPath, name, extensions) {
   const lower = name.toLowerCase()
   return extensions.some(ext => {
     if (ext === 'exe' && process.platform !== 'win32') {
@@ -174,16 +296,27 @@ export function listDirectory(targetPath, opts = {}) {
     }
   }
 
+  const visible = d => opts?.showHidden === true || !d.name.startsWith('.') // hidden entries excluded by default
   const entries = dirents
-    .filter(d => d.isDirectory() && !d.name.startsWith('.')) // hidden entries excluded
-    .map(d => ({ name: d.name, kind: 'directory', ...accessOf(path.join(targetPath, d.name)) }))
+    .filter(d => d.isDirectory() && visible(d))
+    .map(d => {
+      const full = path.join(targetPath, d.name)
+      return { name: d.name, kind: 'directory', ...accessOf(full), ...statOf(full, false) }
+    })
     .sort((a, b) => a.name.localeCompare(b.name))
 
   if (extensions) {
-    const files = dirents
-      .filter(d => !d.name.startsWith('.') && wantsFile(path.join(targetPath, d.name), d.name, d, extensions))
-      .map(d => ({ name: d.name, kind: 'file', ...accessOf(path.join(targetPath, d.name)) }))
-      .sort((a, b) => a.name.localeCompare(b.name))
+    const allFiles = opts?.allFiles === true
+    const files = []
+    for (const d of dirents) {
+      if (!visible(d)) continue
+      const full = path.join(targetPath, d.name)
+      if (!isFileEntry(full, d)) continue
+      const match = matchesExtension(full, d.name, extensions)
+      if (!match && !allFiles) continue
+      files.push({ name: d.name, kind: 'file', ...accessOf(full), ...statOf(full, true), ...(allFiles ? { match } : {}) })
+    }
+    files.sort((a, b) => a.name.localeCompare(b.name))
     entries.push(...files)
   }
 
@@ -217,6 +350,18 @@ export function listDirectory(targetPath, opts = {}) {
  * System or Git capability at, so "not writable" is information for the UI
  * to warn with, not grounds for the daemon to refuse.
  */
+// `modified` for every entry, `size` for a file only (see the SIZE AND DATE
+// note above listDirectory). A stat that fails leaves them off rather than
+// dropping the entry: the name is still worth showing.
+function statOf(target, withSize) {
+  try {
+    const s = fs.statSync(target)
+    return { modified: Math.round(s.mtimeMs), ...(withSize ? { size: s.size } : {}) }
+  } catch {
+    return {}
+  }
+}
+
 function accessOf(target) {
   return { readable: canAccess(target, fs.constants.R_OK), writable: canAccess(target, fs.constants.W_OK) }
 }
@@ -264,7 +409,9 @@ export function browseMkdir({ path: parentPath, name }) {
 export function browseRouteHandlers() {
   return {
     'browse:roots': () => browseRoots(),
-    'browse:list': (opts) => listDirectory(opts?.path, { extensions: opts?.extensions }),
+    'browse:list': (opts) => listDirectory(opts?.path, {
+      extensions: opts?.extensions, allFiles: opts?.allFiles, showHidden: opts?.showHidden,
+    }),
     'browse:mkdir': (opts) => browseMkdir(opts ?? {}),
   }
 }

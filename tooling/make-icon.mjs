@@ -5,13 +5,15 @@
  *   node tooling/make-icon.mjs --variant twig    Twig's icons → redstart-twig/desktop/build/
  *
  * Output: icon.ico (Windows), icon.icns (macOS) and icon.png (1024px), which
- * the app's Tauri config embeds at compile time. build/ is gitignored.
+ * the app's Tauri config embeds at compile time. build/ is gitignored. The
+ * .icns frames sit on a dark rounded-square plate (see THE PLATE below); the
+ * .ico and .png are the bare bird.
  */
 
 import * as fs from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
-import { loadMascot, rasterize, contentSquare, encodePng } from './mascot.mjs'
+import { loadMascot, rasterize, contentSquare, encodePng, blit } from './mascot.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repo = path.join(__dirname, '..')
@@ -100,6 +102,67 @@ console.log(`✓ icon.png → ${pngPath}  (1024px)`)
 //
 // Format: 'icns' + total length (big-endian), then per entry a 4-char type,
 // its length including the 8-byte header, and the PNG bytes.
+//
+// THE PLATE. macOS draws an app icon as is, so a transparent bird sat on
+// nothing; and since macOS 26 an icon that does not fill Apple's rounded
+// square is put on a light plate of the system's choosing, which is the white
+// square the first Mac test showed. So every macOS frame carries its own
+// plate on Apple's icon grid (an 824px rounded square, radius ~185, centred on
+// a 1024 canvas, transparent outside it), a stone-600 → stone-800 gradient
+// from the mascot's own palette, with the bird at about two thirds of the
+// canvas. Dark enough to read as "dark gray" on a light Dock, light enough
+// that the black bird (#1c1917) does not vanish into it. Windows keeps the
+// bare bird: its taskbar and Explorer draw icons without a plate.
+const PLATE_TOP = '#57534e'
+const PLATE_BOTTOM = '#292524'
+const BIRD_SCALE = 0.66
+
+const hexRgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16))
+
+function plate(size) {
+  const buf = Buffer.alloc(size * size * 4)
+  const inset = size * 100 / 1024, side = size * 824 / 1024, rad = size * 185.4 / 1024
+  const top = hexRgb(PLATE_TOP), bottom = hexRgb(PLATE_BOTTOM)
+  const SS = 4 // coverage samples per axis, for an anti-aliased edge
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    let cov = 0
+    for (let j = 0; j < SS; j++) for (let i = 0; i < SS; i++) {
+      const px = x + (i + 0.5) / SS - inset, py = y + (j + 0.5) / SS - inset
+      if (px < 0 || py < 0 || px > side || py > side) continue
+      const cx = Math.min(Math.max(px, rad), side - rad), cy = Math.min(Math.max(py, rad), side - rad)
+      if ((px - cx) ** 2 + (py - cy) ** 2 <= rad * rad) cov++
+    }
+    if (!cov) continue
+    const f = Math.min(Math.max((y - inset) / side, 0), 1)
+    buf.set([...top.map((v, k) => Math.round(v + (bottom[k] - v) * f)), Math.round(cov / (SS * SS) * 255)], (y * size + x) * 4)
+  }
+  return buf
+}
+
+// Source-over of the bird (size×size RGBA) onto the plate, in place.
+function over(dst, src) {
+  for (let i = 0; i < dst.length; i += 4) {
+    const a = src[i + 3] / 255
+    if (!a) continue
+    const da = dst[i + 3] / 255, oa = a + da * (1 - a)
+    for (let k = 0; k < 3; k++) dst[i + k] = Math.round((src[i + k] * a + dst[i + k] * da * (1 - a)) / oa)
+    dst[i + 3] = Math.round(oa * 255)
+  }
+  return dst
+}
+
+const macCache = new Map()
+const makeMacPng = size => {
+  if (!macCache.has(size)) {
+    const inner = Math.round(size * BIRD_SCALE)
+    const bird = Buffer.alloc(size * size * 4)
+    const off = Math.round((size - inner) / 2)
+    blit(bird, size, rasterize(grid, inner, { crop: smallCrop }), inner, inner, off, off)
+    macCache.set(size, encodePng(over(plate(size), bird), size))
+  }
+  return macCache.get(size)
+}
+
 const ICNS_TYPES = [
   ['icp4', 16], ['icp5', 32], ['ic11', 32],   // 16, 32, 16@2x
   ['icp6', 64], ['ic12', 64],                 // 64, 32@2x
@@ -108,7 +171,7 @@ const ICNS_TYPES = [
   ['ic10', 1024],                              // 512@2x
 ]
 const icnsBody = Buffer.concat(ICNS_TYPES.map(([type, size]) => {
-  const png = makePng(size)
+  const png = makeMacPng(size)
   const head = Buffer.alloc(8)
   head.write(type, 0, 'ascii')
   head.writeUInt32BE(png.length + 8, 4)

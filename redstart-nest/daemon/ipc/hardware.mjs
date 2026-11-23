@@ -1,25 +1,34 @@
 // Hardware IPC namespace — machine spec scan. (The GGUF model picker moved to
 // a native picker, itself since retired.)
 //
-// PER PLATFORM. The scan used to be one PowerShell script, so on macOS and
-// Linux the powershell spawn failed, the catch swallowed it, and the Models
-// tab reported "0 GB memory" and no GPU. Windows keeps that script unchanged;
-// macOS and Linux each have their own branch below, and every branch starts
-// from Node's own os.totalmem()/os.cpus() so a failed probe degrades to
-// "less detail", never to zero.
+// THE GPU COMES FROM LLAMA-SERVER. `llama-server --list-devices` prints every
+// device the bundled binary's backends can use, with total and free memory,
+// as ggml itself measures them (CUDA's cudaMemGetInfo, Metal's
+// recommendedMaxWorkingSetSize, Vulkan's heap budget). That is the figure
+// llama-server's own --fit sizes the launch against, so the Model page shows
+// what the model will actually get rather than what the OS thinks the card
+// has, and a card the build cannot use (an AMD card under the CUDA build) is
+// not presented as if it could run the model. probeLlamaDevices() below.
+//
+// PER PLATFORM, FOR EVERYTHING ELSE. CPU and RAM come from each OS (the scan
+// used to be one PowerShell script, so on macOS and Linux it reported "0 GB
+// memory"). The OS GPU probes — nvidia-smi, system_profiler, WMI — remain the
+// fallback for when the binary is missing, fails, or lists no device. Every
+// branch starts from Node's own os.totalmem()/os.cpus() so a failed probe
+// degrades to "less detail", never to zero.
 //
 // UNIFIED MEMORY (Apple Silicon). There is no separate VRAM: the GPU draws on
-// the same RAM as everything else. gpu.vram is reported as the share Metal
-// lets the GPU wire (what llama.cpp sees as recommendedMaxWorkingSetSize),
-// and gpu.unifiedMemory is set so the UI says "shared" instead of presenting
-// two independent pools that would add up to more than the machine has.
+// the same RAM as everything else. gpu.vram is the share Metal lets the GPU
+// wire (recommendedMaxWorkingSetSize, which is what MTL0 reports), and
+// gpu.unifiedMemory is set so the UI says "shared" instead of presenting two
+// independent pools that would add up to more than the machine has.
 //
-// KNOWN BUG (non-NVIDIA VRAM): the fallback below reads
-// Win32_VideoController.AdapterRAM, a 32-bit signed field that saturates at
-// 4095 MB — a 16 GB AMD or Intel card reports as 4 GB. The Models tab shows
-// this number as context next to artifact sizes without drawing a conclusion
-// from it, which is survivable. It must be fixed (registry qwMemorySize) before
-// anything *decides* anything from gpu.vram.
+// WINDOWS FALLBACK VRAM. Win32_VideoController.AdapterRAM is a 32-bit field
+// that saturates at 4095 MB (a 12 GB RTX 3060 reads as 4 GB), so the fallback
+// reads the display driver's HardwareInformation.qwMemorySize from the
+// registry and only uses AdapterRAM where that is absent. It also takes the
+// adapter with the most memory, not the first one: the first is often a
+// virtual display (Meta's, Parsec's) or the CPU's integrated graphics.
 //
 // Handler bodies are exported as plain functions so an HTTP route can call them
 // directly without dragging IPC registration in — importing this module never
@@ -27,6 +36,7 @@
 
 import * as fs from 'fs'
 import * as os from 'os'
+import * as path from 'path'
 
 const GB = 1024 ** 3
 
@@ -34,7 +44,7 @@ function baseSpecs(platform, arch) {
   const cpus = os.cpus() || []
   return {
     cpu: { name: (cpus[0]?.model || '').trim(), cores: cpus.length, threads: cpus.length, architecture: arch, supportsAVX: false },
-    gpu: { name: '', vram: 0, vramFree: 0, cudaAvailable: false, unifiedMemory: false },
+    gpu: { name: '', vram: 0, vramFree: 0, cudaAvailable: false, unifiedMemory: false, devices: [], source: 'system' },
     memory: { total: os.totalmem() / GB, available: os.freemem() / GB },
     os: { platform, arch },
   }
@@ -144,15 +154,79 @@ async function scanLinux({ execFileAsync }, specs) {
   await probeNvidia(execFileAsync, specs)
 }
 
-export async function scanHardware({ execFileAsync, platform = process.platform, arch = process.arch }) {
-  const specs = baseSpecs(platform, arch)
-  try {
-    if (platform === 'win32') await scanWindows({ execFileAsync }, specs)
-    else if (platform === 'darwin') await scanMac({ execFileAsync }, specs)
-    else await scanLinux({ execFileAsync }, specs)
-  } catch (e) {
-    console.error('Hardware scan error:', e)
+// "  CUDA0: NVIDIA GeForce RTX 3060 (12287 MiB, 11253 MiB free)" — one line
+// per non-CPU device, after an "Available devices:" header. A device without
+// memory of its own (BLAS on macOS reports "0 MiB") is not a GPU and is
+// dropped. The description can itself contain parentheses, so the memory
+// group is anchored to the end of the line.
+export function parseListDevices(text) {
+  const devices = []
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const m = /^\s*(\S+?):\s+(.*?)\s+\((\d+) MiB, (\d+) MiB free\)\s*$/.exec(line)
+    if (!m) continue
+    const totalMb = parseInt(m[3], 10)
+    if (!totalMb) continue
+    devices.push({ id: m[1], backend: m[1].replace(/\d+$/, ''), name: m[2], totalMb, freeMb: parseInt(m[4], 10) })
   }
+  return devices
+}
+
+const LIST_DEVICES_TIMEOUT_MS = 30_000
+
+// Runs the same binary a launch would (resolveBinary), from its own folder so
+// Windows finds the CUDA DLLs beside it, as spawnLlama does. Initialising the
+// backends takes a second or two and briefly takes a few hundred MB of VRAM,
+// so this runs on a scan, never on a timer. Any failure is an empty list.
+export async function probeLlamaDevices({ execFileAsync, resolveBinary }) {
+  if (typeof resolveBinary !== 'function') return []
+  let bin = null
+  try { bin = resolveBinary() } catch { bin = null }
+  if (!bin) return []
+  try {
+    const out = await execFileAsync(bin, ['--list-devices'], {
+      cwd: path.dirname(bin), timeout: LIST_DEVICES_TIMEOUT_MS, windowsHide: true,
+    })
+    return parseListDevices(out?.stdout)
+  } catch {
+    return []
+  }
+}
+
+// The largest device stands for "the GPU" in the single-GPU shape the panels
+// read; all of them are kept in gpu.devices. llama-server's --fit spreads a
+// model across every one of them, so the largest is the honest headline.
+function applyLlamaDevices(specs, devices) {
+  if (!devices.length) return false
+  const main = devices.reduce((a, b) => (b.totalMb > a.totalMb ? b : a))
+  specs.gpu.name = main.name
+  specs.gpu.vram = main.totalMb
+  specs.gpu.vramFree = specs.gpu.unifiedMemory
+    // Metal's free figure is the wiring limit minus what Metal has allocated,
+    // and knows nothing of other apps' RAM; what is actually free is bounded
+    // by both.
+    ? Math.min(main.freeMb, Math.round(specs.memory.available * 1024))
+    : main.freeMb
+  specs.gpu.cudaAvailable = devices.some(d => d.backend === 'CUDA')
+  specs.gpu.devices = devices
+  specs.gpu.source = 'llama-server'
+  return true
+}
+
+export async function scanHardware({ execFileAsync, resolveBinary, platform = process.platform, arch = process.arch }) {
+  const specs = baseSpecs(platform, arch)
+  const [, devices] = await Promise.all([
+    (async () => {
+      try {
+        if (platform === 'win32') await scanWindows({ execFileAsync }, specs)
+        else if (platform === 'darwin') await scanMac({ execFileAsync }, specs)
+        else await scanLinux({ execFileAsync }, specs)
+      } catch (e) {
+        console.error('Hardware scan error:', e)
+      }
+    })(),
+    probeLlamaDevices({ execFileAsync, resolveBinary }),
+  ])
+  applyLlamaDevices(specs, devices)
   return specs
 }
 
@@ -189,11 +263,22 @@ try {
 } catch {}
 if (-not $r.gpu.cuda) {
   try {
-    $g = Get-CimInstance Win32_VideoController | Select-Object -First 1
-    $r.gpu.name   = [string]$g.Name
-    # AdapterRAM caps at 4095 MB — see the file header. No free-VRAM source
+    # AdapterRAM caps at 4095 MB — see the file header — so the driver's
+    # registry qwMemorySize wins wherever it exists. No free-VRAM source
     # exists on this path, so vramFreeMb stays 0 and the UI omits it.
-    $r.gpu.vramMb = if ($g.AdapterRAM) { [int]([Math]::Round($g.AdapterRAM / 1MB)) } else { 0 }
+    $reg = @(Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0*' -ErrorAction SilentlyContinue)
+    $best = $null; $bestBytes = [double]0
+    foreach ($g in @(Get-CimInstance Win32_VideoController)) {
+      $bytes = [double]0
+      $k = $reg | Where-Object { $_.DriverDesc -eq $g.Name -and $_.'HardwareInformation.qwMemorySize' } | Select-Object -First 1
+      if ($k) { $bytes = [double]$k.'HardwareInformation.qwMemorySize' }
+      elseif ($g.AdapterRAM) { $bytes = [double]$g.AdapterRAM }
+      if (-not $best -or $bytes -gt $bestBytes) { $best = $g; $bestBytes = $bytes }
+    }
+    if ($best) {
+      $r.gpu.name   = [string]$best.Name
+      $r.gpu.vramMb = [int]([Math]::Round($bestBytes / 1MB))
+    }
   } catch {}
 }
 $r | ConvertTo-Json -Compress

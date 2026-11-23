@@ -247,19 +247,22 @@ Each release also carries `.dmg` installers — Nest for Apple Silicon, Twig for
 What else to expect on a Mac:
 - **Models and files live in `~/Redstart`** (Models, Documents, SQLite, Vault), not in `~/Documents`, which macOS asks permission for. An install that already used `~/Documents/Redstart` keeps it.
 - **"Allow incoming connections?"** appears the first time network mode is on, if the macOS firewall is turned on (it is off by default). Choose Allow, or other devices can't reach Nest. Because the builds are not notarized, macOS may ask again after an update.
-- **Models in other folders:** the model picker lists `.gguf` files, and you can paste a path into its location bar. Hidden folders like `~/.lmstudio/models` or `~/.cache/huggingface` can only be reached by pasting a path (in Finder, Option-Command-C copies one).
+- **Models in other folders:** the file picker has a sidebar like Finder's: the models folder, recent folders, LM Studio's and the Hugging Face cache's model folders when they exist, Home, Desktop, Documents, Downloads, and each volume under `/Volumes`. **Show hidden folders** reveals the rest, and **Type path** takes a pasted path (in Finder, Option-Command-C copies one). ⌘↑, ⌘[ and ⌘] go up, back and forward.
 - If a folder says macOS blocked access, allow Redstart Nest in System Settings → Privacy & Security → Files and Folders.
 
 Removing the first-launch block needs an Apple Developer ID certificate and notarization, tracked in [roadmap → Signed installers](docs/roadmap.md).
 
 #### Mac testing so far
 
-The first hands-on test (Nest on an Apple Silicon MacBook, reported 2026-11-22) found two problems. Both are fixed in code and **waiting for a re-test on a Mac**:
+The first hands-on test (Nest on an Apple Silicon MacBook, reported 2026-11-22) found three problems. All are fixed in code and **waiting for a re-test on a Mac**:
 
 | Found on the Mac | Cause | Fix |
 |---|---|---|
 | The Model page said the machine had **0 GB of memory** | The hardware check was a Windows PowerShell script; on macOS it failed silently. Unified memory was never read | A macOS check (`sysctl`, `vm_stat`). On Apple Silicon the GPU is shown as sharing the system's memory: "up to N GB of M GB unified memory" |
 | **Couldn't choose a model outside the models folder** | The file picker listed folders only and asked for the file name to be typed; it skipped symlinked files and could not reach hidden folders | The picker lists `.gguf` files (symlinked ones included) and takes a pasted path |
+| The app icon sat on a **white square** | The icon was the bird alone on a transparent background. Recent macOS puts an icon that doesn't fill Apple's rounded square onto a light plate of its own | The macOS icon carries its own dark stone-gray rounded square, on Apple's icon grid, with the bird on it (Nest and Twig). Windows keeps the bare bird |
+
+Since then, the GPU line on the Model page comes from the bundled llama-server itself (`llama-server --list-devices`), so on a Mac it shows the Metal device's own figure; also not yet re-tested on a Mac.
 
 Going through the code for anything else Mac-specific turned up four more, fixed in the same pass and not yet seen on a Mac either: the default folders moved out of `~/Documents` (macOS asks permission for it); Twig's "find my Nest" scan opened more connections at once than a Mac allows one app and could find nothing; both apps could pick a VPN or bridge adapter as the LAN address; and some wording assumed Windows. Details are in the [changelog](CHANGELOG.md) under 2026-11-22.
 

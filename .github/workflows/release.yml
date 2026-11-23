@@ -231,6 +231,13 @@ jobs:
           # and electron-builder never has to carry a symlink into the bundle.
           cp -L "$dl/turboquant-plus-$TQP_TAG/llama-server" "$dl/turboquant-plus-$TQP_TAG/"*.dylib "$bin/"
 
+          # The prebuilt links Homebrew's OpenSSL by absolute path. The runner
+          # has Homebrew, a user's Mac may not: copy those libraries in, relink
+          # them to @loader_path, and fail on any dependency still pointing
+          # outside macOS or bin/. The smoke below cannot catch this — on this
+          # runner /opt/homebrew is there.
+          node redstart-nest/scripts/bundle-mac-dylibs.mjs "$bin/llama-server" "$bin"
+
           # Smoke, with the extracted archive gone: proves the binary finds its
           # dylibs beside itself (@loader_path), not at the path it unpacked to.
           rm -rf "$dl"

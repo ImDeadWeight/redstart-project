@@ -27,7 +27,7 @@ import { useTls } from './hooks/useTls'
 import { useUpdateSettings } from './hooks/useUpdateSettings'
 import { useShutdown } from './hooks/useShutdown'
 import { useWindowControlsOverlay } from './hooks/useWindowControlsOverlay'
-import { TopBar, StatusPill, ConfirmDialog, btnCls } from './components/ui'
+import { TopBar, StatusPill, ConfirmDialog, Chip, btnCls } from './components/ui'
 import { useExternalMcp } from './hooks/useExternalMcp'
 import { useToolsCatalog } from './hooks/useToolsCatalog'
 import { useCapabilities } from './hooks/useCapabilities'
@@ -121,9 +121,18 @@ export default function App() {
   const modelName = config.modelPath ? (config.modelPath.split(/[\\/]/).pop() || config.modelPath) : ''
   const addresses = addressesFor(tls, localIp, config.port, networkMode)
   const chatAddress = addresses[0]?.url ?? localAddress(config.port)
-  const { profiles, selectedProfile, selectProfile } = profilesHook
+  const { profiles, selectedProfile, selectProfile, unsaved, notInProfile } = profilesHook
+  // A switch replaces the working settings; ask first when they exist nowhere else.
+  const [pendingSwitch, setPendingSwitch] = useState<string | null>(null)
+
+  function requestSwitchProfile(name: string) {
+    if (!name || name === selectedProfile) return
+    if (unsaved || notInProfile) setPendingSwitch(name)
+    else switchProfile(name)
+  }
 
   async function switchProfile(name: string) {
+    setPendingSwitch(null)
     if (!name) return
     await selectProfile(name)
     showStatus(isRunning
@@ -171,7 +180,7 @@ export default function App() {
         <label className="hidden items-center gap-2 text-[13px] text-zinc-400 lg:flex">
           Profile
           {profiles.length > 0 ? (
-            <select value={selectedProfile} onChange={e => switchProfile(e.target.value)}
+            <select value={selectedProfile} onChange={e => requestSwitchProfile(e.target.value)}
               className="min-w-[10rem] max-w-[14rem] rounded-lg border border-zinc-800 bg-zinc-950/60 px-2.5 py-1 text-[13px] text-zinc-100 hover:border-zinc-600 focus:border-orange-500 focus:outline-none">
               <option value="">Choose a profile…</option>
               {profiles.map(p => <option key={p} value={p}>{p}</option>)}
@@ -181,6 +190,17 @@ export default function App() {
               className="rounded-lg border border-dashed border-zinc-700 px-2.5 py-1 text-[13px] text-zinc-400 hover:border-zinc-500">No profiles yet</button>
           )}
         </label>
+        {/* Settings are kept across restarts either way; these say they are not
+            in a profile, which is the copy that switching profiles leaves alone. */}
+        {(unsaved || notInProfile) && (
+          <button type="button" onClick={() => setSection('system')}
+            data-tip={unsaved
+              ? `Your settings differ from the saved "${selectedProfile}". They are kept when Nest closes, but switching profiles replaces them. Save them on the System page.`
+              : 'Your settings are kept when Nest closes, but no profile holds them. Save them as a profile on the System page.'}
+            className="hidden lg:inline-flex">
+            <Chip tone="warn">{unsaved ? 'Unsaved changes' : 'Not saved to a profile'}</Chip>
+          </button>
+        )}
       </TopBar>
 
       {statusMsg && (
@@ -262,6 +282,18 @@ export default function App() {
         onConfirm={server.confirmStopServer}
         onCancel={() => server.setConfirmStop(false)}>
         <p>Anyone chatting loses the reply being written now, and nobody can chat until the model starts again.</p>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={pendingSwitch !== null}
+        title={`Switch to "${pendingSwitch}"?`}
+        confirmLabel="Switch and discard"
+        onConfirm={() => pendingSwitch && switchProfile(pendingSwitch)}
+        onCancel={() => setPendingSwitch(null)}>
+        <p>{unsaved
+          ? `Your changes to "${selectedProfile}" are not saved to it. Switching replaces them with "${pendingSwitch}".`
+          : `Your current settings are not saved to any profile. Switching replaces them with "${pendingSwitch}".`}</p>
+        <p>To keep them, cancel and save them on the System page first.</p>
       </ConfirmDialog>
     </div>
   )

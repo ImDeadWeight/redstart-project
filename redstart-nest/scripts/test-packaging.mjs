@@ -331,6 +331,41 @@ test("🔍 Nest's mac build stages llama-server and its dylibs where daemon.mjs 
     'llama-server on macOS loads libllama/libggml*.dylib beside it; the executable alone dies with "Library not loaded"')
 })
 
+const macDylibs = await import('./bundle-mac-dylibs.mjs')
+
+test('🔍 the mac dylib closure treats only macOS paths as system, so Homebrew paths get bundled', () => {
+  // The prebuilt llama-server linked /opt/homebrew/opt/openssl@3/... and
+  // SIGABRTed on the first tester's Mac, which had no Homebrew.
+  const { isSystemPath, isRelativePath } = macDylibs
+  for (const p of ['/usr/lib/libc++.1.dylib', '/System/Library/Frameworks/Metal.framework/Versions/A/Metal']) {
+    assert(isSystemPath(p), `${p} should count as part of macOS`)
+  }
+  for (const p of ['/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib', '/usr/local/lib/libomp.dylib', '/Users/runner/work/lib/libllama.dylib']) {
+    assert(!isSystemPath(p) && !isRelativePath(p), `${p} must be bundled, not trusted to exist on a user's Mac`)
+  }
+  assert(isRelativePath('@rpath/libllama.dylib') && isRelativePath('@loader_path/libssl.3.dylib'), '@rpath/@loader_path are bundle-relative')
+})
+
+test('🔍 otool -L parsing drops the dylib\'s own install name', () => {
+  const out = [
+    '/tmp/bin/libssl.3.dylib:',
+    '\t@loader_path/libssl.3.dylib (compatibility version 3.0.0, current version 3.0.0)',
+    '\t/opt/homebrew/Cellar/openssl@3/3.4.0/lib/libcrypto.3.dylib (compatibility version 3.0.0, current version 3.0.0)',
+    '\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)',
+  ].join('\n')
+  const deps = macDylibs.parseOtoolL(out, '@loader_path/libssl.3.dylib')
+  assert(deps.length === 2 && deps[0].endsWith('libcrypto.3.dylib') && deps[1] === '/usr/lib/libSystem.B.dylib',
+    `got ${JSON.stringify(deps)}`)
+})
+
+test('🔍 the mac release job bundles and closure-checks dylibs before the smoke run', () => {
+  const yml = fs.readFileSync(path.join(REPO, '.github', 'workflows', 'release.yml'), 'utf8')
+  const bundle = yml.indexOf('scripts/bundle-mac-dylibs.mjs "$bin/llama-server" "$bin"')
+  const smoke = yml.indexOf('"$bin/llama-server" --version')
+  assert(bundle !== -1, 'release.yml no longer runs bundle-mac-dylibs.mjs: a Homebrew-linked llama-server would ship again')
+  assert(bundle < smoke, 'bundle-mac-dylibs.mjs must run before the --version smoke')
+})
+
 // ---------------------------------------------------------------------------
 // The bundled Caddy (TLS plan C1)
 // ---------------------------------------------------------------------------

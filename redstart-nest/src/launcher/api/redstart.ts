@@ -13,6 +13,26 @@ import type {
   ExternalMcpServer, LlamaConfig, ClientApp, ControlPlaneState, StartupState, UpdateState, UpdateStatus,
   CatalogModel, ModelDetail, ModelDescription, ModelArtifact, LocalModelFile, DownloadProgress, ImageGenerationStatus, ImageCatalogModel, ImageRepoDetail, ImageProgress, ImageTransferProgress } from '../types'
 
+// browse:roots / browse:list shapes (daemon/admin/browse-routes.mjs).
+export type BrowseRoot = {
+  path: string
+  label: string
+  group?: 'library' | 'quick' | 'drive'
+  kind?: 'library' | 'home' | 'folder' | 'drive'
+  free?: number
+  total?: number
+}
+export type BrowseEntry = {
+  name: string
+  kind: 'directory' | 'file'
+  readable?: boolean
+  writable?: boolean
+  size?: number
+  modified?: number
+  /** Present only when listed with allFiles: does it match the extensions? */
+  match?: boolean
+}
+
 export type RedstartAPI = {
   hardware: {
     scan: () => Promise<HardwareSpecs>
@@ -115,14 +135,18 @@ export type RedstartAPI = {
     cancel: (id: string) => Promise<{ ok: true } | { ok: false; error: string }>
   }
   browse: {
-    roots: () => Promise<{ path: string; label: string }[]>
+    // The picker's sidebar: model libraries other tools keep, the usual
+    // folders, then drives (free/total bytes when the drive answers).
+    roots: () => Promise<BrowseRoot[]>
     // readable/writable are the daemon's own access() probe on
     // each path - best-effort and not a promise (a share can drop, and on
     // Windows W_OK reflects the read-only attribute rather than the ACL), but
     // a definite `false` is what lets the picker refuse a folder the daemon
     // cannot use while the admin is still looking at it.
     // extensions (e.g. ['gguf']) also returns matching files as kind 'file'.
-    list: (opts: { path: string; extensions?: string[] }) => Promise<{ path: string; parent: string | null; entries: { name: string; kind: 'directory' | 'file'; readable?: boolean; writable?: boolean }[]; reason?: string; readable?: boolean; writable?: boolean }>
+    // allFiles also returns non-matching files, each with `match`.
+    // size (files) and modified (ms) are metadata only, never contents.
+    list: (opts: { path: string; extensions?: string[]; allFiles?: boolean; showHidden?: boolean }) => Promise<{ path: string; parent: string | null; entries: BrowseEntry[]; reason?: string; readable?: boolean; writable?: boolean }>
     mkdir: (opts: { path: string; name: string }) => Promise<{ ok: boolean; path?: string; error?: string }>
   }
   profiles: {
@@ -131,6 +155,9 @@ export type RedstartAPI = {
     load: (name: string) => Promise<LlamaConfig | null>
     delete: (name: string) => Promise<boolean>
     generateDefaults: (hardware: HardwareSpecs) => Promise<LlamaConfig[]>
+    // The working settings, restored when the launcher opens (profiles.json `last`).
+    getLast: () => Promise<{ profile: string | null; config: LlamaConfig } | null>
+    setLast: (profile: string | null, config: LlamaConfig) => Promise<boolean>
   }
   tools: {
     listAll: () => Promise<{ builtinTools: WebFetchTool[], builtinGroups: ToolGroup[], builtinCapabilities: WebFetchTool[], clientApps: ClientApp[], userTools: WebFetchTool[], userGroups: ToolGroup[] }>

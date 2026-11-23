@@ -142,14 +142,16 @@ export const Switch = TogglePill
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
-export function Modal({ open, title, subtitle, onClose, children, footer, size = 'md' }: {
+export function Modal({ open, title, subtitle, onClose, children, footer, size = 'md', flush = false }: {
   open: boolean
   title: string
   subtitle?: React.ReactNode
   onClose: () => void
   children: React.ReactNode
   footer?: React.ReactNode
-  size?: 'sm' | 'md' | 'lg'
+  size?: 'sm' | 'md' | 'lg' | 'xl'
+  /** No body padding and no body scroll: the child lays out (and scrolls) its own panes. */
+  flush?: boolean
 }) {
   const dialogRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -160,7 +162,7 @@ export function Modal({ open, title, subtitle, onClose, children, footer, size =
     return () => { before?.focus?.() }
   }, [open])
   if (!open) return null
-  const width = size === 'sm' ? 'max-w-md' : size === 'lg' ? 'max-w-3xl' : 'max-w-xl'
+  const width = size === 'sm' ? 'max-w-md' : size === 'lg' ? 'max-w-3xl' : size === 'xl' ? 'max-w-5xl' : 'max-w-xl'
   return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 sm:p-6"
@@ -176,7 +178,7 @@ export function Modal({ open, title, subtitle, onClose, children, footer, size =
           <button type="button" data-modal-close onClick={onClose} aria-label="Close"
             className="-mr-1 rounded-md px-2 py-0.5 text-xl leading-none text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">×</button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
+        <div className={flush ? 'flex min-h-0 flex-1 flex-col' : 'min-h-0 flex-1 overflow-y-auto px-5 py-4'}>{children}</div>
         {footer && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-zinc-800 px-5 py-3.5">{footer}</div>}
       </div>
     </div>,
