@@ -262,6 +262,39 @@ actionable: a client that sends its own tools without connecting to Nest's MCP
 server gets a narrowed list and no `search_tools`, and telling that model to
 call a tool it does not have would be one more false claim.
 
+### 6c. Errors that teach — the correction goes where the mistake is
+
+A small model falls back on habits from training: it calls `read_file` because
+most agent harnesses have one, or tries `subprocess` because coding agents have
+a shell. More prompt text doesn't prevent this. The model is confident, so it
+doesn't stop to read, and every line added to the prompt costs context on every
+request. It does read the error that comes back. So a refusal the model is
+meant to recover from says three things, in order:
+
+1. **What happened, and that nothing ran.** Without the second half a model may
+   report work that never happened.
+2. **What is true here**, when it differs from what the model assumed (*the
+   sandbox cannot start other programs*).
+3. **The call to make instead, by its real name**: a tool this caller actually
+   has. The rule is the same as in §6b: a remedy the caller lacks is a false
+   claim.
+
+The cross-tool cases live in `shared/agent-core/teaching.mjs`, so the browser,
+the daemon's task runner and Nest's MCP server give one answer. That answer is a
+tool name that does not exist here: a namespaced spelling of a real one
+(`functions.read_document`), a name from training (`read_file`, `bash`,
+`TodoWrite`), or a near-miss typo. A call to a name nothing owns runs nothing,
+so the browser answers it without a permission card. Tool-specific cases stay
+with their tools, next to the hints already there: `run_python` trying to start
+a program, `read_document` on a type it cannot read (an image goes to
+`view_image`), and `use_skill` given a tool's name, which now lists the caller's
+own skills.
+
+The agent bench measures whether it works (`scripts/agent-bench/lib/misuse.mjs`).
+`unknownTool` counts calls to names that don't exist, and `repeatedAfterError`
+counts failed calls sent again unchanged as the very next call. An error that
+teaches should bring the second number down.
+
 ---
 
 ## 7. Data handling — derived, and auditable

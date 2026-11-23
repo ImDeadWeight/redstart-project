@@ -45,6 +45,7 @@ import {
 import { DISMISSED_RESULT, formatAskAnswer, parseAskArguments } from '../../shared/agent-core/ask-user.mjs'
 import { formatPlanResult, parsePlanArguments, planTailNote } from '../../shared/agent-core/update-plan.mjs'
 import * as compaction from '../../shared/agent-core/compaction.mjs'
+import { unknownToolText, suggestTools, normalizeToolName } from '../../shared/agent-core/teaching.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const coreDir = path.join(here, '..', '..', 'shared', 'agent-core')
@@ -1151,6 +1152,31 @@ await test('🔒 callToolTarget: a call_tool call is the call it carries, and no
     eq(callToolTarget('call_tool', bad), null, `call_tool with ${JSON.stringify(bad)}`)
   }
   eq(callToolTarget('delete_file', { name: 'x' }), null, 'any other tool')
+})
+
+await test('teaching: an unknown tool is answered with the caller\'s real tool for the job, never one it lacks', () => {
+  const have = ['read_document', 'list_documents', 'view_image', 'run_python', 'web_search', 'web_fetch', 'ask_user', 'update_plan', 'use_skill', 'delete_file', 'write_file']
+  const head = (n) => `Error: there is no tool named "${n}" here, so nothing was run.`
+  eq(unknownToolText('read_file', have), `${head('read_file')} To read a file here, use read_document.`, 'a trained name')
+  eq(unknownToolText('functions.read_document', have), `${head('functions.read_document')} Call it by its plain name: read_document.`, 'a namespace in front')
+  eq(suggestTools('Read-Document', have).tools, ['read_document'], 'another spelling')
+  assert(/use run_python\. There is no shell here/.test(unknownToolText('bash', have)), unknownToolText('bash', have))
+  eq(unknownToolText('web_serach', have), `${head('web_serach')} Did you mean web_search?`, 'a typo')
+  eq(suggestTools('TodoWrite', have).tools, ['update_plan'], 'case and separators ignored')
+  // Only tools the caller has: without read_document, read_text_file is named;
+  // with neither, nothing from the trained list is.
+  eq(suggestTools('read_file', ['read_text_file']).tools, ['read_text_file'], 'the second choice')
+  eq(suggestTools('grep', ['run_python']).kind, 'none', 'no search tool: no false remedy')
+  // A generic word is no match: a move must never be pointed at a delete.
+  assert(!suggestTools('move_file', have).tools.includes('delete_file'), JSON.stringify(suggestTools('move_file', have)))
+  // The last resort: search_tools when it is there, else the names, else nothing.
+  assert(/search_tools finds it/.test(unknownToolText('zzz', ['search_tools', 'call_tool'])), 'search_tools')
+  eq(unknownToolText('zzz', ['a', 'b']), `${head('zzz')} The tools you have: a, b.`, 'the list')
+  eq(unknownToolText('zzz', []), `${head('zzz')} No tools are available in this chat, so answer without one.`, 'none at all')
+  const many = Array.from({ length: 20 }, (_, i) => `t${i}`)
+  assert(/t14, and others in your tool list\.$/.test(unknownToolText('zzz', many)), unknownToolText('zzz', many))
+  eq(unknownToolText('', have).includes('"(no name)"'), true, 'no name')
+  eq(normalizeToolName('Read-File'), 'readfile', 'normalize')
 })
 
 const passed = results.filter((r) => r.pass).length

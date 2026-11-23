@@ -31,7 +31,7 @@ import ExcelJS from 'exceljs'
 import { resolveWithinRoot } from './path-scope.mjs'
 import { resolveUserRoot } from './user-scope.mjs'
 import { fileLink } from './tool-result-links.mjs'
-import { inspectImageFile } from './image-info.mjs'
+import { inspectImageFile, IMAGE_EXTENSIONS } from './image-info.mjs'
 import { isWellFormedConversationId, workspaceRelative } from './conversation-workspace.mjs'
 
 const FORMATS = [
@@ -479,6 +479,22 @@ export async function extractText(filePath) {
   throw new Error(`Unsupported file type "${extension}": not a text file, and not .pdf, .docx or .xlsx`)
 }
 
+/**
+ * What to do instead when read_document cannot read a file's type (the
+ * teaching pattern, shared/agent-core/teaching.mjs). The bench saw read_document
+ * refused 103 times in 327 runs (scripts/agent-bench/lib/misuse.mjs), and the
+ * usual next call was read_document on the same file again. An image has a
+ * tool of its own in this same capability. Anything else is said plainly, so
+ * the model stops retrying. Exported for the suite.
+ *
+ * @param {unknown} docPath
+ */
+export function unsupportedTypeHint(docPath) {
+  const ext = typeof docPath === 'string' ? path.extname(docPath).toLowerCase() : ''
+  if (ext && IMAGE_EXTENSIONS[ext]) return ` It is an image: open it with view_image {"path": ${JSON.stringify(docPath)}} instead.`
+  return ' Nothing here reads this type as text, so do not try it again; tell the user if the answer depends on it.'
+}
+
 const isFile = (p) => fs.existsSync(p) && fs.statSync(p).isFile()
 
 /**
@@ -720,7 +736,8 @@ export async function callTool(name, args, cfg, ctx) {
     try {
       return await readDocument(docCfg, args, ctx?.conversationId)
     } catch (err) {
-      return { isError: true, content: [{ type: 'text', text: `Failed to read document: ${err.message}` }] }
+      const hint = /^Unsupported file type/.test(err.message) ? unsupportedTypeHint(args?.path) : ''
+      return { isError: true, content: [{ type: 'text', text: `Failed to read document: ${err.message}${hint}` }] }
     }
   }
   if (name === 'view_image') {

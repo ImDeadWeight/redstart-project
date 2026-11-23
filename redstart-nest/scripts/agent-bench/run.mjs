@@ -285,13 +285,13 @@ export function armsComparison(results) {
   const lines = [
     '## Arms compared',
     '',
-    '| arm | pass | phase1 | ask_user calls | reply-text asks | lookups | run_python at another program | type refusals | use_skill misnamed |',
-    '|---|---|---|---|---|---|---|---|---|',
+    '| arm | pass | phase1 | ask_user calls | reply-text asks | lookups | run_python at another program | type refusals | use_skill misnamed | unknown tools | repeated after error |',
+    '|---|---|---|---|---|---|---|---|---|---|---|',
   ]
   for (const { arm, summary: s } of results) {
     const p1 = s.tasks.filter((t) => t.group === 'phase1')
     const m = s.misuse ?? {}
-    lines.push(`| ${String(arm).toUpperCase()} | ${passes(s.tasks)}/${s.runs} | ${p1.length ? `${passes(p1)}/${runsOf(p1)}` : '—'} | ${s.askCalls} | ${m.proseAskRuns ?? 0} | ${m.lookups ?? 0} | ${m.subprocess ?? 0} | ${m.unsupportedRead ?? 0} | ${m.skillAsTool ?? 0} |`)
+    lines.push(`| ${String(arm).toUpperCase()} | ${passes(s.tasks)}/${s.runs} | ${p1.length ? `${passes(p1)}/${runsOf(p1)}` : '—'} | ${s.askCalls} | ${m.proseAskRuns ?? 0} | ${m.lookups ?? 0} | ${m.subprocess ?? 0} | ${m.unsupportedRead ?? 0} | ${m.skillAsTool ?? 0} | ${m.unknownTool ?? 0} | ${m.repeatedAfterError ?? 0} |`)
   }
   const ids = [...new Set(results.flatMap((r) => r.summary.tasks.map((t) => t.taskId)))]
   const moved = ids.map((id) => results.map((r) => r.summary.tasks.find((t) => t.taskId === id)))
@@ -495,7 +495,7 @@ export function summaryMarkdown(meta, summary) {
     `questions in reply text (--text-asks ${meta.textAsks ?? 'end'}): ${summary.textAsks ?? 0} answered in ${summary.runsThatAskedInText ?? 0} run(s)`,
     '',
     // The trained habits a run fell back on (lib/misuse.mjs).
-    `trained habits: ${summary.misuse?.proseAskRuns ?? 0} run(s) ended asking in reply text with no ask_user · ${summary.misuse?.lookups ?? 0} memory/web lookup(s) · ${summary.misuse?.subprocess ?? 0} run_python try at another program · ${summary.misuse?.unsupportedRead ?? 0} read_document type refusal(s) · ${summary.misuse?.skillAsTool ?? 0} use_skill with a tool's name`,
+    `trained habits: ${summary.misuse?.proseAskRuns ?? 0} run(s) ended asking in reply text with no ask_user · ${summary.misuse?.lookups ?? 0} memory/web lookup(s) · ${summary.misuse?.subprocess ?? 0} run_python try at another program · ${summary.misuse?.unsupportedRead ?? 0} read_document type refusal(s) · ${summary.misuse?.skillAsTool ?? 0} use_skill with a tool's name · ${summary.misuse?.unknownTool ?? 0} call(s) to a tool that does not exist · ${summary.misuse?.repeatedAfterError ?? 0} failed call(s) repeated unchanged`,
     '',
     retrievalLine(meta, summary),
     '',

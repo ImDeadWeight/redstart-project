@@ -70,6 +70,17 @@ if (!runtime.verifyRuntime(distDir).ok) {
   await runtime.installRuntime(distDir)
 }
 
+await test('starting another program is answered with what to do instead, and only then', () => {
+  const { subprocessHint, formatResult } = pythonTool
+  const hint = subprocessHint('OSError: [Errno 138] emscripten does not support processes', "import subprocess\nsubprocess.run(['ls'])")
+  assert(/cannot start other programs/.test(hint ?? '') && /Do the work in Python itself/.test(hint), `hint: ${hint}`)
+  assert(subprocessHint("OSError: [Errno 2] No such file", "import os\nos.system('git log')"), 'os.system with an OSError')
+  assert(subprocessHint('NameError: name x is not defined', 'x') === null, 'another error')
+  assert(subprocessHint('FileNotFoundError: data.csv', "open('data.csv')") === null, 'a missing file is not a subprocess try')
+  const text = formatResult({ reply: { stdout: '', result: null, error: 'OSError: [Errno 138] emscripten does not support processes' }, code: 'import subprocess', wsRel: 'chats/c1' })
+  assert(/does not support processes\n\(This sandbox cannot start other programs/.test(text), text)
+})
+
 await test('the installed runtime matches every pin', () => {
   const v = runtime.verifyRuntime(distDir)
   assert(v.ok, `verifyRuntime: ${v.reason}`)

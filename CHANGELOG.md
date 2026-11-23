@@ -6,6 +6,15 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ## 2026-11-22
 
+- **Errors that teach: a refusal names the call to make instead.** Small models fall back on tool names and habits from training (`read_file`, `bash`, `subprocess`), and the error that came back only said what went wrong. A refusal now says what happened, that nothing ran, and the real tool for the job, naming only tools the caller has. The pattern is in `docs/system-prompt-spec.md` §6c.
+  - **Unknown tools** (`shared/agent-core/teaching.mjs`, used by the browser, the task runner and the MCP server): "Unknown tool: read_file" becomes *"there is no tool named "read_file" here, so nothing was run. To read a file here, use read_document."* It handles namespaced names (`functions.read_document`), the usual names from other agent harnesses, and near-miss typos, and falls back to `search_tools` or the list of tools. Common words such as "file" are never enough for a match, so `move_file` is never pointed at `delete_file`.
+  - **The browser no longer shows a permission card for a tool that does not exist.** Such a name has no permission key, so the person used to be asked to allow, say, "read_file" before the model got its error. Nothing can run under such a name, so it now goes straight to the teaching text.
+  - **`run_python` starting a program** gets a hint: the sandbox cannot start programs, so do the work in Python and don't try another way (55 of 327 bench runs tried).
+  - **`read_document` on an unreadable type** points an image at `view_image` with its path, and tells the model not to retry anything else.
+  - **`use_skill` with a tool's name** says it is a tool and to call it directly, and lists the caller's own skills, never another account's.
+  - **Bench:** `misuse.mjs` counts `unknownTool` and `repeatedAfterError` (a failed call sent again unchanged as the very next call), which is the measure of whether an error teaches. Both appear in the arms table.
+  - Tests: `test-agent-core.mjs`, `test-skills.mjs`, `test-document-formats.mjs`, `test-python-sandbox.mjs`, `test-agent-bench.mjs`, and chat-ui's `agentic-loop.test.ts`.
+
 - **Mac testing has started.** Nest was run on an Apple Silicon MacBook for the first time. It turned up two problems, both fixed below: the hardware check reported 0 GB of memory, and a model outside the models folder could not be chosen. A pass over the code for other Mac issues found four more (folders in `~/Documents`, Twig's scan, the LAN adapter choice, Windows-only wording). None of the fixes has been re-tested on a Mac yet. The README's macOS section now has a "Mac testing so far" table.
 - **LAN addresses: the right adapter, in Nest and in Twig.**
   - **Twig's "find my Nest" scan** took the first non-internal IPv4, so a VPN, WSL, Hyper-V or Docker adapter sent it to the wrong subnet. It also opened all 254 probes at once, over macOS's default limit of 256 open files, so on a Mac most failed and it found nothing. It now uses Nest's adapter choice and runs 32 probes at a time (about 3 s for a full /24).

@@ -29,6 +29,7 @@ import {
 } from '../../shared/agent-core/compaction.mjs'
 import { ASK_USER_TOOL } from '../../shared/agent-core/ask-user.mjs'
 import { callToolTarget } from '../../shared/agent-core/approval.mjs'
+import { unknownToolText } from '../../shared/agent-core/teaching.mjs'
 import { UPDATE_PLAN_TOOL, NUDGE_PREFIX } from '../../shared/agent-core/update-plan.mjs'
 import * as store from './task-store.mjs'
 import * as conversations from './conversations-storage.mjs'
@@ -507,7 +508,7 @@ export function toolsPort(pass) {
       const t = store.getTask(task.id)
       const result = await seams.callToolAs(turnCtx.account, name, args, { conversationId: t.conversationId, approvalId: approved.get(call.id) })
       const out = result === null || result === undefined
-        ? { text: `Error: Unknown tool: ${name}`, isError: true }
+        ? { text: unknownToolText(name, turnCtx.mcpTools.map((x) => x.name)), isError: true }
         : { text: formatMcpToolResult(result), isError: !!result.isError }
       store.appendEvent(task.id, { type: 'tool_result', callId: call.id, name, isError: out.isError, preview: preview(out.text) })
       return out

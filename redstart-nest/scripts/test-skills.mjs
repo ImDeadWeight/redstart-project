@@ -256,6 +256,21 @@ await test('🔒 use_skill: lists, loads the body with its example and files, re
   assert(!JSON.stringify(JSON.parse(textOf(await call(ann, {}))).skills).includes('"report"'), 'another account listed it')
 })
 
+await test('🔒 an unknown skill name teaches: a tool\'s name is called a tool, the caller\'s real skills come along, and never another account\'s', async () => {
+  const asTool = await call(carol, { name: 'ask_user' })
+  assert(asTool.isError && /"ask_user" is a tool, not a skill, so nothing was loaded\. Call ask_user itself/.test(textOf(asTool)), textOf(asTool))
+  assert(/The skills: report, org-style, org-summary\./.test(textOf(asTool)), textOf(asTool))
+  const typo = textOf(await call(carol, { name: 'reprot' }))
+  assert(/^No skill named "reprot", so nothing was loaded\. The skills: report/.test(typo), typo)
+  // ann asks for carol's skill by name: refused, and carol's names stay hers.
+  const theirs = await call(ann, { name: 'report' })
+  assert(theirs.isError && /^No skill named "report"/.test(textOf(theirs)), textOf(theirs))
+  const named = (textOf(theirs).split('The skills: ')[1] ?? '').replace(/\.$/, '').split(', ')
+  assert(!named.includes('report'), `another account's skill was named: ${textOf(theirs)}`)
+  const none = tool.noSkillText('x', { id: 'acct-empty', username: 'empty' })
+  assert(/org-style/.test(none), `org skills reach everyone: ${none}`)
+})
+
 await test('🔒 a skill\'s .py files are copied into the conversation workspace for run_python, and nothing else is, and only with run_python', async () => {
   const docs = path.join(tmpDir, 'docs')
   fs.mkdirSync(docs, { recursive: true })

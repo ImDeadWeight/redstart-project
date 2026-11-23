@@ -28,7 +28,7 @@ import { extractBase64Attachments } from './agentic-attachments';
 import { parseResourceLine, resourceKind } from '$lib/utils/resource-links';
 import { fetchFileBlob } from '$lib/utils/agentic';
 import { apiPost } from '$lib/utils/api-fetch';
-import { callToolTarget, DENIED_RESULT } from '$lib/agent-core';
+import { callToolTarget, DENIED_RESULT, unknownToolText } from '$lib/agent-core';
 import type { AgentPorts, AgentToolCall, AgentContentPart, ToolExecution } from '$lib/agent-core';
 import type { AgenticSessionState } from './agentic-session.svelte';
 import type { MCPToolCall, DatabaseMessageExtraImageFile } from '$lib/types';
@@ -194,6 +194,11 @@ export class AgenticToolExec {
 		return {
 			gate: {
 				approve: async (call, signal) => {
+					// No such tool: nothing can run, and execute answers it with
+					// what to do instead. A card asking to allow "read_file", a
+					// tool that does not exist, would only put the person in
+					// front of the model's mistake.
+					if (this.isUnknownTool(call.function.name)) return true;
 					const toolName = this.gateToolName(call);
 					const asked = this.asksPerson(toolName);
 					const decision = await this.requestPermission(
@@ -244,6 +249,14 @@ export class AgenticToolExec {
 		return tools.execute(call, signal);
 	}
 
+	/**
+	 * No executor here owns this name. The gate lets it through on this and
+	 * execute refuses it on this, so the two must stay one test.
+	 */
+	private isUnknownTool(toolName: string): boolean {
+		return toolsStore.getToolSource(toolName) === null && !mcpStore.hasTool(toolName);
+	}
+
 	/** Dispatch one call to the executor that owns it. Throws on abort. */
 	private async execute(
 		conversationId: string,
@@ -278,6 +291,13 @@ export class AgenticToolExec {
 			const args = this.parseToolArguments(toolCall.function.arguments);
 			const executionResult = await SandboxService.executeTool(toolName, args, signal);
 			return { text: executionResult.content, isError: !!executionResult.isError };
+		}
+		// A name nothing here owns, usually one the model knows from training
+		// (read_file, bash): say which of its real tools does the job, instead
+		// of a bare "Unknown tool" (shared/agent-core/teaching.mjs).
+		if (this.isUnknownTool(toolName)) {
+			const names = toolsStore.getEnabledToolsForLLM().map((def) => def.function.name);
+			return { text: unknownToolText(toolName, names), isError: true };
 		}
 		const mcpCall: MCPToolCall = {
 			id: toolCall.id,
