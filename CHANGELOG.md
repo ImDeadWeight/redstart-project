@@ -4,6 +4,14 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ---
 
+## 2026-11-23
+
+- **The hardware check's GPU comes from llama-server.** `hardware.mjs` now runs the bundled binary's `llama-server --list-devices` (from the binary's own folder, 30 s timeout) and reads each device's total and free memory as ggml measures them: `cudaMemGetInfo` for CUDA, `recommendedMaxWorkingSetSize` for Metal, the heap budget for Vulkan. That is the figure `--fit` sizes a launch against, so the Model page now shows what the model will actually get. A card the build can't use (an AMD card under the CUDA build) isn't listed as if it could run the model. The largest device is the headline, and `gpu.devices` lists all of them. `gpu.source` says `llama-server` or `system`.
+  - The OS probes (nvidia-smi, `system_profiler`, WMI) are now the fallback, used when the binary is missing, fails or lists nothing. CPU and RAM still come from the OS.
+  - **The Windows fallback's 4 GB cap is fixed.** `Win32_VideoController.AdapterRAM` is 32-bit, so a 12 GB RTX 3060 read as 4095 MB (seen on the dev box). The fallback now reads the driver's `HardwareInformation.qwMemorySize` from the registry and takes the adapter with the most memory. Before, it took the first one, which on the dev box was a virtual display ("Meta Virtual Monitor").
+  - Checked on Windows with an RTX 3060 against the real TurboQuant+ build: `--list-devices` reported 12287 MiB total and 11253 MiB free, in about 1.4 s; the registry fallback reported 12288 MB. Not yet run on a Mac.
+  - Tests: eight new cases in `test-hardware-scan.mjs` (CUDA/Metal/Vulkan/BLAS parsing, the largest-device rule, Metal's unified memory, every fallback path, the probe's cwd and timeout).
+
 ## 2026-11-22
 
 - **Mac testing has started.** Nest was run on an Apple Silicon MacBook for the first time. It turned up two problems, both fixed below: the hardware check reported 0 GB of memory, and a model outside the models folder could not be chosen. A pass over the code for other Mac issues found four more (folders in `~/Documents`, Twig's scan, the LAN adapter choice, Windows-only wording). None of the fixes has been re-tested on a Mac yet. The README's macOS section now has a "Mac testing so far" table.

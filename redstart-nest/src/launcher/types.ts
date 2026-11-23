@@ -8,16 +8,21 @@
 // vram/vramFree are MB; memory.total/available are GB (historical, kept so the
 // existing panels don't shift units).
 //
-// vramFree is 0 on non-NVIDIA GPUs — the WMI fallback has no free-VRAM source.
-// vram itself is also unreliable there: Win32_VideoController.AdapterRAM caps
-// at 4095 MB, so a 16 GB AMD card reports as 4 GB. The Models tab shows these
-// as context without drawing a conclusion from them; see the note in
-// daemon/ipc/hardware.mjs before building anything that decides.
+// gpu comes from `llama-server --list-devices` when the binary can see a
+// device (source 'llama-server'): the memory ggml measures, which is what a
+// launch is sized against. Otherwise from the OS (source 'system'), where
+// vramFree is 0 off NVIDIA — the WMI fallback has no free-VRAM source. See
+// daemon/ipc/hardware.mjs.
+export type HardwareDevice = { id: string; backend: string; name: string; totalMb: number; freeMb: number }
 export type HardwareSpecs = {
   cpu: { name: string; cores: number; threads: number; architecture: string; supportsAVX: boolean }
   // unifiedMemory: Apple Silicon — the GPU shares system RAM, so vram is the
   // share of memory.total the GPU may use, not a separate pool.
-  gpu: { name: string; vram: number; vramFree: number; cudaAvailable: boolean; unifiedMemory?: boolean }
+  // name/vram/vramFree describe the largest device; devices lists all of them.
+  gpu: {
+    name: string; vram: number; vramFree: number; cudaAvailable: boolean; unifiedMemory?: boolean
+    devices?: HardwareDevice[]; source?: 'llama-server' | 'system'
+  }
   memory: { total: number; available: number }
   os: { platform: string; arch: string }
 }
