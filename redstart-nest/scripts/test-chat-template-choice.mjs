@@ -194,9 +194,9 @@ await test('every .jinja in chat-templates/ has a BUNDLED_TEMPLATES entry', asyn
 // ---------------------------------------------------------------------------
 
 await test('the command preview omits a skipped override', async () => {
-  const cmd = generateLlamaCommand({ ...base, modelPath: model4b, chatTemplateFile: BUNDLED }, { buildArgs })
+  const cmd = await generateLlamaCommand({ ...base, modelPath: model4b, chatTemplateFile: BUNDLED }, { buildArgs })
   assert(!cmd.includes('--chat-template-file'), cmd)
-  const ok = generateLlamaCommand({ ...base, modelPath: model36, chatTemplateFile: BUNDLED }, { buildArgs })
+  const ok = await generateLlamaCommand({ ...base, modelPath: model36, chatTemplateFile: BUNDLED }, { buildArgs })
   assert(ok.includes('--chat-template-file'), ok)
 })
 
@@ -204,10 +204,11 @@ await test('the launch builds its args from the chosen config, never the raw pro
   const src = fs.readFileSync(path.join(__dirname, '..', 'daemon', 'ipc', 'server.mjs'), 'utf8')
   assert(!/buildArgs\(config\b/.test(src), 'server.mjs calls buildArgs(config...) directly, bypassing chooseChatTemplate')
   // Since the vision projector (projector.mjs), the chosen config passes
-  // through resolveProjector() on its way to buildArgs: still template.config,
-  // never the raw profile.
-  assert(/resolveProjector\(template\.config\)/.test(src) && /buildArgs\(projector\.config, true\)/.test(src),
-    'the launch does not build its args from template.config (through resolveProjector)')
+  // through resolveProjector() on its way to buildArgs, and since the
+  // KV-cache mapping (kv-cache.mjs) through resolveKvCache() after that:
+  // still template.config, never the raw profile.
+  assert(/resolveProjector\(template\.config\)/.test(src) && /resolveKvCache\(projector\.config, cacheTypes\)/.test(src) && /buildArgs\(kv\.config, true\)/.test(src),
+    'the launch does not build its args from template.config (through resolveProjector and resolveKvCache)')
   assert(/appendLine\(template\.logLine\)/.test(src), 'the decision is not written to the run log')
 })
 

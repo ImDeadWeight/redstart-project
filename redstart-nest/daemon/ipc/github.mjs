@@ -13,7 +13,8 @@
 export async function checkGithubReleases() {
   const releases = {}
   const repos = [
-    { owner: 'ggerganov', repo: 'llama.cpp' },
+    // The bundled engine, then the fork a custom binary path may point at.
+    { owner: 'ggml-org', repo: 'llama.cpp' },
     { owner: 'TheTom', repo: 'llama-cpp-turboquant' },
   ]
   for (const { owner, repo } of repos) {

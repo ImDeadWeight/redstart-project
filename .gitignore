@@ -7,9 +7,11 @@ dev-dist/
 release/
 build/
 
-# llama.cpp / TurboQuant — compiled binaries and full source tree.
-# The installer pulls from llama-cpp-turboquant/build/bin/Release/ at build time.
-# See README "Building from Source" for how to set this up.
+# llama.cpp — compiled binaries and full source tree.
+# The installer pulls from llama-cpp/build/bin/(Release/) at build time.
+# See docs/development.md for how to set this up. llama-cpp-turboquant/ is
+# the same folder under its old name, still found by the dev binary lookup.
+redstart-nest/llama-cpp/
 redstart-nest/llama-cpp-turboquant/
 redstart-nest/llama-server.exe
 redstart-nest/deps/

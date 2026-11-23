@@ -49,7 +49,7 @@ export function setBinaryPath(p, { readSettings, writeSettings }) {
 // default path (selectBinaryDefaultPath, computed from __dirname in
 // index.mjs) — the renderer has no equivalent to hand back, so the picker
 // opens with no default rather than pointing at
-// llama-cpp-turboquant/build/bin/Release. Documented as a deliberate,
+// llama-cpp/build/bin/Release. Documented as a deliberate,
 // accepted regression rather than silently dropped.
 
 export function getResolvedBinary({ resolveBinary }) {

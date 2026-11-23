@@ -1,7 +1,7 @@
 /* === Redstart theme overlay for the llama.cpp web UI ===
  * Once served by a redstart-chat:// protocol handler in the old Electron main process.
  * This file is injected as a stylesheet into every page load — edit here to
- * change the Redstart appearance without touching llama-cpp-turboquant source.
+ * change the Redstart appearance without touching llama.cpp source.
  */
 
 /* SCROLL FIX

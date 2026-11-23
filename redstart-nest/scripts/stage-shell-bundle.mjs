@@ -113,14 +113,14 @@ function main() {
   // on Windows check-dll-closure.mjs proves the set is closed).
   if (win) {
     const dll = (p) => /\.dll$/i.test(p)
-    copyDir(path.join(NEST, 'llama-cpp-turboquant', 'build', 'bin', 'Release'), out('bin'),
+    copyDir(path.join(NEST, 'llama-cpp', 'build', 'bin', 'Release'), out('bin'),
       (p) => dll(p) || /llama-server\.exe$/i.test(p))
     copyDir(path.join(NEST, 'deps', 'windows'), out('bin'), dll)
     need(out('bin', 'llama-server.exe'))
     fs.copyFileSync(need(path.join(NEST, 'deps', 'windows', 'elevate.exe')), out('elevate.exe'))
   } else {
     // build/bin, not Release/: the POSIX layout electron-builder's mac build used.
-    copyDir(path.join(NEST, 'llama-cpp-turboquant', 'build', 'bin'), out('bin'),
+    copyDir(path.join(NEST, 'llama-cpp', 'build', 'bin'), out('bin'),
       (p) => /\.dylib$/.test(p) || path.basename(p) === 'llama-server')
     need(out('bin', 'llama-server'))
   }

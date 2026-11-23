@@ -139,7 +139,7 @@ copy <your build>\*.dll           C:\ProgramData\Redstart\config\bin\
 
 `<config>\bin` is checked on every platform, and on a service install it is the
 only candidate that can match — the packaged branch needs `process.resourcesPath`
-(Electron only) and the development branch needs a `llama-cpp-turboquant` build
+(Electron only) and the development branch needs a `llama-cpp` build
 tree. A Linux package install has the same fallback plus `/usr/lib/redstart/bin`.
 
 Skip this and Nest starts, serves the admin panel, and refuses to launch a model
