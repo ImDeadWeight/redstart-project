@@ -254,12 +254,13 @@ Removing the first-launch block needs an Apple Developer ID certificate and nota
 
 #### Mac testing so far
 
-The first hands-on test (Nest on an Apple Silicon MacBook, reported 2026-11-22) found two problems. Both are fixed in code and **waiting for a re-test on a Mac**:
+The first hands-on test (Nest on an Apple Silicon MacBook, reported 2026-11-22) found three problems. All are fixed in code and **waiting for a re-test on a Mac**:
 
 | Found on the Mac | Cause | Fix |
 |---|---|---|
 | The Model page said the machine had **0 GB of memory** | The hardware check was a Windows PowerShell script; on macOS it failed silently. Unified memory was never read | A macOS check (`sysctl`, `vm_stat`). On Apple Silicon the GPU is shown as sharing the system's memory: "up to N GB of M GB unified memory" |
 | **Couldn't choose a model outside the models folder** | The file picker listed folders only and asked for the file name to be typed; it skipped symlinked files and could not reach hidden folders | The picker lists `.gguf` files (symlinked ones included) and takes a pasted path |
+| The app icon sat on a **white square** | The icon was the bird alone on a transparent background. Recent macOS puts an icon that doesn't fill Apple's rounded square onto a light plate of its own | The macOS icon carries its own dark stone-gray rounded square, on Apple's icon grid, with the bird on it (Nest and Twig). Windows keeps the bare bird |
 
 Since then, the GPU line on the Model page comes from the bundled llama-server itself (`llama-server --list-devices`), so on a Mac it shows the Metal device's own figure; also not yet re-tested on a Mac.
 
