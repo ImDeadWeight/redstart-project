@@ -155,6 +155,9 @@ export type RedstartAPI = {
     load: (name: string) => Promise<LlamaConfig | null>
     delete: (name: string) => Promise<boolean>
     generateDefaults: (hardware: HardwareSpecs) => Promise<LlamaConfig[]>
+    // The working settings, restored when the launcher opens (profiles.json `last`).
+    getLast: () => Promise<{ profile: string | null; config: LlamaConfig } | null>
+    setLast: (profile: string | null, config: LlamaConfig) => Promise<boolean>
   }
   tools: {
     listAll: () => Promise<{ builtinTools: WebFetchTool[], builtinGroups: ToolGroup[], builtinCapabilities: WebFetchTool[], clientApps: ClientApp[], userTools: WebFetchTool[], userGroups: ToolGroup[] }>
