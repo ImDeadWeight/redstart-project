@@ -129,6 +129,9 @@ jobs:
       - name: "Security: llama-server localhost-only args"
         run: node scripts/test-llama-args.mjs
 
+      - name: "Security: KV-cache presets map to types the binary accepts"
+        run: node scripts/test-kv-cache.mjs
+
       - name: "Chat template override only applied to the model family it fits"
         run: node scripts/test-chat-template-choice.mjs
 

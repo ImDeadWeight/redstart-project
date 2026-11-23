@@ -3,7 +3,7 @@ name: Caddy build
 # Builds the Caddy that Nest bundles as its TLS front door (TLS plan C1):
 # upstream Caddy plus three DNS-01 plugins, for every platform Nest ships on,
 # published as a release on this repo that release.yml and fetch-caddy.mjs
-# download by tag and sha256 (the same pattern as the TurboQuant+ pin).
+# download by tag and sha256 (the same pattern as the llama.cpp pin).
 #
 # When it runs: by hand (Actions → Caddy build → Run workflow), and on any
 # push that changes this file, so a version bump builds as part of its own

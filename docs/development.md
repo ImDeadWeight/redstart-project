@@ -102,7 +102,7 @@ This starts Vite (React launcher UI), the SvelteKit chat-ui dev server, and the 
 
 > **Note:** In dev mode the chat-ui runs on its own port (`:5174`). The `--path` flag that serves it through llama-server only applies in production builds.
 
-> **Starting a model in dev:** the launcher UI runs fine without the inference binary, but **Start Server** needs `llama-server.exe`. In dev it's looked up at `redstart-nest/llama-cpp-turboquant/build/bin/Release/llama-server.exe` (or point at a custom path in Settings). See [Building the llama-server binary](#building-from-source--llama-server-binary) to produce it.
+> **Starting a model in dev:** the launcher UI runs fine without the inference binary, but **Start Server** needs `llama-server.exe`. In dev it's looked up at `redstart-nest/llama-cpp/build/bin/Release/llama-server.exe` (the old `llama-cpp-turboquant/` folder name still works), or point at a custom path in Settings. See [Building the llama-server binary](#building-from-source--llama-server-binary) to produce it.
 
 ---
 
@@ -226,35 +226,37 @@ Then open `chat-ui/android` in Android Studio and run on a device or emulator.
 
 > **Just want to use it?** Download the installer from [Releases](../../../releases) — the binaries are already bundled and no extra steps are needed.
 
-Redstart Nest does **not** commit the inference binary or its runtime DLLs — they're large and platform-specific, so the entire `redstart-nest/llama-cpp-turboquant/` tree and `redstart-nest/deps/` are git-ignored. A fresh clone has neither. Building the installer from scratch means assembling two things by hand.
+Redstart Nest does **not** commit the inference binary or its runtime DLLs — they're large and platform-specific, so the entire `redstart-nest/llama-cpp/` tree and `redstart-nest/deps/` are git-ignored. A fresh clone has neither. Building the installer from scratch means assembling two things by hand.
 
-> **Released installers don't build it at all.** The [release workflow](#releases) downloads TurboQuant+'s own prebuilt release (`windows-x64-cuda12.4`, `macos-arm64-metal`), checks it against a pinned SHA-256, and stages it into the same paths described below — so a source build and a downloaded one are interchangeable as far as `stage-shell-bundle.mjs` is concerned. Its `Stage llama-server` steps are also the quickest way to get a working binary locally without a CUDA toolchain.
+> **Released installers don't build it at all.** The [release workflow](#releases) downloads llama.cpp's own prebuilt release (`bin-win-cuda-12.4-x64` plus its `cudart` archive, `bin-macos-arm64`), checks each against a pinned SHA-256, and stages it into the same paths described below — so a source build and a downloaded one are interchangeable as far as `stage-shell-bundle.mjs` is concerned. Its `Stage llama-server` steps are also the quickest way to get a working binary locally without a CUDA toolchain.
 >
-> On **macOS** the layout is `llama-cpp-turboquant/build/bin/` (no `Release/` — that is an MSVC convention), holding `llama-server` and the `lib*.dylib` set beside it, and there is no `deps/` folder: Metal is a system framework.
+> On **macOS** the layout is `llama-cpp/build/bin/` (no `Release/` — that is an MSVC convention), holding `llama-server` and the `lib*.dylib` set beside it, and there is no `deps/` folder: Metal is a system framework.
 
-### 1. Build the TurboQuant `llama-server`
+### 1. Build `llama-server`
 
-Clone [TurboQuant](https://github.com/TheTom/llama-cpp-turboquant) **into `redstart-nest/llama-cpp-turboquant/`** (that exact path — it's where both the dev binary lookup and `stage-shell-bundle.mjs` expect it) and build it there:
+Clone [llama.cpp](https://github.com/ggml-org/llama.cpp) **into `redstart-nest/llama-cpp/`** (that exact path — it's where both the dev binary lookup and `stage-shell-bundle.mjs` expect it) and build it there:
 
 ```bash
 cd redstart-nest
-git clone https://github.com/TheTom/llama-cpp-turboquant.git
-# then follow TurboQuant's own CMake build instructions
+git clone https://github.com/ggml-org/llama.cpp.git llama-cpp
+# then follow llama.cpp's own CMake build instructions (docs/build.md), e.g. -DGGML_CUDA=ON
 ```
+
+A [TurboQuant+](https://github.com/TheTom/llama-cpp-turboquant) checkout built the same way works too. Nest asks the binary which KV-cache types it accepts (`daemon/kv-cache.mjs`) and uses the turbo types when they are there.
 
 You'll need the **NVIDIA CUDA Toolkit 13.x** and the **Visual Studio C++ build tools**. A successful build produces `llama-server.exe` plus the `ggml-*.dll` / `llama.dll` set at:
 
 ```
-redstart-nest/llama-cpp-turboquant/build/bin/Release/
+redstart-nest/llama-cpp/build/bin/Release/
 ```
 
 ### 2. Supply the runtime DLLs — `redstart-nest/deps/windows/`
 
-`llama-server.exe` also needs Visual C++ and CUDA **runtime** libraries that the TurboQuant build does **not** produce. Create the git-ignored folder `redstart-nest/deps/windows/` and place these in it:
+`llama-server.exe` also needs Visual C++ and CUDA **runtime** libraries that a source build does **not** produce. Create the git-ignored folder `redstart-nest/deps/windows/` and place these in it:
 
 | DLL(s) | Where to get them |
 |---|---|
-| `MSVCP140.dll`, `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll`, `VCOMP140.DLL` | Visual C++ Redistributable / your Visual Studio install |
+| `MSVCP140.dll`, `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll`, and `VCOMP140.DLL` if your build uses MSVC's OpenMP | Visual C++ Redistributable / your Visual Studio install |
 | `cublas64_13.dll`, `cublasLt64_13.dll` | NVIDIA CUDA Toolkit 13.x `bin/` directory |
 
 Without these, the packaged `llama-server.exe` fails to load on any machine that doesn't already have the CUDA 13 / VC++ runtimes installed. (The `64_13` suffix is CUDA major version 13 — match it to the toolkit you built against.)
@@ -268,7 +270,7 @@ npm install --prefix ../chat-ui  # the build compiles the chat-ui too
 npm run build
 ```
 
-`npm run build` builds the chat-ui and the launcher, then `scripts/stage-shell-bundle.mjs` copies **both** `llama-cpp-turboquant/build/bin/Release/` and `deps/windows/` into the staged `resources/bin/`, and `tauri build` packages it.
+`npm run build` builds the chat-ui and the launcher, then `scripts/stage-shell-bundle.mjs` copies **both** `llama-cpp/build/bin/Release/` and `deps/windows/` into the staged `resources/bin/`, and `tauri build` packages it.
 
 ---
 
@@ -329,8 +331,8 @@ Things worth knowing:
 - **Leaving alpha is a manual step.** The bump only understands `X.Y.Z-alpha.N`; anything else stops the workflow with an error, so set the next version by hand in a PR when it is time for a beta or a 1.0.
 - **Nothing is signed with a real identity.** Windows installers are unsigned, as before. macOS apps are ad-hoc signed: each by its `stage-shell-bundle.mjs` (every Mach-O) plus Tauri's `signingIdentity: "-"`. That is enough that Apple Silicon does not call them "damaged", but not enough to pass Gatekeeper without the user's *Open Anyway*.
 - **Both apps' updates ARE signed**, with one updater key (repo secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the public key is in each `shell/tauri.conf.json`, and `test-packaging.mjs` checks they match). Each build job writes a manifest fragment, and the release job merges them into `nest-latest.json` and `twig-latest.json`. The Windows job also writes `nest.yml`, which is how Electron-era installs find the bridge installer. Lose the key and no install can be updated again: keep a backup off the machine.
-- **Moving the TurboQuant+ pin** means changing `TQP_TAG`, both asset names and both SHA-256 values at the top of the workflow, then re-reading the CUDA DLL entries in [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) — a new CUDA major renames them. The Windows job's [`check-dll-closure.mjs`](../redstart-nest/scripts/check-dll-closure.mjs) step fails the build if the new set imports a DLL that was not staged.
-- **The macOS llama-server links Homebrew's OpenSSL.** TurboQuant+'s prebuilt points at `/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib` and `libcrypto.3.dylib`, so on a Mac without Homebrew it aborts at launch. The mac job's [`bundle-mac-dylibs.mjs`](../redstart-nest/scripts/bundle-mac-dylibs.mjs) copies every non-system dependency into `bin/`, relinks it to `@loader_path`, re-signs, and then fails the build if any dependency still points outside macOS or `bin/`. The `--version` smoke after it cannot catch a regression, because the runner has Homebrew. Gaps: the bundled OpenSSL is whatever `openssl@3` the runner image has, not pinned; and building llama.cpp ourselves with `-DLLAMA_OPENSSL=OFF` would remove the dependency entirely (Nest downloads models itself and never uses llama-server's HTTPS), but that means owning a source build.
+- **Moving the llama.cpp pin** means changing `LLAMA_TAG`, the three asset names and their SHA-256 values at the top of the workflow, then re-reading the CUDA DLL entries in [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) — a new CUDA major renames them. The Windows job's [`check-dll-closure.mjs`](../redstart-nest/scripts/check-dll-closure.mjs) step fails the build if the new set imports a DLL that was not staged.
+- **The macOS llama-server must not link anything outside macOS and `bin/`.** llama.cpp's release build compiles BoringSSL in and uses `@loader_path`, so today there is nothing to copy. The TurboQuant+ build this replaced linked Homebrew's OpenSSL by absolute path and aborted on a Mac without Homebrew. The mac job's [`bundle-mac-dylibs.mjs`](../redstart-nest/scripts/bundle-mac-dylibs.mjs) is kept as the guard: it copies any non-system dependency into `bin/`, relinks it to `@loader_path`, re-signs, and fails the build if a dependency still points outside macOS or `bin/`. The `--version` smoke after it cannot catch such a regression, because the runner has Homebrew. (`/usr/lib/librdma.dylib` is weak-linked by upstream and absent before macOS 26; the binary's minimum is macOS 13.3.)
 
 ### Redstart Twig Android
 

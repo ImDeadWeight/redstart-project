@@ -8,7 +8,7 @@ What the pieces are, how they talk to each other, and which ports they hold.
 
 ## The ecosystem
 
-Redstart is an **ecosystem of applications** around one idea: a model you own, running on hardware you own, reachable from every tool you work in. It is built on [TurboQuant+](https://github.com/TheTom/llama-cpp-turboquant), a production-grade fork of [llama.cpp](https://github.com/ggerganov/llama.cpp) that adds advanced weight and KV-cache quantization — because your existing PC probably has a GPU capable of running a decent LLM already.
+Redstart is an **ecosystem of applications** around one idea: a model you own, running on hardware you own, reachable from every tool you work in. It is built on [llama.cpp](https://github.com/ggml-org/llama.cpp), with its KV cache quantized so a consumer GPU holds a usable context (a [TurboQuant+](https://github.com/TheTom/llama-cpp-turboquant) binary can be swapped in for its smaller cache types) — because your existing PC probably has a GPU capable of running a decent LLM already.
 
 **Redstart Nest hosts the model. Everything else is a client** that finds it on the network, signs in with a Redstart account, and gets the same tools and policy the admin configured once.
 

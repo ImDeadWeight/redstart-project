@@ -34,11 +34,14 @@ const CONTEXT_PRESETS: { value: number; label: string }[] = [
   { value: 131072, label: 'Longest (128K tokens)' },
 ]
 
+// Ratios are for the whole cache (K and V) against full precision, with the
+// bundled llama.cpp; a TurboQuant+ binary chosen in System saves a little more
+// (kv-cache.mjs maps each preset to the types the binary accepts).
 const KV_HELP: Record<NonNullable<LlamaConfig['kvCache']>, string> = {
   off: 'Full-precision cache. Uses the most GPU memory, so it holds the least conversation.',
-  conservative: 'A light saving, nearly identical to full precision.',
-  balanced: 'Holds about 3 to 4 times more conversation, with almost no loss in quality.',
-  aggressive: 'Holds the most. Best for mixture-of-experts models such as Qwen3.6; check the answers on your model.',
+  conservative: 'Holds about twice as much conversation, nearly identical to full precision.',
+  balanced: 'Holds about 2.5 times more conversation, with almost no loss in quality.',
+  aggressive: 'Holds about 3.5 times more. Check the answers on your model.',
 }
 
 function Field({ label, children, hint, className = '' }: { label: string; children: React.ReactNode; hint?: string; className?: string }) {
@@ -195,7 +198,7 @@ export function ModelSection({
               <option value="off">Off — best quality, uses the most memory</option>
               <option value="conservative">Light</option>
               <option value="balanced">Balanced — recommended</option>
-              <option value="aggressive">Maximum — for mixture-of-experts models</option>
+              <option value="aggressive">Maximum</option>
             </select>
           </Field>
         </div>

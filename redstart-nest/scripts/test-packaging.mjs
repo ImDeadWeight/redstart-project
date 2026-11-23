@@ -305,7 +305,7 @@ console.log('\n-- resources the daemon reaches for at runtime --')
 
 // Each of these shipped broken once and failed nothing: the app starts fine
 // without them and only degrades. They read stage-shell-bundle.mjs
-// statically, so they hold in CI where deps/ and llama-cpp-turboquant/ do
+// statically, so they hold in CI where deps/ and llama-cpp/ do
 // not exist.
 
 test('🔍 Nest stages elevate.exe, which firewall.mjs resolves from the resources dir', () => {

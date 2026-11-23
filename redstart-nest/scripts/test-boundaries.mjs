@@ -85,7 +85,7 @@ export function isTestFile(rel) {
 
 const SKIP_DIRS = new Set([
   'node_modules', 'dist', 'dev-dist', 'build', 'target', 'bundle', 'gen', '.svelte-kit',
-  'licenses', 'deps', 'llama-cpp-turboquant', 'android', 'static', 'test-results',
+  'licenses', 'deps', 'llama-cpp', 'llama-cpp-turboquant', 'android', 'static', 'test-results',
   '.git', '.claude', '.idea', '.redstart-daemon',
 ])
 const CODE_EXT = new Set(['.mjs', '.js', '.cjs', '.ts', '.svelte', '.rs'])

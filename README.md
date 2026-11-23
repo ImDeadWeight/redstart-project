@@ -295,7 +295,7 @@ The hardware and models used during development, all on one machine. Results wil
 | **GPU** | NVIDIA RTX 3060 12 GB |
 | **RAM** | 32 GB DDR5 |
 | **OS** | Windows |
-| **Engine** | llama-server, the bundled TurboQuant+ build |
+| **Engine** | llama-server, the TurboQuant+ build Nest bundled at the time (it now bundles upstream llama.cpp) |
 
 | Model | Quant | Measured |
 |---|---|---|
@@ -392,8 +392,8 @@ server. See [Architecture](docs/architecture.md) for the full picture.
 
 ## Acknowledgements
 
-- [llama.cpp](https://github.com/ggerganov/llama.cpp) — the inference engine that makes all of this possible
-- [TurboQuant](https://github.com/TheTom/llama-cpp-turboquant) — the llama.cpp build and quantization tooling used here; the included `llama-server.exe` comes from this project
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) — the inference engine that makes all of this possible; the included `llama-server` is its own release build
+- [TurboQuant](https://github.com/TheTom/llama-cpp-turboquant) — the llama.cpp fork Nest bundled until 1.0.0-alpha.22, and still supports as a custom binary (its turbo KV-cache types are used when it is the one running)
 - [Unsloth](https://huggingface.co/unsloth) — pre-quantized GGUF models including the Qwen 3.6 model used during development
 - [llama.cpp web UI](https://github.com/ggerganov/llama.cpp/tree/master/examples/server) — the upstream chat UI that the Redstart chat frontend is forked from
 

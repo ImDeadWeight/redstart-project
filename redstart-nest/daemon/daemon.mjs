@@ -196,17 +196,21 @@ function resolveBinary() {
     // Packaged: binary is placed at resources/bin/ by scripts/stage-shell-bundle.mjs
     candidates.push(path.join(resourcesDir(), 'bin', name))
   } else {
-    // Dev: look in the project tree
+    // Dev: look in the project tree. llama-cpp/ is where the release workflow
+    // stages upstream llama.cpp (and where a source build goes);
+    // llama-cpp-turboquant/ is the folder older checkouts still have, from
+    // when the bundled engine was the TurboQuant+ fork.
     const projectRoot = path.join(__dirname, '..')
+    const trees = ['llama-cpp', 'llama-cpp-turboquant']
+    for (const tree of trees) candidates.push(path.join(projectRoot, tree, 'build', 'bin', 'Release', name))
     candidates.push(
-      path.join(projectRoot, 'llama-cpp-turboquant', 'build', 'bin', 'Release', name),
       path.join(projectRoot, name),
       path.join(process.cwd(), name),
     )
     if (process.platform !== 'win32') {
       // A POSIX build tree puts it here instead of under a Release/ config
       // directory, which is an MSVC convention rather than a CMake one.
-      candidates.push(path.join(projectRoot, 'llama-cpp-turboquant', 'build', 'bin', name))
+      for (const tree of trees) candidates.push(path.join(projectRoot, tree, 'build', 'bin', name))
     }
   }
 

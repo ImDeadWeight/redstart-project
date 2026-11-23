@@ -31,19 +31,24 @@ permissions:
   contents: read
 
 env:
-  # The inference binary is TurboQuant+'s own prebuilt release, not a CI build
-  # of the fork: a CUDA toolchain on a hosted runner costs about an hour per
-  # build and would pin a GPU architecture list this project would then own.
-  # The prebuilt Windows zip covers every architecture CUDA 12.4 supports, at
-  # the price of a ~960 MB ggml-cuda.dll. To move the pin: change the tag,
-  # re-hash both assets (GitHub publishes the digest on the release page), and
-  # re-check THIRD-PARTY-NOTICES.md — a new CUDA major renames the DLLs.
-  TQP_REPO: TheTom/llama-cpp-turboquant
-  TQP_TAG: tqp-v0.4.0
-  TQP_WIN_ASSET: turboquant-plus-tqp-v0.4.0-windows-x64-cuda12.4.zip
-  TQP_WIN_SHA256: 033c0a2ce4d876bd1f4c840f1c6eef9a3a55f6af54e20f61bde59e7b2181e6d7
-  TQP_MAC_ASSET: turboquant-plus-tqp-v0.4.0-macos-arm64-metal.tar.gz
-  TQP_MAC_SHA256: f38d0c68e2db29b705ec3944360296c1f8003e4f920d60e6740f9968f3f93769
+  # The inference binary is upstream llama.cpp's own prebuilt release
+  # (ggml-org/llama.cpp), not a CI build: a CUDA toolchain on a hosted runner
+  # costs about an hour per build and would pin a GPU architecture list this
+  # project would then own. Upstream publishes the Windows CUDA build as two
+  # archives — the binaries (with the CPU backends and llama-server) and the
+  # CUDA runtime — and every macOS build with BoringSSL linked in, so the
+  # Mac binary needs nothing outside macOS and bin/. To move the pin: change
+  # the tag, re-hash all three assets (sha256sum on the downloaded files, or
+  # the digest GitHub publishes on the release page), and re-check
+  # THIRD-PARTY-NOTICES.md — a new CUDA major renames the DLLs.
+  LLAMA_REPO: ggml-org/llama.cpp
+  LLAMA_TAG: b12651
+  LLAMA_WIN_ASSET: llama-b12651-bin-win-cuda-12.4-x64.zip
+  LLAMA_WIN_SHA256: 1a6c090f76fab41260b5b7597c6fb1add1fad2efaac692ae2673a22366220a29
+  LLAMA_WIN_CUDART_ASSET: cudart-llama-bin-win-cuda-12.4-x64.zip
+  LLAMA_WIN_CUDART_SHA256: 8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6
+  LLAMA_MAC_ASSET: llama-b12651-bin-macos-arm64.tar.gz
+  LLAMA_MAC_SHA256: 264fd872de61679c45ad57e1e21c2a2a54e29b35734ecf3d50f24166447ab8d2
   # elevate.exe (firewall.mjs's UAC shim) is the one shipped inside
   # electron-builder's own pinned NSIS bundle — byte-identical to the copy
   # previous installers carried. Both the archive and the file are pinned.
@@ -180,23 +185,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          dl="$RUNNER_TEMP/tqp"
-          gh release download "$TQP_TAG" -R "$TQP_REPO" -p "$TQP_WIN_ASSET" -D "$dl"
-          echo "$TQP_WIN_SHA256  $dl/$TQP_WIN_ASSET" | sha256sum -c -
+          dl="$RUNNER_TEMP/llama"
+          gh release download "$LLAMA_TAG" -R "$LLAMA_REPO" -p "$LLAMA_WIN_ASSET" -p "$LLAMA_WIN_CUDART_ASSET" -D "$dl"
+          echo "$LLAMA_WIN_SHA256  $dl/$LLAMA_WIN_ASSET" | sha256sum -c -
+          echo "$LLAMA_WIN_CUDART_SHA256  $dl/$LLAMA_WIN_CUDART_ASSET" | sha256sum -c -
 
-          bin=redstart-nest/llama-cpp-turboquant/build/bin/Release
+          bin=redstart-nest/llama-cpp/build/bin/Release
           deps=redstart-nest/deps/windows
           mkdir -p "$bin" "$deps"
           # The server and exactly the libraries it loads — not the archive's
-          # ~20 other tools, which nothing in Nest spawns.
-          7z e -y "$dl/$TQP_WIN_ASSET" -o"$bin" llama-server.exe llama-server-impl.dll \
-            llama-common.dll llama.dll mtmd.dll 'ggml*.dll'
-          7z e -y "$dl/$TQP_WIN_ASSET" -o"$deps" 'cublas64_*.dll' 'cublasLt64_*.dll' 'cudart64_*.dll'
+          # ~20 other tools, which nothing in Nest spawns. ggml*.dll includes
+          # the per-CPU backends (ggml-cpu-haswell.dll, ...), which ggml picks
+          # between at load time. libomp.dll is LLVM's OpenMP runtime: the
+          # upstream build links it instead of MSVC's VCOMP140.
+          7z e -y "$dl/$LLAMA_WIN_ASSET" -o"$bin" llama-server.exe llama-server-impl.dll \
+            llama-common.dll llama.dll mtmd.dll libomp.dll 'ggml*.dll'
+          7z e -y "$dl/$LLAMA_WIN_CUDART_ASSET" -o"$deps" 'cublas64_*.dll' 'cublasLt64_*.dll' 'cudart64_*.dll'
 
           # VC++ runtime: the hosted image has the 2015-2022 redistributable
-          # installed. VCOMP140 is the OpenMP runtime — the one an earlier
-          # case-sensitive filter silently dropped (test-packaging.mjs).
-          for f in msvcp140.dll vcruntime140.dll vcruntime140_1.dll vcomp140.dll; do
+          # installed. VCOMP140 (MSVC's OpenMP) is no longer among them: the
+          # upstream build uses libomp.dll, staged above, and
+          # check-dll-closure.mjs below fails if anything still imports it.
+          for f in msvcp140.dll vcruntime140.dll vcruntime140_1.dll; do
             cp "/c/Windows/System32/$f" "$deps/"
           done
 
@@ -217,25 +227,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          dl="$RUNNER_TEMP/tqp"
-          gh release download "$TQP_TAG" -R "$TQP_REPO" -p "$TQP_MAC_ASSET" -D "$dl"
-          echo "$TQP_MAC_SHA256  $dl/$TQP_MAC_ASSET" | shasum -a 256 -c -
-          tar -xzf "$dl/$TQP_MAC_ASSET" -C "$dl"
+          dl="$RUNNER_TEMP/llama"
+          gh release download "$LLAMA_TAG" -R "$LLAMA_REPO" -p "$LLAMA_MAC_ASSET" -D "$dl"
+          echo "$LLAMA_MAC_SHA256  $dl/$LLAMA_MAC_ASSET" | shasum -a 256 -c -
+          tar -xzf "$dl/$LLAMA_MAC_ASSET" -C "$dl"
 
           # build/bin/ (no Release/) is where a POSIX CMake build puts it, and
           # where daemon.mjs's dev lookup already checks on non-Windows.
-          bin=redstart-nest/llama-cpp-turboquant/build/bin
+          bin=redstart-nest/llama-cpp/build/bin
           mkdir -p "$bin"
-          # -L: the archive's libfoo.dylib / libfoo.0.dylib are symlinks.
+          # -L: the archive's libfoo.dylib / libfoo.1.dylib are symlinks.
           # Dereferenced, every name the loader may ask for is a real file,
           # and electron-builder never has to carry a symlink into the bundle.
-          cp -L "$dl/turboquant-plus-$TQP_TAG/llama-server" "$dl/turboquant-plus-$TQP_TAG/"*.dylib "$bin/"
+          cp -L "$dl/llama-$LLAMA_TAG/llama-server" "$dl/llama-$LLAMA_TAG/"*.dylib "$bin/"
 
-          # The prebuilt links Homebrew's OpenSSL by absolute path. The runner
-          # has Homebrew, a user's Mac may not: copy those libraries in, relink
-          # them to @loader_path, and fail on any dependency still pointing
-          # outside macOS or bin/. The smoke below cannot catch this — on this
-          # runner /opt/homebrew is there.
+          # Upstream links BoringSSL statically and sets @loader_path, so this
+          # should find nothing to copy. It stays as the guard: it relinks any
+          # dependency outside macOS or bin/ that a future build brings in
+          # (the TurboQuant+ build linked Homebrew's OpenSSL), and fails if
+          # one cannot be resolved. The smoke below cannot catch that — on
+          # this runner /opt/homebrew is there.
           node redstart-nest/scripts/bundle-mac-dylibs.mjs "$bin/llama-server" "$bin"
 
           # Smoke, with the extracted archive gone: proves the binary finds its

@@ -31,6 +31,7 @@ import { publish } from '../event-broker.mjs'
 import { startRun, appendLine, endRun } from '../process-log.mjs'
 import { chooseChatTemplate } from '../chat-template-choice.mjs'
 import { resolveProjector } from '../projector.mjs'
+import { probeCacheTypes, resolveKvCache } from '../kv-cache.mjs'
 import { getUpstreamPort, setUpstreamPort, beginModelSuspension, endModelSuspension, completionsInFlight } from '../completion-activity.mjs'
 
 // EMA smoothing factor for the tokens/sec readout (moved here with its sole
@@ -56,8 +57,14 @@ function rememberDiscovery(config, { readSettings, writeSettings }) {
 
 // The preview applies the same chat-template choice as the launch, so a
 // skipped override is missing from the preview too.
-export function generateLlamaCommand(config, { buildArgs }) {
-  const args = buildArgs(resolveProjector(chooseChatTemplate(config).config).config)
+// The KV-cache types too: the preview asks the same binary the launch would
+// run which cache types it accepts (kv-cache.mjs), so a TurboQuant+ binary
+// previews turbo types and upstream llama.cpp previews its own.
+export async function generateLlamaCommand(config, { buildArgs, resolveBinary, execFileAsync }) {
+  let binaryPath = null
+  try { binaryPath = resolveBinary?.() ?? null } catch { binaryPath = null }
+  const cacheTypes = await probeCacheTypes(binaryPath, { execFileAsync })
+  const args = buildArgs(resolveKvCache(resolveProjector(chooseChatTemplate(config).config).config, cacheTypes).config)
   return `${serverBinaryName()} ${args.join(' ')}`
 }
 
@@ -133,7 +140,7 @@ export async function launchServer(config, deps) {
  * publishes server:stopped, because the server has not stopped — the gateway,
  * MCP server and file-system provider are all still up.
  */
-function spawnLlama(config, deps, binaryPath) {
+function spawnLlama(config, deps, binaryPath, cacheTypes = null) {
   const { serverState, buildArgs, parseEvalTokensPerSec, userDataDir } = deps
   const binaryDir = path.dirname(binaryPath)
   // A bundled template override is checked against the model before it is
@@ -143,7 +150,10 @@ function spawnLlama(config, deps, binaryPath) {
   // Then the vision projector, on the template's output, the same order the
   // preview uses. See projector.mjs.
   const projector = resolveProjector(template.config)
-  const spawnArgs = buildArgs(projector.config, true)
+  // Then the KV-cache preset, mapped to the types this binary accepts
+  // (cacheTypes, probed by the caller; see kv-cache.mjs).
+  const kv = resolveKvCache(projector.config, cacheTypes)
+  const spawnArgs = buildArgs(kv.config, true)
 
   // --- Piped mode (in-app log + token tracking) ---
   serverState.ema = 0
@@ -169,6 +179,8 @@ function spawnLlama(config, deps, binaryPath) {
   publish('server:log', template.logLine)
   appendLine(projector.logLine)
   publish('server:log', projector.logLine)
+  appendLine(kv.logLine)
+  publish('server:log', kv.logLine)
   appendLine(`[redstart] args: ${spawnArgs.join(' ')}`)
 
   const forwardLines = (chunk) => {
@@ -275,8 +287,11 @@ async function doLaunchServer(config, deps) {
     return { success: false, error: `${serverBinaryName()} not found.
 Place it in the build output directory or the project root, or set a custom path via Settings.` }
   }
+  // Asked before the spawn, never in it: `--help` is a second short run of the
+  // same binary, cached per binary file after the first answer.
+  const cacheTypes = await probeCacheTypes(binaryPath, deps)
   try {
-    const child = spawnLlama(config, deps, binaryPath)
+    const child = spawnLlama(config, deps, binaryPath, cacheTypes)
 
     // Start the gateway on the public port. It injects the Redstart system
     // context into every completions request and proxies everything else
@@ -471,9 +486,10 @@ async function doResumeModel(deps, readyTimeoutMs, fetchImpl) {
   const binaryPath = resolveBinary()
   if (!config || !binaryPath) return fail('The chat model could not be reloaded after image generation: its configuration or binary is gone.')
 
+  const cacheTypes = await probeCacheTypes(binaryPath, deps)
   let child
   try {
-    child = spawnLlama(config, deps, binaryPath)
+    child = spawnLlama(config, deps, binaryPath, cacheTypes)
   } catch (err) {
     return fail(`The chat model could not be reloaded after image generation: ${err.message}`)
   }

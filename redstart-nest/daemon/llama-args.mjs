@@ -2,6 +2,7 @@
 
 import { isPackaged, resourcesDir } from './platform-paths.mjs'
 import { EMBED_PORT } from './ports.mjs'
+import { kvCacheTypes } from './kv-cache.mjs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
 
@@ -28,19 +29,13 @@ import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-// TurboQuant KV-cache quantization presets. This is the whole reason Redstart
-// runs on the TurboQuant+ fork: its Walsh-Hadamard-rotated polar codec shrinks
-// the KV cache ~3-4x vs the f16 default, which is what lets a 12 GB card hold a
-// usable context instead of blowing VRAM at 16k tokens. The asymmetric-K/V rule
-// from the fork's own papers is encoded here — K stays high-precision (q8_0),
-// only V drops to a turbo tier; we never lead with a turbo K, which is where
-// models break. Flash attention is already 'auto' in the binary and self-enables
-// for turbo KV, so there's nothing to add on that front.
-export const KV_CACHE_PRESETS = {
-  conservative: { k: 'q8_0', v: 'turbo4' }, // lightest turbo V; first contact
-  balanced:     { k: 'q8_0', v: 'turbo3' }, // recommended default: near-lossless K, ~4.6x V
-  aggressive:   { k: 'q8_0', v: 'turbo2' }, // MoE-aware; Boundary V auto-protects sensitive layers
-}
+// KV-cache presets live in kv-cache.mjs, which maps a profile's kvCache preset
+// to the -ctk/-ctv types the binary that will run accepts (upstream llama.cpp
+// or a TurboQuant+ build).
+
+// A cache type is a ggml type name (q8_0, turbo3, ...). Anything else is never
+// put on the command line, whatever a config file says.
+const SAFE_CACHE_TYPE = /^[a-z0-9_]{1,16}$/
 
 export function buildArgs(config, raw = false) {
   const q = raw ? (v) => v : (v) => `"${v}"`
@@ -101,10 +96,14 @@ export function buildArgs(config, raw = false) {
   if (config.noMmap) {
     args.push('--no-mmap')
   }
-  // KV-cache quantization via TurboQuant. Omitted entirely when unset or 'off'
-  // so legacy profiles keep the exact f16 behavior they had before.
-  const kv = KV_CACHE_PRESETS[config.kvCache]
-  if (kv) {
+  // KV-cache quantization. kvCacheTypes is set by kv-cache.mjs's
+  // resolveKvCache(), which the launch and the preview both apply, from the
+  // preset and what the binary accepts ({ k, v }, or null for none). A config
+  // that never went through it (a direct caller, a test) gets the upstream
+  // mapping, which every build accepts. Omitted entirely when unset or 'off',
+  // so those profiles keep the f16 default.
+  const kv = config.kvCacheTypes !== undefined ? config.kvCacheTypes : kvCacheTypes(config.kvCache, null)
+  if (kv?.k && kv?.v && SAFE_CACHE_TYPE.test(kv.k) && SAFE_CACHE_TYPE.test(kv.v)) {
     args.push('-ctk', kv.k, '-ctv', kv.v)
   }
   if (config.additionalArgs?.trim()) {

@@ -40,26 +40,26 @@ different routes and are verified differently:
 
 Redstart Nest bundles `llama-server.exe` and its accompanying runtime DLLs on
 Windows, and `llama-server` with its `lib*.dylib` set on macOS, from
-**TurboQuant+** — a fork of **llama.cpp** that adds advanced weight and
-KV-cache quantization. Released installers carry the fork's own prebuilt
-release binaries (currently `tqp-v0.4.0`: `windows-x64-cuda12.4` and
-`macos-arm64-metal`), downloaded and SHA-256-verified by
+**llama.cpp**. Released installers carry the project's own prebuilt release
+binaries (currently `b12651`: `bin-win-cuda-12.4-x64` with its
+`cudart-llama-bin-win-cuda-12.4-x64` runtime archive, and `bin-macos-arm64`),
+downloaded and SHA-256-verified by
 [`.github/workflows/release.yml`](.github/workflows/release.yml) rather than
 compiled by this project.
 
-- Upstream project: llama.cpp — <https://github.com/ggerganov/llama.cpp>
-- Fork used for the bundled build: TurboQuant —
-  <https://github.com/TheTom/llama-cpp-turboquant>
+- Project: llama.cpp — <https://github.com/ggml-org/llama.cpp>
 - License: MIT
 - Copyright (c) 2023-2026 The ggml authors
 
-Verified directly against the fork's own `LICENSE` file (not assumed from
-upstream) — the fork does not add a separate copyright holder line, and its
-copyright year range is 2023-2026, not the 2023-2024 carried by upstream at
-the time this fork was taken.
+Verified against the `LICENSE` file inside the `b12651` macOS release
+archive.
+
+Nest can also run a llama-server the user points it at (Settings → System),
+such as a TurboQuant+ build (<https://github.com/TheTom/llama-cpp-turboquant>,
+MIT). That binary is the user's own and is not distributed with Redstart.
 
 These binaries are **not committed to this repository** — the
-`redstart-nest/llama-cpp-turboquant/` tree and `redstart-nest/deps/` are
+`redstart-nest/llama-cpp/` tree and `redstart-nest/deps/` are
 git-ignored and assembled at build time (see
 [docs/development.md](docs/development.md)). They are present only in built
 installers.
@@ -84,24 +84,36 @@ The MIT license text applying to the above:
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
 
-### OpenSSL (macOS only)
+### BoringSSL (compiled into llama-server)
 
-The macOS installer bundles `libssl.3.dylib` and `libcrypto.3.dylib` in
-`bin/`, beside llama-server. TurboQuant+'s prebuilt `macos-arm64-metal`
-llama-server links them by absolute Homebrew path, so the release job copies
-them from the build runner's Homebrew `openssl@3` and relinks them to
-`@loader_path` ([`bundle-mac-dylibs.mjs`](redstart-nest/scripts/bundle-mac-dylibs.mjs)).
-Their install names are changed and they are re-signed ad hoc; the code is
-unmodified. The Windows build does not use them.
+llama.cpp's release builds compile **BoringSSL** in statically
+(`-DLLAMA_BUILD_BORINGSSL=ON` in llama.cpp's release workflow); llama-server
+uses it for HTTPS when it downloads a model itself, which Nest never asks it
+to do. No separate SSL library ships on either platform. (The TurboQuant+
+build this replaced linked Homebrew's OpenSSL on macOS, which the installer
+then had to carry; it no longer does.)
 
-- Project: OpenSSL — <https://www.openssl.org/>
-- License: Apache License, Version 2.0 —
-  <https://www.apache.org/licenses/LICENSE-2.0>
-- Copyright (c) 1998-2025 The OpenSSL Project Authors
+- Project: BoringSSL — <https://boringssl.googlesource.com/boringssl>
+- License: Apache License, Version 2.0 (with some files under the
+  ISC and OpenSSL/SSLeay licenses it inherits from OpenSSL) —
+  <https://boringssl.googlesource.com/boringssl/+/HEAD/LICENSE>
+- Copyright the BoringSSL authors and The OpenSSL Project Authors
 
-OpenSSL 3 ships no `NOTICE` file. The version is whatever `openssl@3` the
-runner image carries at build time; it is not pinned (see
-[docs/development.md](docs/development.md)).
+<!-- VERIFY BEFORE PUBLISHING: read BoringSSL's LICENSE at the revision
+     llama.cpp b12651 pins (vendor/ or its CMake FetchContent) and confirm the
+     license list above; carry its full text into licenses/ if required. -->
+
+### LLVM OpenMP runtime (Windows only)
+
+The Windows installer bundles `libomp.dll` ("LLVM\* OpenMP\* Runtime
+Library", per its own version resources), which llama.cpp's Windows release
+build links for its CPU backends in place of MSVC's `VCOMP140.DLL`. Copied
+unmodified from the release archive.
+
+- Project: LLVM OpenMP — <https://github.com/llvm/llvm-project/tree/main/openmp>
+- License: Apache License, Version 2.0 with LLVM Exceptions —
+  <https://llvm.org/LICENSE.txt>
+- Copyright the LLVM Project contributors
 
 ### Caddy (the TLS front door) and its DNS plugins
 
@@ -190,8 +202,9 @@ The MIT license text applying to the above:
 ### NVIDIA CUDA runtime (cuBLAS)
 
 The Windows installer bundles `cublas64_12.dll`, `cublasLt64_12.dll` and
-`cudart64_12.dll` for GPU-accelerated inference — shipped inside TurboQuant+'s
-`windows-x64-cuda12.4` release archive, and copied from it unmodified.
+`cudart64_12.dll` for GPU-accelerated inference — shipped in llama.cpp's
+`cudart-llama-bin-win-cuda-12.4-x64` release archive, and copied from it
+unmodified.
 Identified from the binaries' own version resources: CompanyName "NVIDIA
 Corporation"; "NVIDIA CUDA BLAS Library, Version 12.4.5" and "NVIDIA CUDA BLAS
 Light Library, Version 12.4.5" (Copyright "NVIDIA Corporation 2010 - 2024");
@@ -230,7 +243,7 @@ Obligations that attach to redistributing these files, per that agreement:
 
 ### Microsoft Visual C++ Runtime
 
-`redstart-nest/deps/windows/` also bundles `MSVCP140.dll`, `VCOMP140.DLL`,
+`redstart-nest/deps/windows/` also bundles `MSVCP140.dll`,
 `VCRUNTIME140.dll`, and `VCRUNTIME140_1.dll` (version 14.50.35719.0, per their
 own version resources) — the Visual C++ 2015-2022 Redistributable runtime,
 required by the native binaries built with MSVC.
@@ -447,8 +460,8 @@ checklist:
 - [ ] The NVIDIA CUDA EULA URL in the cuBLAS entry above still matches the
       EULA shipped inside the CUDA Toolkit installer actually used to build
       the current `cublas64_*.dll` / `cublasLt64_*.dll` / `cudart64_*.dll`.
-      When the `TQP_TAG` pin in `.github/workflows/release.yml` moves, re-read
-      the version resources above — a new TurboQuant+ release can change the
+      When the `LLAMA_TAG` pin in `.github/workflows/release.yml` moves, re-read
+      the version resources above — a new llama.cpp release can change the
       CUDA major version, and with it these file names.
 
 ---
