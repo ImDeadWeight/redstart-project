@@ -16,8 +16,12 @@ import { initPaths } from '../daemon/platform-paths.mjs'
 initPaths({ config: 'unused-by-kv-cache/config', capabilityBase: 'unused-by-kv-cache/data', isPackaged: false })
 
 const {
-  KV_CACHE_PRESETS, parseCacheTypes, kvCacheTypes, resolveKvCache, probeCacheTypes, clearCacheTypeProbes,
+  KV_CACHE_PRESETS, parseCacheTypes, kvCacheTypes, resolveKvCache,
 } = await import('../daemon/kv-cache.mjs')
+// The --help probe lives in server-help.mjs (it also answers the mmap flag,
+// tested in test-server-help.mjs); these tests pin its cacheTypes half.
+const { probeServerHelp, clearServerHelpProbes: clearCacheTypeProbes } = await import('../daemon/server-help.mjs')
+const probeCacheTypes = async (binaryPath, deps) => (await probeServerHelp(binaryPath, deps)).cacheTypes
 const { buildArgs } = await import('../daemon/llama-args.mjs')
 
 const results = []
@@ -177,7 +181,7 @@ await test('probe runs `<binary> --help` from the binary\'s own folder, once per
   const execFileAsync = async (file, args, opts) => { calls.push({ file, args, cwd: opts.cwd }); return { stdout: TURBO_HELP, stderr: '' } }
   const a = await probeCacheTypes('/opt/llama/llama-server', { execFileAsync, statSync: fakeStat })
   const b = await probeCacheTypes('/opt/llama/llama-server', { execFileAsync, statSync: fakeStat })
-  assert(a.has('turbo3') && b === a, 'not cached')
+  assert(a.has('turbo3') && b.has('turbo3'), 'wrong types')
   assert(calls.length === 1 && calls[0].args.join(' ') === '--help' && calls[0].cwd === '/opt/llama', JSON.stringify(calls))
 })
 

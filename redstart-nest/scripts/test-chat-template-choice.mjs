@@ -205,10 +205,12 @@ await test('the launch builds its args from the chosen config, never the raw pro
   assert(!/buildArgs\(config\b/.test(src), 'server.mjs calls buildArgs(config...) directly, bypassing chooseChatTemplate')
   // Since the vision projector (projector.mjs), the chosen config passes
   // through resolveProjector() on its way to buildArgs, and since the
-  // KV-cache mapping (kv-cache.mjs) through resolveKvCache() after that:
+  // KV-cache mapping (kv-cache.mjs) through resolveKvCache() after that, and
+  // since the mmap-off flag (server-help.mjs) through resolveMmap() last:
   // still template.config, never the raw profile.
-  assert(/resolveProjector\(template\.config\)/.test(src) && /resolveKvCache\(projector\.config, cacheTypes\)/.test(src) && /buildArgs\(kv\.config, true\)/.test(src),
-    'the launch does not build its args from template.config (through resolveProjector and resolveKvCache)')
+  assert(/resolveProjector\(template\.config\)/.test(src) && /resolveKvCache\(projector\.config,/.test(src)
+    && /resolveMmap\(kv\.config,/.test(src) && /buildArgs\(mmap\.config, true\)/.test(src),
+    'the launch does not build its args from template.config (through resolveProjector, resolveKvCache and resolveMmap)')
   assert(/appendLine\(template\.logLine\)/.test(src), 'the decision is not written to the run log')
 })
 

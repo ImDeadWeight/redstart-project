@@ -1,19 +1,28 @@
-<p align="center">
+ <p align="center">
   <img src="redstart-nest/public/redstart.svg" alt="Redstart logo" width="120" />
 </p>
 
 # Redstart
 
-**A local AI server for a household or small team.** Redstart Nest runs local models on hardware you own and exposes them to the applications you work in — chat from your phone or laptop, query your data, or drive a coding agent in your IDE. You choose the models, decide which applications and users can connect, and control what those tools can reach.
+**Local AI server infrastructure.**
 
-LM Studio, Jan and Ollama are model runners — very good ones — aimed at getting a model going on the PC in front of you. Redstart is the layer after that: accounts, tool policy and network discovery, so the model on the GPU box is usable from every device in the house. [How it compares](#alternatives-worth-knowing-about).
+Redstart is an open-source platform for building a shared, network-accessible AI environment around locally hosted models.
+
+At its center is **Redstart Nest**, a server that manages local model inference through [llama.cpp](https://github.com/ggml-org/llama.cpp) and provides the surrounding infrastructure needed to make that inference available to applications and users across a network.
+
+Nest manages the inference server and adds an application-facing gateway, account and access management, tool integrations, server administration and optional AI services around it. It also includes an evolving agent runtime for coordinating more complex tasks.
+
+Applications can connect to Nest through its network interfaces, using it as a shared local AI provider without each application needing to manage its own model server.
+
+Redstart includes its own clients and applications, but its broader purpose is to provide infrastructure that other applications and workflows can use as well.
 
 **Documentation:** [Mission](docs/mission.md) · [Architecture](docs/architecture.md) · [Security](docs/security.md) · [Capabilities](docs/capabilities.md) · [Configuration](docs/configuration.md) · [Development](docs/development.md) · [Deployment](deploy/README.md) · [Roadmap](docs/roadmap.md)
 
 ---
 
 > **AI Assistance Disclosure**
-> This project was developed using Claude Code as an AI pair programmer. I designed the product, architecture, user experience, and technical direction, while using Claude to accelerate implementation, debugging, and code generation. All design decisions and final technical choices were made by me.
+>
+> This project was developed using Claude Code as an AI pair programmer. I designed the product, architecture, user experience and technical direction, while using Claude to accelerate implementation, debugging and code generation. All design decisions and final technical choices were made by me.
 
 ---
 
@@ -22,17 +31,16 @@ LM Studio, Jan and Ollama are model runners — very good ones — aimed at gett
 <p align="center">
   <img src="docs/screenshots/tour.png" width="100%" alt="A tour of Redstart, advancing every few seconds: a chat answering with a comparison table; the Nest admin panel's Overview, Model and Images pages; Nest paused while it makes a picture, and the picture in the chat; Nest's Tools, Network & access and Terminal pages; then the chat's Accounts, Roles and Workflows settings." />
 </p>
-<p align="center"><sub>A short tour that advances on its own: the chat, the Nest admin panel, a picture being made, then the chat's admin settings. Every image below opens full size when clicked.</sub></p>
 
 **The chat** — served by Nest to any browser on your network, or through Redstart Twig.
 
 <a href="docs/screenshots/chat-conversation.png"><img src="docs/screenshots/chat-conversation.png" width="100%" alt="The chat UI answering a question with a comparison table, with recent conversations and a project in the sidebar." /></a>
 
-**Pictures, made on your GPU** — asked for a picture, the model calls `generate_image`; Nest pauses the chat model, makes it with the image model you chose, and brings the chat model back.
+**Pictures, made on your GPU** — the model can call `generate_image`. Nest pauses the chat model, starts the separate image-generation engine, and brings the chat model back when the image is ready.
 
 <a href="docs/screenshots/chat-image.png"><img src="docs/screenshots/chat-image.png" width="100%" alt="The chat showing a picture of a robin on a mossy branch that the model just made with generate_image, with a download chip under it." /></a>
 
-**Redstart Nest** — the admin panel: status and Start/Stop on top, every setting in seven sections down the side.
+**Redstart Nest** — the administration interface for managing the server, model configuration, tools and network access.
 
 <a href="docs/screenshots/nest-overview.png"><img src="docs/screenshots/nest-overview.png" width="100%" alt="Nest's Overview page: the model in use, who can connect, tools on, a setup checklist and a QR code for phones." /></a>
 
@@ -40,143 +48,157 @@ LM Studio, Jan and Ollama are model runners — very good ones — aimed at gett
 <summary><b>More of Redstart Nest</b> — Model, Images, Tools, Network &amp; access, Terminal</summary>
 <br>
 
-**Model** — your models, the hardware, and memory settings in plain words; the llama.cpp flags sit under Advanced.
+**Model** — model selection, hardware information and memory settings, with llama.cpp flags under Advanced.
 
-<a href="docs/screenshots/nest-model.png"><img src="docs/screenshots/nest-model.png" width="100%" alt="Nest's Model page: the model in use, the hardware line, and the models folder with a vision model marked as seeing images." /></a>
+<a href="docs/screenshots/nest-model.png"><img src="docs/screenshots/nest-model.png" width="100%" alt="Nest's Model page." /></a>
 
-**Finding a model** — **Find models on Hugging Face** opens a browser: recommended publishers on the left, a search that stays inside the publisher you picked, and the model you open beside the list. Each size is drawn against your GPU memory and RAM, so you can see what fits before you download it.
+**Finding a model** — browse supported publishers on Hugging Face, inspect model files and compare their sizes against available GPU memory and RAM before downloading.
 
-<a href="docs/screenshots/nest-hf-models.png"><img src="docs/screenshots/nest-hf-models.png" width="100%" alt="The Find models on Hugging Face browser: Unsloth chosen in the sidebar, a search for qwen inside it, the results sorted by downloads, and Qwen3.6-35B-A3B opened on the right with each size from 13 to 37 GB drawn against the computer's 12 GB GPU and 31 GB of RAM, the one already downloaded marked." /></a>
+<a href="docs/screenshots/nest-hf-models.png"><img src="docs/screenshots/nest-hf-models.png" width="100%" alt="The Find models on Hugging Face browser." /></a>
 
-**Images** — the picture model, the way Model is the chat model: the image model in use, your image models (the same list as Model's), finding one on Hugging Face, and the engine.
+**Images** — configure the separate image-generation model and its engine.
 
-<a href="docs/screenshots/nest-images.png"><img src="docs/screenshots/nest-images.png" width="100%" alt="Nest's Images page: FLUX.1 schnell in use and ready, and the image models list with a Stable Diffusion XL model beside it, kept in the models folder's image folder." /></a>
+<a href="docs/screenshots/nest-images.png"><img src="docs/screenshots/nest-images.png" width="100%" alt="Nest's Images page." /></a>
 
-The image browser works the same way, with a **Family** filter for the kinds of image model Nest runs. It shows the family's shared files with each size, which come along with the first model of a family.
+**Finding image models** — browse supported image-model families and their shared files.
 
-<a href="docs/screenshots/nest-hf-images.png"><img src="docs/screenshots/nest-hf-images.png" width="100%" alt="The Find image models on Hugging Face browser: city96 and the FLUX.1 schnell family chosen, four FLUX.1 schnell conversions listed, and one opened with its family read from the model card and each file drawn against the GPU and RAM." /></a>
+<a href="docs/screenshots/nest-hf-images.png"><img src="docs/screenshots/nest-hf-images.png" width="100%" alt="The Find image models on Hugging Face browser." /></a>
 
-**Tools** — one row per tool with its switch; opening a row shows its settings.
+**Tools** — configure the capabilities available to connected applications.
 
-<a href="docs/screenshots/nest-tools.png"><img src="docs/screenshots/nest-tools.png" width="100%" alt="Nest's Tools page: a compact list of tools with on/off switches, with Image generation opened to show it is ready and links to the Images page." /></a>
+<a href="docs/screenshots/nest-tools.png"><img src="docs/screenshots/nest-tools.png" width="100%" alt="Nest's Tools page." /></a>
 
-**Network &amp; access** — who can connect, the addresses and QR code, HTTPS, and sign-in.
+**Network &amp; access** — manage connection settings, addresses, QR codes, HTTPS and sign-in.
 
-<a href="docs/screenshots/nest-network.png"><img src="docs/screenshots/nest-network.png" width="100%" alt="Nest's Network & access page with the direct IP address, its QR code, and the secure address setup." /></a>
+<a href="docs/screenshots/nest-network.png"><img src="docs/screenshots/nest-network.png" width="100%" alt="Nest's Network & access page." /></a>
 
-**Terminal** — the model server's own output, live.
+**Terminal** — live output from the underlying model server.
 
-<a href="docs/screenshots/nest-terminal.png"><img src="docs/screenshots/nest-terminal.png" width="100%" alt="Nest's Terminal page showing llama-server loading the model onto the GPU." /></a>
-
+<a href="docs/screenshots/nest-terminal.png"><img src="docs/screenshots/nest-terminal.png" width="100%" alt="Nest's Terminal page showing llama-server output." /></a>
 </details>
 
 <details>
 <summary><b>More of the chat</b> — on a phone, Accounts, Roles, Workflows, System prompt</summary>
 <br>
 
-**On a phone** — the same chat, no app needed.
+**On a phone** — the same chat interface, with no app required.
 
 <p align="center"><a href="docs/screenshots/chat-phone.png"><img src="docs/screenshots/chat-phone.png" width="390" alt="The chat on a phone-sized screen." /></a></p>
 
-**Accounts** — each person signs in with their own account, and their files and history are theirs alone.
+**Accounts** — each person signs in with their own account, with separate files and conversation history.
 
-<a href="docs/screenshots/chat-accounts.png"><img src="docs/screenshots/chat-accounts.png" width="100%" alt="Settings → Accounts listing the owner, two users with the Intake staff role, and an admin." /></a>
+<a href="docs/screenshots/chat-accounts.png"><img src="docs/screenshots/chat-accounts.png" width="100%" alt="Chat account management." /></a>
 
-**Roles** — what an account may reach: a role only ever takes away.
+**Roles** — control which capabilities and resources an account can access.
 
-<a href="docs/screenshots/chat-roles.png"><img src="docs/screenshots/chat-roles.png" width="100%" alt="Settings → Roles with the built-in Full Access and Restricted roles and a custom Intake staff role." /></a>
+<a href="docs/screenshots/chat-roles.png"><img src="docs/screenshots/chat-roles.png" width="100%" alt="Chat role management." /></a>
 
-**Workflows** — saved instructions for recurring work, personal or shared, run by typing <code>/</code>.
+**Workflows** — saved instructions for recurring tasks, personal or shared.
 
-<a href="docs/screenshots/chat-workflows.png"><img src="docs/screenshots/chat-workflows.png" width="100%" alt="The Workflows page with a personal weekly-update workflow and an organisation case-note-summary workflow." /></a>
+<a href="docs/screenshots/chat-workflows.png"><img src="docs/screenshots/chat-workflows.png" width="100%" alt="Chat workflow management." /></a>
 
-**System prompt** — the organisation's context, policy and format, composed by the server for every client.
+**System prompt** — shared organizational context, behavioral guidelines and output formatting composed by the server for connected clients.
 
-<a href="docs/screenshots/chat-system-prompt.png"><img src="docs/screenshots/chat-system-prompt.png" width="100%" alt="Settings → System Prompt with fields for context, behavioural guidelines and output format." /></a>
-
+<a href="docs/screenshots/chat-system-prompt.png"><img src="docs/screenshots/chat-system-prompt.png" width="100%" alt="Chat system prompt configuration." /></a>
 </details>
 
-<sub>All captured from this repository's own code. The Nest pages and the picture are from a real run on the tested hardware below: Qwen3.6-35B-A3B answering, FLUX.1 schnell drawing, the network address replaced with a stand-in. The other chat screens were captured earlier against a stand-in model server, so those answers are scripted.</sub>
+<sub>All captured from this repository's own code. The Nest pages and image-generation example are from a real run on the tested hardware below: Qwen3.6-35B-A3B answering, FLUX.1 schnell drawing, with the network address replaced by a stand-in. Other chat screens were captured against a stand-in model server, so those answers are scripted.</sub>
 
 ---
 
 ## What Nest does
 
-**Redstart Nest is the server.** It runs the model, and it owns the four things a
-model on its own doesn't have: who may use it, what it may reach, how devices
-find it, and who may administer it. Everything else — Twig, a browser, a coding
-agent — is a client that connects and gets whatever the admin configured once.
+**Redstart Nest is the server infrastructure around the model server.** It manages the underlying inference process and provides the services that make it usable by multiple people and applications: network access, accounts, tool policy, administration and discovery.
 
-- **Runs the model.** llama.cpp on your hardware, bound to loopback, driven from a launcher that handles model files, GPU offload and the server lifecycle. Closing the window doesn't stop it; it keeps serving from the tray.
-- **Serves every device on the network.** Nest broadcasts a beacon, so Twig finds it with no configuration and a phone camera can open the chat UI from a QR code. The chat UI is served by Nest itself, so any browser works with nothing installed.
-- **Owns accounts and roles.** Login is on by default with no localhost exemption, roles are assigned per account, and each account's files are structurally isolated from every other's.
-- **Owns the tool policy.** Capabilities and plugins are configured once on the server and apply to every client. Each client authenticates with a per-connector key that carries its own *surface*, so the server knows which app is calling from the credential rather than from a header it could fake.
-- **Keeps control separate from chat.** The admin plane is a different port, a different lifetime and a different login: signing in to the chat UI does not give you process control.
-- **Serves HTTPS on the LAN if you want it.** Turn on *Secure address* and Nest's bundled Caddy serves the chat UI at `https://<name>` with a real Let's Encrypt certificate: an Automatic name from Redstart's name service, or your own DuckDNS or deSEC name. Certificates come by DNS challenge, so nothing on the internet ever connects in. Off by default; while it is off, the chat UI says the connection is not encrypted.
-- **Controls egress explicitly, and will tell you.** Nothing about a conversation leaves by default; what can leave is exactly what an admin turned on, and `GET /egress` returns the live answer.
+The underlying inference is performed by `llama-server`, part of llama.cpp. Nest manages that process and provides an application-facing gateway rather than implementing its own inference engine.
+
+- **Manages the model server.** Nest handles model files, configuration, GPU settings and the llama-server lifecycle. The inference process runs on the host machine and listens on loopback.
+- **Makes the service available across a network.** Nest's gateway provides the network-facing entry point. Its beacon allows compatible clients to discover the server, and a QR code opens the browser chat interface from another device.
+- **Provides accounts and roles.** Login is enabled by default, roles are assigned per account, and account files are structurally isolated.
+- **Applies tool policy centrally.** Capabilities and plugins are configured on the server. Per-connector credentials identify the application connecting to Nest, allowing policy to be applied by application surface.
+- **Separates administration from chat.** The admin plane has its own port, authentication and lifecycle. Chat access does not grant process-control permissions.
+- **Can provide HTTPS on the LAN.** Nest can use its bundled Caddy integration to serve the chat interface with a real certificate through a Redstart-managed name or a supported external domain configuration. This is optional and off by default.
+- **Makes external access explicit.** Inference is local, while configured tools and integrations may contact external services. Nest provides an egress report showing what is permitted.
 
 ### Redstart Twig
 
-The chat client that ships in this repo — a lightweight app that finds Nest on
-the LAN and signs in, with no hostname to type. **Windows works; the macOS
-build has not been run on a Mac yet** (Nest has: [Mac testing so far](#mac-testing-so-far)). **The Android build is out of date and paused** ([see note](#redstart-twig-android)); a phone
-browser against the chat UI is the working substitute in the meantime.
+Redstart Twig is the companion chat client. It discovers Nest on the local network and connects without requiring users to enter a hostname or configure an API endpoint.
 
-Since llama-server speaks the OpenAI API, [coding agents](#using-as-a-coding-agent-kilo-code--continue--etc) and any other OpenAI-compatible application are clients too, with no Redstart-specific code.
+The Windows desktop version works. The macOS build has not yet been tested on a Mac. The Android build is out of date and currently not working; a phone browser using Nest's built-in chat interface is the working alternative.
+
+Since llama-server provides an OpenAI-compatible API, other compatible applications can also connect to Nest without Redstart-specific code.
 
 ---
 
 ## What the assistant can do
 
-The chat is an agent, not just a text box: it works with tools on your own data, asks before it changes anything, and keeps going when the page is closed. Every capability is off until an admin turns it on, and a role can withhold any of them from an account or narrow a shared folder to some of its subfolders.
+The chat interface includes an agent runtime that can use configured tools, work with local data and coordinate multi-step tasks. These capabilities are implemented by Redstart and its integrations, not supplied automatically by llama.cpp.
+
+The runtime is actively developed. Its performance and reliability vary by model, particularly with smaller local models. The benchmark results below and in the documentation are intended to make that performance measurable rather than assumed.
+
+Every capability is disabled until an administrator enables it. Roles can withhold capabilities from accounts or narrow access to shared resources.
 
 **Work with your data** ([Capabilities](docs/capabilities.md))
-- **Files and documents.** Read PDFs, Word, Excel, CSV and Markdown; create `.docx`, `.pdf` and `.md` files that appear in the chat as downloads. Each account's files are its own.
+
+- **Files and documents.** Read PDFs, Word, Excel, CSV and Markdown files; create `.docx`, `.pdf` and `.md` files that appear in the chat as downloads. Each account's files are its own.
 - **Run Python.** `run_python` runs numpy, pandas and matplotlib in a WebAssembly sandbox with no network and no access outside the conversation's own folder. Charts come back as images.
-- **See images.** With a vision model (Qwen3-VL, Gemma 3 and others), it reads photos and screenshots you attach, and looks at image files with `view_image`. Nest downloads a vision model's projector with it and loads it automatically.
-- **Make pictures.** `generate_image` draws with an image model you pick on Hugging Face (FLUX.1 schnell is the tested one; FLUX.1 dev, SDXL and SD 1.x checkpoints work the same way), on this machine's GPU with stable-diffusion.cpp. A 12 GB card cannot hold both models, so the chat model pauses for the 20 to 60 seconds a picture takes and comes back by itself; other chats wait rather than fail. Set up on Nest's Images page.
-- **Search your own files with citations.** Hybrid word and embedding search over uploads, attachments and created documents, with numbered sources linked back to each file. An admin can add a **Shared Documents** folder (policy manuals, templates, reference material) that everyone searches read-only, as far as their role allows.
-- **Query databases and repositories, read-only.** Postgres and SQLite (enforced by a read-only transaction, not by inspecting the SQL), a folder of Markdown notes, local Git repositories.
-- **Reach the web, only where allowed.** Fetch from approved sources, search, and look up academic papers (OpenAlex, arXiv, PubMed).
-- **Add more.** Install a third-party MCP server as a [plugin](docs/capabilities.md#plugins); its tools get the same policy as the built-ins.
+- **See images.** With a supported vision model, the assistant can inspect photos and screenshots attached to a conversation and image files accessed through `view_image`.
+- **Make pictures.** `generate_image` uses a separately configured image model through stable-diffusion.cpp. Nest coordinates the process transition between the chat model and image model. On a 12 GB GPU, the chat model pauses while the image is generated and resumes afterward; other chats wait rather than fail.
+- **Search your own files with citations.** Hybrid word and embedding search over uploads, attachments and created documents, with numbered sources linked back to each file. An administrator can add a Shared Documents folder for read-only organizational reference material.
+- **Query databases and repositories, read-only.** Postgres and SQLite, Markdown notes and local Git repositories.
+- **Reach the web, where allowed.** Fetch from approved sources, search the web and look up academic papers through OpenAlex, arXiv and PubMed.
+- **Add more integrations.** Install third-party MCP servers as plugins. Their tools are subject to Nest's configured policies.
 
 **Work like an agent**
-- **Asks instead of guessing.** When a task depends on something only you know, it asks: up to four questions at once, as a card with choices.
-- **Plans longer work.** Multi-step tasks get a checklist in the chat that it ticks off as it goes.
-- **Asks before it changes anything.** Writes and deletes stop at an approval card in the chat, checked by the server for every client, not just this one. "Always allow" makes a standing grant for a tool (never for deletion), and the launcher's Activity page shows every decision. Deletions go to the Recycle Bin.
-- **Keeps going when you close the page.** Chats run on the server by default, so a refresh, a closed tab or a sleeping phone doesn't end the reply. `/task <request>` hands a longer job to the server outright. Both survive a restart and wait for you in the chat when they need an answer or an approval.
-- **Sends only the tools a chat needs.** Capabilities marked catalog-only stay out of the prompt, and the model finds them with `search_tools` when it needs one, ranked by a small local embedding model. A dozen capabilities don't crowd a small model's context. On by default; per profile on the Tools page.
+
+- **Ask instead of guessing.** When a task depends on information only the user can provide, the assistant can ask questions through a structured clarification interface.
+- **Plan longer work.** Multi-step tasks can be represented as checklists in the chat.
+- **Ask before changing things.** Writes and deletes can require approval through a server-checked approval flow. Deletions go to the Recycle Bin.
+- **Continue after the page closes.** Chats run on the server by default, so refreshing a page or closing a browser does not end the response. `/task` can hand longer work to the server. Tasks can survive a restart and wait for user input or approval.
+- **Retrieve tools as needed.** Capabilities marked catalog-only can be discovered through `search_tools`, using a local embedding model to rank relevant tools. This keeps large tool catalogs from crowding a model's context.
 
 **Remember what matters** ([Memory](docs/security.md#memory))
-- **Three kinds of memory:** facts about you, how you want it to work (followed, with your reason), and where a piece of work stands (dated, and flagged when old).
-- **Automatic, under your control.** After a chat goes quiet it suggests what is worth keeping. Every suggestion quotes the words of yours it is based on, and nothing from a web page or file can become a memory. Suggest (the default) waits for you; Automatic saves with Undo; a "forget" is never applied on its own.
-- `/remember guidance: put the command first because I paste it straight into a terminal` saves one yourself. Settings → Memory shows, edits and deletes all of them.
+
+- **Three kinds of memory:** facts about the user, working preferences and guidance, and the current state of ongoing work.
+- **Automatic suggestions with user control.** After a conversation goes quiet, the system can suggest information worth retaining. Suggestions include the source text they came from. The default mode waits for approval; automatic saving is also available with Undo.
+- **Explicit memory commands.** `/remember` can save a specific item. Settings → Memory provides controls for reviewing and managing saved information.
 
 **Organise the work**
-- **Projects** group chats with their own instructions, files and memories. A project's instructions import from and export to `AGENTS.md`.
-- **Workflows** are saved instructions for recurring tasks, personal or shared across the organisation, run by typing `/`. They are stored as Agent Skills (`SKILL.md`), import and export as `.zip` or `SKILL.md`, and the model can load one itself with `use_skill` when it fits the task.
-- **Slash commands** for the rest: `/new`, `/model`, `/mode`, `/project`, `/compact`, `/task`, `/remember`, `/memory`, `/retry`, `/copy`, `/rename`, `/export`, `/help`.
 
-**Measured, not assumed.** The repo carries an agent benchmark (32 tasks against a real Nest) and a memory benchmark (32 cases, including prompt-injection attempts), and the numbers on each model are recorded before a change ships.
+- **Projects** group chats with their own instructions, files and memories. Project instructions can import from and export to `AGENTS.md`.
+- **Workflows** are saved instructions for recurring tasks, personal or shared across an organization. They can be run with `/` and stored as Agent Skills (`SKILL.md`).
+- **Slash commands** provide shortcuts for common actions, including `/new`, `/model`, `/mode`, `/project`, `/compact`, `/task`, `/remember`, `/memory`, `/retry`, `/copy`, `/rename`, `/export` and `/help`.
+
+**Measured, not assumed.** The repository includes an agent benchmark and a memory benchmark, including tests for prompt-injection attempts. Results are recorded against specific models so changes to the runtime can be evaluated.
 
 ---
 
 ## How it works
 
-```
+```text
 [ GPU PC ]                              [ Phone / Laptop / VS Code / Browser ]
-  Redstart Nest                            Redstart Twig  /  Kilo Code
-  ├─ Gateway     :19080 (LAN in network mode) ├─ Scans LAN on port 8765
-  │   └─ Injects Redstart context      ├─ Finds Redstart Nest automatically
-  ├─ llama-server :19081 (localhost)   └─ Connects to http://IP:19080
-  ├─ MCP server   :19082 (web, Documents, Python, Image generation, document search, Memory, File System, SQLite, Postgres, Vault, Git, Scholar, plugins)
-  ├─ Admin plane :19083 (the launcher UI, in a browser — owner only, loopback by default)
-  └─ Beacon      :8765
+
+  Redstart Nest                            Redstart Twig / compatible clients
+  ├─ Gateway     :19080 (network entry)    ├─ Scans LAN on port 8765
+  │   └─ Applies Redstart context/policy   ├─ Finds Nest automatically
+  ├─ llama-server :19081 (localhost)       └─ Connects through Nest gateway
+  ├─ MCP server   :19082
+  ├─ Admin plane  :19083 (owner-only,
+  │                  loopback by default)
+  └─ Beacon       :8765
 ```
 
-The chat UI is reachable in any browser at `http://127.0.0.1:19080`, and at the Nest machine's LAN address once network mode is on — no app required.
+The roles of these components are distinct:
 
-**Two planes, two lifetimes.** 19080/19081/19082 exist because a model is running and go away when it stops. **19083 is the control plane** — it binds when Redstart Nest starts and stays up whether or not a model is, because a plane whose lifetime is tied to the thing it controls cannot be used to start that thing. It serves the same launcher interface in a browser, so the box can be administered from another device, and it authenticates separately: signing in to the chat UI does *not* give you process control. It listens on loopback unless you deliberately move it.
+- **llama-server** performs model inference and provides the underlying inference API.
+- **Nest's gateway** is the application-facing entry point. It authenticates requests, applies Redstart-specific context and tool policies, and forwards inference requests to llama-server.
+- **Nest's MCP server** exposes configured tools and integrations to compatible clients.
+- **The admin plane** provides server administration separately from chat access.
+- **The beacon** allows compatible clients to discover Nest on the local network.
+
+The chat UI is reachable in a browser at `http://127.0.0.1:19080`, and at the Nest machine's LAN address when network access is enabled.
+
+**Two planes, two lifetimes.** The gateway, inference server and MCP server are tied to the model-serving lifecycle. The admin plane stays available when the model is stopped, because the interface used to control the server must be able to start it. It authenticates separately from the chat interface and listens on loopback unless deliberately exposed.
 
 Details: [Architecture](docs/architecture.md) · [Capabilities](docs/capabilities.md) · [Security](docs/security.md)
 
@@ -184,157 +206,148 @@ Details: [Architecture](docs/architecture.md) · [Capabilities](docs/capabilitie
 
 ## Control, not isolation
 
-Inference is local and architecturally so — llama-server runs on your machine, bound to loopback, and nothing about a conversation is transmitted anywhere by default. What *can* leave is exactly what an administrator turns on: approved web domains, academic search, an external tool server on another host, or an installed [plugin](docs/capabilities.md#plugins) configured with a credential. Each is an explicit, auditable choice.
+Inference is local: llama-server runs on the host machine and is bound to loopback. Conversation content is not transmitted anywhere by default.
 
-The honest one-line version is **local inference with administrator-controlled egress**, and the server will tell you the live answer — `GET /egress` returns which domains are approved, which tool servers are remote, and which local stores exist. See [Security → What actually leaves the machine](docs/security.md#what-actually-leaves-the-machine).
+However, local inference does not mean every operation is necessarily isolated from the internet. Nest can be configured to reach approved web domains, academic search services, external tool servers or plugins that use external credentials.
 
-Accounts are **on by default** with no localhost exemption, and each account's files are structurally isolated from every other's. **Do not expose the gateway port to the public internet.**
+Those connections are administrator-controlled. The server's `GET /egress` endpoint reports which domains are approved, which tool servers are remote and which local stores are configured.
+
+The honest one-line version is **local inference with administrator-controlled egress**.
+
+Accounts are enabled by default, with no localhost exemption, and account files are structurally isolated. **Do not expose the gateway port directly to the public internet.**
+
+See [Security → What actually leaves the machine](docs/security.md#what-actually-leaves-the-machine).
 
 ---
 
 ## Requirements
 
 **Redstart Nest (server)**
-- Windows 10/11
-- A GPU with at least 6 GB VRAM (NVIDIA recommended; llama.cpp supports CUDA and Vulkan)
-- A GGUF model file
-- For pictures: an image model (FLUX.1 schnell Q4_K is about 10 GB with its shared files; it peaks near 11 GB of VRAM while drawing, with the chat model paused)
 
-**Redstart Twig (Android)** — Android 10 or later, on the same Wi-Fi network as the Nest PC. **Not currently working** — [see note](#redstart-twig-android).
+- Windows 10/11 (the currently supported server platform).
+- A GPU with at least 6 GB VRAM. NVIDIA is recommended; llama.cpp supports CUDA and Vulkan.
+- A GGUF model file.
+- For image generation, a supported image model. FLUX.1 schnell Q4_K and its shared files require approximately 10 GB of storage and peak near 11 GB of VRAM while generating, with the chat model paused.
 
-**Redstart Twig (desktop)** — Windows 10/11, or macOS on Apple Silicon (not yet run on a Mac; Nest has been), on the same network as the Nest PC (or on the same machine).
+**Redstart Twig (desktop)**
+
+- Windows 10/11.
+- macOS on Apple Silicon is experimental and not yet fully tested.
+
+**Redstart Twig (Android)**
+
+- Android 10 or later, on the same Wi-Fi network as Nest.
+- The current Android build is out of date and not working. Use a phone browser in the meantime.
 
 ---
 
 ## Installation
 
-> **Alpha software.** Releases are published as prereleases and versioned
-> `1.0.0-alpha.N`. Expect rough edges, and do not run this where losing data or
-> exposing a service would matter.
+> **Alpha software.** Releases are published as prereleases and versioned `1.0.0-alpha.N`. Expect rough edges. Do not run this where losing data or exposing a service would matter.
 
 ### Redstart Nest
-1. Download the latest `Redstart-Nest-Setup-1.0.0-alpha.N.exe` from [Releases](../../releases)
-2. Run the installer — Windows Defender may warn about an unsigned binary, click **More info → Run anyway**
-3. Open Redstart Nest. It opens on a setup screen asking for this machine's **setup code** and the Owner credential you want. On the host itself the code is filled in for you; it also lives in plain text at `bootstrap-token.txt` in Nest's config folder. Login is required by default, so until an Owner exists no device — including a browser on this PC — can sign in to the chat UI. (Home users who don't want accounts can flip **Require login** off afterwards.)
 
-   The setup code is a **recovery credential, not a password** — it is deliberately stored in plain text and meant to be readable by whoever has physical access to the box, like the sticker on the bottom of a router. It is also the way back in if the Owner password is lost: the same screen re-keys the Owner account, which signs out every existing session.
-4. Point it at a `.gguf` model file and click **Start Server**
-5. In **Network & access**, choose **Everyone on my network** to make the server reachable from other devices — each person signs in with an account the Owner/Admins create. The same panel shows the addresses to browse to, including a QR code to scan from a phone
+1. Download the latest `Redstart-Nest-Setup-1.0.0-alpha.N.exe` from [Releases](../../releases).
+2. Run the installer. Windows Defender may warn about an unsigned binary.
+3. Open Redstart Nest. The setup screen asks for this machine's setup code and the Owner credential you want to create. On the host itself, the code is filled in for you. It is also stored in `bootstrap-token.txt` in Nest's configuration folder.
+4. Select a `.gguf` model file and click **Start Server**.
+5. In **Network & access**, choose **Everyone on my network** to make the server reachable from other devices. Create accounts for the people who will use it. The same panel shows the addresses and QR code for connecting from a phone.
 
-**Closing the window does not stop the server.** Redstart Nest keeps running in the tray so the model stays available to everyone else on the network; reopening the window reconnects to the daemon that was already running. To actually stop it, use **Shut down** in the launcher or **Quit Redstart** in the tray menu.
+The setup code is a recovery credential intended for someone with physical access to the host. It can be used to re-key the Owner account if the password is lost, which signs out existing sessions. Protect access to the host and its configuration directory accordingly.
 
-**Administering it from another device** is off by default. The same Network & access page has a second switch for the admin panel itself — separate from the one above, because making the chat UI reachable and making *process control* reachable are different decisions. Turn it on and the launcher interface is available at `http://<nest-ip>:19083`, Owner account only.
+**Closing the window does not stop the server.** Nest continues running in the tray so the model remains available to other devices. Reopening the window reconnects to the running daemon. To stop the server, use **Shut down** in the launcher or **Quit Redstart** in the tray menu.
+
+**Remote administration is off by default.** The Network & access page has a separate setting for exposing the admin interface. This is separate from enabling chat access because allowing people to use the model and allowing them to control the server are different decisions.
+
+### Redstart Twig (Windows)
+
+1. Download the latest `Redstart-Twig-Setup-1.0.0-alpha.N.exe` from [Releases](../../releases).
+2. Install and open the app. It scans the local network for Nest automatically.
+
+Twig updates itself by downloading new releases in the background and installing them when the application closes.
 
 ### Redstart Twig (Android)
 
-> **Currently out of date and not working.** The Android client has fallen behind
-> the server and has not been rebuilt against recent Nest changes; the published
-> APK should not be relied on. This is paused, not abandoned — returning to it is
-> planned, but it is not being worked on right now.
+> **Currently out of date and not working.** The Android client has fallen behind recent Nest changes and should not be relied on.
 >
-> **In the meantime, use a phone browser instead.** The chat UI is served directly
-> by Nest, so browsing to `http://<nest-ip>:19080` — or scanning the QR code in
-> **Network & access** — gives you the same interface on Android with no app
-> installed. Redstart Twig for Windows is unaffected and works normally.
-
-1. Download `redstart-twig.apk` from [Releases](../../releases)
-2. On your phone, allow installation from unknown sources (Settings → Apps → Special app access → Install unknown apps)
-3. Install the APK
-4. Open the app — it finds the server automatically by scanning the LAN for the beacon on port 8765; no hostname or QR code needed
-
-### Redstart Twig (Windows)
-1. Download the latest `Redstart-Twig-Setup-1.0.0-alpha.N.exe` from [Releases](../../releases)
-2. Install and open — it scans your network automatically
-
-Twig updates itself from then on: it downloads a new release in the background and installs it when you close it.
+> In the meantime, use a phone browser. Browse to `http://<nest-ip>:19080` or scan the QR code in **Network & access** to open the chat interface without installing an app.
 
 ### macOS (experimental)
 
-Each release also carries `.dmg` installers — Nest for Apple Silicon, Twig for Apple Silicon (`arm64`) too. **Mac testing has started:** Nest has been run on an Apple Silicon MacBook, and the issues it turned up are listed below. Twig has not been run on a Mac yet. Treat both as a preview. They are not notarized: after dragging the app to Applications, the first launch is blocked until you choose **Open Anyway** in System Settings → Privacy & Security.
+Releases also include `.dmg` installers for Apple Silicon. Nest has been run on an Apple Silicon MacBook, but testing is incomplete. Twig has not yet been tested on a Mac. Treat both builds as experimental.
 
-What else to expect on a Mac:
-- **Models and files live in `~/Redstart`** (Models, Documents, SQLite, Vault), not in `~/Documents`, which macOS asks permission for. An install that already used `~/Documents/Redstart` keeps it.
-- **"Allow incoming connections?"** appears the first time network mode is on, if the macOS firewall is turned on (it is off by default). Choose Allow, or other devices can't reach Nest. Because the builds are not notarized, macOS may ask again after an update.
-- **Models in other folders:** the file picker has a sidebar like Finder's: the models folder, recent folders, LM Studio's and the Hugging Face cache's model folders when they exist, Home, Desktop, Documents, Downloads, and each volume under `/Volumes`. **Show hidden folders** reveals the rest, and **Type path** takes a pasted path (in Finder, Option-Command-C copies one). ⌘↑, ⌘[ and ⌘] go up, back and forward.
-- If a folder says macOS blocked access, allow Redstart Nest in System Settings → Privacy & Security → Files and Folders.
-
-Removing the first-launch block needs an Apple Developer ID certificate and notarization, tracked in [roadmap → Signed installers](docs/roadmap.md).
+The applications are not notarized, so macOS may block the first launch. Additional platform-specific behavior and known testing gaps are documented in the [Mac testing notes](#mac-testing-so-far).
 
 #### Mac testing so far
 
-The first hands-on test (Nest on an Apple Silicon MacBook, reported 2026-11-22) found three problems. All are fixed in code and **waiting for a re-test on a Mac**:
+The first hands-on test found several issues involving hardware reporting, model selection, application icons and network discovery. Fixes have been made in code but are waiting for another hands-on Mac test.
 
-| Found on the Mac | Cause | Fix |
-|---|---|---|
-| The Model page said the machine had **0 GB of memory** | The hardware check was a Windows PowerShell script; on macOS it failed silently. Unified memory was never read | A macOS check (`sysctl`, `vm_stat`). On Apple Silicon the GPU is shown as sharing the system's memory: "up to N GB of M GB unified memory" |
-| **Couldn't choose a model outside the models folder** | The file picker listed folders only and asked for the file name to be typed; it skipped symlinked files and could not reach hidden folders | The picker lists `.gguf` files (symlinked ones included) and takes a pasted path |
-| The app icon sat on a **white square** | The icon was the bird alone on a transparent background. Recent macOS puts an icon that doesn't fill Apple's rounded square onto a light plate of its own | The macOS icon carries its own dark stone-gray rounded square, on Apple's icon grid, with the bird on it (Nest and Twig). Windows keeps the bare bird |
-
-Since then, the GPU line on the Model page comes from the bundled llama-server itself (`llama-server --list-devices`), so on a Mac it shows the Metal device's own figure; also not yet re-tested on a Mac.
-
-Going through the code for anything else Mac-specific turned up four more, fixed in the same pass and not yet seen on a Mac either: the default folders moved out of `~/Documents` (macOS asks permission for it); Twig's "find my Nest" scan opened more connections at once than a Mac allows one app and could find nothing; both apps could pick a VPN or bridge adapter as the LAN address; and some wording assumed Windows. Details are in the [changelog](CHANGELOG.md) under 2026-11-22.
-
-Not tried on a Mac yet: loading and chatting with a model on the Metal engine, image generation, network mode and HTTPS, auto-update, and Twig.
+Not yet tested on a Mac: model loading and inference using Metal, image generation, network mode and HTTPS, automatic updates, and Twig.
 
 ---
 
-## Using as a coding agent (Kilo Code / Continue / etc.)
+## Using Nest as a coding agent provider
 
-Since llama-server speaks the OpenAI API, any coding extension that accepts a custom base URL works out of the box.
+Since the underlying llama-server provides an OpenAI-compatible API, coding extensions and other compatible applications can use Nest as their model provider.
 
-**Kilo Code (VS Code extension):**
-1. Open VS Code → Kilo Code settings
-2. Set **API Provider** to `OpenAI Compatible`
-3. Set **Base URL** to `http://127.0.0.1:19080/v1` (or your LAN IP if connecting from another machine)
-4. Set **API Key** to your account's `rst_` API key (when login is on, which is the default); when login is off, any non-empty string works
-5. Set **Model** to the name of your loaded model (e.g. `Qwen3.6-35B-A3B-UD-Q3_K_XL`)
+For example, with **Kilo Code**:
 
-The same pattern applies to [Continue](https://continue.dev/), [Aider](https://aider.chat/), or any tool with OpenAI-compatible configuration.
+1. Open VS Code and navigate to Kilo Code settings.
+2. Set **API Provider** to `OpenAI Compatible`.
+3. Set **Base URL** to `http://127.0.0.1:19080/v1`, or use the Nest machine's LAN IP when connecting from another device.
+4. Set **API Key** to the account's `rst_` API key when login is enabled.
+5. Set **Model** to the name of the loaded model.
+
+The same general approach applies to [Continue](https://continue.dev/), [Aider](https://aider.chat/) and other applications that accept a custom OpenAI-compatible endpoint.
+
+These applications use Nest for inference access. They continue to provide their own agent runtimes, tools and workflows unless they implement a deeper Redstart integration.
 
 ---
 
 ## Tested configuration
 
-The hardware and models used during development, all on one machine. Results will vary by GPU, quantization level, and task type; no model has been benchmarked on macOS, Linux, or an AMD or Apple GPU yet (Mac testing of the app itself has started: [Mac testing so far](#mac-testing-so-far)).
+The following hardware and models were used during development. Results vary with GPU, quantization, context size and task type. The models have not been benchmarked on macOS, Linux, AMD GPUs or Apple GPUs.
 
-| | |
+| Component | Configuration |
 |---|---|
-| **CPU** | AMD Ryzen 7 7700X |
-| **GPU** | NVIDIA RTX 3060 12 GB |
-| **RAM** | 32 GB DDR5 |
-| **OS** | Windows |
-| **Engine** | llama-server, the TurboQuant+ build Nest bundled at the time (it now bundles upstream llama.cpp) |
+| CPU | AMD Ryzen 7 7700X |
+| GPU | NVIDIA RTX 3060 12 GB |
+| RAM | 32 GB DDR5 |
+| OS | Windows |
+| Inference engine | Upstream llama.cpp, managed by Nest |
 
-| Model | Quant | Measured |
+| Model | Quantization | Measured |
 |---|---|---|
-| [Qwen3.6-35B-A3B](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) | `UD-Q3_K_XL` | 41–45 tokens/sec writing a 5-page report (29 s in all), with llama-server's `--fit` placing the layers and **Disable memory-mapping** on (Model page, advanced); ~25–30 tokens/sec before `--fit` replaced a fixed manual split. The best agent-bench scores (21/24 on the early task set) |
-| Ornith 1.5 9B | `Q6_K` | ~40 tokens/sec alone, 35–36 each with two requests at once; up to 128k context on the 12 GB card. Most of the agent runtime was tuned on it: 76–81% of the 32-task agent bench |
-| [Qwen3-4B-Instruct-2507](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) | `UD-Q4_K_XL` | The small-model floor: 58–67% of the earlier 24-task agent bench. Needs its own embedded chat template, which Nest now checks for |
+| [Qwen3.6-35B-A3B](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) | `UD-Q3_K_XL` | 41–45 tokens/sec writing a five-page report, with llama-server's `--fit` and **Disable memory-mapping** enabled. Best early agent-benchmark result: 21/24 tasks. |
+| Ornith 1.5 9B | `Q6_K` | Approximately 40 tokens/sec alone, 35–36 tokens/sec with two requests at once; up to 128k context on the 12 GB card. Runtime tuning has used this model extensively: 76–81% on the 32-task agent benchmark. |
+| [Qwen3-4B-Instruct-2507](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) | `UD-Q4_K_XL` | 58–67% on an earlier 24-task agent benchmark. |
 
-The benchmark rows, what each model taught the code, and how to run the benches yourself: [Models tested](docs/model-testing.md).
+The benchmark tasks, model-specific findings and instructions for running the tests are in [Models tested](docs/model-testing.md).
 
-**The 35B model:** Qwen3.6-35B-A3B is an Alibaba mixture-of-experts model (llama.cpp architecture `qwen35moe`) with a hybrid Gated DeltaNet and Gated Attention design, 256 experts with 8 routed and 1 shared active at a time — about 3B active parameters out of 35B. That is why it runs at a useful speed on a 12 GB card where a dense 35B would not.
+**About the 35B model:** Qwen3.6-35B-A3B is a mixture-of-experts model with approximately 3B active parameters. It can run at useful speeds on a 12 GB GPU because not all of its parameters are active for each token.
 
-**It does not fit in 12 GB of VRAM on its own.** `--fit` (llama-server's default, which Nest leaves alone unless you set GPU layers) measures free VRAM at load and keeps part of the expert tensors in system RAM. That is what the 32 GB of RAM is for, and why **Disable memory-mapping** helps: llama-server itself recommends `--no-mmap` when expert tensors are placed on the CPU. It is off by default in Nest.
+It does not fit entirely in 12 GB of VRAM. llama-server's `--fit` can place some tensors in system RAM, and the **Disable memory-mapping** setting can help when expert tensors are placed on the CPU. Performance depends on the hardware and configuration.
 
-**The quantization:** The `UD` prefix stands for Unsloth Dynamic — [Unsloth AI](https://huggingface.co/unsloth) applies different quantization levels to different layers rather than a flat bit-depth across the whole model, for better output quality at the same file size than a standard K-quant.
+**About quantization:** The `UD` prefix refers to Unsloth Dynamic quantization, which applies different quantization levels to different layers rather than using one uniform bit depth.
 
-**Finding GGUF models:** [Hugging Face](https://huggingface.co) is the easiest source — [unsloth](https://huggingface.co/unsloth) and [bartowski](https://huggingface.co/bartowski) are both reliable for well-quantized GGUF files across many model families. Nest's Model page can search and download from both.
+**Finding models:** [Hugging Face](https://huggingface.co) is a common source for GGUF models. Nest's Model page can search and download from supported publishers including [Unsloth](https://huggingface.co/unsloth) and [bartowski](https://huggingface.co/bartowski).
 
 ---
 
 ## Known limitations
 
-The short list; the [full set is in the roadmap](docs/roadmap.md#known-limitations).
+Redstart is still alpha software. Some important limitations are:
 
-- **Twig for Android is out of date and not working** — the Android client hasn't been rebuilt against recent server changes. Use a phone browser against the chat UI instead. Paused, not abandoned; see [the note above](#redstart-twig-android).
-- **Unsigned installers** — both will trigger Windows Defender SmartScreen; the macOS builds are not notarized, so Gatekeeper blocks their first launch.
-- **Windows is the only supported server platform** — the daemon itself runs headless under plain Node and `deploy/` carries a systemd unit, and releases now include macOS `.dmg` builds. Mac testing has started ([what it found](#mac-testing-so-far)), but the Linux artifacts have not been run on real hardware yet. The port-80 proxy is Windows-only.
-- **The deployment artifacts are a first draft** — `deploy/` (systemd, Windows SCM, Caddy) was written from the design and reviewed, not executed. Read each command before running it.
-- **HTTPS on the LAN is opt-in and new** — with *Secure address* off (the default), LAN traffic, passwords included, is plain HTTP, and the chat UI says so. Turning it on gets a real certificate, but it has not yet run in many homes.
-- **External MCP servers that need a key or OAuth don't work from the chat** — a saved API key is used only by Nest's connection test, and OAuth isn't supported. See [Capabilities](docs/capabilities.md#external-mcp-servers).
-- **mDNS / `redstart.local` has been retired** — Android's resolver never answered `.local` lookups for browser navigation, so the name failed on the platform most clients are. Use the IP or the QR code; Twig's beacon scan never needed a name.
-- **Postgres sharing is all-or-nothing** — a role can narrow Vault, Git, SQLite and Shared Documents to some of their folders, but Postgres has one connection, so a role can only withhold it whole.
+- **Twig for Android is out of date and not working.** Use the browser chat interface instead.
+- **Unsigned installers.** Windows installers can trigger SmartScreen warnings. macOS builds are not notarized.
+- **Windows is the only supported server platform.** macOS testing has started, but remains incomplete. Linux deployment artifacts have not been tested on real hardware.
+- **Deployment artifacts are an early draft.** The systemd, Windows service and Caddy deployment configurations have been written and reviewed, but not fully executed in production environments.
+- **HTTPS is optional and relatively new.** Without it, LAN traffic, including passwords, is plain HTTP. HTTPS has not yet been validated across a wide range of home networks.
+- **External MCP servers requiring API keys or OAuth have limitations.** Saved API keys are currently used for Nest's connection test, and OAuth is not supported in the chat integration.
+- **mDNS / `redstart.local` has been retired.** Use the IP address or QR code instead. Twig's beacon discovery does not depend on `.local` resolution.
+- **Postgres access is all-or-nothing.** Unlike some other resources, a role cannot currently restrict a Postgres connection to selected folders or schemas.
+
+The [Roadmap](docs/roadmap.md#known-limitations) contains the broader list of known limitations and planned work.
 
 ---
 
@@ -348,62 +361,60 @@ node ../tooling/stage-node.mjs     # the pinned Node 26 the daemon runs on
 npm run dev                        # Vite + chat-ui + the Tauri shell (needs Rust)
 ```
 
-To run the server without the desktop shell (no window, no desktop session):
+To run the server without the desktop shell:
 
 ```bash
-npm run daemon          # boots the daemon under plain Node, in ./.redstart-daemon
+npm run daemon          # boots the daemon under plain Node
 npm run daemon:status
 npm run daemon:stop
 ```
 
-Full setup, repo layout, test commands and installer builds: [Development](docs/development.md). Running it as a service: [Deployment](deploy/README.md).
+Full setup, repository layout, test commands and installer builds: [Development](docs/development.md). Running Nest as a service: [Deployment](deploy/README.md).
 
 ---
 
 ## Alternatives worth knowing about
 
-If you just want to run a model on a single PC, these are more mature options:
+If your goal is simply to run a model on one PC, there are more mature options:
 
-- **[LM Studio](https://lmstudio.ai/)** — polished GUI, built-in model browser, downloads GGUFs directly, OpenAI-compatible server. Windows/Mac/Linux.
-- **[Jan](https://jan.ai/)** — similar to LM Studio, fully open source.
-- **[Ollama](https://ollama.com/)** — CLI-first but extremely simple (`ollama run qwen3`), large ecosystem of community UIs built on top.
+- **[LM Studio](https://lmstudio.ai/)** — a polished desktop application with a model browser, downloads and an OpenAI-compatible server.
+- **[Jan](https://jan.ai/)** — an open-source desktop AI application with local model support.
+- **[Ollama](https://ollama.com/)** — a straightforward model runner with a large ecosystem of tools and interfaces built around it.
 
-All three can technically be reached from other devices on your LAN if you manually configure them to bind to `0.0.0.0` — but you are then on your own for finding the IP address and entering it in whatever client you use. None have a mobile app that discovers the server automatically, and none have a QR-to-connect flow.
+These projects are established model-running options. Redstart is aimed at a different use case: making a locally hosted model available as a shared service for multiple users and applications.
 
-Redstart's niche is the thing those don't try to be: a server for a group of people rather than a runner for one PC. Making the **home network experience a first-class feature** instead of a manual network-configuration exercise, and treating **accounts, tool policy and egress control as the product** rather than something bolted on afterwards, is the whole distinction. If single-PC use is all you need, LM Studio is probably the better starting point.
+Its focus is the infrastructure around inference: accounts, application access, server-side tool policy, network discovery, administration and controlled egress. It also includes its own clients and an evolving agent runtime.
+
+That does not make Redstart a replacement for every feature in those projects. If single-PC model use is all you need, one of them may be the better starting point.
 
 ---
 
 ## Direction
 
-Nest's own roadmap — crash recovery, signed installers, guided onboarding,
-macOS and Linux support, OAuth for external tool servers — is in
-[Roadmap](docs/roadmap.md), along with the limitations it hasn't cleared yet.
+Nest's roadmap includes work such as crash recovery, signed installers, guided onboarding, broader macOS and Linux support, and improved authentication for external tool servers. See the [Roadmap](docs/roadmap.md) for current progress and limitations.
 
-Beyond Nest and Twig, the same server is what these are being built against.
-They live in their own repos and are **not** required to use Redstart:
+Beyond Nest and Twig, other applications are being developed against the same server infrastructure. They live in separate repositories and are not required to use Redstart.
 
 | App | Platform | Role | Status |
 |---|---|---|---|
 | **[Redstart Blueprints](https://github.com/ImDeadWeight/redstart-blueprints)** | Windows (Electron) | Local-first SQL data workbench with optional AI assistance | In progress |
-| **[Redstart Yellowscript](https://github.com/ImDeadWeight/redstart-yellowscript)** | VS Code extension | A coding agent that talks to a local Nest instead of a cloud | In progress |
-| **[Redstart Greenhouse](https://github.com/ImDeadWeight/redstart-greenhouse)** | Windows (Electron) | Project management, built the way Blueprints is built | Planned, not started |
+| **[Redstart Yellowscript](https://github.com/ImDeadWeight/redstart-yellowscript)** | VS Code extension | A coding agent that connects to a local Nest | In progress |
+| **[Redstart Greenhouse](https://github.com/ImDeadWeight/redstart-greenhouse)** | Windows (Electron) | Project management application | Planned, not started |
 
-What makes that plausible rather than aspirational is that the integration
-points are contracts, not conventions: a client authenticates with a
-per-connector key carrying its own surface, and tool names are namespaced per
-app (`bp_*`, `ys_*`, `gh_*` — see [tool namespacing](docs/tool-namespacing.md)),
-so a new client is a credential and a namespace rather than a change to the
-server. See [Architecture](docs/architecture.md) for the full picture.
+These applications are intended to use Nest as shared infrastructure rather than each managing a separate model server.
+
+The integration points are designed around explicit contracts. Clients authenticate with per-connector credentials that identify their application surface, and tool names are namespaced by application (`bp_*`, `ys_*`, `gh_*`). This provides a defined path for adding applications without making every client a special case inside the server.
+
+See [Architecture](docs/architecture.md) and [Tool namespacing](docs/tool-namespacing.md).
 
 ---
 
 ## Acknowledgements
 
-- [llama.cpp](https://github.com/ggml-org/llama.cpp) — the inference engine that makes all of this possible; the included `llama-server` is its own release build
-- [TurboQuant](https://github.com/TheTom/llama-cpp-turboquant) — the llama.cpp fork Nest bundled until 1.0.0-alpha.22, and still supports as a custom binary (its turbo KV-cache types are used when it is the one running)
-- [Unsloth](https://huggingface.co/unsloth) — pre-quantized GGUF models including the Qwen 3.6 model used during development
-- [llama.cpp web UI](https://github.com/ggerganov/llama.cpp/tree/master/examples/server) — the upstream chat UI that the Redstart chat frontend is forked from
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) — the inference engine used by Redstart. Nest manages its `llama-server` process.
+- [TurboQuant](https://github.com/TheTom/llama-cpp-turboquant) — the llama.cpp fork bundled by Nest through version `1.0.0-alpha.22`, and still supported as a custom inference binary.
+- [Unsloth](https://huggingface.co/unsloth) — GGUF model conversions used during development.
+- [llama.cpp web UI](https://github.com/ggml-org/llama.cpp/tree/master/examples/server) — the upstream chat UI from which Redstart's chat frontend is forked.
 
 ---
 
@@ -411,37 +422,21 @@ server. See [Architecture](docs/architecture.md) for the full picture.
 
 Copyright (C) 2025-2026 Patrick Carswell.
 
-Redstart is free software: you can redistribute it and/or modify it under the
-terms of the [GNU Affero General Public License, version 3](LICENSE)
-(`AGPL-3.0-only`). If you distribute a modified version, or let people use one
-over a network, you must make its complete source code available to them under
-the same license.
+Redstart is free software: you can redistribute it and/or modify it under the terms of the [GNU Affero General Public License, version 3](LICENSE) (`AGPL-3.0-only`). If you distribute a modified version, or let people use one over a network, you must make its complete source code available to them under the same license.
 
-- **Apps that connect to Redstart aren't covered.** A program that works with
-  Nest through its interfaces, such as a [connector](docs/connector-contract.md)
-  over HTTP, an MCP server, or a [plugin](docs/capabilities.md#plugins) Nest
-  runs as a separate process, is a separate work. It can use any license you
-  like, including a proprietary one. The AGPL applies to Redstart's own code
-  and to modified versions of it, not to the software that talks to it. The
-  copyright holder states this as a permission, not only as a reading of the
-  license, so integrators can rely on it.
-- **What you make with it is yours.** Conversations, documents, code and other
-  output you produce using Redstart aren't covered by Redstart's license.
-- **Earlier releases.** Releases up to and including `1.0.0-alpha.12` were
-  published under the MIT License, and those copies stay under MIT.
-- **Commercial licenses.** To use Redstart in a product without the AGPL's
-  source-sharing terms, open an issue to ask about a commercial license.
-- **Name and mascot.** "Redstart", "Redstart Nest", "Redstart Twig" and the
-  mascot artwork are trademarks and aren't covered by the AGPL. A distributed
-  fork needs its own name and mascot. See [TRADEMARKS.md](TRADEMARKS.md).
-- **Contributing.** Contributors sign a [CLA](CLA.md). See
-  [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Apps that connect to Redstart aren't covered.** A program that works with Nest through its interfaces, such as a connector over HTTP, an MCP server, or a plugin Nest runs as a separate process, is a separate work. It can use any license you like, including a proprietary one. The AGPL applies to Redstart's own code and modified versions of it, not to software that talks to it. See the project's licensing terms for details.
+- **What you make with it is yours.** Conversations, documents, code and other output produced using Redstart aren't covered by Redstart's license.
+- **Earlier releases.** Releases up to and including `1.0.0-alpha.12` were published under the MIT License, and those copies remain under MIT.
+- **Commercial licenses.** To use Redstart in a product without the AGPL's source-sharing terms, open an issue to ask about a commercial license.
+- **Name and mascot.** "Redstart", "Redstart Nest", "Redstart Twig" and the mascot artwork are trademarks and aren't covered by the AGPL. See [TRADEMARKS.md](TRADEMARKS.md).
+- **Contributing.** Contributors sign a [CLA.md](CLA.md). See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Third-party components keep their own licenses. See
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+Third-party components retain their own licenses. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ---
 
 ## Author
 
-Patrick Carswell — this is my first major development project, built to solve a personal problem: running a local AI on existing home hardware without sending data to the cloud. My background is in social work, not software, so some of the architecture decisions here reflect learning-by-doing as much as deliberate design. The codebase reflects that honestly.
+Redstart is an independently developed project by Patrick Carswell. It began as an effort to make locally hosted AI more practical across multiple devices and applications, and has grown into a broader platform for local AI server infrastructure.
+
+The project is actively developed, with architecture, documentation and implementation evolving alongside it.

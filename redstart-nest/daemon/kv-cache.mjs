@@ -28,14 +28,11 @@
 // DETECTION. `llama-server --help` prints, under -ctv/--cache-type-v, the
 // line "allowed values: f32, f16, ..., q5_1" (common/arg.cpp,
 // get_all_kv_cache_types). A TurboQuant+ build lists turbo2/turbo3/turbo4
-// there as well. probeCacheTypes() reads that list once per binary (keyed on
-// path, size and mtime, so a replaced binary is probed again). If the probe
-// fails, the upstream mapping is used: q8_0 and q4_0 exist in every build of
-// either project, so the fallback cannot ask for a type the binary lacks.
+// there as well. server-help.mjs's probeServerHelp() reads that list (with
+// parseCacheTypes below) once per binary. If the probe fails, the upstream
+// mapping is used: q8_0 and q4_0 exist in every build of either project, so
+// the fallback cannot ask for a type the binary lacks.
 // ---------------------------------------------------------------------------
-
-import * as fs from 'fs'
-import * as path from 'path'
 
 export const KV_CACHE_PRESETS = {
   conservative: { upstream: { k: 'q8_0', v: 'q8_0' }, turbo: { k: 'q8_0', v: 'turbo4' } },
@@ -43,7 +40,6 @@ export const KV_CACHE_PRESETS = {
   aggressive:   { upstream: { k: 'q4_0', v: 'q4_0' }, turbo: { k: 'q8_0', v: 'turbo2' } },
 }
 
-const HELP_TIMEOUT_MS = 30_000
 
 /**
  * The cache types a `llama-server --help` text says -ctv accepts, or null when
@@ -86,7 +82,7 @@ export function kvCacheTypes(preset, supported) {
  * Apply a profile's kvCache preset: returns the config with `kvCacheTypes`
  * set — { k, v } for buildArgs to emit as -ctk/-ctv, or null for "decided:
  * no cache flags" — and a line for the run log. `supported` is
- * probeCacheTypes()'s result (a Set, or null if unknown).
+ * probeServerHelp()'s cacheTypes (a Set, or null if unknown).
  */
 export function resolveKvCache(config, supported) {
   const preset = config?.kvCache
@@ -110,38 +106,4 @@ export function resolveKvCache(config, supported) {
     ? 'TurboQuant+ types, listed by this llama-server'
     : supported ? 'llama.cpp types' : 'llama.cpp types; the binary could not be asked'
   return { config: next, logLine: `[redstart] KV cache: ${preset} → K ${types.k}, V ${types.v} (${source})` }
-}
-
-const probeCache = new Map()
-
-/** Forget every probed binary (tests). */
-export function clearCacheTypeProbes() { probeCache.clear() }
-
-/**
- * Ask a llama-server binary which cache types it accepts. Never throws:
- * any failure is null, which resolveKvCache treats as "upstream types".
- */
-export async function probeCacheTypes(binaryPath, { execFileAsync, statSync = fs.statSync } = {}) {
-  if (!binaryPath || typeof execFileAsync !== 'function') return null
-  let key
-  try {
-    const st = statSync(binaryPath)
-    key = `${binaryPath}|${st.size}|${st.mtimeMs}`
-  } catch {
-    return null
-  }
-  if (probeCache.has(key)) return probeCache.get(key)
-  let supported = null
-  try {
-    const out = await execFileAsync(binaryPath, ['--help'], {
-      cwd: path.dirname(binaryPath), timeout: HELP_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
-    })
-    supported = parseCacheTypes(`${out?.stdout ?? ''}\n${out?.stderr ?? ''}`)
-  } catch (err) {
-    // A non-zero exit still carries the output on the error object.
-    supported = parseCacheTypes(`${err?.stdout ?? ''}\n${err?.stderr ?? ''}`)
-  }
-  // Only a definite answer is remembered; a failed probe is retried next launch.
-  if (supported) probeCache.set(key, supported)
-  return supported
 }

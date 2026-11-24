@@ -1,3 +1,4 @@
+import { chatOverheadTokens } from './chat/context-overhead';
 import { resolveApiPath } from '$lib/utils/api-fetch';
 import { getJsonHeaders } from '$lib/utils/api-headers';
 import { serverStore } from '$lib/stores/server.svelte';
@@ -70,9 +71,11 @@ export interface ManualCompactionResult {
 }
 
 export class ContextCompactionService {
-	/** n_ctx and the send budget (n_ctx minus generation headroom), or null when unknown. */
+	/** n_ctx and the send budget for the messages, or null when unknown: n_ctx
+	 *  minus generation headroom, minus what the request carries besides them
+	 *  (the gateway's system prompt and the tools, context-overhead.ts). */
 	private static budget(): { nCtx: number; usable: number } | null {
-		return compactionBudget(serverStore.contextSize, config().max_tokens);
+		return compactionBudget(serverStore.contextSize, config().max_tokens, chatOverheadTokens());
 	}
 
 	private static async storedSummary(convId: string) {

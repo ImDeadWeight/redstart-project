@@ -14,6 +14,7 @@ import type {
 } from '$lib/types/api';
 import { extractModelName } from './chat-errors';
 import { mergeToolCallDeltas as coreMergeToolCallDeltas, streamErrorMessage } from '$lib/agent-core';
+import { ThinkTagRouter, routeThinkTags, type RoutedSegment } from './think-tags';
 
 /**
  * Fold one chunk's tool-call deltas into the calls so far. One implementation,
@@ -72,6 +73,9 @@ export async function handleStreamResponse(
 	let idEmitted = false;
 	let toolCallIndexOffset = 0;
 	let hasOpenToolCallBatch = false;
+	// Thinking markup the server's parser let through into the content goes to
+	// the reasoning channel or is dropped (see think-tags.ts).
+	const thinkRouter = new ThinkTagRouter();
 
 	const finalizeOpenToolCallBatch = () => {
 		if (!hasOpenToolCallBatch) {
@@ -111,6 +115,25 @@ export async function handleStreamResponse(
 
 		if (!abortSignal?.aborted) {
 			onToolCallChunk?.(serializedToolCalls);
+		}
+	};
+
+	const emitContent = (text: string) => {
+		if (!text) return;
+		finalizeOpenToolCallBatch();
+		aggregatedContent += text;
+		if (!abortSignal?.aborted) onChunk?.(text);
+	};
+	const emitReasoning = (text: string) => {
+		if (!text) return;
+		finalizeOpenToolCallBatch();
+		fullReasoningContent += text;
+		if (!abortSignal?.aborted) onReasoningChunk?.(text);
+	};
+	const emitRouted = (segments: RoutedSegment[]) => {
+		for (const segment of segments) {
+			if (segment.kind === 'content') emitContent(segment.text);
+			else emitReasoning(segment.text);
 		}
 	};
 
@@ -175,21 +198,9 @@ export async function handleStreamResponse(
 							lastTimings = timings;
 						}
 
-						if (content) {
-							finalizeOpenToolCallBatch();
-							aggregatedContent += content;
-							if (!abortSignal?.aborted) {
-								onChunk?.(content);
-							}
-						}
+						if (content) emitRouted(thinkRouter.push(content));
 
-						if (reasoningContent) {
-							finalizeOpenToolCallBatch();
-							fullReasoningContent += reasoningContent;
-							if (!abortSignal?.aborted) {
-								onReasoningChunk?.(reasoningContent);
-							}
-						}
+						if (reasoningContent) emitReasoning(reasoningContent);
 
 						processToolCallDelta(toolCalls);
 					} catch (e) {
@@ -205,6 +216,7 @@ export async function handleStreamResponse(
 		if (abortSignal?.aborted) return;
 
 		if (streamFinished) {
+			emitRouted(thinkRouter.flush());
 			finalizeOpenToolCallBatch();
 
 			const finalToolCalls =
@@ -256,8 +268,12 @@ export async function handleNonStreamResponse(
 			onModel?.(responseModel);
 		}
 
-		const content = data.choices[0]?.message?.content || '';
-		const reasoningContent = data.choices[0]?.message?.reasoning_content;
+		const rawContent = data.choices[0]?.message?.content || '';
+		const routed = routeThinkTags(rawContent);
+		const content = routed.content;
+		const serverReasoning = data.choices[0]?.message?.reasoning_content;
+		const reasoningContent =
+			serverReasoning || routed.reasoning ? `${serverReasoning ?? ''}${routed.reasoning}` : undefined;
 		const toolCalls = data.choices[0]?.message?.tool_calls;
 
 		let serializedToolCalls: string | undefined;
@@ -273,7 +289,9 @@ export async function handleNonStreamResponse(
 			}
 		}
 
-		if (!content.trim() && !serializedToolCalls) {
+		// Judged on what the server sent: a reply that was all thinking is a
+		// reply, even if routing leaves its content empty.
+		if (!rawContent.trim() && !serializedToolCalls) {
 			const noResponseError = new Error('No response received from server. Please try again.');
 
 			throw noResponseError;

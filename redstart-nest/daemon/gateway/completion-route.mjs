@@ -39,6 +39,33 @@ export const RETRIEVAL_REPORT_HEADERS = Object.freeze({
   arm: 'x-redstart-tool-text-arm',
 })
 
+/** How much system prompt the gateway added to this request, in characters. */
+export const SYSTEM_PROMPT_CHARS_HEADER = 'x-redstart-system-prompt-chars'
+
+/**
+ * Sent on every completion, report or not: the client sizes its context
+ * budget over the messages it wrote, and the gateway prepends its own
+ * composed prompt (identity, policy, capabilities, memories) that the client
+ * never sees. On a 4,096-token profile that and the tool list can be 2,000+
+ * tokens, so a request overflowed while the client's budget still showed
+ * room. Characters, not tokens: the gateway has no tokenizer.
+ *
+ * @param {{ systemPromptChars?: number }|null|undefined} wire
+ * @returns {Record<string, string>}
+ */
+export function systemPromptHeaders(wire) {
+  const chars = wire?.systemPromptChars
+  return Number.isFinite(chars) ? { [SYSTEM_PROMPT_CHARS_HEADER]: String(chars) } : {}
+}
+
+/** The two header sets of a response, with one Access-Control-Expose-Headers naming every header in both. */
+export function completionResponseHeaders(wire) {
+  const headers = { ...systemPromptHeaders(wire), ...retrievalReportHeaders(wire) }
+  const exposed = Object.keys(headers).filter((h) => h !== 'Access-Control-Expose-Headers')
+  if (exposed.length) headers['Access-Control-Expose-Headers'] = exposed.join(', ')
+  return headers
+}
+
 /**
  * The response headers that answer `redstart_retrieval_report: true`: the
  * tools forwarded, by name; whether retrieval removed any; and whether it ran
@@ -108,7 +135,7 @@ export async function handleCompletionRoute(req, res, { internalPort, account, s
   ;({ parsed, wire } = await prepareCompletion(parsed, { account, surface, effectiveConfig, accountId, timeZone }))
 
   try {
-    forwardModified(res, internalPort, parsed, retrievalReportHeaders(wire))
+    forwardModified(res, internalPort, parsed, completionResponseHeaders(wire))
   } catch (err) {
     if (!res.headersSent) {
       res.writeHead(500, { 'Content-Type': 'application/json' })

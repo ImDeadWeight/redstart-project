@@ -239,7 +239,7 @@ export function ModelSection({
               </Field>
               <label className="flex items-center gap-2.5 self-center pt-5 text-sm text-zinc-200">
                 <input type="checkbox" checked={!!config.noMmap} onChange={e => set('noMmap', e.target.checked)} className="h-4 w-4" />
-                Disable memory-mapping (--no-mmap)
+                Disable memory-mapping
               </label>
               <div className="w-full max-w-2xl">
                 <Field label="Extra llama-server flags">

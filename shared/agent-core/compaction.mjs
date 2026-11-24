@@ -38,6 +38,12 @@ export const MAX_SINGLE_MESSAGE_TOKENS_RATIO = 0.4;
 export const SUMMARIZER_INPUT_CHARS = 24000;
 
 export const SUMMARY_PREFIX = '[Conversation summary — earlier messages were compacted to fit the context window]\n';
+/** What an earlier turn's tool result becomes when it is given up to fit (leanEarlierTurns). */
+export const LEAN_RESULT_STUB = '[Earlier tool result removed to make room in the context; call the tool again if it is still needed.]';
+/** A tool result in the summarizer's input: its head and tail, this many characters. */
+export const SUMMARY_RESULT_CHARS = 1200;
+/** A tool call's arguments in the summarizer's input, head and tail. */
+export const SUMMARY_TOOL_ARGS_CHARS = 300;
 export const ELISION_MARKER = '\n…[truncated — message exceeded the per-turn context budget]…\n';
 
 /** @typedef {{ id: string, role: string, content?: any, reasoningContent?: string, toolCalls?: string, extra?: any[], [k: string]: any }} StoredMessage */
@@ -99,6 +105,59 @@ export function messageText(message) {
 		}
 	}
 	return `${message.role}: ${text}`;
+}
+
+/**
+ * What a message shows: its content and its attachments' text. No reasoning
+ * and no tool-call JSON, which messageText adds for measuring.
+ *
+ * @param {StoredMessage} message
+ */
+function visibleText(message) {
+	let text = typeof message.content === 'string' ? message.content : '';
+	if (message.extra?.length) {
+		for (const extra of message.extra) {
+			if (extra && 'content' in extra && typeof extra.content === 'string') text += '\n' + extra.content;
+		}
+	}
+	return text;
+}
+
+/**
+ * `text` cut to its head and tail when longer than `keep`.
+ *
+ * @param {string} text
+ * @param {number} keep
+ */
+function headTail(text, keep) {
+	if (text.length <= keep) return text;
+	const half = Math.floor(keep / 2);
+	return `${text.slice(0, half)} … ${text.slice(-half)}`;
+}
+
+/**
+ * One message as the summarizer reads it: no reasoning (it is not what was
+ * said), a tool call as its name and the head and tail of its arguments,
+ * and a tool result as its head and tail. The conclusion a result led to is
+ * in the assistant's next message.
+ *
+ * @param {StoredMessage} message
+ */
+export function summaryLine(message) {
+	if (message.role === 'tool') return `tool result: ${headTail(visibleText(message), SUMMARY_RESULT_CHARS)}`;
+	let line = `${message.role}: ${visibleText(message)}`;
+	if (message.toolCalls) {
+		try {
+			const calls = JSON.parse(message.toolCalls);
+			for (const call of Array.isArray(calls) ? calls : []) {
+				const args = typeof call?.function?.arguments === 'string' ? call.function.arguments : '';
+				line += `\n[called ${call?.function?.name ?? 'a tool'}(${headTail(args, SUMMARY_TOOL_ARGS_CHARS)})]`;
+			}
+		} catch {
+			// Tool calls that do not parse say nothing worth summarizing.
+		}
+	}
+	return line;
 }
 
 /**
@@ -172,7 +231,10 @@ export function capToolCallArguments(toolCalls, keepChars) {
 export function capOversizedMessage(message, tokenCount, limitTokens) {
 	if (limitTokens <= 0 || tokenCount <= limitTokens) return message;
 	const measured = messageText(message);
-	const text = measured.slice(`${message.role}: `.length);
+	// The content and attachments only. Until 2026-11-24 this was messageText,
+	// which carries the reasoning and the tool-call JSON: a capped message
+	// sent its thinking inline in the answer, and every tool call twice.
+	const text = visibleText(message);
 	const approxCharsPerToken = Math.max(1, measured.length / Math.max(1, tokenCount));
 	const keepChars = Math.max(200, Math.floor(limitTokens * approxCharsPerToken * 0.45));
 	return {
@@ -271,8 +333,61 @@ export function summarySpan(pruned, stored) {
  * @param {StoredMessage[]} messages
  */
 export function summaryPrompt(existingSummary, messages) {
-	const newLines = messages.map((m) => messageText(m)).join('\n').slice(0, SUMMARIZER_INPUT_CHARS);
+	const all = messages.map((m) => summaryLine(m)).join('\n');
+	// Too long for one call: the NEWEST lines are kept. Until 2026-11-24 the
+	// clip kept the oldest, so the turns closest to the present, the ones the
+	// conversation is about now, were the ones lost.
+	const newLines = all.length <= SUMMARIZER_INPUT_CHARS ? all : `…[earlier lines omitted]…\n${all.slice(-SUMMARIZER_INPUT_CHARS)}`;
 	return buildSummaryPrompt(existingSummary, newLines);
+}
+
+/**
+ * Earlier turns give up their space before any summary is paid for. The
+ * turns before the last user message drop their reasoning, then their tool
+ * results become LEAN_RESULT_STUB, oldest first, until the payload is under
+ * `target`. Deterministic, so consecutive sends produce the same prefix and
+ * the server's prompt cache holds. The current turn is never touched. The
+ * stored messages are not changed: the copies are the payload.
+ *
+ * Counts are re-estimated by length: a message's tokens scale with the text
+ * it keeps (messageText, as the counts were measured).
+ *
+ * @param {StoredMessage[]} messages
+ * @param {number[]} counts
+ * @param {number} target
+ * @returns {{ messages: StoredMessage[], counts: number[], total: number, changed: boolean }}
+ */
+export function leanEarlierTurns(messages, counts, target) {
+	let lastUser = -1;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		if (messages[i].role === 'user') {
+			lastUser = i;
+			break;
+		}
+	}
+	const out = [...messages];
+	const outCounts = [...counts];
+	let total = counts.reduce((a, b) => a + b, 0);
+	let changed = false;
+	/** @param {number} i @param {StoredMessage} next */
+	const replace = (i, next) => {
+		const before = messageText(out[i]).length;
+		const after = messageText(next).length;
+		const count = Math.max(PER_MESSAGE_OVERHEAD_TOKENS, Math.ceil(outCounts[i] * (after / Math.max(1, before))));
+		total += count - outCounts[i];
+		outCounts[i] = count;
+		out[i] = next;
+		changed = true;
+	};
+	for (let i = 0; i < lastUser && total > target; i++) {
+		if (out[i].reasoningContent) replace(i, { ...out[i], reasoningContent: undefined });
+	}
+	for (let i = 0; i < lastUser && total > target; i++) {
+		const m = out[i];
+		if (m.role !== 'tool' || visibleText(m).length <= LEAN_RESULT_STUB.length) continue;
+		replace(i, { ...m, content: LEAN_RESULT_STUB, extra: undefined });
+	}
+	return { messages: changed ? out : messages, counts: outCounts, total, changed };
 }
 
 /**
@@ -298,6 +413,15 @@ export function planCompaction({ messages, counts, usable, stored }) {
 		const effective = applyStoredSummary(messages, stored);
 		const capped = capPayload(effective.messages, countById, perMessageLimit);
 		return { action: 'send', messages: capped, compacted: effective.applied || capped !== effective.messages };
+	}
+
+	// Before a summary is paid for, earlier turns give up their reasoning and
+	// their old tool results. When that fits, no model call is made.
+	const lean = leanEarlierTurns(messages, counts, usable * KEEP_RATIO);
+	if (lean.changed && lean.total <= usable * TRIGGER_RATIO) {
+		const leanCounts = new Map(lean.messages.map((m, i) => [m.id, lean.counts[i]]));
+		const effective = applyStoredSummary(lean.messages, stored);
+		return { action: 'send', messages: capPayload(effective.messages, leanCounts, perMessageLimit), compacted: true };
 	}
 
 	const firstChat = leadingSystemCount(messages);
