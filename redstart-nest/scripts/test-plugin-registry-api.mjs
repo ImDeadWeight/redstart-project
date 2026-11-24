@@ -17,7 +17,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { searchRegistry, verdictFor, formFieldsFor, VERDICT, REGISTRY_BASE } from '../daemon/plugin-registry-api.mjs'
+import { searchRegistry, verdictFor, formFieldsFor, describeEntry, publisherFor, safeHttpsUrl, VERDICT, REGISTRY_BASE, REGISTRY_PAGE_SIZE } from '../daemon/plugin-registry-api.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.join(__dirname, 'fixtures')
@@ -232,6 +232,7 @@ await test('a successful response returns entries + nextCursor, and hits REGISTR
   assert(calledUrl.startsWith(REGISTRY_BASE), `did not call REGISTRY_BASE: ${calledUrl}`)
   assert(calledUrl.includes('search=filesystem'), `search query missing from URL: ${calledUrl}`)
   assert(calledUrl.includes('version=latest'), `version=latest missing from URL: ${calledUrl}`)
+  assert(calledUrl.includes(`limit=${REGISTRY_PAGE_SIZE}`), `page size missing from URL: ${calledUrl}`)
   assert(result.entries.length === 2, `expected 2 entries, got ${result.entries?.length}`)
   assert(result.nextCursor === 'opaque-cursor-value', `nextCursor not parsed: ${JSON.stringify(result)}`)
   return `${result.entries.length} entries, cursor: ${result.nextCursor}`
@@ -263,6 +264,60 @@ await test('a response with no "servers" array degrades to an empty list, not an
   assert(Array.isArray(result.entries) && result.entries.length === 0, `expected an empty entries array, got ${JSON.stringify(result)}`)
   assert(result.error === undefined, 'a missing servers array should not be reported as an error')
   return 'empty entries, no error'
+})
+
+// ---------------------------------------------------------------------------
+// describeEntry() — what the explorer lists beside a result.
+// ---------------------------------------------------------------------------
+
+console.log('\n-- describeEntry(): facts for the explorer --')
+
+await test('publisherFor reads a GitHub account or writes the domain forwards', async () => {
+  assert(publisherFor('io.github.j0hanz/filesystem-mcp') === 'j0hanz on GitHub', publisherFor('io.github.j0hanz/filesystem-mcp'))
+  assert(publisherFor('com.pulsemcp/remote-filesystem') === 'pulsemcp.com', publisherFor('com.pulsemcp/remote-filesystem'))
+  assert(publisherFor('no-namespace') === '', 'a name without a namespace has no publisher')
+  assert(publisherFor(undefined) === '', 'a missing name has no publisher')
+})
+
+await test('safeHttpsUrl keeps https links and drops every other scheme', async () => {
+  assert(safeHttpsUrl('https://github.com/a/b') === 'https://github.com/a/b', 'https dropped')
+  for (const bad of ['javascript:alert(1)', 'data:text/html,x', 'http://example.com', 'file:///etc/passwd', '/relative', '', 42, null]) {
+    assert(safeHttpsUrl(bad) === undefined, `kept ${String(bad)}`)
+  }
+})
+
+await test('describeEntry reads title, publisher, date and links, and lists a duplicate website once', async () => {
+  const facts = describeEntry({
+    server: {
+      name: 'io.github.j0hanz/filesystem-mcp', title: ' Filesystem MCP ',
+      repository: { url: 'https://github.com/j0hanz/filesystem-mcp' }, websiteUrl: 'https://github.com/j0hanz/filesystem-mcp',
+    },
+    _meta: { 'io.modelcontextprotocol.registry/official': { updatedAt: '2026-11-17T08:00:00Z' } },
+  })
+  assert(facts.title === 'Filesystem MCP', `title: ${facts.title}`)
+  assert(facts.publisher === 'j0hanz on GitHub', `publisher: ${facts.publisher}`)
+  assert(facts.updatedAt === '2026-11-17T08:00:00Z', `updatedAt: ${facts.updatedAt}`)
+  assert(facts.repositoryUrl === 'https://github.com/j0hanz/filesystem-mcp', `repo: ${facts.repositoryUrl}`)
+  assert(facts.websiteUrl === undefined, `website should collapse into the repo link: ${facts.websiteUrl}`)
+})
+
+await test('describeEntry drops a hostile link and an unparseable date, and survives a malformed entry', async () => {
+  const facts = describeEntry({
+    server: { name: 'com.example/x', websiteUrl: 'javascript:alert(1)', repository: { url: 'http://insecure.example' } },
+    _meta: { 'io.modelcontextprotocol.registry/official': { updatedAt: 'not a date' } },
+  })
+  assert(facts.websiteUrl === undefined && facts.repositoryUrl === undefined, `kept a link: ${JSON.stringify(facts)}`)
+  assert(facts.updatedAt === null, `kept a bad date: ${facts.updatedAt}`)
+  const remote = describeEntry({ server: { name: 'com.example/r', remotes: [
+    { type: 'streamable-http', url: 'https://{tenant}.example.com/mcp' },
+    { type: 'sse', url: 'http://insecure.example/mcp' },
+    { type: 'streamable-http', url: 'https://mcp.example.com/mcp' },
+  ] } })
+  assert(remote.remoteUrl === 'https://mcp.example.com/mcp', `remoteUrl: ${remote.remoteUrl}`)
+  for (const junk of [null, undefined, 42, { server: null }, { server: { name: 7 } }]) {
+    const f = describeEntry(junk)
+    assert(f && typeof f.publisher === 'string', `threw or returned nothing for ${JSON.stringify(junk)}`)
+  }
 })
 
 // ---------------------------------------------------------------------------

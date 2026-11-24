@@ -15,7 +15,8 @@
 //     each file's size drawn against them: a fact, not a "will it fit"
 //     verdict (see ModelSection's header).
 // Both browsers (HuggingFaceBrowser, ImageModelBrowser) own their data; this
-// file is layout only.
+// file is layout only. The MCP registry explorer (RegistryExplorer.tsx) uses
+// the same layout with its own rows, since the registry has no downloads.
 // =============================================================================
 
 import { useEffect, useRef } from 'react'
@@ -64,14 +65,17 @@ export function HardwareFacts({ hardware, diskFreeBytes }: { hardware: HardwareS
 
 // --- The three panes ----------------------------------------------------------
 
-export function HubLayout({ sidebar, results, detail, detailOpen, onBack, footer }: {
+export function HubLayout({ sidebar, results, detail, detailOpen, onBack, footer, detailLabel = 'Model details' }: {
   sidebar: React.ReactNode
   results: React.ReactNode
+  /** null: no detail pane at all (a page that is only a form). */
   detail: React.ReactNode
   /** On a narrow window the detail replaces the results while open. */
   detailOpen: boolean
   onBack: () => void
   footer: React.ReactNode
+  /** The detail pane's accessible name. */
+  detailLabel?: string
 }) {
   return (
     <div className="flex h-[min(44rem,calc(100vh-9rem))] min-h-0 flex-col">
@@ -82,14 +86,16 @@ export function HubLayout({ sidebar, results, detail, detailOpen, onBack, footer
         <section aria-label="Results" className={`min-w-0 flex-1 flex-col ${detailOpen ? 'hidden lg:flex' : 'flex'}`}>
           {results}
         </section>
-        <aside aria-label="Model details" className={`min-h-0 w-full shrink-0 flex-col border-zinc-800 bg-zinc-950/40 lg:w-[25rem] lg:border-l ${detailOpen ? 'flex' : 'hidden lg:flex'}`}>
-          {detailOpen && (
-            <button type="button" onClick={onBack} className="flex items-center gap-1.5 border-b border-zinc-800 px-4 py-2.5 text-left text-sm text-orange-400 hover:text-orange-300 lg:hidden">
-              <span aria-hidden="true">‹</span> Back to results
-            </button>
-          )}
-          {detail}
-        </aside>
+        {detail !== null && (
+          <aside aria-label={detailLabel} className={`min-h-0 w-full shrink-0 flex-col border-zinc-800 bg-zinc-950/40 lg:w-[25rem] lg:border-l ${detailOpen ? 'flex' : 'hidden lg:flex'}`}>
+            {detailOpen && (
+              <button type="button" onClick={onBack} className="flex items-center gap-1.5 border-b border-zinc-800 px-4 py-2.5 text-left text-sm text-orange-400 hover:text-orange-300 lg:hidden">
+                <span aria-hidden="true">‹</span> Back to results
+              </button>
+            )}
+            {detail}
+          </aside>
+        )}
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-zinc-800 px-5 py-3">{footer}</div>
     </div>
@@ -133,15 +139,25 @@ export function ScopeSelect({ options, value, onChange }: { options: { id: strin
 
 // --- Search bar ---------------------------------------------------------------
 
-export function HubSearchBar({ scopes, query, onQuery, onSubmit, placeholder, sort, onSort, children }: {
+const MODEL_SORTS: { value: SearchSort; label: string }[] = [
+  { value: 'downloads', label: 'Most downloaded' },
+  { value: 'likes', label: 'Most liked' },
+  { value: 'updated', label: 'Recently updated' },
+]
+
+export function HubSearchBar<S extends string = SearchSort>({ scopes, query, onQuery, onSubmit, placeholder, sort, onSort, sortOptions, searchLabel = 'Search models', children }: {
   /** Chips inside the box saying where it searches; each × widens it. */
   scopes: { label: string; tone?: 'publisher' | 'family'; onClear: () => void }[]
   query: string
   onQuery: (q: string) => void
   onSubmit: () => void
   placeholder: string
-  sort: SearchSort
-  onSort: (s: SearchSort) => void
+  sort: S
+  onSort: (s: S) => void
+  /** The sorts offered; the Hugging Face ones when left out. */
+  sortOptions?: { value: S; label: string }[]
+  /** The search box's accessible name. */
+  searchLabel?: string
   /** The narrow-window scope <select>. */
   children?: React.ReactNode
 }) {
@@ -158,7 +174,7 @@ export function HubSearchBar({ scopes, query, onQuery, onSubmit, placeholder, so
           </button>
         ))}
         <input value={query} onChange={e => onQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') onSubmit() }}
-          aria-label="Search models" placeholder={placeholder}
+          aria-label={searchLabel} placeholder={placeholder}
           className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-500" />
         {query && (
           <button type="button" onClick={() => onQuery('')} aria-label="Clear the search"
@@ -169,11 +185,9 @@ export function HubSearchBar({ scopes, query, onQuery, onSubmit, placeholder, so
       </label>
       <label className="flex items-center gap-2 text-[13px] text-zinc-400">
         Sort
-        <select value={sort} onChange={e => onSort(e.target.value as SearchSort)}
+        <select value={sort} onChange={e => onSort(e.target.value as S)}
           className="h-[38px] rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-[13px] text-zinc-100">
-          <option value="downloads">Most downloaded</option>
-          <option value="likes">Most liked</option>
-          <option value="updated">Recently updated</option>
+          {(sortOptions ?? (MODEL_SORTS as unknown as { value: S; label: string }[])).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       </label>
     </div>

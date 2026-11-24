@@ -4,7 +4,7 @@
 // Mirrors useCapabilities.ts: hold the server-side config, expose loaders and
 // mutators, keep the tab component free of IPC detail.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, getAPI } from '../api/redstart'
 import type { PluginSummary, PluginToolInfo, PluginInstallProgress, RegistrySearchResult } from '../api/redstart'
 
@@ -16,6 +16,12 @@ export function usePlugins() {
   const [installProgress, setInstallProgress] = useState<PluginInstallProgress | null>(null)
   const [searchResults, setSearchResults] = useState<RegistrySearchResult[]>([])
   const [searchError, setSearchError] = useState<string | null>(null)
+  const [searching, setSearching] = useState(false)
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  // Typing searches as the term settles, so an older search can answer after
+  // a newer one; only the newest is kept.
+  const searchSeq = useRef(0)
+  const lastQuery = useRef('')
 
   async function loadPlugins(): Promise<void> {
     setLoading(true)
@@ -81,22 +87,46 @@ export function usePlugins() {
   }
 
   /** Search the MCP registry. Keeps EVERY result, including unsupported ones —
-   *  the verdict is shown, never used to filter. */
-  async function search(query: string): Promise<void> {
+   *  the verdict is shown, never used to filter. `more` appends the next page
+   *  of the last search. */
+  async function search(query: string, opts: { more?: boolean } = {}): Promise<void> {
+    const more = !!opts.more && !!nextCursor
+    const seq = ++searchSeq.current
+    if (!more) lastQuery.current = query
     setSearchError(null)
-    const result = await api().plugins.search({ query })
-    if (!result.ok) {
-      setSearchError(result.error)
-      setSearchResults([])
-      return
+    setSearching(true)
+    try {
+      const result = await api().plugins.search({ query: lastQuery.current, cursor: more ? nextCursor! : undefined })
+      if (seq !== searchSeq.current) return
+      if (!result.ok) {
+        setSearchError(result.error)
+        if (!more) setSearchResults([])
+        setNextCursor(null)
+        return
+      }
+      setSearchResults((prev) => (more ? [...prev, ...result.entries] : result.entries))
+      setNextCursor(result.nextCursor)
+    } catch (err) {
+      if (seq === searchSeq.current) setSearchError(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (seq === searchSeq.current) setSearching(false)
     }
-    setSearchResults(result.entries)
+  }
+
+  /** Forget the last search (the dialog closed). */
+  function clearSearch(): void {
+    searchSeq.current++
+    lastQuery.current = ''
+    setSearchResults([])
+    setSearchError(null)
+    setNextCursor(null)
+    setSearching(false)
   }
 
   return {
     plugins, setPlugins, loading,
     installProgress, setInstallProgress,
-    searchResults, setSearchResults, searchError,
-    loadPlugins, setEnabled, setDisplayName, uninstall, testPlugin, setToolClass, setToolClasses, search,
+    searchResults, setSearchResults, searchError, searching, hasMoreResults: !!nextCursor,
+    loadPlugins, setEnabled, setDisplayName, uninstall, testPlugin, setToolClass, setToolClasses, search, clearSearch,
   }
 }

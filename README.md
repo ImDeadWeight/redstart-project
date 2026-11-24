@@ -45,7 +45,7 @@ Redstart includes its own clients and applications, but its broader purpose is t
 <a href="docs/screenshots/nest-overview.png"><img src="docs/screenshots/nest-overview.png" width="100%" alt="Nest's Overview page: the model in use, who can connect, tools on, a setup checklist and a QR code for phones." /></a>
 
 <details>
-<summary><b>More of Redstart Nest</b> — Model, Images, Tools, Network &amp; access, Terminal</summary>
+<summary><b>More of Redstart Nest</b> — Model, Images, Tools, Plugins, Network &amp; access, Terminal</summary>
 <br>
 
 **Model** — model selection, hardware information and memory settings, with llama.cpp flags under Advanced.
@@ -67,6 +67,10 @@ Redstart includes its own clients and applications, but its broader purpose is t
 **Tools** — configure the capabilities available to connected applications.
 
 <a href="docs/screenshots/nest-tools.png"><img src="docs/screenshots/nest-tools.png" width="100%" alt="Nest's Tools page." /></a>
+
+**Adding a plugin** — browse the official MCP registry for servers that run on your Nest. Each result shows what it installs and what settings it needs before you install it.
+
+<a href="docs/screenshots/nest-plugins.png"><img src="docs/screenshots/nest-plugins.png" width="100%" alt="The Add a plugin dialog browsing the MCP registry: a search for filesystem showing the seven servers that run on this Nest, with three more counted that can't, and Filesystem MCP opened on the right with its pinned npm package, the optional settings it asks for, and the name it will be saved under." /></a>
 
 **Network &amp; access** — manage connection settings, addresses, QR codes, HTTPS and sign-in.
 

@@ -42,7 +42,8 @@ import {
 } from '../plugin-registry.mjs'
 import { installNpmPackage, installPypiPackage, probePlugin, uninstallPlugin, normalizeConstraints } from '../plugin-install.mjs'
 import { encryptSecret, decryptSecret } from '../secrets.mjs'
-import { searchRegistry, verdictFor, formFieldsFor } from '../plugin-registry-api.mjs'
+import { searchRegistry, verdictFor, formFieldsFor, describeEntry } from '../plugin-registry-api.mjs'
+import { detectNode, detectNpm, detectUv } from '../plugin-runtimes.mjs'
 
 function refuse(channel, reason) {
   logEvent('security', 'ipc_argument_rejected', { channel, reason })
@@ -523,8 +524,15 @@ export async function searchPluginRegistry(opts) {
     const verdict = verdictFor(entry)
     const fields = verdict.packageRef ? formFieldsFor(verdict.packageRef).fields : []
     const serverName = entry?.server?.name ?? '(unnamed)'
+    const facts = describeEntry(entry)
     return {
       name: serverName,
+      title: facts.title,
+      publisher: facts.publisher,
+      updatedAt: facts.updatedAt,
+      repositoryUrl: facts.repositoryUrl,
+      websiteUrl: facts.websiteUrl,
+      remoteUrl: facts.remoteUrl,
       // The name above is the registry's canonical reverse-DNS identifier
       // ("io.github.artokun/comfyui-mcp"). `title` is the human one, and it is
       // OPTIONAL — roughly half the registry publishes it. Seeding the display
@@ -549,6 +557,19 @@ export async function searchPluginRegistry(opts) {
     }
   })
   return { ok: true, entries, nextCursor: result.nextCursor }
+}
+
+/**
+ * Which plugin runtimes this machine has, for the explorer's header: a fact
+ * shown beside the results, not a filter. Versions only; never a path.
+ */
+export async function pluginRuntimes() {
+  const [npm, uv] = await Promise.all([detectNpm(), detectUv()])
+  const node = npm.ok ? await detectNode() : null
+  return {
+    npm: npm.ok ? { ok: true, version: npm.version, nodeVersion: node?.ok ? node.version : undefined } : { ok: false },
+    uv: uv.ok ? { ok: true, version: uv.version } : { ok: false },
+  }
 }
 
 // pickPluginFolder() is retired — replaced with a native picker, itself
@@ -576,5 +597,6 @@ export function pluginsHandlers(deps) {
 
     // --- registry browsing ---
     'plugins:search': async (opts) => searchPluginRegistry(opts),
+    'plugins:runtimes': async () => pluginRuntimes(),
   }
 }
