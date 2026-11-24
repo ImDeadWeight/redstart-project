@@ -49,7 +49,26 @@ const { setAuthRequired, createOwner, createAccount } = await import('../daemon/
 
 const baseConfig = { allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 }
 
-const GATEWAY_PORT = 48180 // internal is +1; well clear of the app's defaults
+// Three ports in a row: the gateway, its internal upstream (+1) and the MCP
+// server (+2). Chosen at run time rather than fixed: a fixed 48180 sits in
+// Linux's ephemeral range (32768-60999), and a CI runner's outgoing socket
+// took it once (EADDRINUSE before a single case ran). This picks a block
+// below that range and checks all three are free first.
+async function freeBlock(size = 3) {
+  const canBind = (port) => new Promise((resolve) => {
+    const s = net.createServer()
+    s.once('error', () => resolve(false))
+    s.listen(port, '127.0.0.1', () => s.close(() => resolve(true)))
+  })
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const base = 20000 + Math.floor(Math.random() * 12000)
+    let ok = true
+    for (let i = 0; i < size && ok; i++) ok = await canBind(base + i)
+    if (ok) return base
+  }
+  throw new Error('no three free ports in a row between 20000 and 32000')
+}
+const GATEWAY_PORT = await freeBlock() // internal is +1, MCP +2
 const gw = `http://127.0.0.1:${GATEWAY_PORT}`
 
 // ---------------------------------------------------------------------------

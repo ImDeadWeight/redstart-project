@@ -15,26 +15,30 @@
 
 import { useState } from 'react'
 import { getAPI } from '../api/redstart'
-import type { HardwareSpecs, ImageGenerationStatus, ImageTransferProgress, LlamaConfig } from '../types'
+import type { HardwareSpecs, ImageGenerationStatus, ImageModelEntry, ImageTransferProgress, LlamaConfig } from '../types'
 import type { SectionId } from './Sidebar'
 import { useImageGeneration, imageBlocker } from '../hooks/useImageGeneration'
-import { Card, Chip, ConfirmDialog, Modal, PageHeader, SectionTitle, btnCls, inputCls } from '../components/ui'
+import { Card, Chip, Modal, PageHeader, SectionTitle, btnCls, inputCls } from '../components/ui'
 import { ImageModelBrowser } from './ImageModelBrowser'
+import { ModelPickList } from '../components/ModelPickList'
+import { HardwareFacts } from '../components/HubBrowser'
 
 const size = (n: number | null | undefined) => typeof n === 'number' ? (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${Math.round(n / 1024 ** 2)} MB`) : '—'
 const pct = (p: ImageTransferProgress | null) => p?.totalBytes ? Math.min(100, Math.round(((p.receivedBytes ?? 0) / p.totalBytes) * 100)) : 0
 
-export function ImagesSection({ config, documentsConfigured, onNavigate, hardware, diskFreeBytes }: {
+export function ImagesSection({ config, documentsConfigured, onNavigate, hardware, diskFreeBytes, modelsDir }: {
   config: LlamaConfig
   documentsConfigured: boolean
   onNavigate: (s: SectionId) => void
   /** For the browser's "Your computer" line: facts beside each download. */
   hardware: HardwareSpecs | null
   diskFreeBytes?: number
+  /** The Model page's models folder; image models live in its image/ folder. */
+  modelsDir?: string
 }) {
   const { status, error, engineProgress, downloadProgress, run } = useImageGeneration()
   const [finding, setFinding] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<ImageModelEntry | null>(null)
   const api = getAPI()
 
   const toolOn = config.tools?.activeToolIds?.includes('image_generation') ?? false
@@ -79,32 +83,27 @@ export function ImagesSection({ config, documentsConfigured, onNavigate, hardwar
           </div>
         </Card>
 
-        {/* ── Your image models ── */}
+        {/* ── Your image models ── the same list as the Model page's. */}
         <Card>
-          <div className="mb-3 flex flex-wrap items-center gap-3">
-            <SectionTitle className="mb-0 flex-1">Your image models</SectionTitle>
-            <button type="button" className={btnCls.secondary} onClick={() => setFinding(true)}>Find one on Hugging Face</button>
+          <SectionTitle className="mb-1">Your image models</SectionTitle>
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-sm text-zinc-400">
+            <span>Kept in</span>
+            <code className="break-all text-[13px] text-zinc-300">{modelsDir ? `${modelsDir}${modelsDir.includes('\\') ? '\\' : '/'}image` : 'the models folder, under image/'}</code>
+            <button type="button" className={btnCls.subtle} onClick={() => onNavigate('model')}
+              data-tip="Image models follow the models folder chosen on the Model page">Change on Model</button>
           </div>
-          {status.models.length === 0 && !status.downloading && (
-            <p className="text-sm text-zinc-500">None yet. FLUX.1 schnell is a good first choice: Apache-2.0, about 10 GB with its shared files, four steps per picture. Search &ldquo;flux schnell gguf&rdquo;.</p>
-          )}
-          <div role="radiogroup" aria-label="Image models" className="flex flex-col gap-2">
-            {status.models.map(m => {
-              const isActive = m.file === status.model
-              return (
-                <div key={m.file} className={`flex flex-wrap items-center gap-3 rounded-xl border px-3.5 py-2.5 ${isActive ? 'border-orange-500/70 bg-orange-500/5' : 'border-zinc-800 bg-zinc-950/40'}`}>
-                  <div className="min-w-[14rem] flex-1">
-                    <div className="break-all text-sm font-medium text-zinc-100">{m.repoId} <span className="font-normal text-zinc-400">· {m.rfilename}</span></div>
-                    <div className="text-[13px] text-zinc-500">{m.familyLabel} · {size(m.bytes)}{!m.ready && <span className="text-amber-300"> · files missing</span>}</div>
-                  </div>
-                  {isActive
-                    ? <Chip tone="ok">In use</Chip>
-                    : <button type="button" role="radio" aria-checked={false} className={btnCls.chip} onClick={() => run(api.capabilities.setImageGeneration({ model: m.file }))}>Use this</button>}
-                  <button type="button" className={btnCls.subtle} onClick={() => setConfirmDelete(m.file)}>Delete</button>
-                </div>
-              )
-            })}
-          </div>
+
+          <ModelPickList label="Image models"
+            empty={status.downloading ? 'Downloading your first image model…' : <>None yet. FLUX.1 schnell is a good first choice: Apache-2.0, about 10 GB with its shared files, four steps per picture. Search &ldquo;flux schnell gguf&rdquo;.</>}
+            rows={status.models.map(m => ({
+              key: m.file,
+              title: <>{m.repoId} <span className="font-normal text-zinc-400">· {m.rfilename}</span></>,
+              detail: <>{m.familyLabel} · {size(m.bytes)}{!m.ready && <span className="text-amber-300"> · files missing</span>}</>,
+              active: m.file === status.model,
+              onUse: () => { void run(api.capabilities.setImageGeneration({ model: m.file })) },
+              onDelete: () => setConfirmDelete(m),
+            }))} />
+
           {status.downloading && (
             <div className="mt-2 rounded-xl border border-zinc-800 bg-zinc-950/40 px-3.5 py-2.5">
               <div className="flex flex-wrap items-center gap-3 text-[13px] text-zinc-300">
@@ -115,7 +114,10 @@ export function ImagesSection({ config, documentsConfigured, onNavigate, hardwar
               <div className="mt-2 h-1.5 overflow-hidden rounded bg-zinc-800"><div className="h-full bg-orange-500 transition-all" style={{ width: `${pct(downloadProgress)}%` }} /></div>
             </div>
           )}
-          <p className="mt-3 text-[13px] text-zinc-500">Kept in the models folder (Model page), under <code>image/</code>.</p>
+
+          <div className="mt-4 flex flex-wrap gap-2 border-t border-zinc-800 pt-4">
+            <button type="button" className={btnCls.secondary} onClick={() => setFinding(true)}>Find image models on Hugging Face</button>
+          </div>
         </Card>
 
         {/* ── Engine ── */}
@@ -150,18 +152,25 @@ export function ImagesSection({ config, documentsConfigured, onNavigate, hardwar
           <p className="mt-2 text-[13px] text-zinc-500">On an RTX 3060, CUDA made a FLUX schnell picture in 17 s, Vulkan in 37 s.</p>
         </Card>
 
-        <Modal open={finding} title="Find image models on Hugging Face" onClose={() => setFinding(false)} size="lg"
-          footer={<button type="button" onClick={() => setFinding(false)} className={btnCls.secondary}>Done</button>}>
-          <ImageModelBrowser status={status} hardware={hardware} diskFreeBytes={diskFreeBytes} progress={downloadProgress}
+        <Modal open={finding} title="Find image models on Hugging Face" onClose={() => setFinding(false)} size="2xl" flush
+          subtitle={<HardwareFacts hardware={hardware} diskFreeBytes={diskFreeBytes} />}>
+          <ImageModelBrowser status={status} hardware={hardware} progress={downloadProgress}
             onDownload={(req) => { void run(api.capabilities.downloadImageModel(req)) }}
-            onCancel={() => { void run(api.capabilities.cancelImageDownload()) }} />
+            onCancel={() => { void run(api.capabilities.cancelImageDownload()) }}
+            onDone={() => setFinding(false)} />
         </Modal>
 
-        <ConfirmDialog open={!!confirmDelete} title="Delete this image model?" confirmLabel="Delete"
-          onCancel={() => setConfirmDelete(null)}
-          onConfirm={async () => { const f = confirmDelete!; setConfirmDelete(null); await run(api.capabilities.deleteImageModel(f)) }}>
-          The model file leaves the models folder. Its family&rsquo;s shared files stay, for other models of the same family.
-        </ConfirmDialog>
+        <Modal open={!!confirmDelete} title="Delete this image model?" onClose={() => setConfirmDelete(null)} size="sm"
+          footer={<>
+            <button type="button" onClick={() => setConfirmDelete(null)} className={btnCls.secondary}>Cancel</button>
+            <button type="button" className={btnCls.danger}
+              onClick={() => { const m = confirmDelete; setConfirmDelete(null); if (m) void run(api.capabilities.deleteImageModel(m.file)) }}>Delete</button>
+          </>}>
+          <p className="text-sm text-zinc-300">
+            <span className="break-all font-medium text-zinc-100">{confirmDelete?.repoId} · {confirmDelete?.rfilename}</span> ({size(confirmDelete?.bytes)}) leaves the models folder.
+            Its family&rsquo;s shared files stay, for other models of the same family.
+          </p>
+        </Modal>
       </>)}
     </div>
   )

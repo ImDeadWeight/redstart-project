@@ -11,7 +11,7 @@ import type {
   TlsStatus, TlsPatch,
   HardwareSpecs, WebFetchTool, CapabilityConfig, ToolGroup, ToolContextEstimate, RetrievalStatus,
   ExternalMcpServer, LlamaConfig, ClientApp, ControlPlaneState, StartupState, UpdateState, UpdateStatus,
-  CatalogModel, ModelDetail, ModelDescription, ModelArtifact, LocalModelFile, DownloadProgress, ImageGenerationStatus, ImageCatalogModel, ImageRepoDetail, ImageProgress, ImageTransferProgress } from '../types'
+  CatalogModel, ModelDetail, ModelDescription, ModelArtifact, LocalModelFile, DownloadProgress, ImageGenerationStatus, ImageCatalogModel, ImageRepoDetail, ImageProgress, ImageTransferProgress, SearchSort } from '../types'
 
 // browse:roots / browse:list shapes (daemon/admin/browse-routes.mjs).
 export type BrowseRoot = {
@@ -180,7 +180,7 @@ export type RedstartAPI = {
   }
   models: {
     publishers: () => Promise<{ id: string; label: string; note: string }[]>
-    search: (opts: { query?: string; publisher?: string; limit?: number })
+    search: (opts: { query?: string; publisher?: string; limit?: number; sort?: SearchSort })
       => Promise<{ ok: boolean; models?: CatalogModel[]; error?: string }>
     detail: (repoId: string) => Promise<{ ok: boolean; detail?: ModelDetail; error?: string }>
     describe: (repoId: string) => Promise<{ ok: boolean; description?: ModelDescription | null; error?: string }>
@@ -239,7 +239,7 @@ export type RedstartAPI = {
     imageGeneration: () => Promise<ImageGenerationStatus>
     setImageGeneration: (config: { model?: string | null; backend?: ImageGenerationStatus['backend']; timeoutS?: number }) => Promise<{ ok: boolean; error?: string }>
     installImageEngine: () => Promise<{ ok: boolean; error?: string }>
-    searchImageModels: (opts: { query?: string; publisher?: string }) => Promise<{ ok: boolean; error?: string; results: ImageCatalogModel[] }>
+    searchImageModels: (opts: { query?: string; publisher?: string; sort?: SearchSort; family?: string }) => Promise<{ ok: boolean; error?: string; results: ImageCatalogModel[] }>
     imageRepo: (repoId: string) => Promise<ImageRepoDetail>
     downloadImageModel: (req: { repoId: string; rfilename: string; family: string }) => Promise<{ ok: boolean; error?: string; cancelled?: boolean; file?: string }>
     cancelImageDownload: () => Promise<{ ok: boolean }>

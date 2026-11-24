@@ -29,6 +29,9 @@ export type HardwareSpecs = {
 
 // --- Hugging Face model catalog ---------------------------------------------
 
+/** The orders a Hugging Face search can come back in (hf-catalog.mjs SEARCH_SORTS). */
+export type SearchSort = 'downloads' | 'likes' | 'updated'
+
 export type CatalogModel = {
   repoId: string
   author: string

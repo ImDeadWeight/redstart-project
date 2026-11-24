@@ -4,6 +4,20 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ---
 
+## 2026-11-24
+
+- **The Hugging Face browsers are explorers.** Both "Find models" popups (the Model page's and the Images page's) were hard to navigate: a search ignored the publisher tab you were on, choosing a tab cleared the search, and opening a model replaced the list behind a "Back to results" button. The new layout was approved as a mockup first ("Option A"), the same treatment the file picker got. It is shared by both browsers in `components/HubBrowser.tsx`:
+  - **A sidebar of where to look:** the recommended publishers, then all of Hugging Face, then "show only" switches (models that see images, hide gated models). The image browser's sidebar adds a **Family** filter (FLUX.1 schnell / dev, SDXL, SD 1.x).
+  - **A search box that says where it searches.** "in Unsloth ×" and, for images, a family chip. A term searches *inside* the chosen publisher, and the × widens it. Typing searches once you pause; Enter searches at once. Picking a publisher keeps the term.
+  - **Sort** by most downloaded, most liked or recently updated. Results are a table with downloads and last update.
+  - **The opened model sits beside the list.** Each size has one Download button and a bar drawing the file (plus its vision projector, or the image family's shared files) against the machine's RAM, with a tick at GPU memory. These are facts, not a "fits" verdict, as before. On a narrow window the model replaces the list, with a Back button.
+  - **Your computer's GPU, RAM and free disk** are in the popup header the whole time, and one download tray sits in the footer.
+  - **Daemon:** `searchParams()` in `hf-catalog.mjs` builds both searches. It combines `author` and `search` (the Hub ANDs them), maps `sort` through `SEARCH_SORTS` (anything else falls back to downloads), and for images turns a family into `filter=base_model:<the family's base model>`. Results go up from 30 to 50, because "sees images" and "hide gated" filter what came back (the Hub has no query for them).
+  - **Recommended publishers:** added LM Studio (`lmstudio-community`), which converts new releases quickly with one repo per model, and Qwen, the one major lab that ships its own ungated GGUFs. Considered and left out: mradermacher (huge, but split static/imatrix repos and many obscure fine-tunes), Google (its Gemma GGUFs are gated, which Nest cannot download), Mistral (few GGUFs of its own).
+  - **The Images page uses the Model page's model list** (`components/ModelPickList.tsx`): In use / Use this / Delete, a scroll cap, the model in use cannot be deleted, "Kept in" names the folder, and the delete confirmation names the file and its size.
+  - Tests: a new case in `test-image-models.mjs` (publisher + term, sort mapping and fallback, the limit cap, the family filter, invalid base models dropped, every recommended publisher a valid author).
+  - Rendered in a headless browser against faked data, wide and narrow. Not yet run against the live Hub (the family filter's `base_model:` tag in particular) or clicked in the running app.
+
 ## 2026-11-23
 
 - **Nest bundles upstream llama.cpp instead of the TurboQuant+ fork.** The first Mac test of an Inkling 2 model failed with `unknown pre-tokenizer type: 'inkling2'`: the pinned fork (`tqp-v0.4.0`) predates that architecture, and every new model family waits on the fork's next rebase. The fork's only feature Nest used was its turbo KV-cache types, and that was worth less than it looked: against upstream's own `q4_0` V cache, turbo3 saves about a quarter more on V, or under a tenth of the whole cache.
