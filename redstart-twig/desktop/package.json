@@ -1,6 +1,6 @@
 {
   "name": "redstart-twig",
-  "version": "1.0.0-alpha.24",
+  "version": "1.0.0-alpha.25",
   "description": "Lightweight desktop chat client (Windows, macOS) for a Redstart Nest or llama.cpp-compatible server on your local network.",
   "author": "Patrick Carswell",
   "license": "AGPL-3.0-only",
