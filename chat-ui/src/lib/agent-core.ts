@@ -42,6 +42,9 @@ export {
 	streamErrorMessage
 } from '../../../shared/agent-core/chat-stream.mjs';
 export { attachmentNote } from '../../../shared/agent-core/attachment-note.mjs';
+export { ThinkTagRouter, routeThinkTags } from '../../../shared/agent-core/think-tags.mjs';
+/** A piece of routed content: still the answer, or thinking that leaked into it. */
+export type RoutedSegment = { kind: 'content' | 'reasoning'; text: string };
 export { unknownToolText, suggestTools } from '../../../shared/agent-core/teaching.mjs';
 export {
 	ASK_USER_TOOL,

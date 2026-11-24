@@ -910,6 +910,26 @@ await test('content between two tool-call batches starts a new call at index 0',
   eq(acc.toolCalls.map((c) => c.id), ['a', 'b'], 'two calls, not one overwritten')
 })
 
+await test('a stray </think> in the content is dropped, and <think> in the content goes to reasoning (the server path)', async () => {
+  // Seen after tool results: the model closed thinking a second time, and the
+  // tag reached the answer. Split across chunks, as a stream delivers it.
+  const acc = createTurnAccumulator(undefined)
+  const seen = []
+  await readChatStream(sse([
+    chunk({ content: "Sure, let's try it out!\n</th" }),
+    chunk({ content: 'ink>\n\nRunning it now. <think>check the path' }),
+    chunk({ content: ' first</think> Done: `<think>` is the tag.' }),
+    '[DONE]',
+  ]), acc, { onContent: (t) => seen.push(t) })
+  eq(acc.content, "Sure, let's try it out!\nRunning it now.  Done: `<think>` is the tag.", 'content')
+  eq(acc.reasoning, 'check the path first', 'reasoning')
+  eq(seen.join(''), acc.content, 'onContent saw exactly the content')
+  // A partial tag that never completes is released as text at the end.
+  const cut = createTurnAccumulator(undefined)
+  await readChatStream(sse([chunk({ content: 'a </th' })]), cut)
+  eq(cut.content, 'a </th', 'held-back text released')
+})
+
 await test('mergeToolCallDeltas does not modify its input', async () => {
   const before = [{ id: 'a', function: { name: 'x', arguments: '{' } }]
   const snapshot = JSON.stringify(before)

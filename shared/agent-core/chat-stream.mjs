@@ -15,6 +15,8 @@
  * mergeToolCallDeltas is the shared part.
  */
 
+import { ThinkTagRouter } from './think-tags.mjs';
+
 /** @typedef {import('./types').RawToolCall} RawToolCall */
 /** @typedef {import('./types').TurnAccumulator} TurnAccumulator */
 /** @typedef {import('./types').Timings} Timings */
@@ -123,6 +125,30 @@ export async function readChatStream(response, acc, hooks = {}) {
 		indexOffset = acc.toolCalls.length;
 		openBatch = false;
 	};
+	// Thinking markup the server's parser let through into the content goes to
+	// the reasoning channel, or is dropped when it is a stray close (think-tags.mjs).
+	const thinkRouter = new ThinkTagRouter();
+	/** @param {string} text */
+	const emitContent = (text) => {
+		if (!text) return;
+		closeBatch();
+		acc.content += text;
+		hooks.onContent?.(text);
+	};
+	/** @param {string} text */
+	const emitReasoning = (text) => {
+		if (!text) return;
+		closeBatch();
+		acc.reasoning += text;
+		hooks.onReasoning?.(text);
+	};
+	/** @param {import('./think-tags.mjs').RoutedSegment[]} segments */
+	const emitRouted = (segments) => {
+		for (const segment of segments) {
+			if (segment.kind === 'content') emitContent(segment.text);
+			else emitReasoning(segment.text);
+		}
+	};
 
 	try {
 		while (true) {
@@ -161,16 +187,8 @@ export async function readChatStream(response, acc, hooks = {}) {
 					acc.captured = parsed.timings;
 					hooks.onTimings?.(parsed.timings);
 				}
-				if (typeof delta?.content === 'string' && delta.content) {
-					closeBatch();
-					acc.content += delta.content;
-					hooks.onContent?.(delta.content);
-				}
-				if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content) {
-					closeBatch();
-					acc.reasoning += delta.reasoning_content;
-					hooks.onReasoning?.(delta.reasoning_content);
-				}
+				if (typeof delta?.content === 'string' && delta.content) emitRouted(thinkRouter.push(delta.content));
+				if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content) emitReasoning(delta.reasoning_content);
 				if (Array.isArray(delta?.tool_calls) && delta.tool_calls.length > 0) {
 					acc.toolCalls = mergeToolCallDeltas(acc.toolCalls, delta.tool_calls, indexOffset);
 					if (acc.toolCalls.length > 0) {
@@ -183,6 +201,8 @@ export async function readChatStream(response, acc, hooks = {}) {
 	} finally {
 		reader.releaseLock();
 	}
+	// What the router held back (a "</th" that never became a tag) is text.
+	emitRouted(thinkRouter.flush());
 
 	return { finished, model };
 }
