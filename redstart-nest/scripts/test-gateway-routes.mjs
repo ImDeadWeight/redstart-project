@@ -983,6 +983,27 @@ async function main() {
     })
   })
 
+  await test('every completion states how much system prompt the gateway added, readable cross-origin', async () => {
+    updateGatewayConfig({ ...baseConfig, ctxSize: 4096 })
+    // With no client system message: the whole forwarded system message is the gateway's.
+    const res = await completions(retrievalBody())
+    const added = Number(res.headers.get('x-redstart-system-prompt-chars'))
+    const forwardedSystem = (lastForwarded.messages || []).filter(m => m.role === 'system').map(m => m.content).join('')
+    assert(added > 0 && added === forwardedSystem.length, `header ${added}, forwarded system prompt ${forwardedSystem.length}`)
+    assert(/x-redstart-system-prompt-chars/.test(res.headers.get('access-control-expose-headers') ?? ''), 'not exposed to a browser client')
+    // With the client's own system message: only what the gateway prepended counts.
+    const own = 'You are a careful assistant.'
+    const withOwn = await completions({ ...retrievalBody(), messages: [{ role: 'system', content: own }, ...retrievalBody().messages] })
+    const addedToOwn = Number(withOwn.headers.get('x-redstart-system-prompt-chars'))
+    const merged = (lastForwarded.messages || []).find(m => m.role === 'system').content
+    assert(addedToOwn === merged.length - own.length, `header ${addedToOwn}, prepended ${merged.length - own.length}`)
+    // Next to a report, both are exposed.
+    const both = await completions({ ...retrievalBody(), redstart_retrieval_report: true })
+    const exposed = both.headers.get('access-control-expose-headers') ?? ''
+    assert(/x-redstart-system-prompt-chars/.test(exposed) && /x-redstart-tools-sent/.test(exposed), `exposed: ${exposed}`)
+    updateGatewayConfig(baseConfig)
+  })
+
   await test('🔍 an unfiltered request reports filtered: 0, with every tool', async () => {
     updateGatewayConfig({ ...baseConfig, ctxSize: 4096 })
     const res = await completions({ ...retrievalBody(), redstart_retrieval_report: true })
