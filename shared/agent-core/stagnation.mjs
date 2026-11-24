@@ -125,7 +125,12 @@ const DECORATION = /[─-▟⎯•◆◇●○✔✖✘✓·]+/g;
 const FAILURE_WORDS =
 	/\b(error|errors|failed|failure|fail|cannot|can't|could not|couldn't|not found|no such|exception|denied|invalid|unexpected|missing|refused|err!|does not|is not|undefined)\b/i;
 
-/** `text` without terminal codes and frame characters, trimmed per line. */
+/**
+ * `text` without terminal codes and frame characters, trimmed per line.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
 export function plainText(text) {
 	return String(text ?? '')
 		.replace(ANSI, '')
@@ -175,6 +180,7 @@ export function errorSignature(text) {
 }
 
 /** A signature that says something (two words), rather than "failed" alone. */
+/** @param {string} signature */
 function informative(signature) {
 	return (signature.match(/[a-z]{2,}/g) ?? []).length >= 2;
 }
@@ -233,6 +239,7 @@ function isBlocked(call, blocked) {
 }
 
 /** FNV-1a, 32 bits: enough to tell one version of a file from another. */
+/** @param {string} text */
 function hash(text) {
 	let h = 0x811c9dc5;
 	for (let i = 0; i < text.length; i++) {
@@ -244,6 +251,7 @@ function hash(text) {
 
 /** A sentence as it compares with others: lowercased, punctuation gone.
  *  Digits stay: a list of errors at different lines is not a loop. */
+/** @param {string} sentence */
 function sentenceKey(sentence) {
 	return sentence
 		.toLowerCase()
@@ -257,6 +265,7 @@ const REVERSAL = /^(actually|wait|hmm+|hold on|on second thought|no,? wait|let m
 // --- the texts ---------------------------------------------------------------
 
 /** What the model reads instead of a repeated call's result (rule 1 of detector a). */
+/** @param {string} name @param {number} times */
 export function repeatedCallResult(name, times) {
 	return (
 		`Not run: you have called ${name} with these exact arguments ${times} times in this task, ` +
@@ -266,6 +275,7 @@ export function repeatedCallResult(name, times) {
 }
 
 /** What the model reads instead of an action refused at recovery level 2. */
+/** @param {string} action */
 export function refusedActionResult(action) {
 	return (
 		(action.startsWith('kind:')
@@ -278,6 +288,7 @@ export function refusedActionResult(action) {
 }
 
 /** `ys_run_command:npx sv add` reads as "npx sv add"; `kind:search` as "searches"; anything else as tool and target. */
+/** @param {string} action */
 function describeAction(action) {
 	if (action.startsWith('kind:')) return KIND_PLURAL[action.slice(5)] ?? action.slice(5);
 	const at = action.indexOf(':');
@@ -289,9 +300,11 @@ function describeAction(action) {
 	return /\s/.test(target) ? target : `${tool} ${target}`;
 }
 
+/** @type {Record<string, string>} */
 const KIND_PLURAL = { read: 'reads', search: 'searches', write: 'writes', command: 'commands', diagnostics: 'diagnostics', other: 'those calls' };
 
 /** What a level 2 refusal blocks for each detector without an action of its own. */
+/** @type {Partial<Record<Detector, string>>} */
 const BLOCKED_KIND = { 'no-progress': 'kind:search', theorizing: 'kind:write', 'reasoning-loop': 'kind:write' };
 
 /** @param {Recovery['level']} level @param {string} evidence @param {string} action */
@@ -337,9 +350,11 @@ export function createStagnationMonitor(overrides = {}) {
 	let progressThisRound = false;
 	let roundsWithoutProgress = 0;
 	/** What has been tried, newest last, for the level 3 summary. */
+	/** @type {string[]} */
 	const tried = [];
 
 	// d: the current response's recent sentences.
+	/** @type {string[]} */
 	let sentences = [];
 	let partial = '';
 	// e: since the last new evidence.

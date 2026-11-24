@@ -30,6 +30,15 @@ export function useServerLifecycle(opts: {
   // config.tools still describes the server that's actually up, or describes
   // some other profile the admin has since switched to editing.
   const [runningProfileName, setRunningProfileName] = useState<string | null>(null)
+  // The model file the server actually loaded. The selected config changes
+  // when the person switches profiles; what is running does not until a
+  // restart, and the top bar must say what is running.
+  const [runningModel, setRunningModel] = useState<string | null>(null)
+  const fileName = (p: string | undefined) => (p ? p.split(/[\\/]/).pop() || p : null)
+  // A launch elsewhere (another client) is announced without a payload: ask.
+  const refreshRunningModel = () => {
+    api().admin.getStatus().then(s => { if (s.running) setRunningModel(s.model ?? null) }).catch(() => {})
+  }
 
   const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const configRef = useRef(config)
@@ -69,6 +78,7 @@ export function useServerLifecycle(opts: {
     let cancelled = false
     api().admin.getStatus().then(s => {
       if (cancelled || !s.running) return
+      setRunningModel(s.model ?? null)
       setServerState('running')
       setHealth('starting')
       startStatusPoll()
@@ -90,6 +100,7 @@ export function useServerLifecycle(opts: {
     // already-open second client pick up a launch triggered elsewhere
     // without waiting for a remount.
     a.events.onServerStarted(() => {
+      refreshRunningModel()
       setServerState('running')
       setHealth('starting')
       startStatusPoll()
@@ -103,6 +114,7 @@ export function useServerLifecycle(opts: {
       setTokensPerMin(0)
       setConfirmStop(false)
       setRunningProfileName(null)
+      setRunningModel(null)
       stopStatusPoll()
       if (isUserStopRef.current) {
         isUserStopRef.current = false
@@ -135,6 +147,7 @@ export function useServerLifecycle(opts: {
       setServerState('running')
       setHealth('starting')
       setRunningProfileName(selectedProfile || null)
+      setRunningModel(fileName(config.modelPath))
       startStatusPoll()
     } else {
       setServerState('stopped')
@@ -180,6 +193,6 @@ export function useServerLifecycle(opts: {
     serverState, health, imageProgress, tokensPerMin, logLines, clearLog,
     confirmStop, setConfirmStop,
     launchServer, requestStopServer, confirmStopServer,
-    runningProfileName, syncToolsIfLive,
+    runningProfileName, runningModel, syncToolsIfLive,
   }
 }

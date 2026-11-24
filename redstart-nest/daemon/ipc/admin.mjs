@@ -95,6 +95,10 @@ export function getFullStatus({ serverState }) {
     // Whether the running model got a vision projector: { source: 'profile' |
     // 'paired' | 'none', projector: <file name>, warning }. See projector.mjs.
     vision: running ? (serverState.vision ?? null) : null,
+    // The model file the running server loaded: the file name only, as the
+    // launcher shows it. Switching profiles changes the selected config, not
+    // what is running, so the "Running" pill reads this, not the profile.
+    model: running && config?.modelPath ? (String(config.modelPath).split(/[\\/]/).pop() || null) : null,
     port: config?.port ?? null,
     networkMode: config ? !!config.networkMode : null,
     gateway: { port: config ? getGatewayPort(config.port) : null },

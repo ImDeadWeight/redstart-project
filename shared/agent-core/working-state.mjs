@@ -43,6 +43,7 @@ const KEEP = { discoveries: 8, errors: 5, fixed: 3, notes: 4, files: 12 };
  */
 
 /** The first lines of a result that carry something, joined, for a discovery. */
+/** @param {string} text */
 function gist(text, lines = 2, chars = 140) {
 	const kept = String(text ?? '')
 		.split('\n')
@@ -53,6 +54,7 @@ function gist(text, lines = 2, chars = 140) {
 }
 
 /** `ys_grep:runes` → "ys_grep runes"; a command's family → the command. */
+/** @param {string} family */
 function where(family) {
 	const at = family.indexOf(':');
 	return at === -1 ? family : `${family.slice(0, at)} ${family.slice(at + 1)}`.trim();
@@ -76,6 +78,7 @@ export function createWorkingState(options = {}) {
 	/** @type {PlanStep[]} */
 	let plan = [];
 
+	/** @param {string[]} list @param {string} item @param {number} keep */
 	const push = (list, item, keep) => {
 		list.push(item);
 		if (list.length > keep) list.splice(0, list.length - keep);
@@ -120,7 +123,7 @@ export function createWorkingState(options = {}) {
 				if (found) {
 					discoveries.delete(family);
 					discoveries.set(family, found);
-					while (discoveries.size > KEEP.discoveries) discoveries.delete(discoveries.keys().next().value);
+					while (discoveries.size > KEEP.discoveries) discoveries.delete(/** @type {string} */ (discoveries.keys().next().value));
 				}
 			}
 		},
@@ -143,10 +146,12 @@ export function createWorkingState(options = {}) {
 		 * @returns {string}
 		 */
 		render() {
+			/** @param {string} title @param {string[]} lines */
 			const section = (title, lines) => (lines.length ? [`${title}:`, ...lines.map((l) => `- ${l}`)] : []);
+			/** @param {string} state */
 			const fileLines = (state) => [...files].filter(([, s]) => s === state).map(([p]) => p);
 			const changed = ['created', 'changed', 'deleted']
-				.map((state) => [state, fileLines(state).slice(-KEEP.files)])
+				.map((state) => /** @type {[string, string[]]} */ ([state, fileLines(state).slice(-KEEP.files)]))
 				.filter(([, names]) => names.length)
 				.map(([state, names]) => `${state} ${names.join(', ')}`);
 			const open = [...errors.values()].slice(-KEEP.errors).map((e) => `${e.line} (${e.from}${e.count > 1 ? `, ${e.count} times` : ''})`);

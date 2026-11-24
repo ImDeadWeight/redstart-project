@@ -140,6 +140,8 @@ await test('🔍 while paused: upstream port null, status suspended (still runni
     assert(st.running === true && st.health === 'suspended', JSON.stringify(st))
     const full = getFullStatus(deps)
     assert(full.running === true && full.suspended?.reason === 'image generation', JSON.stringify({ running: full.running, suspended: full.suspended }))
+    // The model that is running, not the selected profile's: the launcher's "Running" pill reads this.
+    assert(full.model === 'fake.gguf', `status model: ${full.model}`)
     const again = await launchServer(CONFIG, deps)
     assert(again.success === false && /paused/i.test(again.error), JSON.stringify(again))
     assert((await suspendModel(deps)).already === true, 'a second pause did not report already-paused')
