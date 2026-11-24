@@ -378,7 +378,9 @@ export function createStagnationMonitor(overrides = {}) {
 		const notes = earlier.length ? `\n\nEarlier in this run: ${earlier.join(' ')}` : '';
 		return (
 			`I stopped because I was not making progress. ${evidence}${notes}${lines}\n\n` +
-			'How would you like me to continue? A hint about the cause, or a different approach, would help.'
+			// Ends in a question: the person answers in the next message, and a
+			// host's plan check (update-plan.mjs endsInQuestion) waits for it.
+			'A hint about the cause, or a different approach, would help. How would you like me to continue?'
 		);
 	};
 
