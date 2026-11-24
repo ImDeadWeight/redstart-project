@@ -23,6 +23,7 @@
 import { registerElectronStub } from './electron-stub-hooks.mjs'
 import * as http from 'node:http'
 import * as net from 'node:net'
+import { randomInt } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -61,7 +62,9 @@ async function freeBlock(size = 3) {
     s.listen(port, '127.0.0.1', () => s.close(() => resolve(true)))
   })
   for (let attempt = 0; attempt < 50; attempt++) {
-    const base = 20000 + Math.floor(Math.random() * 12000)
+    // crypto.randomInt rather than Math.random: nothing here needs to be
+    // unpredictable, but CodeQL flags Math.random and this costs nothing.
+    const base = randomInt(20000, 32000)
     let ok = true
     for (let i = 0; i < size && ok; i++) ok = await canBind(base + i)
     if (ok) return base

@@ -4,25 +4,39 @@ import { resolveApiPath } from '$lib/utils/api-fetch';
 
 /**
  * Client for projects (projects-plan Phase 2), served by Nest's /projects
- * routes. Like the other per-account clients, no call names a user: the
- * server scopes everything to the credential, and answers 404 for a project
- * the caller may not read.
+ * routes. The server decides who may do what (owner, admin, editor, viewer —
+ * `access` on each project) and answers 404 for a project the caller may not
+ * read, 403 for one they may read but not change.
  *
  * A project's instructions and memories reach the model through the
  * completion's `redstart_project` id (chat.service), never as text from here.
  */
 
+/** What the signed-in account may do with a project. */
+export type ProjectAccess = 'owner' | 'admin' | 'editor' | 'viewer';
+
+/** Someone a project is shared with: an account or a whole group. */
+export interface ProjectMember {
+	type: 'account' | 'group';
+	id: string;
+	role: 'viewer' | 'editor';
+}
+
 export interface Project {
 	id: string;
 	name: string;
 	instructions: string;
-	/** Fixed at creation; the files folder is named after it. */
 	slug: string;
-	/** The files folder, relative to the user's Documents space: `Projects/<slug>/`. */
+	/**
+	 * The file-explorer space holding the project's files (`project-<id>`),
+	 * shared by everyone in the project. List it at path '.'.
+	 */
 	folder: string;
 	ownerKey: string;
-	/** Sharing is not built yet (plan D7); always empty today. */
-	members: unknown[];
+	/** The owner's username, or null with sign-in off. */
+	ownerName: string | null;
+	members: ProjectMember[];
+	access: ProjectAccess;
 	createdAt: number;
 	updatedAt: number;
 }
@@ -31,19 +45,55 @@ export interface ProjectLimits {
 	maxNameChars: number;
 	maxInstructionsChars: number;
 	maxProjects: number;
+	maxMembers?: number;
 }
+
+/** Who a project can be shared with (GET /directory): names only. */
+export interface Directory {
+	accounts: { id: string; username: string }[];
+	groups: { id: string; name: string; members: number }[];
+}
+
+/** May this access change the project (name, instructions, memory, files)? */
+export const canEditProject = (p: Project | null) =>
+	!!p && (!p.access || p.access === 'owner' || p.access === 'admin' || p.access === 'editor');
+
+/** May this access share, hand over or delete the project? */
+export const canManageProject = (p: Project | null) =>
+	!!p && (!p.access || p.access === 'owner' || p.access === 'admin');
 
 export interface ProjectDraft {
 	name?: string;
 	instructions?: string;
 }
 
-/** The space the files folder lives in (FilesService). */
-export const PROJECT_FILES_SPACE = 'documents';
-
 export class ProjectService {
 	static async list(): Promise<{ projects: Project[]; limits: ProjectLimits }> {
 		return apiFetch<{ projects: Project[]; limits: ProjectLimits }>('/projects');
+	}
+
+	/** Every project on the server, for an admin who manages them all (403 otherwise). */
+	static async listAll(): Promise<Project[]> {
+		return (await apiFetch<{ projects: Project[] }>('/projects?all=1')).projects;
+	}
+
+	static async setMembers(id: string, members: ProjectMember[]): Promise<Project> {
+		return apiFetch<Project>(`/projects/${encodeURIComponent(id)}/members`, {
+			method: 'PUT',
+			body: JSON.stringify({ members })
+		});
+	}
+
+	/** Hand the project to another account; the previous owner stays on as an editor. */
+	static async transfer(id: string, accountId: string): Promise<Project> {
+		return apiFetch<Project>(`/projects/${encodeURIComponent(id)}/transfer`, {
+			method: 'POST',
+			body: JSON.stringify({ accountId })
+		});
+	}
+
+	static async directory(): Promise<Directory> {
+		return apiFetch<Directory>('/directory');
 	}
 
 	static async get(id: string): Promise<Project> {

@@ -207,7 +207,7 @@ export function ResultRow({ active, onClick, disabled, tip, title, tags, second,
     <button type="button" onClick={onClick} disabled={disabled} data-tip={tip} aria-current={active ? 'true' : undefined}
       className={`${RESULT_COLS} my-0.5 w-full items-center rounded-lg border px-2 py-2 text-left transition-colors disabled:opacity-50 ${active ? 'border-orange-500/60 bg-orange-500/[0.08]' : 'border-transparent hover:bg-zinc-800/60'}`}>
       <span className="min-w-0">
-        <span className="block break-all text-[13.5px] font-medium leading-snug text-zinc-100">{title}</span>
+        <span className="block text-[13.5px] font-medium leading-snug text-zinc-100 [overflow-wrap:anywhere]">{title}</span>
         <span className="mt-0.5 flex flex-wrap gap-x-1.5 text-[11.5px] text-zinc-400">{tags}</span>
       </span>
       <span className="truncate font-mono text-xs text-zinc-300">{second}</span>

@@ -4,22 +4,28 @@
 // Redstart Nest — projects: a named place for related chats (projects-plan)
 // =============================================================================
 // A project holds instructions that apply to every chat in it, its own memory
-// (memory-storage, scope key `<account>#project:<id>`), a files folder under
-// the user's Documents, and the chats that point at it (conversation
-// `projectId`). Claude Projects is the model.
+// (memory-storage, scope key `#project:<id>`), a files folder of its own
+// (project_files/<id>/ under the Documents root), and the chats that point at
+// it (conversation `projectId`). Claude Projects is the model.
 //
-//   <config>/projects.json
-//   { accounts: { "<scope key>": [project] } }
+//   <config>/projects.json   (version 2, 2026-11-24)
+//   { version: 2, projects: [project] }
 //
-// The scope key is memoryKey(account): the account id, or '_local' with auth
-// off, which every auth-off caller shares, as with memories and workflows.
+// Version 1 kept a list per owner ({ accounts: { "<owner key>": [project] } });
+// read() flattens it once. ownerKey is memoryKey(account): the account id, or
+// '_local' with auth off, which every auth-off caller shares.
 //
-// PERSONAL TODAY, SHARED LATER (plan D7). The user's target is Google-Docs-
-// like: the owner adds people and sets what each may do. Not built. So that
-// adding it is not a migration, every record carries `ownerKey` and an empty
-// `members` list from the start, and every access decision goes through
-// canRead / canWrite below, which today mean "the owner". Nothing else in Nest
-// may compare keys itself.
+// SHARED, LIKE A DOCUMENT (plan D7, built 2026-11-24). The owner adds people
+// and groups as Viewers or Editors:
+//
+//   viewer  open the project, chat in it (with their OWN chats — chats are
+//           never shared), read its instructions, memory and files
+//   editor  also change its name and instructions, its memory and its files
+//   owner   also manage members, hand the project to someone else, delete it
+//
+// An admin whose roles grant manageProjects (and the Nest owner) may do what
+// the project's owner may, to every project. Every access decision goes
+// through accessFor() below; nothing else in Nest may compare keys itself.
 //
 // THE INSTRUCTIONS ARE USER-TIER TEXT (plan D9). They reach the model after
 // the precedence clause, never among the admin's blocks; that framing is
@@ -27,26 +33,45 @@
 // =============================================================================
 
 import * as crypto from 'crypto'
+import * as fs from 'fs'
 import * as path from 'path'
 import { configDir } from './platform-paths.mjs'
 import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
 import { memoryKey } from './memory-storage.mjs'
 import { getConversation, getConversationAnyAccount } from './conversations-storage.mjs'
+import { groupsForAccount, findGroupById } from './groups-storage.mjs'
+import { findById as findAccountById } from './accounts-storage.mjs'
+import { canDo } from './auth.mjs'
+import { resolveWithinRoot } from './path-scope.mjs'
+import { resolveUserScope, USER_FILES_DIR } from './user-scope.mjs'
 
 export const MAX_NAME_CHARS = 80
 export const MAX_INSTRUCTIONS_CHARS = 8000
 export const MAX_PROJECTS_PER_ACCOUNT = 100
 export const MAX_SLUG_CHARS = 48
+export const MAX_MEMBERS = 200
+export const MEMBER_ROLES = ['viewer', 'editor']
 
 const ID = /^[A-Za-z0-9-]{1,64}$/
 
 function file() { return path.join(configDir(), 'projects.json') }
 function read() {
-  const data = readJsonOr(file(), { accounts: {} })
-  if (!data.accounts || typeof data.accounts !== 'object') data.accounts = {}
+  const data = readJsonOr(file(), { version: 2, projects: [] })
+  if (data.version !== 2) {
+    // Version 1: one list per owner. Flattened, each record keeping its
+    // ownerKey (which every record already carried, plan D7).
+    const projects = []
+    for (const list of Object.values(data.accounts && typeof data.accounts === 'object' ? data.accounts : {})) {
+      if (Array.isArray(list)) projects.push(...list)
+    }
+    const flat = { version: 2, projects: projects.map((p) => ({ ...p, members: [] })) }
+    if (fs.existsSync(file())) write(flat)
+    return flat
+  }
+  if (!Array.isArray(data.projects)) data.projects = []
   return data
 }
-function write(data) { writeJsonAtomic(file(), data) }
+function write(data) { writeJsonAtomic(file(), { ...data, version: 2 }) }
 
 export function isProjectId(id) {
   return typeof id === 'string' && ID.test(id)
@@ -56,15 +81,52 @@ export function isProjectId(id) {
 // Access — the one place it is decided (plan D7)
 // ---------------------------------------------------------------------------
 
-/** May this caller see the project and use it in a chat? Owner only, today. */
-export function canRead(project, account) {
-  if (!project) return false
-  try { return project.ownerKey === memoryKey(account) } catch { return false }
+const RANK = { viewer: 1, editor: 2, admin: 3, owner: 4 }
+
+function keyOf(account) {
+  try { return memoryKey(account) } catch { return null }
 }
 
-/** May this caller change or delete it? Owner only, today. */
+/** May this account manage every project (manageProjects, or the Nest owner)? */
+export function managesAllProjects(account) {
+  return !!account && canDo(account, 'manageProjects')
+}
+
+/**
+ * What this caller may do with the project: 'owner' | 'admin' | 'editor' |
+ * 'viewer', or null for nothing. With auth off everyone is the '_local' owner
+ * of '_local' projects, as before; sharing needs accounts.
+ */
+export function accessFor(project, account) {
+  if (!project) return null
+  const key = keyOf(account)
+  if (key === null) return null
+  if (project.ownerKey === key) return 'owner'
+  if (!account) return null
+  let best = managesAllProjects(account) ? 'admin' : null
+  const groupIds = new Set(groupsForAccount(account.id).map((g) => g.id))
+  for (const m of project.members || []) {
+    const mine = (m.type === 'account' && m.id === account.id) || (m.type === 'group' && groupIds.has(m.id))
+    if (mine && (!best || RANK[m.role] > RANK[best])) best = m.role
+  }
+  return best
+}
+
+/** May this caller see the project, chat in it, read its memory and files? */
+export function canRead(project, account) {
+  return accessFor(project, account) !== null
+}
+
+/** May this caller change its name, instructions, memory and files? */
 export function canWrite(project, account) {
-  return canRead(project, account)
+  const a = accessFor(project, account)
+  return a === 'owner' || a === 'admin' || a === 'editor'
+}
+
+/** May this caller manage its members, hand it over, or delete it? */
+export function canManage(project, account) {
+  const a = accessFor(project, account)
+  return a === 'owner' || a === 'admin'
 }
 
 // ---------------------------------------------------------------------------
@@ -118,28 +180,41 @@ export function validateProject(body, { partial = false } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// CRUD — scoped to the caller's own list
+// CRUD
 // ---------------------------------------------------------------------------
 
-function ownList(data, account) {
-  const key = memoryKey(account)
-  if (!data.accounts[key]) data.accounts[key] = []
-  return data.accounts[key]
+function ownedBy(data, key) {
+  return data.projects.filter((p) => p.ownerKey === key)
 }
 
-/** The caller's projects, most recently updated first. */
+/** The project with its caller's access attached, for responses. */
+function withAccess(project, account) {
+  return { ...project, access: accessFor(project, account) }
+}
+
+/**
+ * The projects the caller owns or was given, most recently updated first,
+ * each with `access`. An admin's view of every project is listAllProjects().
+ */
 export function listProjects(account) {
-  const list = read().accounts[memoryKey(account)] || []
-  return [...list].sort((a, b) => b.updatedAt - a.updatedAt)
+  if (keyOf(account) === null) return []
+  return read().projects
+    .map((p) => withAccess(p, account))
+    .filter((p) => p.access && p.access !== 'admin')
+    .sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
-/** One project the caller may read, or null — never another account's. */
+/** Every project, for an admin who manages them all; [] for anyone else. */
+export function listAllProjects(account) {
+  if (!managesAllProjects(account)) return []
+  return read().projects.map((p) => withAccess(p, account)).sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+/** One project the caller may read (with `access`), or null. */
 export function getProject(account, id) {
   if (!isProjectId(id)) return null
-  let key
-  try { key = memoryKey(account) } catch { return null }
-  const project = (read().accounts[key] || []).find((p) => p.id === id) || null
-  return canRead(project, account) ? project : null
+  const project = read().projects.find((p) => p.id === id) || null
+  return canRead(project, account) ? withAccess(project, account) : null
 }
 
 function uniqueSlug(list, base) {
@@ -157,7 +232,8 @@ export function createProject(account, body, { now = Date.now() } = {}) {
   const v = validateProject(body)
   if (!v.ok) return v
   const data = read()
-  const list = ownList(data, account)
+  const key = memoryKey(account)
+  const list = ownedBy(data, key)
   if (list.length >= MAX_PROJECTS_PER_ACCOUNT) {
     return { ok: false, error: `the limit of ${MAX_PROJECTS_PER_ACCOUNT} projects is reached; delete one first` }
   }
@@ -166,8 +242,7 @@ export function createProject(account, body, { now = Date.now() } = {}) {
   }
   const project = {
     id: crypto.randomUUID(),
-    ownerKey: memoryKey(account),
-    // plan D7: sharing is not built; the field exists so it is not a migration
+    ownerKey: key,
     members: [],
     name: v.fields.name,
     instructions: v.fields.instructions,
@@ -175,25 +250,130 @@ export function createProject(account, body, { now = Date.now() } = {}) {
     createdAt: now,
     updatedAt: now,
   }
-  list.push(project)
+  data.projects.push(project)
   write(data)
-  return { ok: true, project }
+  return { ok: true, project: withAccess(project, account) }
 }
 
 export function updateProject(account, id, body, { now = Date.now() } = {}) {
   const v = validateProject(body, { partial: true })
   if (!v.ok) return v
   const data = read()
-  const list = ownList(data, account)
-  const idx = list.findIndex((p) => p.id === id)
-  if (idx === -1 || !canWrite(list[idx], account)) return { ok: false, error: 'not found', code: 'not_found' }
-  if (v.fields.name && list.some((p, i) => i !== idx && p.name.toLowerCase() === v.fields.name.toLowerCase())) {
+  const idx = data.projects.findIndex((p) => p.id === id)
+  if (idx === -1 || !canRead(data.projects[idx], account)) return { ok: false, error: 'not found', code: 'not_found' }
+  if (!canWrite(data.projects[idx], account)) return { ok: false, error: 'You can view this project but not change it', code: 'forbidden' }
+  const owner = data.projects[idx].ownerKey
+  if (v.fields.name && data.projects.some((p, i) => i !== idx && p.ownerKey === owner && p.name.toLowerCase() === v.fields.name.toLowerCase())) {
     return { ok: false, error: `a project named "${v.fields.name}" already exists`, code: 'conflict' }
   }
   // Only validated fields: the body never sets id, ownerKey, members or slug.
-  list[idx] = { ...list[idx], ...v.fields, updatedAt: now }
+  data.projects[idx] = { ...data.projects[idx], ...v.fields, updatedAt: now }
   write(data)
-  return { ok: true, project: list[idx] }
+  return { ok: true, project: withAccess(data.projects[idx], account) }
+}
+
+// ---------------------------------------------------------------------------
+// Members and ownership
+// ---------------------------------------------------------------------------
+
+/**
+ * Replace a project's members. Each is { type: 'account' | 'group', id, role:
+ * 'viewer' | 'editor' }; the owner is never a member of their own project.
+ */
+export function setMembers(account, id, members, { now = Date.now() } = {}) {
+  const data = read()
+  const project = data.projects.find((p) => p.id === id)
+  if (!project || !canRead(project, account)) return { ok: false, error: 'not found', code: 'not_found' }
+  if (!canManage(project, account)) return { ok: false, error: 'Only the project\'s owner, or an admin, can change who it is shared with', code: 'forbidden' }
+  if (!Array.isArray(members)) return { ok: false, error: 'members must be a list' }
+  if (members.length > MAX_MEMBERS) return { ok: false, error: `at most ${MAX_MEMBERS} members` }
+  const seen = new Set()
+  const clean = []
+  for (const m of members) {
+    const type = m?.type === 'group' ? 'group' : m?.type === 'account' ? 'account' : null
+    if (!type || typeof m.id !== 'string' || !MEMBER_ROLES.includes(m.role)) return { ok: false, error: 'each member needs a type (account or group), an id and a role (viewer or editor)' }
+    if (type === 'account' && !findAccountById(m.id)) return { ok: false, error: 'No such account' }
+    if (type === 'group' && !findGroupById(m.id)) return { ok: false, error: 'No such group' }
+    if (type === 'account' && m.id === project.ownerKey) continue
+    const k = `${type}:${m.id}`
+    if (seen.has(k)) continue
+    seen.add(k)
+    clean.push({ type, id: m.id, role: m.role })
+  }
+  project.members = clean
+  project.updatedAt = now
+  write(data)
+  return { ok: true, project: withAccess(project, account) }
+}
+
+/**
+ * Hand a project to another account. The previous owner stays on as an
+ * editor (as in Google Docs), unless that is who receives it. A clashing name
+ * in the new owner's projects gets " (2)" and so on.
+ */
+export function transferProject(account, id, newOwnerId, { now = Date.now() } = {}) {
+  const data = read()
+  const project = data.projects.find((p) => p.id === id)
+  if (!project || !canRead(project, account)) return { ok: false, error: 'not found', code: 'not_found' }
+  if (!canManage(project, account)) return { ok: false, error: 'Only the project\'s owner, or an admin, can hand it over', code: 'forbidden' }
+  const target = findAccountById(newOwnerId)
+  if (!target) return { ok: false, error: 'No such account' }
+  if (project.ownerKey === target.id) return { ok: true, project: withAccess(project, account) }
+  moveOwnership(data, project, target.id, now)
+  write(data)
+  return { ok: true, project: withAccess(project, account) }
+}
+
+function moveOwnership(data, project, newKey, now) {
+  const previous = project.ownerKey
+  const taken = new Set(ownedBy(data, newKey).map((p) => p.name.toLowerCase()))
+  let name = project.name
+  for (let i = 2; taken.has(name.toLowerCase()); i++) name = `${project.name.slice(0, MAX_NAME_CHARS - 6)} (${i})`
+  project.name = name
+  project.ownerKey = newKey
+  project.members = (project.members || []).filter((m) => !(m.type === 'account' && m.id === newKey))
+  if (previous !== '_local' && findAccountById(previous)) project.members.push({ type: 'account', id: previous, role: 'editor' })
+  project.updatedAt = now
+}
+
+/**
+ * An account is being deleted: hand every project it owns to `toAccountId`,
+ * and take it off every project it was a member of. Called by the route that
+ * deletes accounts, before the account goes.
+ */
+export function handOverAccount(accountId, toAccountId, { now = Date.now() } = {}) {
+  const data = read()
+  let transferred = 0
+  for (const p of data.projects) {
+    if (p.ownerKey === accountId) {
+      moveOwnership(data, p, toAccountId, now)
+      // The deleted account must not linger as an editor.
+      p.members = p.members.filter((m) => !(m.type === 'account' && m.id === accountId))
+      transferred++
+    } else if ((p.members || []).some((m) => m.type === 'account' && m.id === accountId)) {
+      p.members = p.members.filter((m) => !(m.type === 'account' && m.id === accountId))
+    }
+  }
+  write(data)
+  return { transferred }
+}
+
+/** A group was deleted: take it off every project. */
+export function removeGroupEverywhere(groupId) {
+  const data = read()
+  let changed = 0
+  for (const p of data.projects) {
+    const before = (p.members || []).length
+    p.members = (p.members || []).filter((m) => !(m.type === 'group' && m.id === groupId))
+    if (p.members.length !== before) changed++
+  }
+  if (changed) write(data)
+  return changed
+}
+
+/** Projects an account owns, for the "who takes these over?" question. */
+export function countOwnedBy(accountId) {
+  return read().projects.filter((p) => p.ownerKey === accountId).length
 }
 
 // ---------------------------------------------------------------------------
@@ -213,10 +393,46 @@ export function instructionsFromAgentsMd(text) {
   return String(text ?? '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim()
 }
 
-/** Where the folder lives under the user's Documents root, posix, with a trailing slash. */
-export const PROJECTS_DIR = 'Projects'
+// ---------------------------------------------------------------------------
+// The files folder — the project's own, shared with its members
+// ---------------------------------------------------------------------------
+// <documents root>/project_files/<project id>/. Not inside anyone's
+// user_files/<scope>/, because every member reaches it; the file explorer
+// offers it as a space of its own (read-only to viewers) and search_documents
+// searches it in the project's chats. Before 2026-11-24 it was
+// user_files/<owner scope>/Projects/<slug>/; ensureProjectFiles() moves that
+// folder here the first time it is needed.
+
+export const PROJECT_FILES_DIR = 'project_files'
+
+/** The project's folder, contained in the Documents root. Does not create it. */
+export function projectFilesDir(documentsRoot, project) {
+  if (!documentsRoot || !isProjectId(project?.id)) return null
+  return resolveWithinRoot(documentsRoot, `${PROJECT_FILES_DIR}/${project.id}`)
+}
+
+/** Make the folder, moving the pre-sharing one into place if it exists. */
+export function ensureProjectFiles(documentsRoot, project) {
+  const dir = projectFilesDir(documentsRoot, project)
+  if (!dir) return null
+  if (!fs.existsSync(dir)) {
+    let legacy = null
+    try {
+      const owner = project.ownerKey === '_local' ? null : findAccountById(project.ownerKey)
+      if (owner || project.ownerKey === '_local') {
+        legacy = resolveWithinRoot(documentsRoot, `${USER_FILES_DIR}/${resolveUserScope(owner)}/Projects/${project.slug}`)
+      }
+    } catch { legacy = null }
+    fs.mkdirSync(path.dirname(dir), { recursive: true })
+    if (legacy && fs.existsSync(legacy)) fs.renameSync(legacy, dir)
+    else fs.mkdirSync(dir, { recursive: true })
+  }
+  return dir
+}
+
+/** What a response says about the folder: the file-explorer space that shows it. */
 export function projectFolder(project) {
-  return `${PROJECTS_DIR}/${project.slug}/`
+  return `project-${project.id}`
 }
 
 /**
@@ -253,10 +469,9 @@ export function projectForCall(account, ctx) {
 /** Removes the record only. The route detaches chats and drops project memory. */
 export function deleteProject(account, id) {
   const data = read()
-  const list = ownList(data, account)
-  const target = list.find((p) => p.id === id)
-  if (!target || !canWrite(target, account)) return null
-  data.accounts[memoryKey(account)] = list.filter((p) => p.id !== id)
+  const target = data.projects.find((p) => p.id === id)
+  if (!target || !canManage(target, account)) return null
+  data.projects = data.projects.filter((p) => p.id !== id)
   write(data)
   return target
 }

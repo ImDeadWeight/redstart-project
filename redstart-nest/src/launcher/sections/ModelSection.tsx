@@ -69,7 +69,7 @@ export function ModelSection({
   generatedCommand: string
   onGenerateCommand: () => void
 }) {
-  const { hardware, scanHardware, applyModelPath } = hw
+  const { hardware, scanHardware, ensureHardware, applyModelPath } = hw
   const { modelsDir, localFiles, disk, changeFolder, deleteLocal } = catalog
   const [hfOpen, setHfOpen] = useState(false)
   const [advanced, setAdvanced] = useState(false)
@@ -163,7 +163,7 @@ export function ModelSection({
         )}
 
         <div className="mt-4 flex flex-wrap gap-2 border-t border-zinc-800 pt-4">
-          <button type="button" onClick={() => setHfOpen(true)} className={btnCls.secondary}>Find models on Hugging Face</button>
+          <button type="button" onClick={() => { setHfOpen(true); void ensureHardware() }} className={btnCls.secondary}>Find models on Hugging Face</button>
           <FolderPicker mode="file" extensions={['gguf']} extensionLabel="GGUF models" title="Choose a .gguf file"
             startPath={modelPath || (modelsDir ? `${modelsDir}${modelsDir.includes('\\') ? '\\' : '/'}` : undefined)} onPick={applyModelPath} className={btnCls.secondary}>
             Use a file from another folder…

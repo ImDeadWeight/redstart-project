@@ -45,7 +45,7 @@ Redstart is a LAN appliance, not an internet-facing service. **Do not expose the
 Redstart Nest has an optional account system, gated behind a global **Require login** toggle in the server settings. It's **on by default** — every client on the network, including the host machine's own browser, must authenticate before accessing the chat UI or API. With it off, anyone on your network can use the server with no login and no API key, exactly like a plain llama.cpp setup. Turn it on and the picture changes:
 
 - **Login gate.** When accounts are required, the chat UI is not reachable until you sign in — a device that isn't logged in gets the login screen, not the chat. This holds for browsers on other devices too, not just the app.
-- **Three-tier roles.** A single **Owner** creates and removes **Admin** accounts; Admins manage regular **Users** day-to-day; Users just log in and chat.
+- **One Owner, then roles and groups.** A single **Owner** can do everything. Everyone else gets what their **roles** allow, given to them directly or through a **group**; administration is one of the things a role can give (see [Roles](#roles)). Accounts, groups and roles are managed on one page, **Settings → People & access**.
 - **Sessions survive a restart.** They are stored in `sessions.json` as SHA-256 hashes of the token, so the file cannot be replayed as a credential by anyone who reads it. Chat sessions slide on a 30-day expiry; control-plane sessions get 12 hours (see [The control plane](#the-control-plane)). Signing out, resetting a password and deleting an account each revoke on disk, not just in memory.
 - **Profile page.** A **Profile** entry in the sidebar (and in the collapsed icon rail) opens a full-page account view rather than a dropdown. Its **Account** tab shows role, account-created / last-login timestamps and API key management; its **Files** tab browses your own storage on the server (see [Your files](#your-files-web-ui)). A regenerated key is shown once and stays on the page until dismissed — the previous dropdown put it in a modal that a stray click could dismiss, and the server keeps only a hash, so a key lost that way is gone for good.
 - **API keys.** Each account has a long-lived API key (prefixed `rst_`) for OpenAI-compatible clients like Kilo Code. Only a hash is stored server-side, so an existing key is only ever shown as its prefix — regenerate to get a fresh full key. Admins can also manage keys for the accounts they oversee.
@@ -78,11 +78,11 @@ never consults the toggle in either direction.
 
 **Owner only, behind one check.** Every control-plane route calls a single
 function — `mayAccessControlPlane()` in `permissions.mjs`, whose whole body is
-`account?.tier === 'owner'`. Admin-tier accounts are refused. It is deliberately
-not a role permission: roles in Redstart may only ever *narrow* a tier, and the
-Owner ignores narrowing, so a control-plane permission would be permanently true
-and never consulted. It becomes meaningful the day a non-Owner can hold it, and
-widening it is then one edit rather than an audit of every route.
+`account?.tier === 'owner'`. Every other account is refused, Administrators
+included. It is deliberately not a role permission: process control is the one
+thing no role hands out, so that an admin who can manage people cannot also stop,
+start or reconfigure the server. Widening it later is one edit rather than an
+audit of every route.
 
 **A session opens one plane.** Sessions are bound to their plane when they are
 issued: the gateway issues chat sessions, the admin listener issues
@@ -206,38 +206,40 @@ There is exactly one resolution path from an incoming request to an account: `au
 
 ## Roles
 
-A **tier** (Owner / Admin / User) decides who may *administer* whom. A **role** decides what an account may *reach*. They are separate axes on purpose: the moment an admin can invent a tier called "Legal Team", every management check in the system needs an opinion about where it sits in a hierarchy that no longer exists.
-
-Roles are created and assigned under **Settings → Roles**, beside Accounts. Each account holds exactly one; an account with none gets **Full Access**.
-
-**A role can only restrict.** Effective access is
+**Roles add up** (since 2026-11-24; before that a role could only restrict, one per account, beside a fixed Owner / Admin / User tier). A role is a set of things someone may do. An account holds any number of roles, directly or through **groups** — a group gives every role it carries to everyone in it — and may do what any of its roles allows:
 
 ```
-(configured globally AND activated by the running profile)  ∩  role
+(configured globally AND activated by the running profile)  ∩  (everything its roles and its groups' roles allow)
 ```
 
-so a role can never switch on a capability the server has turned off, widen the URL whitelist, or raise a fetch budget. This is a property of the code rather than of review: every rule in `permissions.mjs` narrows, and `scripts/test-roles.mjs` asserts over 2000 randomised config × role pairs that nothing coming out is more permissive than what went in, on any field. Adding a rule that widens fails the build with a reproducible counterexample.
+so roles can never switch on a capability the server has turned off, widen the URL whitelist past what the profile allows, or raise a fetch budget past the profile's. `permissions.mjs combineRoles()` turns an account's roles into one permission set, and the code that applies it only narrows: `scripts/test-roles.mjs` checks over randomised configs and role lists that nothing coming out is more permissive than the server config, and that adding a role never takes anything away.
 
-A role can withhold:
+Roles, groups and accounts are managed on **Settings → People & access**. Built-in roles: **Administrator** (everything, and every kind of administration), **Full Access** (everything, no administration; what a new account gets unless you choose otherwise) and **Restricted** (web sources only). An account with no roles at all can chat with the model and use nothing else.
+
+A role can give:
 
 | | |
 |---|---|
-| **Local capabilities** | Which of Postgres, Documents, SQLite, Vault, Git, File System, Python, Document search, Memory, Scholar and each installed plugin the account may use. A withheld capability is disabled *and* its tool names are banned — two independent mechanisms, so neither is a single point of failure. |
-| **Folders** | For Vault, Git, SQLite and Shared Documents: which of the shared folder's subfolders the account may reach (see [Resource grants](#resource-grants)). |
-| **Web sources** | Which approved sources the account may fetch, its per-fetch token budget, and whether it may fetch off-whitelist. Naming sources also forces the whitelist on, since otherwise `web_fetch` still takes any URL and the narrowed list would govern nothing. |
-| **File-system policy** | `Allow writes` / `Allow destructive` withdrawn per account. Applies to Redstart's own file tools *and* the web file explorer. |
-| **Client surfaces** | Which apps the account may connect from. |
-| **Administration** | For admin-tier accounts: `manageAccounts`, `manageRoles`, `managePromptBlocks`, `manageOrgWorkflows` individually. Tier remains the ceiling — no role can make a User an admin. |
+| **Local capabilities** | All of them, or some of Postgres, Documents, SQLite, Vault, Git, File System, Python, Document search, Memory, Scholar, Image generation and each installed plugin. A capability no role gives is disabled *and* its tool names are banned — two independent mechanisms, so neither is a single point of failure. |
+| **Folders** | For Vault, Git, SQLite and Shared Documents: every folder, or some of the shared folder's subfolders (see [Resource grants](#resource-grants)). |
+| **Web sources** | All of them or some; the general web search engine; fetching off-whitelist when the profile's whitelist is off. A role may cap fetch size; the most generous of an account's caps applies. Naming sources forces the whitelist on, since otherwise `web_fetch` still takes any URL. |
+| **File-system policy** | Writing and deleting files. Applies to Redstart's own file tools *and* the web file explorer. |
+| **Client surfaces** | A limit rather than a grant: which apps the account may connect from. It applies only when *every* role the account holds limits apps. |
+| **Administration** | `manageAccounts` (people and groups), `manageRoles`, `managePromptBlocks`, `manageOrgWorkflows`, `manageProjects` (every project), each separately. |
 
-Enforcement is per request at both chokepoints (the completions proxy and the MCP server's `tools/list` + `tools/call`), so a role edit takes effect on the next call rather than at next login.
+**Nobody hands out more than they hold.** An admin may give a role, define one, put someone in a group, or change an account only when the result is *less* than the admin's own access — every capability, folder, source and admin permission it involves, they hold too, and they hold something it does not. So two Administrators cannot manage each other, and only the Owner makes someone an Administrator. `scripts/test-groups.mjs` pins this through accounts, roles and groups.
+
+**The move kept everyone's access.** On upgrade, `access-migration.mjs` rewrote `accounts.json` and `roles.json` once: old restriction roles became grant roles, User-tier accounts kept their role (or got Full Access), Admin-tier accounts got Administrator (or, for an admin on a restricted role, a derived "*role* (administration)" role carrying exactly the admin permissions that role left them). `scripts/test-access-migration.mjs` checks, over 300 randomised old installs, that every account is served the same config, the same admin permissions and the same apps as before. The one deliberate difference: unrestricted admins also get the new `manageProjects`. Downgrading Nest after the migration is not supported.
+
+Enforcement is per request at both chokepoints (the completions proxy and the MCP server's `tools/list` + `tools/call`), so a role, group or membership edit takes effect on the next call rather than at next login.
 
 **Two things a role deliberately does not do.**
 
 *It does not reach client-app tools.* Roles govern what Redstart Nest itself serves. Twig's `fs_*` tools act on the user's own PC, and writing files there is the entire point of Twig — restricting what an account may do to the *server* must not disable the user's local editor. Banning a client app stays an org-wide decision (see [Tool bans](#tool-bans)).
 
-*It does not restrict the Owner, and it does not apply when login is off.* Both are unrestricted by design: the Owner exemption is the anti-lockout guarantee, and the auth-off case keeps the **Require login** toggle meaning exactly what it says. Note the third null case is treated as a bug rather than a posture — if login is on but a request reaches the tool dispatcher with no identity attached, it is narrowed to nothing rather than served the full set.
+*It does not restrict the Owner, and it does not apply when login is off.* The Owner holds no roles. Both are unrestricted by design: the Owner exemption is the anti-lockout guarantee, and the auth-off case keeps the **Require login** toggle meaning exactly what it says. Note the third null case is treated as a bug rather than a posture — if login is on but a request reaches the tool dispatcher with no identity attached, it is narrowed to nothing rather than served the full set.
 
-**Surfaces are a hard control only for connector keys.** A per-connector key binds its surface at issue time, so the server derives the calling app from the credential. A session obtained with a username and password is tagged `nest-chat` because the chat UI is what logs in that way — but any client that posts credentials gets one too. An account-wide API key names no app at all, so an account whose role restricts surfaces cannot hold one: issuing is refused in both the admin and self-service paths rather than left as a documented caveat.
+**Surfaces are a hard control only for connector keys.** A per-connector key binds its surface at issue time, so the server derives the calling app from the credential. A session obtained with a username and password is tagged `nest-chat` because the chat UI is what logs in that way — but any client that posts credentials gets one too. An account-wide API key names no app at all, so an account whose roles limit apps cannot hold one: issuing is refused in both the admin and self-service paths, and giving such roles to an account that already has one revokes it (the page says so).
 
 ---
 
@@ -440,7 +442,7 @@ The box's administrator can read `memories.json` on disk, as with every per-acco
 A workflow is a saved instruction for one recurring task, run from the chat by typing `/`. Each one is stored as a skill, a folder with a `SKILL.md` file under `skills/` in Nest's config folder (an older `workflows.json` is copied there once and left in place), in two scopes:
 
 - **Personal** workflows belong to one account. Anyone may create them, and no capability or role turns that off. Another account can't list, edit, delete or run them: every route and MCP call resolves the account from the credential, never from a name the client sends. With login off, everyone shares one personal list, as with memories.
-- **Organization** workflows are listed for every account. Creating, editing or deleting one takes `manageOrgWorkflows`, an admin permission: admin-tier accounts have it unless their role withholds it, and no role can give it to a User-tier account. To let someone edit org workflows and nothing else, make them admin-tier with a role that limits administration to `manageOrgWorkflows`. With login off there is no account to hold the permission, so org workflows can't be written.
+- **Organization** workflows are listed for every account. Creating, editing or deleting one takes `manageOrgWorkflows`, an admin permission that a role gives (Administrator has it). To let someone edit org workflows and nothing else, give them a role whose only administration is `manageOrgWorkflows`. With login off there is no account to hold the permission, so org workflows can't be written.
 
 **Workflow text never enters the system prompt.** Only a name and a one-line description do (below). Nest serves workflows as MCP prompts. Running one sends a *user* message, so a workflow is user-supplied content: it sits below the administrator's prompt blocks and can't change the assistant's guidelines or permissions. The client sends only the workflow's name and input values; Nest holds the text and composes the message, so a client can't run a workflow that doesn't exist. Input values fill `{{placeholders}}` in one pass and are never re-read as template.
 
@@ -452,12 +454,16 @@ Everyone can read an organization workflow's full text on the **Workflows** page
 
 ## Projects
 
-A project groups related chats. It has instructions that apply to every chat in it, its own memory, and a files folder (`Projects/<name>/` in your Documents). Projects are stored per account in `projects.json`. With login off, everyone shares one list, as with memories and workflows.
+A project groups related chats. It has instructions that apply to every chat in it, its own memory, and its own files folder (`project_files/<id>/` under the Documents folder). Projects are stored in `projects.json`. With login off, everyone shares one list, as with memories and workflows.
 
-- **Projects are personal.** Only the account that made a project can list, open, edit or delete it, use it in a chat, or read and write its memory. Any other account gets *not found*, the same as for an id that doesn't exist, so project ids can't be probed. Sharing a project with other people is planned but not built (see [Known gaps](#known-gaps)).
+- **A project is shared like a document.** Its owner adds people and groups as **Viewers** (open it, chat in it, read its instructions, memory and files) or **Editors** (also change its name, instructions, memory and files). Only the owner shares it, hands it to someone else (the old owner stays on as an editor), or deletes it. An account given it both directly and through a group gets the higher role. Anyone it isn't shared with gets *not found*, the same as for an id that doesn't exist, so project ids can't be probed; a viewer who tries to change something gets *forbidden*.
+- **Chats are never shared.** Each person's chats in a project are their own; the project shares its instructions, memory and files, not conversations.
+- **Admins with `manageProjects` manage every project** (Settings → People & access → Projects): they can open, change, share, hand over and delete any of them, without those crowding their own project list. They see the project, not other people's chats in it.
+- **Deleting an account hands its projects over** to whoever deletes it (or to the account they choose) and takes it off every project it was shared with. Deleting a group takes it off every project too.
+- **Who to share with** comes from a directory of usernames and group names that any signed-in account may read (`GET /directory`).
 - **Project instructions are user-tier, like workflows.** They're added after the precedence clause, said to be the user's own, and can't change the assistant's guidelines or permissions. The client sends only a project id. Nest looks up the text, so naming another account's project or sending text in that field adds nothing.
-- **A chat can only be put in your own project.** Moving a chat into a project you can't read is refused. The assistant's memory and document-search tools find the project through the chat itself, after checking the chat is yours, never from a value the model or client supplies.
-- **Deleting a project keeps its chats.** They move back to your ordinary chat list. The project's memories are deleted with it. Its files folder is left on disk.
+- **A chat can only be put in a project you can read.** Moving a chat into any other project is refused. The assistant's memory and document-search tools find the project through the chat itself, after checking the chat is yours, never from a value the model or client supplies.
+- **Deleting a project keeps its chats.** Each person's move back to their ordinary chat list. The project's memories are deleted with it. Its files folder is left on disk.
 - **Chats in a project are kept past the 30-day clean-up.** Moving a chat out of its project makes it eligible again.
 
 ---
@@ -702,8 +708,9 @@ Stated plainly, because a security document that lists only strengths is not one
 - **The clean-URL (port 80) proxy is Windows-only.** On any other platform Redstart does not attempt it: port 80 is privileged, and the alternative — granting the daemon the capability to bind it — would hand back privileges the unprivileged service account exists to shed, on a process that spawns a configurable binary and runs third-party plugin code. A reverse proxy in front is the answer there, and it is the same reverse proxy that terminates TLS.
 - **Tool retrieval is on by default (since 2026-11-18).** On means the catalog: the deferred capabilities' tools leave the list and are reached through `search_tools` and `call_tool`. It is an **optimization, never a boundary**: it runs strictly after the ban filter and can only remove from what that left, and `search_tools` searches the same post-ban catalog, so no tool can be found by describing it that the policy gate withheld; a write or delete through `call_tool` needs an approval for the inner tool, whatever client sends it. Search ranks with a second, localhost-only llama-server (a 67 MB embedding model on the CPU, port 19084), downloaded once when retrieval is first on; until it is ready, or if it is down, `search_tools` matches by keyword instead. It was measured on Ornith 9B in the agent bench against sending every tool (master plan 3.2): within noise on task success, and no cache misses. Turn it off per profile on the Tools page, under the tool-cost readout; the switch reports the setting, the model and the sidecar separately.
 - **What the Tools page estimates and what a request costs are different numbers, and both are now shown.** The estimate describes the tools *that profile* would serve over MCP; the completions payload is composed by the client (its live MCP connections, its own local tools) and the gateway then adds a system prompt on top, so the estimate has always under-counted a real request. The tab now also reports what the last completion actually forwarded, and how many tools policy and retrieval each removed. That observation is server-wide and overwritten by every request, so on a multi-user daemon it describes whoever asked last — deliberately, because a per-account series would be a log of one user's tool usage.
-- **Projects can't be shared yet.** The plan is that a project's owner adds people and sets what each may do, as with a shared document. Today a project is visible only to its owner. Records already carry an owner and an (empty) member list, and every access check goes through one function, so sharing is an addition rather than a migration. Until then, use an organization workflow for instructions many people should share.
-- **A project's files folder is not protected from the rest of your Documents.** It's an ordinary folder in your own storage: the file explorer, and any of your chats with file tools, can read or change it. Project chats search it first and say so, but nothing stops a chat outside the project from searching it too.
+- **A project's files are reached through the project, not through file tools.** Its folder is the project's own (`project_files/<id>/`), served by the project page's file list and by `search_documents` in its chats. The assistant's other file tools (Documents, File System) still work in each person's own storage, so a document the assistant writes in a project chat lands in that person's Documents, not the project folder; upload it to the project to share it.
+- **The people directory lists every account's username to every signed-in account.** That is what lets anyone share a project, as in a document app's share box. Names only: no roles, groups' members or anything else.
+- **An admin with `manageProjects` can read every project's instructions, memory and files.** That is the point of the permission; give it accordingly. Other people's chats are not included.
 - **Postgres is all-or-nothing.** Vault, Git, SQLite and Shared Documents can be narrowed per role to folders; Postgres has one connection and no subdivision, so a role can only withhold it whole.
 - **Twig's local MCP servers are unmoderated.** Twig can run local stdio MCP servers from a file on the user's own machine — arbitrary command execution by design, with the local disk as the trust boundary. Tool bans can strip their tools by name, but the server never sees them registered.
 - **The filesystem containment check is not atomic with the operation.** The File System capability re-validates every path argument through `resolveWithinRoot()` before handing the call to the upstream stdio child, but the child is a separate process, so a check-then-operate window exists in principle. The upstream server re-validates independently, which makes this degraded defense-in-depth rather than a hole.

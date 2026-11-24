@@ -4,6 +4,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { configDir } from './platform-paths.mjs'
 import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
+import { ensureAccessModel } from './access-migration.mjs'
 
 function getPath() {
   return path.join(configDir(), 'accounts.json')
@@ -17,21 +18,28 @@ export function defaults() {
 // existed — in-memory only, not persisted, so this doesn't add a write to
 // the hot read path (accounts.json is read on every gateway/MCP request).
 function normalizeAccount(a) {
-  // `role` was the management tier and is now called `tier`, because a second,
-  // admin-defined notion of "role" arrived alongside it (roles-storage.mjs).
-  // Records on disk predate the rename, so tier is derived from whichever is
-  // present, and `role` is kept as a mirror: the login response shape is public
-  // API for Twig/Blueprints/Yellowscript, which each hold their own copy of it,
-  // and an undefined `role` there reads as "not an admin" — a failure in the
-  // confusing direction. Drop the mirror once those clients read `tier`.
-  const tier = a.tier ?? a.role ?? 'user'
+  // Only the owner has a tier now (access-migration.mjs). Everyone else is a
+  // member whose rights come from roles. `role` mirrors the tier for old
+  // clients; auth.mjs toPublicAccount replaces it with 'admin' or 'user' from
+  // the account's actual permissions, which is what those clients mean by it.
+  //
+  // A record still in the old shape (no roleIds — written by hand, by an old
+  // tool, or by a test fixture) is read the way the migration would have
+  // converted it, minus the derived "(administration)" roles: an old admin
+  // reads as an Administrator, anyone else as their role or Full Access.
+  const legacy = !Array.isArray(a.roleIds)
+  const oldTier = a.tier ?? a.role ?? 'user'
+  const tier = (legacy ? oldTier : a.tier) === 'owner' ? 'owner' : 'member'
+  const roleIds = !legacy ? a.roleIds.filter(x => typeof x === 'string')
+    : tier === 'owner' ? []
+    : oldTier === 'admin' ? ['administrator']
+    : [typeof a.roleId === 'string' && a.roleId ? a.roleId : 'full-access']
   return {
     ...a,
     tier,
     role: tier,
-    // The admin-defined capability role. null → Full Access, which narrows
-    // nothing, which is why adding this field changes no behaviour on upgrade.
-    roleId: a.roleId ?? null,
+    // The roles this account holds directly; its groups add more.
+    roleIds,
     status: a.status === 'disabled' ? 'disabled' : 'active',
     createdBy: a.createdBy ?? null,
     lastLoginAt: a.lastLoginAt ?? null,
@@ -44,6 +52,7 @@ function normalizeAccount(a) {
 
 export function read() {
   const p = getPath()
+  ensureAccessModel()
   if (!fs.existsSync(p)) return defaults()
   try {
     // readJsonOr rather than a bare parse: a torn or corrupt accounts.json
@@ -57,21 +66,7 @@ export function read() {
 
     data.accounts = data.accounts.map(normalizeAccount)
 
-    // One-time migration for pre-three-tier installs, which only ever wrote
-    // role: 'admin' | 'user'. Promote the existing admin(s) to 'owner' so
-    // nobody loses access they already had — only runs while no owner
-    // exists yet, and is idempotent (never touches a file that already has one).
-    // Reads `tier` because normalizeAccount has already run above and derives it
-    // from a legacy `role`; writes both so the persisted record carries the new
-    // field name too.
-    if (!data.accounts.some(a => a.tier === 'owner')) {
-      let migrated = false
-      for (const a of data.accounts) {
-        if (a.tier === 'admin') { a.tier = 'owner'; a.role = 'owner'; migrated = true }
-      }
-      if (migrated) write(data)
-    }
-
+    // The pre-three-tier owner promotion now runs inside ensureAccessModel().
     return data
   } catch { return defaults() }
 }
@@ -138,15 +133,12 @@ export function hasOwner() {
   return read().accounts.some(a => a.tier === 'owner')
 }
 
-/**
- * Point every account on `roleId` at `nextRoleId`. Used when a role is deleted,
- * so a member can never be left holding a dangling id.
- */
-export function reassignRole(roleId, nextRoleId) {
+/** Drop a role from every account (the role was deleted). */
+export function removeRoleEverywhere(roleId) {
   const data = read()
   let changed = 0
   for (const a of data.accounts) {
-    if (a.roleId === roleId) { a.roleId = nextRoleId; changed++ }
+    if (a.roleIds.includes(roleId)) { a.roleIds = a.roleIds.filter(id => id !== roleId); changed++ }
   }
   if (changed) write(data)
   return changed

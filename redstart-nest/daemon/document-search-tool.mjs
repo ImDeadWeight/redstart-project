@@ -32,7 +32,7 @@ import { embedTexts, embedServerStatus } from './embed-server.mjs'
 import { fileLink } from './tool-result-links.mjs'
 import { configDir } from './platform-paths.mjs'
 import { logEvent } from './logger.mjs'
-import { projectForCall, projectFolder } from './projects-storage.mjs'
+import { projectForCall, ensureProjectFiles } from './projects-storage.mjs'
 
 export const TOOL_NAME = 'search_documents'
 const SNIPPET_CHARS = 900
@@ -47,6 +47,12 @@ export const SHARED_SCOPE = '_shared'
 export const SHARED_GRANT = 'shared'
 /** How a shared passage is cited, so it is never taken for the user's own file. */
 export const SHARED_LABEL = 'Shared: '
+
+// A project's files (2026-11-24): one index scope per project, shared by its
+// members, as its folder is (projects-storage projectFilesDir).
+export const PROJECT_GRANT = 'project'
+export const PROJECT_LABEL = 'Project: '
+export const projectScope = (project) => `_project-${project.id}`
 
 // The embedder is used only while the sidecar runs; null otherwise, and the
 // index falls back to words. Overridable for the suite.
@@ -86,6 +92,8 @@ export function toolDefs(cfg) {
 }
 
 const isShared = (h) => h.chunk.grantId === SHARED_GRANT
+const isProjectHit = (h) => h.chunk.grantId === PROJECT_GRANT
+const labelOf = (h) => (isShared(h) ? SHARED_LABEL : isProjectHit(h) ? PROJECT_LABEL : '')
 
 /**
  * The shared folder's part of a search, or null when there is none for this
@@ -109,7 +117,7 @@ export function formatHits(hits, { status, query }) {
   } else {
     hits.forEach((h, i) => {
       const snippet = h.chunk.text.length > SNIPPET_CHARS ? h.chunk.text.slice(0, SNIPPET_CHARS) + ' …' : h.chunk.text
-      lines.push(`[${i + 1}] ${isShared(h) ? SHARED_LABEL : ''}${h.chunk.path} (part ${h.chunk.ord + 1})\n${snippet}`)
+      lines.push(`[${i + 1}] ${labelOf(h)}${h.chunk.path} (part ${h.chunk.ord + 1})\n${snippet}`)
     })
     const anyShared = hits.some(isShared)
     lines.push('Cite each claim with its passage number and file name, e.g. [1] ' + path.posix.basename(hits[0].chunk.path) + '. ' +
@@ -173,20 +181,33 @@ export async function callTool(name, args, cfg, ctx) {
   // model can only widen back to everything with scope "all". When the
   // project's files have nothing, the whole folder is searched and the
   // answer says so, so "nothing found" is never claimed too early.
+  // The project's folder is shared by its members, so it is a source of its
+  // own (indexed once for all of them), not a corner of this user's files.
   const project = projectForCall(ctx?.account ?? null, ctx)
-  const pathPrefix = project && args?.scope !== 'all' ? projectFolder(project) : null
-  // A project search stays in the project's own files; "all" and the
-  // fallback also take the shared folder.
-  let hits = pathPrefix
-    ? await searchScope({ dir: indexDir(), scope, query, queryVector, limit, pathPrefix })
-    : await searchSources({ dir: indexDir(), sources: [{ scope }, ...sharedSrc], query, queryVector, limit })
-  let where = pathPrefix ? 'project' : 'all'
-  if (pathPrefix && hits.length === 0) {
-    hits = await searchSources({ dir: indexDir(), sources: [{ scope }, ...sharedSrc], query, queryVector, limit })
+  let projectSrc = null
+  if (project) {
+    try {
+      const projectRoot = ensureProjectFiles(dsCfg.documentsRoot, project)
+      const left = Math.max(1000, SYNC_BUDGET_MS - (Date.now() - started))
+      const s3 = await syncScope({ dir: indexDir(), scope: projectScope(project), grantId: PROJECT_GRANT, root: projectRoot, extract: extractText, embed: embed ?? undefined, budgetMs: left })
+      sync = { ...sync, files: sync.files + s3.files, indexed: sync.indexed + s3.indexed, pending: sync.pending + s3.pending, errors: [...sync.errors, ...s3.errors.map((e) => `${PROJECT_LABEL}${e}`)] }
+      projectSrc = { scope: projectScope(project), grantId: PROJECT_GRANT }
+    } catch (err) {
+      logEvent('documents', 'project_folder_failed', { reason: err.message })
+    }
+  }
+  const everywhere = [{ scope }, ...sharedSrc, ...(projectSrc ? [projectSrc] : [])]
+  const projectFirst = projectSrc && args?.scope !== 'all'
+  let hits = projectFirst
+    ? await searchScope({ dir: indexDir(), scope: projectSrc.scope, grantId: PROJECT_GRANT, query, queryVector, limit })
+    : await searchSources({ dir: indexDir(), sources: everywhere, query, queryVector, limit })
+  let where = projectFirst ? 'project' : 'all'
+  if (projectFirst && hits.length === 0) {
+    hits = await searchSources({ dir: indexDir(), sources: everywhere, query, queryVector, limit })
     where = 'fallback'
   }
   let text = formatHits(hits, { query, status: { ...sync, semantic: !!queryVector } })
-  if (where === 'project') text = `From the files of the project "${project.name}" (${pathPrefix}). Search with scope "all" for the rest of the user's documents.\n\n${text}`
+  if (where === 'project') text = `From the files of the project "${project.name}", which everyone in the project shares. Search with scope "all" for the rest of the user's documents.\n\n${text}`
   if (where === 'fallback') text = `Nothing in the files of the project "${project.name}" matched, so this searched all of the user's documents.\n\n${text}`
 
   logEvent('documents', 'searched', { durationMs: Date.now() - started, files: sync.files, indexed: sync.indexed, pending: sync.pending, hits: hits.length, semantic: !!queryVector, shared: hits.filter(isShared).length })
@@ -198,7 +219,7 @@ export async function callTool(name, args, cfg, ctx) {
   const seen = new Set()
   const links = []
   for (const h of hits) {
-    if (isShared(h) || seen.has(h.chunk.path)) continue
+    if (isShared(h) || isProjectHit(h) || seen.has(h.chunk.path)) continue
     seen.add(h.chunk.path)
     links.push(fileLink(h.chunk.path))
   }

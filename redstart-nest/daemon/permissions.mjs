@@ -33,7 +33,19 @@
 //                        keeps meaning exactly what it says.
 //   tier === 'owner'   → no narrowing, and the owner cannot be assigned a role.
 //                        This is the anti-lockout guarantee.
-//   no role assigned   → Full Access, whose permission set is {} → no narrowing.
+//   no roles at all    → combineRoles([]) — no capabilities, no web sources,
+//                        no administration. Plain chat with the model only.
+//
+// ROLES ADD UP; THIS FILE STILL ONLY NARROWS (2026-11-24)
+//
+// Roles used to be restrictions (an absent field inherited everything). They
+// are now GRANTS, as in Open WebUI, Grafana and GitLab: an account holds any
+// number of roles, directly and through its groups, and may do what ANY of
+// them allows. combineRoles() turns that list of grants into ONE permission
+// set in the restriction shape narrowConfig() has always read, so the rule
+// above — nothing here can enable what the server config has off — still
+// holds unchanged, and so does the randomised test that checks it. Roles can
+// grant only what the running profile has already enabled.
 // =============================================================================
 
 import { capabilityToolNames, expandDisabledToolIds } from './tools-definitions.mjs'
@@ -86,7 +98,7 @@ export const DENY_ALL = Object.freeze({
  * the same reason as the rest: roles only tighten. A "workflow editor" is an
  * admin-tier account whose role limits administration to this one.
  */
-export const ADMIN_PERMISSIONS = ['manageAccounts', 'manageRoles', 'managePromptBlocks', 'manageOrgWorkflows']
+export const ADMIN_PERMISSIONS = ['manageAccounts', 'manageRoles', 'managePromptBlocks', 'manageOrgWorkflows', 'manageProjects']
 
 // Capability id → the config key its provider reads. file_system is camelCase
 // (see the note in gateway-config.mjs — emitting snake_case there once disabled
@@ -232,6 +244,128 @@ export function narrowConfig(config, permissions) {
   return out
 }
 
+// ---------------------------------------------------------------------------
+// Additive roles
+// ---------------------------------------------------------------------------
+//
+// A ROLE (roles.json version 2) is a set of GRANTS. Field by field:
+//
+//   capabilities          null = every capability · [ids] = those · absent = none
+//   grants[cap]           null/absent = every folder of a granted capability ·
+//                         [folders] = those
+//   webSourceIds          null = every source · [ids] = those · absent = none
+//   allowWebSearchEngine  true grants it · absent/false = not granted
+//   allowWhitelistBypass  true grants it · absent/false = not granted
+//   fileSystem.allowWrite / allowDestructive   true grants · absent = not
+//   maxFetchTokens        a number caps this role's fetches · null/absent = no cap
+//   surfaces              null/absent = any app · [ids] = only those
+//   admin[perm]           true grants · absent = not
+//
+// Two fields default open when absent, on purpose: maxFetchTokens and surfaces
+// are LIMITS on something granted elsewhere, not grants themselves, so a role
+// that does not mention them does not limit them.
+
+// The capability each folder grant belongs to. Shared Documents is read by
+// document search, so that is the capability a role must hold for its folder
+// list to count (test-access-migration.mjs caught this one).
+const GRANT_HOLDER = Object.freeze({ sqlite: 'sqlite', git: 'git', vault: 'vault', shared_documents: 'document_search' })
+
+const isAll = (v) => v === null
+const listOf = (v) => (Array.isArray(v) ? v.filter(x => typeof x === 'string') : [])
+
+/**
+ * Combine the roles an account holds into one permission set in the
+ * RESTRICTION shape narrowConfig(), can() and allowsSurface() read (absent =
+ * inherit, [] = nothing). The account may do what any role allows: lists are
+ * unioned, flags are OR'd, a cap is the most generous one, and one role saying
+ * "all" makes the combination "all".
+ *
+ * @param {object[]} roleList  role records (or anything with .permissions)
+ * @returns {object} a restriction-shaped permission set
+ */
+export function combineRoles(roleList) {
+  const perms = (roleList || []).map(r => r?.permissions || {})
+  const out = { admin: {} }
+
+  // Capabilities
+  const capsAll = perms.some(p => isAll(p.capabilities))
+  const caps = new Set(perms.flatMap(p => listOf(p.capabilities)))
+  if (!capsAll) out.capabilities = [...caps].sort()
+  const grantsCap = (p, cap) => isAll(p.capabilities) || listOf(p.capabilities).includes(GRANT_HOLDER[cap] ?? cap)
+
+  // Folder grants, per grantable capability: only the roles that grant the
+  // capability have a say. One of them leaving folders open opens them all.
+  const grants = {}
+  for (const cap of GRANTABLE) {
+    const holders = perms.filter(p => grantsCap(p, cap))
+    if (holders.length === 0) { grants[cap] = []; continue }
+    const open = holders.some(p => p.grants?.[cap] === null || p.grants?.[cap] === undefined)
+    if (!open) grants[cap] = [...new Set(holders.flatMap(p => listOf(p.grants[cap])))].sort()
+  }
+  if (Object.keys(grants).length) out.grants = grants
+
+  // Web
+  if (!perms.some(p => isAll(p.webSourceIds))) out.webSourceIds = [...new Set(perms.flatMap(p => listOf(p.webSourceIds)))].sort()
+  if (!perms.some(p => p.allowWebSearchEngine === true)) out.allowWebSearchEngine = false
+  if (!perms.some(p => p.allowWhitelistBypass === true)) out.allowWhitelistBypass = false
+  const caps2 = perms.map(p => p.maxFetchTokens)
+  if (perms.length && caps2.every(c => typeof c === 'number' && c > 0)) out.maxFetchTokens = Math.max(...caps2)
+
+  // File system
+  out.fileSystem = {
+    allowWrite: perms.some(p => p.fileSystem?.allowWrite === true),
+    allowDestructive: perms.some(p => p.fileSystem?.allowDestructive === true),
+  }
+  // narrowConfig reads `!== false` as inherit, so a granted flag is left out.
+  if (out.fileSystem.allowWrite) delete out.fileSystem.allowWrite
+  if (out.fileSystem.allowDestructive) delete out.fileSystem.allowDestructive
+
+  // Surfaces: a limit, open unless every role names its apps.
+  if (perms.length && perms.every(p => Array.isArray(p.surfaces))) out.surfaces = [...new Set(perms.flatMap(p => p.surfaces))].sort()
+
+  for (const perm of ADMIN_PERMISSIONS) {
+    if (perms.some(p => p.admin?.[perm] === true)) out.admin[perm] = true
+  }
+  return out
+}
+
+/**
+ * Is every permission in `inner` also held by `outer`? Both are in the
+ * restriction shape (combineRoles output). This is the escalation rule: an
+ * admin may only hand out, or manage someone holding, what they hold
+ * themselves. Absent in `outer` means "all"; absent in `inner` means it wants
+ * all, so `outer` must be absent too.
+ */
+export function permissionsWithin(inner, outer) {
+  const a = inner || {}
+  const b = outer || {}
+  const listWithin = (x, y) => inherits(y) || (!inherits(x) && x.every(v => y.includes(v)))
+  if (!listWithin(a.capabilities, b.capabilities)) return false
+  for (const cap of GRANTABLE) {
+    if (!listWithin(a.grants?.[cap], b.grants?.[cap])) {
+      // A capability the inner set does not hold at all has nothing to compare.
+      const innerHolds = inherits(a.capabilities) || a.capabilities.includes(GRANT_HOLDER[cap] ?? cap)
+      if (innerHolds) return false
+    }
+  }
+  if (!listWithin(a.webSourceIds, b.webSourceIds)) return false
+  if (a.allowWebSearchEngine !== false && b.allowWebSearchEngine === false) return false
+  if (a.allowWhitelistBypass !== false && b.allowWhitelistBypass === false) return false
+  if (a.fileSystem?.allowWrite !== false && b.fileSystem?.allowWrite === false) return false
+  if (a.fileSystem?.allowDestructive !== false && b.fileSystem?.allowDestructive === false) return false
+  if (!inherits(b.maxFetchTokens) && (inherits(a.maxFetchTokens) || a.maxFetchTokens > b.maxFetchTokens)) return false
+  if (!listWithin(a.surfaces, b.surfaces)) return false
+  for (const perm of ADMIN_PERMISSIONS) {
+    if (a.admin?.[perm] === true && b.admin?.[perm] !== true) return false
+  }
+  return true
+}
+
+/** Does this combined permission set carry any administration at all? */
+export function holdsAnyAdmin(permissions) {
+  return ADMIN_PERMISSIONS.some(p => permissions?.admin?.[p] === true)
+}
+
 /**
  * The config an account should be served, given the server's config and the
  * account's role. This is the only entry point callers need.
@@ -253,21 +387,15 @@ export function resolveEffectiveConfig(account, config, role) {
 /**
  * May this account perform an admin action?
  *
- * Tier is the CEILING and the role can only lower it — the same restrict-only
- * law as tools. A 'user'-tier account cannot be handed manageAccounts by any
- * role, so a mis-written role can widen nothing.
- *
- * An absent `admin` object inherits (full admin-tier authority, today's
- * behaviour). A PRESENT one is an explicit narrowing, so any key it omits reads
- * as false — fail-closed, matching how an explicit array narrows elsewhere.
+ * Administration is granted by roles, like everything else: the account holds
+ * a permission when one of its roles grants it. `role` is the COMBINED role
+ * (auth.mjs roleFor), so an absent `admin` block grants nothing — fail-closed.
+ * The owner holds every permission and cannot be narrowed.
  */
 export function can(account, role, permission) {
   if (!account) return false
   if (account.tier === 'owner') return true
-  if (account.tier !== 'admin') return false
-  const grants = role?.permissions?.admin
-  if (inherits(grants)) return true
-  return grants[permission] === true
+  return role?.permissions?.admin?.[permission] === true
 }
 
 /**

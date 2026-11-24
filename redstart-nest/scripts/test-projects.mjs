@@ -1,5 +1,5 @@
 // =============================================================================
-// Projects — personal, owner-only, chats move out on delete (projects-plan)
+// Projects — isolation from non-members, chats move out on delete (projects-plan; sharing: test-project-sharing.mjs)
 // =============================================================================
 // Pinned here:
 //   - validation: a name is required and bounded, instructions are bounded,
@@ -153,7 +153,10 @@ await test('project memory is its own scope, never mixed with the account\'s', (
   assert(pm.ok, pm.error)
   assert(!memory.listMemories(ALICE).some((m) => m.id === pm.memory.id), 'project memory listed with the account\'s')
   assert(memory.listMemories(ALICE, { projectId: aliceProject.id }).length === 1, 'project memory missing')
-  assert(memory.listMemories(BOB, { projectId: aliceProject.id }).length === 0, 'bob\'s key reached alice\'s project memory')
+  // Project memory belongs to the project (shared, 2026-11-24); who reaches it
+  // is decided by getProject, which every route and tool goes through.
+  assert(memory.scopeKey(ALICE, aliceProject.id) === memory.scopeKey(BOB, aliceProject.id), 'project memory is not keyed by the project')
+  assert(store.getProject(BOB, aliceProject.id) === null, 'bob passes the gate to alice\'s project')
   assert(memory.deleteMemory(ALICE, pm.memory.id) === false, 'deleted from the wrong scope')
   let threw = false
   try { memory.scopeKey(ALICE, 'a#b') } catch { threw = true }
@@ -452,8 +455,7 @@ await test('search_documents: a project chat searches its folder first, then say
 
   const p = store.createProject(ALICE, { name: 'Search project' }).project
   const root = resolveUserRoot(docs, ALICE, { create: true })
-  const folder = path.join(root, ...store.projectFolder(p).split('/').filter(Boolean))
-  fs.mkdirSync(folder, { recursive: true })
+  const folder = store.ensureProjectFiles(docs, p)
   fs.writeFileSync(path.join(folder, 'spec.md'), 'The HERON service retries webhooks three times.')
   fs.writeFileSync(path.join(root, 'elsewhere.md'), 'HERON appears here too, outside the project. KESTREL only lives here.')
   convs.createConversation('alice-1', { id: 'doc-in', name: 'in', projectId: p.id, messages: [] })
@@ -473,7 +475,7 @@ await test('search_documents: a project chat searches its folder first, then say
   assert(!plain.includes('From the files of the project'), 'a chat outside a project was narrowed')
 })
 
-await test('the folder: made on create, named by the fixed slug, given to the client', async () => {
+await test('the folder: made on create, its own (not in the owner\'s files), given to the client as a space', async () => {
   const docs = fs.mkdtempSync(path.join(tmpDir, 'docs-route-'))
   const caps = await import('../daemon/tools-storage.mjs')
   const original = caps.getCapabilities().documents?.outputDir ?? null
@@ -481,9 +483,9 @@ await test('the folder: made on create, named by the fixed slug, given to the cl
   caps.setCapabilityConfig('documents', { outputDir: docs })
   try {
     const made = await route('POST', '/projects', ALICE, { name: 'Folder project' })
-    assert(made.status === 201 && made.json.folder === `Projects/${made.json.slug}/`, JSON.stringify(made.json))
-    const onDisk = path.join(resolveUserRoot(docs, ALICE), 'Projects', made.json.slug)
-    assert(fs.existsSync(onDisk), 'folder not created')
+    assert(made.status === 201 && made.json.folder === `project-${made.json.id}`, JSON.stringify(made.json))
+    const onDisk = store.projectFilesDir(docs, made.json)
+    assert(fs.existsSync(onDisk) && !onDisk.includes('user_files'), `folder not created in its own place: ${onDisk}`)
     await route('PUT', `/projects/${made.json.id}`, ALICE, { name: 'Renamed project' })
     const after = await route('GET', `/projects/${made.json.id}`, ALICE)
     assert(after.json.folder === made.json.folder, 'renaming moved the folder')

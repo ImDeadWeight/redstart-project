@@ -83,7 +83,9 @@ const gw = (p = '') => `http://127.0.0.1:${GATEWAY_PORT}${p}`
 // reads as "not an admin". `roleId` is the admin-defined capability role, null
 // for Full Access. Drop `role` from this list only when every connector reads
 // `tier`.
-const PUBLIC_USER_KEYS = ['id', 'username', 'tier', 'role', 'roleId', 'apiKeyPrefix', 'createdAt', 'lastLoginAt']
+// 2026-11-24: roleId became roleIds (several roles), and groupIds, isAdmin and
+// status were added. `role` stays: older clients read it as owner/admin/user.
+const PUBLIC_USER_KEYS = ['id', 'username', 'tier', 'role', 'isAdmin', 'roleIds', 'groupIds', 'apiKeyPrefix', 'createdAt', 'lastLoginAt', 'status']
 const SECRET_KEYS = ['passwordHash', 'passwordSalt', 'apiKeyHash', 'password', 'apiKey']
 
 function assertPublicUser(user, where) {

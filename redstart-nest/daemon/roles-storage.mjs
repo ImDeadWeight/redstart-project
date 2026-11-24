@@ -3,75 +3,79 @@
 // =============================================================================
 // Redstart Nest — Roles
 // =============================================================================
-// A role is a named RESTRICTION applied to one account. It can never grant
-// access the server has not already enabled: effective access is
+// A role is a named set of GRANTS (roles.json version 2, 2026-11-24). An
+// account holds any number of roles, directly and through its groups
+// (groups-storage.mjs), and may do what any of them allows; permissions.mjs
+// combineRoles() documents each field. Roles still cannot reach past the
+// server: effective access is
 //
-//     (globally configured AND activated by the running profile) ∩ role
+//     (globally configured AND activated by the running profile) ∩ combined roles
 //
-// so `roles.json` is a narrowing layer over `tools.json` + the profile, never a
-// second source of truth about what exists. permissions.mjs is where that
-// narrowing is actually computed; this module only stores and resolves.
+// so roles.json never becomes a second source of truth about what exists.
 //
-// WHY ROLES ARE A SEPARATE AXIS FROM `tier`
-//
-// `tier` ('owner' | 'admin' | 'user') governs ACCOUNT MANAGEMENT — who may
-// create accounts, who may be managed by whom (auth.mjs canManage). It is
-// hardcoded and stays that way: the moment an admin can create a tier called
-// "Legal Team", every management check in the system has to have an opinion
-// about where it sits in a hierarchy that no longer exists. Roles govern
-// CAPABILITY instead, and the two compose without either knowing about the
-// other's values.
+// Version 1 roles were RESTRICTIONS (an absent field inherited everything)
+// beside a hardcoded tier (owner / admin / user). access-migration.mjs turns
+// those files into this shape once, keeping every account's reach exactly as it
+// was. Only the owner remains a tier: the one account that cannot be narrowed,
+// recovers the box, and reaches the control plane.
 //
 // BUILT-IN ROLES ARE HARDCODED, NOT SEEDED
 //
 // Same shape as BUILTIN_TOOLS/BUILTIN_GROUPS in tools-definitions.mjs: the
 // built-ins live in code and are merged with the user's roles at read time.
-// Seeding them into roles.json instead would mean a first-run write, and a
-// built-in whose definition could drift from the code that documents it. They
-// cannot be edited or deleted; the UI offers "clone" instead.
+// They cannot be edited or deleted; the UI offers "clone" instead.
 // =============================================================================
 
+import * as fs from 'fs'
 import * as path from 'path'
 import { configDir } from './platform-paths.mjs'
 import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
+import { ensureAccessModel } from './access-migration.mjs'
 
 function getPath() {
   return path.join(configDir(), 'roles.json')
 }
 
-/**
- * The role every account resolves to when it has no `roleId`.
- *
- * Its permission set is EMPTY, and empty means "narrow nothing" (see
- * permissions.mjs). That is what makes this whole feature inert on upgrade:
- * every existing account has no roleId, resolves here, and is served exactly
- * the config it was served before.
- */
+/** The role a new account gets when none is chosen: what "no role" used to mean. */
 export const DEFAULT_ROLE_ID = 'full-access'
+
+const EVERYTHING = {
+  capabilities: null,
+  webSourceIds: null,
+  allowWebSearchEngine: true,
+  allowWhitelistBypass: true,
+  fileSystem: { allowWrite: true, allowDestructive: true },
+}
 
 export const BUILTIN_ROLES = [
   {
+    id: 'administrator',
+    name: 'Administrator',
+    description: 'Everything the running profile has enabled, and every kind of administration: accounts, groups, roles, prompt blocks, organization workflows and all projects.',
+    builtIn: true,
+    permissions: {
+      ...EVERYTHING,
+      admin: { manageAccounts: true, manageRoles: true, managePromptBlocks: true, manageOrgWorkflows: true, manageProjects: true },
+    },
+  },
+  {
     id: DEFAULT_ROLE_ID,
     name: 'Full Access',
-    description:
-      'Everything the running profile has enabled. Assigned to any account without a role, so it is also what the server did before roles existed.',
+    description: 'Everything the running profile has enabled, and no administration. What a new account gets unless you choose otherwise.',
     builtIn: true,
-    permissions: {},
+    permissions: { ...EVERYTHING },
   },
   {
     id: 'restricted',
     name: 'Restricted',
-    description:
-      'Web sources only — no local capabilities, no file-system writes, no administration. A starting point to clone and widen.',
+    description: 'Web sources only: no local capabilities, no file-system writes, no general web search engine, no administration. A starting point to clone and widen.',
     builtIn: true,
     permissions: {
       capabilities: [],
-      fileSystem: { allowWrite: false, allowDestructive: false },
-      allowWhitelistBypass: false,
-      // No general web search engine: queries to SearXNG/Brave are a new
-      // egress path, and this role is the conservative starting point.
+      webSourceIds: null,
       allowWebSearchEngine: false,
-      admin: {},
+      allowWhitelistBypass: false,
+      fileSystem: { allowWrite: false, allowDestructive: false },
     },
   },
 ]
@@ -83,14 +87,30 @@ export const BUILTIN_ROLES = [
 // request that reads it always runs after the write that changed it.
 let cached = null
 
+let cachedKey = null
+
+// Keyed by path and mtime, so a test pointing configDir elsewhere, a hand edit
+// or a restore is never served a stale copy.
+function fileKey() {
+  const p = getPath()
+  try { return `${p}@${fs.statSync(p).mtimeMs}` } catch { return `${p}@none` }
+}
+
 function read() {
-  if (!cached) cached = readJsonOr(getPath(), { roles: [] })
+  ensureAccessModel()
+  const key = fileKey()
+  if (!cached || cachedKey !== key) {
+    cached = readJsonOr(getPath(), { version: 2, roles: [] })
+    cachedKey = key
+  }
   return cached
 }
 
 function write(data) {
+  data.version = 2
   writeJsonAtomic(getPath(), data)
   cached = data
+  cachedKey = fileKey()
 }
 
 /** User-defined roles only, in creation order. */
@@ -113,20 +133,10 @@ export function isBuiltInRole(id) {
   return BUILTIN_ROLES.some(r => r.id === id)
 }
 
-/**
- * The role governing an account.
- *
- * An account with no roleId, or one pointing at a role that has since been
- * deleted, resolves to Full Access. The dangling case is defended twice — once
- * here and once by deleteRole() reassigning members — because the failure
- * direction matters: a dangling id that resolved to "no role object" would read
- * as "no restrictions" in permissions.mjs anyway, but only by accident. Making
- * it explicit means a future change to the null handling cannot silently turn a
- * deleted role into an escalation.
- */
-export function getRoleForAccount(account) {
-  if (!account) return null
-  return findRoleById(account.roleId) || findRoleById(DEFAULT_ROLE_ID)
+/** Resolve role ids to role records, dropping any that no longer exist. */
+export function resolveRoles(ids) {
+  const all = listRoles()
+  return [...new Set(Array.isArray(ids) ? ids : [])].map(id => all.find(r => r.id === id)).filter(Boolean)
 }
 
 export function upsertRole(role) {
@@ -150,14 +160,9 @@ export function upsertRole(role) {
 }
 
 /**
- * Delete a role and hand back the members that need reassigning.
- *
- * This function does NOT touch accounts.json — accounts-storage owns that file
- * and importing it here would make two storage modules mutually dependent. The
- * caller (auth.mjs deleteRole) reassigns, and the roles.json write happens
- * FIRST so a crash between the two leaves accounts pointing at a role that no
- * longer exists — which getRoleForAccount already resolves to Full Access —
- * rather than a role that exists but nobody can see.
+ * Delete a role. Accounts and groups that held it are cleaned up by the caller
+ * (auth.mjs deleteRole); until then a dangling id is simply ignored by
+ * resolveRoles(), which can only take access away, never add it.
  */
 export function deleteRole(id) {
   if (isBuiltInRole(id)) return { ok: false, error: 'Built-in roles cannot be deleted' }

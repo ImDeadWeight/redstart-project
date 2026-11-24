@@ -35,10 +35,11 @@ directory it wants explicitly.
 |---|---|
 | `profiles.json` | Per profile: model path, context/batch/threads, GPU layers, port, network mode, and web source config. Also the per-profile `tools` block — whether tools are on, the whitelist and active sources/groups, the general web search engine (`webSearchEngine`: `none`, `searxng` or `brave`), activated capabilities (`activeToolIds`) and banned tools (`disabledToolIds`). |
 | `tools.json` | User-defined tools, groups, external MCP servers, and global capability config (schema below). |
-| `accounts.json` | Accounts, when login is enabled. Passwords and API keys are stored only as hashes. Each account carries a `tier` (`owner`/`admin`/`user`) and a `roleId` (`null` = Full Access). |
-| `roles.json` | Admin-defined capability roles, including any folder grants that narrow a shared capability (Vault, Git, SQLite, Shared Documents) to some of its folders. Built-in roles live in code and are merged in at read time, so this file holds only the ones you create. Absent until you create one. |
+| `accounts.json` | Accounts, when login is enabled. Passwords and API keys are stored only as hashes. The Owner has `tier: "owner"`; every other account has `roleIds`, the roles it holds directly (its groups add more). |
+| `roles.json` | Admin-defined roles (version 2: each lists what it *grants*; an account may do what any of its roles allows), including any folder grants that narrow a shared capability (Vault, Git, SQLite, Shared Documents) to some of its folders. Built-in roles live in code and are merged in at read time, so this file holds only the ones you create. Absent until you create one. |
 | `conversations.json` | Server-side conversation history, scoped per account. |
-| `projects.json` | Projects: their names, instructions and which chats belong to them, per account. |
+| `projects.json` | Projects (version 2): names, instructions, owner, and who each is shared with (accounts and groups, as viewers or editors). Which chats belong to a project is on each conversation. A project's files are in `project_files/<id>/` under the Documents folder. |
+| `groups.json` | Groups: their members and the roles everyone in them gets. |
 | `memories.json` | Saved memories (facts, guidance, state), keyed by account. |
 | `memory-review.json` | The automatic memory review's own bookkeeping: which chats it has reviewed and the suggestions waiting for an answer. Kept apart from `memories.json` because that file is the user's data. |
 | `approvals.json` | Standing "Always allow" grants, per account and tool. Deletion is never granted this way. |

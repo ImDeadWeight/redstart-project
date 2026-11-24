@@ -76,13 +76,14 @@ export { default as SettingsChatServerTab } from './SettingsChat/SettingsChatSer
 export { default as SettingsChatToolsTab } from './SettingsChat/SettingsChatToolsTab.svelte';
 
 /**
- * **SettingsChatAccountsTab** - Admin account management settings tab
+ * **SettingsChatPeopleTab** - People & access: users, groups and roles
  *
- * Lists accounts, creates new ones, and manages password/API-key resets.
- * Only reachable by logged-in admins — the section itself is filtered out
- * of the sidebar for non-admins in SettingsChat.svelte.
+ * One admin page with three tabs (2026-11-24), replacing the separate Accounts
+ * and Roles tabs. Roles add up; groups give their roles to their members; an
+ * admin may only give or manage less access than their own. Only reachable by
+ * admins (filtered in SettingsChat.svelte); the server gates every write.
  */
-export { default as SettingsChatAccountsTab } from './SettingsChat/SettingsChatAccountsTab.svelte';
+export { default as SettingsChatPeopleTab } from './SettingsChat/SettingsChatPeopleTab.svelte';
 
 /**
  * **SettingsChatSystemPromptTab** - Admin-owned system prompt blocks
@@ -97,16 +98,6 @@ export { default as SettingsChatAccountsTab } from './SettingsChat/SettingsChatA
  */
 export { default as SettingsChatSystemPromptTab } from './SettingsChat/SettingsChatSystemPromptTab.svelte';
 
-/**
- * **SettingsChatRolesTab** - Admin-defined capability roles
- *
- * Creates, edits and deletes the roles an admin assigns to accounts, and is
- * where the restrict-only model is made visible: every control subtracts from
- * what the running profile has enabled, and an untouched list means "inherit"
- * rather than "allow nothing". Admin-only, same sidebar filter as Accounts;
- * the server gates every write regardless of what this renders.
- */
-export { default as SettingsChatRolesTab } from './SettingsChat/SettingsChatRolesTab.svelte';
 export { default as SettingsChatMemoryTab } from './SettingsChat/SettingsChatMemoryTab.svelte';
 
 /**

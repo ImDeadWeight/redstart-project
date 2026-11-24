@@ -28,15 +28,22 @@ export type ConnectorKey = {
 export type AuthUser = {
 	id: string;
 	username: string;
-	/** Management tier — governs account administration. */
-	tier: 'owner' | 'admin' | 'user';
 	/**
-	 * Mirror of `tier` under its old name. The server emits both so connector
-	 * apps holding their own copy of this shape keep working; prefer `tier`.
+	 * 'owner' for the one account that cannot be narrowed; everyone else is a
+	 * 'member' whose rights come from roles (2026-11-24). Older servers sent
+	 * 'admin' | 'user' here.
+	 */
+	tier: 'owner' | 'member' | 'admin' | 'user';
+	/**
+	 * owner / admin / user, derived by the server from the account's roles:
+	 * "admin" means it holds some administration. Kept for connector apps.
 	 */
 	role: 'owner' | 'admin' | 'user';
-	/** Admin-defined capability role, or null for Full Access. */
-	roleId?: string | null;
+	/** Holds any administration permission (or is the owner). */
+	isAdmin?: boolean;
+	/** The roles this account holds directly; its groups add more. */
+	roleIds?: string[];
+	groupIds?: string[];
 	apiKeyPrefix?: string;
 	createdAt?: string;
 	lastLoginAt?: string | null;
@@ -69,7 +76,8 @@ class AuthStore {
 	 * emits only the old field) does not silently read as "not an admin".
 	 */
 	get isAdmin(): boolean {
-		const tier = this.user?.tier ?? this.user?.role;
+		if (typeof this.user?.isAdmin === 'boolean') return this.user.isAdmin;
+		const tier = this.user?.role ?? this.user?.tier;
 		return tier === 'admin' || tier === 'owner';
 	}
 

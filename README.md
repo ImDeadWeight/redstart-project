@@ -44,9 +44,17 @@ LM Studio, Jan and Ollama are model runners — very good ones — aimed at gett
 
 <a href="docs/screenshots/nest-model.png"><img src="docs/screenshots/nest-model.png" width="100%" alt="Nest's Model page: the model in use, the hardware line, and the models folder with a vision model marked as seeing images." /></a>
 
-**Images** — the picture model, the way Model is the chat model: the image model in use, your image models, finding one on Hugging Face, and the engine.
+**Finding a model** — **Find models on Hugging Face** opens a browser: recommended publishers on the left, a search that stays inside the publisher you picked, and the model you open beside the list. Each size is drawn against your GPU memory and RAM, so you can see what fits before you download it.
 
-<a href="docs/screenshots/nest-images.png"><img src="docs/screenshots/nest-images.png" width="100%" alt="Nest's Images page: FLUX.1 schnell in use and ready, the image models list, and the stable-diffusion.cpp engine installed with its CUDA build." /></a>
+<a href="docs/screenshots/nest-hf-models.png"><img src="docs/screenshots/nest-hf-models.png" width="100%" alt="The Find models on Hugging Face browser: Unsloth chosen in the sidebar, a search for qwen inside it, the results sorted by downloads, and Qwen3.6-35B-A3B opened on the right with each size from 13 to 37 GB drawn against the computer's 12 GB GPU and 31 GB of RAM, the one already downloaded marked." /></a>
+
+**Images** — the picture model, the way Model is the chat model: the image model in use, your image models (the same list as Model's), finding one on Hugging Face, and the engine.
+
+<a href="docs/screenshots/nest-images.png"><img src="docs/screenshots/nest-images.png" width="100%" alt="Nest's Images page: FLUX.1 schnell in use and ready, and the image models list with a Stable Diffusion XL model beside it, kept in the models folder's image folder." /></a>
+
+The image browser works the same way, with a **Family** filter for the kinds of image model Nest runs. It shows the family's shared files with each size, which come along with the first model of a family.
+
+<a href="docs/screenshots/nest-hf-images.png"><img src="docs/screenshots/nest-hf-images.png" width="100%" alt="The Find image models on Hugging Face browser: city96 and the FLUX.1 schnell family chosen, four FLUX.1 schnell conversions listed, and one opened with its family read from the model card and each file drawn against the GPU and RAM." /></a>
 
 **Tools** — one row per tool with its switch; opening a row shows its settings.
 

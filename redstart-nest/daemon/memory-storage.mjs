@@ -33,9 +33,25 @@ export const MAX_MEMORIES_PER_ACCOUNT = 200
 export const ANONYMOUS_KEY = '_local'
 
 function file() { return path.join(configDir(), 'memories.json') }
+// Before 2026-11-24 a project's memories lived under its owner's key,
+// `<owner>#project:<id>`. Projects are shared now, so they live under the
+// project alone, `#project:<id>`; old keys are renamed the first time the file
+// is read, merging if both somehow exist.
+const LEGACY_PROJECT_KEY = /^[^#]+#project:([A-Za-z0-9-]{1,64})$/
+
 function read() {
   const data = readJsonOr(file(), { accounts: {} })
   if (!data.accounts || typeof data.accounts !== 'object') data.accounts = {}
+  let moved = false
+  for (const key of Object.keys(data.accounts)) {
+    const m = LEGACY_PROJECT_KEY.exec(key)
+    if (!m) continue
+    const next = `#project:${m[1]}`
+    data.accounts[next] = [...(data.accounts[next] || []), ...(data.accounts[key] || [])]
+    delete data.accounts[key]
+    moved = true
+  }
+  if (moved) write(data)
   return data
 }
 function write(data) { writeJsonAtomic(file(), data) }
@@ -116,13 +132,15 @@ function kindFields(kind, why, now) {
 }
 
 /**
- * The storage key for one memory scope: the account's own memories, or one of
- * its projects' (projects-plan D13), `<account key>#project:<id>`. The '#'
- * cannot occur in an account id or in '_local', so the two never collide.
+ * The storage key for one memory scope: the account's own memories, or a
+ * project's (projects-plan D13), `#project:<id>` — the project's, shared by
+ * everyone it is shared with. The '#' cannot occur in an account id or in
+ * '_local', so the two never collide.
  *
  * THE CALLER VERIFIES THE PROJECT. This module trusts `projectId` the way it
  * trusts `account`: routes and tools pass only an id that getProject()
- * returned for this account, never a raw client value.
+ * returned for this account (and check canWrite before changing anything),
+ * never a raw client value.
  */
 export function scopeKey(account, projectId = null) {
   const base = memoryKey(account)
@@ -130,7 +148,7 @@ export function scopeKey(account, projectId = null) {
   if (typeof projectId !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(projectId)) {
     throw new Error('Cannot resolve a memory scope: malformed project id')
   }
-  return `${base}#project:${projectId}`
+  return `#project:${projectId}`
 }
 
 /** Newest first. Every record carries a kind (old ones read as `fact`). */

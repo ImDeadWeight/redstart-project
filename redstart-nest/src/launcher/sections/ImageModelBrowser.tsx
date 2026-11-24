@@ -106,7 +106,7 @@ export function ImageModelBrowser({ status, hardware, progress, onDownload, onCa
         ...(familyFilter ? [{ label: famLabel, tone: 'family' as const, onClear: () => pickFamily('') }] : []),
       ]}
       query={query} onQuery={setQuery} onSubmit={() => void search()}
-      placeholder={publisher && familyFilter ? 'Search…' : publisher ? `Search ${pubLabel}’s image models…` : 'Search Hugging Face for image models (flux schnell gguf, sdxl…)'}
+      placeholder={publisher && familyFilter ? '' : publisher ? `Search ${pubLabel}’s image models…` : 'Search Hugging Face for image models (flux schnell gguf, sdxl…)'}
       sort={sort} onSort={s => { setSort(s); void search({ sort: s }) }}>
       <ScopeSelect value={publisher} onChange={pickSource}
         options={[{ id: '', label: 'All of Hugging Face' }, ...status.publishers.map(p => ({ id: p.id, label: p.label }))]} />

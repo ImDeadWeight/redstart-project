@@ -1,10 +1,9 @@
 <script lang="ts">
 	import {
-		SettingsChatAccountsTab,
 		SettingsChatDesktopSidebar,
 		SettingsChatImportExportTab,
 		SettingsChatMobileHeader,
-		SettingsChatRolesTab,
+		SettingsChatPeopleTab,
 		SettingsChatMemoryTab,
 		SettingsChatConnectorsTab,
 		SettingsChatServerTab,
@@ -39,17 +38,19 @@
 
 	let { initialSection, getSectionHref }: Props = $props();
 
-	let activeSlug = $derived(
+	let requestedSlug = $derived(
 		initialSection ?? (page.params as Record<string, string | undefined>).section ?? 'general'
 	);
+	// Accounts and Roles became one page; their old links open its tabs.
+	let activeSlug = $derived(
+		requestedSlug === 'accounts' || requestedSlug === 'roles' ? 'people' : requestedSlug
+	);
+	let peopleTab = $derived<'users' | 'roles'>(requestedSlug === 'roles' ? 'roles' : 'users');
 
 	// Accounts is a static registry entry (see settings-registry.ts) but should
 	// only be visible to logged-in admins, so it's filtered out here at render
 	// time rather than in the registry, which has no access to auth state.
-	const ADMIN_ONLY_SECTIONS: string[] = [
-		SETTINGS_SECTION_TITLES.ACCOUNTS,
-		SETTINGS_SECTION_TITLES.ROLES
-	];
+	const ADMIN_ONLY_SECTIONS: string[] = [SETTINGS_SECTION_TITLES.PEOPLE];
 
 	let visibleSections = $derived(
 		SETTINGS_CHAT_SECTIONS.filter(
@@ -171,10 +172,8 @@
 						<SettingsChatImportExportTab />
 					{:else if currentSection.title === SETTINGS_SECTION_TITLES.SERVER}
 						<SettingsChatServerTab />
-					{:else if currentSection.title === SETTINGS_SECTION_TITLES.ACCOUNTS}
-						<SettingsChatAccountsTab />
-					{:else if currentSection.title === SETTINGS_SECTION_TITLES.ROLES}
-						<SettingsChatRolesTab />
+					{:else if currentSection.title === SETTINGS_SECTION_TITLES.PEOPLE}
+						{#key peopleTab}<SettingsChatPeopleTab initialTab={peopleTab} />{/key}
 					{:else if currentSection.title === SETTINGS_SECTION_TITLES.SYSTEM_PROMPT}
 						<SettingsChatSystemPromptTab />
 					{:else if currentSection.title === SETTINGS_SECTION_TITLES.CONNECTORS}

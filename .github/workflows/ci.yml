@@ -90,8 +90,14 @@ jobs:
       - name: "Security: task runtime (store, server-owned writes, runner, routes)"
         run: node scripts/test-task-runtime.mjs
 
-      - name: "Security: role narrowing (restrict-only law)"
+      - name: "Security: role narrowing (combined roles never widen the server config)"
         run: node scripts/test-roles.mjs
+
+      - name: "Security: the move to additive roles keeps every account's access"
+        run: node scripts/test-access-migration.mjs
+
+      - name: "Security: groups, several roles per account, only less than you"
+        run: node scripts/test-groups.mjs
 
       - name: "Security: resource grants narrow a shared root to folders, never widen it"
         run: node scripts/test-grants.mjs
@@ -213,8 +219,11 @@ jobs:
       - name: "Skills: SKILL.md is read and written as the format has it; a skill's scripts run only through run_python"
         run: node scripts/test-skills.mjs
 
-      - name: "Security: projects are per account and owner-only; deleting one keeps its chats"
+      - name: "Security: projects are isolated from non-members; deleting one keeps its chats"
         run: node scripts/test-projects.mjs
+
+      - name: "Security: shared projects (viewer, editor, owner, admin; chats stay private)"
+        run: node scripts/test-project-sharing.mjs
 
       - name: "Security: document search is per account; index, citations, sync"
         run: node scripts/test-document-search.mjs

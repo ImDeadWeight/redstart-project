@@ -51,9 +51,9 @@ async function test(name, fn) {
 }
 function assert(cond, message) { if (!cond) throw new Error(message) }
 
-const ALICE = { id: 'alice-1', username: 'alice', tier: 'user' }
-const BOB = { id: 'bob-2', username: 'bob', tier: 'user' }
-const ADMIN = { id: 'admin-3', username: 'ada', tier: 'admin' }
+const ALICE = { id: 'alice-1', username: 'alice', tier: 'member', roleIds: ['full-access'] }
+const BOB = { id: 'bob-2', username: 'bob', tier: 'member', roleIds: ['full-access'] }
+const ADMIN = { id: 'admin-3', username: 'ada', tier: 'member', roleIds: ['administrator'] }
 
 const NOTES = {
   name: 'work-notes',
@@ -124,12 +124,12 @@ await test('composition: one-pass substitution, appended inputs, required inputs
 // The permission
 // ---------------------------------------------------------------------------
 
-await test('manageOrgWorkflows: admin by default, withholdable, never user tier', () => {
+await test('manageOrgWorkflows: granted by a role (Administrator has it), never by default', () => {
   assert(ADMIN_PERMISSIONS.includes('manageOrgWorkflows'), 'not an admin permission')
-  assert(can(ADMIN, null, 'manageOrgWorkflows'), 'admin without a role lacks it')
-  assert(!can(ADMIN, { permissions: { admin: { manageAccounts: true } } }, 'manageOrgWorkflows'), 'a narrowing role did not withhold it')
-  assert(can(ADMIN, { permissions: { admin: { manageOrgWorkflows: true } } }, 'manageOrgWorkflows'), 'a workflow-editor role lost it')
-  assert(!can(ALICE, { permissions: { admin: { manageOrgWorkflows: true } } }, 'manageOrgWorkflows'), 'a role granted it to a user')
+  assert(auth.canDo(ADMIN, 'manageOrgWorkflows'), 'an Administrator lacks it')
+  assert(!auth.canDo(ALICE, 'manageOrgWorkflows'), 'Full Access holds it')
+  assert(!can(ADMIN, { permissions: { admin: { manageAccounts: true } } }, 'manageOrgWorkflows'), 'a role without it granted it')
+  assert(can(ALICE, { permissions: { admin: { manageOrgWorkflows: true } } }, 'manageOrgWorkflows'), 'a workflow-editor role did not grant it')
   assert(!can(null, null, 'manageOrgWorkflows'), 'auth-off null account holds it')
   assert(can({ id: 'o', tier: 'owner' }, null, 'manageOrgWorkflows'), 'owner lacks it')
 })
@@ -187,7 +187,7 @@ await test('org routes: writes need manageOrgWorkflows, reads are open', async (
   assert(adminList.json.canEditOrg === true, 'admin not offered org edit')
 })
 
-await test('a role withholding manageOrgWorkflows blocks an admin at the route', async () => {
+await test('an admin whose roles do not grant manageOrgWorkflows is blocked at the route', async () => {
   // Persist a narrowing role and an admin account that holds it, then ask the
   // route as that account — canDo() resolves the role from storage, so this
   // proves the route consults the role and not just the tier.
@@ -196,7 +196,7 @@ await test('a role withholding manageOrgWorkflows blocks an admin at the route',
   const ownerAcct = { ...owner.account, tier: 'owner' }
   const role = auth.saveRole(ownerAcct, { name: 'Accounts only', permissions: { admin: { manageAccounts: true } } })
   assert(role.ok, role.error)
-  const admin = auth.createAccount(ownerAcct, { username: 'narrowed', password: 'narrowed-password-1', tier: 'admin', roleId: role.role.id })
+  const admin = auth.createAccount(ownerAcct, { username: 'narrowed', password: 'narrowed-password-1', roleIds: [role.role.id] })
   assert(admin.ok, admin.error)
   const r = await route('POST', '/workflows/org', admin.account, { ...NOTES, name: 'blocked' })
   assert(r.status === 403, `narrowed admin org create got ${r.status}`)
@@ -232,7 +232,7 @@ await test('MCP server: advertises prompts, scopes by bearer, refuses lost ident
   await startMcpServer(PORT, {})
   try {
     const owner = { id: 'x', tier: 'owner' }
-    const made = auth.createAccount(owner, { username: 'carol', password: 'carol-password-1', tier: 'user' })
+    const made = auth.createAccount(owner, { username: 'carol', password: 'carol-password-1', roleIds: ['full-access'] })
     assert(made.ok, made.error)
     store.createWorkflow(made.account, 'personal', { ...NOTES, name: 'carols', title: 'Carol only' })
     const login = auth.login('carol', 'carol-password-1')

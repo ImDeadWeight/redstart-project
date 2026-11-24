@@ -33,7 +33,11 @@ import {
   CAPABILITY_CONFIG_KEY,
   ADMIN_PERMISSIONS,
   DENY_ALL,
+  combineRoles,
+  permissionsWithin,
+  holdsAnyAdmin,
 } from '../daemon/permissions.mjs'
+import { BUILTIN_ROLES } from '../daemon/roles-storage.mjs'
 import { CAPABILITY_TOOL_NAMES, setPluginCapabilityProvider } from '../daemon/tools-definitions.mjs'
 
 // ---------------------------------------------------------------------------
@@ -438,13 +442,14 @@ await test('an omitted fileSystem flag inherits rather than denying', async () =
 console.log('\n-- admin sub-permissions --')
 
 const owner = { id: 'o', tier: 'owner' }
-const admin = { id: 'a', tier: 'admin' }
-const user = { id: 'u', tier: 'user' }
+const admin = { id: 'a', tier: 'member' }
+const user = { id: 'u', tier: 'member' }
 
-await test('🔍 tier is the ceiling — no role can make a user-tier account an admin', async () => {
-  const godRole = { permissions: { admin: Object.fromEntries(ADMIN_PERMISSIONS.map(p => [p, true])) } }
+await test('🔍 a member holds no administration unless a role grants it', async () => {
   for (const permission of ADMIN_PERMISSIONS) {
-    assert(!can(user, godRole, permission), `a role granted "${permission}" to a user-tier account`)
+    assert(!can(user, null, permission), `a member with no roles held "${permission}"`)
+    assert(!can(user, { permissions: combineRoles([]) }, permission), `an empty combination granted "${permission}"`)
+    assert(!can(user, { permissions: combineRoles([{ permissions: { capabilities: null } }]) }, permission), `a role without an admin block granted "${permission}"`)
   }
 })
 
@@ -455,11 +460,14 @@ await test('the owner holds every admin permission regardless of role', async ()
   }
 })
 
-await test('an admin with no role holds every admin permission (today\'s behaviour)', async () => {
-  for (const permission of ADMIN_PERMISSIONS) {
-    assert(can(admin, null, permission), `an unroled admin lost "${permission}"`)
-    assert(can(admin, { permissions: {} }, permission), `a Full Access admin lost "${permission}"`)
-  }
+await test('an account holds an admin permission when any of its roles grants it', async () => {
+  const combined = { permissions: combineRoles([
+    { permissions: { admin: { manageAccounts: true } } },
+    { permissions: { admin: { manageProjects: true } } },
+  ]) }
+  assert(can(user, combined, 'manageAccounts') && can(user, combined, 'manageProjects'), 'a granted permission was refused')
+  assert(!can(user, combined, 'manageRoles'), 'a permission no role granted was held')
+  assert(holdsAnyAdmin(combined.permissions), 'holdsAnyAdmin missed it')
 })
 
 await test('🔍 a present admin block is an explicit narrowing — omitted keys read as false', async () => {
@@ -473,6 +481,105 @@ await test('an unauthenticated caller holds no admin permission', async () => {
   for (const permission of ADMIN_PERMISSIONS) {
     assert(!can(null, null, permission), `a null account held "${permission}"`)
   }
+})
+
+// ---------------------------------------------------------------------------
+// Additive roles (2026-11-24): combineRoles
+// ---------------------------------------------------------------------------
+
+console.log('\n-- additive roles --')
+
+function randomAdditiveRole() {
+  const p = {}
+  if (chance(0.8)) p.capabilities = chance(0.15) ? null : subset(capabilityIds())
+  if (chance(0.7)) p.webSourceIds = chance(0.2) ? null : subset(WEB_SOURCES)
+  if (chance(0.5)) p.allowWhitelistBypass = chance(0.5)
+  if (chance(0.5)) p.allowWebSearchEngine = chance(0.5)
+  if (chance(0.3)) p.maxFetchTokens = pick([100, 1000, 99999])
+  if (chance(0.6)) p.fileSystem = { allowWrite: chance(0.5), allowDestructive: chance(0.5) }
+  if (chance(0.3)) p.surfaces = subset(['nest-chat', 'twig', 'blueprints'])
+  if (chance(0.4)) p.admin = Object.fromEntries(subset(ADMIN_PERMISSIONS).map(k => [k, true]))
+  if (chance(0.5)) {
+    p.grants = {}
+    for (const cap of ['sqlite', 'git', 'vault']) if (chance(0.6)) p.grants[cap] = chance(0.2) ? null : subset(['a', 'a/x', 'b', 'c/y', 'd'])
+  }
+  return { permissions: p }
+}
+
+await test('🔍 combined roles still NEVER widen the server config — 1500 random role lists', async () => {
+  for (let i = 0; i < 1500; i++) {
+    const config = randomConfig()
+    const held = Array.from({ length: Math.floor(rand() * 4) }, randomAdditiveRole)
+    const why = widenedAnywhere(config, narrowConfig(config, combineRoles(held)))
+    if (why) throw new Error(`case ${i}: ${why}\nroles: ${JSON.stringify(held)}`)
+  }
+  return '1500 cases'
+})
+
+await test('🔍 adding a role never takes anything away — 1500 random pairs', async () => {
+  for (let i = 0; i < 1500; i++) {
+    const config = randomConfig()
+    const a = Array.from({ length: 1 + Math.floor(rand() * 2) }, randomAdditiveRole)
+    const b = randomAdditiveRole()
+    const fewer = combineRoles(a)
+    const more = combineRoles([...a, b])
+    if (!permissionsWithin(fewer, more)) throw new Error(`case ${i}: permissionsWithin says adding a role lost something\n${JSON.stringify({ a, b })}`)
+    const why = widenedAnywhere(narrowConfig(config, more), narrowConfig(config, fewer))
+    if (why) throw new Error(`case ${i}: with one role fewer the config was wider: ${why}\n${JSON.stringify({ a, b })}`)
+  }
+  return '1500 cases'
+})
+
+await test('no roles: no capabilities, no web sources, no search engine, no writes, no administration', async () => {
+  const c = combineRoles([])
+  assert(c.capabilities.length === 0 && c.webSourceIds.length === 0, JSON.stringify(c))
+  assert(c.allowWebSearchEngine === false && c.fileSystem.allowWrite === false && c.fileSystem.allowDestructive === false, JSON.stringify(c))
+  assert(!holdsAnyAdmin(c), 'administration from nothing')
+  assert(c.surfaces === undefined, 'no roles must not lock the account out of every app')
+})
+
+await test('the built-in Full Access and Administrator roles narrow nothing, as "no role" used to', async () => {
+  for (const id of ['full-access', 'administrator']) {
+    const role = BUILTIN_ROLES.find(r => r.id === id)
+    for (let i = 0; i < 300; i++) {
+      const config = randomConfig()
+      const a = JSON.stringify(narrowConfig(config, combineRoles([role])))
+      const b = JSON.stringify(narrowConfig(config, {}))
+      if (a !== b) throw new Error(`${id} narrowed something:\n${a}\n${b}`)
+    }
+  }
+})
+
+await test('lists union, one "all" opens a list, folder grants come only from roles holding the capability', async () => {
+  const c = combineRoles([
+    { permissions: { capabilities: ['git'], grants: { git: ['a'] }, webSourceIds: ['wikipedia'] } },
+    { permissions: { capabilities: ['git', 'sqlite'], grants: { git: ['b'] }, webSourceIds: null } },
+    { permissions: { capabilities: [], grants: { vault: ['secret'] } } },
+  ])
+  assert(JSON.stringify(c.capabilities) === '["git","sqlite"]', JSON.stringify(c.capabilities))
+  assert(JSON.stringify(c.grants.git) === '["a","b"]', `git grants: ${JSON.stringify(c.grants.git)}`)
+  assert(c.grants.sqlite === undefined, 'sqlite held with no folder list must be every folder')
+  assert(JSON.stringify(c.grants.vault) === '[]', 'a folder grant from a role that does not hold Vault leaked through')
+  assert(c.webSourceIds === undefined, 'one role with every web source must open the list')
+})
+
+await test('limits: the most generous fetch cap wins, and apps are limited only when every role limits them', async () => {
+  assert(combineRoles([{ permissions: { maxFetchTokens: 100 } }, { permissions: { maxFetchTokens: 900 } }]).maxFetchTokens === 900, 'max')
+  assert(combineRoles([{ permissions: { maxFetchTokens: 100 } }, { permissions: {} }]).maxFetchTokens === undefined, 'an uncapped role must lift the cap')
+  assert(JSON.stringify(combineRoles([{ permissions: { surfaces: ['twig'] } }, { permissions: { surfaces: ['nest-chat'] } }]).surfaces) === '["nest-chat","twig"]', 'union')
+  assert(combineRoles([{ permissions: { surfaces: ['twig'] } }, { permissions: {} }]).surfaces === undefined, 'a role with no app limit must lift it')
+})
+
+await test('🔍 permissionsWithin: equal sets are within each other; more of anything is not', async () => {
+  for (let i = 0; i < 500; i++) {
+    const c = combineRoles([randomAdditiveRole(), randomAdditiveRole()])
+    if (!permissionsWithin(c, c)) throw new Error(`not within itself: ${JSON.stringify(c)}`)
+  }
+  const base = combineRoles([{ permissions: { capabilities: ['git'] } }])
+  assert(!permissionsWithin(combineRoles([{ permissions: { capabilities: ['git', 'sqlite'] } }]), base), 'an extra capability was within')
+  assert(!permissionsWithin(combineRoles([{ permissions: { capabilities: ['git'], admin: { manageRoles: true } } }]), base), 'an admin permission was within')
+  assert(!permissionsWithin(combineRoles([{ permissions: { capabilities: ['git'], fileSystem: { allowWrite: true } } }]), base), 'file writes were within')
+  assert(permissionsWithin(base, combineRoles([BUILTIN_ROLES.find(r => r.id === 'administrator')])), 'git is not within Administrator')
 })
 
 // ---------------------------------------------------------------------------
