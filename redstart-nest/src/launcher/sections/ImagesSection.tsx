@@ -21,6 +21,7 @@ import { useImageGeneration, imageBlocker } from '../hooks/useImageGeneration'
 import { Card, Chip, Modal, PageHeader, SectionTitle, btnCls, inputCls } from '../components/ui'
 import { ImageModelBrowser } from './ImageModelBrowser'
 import { ModelPickList } from '../components/ModelPickList'
+import { HardwareFacts } from '../components/HubBrowser'
 
 const size = (n: number | null | undefined) => typeof n === 'number' ? (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${Math.round(n / 1024 ** 2)} MB`) : '—'
 const pct = (p: ImageTransferProgress | null) => p?.totalBytes ? Math.min(100, Math.round(((p.receivedBytes ?? 0) / p.totalBytes) * 100)) : 0
@@ -151,11 +152,12 @@ export function ImagesSection({ config, documentsConfigured, onNavigate, hardwar
           <p className="mt-2 text-[13px] text-zinc-500">On an RTX 3060, CUDA made a FLUX schnell picture in 17 s, Vulkan in 37 s.</p>
         </Card>
 
-        <Modal open={finding} title="Find image models on Hugging Face" onClose={() => setFinding(false)} size="lg"
-          footer={<button type="button" onClick={() => setFinding(false)} className={btnCls.secondary}>Done</button>}>
-          <ImageModelBrowser status={status} hardware={hardware} diskFreeBytes={diskFreeBytes} progress={downloadProgress}
+        <Modal open={finding} title="Find image models on Hugging Face" onClose={() => setFinding(false)} size="2xl" flush
+          subtitle={<HardwareFacts hardware={hardware} diskFreeBytes={diskFreeBytes} />}>
+          <ImageModelBrowser status={status} hardware={hardware} progress={downloadProgress}
             onDownload={(req) => { void run(api.capabilities.downloadImageModel(req)) }}
-            onCancel={() => { void run(api.capabilities.cancelImageDownload()) }} />
+            onCancel={() => { void run(api.capabilities.cancelImageDownload()) }}
+            onDone={() => setFinding(false)} />
         </Modal>
 
         <Modal open={!!confirmDelete} title="Delete this image model?" onClose={() => setConfirmDelete(null)} size="sm"

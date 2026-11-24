@@ -149,7 +149,7 @@ export function Modal({ open, title, subtitle, onClose, children, footer, size =
   onClose: () => void
   children: React.ReactNode
   footer?: React.ReactNode
-  size?: 'sm' | 'md' | 'lg' | 'xl'
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
   /** No body padding and no body scroll: the child lays out (and scrolls) its own panes. */
   flush?: boolean
 }) {
@@ -162,7 +162,7 @@ export function Modal({ open, title, subtitle, onClose, children, footer, size =
     return () => { before?.focus?.() }
   }, [open])
   if (!open) return null
-  const width = size === 'sm' ? 'max-w-md' : size === 'lg' ? 'max-w-3xl' : size === 'xl' ? 'max-w-5xl' : 'max-w-xl'
+  const width = size === 'sm' ? 'max-w-md' : size === 'lg' ? 'max-w-3xl' : size === 'xl' ? 'max-w-5xl' : size === '2xl' ? 'max-w-6xl' : 'max-w-xl'
   return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 sm:p-6"

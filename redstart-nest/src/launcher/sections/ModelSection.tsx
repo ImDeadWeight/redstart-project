@@ -21,6 +21,7 @@ import { Card, Modal, PageHeader, SectionTitle, btnCls, inputCls } from '../comp
 import { FolderPicker } from '../components/FolderPicker'
 import { ModelPickList } from '../components/ModelPickList'
 import { HuggingFaceBrowser } from './HuggingFaceBrowser'
+import { HardwareFacts } from '../components/HubBrowser'
 
 const gb = (n: number | null | undefined) => typeof n === 'number' ? `${(n / 1024 ** 3).toFixed(1)} GB` : '—'
 const samePath = (a: string, b: string) => a.replace(/\\/g, '/').toLowerCase() === b.replace(/\\/g, '/').toLowerCase()
@@ -260,9 +261,9 @@ export function ModelSection({
         </div>
       </Card>
 
-      <Modal open={hfOpen} title="Find models on Hugging Face" onClose={() => setHfOpen(false)} size="lg"
-        footer={<button type="button" onClick={() => setHfOpen(false)} className={btnCls.secondary}>Done</button>}>
-        <HuggingFaceBrowser catalog={catalog} hardware={hardware} />
+      <Modal open={hfOpen} title="Find models on Hugging Face" onClose={() => setHfOpen(false)} size="2xl" flush
+        subtitle={<HardwareFacts hardware={hardware} diskFreeBytes={disk.freeBytes} />}>
+        <HuggingFaceBrowser catalog={catalog} hardware={hardware} onDone={() => setHfOpen(false)} />
       </Modal>
 
       <Modal open={!!confirmDelete} title="Delete this model file?" onClose={() => setConfirmDelete(null)} size="sm"
