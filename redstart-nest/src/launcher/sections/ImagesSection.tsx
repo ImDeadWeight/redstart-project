@@ -13,7 +13,7 @@
 // The cost is said plainly: the chat model pauses while a picture is made.
 // =============================================================================
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { getAPI } from '../api/redstart'
 import type { HardwareSpecs, ImageGenerationStatus, ImageModelEntry, ImageTransferProgress, LlamaConfig } from '../types'
 import type { SectionId } from './Sidebar'
@@ -26,7 +26,7 @@ import { HardwareFacts } from '../components/HubBrowser'
 const size = (n: number | null | undefined) => typeof n === 'number' ? (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${Math.round(n / 1024 ** 2)} MB`) : '—'
 const pct = (p: ImageTransferProgress | null) => p?.totalBytes ? Math.min(100, Math.round(((p.receivedBytes ?? 0) / p.totalBytes) * 100)) : 0
 
-export function ImagesSection({ config, documentsConfigured, onNavigate, hardware, diskFreeBytes, modelsDir }: {
+export function ImagesSection({ config, documentsConfigured, onNavigate, hardware, onNeedHardware, diskFreeBytes, modelsDir }: {
   config: LlamaConfig
   documentsConfigured: boolean
   onNavigate: (s: SectionId) => void
@@ -35,9 +35,15 @@ export function ImagesSection({ config, documentsConfigured, onNavigate, hardwar
   diskFreeBytes?: number
   /** The Model page's models folder; image models live in its image/ folder. */
   modelsDir?: string
+  /** Read the hardware (without changing settings) for the browser's memory bars. */
+  onNeedHardware?: () => void
 }) {
   const { status, error, engineProgress, downloadProgress, run } = useImageGeneration()
   const [finding, setFinding] = useState(false)
+  // The models folder, read here when the Model page has not loaded it yet.
+  const [ownModelsDir, setOwnModelsDir] = useState<string>('')
+  useEffect(() => { if (!modelsDir) getAPI()?.settings.getModelsDir().then(setOwnModelsDir).catch(() => {}) }, [modelsDir])
+  const folder = modelsDir || ownModelsDir
   const [confirmDelete, setConfirmDelete] = useState<ImageModelEntry | null>(null)
   const api = getAPI()
 
@@ -88,7 +94,7 @@ export function ImagesSection({ config, documentsConfigured, onNavigate, hardwar
           <SectionTitle className="mb-1">Your image models</SectionTitle>
           <div className="mb-3 flex flex-wrap items-center gap-2 text-sm text-zinc-400">
             <span>Kept in</span>
-            <code className="break-all text-[13px] text-zinc-300">{modelsDir ? `${modelsDir}${modelsDir.includes('\\') ? '\\' : '/'}image` : 'the models folder, under image/'}</code>
+            <code className="break-all text-[13px] text-zinc-300">{folder ? `${folder}${folder.includes('\\') ? '\\' : '/'}image` : 'the models folder, under image/'}</code>
             <button type="button" className={btnCls.subtle} onClick={() => onNavigate('model')}
               data-tip="Image models follow the models folder chosen on the Model page">Change on Model</button>
           </div>
@@ -116,7 +122,7 @@ export function ImagesSection({ config, documentsConfigured, onNavigate, hardwar
           )}
 
           <div className="mt-4 flex flex-wrap gap-2 border-t border-zinc-800 pt-4">
-            <button type="button" className={btnCls.secondary} onClick={() => setFinding(true)}>Find image models on Hugging Face</button>
+            <button type="button" className={btnCls.secondary} onClick={() => { setFinding(true); onNeedHardware?.() }}>Find image models on Hugging Face</button>
           </div>
         </Card>
 

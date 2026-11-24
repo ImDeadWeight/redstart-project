@@ -31,6 +31,14 @@ export function useHardwareAndBinary(
     }))
   }
 
+  // Read the hardware without touching the config, for screens that only show
+  // it (the Hugging Face browsers' memory bars). scanHardware() also resets
+  // threads and GPU layers, which would mark the profile as changed.
+  async function ensureHardware() {
+    if (hardware) return
+    try { setHardware(await api().hardware.scan()) } catch { /* the bars just stay hidden */ }
+  }
+
   async function applyBinaryPath(p: string) {
     await api().settings.setBinaryPath(p)
     setBinaryPath(p)
@@ -46,5 +54,5 @@ export function useHardwareAndBinary(
     setConfig(prev => ({ ...prev, modelPath: p }))
   }
 
-  return { hardware, binaryPath, scanHardware, applyBinaryPath, clearBinaryOverride, applyModelPath }
+  return { hardware, binaryPath, scanHardware, ensureHardware, applyBinaryPath, clearBinaryOverride, applyModelPath }
 }
