@@ -43,6 +43,7 @@ export const INSTALL_REASON = {
   network: 'network',
   installFailed: 'install-failed',
   noEntryPoint: 'no-entry-point',
+  badConstraint: 'bad-constraint',
   cancelled: 'cancelled',
 }
 
@@ -71,6 +72,95 @@ export function buildNpmInstallArgs({ cliPath, spec, dir }) {
     '--no-fund',
     '--loglevel=error',
   ]
+}
+
+// ---------------------------------------------------------------------------
+// Dependency constraints
+// ---------------------------------------------------------------------------
+//
+// A package's dependency ranges are the publisher's, and an open one goes
+// stale: mtg-mcp 0.1.3 declares `mcp>=1.2.0`, so a fresh install resolves
+// mcp 2.x, which removed the FastMCP import it starts with. Constraints let
+// the admin narrow a dependency's version on top of what the package declares
+// — npm `overrides` in the plugin's own package.json, a uv constraints file
+// for pypi. Neither adds a package that is not already in the tree.
+//
+// Validated strictly, because both land somewhere with more power than a
+// version range needs. A uv constraints file accepts option lines
+// (`--index-url ...`), and an npm override value accepts aliases, git URLs and
+// `file:` paths. Each one is a way to swap in code from a source the admin
+// never chose. So: one name plus version comparisons, nothing else, and no
+// line breaks.
+
+const MAX_CONSTRAINTS = 20
+const MAX_CONSTRAINT_LENGTH = 200
+
+// ' *' rather than '\s*' between parts — '\s' matches a newline, which would
+// let one constraint become two lines of the constraints file.
+const PYPI_SPEC = String.raw`(?:===|==|!=|<=|>=|~=|<|>) *[A-Za-z0-9.*+!_-]+`
+const PYPI_CONSTRAINT = new RegExp(String.raw`^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])? *${PYPI_SPEC}(?: *, *${PYPI_SPEC})*$`)
+
+const NPM_NAME = /^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z0-9._-]*$/
+// Semver range characters only — no ':' or '/', which is what keeps out
+// `npm:` aliases, `file:`/`git+` URLs and `user/repo` shorthands; no '$',
+// which keeps out references to the root's own dependency versions.
+const NPM_RANGE = /^[0-9A-Za-z^~<>=*][0-9A-Za-z.^~<>=|*+ -]*$/
+
+function splitNpmConstraint(c) {
+  const at = c.lastIndexOf('@')
+  return at > 0 ? { name: c.slice(0, at), range: c.slice(at + 1).trim() } : null
+}
+
+/**
+ * Validate a source's `constraints` for its kind. A missing or empty list is
+ * valid — constraints are optional.
+ *
+ *   pypi: `mcp<2`, `pydantic>=2,<3` (a name and PEP 440 comparisons)
+ *   npm:  `zod@^3`, `@modelcontextprotocol/sdk@1.29.0` (a name, '@', a range)
+ *
+ * @returns {{ok: true, constraints: string[]} | {ok: false, error: string}}
+ */
+export function normalizeConstraints(kind, raw) {
+  if (raw === undefined || raw === null) return { ok: true, constraints: [] }
+  if (!Array.isArray(raw)) return { ok: false, error: 'constraints must be a list of strings' }
+  const constraints = raw.map((c) => (typeof c === 'string' ? c.trim() : c)).filter((c) => c !== '')
+  if (constraints.length > MAX_CONSTRAINTS) return { ok: false, error: `at most ${MAX_CONSTRAINTS} constraints` }
+
+  const names = new Set()
+  for (const c of constraints) {
+    if (typeof c !== 'string') return { ok: false, error: 'constraints must be a list of strings' }
+    if (c.length > MAX_CONSTRAINT_LENGTH) return { ok: false, error: `constraint too long: "${c.slice(0, 40)}..."` }
+
+    let name
+    if (kind === 'pypi') {
+      if (!PYPI_CONSTRAINT.test(c)) {
+        return { ok: false, error: `"${c}" is not a package name followed by version comparisons, e.g. "mcp<2"` }
+      }
+      name = c.match(/^[A-Za-z0-9._-]+/)[0].toLowerCase().replace(/[._-]+/g, '-') // PEP 503 normalisation
+    } else if (kind === 'npm') {
+      const parts = splitNpmConstraint(c)
+      if (!parts || !NPM_NAME.test(parts.name) || !NPM_RANGE.test(parts.range)) {
+        return { ok: false, error: `"${c}" is not a package name, "@", and a version range, e.g. "zod@^3"` }
+      }
+      name = parts.name.toLowerCase()
+    } else {
+      return { ok: false, error: `a ${kind} source takes no constraints` }
+    }
+
+    if (names.has(name)) return { ok: false, error: `more than one constraint for "${name}"` }
+    names.add(name)
+  }
+  return { ok: true, constraints }
+}
+
+/** npm constraints as the `overrides` object of the plugin's package.json. */
+export function buildNpmOverrides(constraints) {
+  const overrides = {}
+  for (const c of constraints) {
+    const { name, range } = splitNpmConstraint(c)
+    overrides[name] = range
+  }
+  return overrides
 }
 
 // ---------------------------------------------------------------------------
@@ -126,16 +216,21 @@ export function buildNpmInstallArgs({ cliPath, spec, dir }) {
  * process.execPath + [<absolute entry .js>], run with ELECTRON_RUN_AS_NODE=1,
  * shell:false. RESOLVED ONCE, HERE. Never re-resolved at spawn (D5).
  *
- * @param {{id: string, packageName: string, version: string,
+ * `constraints` (see normalizeConstraints) become `overrides` in the
+ * project-root package.json written in step 2.
+ *
+ * @param {{id: string, packageName: string, version: string, constraints?: string[],
  *          onProgress?: (p: object) => void, signal?: AbortSignal}} opts
  * @returns {Promise<{ok: true, dir: string, resolvedVersion: string, integrity: string|null,
  *                    command: string, args: string[]}
  *                 | {ok: false, reason: string, detail?: string}>}
  */
-export async function installNpmPackage({ id, packageName, version, onProgress, signal }) {
+export async function installNpmPackage({ id, packageName, version, constraints, onProgress, signal }) {
   if (typeof id !== 'string' || !PLUGIN_ID_PATTERN.test(id)) {
     return { ok: false, reason: INSTALL_REASON.badId, detail: `invalid plugin id "${id}"` }
   }
+  const checked = normalizeConstraints('npm', constraints)
+  if (!checked.ok) return { ok: false, reason: INSTALL_REASON.badConstraint, detail: checked.error }
   if (signal?.aborted) return { ok: false, reason: INSTALL_REASON.cancelled }
 
   const npm = await detectNpm()
@@ -144,13 +239,12 @@ export async function installNpmPackage({ id, packageName, version, onProgress, 
   const dir = path.join(pluginsRoot(), id)
 
   // A project root of its own — so npm resolves dependencies against THIS
-  // directory rather than walking up into Redstart's own package.json.
+  // directory rather than walking up into Redstart's own package.json. It is
+  // also the only place npm reads `overrides` from.
+  const rootPkg = { name: `redstart-plugin-${id}`, private: true }
+  if (checked.constraints.length > 0) rootPkg.overrides = buildNpmOverrides(checked.constraints)
   fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(
-    path.join(dir, 'package.json'),
-    JSON.stringify({ name: `redstart-plugin-${id}`, private: true }, null, 2) + '\n',
-    'utf8',
-  )
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(rootPkg, null, 2) + '\n', 'utf8')
 
   const spec = `${packageName}@${version}`
   const args = buildNpmInstallArgs({ cliPath: npm.cliPath, spec, dir })
@@ -314,12 +408,47 @@ function readLockfileInfo(dir, packageName) {
 
 /** Argv construction pulled out for the same reason buildNpmInstallArgs is —
  *  asserted directly against the built array, without spawning a real uv. */
-export function buildUvInstallArgs({ spec }) {
-  return ['tool', 'install', '--python-preference', 'only-managed', spec]
+export function buildUvInstallArgs({ spec, constraintsPath }) {
+  // --color never: uv bolds the executable name even when stderr is a pipe,
+  // and the bolded name ("\x1b[1mmtg-mcp\x1b[0m") then became the path of an
+  // .exe that does not exist. parseUvInstallOutput strips ANSI as well, since
+  // FORCE_COLOR / UV_COLOR in the admin's environment can override the flag.
+  const args = ['tool', 'install', '--color', 'never', '--python-preference', 'only-managed']
+  // --constraints, not --with: a constraint narrows a version already in the
+  // tree, where --with would install the named package even if nothing
+  // depends on it.
+  if (constraintsPath) args.push('--constraints', constraintsPath)
+  args.push(spec)
+  return args
 }
 
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// CSI sequences (colour, bold, cursor) — all uv emits in practice.
+const ANSI_PATTERN = /\x1b\[[0-9;?]*[ -/]*[@-~]/g
+
+/**
+ * Read the installed executable names and resolved version out of uv's
+ * stderr. Pulled out of installPypiPackage so the parse — the part that broke
+ * on colourised output — is asserted directly, without a real uv or network.
+ *
+ * @returns {{names: string[], resolvedVersion: string|null}}
+ */
+export function parseUvInstallOutput(stderr, identifier) {
+  const text = stderr.replace(ANSI_PATTERN, '')
+
+  // uv states exactly which console-script(s) it created on success — parse
+  // rather than guess, since a package's script name need not match its pypi
+  // identifier. Verified format live: "Installed 1 executable: cowsay" /
+  // "Installed 2 executables: pip-compile, pip-sync".
+  const execMatch = text.match(/Installed \d+ executables?:\s*(.+)/)
+  const names = execMatch ? execMatch[1].split(',').map((s) => s.trim()).filter(Boolean) : []
+
+  // "+ <name>==<version>" is uv's own resolution confirmation (P4-6).
+  const resolvedMatch = text.match(new RegExp(`\\+\\s+${escapeRegExp(identifier)}==(\\S+)`, 'i'))
+  return { names, resolvedVersion: resolvedMatch ? resolvedMatch[1] : null }
 }
 
 // Distinguishes the taxonomy in INSTALL_REASON from uv's own stderr, mirroring
@@ -345,16 +474,21 @@ function classifyUvFailure(stderr) {
  * own P4-1-equivalent reasoning) — spawn it directly, no process.execPath /
  * ELECTRON_RUN_AS_NODE wrapping the way npm-sourced installs need.
  *
- * @param {{id: string, identifier: string, version: string,
+ * `constraints` (see normalizeConstraints) are written to <dir>/constraints.txt
+ * and passed to uv with --constraints.
+ *
+ * @param {{id: string, identifier: string, version: string, constraints?: string[],
  *          onProgress?: (p: object) => void, signal?: AbortSignal}} opts
  * @returns {Promise<{ok: true, dir: string, resolvedVersion: string, integrity: null,
  *                    command: string, args: string[]}
  *                 | {ok: false, reason: string, detail?: string}>}
  */
-export async function installPypiPackage({ id, identifier, version, onProgress, signal }) {
+export async function installPypiPackage({ id, identifier, version, constraints, onProgress, signal }) {
   if (typeof id !== 'string' || !PLUGIN_ID_PATTERN.test(id)) {
     return { ok: false, reason: INSTALL_REASON.badId, detail: `invalid plugin id "${id}"` }
   }
+  const checked = normalizeConstraints('pypi', constraints)
+  if (!checked.ok) return { ok: false, reason: INSTALL_REASON.badConstraint, detail: checked.error }
   if (signal?.aborted) return { ok: false, reason: INSTALL_REASON.cancelled }
 
   const uv = await detectUv()
@@ -366,8 +500,14 @@ export async function installPypiPackage({ id, identifier, version, onProgress, 
   fs.mkdirSync(toolDir, { recursive: true })
   fs.mkdirSync(binDir, { recursive: true })
 
+  let constraintsPath = null
+  if (checked.constraints.length > 0) {
+    constraintsPath = path.join(dir, 'constraints.txt')
+    fs.writeFileSync(constraintsPath, checked.constraints.join('\n') + '\n', 'utf8')
+  }
+
   const spec = `${identifier}==${version}`
-  const args = buildUvInstallArgs({ spec })
+  const args = buildUvInstallArgs({ spec, constraintsPath })
 
   onProgress?.({ state: 'installing', message: `Installing ${spec}...` })
 
@@ -438,13 +578,10 @@ export async function installPypiPackage({ id, identifier, version, onProgress, 
 
   onProgress?.({ state: 'resolving', message: 'Resolving entry point...' })
 
-  // uv states exactly which console-script(s) it created on success — parse
-  // rather than guess, since a package's script name need not match its pypi
-  // identifier. Verified format live: "Installed 1 executable: cowsay" /
-  // "Installed 2 executables: pip-compile, pip-sync". On stderr, not stdout
-  // (see the capture setup above) — this bit me on the first real run.
-  const execMatch = stderrTail.match(/Installed \d+ executables?:\s*(.+)/)
-  const names = execMatch ? execMatch[1].split(',').map((s) => s.trim()).filter(Boolean) : []
+  // On stderr, not stdout (see the capture setup above) — this bit me on the
+  // first real run.
+  const parsed = parseUvInstallOutput(stderrTail, identifier)
+  const names = parsed.names
   if (names.length === 0) {
     fs.rmSync(dir, { recursive: true, force: true })
     logEvent('plugin', 'install_failed', { plugin: id, reason: INSTALL_REASON.noEntryPoint })
@@ -457,13 +594,11 @@ export async function installPypiPackage({ id, identifier, version, onProgress, 
     return { ok: false, reason: INSTALL_REASON.noEntryPoint, detail: `expected executable not found: ${entryPath}` }
   }
 
-  // "+ <name>==<version>" is uv's own resolution confirmation — read what it
-  // actually resolved (P4-6's principle) rather than trusting the version
-  // string the admin typed, which may have been a range. Falls back to the
-  // requested version if the line's shape ever drifts — not fatal, just
+  // Read what uv actually resolved (P4-6's principle) rather than trusting the
+  // version string the admin typed, which may have been a range. Falls back to
+  // the requested version if the line's shape ever drifts — not fatal, just
   // less precise metadata, same posture readLockfileInfo takes on npm's side.
-  const resolvedMatch = stderrTail.match(new RegExp(`\\+\\s+${escapeRegExp(identifier)}==(\\S+)`, 'i'))
-  const resolvedVersion = resolvedMatch ? resolvedMatch[1] : version
+  const resolvedVersion = parsed.resolvedVersion ?? version
 
   logEvent('plugin', 'installed', { plugin: id, version: resolvedVersion })
 
