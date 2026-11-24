@@ -1365,14 +1365,14 @@ await test('working state: files, open errors, what was found and the plan, buil
   ws.observe(write('src/routes/+page.svelte'), { ok: true, writes: [{ path: 'src/routes/+page.svelte' }] })
   ws.observe(write('src/lib/quote.test.ts'), { ok: true, writes: [{ path: 'src/lib/quote.test.ts', isNew: true }] })
   ws.observe({ name: 'note', args: '{}', kind: 'other' }, { ok: true, note: 'Tests use Vitest; the check is npm run check.' })
-  ws.setPlan([{ step: 'Write the estimator', status: 'completed' }, { step: 'Make the check pass', status: 'in_progress' }])
+  ws.setPlan([{ text: 'Write the estimator', status: 'done' }, { text: 'Make the check pass', status: 'in_progress' }, { text: 'Drop it', status: 'skipped' }])
   const text = ws.render()
   assert(text.startsWith(WORKING_STATE_HEADER), text)
   assert(/created src\/lib\/quote\.test\.ts/.test(text) && /changed src\/routes\/\+page\.svelte/.test(text), text)
   assert(/Error: Cannot assign to constant \(run_command npm run check, 2 times\)/.test(text), text)
   assert(/read_file src\/lib\/quote\.ts: export function calculateQuote/.test(text), text)
   assert(/Tests use Vitest/.test(text), text)
-  assert(/Make the check pass \(in progress\)/.test(text) && !/Write the estimator/.test(text), text)
+  assert(/Make the check pass \(in progress\)/.test(text) && !/Write the estimator|Drop it/.test(text), text)
 })
 
 await test('working state: an error is closed when the same action succeeds; the record stays under its cap', () => {

@@ -39,6 +39,7 @@ const KEEP = { discoveries: 8, errors: 5, fixed: 3, notes: 4, files: 12 };
 /**
  * @typedef {import('./stagnation.mjs').CallInfo} CallInfo
  * @typedef {import('./stagnation.mjs').CallOutcome & { note?: string }} StateOutcome
+ * @typedef {import('./types').PlanStep} PlanStep
  */
 
 /** The first lines of a result that carry something, joined, for a discovery. */
@@ -72,7 +73,7 @@ export function createWorkingState(options = {}) {
 	const discoveries = new Map();
 	/** @type {string[]} */
 	const notes = [];
-	/** @type {{ step: string, status: string }[]} */
+	/** @type {PlanStep[]} */
 	let plan = [];
 
 	const push = (list, item, keep) => {
@@ -124,9 +125,9 @@ export function createWorkingState(options = {}) {
 			}
 		},
 
-		/** @param {{ step: string, status: string }[] | null | undefined} steps */
+		/** @param {readonly PlanStep[] | null | undefined} steps update_plan's steps */
 		setPlan(steps) {
-			plan = Array.isArray(steps) ? steps.map((s) => ({ step: String(s.step), status: String(s.status) })) : [];
+			plan = Array.isArray(steps) ? steps.map((s) => ({ ...s })) : [];
 		},
 
 		/** Nothing recorded yet. */
@@ -151,7 +152,9 @@ export function createWorkingState(options = {}) {
 			const open = [...errors.values()].slice(-KEEP.errors).map((e) => `${e.line} (${e.from}${e.count > 1 ? `, ${e.count} times` : ''})`);
 			let found = [...discoveries].map(([from, gistText]) => `${where(from)}: ${gistText}`);
 			let fixedLines = [...fixed];
-			const open_steps = plan.filter((s) => s.status !== 'completed').map((s) => `${s.step}${s.status === 'in_progress' ? ' (in progress)' : ''}`);
+			const open_steps = plan
+				.filter((s) => s.status === 'pending' || s.status === 'in_progress')
+				.map((s) => `${s.text}${s.status === 'in_progress' ? ' (in progress)' : ''}`);
 
 			const build = () =>
 				[
