@@ -1314,7 +1314,12 @@ await test('stagnation (e): reasoning that grows with nothing new, or keeps reve
   const m3 = createStagnationMonitor()
   m3.startResponse()
   for (let i = 0; i < STAGNATION_LIMITS.reversals; i++) m3.reasoning(`Actually, let me reconsider option ${i}. `)
-  const r3 = step(m3, search('runes'), { ok: true }).recovery
+  // A habit of "actually" in a short stretch is not theorising (Ornith, 4k characters).
+  eq(step(m3, search('runes'), { ok: true }).recovery, null, '8 reversals in a few hundred characters')
+  const m3b = createStagnationMonitor()
+  m3b.startResponse()
+  for (let i = 0; i < STAGNATION_LIMITS.reversals; i++) m3b.reasoning(`Actually, let me reconsider option ${i}. ${'The runes resolve somewhere. '.repeat(70)}`)
+  const r3 = step(m3b, search('runes'), { ok: true }).recovery
   assert(r3?.detector === 'theorizing' && /changed your mind 8 times/.test(r3.evidence), JSON.stringify(r3))
   const m4 = createStagnationMonitor()
   m4.startResponse()
@@ -1353,6 +1358,25 @@ await test('stagnation: a refused call counts as another attempt, without quotin
   step(m, read('note.txt'), { ok: true })
   const { recovery } = step(m, read('note.txt'), { ok: true })
   assert(recovery?.detector === 'same-failure' && /read_file note\.txt failed 3 times/.test(recovery.evidence) && !/not run/i.test(recovery.evidence), JSON.stringify(recovery))
+})
+
+await test('stagnation: real headway since a firing (a write, and a command that now works) starts the next one over at level 1', () => {
+  const m = createStagnationMonitor()
+  const failing = (flag) => step(m, cmd(`npx sv add vitest --${flag}`), { ok: false, text: 'Error: no such add-on' })
+  failing('a'); failing('b')
+  eq(failing('c').recovery?.level, 1, 'first')
+  step(m, write('src/lib/quote.ts'), { ok: true, writes: [{ path: 'src/lib/quote.ts', after: 'v1' }] })
+  step(m, cmd('npm install'), { ok: true })
+  const later = () => step(m, cmd(`npm run check -- --${'xyz'[later.n++]}`), { ok: false, text: 'Error: Cannot find module' })
+  later.n = 0
+  later(); later()
+  eq(later().recovery?.level, 1, 'a new problem after headway is level 1 again')
+  // Without headway in between, it climbs.
+  later.n = 0
+  const again = () => step(m, cmd(`npm run check -- --${'pqr'[again.n++]}`), { ok: false, text: 'Error: Cannot find module' })
+  again.n = 0
+  again(); again()
+  eq(again().recovery?.level, 2, 'the same problem again climbs')
 })
 
 await test('stagnation: no-progress at level 2 pauses searches, not writes', () => {
