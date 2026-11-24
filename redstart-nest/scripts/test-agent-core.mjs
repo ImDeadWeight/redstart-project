@@ -1197,7 +1197,7 @@ const search = (pattern) => ({ name: 'grep', args: JSON.stringify({ pattern }), 
 /** One round of one call: check, record, endRound. */
 function step(m, call, outcome) {
   const refused = m.check(call)
-  m.record(call, refused ? { ok: false, text: refused.refuse } : outcome)
+  m.record(call, refused ? { ok: false, refused: refused.reason } : outcome)
   return { refused, recovery: m.endRound() }
 }
 
@@ -1343,6 +1343,16 @@ await test('stagnation: recovery escalates: a note, then the action refused unti
   eq([third?.level, third?.stop], [3, true], 'level 3 stops')
   assert(/I stopped because I was not making progress/.test(third.note) && /npx sv add: failed/.test(third.note), third.note)
   eq(m.firings.length, 3, 'all three recorded')
+})
+
+await test('stagnation: a refused call counts as another attempt, without quoting the refusal as an error', () => {
+  const m = createStagnationMonitor()
+  for (let i = 0; i < 3; i++) step(m, read('note.txt'), { ok: true, reads: ['note.txt'] })
+  const { refused } = step(m, read('note.txt'), { ok: true })
+  eq(refused?.reason, 'repeated', 'the 4th is refused')
+  step(m, read('note.txt'), { ok: true })
+  const { recovery } = step(m, read('note.txt'), { ok: true })
+  assert(recovery?.detector === 'same-failure' && /read_file note\.txt failed 3 times/.test(recovery.evidence) && !/not run/i.test(recovery.evidence), JSON.stringify(recovery))
 })
 
 await test('stagnation: no-progress at level 2 pauses searches, not writes', () => {

@@ -92,6 +92,8 @@ export const DEBUGGING_PROCEDURE =
  * @typedef {object} CallOutcome
  * @property {boolean} ok it succeeded (a rejected write or command is not a failure, and not ok)
  * @property {boolean} [rejected] the person declined it
+ * @property {'repeated' | 'blocked'} [refused] check() refused it, so it did not run: an
+ *   attempt of the same action, but no error of its own to compare
  * @property {string} [text] the result the model read
  * @property {string[]} [reads] paths it read
  * @property {{ path: string, before?: string, after: string }[]} [writes] files it wrote, when applied
@@ -267,8 +269,11 @@ function describeAction(action) {
 	if (action.startsWith('kind:')) return KIND_PLURAL[action.slice(5)] ?? action.slice(5);
 	const at = action.indexOf(':');
 	if (at === -1) return action;
+	const tool = action.slice(0, at);
 	const target = action.slice(at + 1);
-	return target ? target : action.slice(0, at);
+	if (!target) return tool;
+	// A command's family is its words; anything else reads as tool and target.
+	return /\s/.test(target) ? target : `${tool} ${target}`;
 }
 
 const KIND_PLURAL = { read: 'reads', search: 'searches', write: 'writes', command: 'commands', diagnostics: 'diagnostics', other: 'those calls' };
@@ -460,6 +465,11 @@ export function createStagnationMonitor(overrides = {}) {
 					(call.kind === 'search' && blocked !== 'kind:search') ||
 					(call.kind === 'command' && (blocked === null || !isBlocked(call, blocked)));
 				if (gathers) blocked = null;
+			} else if (outcome.refused) {
+				// Asked for again although refused: the same action, with no new
+				// error (the refusal's own text is not one).
+				failures.push({ round, family, signature: '', wroteBefore: writesApplied });
+				tried.push(`${describeAction(family)}: not run (${outcome.refused === 'repeated' ? 'a repeat' : 'paused'})`);
 			} else if (!outcome.rejected) {
 				const signature = errorSignature(text);
 				failures.push({ round, family, signature, wroteBefore: writesApplied });
