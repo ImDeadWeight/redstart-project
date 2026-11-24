@@ -379,14 +379,15 @@ async function main() {
     assert(res.status === 403, `expected 403, got ${res.status}`)
   })
 
-  await test('🔍 GET /auth/accounts as itadmin -> filtered to User-tier only (least visibility)', async () => {
+  await test('🔍 GET /auth/accounts as itadmin -> everyone listed, only accounts with less access editable', async () => {
     const res = await fetch(`${gw(remoteHost)}/auth/accounts`, { headers: { Authorization: `Bearer ${itAdminToken}` } })
     const body = await json(res)
     assert(res.status === 200, `expected 200, got ${res.status}`)
-    assert(body.accounts.every(a => a.role === 'user'), `expected only user-role accounts, got ${JSON.stringify(body.accounts)}`)
-    assert(body.accounts.some(a => a.username === 'staffuser'), 'expected staffuser to be visible to itadmin')
-    assert(!body.accounts.some(a => a.username === 'owner' || a.username === 'itadmin'),
-      'admin-tier accounts leaked into a sub-admin\'s account list')
+    const by = Object.fromEntries(body.accounts.map(a => [a.username, a]))
+    assert(by.staffuser?.canEdit === true, 'itadmin cannot edit staffuser')
+    assert(by.owner?.canEdit === false, 'itadmin may edit the owner')
+    assert(by.itadmin?.canEdit === false, 'itadmin may edit itself as a peer')
+    assert(body.accounts.every(a => !('passwordHash' in a) && !('apiKeyHash' in a)), 'secrets leaked into the account list')
   })
 
   await test('🔍 DELETE /auth/accounts/:id (owner) as itadmin -> 403 (nobody manages the Owner)', async () => {

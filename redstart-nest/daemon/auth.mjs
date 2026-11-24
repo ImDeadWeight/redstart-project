@@ -19,7 +19,8 @@
 import * as crypto from 'crypto'
 import * as accounts from './accounts-storage.mjs'
 import * as roles from './roles-storage.mjs'
-import { can, allowsSurface, restrictsSurfaces, ADMIN_PERMISSIONS } from './permissions.mjs'
+import * as groups from './groups-storage.mjs'
+import { can, allowsSurface, restrictsSurfaces, combineRoles, permissionsWithin, holdsAnyAdmin } from './permissions.mjs'
 import { validateGrants } from './grant-scope.mjs'
 import { isKnownSurface } from './system-prompt.mjs'
 import * as sessionStore from './sessions-storage.mjs'
@@ -167,53 +168,82 @@ function bearerToken(req) {
 
 function toPublicAccount(record) {
   if (!record) return null
-  const tier = record.tier ?? record.role ?? 'user'
+  const tier = record.tier === 'owner' ? 'owner' : 'member'
+  const isAdmin = tier === 'owner' || holdsAnyAdmin(roleFor(record)?.permissions)
   return {
     id: record.id,
     username: record.username,
     tier,
-    // Mirror of `tier` under its old name — see normalizeAccount in
-    // accounts-storage.mjs for why it is still emitted.
-    role: tier,
-    roleId: record.roleId ?? null,
+    // The old three-tier name, derived: Twig, Blueprints and Yellowscript read
+    // `role` to decide whether to show admin screens, and "admin" there means
+    // "holds some administration", which is what this says.
+    role: tier === 'owner' ? 'owner' : isAdmin ? 'admin' : 'user',
+    isAdmin,
+    roleIds: Array.isArray(record.roleIds) ? record.roleIds : [],
+    groupIds: groups.groupsForAccount(record.id).map(g => g.id),
     apiKeyPrefix: record.apiKeyPrefix,
     createdAt: record.createdAt,
     lastLoginAt: record.lastLoginAt ?? null,
+    status: record.status === 'disabled' ? 'disabled' : 'active',
   }
 }
 
 // ---------------------------------------------------------------------------
-// Role hierarchy — Owner manages Admins and Users; Admin manages Users only;
-// nobody manages the Owner (no transfer-ownership flow yet — the recovery
-// path, if ever needed, is the physical re-bootstrap in Redstart Nest's own
-// launcher, same as the original bootstrap).
+// Who may manage whom
 // ---------------------------------------------------------------------------
+// Nobody manages the owner (recovery is the launcher's re-bootstrap). The owner
+// manages everyone else. Anyone else needs manageAccounts AND may only manage
+// an account with LESS access than their own: every right it holds they hold,
+// and they hold something it does not. That is the general form of the old
+// "an admin manages users, not other admins" — two Administrators cannot
+// delete each other, and only the owner makes a peer of an admin — and it is
+// the same rule as putting someone in a role (resolveRoleAssignment).
 
-function canManage(actor, targetTier) {
-  if (targetTier === 'owner') return false
+function strictlyWithin(inner, outer) {
+  return permissionsWithin(inner, outer) && !permissionsWithin(outer, inner)
+}
+
+function canManage(actor, target) {
+  if (!target || target.tier === 'owner') return false
   if (actor?.tier === 'owner') return true
-  if (actor?.tier === 'admin') return targetTier === 'user'
-  return false
+  if (!canDo(actor, 'manageAccounts')) return false
+  return strictlyWithin(roleFor(target)?.permissions, roleFor(actor)?.permissions)
 }
 
-// Gateway route-level gate: is this account admin-tier or above at all?
-// Fine-grained actor-vs-target checks (e.g. an Admin trying to touch another
-// Admin) happen inside the functions below via canManage(), not here.
+/** Gateway route-level gate: does this account hold any administration? */
 export function hasAdminAccess(account) {
-  return account?.tier === 'admin' || account?.tier === 'owner'
+  if (!account) return false
+  return account.tier === 'owner' || holdsAnyAdmin(roleFor(account)?.permissions)
 }
 
 // ---------------------------------------------------------------------------
-// Role-aware authorization — the entry points routes call.
-//
-// Tier is the ceiling and the role can only lower it (permissions.mjs can()).
-// Kept here rather than at the routes so there is one place that pairs an
-// account with its role; a route that looked the role up itself could forget.
+// Roles an account holds, combined — the entry points routes call.
 // ---------------------------------------------------------------------------
 
-/** The role object governing an account, or null. */
+/** The role records an account holds: its own, then its groups'. */
+export function rolesFor(account) {
+  if (!account) return []
+  const record = account.roleIds ? account : accounts.findById(account.id)
+  const own = Array.isArray(record?.roleIds) ? record.roleIds : []
+  const viaGroups = groups.groupsForAccount(account.id).flatMap(g => g.roleIds)
+  return roles.resolveRoles([...own, ...viaGroups])
+}
+
+/**
+ * The account's roles combined into one role-shaped object, which is what
+ * permissions.mjs reads (resolveEffectiveConfig, can, allowsSurface). Looked
+ * up on every call: a role, group or membership edit applies to the very next
+ * request.
+ */
 export function roleFor(account) {
-  return account ? roles.getRoleForAccount(account) : null
+  if (!account) return null
+  const held = rolesFor(account)
+  return {
+    id: 'combined',
+    name: held.map(r => r.name).join(', ') || 'No roles',
+    roles: held,
+    permissions: combineRoles(held),
+  }
 }
 
 /** May this account perform an admin action? See ADMIN_PERMISSIONS. */
@@ -365,12 +395,13 @@ export function logout(req) {
   if (token) revokeSession(token)
 }
 
-// actor is the caller's own account (from authenticate()) — Owner sees
-// everyone, Admin's view is filtered to User-tier accounts only (principle
-// of least visibility: sub-admins don't need to know who the other admins are).
+// Every account, each saying whether the actor may change it. Admins see
+// everyone now (not only user-tier accounts): with groups and shared projects
+// they pick people by name, and "who are the other admins" is no longer a
+// secret worth the confusion of half a list. What they may CHANGE is still
+// canManage().
 export function listAccounts(actor) {
-  const all = accounts.listAccounts()
-  return actor?.tier === 'owner' ? all : all.filter(a => a.tier === 'user')
+  return accounts.listAccounts().map(a => ({ ...toPublicAccount(a), canEdit: canManage(actor, a) }))
 }
 
 export function getAuthRequired() {
@@ -385,35 +416,41 @@ export function hasOwner() {
   return accounts.hasOwner()
 }
 
-// `tier` defaults to `role`, which is both the back-compat rule (older clients
-// send the tier under its old name) and what keeps these two parameters
-// optional for callers that predate them.
-export function createAccount(actor, { username, password, role, tier = role, roleId = null }) {
-  const targetTier = tier === 'admin' ? 'admin' : 'user'
-  if (!canManage(actor, targetTier)) {
-    return { ok: false, error: 'Not permitted to create an account with this role' }
+/**
+ * Normalise what a caller asks an account to hold. `roleIds` is the new shape;
+ * `roleId` and `tier: 'admin'` are what older clients send.
+ */
+function requestedRoleIds({ roleIds, roleId, tier, role }) {
+  if (Array.isArray(roleIds)) return [...new Set(roleIds.filter(x => typeof x === 'string' && x))]
+  const out = []
+  if ((tier ?? role) === 'admin') out.push('administrator')
+  if (typeof roleId === 'string' && roleId) out.push(roleId)
+  return out.length ? out : [roles.DEFAULT_ROLE_ID]
+}
+
+export function createAccount(actor, { username, password, roleIds, roleId, tier, role }) {
+  if (!actor || (actor.tier !== 'owner' && !canDo(actor, 'manageAccounts'))) {
+    return { ok: false, error: 'Not permitted to create accounts' }
   }
   if (accounts.findByUsername(username)) {
     return { ok: false, error: 'Username already exists' }
   }
-  const assignment = resolveRoleAssignment(actor, roleId)
+  const assignment = resolveRoleAssignment(actor, requestedRoleIds({ roleIds, roleId, tier, role }))
   if (!assignment.ok) return assignment
   // The third door onto the same rule the regenerate paths already guard: an
-  // account-wide key names no app, so issuing one to a surface-restricted role
-  // hands out the bypass at creation time. Checked against the role directly —
-  // the account does not exist yet, so apiKeyBlockedBySurfaceRule has nothing to
-  // read.
-  if (restrictsSurfaces(roles.findRoleById(assignment.roleId))) {
-    return { ok: false, error: 'This role limits which apps the account may connect from, and an account-wide API key carries no app identity. Create the account without this role and assign it after the user has issued a per-connector key.' }
+  // account-wide key names no app, so issuing one to a surface-restricted
+  // account hands out the bypass at creation time.
+  if (restrictsSurfaces({ permissions: combineRoles(roles.resolveRoles(assignment.roleIds)) })) {
+    return { ok: false, error: 'These roles limit which apps the account may connect from, and an account-wide API key carries no app identity. Create the account without them and add them after the user has issued a per-connector key.' }
   }
   const apiKey = generateApiKey()
   const now = new Date().toISOString()
   const record = {
     id: crypto.randomUUID(),
     username,
-    tier: targetTier,
-    role: targetTier,
-    roleId: assignment.roleId,
+    tier: 'member',
+    role: 'member',
+    roleIds: assignment.roleIds,
     ...hashPassword(password),
     apiKeyHash: hashApiKey(apiKey),
     apiKeyPrefix: apiKey.slice(0, 8),
@@ -422,7 +459,7 @@ export function createAccount(actor, { username, password, role, tier = role, ro
     createdBy: actor?.id ?? null,
   }
   const account = accounts.insertAccount(record)
-  return { ok: true, account, apiKey }
+  return { ok: true, account: toPublicAccount(account), apiKey }
 }
 
 // Bootstrap flow only — called from Redstart Nest's own launcher (physical
@@ -439,9 +476,9 @@ export function createOwner({ username, password }) {
     username,
     tier: 'owner',
     role: 'owner',
-    // The owner is never narrowed (permissions.mjs FAIL POSTURE) — this stays
-    // null so nothing can be assigned to it later either.
-    roleId: null,
+    // The owner is never narrowed (permissions.mjs FAIL POSTURE) and holds no
+    // roles, so nothing can be assigned to it later either.
+    roleIds: [],
     ...hashPassword(password),
     apiKeyHash: hashApiKey(apiKey),
     apiKeyPrefix: apiKey.slice(0, 8),
@@ -492,16 +529,19 @@ export function resetOwner({ username, password }) {
 export function deleteAccount(actor, id) {
   const target = accounts.findById(id)
   if (!target) return { ok: false, error: 'Account not found' }
-  if (!canManage(actor, target.tier)) return { ok: false, error: 'Not permitted to delete this account' }
+  if (!canManage(actor, target)) return { ok: false, error: 'Not permitted to delete this account' }
   const removed = accounts.deleteAccount(id)
-  if (removed) revokeSessionsForAccount(id)
+  if (removed) {
+    revokeSessionsForAccount(id)
+    groups.removeMemberEverywhere(id)
+  }
   return { ok: removed }
 }
 
 export function resetPassword(actor, id, newPassword) {
   const target = accounts.findById(id)
   if (!target) return { ok: false, error: 'Account not found' }
-  if (!canManage(actor, target.tier)) return { ok: false, error: 'Not permitted to reset this account' }
+  if (!canManage(actor, target)) return { ok: false, error: 'Not permitted to reset this account' }
   const account = accounts.updateAccount(id, hashPassword(newPassword))
   if (account) revokeSessionsForAccount(id)
   return { ok: true, account }
@@ -518,13 +558,13 @@ export function resetPassword(actor, id, newPassword) {
 function apiKeyBlockedBySurfaceRule(account) {
   const role = roleFor(account)
   if (!restrictsSurfaces(role)) return null
-  return `The "${role?.name}" role limits which apps this account may connect from, and an account-wide API key carries no app identity. Issue a per-connector key instead.`
+  return `This account's roles (${role?.name}) limit which apps it may connect from, and an account-wide API key carries no app identity. Issue a per-connector key instead.`
 }
 
 export function regenerateApiKey(actor, id) {
   const target = accounts.findById(id)
   if (!target) return { ok: false, error: 'Account not found' }
-  if (!canManage(actor, target.tier)) return { ok: false, error: 'Not permitted to modify this account' }
+  if (!canManage(actor, target)) return { ok: false, error: 'Not permitted to modify this account' }
   const blocked = apiKeyBlockedBySurfaceRule(target)
   if (blocked) return { ok: false, error: blocked }
   const apiKey = generateApiKey()
@@ -541,43 +581,61 @@ export function regenerateApiKey(actor, id) {
 // ---------------------------------------------------------------------------
 
 /**
- * Validate a roleId an actor wants to put on an account.
+ * Refuse an actor handing out anything they do not hold themselves.
  *
- * The escalation rule: an admin may not hand out an admin permission they do
- * not themselves hold. Without it, an admin with manageRoles could mint a role
- * carrying managePromptBlocks, assign it to an account they control, and log in
- * as it. The Owner holds everything, so this only ever binds admins.
- */
-/**
- * Refuse an actor handing out an admin permission they do not hold themselves.
- *
- * Shared by role ASSIGNMENT and role DEFINITION because they are the same act one
- * step apart: minting a role that grants managePromptBlocks and assigning it to an
- * account you control is the escalation this stops. An absent `admin` block
- * inherits (grants everything), so it is treated as granting each permission.
+ * With additive roles this covers every field, not only administration: an
+ * admin with manageRoles could otherwise mint a role granting Postgres, assign
+ * it to an account they control, and log in as it. `permissions` is in the
+ * combined (restriction) shape. The owner holds everything.
  */
 function assertNoEscalation(actor, permissions, verb) {
-  for (const permission of ADMIN_PERMISSIONS) {
-    const grants = permissions?.admin
-    const granted = grants === null || grants === undefined || grants[permission] === true
-    if (granted && !canDo(actor, permission)) {
-      return { ok: false, error: `Not permitted to ${verb} "${permission}" — you do not hold it yourself` }
-    }
+  if (actor?.tier === 'owner') return { ok: true }
+  if (!actor) return { ok: false, error: 'Not authenticated' }
+  if (!permissionsWithin(permissions, roleFor(actor)?.permissions)) {
+    return { ok: false, error: `Not permitted to ${verb} something you do not hold yourself` }
   }
   return { ok: true }
 }
 
-function resolveRoleAssignment(actor, roleId) {
-  if (roleId === undefined || roleId === null) return { ok: true, roleId: null }
-  const role = roles.findRoleById(roleId)
-  if (!role) return { ok: false, error: 'Role not found' }
-  const check = assertNoEscalation(actor, role.permissions, 'grant')
-  if (!check.ok) return check
-  return { ok: true, roleId }
+/**
+ * Check the roles an actor wants to put on an account (or a group). The
+ * result must be LESS than the actor holds, not equal — the canManage() rule,
+ * so an admin can never create a peer they then cannot manage.
+ */
+function resolveRoleAssignment(actor, roleIds) {
+  const held = roles.resolveRoles(roleIds)
+  if (held.length !== new Set(roleIds).size) return { ok: false, error: 'Role not found' }
+  if (actor?.tier !== 'owner') {
+    if (!actor) return { ok: false, error: 'Not authenticated' }
+    if (!strictlyWithin(combineRoles(held), roleFor(actor)?.permissions)) {
+      return { ok: false, error: 'Not permitted to give someone as much access as you have, or more. Only the owner can.' }
+    }
+  }
+  return { ok: true, roleIds: held.map(r => r.id) }
 }
 
 export function listRoles() {
   return roles.listRoles()
+}
+
+const ADDITIVE_LISTS = ['capabilities', 'webSourceIds', 'surfaces']
+
+/** A role's permissions as the client sent them, reduced to known fields. */
+function cleanPermissions(p) {
+  const src = p && typeof p === 'object' ? p : {}
+  const out = {}
+  for (const key of ADDITIVE_LISTS) {
+    if (src[key] === null) out[key] = null
+    else if (Array.isArray(src[key])) out[key] = [...new Set(src[key].filter(x => typeof x === 'string'))]
+  }
+  for (const key of ['allowWebSearchEngine', 'allowWhitelistBypass']) if (src[key] === true) out[key] = true
+  out.fileSystem = { allowWrite: src.fileSystem?.allowWrite === true, allowDestructive: src.fileSystem?.allowDestructive === true }
+  if (typeof src.maxFetchTokens === 'number' && src.maxFetchTokens > 0) out.maxFetchTokens = Math.floor(src.maxFetchTokens)
+  if (src.grants && typeof src.grants === 'object') out.grants = src.grants
+  const admin = {}
+  for (const k of Object.keys(src.admin || {})) if (src.admin[k] === true) admin[k] = true
+  out.admin = admin
+  return out
 }
 
 export function saveRole(actor, role) {
@@ -588,7 +646,7 @@ export function saveRole(actor, role) {
     id,
     name: role.name.trim().slice(0, 64),
     description: typeof role.description === 'string' ? role.description.trim().slice(0, 280) : '',
-    permissions: role.permissions && typeof role.permissions === 'object' ? { ...role.permissions } : {},
+    permissions: cleanPermissions(role.permissions),
   }
   // Resource grants (master plan 6.1): folders relative to each shared root,
   // checked here so a stored role can never name a path outside one.
@@ -596,37 +654,130 @@ export function saveRole(actor, role) {
   if (!grants.ok) return { ok: false, error: grants.error }
   if (grants.grants) candidate.permissions.grants = grants.grants
   else delete candidate.permissions.grants
-  // Same escalation rule as assignment: creating a role that grants more than
-  // the actor holds is the same act as assigning one, one step removed.
-  const check = assertNoEscalation(actor, candidate.permissions, 'create a role granting')
+  // Same escalation rule as assignment: defining a role that grants more than
+  // the actor holds is the same act as assigning one, one step removed. An
+  // edit is checked too: it changes what every holder of the role can do.
+  const check = assertNoEscalation(actor, combineRoles([candidate]), 'create a role granting')
   if (!check.ok) return check
+  const existing = roles.findRoleById(id)
+  if (existing) {
+    const before = assertNoEscalation(actor, combineRoles([existing]), 'change a role granting')
+    if (!before.ok) return before
+  }
   return roles.upsertRole(candidate)
 }
 
 /**
- * Delete a role, reassigning its members to Full Access.
+ * Delete a role, taking it off every account and group that held it.
  *
- * Sessions of affected accounts are revoked so nobody keeps operating under a
- * policy that no longer exists — cheap, and the alternative is a window where
- * the effective config depends on when a client last reconnected.
+ * Nothing needs signing out: sessions carry no authority, every request
+ * re-reads the account's roles, and the route closes live MCP sessions so
+ * clients re-list their tools (gateway/auth-routes.mjs policyChanged).
  */
 export function deleteRole(actor, id) {
+  const existing = roles.findRoleById(id)
+  if (!existing) return { ok: false, error: 'Role not found' }
+  const check = assertNoEscalation(actor, combineRoles([existing]), 'delete a role granting')
+  if (!check.ok) return check
   const result = roles.deleteRole(id)
   if (!result.ok) return result
-  const reassigned = accounts.reassignRole(id, null)
+  const reassigned = accounts.removeRoleEverywhere(id)
+  groups.removeRoleEverywhere(id)
   return { ok: true, reassigned }
 }
 
-export function assignRole(actor, accountId, roleId) {
+/**
+ * Set the roles an account holds directly.
+ *
+ * If the new roles limit which apps it may connect from, its account-wide API
+ * key is revoked, because a key that names no app would be the way around that
+ * limit. (Before 2026-11-24 this path forgot to, while creation and key
+ * regeneration refused.) The result says so, so the admin can tell the person.
+ */
+export function assignRoles(actor, accountId, roleIds) {
   const target = accounts.findById(accountId)
   if (!target) return { ok: false, error: 'Account not found' }
-  if (!canManage(actor, target.tier)) return { ok: false, error: 'Not permitted to modify this account' }
-  if (target.tier === 'owner') return { ok: false, error: 'The owner account cannot be assigned a role' }
-  const assignment = resolveRoleAssignment(actor, roleId)
+  if (target.tier === 'owner') return { ok: false, error: 'The owner account holds every permission and cannot be given roles' }
+  if (!canManage(actor, target)) return { ok: false, error: 'Not permitted to modify this account' }
+  const assignment = resolveRoleAssignment(actor, Array.isArray(roleIds) ? roleIds : [])
   if (!assignment.ok) return assignment
-  const account = accounts.updateAccount(accountId, { roleId: assignment.roleId })
+  let account = accounts.updateAccount(accountId, { roleIds: assignment.roleIds })
   if (!account) return { ok: false, error: 'Account not found' }
-  return { ok: true, account }
+  let apiKeyRevoked = false
+  if (target.apiKeyHash && apiKeyBlockedBySurfaceRule(accounts.findById(accountId))) {
+    account = accounts.updateAccount(accountId, { apiKeyHash: null, apiKeyPrefix: null })
+    apiKeyRevoked = true
+  }
+  return { ok: true, account: toPublicAccount(accounts.findById(accountId)), apiKeyRevoked }
+}
+
+/** Back-compat: one role, as the old clients send it. */
+export function assignRole(actor, accountId, roleId) {
+  return assignRoles(actor, accountId, roleId ? [roleId] : [roles.DEFAULT_ROLE_ID])
+}
+
+// ---------------------------------------------------------------------------
+// Groups (groups-storage.mjs)
+// ---------------------------------------------------------------------------
+// Gated on manageAccounts at the route: a group is a way of giving people
+// roles. The escalation rules follow from that:
+//   - the group's roles must be within the actor's own rights;
+//   - every account the edit adds or removes must be one the actor may manage;
+//   - changing the roles of a group, or deleting it, changes what every member
+//     can do, so the actor must be able to manage all of them (the owner can be
+//     in groups — for shared projects — and is unaffected by their roles).
+
+export function listGroups() {
+  return groups.listGroups()
+}
+
+function manageableMembers(actor, memberIds) {
+  for (const id of memberIds) {
+    const member = accounts.findById(id)
+    if (!member || member.tier === 'owner') continue
+    if (!canManage(actor, member)) return { ok: false, error: `Not permitted to change ${member.username}'s access` }
+  }
+  return { ok: true }
+}
+
+export function saveGroup(actor, group) {
+  const id = typeof group?.id === 'string' && group.id ? group.id : crypto.randomUUID()
+  const existing = groups.findGroupById(id)
+  const memberIds = [...new Set((group?.memberIds || []).filter(x => typeof x === 'string'))]
+  for (const m of memberIds) if (!accounts.findById(m)) return { ok: false, error: 'Account not found' }
+  const roleIds = [...new Set((group?.roleIds || []).filter(x => typeof x === 'string'))]
+  const assignment = resolveRoleAssignment(actor, roleIds)
+  if (!assignment.ok) return assignment
+  const before = existing?.memberIds ?? []
+  const rolesChanged = !existing || JSON.stringify([...existing.roleIds].sort()) !== JSON.stringify([...assignment.roleIds].sort())
+  const touched = rolesChanged
+    ? [...new Set([...before, ...memberIds])]
+    : [...memberIds.filter(m => !before.includes(m)), ...before.filter(m => !memberIds.includes(m))]
+  const check = manageableMembers(actor, touched)
+  if (!check.ok) return check
+  return groups.upsertGroup({ id, name: group?.name, description: group?.description, memberIds, roleIds: assignment.roleIds })
+}
+
+export function deleteGroup(actor, id) {
+  const existing = groups.findGroupById(id)
+  if (!existing) return { ok: false, error: 'Group not found' }
+  const check = manageableMembers(actor, existing.memberIds)
+  if (!check.ok) return check
+  return groups.deleteGroup(id)
+}
+
+/**
+ * What an account can reach, for the admin page's preview: its roles (direct
+ * and through which group) and the combined permission set.
+ */
+export function describeAccess(actor, accountId) {
+  const target = accounts.findById(accountId)
+  if (!target) return { ok: false, error: 'Account not found' }
+  if (target.tier === 'owner') return { ok: true, owner: true, roles: [], permissions: null }
+  const direct = roles.resolveRoles(target.roleIds).map(r => ({ id: r.id, name: r.name, via: null }))
+  const viaGroups = groups.groupsForAccount(target.id).flatMap(g =>
+    roles.resolveRoles(g.roleIds).map(r => ({ id: r.id, name: r.name, via: { id: g.id, name: g.name } })))
+  return { ok: true, owner: false, roles: [...direct, ...viaGroups], permissions: roleFor(target).permissions, canEdit: canManage(actor, target) }
 }
 
 // Self-service: a logged-in user rotating their OWN key. No canManage() check
@@ -668,7 +819,7 @@ export function issueClientKey(actor, { surface, label } = {}) {
   // (apiKeyBlockedBySurfaceRule); this is the same rule on the self-service door.
   const role = roleFor(actor)
   if (!allowsSurface(actor, role, surface)) {
-    return { ok: false, error: `The "${role?.name ?? 'assigned'}" role does not permit connecting from this app.` }
+    return { ok: false, error: `Your roles (${role?.name ?? 'none'}) do not permit connecting from this app.` }
   }
 
   const record = accounts.findById(actor.id)

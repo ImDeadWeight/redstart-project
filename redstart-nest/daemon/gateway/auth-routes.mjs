@@ -16,7 +16,7 @@
 // injector, or activeConfig. It talks only to auth.mjs.
 // =============================================================================
 
-import { authenticate, login, logout, listAccounts, getAuthRequired, createAccount, deleteAccount, resetPassword, regenerateApiKey, regenerateOwnApiKey, hasAdminAccess, canDo, issueClientKey, revokeClientKey, getOwnClientKeys, listRoles, saveRole, deleteRole, assignRole } from '../auth.mjs'
+import { authenticate, login, logout, listAccounts, getAuthRequired, createAccount, deleteAccount, resetPassword, regenerateApiKey, regenerateOwnApiKey, hasAdminAccess, canDo, issueClientKey, revokeClientKey, getOwnClientKeys, listRoles, saveRole, deleteRole, assignRole, assignRoles, listGroups, saveGroup, deleteGroup, describeAccess } from '../auth.mjs'
 import { capabilityIds, ADMIN_PERMISSIONS } from '../permissions.mjs'
 import { BUILTIN_TOOLS } from '../tools-definitions.mjs'
 import { getCapabilities } from '../tools-storage.mjs'
@@ -158,7 +158,7 @@ export async function handleAuthRoute(req, res, urlPath) {
     return sendJson(res, 200, { account: result.account, apiKey: result.apiKey })
   }
 
-  // Everything below is administration — admin-tier (Admin or Owner) only,
+  // Everything below is administration — accounts holding some admin permission,
   // regardless of the authRequired toggle (an unauthenticated/bypassed
   // request has no account attached, so it can never satisfy this check).
   //
@@ -169,11 +169,11 @@ export async function handleAuthRoute(req, res, urlPath) {
   // the Owner) happen inside auth.mjs's functions, not here.
   const authResult = authenticate(req)
   if (!authResult.ok) return sendJson(res, 401, { error: 'Unauthorized' })
-  if (!hasAdminAccess(authResult.account)) return sendJson(res, 403, { error: 'Admin role required' })
+  if (!hasAdminAccess(authResult.account)) return sendJson(res, 403, { error: 'An administration permission is required' })
 
   const actor = authResult.account
   const deny = permission =>
-    canDo(actor, permission) ? null : sendJson(res, 403, { error: `Your role does not permit "${permission}"` })
+    canDo(actor, permission) ? null : sendJson(res, 403, { error: `Your roles do not grant "${permission}"` })
 
   // ---------------------------------------------------------------------------
   // Roles — the admin-defined capability layer.
@@ -226,6 +226,38 @@ export async function handleAuthRoute(req, res, urlPath) {
     return sendJson(res, 200, { ok: true, reassigned: result.reassigned })
   }
 
+  // ---------------------------------------------------------------------------
+  // Groups — a way of giving several accounts the same roles, so they need
+  // manageAccounts. Listed before /auth/accounts/:id for the same reason as
+  // roles.
+  // ---------------------------------------------------------------------------
+
+  if (req.method === 'GET' && urlPath === '/auth/groups') {
+    const denied = deny('manageAccounts'); if (denied) return denied
+    return sendJson(res, 200, { groups: listGroups(), canEdit: true })
+  }
+
+  if (req.method === 'POST' && urlPath === '/auth/groups') {
+    const denied = deny('manageAccounts'); if (denied) return denied
+    const body = await readJsonBody(req)
+    const result = saveGroup(actor, body || {})
+    if (!result.ok) return sendJson(res, result.error?.startsWith('Not permitted') ? 403 : 400, { error: result.error })
+    logEvent('auth', 'group_saved', { group: result.group.name })
+    logPolicy('group.saved', { group: result.group.name, members: result.group.memberIds.length, roles: result.group.roleIds, by: actor?.username ?? '(auth off)' })
+    policyChanged()
+    return sendJson(res, 200, { group: result.group })
+  }
+
+  const groupMatch = /^\/auth\/groups\/([^/]+)$/.exec(urlPath)
+  if (groupMatch && req.method === 'DELETE') {
+    const denied = deny('manageAccounts'); if (denied) return denied
+    const result = deleteGroup(actor, groupMatch[1])
+    if (!result.ok) return sendJson(res, result.error === 'Group not found' ? 404 : 403, { error: result.error })
+    logPolicy('group.deleted', { group: groupMatch[1], by: actor?.username ?? '(auth off)' })
+    policyChanged()
+    return sendJson(res, 200, { ok: true })
+  }
+
   if (req.method === 'GET' && urlPath === '/auth/accounts') {
     const denied = deny('manageAccounts'); if (denied) return denied
     return sendJson(res, 200, { accounts: listAccounts(actor), canEdit: canDo(actor, 'manageAccounts') })
@@ -235,12 +267,12 @@ export async function handleAuthRoute(req, res, urlPath) {
     const denied = deny('manageAccounts'); if (denied) return denied
     const body = await readJsonBody(req)
     if (!body?.username || !body?.password) return sendJson(res, 400, { error: 'Username and password required' })
-    const result = createAccount(actor, { username: body.username, password: body.password, tier: body.tier ?? body.role, roleId: body.roleId })
+    const result = createAccount(actor, { username: body.username, password: body.password, roleIds: body.roleIds, tier: body.tier ?? body.role, roleId: body.roleId })
     if (!result.ok) return sendJson(res, result.error?.startsWith('Not permitted') ? 403 : 400, { error: result.error })
     return sendJson(res, 200, { account: result.account, apiKey: result.apiKey })
   }
 
-  const idMatch = /^\/auth\/accounts\/([^/]+)(?:\/(reset-password|regenerate-key|role))?$/.exec(urlPath)
+  const idMatch = /^\/auth\/accounts\/([^/]+)(?:\/(reset-password|regenerate-key|role|roles|access))?$/.exec(urlPath)
   if (idMatch) {
     const [, id, action] = idMatch
     const denied = deny('manageAccounts'); if (denied) return denied
@@ -270,13 +302,24 @@ export async function handleAuthRoute(req, res, urlPath) {
     // place people into roles but not redefine them is a real configuration,
     // and the escalation check in auth.mjs still stops them assigning authority
     // they do not hold themselves.
-    if (req.method === 'PUT' && action === 'role') {
+    if (req.method === 'PUT' && (action === 'role' || action === 'roles')) {
       const body = await readJsonBody(req)
-      const result = assignRole(actor, id, body?.roleId ?? null)
+      // /role takes one roleId (older clients); /roles takes the whole list.
+      const result = action === 'roles'
+        ? assignRoles(actor, id, Array.isArray(body?.roleIds) ? body.roleIds : [])
+        : assignRole(actor, id, body?.roleId ?? null)
       if (!result.ok) return sendJson(res, result.error === 'Account not found' ? 404 : 403, { error: result.error })
-      logEvent('auth', 'role_assigned', { username: result.account.username, roleId: body?.roleId ?? null })
+      logEvent('auth', 'role_assigned', { username: result.account.username, roleIds: result.account.roleIds })
+      logPolicy('account.roles', { username: result.account.username, roles: result.account.roleIds, by: actor?.username ?? '(auth off)' })
       policyChanged()
-      return sendJson(res, 200, { account: result.account })
+      return sendJson(res, 200, { account: result.account, apiKeyRevoked: !!result.apiKeyRevoked })
+    }
+
+    // What this account can reach, and through which role or group.
+    if (req.method === 'GET' && action === 'access') {
+      const result = describeAccess(actor, id)
+      if (!result.ok) return sendJson(res, 404, { error: result.error })
+      return sendJson(res, 200, result)
     }
   }
 

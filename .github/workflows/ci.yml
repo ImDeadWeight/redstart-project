@@ -90,8 +90,14 @@ jobs:
       - name: "Security: task runtime (store, server-owned writes, runner, routes)"
         run: node scripts/test-task-runtime.mjs
 
-      - name: "Security: role narrowing (restrict-only law)"
+      - name: "Security: role narrowing (combined roles never widen the server config)"
         run: node scripts/test-roles.mjs
+
+      - name: "Security: the move to additive roles keeps every account's access"
+        run: node scripts/test-access-migration.mjs
+
+      - name: "Security: groups, several roles per account, only less than you"
+        run: node scripts/test-groups.mjs
 
       - name: "Security: resource grants narrow a shared root to folders, never widen it"
         run: node scripts/test-grants.mjs

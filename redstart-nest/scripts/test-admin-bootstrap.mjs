@@ -340,7 +340,7 @@ await test('a reset cannot take a username another account holds', async () => {
   const res = await bootstrap({ token: readBootstrapToken(), username: 'sub-admin', password: 'owner-pw-7890' })
   assert(res.status === 400, `expected 400, got ${res.status}`)
   const stillAdmin = listAccounts().find(a => a.username === 'sub-admin')
-  assert(stillAdmin?.tier === 'admin', 'the collision promoted an existing account')
+  assert(stillAdmin && stillAdmin.tier !== 'owner', 'the collision promoted an existing account')
 })
 
 await test('🔍 bootstrap is rate limited too', async () => {
