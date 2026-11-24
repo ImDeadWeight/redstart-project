@@ -23,6 +23,9 @@
  */
 export const REGISTRY_BASE = 'https://registry.modelcontextprotocol.io'
 
+/** The most the registry returns in one page (it refuses more with HTTP 422). */
+export const REGISTRY_PAGE_SIZE = 100
+
 /** Verdict states. Every search result gets exactly one — nothing is hidden. */
 export const VERDICT = {
   installable: 'installable',     // ready to install
@@ -46,6 +49,9 @@ export const VERDICT = {
 export async function searchRegistry({ query, cursor, signal } = {}) {
   const url = new URL('/v0.1/servers', REGISTRY_BASE)
   url.searchParams.set('version', 'latest')
+  // The registry's largest page. Most of a page is remote-only servers this
+  // Nest cannot run, so the default page size left a handful of usable rows.
+  url.searchParams.set('limit', String(REGISTRY_PAGE_SIZE))
   if (query) url.searchParams.set('search', query)
   if (cursor) url.searchParams.set('cursor', cursor)
 
@@ -226,5 +232,71 @@ export function formFieldsFor(packageRef) {
     return { fields }
   } catch {
     return { fields: [] }
+  }
+}
+
+// --- What the explorer shows beside a result --------------------------------
+
+/**
+ * A publisher-written link is shown only when it is an absolute https URL.
+ * Anything else (javascript:, data:, file:, http:, a relative path) is
+ * dropped, not repaired: the explorer renders it as a link a person clicks.
+ */
+export function safeHttpsUrl(value) {
+  if (typeof value !== 'string' || !value) return undefined
+  try {
+    const u = new URL(value)
+    return u.protocol === 'https:' && u.hostname ? u.href : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Who published it, read from the reverse-DNS namespace of the server name
+ * (the part before the slash): io.github.<user> is a GitHub account, and any
+ * other namespace is the domain written forwards ("com.pulsemcp" ->
+ * "pulsemcp.com"). The registry verified that namespace when it was
+ * published, which is why it is worth showing.
+ */
+export function publisherFor(serverName) {
+  if (typeof serverName !== 'string' || !serverName.includes('/')) return ''
+  const ns = serverName.split('/')[0]
+  const github = /^io\.github\.(.+)$/i.exec(ns)
+  if (github) return `${github[1]} on GitHub`
+  return ns.split('.').reverse().join('.')
+}
+
+/**
+ * The facts the explorer lists for one entry. Never throws: a malformed
+ * entry gets empty facts, the same posture as verdictFor().
+ *
+ * @returns {{title?: string, publisher: string, updatedAt: string|null,
+ *            repositoryUrl?: string, websiteUrl?: string, remoteUrl?: string}}
+ */
+export function describeEntry(serverEntry) {
+  try {
+    const server = serverEntry?.server ?? {}
+    const official = serverEntry?._meta?.['io.modelcontextprotocol.registry/official'] ?? {}
+    const updatedAt = typeof official.updatedAt === 'string' ? official.updatedAt
+      : typeof official.publishedAt === 'string' ? official.publishedAt : null
+    const repositoryUrl = safeHttpsUrl(server.repository?.url)
+    const websiteUrl = safeHttpsUrl(server.websiteUrl)
+    // A remote-only server is not installed here, but it can be reached from
+    // Tools > External MCP; its address is what that view asks for. The first
+    // https one is enough; a {placeholder} URL needs values a person supplies.
+    const remotes = Array.isArray(server.remotes) ? server.remotes : []
+    const remoteUrl = remotes.map((r) => safeHttpsUrl(r?.url)).find((u) => u && !/%7B|\{/i.test(u))
+    return {
+      title: typeof server.title === 'string' && server.title.trim() ? server.title.trim() : undefined,
+      publisher: publisherFor(server.name),
+      updatedAt: updatedAt && !Number.isNaN(Date.parse(updatedAt)) ? updatedAt : null,
+      repositoryUrl,
+      // Often the repository again; listed once.
+      websiteUrl: websiteUrl && websiteUrl !== repositoryUrl ? websiteUrl : undefined,
+      remoteUrl,
+    }
+  } catch {
+    return { publisher: '', updatedAt: null }
   }
 }

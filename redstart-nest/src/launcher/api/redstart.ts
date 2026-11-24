@@ -299,6 +299,8 @@ export type RedstartAPI = {
     search: (opts: { query?: string; cursor?: string }) => Promise<
       { ok: true; entries: RegistrySearchResult[]; nextCursor: string | null } | { ok: false; error: string }
     >
+    /** Which plugin runtimes this machine has: versions only, never a path. */
+    runtimes: () => Promise<PluginRuntimes>
   }
   events: {
     onTokensPerMinute: (cb: (tpm: number) => void) => void
@@ -415,11 +417,27 @@ export type PluginInstallProgress = {
   message?: string
 }
 
+export type PluginRuntimes = {
+  npm: { ok: true; version: string; nodeVersion?: string } | { ok: false }
+  uv: { ok: true; version: string } | { ok: false }
+}
+
 export type RegistrySearchResult = {
   /** The registry's canonical reverse-DNS identifier, e.g. io.github.artokun/comfyui-mcp. */
   name: string
   /** What a person should see: the registry's own `title` where it has one, else derived. */
   suggestedDisplayName: string
+  /** The registry's own human title, when the publisher gave one. */
+  title?: string
+  /** "j0hanz on GitHub" or "pulsemcp.com", read from the verified namespace. */
+  publisher: string
+  /** When this version was last updated in the registry (ISO), or null. */
+  updatedAt: string | null
+  /** Absolute https links only; the daemon drops any other scheme. */
+  repositoryUrl?: string
+  websiteUrl?: string
+  /** A remote-only server's https address, for Tools > External MCP. */
+  remoteUrl?: string
   description: string
   packageName?: string
   version?: string
