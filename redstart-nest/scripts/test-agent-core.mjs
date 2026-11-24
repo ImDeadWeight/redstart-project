@@ -1320,7 +1320,7 @@ await test('stagnation (e): reasoning that grows with nothing new, or keeps reve
   m3b.startResponse()
   for (let i = 0; i < STAGNATION_LIMITS.reversals; i++) m3b.reasoning(`Actually, let me reconsider option ${i}. ${'The runes resolve somewhere. '.repeat(70)}`)
   const r3 = step(m3b, search('runes'), { ok: true }).recovery
-  assert(r3?.detector === 'theorizing' && /changed your mind 8 times/.test(r3.evidence), JSON.stringify(r3))
+  assert(r3?.detector === 'theorizing' && /with 8 changes of mind/.test(r3.evidence), JSON.stringify(r3))
   const m4 = createStagnationMonitor()
   m4.startResponse()
   m4.reasoning('x'.repeat(STAGNATION_LIMITS.theorizingChars))
@@ -1377,6 +1377,20 @@ await test('stagnation: real headway since a firing (a write, and a command that
   again.n = 0
   again(); again()
   eq(again().recovery?.level, 2, 'the same problem again climbs')
+})
+
+await test("stagnation: the evidence is in no one's voice; the model reads 'you', the person reads 'I'", () => {
+  const m = createStagnationMonitor({ reversalChars: 0 })
+  const all = []
+  for (let n = 0; n < 3; n++) {
+    m.startResponse()
+    for (let i = 0; i < STAGNATION_LIMITS.reversals; i++) m.reasoning(`Actually, option ${n}-${i}. `)
+    all.push(step(m, search(`q${n}`), { ok: true }).recovery)
+  }
+  for (const r of all) assert(!/\b(you|your|I)\b/.test(r.evidence), r.evidence)
+  assert(/^\[You seem to be stuck\./.test(all[0].note), all[0].note)
+  assert(all[2].stop && /^I stopped because I was not making progress\. \d+k characters of reasoning/.test(all[2].note), all[2].note)
+  assert(!/\byou have\b/i.test(all[2].note), all[2].note)
 })
 
 await test('stagnation: no-progress at level 2 pauses searches, not writes', () => {

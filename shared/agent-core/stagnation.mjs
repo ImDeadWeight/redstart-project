@@ -107,7 +107,9 @@ export const DEBUGGING_PROCEDURE =
  * @typedef {object} Recovery
  * @property {Detector} detector
  * @property {1 | 2 | 3} level 1 note, 2 refuse the repeated action, 3 stop
- * @property {string} evidence what was seen, in one or two sentences
+ * @property {string} evidence what was seen, in one or two sentences, in no
+ *   one's voice: the model's note wraps it in "you", the person's summary in
+ *   "I", and a host's timeline line shows it bare
  * @property {string} note what the model reads (levels 1 and 2), or the person (level 3)
  * @property {boolean} stop the run should end here
  * @property {string} [action] what is refused until new evidence (level 2): an
@@ -548,7 +550,7 @@ export function createStagnationMonitor(overrides = {}) {
 					const example = [...counts].sort((x, y) => y[1] - x[1])[0][0];
 					return fire(
 						'reasoning-loop',
-						`Your reasoning is going in a circle: of your last ${sentences.length} sentences, ${repeats} repeat earlier ones (for example "${example.slice(0, 80)}", ${top} times).`
+						`The reasoning is going in a circle: of the last ${sentences.length} sentences, ${repeats} repeat earlier ones (for example "${example.slice(0, 80)}", ${top} times).`
 					);
 				}
 			}
@@ -573,7 +575,7 @@ export function createStagnationMonitor(overrides = {}) {
 			else if (charsSinceEvidence >= limits.theorizingChars || (reversals >= limits.reversals && charsSinceEvidence >= limits.reversalChars)) {
 				recovery = fire(
 					'theorizing',
-					`You have written ${Math.round(charsSinceEvidence / 1000)}k characters of reasoning${reversals ? ` and changed your mind ${reversals} times` : ''} since anything new came back from a tool.`
+					`${Math.round(charsSinceEvidence / 1000)}k characters of reasoning${reversals ? `, with ${reversals} changes of mind,` : ''} since anything new came back from a tool.`
 				);
 			} else if (roundsWithoutProgress >= limits.noProgressRounds) {
 				recovery = fire('no-progress', `The last ${roundsWithoutProgress} rounds found no new error, read no new file and wrote nothing.`);
