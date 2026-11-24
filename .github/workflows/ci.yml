@@ -138,6 +138,9 @@ jobs:
       - name: "Security: KV-cache presets map to types the binary accepts"
         run: node scripts/test-kv-cache.mjs
 
+      - name: "Disable memory-mapping maps to the flag the binary accepts"
+        run: node scripts/test-server-help.mjs
+
       - name: "Chat template override only applied to the model family it fits"
         run: node scripts/test-chat-template-choice.mjs
 

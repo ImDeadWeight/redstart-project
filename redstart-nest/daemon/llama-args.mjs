@@ -3,6 +3,7 @@
 import { isPackaged, resourcesDir } from './platform-paths.mjs'
 import { EMBED_PORT } from './ports.mjs'
 import { kvCacheTypes } from './kv-cache.mjs'
+import { MMAP_OFF_ARGS } from './server-help.mjs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
 
@@ -93,8 +94,15 @@ export function buildArgs(config, raw = false) {
   if (config.priority === 'high') {
     args.push('--prio', '2')
   }
+  // Memory-mapping off. Upstream llama.cpp spells it --load-mode none and
+  // rejects --no-mmap; older and TurboQuant+ builds only know --no-mmap.
+  // mmapOffFlag is set by server-help.mjs's resolveMmap() from the binary's
+  // own --help (null = it could not be asked, so no flag). A config that never
+  // went through it gets the bundled engine's form. Only MMAP_OFF_ARGS' fixed
+  // lists are ever emitted.
   if (config.noMmap) {
-    args.push('--no-mmap')
+    const form = config.mmapOffFlag !== undefined ? config.mmapOffFlag : 'load-mode'
+    if (typeof form === 'string' && Object.hasOwn(MMAP_OFF_ARGS, form)) args.push(...MMAP_OFF_ARGS[form])
   }
   // KV-cache quantization. kvCacheTypes is set by kv-cache.mjs's
   // resolveKvCache(), which the launch and the preview both apply, from the
