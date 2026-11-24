@@ -440,7 +440,7 @@
 									<span class="text-foreground">{r.name}</span>
 									{#if r.via}
 										<span class="flex items-center gap-1 text-muted-foreground">
-											{'·'} through <UsersIcon class="h-3 w-3" />
+											· through <UsersIcon class="h-3 w-3" />
 											{r.via.name}
 										</span>
 									{/if}

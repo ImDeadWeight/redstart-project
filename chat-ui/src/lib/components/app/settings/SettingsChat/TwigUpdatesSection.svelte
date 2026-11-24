@@ -21,10 +21,7 @@
 	let actionError = $state('');
 
 	onMount(() => {
-		api
-			.status()
-			.then((s) => (status = s))
-			.catch(() => {});
+		api.status().then((s) => (status = s)).catch(() => {});
 		return api.onStatus((s) => (status = s));
 	});
 
@@ -41,9 +38,7 @@
 		}
 	}
 
-	const checkedAt = $derived(
-		status?.checkedAt ? new Date(status.checkedAt).toLocaleString() : null
-	);
+	const checkedAt = $derived(status?.checkedAt ? new Date(status.checkedAt).toLocaleString() : null);
 </script>
 
 <div class="space-y-4 border-t border-border/40 pt-6">

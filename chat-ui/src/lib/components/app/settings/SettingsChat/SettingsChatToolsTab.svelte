@@ -62,57 +62,57 @@
 							<span class="w-20 shrink-0 text-center">Always allow</span>
 						</div>
 
-						{#each group.tools as entry (entry.key)}
-							{@const toolName = entry.definition.function.name}
-							{@const isEnabled = toolsStore.isToolEnabled(entry.key)}
-							{@const isServerBanned = toolsStore.serverDisabledTools.has(toolName)}
-							{@const permissionKey = entry.key}
-							{@const isAlwaysAllowed = permissionsStore.hasTool(permissionKey)}
+					{#each group.tools as entry (entry.key)}
+						{@const toolName = entry.definition.function.name}
+						{@const isEnabled = toolsStore.isToolEnabled(entry.key)}
+						{@const isServerBanned = toolsStore.serverDisabledTools.has(toolName)}
+						{@const permissionKey = entry.key}
+						{@const isAlwaysAllowed = permissionsStore.hasTool(permissionKey)}
 
-							<div class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50">
-								<!--
+						<div class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50">
+							<!--
 								Both, deliberately. This list is where a tool is enabled and
 								where a server-side ban shows as a lock, and a ban matches the
 								WIRE NAME — so the name a policy acts on stays legible here even
 								when a friendlier label exists. The picker in the composer shows
 								the label alone; this one is the reference view.
 							-->
-								<div class="flex min-w-0 flex-1 flex-col">
-									<TruncatedText text={entry.displayName} showTooltip={true} />
-									{#if entry.displayName !== toolName}
-										<span class="truncate font-mono text-[11px] text-muted-foreground">
-											{toolName}
-										</span>
-									{/if}
-								</div>
+							<div class="flex min-w-0 flex-1 flex-col">
+								<TruncatedText text={entry.displayName} showTooltip={true} />
+								{#if entry.displayName !== toolName}
+									<span class="truncate font-mono text-[11px] text-muted-foreground">
+										{toolName}
+									</span>
+								{/if}
+							</div>
 
-								<div class="flex w-16 shrink-0 justify-center">
-									{#if isServerBanned}
-										<Lock class="h-4 w-4 text-muted-foreground" />
-									{:else}
-										<Checkbox
-											checked={isEnabled}
-											onCheckedChange={() => toolsStore.toggleTool(entry.key)}
-											class="h-4 w-4"
-										/>
-									{/if}
-								</div>
-
-								<div class="flex w-20 shrink-0 justify-center">
+							<div class="flex w-16 shrink-0 justify-center">
+								{#if isServerBanned}
+									<Lock class="h-4 w-4 text-muted-foreground" />
+								{:else}
 									<Checkbox
-										checked={isAlwaysAllowed}
-										onCheckedChange={() => {
-											if (isAlwaysAllowed) {
-												permissionsStore.revokeTool(permissionKey);
-											} else {
-												permissionsStore.allowTool(permissionKey);
-											}
-										}}
+										checked={isEnabled}
+										onCheckedChange={() => toolsStore.toggleTool(entry.key)}
 										class="h-4 w-4"
 									/>
-								</div>
+								{/if}
 							</div>
-						{/each}
+
+							<div class="flex w-20 shrink-0 justify-center">
+								<Checkbox
+									checked={isAlwaysAllowed}
+									onCheckedChange={() => {
+										if (isAlwaysAllowed) {
+											permissionsStore.revokeTool(permissionKey);
+										} else {
+											permissionsStore.allowTool(permissionKey);
+										}
+									}}
+									class="h-4 w-4"
+								/>
+							</div>
+						</div>
+					{/each}
 					</div>
 				</Collapsible.Content>
 			</Collapsible.Root>

@@ -114,15 +114,14 @@
 	let busyId = $state<string | null>(null);
 
 	const KIND_HELP: Record<MemoryKind, string> = {
-		guidance: "The assistant follows these, within the server's rules.",
+		guidance: 'The assistant follows these, within the server\'s rules.',
 		fact: 'Notes about you. The assistant treats them as information, never as instructions.',
 		state: 'Where a piece of work stood on the date shown. Old ones may no longer be true.'
 	};
 	let grouped = $derived(
-		MEMORY_KINDS.map((kind) => ({
-			kind,
-			items: memories.filter((m) => (m.kind ?? 'fact') === kind)
-		})).filter((g) => g.items.length > 0)
+		MEMORY_KINDS.map((kind) => ({ kind, items: memories.filter((m) => (m.kind ?? 'fact') === kind) })).filter(
+			(g) => g.items.length > 0
+		)
 	);
 
 	async function load() {
@@ -153,10 +152,7 @@
 		}
 		busyId = id;
 		try {
-			const updated = await MemoryService.update(id, draft, null, {
-				kind: draftKind,
-				why: draftWhy.trim() || null
-			});
+			const updated = await MemoryService.update(id, draft, null, { kind: draftKind, why: draftWhy.trim() || null });
 			memories = memories.map((m) => (m.id === id ? updated : m));
 			editingId = null;
 		} catch (e) {
@@ -178,16 +174,16 @@
 		}
 	}
 
-	const fmt = (t: number) =>
-		new Date(t).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+	const fmt = (t: number) => new Date(t).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 </script>
 
 <div class="space-y-4">
 	<p class="text-sm text-muted-foreground">
 		What the assistant remembers about you, across all your chats. The ones that best match how a
-		chat starts, then the newest, are included with it; it can search the rest. Remembering only
-		works when an administrator has turned Memory on for your server, but you can always see and
-		delete what is here. The server's administrator can read this on disk, as with your files.
+		chat starts, then the newest, are included with it; it can search the rest.
+		Remembering only works when an administrator has turned Memory on for your server, but you can
+		always see and delete what is here. The server's administrator can read this on disk, as with
+		your files.
 	</p>
 
 	{#if memoryReviewStore.settingsLoaded && memoryReviewStore.available}
@@ -234,7 +230,7 @@
 								{#if s.scope === 'project'}<span class="ml-1 text-xs text-muted-foreground"
 										>(project)</span
 									>{/if}
-								{#if s.quote}<span class="block text-xs text-muted-foreground italic"
+								{#if s.quote}<span class="block text-xs italic text-muted-foreground"
 										>From your message: “{s.quote}”</span
 									>{/if}
 							</span>
@@ -259,112 +255,78 @@
 	{/if}
 
 	{#if loading}
-		<div class="flex items-center gap-2 text-sm text-muted-foreground">
-			<Loader class="h-4 w-4 animate-spin" /> Loading…
-		</div>
+		<div class="flex items-center gap-2 text-sm text-muted-foreground"><Loader class="h-4 w-4 animate-spin" /> Loading…</div>
 	{:else if error}
 		<div class="text-sm text-destructive">{error}</div>
 	{:else if memories.length === 0}
 		<div class="text-sm text-muted-foreground italic">Nothing remembered yet.</div>
 	{:else}
 		{#each grouped as g (g.kind)}
-			<section class="space-y-2">
-				<div>
-					<div class="text-sm font-medium">{KIND_LABELS[g.kind]}</div>
-					<div class="text-xs text-muted-foreground">{KIND_HELP[g.kind]}</div>
-				</div>
-				<ul class="space-y-2">
-					{#each g.items as m (m.id)}
-						<li class="rounded-lg border border-border/50 p-3">
-							{#if editingId === m.id}
-								<div class="space-y-2">
-									<div class="flex items-center gap-2">
-										<Input bind:value={draft} maxlength={500} class="flex-1" />
-										<Button
-											size="sm"
-											variant="outline"
-											onclick={() => saveEdit(m.id)}
-											disabled={busyId === m.id}
-											aria-label="Save"><Check class="h-4 w-4" /></Button
-										>
-										<Button
-											size="sm"
-											variant="ghost"
-											onclick={() => (editingId = null)}
-											aria-label="Cancel"><X class="h-4 w-4" /></Button
-										>
-									</div>
-									<div class="flex flex-wrap items-center gap-2 text-xs">
-										<label class="flex items-center gap-1">
-											Kind
-											<select
-												bind:value={draftKind}
-												class="rounded border border-border bg-background px-1 py-0.5"
-											>
-												{#each MEMORY_KINDS as k (k)}<option value={k}>{KIND_LABELS[k]}</option
-													>{/each}
-											</select>
-										</label>
-										<Input
-											bind:value={draftWhy}
-											maxlength={300}
-											class="h-7 flex-1 text-xs"
-											placeholder={draftKind === 'guidance'
-												? 'Why (required for how to work)'
-												: 'Why (optional)'}
-										/>
-									</div>
-								</div>
-							{:else}
-								<div class="flex items-start gap-2">
-									<div class="flex-1">
-										<div class="text-sm">{m.text}</div>
-										{#if m.why}
-											<div class="text-xs text-muted-foreground">Because: {m.why}</div>
+		<section class="space-y-2">
+			<div>
+				<div class="text-sm font-medium">{KIND_LABELS[g.kind]}</div>
+				<div class="text-xs text-muted-foreground">{KIND_HELP[g.kind]}</div>
+			</div>
+		<ul class="space-y-2">
+			{#each g.items as m (m.id)}
+				<li class="rounded-lg border border-border/50 p-3">
+					{#if editingId === m.id}
+						<div class="space-y-2">
+							<div class="flex items-center gap-2">
+								<Input bind:value={draft} maxlength={500} class="flex-1" />
+								<Button size="sm" variant="outline" onclick={() => saveEdit(m.id)} disabled={busyId === m.id} aria-label="Save"><Check class="h-4 w-4" /></Button>
+								<Button size="sm" variant="ghost" onclick={() => (editingId = null)} aria-label="Cancel"><X class="h-4 w-4" /></Button>
+							</div>
+							<div class="flex flex-wrap items-center gap-2 text-xs">
+								<label class="flex items-center gap-1">
+									Kind
+									<select bind:value={draftKind} class="rounded border border-border bg-background px-1 py-0.5">
+										{#each MEMORY_KINDS as k (k)}<option value={k}>{KIND_LABELS[k]}</option>{/each}
+									</select>
+								</label>
+								<Input
+									bind:value={draftWhy}
+									maxlength={300}
+									class="h-7 flex-1 text-xs"
+									placeholder={draftKind === 'guidance' ? 'Why (required for how to work)' : 'Why (optional)'}
+								/>
+							</div>
+						</div>
+					{:else}
+						<div class="flex items-start gap-2">
+							<div class="flex-1">
+								<div class="text-sm">{m.text}</div>
+								{#if m.why}
+									<div class="text-xs text-muted-foreground">Because: {m.why}</div>
+								{/if}
+								<div class="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+									{#if stateAge(m)}
+										{@const age = stateAge(m)}
+										<span>as of {age?.date}</span>
+										{#if age?.stale}
+											<span class="text-amber-500" title="Over 60 days old. The assistant is told it may no longer hold.">may be out of date</span>
 										{/if}
-										<div class="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-											{#if stateAge(m)}
-												{@const age = stateAge(m)}
-												<span>as of {age?.date}</span>
-												{#if age?.stale}
-													<span
-														class="text-amber-500"
-														title="Over 60 days old. The assistant is told it may no longer hold."
-														>may be out of date</span
-													>
-												{/if}
-											{:else}
-												<span>{fmt(m.createdAt)}</span>
-											{/if}
-											{#if m.via === 'review'}
-												<span title="Saved by automatic memory">automatic</span>
-											{/if}
-											{#if m.fromWebTurn}
-												<span
-													class="inline-flex items-center gap-1 text-amber-500"
-													title="Saved while the assistant was reading web content. Check it says something you actually told it."
-												>
-													<AlertTriangle class="h-3 w-3" /> saved while reading the web
-												</span>
-											{/if}
-										</div>
-									</div>
-									<Button size="sm" variant="ghost" onclick={() => startEdit(m)} aria-label="Edit"
-										><Pencil class="h-4 w-4" /></Button
-									>
-									<Button
-										size="sm"
-										variant="ghost"
-										onclick={() => remove(m.id)}
-										disabled={busyId === m.id}
-										aria-label="Delete"><Trash2 class="h-4 w-4" /></Button
-									>
+									{:else}
+										<span>{fmt(m.createdAt)}</span>
+									{/if}
+									{#if m.via === 'review'}
+										<span title="Saved by automatic memory">automatic</span>
+									{/if}
+									{#if m.fromWebTurn}
+										<span class="inline-flex items-center gap-1 text-amber-500" title="Saved while the assistant was reading web content. Check it says something you actually told it.">
+											<AlertTriangle class="h-3 w-3" /> saved while reading the web
+										</span>
+									{/if}
 								</div>
-							{/if}
-						</li>
-					{/each}
-				</ul>
-			</section>
+							</div>
+							<Button size="sm" variant="ghost" onclick={() => startEdit(m)} aria-label="Edit"><Pencil class="h-4 w-4" /></Button>
+							<Button size="sm" variant="ghost" onclick={() => remove(m.id)} disabled={busyId === m.id} aria-label="Delete"><Trash2 class="h-4 w-4" /></Button>
+						</div>
+					{/if}
+				</li>
+			{/each}
+		</ul>
+		</section>
 		{/each}
 	{/if}
 </div>
