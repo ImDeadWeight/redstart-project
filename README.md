@@ -22,7 +22,6 @@ LM Studio, Jan and Ollama are model runners — very good ones — aimed at gett
 <p align="center">
   <img src="docs/screenshots/tour.png" width="100%" alt="A tour of Redstart, advancing every few seconds: a chat answering with a comparison table; the Nest admin panel's Overview, Model and Images pages; Nest paused while it makes a picture, and the picture in the chat; Nest's Tools, Network & access and Terminal pages; then the chat's Accounts, Roles and Workflows settings." />
 </p>
-<p align="center"><sub>A short tour that advances on its own: the chat, the Nest admin panel, a picture being made, then the chat's admin settings. Every image below opens full size when clicked.</sub></p>
 
 **The chat** — served by Nest to any browser on your network, or through Redstart Twig.
 
