@@ -94,6 +94,22 @@ await test('quant labels read like the chat model\'s, and every image publisher 
   assert(IMAGE_PUBLISHERS.length > 0 && IMAGE_PUBLISHERS.every((p) => isValidRepoId(`${p.id}/x`) && p.label && p.note), JSON.stringify(IMAGE_PUBLISHERS))
 })
 
+await test('🔍 a search term stays inside the chosen publisher, and sort and family never pass through raw', async () => {
+  const { searchParams, TRUSTED_PUBLISHERS, isValidRepoId } = await import('../daemon/hf-catalog.mjs')
+  const both = searchParams({ query: ' qwen ', publisher: 'unsloth' }, { filter: 'gguf' })
+  assert(both.get('search') === 'qwen' && both.get('author') === 'unsloth' && both.get('filter') === 'gguf', `publisher + term: ${both}`)
+  const all = searchParams({ query: 'qwen', publisher: '' })
+  assert(all.get('search') === 'qwen' && !all.has('author'), `all of Hugging Face: ${all}`)
+  assert(searchParams({ sort: 'updated' }).get('sort') === 'lastModified', 'updated maps to lastModified')
+  assert(searchParams({ sort: 'likes' }).get('sort') === 'likes', 'likes')
+  assert(searchParams({ sort: 'x&author=evil' }).get('sort') === 'downloads', 'an unknown sort falls back to downloads')
+  assert(searchParams({ limit: 5000 }).get('limit') === '100', 'limit is capped')
+  const fam = searchParams({ baseModel: 'black-forest-labs/FLUX.1-schnell' }, { pipeline_tag: 'text-to-image' })
+  assert(fam.get('filter') === 'base_model:black-forest-labs/FLUX.1-schnell' && fam.get('pipeline_tag') === 'text-to-image', `family: ${fam}`)
+  assert(!searchParams({ baseModel: '../etc' }).has('filter'), 'an invalid base model is dropped')
+  assert(TRUSTED_PUBLISHERS.every((p) => isValidRepoId(`${p.id}/x`) && p.label && p.note), JSON.stringify(TRUSTED_PUBLISHERS))
+})
+
 await test('🔍 saved names are one safe component, qualified by repo', () => {
   assert(savedName('leejet/FLUX.1-schnell-gguf', 'flux1-schnell-q4_k.gguf') === 'leejet_FLUX.1-schnell-gguf.flux1-schnell-q4_k.gguf', 'basic')
   for (const [r, f] of [['a/b', '../../x.gguf'], ['a/b', 'dir\\x.safetensors'], ['../x', 'm.gguf'], ['a/b', 'we ird?.safetensors']]) {

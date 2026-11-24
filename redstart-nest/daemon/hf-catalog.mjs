@@ -29,6 +29,12 @@ export const TRUSTED_PUBLISHERS = [
   { id: 'unsloth', label: 'Unsloth', note: 'Dynamic (UD) quants — better quality at the same size' },
   { id: 'bartowski', label: 'bartowski', note: 'Broad model coverage, imatrix quants' },
   { id: 'ggml-org', label: 'ggml-org', note: 'From the llama.cpp maintainers' },
+  // Added 2026-11-24. LM Studio's own picks: new releases converted within
+  // days, one clear repo per model. Qwen is the one major lab that publishes
+  // its own GGUFs, ungated (Google's Gemma GGUFs are gated, so Nest cannot
+  // download them; Mistral's are few).
+  { id: 'lmstudio-community', label: 'LM Studio', note: 'New releases, converted quickly, one repo per model' },
+  { id: 'Qwen', label: 'Qwen', note: 'Official GGUFs from the Qwen team' },
 ]
 
 // ---------------------------------------------------------------------------
@@ -147,13 +153,20 @@ async function apiGet(pathAndQuery) {
   return response.json()
 }
 
-// Search, or list a publisher when `publisher` is set and `query` is empty.
-// Returns the light shape — the Hub omits file sizes here, so the tab shows
-// which quants exist and fetches sizes only when a model is opened.
-export async function searchModels({ query = '', publisher = '', limit = 24 } = {}) {
+// The orders the browser offers, mapped to the Hub's `sort` values. Anything
+// else falls back to downloads: the value goes into a URL, so it is never
+// passed through as given.
+export const SEARCH_SORTS = { downloads: 'downloads', likes: 'likes', updated: 'lastModified' }
+
+/**
+ * The /api/models query for a search. `query` and `publisher` combine: a
+ * publisher with a term searches inside that publisher (the Hub ANDs `author`
+ * and `search`), a term alone searches everyone, a publisher alone lists it.
+ */
+export function searchParams({ query = '', publisher = '', limit = 24, sort = 'downloads', baseModel = '' } = {}, base = {}) {
   const params = new URLSearchParams({
-    filter: 'gguf',
-    sort: 'downloads',
+    ...base,
+    sort: SEARCH_SORTS[sort] || 'downloads',
     direction: '-1',
     limit: String(Math.min(Math.max(1, Number(limit) || 24), 100)),
     // Counterintuitive but verified 2026-08-08: OMITTING `full` returns LESS
@@ -162,9 +175,19 @@ export async function searchModels({ query = '', publisher = '', limit = 24 } = 
     // this function needs; full=true adds card data we do not use.
     full: 'false',
   })
-  if (query.trim()) params.set('search', query.trim())
-  if (publisher.trim()) params.set('author', publisher.trim())
+  if (String(query).trim()) params.set('search', String(query).trim())
+  if (String(publisher).trim()) params.set('author', String(publisher).trim())
+  // Conversions carry their source as a `base_model:<repo>` tag, which is how a
+  // family filter finds FLUX.1 schnell quants whatever their repo is named.
+  if (baseModel && isValidRepoId(baseModel)) params.append('filter', `base_model:${baseModel}`)
+  return params
+}
 
+// Search, list a publisher, or search inside one (see searchParams).
+// Returns the light shape — the Hub omits file sizes here, so the tab shows
+// which quants exist and fetches sizes only when a model is opened.
+export async function searchModels({ query = '', publisher = '', limit = 24, sort = 'downloads' } = {}) {
+  const params = searchParams({ query, publisher, limit, sort }, { filter: 'gguf' })
   const raw = await apiGet(`/api/models?${params}`)
   if (!Array.isArray(raw)) return []
 
@@ -533,16 +556,8 @@ export function imageQuantLabel(rfilename) {
   return parseQuant(rfilename) || String(rfilename).replace(IMAGE_WEIGHT_RE, '')
 }
 
-export async function searchImageModels({ query = '', publisher = '', limit = 24 } = {}) {
-  const params = new URLSearchParams({
-    pipeline_tag: 'text-to-image',
-    sort: 'downloads',
-    direction: '-1',
-    limit: String(Math.min(Math.max(1, Number(limit) || 24), 100)),
-    full: 'false',
-  })
-  if (String(query).trim()) params.set('search', String(query).trim())
-  if (String(publisher).trim()) params.set('author', String(publisher).trim())
+export async function searchImageModels({ query = '', publisher = '', limit = 24, sort = 'downloads', baseModel = '' } = {}) {
+  const params = searchParams({ query, publisher, limit, sort, baseModel }, { pipeline_tag: 'text-to-image' })
   const raw = await apiGet(`/api/models?${params}`)
   if (!Array.isArray(raw)) return []
   return raw.filter(m => isValidRepoId(m?.id)).map(m => {

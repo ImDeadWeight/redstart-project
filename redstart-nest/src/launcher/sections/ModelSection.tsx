@@ -17,9 +17,11 @@ import { useEffect, useState } from 'react'
 import type { LlamaConfig, LocalModelFile } from '../types'
 import type { useHardwareAndBinary } from '../hooks/useHardwareAndBinary'
 import type { ModelCatalogHook } from '../hooks/useModelCatalog'
-import { Card, Chip, Modal, PageHeader, SectionTitle, btnCls, inputCls } from '../components/ui'
+import { Card, Modal, PageHeader, SectionTitle, btnCls, inputCls } from '../components/ui'
 import { FolderPicker } from '../components/FolderPicker'
+import { ModelPickList } from '../components/ModelPickList'
 import { HuggingFaceBrowser } from './HuggingFaceBrowser'
+import { HardwareFacts } from '../components/HubBrowser'
 
 const gb = (n: number | null | undefined) => typeof n === 'number' ? `${(n / 1024 ** 3).toFixed(1)} GB` : '—'
 const samePath = (a: string, b: string) => a.replace(/\\/g, '/').toLowerCase() === b.replace(/\\/g, '/').toLowerCase()
@@ -132,30 +134,16 @@ export function ModelSection({
             onPick={changeFolder} className={btnCls.subtle}>Change</FolderPicker>
         </div>
 
-        {usable.length > 0 ? (
-          <div role="radiogroup" aria-label="Models in the models folder" className="flex max-h-96 flex-col gap-2 overflow-y-auto pr-1">
-            {usable.map(f => {
-              const active = !!modelPath && samePath(f.path, modelPath)
-              return (
-                <div key={f.path} className={`flex flex-wrap items-center gap-3 rounded-xl border px-3.5 py-2.5 ${active ? 'border-orange-500/70 bg-orange-500/5' : 'border-zinc-800 bg-zinc-950/40'}`}>
-                  <div className="min-w-[14rem] flex-1">
-                    <div className="break-all text-sm font-medium text-zinc-100">{f.name}</div>
-                    <div className="text-[13px] text-zinc-500">{gb(f.size)}{f.visionProjector && <span data-tip={`Loads with ${f.visionProjector}, so it can see images`}> · sees images</span>}</div>
-                  </div>
-                  {active
-                    ? <Chip tone="ok">In use</Chip>
-                    : <button type="button" role="radio" aria-checked={false} onClick={() => applyModelPath(f.path)} className={btnCls.chip}>Use this</button>}
-                  <button type="button" onClick={() => setConfirmDelete(f)} className={btnCls.subtle} disabled={active}
-                    data-tip={active ? 'Choose another model before deleting this one' : 'Delete this file from the models folder'} data-tip-end="">
-                    Delete
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-        ) : (
-          <p className="text-sm text-zinc-500">No models in this folder yet. Find one on Hugging Face, or use a .gguf file from somewhere else.</p>
-        )}
+        <ModelPickList label="Models in the models folder"
+          empty="No models in this folder yet. Find one on Hugging Face, or use a .gguf file from somewhere else."
+          rows={usable.map(f => ({
+            key: f.path,
+            title: f.name,
+            detail: <>{gb(f.size)}{f.visionProjector && <span data-tip={`Loads with ${f.visionProjector}, so it can see images`}> · sees images</span>}</>,
+            active: !!modelPath && samePath(f.path, modelPath),
+            onUse: () => applyModelPath(f.path),
+            onDelete: () => setConfirmDelete(f),
+          }))} />
 
         {others.length > 0 && (
           <details className="mt-3">
@@ -273,9 +261,9 @@ export function ModelSection({
         </div>
       </Card>
 
-      <Modal open={hfOpen} title="Find models on Hugging Face" onClose={() => setHfOpen(false)} size="lg"
-        footer={<button type="button" onClick={() => setHfOpen(false)} className={btnCls.secondary}>Done</button>}>
-        <HuggingFaceBrowser catalog={catalog} hardware={hardware} />
+      <Modal open={hfOpen} title="Find models on Hugging Face" onClose={() => setHfOpen(false)} size="2xl" flush
+        subtitle={<HardwareFacts hardware={hardware} diskFreeBytes={disk.freeBytes} />}>
+        <HuggingFaceBrowser catalog={catalog} hardware={hardware} onDone={() => setHfOpen(false)} />
       </Modal>
 
       <Modal open={!!confirmDelete} title="Delete this model file?" onClose={() => setConfirmDelete(null)} size="sm"

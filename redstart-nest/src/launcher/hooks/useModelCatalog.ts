@@ -9,15 +9,17 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api, getAPI } from '../api/redstart'
 import type {
-  CatalogModel, ModelDetail, ModelDescription, ModelArtifact, LocalModelFile, DownloadProgress,
+  CatalogModel, ModelDetail, ModelDescription, ModelArtifact, LocalModelFile, DownloadProgress, SearchSort,
 } from '../types'
 
 export function useModelCatalog() {
   // Off until the user clicks Connect — see the bootstrap note below.
   const [catalogEnabled, setCatalogEnabled] = useState(false)
   const [publishers, setPublishers] = useState<{ id: string; label: string; note: string }[]>([])
+  // '' is all of Hugging Face. A publisher and a search term combine.
   const [publisher, setPublisher] = useState('unsloth')
   const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<SearchSort>('downloads')
   const [models, setModels] = useState<CatalogModel[]>([])
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
@@ -39,6 +41,8 @@ export function useModelCatalog() {
   const [progress, setProgress] = useState<DownloadProgress | null>(null)
   const [downloading, setDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState<string | null>(null)
+  // "Qwen3-8B-GGUF · Q4_K_M" for the download tray, which outlives the detail it was started from.
+  const [downloadLabel, setDownloadLabel] = useState('')
 
   // Guards against an in-flight search landing after a newer one — a slow
   // "qwen" resolving after a fast "llama" would otherwise show the wrong list.
@@ -55,21 +59,22 @@ export function useModelCatalog() {
     if (space.ok) setDisk({ freeBytes: space.freeBytes, totalBytes: space.totalBytes })
   }, [])
 
-  const runSearch = useCallback(async (opts?: { query?: string; publisher?: string }) => {
+  const runSearch = useCallback(async (opts?: { query?: string; publisher?: string; sort?: SearchSort }) => {
     const a = getAPI()
     if (!a) return
     const q = opts?.query ?? query
     const p = opts?.publisher ?? publisher
+    const o = opts?.sort ?? sort
     const seq = ++searchSeq.current
     setSearching(true)
     setSearchError(null)
-    // A search term spans all publishers; a publisher tab lists that publisher.
-    const res = await a.models.search(q.trim() ? { query: q, limit: 30 } : { publisher: p, limit: 30 })
+    // The term searches inside the chosen publisher; '' searches everyone.
+    const res = await a.models.search({ query: q.trim(), publisher: p, sort: o, limit: 50 })
     if (seq !== searchSeq.current) return
     setSearching(false)
     if (res.ok) setModels(res.models || [])
     else { setModels([]); setSearchError(res.error || 'Search failed') }
-  }, [query, publisher])
+  }, [query, publisher, sort])
 
   const openModel = useCallback(async (repoId: string) => {
     const a = getAPI()
@@ -103,6 +108,7 @@ export function useModelCatalog() {
     if (!detail) return
     setDownloading(true)
     setDownloadError(null)
+    setDownloadLabel(`${detail.repoId.split('/').pop()} · ${artifact.quantLabel}`)
     setProgress({ repoId: detail.repoId, artifactId: artifact.id, state: 'downloading', receivedBytes: 0, totalBytes: artifact.totalBytes ?? 0 })
     const res = await api().models.download({
       repoId: detail.repoId, revision: detail.revision, artifact,
@@ -169,12 +175,12 @@ export function useModelCatalog() {
   return {
     catalogEnabled, connectCatalog, openTab,
     publishers, publisher, setPublisher,
-    query, setQuery,
+    query, setQuery, sort, setSort,
     models, searching, searchError, runSearch,
     detail, detailLoading, detailError, description, openModel, closeModel,
     modelsDir, localFiles, disk, localNames,
     refreshLocal, changeFolder, deleteLocal,
-    progress, downloading, downloadError, download, cancelDownload,
+    progress, downloading, downloadError, downloadLabel, download, cancelDownload,
   }
 }
 

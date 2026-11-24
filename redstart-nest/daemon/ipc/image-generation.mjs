@@ -111,7 +111,11 @@ export async function installImageEngine() {
 export async function searchImageModelCatalog(opts) {
   try {
     const o = isPlainObject(opts) ? opts : {}
-    return { ok: true, results: await searchImageModels({ query: String(o.query ?? ''), publisher: String(o.publisher ?? '') }) }
+    return { ok: true, results: await searchImageModels({
+      query: String(o.query ?? ''), publisher: String(o.publisher ?? ''), sort: String(o.sort ?? ''), limit: 50,
+      // A family Nest knows narrows the search to conversions of its base model.
+      baseModel: Object.hasOwn(FAMILIES, String(o.family ?? '')) ? FAMILIES[o.family].baseModels[0] : '',
+    }) }
   } catch (err) {
     return { ok: false, error: err.message, results: [] }
   }
