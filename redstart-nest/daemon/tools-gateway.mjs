@@ -265,6 +265,7 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   const toolsSent = Array.isArray(parsed.tools) ? parsed.tools.length : 0
   const toolsFiltered = toolsAfterBans > toolsSent
 
+  const systemCharsBefore = systemChars(parsed.messages)
   parsed.messages = injectSystemContext([...(parsed.messages || [])], effectiveConfig, {
     hasTools: requestHasTools,
     account,
@@ -286,6 +287,10 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   // prompt the gateway added — and the Tools tab's estimate has never
   // seen any of them.
   const wire = {
+    // What the gateway's composed prompt added, in characters: the client
+    // sizes its context budget over the messages it wrote and cannot count
+    // text it never saw (systemPromptHeaders in completion-route.mjs).
+    systemPromptChars: Math.max(0, systemChars(parsed.messages) - systemCharsBefore),
     toolsOffered,
     toolsAfterBans,
     tools: parsed.tools,
@@ -306,6 +311,17 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   recordWireCost(wire)
 
   return { parsed, wire }
+}
+
+/** Characters of system-message text in `messages`. */
+function systemChars(messages) {
+  let n = 0
+  for (const m of Array.isArray(messages) ? messages : []) {
+    if (m?.role !== 'system') continue
+    if (typeof m.content === 'string') n += m.content.length
+    else if (Array.isArray(m.content)) for (const p of m.content) if (typeof p?.text === 'string') n += p.text.length
+  }
+  return n
 }
 
 // ---------------------------------------------------------------------------

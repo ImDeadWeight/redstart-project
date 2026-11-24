@@ -34,8 +34,9 @@ type Props = {
 
 function sourceLabel(source: PluginSummary['source']): string {
   if (!source) return 'unknown source'
-  if (source.kind === 'npm') return `npm · ${source.packageName}@${source.version}`
-  if (source.kind === 'pypi') return `pypi (uv) · ${source.identifier}@${source.version}`
+  const constrained = source.constraints?.length ? ` · constrained: ${source.constraints.join(', ')}` : ''
+  if (source.kind === 'npm') return `npm · ${source.packageName}@${source.version}${constrained}`
+  if (source.kind === 'pypi') return `pypi (uv) · ${source.identifier}@${source.version}${constrained}`
   if (source.kind === 'path') return `local · ${source.path}`
   return `command · ${source.command}`
 }

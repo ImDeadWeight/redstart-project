@@ -25,6 +25,7 @@ import {
 	stripReasoningContent
 } from './chat/chat-message-convert';
 import { parseErrorResponse } from './chat/chat-errors';
+import { recordRequestOverhead } from './chat/context-overhead';
 import { wireSafeToolCalls } from '$lib/agent-core';
 
 export class ChatService {
@@ -318,6 +319,9 @@ export class ChatService {
 				body: JSON.stringify(requestBody),
 				signal
 			});
+			// What the gateway added, for the context budget (context-overhead.ts):
+			// read on a refusal too, since that is the request most in need of it.
+			recordRequestOverhead(requestBody.tools as unknown[] | undefined, response);
 
 			if (!response.ok) {
 				const error = await parseErrorResponse(response);
