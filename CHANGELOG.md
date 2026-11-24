@@ -4,6 +4,44 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ---
 
+## 2026-11-24
+
+- **Roles add up, accounts hold several, and groups give roles.** The fixed Owner / Admin / User tier plus one restricting role per account became the industry-standard model (Open WebUI, Grafana, GitLab were the references):
+  - **Roles are grants.** An account holds any number of roles, directly or through a **group**, and may do what any of them allows. Administration is permissions that roles give (`manageAccounts`, `manageRoles`, `managePromptBlocks`, `manageOrgWorkflows`, and the new `manageProjects`). Only the Owner keeps a tier.
+  - **Built-in roles:** Administrator (everything, all administration), Full Access (everything, no administration; the default for new accounts) and Restricted.
+  - **How it is enforced:** `permissions.mjs combineRoles()` folds an account's roles into the restriction-shaped set `narrowConfig()` already read. So the rule that nothing can enable what the profile has off still holds, and so does its randomised test, which now also checks that adding a role never removes anything.
+  - **Nobody gives more than they hold.** An admin may give, define or manage only access *less* than their own, across every field, not only administration. So two Administrators cannot manage each other, and only the Owner makes admins. Before this an admin could not hand out admin permissions they lacked, but nothing stopped them handing out capabilities they lacked. With roles that only restricted that was harmless; with additive roles it would be an escalation.
+  - **Migration:** `access-migration.mjs` converts `accounts.json` and `roles.json` once and keeps every account's access exactly as it was. It is crash-safe, and downgrading is not supported. `test-access-migration.mjs` checks it over 300 random old installs. Writing that test found that Shared Documents folder grants would have been dropped (the grant belongs to the document-search capability), fixed before it shipped.
+  - **Fixed:**
+    - Giving an account roles that limit apps now revokes its account-wide API key. Creating the account and regenerating the key already refused it.
+    - `deleteRole` no longer claims to revoke sessions it never revoked.
+  - **Routes:** `/auth/groups`, `PUT /auth/accounts/:id/roles` and `GET /auth/accounts/:id/access` are new. The old `/role` and `tier: "admin"` are still accepted.
+  - **Visibility:** admins now see every account, each marked editable or not.
+  - **Login response:** it adds `isAdmin`, `roleIds`, `groupIds` and `status`. `role` is still `owner` / `admin` / `user`, now derived from permissions, so Twig, Blueprints and Yellowscript keep working.
+- **People & access: users, groups and roles on one page** (chat Settings). It replaces the separate Accounts and Roles tabs.
+  - **Users:** each person's roles and groups, and a summary of what they add up to ("Databases · through Data team"), with password reset, new key and delete. People with as much access as you show read-only.
+  - **Groups:** members and the roles everyone in the group gets.
+  - **Roles:** the editor reads as what the role gives, a new role gives nothing until ticked, and each role lists who holds it.
+  - **Projects:** every project on the server, for admins with `manageProjects`.
+  - Old links to the Accounts and Roles tabs open the matching tab.
+- **Projects can be shared** (plan D7, which left `ownerKey` and an empty `members` list for this).
+  - **Who can do what:** the owner adds people and groups as **Viewers** (open, chat, read) or **Editors** (also change the name, instructions, memory and files). Only the owner shares, hands over or deletes. Admins with `manageProjects` may do all of that to every project.
+  - **Chats are never shared.**
+  - **Memory:** a project's memory is now keyed by the project (`#project:<id>`) instead of its owner. Old keys are renamed when the file is first read, and viewers cannot change it from the routes, the memory tool or memory review.
+  - **Files:** each project has its own folder, `<Documents>/project_files/<id>/`. The file explorer serves it as the space `project-<id>` (read-only for viewers, not found for everyone else). `search_documents` indexes it as a source of its own, labelled "Project:". The old `Projects/<slug>/` folder in the owner's files is moved there the first time it is needed.
+  - **Ownership:** handing a project over keeps the old owner on as an editor. Deleting an account hands its projects to whoever deletes it, and deleting a group takes the group off every project.
+  - **`projects.json`** becomes version 2, one flat list, converted on read.
+  - **UI:** a Share dialog, a read-only project page for viewers, and "shared by" in the projects list.
+  - **Known limit:** the assistant's Documents and File System tools still write to each person's own storage, so a file has to be uploaded to the project to be shared (security.md, Known gaps).
+- Tests:
+  - New suites: `test-access-migration.mjs`, `test-groups.mjs` and `test-project-sharing.mjs`, all in `test:security` and CI.
+  - `test-roles.mjs` gained 7 cases.
+  - Chat UI client tests: `people-page` (6 cases) and `project-sharing` (4 cases).
+  - Suites changed to the new model: `test-auth`, `-workflows`, `-contracts`, `-daemon-security`, `-admin-bootstrap` and `-projects`.
+- Not yet tested:
+  - The pages were rendered and screenshotted headless against faked data, but not clicked against a running Nest.
+  - The README's Accounts and Roles screenshots are now out of date.
+
 ## 2026-11-23
 
 - **Nest bundles upstream llama.cpp instead of the TurboQuant+ fork.** The first Mac test of an Inkling 2 model failed with `unknown pre-tokenizer type: 'inkling2'`: the pinned fork (`tqp-v0.4.0`) predates that architecture, and every new model family waits on the fork's next rebase. The fork's only feature Nest used was its turbo KV-cache types, and that was worth less than it looked: against upstream's own `q4_0` V cache, turbo3 saves about a quarter more on V, or under a tenth of the whole cache.

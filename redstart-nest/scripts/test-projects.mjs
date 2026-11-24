@@ -1,5 +1,5 @@
 // =============================================================================
-// Projects — personal, owner-only, chats move out on delete (projects-plan)
+// Projects — isolation from non-members, chats move out on delete (projects-plan; sharing: test-project-sharing.mjs)
 // =============================================================================
 // Pinned here:
 //   - validation: a name is required and bounded, instructions are bounded,
