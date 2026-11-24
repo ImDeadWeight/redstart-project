@@ -8,11 +8,24 @@
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
-	import { NetworkDiscovery, type DiscoveredServer, type NetworkDiscoveryPlugin } from '$lib/plugins/network-discovery';
+	import {
+		NetworkDiscovery,
+		type DiscoveredServer,
+		type NetworkDiscoveryPlugin
+	} from '$lib/plugins/network-discovery';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
-	import { Wifi, RefreshCw, Check, AlertCircle, Loader, FolderOpen, Plus, Trash2 } from '@lucide/svelte';
+	import {
+		Wifi,
+		RefreshCw,
+		Check,
+		AlertCircle,
+		Loader,
+		FolderOpen,
+		Plus,
+		Trash2
+	} from '@lucide/svelte';
 
 	// ── State ─────────────────────────────────────────────────────────────────
 
@@ -193,7 +206,8 @@
 			const result = await discovery.scanForServers({ subnet: info.subnet, timeout: 400 });
 			discovered = result.servers;
 			if (discovered.length === 0) {
-				scanError = 'No Redstart Nest servers found. Make sure a model is running on Redstart Nest.';
+				scanError =
+					'No Redstart Nest servers found. Make sure a model is running on Redstart Nest.';
 			}
 		} catch (e) {
 			scanError = e instanceof Error ? e.message : 'Scan failed';
@@ -237,7 +251,12 @@
 		{/if}
 
 		<div class="flex gap-2">
-			<Button variant="outline" size="sm" onclick={testConnection} disabled={testStatus === 'testing'}>
+			<Button
+				variant="outline"
+				size="sm"
+				onclick={testConnection}
+				disabled={testStatus === 'testing'}
+			>
 				{#if testStatus === 'testing'}
 					<Loader class="h-3.5 w-3.5 animate-spin" /> Testing…
 				{:else}
@@ -253,9 +272,7 @@
 			<div class="flex items-center justify-between">
 				<div>
 					<h4 class="text-sm font-medium">Discover on Network</h4>
-					<p class="text-xs text-muted-foreground">
-						Scan the local network for llama.cpp servers.
-					</p>
+					<p class="text-xs text-muted-foreground">Scan the local network for llama.cpp servers.</p>
 				</div>
 				<Button variant="outline" size="sm" onclick={scanNetwork} disabled={scanning}>
 					{#if scanning}
@@ -274,7 +291,9 @@
 			{#if discovered.length > 0}
 				<ul class="space-y-2">
 					{#each discovered as server}
-						<li class="flex items-center justify-between rounded-md border border-border/50 bg-muted/30 px-3 py-2">
+						<li
+							class="flex items-center justify-between rounded-md border border-border/50 bg-muted/30 px-3 py-2"
+						>
 							<div>
 								<p class="font-mono text-sm">{server.url}</p>
 								<p class="text-xs text-muted-foreground">{server.ip}:{server.port}</p>
@@ -303,7 +322,7 @@
 			{#if localFsRoot}
 				<p class="flex items-center gap-1.5 text-sm">
 					<Check class="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" />
-					<span class="break-all font-mono text-xs">{localFsRoot}</span>
+					<span class="font-mono text-xs break-all">{localFsRoot}</span>
 				</p>
 			{:else}
 				<p class="text-xs text-muted-foreground">
@@ -329,20 +348,24 @@
 				<h4 class="text-sm font-medium">Local MCP Servers (desktop)</h4>
 				<p class="text-xs text-muted-foreground">
 					Run MCP servers as local processes on this PC — the Claude Desktop model. Servers are
-					stored in <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">twig-mcp.json</code>
-					and their tools appear in the chat tool picker. Commands run with your user account's
-					permissions — only add servers you trust.
+					stored in <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">twig-mcp.json</code
+					>
+					and their tools appear in the chat tool picker. Commands run with your user account's permissions
+					— only add servers you trust.
 				</p>
 			</div>
 
 			{#if localMcpServers.length > 0}
 				<ul class="space-y-2">
 					{#each localMcpServers as server (server.id)}
-						<li class="flex items-center justify-between rounded-md border border-border/50 bg-muted/30 px-3 py-2">
+						<li
+							class="flex items-center justify-between rounded-md border border-border/50 bg-muted/30 px-3 py-2"
+						>
 							<div class="min-w-0">
 								<p class="text-sm font-medium">{server.id}</p>
-								<p class="break-all font-mono text-xs text-muted-foreground">
-									{server.command} {server.args.join(' ')}
+								<p class="font-mono text-xs break-all text-muted-foreground">
+									{server.command}
+									{server.args.join(' ')}
 								</p>
 							</div>
 							<div class="flex shrink-0 items-center gap-2">
@@ -406,9 +429,7 @@
 	<!-- Reload note -->
 	<div class="border-t border-border/40 pt-6">
 		<div class="flex items-center justify-between">
-			<p class="text-xs text-muted-foreground">
-				Changes take effect after reloading the app.
-			</p>
+			<p class="text-xs text-muted-foreground">Changes take effect after reloading the app.</p>
 			<Button variant="outline" size="sm" onclick={() => window.location.reload()}>
 				<RefreshCw class="h-3.5 w-3.5" /> Reload app
 			</Button>

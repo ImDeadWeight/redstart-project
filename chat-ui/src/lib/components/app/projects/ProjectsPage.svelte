@@ -1,7 +1,8 @@
 <script lang="ts">
 	/**
-	 * The Projects list (projects-plan Phase 2): every project of the signed-in
-	 * account, how many chats each holds, and a form to start one. One project
+	 * The Projects list (projects-plan Phase 2): the signed-in account's
+	 * projects and those shared with it (marked "shared by"), how many of its
+	 * own chats each holds, and a form to start one. One project
 	 * opens on its own page (ProjectPage).
 	 */
 	import { goto } from '$app/navigation';
@@ -116,7 +117,16 @@
 					>
 						<FolderKanban class="h-4 w-4 shrink-0 text-muted-foreground" />
 						<div class="min-w-0 flex-1">
-							<div class="truncate font-medium">{project.name}</div>
+							<div class="flex items-center gap-2">
+								<span class="truncate font-medium">{project.name}</span>
+								{#if project.access !== 'owner' && project.ownerName}
+									<span class="shrink-0 text-xs text-muted-foreground">
+										shared by {project.ownerName}{project.access === 'viewer' ? ' · view only' : ''}
+									</span>
+								{:else if project.members?.length}
+									<span class="shrink-0 text-xs text-muted-foreground">shared</span>
+								{/if}
+							</div>
 							{#if project.instructions}
 								<div class="truncate text-sm text-muted-foreground">{project.instructions}</div>
 							{/if}

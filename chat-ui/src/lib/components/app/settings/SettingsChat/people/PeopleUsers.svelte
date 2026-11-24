@@ -482,6 +482,9 @@
 								<Button size="sm" variant="ghost" onclick={() => (confirmDelete = false)}
 									>Cancel</Button
 								>
+								<p class="w-full text-xs text-muted-foreground">
+									Projects {selected.username} owns become yours, shared as they are now.
+								</p>
 							{:else}
 								<Button
 									size="sm"

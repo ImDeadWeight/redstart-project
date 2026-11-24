@@ -170,13 +170,14 @@
 		<Dialog.Header>
 			<Dialog.Title>New connector key</Dialog.Title>
 			<Dialog.Description>
-				Copy it now — it is shown once and only its hash is stored, so it cannot be retrieved
-				again. Revoking and re-issuing is the way to recover from a lost key.
+				Copy it now — it is shown once and only its hash is stored, so it cannot be retrieved again.
+				Revoking and re-issuing is the way to recover from a lost key.
 			</Dialog.Description>
 		</Dialog.Header>
 
 		<div class="flex items-center gap-2">
-			<code class="flex-1 truncate rounded bg-muted px-2 py-2 font-mono text-sm">{revealedKey}</code>
+			<code class="flex-1 truncate rounded bg-muted px-2 py-2 font-mono text-sm">{revealedKey}</code
+			>
 			<Button
 				variant="outline"
 				size="icon"

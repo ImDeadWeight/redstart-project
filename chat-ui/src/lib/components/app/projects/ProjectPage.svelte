@@ -3,11 +3,13 @@
 	 * One project (projects-plan Phase 2): its chats, its instructions, its own
 	 * memory and its files folder, plus New chat and Delete.
 	 *
-	 * Everything here is the owner's: Nest answers 404 to anyone else, so a
-	 * missing project and a foreign one look the same. Deleting moves the
-	 * project's chats out to the ordinary list (the user's decision), deletes
-	 * its memories and leaves its files folder on disk; the confirmation says
-	 * exactly that.
+	 * A project can be shared (2026-11-24): `project.access` says what the
+	 * signed-in account may do. Viewers see everything read-only; editors also
+	 * change it; the owner (or an admin who manages every project) also shares,
+	 * hands over and deletes it. Nest answers 404 to anyone it isn't shared
+	 * with. Chats listed here are the viewer's own — chats are never shared.
+	 * Deleting moves each person's chats in it out to their ordinary list,
+	 * deletes its memories and leaves its files folder on the server.
 	 */
 	import { goto } from '$app/navigation';
 	import {
@@ -21,7 +23,9 @@
 		Upload,
 		Download,
 		X,
-		Pencil
+		Pencil,
+		Share2,
+		Eye
 	} from '@lucide/svelte';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
@@ -30,7 +34,13 @@
 	import { DialogConfirmation } from '$lib/components/app';
 	import { ROUTES } from '$lib/constants/routes';
 	import { RouterService } from '$lib/services/router.service';
-	import { ProjectService, PROJECT_FILES_SPACE, type Project } from '$lib/services/project.service';
+	import {
+		ProjectService,
+		canEditProject,
+		canManageProject,
+		type Project
+	} from '$lib/services/project.service';
+	import ProjectShareDialog from './ProjectShareDialog.svelte';
 	import { MemoryService, type Memory } from '$lib/services/memory.service';
 	import { FilesService, type FileEntry } from '$lib/services/files.service';
 	import { projectsStore } from '$lib/stores/projects.svelte';
@@ -61,6 +71,14 @@
 	let fileInput: HTMLInputElement | undefined = $state();
 
 	let showDelete = $state(false);
+	let showShare = $state(false);
+
+	const canEdit = $derived(canEditProject(project));
+	const canManage = $derived(canManageProject(project));
+	// An older Nest sends no members or access: read that as the owner's own project.
+	const shared = $derived(
+		!!project && ((project.members?.length ?? 0) > 0 || (project.access ?? 'owner') !== 'owner')
+	);
 
 	let chats = $derived(
 		conversations()
@@ -102,7 +120,7 @@
 	async function loadFiles() {
 		if (!project) return;
 		try {
-			files = (await FilesService.list(PROJECT_FILES_SPACE, project.folder)).entries;
+			files = (await FilesService.list(project.folder, '.')).entries;
 			filesError = '';
 		} catch (e) {
 			files = [];
@@ -195,7 +213,7 @@
 		uploading = true;
 		try {
 			for (const file of picked) {
-				await FilesService.upload(PROJECT_FILES_SPACE, project.folder, file);
+				await FilesService.upload(project.folder, '.', file);
 			}
 			toast.success(
 				picked.length === 1 ? `Added ${picked[0].name}` : `Added ${picked.length} files`
@@ -235,7 +253,9 @@
 		</div>
 	{:else if notFound || !project}
 		<div class="space-y-2">
-			<p class="text-sm text-muted-foreground">This project doesn't exist, or isn't yours.</p>
+			<p class="text-sm text-muted-foreground">
+				This project doesn't exist, or isn't shared with you.
+			</p>
 			<a class="text-sm underline" href={ROUTES.PROJECTS}>All projects</a>
 		</div>
 	{:else}
@@ -257,34 +277,55 @@
 				{:else}
 					<button
 						class="group flex max-w-full items-center gap-2 text-left"
-						onclick={() => (renaming = true)}
-						title="Rename"
+						onclick={() => canEdit && (renaming = true)}
+						title={canEdit ? 'Rename' : undefined}
+						disabled={!canEdit}
 					>
 						<h1 class="truncate text-lg font-semibold">{project.name}</h1>
-						<Pencil class="h-3.5 w-3.5 shrink-0 opacity-0 group-hover:opacity-60" />
+						{#if canEdit}<Pencil
+								class="h-3.5 w-3.5 shrink-0 opacity-0 group-hover:opacity-60"
+							/>{/if}
 					</button>
 				{/if}
-				<a class="text-sm text-muted-foreground hover:underline" href={ROUTES.PROJECTS}>
-					All projects
-				</a>
+				<div class="flex flex-wrap items-center gap-x-2 text-sm text-muted-foreground">
+					<a class="hover:underline" href={ROUTES.PROJECTS}>All projects</a>
+					{#if project.access && project.access !== 'owner' && project.ownerName}
+						<span>· shared by {project.ownerName}</span>
+					{/if}
+					{#if project.access === 'viewer'}
+						<span class="flex items-center gap-1"><Eye class="h-3 w-3" /> you can view</span>
+					{:else if project.access === 'editor'}
+						<span>· you can edit</span>
+					{:else if project.access === 'admin'}
+						<span>· you manage every project</span>
+					{:else if project.members?.length}
+						<span>· shared with {project.members.length}</span>
+					{/if}
+				</div>
 			</div>
 
 			<Button size="sm" onclick={() => goto(RouterService.newChatInProject(id))}>
 				<Plus class="h-3 w-3" /> New chat
 			</Button>
-			<Button
-				size="sm"
-				variant="ghost"
-				onclick={() => (showDelete = true)}
-				aria-label="Delete project"
-			>
-				<Trash2 class="h-4 w-4" />
-			</Button>
+			{#if canManage}
+				<Button size="sm" variant="outline" onclick={() => (showShare = true)}>
+					<Share2 class="h-3 w-3" /> Share
+				</Button>
+				<Button
+					size="sm"
+					variant="ghost"
+					onclick={() => (showDelete = true)}
+					aria-label="Delete project"
+				>
+					<Trash2 class="h-4 w-4" />
+				</Button>
+			{/if}
 		</div>
 
 		<section class="space-y-2">
 			<h2 class="flex items-center gap-1.5 text-sm font-medium">
-				<MessageSquare class="h-4 w-4" /> Chats
+				<MessageSquare class="h-4 w-4" />
+				{shared ? 'Your chats' : 'Chats'}
 			</h2>
 			{#if chats.length === 0}
 				<div class="text-sm text-muted-foreground italic">
@@ -312,7 +353,7 @@
 		<section class="space-y-2">
 			<div class="flex items-center justify-between gap-2">
 				<h2 class="text-sm font-medium">Instructions</h2>
-				<div class="flex gap-1">
+				<div class="flex gap-1" class:hidden={!canEdit}>
 					<input
 						type="file"
 						accept=".md,text/markdown,text/plain"
@@ -341,6 +382,7 @@
 			</div>
 			<Textarea
 				bind:value={instructionsDraft}
+				readonly={!canEdit}
 				rows={6}
 				maxlength={projectsStore.limits?.maxInstructionsChars}
 				placeholder="What every chat in this project should know or do."
@@ -350,13 +392,15 @@
 					Added to every chat in this project. They guide the assistant's work here but can't change
 					its rules or permissions.
 				</span>
-				<Button
-					size="sm"
-					onclick={saveInstructions}
-					disabled={!instructionsChanged || savingInstructions}
-				>
-					{#if savingInstructions}<Loader class="h-4 w-4 animate-spin" />{/if} Save
-				</Button>
+				{#if canEdit}
+					<Button
+						size="sm"
+						onclick={saveInstructions}
+						disabled={!instructionsChanged || savingInstructions}
+					>
+						{#if savingInstructions}<Loader class="h-4 w-4 animate-spin" />{/if} Save
+					</Button>
+				{/if}
 			</div>
 		</section>
 
@@ -365,13 +409,14 @@
 				<Brain class="h-4 w-4" /> Project memory
 			</h2>
 			<p class="text-xs text-muted-foreground">
-				Facts about this project, shared by its chats. The assistant can add to it; it's deleted
-				with the project.
+				Facts about this project, shared by its chats{shared ? ' and everyone in it' : ''}. The
+				assistant can add to it{canEdit ? '' : ' when an editor is chatting'}; it's deleted with the
+				project.
 			</p>
 			{#if memoryError}
 				<div class="text-sm text-destructive">{memoryError}</div>
 			{/if}
-			<div class="flex gap-2">
+			<div class="flex gap-2" class:hidden={!canEdit}>
 				<Input
 					bind:value={memoryDraft}
 					placeholder="The billing service deploys on Fridays"
@@ -387,13 +432,15 @@
 					{#each memories as memory (memory.id)}
 						<li class="flex items-start gap-2 rounded px-2 py-1 text-sm hover:bg-accent/30">
 							<span class="flex-1">{memory.text}</span>
-							<button
-								class="text-muted-foreground hover:text-foreground"
-								onclick={() => forget(memory)}
-								aria-label="Forget"
-							>
-								<X class="h-3.5 w-3.5" />
-							</button>
+							{#if canEdit}
+								<button
+									class="text-muted-foreground hover:text-foreground"
+									onclick={() => forget(memory)}
+									aria-label="Forget"
+								>
+									<X class="h-3.5 w-3.5" />
+								</button>
+							{/if}
 						</li>
 					{/each}
 				</ul>
@@ -405,7 +452,7 @@
 				<h2 class="flex items-center gap-1.5 text-sm font-medium">
 					<FileText class="h-4 w-4" /> Files
 				</h2>
-				{#if !filesError}
+				{#if !filesError && canEdit}
 					<input bind:this={fileInput} type="file" multiple class="hidden" onchange={upload} />
 					<Button
 						size="sm"
@@ -420,7 +467,8 @@
 				{/if}
 			</div>
 			<p class="text-xs text-muted-foreground">
-				In <code>{project.folder}</code> in your Documents. Chats in this project search these first.
+				The project's own folder{shared ? ', shared by everyone in it' : ''}. Chats in this project
+				search these first.
 			</p>
 			{#if filesError}
 				<div class="text-sm text-muted-foreground">{filesError}</div>
@@ -440,11 +488,22 @@
 	{/if}
 </div>
 
+{#if project && canManage}
+	<ProjectShareDialog
+		bind:open={showShare}
+		{project}
+		onChanged={(p) => {
+			project = p;
+			void projectsStore.refresh();
+		}}
+	/>
+{/if}
+
 <DialogConfirmation
 	bind:open={showDelete}
 	title="Delete project"
 	description={project
-		? `Delete "${project.name}"? Its ${chats.length === 1 ? 'chat moves' : `${chats.length} chats move`} back to your chat list, and its project memory is deleted. Its files stay in ${project.folder}.`
+		? `Delete "${project.name}"? Everyone's chats in it move back to their own chat lists, and its project memory is deleted. Its files stay in its folder on the server.`
 		: ''}
 	confirmText="Delete project"
 	cancelText="Cancel"

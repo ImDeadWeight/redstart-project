@@ -7,10 +7,12 @@
 	import PeopleUsers from './people/PeopleUsers.svelte';
 	import PeopleGroups from './people/PeopleGroups.svelte';
 	import PeopleRoles from './people/PeopleRoles.svelte';
+	import PeopleProjects from './people/PeopleProjects.svelte';
+	import { ProjectService, type Project } from '$lib/services/project.service';
 
 	interface Props {
 		/** Open on this tab; the old Accounts and Roles links land here. */
-		initialTab?: 'users' | 'groups' | 'roles';
+		initialTab?: 'users' | 'groups' | 'roles' | 'projects';
 	}
 	let { initialTab = 'users' }: Props = $props();
 
@@ -19,12 +21,17 @@
 	let error = $state('');
 	// Read once on purpose: SettingsChat re-creates this page when the link changes.
 	// svelte-ignore state_referenced_locally
-	let tab = $state<'users' | 'groups' | 'roles'>(initialTab);
+	let tab = $state<'users' | 'groups' | 'roles' | 'projects'>(initialTab);
+	// Every project, for an admin whose roles grant manageProjects; null otherwise.
+	let allProjects = $state<Project[] | null>(null);
 
 	async function reload() {
 		error = '';
 		try {
-			data = await loadPeople();
+			[data, allProjects] = await Promise.all([
+				loadPeople(),
+				ProjectService.listAll().catch(() => null)
+			]);
 			// An admin who cannot manage accounts sees Roles only.
 			if (!data.accounts && tab !== 'roles') tab = 'roles';
 		} catch (e) {
@@ -45,7 +52,13 @@
 				show: !!data?.accounts
 			},
 			{ id: 'groups' as const, label: 'Groups', count: data?.groups?.length, show: !!data?.groups },
-			{ id: 'roles' as const, label: 'Roles', count: data?.roles.length, show: true }
+			{ id: 'roles' as const, label: 'Roles', count: data?.roles.length, show: true },
+			{
+				id: 'projects' as const,
+				label: 'Projects',
+				count: allProjects?.length,
+				show: !!allProjects
+			}
 		].filter((t) => t.show)
 	);
 </script>
@@ -89,6 +102,8 @@
 			<PeopleUsers {data} {reload} />
 		{:else if tab === 'groups' && data.groups}
 			<PeopleGroups {data} {reload} />
+		{:else if tab === 'projects' && allProjects}
+			<PeopleProjects bind:projects={allProjects} />
 		{:else}
 			<PeopleRoles {data} {reload} />
 		{/if}

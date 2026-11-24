@@ -113,7 +113,9 @@
 		{/if}
 
 		{#if !canEdit}
-			<div class="flex items-start gap-2 rounded-md border border-border/40 bg-muted/40 p-3 text-sm">
+			<div
+				class="flex items-start gap-2 rounded-md border border-border/40 bg-muted/40 p-3 text-sm"
+			>
 				<ShieldAlert class="mt-0.5 h-4 w-4 shrink-0" />
 				<div>
 					<p class="font-medium">Read-only</p>
@@ -225,9 +227,7 @@
 				{/if}
 
 				{#if !egress.hasEgress}
-					<p class="text-muted-foreground">
-						No tool currently reaches outside this machine.
-					</p>
+					<p class="text-muted-foreground">No tool currently reaches outside this machine.</p>
 				{/if}
 			</div>
 		{/if}
