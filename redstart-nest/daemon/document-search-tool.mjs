@@ -77,7 +77,6 @@ export function toolDefs(cfg) {
       'Returns the most relevant passages, numbered, each naming its file. Use it when the user asks what their documents say, or refers to a file they gave you. ' +
       'Cite every claim from a passage with its number and file name, e.g. [2] contract.pdf, and say plainly when nothing relevant was found rather than answering from memory. ' +
       'When the organization has a shared documents folder it searches the parts of it this user may read too, and marks those passages "Shared:". ' +
-      'In a project chat it searches the project\'s own files first (shared by everyone in the project) and marks those passages "Project:". ' +
       'It does not search the web or databases. To read a whole file of the user\'s own, use read_document with the path shown. ' +
       'Example: {"query": "termination notice period"}',
     inputSchema: {
