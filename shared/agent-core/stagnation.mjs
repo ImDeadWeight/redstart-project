@@ -2,8 +2,8 @@
  * agent-core/stagnation — noticing a run that has stopped getting anywhere,
  * and what to do about it.
  *
- * The exact-repeat guard (the same call, the same arguments, a fourth time)
- * was the only check, and the first SvelteKit benchmark ("Crestline",
+ * The exact-repeat guard (the same call, the same arguments, a fourth time
+ * with no file changed in between) was the only check, and the first SvelteKit benchmark ("Crestline",
  * 2026-11-23) stalled twice without tripping it:
  *
  *   - Turn 1 THEORIZED: 115k characters of reasoning, "Actually, let me
@@ -126,6 +126,16 @@ const FAILURE_WORDS =
 	/\b(error|errors|failed|failure|fail|cannot|can't|could not|couldn't|not found|no such|exception|denied|invalid|unexpected|missing|refused|err!|does not|is not|undefined)\b/i;
 
 /**
+ * Lines that say a tool failed without saying why: Vite's "✗ Build failed in
+ * 65ms" / "error during build:" / "Build failed with 1 error:", npm's
+ * lifecycle trailer, "Command failed with exit code 1", a test runner's
+ * "Test Files 1 failed". Three different Svelte errors each ended in "Build
+ * failed in #ms" and read as one error three times (Crestline, 2026-11-24).
+ */
+const GENERIC_FAILURE =
+	/^(?:\W*\s*)?(?:build failed(?: in \d+(?:\.\d+)?m?s| with \d+ errors?:?)|error during build:?|npm err(?:or|!) (?:code|path|command|errno|syscall|signal|a complete log|lifecycle)\b|(?:command|process) (?:failed|exited) with (?:exit )?code\b|test files? .*\bfailed\b|tests? .*\bfailed\b.*\bpassed\b|elifecycle\b|found \d+ errors?\b)/i;
+
+/**
  * `text` without terminal codes and frame characters, trimmed per line.
  *
  * @param {string} text
@@ -152,7 +162,12 @@ export function failureLine(text) {
 	const lines = plainText(text)
 		.split('\n')
 		.filter((l) => /[a-z]{2}/i.test(l) && !/^(---|exit code\b)/i.test(l));
-	const line = lines.find((l) => FAILURE_WORDS.test(l)) ?? lines.at(-1) ?? '';
+	// A tool's summary of its own failure ("✗ Build failed in 65ms") is the
+	// same whatever went wrong: the line after it says what. Quoted only when
+	// nothing more specific is there.
+	const telling = lines.filter((l) => !GENERIC_FAILURE.test(l));
+	const line =
+		telling.find((l) => FAILURE_WORDS.test(l)) ?? lines.find((l) => FAILURE_WORDS.test(l)) ?? lines.at(-1) ?? '';
 	return line.slice(0, 200);
 }
 
@@ -332,7 +347,8 @@ export function createStagnationMonitor(overrides = {}) {
 	const limits = { ...STAGNATION_LIMITS, ...overrides };
 
 	let round = 1;
-	/** How often each exact call has been asked for. */
+	/** How often each exact call has been asked for, since the files last
+	 *  changed (writes themselves: over the whole run). */
 	const callCounts = new Map();
 	/** @type {{ round: number, family: string, signature: string, wroteBefore: number }[]} */
 	let failures = [];
@@ -470,7 +486,12 @@ export function createStagnationMonitor(overrides = {}) {
 		 * @returns {{ refuse: string, reason: 'repeated' | 'blocked' } | null}
 		 */
 		check(call) {
-			const signature = call.signature ?? `${call.name}\u0000${String(call.args ?? '').trim()}`;
+			const exact = call.signature ?? `${call.name}\u0000${String(call.args ?? '').trim()}`;
+			// A check run again after an edit is a new question with a new
+			// answer, not a repeat: `npm run check` after a fix was refused
+			// as one, and the run went on without it (Crestline, 2026-11-24).
+			// The same write over and over is still a repeat, edits or not.
+			const signature = call.kind === 'write' ? exact : `${exact}\u0000${writesApplied}`;
 			const times = (callCounts.get(signature) ?? 0) + 1;
 			callCounts.set(signature, times);
 			if (times > limits.identicalCalls) {
