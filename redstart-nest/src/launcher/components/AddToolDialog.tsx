@@ -5,12 +5,17 @@
 // The admin never types a shell command (unless they deliberately choose the
 // Advanced source, which is the one place that's still exactly a command).
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api/redstart'
-import type { PluginToolInfo, RegistrySearchResult } from '../api/redstart'
+import type { PluginRuntimes, PluginToolInfo, RegistrySearchResult } from '../api/redstart'
 import type { usePlugins } from '../hooks/usePlugins'
 import { btnCls, inputCls, TruncatedText, Modal } from './ui'
 import { FolderPicker } from './FolderPicker'
+import { HubLayout } from './HubBrowser'
+import {
+  RegistryDetail, RegistryResults, RegistrySidebar, RuntimeFacts, filterRegistry, initialRegistryView, runsHere,
+} from './RegistryExplorer'
+import type { RegistryView } from './RegistryExplorer'
 
 // A fixed-width sibling of inputCls.xs for the per-tool class picker. Deliberately
 // NOT built from inputCls.xs + ' w-32' — that variant's own w-full and a
@@ -71,7 +76,6 @@ const initialState = {
   step: 1 as WizardStep,
   sourceKind: 'registry' as SourceKind,
   registryQuery: '',
-  registrySearched: false,
   registrySelected: null as RegistrySearchResult | null,
   // Which resolver a REGISTRY pick needs — npm or pypi (uv) are not
   // interchangeable. Irrelevant for the manual 'npm'/'pypi' tabs, where
@@ -108,6 +112,15 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
   const [s, setState] = useState(initialState)
   const set = <K extends keyof typeof initialState>(key: K, value: (typeof initialState)[K]) =>
     setState((prev) => ({ ...prev, [key]: value }))
+  // The explorer's own view (sidebar choice, sort, opened row). Kept here, not
+  // in the explorer, so Back from step 2 returns to the same list.
+  const [view, setViewState] = useState<RegistryView>(initialRegistryView)
+  const setView = (v: Partial<RegistryView>) => setViewState((prev) => ({ ...prev, ...v }))
+  const [runtimes, setRuntimes] = useState<PluginRuntimes | null>(null)
+  useEffect(() => {
+    if (!open || runtimes) return
+    api().plugins.runtimes().then(setRuntimes).catch(() => { /* the header just leaves the facts out */ })
+  }, [open])
 
   if (!open) return null
 
@@ -116,21 +129,29 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
 
   function reset() {
     setState(initialState)
+    setViewState(initialRegistryView)
+    plugins.clearSearch()
   }
   function close() {
     reset()
     onClose()
   }
 
-  async function runSearch() {
-    set('registrySearched', true)
-    await plugins.search(s.registryQuery)
+  // Opening a row shows it; one that runs here is also picked, so the name,
+  // id and settings beside it are its own. Each pick starts fresh: an id or a
+  // setting typed for the previous server does not carry over to this one.
+  function openRegistryResult(entry: RegistrySearchResult) {
+    setView({ openName: entry.name })
+    if (runsHere(entry)) pickRegistryResult(entry)
+    else setState((prev) => ({ ...prev, registrySelected: null }))
   }
 
   function pickRegistryResult(entry: RegistrySearchResult) {
     setState((prev) => ({
       ...prev,
       registrySelected: entry,
+      values: {},
+      constraints: '',
       registryType: entry.registryType ?? null,
       npmPackage: entry.packageName || '',
       npmVersion: entry.version || '',
@@ -138,7 +159,8 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
       // the identifier: it is the ban handle and the tools' namespace prefix,
       // so it stays unique and stable while the label above it reads properly.
       displayName: entry.suggestedDisplayName || entry.name,
-      pluginId: prev.pluginIdTouched ? prev.pluginId : slugify(entry.name),
+      pluginId: slugify(entry.name),
+      pluginIdTouched: false,
       fields: entry.fields.map((f) => ({
         name: f.name,
         description: f.description,
@@ -274,126 +296,156 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
 
   const hasSecretValue = Object.values(buildEnvPayload()).some((e) => e.isSecret)
 
-  return (
-    <Modal open title="Add a plugin" subtitle={`Step ${s.step} of 5`} onClose={close} size="lg">
-        <div>
+  const nextDisabled =
+    !PLUGIN_ID_PATTERN.test(s.pluginId || slugify(s.displayName || s.npmPackage || s.command || s.localPath || '')) ||
+    (s.sourceKind === 'registry' && !s.registrySelected) ||
+    ((s.sourceKind === 'npm' || s.sourceKind === 'pypi') && (!s.npmPackage || !s.npmVersion)) ||
+    (s.sourceKind === 'path' && !s.localPath) ||
+    (s.sourceKind === 'command' && !s.command)
 
-          {/* Step 1 — Source */}
-          {s.step === 1 && (
-            <div className="space-y-4">
-              <div className="flex gap-2 text-xs">
-                {(['registry', 'npm', 'pypi', 'path', 'command'] as SourceKind[]).map((kind) => (
-                  <button key={kind}
-                    onClick={() => set('sourceKind', kind)}
-                    className={`px-2.5 py-1 rounded ${s.sourceKind === kind ? 'bg-orange-500 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'}`}>
-                    {kind === 'registry' ? 'Browse registry' : kind === 'npm' ? 'npm package' : kind === 'pypi' ? 'pypi package (uv)' : kind === 'path' ? 'Local folder' : 'Advanced'}
-                  </button>
-                ))}
-              </div>
+  // Step 1 is the explorer (RegistryExplorer.tsx): it needs the whole modal,
+  // so it is its own Modal rather than a block inside the padded one below.
+  if (s.step === 1) {
+    const explorer = filterRegistry({ plugins, view })
+    const registry = s.sourceKind === 'registry'
 
-              {s.sourceKind === 'registry' && (
-                <div>
-                  <div className="flex gap-2 mb-3">
-                    <input className={inputCls.sm} placeholder="Search the MCP registry…" value={s.registryQuery}
-                      onChange={(e) => set('registryQuery', e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && runSearch()} />
-                    <button onClick={runSearch} className={btnCls.secondary}>Search</button>
-                  </div>
-                  <RegistryResults
-                    results={plugins.searchResults}
-                    error={plugins.searchError}
-                    onPick={pickRegistryResult}
-                    selected={s.registrySelected}
-                    searched={s.registrySearched}
-                  />
-                </div>
-              )}
+    const constraintsField = isPackageSource && (
+      <div className="space-y-1">
+        <label className="block text-xs text-zinc-400">Dependency constraints (optional, one per line)</label>
+        <p className="text-xs text-zinc-400">
+          Narrows a dependency the package pulls in, for when its own range lets in a version it breaks on.
+          {isPypiSource ? ' A name and version comparisons, e.g. mcp<2.' : ' A name, @, and a version range, e.g. zod@^3.'}
+        </p>
+        <textarea className={inputCls.sm + ' font-mono'} rows={2} spellCheck={false}
+          placeholder={isPypiSource ? 'mcp<2' : 'zod@^3'} value={s.constraints}
+          onChange={(e) => set('constraints', e.target.value)} />
+      </div>
+    )
 
-              {s.sourceKind === 'npm' && (
-                <div className="space-y-2">
-                  <label className="block text-xs text-zinc-400">Package name</label>
-                  <input className={inputCls.sm} placeholder="@modelcontextprotocol/server-memory" value={s.npmPackage}
-                    onChange={(e) => set('npmPackage', e.target.value)} />
-                  <label className="block text-xs text-zinc-400">Version (pinned — no ranges, no "latest")</label>
-                  <input className={inputCls.sm} placeholder="2026.7.4" value={s.npmVersion}
-                    onChange={(e) => set('npmVersion', e.target.value)} />
-                </div>
-              )}
+    const nameFields = (
+      <div className="space-y-2">
+        <label className="block text-xs text-zinc-400">Display name</label>
+        <input className={inputCls.sm} value={s.displayName} onChange={(e) => set('displayName', e.target.value)} placeholder="Shown on the Plugins and Tools tabs" />
+        <label className="block text-xs text-zinc-400">Plugin id (lowercase, used as the tool namespace)</label>
+        <input className={inputCls.sm} value={s.pluginId}
+          onChange={(e) => setState((prev) => ({ ...prev, pluginId: e.target.value, pluginIdTouched: true }))} />
+        {s.pluginId && !PLUGIN_ID_PATTERN.test(s.pluginId) && (
+          <p className="text-xs text-red-400">Must start with a letter and contain only lowercase letters, digits, and underscores.</p>
+        )}
+      </div>
+    )
 
-              {s.sourceKind === 'pypi' && (
-                <div className="space-y-2">
-                  <p className="text-xs text-zinc-500">Installed as an isolated uv tool — needs uv on this machine (the uv command, not pip).</p>
-                  <label className="block text-xs text-zinc-400">Package identifier</label>
-                  <input className={inputCls.sm} placeholder="armor-mcp" value={s.npmPackage}
-                    onChange={(e) => set('npmPackage', e.target.value)} />
-                  <label className="block text-xs text-zinc-400">Version (pinned — no ranges, no "latest")</label>
-                  <input className={inputCls.sm} placeholder="0.6.1" value={s.npmVersion}
-                    onChange={(e) => set('npmVersion', e.target.value)} />
-                </div>
-              )}
+    const otherSource = (kind: SourceKind) => setState((prev) => ({
+      ...prev, sourceKind: kind, registrySelected: null, registryType: null, npmPackage: '', npmVersion: '',
+      constraints: '', displayName: '', pluginId: '', pluginIdTouched: false, fields: [], values: {},
+    }))
+    const backToRegistry = () => {
+      setState((prev) => ({ ...prev, sourceKind: 'registry', displayName: '', pluginId: '', pluginIdTouched: false }))
+      if (explorer.opened && runsHere(explorer.opened)) pickRegistryResult(explorer.opened)
+    }
 
-              {isPackageSource && (
-                <div className="space-y-1">
-                  <label className="block text-xs text-zinc-400">Dependency constraints (optional, one per line)</label>
-                  <p className="text-xs text-zinc-600">
-                    Narrows a dependency the package pulls in, for when its own range lets in a version it breaks on.
-                    {isPypiSource ? ' A name and version comparisons, e.g. mcp<2.' : ' A name, @, and a version range, e.g. zod@^3.'}
-                  </p>
-                  <textarea className={inputCls.sm + ' font-mono'} rows={2} spellCheck={false}
-                    placeholder={isPypiSource ? 'mcp<2' : 'zod@^3'} value={s.constraints}
-                    onChange={(e) => set('constraints', e.target.value)} />
-                </div>
-              )}
-
-              {s.sourceKind === 'path' && (
-                <div className="space-y-2">
-                  <label className="block text-xs text-zinc-400">Local folder or entry script, already on this machine</label>
-                  <div className="flex gap-2">
-                    <input className={inputCls.sm} placeholder="/path/to/server or C:\path\to\server" value={s.localPath}
-                      onChange={(e) => set('localPath', e.target.value)} />
-                    <FolderPicker mode="directory" startPath={s.localPath || undefined} onPick={(dir) => set('localPath', dir)} className={btnCls.secondary}>Browse…</FolderPicker>
-                  </div>
-                </div>
-              )}
-
-              {s.sourceKind === 'command' && (
-                <div className="space-y-2">
-                  <p className="text-xs text-yellow-500/90">Advanced. Redstart runs this exactly as typed — only use a command you trust.</p>
-                  <label className="block text-xs text-zinc-400">Command</label>
-                  <input className={inputCls.sm} placeholder="/path/to/server or C:\path\to\server.exe" value={s.command}
-                    onChange={(e) => set('command', e.target.value)} />
-                  <label className="block text-xs text-zinc-400">Arguments (space-separated)</label>
-                  <input className={inputCls.sm} value={s.commandArgs} onChange={(e) => set('commandArgs', e.target.value)} />
-                </div>
-              )}
-
-              <div className="space-y-2 pt-2 border-t border-zinc-800">
-                <label className="block text-xs text-zinc-400">Display name</label>
-                <input className={inputCls.sm} value={s.displayName} onChange={(e) => set('displayName', e.target.value)} placeholder="Shown on the Plugins and Tools tabs" />
-                <label className="block text-xs text-zinc-400">Plugin id (lowercase, used as the tool namespace)</label>
-                <input className={inputCls.sm} value={s.pluginId}
-                  onChange={(e) => setState((prev) => ({ ...prev, pluginId: e.target.value, pluginIdTouched: true }))} />
-                {s.pluginId && !PLUGIN_ID_PATTERN.test(s.pluginId) && (
-                  <p className="text-xs text-red-400">Must start with a letter and contain only lowercase letters, digits, and underscores.</p>
-                )}
-              </div>
-
-              <div className="flex justify-end pt-2">
-                <button
-                  onClick={goToStep2}
-                  disabled={
-                    !PLUGIN_ID_PATTERN.test(s.pluginId || slugify(s.displayName || s.npmPackage || s.command || s.localPath || '')) ||
-                    (s.sourceKind === 'registry' && !s.registrySelected) ||
-                    ((s.sourceKind === 'npm' || s.sourceKind === 'pypi') && (!s.npmPackage || !s.npmVersion)) ||
-                    (s.sourceKind === 'path' && !s.localPath) ||
-                    (s.sourceKind === 'command' && !s.command)
-                  }
-                  className={btnCls.primary + ' disabled:opacity-40'}>
-                  Next
-                </button>
+    const otherForm = (
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        <button type="button" onClick={backToRegistry} className="mb-3 flex items-center gap-1.5 text-sm text-orange-400 hover:text-orange-300">
+          <span aria-hidden="true">‹</span> Back to the registry
+        </button>
+        <div className="max-w-xl space-y-4">
+          {s.sourceKind === 'npm' && (
+            <div className="space-y-2">
+              <h3 className="text-[15px] font-semibold text-zinc-100">An npm package by name</h3>
+              <label className="block text-xs text-zinc-400">Package name</label>
+              <input className={inputCls.sm} placeholder="@modelcontextprotocol/server-memory" value={s.npmPackage}
+                onChange={(e) => set('npmPackage', e.target.value)} />
+              <label className="block text-xs text-zinc-400">Version (pinned — no ranges, no "latest")</label>
+              <input className={inputCls.sm} placeholder="2026.7.4" value={s.npmVersion}
+                onChange={(e) => set('npmVersion', e.target.value)} />
+            </div>
+          )}
+          {s.sourceKind === 'pypi' && (
+            <div className="space-y-2">
+              <h3 className="text-[15px] font-semibold text-zinc-100">A Python package by name</h3>
+              <p className="text-xs text-zinc-400">Installed as an isolated uv tool — needs uv on this machine (the uv command, not pip).</p>
+              <label className="block text-xs text-zinc-400">Package identifier</label>
+              <input className={inputCls.sm} placeholder="armor-mcp" value={s.npmPackage}
+                onChange={(e) => set('npmPackage', e.target.value)} />
+              <label className="block text-xs text-zinc-400">Version (pinned — no ranges, no "latest")</label>
+              <input className={inputCls.sm} placeholder="0.6.1" value={s.npmVersion}
+                onChange={(e) => set('npmVersion', e.target.value)} />
+            </div>
+          )}
+          {s.sourceKind === 'path' && (
+            <div className="space-y-2">
+              <h3 className="text-[15px] font-semibold text-zinc-100">A folder on this machine</h3>
+              <label className="block text-xs text-zinc-400">Local folder or entry script, already on this machine</label>
+              <div className="flex gap-2">
+                <input className={inputCls.sm} placeholder="/path/to/server or C:\path\to\server" value={s.localPath}
+                  onChange={(e) => set('localPath', e.target.value)} />
+                <FolderPicker mode="directory" startPath={s.localPath || undefined} onPick={(dir) => set('localPath', dir)} className={btnCls.secondary}>Browse…</FolderPicker>
               </div>
             </div>
           )}
+          {s.sourceKind === 'command' && (
+            <div className="space-y-2">
+              <h3 className="text-[15px] font-semibold text-zinc-100">A command (Advanced)</h3>
+              <p className="text-xs text-yellow-500/90">Redstart runs this exactly as typed — only use a command you trust.</p>
+              <label className="block text-xs text-zinc-400">Command</label>
+              <input className={inputCls.sm} placeholder="/path/to/server or C:\path\to\server.exe" value={s.command}
+                onChange={(e) => set('command', e.target.value)} />
+              <label className="block text-xs text-zinc-400">Arguments (space-separated)</label>
+              <input className={inputCls.sm} value={s.commandArgs} onChange={(e) => set('commandArgs', e.target.value)} />
+            </div>
+          )}
+          {constraintsField}
+          <div className="border-t border-zinc-800 pt-3">{nameFields}</div>
+          <div className="flex justify-end">
+            <button onClick={goToStep2} disabled={nextDisabled} className={btnCls.primary + ' disabled:opacity-40'}>Next: settings</button>
+          </div>
+        </div>
+      </div>
+    )
+
+    const pickedForm = (
+      <div className="space-y-3">
+        {nameFields}
+        {constraintsField && (
+          <details className="text-xs text-zinc-400">
+            <summary className="cursor-pointer select-none hover:text-zinc-200">Dependency constraints</summary>
+            <div className="mt-2">{constraintsField}</div>
+          </details>
+        )}
+        <button onClick={goToStep2} disabled={nextDisabled} className={btnCls.primary + ' w-full disabled:opacity-40'}>Next: settings</button>
+        <p className="text-center text-[11.5px] text-zinc-400">Nothing installs until step 3.</p>
+      </div>
+    )
+
+    return (
+      <Modal open title="Add a plugin" onClose={close} size="2xl" flush
+        subtitle={<div className="flex flex-wrap items-center gap-x-4 gap-y-1.5"><span>Step 1 of 5 · Choose one</span><RuntimeFacts runtimes={runtimes} /></div>}>
+        <HubLayout
+          sidebar={<RegistrySidebar explorer={explorer} view={view}
+            setView={(v) => { setView(v); if (!registry) backToRegistry() }} onOtherSource={otherSource} />}
+          results={registry
+            ? <RegistryResults explorer={explorer} plugins={plugins} view={view} setView={setView}
+                query={s.registryQuery} onQuery={(q) => set('registryQuery', q)} onOpen={openRegistryResult} />
+            : otherForm}
+          detail={registry ? <RegistryDetail server={explorer.opened} runtimes={runtimes} form={pickedForm} /> : null}
+          detailLabel="Server details"
+          detailOpen={registry && !!explorer.opened}
+          onBack={() => setView({ openName: null })}
+          footer={<>
+            <span className="flex-1 text-[12.5px] text-zinc-400">
+              From the official MCP registry. Publishers write these listings; read one before you install it.
+            </span>
+            <button type="button" onClick={close} className={btnCls.secondary}>Cancel</button>
+          </>}
+        />
+      </Modal>
+    )
+  }
+
+  return (
+    <Modal open title="Add a plugin" subtitle={`Step ${s.step} of 5`} onClose={close} size="lg">
+        <div>
 
           {/* Step 2 — Settings & keys */}
           {s.step === 2 && (
@@ -554,87 +606,5 @@ export function AddToolDialog({ open, onClose, onInstalled, plugins }: Props) {
           )}
         </div>
     </Modal>
-  )
-}
-
-// Verdicts are shown, never used to filter — every result renders, including
-// ones the admin cannot install
-// from here, each with the reason stated.
-function verdictLabel(v: RegistrySearchResult['verdict']): { text: string; installable: boolean } {
-  switch (v.state) {
-    case 'installable': return { text: 'Install', installable: true }
-    case 'needs-setup': return { text: 'Install — needs setup', installable: true }
-    case 'needs-runtime': return { text: v.reason === 'python' ? 'Needs Python (not yet supported)' : 'Needs runtime', installable: false }
-    default: return { text: `Not supported: ${v.reason || 'unsupported'}`, installable: false }
-  }
-}
-
-function RegistryResults({ results, error, onPick, selected, searched }: {
-  results: RegistrySearchResult[]
-  error: string | null
-  onPick: (e: RegistrySearchResult) => void
-  selected: RegistrySearchResult | null
-  searched: boolean
-}) {
-  if (error) return <p className="text-xs text-red-400">Registry unavailable ({error}) — install by package name instead.</p>
-  if (!searched) return <p className="text-xs text-zinc-500">Search above, or switch to "npm package" / "Local folder" / "Advanced".</p>
-  if (results.length === 0) return <p className="text-xs text-zinc-500">No results.</p>
-  return <RegistryResultList results={results} onPick={onPick} selected={selected} />
-}
-
-// Clicking a row unfolds it to the publisher's full description, plus the
-// package it would install; the collapsed row is truncated to a single line,
-// which is too little to decide whether a plugin is worth installing. An
-// installable row is also selected by that click. A row that can't be
-// installed from here still unfolds, so you can read why you'd want it before
-// finding another way to install it. One row open at a time keeps the
-// list short.
-function RegistryResultList({ results, onPick, selected }: {
-  results: RegistrySearchResult[]
-  onPick: (e: RegistrySearchResult) => void
-  selected: RegistrySearchResult | null
-}) {
-  const [openKey, setOpenKey] = useState<string | null>(null)
-  return (
-    <div className="max-h-72 overflow-y-auto divide-y divide-zinc-800 border border-zinc-800 rounded">
-      {results.map((r, i) => {
-        const v = verdictLabel(r.verdict)
-        const key = `${r.name}-${i}`
-        const isOpen = openKey === key
-        const isSelected = selected?.name === r.name && selected?.packageName === r.packageName
-        return (
-          <button key={key} aria-expanded={isOpen}
-            onClick={() => {
-              setOpenKey(isOpen ? null : key)
-              if (v.installable) onPick(r)
-            }}
-            className={`w-full text-left px-3 py-2 text-xs flex items-start justify-between gap-3 ${
-              isSelected ? 'bg-orange-500/10' : 'hover:bg-zinc-800'
-            }`}>
-            <span className={`min-w-0 flex-1 ${v.installable ? '' : 'opacity-60'}`}>
-              <span className="flex items-center gap-1.5 text-zinc-200">
-                <span className="text-zinc-500 flex-shrink-0" aria-hidden>{isOpen ? '▾' : '▸'}</span>
-                <span className={isOpen ? 'break-all' : 'truncate'}>{r.name}</span>
-              </span>
-              {isOpen ? (
-                <span className="block mt-1 pl-4 space-y-1">
-                  <span className="block text-zinc-400 whitespace-pre-wrap break-words">
-                    {r.description || '(no description provided by the registry)'}
-                  </span>
-                  {(r.packageName || r.registryType) && (
-                    <span className="block text-zinc-500 break-all">
-                      {r.registryType ? `${r.registryType} · ` : ''}{r.packageName ?? ''}{r.version ? `@${r.version}` : ''}
-                    </span>
-                  )}
-                </span>
-              ) : (
-                <span className="block text-zinc-500 truncate pl-4">{r.description}</span>
-              )}
-            </span>
-            <span className={`flex-shrink-0 ${v.installable ? 'text-green-400' : 'text-zinc-500'}`}>{v.text}</span>
-          </button>
-        )
-      })}
-    </div>
   )
 }
