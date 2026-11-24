@@ -1109,6 +1109,55 @@ await test('a stored summary inside the folded span is extended, not rebuilt', a
   assert(prompt.includes('Current summary:\nold') && prompt.includes('user: m2'), 'the prompt carries both')
 })
 
+await test('over the threshold, earlier turns give up reasoning and old tool results first, and no summary is paid for when that fits', async () => {
+  // An agentic chat: an earlier turn with long reasoning and two big tool
+  // results, then the current question.
+  const big = 'r'.repeat(3000)
+  const messages = [
+    msg('sys', 'system'),
+    msg('u0', 'user', 'find the bug'),
+    { id: 'a0', role: 'assistant', content: 'looking', reasoningContent: 'thinking '.repeat(300), toolCalls: JSON.stringify([call('c1', 'read_file', '{"path":"a"}')]) },
+    { id: 't0', role: 'tool', toolCallId: 'c1', content: big },
+    { id: 't1', role: 'tool', toolCallId: 'c2', content: big },
+    msg('a1', 'assistant', 'it was the off-by-one'),
+    msg('u1', 'user', 'now add a test'),
+  ]
+  const counts = messages.map((m) => Math.ceil(compaction.messageText(m).length / 3) + compaction.PER_MESSAGE_OVERHEAD_TOKENS)
+  const usable = 2600
+  const plan = compaction.planCompaction({ messages, counts, usable, stored: null })
+  assert(plan.action === 'send' && plan.compacted, `no summary needed: ${plan.action}`)
+  const byId = Object.fromEntries(plan.messages.map((m) => [m.id, m]))
+  eq(byId.a0.reasoningContent, undefined, 'earlier reasoning given up')
+  assert(byId.t0.content === compaction.LEAN_RESULT_STUB, 'the oldest result became the stub')
+  eq([byId.u1.content, byId.a1.content], ['now add a test', 'it was the off-by-one'], 'answers and the current turn untouched')
+  // The stored messages are not changed, and the same input gives the same payload.
+  eq(messages[3].content, big, 'stored result intact')
+  const again = compaction.planCompaction({ messages, counts, usable, stored: null })
+  eq(JSON.stringify(again.messages), JSON.stringify(plan.messages), 'deterministic: the same prefix every send')
+})
+
+await test('the summarizer reads what was said: no reasoning, calls by name, results head and tail, and the newest kept', async () => {
+  const lines = compaction.summaryPrompt('', [
+    { id: 'a', role: 'assistant', content: 'checking', reasoningContent: 'SECRET THINKING', toolCalls: JSON.stringify([call('c1', 'read_file', '{"path":"src/a.ts"}')]) },
+    { id: 't', role: 'tool', content: 'HEAD' + 'x'.repeat(5000) + 'TAIL' },
+  ])
+  assert(!lines.includes('SECRET THINKING'), 'reasoning is not summarized')
+  assert(lines.includes('[called read_file({"path":"src/a.ts"})]'), 'the call by name and arguments')
+  assert(lines.includes('HEAD') && lines.includes('TAIL') && lines.length < 3000, `the result, head and tail (${lines.length})`)
+  // Too long for one call: the oldest goes, the newest stays.
+  const many = Array.from({ length: 400 }, (_, i) => msg(`m${i}`, 'user', `line ${i} ${'w'.repeat(100)}`))
+  const prompt = compaction.summaryPrompt('', many)
+  assert(prompt.includes('line 399') && !prompt.includes('line 0 '), 'newest kept, oldest dropped')
+  assert(prompt.includes('[earlier lines omitted]'), 'and it says so')
+})
+
+await test('a capped message keeps its content: no reasoning inline, no tool calls twice', async () => {
+  const original = { id: 'big', role: 'assistant', content: 'answer '.repeat(600), reasoningContent: 'THINKING', toolCalls: JSON.stringify([call('c1', 'run_python', '{"code":"1"}')]) }
+  const capped = compaction.capOversizedMessage(original, 2000, 400)
+  assert(!capped.content.includes('THINKING'), 'the reasoning went out inline')
+  assert(!capped.content.includes('run_python'), 'the tool call went out in the content as well')
+})
+
 await test('the tail is never fewer than two messages, however large', async () => {
   const messages = [msg('u0'), msg('u1'), msg('u2')]
   const plan = compaction.planCompaction({ messages, counts: [600, 600, 600], usable: 1000, stored: null })

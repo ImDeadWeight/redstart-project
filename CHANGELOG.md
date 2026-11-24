@@ -6,6 +6,13 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ## 2026-11-24
 
+- **Compaction gives up earlier turns' bulk before paying for a summary, and the summary reads the right things** (`shared/agent-core/compaction.mjs`, so chat-ui and every other host get it). Ported from `feat/context-budget` (1a20766, never merged), the parts that still applied to `main`'s compaction:
+  - **Earlier turns first** (`leanEarlierTurns`). Over the trigger, the turns before the last user message drop their reasoning, then their tool results become a one-line stub, oldest first. If that fits, no summarizer call is made. Deterministic, so consecutive sends share the prompt prefix; the current turn is never touched.
+  - **The summarizer keeps the newest.** Its input was clipped to the first 24,000 characters, so the turns closest to the present were the ones lost. It now keeps the last, and says lines were omitted.
+  - **What it reads** (`summaryLine`): no reasoning, a tool call as its name and the head and tail of its arguments, a tool result as its head and tail.
+  - **Fixed: a capped message leaked its reasoning.** `capOversizedMessage` rebuilt the content from `messageText`, which includes the reasoning and the tool-call JSON, so the thinking went out inline in the answer and every tool call twice.
+  - Not ported: multi-pass summaries, structured summary headings and the summary's placement, which `main`'s compaction does differently. Tests: `test-agent-core.mjs` 80/80, chat-ui unit 784/784.
+
 - **The chat's context budget counts the whole request.** chat-ui sized its budget over the messages it wrote, but every request through Nest also carries the gateway's composed system prompt and the tool definitions: on a 4,096-token profile, 2,000+ tokens. A request could be refused for overflowing ("exceeds the available context size") while compaction still saw room. The gateway now states what it added on every completion (`x-redstart-system-prompt-chars`, in characters, exposed to cross-origin pages; `completion-route.mjs`), and chat-ui (`services/chat/context-overhead.ts`) passes that plus its own tool list to agent-core's `compactionBudget` as the overhead it already takes. Ported from `feat/context-budget` (97b51bd, 5e33099, never merged), onto `main`'s agent-core compaction instead of the old chat-ui service. Tests: `test-gateway-routes.mjs` 89/89, chat-ui `context-overhead`.
 
 - **No more stray `</think>` in answers, in the browser or on the server.** llama-server only separates the one thinking block it expects at the start of a reply. When a model closes thinking a second time (after tool results, "Sure, let's try it out!
