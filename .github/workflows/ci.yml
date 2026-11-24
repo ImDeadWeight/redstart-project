@@ -219,8 +219,11 @@ jobs:
       - name: "Skills: SKILL.md is read and written as the format has it; a skill's scripts run only through run_python"
         run: node scripts/test-skills.mjs
 
-      - name: "Security: projects are per account and owner-only; deleting one keeps its chats"
+      - name: "Security: projects are isolated from non-members; deleting one keeps its chats"
         run: node scripts/test-projects.mjs
+
+      - name: "Security: shared projects (viewer, editor, owner, admin; chats stay private)"
+        run: node scripts/test-project-sharing.mjs
 
       - name: "Security: document search is per account; index, citations, sync"
         run: node scripts/test-document-search.mjs

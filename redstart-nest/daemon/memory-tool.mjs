@@ -28,7 +28,7 @@
 // =============================================================================
 
 import * as memory from './memory-storage.mjs'
-import { projectForCall } from './projects-storage.mjs'
+import { projectForCall, canWrite as canWriteProject } from './projects-storage.mjs'
 import { embedTexts, embedServerStatus } from './embed-server.mjs'
 import { logEvent } from './logger.mjs'
 
@@ -133,6 +133,8 @@ export async function callTool(name, args, cfg, ctx) {
       }
       const wantsProject = args?.scope === 'project'
       if (wantsProject && !project) return err('Not saved: this chat is not in a project. Save it with scope "user", or not at all.')
+      // A shared project's memory is its editors' to change; a viewer reads it.
+      if (wantsProject && !canWriteProject(project, account)) return err(`Not saved: this user can view the project "${project.name}" but not add to its memory. Save it with scope "user" instead, or not at all.`)
       const fromWebTurn = readTheWebRecently(ctx)
       const projectId = wantsProject ? project.id : null
       const r = memory.saveMemory(account, args?.text, { conversationId: ctx?.conversationId ?? null, fromWebTurn, projectId, kind: args?.kind })
@@ -172,6 +174,7 @@ export async function callTool(name, args, cfg, ctx) {
       found = matches[0] ?? null
     }
     if (!found) return err(`No memory with id ${id}. Use memory_search to find the right one.`)
+    if (found.projectId && !canWriteProject(project, account)) return err(`Not forgotten: that memory belongs to the project "${project.name}", which this user can view but not change.`)
     memory.deleteMemory(account, found.m.id, { projectId: found.projectId })
     logEvent('memory', 'forgotten', { project: !!found.projectId })
     return ok(`Forgotten: ${found.m.text}`)

@@ -43,6 +43,7 @@ import { resolveWithinRoot } from './path-scope.mjs'
 import { resolveGrantedPath, isNarrowed } from './grant-scope.mjs'
 import { resolveUserRoot } from './user-scope.mjs'
 import { moveToTrash, isInTrash, TRASH_DIR_NAME } from './trash.mjs'
+import { getProject, canWrite as canWriteProject, ensureProjectFiles } from './projects-storage.mjs'
 import { logAudit } from './logger.mjs'
 
 // The capabilities that have per-account storage. `space` is validated against
@@ -76,13 +77,31 @@ const SPACES = {
   },
 }
 
-/** Is this space the read-only shared one? Every write route asks. */
+/** Is this space the read-only shared one? */
 function isSharedSpace(space) {
   return Object.prototype.hasOwnProperty.call(SPACES, space) && SPACES[space].shared === true
 }
 
-function refuseShared(res) {
-  return fail(res, 403, 'The shared folder is read-only', 'permission_error')
+// A project's files (2026-11-24): space "project-<id>", the folder every
+// member of the project shares (projects-storage projectFilesDir). Reached
+// only through getProject, so a project the caller may not read is "not
+// found"; a viewer's is read-only. Not listed in /files/spaces: the project
+// page opens it, and a tab per project would crowd the explorer.
+const PROJECT_SPACE = /^project-([A-Za-z0-9-]{1,64})$/
+
+/** Is this space one the caller may not write to? Every write route asks. */
+function refusesWrites(account, space) {
+  if (isSharedSpace(space)) return 'The shared folder is read-only'
+  const m = typeof space === 'string' ? PROJECT_SPACE.exec(space) : null
+  if (m) {
+    const project = getProject(account, m[1])
+    if (project && !canWriteProject(project, account)) return 'You can view this project\'s files but not change them'
+  }
+  return null
+}
+
+function refuseShared(res, message = 'The shared folder is read-only') {
+  return fail(res, 403, message, 'permission_error')
 }
 
 /** A relative folder path, '/'-separated, '' for the root. */
@@ -161,6 +180,24 @@ function resolveRequest(config, account, space, relPath = '.') {
   // Object.prototype — truthy, so a plain `if (!spec)` waves it through and the
   // next line throws on a spec that has no pick(). Same for 'constructor' and
   // 'toString'. A client-supplied string is never safe as a bare object key.
+  const projectMatch = typeof space === 'string' ? PROJECT_SPACE.exec(space) : null
+  if (projectMatch) {
+    const project = getProject(account, projectMatch[1])
+    if (!project) return { error: { status: 404, message: 'Project not found' } }
+    const docsRoot = config?.documents?.outputDir
+    if (!docsRoot) return { error: { status: 404, message: 'The Documents storage is not configured' } }
+    let root
+    try {
+      root = fs.realpathSync.native(ensureProjectFiles(docsRoot, project))
+    } catch (err) {
+      return { error: { status: 500, message: `Could not open the project's files: ${err.message}` } }
+    }
+    try {
+      return { userRoot: root, full: resolveWithinRoot(root, relPath ?? '.') }
+    } catch {
+      return { error: { status: 403, message: 'Path is outside your storage' } }
+    }
+  }
   const spec = Object.prototype.hasOwnProperty.call(SPACES, space) ? SPACES[space] : null
   if (!spec) return { error: { status: 400, message: `Unknown storage space: ${space}` } }
   const capabilityRoot = spec.pick(config)
@@ -294,7 +331,7 @@ async function previewFile(res, config, account, url) {
 
 async function makeDirectory(req, res, config, account) {
   const body = await readJsonBody(req)
-  if (isSharedSpace(body?.space)) return refuseShared(res)
+  { const why = refusesWrites(account, body?.space); if (why) return refuseShared(res, why) }
   const { userRoot, full, error } = resolveRequest(config, account, body.space, body.path)
   if (error) return fail(res, error.status, error.message)
   if (path.relative(userRoot, full) === '') return fail(res, 400, 'A folder needs a name')
@@ -309,7 +346,7 @@ async function makeDirectory(req, res, config, account) {
 
 async function renameEntry(req, res, config, account) {
   const body = await readJsonBody(req)
-  if (isSharedSpace(body?.space)) return refuseShared(res)
+  { const why = refusesWrites(account, body?.space); if (why) return refuseShared(res, why) }
   // BOTH paths are resolved through the same containment — a rename is two
   // path arguments, and checking only the source would let the destination
   // write anywhere.
@@ -344,7 +381,7 @@ async function renameEntry(req, res, config, account) {
 
 async function deleteEntry(req, res, config, account) {
   const body = await readJsonBody(req)
-  if (isSharedSpace(body?.space)) return refuseShared(res)
+  { const why = refusesWrites(account, body?.space); if (why) return refuseShared(res, why) }
   const { userRoot, full, error } = resolveRequest(config, account, body.space, body.path)
   if (error) return fail(res, error.status, error.message)
 
@@ -376,7 +413,7 @@ async function deleteEntry(req, res, config, account) {
  */
 async function uploadFile(req, res, config, account, url) {
   const space = url.searchParams.get('space') || 'documents'
-  if (isSharedSpace(space)) return refuseShared(res)
+  { const why = refusesWrites(account, space); if (why) return refuseShared(res, why) }
   const dirParam = url.searchParams.get('path') || '.'
   const nameParam = url.searchParams.get('name') || ''
 

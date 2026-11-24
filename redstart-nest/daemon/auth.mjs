@@ -223,7 +223,10 @@ export function hasAdminAccess(account) {
 /** The role records an account holds: its own, then its groups'. */
 export function rolesFor(account) {
   if (!account) return []
-  const record = account.roleIds ? account : accounts.findById(account.id)
+  // The stored record wins over whatever object the caller holds, so a role
+  // change applies even to an account object read before it. An object with
+  // no stored record (a test fixture) is read as given.
+  const record = accounts.findById(account.id) ?? account
   const own = Array.isArray(record?.roleIds) ? record.roleIds : []
   const viaGroups = groups.groupsForAccount(account.id).flatMap(g => g.roleIds)
   return roles.resolveRoles([...own, ...viaGroups])

@@ -38,7 +38,7 @@
 // =============================================================================
 
 import { getConversation, getConversationAnyAccount } from './conversations-storage.mjs'
-import { getProject } from './projects-storage.mjs'
+import { getProject, canWrite as canWriteProject } from './projects-storage.mjs'
 import * as memory from './memory-storage.mjs'
 import * as store from './memory-review-store.mjs'
 import { completionsInFlight, getUpstreamPort } from './completion-activity.mjs'
@@ -680,7 +680,8 @@ export function applyOp(account, op, { conversationId = null, via = 'review' } =
   let projectId = null
   if (op.scope === 'project') {
     const project = op.projectId ? getProject(account, op.projectId) : null
-    if (!project) return null
+    // A viewer of a shared project does not change its memory, by review either.
+    if (!project || !canWriteProject(project, account)) return null
     projectId = project.id
   }
   const scopeFields = { scope: op.scope, ...(projectId ? { projectId } : {}) }

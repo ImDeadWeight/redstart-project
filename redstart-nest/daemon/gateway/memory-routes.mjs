@@ -22,7 +22,7 @@
 // =============================================================================
 
 import { listMemories, saveMemory, updateMemory, deleteMemory } from '../memory-storage.mjs'
-import { getProject } from '../projects-storage.mjs'
+import { getProject, canWrite as canWriteProject } from '../projects-storage.mjs'
 import * as reviewStore from '../memory-review-store.mjs'
 import { reviewConversation, applyOp } from '../memory-review.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
@@ -121,14 +121,20 @@ async function handleAutomatic(req, res, urlPath, account, config) {
  * caller may read is reachable; anything else is 404, the same answer as an
  * unknown memory, so project ids cannot be probed.
  *
- * @returns {{ projectId: string | null } | { missing: true }}
+ * A shared project's memory is changed only by those who may change the
+ * project (projects-storage canWrite); a viewer reads it.
+ *
+ * @returns {{ projectId: string | null, writable: boolean } | { missing: true }}
  */
 function scopeOf(req, account) {
   let claimed = null
   try { claimed = new URL(req.url ?? '/', 'http://x').searchParams.get('projectId') } catch { /* no query */ }
-  if (!claimed) return { projectId: null }
-  return getProject(account, claimed) ? { projectId: claimed } : { missing: true }
+  if (!claimed) return { projectId: null, writable: true }
+  const project = getProject(account, claimed)
+  return project ? { projectId: claimed, writable: canWriteProject(project, account) } : { missing: true }
 }
+
+const READ_ONLY = { error: { message: 'You can view this project but not change its memory', type: 'permission_error' } }
 
 export async function handleMemoryRoute(req, res, urlPath, account, { config } = {}) {
   try {
@@ -141,7 +147,8 @@ export async function handleMemoryRoute(req, res, urlPath, account, { config } =
 
     const scope = scopeOf(req, account)
     if (scope.missing) { sendJson(res, 404, NOT_FOUND); return true }
-    const { projectId } = scope
+    const { projectId, writable } = scope
+    if (req.method !== 'GET' && !writable) { sendJson(res, 403, READ_ONLY); return true }
 
     if (isCollection && req.method === 'GET') {
       sendJson(res, 200, { memories: listMemories(account, { projectId }) })

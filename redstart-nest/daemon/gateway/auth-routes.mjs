@@ -16,6 +16,7 @@
 // injector, or activeConfig. It talks only to auth.mjs.
 // =============================================================================
 
+import { handOverAccount, removeGroupEverywhere, countOwnedBy } from '../projects-storage.mjs'
 import { authenticate, login, logout, listAccounts, getAuthRequired, createAccount, deleteAccount, resetPassword, regenerateApiKey, regenerateOwnApiKey, hasAdminAccess, canDo, issueClientKey, revokeClientKey, getOwnClientKeys, listRoles, saveRole, deleteRole, assignRole, assignRoles, listGroups, saveGroup, deleteGroup, describeAccess } from '../auth.mjs'
 import { capabilityIds, ADMIN_PERMISSIONS } from '../permissions.mjs'
 import { BUILTIN_TOOLS } from '../tools-definitions.mjs'
@@ -253,6 +254,7 @@ export async function handleAuthRoute(req, res, urlPath) {
     const denied = deny('manageAccounts'); if (denied) return denied
     const result = deleteGroup(actor, groupMatch[1])
     if (!result.ok) return sendJson(res, result.error === 'Group not found' ? 404 : 403, { error: result.error })
+    removeGroupEverywhere(groupMatch[1])
     logPolicy('group.deleted', { group: groupMatch[1], by: actor?.username ?? '(auth off)' })
     policyChanged()
     return sendJson(res, 200, { ok: true })
@@ -278,9 +280,19 @@ export async function handleAuthRoute(req, res, urlPath) {
     const denied = deny('manageAccounts'); if (denied) return denied
 
     if (req.method === 'DELETE' && !action) {
+      // The person's projects go to ?transferTo=<account id>, or to whoever is
+      // deleting them; shared projects outlive the account that made them.
+      let transferTo = actor?.id ?? null
+      try { transferTo = new URL(req.url ?? '/', 'http://x').searchParams.get('transferTo') || transferTo } catch { /* keep the actor */ }
+      if (transferTo === id) return sendJson(res, 400, { error: 'Projects cannot be handed to the account being deleted' })
+      if (countOwnedBy(id) > 0 && !listAccounts(actor).some(a => a.id === transferTo)) {
+        return sendJson(res, 400, { error: 'Choose who takes over this person\'s projects' })
+      }
       const result = deleteAccount(actor, id)
       if (!result.ok) return sendJson(res, result.error === 'Account not found' ? 404 : 403, { error: result.error })
-      return sendJson(res, 200, { ok: true })
+      const { transferred } = handOverAccount(id, transferTo)
+      if (transferred) logPolicy('projects.transferred', { count: transferred, by: actor?.username ?? '(auth off)' })
+      return sendJson(res, 200, { ok: true, projectsTransferred: transferred })
     }
 
     if (req.method === 'POST' && action === 'reset-password') {
