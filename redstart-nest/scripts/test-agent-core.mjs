@@ -1221,6 +1221,11 @@ await test("stagnation: a command's action is its first words, whatever its flag
   eq(f('npx vitest run --reporter=json > out.json'), 'run_command:npx vitest run', 'a redirect ends it')
   assert(f('npm run check') !== f('npm run build'), 'different scripts are different actions')
   eq(actionFamily('read_file', '{"path":"a.ts"}', 'read'), 'read_file:a.ts', 'other tools: tool and target')
+  // A leading cd says where, not what: these are three different actions.
+  eq(f('cd Crestline && npm run check'), 'run_command:npm run check', 'cd && …')
+  eq(f('cd /d Crestline && dir .svelte-kit'), 'run_command:dir .svelte-kit', 'cd /d && …')
+  assert(f('cd app && npx svelte-kit sync') !== f('cd app && npm run check'), 'not all "cd app"')
+  eq(f('cd app'), 'run_command:cd app', 'a cd alone is itself')
 })
 
 await test('stagnation (a): the same exact call is refused after the third time', () => {

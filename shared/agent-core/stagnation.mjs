@@ -192,7 +192,14 @@ function informative(signature) {
 export function actionFamily(name, args, kind) {
 	const parsed = parseArgs(args);
 	if (kind === 'command') {
-		const line = typeof parsed.command === 'string' ? parsed.command : typeof parsed.cmd === 'string' ? parsed.cmd : String(args ?? '');
+		const full = typeof parsed.command === 'string' ? parsed.command : typeof parsed.cmd === 'string' ? parsed.cmd : String(args ?? '');
+		// `cd app && npm run check` is npm run check: a leading cd says where,
+		// not what. Without this every chained line was "cd app", and three
+		// different commands read as one failing three times (Crestline,
+		// 2026-11-24).
+		const parts = full.split('&&').map((p) => p.trim());
+		while (parts.length > 1 && /^(cd|chdir)(\s|$)/i.test(parts[0])) parts.shift();
+		const line = parts.join(' && ');
 		const words = [];
 		for (const raw of line.split(/\s+/)) {
 			if (/^(\||\|\||&&|;|>|>>|2>|2>&1|<)$/.test(raw) || /^\d?>/.test(raw)) break;
