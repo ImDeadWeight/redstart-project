@@ -513,9 +513,13 @@ export function toolsPort(pass) {
       const out = result === null || result === undefined
         ? { text: unknownToolText(name, turnCtx.mcpTools.map((x) => x.name)), isError: true }
         : { text: formatMcpToolResult(result), isError: !!result.isError }
-      store.appendEvent(task.id, { type: 'tool_result', callId: call.id, name, isError: out.isError, preview: preview(out.text) })
+      // The artifacts it named ride on the event (artifacts plan §10), so a
+      // browser following this chat opens and refreshes the panel as it would
+      // for its own loop; the preview is cut short and may lose the line.
+      const artifacts = parseArtifactLines(out.text)
+      store.appendEvent(task.id, { type: 'tool_result', callId: call.id, name, isError: out.isError, preview: preview(out.text), ...(artifacts.length ? { artifacts: artifacts.map((r) => r.id) } : {}) })
       // Artifacts this pass wrote, sealed when it ends (artifacts plan D7).
-      for (const ref of parseArtifactLines(out.text)) if (ref.revision === 'draft') pass.artifactsTouched.add(ref.id)
+      for (const ref of artifacts) if (ref.revision === 'draft') pass.artifactsTouched.add(ref.id)
       return out
     },
     // Images the result linked (view_image, charts, generated pictures), sent
