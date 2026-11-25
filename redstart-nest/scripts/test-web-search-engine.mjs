@@ -287,6 +287,7 @@ const NOW = new Date('2026-11-05T12:00:00Z')
 await test('🔍 engine off: no claim, no egress entry', async () => {
   const { prompt } = composePrompt({ config: cfg(), hasTools: true, toolNames: ['web_fetch', 'web_search'], now: NOW })
   assert(!/SearXNG|Brave|"web" source/.test(prompt), 'prompt mentions an engine that is off')
+  assert(!/newer versions/.test(prompt), 'told to look things up with no engine to look them up with')
   assert(deriveEgressFacts(cfg(), [], true).webSearchEngine === null, 'egress reports an off engine')
 })
 
@@ -295,6 +296,7 @@ await test('engine on: the claim names the engine and host; SearXNG on localhost
   const { prompt } = composePrompt({ config, hasTools: true, toolNames: ['web_fetch', 'web_search'], now: NOW })
   assert(prompt.includes(`sends the query to SearXNG (127.0.0.1:${stub.address().port})`), 'claim does not name the engine')
   assert(/forwards them to the public search engines/.test(prompt), 'data_handling missing the upstream disclosure')
+  assert(/may use newer\s+versions/.test(prompt) && /with web_search and read the page with web_fetch/.test(prompt), 'no line saying when to look things up')
   const facts = deriveEgressFacts(config, [], true)
   assert(facts.hasEgress === true, 'a localhost SearXNG was reported as no egress')
 })

@@ -36,12 +36,18 @@
  *      diagnostics, a search, or a different command)
  *   3  the run stops, and the person gets a summary of what was tried
  *
+ * When the host has a web tool (options.lookupTools), the notes also say to
+ * look the failure up (lookup.mjs), a lookup is never what a level 2 refusal
+ * blocks, and what one finds is new evidence.
+ *
  * Pure: no I/O, no clock. The host says what each call was (its kind, what it
  * read and wrote); the monitor keeps the counts. That keeps it testable
  * against recorded transcripts, and the same in every host.
  *
  * Pinned by redstart-nest/scripts/test-agent-core.mjs.
  */
+
+import { stuckLookupHint } from './lookup.mjs';
 
 /** Starting thresholds: guesses checked against the Crestline transcript, to be tuned against the benchmark. */
 export const STAGNATION_LIMITS = Object.freeze({
@@ -322,13 +328,32 @@ const KIND_PLURAL = { read: 'reads', search: 'searches', write: 'writes', comman
 /** @type {Partial<Record<Detector, string>>} */
 const BLOCKED_KIND = { 'no-progress': 'kind:search', theorizing: 'kind:write', 'reasoning-loop': 'kind:write' };
 
-/** @param {Recovery['level']} level @param {string} evidence @param {string} action */
-function modelNote(level, evidence, action) {
+/**
+ * @param {Recovery['level']} level @param {string} evidence @param {string} action
+ * @param {string | null} lookup the web tool to name, if the host has one
+ */
+function modelNote(level, evidence, action, lookup) {
+	const hint = lookup ? `${stuckLookupHint(lookup)} ` : '';
 	if (level === 1) {
-		return `[You seem to be stuck. ${evidence} Change approach. ${DEBUGGING_PROCEDURE}]`;
+		return `[You seem to be stuck. ${evidence} Change approach. ${hint}${DEBUGGING_PROCEDURE}]`;
 	}
-	const ways = action === 'kind:search' ? 'read the file involved, check diagnostics, or run a command' : 'read the file involved, check diagnostics, search, or run a different command';
-	return `[You are still stuck. ${evidence} Until you have new evidence, ${describeAction(action)} will not run: ${ways}. ${DEBUGGING_PROCEDURE}]`;
+	const search = lookup ? `, look it up with ${lookup}` : '';
+	const ways = action === 'kind:search'
+		? `read the file involved, check diagnostics${search}, or run a command`
+		: `read the file involved, check diagnostics, search${search}, or run a different command`;
+	return `[You are still stuck. ${evidence} Until you have new evidence, ${describeAction(action)} will not run: ${ways}. ${hint}${DEBUGGING_PROCEDURE}]`;
+}
+
+/**
+ * The tool a call really runs: Nest's catalog dispatcher (call_tool) names it
+ * in its arguments.
+ *
+ * @param {CallInfo} call
+ */
+function targetName(call) {
+	if (call.name !== 'call_tool') return call.name;
+	const name = parseArgs(call.args).name;
+	return typeof name === 'string' ? name : call.name;
 }
 
 // --- the monitor ---------------------------------------------------------------
@@ -342,9 +367,18 @@ function modelNote(level, evidence, action) {
  * return a Recovery for the host to act on.
  *
  * @param {Partial<typeof STAGNATION_LIMITS>} [overrides]
+ * @param {{ lookupTools?: readonly string[] }} [options] lookupTools: the web
+ *   tools the model has (web_search, web_fetch), first named in the notes
  */
-export function createStagnationMonitor(overrides = {}) {
+export function createStagnationMonitor(overrides = {}, options = {}) {
 	const limits = { ...STAGNATION_LIMITS, ...overrides };
+	const lookupTools = options.lookupTools ?? [];
+	const lookup = lookupTools[0] ?? null;
+	/** @param {CallInfo} call */
+	const isLookup = (call) => lookupTools.includes(targetName(call));
+	/** Lookups already made: a new one is new evidence.
+	 *  @type {Set<string>} */
+	const lookedUp = new Set();
 
 	let round = 1;
 	/** How often each exact call has been asked for, since the files last
@@ -421,7 +455,7 @@ export function createStagnationMonitor(overrides = {}) {
 		const recovery =
 			lvl === 3
 				? { detector, level: lvl, evidence, note: stopSummary(evidence), stop: true }
-				: { detector, level: lvl, evidence, note: modelNote(lvl, evidence, refuse), stop: false };
+				: { detector, level: lvl, evidence, note: modelNote(lvl, evidence, refuse, lookup), stop: false };
 		if (lvl === 2) {
 			blocked = refuse;
 			recovery.action = refuse;
@@ -497,7 +531,8 @@ export function createStagnationMonitor(overrides = {}) {
 			if (times > limits.identicalCalls) {
 				return { refuse: repeatedCallResult(call.name, times - 1), reason: 'repeated' };
 			}
-			if (blocked && isBlocked(call, blocked)) {
+			// Looking it up is what the notes ask for: never refused as blocked.
+			if (blocked && !isLookup(call) && isBlocked(call, blocked)) {
 				return { refuse: refusedActionResult(blocked), reason: 'blocked' };
 			}
 			return null;
@@ -522,7 +557,15 @@ export function createStagnationMonitor(overrides = {}) {
 				}
 				// New evidence lifts a refusal: a read, diagnostics, a search
 				// (unless searching is what is refused), or another command.
-				const gathers = call.kind === 'read' || call.kind === 'diagnostics' ||
+				// A web lookup is new evidence whatever is refused; a new one is progress.
+				if (isLookup(call)) {
+					const key = `${targetName(call)}\u0000${String(call.args ?? '').trim()}`;
+					if (!lookedUp.has(key)) {
+						lookedUp.add(key);
+						progress();
+					}
+				}
+				const gathers = isLookup(call) || call.kind === 'read' || call.kind === 'diagnostics' ||
 					(call.kind === 'search' && blocked !== 'kind:search') ||
 					(call.kind === 'command' && (blocked === null || !isBlocked(call, blocked)));
 				if (gathers) blocked = null;

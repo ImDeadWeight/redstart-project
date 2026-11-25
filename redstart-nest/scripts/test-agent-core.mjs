@@ -55,6 +55,7 @@ import {
   STAGNATION_LIMITS,
 } from '../../shared/agent-core/stagnation.mjs'
 import { createWorkingState, WORKING_STATE_HEADER } from '../../shared/agent-core/working-state.mjs'
+import { lookupGuidance, majorOf, newerThanKnown, manifestNote, KNOWN_MAJORS } from '../../shared/agent-core/lookup.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const coreDir = path.join(here, '..', '..', 'shared', 'agent-core')
@@ -1474,6 +1475,66 @@ await test('stagnation: no-progress at level 2 pauses searches, not writes', () 
   eq([r?.level, r?.action], [2, 'kind:search'], 'searches')
   eq(m.check(search('e'))?.reason, 'blocked', 'a search is paused')
   eq(m.check(write('a.ts')), null, 'a write is not')
+})
+
+await test('stagnation: with a web tool, the notes say to look it up, and a lookup is never paused', () => {
+  const plain = createStagnationMonitor({ noProgressRounds: 2 })
+  step(plain, search('a'), { ok: true })
+  const quiet = step(plain, search('b'), { ok: true }).recovery
+  assert(quiet && !/web_search/.test(quiet.note), 'no web tool: no lookup in the note')
+
+  const m = createStagnationMonitor({ noProgressRounds: 2 }, { lookupTools: ['web_search', 'web_fetch'] })
+  step(m, search('a'), { ok: true })
+  const r1 = step(m, search('b'), { ok: true }).recovery
+  eq(r1?.level, 1, 'level 1')
+  assert(/look up its current documentation with web_search/.test(r1.note), r1.note)
+  step(m, search('c'), { ok: true })
+  const r2 = step(m, search('d'), { ok: true }).recovery
+  eq([r2?.level, r2?.action], [2, 'kind:search'], 'searches are paused')
+  assert(/look it up with web_search/.test(r2.note), r2.note)
+  const web = { name: 'web_search', args: JSON.stringify({ source: 'web', query: 'sveltekit 3 $lib' }), kind: 'search' }
+  eq(m.check(web), null, 'web_search is a search, but not paused')
+  m.record(web, { ok: true, text: 'SvelteKit 3: $lib is now the #lib package import' })
+  eq(m.check(search('e')), null, 'what it found lifts the pause')
+  const viaCatalog = { name: 'call_tool', args: JSON.stringify({ name: 'web_fetch', arguments: { url: 'https://svelte.dev' } }), kind: 'read' }
+  eq(m.check(viaCatalog), null, 'through call_tool too')
+})
+
+await test('stagnation: a new lookup is progress; the same one again is not', () => {
+  const m = createStagnationMonitor({ noProgressRounds: 3 }, { lookupTools: ['web_search'] })
+  const web = (q) => ({ name: 'web_search', args: JSON.stringify({ query: q }), kind: 'search' })
+  for (const q of ['a', 'b', 'c', 'd']) eq(step(m, web(q), { ok: true }).recovery, null, `new query ${q}`)
+  step(m, web('d'), { ok: true }); step(m, web('d'), { ok: true })
+  assert(step(m, web('d'), { ok: true }).recovery?.detector === 'no-progress', 'the same query is not news')
+})
+
+console.log('\n-- lookup --')
+
+await test('lookup: a range gives its major version; what is not a version gives none', () => {
+  eq(['^3.2.0', '~1.2', '>=2 <4', '5', 'v6.1.0', '3.x'].map(majorOf), [3, 1, 2, 5, 6, 3], 'versions')
+  eq(['latest', '*', 'workspace:*', 'file:../x', 'github:a/b', 'next'].map(majorOf), [null, null, null, null, null, null], 'not versions')
+})
+
+await test('lookup: the Crestline scaffold (SvelteKit 3, Vite 8) is flagged; known versions are not', () => {
+  const crestline = {
+    devDependencies: { '@sveltejs/kit': '^3.2.0', svelte: '^5.57.3', typescript: '^6.0.3', vite: '^8.3.8', vitest: '^5.1.0', 'left-pad': '^9.0.0' },
+  }
+  const found = newerThanKnown(crestline.devDependencies).map((f) => f.name)
+  eq(found, ['@sveltejs/kit', 'typescript', 'vite', 'vitest'], 'past the known majors; unknown packages are left alone')
+  const note = manifestNote(JSON.stringify(crestline), ['web_search'])
+  assert(/@sveltejs\/kit \^3\.2\.0/.test(note) && /with web_search/.test(note), note)
+  eq(manifestNote(JSON.stringify(crestline), ['read_file']), '', 'no web tool: no note')
+  eq(manifestNote(JSON.stringify({ dependencies: { svelte: '^5.0.0' } }), ['web_search']), '', 'nothing newer: no note')
+  eq(manifestNote('{ not json', ['web_search']), '', 'a manifest that does not parse: no note')
+  assert(Object.isFrozen(KNOWN_MAJORS), 'the table is frozen')
+})
+
+await test('lookup: the prompt line is only for a host with a web tool, and names what it has', () => {
+  eq(lookupGuidance(['read_file', 'run_python']), '', 'no web tool')
+  const both = lookupGuidance(['web_search', 'web_fetch'])
+  assert(/with web_search and read the page with web_fetch/.test(both), both)
+  assert(/newer\s+versions/.test(both), both)
+  assert(!/web_fetch/.test(lookupGuidance(['web_search'])), 'never names a tool it lacks')
 })
 
 console.log('\n-- working state --')
