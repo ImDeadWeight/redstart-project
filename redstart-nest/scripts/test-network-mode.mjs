@@ -99,7 +99,7 @@ test('🔍 lan-http → lan-https: proxy stops, data plane narrows, then the Cad
 
 test('🔍 lan-https → lan-http: Caddy stops, THEN the data plane widens, then the proxy', () => {
   const got = ops(next(at('lan-https'), inp({ tlsMode: 'off' })).steps)
-  assert(got === 'caddy:stop → dataplane:bind(0.0.0.0) → port80:start → firewall:ensure(gateway) → firewall:ensure(mcp) → firewall:ensure(port80)', got)
+  assert(got === 'caddy:stop → dataplane:bind(0.0.0.0) → port80:start → firewall:ensure(gateway) → firewall:ensure(mcp) → firewall:ensure(content) → firewall:ensure(port80)', got)
 })
 
 test('🔍 Caddy gives up: lan-https → fallback stops it and widens; the rules were already ensured once', () => {
@@ -163,7 +163,7 @@ const ALL = Object.entries(VARIANTS).flatMap(([s, vs]) => vs.map((v) => ({ s, v 
 
 function simulate(from, steps) {
   const w = { host: from.host, port80: from.port80Proxy, caddy: !!from.caddy, rules: new Set(from.firewall) }
-  const listening = { gateway: () => w.host === WILDCARD, mcp: () => w.host === WILDCARD, port80: () => w.port80, caddy: () => w.caddy }
+  const listening = { gateway: () => w.host === WILDCARD, mcp: () => w.host === WILDCARD, content: () => w.host === WILDCARD, port80: () => w.port80, caddy: () => w.caddy }
   const check = (where) => {
     assert(!(w.caddy && w.port80), `${where}: Caddy and the port-80 proxy both running (both want :80)`)
     assert(!(w.caddy && w.host === WILDCARD), `${where}: Caddy running while the gateway is on 0.0.0.0 (LAN can go around it)`)

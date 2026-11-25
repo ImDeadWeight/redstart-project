@@ -68,6 +68,7 @@ import { pluginCapabilities, pluginToolRetrievalMetadata } from './plugin-regist
 import { setPluginMetadataProvider } from './tool-metadata.mjs'
 import { sweepPendingDeletions } from './plugin-install.mjs'
 import { startArtifactSweep, stopArtifactSweep } from './artifacts-storage.mjs'
+import { startContentListener, stopContentListener } from './artifact-content.mjs'
 import { describeCrash } from './crash-handler.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -542,6 +543,16 @@ export async function startDaemon(entrypoint = {}) {
   setupAdminApi()
   await startDiscoveryBeacon()
   await startAdminPlane()
+  // The artifact content listener (artifacts plan D9), at the data plane's
+  // current bind, which the network-mode owner has just settled; it moves the
+  // listener on every later change. Not fatal: Nest runs without it, and the
+  // viewer says artifacts cannot be shown.
+  try {
+    await startContentListener({ bindHost: lanOwner().dataPlaneHost() })
+  } catch (err) {
+    logEvent('artifact', 'content_listener_failed', { message: err.message })
+    console.warn(`Artifact content listener could not start: ${err.message}`)
+  }
   // A daemon that died while an image was being generated left the GPU lease
   // marker behind and its model paused: bring that model back (plan decision
   // U-IG4). After the control plane is up, so a launch failure is visible to
@@ -605,6 +616,7 @@ export function stopDaemon() {
   // that is mid-write finishes that write before it sees the abort.
   void suspendAllTasks()
   stopArtifactSweep()
+  stopContentListener()
   stopGateway()
   stopMcpServer()
   // The port-80 proxy and Caddy, signalled now; Caddy is a child to wait for.

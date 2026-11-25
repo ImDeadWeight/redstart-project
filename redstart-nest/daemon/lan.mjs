@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 import { createNetworkModeOwner } from './network-mode-owner.mjs'
 import { createCaddySupervisor, caddyBinaryCandidates, caddyPaths } from './caddy-server.mjs'
-import { buildCaddyConfig, PROXY_SECRET_ENV, adminHostnameFor } from './caddy-config.mjs'
+import { buildCaddyConfig, PROXY_SECRET_ENV, adminHostnameFor, contentHostnameFor } from './caddy-config.mjs'
 import { newProxySecret, clearProxySecret } from './proxy-trust.mjs'
 import { rebindGateway } from './tools-gateway.mjs'
 import { rebindMcpServer } from './mcp-server.mjs'
@@ -18,7 +18,8 @@ import { nameProvider, createAddressWatcher, registerName, heartbeatName, releas
 import { checkServing, diagnostics, createHealthRunner } from './tls-health.mjs'
 import { getPrimaryLanIp, refreshRouteIp } from './net-interfaces.mjs'
 import { logEvent } from './logger.mjs'
-import { ADMIN_PORT } from './ports.mjs'
+import { ADMIN_PORT, ARTIFACT_CONTENT_PORT } from './ports.mjs'
+import { rebindContentListener } from './artifact-content.mjs'
 import { setInfrastructureEgress } from './infrastructure-egress.mjs'
 
 // =============================================================================
@@ -164,6 +165,8 @@ function realEffects({ configDir }) {
     async bindDataPlane(host) {
       await rebindGateway(host)
       await rebindMcpServer(host)
+      // The artifact content listener follows the data plane (artifacts plan D9).
+      await rebindContentListener(host)
     },
     async startPort80({ gatewayPort }) {
       startPort80Proxy({ targetPort: gatewayPort })
@@ -197,6 +200,11 @@ function realEffects({ configDir }) {
         // challenge is the one it already answers. Own names keep :8443 only
         // (controlPlaneState in ipc/admin.mjs tells the launcher the same).
         adminHostname: t.adminProxied && t.provider === 'redstart' ? adminHostnameFor(t.hostname) : null,
+        // Artifact content (artifacts plan D9): always on :8444 under the
+        // device name, and on art.<name> for an Automatic name. Which one the
+        // viewer is handed is artifactContentTarget()'s call.
+        contentPort: ARTIFACT_CONTENT_PORT,
+        contentHostname: t.provider === 'redstart' ? contentHostnameFor(t.hostname) : null,
       })
       await supervisor.start({ config, secrets: { ...t.secrets, [PROXY_SECRET_ENV]: secret } })
     },
@@ -210,6 +218,7 @@ function realEffects({ configDir }) {
       // one in turn would split up again.
       if (rule === 'gateway') void ensureFirewallRule(gatewayPort)
       else if (rule === 'mcp') void ensureFirewallRule(gatewayPort + 2)
+      else if (rule === 'content') void ensureFirewallRule(ARTIFACT_CONTENT_PORT)
       else if (rule === 'port80') void ensureFirewallRule(80)
       else if (rule === 'caddy') {
         // Awaited: this runs BEFORE caddy:start (network-mode.mjs, rule 4's
@@ -369,6 +378,27 @@ export function beaconInfo(gatewayPort) {
   // The name Caddy serves, which in "redstart" mode is not the own-name field.
   const name = servedName(io ? readTls(io.readSettings()) : null)
   return { port: 80, origin: health?.serving() && name ? `https://${name}` : null }
+}
+
+/**
+ * Where artifact content is reachable, for artifact-origin.mjs: the LAN
+ * state, the HTTPS name and kind, whether HTTPS is serving, and whether the
+ * name service has said it publishes art.<name> (an older one does not, and
+ * then :8444 under the device name is used instead).
+ */
+export function artifactContentTarget() {
+  const state = owner?.status().state ?? 'local'
+  // The settings, not runtime(): no credential is decrypted per request.
+  const t = io ? readTls(io.readSettings()) : null
+  const automatic = t?.mode === 'redstart'
+  const hostname = (automatic ? t?.automatic?.hostname : t?.name) || null
+  return {
+    state,
+    hostname,
+    automatic,
+    serving: health?.serving() ?? false,
+    contentNamePublished: !!hostname && lastPublish?.ok === true && lastPublish?.artifactsName === contentHostnameFor(hostname),
+  }
 }
 
 /** The owner. Lazily created with defaults for callers that run without a daemon (tests). */

@@ -237,6 +237,9 @@ jobs:
       - name: "Security: artifact access (most specific wins; 404 for unreadable; UI-only sharing)"
         run: node scripts/test-artifacts-access.mjs
 
+      - name: "Security: artifact content origin (view tokens, sandbox headers, main origin refuses /a/)"
+        run: node scripts/test-artifacts-content.mjs
+
       - name: "Security: document search is per account; index, citations, sync"
         run: node scripts/test-document-search.mjs
 

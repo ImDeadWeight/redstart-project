@@ -37,6 +37,7 @@ import { isApprovalRoute, handleApprovalRoute } from './gateway/approval-routes.
 import { isTaskRoute, handleTaskRoute } from './gateway/task-routes.mjs'
 import { isWorkflowRoute, handleWorkflowRoute } from './gateway/workflow-routes.mjs'
 import { isProjectRoute, handleProjectRoute } from './gateway/project-routes.mjs'
+import { isArtifactRoute, handleArtifactRoute } from './gateway/artifact-routes.mjs'
 import { setUpstreamPort } from './completion-activity.mjs'
 import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/document-index-routes.mjs'
 import { handlePromptRoute } from './gateway/prompt-routes.mjs'
@@ -422,7 +423,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       if (req.method === 'OPTIONS') {
         res.writeHead(204, {
           'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+          'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
           // X-Redstart-Device-Id is sent by the chat-ui's DatabaseService on
           // every /conversations call; without it here, browsers block those
           // cross-origin requests at preflight. X-Redstart-Timezone rides on
@@ -440,6 +441,17 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       const urlPath = req.url.split('?')[0]
       if (urlPath.startsWith('/auth/')) {
         return await handleAuthRoute(req, res, urlPath)
+      }
+
+      // Artifact content is served ONLY by the content listener, on an origin
+      // of its own (artifact-content.mjs, artifacts plan D9). Refused here
+      // before anything else can answer it: an artifact page on THIS origin
+      // could read the login token. (Its paths end in .html, which the
+      // public-asset rule below would otherwise pass through.)
+      if (urlPath === '/a' || urlPath.startsWith('/a/')) {
+        res.writeHead(404, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+        res.end(JSON.stringify({ error: { message: 'Not found', type: 'not_found' } }))
+        return
       }
 
       // Serve the app shell (static assets) to everyone — the login screen
@@ -523,6 +535,9 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       if (isWorkflowRoute(urlPath) && await handleWorkflowRoute(req, res, urlPath, authResult.account ?? null)) return
       // Projects (personal; sharing is projects-plan D7). Same account rule.
       if (isProjectRoute(urlPath) && await handleProjectRoute(req, res, urlPath, authResult.account ?? null)) return
+      // Artifacts (artifacts plan §12): listing, sharing, view tokens. Same
+      // account rule. Sharing, deleting and restoring exist only here (D8).
+      if (isArtifactRoute(urlPath) && await handleArtifactRoute(req, res, urlPath, authResult.account ?? null)) return
       if (isDocumentIndexRoute(urlPath) && await handleDocumentIndexRoute(req, res, urlPath, authResult.account ?? null)) return
 
       // MCP server discovery — the chat-ui fetches this at startup to
