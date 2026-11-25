@@ -74,6 +74,21 @@ export function readTls(settings) {
 }
 
 /**
+ * The name Caddy serves for these settings (readTls's view), or ''. The own
+ * name in "own" mode, the registered automatic name in "redstart" mode. The
+ * own-name field keeps its value when the mode changes, so it is not the
+ * served name in "redstart" mode: the beacon advertised it there (2026-11-24),
+ * a name nothing was serving, while Caddy served the automatic one.
+ * @param {ReturnType<typeof readTls> | null | undefined} t
+ */
+export function servedName(t) {
+  if (!t) return ''
+  if (t.mode === 'redstart') return t.automatic?.hostname ?? ''
+  if (t.mode === 'own') return t.name
+  return ''
+}
+
+/**
  * The stored Automatic registration, or null. `credentialEnc` is encrypted
  * like the own-name token and found by the re-key tool the same way.
  * @returns {{ id: string, hostname: string, credentialEnc: string, registeredAt: number } | null}
