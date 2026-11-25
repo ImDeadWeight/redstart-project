@@ -26,6 +26,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import * as http from 'node:http'
 import { Readable } from 'node:stream'
+import { randomInt } from 'node:crypto'
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-artifacts-content-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
@@ -211,7 +212,9 @@ await test('the reporter is injected first in <head> only when the token asks fo
 console.log('\n-- the main origin --')
 
 await test('🔍 the main gateway refuses /a/ before anything else can answer it', async () => {
-  const port = 41000 + Math.floor(Math.random() * 2000)
+  // crypto.randomInt rather than Math.random, as test-gateway-routes does:
+  // nothing here needs to be unpredictable, but CodeQL flags Math.random.
+  const port = randomInt(41000, 43000)
   await startGateway(port, { tools: {} })
   try {
     for (const p of [`/a/${tokenFor()}/index.html`, '/a/', '/a']) {
