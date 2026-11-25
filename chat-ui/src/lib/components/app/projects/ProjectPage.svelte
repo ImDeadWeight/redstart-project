@@ -352,16 +352,6 @@
 			{/if}
 		</section>
 
-		<!-- Artifacts in the project (artifacts plan §10). A viewer's New makes
-		     one of their own (D6); the gallery says what each person may do. -->
-		<section class="space-y-2">
-			<h2 class="flex items-center gap-1.5 text-sm font-medium">
-				<AppWindow class="h-4 w-4" />
-				Artifacts
-			</h2>
-			<ArtifactsGallery projectId={project.id} canAdd={canEdit} compact />
-		</section>
-
 		<section class="space-y-2">
 			<div class="flex items-center justify-between gap-2">
 				<h2 class="text-sm font-medium">Instructions</h2>
@@ -496,6 +486,16 @@
 					{/each}
 				</ul>
 			{/if}
+		</section>
+
+		<!-- Artifacts in the project (artifacts plan §10). A viewer's New makes
+		     one of their own (D6); the gallery says what each person may do. -->
+		<section class="space-y-2">
+			<h2 class="flex items-center gap-1.5 text-sm font-medium">
+				<AppWindow class="h-4 w-4" />
+				Artifacts
+			</h2>
+			<ArtifactsGallery projectId={project.id} canAdd={canEdit} compact />
 		</section>
 	{/if}
 </div>
