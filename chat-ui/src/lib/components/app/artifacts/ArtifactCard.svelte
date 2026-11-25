@@ -42,9 +42,15 @@
 	});
 
 	const isOpen = $derived(artifactPanelStore.open?.id === id);
-	const label = $derived(
-		revision === 'draft' ? 'draft, saved when this turn ends' : revision ? `revision ${revision}` : 'nothing saved yet'
-	);
+	// The line says where it stood when the tool ran; once the turn has sealed
+	// that draft, say what is saved now.
+	const label = $derived.by(() => {
+		if (revision === 'draft') {
+			if (detail && !detail.draft?.mine) return detail.head ? `revision ${detail.head}` : 'nothing saved yet';
+			return 'draft, saved when this turn ends';
+		}
+		return revision ? `revision ${revision}` : 'nothing saved yet';
+	});
 </script>
 
 {#if detail === null}
