@@ -1,8 +1,9 @@
 // The Cloudflare DNS API, behind one guard (TLS plan C12, invariants 7 + 10).
 //
 // Every write the service can make passes writable(): the name must be
-// exactly <id>.nest.<zone>, admin.<id>.nest.<zone> (the install's admin
-// panel, same address) or _acme-challenge.<id>.nest.<zone> for the install
+// exactly <id>.nest.<zone>, one of its sub-names (admin.<id>.nest.<zone>,
+// the install's admin panel; art.<id>.nest.<zone>, its artifact content
+// origin; both the same address) or _acme-challenge.<id>.nest.<zone> for the install
 // that is asking, the type A, AAAA or TXT, and the record is always
 // DNS-only (proxied: false, the grey cloud). A proxied record would route
 // the household's traffic through Cloudflare and terminate TLS there, which
@@ -27,6 +28,15 @@ export const challengeNameFor = (id, zone) => `_acme-challenge.${hostnameFor(id,
  */
 export const ADMIN_LABEL = 'admin'
 export const adminHostnameFor = (id, zone) => `${ADMIN_LABEL}.${hostnameFor(id, zone)}`
+/**
+ * The artifact content origin's name (artifacts plan D9, 2026-11-25): where
+ * Nest serves artifact pages, on an origin of their own so their scripts can
+ * never read the chat app's login. Same wildcard, same challenge.
+ */
+export const ARTIFACTS_LABEL = 'art'
+export const artifactsHostnameFor = (id, zone) => `${ARTIFACTS_LABEL}.${hostnameFor(id, zone)}`
+/** Every A/AAAA name an install has: the device name and its sub-names, one address. */
+export const addressNamesFor = (id, zone) => [hostnameFor(id, zone), adminHostnameFor(id, zone), artifactsHostnameFor(id, zone)]
 
 /**
  * May the install `id` write a `type` record called `name`? Throws if not.
@@ -35,7 +45,7 @@ export const adminHostnameFor = (id, zone) => `${ADMIN_LABEL}.${hostnameFor(id, 
 export function writable({ id, name, type, zone }) {
   if (!ID_RE.test(String(id))) throw new Error('refused: not an install id')
   if (!TYPES.has(type)) throw new Error(`refused: ${type} records are not written`)
-  const allowed = type === 'TXT' ? [challengeNameFor(id, zone)] : [hostnameFor(id, zone), adminHostnameFor(id, zone)]
+  const allowed = type === 'TXT' ? [challengeNameFor(id, zone)] : addressNamesFor(id, zone)
   if (!allowed.includes(name)) throw new Error(`refused: ${name} is not ${allowed.join(' or ')}`)
   return true
 }

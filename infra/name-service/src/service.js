@@ -23,7 +23,7 @@
 
 import { newId, newCredential, sha256Hex, sameHex, ID_RE } from './ids.js'
 import { isPrivateIPv4, ulaIPv6 } from './net.js'
-import { hostnameFor, adminHostnameFor, challengeNameFor, reconcile } from './dns.js'
+import { hostnameFor, adminHostnameFor, artifactsHostnameFor, addressNamesFor, challengeNameFor, reconcile } from './dns.js'
 
 export const REGISTER_LIMIT = 5
 export const REGISTER_WINDOW_MS = 60 * 60 * 1000
@@ -107,14 +107,14 @@ export function createService({ db, dns, zone, serverUrl, now = Date.now, log = 
     }
     const name = hostnameFor(install.id, zone)
     const adminName = adminHostnameFor(install.id, zone)
-    // The device name and the admin panel's name always carry the same
-    // address: one machine, two names, one wildcard certificate.
-    for (const n of [name, adminName]) {
+    // The device name and its sub-names (admin panel, artifact content)
+    // always carry the same address: one machine, one wildcard certificate.
+    for (const n of addressNamesFor(install.id, zone)) {
       await reconcile(dns, { id: install.id, name: n, type: 'A', contents: [ipv4] })
       await reconcile(dns, { id: install.id, name: n, type: 'AAAA', contents: ipv6 ? [ipv6] : [] })
     }
     await db.prepare('UPDATE installs SET ipv4 = ?, ipv6 = ?, last_seen = ? WHERE id = ?').bind(ipv4, ipv6, now(), install.id).run()
-    return json(200, { hostname: name, adminHostname: adminName, ipv4, ipv6 })
+    return json(200, { hostname: name, adminHostname: adminName, artifactsHostname: artifactsHostnameFor(install.id, zone), ipv4, ipv6 })
   }
 
   async function acmeUpdate(req) {
@@ -139,7 +139,7 @@ export function createService({ db, dns, zone, serverUrl, now = Date.now, log = 
 
   /** Every record the install owns, then the install. Also housekeeping's. */
   async function forget(id) {
-    for (const name of [hostnameFor(id, zone), adminHostnameFor(id, zone)]) {
+    for (const name of addressNamesFor(id, zone)) {
       await reconcile(dns, { id, name, type: 'A', contents: [] })
       await reconcile(dns, { id, name, type: 'AAAA', contents: [] })
     }
