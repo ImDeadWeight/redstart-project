@@ -200,6 +200,12 @@ await test('the reporter is injected first in <head> only when the token asks fo
   assert(/^<!doctype html><html><head><script>\(function\(\)\{/.test(checked) && checked.includes('redstart-artifact'), checked.slice(0, 120))
   const css = contentGet(`/a/${tokenFor({ report: true })}/site.css`).body.toString()
   assert(css === 'h1{}', 'reporter injected into CSS')
+  // Under the sandbox a page's own scripts are cross-origin, and their errors
+  // read only "Script error." unless loaded in CORS mode (found in Edge).
+  assert(/<script crossorigin="anonymous" src="js\/app\.js">/.test(checked), 'checked page scripts not CORS-mode')
+  assert(!plain.includes('crossorigin'), 'the viewer\'s page was rewritten')
+  const { withCorsScripts } = await import('../daemon/artifact-reporter.mjs')
+  assert(withCorsScripts('<script src="a.js" crossorigin="use-credentials"></script><script>inline()</script>') === '<script src="a.js" crossorigin="use-credentials"></script><script>inline()</script>', 'touched a script that had crossorigin, or an inline one')
 })
 
 console.log('\n-- the main origin --')

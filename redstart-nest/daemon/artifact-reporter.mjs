@@ -50,12 +50,26 @@ if(document.readyState==='complete')post({type:'ready'});else addEventListener('
 })();`
 
 /**
+ * Every <script src> the page has, loaded in CORS mode. Under the sandbox the
+ * page's origin is opaque, so its own script files count as cross-origin, and
+ * a browser reports an error thrown in one only as "Script error." with no
+ * message or line (found running the reporter in Edge, 2026-11-25). A
+ * crossorigin="anonymous" load is a CORS request, which the content listener's
+ * Access-Control-Allow-Origin: * admits, and then the error is reported in
+ * full. Only in a checked page: the viewer leaves the HTML as written.
+ */
+export function withCorsScripts(html) {
+  return html.replace(/<script\b(?![^>]*\bcrossorigin\b)(?=[^>]*\bsrc\s*=)/gi, '<script crossorigin="anonymous"')
+}
+
+/**
  * The page with the reporter as its first script: right after <head> (or
  * <html>, or at the very start), so it is listening before any page script
  * runs and fails.
  */
 export function injectReporter(html) {
   const tag = `<script>${REPORTER_SCRIPT}</script>`
+  html = withCorsScripts(html)
   const head = /<head\b[^>]*>/i.exec(html)
   if (head) return html.slice(0, head.index + head[0].length) + tag + html.slice(head.index + head[0].length)
   const root = /<html\b[^>]*>/i.exec(html)
