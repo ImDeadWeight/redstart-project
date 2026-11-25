@@ -40,6 +40,7 @@
 	import ToolResultResource from './ToolResultResource.svelte';
 	import { resourceKind, type ToolResultResource as ToolResultResourceLine } from '$lib/utils/resource-links';
 	import MemorySavedChip from './MemorySavedChip.svelte';
+	import ArtifactCard from '$lib/components/app/artifacts/ArtifactCard.svelte';
 
 	/**
 	 * Download a file a tool produced, reporting failures.
@@ -365,6 +366,8 @@
 						{#each section.parsedLines as line, i (i)}
 							{#if line.resource}
 								<ToolResultResource resource={line.resource} onDownload={handleDownload} />
+							{:else if line.artifact}
+								<!-- Shown as a card below the block; the line itself is plumbing. -->
 							{:else if line.memory}
 								<MemorySavedChip
 									id={line.memory.id}
@@ -392,6 +395,11 @@
 				{/if}
 			</div>
 		</CollapsibleContentBlock>
+		<!-- Artifacts the call made or changed (artifacts plan §10): outside the
+		     collapsed block, so the person sees them without opening it. -->
+		{#each section.parsedLines.filter((l) => l.artifact) as line, i (i)}
+			<ArtifactCard conversationId={message.convId ?? null} id={line.artifact!.id} revision={line.artifact!.revision} />
+		{/each}
 	{:else if section.type === AgenticSectionType.REASONING}
 		{@const reasoningSubtitle = section.wasInterrupted
 			? hasReasoningError

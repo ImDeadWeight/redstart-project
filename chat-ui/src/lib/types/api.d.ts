@@ -265,6 +265,11 @@ export interface ApiChatCompletionRequest {
 	 * before forwarding; an id the caller cannot read adds nothing.
 	 */
 	redstart_project?: string;
+	/**
+	 * Redstart-only: the artifact open beside the chat (artifacts plan §10).
+	 * Resolved against the caller and stripped by the gateway.
+	 */
+	redstart_artifact?: string;
 	/** Redstart-only: the conversation's id, for tool retrieval's per-conversation set. Stripped by the gateway. */
 	redstart_conversation_id?: string;
 	/**

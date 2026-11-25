@@ -89,7 +89,9 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 import { AgenticSessionState } from '$lib/stores/agentic/agentic-session.svelte';
 import { AgenticToolExec } from '$lib/stores/agentic/agentic-tool-exec';
 import { AgenticTurn } from '$lib/stores/agentic/agentic-turn';
-import { runAgentLoop } from '$lib/agent-core';
+import { runAgentLoop, parseArtifactLines } from '$lib/agent-core';
+import { artifactPanelStore } from '$lib/stores/artifact-panel.svelte';
+import { ArtifactService } from '$lib/services/artifact.service';
 import type { AskAnswer } from '$lib/agent-core';
 
 class AgenticStore {
@@ -333,54 +335,79 @@ class AgenticStore {
 		const { conversationId, messages, options, tools, agenticConfig, callbacks, signal } = params;
 		const effectiveModel = options.model || modelsStore.models[0]?.model || '';
 
-		await runAgentLoop({
-			messages: toAgenticMessages(messages),
-			maxTurns: agenticConfig.maxTurns,
-			callbacks,
-			signal,
-			ports: {
-				model: {
-					streamTurn: ({ acc, messages: sessionMessages, signal: turnSignal }) =>
-						this.turnRunner.runTurn({
-							acc,
-							conversationId,
-							sessionMessages: sessionMessages as ApiChatMessageData[],
-							options,
-							tools,
-							callbacks,
-							signal: turnSignal
-						})
-				},
-				...this.toolExec.ports(conversationId, effectiveModel),
-				// ask_user (plan §4, 1.1): the question card. Nest offers the tool
-				// because chat-ui declares it answers it (constants/mcp.ts).
-				ask: { user: (request, s) => this.session.requestAnswer(conversationId, request, s) },
-				// update_plan (plan §4, 1.2): kept on the conversation record and
-				// shown above the composer (ChatFormPlan). The core sends the open
-				// steps at the tail of each request and nudges once at the end.
-				plan: {
-					get: () => conversationsStore.getPlanSteps(conversationId),
-					save: (steps) => conversationsStore.setConversationPlan(conversationId, steps)
-				},
-				limit: { askContinue: (s) => this.requestContinue(conversationId, s) },
-				steering: { pending: () => this.session.steeringMessages.has(conversationId) },
-				fallbackParser: () => {
-					const settings = config();
-					if (!settings.toolCallFallbackParserEnabled) return null;
-					return {
-						patterns: String(settings.toolCallFallbackParserPatterns || '')
-							.split(',')
-							.map((p: string) => p.trim())
-							.filter(Boolean),
-						availableTools: toolsStore.allTools.map((t) => ({
-							name: t.definition.function.name
-						}))
-					};
-				},
-				progress: (patch) => this.session.updateSession(conversationId, patch),
-				log: (message) => console.log(`[AgenticStore] ${message}`)
+		// Artifacts (artifacts plan D7, §10): every result naming one ends with
+		// an [artifact: …] line. Drafts this turn wrote are sealed into
+		// revisions when it ends; the first artifact CREATED in the turn opens
+		// the panel, and a write to the open one refreshes it.
+		const execPorts = this.toolExec.ports(conversationId, effectiveModel);
+		const touched = new Set<string>();
+		const trackedTools: typeof execPorts.tools = {
+			...execPorts.tools,
+			execute: async (call, s) => {
+				const out = await execPorts.tools.execute(call, s);
+				for (const ref of parseArtifactLines(out.text)) {
+					if (ref.revision === 'draft') touched.add(ref.id);
+					artifactPanelStore.noteResult(conversationId, ref.id, call.function.name === 'artifact_create' && !out.isError);
+				}
+				return out;
 			}
-		});
+		};
+
+		try {
+			await runAgentLoop({
+				messages: toAgenticMessages(messages),
+				maxTurns: agenticConfig.maxTurns,
+				callbacks,
+				signal,
+				ports: {
+					model: {
+						streamTurn: ({ acc, messages: sessionMessages, signal: turnSignal }) =>
+							this.turnRunner.runTurn({
+								acc,
+								conversationId,
+								sessionMessages: sessionMessages as ApiChatMessageData[],
+								options,
+								tools,
+								callbacks,
+								signal: turnSignal
+							})
+					},
+					gate: execPorts.gate,
+					tools: trackedTools,
+					// ask_user (plan §4, 1.1): the question card. Nest offers the tool
+					// because chat-ui declares it answers it (constants/mcp.ts).
+					ask: { user: (request, s) => this.session.requestAnswer(conversationId, request, s) },
+					// update_plan (plan §4, 1.2): kept on the conversation record and
+					// shown above the composer (ChatFormPlan). The core sends the open
+					// steps at the tail of each request and nudges once at the end.
+					plan: {
+						get: () => conversationsStore.getPlanSteps(conversationId),
+						save: (steps) => conversationsStore.setConversationPlan(conversationId, steps)
+					},
+					limit: { askContinue: (s) => this.requestContinue(conversationId, s) },
+					steering: { pending: () => this.session.steeringMessages.has(conversationId) },
+					fallbackParser: () => {
+						const settings = config();
+						if (!settings.toolCallFallbackParserEnabled) return null;
+						return {
+							patterns: String(settings.toolCallFallbackParserPatterns || '')
+								.split(',')
+								.map((p: string) => p.trim())
+								.filter(Boolean),
+							availableTools: toolsStore.allTools.map((t) => ({
+								name: t.definition.function.name
+							}))
+						};
+					},
+					progress: (patch) => this.session.updateSession(conversationId, patch),
+					log: (message) => console.log(`[AgenticStore] ${message}`)
+				}
+			});
+		} finally {
+			// Never blocks the turn ending: a seal that fails is the idle sweep's.
+			await Promise.all([...touched].map((id) => ArtifactService.seal(id, conversationId)));
+			artifactPanelStore.turnEnded(conversationId);
+		}
 	}
 }
 

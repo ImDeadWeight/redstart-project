@@ -127,6 +127,8 @@ export interface SettingsChatServiceOptions {
 	promptMode?: string | null;
 	// The chat's project id (projects-plan Phase 2). Resolved server-side.
 	projectId?: string | null;
+	// The artifact open beside the chat (artifacts plan §10). Resolved server-side.
+	artifactId?: string | null;
 	// Callbacks
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;

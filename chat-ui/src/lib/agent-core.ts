@@ -12,6 +12,7 @@
  */
 
 export { runAgentLoop, createTurnAccumulator } from '../../../shared/agent-core/loop.mjs';
+export { parseArtifactLines, stripArtifactLines, formatArtifactLine } from '../../../shared/agent-core/artifact-lines.mjs';
 export {
 	buildFinalTimings,
 	createAgenticTimings,
