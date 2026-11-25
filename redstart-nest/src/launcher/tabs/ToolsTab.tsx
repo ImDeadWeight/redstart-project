@@ -220,6 +220,8 @@ export function ToolsTab({ config, toolsCatalog, caps, plugins, onOpenImages }: 
   // uses its own `!== false` boolean (see ProfileTools in types.ts).
   const isActive = (id: string) => config.tools?.activeToolIds?.includes(id) ?? false
   const webAccessOn = config.tools?.webAccessEnabled !== false
+  // Artifacts default to on the same way (ProfileTools.artifactsEnabled).
+  const artifactsOn = config.tools?.artifactsEnabled !== false
   const restrictOn = config.tools?.whitelistEnabled !== false
   const toolsOn = !!config.tools?.enabled
   const docsDir = !!capabilityConfig?.documents.outputDir
@@ -573,6 +575,17 @@ export function ToolsTab({ config, toolsCatalog, caps, plugins, onOpenImages }: 
                   people manage theirs under Settings → Memory, and a save made while reading the web is flagged.
                 </p>
               </div>
+            </ToolRow>
+
+            <ToolRow name="Artifacts" short="Pages, prototypes and mockups that open beside the chat"
+              status={statusOf(artifactsOn, true)} on={artifactsOn}
+              onToggle={() => setToolsField('artifactsEnabled', !artifactsOn)}
+              open={openId === 'artifacts'} onOpen={() => openRow('artifacts')}>
+              <p className="text-[13px] leading-relaxed text-zinc-500">
+                The assistant makes web pages, interactive prototypes, document mockups and SVGs, and changes them later. Every version is kept and can be restored,
+                and people share them like projects. They run in a sandbox on an address of their own, so their scripts cannot reach a person&rsquo;s login,
+                and they cannot load anything from outside. Sharing and deleting are done by people in the chat app, never by the assistant.
+              </p>
             </ToolRow>
 
             {FOLDER_CARDS.filter(c => c.cap !== 'documents').map(card => (

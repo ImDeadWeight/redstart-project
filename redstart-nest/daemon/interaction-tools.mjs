@@ -38,12 +38,17 @@ import { HOST_RESOLVED_TOOL_NAMES } from './tools-definitions.mjs'
 /** The MCP experimental capability a client declares at initialize. */
 export const HOST_TOOLS_CAPABILITY = 'redstart/hostTools'
 
-export const TOOL_NAMES = [...HOST_RESOLVED_TOOL_NAMES]
-
 const DEFINITIONS = new Map([
   [ASK_USER_DEFINITION.name, ASK_USER_DEFINITION],
   [UPDATE_PLAN_DEFINITION.name, UPDATE_PLAN_DEFINITION],
 ])
+
+/**
+ * The host-resolved tools THIS module serves. artifact_check is host-resolved
+ * too but belongs to the artifacts capability (artifacts-tool.mjs serves it),
+ * so a client may declare it here without this module defining it twice.
+ */
+export const TOOL_NAMES = HOST_RESOLVED_TOOL_NAMES.filter((name) => DEFINITIONS.has(name))
 
 /**
  * The host-resolved tool names an initialize request's client can answer.
@@ -55,7 +60,7 @@ const DEFINITIONS = new Map([
 export function hostToolsDeclared(initializeParams) {
   const declared = initializeParams?.capabilities?.experimental?.[HOST_TOOLS_CAPABILITY]?.names
   if (!Array.isArray(declared)) return []
-  return TOOL_NAMES.filter(name => declared.includes(name))
+  return HOST_RESOLVED_TOOL_NAMES.filter(name => declared.includes(name))
 }
 
 /**

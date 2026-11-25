@@ -108,6 +108,7 @@ export function buildGatewayConfig(llamaConfig) {
       imageGeneration: { enabled: false },
       memory: { enabled: false },
       documentSearch: { enabled: false },
+      artifacts: { enabled: false },
       ...Object.fromEntries(listPlugins().map((p) => [p.id, { enabled: false, isPlugin: true }])),
     }
   }
@@ -252,6 +253,12 @@ export function buildGatewayConfig(llamaConfig) {
       // Shared Documents (master plan 6.2): searched beside each account's own
       // files, narrowed per role by grants.shared_documents (sharedGrants).
       sharedRootDir: capabilities.document_search?.sharedRootDir ?? null,
+    },
+    // Artifacts (artifacts plan D15): on by default, like Web Access. Absent
+    // artifactsEnabled means on; only an explicit false switches it off for
+    // the profile. Bans and roles narrow it like any capability.
+    artifacts: {
+      enabled: toolSettings.artifactsEnabled !== false,
     },
     memory: {
       enabled: toolIdSet.has('memory'),

@@ -45,6 +45,7 @@ export const TOOL_CATEGORIES = Object.freeze([
   'interaction', // talking to the user, planning
   'discovery',   // finding other tools
   'images',      // making pictures (generate_image)
+  'artifacts',   // pages, prototypes and mockups the user opens beside the chat
   'other',       // an MCP or client tool that declared nothing
 ])
 
@@ -66,6 +67,7 @@ const S = {
   memory: "the user's saved memories",
   conversation: 'this conversation',
   tools: "this server's tool catalog",
+  artifacts: "the user's artifacts (pages, prototypes, mockups) on the Redstart server",
 }
 
 const FS_READ_TAGS = ['file', 'open file', 'config', 'settings', 'source code', 'text file', 'log']
@@ -130,6 +132,14 @@ export const BUILTIN_TOOL_METADATA = Object.freeze({
   memory_save: { category: 'memory', store: S.memory, tags: ['remember', 'note that', 'my preference', 'keep in mind'], useWhen: 'the user asks to remember something about them' },
   memory_search: { category: 'memory', store: S.memory, tags: ['remember', 'recall', 'what do you know about me'], useWhen: 'recalling what was saved about the user' },
   memory_forget: { category: 'memory', store: S.memory, tags: ['forget', 'delete memory', 'remove memory'], useWhen: 'the user asks to forget something' },
+  // artifacts
+  artifact_create: { category: 'artifacts', store: S.artifacts, tags: ['mockup', 'prototype', 'web page', 'landing page', 'dashboard', 'html', 'svg', 'design'], useWhen: 'the user wants a page, prototype, mockup or SVG made' },
+  artifact_list: { category: 'artifacts', store: S.artifacts, tags: ['my artifacts', 'mockups', 'prototypes'], useWhen: 'finding an artifact the user mentions' },
+  artifact_read: { category: 'artifacts', store: S.artifacts, tags: ['open artifact', 'look at the page'], useWhen: 'reading an artifact before changing it' },
+  artifact_write: { category: 'artifacts', store: S.artifacts, tags: ['add a page', 'replace file'], useWhen: 'writing a whole file into an artifact' },
+  artifact_edit: { category: 'artifacts', store: S.artifacts, tags: ['change the page', 'make it', 'tweak', 'fix the layout'], useWhen: 'changing part of an artifact' },
+  artifact_rename: { category: 'artifacts', store: S.artifacts, tags: ['rename', 'retitle'], useWhen: 'renaming an artifact' },
+  artifact_check: { category: 'artifacts', store: S.artifacts, tags: ['test the page', 'does it work', 'errors'], useWhen: 'checking an artifact works before saying it is done' },
 
   // interaction and discovery
   ask_user: { category: 'interaction', store: S.conversation, tags: ['question', 'clarify', 'choose', 'preference'], useWhen: 'the answer would change what you produce' },

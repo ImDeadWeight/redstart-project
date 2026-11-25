@@ -243,6 +243,24 @@ const PROVIDERS = [
     badCall: { name: 'ask_user', arguments: {} },
   },
   {
+    // Artifacts (artifacts plan §6): the six the server answers.
+    name: 'artifacts',
+    tools: CAPABILITY_TOOL_NAMES.artifacts.filter((t) => t !== 'artifact_check'),
+    enable: () => ({ artifacts: { enabled: true } }),
+    advertised: CAPABILITY_TOOL_NAMES.artifacts.filter((t) => t !== 'artifact_check'),
+    badCall: { name: 'artifact_edit', arguments: { id: '../../etc', path: '../x', old_string: 1 } }, // malformed id, traversal, wrong type
+  },
+  {
+    // artifact_check is host-resolved (D11): advertised only to a client that
+    // declares it, like ask_user, and only while artifacts is on.
+    name: 'artifacts-check',
+    tools: ['artifact_check'],
+    enable: () => ({ artifacts: { enabled: true } }),
+    clientCapabilities: { experimental: { 'redstart/hostTools': { names: ['artifact_check'] } } },
+    advertised: ['artifact_check'],
+    badCall: { name: 'artifact_check', arguments: {} },
+  },
+  {
     name: 'postgres',
     tools: CAPABILITY_TOOL_NAMES.postgres,
     enable: () => ({ postgres: { enabled: true, connectionString: PG_URL, maxRows: 200 } }),

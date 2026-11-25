@@ -58,6 +58,7 @@ import {
 } from './task-ports.mjs'
 import { finishedBeforeRestart, resumeOpenCalls } from './task-resume.mjs'
 import { cleanClientTools, cleanToolLimits, MAX_CLIENT_RESULT_CHARS } from './client-tools.mjs'
+import { sealArtifact } from './artifacts-storage.mjs'
 
 // Where they lived before master plan Phase 4 split runOnce; importers keep
 // reading them from here.
@@ -567,6 +568,7 @@ async function runOnce(task, l, conv, generation, { resume }) {
   try {
     await runAgentLoop({ messages: pass.messages, maxTurns: task.limits.maxTurns, ports, callbacks, signal })
   } catch (err) {
+    sealTouched(pass)
     if (err instanceof TaskEnded) throw err
     if (signal.aborted || isAbortError(err)) return 'done'
     if (isModelGoneError(err) || !seams.upstreamPort()) {
@@ -576,7 +578,21 @@ async function runOnce(task, l, conv, generation, { resume }) {
     }
     throw err
   }
+  sealTouched(pass)
   return 'done'
+}
+
+/**
+ * The pass is over: seal the drafts it wrote into revisions (artifacts plan
+ * D7), as chat-ui does when a turn ends. Only this conversation's drafts; one
+ * another chat holds is left alone. Never throws: the idle sweep seals
+ * anything this misses.
+ */
+function sealTouched(pass) {
+  for (const id of pass.artifactsTouched) {
+    try { sealArtifact(pass.turnCtx.account, id, { conversationId: store.getTask(pass.task.id)?.conversationId ?? null }) } catch { /* the sweep has it */ }
+  }
+  pass.artifactsTouched.clear()
 }
 
 // ---------------------------------------------------------------------------

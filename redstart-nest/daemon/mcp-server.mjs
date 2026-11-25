@@ -36,6 +36,8 @@ import * as imageGenTool from './image-gen-tool.mjs'
 import * as memoryTool from './memory-tool.mjs'
 import * as documentSearchTool from './document-search-tool.mjs'
 import * as skillsTool from './skills-tool.mjs'
+import * as artifactsTool from './artifacts-tool.mjs'
+import { mcpAppOrigin } from './artifact-session-origin.mjs'
 import { getConversation } from './conversations-storage.mjs'
 import { canWrite, getProject, isProjectId } from './projects-storage.mjs'
 import { isWellFormedConversationId } from './conversation-workspace.mjs'
@@ -73,7 +75,7 @@ import { unknownToolText } from '../../shared/agent-core/teaching.mjs'
 // searchToolsProvider is LAST, and deliberately: it is the only provider whose
 // job is to describe the others, so it must never shadow one of them on a name
 // collision, and its own tool must never appear in the catalog it searches.
-const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, imageGenTool, memoryTool, documentSearchTool, skillsTool, interactionTools, searchToolsProvider]
+const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, imageGenTool, memoryTool, documentSearchTool, skillsTool, artifactsTool, interactionTools, searchToolsProvider]
 
 // Resolved per call, never captured in a const: a plugin installed or removed
 // while Nest is running must take effect without a restart. Built-ins come
@@ -316,6 +318,8 @@ export function verifiedProjectId(account, claimed) {
 }
 
 let mcpServer = null
+/** The port this server listens on, for the app origin a session records. */
+let listeningPort = null
 let activeToolsConfig = null   // { webFetch: {...}, postgres: {...}, documents: {...} }
 
 // ---------------------------------------------------------------------------
@@ -541,6 +545,7 @@ function addCorsHeaders(res) {
 export function startMcpServer(port, config, { bindHost = '127.0.0.1' } = {}) {
   stopMcpServer()
   activeToolsConfig = config
+  listeningPort = port
 
   const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') {
@@ -630,7 +635,9 @@ export function startMcpServer(port, config, { bindHost = '127.0.0.1' } = {}) {
 
       // Per-session state, set at initialize (see handleRpc). One object per
       // transport, so it lives exactly as long as the session does.
-      const session = { hostTools: [], toolTextArm: null }
+      // appOrigin: the chat app's origin as this client reached Nest, for the
+      // links artifacts tools put in their results (artifact-session-origin.mjs).
+      const session = { hostTools: [], toolTextArm: null, appOrigin: mcpAppOrigin(req.headers, listeningPort) }
 
       transport.onmessage = async (message, extra) => {
         const ctx = { account: extra.authInfo?.account ?? null, session }

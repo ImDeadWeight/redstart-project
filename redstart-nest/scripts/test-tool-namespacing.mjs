@@ -95,12 +95,20 @@ await test('no Nest capability tool takes a reserved app prefix', async () => {
 await test('🔍 host-resolved tools are classified, unprefixed, and collide with nothing', async () => {
   // ask_user belongs to no capability, so the capability walks above never
   // see it. It is still a Nest name a ban targets, so the same rules apply.
+  // artifact_check (artifacts plan D11) is the one host-resolved tool that
+  // BELONGS to a capability, so a ban on 'artifacts' strips it; it must be
+  // listed under exactly that capability and resolve back to it.
+  const OWNED = { artifact_check: 'artifacts' }
   for (const name of HOST_RESOLVED_TOOL_NAMES) {
     assert(TOOL_CLASSES[name], `"${name}" has no entry in TOOL_CLASSES`)
     assert(!APP_PREFIXES.some((p) => name.startsWith(p)), `"${name}" takes a reserved app prefix`)
-    assert(!nestToolNames.has(name), `"${name}" is also a capability tool`)
     assert(!clientToolNames.includes(name), `"${name}" collides with a client-app tool`)
-    assert(capabilityForTool(name) === null, `"${name}" resolves to capability ${capabilityForTool(name)}`)
+    if (OWNED[name]) {
+      assert(capabilityForTool(name) === OWNED[name], `"${name}" resolves to capability ${capabilityForTool(name)}, not ${OWNED[name]}`)
+    } else {
+      assert(!nestToolNames.has(name), `"${name}" is also a capability tool`)
+      assert(capabilityForTool(name) === null, `"${name}" resolves to capability ${capabilityForTool(name)}`)
+    }
   }
   return `${HOST_RESOLVED_TOOL_NAMES.length} host-resolved`
 })

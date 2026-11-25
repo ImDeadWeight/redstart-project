@@ -26,7 +26,7 @@ import { getExternalServers } from './tools-storage.mjs'
 import { builtinCapabilityName, capabilityForTool } from './tools-definitions.mjs'
 import { catalogContents, isDeferredTool } from './tool-deferral.mjs'
 import { handleFilesRequest } from './files-api.mjs'
-import { resolveProject, injectSystemContext, clientToolNamesIn, toolNamesIn } from './completion-prompt.mjs'
+import { resolveProject, resolveArtifact, injectSystemContext, clientToolNamesIn, toolNamesIn } from './completion-prompt.mjs'
 import { isCompletionRoute, handleCompletionRoute } from './gateway/completion-route.mjs'
 import { rebindHttpServer } from './listener-rebind.mjs'
 import { passthrough } from './gateway/upstream.mjs'
@@ -178,6 +178,12 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   const project = resolveProject(account ?? null, parsed.redstart_project)
   delete parsed.redstart_project
 
+  // Redstart-specific request field: an ARTIFACT ID, the one open beside the
+  // chat (artifacts plan §10). Resolved against the caller like the project;
+  // a foreign or unknown id composes nothing. Deleted before forwarding.
+  const selectedArtifact = resolveArtifact(account ?? null, parsed.redstart_artifact)
+  delete parsed.redstart_artifact
+
   // Redstart-specific request field: `redstart_retrieval: false` asks the
   // gateway not to narrow THIS request's tools. For a connector that sends
   // its own small, curated tool list (Dungeon Books sends ~25 notes tools)
@@ -270,7 +276,7 @@ export async function prepareCompletion(parsed, { account, surface, effectiveCon
   parsed.messages = injectSystemContext([...(parsed.messages || [])], effectiveConfig, {
     hasTools: requestHasTools,
     account,
-    mode: requestedMode, project,
+    mode: requestedMode, project, selectedArtifact,
     surface,
     timeZone,
     clientToolNames: clientToolNamesIn(parsed),
