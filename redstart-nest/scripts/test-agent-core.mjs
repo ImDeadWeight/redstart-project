@@ -46,6 +46,17 @@ import { DISMISSED_RESULT, formatAskAnswer, parseAskArguments } from '../../shar
 import { formatPlanResult, parsePlanArguments, planTailNote } from '../../shared/agent-core/update-plan.mjs'
 import * as compaction from '../../shared/agent-core/compaction.mjs'
 import { unknownToolText, suggestTools, normalizeToolName } from '../../shared/agent-core/teaching.mjs'
+import {
+  createStagnationMonitor,
+  errorSignature,
+  failureLine,
+  actionFamily,
+  DEBUGGING_PROCEDURE,
+  STAGNATION_LIMITS,
+  repeatingTail,
+} from '../../shared/agent-core/stagnation.mjs'
+import { createWorkingState, WORKING_STATE_HEADER } from '../../shared/agent-core/working-state.mjs'
+import { lookupGuidance, majorOf, newerThanKnown, manifestNote, KNOWN_MAJORS } from '../../shared/agent-core/lookup.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const coreDir = path.join(here, '..', '..', 'shared', 'agent-core')
@@ -1246,6 +1257,364 @@ await test('teaching: an unknown tool is answered with the caller\'s real tool f
   assert(/t14, and others in your tool list\.$/.test(unknownToolText('zzz', many)), unknownToolText('zzz', many))
   eq(unknownToolText('', have).includes('"(no name)"'), true, 'no name')
   eq(normalizeToolName('Read-File'), 'readfile', 'normalize')
+})
+
+console.log('\n-- stagnation --')
+
+const cmd = (command) => ({ name: 'run_command', args: JSON.stringify({ command }), kind: 'command' })
+const read = (path) => ({ name: 'read_file', args: JSON.stringify({ path }), kind: 'read' })
+const write = (path) => ({ name: 'write_file', args: JSON.stringify({ path }), kind: 'write' })
+const search = (pattern) => ({ name: 'grep', args: JSON.stringify({ pattern }), kind: 'search' })
+/** One round of one call: check, record, endRound. */
+function step(m, call, outcome) {
+  const refused = m.check(call)
+  m.record(call, refused ? { ok: false, refused: refused.reason } : outcome)
+  return { refused, recovery: m.endRound() }
+}
+
+await test('stagnation: an error compares without its numbers, paths, positions and colours', () => {
+  const a = errorSignature('\u001b[31msrc/routes/+page.svelte:12:5 Error: Cannot assign to constant\u001b[39m')
+  const b = errorSignature('Error: Cannot assign to constant\n  at C:\\work\\app\\src\\lib\\quote.ts:40:2')
+  eq(a, b, 'another file, another line')
+  eq(
+    errorSignature('Type error: Property "items" does not exist on type PageData (line 7)'),
+    errorSignature('Type error: Property "total" does not exist on type PageData (line 19)'),
+    'another name, another line',
+  )
+  eq(failureLine('\u2514  Operation failed.\n[39m'), 'Operation failed.', 'frames and lost colour codes are dropped')
+  eq(errorSignature('\u2514\n[39m'), '', 'nothing but decoration: nothing to compare')
+  eq(failureLine('building...\n3 modules\nnpm ERR! missing script: test\nnpm ERR! log at x'), 'npm ERR! missing script: test', 'the line that says what failed')
+})
+
+await test("stagnation: a command's action is its first words, whatever its flags", () => {
+  const f = (c) => actionFamily('run_command', JSON.stringify({ command: c }), 'command')
+  eq(f('npx sv add vitest --no-install'), f('npx sv add vitest=usages:unit --no-install --no-git-check'), 'settings and flags')
+  eq(f('npx vitest run --reporter=json > out.json'), 'run_command:npx vitest run', 'a redirect ends it')
+  assert(f('npm run check') !== f('npm run build'), 'different scripts are different actions')
+  eq(actionFamily('read_file', '{"path":"a.ts"}', 'read'), 'read_file:a.ts', 'other tools: tool and target')
+  // A leading cd says where, not what: these are three different actions.
+  eq(f('cd Crestline && npm run check'), 'run_command:npm run check', 'cd && …')
+  eq(f('cd /d Crestline && dir .svelte-kit'), 'run_command:dir .svelte-kit', 'cd /d && …')
+  assert(f('cd app && npx svelte-kit sync') !== f('cd app && npm run check'), 'not all "cd app"')
+  eq(f('cd app'), 'run_command:cd app', 'a cd alone is itself')
+})
+
+await test('stagnation (a): the same exact call is refused after the third time', () => {
+  const m = createStagnationMonitor()
+  for (let i = 0; i < STAGNATION_LIMITS.identicalCalls; i++) eq(m.check(read('a.ts')), null, `call ${i + 1}`)
+  const refused = m.check(read('a.ts'))
+  assert(refused && refused.reason === 'repeated' && /these exact arguments 3 times/.test(refused.refuse), JSON.stringify(refused))
+})
+
+await test('stagnation (a): the same error three times fires, with the edits in between', () => {
+  const m = createStagnationMonitor()
+  const fail = (line) => ({ ok: false, text: `src/routes/+page.svelte:${line}:3 Error: Cannot assign to constant` })
+  eq(step(m, cmd('npm run check'), fail(10)).recovery, null, 'first')
+  step(m, write('src/routes/+page.svelte'), { ok: true, writes: [{ path: 'src/routes/+page.svelte', after: 'v1' }] })
+  eq(step(m, cmd('npx svelte-check'), fail(12)).recovery, null, 'second, by another command')
+  step(m, write('src/routes/+page.svelte'), { ok: true, writes: [{ path: 'src/routes/+page.svelte', after: 'v2' }] })
+  const { recovery } = step(m, cmd('npm run check'), fail(14))
+  assert(recovery && recovery.detector === 'same-failure' && recovery.level === 1, JSON.stringify(recovery))
+  assert(recovery.note.includes('cannot assign to constant') && recovery.note.includes(DEBUGGING_PROCEDURE), recovery.note)
+})
+
+await test('stagnation (a): one command failing three times with other flags and nothing changed fires', () => {
+  const m = createStagnationMonitor()
+  const fail = { ok: false, text: '\u2514' }
+  eq(step(m, cmd('npx sv add vitest --no-install'), fail).recovery, null, '1')
+  step(m, cmd('npx sv add --help'), { ok: true, text: 'usage' })
+  eq(step(m, cmd('npx sv add vitest --no-install --no-git-check'), fail).recovery, null, '2')
+  const { recovery } = step(m, cmd('npx sv add vitest --yes'), fail)
+  assert(recovery?.detector === 'same-failure' && /npx sv add failed 3 times/.test(recovery.evidence), JSON.stringify(recovery))
+  // With a write between the failures, the retries are not "the same".
+  const m2 = createStagnationMonitor()
+  step(m2, cmd('npm test'), { ok: false, text: '\u2514' })
+  step(m2, write('a.ts'), { ok: true, writes: [{ path: 'a.ts', after: '1' }] })
+  step(m2, cmd('npm test'), { ok: false, text: '\u2514' })
+  step(m2, write('a.ts'), { ok: true, writes: [{ path: 'a.ts', after: '2' }] })
+  eq(step(m2, cmd('npm test'), { ok: false, text: '\u2514' }).recovery, null, 'edits in between')
+})
+
+await test('stagnation (b): a file written back to an earlier version fires', () => {
+  const m = createStagnationMonitor()
+  eq(step(m, write('a.ts'), { ok: true, writes: [{ path: 'a.ts', before: 'A', after: 'B' }] }).recovery, null, 'A to B')
+  const { recovery } = step(m, write('a.ts'), { ok: true, writes: [{ path: 'a.ts', after: 'A' }] })
+  assert(recovery?.detector === 'oscillation' && recovery.evidence.includes('a.ts'), JSON.stringify(recovery))
+  const m2 = createStagnationMonitor()
+  step(m2, write('a.ts'), { ok: true, writes: [{ path: 'a.ts', before: 'A', after: 'B' }] })
+  eq(step(m2, write('a.ts'), { ok: true, writes: [{ path: 'a.ts', after: 'C' }] }).recovery, null, 'A to B to C is progress')
+})
+
+await test('stagnation (c): rounds that find nothing new fire; a newly read file resets them', () => {
+  const m = createStagnationMonitor()
+  for (let i = 1; i < STAGNATION_LIMITS.noProgressRounds; i++) eq(step(m, search(`p${i}`), { ok: true }).recovery, null, `round ${i}`)
+  step(m, read('new.ts'), { ok: true, reads: ['new.ts'] })
+  for (let i = 1; i < STAGNATION_LIMITS.noProgressRounds; i++) eq(step(m, search(`q${i}`), { ok: true }).recovery, null, `again ${i}`)
+  const { recovery } = step(m, search('last'), { ok: true })
+  assert(recovery?.detector === 'no-progress', JSON.stringify(recovery))
+})
+
+await test('stagnation (d): a response going in a circle fires while it streams; varied reasoning does not', () => {
+  const cycle = [
+    'The sample test file fails the same way as mine does.',
+    'The JSON output failed because of the Windows path handling.',
+    'Let me try a different approach with the default reporter.',
+    'Actually the default reporter already showed the whole error.',
+    'Let me look more carefully at what that output said before.',
+    'So the error is thrown at the describe call in the test file.',
+  ].join(' ') + ' '
+  const m = createStagnationMonitor()
+  m.startResponse()
+  let fired = null
+  let cycles = 0
+  while (!fired && cycles < 59) {
+    cycles++
+    for (let i = 0; i < cycle.length && !fired; i += 37) fired = m.reasoning(cycle.slice(i, i + 37))
+  }
+  assert(fired?.detector === 'reasoning-loop', 'never fired')
+  assert(cycles <= 20, `fired only on cycle ${cycles}`)
+  const quiet = createStagnationMonitor()
+  quiet.startResponse()
+  for (let i = 0; i < 400; i++) eq(quiet.reasoning(`Step ${i} looks at file number ${i} and finds the value ${i * 7} there. `), null, `sentence ${i}`)
+})
+
+await test('stagnation (e): reasoning that grows with nothing new, or keeps reversing, fires at the round end', () => {
+  const m = createStagnationMonitor()
+  m.startResponse()
+  m.reasoning('x'.repeat(STAGNATION_LIMITS.theorizingChars))
+  eq(step(m, search('runes'), { ok: true }).recovery?.detector, 'theorizing', 'at the limit')
+  const m2 = createStagnationMonitor()
+  m2.startResponse()
+  m2.reasoning('x'.repeat(STAGNATION_LIMITS.theorizingChars - 1))
+  eq(step(m2, search('runes'), { ok: true }).recovery, null, 'just under')
+  const m3 = createStagnationMonitor()
+  m3.startResponse()
+  for (let i = 0; i < STAGNATION_LIMITS.reversals; i++) m3.reasoning(`Actually, let me reconsider option ${i}. `)
+  // A habit of "actually" in a short stretch is not theorising (Ornith, 4k characters).
+  eq(step(m3, search('runes'), { ok: true }).recovery, null, '8 reversals in a few hundred characters')
+  const m3b = createStagnationMonitor()
+  m3b.startResponse()
+  for (let i = 0; i < STAGNATION_LIMITS.reversals; i++) m3b.reasoning(`Actually, let me reconsider option ${i}. ${'The runes resolve somewhere. '.repeat(70)}`)
+  const r3 = step(m3b, search('runes'), { ok: true }).recovery
+  assert(r3?.detector === 'theorizing' && /with 8 changes of mind/.test(r3.evidence), JSON.stringify(r3))
+  const m4 = createStagnationMonitor()
+  m4.startResponse()
+  m4.reasoning('x'.repeat(STAGNATION_LIMITS.theorizingChars))
+  eq(step(m4, read('fresh.ts'), { ok: true, reads: ['fresh.ts'] }).recovery, null, 'a new read is evidence')
+})
+
+await test('stagnation: recovery escalates: a note, then the action refused until new evidence, then a stop', () => {
+  const m = createStagnationMonitor()
+  const failing = (flag) => step(m, cmd(`npx sv add vitest --${flag}`), { ok: false, text: 'Error: no such add-on' })
+  failing('a'); failing('b')
+  const first = failing('c').recovery
+  eq([first?.level, first?.stop], [1, false], 'level 1')
+  failing('d'); failing('e')
+  const second = failing('f').recovery
+  eq([second?.level, second?.action], [2, 'run_command:npx sv add'], 'level 2 blocks the action')
+  assert(/npx sv add will not run/.test(second.note), second.note)
+  eq(m.check(cmd('npx sv add vitest --g'))?.reason, 'blocked', 'the same action is refused')
+  eq(m.check(read('package.json')), null, 'a read is allowed')
+  m.record(read('package.json'), { ok: true, reads: ['package.json'] })
+  eq(m.check(cmd('npx sv add vitest --h')), null, 'new evidence lifts the refusal')
+  m.record(cmd('npx sv add vitest --h'), { ok: false, text: 'Error: no such add-on' })
+  m.endRound()
+  failing('i')
+  const third = failing('j').recovery
+  eq([third?.level, third?.stop], [3, true], 'level 3 stops')
+  assert(/I stopped because I was not making progress/.test(third.note) && /npx sv add: failed/.test(third.note), third.note)
+  eq(m.firings.length, 3, 'all three recorded')
+})
+
+await test('stagnation: a refused call counts as another attempt, without quoting the refusal as an error', () => {
+  const m = createStagnationMonitor()
+  for (let i = 0; i < 3; i++) step(m, read('note.txt'), { ok: true, reads: ['note.txt'] })
+  const { refused } = step(m, read('note.txt'), { ok: true })
+  eq(refused?.reason, 'repeated', 'the 4th is refused')
+  step(m, read('note.txt'), { ok: true })
+  const { recovery } = step(m, read('note.txt'), { ok: true })
+  assert(recovery?.detector === 'same-failure' && /read_file note\.txt failed 3 times/.test(recovery.evidence) && !/not run/i.test(recovery.evidence), JSON.stringify(recovery))
+})
+
+await test('stagnation: real headway since a firing (a write, and a command that now works) starts the next one over at level 1', () => {
+  const m = createStagnationMonitor()
+  const failing = (flag) => step(m, cmd(`npx sv add vitest --${flag}`), { ok: false, text: 'Error: no such add-on' })
+  failing('a'); failing('b')
+  eq(failing('c').recovery?.level, 1, 'first')
+  step(m, write('src/lib/quote.ts'), { ok: true, writes: [{ path: 'src/lib/quote.ts', after: 'v1' }] })
+  step(m, cmd('npm install'), { ok: true })
+  const later = () => step(m, cmd(`npm run check -- --${'xyz'[later.n++]}`), { ok: false, text: 'Error: Cannot find module' })
+  later.n = 0
+  later(); later()
+  eq(later().recovery?.level, 1, 'a new problem after headway is level 1 again')
+  // Without headway in between, it climbs.
+  later.n = 0
+  const again = () => step(m, cmd(`npm run check -- --${'pqr'[again.n++]}`), { ok: false, text: 'Error: Cannot find module' })
+  again.n = 0
+  again(); again()
+  eq(again().recovery?.level, 2, 'the same problem again climbs')
+})
+
+await test("stagnation: the evidence is in no one's voice; the model reads 'you', the person reads 'I'", () => {
+  const m = createStagnationMonitor({ reversalChars: 0 })
+  const all = []
+  for (let n = 0; n < 3; n++) {
+    m.startResponse()
+    for (let i = 0; i < STAGNATION_LIMITS.reversals; i++) m.reasoning(`Actually, option ${n}-${i}. `)
+    all.push(step(m, search(`q${n}`), { ok: true }).recovery)
+  }
+  for (const r of all) assert(!/\b(you|your|I)\b/.test(r.evidence), r.evidence)
+  assert(/^\[You seem to be stuck\./.test(all[0].note), all[0].note)
+  assert(all[2].stop && /^I stopped because I was not making progress\. \d+k characters of reasoning/.test(all[2].note), all[2].note)
+  assert(!/\byou have\b/i.test(all[2].note), all[2].note)
+})
+
+await test('stagnation: no-progress at level 2 pauses searches, not writes', () => {
+  const m = createStagnationMonitor({ noProgressRounds: 2 })
+  step(m, search('a'), { ok: true }); step(m, search('b'), { ok: true })
+  step(m, search('c'), { ok: true }); const r = step(m, search('d'), { ok: true }).recovery
+  eq([r?.level, r?.action], [2, 'kind:search'], 'searches')
+  eq(m.check(search('e'))?.reason, 'blocked', 'a search is paused')
+  eq(m.check(write('a.ts')), null, 'a write is not')
+})
+
+await test('stagnation: with a web tool, the notes say to look it up, and a lookup is never paused', () => {
+  const plain = createStagnationMonitor({ noProgressRounds: 2 })
+  step(plain, search('a'), { ok: true })
+  const quiet = step(plain, search('b'), { ok: true }).recovery
+  assert(quiet && !/web_search/.test(quiet.note), 'no web tool: no lookup in the note')
+
+  const m = createStagnationMonitor({ noProgressRounds: 2 }, { lookupTools: ['web_search', 'web_fetch'] })
+  step(m, search('a'), { ok: true })
+  const r1 = step(m, search('b'), { ok: true }).recovery
+  eq(r1?.level, 1, 'level 1')
+  assert(/look up its current documentation with web_search/.test(r1.note), r1.note)
+  step(m, search('c'), { ok: true })
+  const r2 = step(m, search('d'), { ok: true }).recovery
+  eq([r2?.level, r2?.action], [2, 'kind:search'], 'searches are paused')
+  assert(/look it up with web_search/.test(r2.note), r2.note)
+  const web = { name: 'web_search', args: JSON.stringify({ source: 'web', query: 'sveltekit 3 $lib' }), kind: 'search' }
+  eq(m.check(web), null, 'web_search is a search, but not paused')
+  m.record(web, { ok: true, text: 'SvelteKit 3: $lib is now the #lib package import' })
+  eq(m.check(search('e')), null, 'what it found lifts the pause')
+  const viaCatalog = { name: 'call_tool', args: JSON.stringify({ name: 'web_fetch', arguments: { url: 'https://svelte.dev' } }), kind: 'read' }
+  eq(m.check(viaCatalog), null, 'through call_tool too')
+})
+
+await test('stagnation: a new lookup is progress; the same one again is not', () => {
+  const m = createStagnationMonitor({ noProgressRounds: 3 }, { lookupTools: ['web_search'] })
+  const web = (q) => ({ name: 'web_search', args: JSON.stringify({ query: q }), kind: 'search' })
+  for (const q of ['a', 'b', 'c', 'd']) eq(step(m, web(q), { ok: true }).recovery, null, `new query ${q}`)
+  step(m, web('d'), { ok: true }); step(m, web('d'), { ok: true })
+  assert(step(m, web('d'), { ok: true }).recovery?.detector === 'no-progress', 'the same query is not news')
+})
+
+await test('stagnation (f): a tool call whose arguments repeat one stretch fires while it streams', () => {
+  const m = createStagnationMonitor()
+  m.startResponse()
+  const start = '{"command":"npx sv add vitest=\\"usages:unit\\" --no-install --no-git-check","cwd":"Crestline","answer":"'
+  let r = m.toolArguments(0, start, 'command')
+  eq(r, null, 'a normal start')
+  // What a small model does when it falls into a loop inside a value.
+  const loop = 'unit testing, '
+  let fired = null
+  for (let i = 0; i < 400 && !fired; i++) fired = m.toolArguments(0, loop, 'command')
+  assert(fired && fired.detector === 'argument-loop' && fired.level === 1, JSON.stringify(fired))
+  assert(/"unit testing,"/.test(fired.note) && /Send a short, complete call/.test(fired.note), fired.note)
+  assert(!fired.stop, 'level 1 asks again')
+})
+
+await test('stagnation (f): a long, real file is not a loop; whitespace without end is', () => {
+  const m = createStagnationMonitor()
+  m.startResponse()
+  const lines = []
+  for (let i = 0; i < 300; i++) lines.push(`  .row-${i} { margin: ${i % 7}px; padding: ${(i * 3) % 11}px; }`)
+  const content = JSON.stringify({ path: 'src/app.css', content: lines.join('\n') })
+  for (let i = 0; i < content.length; i += 40) eq(m.toolArguments(0, content.slice(i, i + 40), 'write'), null, `chunk ${i}`)
+  eq(repeatingTail('ab'.repeat(2000), 2000, 400), 'ab', 'the repeating stretch')
+  eq(repeatingTail('x'.repeat(100), 2000, 400), null, 'too short to tell')
+  m.startResponse()
+  m.toolArguments(1, '{"path":"a.ts","content":"', 'write')
+  let fired = null
+  for (let i = 0; i < 100 && !fired; i++) fired = m.toolArguments(1, ' '.repeat(50), 'write')
+  assert(fired && /whitespace over and over/.test(fired.note), JSON.stringify(fired))
+})
+
+await test('stagnation (f): it escalates like the others, and a new response starts the count again', () => {
+  const m = createStagnationMonitor()
+  const spin = (index) => {
+    let fired = null
+    for (let i = 0; i < 400 && !fired; i++) fired = m.toolArguments(index, 'again and again ', 'command')
+    return fired
+  }
+  m.startResponse()
+  eq(spin(0)?.level, 1, 'first')
+  m.startResponse()
+  const second = spin(0)
+  eq([second?.level, second?.action], [2, 'kind:command'], 'second pauses that kind')
+  m.startResponse()
+  assert(spin(0)?.stop === true, 'third stops the run')
+})
+
+console.log('\n-- lookup --')
+
+await test('lookup: a range gives its major version; what is not a version gives none', () => {
+  eq(['^3.2.0', '~1.2', '>=2 <4', '5', 'v6.1.0', '3.x'].map(majorOf), [3, 1, 2, 5, 6, 3], 'versions')
+  eq(['latest', '*', 'workspace:*', 'file:../x', 'github:a/b', 'next'].map(majorOf), [null, null, null, null, null, null], 'not versions')
+})
+
+await test('lookup: the Crestline scaffold (SvelteKit 3, Vite 8) is flagged; known versions are not', () => {
+  const crestline = {
+    devDependencies: { '@sveltejs/kit': '^3.2.0', svelte: '^5.57.3', typescript: '^6.0.3', vite: '^8.3.8', vitest: '^5.1.0', 'left-pad': '^9.0.0' },
+  }
+  const found = newerThanKnown(crestline.devDependencies).map((f) => f.name)
+  eq(found, ['@sveltejs/kit', 'typescript', 'vite', 'vitest'], 'past the known majors; unknown packages are left alone')
+  const note = manifestNote(JSON.stringify(crestline), ['web_search'])
+  assert(/@sveltejs\/kit \^3\.2\.0/.test(note) && /with web_search/.test(note), note)
+  eq(manifestNote(JSON.stringify(crestline), ['read_file']), '', 'no web tool: no note')
+  eq(manifestNote(JSON.stringify({ dependencies: { svelte: '^5.0.0' } }), ['web_search']), '', 'nothing newer: no note')
+  eq(manifestNote('{ not json', ['web_search']), '', 'a manifest that does not parse: no note')
+  assert(Object.isFrozen(KNOWN_MAJORS), 'the table is frozen')
+})
+
+await test('lookup: the prompt line is only for a host with a web tool, and names what it has', () => {
+  eq(lookupGuidance(['read_file', 'run_python']), '', 'no web tool')
+  const both = lookupGuidance(['web_search', 'web_fetch'])
+  assert(/with web_search and read the page with web_fetch/.test(both), both)
+  assert(/newer\s+versions/.test(both), both)
+  assert(!/web_fetch/.test(lookupGuidance(['web_search'])), 'never names a tool it lacks')
+})
+
+console.log('\n-- working state --')
+
+await test('working state: files, open errors, what was found and the plan, built from the calls alone', () => {
+  const ws = createWorkingState()
+  assert(ws.empty, 'empty at first')
+  ws.observe(read('src/lib/quote.ts'), { ok: true, text: 'export function calculateQuote(config) {\n  const rate = FACILITY_RATES[config.facilityType]', reads: ['src/lib/quote.ts'] })
+  ws.observe(cmd('npm run check'), { ok: false, text: 'src/routes/+page.svelte:12:5 Error: Cannot assign to constant' })
+  ws.observe(cmd('npm run check'), { ok: false, text: 'src/routes/+page.svelte:30:5 Error: Cannot assign to constant' })
+  ws.observe(write('src/routes/+page.svelte'), { ok: true, writes: [{ path: 'src/routes/+page.svelte' }] })
+  ws.observe(write('src/lib/quote.test.ts'), { ok: true, writes: [{ path: 'src/lib/quote.test.ts', isNew: true }] })
+  ws.observe({ name: 'note', args: '{}', kind: 'other' }, { ok: true, note: 'Tests use Vitest; the check is npm run check.' })
+  ws.setPlan([{ text: 'Write the estimator', status: 'done' }, { text: 'Make the check pass', status: 'in_progress' }, { text: 'Drop it', status: 'skipped' }])
+  const text = ws.render()
+  assert(text.startsWith(WORKING_STATE_HEADER), text)
+  assert(/created src\/lib\/quote\.test\.ts/.test(text) && /changed src\/routes\/\+page\.svelte/.test(text), text)
+  assert(/Error: Cannot assign to constant \(run_command npm run check, 2 times\)/.test(text), text)
+  assert(/read_file src\/lib\/quote\.ts: export function calculateQuote/.test(text), text)
+  assert(/Tests use Vitest/.test(text), text)
+  assert(/Make the check pass \(in progress\)/.test(text) && !/Write the estimator|Drop it/.test(text), text)
+})
+
+await test('working state: an error is closed when the same action succeeds; the record stays under its cap', () => {
+  const ws = createWorkingState({ maxChars: 400 })
+  ws.observe(cmd('npm run check'), { ok: false, text: 'Error: Cannot assign to constant' })
+  ws.observe(cmd('npm run check --verbose'), { ok: true, text: 'svelte-check found 0 errors' })
+  const text = ws.render()
+  assert(!/Open errors/.test(text) && /Fixed:\n- Error: Cannot assign to constant/.test(text), text)
+  for (let i = 0; i < 30; i++) ws.observe(search(`pattern${i}`), { ok: true, text: `match ${i} in a file that says something long enough to take room` })
+  assert(ws.render().length <= 400, `${ws.render().length} characters`)
+  assert(/pattern29/.test(ws.render()) && !/pattern0:/.test(ws.render()), 'the newest discoveries are kept')
 })
 
 const passed = results.filter((r) => r.pass).length

@@ -60,6 +60,8 @@ export type RedstartAPI = {
     // stance server.mjs already takes for the event log.
     getStatus: () => Promise<{
       running: boolean
+      /** The running model's file name (not the selected profile's), or null. */
+      model?: string | null
       pid: number | null
       startedAt: number | null
       uptimeMs: number | null

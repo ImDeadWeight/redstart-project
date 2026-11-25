@@ -118,7 +118,10 @@ export default function App() {
   const isRunning = serverState === 'running'
   const isStopping = serverState === 'stopping'
   const isStarting = serverState === 'starting'
-  const modelName = config.modelPath ? (config.modelPath.split(/[\\/]/).pop() || config.modelPath) : ''
+  // While a model runs, the one it loaded: switching profiles changes the
+  // selected config, not what is running, until a restart.
+  const selectedModelName = config.modelPath ? (config.modelPath.split(/[\\/]/).pop() || config.modelPath) : ''
+  const modelName = (isRunning || paused) && server.runningModel ? server.runningModel : selectedModelName
   const addresses = addressesFor(tls, localIp, config.port, networkMode)
   const chatAddress = addresses[0]?.url ?? localAddress(config.port)
   const { profiles, selectedProfile, selectProfile, unsaved, notInProfile } = profilesHook
