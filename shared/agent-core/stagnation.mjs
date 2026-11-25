@@ -28,6 +28,11 @@
  *                        recurring, or most of the recent sentences repeat
  *   e  theorizing        reasoning keeps growing with no new evidence, or
  *                        keeps reversing itself ("actually, wait")
+ *   f  argument loop     while a tool call's arguments stream: their tail is
+ *                        one short stretch over and over. Ornith on Crestline
+ *                        (2026-11-24, after the reasoning had ended) wrote
+ *                        19k tokens into one call for ten minutes; nothing
+ *                        reached the person, who saw "waiting on the model".
  *
  * A firing gets a recovery, more forceful each time in the same run:
  *
@@ -77,7 +82,12 @@ export const STAGNATION_LIMITS = Object.freeze({
 	 *  "actually" as a habit fit 8 into 4k characters (Ornith on Crestline,
 	 *  2026-11-24) without being stuck. */
 	reversals: 8,
-	reversalChars: 15_000
+	reversalChars: 15_000,
+	/** f: the last `argumentSpan` characters of one call's arguments, all a
+	 *  repeat of a stretch of at most `argumentPeriod` characters, fire. Real
+	 *  file content does not repeat one stretch exactly for this long. */
+	argumentSpan: 2_000,
+	argumentPeriod: 400
 });
 
 /**
@@ -108,7 +118,7 @@ export const DEBUGGING_PROCEDURE =
  * @property {string[]} [reads] paths it read
  * @property {{ path: string, before?: string, after: string }[]} [writes] files it wrote, when applied
  *
- * @typedef {'same-failure' | 'oscillation' | 'no-progress' | 'reasoning-loop' | 'theorizing'} Detector
+ * @typedef {'same-failure' | 'oscillation' | 'no-progress' | 'reasoning-loop' | 'theorizing' | 'argument-loop'} Detector
  *
  * @typedef {object} Recovery
  * @property {Detector} detector
@@ -283,6 +293,26 @@ function sentenceKey(sentence) {
 
 const REVERSAL = /^(actually|wait|hmm+|hold on|on second thought|no,? wait|let me reconsider|let me rethink|scratch that)\b/i;
 
+/**
+ * f: the stretch the end of `text` repeats, when its last `span` characters
+ * are that stretch (at most `maxPeriod` long) over and over; else null.
+ * A stretch of only whitespace counts: a run of spaces is a loop too.
+ *
+ * @param {string} text
+ * @param {number} span
+ * @param {number} maxPeriod
+ * @returns {string | null}
+ */
+export function repeatingTail(text, span, maxPeriod) {
+	if (text.length < span + 1) return null;
+	const tail = text.slice(-span);
+	for (let p = 1; p <= maxPeriod && p < span; p++) {
+		// Periodic with period p: the tail equals itself shifted by p.
+		if (text.slice(-span - p, -p) === tail) return tail.slice(-p);
+	}
+	return null;
+}
+
 // --- the texts ---------------------------------------------------------------
 
 /** What the model reads instead of a repeated call's result (rule 1 of detector a). */
@@ -361,10 +391,12 @@ function targetName(call) {
 /**
  * One monitor per run (one user message and everything the agent does for it).
  *
- * Host order, per round: startResponse() → reasoning(chunk)… as the response
- * streams → for each call, check() before it runs and record() after → and
- * endRound() before the next request. Any of reasoning() and endRound() can
- * return a Recovery for the host to act on.
+ * Host order, per round: startResponse() → reasoning(chunk)… and
+ * toolArguments(index, chunk)… as the response streams → for each call,
+ * check() before it runs and record() after → and endRound() before the next
+ * request. Any of reasoning(), toolArguments() and endRound() can return a
+ * Recovery for the host to act on (for the two that watch a stream: drop the
+ * response, and ask again with the note).
  *
  * @param {Partial<typeof STAGNATION_LIMITS>} [overrides]
  * @param {{ lookupTools?: readonly string[] }} [options] lookupTools: the web
@@ -410,6 +442,10 @@ export function createStagnationMonitor(overrides = {}, options = {}) {
 	// e: since the last new evidence.
 	let charsSinceEvidence = 0;
 	let reversals = 0;
+	// f: the current response's tool call arguments, by call index, and how
+	// long each was when it was last checked.
+	/** @type {Map<number, { text: string, checked: number }>} */
+	let callArgs = new Map();
 
 	let level = 0;
 	/** Since the last firing: a write applied, and a command that newly worked.
@@ -511,6 +547,36 @@ export function createStagnationMonitor(overrides = {}, options = {}) {
 		startResponse() {
 			sentences = [];
 			partial = '';
+			callArgs = new Map();
+		},
+
+		/**
+		 * As a tool call's arguments stream (f). `index` is the call's place
+		 * in the response, as the stream numbers it; `kind`, when the host
+		 * knows it, is what a level 2 refusal pauses.
+		 *
+		 * @param {number} index
+		 * @param {string} chunk
+		 * @param {CallKind} [kind]
+		 * @returns {Recovery | null}
+		 */
+		toolArguments(index, chunk, kind) {
+			const entry = callArgs.get(index) ?? { text: '', checked: 0 };
+			entry.text += chunk;
+			callArgs.set(index, entry);
+			// Checked every few hundred characters, not on every delta.
+			if (entry.text.length - entry.checked < 256) return null;
+			entry.checked = entry.text.length;
+			const unit = repeatingTail(entry.text, limits.argumentSpan, limits.argumentPeriod);
+			if (unit === null) return null;
+			const shown = unit.trim() ? `"${unit.trim().slice(0, 60)}"` : 'whitespace';
+			return fire(
+				'argument-loop',
+				`The last reply was dropped: its tool call's arguments had reached ${entry.text.length} characters, ` +
+					`the last ${limits.argumentSpan} of them ${shown} over and over. Send a short, complete call; ` +
+					'write a long file in parts.',
+				kind ? `kind:${kind}` : undefined
+			);
 		},
 
 		/**

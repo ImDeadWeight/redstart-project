@@ -53,6 +53,7 @@ import {
   actionFamily,
   DEBUGGING_PROCEDURE,
   STAGNATION_LIMITS,
+  repeatingTail,
 } from '../../shared/agent-core/stagnation.mjs'
 import { createWorkingState, WORKING_STATE_HEADER } from '../../shared/agent-core/working-state.mjs'
 import { lookupGuidance, majorOf, newerThanKnown, manifestNote, KNOWN_MAJORS } from '../../shared/agent-core/lookup.mjs'
@@ -1506,6 +1507,53 @@ await test('stagnation: a new lookup is progress; the same one again is not', ()
   for (const q of ['a', 'b', 'c', 'd']) eq(step(m, web(q), { ok: true }).recovery, null, `new query ${q}`)
   step(m, web('d'), { ok: true }); step(m, web('d'), { ok: true })
   assert(step(m, web('d'), { ok: true }).recovery?.detector === 'no-progress', 'the same query is not news')
+})
+
+await test('stagnation (f): a tool call whose arguments repeat one stretch fires while it streams', () => {
+  const m = createStagnationMonitor()
+  m.startResponse()
+  const start = '{"command":"npx sv add vitest=\\"usages:unit\\" --no-install --no-git-check","cwd":"Crestline","answer":"'
+  let r = m.toolArguments(0, start, 'command')
+  eq(r, null, 'a normal start')
+  // What a small model does when it falls into a loop inside a value.
+  const loop = 'unit testing, '
+  let fired = null
+  for (let i = 0; i < 400 && !fired; i++) fired = m.toolArguments(0, loop, 'command')
+  assert(fired && fired.detector === 'argument-loop' && fired.level === 1, JSON.stringify(fired))
+  assert(/"unit testing,"/.test(fired.note) && /Send a short, complete call/.test(fired.note), fired.note)
+  assert(!fired.stop, 'level 1 asks again')
+})
+
+await test('stagnation (f): a long, real file is not a loop; whitespace without end is', () => {
+  const m = createStagnationMonitor()
+  m.startResponse()
+  const lines = []
+  for (let i = 0; i < 300; i++) lines.push(`  .row-${i} { margin: ${i % 7}px; padding: ${(i * 3) % 11}px; }`)
+  const content = JSON.stringify({ path: 'src/app.css', content: lines.join('\n') })
+  for (let i = 0; i < content.length; i += 40) eq(m.toolArguments(0, content.slice(i, i + 40), 'write'), null, `chunk ${i}`)
+  eq(repeatingTail('ab'.repeat(2000), 2000, 400), 'ab', 'the repeating stretch')
+  eq(repeatingTail('x'.repeat(100), 2000, 400), null, 'too short to tell')
+  m.startResponse()
+  m.toolArguments(1, '{"path":"a.ts","content":"', 'write')
+  let fired = null
+  for (let i = 0; i < 100 && !fired; i++) fired = m.toolArguments(1, ' '.repeat(50), 'write')
+  assert(fired && /whitespace over and over/.test(fired.note), JSON.stringify(fired))
+})
+
+await test('stagnation (f): it escalates like the others, and a new response starts the count again', () => {
+  const m = createStagnationMonitor()
+  const spin = (index) => {
+    let fired = null
+    for (let i = 0; i < 400 && !fired; i++) fired = m.toolArguments(index, 'again and again ', 'command')
+    return fired
+  }
+  m.startResponse()
+  eq(spin(0)?.level, 1, 'first')
+  m.startResponse()
+  const second = spin(0)
+  eq([second?.level, second?.action], [2, 'kind:command'], 'second pauses that kind')
+  m.startResponse()
+  assert(spin(0)?.stop === true, 'third stops the run')
 })
 
 console.log('\n-- lookup --')
