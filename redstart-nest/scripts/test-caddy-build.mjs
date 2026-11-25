@@ -26,7 +26,9 @@ import { buildNotices, escapeModulePath } from './caddy-notices.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.join(__dirname, '..', '..')
-const WORKFLOW = fs.readFileSync(path.join(REPO, '.github', 'workflows', 'caddy.yml'), 'utf8')
+// LF, whatever the checkout: a Windows clone with core.autocrlf has CRLF on
+// disk, and the checks below match line breaks.
+const WORKFLOW = fs.readFileSync(path.join(REPO, '.github', 'workflows', 'caddy.yml'), 'utf8').replace(/\r\n/g, '\n')
 
 const results = []
 
