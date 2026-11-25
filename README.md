@@ -40,6 +40,18 @@ Redstart includes its own clients and applications, but its broader purpose is t
 
 <a href="docs/screenshots/chat-image.png"><img src="docs/screenshots/chat-image.png" width="100%" alt="The chat showing a picture of a robin on a mossy branch that the model just made with generate_image, with a download chip under it." /></a>
 
+**Artifacts** — ask for a page, a prototype or a mockup and the model builds it as an artifact that opens beside the chat. Every change is kept as a revision you can go back to, and it runs in a sandbox on its own address, so its scripts can't reach your login or the server.
+
+<a href="docs/screenshots/chat-artifact.png"><img src="docs/screenshots/chat-artifact.png" width="100%" alt="The chat after the model built a team dashboard mockup: the artifact card in the conversation, and the dashboard itself (a dark sidebar, four KPI cards and a weekly bar chart) running in the artifact panel beside the chat, with width, revision, source, download, copy and share controls above it." /></a>
+
+<details>
+<summary><b>Sharing an artifact</b></summary>
+<br>
+
+<a href="docs/screenshots/artifact-share.png"><img src="docs/screenshots/artifact-share.png" width="100%" alt="An artifact on its own page with the Share dialog open: add a person or group as viewer, editor or no access, and hand it to someone else." /></a>
+
+</details>
+
 **Redstart Nest** — the administration interface for managing the server, model configuration, tools and network access.
 
 <a href="docs/screenshots/nest-overview.png"><img src="docs/screenshots/nest-overview.png" width="100%" alt="Nest's Overview page: the model in use, who can connect, tools on, a setup checklist and a QR code for phones." /></a>
@@ -140,7 +152,7 @@ The chat interface includes an agent runtime that can use configured tools, work
 
 The runtime is actively developed. Its performance and reliability vary by model, particularly with smaller local models. The benchmark results below and in the documentation are intended to make that performance measurable rather than assumed.
 
-Every capability is disabled until an administrator enables it. Roles can withhold capabilities from accounts or narrow access to shared resources.
+Every capability except artifacts is disabled until an administrator enables it; artifacts are on by default and can be switched off per profile. Roles can withhold capabilities from accounts or narrow access to shared resources.
 
 **Work with your data** ([Capabilities](docs/capabilities.md))
 
@@ -148,6 +160,7 @@ Every capability is disabled until an administrator enables it. Roles can withho
 - **Run Python.** `run_python` runs numpy, pandas and matplotlib in a WebAssembly sandbox with no network and no access outside the conversation's own folder. Charts come back as images.
 - **See images.** With a supported vision model, the assistant can inspect photos and screenshots attached to a conversation and image files accessed through `view_image`.
 - **Make pictures.** `generate_image` uses a separately configured image model through stable-diffusion.cpp. Nest coordinates the process transition between the chat model and image model. On a 12 GB GPU, the chat model pauses while the image is generated and resumes afterward; other chats wait rather than fail.
+- **Make pages, prototypes and mockups.** The assistant builds web pages, interactive prototypes, document mockups and SVGs as artifacts that open beside the chat, then edits them in place when asked. Every revision is kept and can be restored. Artifacts are shared like projects, and only people can share or delete them, never the assistant. They run in a sandbox on their own address and can't load anything from outside. Yellowscript works on the same artifacts with the same tools.
 - **Search your own files with citations.** Hybrid word and embedding search over uploads, attachments and created documents, with numbered sources linked back to each file. An administrator can add a Shared Documents folder for read-only organizational reference material.
 - **Query databases and repositories, read-only.** Postgres and SQLite, Markdown notes and local Git repositories.
 - **Reach the web, where allowed.** Fetch from approved sources, search the web and look up academic papers through OpenAlex, arXiv and PubMed.
