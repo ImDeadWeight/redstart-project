@@ -158,6 +158,12 @@ export const BUILTIN_CAPABILITIES = [
     description: 'Lets the assistant remember durable facts about each user across chats (their tools, preferences, role). Per account; every save is shown with Undo, and users can edit or delete every memory in Settings',
   },
   {
+    id: 'artifacts',
+    name: 'Artifacts',
+    kind: 'capability',
+    description: 'Lets the assistant make web pages, interactive prototypes, document mockups and SVGs that open beside the chat, keep every revision, and can be shared like a project. They run in a sandbox on their own origin and cannot load anything from outside. On by default',
+  },
+  {
     id: 'scholar',
     name: 'Scholar',
     kind: 'capability',
@@ -197,6 +203,9 @@ export const BUILTIN_CAPABILITY_TOOL_NAMES = {
   image_generation: ['generate_image'],
   memory: ['memory_save', 'memory_search', 'memory_forget'],
   document_search: ['search_documents'],
+  // artifacts-tool.mjs. artifact_check is host-resolved as well (below): it is
+  // listed here so a ban on 'artifacts' strips it with the rest.
+  artifacts: ['artifact_create', 'artifact_list', 'artifact_read', 'artifact_write', 'artifact_edit', 'artifact_rename', 'artifact_check'],
 }
 
 /**
@@ -229,7 +238,12 @@ export function capabilityToolNames() {
 //
 // The namespacing contract applies to them like any Nest tool
 // (scripts/test-tool-namespacing.mjs).
-export const HOST_RESOLVED_TOOL_NAMES = ['ask_user', 'update_plan']
+//
+// artifact_check (artifacts plan D11) is the one that BELONGS to a capability
+// (artifacts): it loads an artifact the way the person sees it, which only a
+// host with a browser can do. It is served by artifacts-tool.mjs, not
+// interaction-tools.mjs, so switching artifacts off removes it too.
+export const HOST_RESOLVED_TOOL_NAMES = ['ask_user', 'update_plan', 'artifact_check']
 
 // Back-compat alias for call sites that only need the built-ins (the file-system
 // policy set in mcp-server.mjs). Plugins are deliberately absent here.
@@ -445,6 +459,20 @@ export const TOOL_CLASSES = {
   // Document search — reads the caller's own Documents folder and Nest's own
   // index of it; nothing leaves the machine.
   search_documents: 'read',
+  // Artifacts (artifacts plan §6). The writes change only Nest-held artifact
+  // content the caller may edit, always into a draft that becomes a revision
+  // the person can roll back; they cannot reach the network, the person's
+  // files or who an artifact is shared with (D8). Hence no approval card
+  // (REVISIONED_WRITE_TOOLS below); the class still feeds bans, role
+  // narrowing and the activity log.
+  artifact_create: 'write',
+  artifact_write: 'write',
+  artifact_edit: 'write',
+  artifact_rename: 'write',
+  artifact_list: 'read',
+  artifact_read: 'read',
+  // Host-resolved: the client loads the artifact in its own sandbox.
+  artifact_check: 'read',
 }
 
 // Classify a tool by its function name. Unknown names default to 'read' — see
@@ -501,6 +529,18 @@ export const APPROVAL_OVERRIDES = {}
 /** @type {Set<string>} */
 export const ENFORCED_TOOLS = new Set()
 
+/**
+ * Write-class tools whose rule is 'none' (artifacts plan §6): every change
+ * they make is a draft of a Nest-held artifact that becomes a numbered
+ * revision, restorable from the UI, and none of them can share, delete or
+ * reach outside the artifact. A card per edit would make an agent that
+ * iterates on a page unusable for nothing gained. The ONE place a rule is
+ * looser than its class gives; test-artifacts-tool.mjs pins that it holds
+ * only artifacts' write tools.
+ * @type {ReadonlySet<string>}
+ */
+export const REVISIONED_WRITE_TOOLS = Object.freeze(new Set(['artifact_create', 'artifact_write', 'artifact_edit', 'artifact_rename']))
+
 /** @param {string} cls */
 function ruleForClass(cls) {
   if (cls === 'destructive') return 'always'
@@ -516,6 +556,7 @@ function ruleForClass(cls) {
  */
 export function approvalRule(name) {
   if (HOST_RESOLVED_TOOL_NAMES.includes(name)) return 'none'
+  if (REVISIONED_WRITE_TOOLS.has(name) && TOOL_CLASSES[name] === 'write') return 'none'
   const fromClass = ruleForClass(classifyTool(name))
   const override = APPROVAL_OVERRIDES[name]
   return override && RULE_STRICTNESS[override] > RULE_STRICTNESS[fromClass] ? override : fromClass

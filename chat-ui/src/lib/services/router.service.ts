@@ -13,6 +13,11 @@ export class RouterService {
 		return `${ROUTES.PROJECTS}/${encodeURIComponent(id)}`;
 	}
 
+	/** One artifact's own page (artifacts plan §10). */
+	static artifact(id: string): string {
+		return `${ROUTES.ARTIFACTS}/${encodeURIComponent(id)}`;
+	}
+
 	/** A new chat that starts in this project. */
 	static newChatInProject(id: string): string {
 		return `?${NEW_CHAT_PARAM}=true&${NEW_CHAT_PROJECT_PARAM}=${encodeURIComponent(id)}#/`;

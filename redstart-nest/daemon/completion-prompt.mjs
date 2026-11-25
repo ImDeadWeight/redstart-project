@@ -21,6 +21,7 @@ import { composePrompt } from './system-prompt.mjs'
 import { getPromptBlocks } from './prompt-storage.mjs'
 import { getProject } from './projects-storage.mjs'
 import { skillsForPrompt } from './skills-tool.mjs'
+import { getArtifact, isArtifactId } from './artifacts-storage.mjs'
 
 // The request's `redstart_project`, as a project this caller may read, or
 // null. Only name, id and instructions travel on: the composer has no use
@@ -30,6 +31,16 @@ export function resolveProject(account, claimed) {
   let project = null
   try { project = getProject(account, claimed) } catch { return null }
   return project ? { id: project.id, name: project.name, instructions: project.instructions } : null
+}
+
+// The request's `redstart_artifact` (artifacts plan §10: the artifact open
+// beside the chat), as one this caller may read, or null. An id, never text:
+// the title comes from the store, and the composer quotes it as data.
+export function resolveArtifact(account, claimed) {
+  if (!isArtifactId(claimed)) return null
+  let art = null
+  try { art = getArtifact(account, claimed) } catch { return null }
+  return art ? { id: art.id, title: art.title, kind: art.kind, head: art.head } : null
 }
 
 // The FIRST user message's text, which picks the most relevant memories for

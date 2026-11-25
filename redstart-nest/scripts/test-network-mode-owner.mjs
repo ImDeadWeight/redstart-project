@@ -73,7 +73,7 @@ await test('boot with network mode on, HTTPS off: today\'s lan-http, in order', 
   const fx = fakeEffects(); const o = owner(fx)
   const s = await o.update({ networkMode: true, gatewayPort: 19080 })
   assert(s.state === 'lan-http' && o.dataPlaneHost() === '0.0.0.0', JSON.stringify(s))
-  assert(fx.calls.join(' ') === 'bind(0.0.0.0) port80+ fw(gateway) fw(mcp) fw(port80)', fx.calls.join(' '))
+  assert(fx.calls.join(' ') === 'bind(0.0.0.0) port80+ fw(gateway) fw(mcp) fw(content) fw(port80)', fx.calls.join(' '))
 })
 
 await test('🔍 HTTPS on: the effects run proxy-off → narrow → rule → Caddy', async () => {
@@ -91,7 +91,7 @@ await test('🔍 Caddy gives up: the fallback, once, and no restart loop afterwa
   fx.calls.length = 0
   const s = await o.caddyStatus({ state: 'failed', reason: 'Port 443 is in use by another program' })
   assert(s.state === 'lan-https-fallback' && o.dataPlaneHost() === '0.0.0.0', JSON.stringify(s))
-  assert(fx.calls.join(' ') === 'caddy- bind(0.0.0.0) fw(gateway) fw(mcp)', fx.calls.join(' '))
+  assert(fx.calls.join(' ') === 'caddy- bind(0.0.0.0) fw(gateway) fw(mcp) fw(content)', fx.calls.join(' '))
   fx.calls.length = 0
   await o.caddyStatus({ state: 'stopped' })
   await o.caddyStatus({ state: 'failed' })
@@ -162,7 +162,7 @@ await test('🔍 updates are serialised: two at once never interleave their step
   const fx = fakeEffects({ delayMs: 15 }); const o = owner(fx)
   await Promise.all([o.update({ networkMode: true }), o.update({ tlsMode: 'own', caddyKey: 'a' })])
   const seq = fx.calls.join(' ')
-  assert(seq === 'bind(0.0.0.0) port80+ fw(gateway) fw(mcp) fw(port80) port80- bind(127.0.0.1) fw(caddy) caddy+(serving=false)', seq)
+  assert(seq === 'bind(0.0.0.0) port80+ fw(gateway) fw(mcp) fw(content) fw(port80) port80- bind(127.0.0.1) fw(caddy) caddy+(serving=false)', seq)
 })
 
 await test('HTTPS off clears the latch, so turning it back on tries Caddy again', async () => {

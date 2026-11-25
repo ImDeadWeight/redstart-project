@@ -113,7 +113,14 @@ export function nameProvider({ provider, name }) {
             body: JSON.stringify({ ipv4: ip }),
             signal: AbortSignal.timeout(timeoutMs),
           })
-          if (res.status === 200) return { ok: true, detail: 'published' }
+          if (res.status === 200) {
+            // artifactsName: the service also publishes art.<id> (2026-11-25),
+            // so Nest may serve artifacts there; an older service does not say so.
+            let body = null
+            try { body = await res.json() } catch { /* not JSON: an older service */ }
+            const artifactsName = typeof body?.artifactsHostname === 'string' ? body.artifactsHostname : null
+            return { ok: true, detail: 'published', artifactsName }
+          }
           if (res.status === 401) return { ok: false, detail: 'the name service no longer knows this computer: switch HTTPS off and back to Automatic to get a new name' }
           return { ok: false, detail: `the name service answered ${res.status}` }
         } catch (err) {

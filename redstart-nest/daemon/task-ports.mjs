@@ -31,6 +31,7 @@ import { ASK_USER_TOOL } from '../../shared/agent-core/ask-user.mjs'
 import { callToolTarget } from '../../shared/agent-core/approval.mjs'
 import { unknownToolText } from '../../shared/agent-core/teaching.mjs'
 import { UPDATE_PLAN_TOOL, NUDGE_PREFIX } from '../../shared/agent-core/update-plan.mjs'
+import { parseArtifactLines } from '../../shared/agent-core/artifact-lines.mjs'
 import * as store from './task-store.mjs'
 import * as conversations from './conversations-storage.mjs'
 import { accountForTask, surfacePermitted } from './auth.mjs'
@@ -211,6 +212,8 @@ export function createPass({ task, l, conv, generation, seams }) {
     turnCtx: { account: null, toolNames: new Set(), mcpTools: [], model: null, clientToolNames: new Set(), config: null, switchedOff: () => false },
     /** call id → approval id the person granted for it */
     approved: new Map(),
+    /** Artifact ids whose draft this pass wrote; sealed when it ends (task-runner). */
+    artifactsTouched: new Set(),
     planSteps: Array.isArray(conv.plan?.steps) ? conv.plan.steps : null,
     /** The assistant message the current turn writes. */
     current: { id: crypto.randomUUID(), parent: tipId },
@@ -511,6 +514,8 @@ export function toolsPort(pass) {
         ? { text: unknownToolText(name, turnCtx.mcpTools.map((x) => x.name)), isError: true }
         : { text: formatMcpToolResult(result), isError: !!result.isError }
       store.appendEvent(task.id, { type: 'tool_result', callId: call.id, name, isError: out.isError, preview: preview(out.text) })
+      // Artifacts this pass wrote, sealed when it ends (artifacts plan D7).
+      for (const ref of parseArtifactLines(out.text)) if (ref.revision === 'draft') pass.artifactsTouched.add(ref.id)
       return out
     },
     // Images the result linked (view_image, charts, generated pictures), sent

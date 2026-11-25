@@ -50,6 +50,15 @@
 //     _acme-challenge.<hostname> (the service keeps the newest two values,
 //     one per certificate). On :80 the admin name only ever redirects to
 //     HTTPS, or is refused: never proxied in plain text, even in fallback.
+//   Artifact content (artifacts plan D9, 2026-11-25; contentPort):
+//     :8444, same name and certificate, from 127.0.0.1:<contentPort> — the
+//     content listener, which serves sandboxed artifact pages by view token.
+//     A port of its own makes it a separate ORIGIN from the chat app, so an
+//     artifact's scripts can never read the login token.
+//     art.<hostname> on :443 as well (contentHostname; Automatic names only),
+//     under the same wildcard as admin.<hostname>, skipped by automatic HTTPS
+//     for the same reason. On :80 it only redirects or is refused.
+//     Nothing but the content listener is reachable on either.
 //   Listens on IPv4 only (tcp4/0.0.0.0), never IPv6: a machine's global IPv6
 //     addresses are reachable from the internet unless the router blocks
 //     them, and Nest must not depend on that (listenOn below).
@@ -65,6 +74,12 @@ export const ADMIN_HTTPS_PORT = 8443
 /** The admin panel's own name: one label under the device name, inside its wildcard certificate. */
 export const ADMIN_LABEL = 'admin'
 export const adminHostnameFor = (hostname) => `${ADMIN_LABEL}.${hostname}`
+
+/** Where Caddy serves artifact content over HTTPS on the device name (artifacts plan D9). */
+export const CONTENT_HTTPS_PORT = 8444
+/** The artifact content origin's own name, inside the same wildcard. */
+export const CONTENT_LABEL = 'art'
+export const contentHostnameFor = (hostname) => `${CONTENT_LABEL}.${hostname}`
 
 /** Answered by Caddy itself on :443 (tls-health.mjs's serving check). */
 export const TLS_HEALTH_PATH = '/.well-known/redstart-tls-health'
@@ -86,6 +101,13 @@ const ADMIN_HTTPS_ONLY_PAGE = [
   '<p style="font:16px system-ui;max-width:32em;margin:3em auto;padding:0 1em">',
   "The admin panel is only served over HTTPS, and HTTPS isn't working on this Nest yet.",
   ' Use the launcher on the Nest computer itself.</p>',
+].join('')
+
+const CONTENT_HTTPS_ONLY_PAGE = [
+  '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">',
+  '<title>Redstart Nest</title>',
+  '<p style="font:16px system-ui;max-width:32em;margin:3em auto;padding:0 1em">',
+  "Artifacts are only served over HTTPS here, and HTTPS isn't working on this Nest yet.</p>",
 ].join('')
 
 const REQUIRE_HTTPS_PAGE = [
@@ -205,6 +227,11 @@ export function buildCaddyConfig({
   // Needs adminPort. Automatic names only: an own name's DNS provider would
   // need the wildcard's challenge too, which is not checked for each.
   adminHostname = null,
+  // Artifact content (artifacts plan D9): the content listener on loopback at
+  // contentPort, served on contentHttpsPort under the device name, and on its
+  // own name on :443 when contentHostname is set (Automatic names only).
+  contentPort = null, contentHttpsPort = CONTENT_HTTPS_PORT,
+  contentHostname = null,
 }) {
   if (typeof hostname !== 'string' || !HOSTNAME_RE.test(hostname)) throw new Error(`not a hostname: ${JSON.stringify(hostname)}`)
   if (typeof storageDir !== 'string' || !storageDir) throw new Error('storageDir is required')
@@ -221,7 +248,15 @@ export function buildCaddyConfig({
     if (adminHostname !== adminHostnameFor(hostname)) throw new Error(`adminHostname must be ${adminHostnameFor(hostname)}`)
     if (!HOSTNAME_RE.test(adminHostname)) throw new Error(`not a hostname: ${JSON.stringify(adminHostname)}`)
   }
-  const httpsNames = adminHostname ? [hostname, adminHostname] : [hostname]
+  if (contentPort !== null) { port('contentPort', contentPort); port('contentHttpsPort', contentHttpsPort) }
+  if (contentHostname !== null) {
+    if (contentPort === null) throw new Error('contentHostname needs contentPort')
+    if (contentHostname !== contentHostnameFor(hostname)) throw new Error(`contentHostname must be ${contentHostnameFor(hostname)}`)
+    if (!HOSTNAME_RE.test(contentHostname)) throw new Error(`not a hostname: ${JSON.stringify(contentHostname)}`)
+  }
+  // The sub-names on :443, all under one wildcard certificate.
+  const subNames = [adminHostname, contentHostname].filter((n) => n !== null)
+  const httpsNames = [hostname, ...subNames]
   const provider = checkDnsProvider(dnsProvider)
   const routes = appRoutes({ mcpPort, gatewayPort })
 
@@ -250,14 +285,15 @@ export function buildCaddyConfig({
   } else {
     plainRoutes = routes
   }
-  if (adminHostname) {
-    // First, so the chat app is never served under the admin name in plain
-    // text: the admin panel's name means HTTPS or nothing.
+  // First, so the chat app is never served under a sub-name in plain text:
+  // the admin panel's name and the content name mean HTTPS or nothing.
+  for (const [name, page] of [[contentHostname, CONTENT_HTTPS_ONLY_PAGE], [adminHostname, ADMIN_HTTPS_ONLY_PAGE]]) {
+    if (!name) continue
     plainRoutes = [{
-      match: [{ host: [adminHostname] }],
+      match: [{ host: [name] }],
       handle: [httpsServing
-        ? { handler: 'static_response', status_code: 308, headers: { Location: [`https://${adminHostname}${httpsPort === 443 ? '' : `:${httpsPort}`}{http.request.uri}`] } }
-        : { handler: 'static_response', status_code: 503, headers: { 'Content-Type': ['text/html; charset=utf-8'], 'Cache-Control': ['no-store'] }, body: ADMIN_HTTPS_ONLY_PAGE }],
+        ? { handler: 'static_response', status_code: 308, headers: { Location: [`https://${name}${httpsPort === 443 ? '' : `:${httpsPort}`}{http.request.uri}`] } }
+        : { handler: 'static_response', status_code: 503, headers: { 'Content-Type': ['text/html; charset=utf-8'], 'Cache-Control': ['no-store'] }, body: page }],
       terminal: true,
     }, ...plainRoutes]
   }
@@ -281,12 +317,13 @@ export function buildCaddyConfig({
             tls_connection_policies: [{ match: { sni: httpsNames } }],
             routes: [
               ...(adminHostname ? [{ match: [{ host: [adminHostname] }], handle: [reverseProxy(adminPort)], terminal: true }] : []),
+              ...(contentHostname ? [{ match: [{ host: [contentHostname] }], handle: [reverseProxy(contentPort)], terminal: true }] : []),
               { match: [{ host: [hostname] }], handle: [{ handler: 'subroute', routes: [healthRoute(), ...routes] }], terminal: true },
             ],
             // The :80 server below is ours; Caddy must not add its own. The
             // admin name rides on the wildcard (tls.certificates below).
-            automatic_https: adminHostname
-              ? { disable_redirects: true, skip_certificates: [adminHostname] }
+            automatic_https: subNames.length
+              ? { disable_redirects: true, skip_certificates: subNames }
               : { disable_redirects: true },
           },
           http: {
@@ -305,13 +342,23 @@ export function buildCaddyConfig({
               automatic_https: { disable_redirects: true },
             },
           } : {}),
+          ...(contentPort !== null ? {
+            content: {
+              listen: listenOn(contentHttpsPort),
+              protocols: ['h1', 'h2'],
+              strict_sni_host: true,
+              tls_connection_policies: [{ match: { sni: [hostname] } }],
+              routes: [{ match: [{ host: [hostname] }], handle: [reverseProxy(contentPort)], terminal: true }],
+              automatic_https: { disable_redirects: true },
+            },
+          } : {}),
         },
       },
       tls: {
-        ...(adminHostname ? { certificates: { automate: [`*.${hostname}`] } } : {}),
+        ...(subNames.length ? { certificates: { automate: [`*.${hostname}`] } } : {}),
         automation: {
           policies: [{
-            subjects: adminHostname ? [hostname, `*.${hostname}`] : [hostname],
+            subjects: subNames.length ? [hostname, `*.${hostname}`] : [hostname],
             issuers: [{
               module: 'acme',
               ca: acmeStaging ? ACME_STAGING : ACME_PRODUCTION,

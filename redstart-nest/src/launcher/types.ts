@@ -275,6 +275,10 @@ export type ProfileTools = {
   // capabilities — an absent array entry would read as "off" and silently
   // disable web access for every existing profile.
   webAccessEnabled?: boolean
+  // Artifacts (pages, prototypes and mockups the assistant makes; artifacts
+  // plan D15) on/off for this profile. On by default, so the same `!== false`
+  // reading as webAccessEnabled: absent means on.
+  artifactsEnabled?: boolean
   // General web search engine for web_search's "web" source. Absent = 'none':
   // off is the default (chat-tooling plan D1). The engine's connection (SearXNG
   // URL, Brave key) is global, in CapabilityConfig.web_search.

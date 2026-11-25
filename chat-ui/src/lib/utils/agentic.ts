@@ -38,7 +38,13 @@ export type ToolResultLine = {
 	resource?: ToolResultResource;
 	/** A Phase 3 memory_save line: drawn as a chip with Undo. */
 	memory?: { id: string; text: string; fromWeb: boolean; projectId?: string };
+	/** An artifacts tool's `[artifact: <id> r<n>|draft]` line: drawn as a card (artifacts plan §10). */
+	artifact?: { id: string; revision: number | 'draft' };
 };
+
+/** The artifacts tools' result line (shared/agent-core/artifact-lines.mjs). */
+export const ARTIFACT_LINE_REGEX =
+	/^\[artifact: ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) (r[0-9]{1,6}|draft)\]$/;
 
 /**
  * memory_save's first result line (daemon/memory-tool.mjs):
@@ -205,6 +211,8 @@ export function parseToolResultWithImages(
 	return lines.map((line) => {
 		const resource = parseResourceLine(line);
 		if (resource) return { text: line, resource, filePath: resource.path };
+		const art = line.match(ARTIFACT_LINE_REGEX);
+		if (art) return { text: line, artifact: { id: art[1], revision: art[2] === 'draft' ? 'draft' : Number(art[2].slice(1)) } };
 		const mem = line.match(MEMORY_LINE_REGEX);
 		if (mem) {
 			return {

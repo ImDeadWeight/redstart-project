@@ -8,6 +8,7 @@
 
 import { config } from '$lib/stores/settings.svelte';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
+import { artifactPanelStore } from '$lib/stores/artifact-panel.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import { selectedModelName, selectedModelContextSize } from '$lib/stores/models.svelte';
 import type { ApiProcessingState, DatabaseMessage } from '$lib/types';
@@ -122,6 +123,12 @@ export function getApiOptions(): Record<string, unknown> {
 	// the field before llama-server sees it.
 	const projectId = conversationsStore.getProjectId();
 	if (projectId) apiOptions.projectId = projectId;
+
+	// The artifact open beside this chat (artifacts plan §10): only the id;
+	// the gateway checks the caller can read it, says so in the prompt (its
+	// title as data), and strips the field.
+	const artifactId = artifactPanelStore.selectedFor(conversationsStore.activeConversation?.id);
+	if (artifactId) apiOptions.artifactId = artifactId;
 
 	if (hasValue(currentConfig.temperature))
 		apiOptions.temperature = Number(currentConfig.temperature);

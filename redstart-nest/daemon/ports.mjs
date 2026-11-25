@@ -40,6 +40,14 @@ export const ADMIN_PORT = 19083
  */
 export const EMBED_PORT = 19084
 
+/**
+ * The artifact content listener (artifacts plan D9): sandboxed artifact pages,
+ * by view token only. A port, and so an ORIGIN, of its own, so an artifact's
+ * scripts can never read the chat app's login. Daemon lifetime, like the
+ * admin listener: an artifact opens whether or not a model is loaded.
+ */
+export const ARTIFACT_CONTENT_PORT = 19085
+
 /** config.port's default, duplicated in src/launcher/types.ts's DEFAULT_CONFIG. */
 export const DEFAULT_GATEWAY_PORT = 19080
 
@@ -48,6 +56,7 @@ export const FIXED_PORTS = Object.freeze({
   [BEACON_PORT]: 'the discovery beacon',
   [ADMIN_PORT]: 'the admin listener',
   [EMBED_PORT]: 'the embedding server',
+  [ARTIFACT_CONTENT_PORT]: 'the artifact content listener',
 })
 
 /**

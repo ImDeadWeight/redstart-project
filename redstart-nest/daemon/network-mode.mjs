@@ -17,6 +17,8 @@
 //   local               network mode off: loopback only, no Caddy, no :80.
 //   lan-http            HTTPS off (today's behaviour, or a BYO proxy):
 //                       gateway + MCP on 0.0.0.0, port-80 proxy on Windows.
+//                       ("The data plane" is the gateway, the MCP server and
+//                       the artifact content listener: one bind for all three.)
 //   lan-https           Caddy fronts :443/:80; gateway + MCP on LOOPBACK.
 //                       While HTTPS is not serving yet, Caddy's :80 proxies
 //                       plain HTTP itself (caddy-config.mjs), so every LAN
@@ -107,14 +109,14 @@ export function factsFor(state, i) {
       return { host: LOOPBACK, port80Proxy: false, caddy: null, firewall: [] }
     case 'lan-http': {
       const p80 = wantsPort80Proxy(i)
-      return { host: WILDCARD, port80Proxy: p80, caddy: null, firewall: ['gateway', 'mcp', ...(p80 ? ['port80'] : [])] }
+      return { host: WILDCARD, port80Proxy: p80, caddy: null, firewall: ['gateway', 'mcp', 'content', ...(p80 ? ['port80'] : [])] }
     }
     case 'lan-https':
       // Caddy wanted even while the latch says it failed under requireHttps:
       // the fact is unchanged, so no step re-runs it; a retry changes caddyKey.
       return { host: LOOPBACK, port80Proxy: false, caddy: { serving: !!i.serving, key: String(i.caddyKey ?? '') }, firewall: ['caddy'] }
     case 'lan-https-fallback':
-      return { host: WILDCARD, port80Proxy: false, caddy: null, firewall: ['gateway', 'mcp'] }
+      return { host: WILDCARD, port80Proxy: false, caddy: null, firewall: ['gateway', 'mcp', 'content'] }
     case 'stopping':
       // host null: shutdown stops the data plane itself; rebinding it first
       // would be work for nothing.

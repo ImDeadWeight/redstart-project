@@ -11,9 +11,9 @@
 //   POST   /projects        create one of the caller's own
 //   GET    /projects/:id
 //   PUT    /projects/:id    name and/or instructions (editors and up)
-//   DELETE /projects/:id    owner or admin: its chats MOVE OUT (each person's
-//                           own), its memories go with it, its files folder is
-//                           left on disk
+//   DELETE /projects/:id    owner or admin: its chats and artifacts MOVE OUT
+//                           (each to its owner), its memories go with it, its
+//                           files folder is left on disk
 //   PUT    /projects/:id/members   { members: [{ type, id, role }] } (owner, admin)
 //   POST   /projects/:id/transfer  { accountId } — hand it over (owner, admin)
 //   GET    /projects/:id/agents-md   the instructions as an AGENTS.md file
@@ -44,6 +44,7 @@ import { listGroups } from '../groups-storage.mjs'
 import { deleteProjectMemories } from '../memory-storage.mjs'
 import { dropSuggestions } from '../memory-review-store.mjs'
 import { detachProject } from '../conversations-storage.mjs'
+import { detachProjectArtifacts } from '../artifacts-storage.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
 import { logEvent } from '../logger.mjs'
 
@@ -226,10 +227,11 @@ export async function handleProjectRoute(req, res, urlPath, account) {
       // reader already treats as "not in a project". The reverse order could
       // leave a live project with its chats silently moved out.
       const chatsMovedOut = detachProject(id)
+      const artifactsMovedOut = detachProjectArtifacts(id)
       const memoriesDeleted = deleteProjectMemories(account, id)
       dropSuggestions(account, (s) => s.projectId === id)
-      logEvent('project', 'deleted', { account: account?.username ?? undefined, chatsMovedOut, memoriesDeleted })
-      sendJson(res, 200, { deleted: true, chatsMovedOut, memoriesDeleted })
+      logEvent('project', 'deleted', { account: account?.username ?? undefined, chatsMovedOut, artifactsMovedOut, memoriesDeleted })
+      sendJson(res, 200, { deleted: true, chatsMovedOut, artifactsMovedOut, memoriesDeleted })
       return true
     }
 

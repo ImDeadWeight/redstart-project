@@ -25,7 +25,8 @@
 		X,
 		Pencil,
 		Share2,
-		Eye
+		Eye,
+		AppWindow
 	} from '@lucide/svelte';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
@@ -41,6 +42,7 @@
 		type Project
 	} from '$lib/services/project.service';
 	import ProjectShareDialog from './ProjectShareDialog.svelte';
+	import { ArtifactsGallery } from '$lib/components/app/artifacts';
 	import { MemoryService, type Memory } from '$lib/services/memory.service';
 	import { FilesService, type FileEntry } from '$lib/services/files.service';
 	import { projectsStore } from '$lib/stores/projects.svelte';
@@ -484,6 +486,16 @@
 					{/each}
 				</ul>
 			{/if}
+		</section>
+
+		<!-- Artifacts in the project (artifacts plan §10). A viewer's New makes
+		     one of their own (D6); the gallery says what each person may do. -->
+		<section class="space-y-2">
+			<h2 class="flex items-center gap-1.5 text-sm font-medium">
+				<AppWindow class="h-4 w-4" />
+				Artifacts
+			</h2>
+			<ArtifactsGallery projectId={project.id} canAdd={canEdit} compact />
 		</section>
 	{/if}
 </div>

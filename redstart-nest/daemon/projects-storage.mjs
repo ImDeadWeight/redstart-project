@@ -39,9 +39,9 @@ import { configDir } from './platform-paths.mjs'
 import { readJsonOr, writeJsonAtomic } from './json-store.mjs'
 import { memoryKey } from './memory-storage.mjs'
 import { getConversation, getConversationAnyAccount } from './conversations-storage.mjs'
-import { groupsForAccount, findGroupById } from './groups-storage.mjs'
+import { findGroupById } from './groups-storage.mjs'
 import { findById as findAccountById } from './accounts-storage.mjs'
-import { canDo } from './auth.mjs'
+import { ownerKeyOf, managesAllProjects, memberRoles, highestRole } from './access-core.mjs'
 import { resolveWithinRoot } from './path-scope.mjs'
 import { resolveUserScope, USER_FILES_DIR } from './user-scope.mjs'
 
@@ -81,16 +81,10 @@ export function isProjectId(id) {
 // Access — the one place it is decided (plan D7)
 // ---------------------------------------------------------------------------
 
-const RANK = { viewer: 1, editor: 2, admin: 3, owner: 4 }
-
-function keyOf(account) {
-  try { return memoryKey(account) } catch { return null }
-}
-
-/** May this account manage every project (manageProjects, or the Nest owner)? */
-export function managesAllProjects(account) {
-  return !!account && canDo(account, 'manageProjects')
-}
+// The owner check, the admin check and the group lookup are access-core's,
+// shared with artifacts; the rule that the HIGHEST role wins is projects'.
+const keyOf = ownerKeyOf
+export { managesAllProjects }
 
 /**
  * What this caller may do with the project: 'owner' | 'admin' | 'editor' |
@@ -103,13 +97,8 @@ export function accessFor(project, account) {
   if (key === null) return null
   if (project.ownerKey === key) return 'owner'
   if (!account) return null
-  let best = managesAllProjects(account) ? 'admin' : null
-  const groupIds = new Set(groupsForAccount(account.id).map((g) => g.id))
-  for (const m of project.members || []) {
-    const mine = (m.type === 'account' && m.id === account.id) || (m.type === 'group' && groupIds.has(m.id))
-    if (mine && (!best || RANK[m.role] > RANK[best])) best = m.role
-  }
-  return best
+  const held = memberRoles(project.members, account)
+  return highestRole([managesAllProjects(account) ? 'admin' : null, held.account, ...held.groups])
 }
 
 /** May this caller see the project, chat in it, read its memory and files? */

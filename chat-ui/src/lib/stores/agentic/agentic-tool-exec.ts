@@ -28,6 +28,7 @@ import { extractBase64Attachments } from './agentic-attachments';
 import { parseResourceLine, resourceKind } from '$lib/utils/resource-links';
 import { fetchFileBlob } from '$lib/utils/agentic';
 import { apiPost } from '$lib/utils/api-fetch';
+import { ARTIFACT_CHECK_TOOL, runArtifactCheck } from '$lib/utils/artifact-check';
 import { callToolTarget, DENIED_RESULT, unknownToolText } from '$lib/agent-core';
 import type { AgentPorts, AgentToolCall, AgentContentPart, ToolExecution } from '$lib/agent-core';
 import type { AgenticSessionState } from './agentic-session.svelte';
@@ -111,6 +112,11 @@ export class AgenticToolExec {
 	 * deletion.
 	 */
 	asksPerson(toolName: string): boolean {
+		// Nest's artifacts tools need no card (artifacts plan §6): every change
+		// is a draft that becomes a revision the person can restore, and none
+		// of them can share, delete or reach outside the artifact. Nest says
+		// so with approval rule 'none'; keyed on the capability Nest reports.
+		if (mcpStore.getNestToolMeta(toolName).capability === 'artifacts') return false;
 		const permissionKey = toolsStore.getPermissionKey(toolName);
 		const destructive = toolsStore.isDestructiveTool(toolName);
 		return destructive || !permissionKey || !permissionsStore.hasTool(permissionKey);
@@ -266,6 +272,13 @@ export class AgenticToolExec {
 	): Promise<ToolExecution> {
 		const toolName = toolCall.function.name;
 		const toolSource = toolsStore.getToolSource(toolName);
+
+		// artifact_check is defined by Nest and answered here (artifacts plan
+		// D11): this browser loads the artifact in a hidden sandboxed frame.
+		// Only while Nest offers it, i.e. it is a Nest tool on this session.
+		if (toolName === ARTIFACT_CHECK_TOOL && mcpStore.getNestToolMeta(toolName).capability === 'artifacts') {
+			return runArtifactCheck(this.parseToolArguments(toolCall.function.arguments), signal);
+		}
 
 		if (toolSource === ToolSource.LOCAL_FS) {
 			const api = twigFsApi();

@@ -141,7 +141,8 @@ export class ChatService {
 			reasoningEffort,
 			continueFinalMessage,
 			promptMode,
-			projectId
+			projectId,
+			artifactId
 		} = options;
 
 		const normalizedMessages: ApiChatMessageData[] = (
@@ -253,6 +254,11 @@ export class ChatService {
 		// resolves against the caller's own projects, then strips.
 		if (projectId) {
 			requestBody.redstart_project = projectId;
+		}
+
+		// Redstart-only field, the same rule: the artifact open beside the chat.
+		if (artifactId) {
+			requestBody.redstart_artifact = artifactId;
 		}
 
 		// Redstart-only field: keys tool retrieval's per-conversation set, which

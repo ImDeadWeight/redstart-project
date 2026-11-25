@@ -29,6 +29,8 @@ import { stagedCaddyPath } from './fetch-caddy.mjs'
 import {
   buildCaddyConfig, checkDnsProvider, TLS_HEALTH_PATH, PROXY_HEADER, PROXY_SECRET_ENV, ACME_PRODUCTION, ACME_STAGING,
   adminHostnameFor,
+  contentHostnameFor,
+  CONTENT_HTTPS_PORT,
 } from '../daemon/caddy-config.mjs'
 
 const results = []
@@ -259,6 +261,61 @@ test('the admin name is refused without adminPort, or when it is not admin.<host
   }
 })
 
+console.log('\n-- artifact content (artifacts plan D9) --')
+
+const CONTENT_NAME = contentHostnameFor(BASE.hostname)
+const withContent = (c = {}) => build({ ...c, contentPort: 19085 })
+const withContentName = (c = {}) => build({ ...c, contentPort: 19085, contentHostname: CONTENT_NAME })
+
+test('🔍 content over HTTPS (:8444): only when asked, the device name, loopback content listener only', () => {
+  for (const c of COMBOS) {
+    assert(!('content' in servers(build(c))), `${label(c)}: a content server without contentPort`)
+    const s = servers(withContent(c))
+    assert(s.content && JSON.stringify(s.content.listen) === JSON.stringify([`tcp4/0.0.0.0:${CONTENT_HTTPS_PORT}`]), `listen ${s.content?.listen}`)
+    assert(JSON.stringify(s.content.tls_connection_policies) === JSON.stringify([{ match: { sni: [BASE.hostname] } }]) && s.content.strict_sni_host === true, 'not SNI-bound')
+    const p = proxies({ content: s.content })
+    assert(p.length === 1 && p[0].upstreams[0].dial === '127.0.0.1:19085', `upstream ${JSON.stringify(p.map((x) => x.upstreams))}`)
+    for (const other of ['http', 'https']) assert(!JSON.stringify(s[other]).includes(':19085'), `${label(c)}: content reachable through ${other}`)
+    assert(!JSON.stringify(s.content).includes(':19080') && !JSON.stringify(s.content).includes(':19082'), 'the gateway or MCP reachable on the content origin')
+  }
+})
+
+test('🔍 content on its own name (art.<hostname>): :443 by Host, under the wildcard, never asked for itself', () => {
+  assert(CONTENT_NAME === `art.${BASE.hostname}`, CONTENT_NAME)
+  const cfg = withContentName()
+  const s = servers(cfg)
+  assert(JSON.stringify(s.https.tls_connection_policies) === JSON.stringify([{ match: { sni: [BASE.hostname, CONTENT_NAME] } }]), JSON.stringify(s.https.tls_connection_policies))
+  const route = s.https.routes.find((r) => JSON.stringify(r.match) === JSON.stringify([{ host: [CONTENT_NAME] }]))
+  assert(route && route.terminal && route.handle[0].upstreams[0].dial === '127.0.0.1:19085', JSON.stringify(route))
+  const device = s.https.routes.find((r) => JSON.stringify(r.match) === JSON.stringify([{ host: [BASE.hostname] }]))
+  assert(device && !JSON.stringify(device).includes(':19085'), 'content reachable under the device name on :443')
+  assert(JSON.stringify(cfg.apps.tls.certificates?.automate) === JSON.stringify([`*.${BASE.hostname}`]), 'no wildcard')
+  assert(JSON.stringify(s.https.automatic_https.skip_certificates) === JSON.stringify([CONTENT_NAME]), JSON.stringify(s.https.automatic_https))
+  // With the admin name as well: one wildcard, both names skipped, both routed.
+  const both = build({ adminPort: 19083, adminHostname: ADMIN_NAME, contentPort: 19085, contentHostname: CONTENT_NAME })
+  assert(JSON.stringify(servers(both).https.automatic_https.skip_certificates) === JSON.stringify([ADMIN_NAME, CONTENT_NAME]), 'both names not skipped')
+  assert(JSON.stringify(both.apps.tls.automation.policies[0].subjects) === JSON.stringify([BASE.hostname, `*.${BASE.hostname}`]), 'subjects')
+})
+
+test('🔍 on :80 the content name only redirects to HTTPS or is refused; artifact pages are never plain text through Caddy', () => {
+  for (const c of COMBOS) {
+    const http = servers(withContentName(c)).http
+    const first = http.routes[0]
+    assert(JSON.stringify(first.match) === JSON.stringify([{ host: [CONTENT_NAME] }]), `${label(c)}: content name not matched first`)
+    const h = first.handle[0]
+    if (c.httpsServing) assert(h.status_code === 308 && h.headers.Location[0] === `https://${CONTENT_NAME}{http.request.uri}`, JSON.stringify(h))
+    else assert(h.status_code === 503, `${label(c)}: ${h.status_code}`)
+    assert(!JSON.stringify(http).includes(':19085'), `${label(c)}: the content listener is reachable over plain :80`)
+  }
+})
+
+test('the content name is refused without contentPort, or when it is not art.<hostname>', () => {
+  throws(() => build({ contentHostname: CONTENT_NAME }), /needs contentPort/, 'no contentPort')
+  for (const bad of ['art.example.com', `x.art.${BASE.hostname}`, ADMIN_NAME, BASE.hostname]) {
+    throws(() => build({ contentPort: 19085, contentHostname: bad }), /contentHostname must be/, bad)
+  }
+})
+
 test('Caddy adds no redirects of its own; :80 runs no automatic HTTPS', () => {
   const s = servers(build())
   assert(s.https.automatic_https?.disable_redirects === true, ':443 automatic redirects not disabled')
@@ -364,7 +421,9 @@ test('🔍 `caddy validate` accepts every mode (staged binary; required under CI
       ]) {
         const file = path.join(dir, 'caddy.json')
         // Automatic (acmedns) also with the admin panel on its own name.
-        const variants = dnsProvider.name === 'acmedns' ? [{}, { adminPort: 19083, adminHostname: ADMIN_NAME }] : [{}]
+        const variants = dnsProvider.name === 'acmedns'
+          ? [{}, { adminPort: 19083, adminHostname: ADMIN_NAME }, { adminPort: 19083, adminHostname: ADMIN_NAME, contentPort: 19085, contentHostname: CONTENT_NAME }]
+          : [{}, { contentPort: 19085 }]
         for (const v of variants) {
           fs.writeFileSync(file, JSON.stringify(build({ ...c, ...v, dnsProvider, acmeStaging: true, storageDir: path.join(dir, 'storage') })))
           try {
@@ -373,7 +432,7 @@ test('🔍 `caddy validate` accepts every mode (staged binary; required under CI
               stdio: 'pipe',
             })
           } catch (err) {
-            throw new Error(`${label(c)} ${dnsProvider.name}${v.adminHostname ? ' +admin name' : ''}: ${String(err.stderr || err.message).trim().split('\n').pop()}`)
+            throw new Error(`${label(c)} ${dnsProvider.name}${v.adminHostname ? ' +admin name' : ''}${v.contentPort ? ' +content' : ''}: ${String(err.stderr || err.message).trim().split('\n').pop()}`)
           }
           n++
         }

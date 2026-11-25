@@ -193,11 +193,13 @@ MCP says how a tool is called, not where it runs, so Redstart has tool hosts on 
 |---|---|
 | 19080 | Gateway — all clients connect here (default, configurable in Redstart Nest). Bound to `127.0.0.1` unless network mode is on |
 | 19081 | llama-server — internal only, bound to `127.0.0.1` in both modes; never reachable from LAN |
-| 19082 | MCP server — built-in tool endpoint (web_fetch, web_search, Documents, run_python, search_documents, Memory, File System, SQLite, Postgres, Vault, Git, Scholar, skills) plus any installed [plugins](capabilities.md#plugins). Bound to `127.0.0.1` unless network mode is on |
+| 19082 | MCP server — built-in tool endpoint (web_fetch, web_search, Documents, run_python, search_documents, Memory, Artifacts, File System, SQLite, Postgres, Vault, Git, Scholar, skills) plus any installed [plugins](capabilities.md#plugins). Bound to `127.0.0.1` unless network mode is on |
 | 19083 | Admin listener — the control plane. Fixed, not configurable, and up whenever Redstart Nest is, whether or not a model is running. Bound to `127.0.0.1` unless `adminBindHost` says otherwise. See [The control plane](security.md#the-control-plane) |
 | 19084 | Embedding server — a second, small llama-server used for tool and document search ranking. Bound to `127.0.0.1` only |
+| 19085 | Artifact content listener — serves sandboxed artifact pages by view token only, on an origin of its own so their scripts can never reach the chat app's login. Fixed, up whenever Nest is, and bound wherever the gateway is (loopback while Caddy fronts Nest). See [Artifacts](security.md#artifacts) |
 | 80 / 443 | The bundled Caddy, **only while HTTPS is on**: 443 serves `https://<name>` (the chat UI and MCP server), 80 redirects to it. With HTTPS off, Windows uses 80 for the clean-URL proxy instead |
 | 8443 | The bundled Caddy serving the control plane over HTTPS, only while HTTPS is on **and** the admin panel is reachable on the network. An Automatic name also gets it on :443 as `admin.<name>` |
+| 8444 | The bundled Caddy serving artifact content over HTTPS, while HTTPS is on. An Automatic name also gets it on :443 as `art.<name>` once the name service publishes that name |
 | 8765 | Beacon — Redstart Nest identity broadcast, always bound to `0.0.0.0` for LAN discovery |
 
 **Two planes, two lifecycles.** 19080/19081/19082 are the *data* plane: they exist

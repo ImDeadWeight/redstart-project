@@ -7,7 +7,7 @@
 // on what would actually be sent to Cloudflare:
 //
 //   - a credential touches only its own <id>.nest. records;
-//   - nothing is written outside <id>.nest. / admin.<id>.nest. /
+//   - nothing is written outside <id>.nest. / admin.<id>.nest. / art.<id>.nest. /
 //     _acme-challenge.<id>.nest.;
 //   - every record is DNS-only (proxied: false);
 //   - only private addresses are published;
@@ -70,7 +70,7 @@ function assertWritesSafe(cf) {
   for (const w of cf.writes()) {
     if (w.method === 'DELETE') continue
     assert(w.body.proxied === false, `a ${w.method} body is not DNS-only: ${JSON.stringify(w.body)}`)
-    assert(new RegExp(`^(?:_acme-challenge\\.|admin\\.)?[a-z2-9]{6}\\.nest\\.${ZONE.replace('.', '\\.')}$`).test(w.body.name), `write outside <id>.nest.: ${w.body.name}`)
+    assert(new RegExp(`^(?:_acme-challenge\\.|admin\\.|art\\.)?[a-z2-9]{6}\\.nest\\.${ZONE.replace('.', '\\.')}$`).test(w.body.name), `write outside <id>.nest.: ${w.body.name}`)
     assert(w.body.ttl === RECORD_TTL, `ttl ${w.body.ttl}`)
   }
 }
@@ -97,6 +97,8 @@ await test('🔍 writable(): only this install\'s own name and admin name (A/AAA
   assert(writable({ id, zone: ZONE, type: 'A', name: `${id}.nest.${ZONE}` }), 'own A')
   assert(writable({ id, zone: ZONE, type: 'A', name: `admin.${id}.nest.${ZONE}` }), 'own admin A')
   assert(writable({ id, zone: ZONE, type: 'AAAA', name: `admin.${id}.nest.${ZONE}` }), 'own admin AAAA')
+  assert(writable({ id, zone: ZONE, type: 'A', name: `art.${id}.nest.${ZONE}` }), 'own artifacts A')
+  assert(writable({ id, zone: ZONE, type: 'AAAA', name: `art.${id}.nest.${ZONE}` }), 'own artifacts AAAA')
   assert(writable({ id, zone: ZONE, type: 'TXT', name: `_acme-challenge.${id}.nest.${ZONE}` }), 'own TXT')
   const refused = [
     { type: 'A', name: ZONE }, { type: 'A', name: `www.${ZONE}` }, { type: 'A', name: `nest.${ZONE}` },
@@ -109,6 +111,7 @@ await test('🔍 writable(): only this install\'s own name and admin name (A/AAA
     { type: 'A', name: `admin.abcdef.nest.${ZONE}` }, { type: 'A', name: `x.admin.${id}.nest.${ZONE}` },
     { type: 'A', name: `chat.${id}.nest.${ZONE}` }, { type: 'A', name: `*.${id}.nest.${ZONE}` },
     { type: 'CNAME', name: `admin.${id}.nest.${ZONE}` },
+    { type: 'TXT', name: `art.${id}.nest.${ZONE}` }, { type: 'A', name: `x.art.${id}.nest.${ZONE}` }, { type: 'A', name: `art.abcdef.nest.${ZONE}` },
   ]
   for (const r of refused) {
     let threw = false
@@ -149,17 +152,18 @@ await test('🔍 register is rate-limited per network; the IP itself is never st
 
 console.log('\n-- publishing the address --')
 
-await test('🔍 PUT /v1/ip: one DNS-only A record at <id>.nest. and one at admin.<id>.nest., replaced (not added to) on a change', async () => {
+await test('🔍 PUT /v1/ip: one DNS-only A record at <id>.nest., admin.<id>.nest. and art.<id>.nest., replaced (not added to) on a change', async () => {
   const w = world()
   const inst = await w.register()
   assert((await w.call('PUT', '/v1/ip', { body: { ipv4: '192.168.0.213' }, headers: w.bearer(inst) })).status === 200, 'set')
   const res = await w.call('PUT', '/v1/ip', { body: { ipv4: '192.168.0.50' }, headers: w.bearer(inst) })
   assert(res.status === 200, 'change')
   const body = await res.json()
-  assert(body.hostname === `${inst.id}.nest.${ZONE}` && body.adminHostname === `admin.${inst.id}.nest.${ZONE}`, JSON.stringify(body))
-  const a = [...w.cf.records.values()].filter((r) => r.type === 'A').sort((x, y) => x.name.length - y.name.length)
-  assert(a.length === 2 && a.every((r) => r.content === '192.168.0.50'), JSON.stringify(a))
-  assert(a[0].name === `${inst.id}.nest.${ZONE}` && a[1].name === `admin.${inst.id}.nest.${ZONE}`, JSON.stringify(a.map((r) => r.name)))
+  assert(body.hostname === `${inst.id}.nest.${ZONE}` && body.adminHostname === `admin.${inst.id}.nest.${ZONE}` && body.artifactsHostname === `art.${inst.id}.nest.${ZONE}`, JSON.stringify(body))
+  const a = [...w.cf.records.values()].filter((r) => r.type === 'A')
+  assert(a.length === 3 && a.every((r) => r.content === '192.168.0.50'), JSON.stringify(a))
+  const names = a.map((r) => r.name).sort()
+  assert(JSON.stringify(names) === JSON.stringify([`${inst.id}.nest.${ZONE}`, `admin.${inst.id}.nest.${ZONE}`, `art.${inst.id}.nest.${ZONE}`].sort()), JSON.stringify(names))
   assertWritesSafe(w.cf)
   assert(w.cf.requests.every((r) => r.auth === `Bearer ${TOKEN}`), 'Cloudflare not called with the API token')
 })
@@ -178,7 +182,7 @@ await test('a ULA IPv6 gets an AAAA beside the A; dropping it removes the AAAA',
   const w = world()
   const inst = await w.register()
   await w.call('PUT', '/v1/ip', { body: { ipv4: '10.0.0.5', ipv6: 'fd12:3456::5' }, headers: w.bearer(inst) })
-  assert([...w.cf.records.values()].filter((r) => r.type === 'AAAA' && r.content === 'fd12:3456::5').length === 2, 'no AAAA on both names')
+  assert([...w.cf.records.values()].filter((r) => r.type === 'AAAA' && r.content === 'fd12:3456::5').length === 3, 'no AAAA on every name')
   await w.call('PUT', '/v1/ip', { body: { ipv4: '10.0.0.5' }, headers: w.bearer(inst) })
   assert(![...w.cf.records.values()].some((r) => r.type === 'AAAA'), 'AAAA kept')
   assertWritesSafe(w.cf)
@@ -213,7 +217,7 @@ await test('🔍 each install\'s writes land only on its own names', async () =>
   await w.call('PUT', '/v1/ip', { body: { ipv4: '10.0.0.2' }, headers: w.bearer(b) })
   await w.acme(a, T1)
   const byOwner = (id) => [...w.cf.records.values()].filter((r) => r.name.includes(`${id}.nest.`))
-  assert(byOwner(a.id).length === 3 && byOwner(b.id).length === 2, `${byOwner(a.id).length} / ${byOwner(b.id).length}`)
+  assert(byOwner(a.id).length === 4 && byOwner(b.id).length === 3, `${byOwner(a.id).length} / ${byOwner(b.id).length}`)
   assert(byOwner(b.id).every((r) => r.content === '10.0.0.2'), 'b\'s records changed')
   assertWritesSafe(w.cf)
 })
@@ -266,7 +270,7 @@ await test('🔍 DELETE /v1/register removes every record and the install; the c
   const inst = await w.register()
   await w.call('PUT', '/v1/ip', { body: { ipv4: '10.1.1.1', ipv6: 'fd00::1' }, headers: w.bearer(inst) })
   await w.acme(inst, T1)
-  assert(w.cf.records.size === 5, `records ${w.cf.records.size}`) // A + AAAA on both names, and the TXT
+  assert(w.cf.records.size === 7, `records ${w.cf.records.size}`) // A + AAAA on the three names, and the TXT
   assert((await w.call('DELETE', '/v1/register', { headers: w.bearer(inst) })).status === 204, 'status')
   assert(w.cf.records.size === 0, `left ${w.cf.records.size}`)
   assert((await w.call('POST', '/v1/heartbeat', { headers: w.bearer(inst) })).status === 401, 'credential still works')
@@ -285,7 +289,7 @@ await test(`🔍 installs unseen for ${UNSEEN_DAYS} days are forgotten, records 
   const rep = await w.svc.housekeeping()
   assert(rep.forgotten === 1, `forgot ${rep.forgotten}`)
   const names = [...w.cf.records.values()].map((r) => r.name)
-  assert(names.length === 2 && names.every((n) => n.includes(`${fresh.id}.nest.`)), JSON.stringify(names))
+  assert(names.length === 3 && names.every((n) => n.includes(`${fresh.id}.nest.`)), JSON.stringify(names))
 })
 
 await test('🔍 a proxied record under nest. is turned back to DNS-only and reported; one that is not an install\'s is reported as failed', async () => {

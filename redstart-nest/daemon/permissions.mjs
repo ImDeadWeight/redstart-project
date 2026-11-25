@@ -115,6 +115,7 @@ export const CAPABILITY_CONFIG_KEY = {
   memory: 'memory',
   document_search: 'documentSearch',
   image_generation: 'imageGeneration',
+  artifacts: 'artifacts',
 }
 
 /**

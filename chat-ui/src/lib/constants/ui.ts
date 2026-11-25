@@ -1,4 +1,4 @@
-import { Settings, Search, SquarePen, CircleUser, Workflow, FolderKanban } from '@lucide/svelte';
+import { Settings, Search, SquarePen, CircleUser, Workflow, FolderKanban, AppWindow } from '@lucide/svelte';
 import type { Component } from 'svelte';
 import { ROUTES } from './routes';
 
@@ -55,6 +55,14 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		tooltip: 'Projects',
 		route: ROUTES.PROJECTS,
 		activeRoutePrefix: '/projects'
+	},
+	// Artifacts (artifacts plan §10): pages, prototypes and mockups, the
+	// person's own and shared with them.
+	{
+		icon: AppWindow,
+		tooltip: 'Artifacts',
+		route: ROUTES.ARTIFACTS,
+		activeRoutePrefix: '/artifacts'
 	},
 	{
 		icon: Settings,

@@ -29,12 +29,13 @@ export const MCP_PROTOCOL_VERSION = '2025-06-18';
 export const DEFAULT_MCP_CONFIG = {
 	protocolVersion: MCP_PROTOCOL_VERSION,
 	// experimental['redstart/hostTools']: the tools this client's own loop
-	// answers (the ask_user card, the update_plan checklist), so Nest offers
-	// them on this session (redstart-nest/daemon/interaction-tools.mjs). Other
+	// answers (the ask_user card, the update_plan checklist, artifact_check's
+	// hidden sandboxed frame), so Nest offers them on this session
+	// (redstart-nest/daemon/interaction-tools.mjs, artifacts-tool.mjs). Other
 	// servers ignore it.
 	capabilities: {
 		tools: { listChanged: true },
-		experimental: { 'redstart/hostTools': { names: ['ask_user', 'update_plan'] } }
+		experimental: { 'redstart/hostTools': { names: ['ask_user', 'update_plan', 'artifact_check'] } }
 	} as ClientCapabilities,
 	clientInfo: { name: MCP_CLIENT_NAME, version: DEFAULT_CLIENT_VERSION } as Implementation,
 	requestTimeoutSeconds: 300, // 5 minutes for long-running tools

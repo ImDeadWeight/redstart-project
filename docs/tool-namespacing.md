@@ -95,6 +95,12 @@ declared, at `initialize`, that it answers them:
 A client that declares nothing is never offered one, so it can never be handed a tool that can
 only fail. An admin bans one by name like any other tool.
 
+`artifact_check` is the one host-resolved tool that belongs to a capability (`artifacts`): it
+loads an artifact the way the person will see it, which only a client with a browser can do
+(chat-ui in a hidden sandboxed frame, Yellowscript through its page check). It is listed under
+`artifacts` in `BUILTIN_CAPABILITY_TOOL_NAMES`, so switching artifacts off or banning
+`artifacts` removes it with the rest, and it is still offered only to a client that declared it.
+
 ## If a name has to collide
 
 Don't. If a client app genuinely needs a tool that does what a Nest tool does, the answer is
