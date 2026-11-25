@@ -67,6 +67,7 @@ import { setPluginCapabilityProvider } from './tools-definitions.mjs'
 import { pluginCapabilities, pluginToolRetrievalMetadata } from './plugin-registry.mjs'
 import { setPluginMetadataProvider } from './tool-metadata.mjs'
 import { sweepPendingDeletions } from './plugin-install.mjs'
+import { startArtifactSweep, stopArtifactSweep } from './artifacts-storage.mjs'
 import { describeCrash } from './crash-handler.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -532,6 +533,9 @@ export async function startDaemon(entrypoint = {}) {
   // Retries any plugin folder an uninstall couldn't delete last session (a
   // Windows file lock, most likely) — best-effort, never blocks startup (P4-4).
   sweepPendingDeletions()
+  // Artifacts (artifacts plan §7): clear what an interrupted seal left, seal
+  // drafts that went idle while Nest was down, then keep sealing idle ones.
+  startArtifactSweep()
   // Before the admin listener binds, not after: a control-plane request that
   // arrives before this table is assembled gets a 503 rather than the
   // method it asked for.
@@ -600,6 +604,7 @@ export function stopDaemon() {
   // them (task-runner.mjs). Not awaited: stopDaemon is synchronous, and a run
   // that is mid-write finishes that write before it sees the abort.
   void suspendAllTasks()
+  stopArtifactSweep()
   stopGateway()
   stopMcpServer()
   // The port-80 proxy and Caddy, signalled now; Caddy is a child to wait for.

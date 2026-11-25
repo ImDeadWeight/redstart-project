@@ -17,6 +17,7 @@
 // =============================================================================
 
 import { handOverAccount, removeGroupEverywhere, countOwnedBy } from '../projects-storage.mjs'
+import { handOverArtifacts, removeGroupFromArtifacts, countArtifactsOwnedBy } from '../artifacts-storage.mjs'
 import { authenticate, login, logout, listAccounts, getAuthRequired, createAccount, deleteAccount, resetPassword, regenerateApiKey, regenerateOwnApiKey, hasAdminAccess, canDo, issueClientKey, revokeClientKey, getOwnClientKeys, listRoles, saveRole, deleteRole, assignRole, assignRoles, listGroups, saveGroup, deleteGroup, describeAccess } from '../auth.mjs'
 import { capabilityIds, ADMIN_PERMISSIONS } from '../permissions.mjs'
 import { BUILTIN_TOOLS } from '../tools-definitions.mjs'
@@ -255,6 +256,7 @@ export async function handleAuthRoute(req, res, urlPath) {
     const result = deleteGroup(actor, groupMatch[1])
     if (!result.ok) return sendJson(res, result.error === 'Group not found' ? 404 : 403, { error: result.error })
     removeGroupEverywhere(groupMatch[1])
+    removeGroupFromArtifacts(groupMatch[1])
     logPolicy('group.deleted', { group: groupMatch[1], by: actor?.username ?? '(auth off)' })
     policyChanged()
     return sendJson(res, 200, { ok: true })
@@ -280,8 +282,8 @@ export async function handleAuthRoute(req, res, urlPath) {
     const denied = deny('manageAccounts'); if (denied) return denied
 
     if (req.method === 'DELETE' && !action) {
-      // The person's projects go to ?transferTo=<account id>, or to whoever is
-      // deleting them; shared projects outlive the account that made them.
+      // The person's projects and artifacts go to ?transferTo=<account id>, or
+      // to whoever is deleting them; shared work outlives the account that made it.
       let transferTo = actor?.id ?? null
       try { transferTo = new URL(req.url ?? '/', 'http://x').searchParams.get('transferTo') || transferTo } catch { /* keep the actor */ }
       if (transferTo === id) return sendJson(res, 400, { error: 'Projects cannot be handed to the account being deleted' })
@@ -292,7 +294,9 @@ export async function handleAuthRoute(req, res, urlPath) {
       if (!result.ok) return sendJson(res, result.error === 'Account not found' ? 404 : 403, { error: result.error })
       const { transferred } = handOverAccount(id, transferTo)
       if (transferred) logPolicy('projects.transferred', { count: transferred, by: actor?.username ?? '(auth off)' })
-      return sendJson(res, 200, { ok: true, projectsTransferred: transferred })
+      const artifacts = handOverArtifacts(id, transferTo)
+      if (artifacts.transferred) logPolicy('artifacts.transferred', { count: artifacts.transferred, by: actor?.username ?? '(auth off)' })
+      return sendJson(res, 200, { ok: true, projectsTransferred: transferred, artifactsTransferred: artifacts.transferred })
     }
 
     if (req.method === 'POST' && action === 'reset-password') {

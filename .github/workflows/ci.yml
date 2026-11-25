@@ -228,6 +228,15 @@ jobs:
       - name: "Security: shared projects (viewer, editor, owner, admin; chats stay private)"
         run: node scripts/test-project-sharing.mjs
 
+      - name: "Agent core: the shared old/new-string matcher (ys_replace and artifact_edit)"
+        run: node scripts/test-replace-match.mjs
+
+      - name: "Artifacts: drafts, revisions, limits, path safety, crash cleanup"
+        run: node scripts/test-artifacts-storage.mjs
+
+      - name: "Security: artifact access (most specific wins; 404 for unreadable; UI-only sharing)"
+        run: node scripts/test-artifacts-access.mjs
+
       - name: "Security: document search is per account; index, citations, sync"
         run: node scripts/test-document-search.mjs
 
