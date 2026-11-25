@@ -1,5 +1,6 @@
 import { toast } from 'svelte-sonner';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
+import { artifactPanelStore } from '$lib/stores/artifact-panel.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { getApiOptions } from '$lib/stores/chat/chat-options';
 import { setTaskActiveHandler } from '$lib/services/database.service';
@@ -41,6 +42,7 @@ import {
  */
 
 /** Events after which the stored conversation has changed. */
+const ARTIFACT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const RELOADING_EVENTS = new Set(['message', 'plan', 'turn', 'status', 'compacted', 'resumed']);
 const RELOAD_THROTTLE_MS = 400;
 const RECONNECT_MIN_MS = 1000;
@@ -301,6 +303,16 @@ class TasksStore {
 			return;
 		}
 		if (e.seq > f.lastSeq) f.lastSeq = e.seq;
+		// Artifacts a server-run turn's tools named (artifacts plan §10): the
+		// panel opens for the first one created and refreshes on writes, as
+		// it does when this browser runs the loop itself.
+		if (e.type === 'tool_result' && Array.isArray(e.artifacts)) {
+			for (const id of e.artifacts) {
+				if (typeof id === 'string' && ARTIFACT_ID.test(id)) {
+					artifactPanelStore.noteResult(f.conversationId, id, e.name === 'artifact_create' && e.isError !== true);
+				}
+			}
+		}
 		// The stored message replaces the live one at the next reload.
 		if (e.type === 'message') f.live = null;
 		if (e.type === 'status' && e.status) {
@@ -397,6 +409,8 @@ class TasksStore {
 
 	private finish(f: Follower, record: TaskRecord | null): void {
 		if (this.follower !== f) return;
+		// The task sealed its drafts; the panel shows the new revision.
+		artifactPanelStore.turnEnded(f.conversationId);
 		if (record?.status === 'failed')
 			toast.error(`The background task failed: ${record.error || 'no reason given'}`);
 		this.stopFollowing();
