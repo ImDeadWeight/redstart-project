@@ -13,7 +13,7 @@ import { rebindGateway } from './tools-gateway.mjs'
 import { rebindMcpServer } from './mcp-server.mjs'
 import { startPort80Proxy, stopPort80Proxy } from './port80-proxy.mjs'
 import { ensureFirewallRule, ensureCaddyFirewallRule } from './firewall.mjs'
-import { readTls, tlsRuntime, caddyKeyOf, readRedstart, withRedstart, withoutRedstart } from './tls-settings.mjs'
+import { readTls, servedName, tlsRuntime, caddyKeyOf, readRedstart, withRedstart, withoutRedstart } from './tls-settings.mjs'
 import { nameProvider, createAddressWatcher, registerName, heartbeatName, releaseName } from './tls-names.mjs'
 import { checkServing, diagnostics, createHealthRunner } from './tls-health.mjs'
 import { getPrimaryLanIp, refreshRouteIp } from './net-interfaces.mjs'
@@ -366,8 +366,9 @@ export function lanStatus() {
 export function beaconInfo(gatewayPort) {
   const s = owner?.status()
   if (s?.state !== 'lan-https') return { port: gatewayPort, origin: null }
-  const t = io ? readTls(io.readSettings()) : null
-  return { port: 80, origin: health?.serving() && t?.name ? `https://${t.name}` : null }
+  // The name Caddy serves, which in "redstart" mode is not the own-name field.
+  const name = servedName(io ? readTls(io.readSettings()) : null)
+  return { port: 80, origin: health?.serving() && name ? `https://${name}` : null }
 }
 
 /** The owner. Lazily created with defaults for callers that run without a daemon (tests). */

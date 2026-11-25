@@ -187,7 +187,7 @@ await test('a gateway port of 443 cannot be combined with HTTPS', async () => {
 
 console.log('\n-- Automatic (step 8) --')
 
-const { readRedstart, withRedstart, withoutRedstart } = await import('../daemon/tls-settings.mjs')
+const { readRedstart, withRedstart, withoutRedstart, servedName } = await import('../daemon/tls-settings.mjs')
 const CRED = 'C'.repeat(43)
 const registered = () => withRedstart(save({ mode: 'redstart' }), { id: 'k7f3q2', credential: CRED }, { encrypt: encryptSecret, now: 5 })
 
@@ -201,6 +201,18 @@ await test('🔍 the registration: credential encrypted, never in readTls(), hos
   let threw = false
   try { withRedstart({}, { id: 'evil.com', credential: CRED }, { encrypt: encryptSecret }) } catch { threw = true }
   assert(threw, 'stored a non-id')
+})
+
+await test('servedName: the automatic name in "redstart" mode, even with an own name left in the settings (the beacon, 2026-11-24)', () => {
+  // Switched from "own" to "redstart": tls.own.name keeps the old name.
+  const s = registered()
+  const both = { ...s, tls: { ...s.tls, own: { provider: 'duckdns', name: 'old.duckdns.org' } } }
+  const name = servedName(readTls(both))
+  assert(name === 'k7f3q2.nest.redstartdevelopment.com', `served ${name}`)
+  assert(servedName(readTls({ ...both, tls: { ...both.tls, mode: 'own' } })) === 'old.duckdns.org', 'own mode: the own name')
+  assert(servedName(readTls({ ...both, tls: { ...both.tls, mode: 'off' } })) === '', 'off: no name')
+  assert(servedName(readTls(save({ mode: 'redstart' }))) === '', 'redstart, not yet registered: no name')
+  assert(servedName(null) === '', 'no settings')
 })
 
 await test('🔍 a save of any other field keeps the registration (applyTlsPatch must not drop it)', () => {
