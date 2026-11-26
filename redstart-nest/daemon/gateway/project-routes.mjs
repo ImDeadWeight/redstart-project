@@ -45,6 +45,7 @@ import { deleteProjectMemories } from '../memory-storage.mjs'
 import { dropSuggestions } from '../memory-review-store.mjs'
 import { detachProject } from '../conversations-storage.mjs'
 import { detachProjectArtifacts } from '../artifacts-storage.mjs'
+import { detachProjectWorkItems } from '../work-items-storage.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
 import { logEvent } from '../logger.mjs'
 
@@ -228,10 +229,12 @@ export async function handleProjectRoute(req, res, urlPath, account) {
       // leave a live project with its chats silently moved out.
       const chatsMovedOut = detachProject(id)
       const artifactsMovedOut = detachProjectArtifacts(id)
+      // Its tasks keep everything but the project (tasks plan D8).
+      const tasksMovedOut = detachProjectWorkItems(id)
       const memoriesDeleted = deleteProjectMemories(account, id)
       dropSuggestions(account, (s) => s.projectId === id)
-      logEvent('project', 'deleted', { account: account?.username ?? undefined, chatsMovedOut, artifactsMovedOut, memoriesDeleted })
-      sendJson(res, 200, { deleted: true, chatsMovedOut, artifactsMovedOut, memoriesDeleted })
+      logEvent('project', 'deleted', { account: account?.username ?? undefined, chatsMovedOut, artifactsMovedOut, tasksMovedOut, memoriesDeleted })
+      sendJson(res, 200, { deleted: true, chatsMovedOut, artifactsMovedOut, tasksMovedOut, memoriesDeleted })
       return true
     }
 

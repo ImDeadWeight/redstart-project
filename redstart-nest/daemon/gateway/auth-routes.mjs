@@ -18,6 +18,9 @@
 
 import { handOverAccount, removeGroupEverywhere, countOwnedBy } from '../projects-storage.mjs'
 import { handOverArtifacts, removeGroupFromArtifacts, countArtifactsOwnedBy } from '../artifacts-storage.mjs'
+import { handOverAccountWorkItems, unassignGroupWorkItems } from '../work-items-storage.mjs'
+import { findById as findAccountRecord } from '../accounts-storage.mjs'
+import { findGroupById } from '../groups-storage.mjs'
 import { authenticate, login, logout, listAccounts, getAuthRequired, createAccount, deleteAccount, resetPassword, regenerateApiKey, regenerateOwnApiKey, hasAdminAccess, canDo, issueClientKey, revokeClientKey, getOwnClientKeys, listRoles, saveRole, deleteRole, assignRole, assignRoles, listGroups, saveGroup, deleteGroup, describeAccess } from '../auth.mjs'
 import { capabilityIds, ADMIN_PERMISSIONS } from '../permissions.mjs'
 import { BUILTIN_TOOLS } from '../tools-definitions.mjs'
@@ -253,10 +256,13 @@ export async function handleAuthRoute(req, res, urlPath) {
   const groupMatch = /^\/auth\/groups\/([^/]+)$/.exec(urlPath)
   if (groupMatch && req.method === 'DELETE') {
     const denied = deny('manageAccounts'); if (denied) return denied
+    const groupName = findGroupById(groupMatch[1])?.name ?? null
     const result = deleteGroup(actor, groupMatch[1])
     if (!result.ok) return sendJson(res, result.error === 'Group not found' ? 404 : 403, { error: result.error })
     removeGroupEverywhere(groupMatch[1])
     removeGroupFromArtifacts(groupMatch[1])
+    // Its tasks become unassigned and say which group had them (tasks plan D8).
+    unassignGroupWorkItems(groupMatch[1], groupName)
     logPolicy('group.deleted', { group: groupMatch[1], by: actor?.username ?? '(auth off)' })
     policyChanged()
     return sendJson(res, 200, { ok: true })
@@ -290,12 +296,17 @@ export async function handleAuthRoute(req, res, urlPath) {
       if (countOwnedBy(id) > 0 && !listAccounts(actor).some(a => a.id === transferTo)) {
         return sendJson(res, 400, { error: 'Choose who takes over this person\'s projects' })
       }
+      const username = findAccountRecord(id)?.username ?? null
       const result = deleteAccount(actor, id)
       if (!result.ok) return sendJson(res, result.error === 'Account not found' ? 404 : 403, { error: result.error })
       const { transferred } = handOverAccount(id, transferTo)
       if (transferred) logPolicy('projects.transferred', { count: transferred, by: actor?.username ?? '(auth off)' })
       const artifacts = handOverArtifacts(id, transferTo)
       if (artifacts.transferred) logPolicy('artifacts.transferred', { count: artifacts.transferred, by: actor?.username ?? '(auth off)' })
+      // Tasks given to them are unassigned (or go back to their group); the
+      // ones they made go with their projects (tasks plan D8).
+      const tasks = handOverAccountWorkItems(id, username, transferTo)
+      if (tasks.unassigned || tasks.handedOver) logEvent('work_item', 'account_handed_over', { unassigned: tasks.unassigned, handedOver: tasks.handedOver })
       return sendJson(res, 200, { ok: true, projectsTransferred: transferred, artifactsTransferred: artifacts.transferred })
     }
 

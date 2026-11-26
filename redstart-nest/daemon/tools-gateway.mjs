@@ -37,6 +37,7 @@ import { isApprovalRoute, handleApprovalRoute } from './gateway/approval-routes.
 import { isJobRoute, handleJobRoute } from './gateway/job-routes.mjs'
 import { isWorkflowRoute, handleWorkflowRoute } from './gateway/workflow-routes.mjs'
 import { isProjectRoute, handleProjectRoute } from './gateway/project-routes.mjs'
+import { isWorkItemRoute, handleWorkItemRoute } from './gateway/work-item-routes.mjs'
 import { isArtifactRoute, handleArtifactRoute } from './gateway/artifact-routes.mjs'
 import { setUpstreamPort } from './completion-activity.mjs'
 import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/document-index-routes.mjs'
@@ -541,6 +542,9 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       if (isWorkflowRoute(urlPath) && await handleWorkflowRoute(req, res, urlPath, authResult.account ?? null)) return
       // Projects (personal; sharing is projects-plan D7). Same account rule.
       if (isProjectRoute(urlPath) && await handleProjectRoute(req, res, urlPath, authResult.account ?? null)) return
+      // Tasks people give each other (tasks plan Phase 1). Same account rule;
+      // with sign-in off they are one shared personal list, as projects are.
+      if (isWorkItemRoute(urlPath) && await handleWorkItemRoute(req, res, urlPath, authResult.account ?? null)) return
       // Artifacts (artifacts plan §12): listing, sharing, view tokens. Same
       // account rule. Sharing, deleting and restoring exist only here (D8).
       if (isArtifactRoute(urlPath) && await handleArtifactRoute(req, res, urlPath, authResult.account ?? null)) return
