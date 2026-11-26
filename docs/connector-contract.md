@@ -243,7 +243,43 @@ header, which is unauthenticated and acceptable only in that posture. Send one.
 
 ---
 
-## 7. Checklist
+## 7. Tasks
+
+The tasks people give each other, which a planning client (Greenhouse) builds
+on. Nest keeps the only copy: a client reads and writes them here and stores
+none of its own. They live under `/work-items`. The assistant's background jobs are `/jobs`
+(formerly `/tasks`, still accepted as an alias), and `/tasks` is never reused
+for these.
+
+| Route | Body or query | Answers |
+| --- | --- | --- |
+| `GET /work-items/mine` | `?include=done` `?today=YYYY-MM-DD` | `{ items, counts: { open, overdue }, limits }` |
+| `GET /work-items/count` | `?today=` | `{ open, overdue }` |
+| `GET /work-items/created` | `?include=done` | tasks the caller made that are in no project |
+| `GET /work-items/assignees` | `?projectId=` | `{ accounts, groups }` a task can be given to |
+| `GET /work-items` | `?projectId=` (required) `?include=deleted` | `{ items, limits }` |
+| `POST /work-items` | `{ title, notes?, status?, dueDate?, projectId?, assignee? }` | the task, `201` |
+| `GET /work-items/:id` | | the task with `history` |
+| `PATCH /work-items/:id` | any of `title, notes, status, dueDate, assignee, projectId` | the task |
+| `DELETE /work-items/:id` | | `{ deleted: true }`; restorable for 30 days |
+| `POST /work-items/:id/claim` | | the task, now the caller's |
+| `POST /work-items/:id/release` | | the task, back with its group |
+| `POST /work-items/:id/restore` | | the task |
+
+- `assignee` is `{ type: "account" | "group", id }` or `null`. `status` is
+  `open`, `in_progress`, `blocked` or `done`. `dueDate` is a calendar date with
+  no time or zone; send `today` from the user's own calendar so "overdue" is
+  theirs.
+- Every task carries `can` (`edit`, `status`, `assign`, `claim`, `release`,
+  `delete`, `move`). Show what it allows; do not work the rules out yourself.
+- A task the caller may not see is `404`; one they may see but not change is
+  `403`. A `PATCH` with one field the caller may not change is refused whole.
+- `startDate`, `estimate`, `blockedBy`, `milestoneId` and an assistant
+  assignee are reserved for later phases and refused (`400`) until then.
+
+---
+
+## 8. Checklist
 
 - [ ] Reads `GET /auth/config`; works with auth on **and** off
 - [ ] Sends `Authorization` when it has a token; sends `X-Redstart-Device-Id`

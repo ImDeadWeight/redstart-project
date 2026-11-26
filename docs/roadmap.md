@@ -60,6 +60,7 @@ This is an honest work-in-progress. The project started as a personal home tool 
 - [x] Three-tier accounts with login gate — Owner/Admin/User, session tokens, `rst_` API keys; on by default, localhost bypass removed
 - [x] Roles and groups (2026-11-24) — roles add up, several per account, given directly or through groups; one People & access page for users, groups, roles and every project; the old tiers migrated with everyone's access kept
 - [x] Shared projects (2026-11-24) — viewers and editors (people or groups), shared memory and files, private chats, ownership hand-over, admins manage every project
+- [x] Tasks (2026-11-26) — give a task to a person or a group, in a project or none; My tasks with an open count in the sidebar; a project's tasks on its page; group tasks are claimed and handed back; history on every task; nothing lost when people, groups or projects are deleted
 - [x] Per-account file storage — structurally enforced across the MCP tools, download endpoint and file explorer alike
 - [x] File explorer — Profile → Files: navigate, preview, download, rename, drag-to-move, upload
 - [x] Recoverable deletion — the one destructive-class tool, off by default, deletes to the recycle bin, and always prompts

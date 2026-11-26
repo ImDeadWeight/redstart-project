@@ -416,7 +416,7 @@ Beyond Nest and Twig, other applications are being developed against the same se
 |---|---|---|---|
 | **[Redstart Blueprints](https://github.com/ImDeadWeight/redstart-blueprints)** | Windows (Electron) | Local-first SQL data workbench with optional AI assistance | In progress |
 | **[Redstart Yellowscript](https://github.com/ImDeadWeight/redstart-yellowscript)** | VS Code extension | A coding agent that connects to a local Nest | In progress |
-| **[Redstart Greenhouse](https://github.com/ImDeadWeight/redstart-greenhouse)** | Windows (Electron) | Project management application | Planned, not started |
+| **[Redstart Greenhouse](https://github.com/ImDeadWeight/redstart-greenhouse)** | Desktop, planned | Planning views over Nest's projects and tasks: timelines, workload, portfolio dashboards. Tasks themselves are in the chat | Planned, not started |
 
 These applications are intended to use Nest as shared infrastructure rather than each managing a separate model server.
 
