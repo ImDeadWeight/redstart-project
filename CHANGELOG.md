@@ -4,6 +4,15 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ---
 
+## 2026-11-25
+
+- **A server-run chat writing an artifact no longer looks stalled, and Stop no longer leaves the model working.** The first real run (installed alpha.28, Qwen 3.6 35B-A3B, "Run chats on the server") stalled twice for 1.5-7 minutes with no reasoning or steps on screen, and after both were stopped a "thought process" was still going. What the logs showed:
+  - **The model was writing, the UI showed none of it.** The stalled turn was a single `artifact_create` carrying a whole four-screen prototype: llama-server grew the context from 15,377 to 33,153 tokens in 7.3 minutes. The task runner forwarded content, reasoning and timings as live events, but never tool-call arguments, so nothing arrived until the call was complete. `liveDeltas` (`task-ports.mjs`) now sends the calls being written as increments (`toolCalls: [{ index, id?, name?, arguments }]`, only the new text each time, so a 70 KB page crosses the wire once), and chat-ui's task follower merges them into the placeholder reply, where they show as pending tool cards as on the browser-run path.
+  - **The pending card says what is happening.** A call whose arguments do not parse yet reads "writing... 42 KB" instead of "executing...", on both paths.
+  - **The "rogue thought" was the automatic memory review** (thinking on, 166 s), started the moment the task was cancelled, then still running beside the next message, which it slowed from 47 to 29 tokens/s and pushed onto a cold slot (18k prompt tokens re-read). A cancelled task no longer starts a review (its messages stay unreviewed for the next run that ends), and a review already running is aborted when any reply starts (`onCompletionBegin` in `completion-activity.mjs`; aborting the request stops llama-server), reported as `busy` and retried once idle.
+  - **The artifact prompt asks for big pages in steps**: the layout and one screen first, then one file or section per call. Guidance only; not yet measured on Qwen.
+  - Tests: `test-task-runtime.mjs` (tool-call increments; a cancelled task is not reviewed), `test-memory-review.mjs` (a reply mid-review aborts it, nothing marked reviewed), `background-tasks.test.ts` (the placeholder builds its tool calls). Not yet clicked in the installed app.
+
 ## 2026-11-24
 
 - **The top bar's "Running" names the model that is running.** It showed the selected profile's model, so switching profiles while a model ran named a model that was not loaded. The daemon's status now reports the running model's file name (`getFullStatus().model`, from the config it launched with), the launcher tracks it from the launch, the first status and any launch by another client, and the pill shows it while a model runs. Test: `test-model-suspend.mjs`.

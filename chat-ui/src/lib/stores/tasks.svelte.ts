@@ -7,6 +7,7 @@ import { setTaskActiveHandler } from '$lib/services/database.service';
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import { MessageRole, MessageType } from '$lib/enums';
+import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import {
 	TaskService,
 	isTerminal,
@@ -58,6 +59,35 @@ export function taskGeneration(): Record<string, unknown> {
 	return out;
 }
 
+/** A server-run reply as its live events have built it so far. */
+interface LiveReply {
+	messageId: string;
+	content: string;
+	reasoning: string;
+	/** The tool calls being written, merged from the delta increments. */
+	toolCalls: ApiChatCompletionToolCall[];
+}
+
+/**
+ * Add one delta event's tool-call increments (`{ index, id?, name?,
+ * arguments? }`, the daemon's liveDeltas) to the calls built so far.
+ * Exported for tests.
+ */
+export function mergeLiveToolCalls(calls: ApiChatCompletionToolCall[], increments: unknown[]): void {
+	for (const raw of increments) {
+		if (!raw || typeof raw !== 'object') continue;
+		const d = raw as { index?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
+		const index = typeof d.index === 'number' && Number.isInteger(d.index) && d.index >= 0 ? d.index : -1;
+		if (index < 0 || index > 64) continue;
+		while (calls.length <= index) calls.push({ type: 'function', function: { name: '', arguments: '' } });
+		const call = calls[index];
+		const fn = call.function ?? (call.function = { name: '', arguments: '' });
+		if (typeof d.id === 'string') call.id = d.id;
+		if (typeof d.name === 'string') fn.name = d.name;
+		if (typeof d.arguments === 'string') fn.arguments = (fn.arguments ?? '') + d.arguments;
+	}
+}
+
 interface Follower {
 	taskId: string;
 	conversationId: string;
@@ -68,7 +98,7 @@ interface Follower {
 	/** Register this app's tools on the first connect (a task picked up after a reload). */
 	registerOnConnect: boolean;
 	/** The reply being written, from live tokens, until it is stored. */
-	live: { messageId: string; content: string; reasoning: string } | null;
+	live: LiveReply | null;
 }
 
 /** Is a plain Send a run on the server? (Settings: "Run chats on the server".) */
@@ -338,9 +368,10 @@ class TasksStore {
 		if (conversationsStore.activeConversation?.id !== f.conversationId) return;
 		const messageId = typeof e.messageId === 'string' ? e.messageId : '';
 		if (!messageId) return;
-		if (f.live?.messageId !== messageId) f.live = { messageId, content: '', reasoning: '' };
+		if (f.live?.messageId !== messageId) f.live = { messageId, content: '', reasoning: '', toolCalls: [] };
 		if (typeof e.content === 'string') f.live.content += e.content;
 		if (typeof e.reasoning === 'string') f.live.reasoning += e.reasoning;
+		if (Array.isArray(e.toolCalls)) mergeLiveToolCalls(f.live.toolCalls, e.toolCalls);
 		if (e.timings && typeof e.timings === 'object') {
 			try {
 				this.onLiveTimings?.(f.conversationId, e.timings as Record<string, number>);
@@ -360,6 +391,8 @@ class TasksStore {
 		const live = f.live;
 		if (!live || conversationsStore.activeConversation?.id !== f.conversationId) return;
 		const { messageId } = live;
+		// A call shows once its name has arrived (it comes with the first increment).
+		const named = live.toolCalls.filter((c) => c.function?.name);
 		let index = conversationsStore.findMessageIndex(messageId);
 		if (index === -1) {
 			const last = conversationsStore.activeMessages.at(-1);
@@ -379,7 +412,11 @@ class TasksStore {
 		}
 		conversationsStore.updateMessageAtIndex(index, {
 			content: live.content,
-			...(live.reasoning ? { reasoningContent: live.reasoning } : {})
+			...(live.reasoning ? { reasoningContent: live.reasoning } : {}),
+			// The calls being written show as pending cards with their arguments,
+			// as they do when this browser runs the loop (chat-send's
+			// onToolCallsStreaming).
+			...(named.length ? { toolCalls: JSON.stringify(named) } : {})
 		});
 	}
 

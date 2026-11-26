@@ -467,6 +467,42 @@ describe('tasksStore', () => {
 		expect(stream.calls).toEqual([0, 3]);
 	});
 
+	it('a tool call being written shows in the placeholder, built from its increments', async () => {
+		const stream = controllableStream();
+		const store = await freshStore();
+		h.conv.activeConversation = { id: 'c1', activeTaskId: 't1' };
+		h.conv.activeMessages = [{ id: 'u1', content: 'hi', parent: null }];
+		h.svc.get.mockResolvedValue(record());
+		await store.watch('c1');
+		await vi.advanceTimersByTimeAsync(0);
+		stream.push({ seq: 3, type: 'turn' });
+		stream.push({ seq: -1, live: true, type: 'delta', messageId: 'a1', content: 'Building it.' });
+		stream.push({
+			seq: -1,
+			live: true,
+			type: 'delta',
+			messageId: 'a1',
+			toolCalls: [{ index: 0, id: 'c1', name: 'artifact_create', arguments: '{"title":' }]
+		});
+		stream.push({
+			seq: -1,
+			live: true,
+			type: 'delta',
+			messageId: 'a1',
+			toolCalls: [{ index: 0, arguments: '"Demo"' }, { index: 7, arguments: 'x' }, { nope: 1 }]
+		});
+		const calls = JSON.parse((h.conv.activeMessages[1] as { toolCalls?: string }).toolCalls ?? '[]');
+		expect(calls[0]).toEqual({
+			id: 'c1',
+			type: 'function',
+			function: { name: 'artifact_create', arguments: '{"title":"Demo"' }
+		});
+		// A call with no name yet (index 7) is not shown; a malformed increment is skipped.
+		expect(calls).toHaveLength(1);
+		expect(h.conv.activeMessages[1].content).toBe('Building it.');
+		stream.end();
+	});
+
 	it('a reload in the middle of a turn puts the reply so far back; the stored message ends it', async () => {
 		const stream = controllableStream();
 		const store = await freshStore();

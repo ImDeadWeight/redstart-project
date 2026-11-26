@@ -219,6 +219,23 @@
 		return turns;
 	});
 
+	/**
+	 * A call with no result yet is either still being written by the model or
+	 * running. Its arguments tell which: until they parse, the model is still
+	 * writing them, and a big one (a whole artifact page) can take minutes, so
+	 * the card says how much has arrived rather than "executing".
+	 */
+	function pendingSubtitle(args: string | undefined): string {
+		if (!args) return 'writing...';
+		try {
+			JSON.parse(args);
+			return 'executing...';
+		} catch {
+			const kb = args.length / 1024;
+			return `writing... ${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB`;
+		}
+	}
+
 	function getDefaultExpanded(section: AgenticSection): boolean {
 		if (
 			section.type === AgenticSectionType.TOOL_CALL_PENDING ||
@@ -317,7 +334,7 @@
 			icon={toolIcon}
 			iconClass={toolIconClass}
 			title={section.toolName || ''}
-			subtitle={isPending ? 'executing...' : undefined}
+			subtitle={isPending ? pendingSubtitle(section.toolArgs) : undefined}
 			isStreaming={isPending}
 			onToggle={() => toggleExpanded(index, section)}
 		>
