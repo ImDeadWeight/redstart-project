@@ -453,6 +453,10 @@ function finish(task, status, error) {
   logEvent('task', status, error ? { reason: preview(error) } : {})
   // D41: the daemon reviews what the daemon ran. Not awaited: the task has
   // ended whatever the review does. Kept so tests (and a stop) can wait on it.
+  // Not after a cancel: Stop means stop, and a review starting the moment
+  // the user pressed it read as the model still going (2026-11-25). The
+  // messages stay unreviewed, so the next run that ends reviews them.
+  if (status === 'cancelled') return
   const p = reviewEndedTask(task).catch((err) => logEvent('memory', 'review_failed', { reason: preview(err?.message ?? String(err)), task: true }))
   reviewRuns.add(p)
   p.finally(() => reviewRuns.delete(p))
@@ -463,8 +467,8 @@ function finish(task, status, error) {
 // ---------------------------------------------------------------------------
 // A browser chat is reviewed by the client once it goes quiet; a background
 // task has no client watching it, so nothing reviewed it and an hour of the
-// user steering a task taught the memory nothing. On done, failed or
-// cancelled, the runner asks for the same review a client would, as the
+// user steering a task taught the memory nothing. On done or failed (not
+// cancelled, since 2026-11-25: see finish), the runner asks for the same review a client would, as the
 // task's account (re-resolved, as every turn is) with its narrowed config, so
 // memory off, a role without memory, or the account's mode "off" all mean no
 // review (reviewConversation's own checks). "busy" (a reply being generated,

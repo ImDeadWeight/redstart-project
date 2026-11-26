@@ -21,9 +21,25 @@
 let inFlight = 0
 let upstreamPort = null
 
+const beginListeners = new Set()
+
+/**
+ * Be told each time a user completion starts. The memory review checks for
+ * zero only when it begins; a review already running when someone sends a
+ * message shared the GPU with that reply (47 → 29 tokens/s on 2026-11-25) and
+ * took its cached slot. This lets it stop instead. Returns the unsubscribe.
+ */
+export function onCompletionBegin(fn) {
+  beginListeners.add(fn)
+  return () => beginListeners.delete(fn)
+}
+
 /** Call when a completion starts; returns the function that ends it (idempotent). */
 export function beginCompletion() {
   inFlight++
+  for (const fn of beginListeners) {
+    try { fn() } catch { /* a listener's failure is its own */ }
+  }
   let open = true
   return () => {
     if (!open) return
