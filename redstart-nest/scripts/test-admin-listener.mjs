@@ -33,6 +33,7 @@
 // =============================================================================
 
 import { registerElectronStub } from './electron-stub-hooks.mjs'
+import { freeBlock } from './lib/free-ports.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as net from 'node:net'
@@ -76,7 +77,7 @@ const {
   CONTROL_PLANE, DATA_PLANE,
 } = await import('../daemon/auth.mjs')
 
-const ADMIN_TEST_PORT = 48383 // well clear of the real 19083
+const ADMIN_TEST_PORT = await freeBlock(3) // never the real 19083: chosen below 32000
 const admin = `http://127.0.0.1:${ADMIN_TEST_PORT}`
 
 // ---------------------------------------------------------------------------

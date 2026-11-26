@@ -23,6 +23,7 @@
 // =============================================================================
 
 import { registerElectronStub } from './electron-stub-hooks.mjs'
+import { freeBlock } from './lib/free-ports.mjs'
 import * as net from 'node:net'
 import * as os from 'node:os'
 import * as fs from 'node:fs'
@@ -52,8 +53,8 @@ const { setAuthRequired } = await import('../daemon/auth.mjs')
 // itself being the thing that failed.
 setAuthRequired(false)
 
-const GATEWAY_PORT = 48280 // internal is +1
-const MCP_PORT = 48282
+const GATEWAY_PORT = await freeBlock(3) // internal is +1
+const MCP_PORT = GATEWAY_PORT + 2
 const CONNECT_TIMEOUT_MS = 3000
 
 const baseConfig = { allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 }

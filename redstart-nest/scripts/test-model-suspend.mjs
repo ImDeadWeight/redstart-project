@@ -20,6 +20,7 @@
 // =============================================================================
 
 import * as fs from 'node:fs'
+import { freeBlock } from './lib/free-ports.mjs'
 import * as net from 'node:net'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -57,7 +58,7 @@ const STUB_GATEWAY_CONFIG = {
   fileSystem: { enabled: false }, git: { enabled: false }, scholar: { enabled: false },
 }
 
-const PORT = 48480
+const PORT = await freeBlock(3)
 const CONFIG = { port: PORT, networkMode: false, tools: { enabled: false }, modelPath: 'fake.gguf' }
 
 // A llama-server stand-in: answers /health on port+1 after `delayMs`.

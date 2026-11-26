@@ -25,6 +25,7 @@ import { pathToFileURL } from 'node:url'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { freeBlock } from './lib/free-ports.mjs'
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-auth-test-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
@@ -49,8 +50,11 @@ const { setAuthRequired, createOwner } = await import('../daemon/auth.mjs')
 // real Redstart Nest instance without colliding).
 // ---------------------------------------------------------------------------
 
-const GATEWAY_PORT = 48080 // internal (unused, no llama-server) is +1
-const MCP_PORT = 48090
+// Chosen at run time (lib/free-ports.mjs): fixed ports in the 48000s sit in
+// Linux's ephemeral range, where a CI runner's own sockets can hold them.
+// Gateway, its internal port (+1, unused: no llama-server), MCP (+2).
+const GATEWAY_PORT = await freeBlock(3)
+const MCP_PORT = GATEWAY_PORT + 2
 
 function getLocalIp() {
   const interfaces = os.networkInterfaces()

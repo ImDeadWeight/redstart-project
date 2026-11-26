@@ -23,6 +23,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { connectMcpClient } from './lib/mcp-test-client.mjs'
+import { freeBlock } from './lib/free-ports.mjs'
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-contracts-test-'))
 process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
@@ -42,8 +43,10 @@ const { startGateway, stopGateway } = await import('../daemon/tools-gateway.mjs'
 const { startMcpServer, stopMcpServer } = await import('../daemon/mcp-server.mjs')
 const { setAuthRequired, createOwner } = await import('../daemon/auth.mjs')
 
-const GATEWAY_PORT = 48082 // internal (unused) is +1
-const MCP_PORT = 48096
+// Chosen at run time, not fixed (lib/free-ports.mjs): a fixed 48082 was taken
+// by a CI runner's own socket once. Gateway, its internal port (+1), MCP (+2).
+const GATEWAY_PORT = await freeBlock(3)
+const MCP_PORT = GATEWAY_PORT + 2
 
 // ---------------------------------------------------------------------------
 // Harness

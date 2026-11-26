@@ -16,6 +16,7 @@
 // =============================================================================
 
 import { registerElectronStub } from './electron-stub-hooks.mjs'
+import { freeBlock } from './lib/free-ports.mjs'
 import * as http from 'node:http'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -38,7 +39,7 @@ await import('./electron-stub.mjs')
 const { startGateway, stopGateway } = await import('../daemon/tools-gateway.mjs')
 const { setAuthRequired, createOwner } = await import('../daemon/auth.mjs')
 
-const PORT = 48280
+const PORT = await freeBlock(3)
 const gw = `http://127.0.0.1:${PORT}`
 const baseConfig = { allowedBaseUrls: [], activeTools: [], maxFetchTokens: 2000 }
 

@@ -29,6 +29,7 @@
 // =============================================================================
 
 import { registerElectronStub } from './electron-stub-hooks.mjs'
+import { freeBlock } from './lib/free-ports.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -52,7 +53,7 @@ const { hasOwner, createAccount } = await import('../daemon/auth.mjs')
 const { listAccounts } = await import('../daemon/accounts-storage.mjs')
 const { listSessions } = await import('../daemon/sessions-storage.mjs')
 
-const PORT = 48384
+const PORT = await freeBlock(3)
 const admin = `http://127.0.0.1:${PORT}`
 
 // ---------------------------------------------------------------------------

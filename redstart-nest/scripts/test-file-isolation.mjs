@@ -25,6 +25,7 @@
 // =============================================================================
 
 import { registerElectronStub } from './electron-stub-hooks.mjs'
+import { freeBlock } from './lib/free-ports.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -399,7 +400,7 @@ console.log('\n-- surface 2: GET /files/download --')
 const { startGateway, stopGateway, updateGatewayConfig } = await import('../daemon/tools-gateway.mjs')
 const { setAuthRequired, createOwner, createAccount, login } = await import('../daemon/auth.mjs')
 
-const GATEWAY_PORT = 48097
+const GATEWAY_PORT = await freeBlock(3) // internal is +1
 
 setAuthRequired(true)
 // The owner is bootstrapped over IPC in production (no HTTP route by design),

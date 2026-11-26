@@ -31,6 +31,7 @@
 // =============================================================================
 
 import { registerElectronStub } from './electron-stub-hooks.mjs'
+import { freeBlock } from './lib/free-ports.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -53,7 +54,7 @@ const { buildAdminApi } = await import('../daemon/admin/api-table.mjs')
 const { isLocalOnly } = await import('../daemon/ipc/transport.mjs')
 const { createOwner, createAccount, login, CONTROL_PLANE } = await import('../daemon/auth.mjs')
 
-const PORT = 48385
+const PORT = await freeBlock(3)
 const admin = `http://127.0.0.1:${PORT}`
 
 // ---------------------------------------------------------------------------
