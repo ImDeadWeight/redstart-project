@@ -497,6 +497,10 @@ function buildArtifacts(toolNames) {
     '- Read an artifact (artifact_read) before you change it.',
     '- A requested change is an edit to the same artifact (artifact_edit; artifact_write for a whole file). A new direction, or "try another version", is a new artifact: artifact_create with "from" copies one. Never overwrite a version the user did not ask to replace.',
     '- Artifacts are self-contained: nothing outside the artifact loads (no CDN scripts or stylesheets, no web fonts, no remote images), and links to other sites do nothing. Use system fonts, inline SVG, and files you write into the artifact.',
+    // 2026-11-25, Qwen 3.6 35B: a four-screen prototype went into one
+    // artifact_create, 17,800 tokens over seven minutes, cancelled twice
+    // before it landed. Smaller calls each save a revision the user can see.
+    '- Build a big page in steps, not one call: first the layout and one screen (or section), then add the rest one file or section per call (artifact_write for a new file, artifact_edit to add to one). Keep each call to a few hundred lines. Every call saves a revision the user can open, and one huge call shows them nothing for minutes.',
   ]
   if (toolNames.includes('artifact_check')) lines.push('- After you make or change one, run artifact_check and fix what it reports before you say it is done.')
   lines.push('- You cannot share, delete or hand over an artifact; the user does that in the app.')

@@ -41,7 +41,7 @@ import { getConversation, getConversationAnyAccount } from './conversations-stor
 import { getProject, canWrite as canWriteProject } from './projects-storage.mjs'
 import * as memory from './memory-storage.mjs'
 import * as store from './memory-review-store.mjs'
-import { completionsInFlight, getUpstreamPort } from './completion-activity.mjs'
+import { completionsInFlight, getUpstreamPort, onCompletionBegin } from './completion-activity.mjs'
 import { readTheWebRecently } from './memory-tool.mjs'
 import { logEvent } from './logger.mjs'
 
@@ -554,14 +554,16 @@ export async function runReview(call, body, filterCtx) {
 // The model call (the seam)
 // ---------------------------------------------------------------------------
 
-async function callUpstream(body) {
+async function callUpstream(body, { signal } = {}) {
   const port = getUpstreamPort()
   if (!port) throw new Error('the model server is not running')
+  const timeout = AbortSignal.timeout(reviewTimeoutMs(body))
   const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(reviewTimeoutMs(body)),
+    // Aborting the request is what stops llama-server generating it.
+    signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
   })
   if (!res.ok) throw new Error(`the model server answered ${res.status}`)
   const json = await res.json()
@@ -629,15 +631,27 @@ export async function reviewConversation({ account, conversationId, config, now 
 
   running.add(key)
   const started = Date.now()
+  // A reply someone is waiting on goes first, also once the review has begun:
+  // a completion starting aborts the review's model call (which stops
+  // llama-server generating it), and the messages stay unreviewed for the
+  // next trigger. Seen 2026-11-25: a thinking review (166 s) ran on beside the
+  // user's next message, which looked like the model still going after Stop.
+  const yielded = new AbortController()
+  const unsubscribe = onCompletionBegin(() => yielded.abort())
+  const call = (b) => callModel(b, { signal: yielded.signal })
   try {
     let ops
     let repaired = 0
     try {
-      ({ ops, repaired } = await runReview(callModel, buildReviewRequest({ turns, userMemories, projectMemories, project, model, now, think }), {
+      ({ ops, repaired } = await runReview(call, buildReviewRequest({ turns, userMemories, projectMemories, project, model, now, think }), {
         userMemories, projectMemories, project, turns,
         isDismissed: (text) => store.isDismissed(account, text),
       }))
     } catch (err) {
+      if (yielded.signal.aborted) {
+        logEvent('memory', 'review_yielded', { durationMs: Date.now() - started })
+        return { status: 'busy', mode }
+      }
       logEvent('memory', 'review_failed', { reason: err.message })
       // Not marked reviewed: the next trigger tries these messages again.
       return { status: 'failed', mode, error: err.message }
@@ -662,6 +676,7 @@ export async function reviewConversation({ account, conversationId, config, now 
     logEvent('memory', 'reviewed', { mode, think, proposed: ops.length, repaired, saved: saved.length, suggested: suggestions.length, web, durationMs: Date.now() - started })
     return { status: 'done', mode, saved, suggestions }
   } finally {
+    unsubscribe()
     running.delete(key)
   }
 }

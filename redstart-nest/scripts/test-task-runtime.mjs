@@ -527,7 +527,7 @@ await test('8.5: an ended task queues one memory review of its conversation, as 
   eq([reviews[0].conversationId, reviews[0].account, reviews[0].config === cfg], [conv, null, true], 'what the review was given')
 })
 
-await test('8.5: busy retries once, after the completions end; a cancelled task is reviewed too', async () => {
+await test('8.5: busy retries once, after the completions end; a cancelled task is not reviewed', async () => {
   const reviews = []
   let inFlight = 0
   let answers = ['busy', 'done']
@@ -552,7 +552,7 @@ await test('8.5: busy retries once, after the completions end; a cancelled task 
   await waitFor(() => ended(t2.id), 'end')
   await runner._settleReviews()
   eq(reviews.length, 2, 'retried more than once')
-  // cancelled: reviewed as well
+  // cancelled: Stop means stop, no review starts (2026-11-25)
   reviews.length = 0
   answers = ['done']
   fakeWorld([call('q1', 'ask_user', { question: 'Which city?' })], { effectiveConfigFor: async () => ({ memory: { enabled: true } }), reviewConversation: async () => { reviews.push(0); return { status: 'done' } } })
@@ -561,7 +561,7 @@ await test('8.5: busy retries once, after the completions end; a cancelled task 
   runner.cancelTask(t3.id)
   await waitFor(() => ended(t3.id), 'cancel')
   await runner._settleReviews()
-  eq([statusOf(t3.id), reviews.length], ['cancelled', 1], 'a cancelled task reviewed')
+  eq([statusOf(t3.id), reviews.length], ['cancelled', 0], 'a cancelled task started a review')
 })
 
 await test('8.5: memory off or a role without memory means no review is saved (the real reviewer decides)', async () => {
@@ -824,6 +824,29 @@ await test('live deltas carry llama-server\'s latest timings for the readout, an
   eq(JSON.stringify(sent[1]?.timings), JSON.stringify({ predicted_n: 3 }), 'timings alone still go out')
   l.flush()
   eq(sent.length, 2, 'an empty flush sent an event')
+})
+
+await test('live deltas carry the tool calls being written, as increments only', async () => {
+  const { liveDeltas } = await import('../daemon/task-ports.mjs')
+  const sent = []
+  const l = liveDeltas('t1', 'm1', (id, e) => sent.push(e))
+  // The reader hands over the whole merged list each time.
+  l.onToolCalls([{ id: 'c1', type: 'function', function: { name: 'artifact_create', arguments: '{"ti' } }])
+  l.onToolCalls([{ id: 'c1', type: 'function', function: { name: 'artifact_create', arguments: '{"title":' } }])
+  l.flush()
+  eq(JSON.stringify(sent[0]?.toolCalls), JSON.stringify([{ index: 0, id: 'c1', name: 'artifact_create', arguments: '{"title":' }]), 'first event')
+  l.onToolCalls([
+    { id: 'c1', type: 'function', function: { name: 'artifact_create', arguments: '{"title":"A"}' } },
+    { id: 'c2', type: 'function', function: { name: 'artifact_check', arguments: '' } },
+  ])
+  l.flush()
+  eq(JSON.stringify(sent[1]?.toolCalls), JSON.stringify([{ index: 0, arguments: '"A"}' }, { index: 1, id: 'c2', name: 'artifact_check' }]), 'only what is new')
+  l.onToolCalls([
+    { id: 'c1', type: 'function', function: { name: 'artifact_create', arguments: '{"title":"A"}' } },
+    { id: 'c2', type: 'function', function: { name: 'artifact_check', arguments: '' } },
+  ])
+  l.flush()
+  eq(sent.length, 2, 'an unchanged list sent an event')
 })
 
 await test('🔍 the event stream sends a live event with no id: line, so Last-Event-ID still names the last stored one', async () => {

@@ -150,18 +150,48 @@ export const DELTA_BATCH_MS = 50
  * predicted_n, ...), the numbers the chat UI's live context / speed readout
  * shows. Without them a server-run reply showed none (found 2026-11-19).
  * Only the latest is sent; they are cumulative for the turn.
+ *
+ * `toolCalls` are the calls being written, as increments:
+ * `[{ index, id?, name?, arguments }]`, where `arguments` is only the text
+ * added since the last event (and id/name only the first time they are seen).
+ * Without them a turn that wrote one big call (an artifact_create carrying a
+ * whole page: 17,800 tokens over seven minutes on 2026-11-25) showed nothing
+ * at all until it ended, and read as a stall. The reader hands over the whole
+ * merged list each time; only the new part goes out, so a 70 KB page is sent
+ * once, not once per batch.
  */
 export function liveDeltas(taskId, messageId, emit = (id, e) => store.emitLive(id, e)) {
   let content = ''
   let reasoning = ''
   let timings = null
+  let calls = null
+  /** Per call index: { id, name, sent } of what earlier events carried. */
+  const sentCalls = []
   let timer = null
+  const callDeltas = () => {
+    if (!calls) return []
+    const out = []
+    calls.forEach((call, index) => {
+      const fn = call?.function ?? {}
+      const args = typeof fn.arguments === 'string' ? fn.arguments : ''
+      const prev = sentCalls[index] ?? (sentCalls[index] = { id: '', name: '', sent: 0 })
+      const d = { index }
+      if (call?.id && call.id !== prev.id) { d.id = call.id; prev.id = call.id }
+      if (fn.name && fn.name !== prev.name) { d.name = fn.name; prev.name = fn.name }
+      if (args.length > prev.sent) { d.arguments = args.slice(prev.sent); prev.sent = args.length }
+      if (Object.keys(d).length > 1) out.push(d)
+    })
+    calls = null
+    return out
+  }
   const send = () => {
     timer = null
-    if (!content && !reasoning && !timings) return
+    const toolCalls = callDeltas()
+    if (!content && !reasoning && !timings && toolCalls.length === 0) return
     emit(taskId, {
       type: 'delta', messageId,
       ...(content ? { content } : {}), ...(reasoning ? { reasoning } : {}), ...(timings ? { timings } : {}),
+      ...(toolCalls.length ? { toolCalls } : {}),
     })
     content = ''
     reasoning = ''
@@ -172,6 +202,7 @@ export function liveDeltas(taskId, messageId, emit = (id, e) => store.emitLive(i
     onContent: (t) => { content += t; schedule() },
     onReasoning: (t) => { reasoning += t; schedule() },
     onTimings: (t) => { if (t && typeof t === 'object') { timings = pickTimings(t); schedule() } },
+    onToolCalls: (list) => { if (Array.isArray(list)) { calls = list; schedule() } },
     flush: () => { if (timer) clearTimeout(timer); send() },
   }
 }
@@ -474,7 +505,7 @@ export function modelPort(pass) {
             if (sig?.aborted) throw err
             throw new ModelGone(err?.message ?? 'The model could not be reached.')
           }
-          const r = await readChatStream(res, acc, { signal: sig, onContent: live.onContent, onReasoning: live.onReasoning, onTimings: live.onTimings })
+          const r = await readChatStream(res, acc, { signal: sig, onContent: live.onContent, onReasoning: live.onReasoning, onTimings: live.onTimings, onToolCalls: live.onToolCalls })
           turnCtx.model = r?.model ?? turnCtx.model
         } finally {
           live.flush()

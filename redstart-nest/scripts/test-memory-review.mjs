@@ -328,6 +328,29 @@ await test('one review per account at a time', async () => {
   assert((await first).status === 'done', 'first review did not finish')
 })
 
+await test('a reply starting mid-review stops it: the model call is aborted, nothing is marked reviewed', async () => {
+  chat('yd-1', 'alice-1')
+  let signal = null
+  review._setTestSeams({
+    model: (body, opts) => new Promise((resolve, reject) => {
+      signal = opts?.signal ?? null
+      signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))
+    }),
+    busy: () => false,
+  })
+  const pending = review.reviewConversation({ account: ALICE, conversationId: 'yd-1', config: CFG })
+  await new Promise((r) => setTimeout(r, 10))
+  assert(signal && !signal.aborted, 'the model call was given no signal')
+  const end = activity.beginCompletion()
+  const r = await pending
+  end()
+  assert(r.status === 'busy', `a yielded review reported ${r.status}`)
+  assert(signal.aborted, 'the model call was not aborted')
+  fakeModel({ ops: [] })
+  const again = await review.reviewConversation({ account: ALICE, conversationId: 'yd-1', config: CFG })
+  assert(again.status === 'done' && calls.length === 1, 'the yielded review marked its messages reviewed')
+})
+
 await test('isolation: bob cannot review alice\'s chat or touch her suggestions', async () => {
   chat('iso-1', 'alice-1')
   fakeModel({ ops: [{ op: 'add', text: 'Leaked billing into bob', quote: 'billing service in TypeScript' }] })
