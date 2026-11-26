@@ -6,6 +6,7 @@
 	import { page } from '$app/state';
 	import { SIDEBAR_ACTIONS_ITEMS } from '$lib/constants/ui';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import TaskCountBadge from '$lib/components/app/tasks/TaskCountBadge.svelte';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
@@ -97,6 +98,9 @@
 						{item.tooltip}
 					</div>
 
+					{#if item.badge === 'myTasks'}
+						<TaskCountBadge />
+					{/if}
 					{#if item.keys}
 						<KeyboardShortcutInfo keys={item.keys} />
 					{/if}

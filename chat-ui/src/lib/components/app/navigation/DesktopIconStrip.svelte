@@ -13,6 +13,7 @@
 	import { onMount } from 'svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import TaskCountBadge from '$lib/components/app/tasks/TaskCountBadge.svelte';
 
 	interface Props {
 		sidebarOpen: boolean;
@@ -73,6 +74,7 @@
 			{/if}
 			{#if showIcons}
 				<div
+					class="relative"
 					in:fade={{
 						duration: ICON_STRIP_TRANSITION_DURATION,
 						delay: !initialized
@@ -92,6 +94,9 @@
 							: ''}"
 						{onclick}
 					/>
+					{#if item.badge === 'myTasks'}
+						<TaskCountBadge dot />
+					{/if}
 				</div>
 			{/if}
 		{/each}

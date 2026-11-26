@@ -1,4 +1,13 @@
-import { Settings, Search, SquarePen, CircleUser, Workflow, FolderKanban, AppWindow } from '@lucide/svelte';
+import {
+	Settings,
+	Search,
+	SquarePen,
+	CircleUser,
+	Workflow,
+	FolderKanban,
+	AppWindow,
+	ListTodo
+} from '@lucide/svelte';
 import type { Component } from 'svelte';
 import { ROUTES } from './routes';
 
@@ -19,6 +28,8 @@ export interface DesktopIconStripItem {
 	requiresAuth?: boolean;
 	/** A thin line above it, setting it apart from the items before. */
 	separatedAbove?: boolean;
+	/** Shows a count beside it: 'myTasks' is the open-task badge (workItemsStore). */
+	badge?: 'myTasks';
 }
 
 /**
@@ -47,6 +58,15 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		tooltip: 'Workflows',
 		route: ROUTES.WORKFLOWS,
 		activeRoutePrefix: '/workflows'
+	},
+	// My tasks (tasks plan Phase 1): what has been given to me, with a count of
+	// what is still open, red when any of it is overdue.
+	{
+		icon: ListTodo,
+		tooltip: 'My tasks',
+		route: ROUTES.TASKS,
+		activeRoutePrefix: '/tasks',
+		badge: 'myTasks'
 	},
 	// Projects hold chats (they are also listed in the sidebar with their chats
 	// nested); this opens the list and New project.
