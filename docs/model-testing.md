@@ -57,7 +57,7 @@ Thinking helped Ornith and did nothing for the 4B, which is why the memory revie
 ### Two things at once (Ornith 1.5 9B)
 
 - Two short generations: 88 to 92% of the single-request speed each, 1.75x in total.
-- Two long prompts do not run side by side. The slots share one cache pool of the context size, and while one slot prefills a long prompt, the other's generation drops from ~40 to ~5 tokens/s. So Nest runs one background task at a time, with chats first between turns.
+- Two long prompts do not run side by side. The slots share one cache pool of the context size, and while one slot prefills a long prompt, the other's generation drops from ~40 to ~5 tokens/s. So Nest runs one background job at a time, with chats first between turns.
 
 ## What the testing changed
 
@@ -74,7 +74,7 @@ The fixes the runs forced, so it is clear why the code is the way it is:
 ## Known gaps
 
 - `p1-two-unknowns` has not been run on the 4B, and no model has used `ask_user`'s several-question list yet.
-- A background task that compacts its context has not been run against a real model (the compaction profile, "Ornith 9B · 12k", exists for it).
+- A background job that compacts its context has not been run against a real model (the compaction profile, "Ornith 9B · 12k", exists for it).
 - `p4-git-log` and `p4-exit-code` are expected to fail on every model: Nest has no terminal. Their transcripts are read for whether the model says so or invents a result.
 - No benchmark has been run on macOS or Linux, or on an AMD or Apple GPU. Mac testing of the app itself started on 2026-11-22 ([what it found](../README.md#mac-testing-so-far)).
 

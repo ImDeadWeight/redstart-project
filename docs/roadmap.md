@@ -76,7 +76,7 @@ This is an honest work-in-progress. The project started as a personal home tool 
 - [x] **One agent loop for every host** — the browser, the benchmark and the daemon run the same core (`shared/agent-core/`), so behaviour measured on the bench is the behaviour users get
 - [x] **Asking and planning** — `ask_user` (up to four questions as one card) and `update_plan` (a checklist the chat shows)
 - [x] **Approvals enforced by the server** — writes and deletes wait for the user's decision on every client, with standing grants per account (never for deletion) and a decision log in the launcher's Activity page
-- [x] **Background tasks** — `/task` runs a request in the daemon with no browser attached; it survives a restart and waits in the chat for answers and approvals
+- [x] **Background jobs** — `/job` (formerly `/task`, which still works) runs a request in the daemon with no browser attached; it survives a restart and waits in the chat for answers and approvals
 - [x] **Memory that learns from the work** — facts, guidance and dated state; an automatic review that must quote the user and cannot be steered by a page or a file; full Undo
 - [x] **Agent and memory benchmarks** — `scripts/agent-bench/` and `scripts/memory-bench/`, run against a real model, with the results recorded per model
 

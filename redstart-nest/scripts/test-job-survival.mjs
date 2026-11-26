@@ -3,7 +3,7 @@
 // =============================================================================
 // Phase 3's acceptance: "a task survives a client disconnect, a model stop and
 // start, and a daemon restart, each as a test against the real daemon."
-// test-task-runtime.mjs proves the runner's logic with its seams replaced, and
+// test-job-runtime.mjs proves the runner's logic with its seams replaced, and
 // 3.7 killed a child process hosting the runner; neither is nestd. This runs
 // `node bin/nestd.mjs` on a temp directory, launches a model through the
 // admin API like the launcher does, and drives a task through the gateway
@@ -31,7 +31,7 @@
 // taken (Redstart running), and when no shim can be built (Windows without
 // .NET Framework's csc.exe).
 //
-// Run:  node scripts/test-task-survival.mjs
+// Run:  node scripts/test-job-survival.mjs
 // =============================================================================
 
 import { spawn } from 'node:child_process'
@@ -204,7 +204,7 @@ let convCounter = 0
 async function startHeldTask() {
   const id = `survival-${++convCounter}-${Date.now()}`
   await gwJson('/conversations', { method: 'POST', body: JSON.stringify({ id, name: id }) })
-  const task = await gwJson('/tasks', { method: 'POST', body: JSON.stringify({ conversationId: id, content: 'Write the report. [hold]' }) })
+  const task = await gwJson('/jobs', { method: 'POST', body: JSON.stringify({ conversationId: id, content: 'Write the report. [hold]' }) })
   return { conversationId: id, taskId: task.id }
 }
 
@@ -216,8 +216,8 @@ const unrelease = () => fs.rmSync(path.join(control, 'release'), { force: true }
 
 /** The task as the control plane sees it (works with no model and no gateway). */
 async function adminTask(id) {
-  const r = await call('tasks:list', [], adminToken)
-  return r.tasks.find((t) => t.id === id) ?? null
+  const r = await call('jobs:list', [], adminToken)
+  return r.jobs.find((t) => t.id === id) ?? null
 }
 
 /** The stored conversation's assistant replies on its current branch. */
@@ -241,7 +241,7 @@ try {
 
     // A client following the task, then gone (a closed tab, a dropped Wi-Fi).
     const ac = new AbortController()
-    const res = await gwFetch(`/tasks/${taskId}/events`, { signal: ac.signal, headers: { Accept: 'text/event-stream' } })
+    const res = await gwFetch(`/jobs/${taskId}/events`, { signal: ac.signal, headers: { Accept: 'text/event-stream' } })
     assert(res.ok, `events: ${res.status}`)
     const reader = res.body.getReader()
     await reader.read()
@@ -250,7 +250,7 @@ try {
     await sleep(500)
     release()
     const done = await waitFor('the task to finish', async () => {
-      const t = await gwJson(`/tasks/${taskId}`)
+      const t = await gwJson(`/jobs/${taskId}`)
       return ['done', 'failed', 'cancelled'].includes(t.status) ? t : null
     })
     assert(done.status === 'done', `status ${done.status} ${done.error ?? ''}`)
@@ -278,7 +278,7 @@ try {
     await waitFor('the turn to run again on the new model', () => holds() > beforeRelaunch)
     release()
     const done = await waitFor('the task to finish', async () => {
-      const t = await gwJson(`/tasks/${taskId}`)
+      const t = await gwJson(`/jobs/${taskId}`)
       return ['done', 'failed', 'cancelled'].includes(t.status) ? t : null
     })
     assert(done.status === 'done', `status ${done.status} ${done.error ?? ''}`)
@@ -294,7 +294,7 @@ try {
     const { conversationId, taskId } = await startHeldTask()
     await waitFor('the model to be generating', () => holds() > before)
 
-    // Outright: no shutdown handler, no suspendAllTasks. What a crash or a
+    // Outright: no shutdown handler, no suspendAllJobs. What a crash or a
     // power cut leaves behind, the hardest case 3.7 covers.
     daemon.child.kill('SIGKILL')
     await daemon.exited
@@ -313,7 +313,7 @@ try {
     release()
     await launchModel()
     const done = await waitFor('the task to finish', async () => {
-      const t = await gwJson(`/tasks/${taskId}`)
+      const t = await gwJson(`/jobs/${taskId}`)
       return ['done', 'failed', 'cancelled'].includes(t.status) ? t : null
     })
     assert(done.status === 'done', `status ${done.status} ${done.error ?? ''}`)

@@ -4,6 +4,14 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ---
 
+## 2026-11-26
+
+- **Background tasks are now background jobs** (tasks plan Phase 0). "Task" is about to mean the work people give each other (tasks plan Phase 1), so the assistant's own background work is a job, everywhere: in what people read (`/job`, the job bar, the launcher's Activity tab), in the code (`job-store`, `job-runner`, `job-resume`, `job-ports`, `gateway/job-routes`, `ipc/jobs`; chat-ui's `JobService`, `jobsStore`, `ChatScreenJobBar`) and in the API.
+  - **Nothing that was working stops.** `/task` still runs a job. The gateway routes are `/jobs/*`, and `/tasks/*` still reaches them for an Android build or a cached page that has not updated; each use is logged (`task legacy_route`, at most once a minute) so the alias can be removed once the log is quiet for two releases. `/tasks` is never reused for anything else.
+  - **Stored jobs move once.** `<config>/tasks/` is renamed to `<config>/jobs/` the first time it is read. The rename is all or nothing; if it fails, the old folder is used where it is and the move is tried again on the next start.
+  - **Kept on purpose:** what is stored and sent with the old name stays (`task.json` inside each job's folder, a conversation's `activeTaskId`, the `task` log channel, the `tasks` field in `GET /jobs`), so no stored chat or record has to be rewritten. The control-plane channels are `jobs:list` and `jobs:cancel`, with no alias: the launcher that calls them ships in the same build.
+  - Tests: `test-job-runtime.mjs` (the old path reaches the same job; the folder move, in a separate process), `test-job-survival.mjs`, `slash-job-command.test.ts`.
+
 ## 2026-11-25
 
 - **A server-run chat writing an artifact no longer looks stalled, and Stop no longer leaves the model working.** The first real run (installed alpha.28, Qwen 3.6 35B-A3B, "Run chats on the server") stalled twice for 1.5-7 minutes with no reasoning or steps on screen, and after both were stopped a "thought process" was still going. What the logs showed:

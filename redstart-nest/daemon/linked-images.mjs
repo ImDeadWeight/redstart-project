@@ -9,7 +9,7 @@
 //
 // In the browser, chat-ui fetches those images and sends them with the result
 // to a model that can see (agentic-tool-exec.ts, linkedImagesAsDataUrls). A
-// chat running ON THE SERVER (task-runner.mjs) had no such step, so view_image
+// chat running ON THE SERVER (job-runner.mjs) had no such step, so view_image
 // there would have shown the model nothing. This is that step, with the same
 // limits: at most MAX_IMAGES per result, none over MAX_BYTES, only for a
 // model whose /props reports vision, read for this request only and never

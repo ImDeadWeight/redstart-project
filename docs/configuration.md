@@ -44,7 +44,7 @@ directory it wants explicitly.
 | `memory-review.json` | The automatic memory review's own bookkeeping: which chats it has reviewed and the suggestions waiting for an answer. Kept apart from `memories.json` because that file is the user's data. |
 | `approvals.json` | Standing "Always allow" grants, per account and tool. Deletion is never granted this way. |
 | `skills/` | Workflows, stored as Agent Skill folders (`SKILL.md` plus any files): `skills/personal/<account>/` and `skills/org/`. Migrated once from the old `workflows.json`, which is left in place. |
-| `tasks/` | One folder per background task or server-run chat: `task.json` (its state) and `events.jsonl` (everything it did, in order), so a run survives a restart. |
+| `jobs/` | One folder per background job or server-run chat (`tasks/` before 2026-11-26, moved on the first start after the update): `task.json` (its state) and `events.jsonl` (everything it did, in order), so a run survives a restart. |
 | `document-index.sqlite` | The document search index: extracted text and embedding vectors for every account's files, each passage stored under its account. Rebuildable from *Profile → Files → Rebuild search index*. |
 | `runtimes/` | Downloaded runtimes: `pyodide-<version>/` for `run_python`, checked file by file against pinned hashes, and `sd-<release>-<build>/` for `generate_image` (stable-diffusion.cpp, each release zip checked against a pinned SHA-256 before it is unpacked). |
 | `gpu-lease.json` | Present only while an image is being made (the chat model is paused). Left behind by a crash, it makes the next start reload the model that was paused. |

@@ -1,6 +1,6 @@
 // =============================================================================
 // view_image suite — daemon/image-info.mjs, view_image in documents-tool.mjs,
-// daemon/linked-images.mjs and its use in task-ports.mjs.
+// daemon/linked-images.mjs and its use in job-ports.mjs.
 // =============================================================================
 // What has to hold:
 //   - an image is what its BYTES say: a .png holding text is refused
@@ -35,7 +35,7 @@ function assert(cond, msg) { if (!cond) throw new Error(msg) }
 const { sniffImageType, imageSize, inspectImageFile } = await import('../daemon/image-info.mjs')
 const { callTool, VIEW_IMAGE_MAX_BYTES } = await import('../daemon/documents-tool.mjs')
 const { linkedImagePaths, linkedImageParts, modelHasVision, MAX_IMAGES } = await import('../daemon/linked-images.mjs')
-const { toolsPort } = await import('../daemon/task-ports.mjs')
+const { toolsPort } = await import('../daemon/job-ports.mjs')
 const { formatMcpToolResult } = await import('../../shared/agent-core/tool-result.mjs')
 const { userScopePath } = await import('../daemon/user-scope.mjs')
 

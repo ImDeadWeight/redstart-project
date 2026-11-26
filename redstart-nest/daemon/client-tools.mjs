@@ -11,7 +11,7 @@
 // own card (D48), as it is today.
 //
 // This module only checks what a client may register. The waiting is the
-// runner's (task-runner.mjs), the dispatch the tools port's (task-ports.mjs).
+// runner's (job-runner.mjs), the dispatch the tools port's (job-ports.mjs).
 //
 // What a client registers is a DESCRIPTION, never a capability: the model is
 // offered the tool, and a call is a request the client may refuse. A name

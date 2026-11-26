@@ -1,14 +1,14 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — a task pass's state, ports and callbacks (task-runner.mjs)
+// Redstart Nest — a job pass's state, ports and callbacks (job-runner.mjs)
 // =============================================================================
 // One pass of shared/agent-core's loop over a stored conversation needs a
 // handful of things to talk through: the ports (model, tools, gate, ask,
 // plan, limit, steering) and the callbacks that write each message the loop
 // adds. They used to be one ~380-line runOnce; master plan Phase 4 split them
 // out, one builder per port, so each can be read and tested alone. The run
-// itself (the outer loop, finishing, resuming) stays in task-runner.mjs.
+// itself (the outer loop, finishing, resuming) stays in job-runner.mjs.
 //
 // Every builder takes the pass (createPass) and nothing else. The pass holds
 // the per-pass state the ports share: who and which tools this turn
@@ -32,7 +32,7 @@ import { callToolTarget } from '../../shared/agent-core/approval.mjs'
 import { unknownToolText } from '../../shared/agent-core/teaching.mjs'
 import { UPDATE_PLAN_TOOL, NUDGE_PREFIX } from '../../shared/agent-core/update-plan.mjs'
 import { parseArtifactLines } from '../../shared/agent-core/artifact-lines.mjs'
-import * as store from './task-store.mjs'
+import * as store from './job-store.mjs'
 import * as conversations from './conversations-storage.mjs'
 import { accountForTask, surfacePermitted } from './auth.mjs'
 import { approvalRule, isApprovalEnforced } from './tools-definitions.mjs'
@@ -45,8 +45,8 @@ import { CLIENT_CALL_TIMEOUT_MS, clientUnavailable } from './client-tools.mjs'
 /** chat-ui's DEFAULT parser patterns (the bench uses the same). */
 export const FALLBACK_PARSER_PATTERNS = ['braces', 'xml', 'fn', 'json']
 /** The host-resolved tools this host answers itself. */
-export const TASK_HOST_TOOLS = [ASK_USER_TOOL, UPDATE_PLAN_TOOL]
-const HOST_TOOL_NAMES = new Set(TASK_HOST_TOOLS)
+export const JOB_HOST_TOOLS = [ASK_USER_TOOL, UPDATE_PLAN_TOOL]
+const HOST_TOOL_NAMES = new Set(JOB_HOST_TOOLS)
 const PREVIEW_CHARS = 400
 
 /**
@@ -64,7 +64,7 @@ export const GENERATION_KEYS = Object.freeze([
 // What the ports and the run both use
 // ---------------------------------------------------------------------------
 
-export class TaskEnded extends Error {
+export class JobEnded extends Error {
   /** @param {'failed' | 'cancelled'} status */
   constructor(status, message) { super(message); this.status = status }
 }
@@ -230,7 +230,7 @@ export function createPass({ task, l, conv, generation, seams }) {
   const branch = currentBranch(conv)
   const wireOpts = { vision: generation.vision !== false, excludeReasoning: generation.excludeReasoning === true }
   const tipId = branch.length ? branch[branch.length - 1].id : null
-  if (!tipId) throw new TaskEnded('failed', 'The conversation is empty.')
+  if (!tipId) throw new JobEnded('failed', 'The conversation is empty.')
 
   const pass = {
     task, l, conv, generation, seams, branch, wireOpts,
@@ -252,9 +252,9 @@ export function createPass({ task, l, conv, generation, seams }) {
     appended: new Set(),
 
     write(message) {
-      const t = store.getTask(task.id)
+      const t = store.getJob(task.id)
       const m = conversations.appendMessage(t.storeAccountId, t.conversationId, message)
-      if (!m) throw new TaskEnded('cancelled', 'The conversation was deleted.')
+      if (!m) throw new JobEnded('cancelled', 'The conversation was deleted.')
       pass.tip = m.id
       store.appendEvent(task.id, { type: 'message', id: m.id, role: m.role })
       return m
@@ -271,11 +271,11 @@ export function createPass({ task, l, conv, generation, seams }) {
      * the tools only: a question or an approval needs no model.
      */
     async refresh({ needModel = true } = {}) {
-      const t = store.getTask(task.id)
+      const t = store.getJob(task.id)
       const who = accountForTask(t.accountId)
-      if (!who.ok) throw new TaskEnded('failed', who.reason)
+      if (!who.ok) throw new JobEnded('failed', who.reason)
       if (who.account && t.surface && !surfacePermitted(who.account, t.surface)) {
-        throw new TaskEnded('failed', 'This account may no longer connect from the app that started the task.')
+        throw new JobEnded('failed', 'This account may no longer connect from the app that started the task.')
       }
       pass.turnCtx.account = who.account
       if (!needModel) {
@@ -287,7 +287,7 @@ export function createPass({ task, l, conv, generation, seams }) {
       let port = seams.upstreamPort()
       while (!config || !port) {
         if (pass.signal.aborted) return null
-        if (store.getTask(task.id).status !== 'waiting_model') store.updateTask(task.id, { status: 'waiting_model', waiting: { kind: 'model' } })
+        if (store.getJob(task.id).status !== 'waiting_model') store.updateJob(task.id, { status: 'waiting_model', waiting: { kind: 'model' } })
         await sleep(seams.modelPollMs, pass.signal)
         config = await seams.effectiveConfigFor(who.account)
         port = seams.upstreamPort()
@@ -298,8 +298,8 @@ export function createPass({ task, l, conv, generation, seams }) {
     },
 
     setRunning() {
-      const t = store.getTask(task.id)
-      if (t.status !== 'running') store.updateTask(task.id, { status: 'running' })
+      const t = store.getJob(task.id)
+      if (t.status !== 'running') store.updateJob(task.id, { status: 'running' })
     },
 
     /** Park until `l.answer` is called, or the task is cancelled (→ fallback). */
@@ -316,17 +316,17 @@ export function createPass({ task, l, conv, generation, seams }) {
           pass.setRunning()
           resolve(value)
         }
-        store.updateTask(task.id, { status: 'waiting_user', waiting })
+        store.updateJob(task.id, { status: 'waiting_user', waiting })
       })
     },
   }
 
   async function loadTools(account) {
-    const catalog = await seams.toolCatalogFor(account, { hostTools: TASK_HOST_TOOLS })
+    const catalog = await seams.toolCatalogFor(account, { hostTools: JOB_HOST_TOOLS })
     const nest = new Set(catalog.map((x) => x.name))
     // Nest tools the client switched off for this chat, as its own loop
     // would leave them out (cleanToolLimits). The task's own two stay.
-    const limits = store.getTask(task.id)?.toolLimits
+    const limits = store.getJob(task.id)?.toolLimits
     const excluded = new Set(limits?.exclude ?? [])
     const switchedOff = (name) => nest.has(name) && !HOST_TOOL_NAMES.has(name) && (limits?.nest === false || excluded.has(name))
     const tools = catalog.filter((x) => !switchedOff(x.name))
@@ -357,7 +357,7 @@ export function createPass({ task, l, conv, generation, seams }) {
 async function payloadFor(pass, msgs, ready, t, overheadTokens) {
   const tail = msgs.length > pass.messages.length ? msgs[msgs.length - 1] : null
   const current = conversations.getConversation(t.storeAccountId, t.conversationId)
-  if (!current) throw new TaskEnded('cancelled', 'The conversation was deleted.')
+  if (!current) throw new JobEnded('cancelled', 'The conversation was deleted.')
   const stored = currentBranch(current).filter((m) => m.type !== 'root')
   const compacted = await compact(pass, stored, current, ready, t, overheadTokens)
   const wire = branchToWire(compacted, pass.wireOpts)
@@ -461,7 +461,7 @@ export function modelPort(pass) {
         while (seams.completionsInFlight() > 0 && !sig?.aborted) await sleep(seams.busyPollMs, sig)
         if (sig?.aborted) throw abortError()
         pass.setRunning()
-        const t = store.getTask(task.id)
+        const t = store.getJob(task.id)
         const head = {
           stream: true,
           tools: turnCtx.mcpTools.length > 0 ? toLlmTools(turnCtx.mcpTools) : undefined,
@@ -533,13 +533,13 @@ export function toolsPort(pass) {
       const off = turnCtx.switchedOff(name) ? name : target && turnCtx.switchedOff(target.name) ? target.name : null
       if (off) return { text: `Error: ${off} is switched off in this chat, so it was not run.`, isError: true }
       const args = parseArgs(call.function.arguments)
-      store.updateTask(task.id, { inFlight: { callId: call.id, name } })
+      store.updateJob(task.id, { inFlight: { callId: call.id, name } })
       store.appendEvent(task.id, { type: 'tool_call', callId: call.id, name })
       // inFlight stays set until the RESULT is stored (createToolResultMessage
       // clears it), not merely until the tool returns: a stop or crash in
       // between would otherwise leave a call with no result and no marker,
       // and the restart would run it a second time.
-      const t = store.getTask(task.id)
+      const t = store.getJob(task.id)
       const result = await seams.callToolAs(turnCtx.account, name, args, { conversationId: t.conversationId, approvalId: approved.get(call.id) })
       const out = result === null || result === undefined
         ? { text: unknownToolText(name, turnCtx.mcpTools.map((x) => x.name)), isError: true }
@@ -566,7 +566,7 @@ export function toolsPort(pass) {
 
 /**
  * A call to a tool the client runs (master plan 7.1): sent over the event
- * stream as `client_call`, answered by POST /tasks/:id/client-result. With
+ * stream as `client_call`, answered by POST /jobs/:id/client-result. With
  * no client connected, or when the client leaves or takes longer than
  * CLIENT_CALL_TIMEOUT_MS, the model is told it was not run. A banned name
  * is refused here too: bans apply to client tools as to any.
@@ -582,7 +582,7 @@ async function runOnClient(pass, call) {
     store.appendEvent(task.id, { type: 'tool_result', callId: call.id, name, isError: true, preview: 'client not connected' })
     return { text: clientUnavailable(name), isError: true }
   }
-  store.updateTask(task.id, { inFlight: { callId: call.id, name }, status: 'waiting_client', waiting: { kind: 'client', callId: call.id, tool: name } })
+  store.updateJob(task.id, { inFlight: { callId: call.id, name }, status: 'waiting_client', waiting: { kind: 'client', callId: call.id, tool: name } })
   // Stored for the record; the request itself goes to one client only (a
   // live event on its stream), so a second tab never runs it too.
   store.appendEvent(task.id, { type: 'client_call', callId: call.id, name })
@@ -630,7 +630,7 @@ function awaitDecision(pass, pending, call, name, rule, sig) {
     })
     const onAbort = () => { off(); resolve(null) }
     sig?.addEventListener('abort', onAbort, { once: true })
-    store.updateTask(pass.task.id, { status: 'waiting_approval', waiting: { kind: 'approval', callId: call.id, tool: name, rule, approval: pending } })
+    store.updateJob(pass.task.id, { status: 'waiting_approval', waiting: { kind: 'approval', callId: call.id, tool: name, rule, approval: pending } })
   })
 }
 
@@ -658,7 +658,7 @@ export function gatePort(pass) {
       // Not offered this turn (banned, withdrawn, made up): nothing to ask
       // about. callToolAs refuses it with the reason.
       if (!turnCtx.toolNames.has(name)) return true
-      const t = store.getTask(task.id)
+      const t = store.getJob(task.id)
       if (rule === 'prompt' && grantCovers(t.accountKey, name)) return true
       if (!target) {
         try { args = parseArgs(call.function.arguments) } catch { return true } // execute reports the bad arguments
@@ -686,7 +686,7 @@ export function gatePort(pass) {
 // ask, plan, limit, steering
 // ---------------------------------------------------------------------------
 
-/** ask_user parks in waiting_user until POST /tasks/:id/answer. */
+/** ask_user parks in waiting_user until POST /jobs/:id/answer. */
 export function askPort(pass) {
   return {
     user: async (request, _sig, call) => pass.waitForAnswer('question', {
@@ -701,7 +701,7 @@ export function planPort(pass) {
     get: () => pass.planSteps,
     save: (steps) => {
       pass.planSteps = steps
-      const t = store.getTask(pass.task.id)
+      const t = store.getJob(pass.task.id)
       conversations.updateConversation(t.storeAccountId, t.conversationId, { plan: { steps, updatedAt: Date.now() } })
       store.appendEvent(pass.task.id, { type: 'plan', steps })
     },
@@ -749,7 +749,7 @@ export function buildCallbacks(pass) {
         model: turnCtx.model ?? undefined,
       }
       if (appended.has(current.id)) {
-        const t = store.getTask(task.id)
+        const t = store.getJob(task.id)
         conversations.patchMessage(t.storeAccountId, t.conversationId, current.id, fields)
         store.appendEvent(task.id, { type: 'message', id: current.id, role: 'assistant' })
         return
@@ -762,7 +762,7 @@ export function buildCallbacks(pass) {
     },
     createToolResultMessage: async (toolCallId, content) => {
       const m = pass.write({ id: crypto.randomUUID(), parent: pass.tip, type: 'text', role: 'tool', content, toolCallId, timestamp: Date.now(), toolCalls: '', model: null })
-      if (store.getTask(task.id)?.inFlight?.callId === toolCallId) store.updateTask(task.id, { inFlight: null })
+      if (store.getJob(task.id)?.inFlight?.callId === toolCallId) store.updateJob(task.id, { inFlight: null })
       return { id: m.id }
     },
   }

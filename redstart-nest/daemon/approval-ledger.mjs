@@ -85,7 +85,7 @@ function sweep() {
 }
 
 /**
- * A pending approval a background task holds (task-runner.mjs) lives this
+ * A pending approval a background task holds (job-runner.mjs) lives this
  * long: nobody may look at the chat for days. The task withdraws it when it
  * ends (withdraw), and a restart drops it like any other.
  */

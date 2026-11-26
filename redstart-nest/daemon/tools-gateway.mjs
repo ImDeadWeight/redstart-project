@@ -34,7 +34,7 @@ import { handleAuthRoute } from './gateway/auth-routes.mjs'
 import { isConversationRoute, handleConversationRoute } from './gateway/conversation-routes.mjs'
 import { isMemoryRoute, handleMemoryRoute } from './gateway/memory-routes.mjs'
 import { isApprovalRoute, handleApprovalRoute } from './gateway/approval-routes.mjs'
-import { isTaskRoute, handleTaskRoute } from './gateway/task-routes.mjs'
+import { isJobRoute, handleJobRoute } from './gateway/job-routes.mjs'
 import { isWorkflowRoute, handleWorkflowRoute } from './gateway/workflow-routes.mjs'
 import { isProjectRoute, handleProjectRoute } from './gateway/project-routes.mjs'
 import { isArtifactRoute, handleArtifactRoute } from './gateway/artifact-routes.mjs'
@@ -434,7 +434,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
           // every /conversations call; without it here, browsers block those
           // cross-origin requests at preflight. X-Redstart-Timezone rides on
           // every completions call (the user's local date, session-time.mjs).
-          // Last-Event-ID: a task's event stream resumes from it (gateway/task-routes.mjs).
+          // Last-Event-ID: a task's event stream resumes from it (gateway/job-routes.mjs).
           'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Redstart-Device-Id, X-Redstart-Timezone, Last-Event-ID',
           'Access-Control-Max-Age': '86400',
         })
@@ -488,7 +488,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       // posture; with auth on, every request already carries a real account.
       const accountId = authResult.account?.id || req.headers['x-redstart-device-id']
       // Tasks run on conversations, so they need the same storage scope.
-      if ((isConversationRoute(urlPath) || isTaskRoute(urlPath)) && !accountId) {
+      if ((isConversationRoute(urlPath) || isJobRoute(urlPath)) && !accountId) {
         res.writeHead(401, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
         res.end(JSON.stringify({ error: { message: 'Unauthorized — no account or device ID', type: 'auth_error' } }))
         return
@@ -530,7 +530,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       if (isApprovalRoute(urlPath) && await handleApprovalRoute(req, res, urlPath, authResult.account ?? null)) return
       // Background tasks (agent-runtime Phase 3). The conversations scope as
       // above; the surface from the credential, for the runner's per-turn check.
-      if (isTaskRoute(urlPath) && await handleTaskRoute(req, res, urlPath, {
+      if (isJobRoute(urlPath) && await handleJobRoute(req, res, urlPath, {
         account: authResult.account ?? null,
         storeAccountId: accountId,
         surface: authResult.surface ?? null,

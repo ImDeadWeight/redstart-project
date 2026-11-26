@@ -41,9 +41,9 @@
 	import { workspaceAvailable, isWorkspaceOnlyFile } from '$lib/utils/workspace-upload';
 	import { onMount } from 'svelte';
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
-	import ChatScreenTaskBar from './ChatScreenTaskBar.svelte';
-	import { tasksStore } from '$lib/stores/tasks.svelte';
-	import { isChatRun } from '$lib/services/task.service';
+	import ChatScreenJobBar from './ChatScreenJobBar.svelte';
+	import { jobsStore } from '$lib/stores/jobs.svelte';
+	import { isChatRun } from '$lib/services/job.service';
 
 	let { showCenteredEmpty = false } = $props();
 
@@ -55,7 +55,7 @@
 	$effect(() => {
 		const conv = activeConversation();
 		void conv?.activeTaskId;
-		void tasksStore.watch(conv?.id ?? null);
+		void jobsStore.watch(conv?.id ?? null);
 	});
 
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
@@ -98,7 +98,7 @@
 	// A plain Send that runs on the server (origin 'chat') is a reply in
 	// progress like the browser loop's: the composer shows Stop, which cancels
 	// the run (chat-send stopGeneration).
-	let chatRunActive = $derived(isChatRun(tasksStore.activeFor(activeConversation()?.id)));
+	let chatRunActive = $derived(isChatRun(jobsStore.activeFor(activeConversation()?.id)));
 	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming() || chatRunActive);
 
 	let showProcessingInfo = $derived(
@@ -462,7 +462,7 @@
 
 			<ChatScreenServerError />
 
-			<ChatScreenTaskBar conversationId={activeConversation()?.id} />
+			<ChatScreenJobBar conversationId={activeConversation()?.id} />
 
 			<div class="conversation-chat-form rounded-t-3xl">
 				<ChatScreenForm

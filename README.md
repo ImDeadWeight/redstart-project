@@ -171,7 +171,7 @@ Every capability except artifacts is disabled until an administrator enables it;
 - **Ask instead of guessing.** When a task depends on information only the user can provide, the assistant can ask questions through a structured clarification interface.
 - **Plan longer work.** Multi-step tasks can be represented as checklists in the chat.
 - **Ask before changing things.** Writes and deletes can require approval through a server-checked approval flow. Deletions go to the Recycle Bin.
-- **Continue after the page closes.** Chats run on the server by default, so refreshing a page or closing a browser does not end the response. `/task` can hand longer work to the server. Tasks can survive a restart and wait for user input or approval.
+- **Continue after the page closes.** Chats run on the server by default, so refreshing a page or closing a browser does not end the response. `/job` can hand longer work to the server. Jobs survive a restart and wait for user input or approval.
 - **Retrieve tools as needed.** Capabilities marked catalog-only can be discovered through `search_tools`, using a local embedding model to rank relevant tools. This keeps large tool catalogs from crowding a model's context.
 
 **Remember what matters** ([Memory](docs/security.md#memory))
@@ -184,7 +184,7 @@ Every capability except artifacts is disabled until an administrator enables it;
 
 - **Projects** group chats with their own instructions, files and memories. Project instructions can import from and export to `AGENTS.md`.
 - **Workflows** are saved instructions for recurring tasks, personal or shared across an organization. They can be run with `/` and stored as Agent Skills (`SKILL.md`).
-- **Slash commands** provide shortcuts for common actions, including `/new`, `/model`, `/mode`, `/project`, `/compact`, `/task`, `/remember`, `/memory`, `/retry`, `/copy`, `/rename`, `/export` and `/help`.
+- **Slash commands** provide shortcuts for common actions, including `/new`, `/model`, `/mode`, `/project`, `/compact`, `/job`, `/remember`, `/memory`, `/retry`, `/copy`, `/rename`, `/export` and `/help`.
 
 **Measured, not assumed.** The repository includes an agent benchmark and a memory benchmark, including tests for prompt-injection attempts. Results are recorded against specific models so changes to the runtime can be evaluated.
 

@@ -12,7 +12,7 @@ import { getServerBaseUrl } from './server-url';
 import { getAuthHeaders } from './api-headers';
 import { ASK_USER_TOOL, formatAskAnswer, parseAskArguments } from '$lib/agent-core';
 import type { AskAnswer, AskQuestion, AskRequest, PlanStep } from '$lib/agent-core';
-import type { TaskRecord } from '$lib/services/task.service';
+import type { JobRecord } from '$lib/services/job.service';
 
 /**
  * Represents a parsed section of agentic content for display
@@ -437,7 +437,7 @@ export type QuestionSource =
  * question would send the answer to a browser loop that is not running.
  */
 export function pickQuestionSource(input: {
-	task: Pick<TaskRecord, 'id' | 'waiting'> | null;
+	task: Pick<JobRecord, 'id' | 'waiting'> | null;
 	activeTaskId: string | null | undefined;
 	live: AskRequest | null;
 	flowBusy: boolean;

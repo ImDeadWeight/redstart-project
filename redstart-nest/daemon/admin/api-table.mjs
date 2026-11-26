@@ -39,7 +39,7 @@ import { modelsHandlers } from '../ipc/models.mjs'
 import { pluginsHandlers } from '../ipc/plugins.mjs'
 import { browseRouteHandlers } from './browse-routes.mjs'
 import { approvalsHandlers } from '../ipc/approvals.mjs'
-import { tasksHandlers } from '../ipc/tasks.mjs'
+import { jobsHandlers } from '../ipc/jobs.mjs'
 import { tlsHandlers } from '../ipc/tls.mjs'
 
 /**
@@ -69,7 +69,7 @@ export function buildAdminApi(deps) {
     // agent-runtime Phase 2): owner-only by the listener's gate.
     ...approvalsHandlers(),
     // Every account's background tasks (agent-runtime Phase 3), table-only.
-    ...tasksHandlers(),
+    ...jobsHandlers(),
     // The "Secure address" section (TLS plan C9): owner-only, control plane only.
     ...tlsHandlers(deps),
   }

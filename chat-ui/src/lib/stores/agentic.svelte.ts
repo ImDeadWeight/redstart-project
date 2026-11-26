@@ -31,7 +31,7 @@ import { toolsStore } from '$lib/stores/tools.svelte';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { ToolPermissionDecision } from '$lib/enums';
 import { DEFAULT_AGENTIC_CONFIG, NEST_MCP_SERVER_ID_PREFIX } from '$lib/constants';
-import type { ClientToolSpec } from '$lib/services/task.service';
+import type { ClientToolSpec } from '$lib/services/job.service';
 import { MessageRole, ToolCallType } from '$lib/enums';
 import type {
 	AgenticFlowParams,

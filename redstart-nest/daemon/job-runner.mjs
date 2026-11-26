@@ -1,7 +1,7 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — the task runner (agent-runtime plan Phase 3, 3.5)
+// Redstart Nest — the job runner (agent-runtime plan Phase 3, 3.5; "tasks" until tasks plan Phase 0)
 // =============================================================================
 // Runs shared/agent-core's loop inside the daemon, against one of the
 // account's conversations, with no client attached. The third host of the one
@@ -19,11 +19,11 @@
 //             anything else parks in waiting_approval on a ledger approval
 //             this task holds, until POST /approvals/:id decides it (U-a,
 //             decided 2026-11-12: a write waits, like a delete).
-//   ask       ask_user parks in waiting_user until POST /tasks/:id/answer.
+//   ask       ask_user parks in waiting_user until POST /jobs/:id/answer.
 //   plan      the conversation's `plan` field, as chat-ui keeps it.
 //   limit     the turn limit parks in waiting_user with the continue
 //             question (D30).
-//   steering  POST /tasks/:id/steer: the loop ends its turn, the message is
+//   steering  POST /jobs/:id/steer: the loop ends its turn, the message is
 //             added, the loop goes on.
 //
 // Writes: the conversation is the task's while it runs (activeTaskId, D25).
@@ -36,7 +36,7 @@
 // One task generates at a time, and a task waits while a chat's completion is
 // in flight (D29): a person waiting on a reply goes first.
 //
-// Restart (3.7): resumeTasks() at daemon start re-enters every task that had
+// Restart (3.7): resumeJobs() at daemon start re-enters every task that had
 // not ended, from the conversation. A tool call that was running is closed
 // with INTERRUPTED_BY_RESTART; calls not yet reached run normally, so an open
 // question or approval is asked again, and the task stays waiting.
@@ -46,7 +46,7 @@ import * as crypto from 'node:crypto'
 import { runAgentLoop } from '../../shared/agent-core/loop.mjs'
 import { isAbortError } from '../../shared/agent-core/tool-calls.mjs'
 import { currentBranch } from '../../shared/agent-core/stored-messages.mjs'
-import * as store from './task-store.mjs'
+import * as store from './job-store.mjs'
 import * as conversations from './conversations-storage.mjs'
 import { accountForTask } from './auth.mjs'
 import { memoryKey } from './memory-storage.mjs'
@@ -54,16 +54,16 @@ import * as ledger from './approval-ledger.mjs'
 import { completionsInFlight, getUpstreamPort } from './completion-activity.mjs'
 import { logEvent } from './logger.mjs'
 import {
-  GENERATION_KEYS, TaskEnded, isModelGoneError, sleep, preview, createPass, buildPorts, buildCallbacks,
-} from './task-ports.mjs'
-import { finishedBeforeRestart, resumeOpenCalls } from './task-resume.mjs'
+  GENERATION_KEYS, JobEnded, isModelGoneError, sleep, preview, createPass, buildPorts, buildCallbacks,
+} from './job-ports.mjs'
+import { finishedBeforeRestart, resumeOpenCalls } from './job-resume.mjs'
 import { cleanClientTools, cleanToolLimits, MAX_CLIENT_RESULT_CHARS } from './client-tools.mjs'
 import { sealArtifact } from './artifacts-storage.mjs'
 
 // Where they lived before master plan Phase 4 split runOnce; importers keep
 // reading them from here.
-export { FALLBACK_PARSER_PATTERNS, TASK_HOST_TOOLS, GENERATION_KEYS } from './task-ports.mjs'
-export { INTERRUPTED_BY_RESTART } from './task-resume.mjs'
+export { FALLBACK_PARSER_PATTERNS, JOB_HOST_TOOLS, GENERATION_KEYS } from './job-ports.mjs'
+export { INTERRUPTED_BY_RESTART } from './job-resume.mjs'
 
 const MODEL_POLL_MS = 2000
 const BUSY_POLL_MS = 250
@@ -180,7 +180,7 @@ function pickGeneration(gen) {
  *   origin: 'chat' for a plain Send run on the server; absent means 'background'
  * @returns {{ ok: true, task: object } | { ok: false, status: number, error: string }}
  */
-export function startTask(req) {
+export function startJob(req) {
   const content = typeof req.content === 'string' ? req.content.trim() : ''
   if (!content) return { ok: false, status: 400, error: 'content is required' }
   if (req.origin !== undefined && req.origin !== 'chat' && req.origin !== 'background') {
@@ -196,13 +196,13 @@ export function startTask(req) {
   const conv = conversations.getConversation(req.storeAccountId, req.conversationId)
   if (!conv) return { ok: false, status: 404, error: 'Not found' }
   if (conv.activeTaskId) {
-    const holder = store.getTask(conv.activeTaskId)
+    const holder = store.getJob(conv.activeTaskId)
     if (holder && !store.TERMINAL_STATES.includes(holder.status)) {
       return { ok: false, status: 409, error: 'A task is already running in this conversation.' }
     }
   }
 
-  const task = store.createTask({
+  const task = store.createJob({
     accountKey: memoryKey(req.account ?? null),
     accountId: req.account?.id ?? null,
     storeAccountId: req.storeAccountId,
@@ -220,13 +220,13 @@ export function startTask(req) {
 
   const userMessage = appendUserMessage(task, content)
   if (!userMessage) {
-    store.updateTask(task.id, { status: 'failed', error: 'The conversation could not be written.' })
+    store.updateJob(task.id, { status: 'failed', error: 'The conversation could not be written.' })
     conversations.setActiveTask(req.storeAccountId, req.conversationId, null)
     return { ok: false, status: 500, error: 'The conversation could not be written.' }
   }
   logEvent('task', 'started', { account: req.account?.username ?? undefined })
   launch(task.id, { clientTools: client.tools })
-  return { ok: true, task: store.getTask(task.id) }
+  return { ok: true, task: store.getJob(task.id) }
 }
 
 /** The tip of the current branch, creating the root record a new chat lacks. */
@@ -264,9 +264,9 @@ function appendUserMessage(task, content) {
  *
  * @returns {{ ok: true } | { ok: false, status: number, error: string }}
  */
-export function answerTask(id, body) {
+export function answerJob(id, body) {
   const l = live.get(id)
-  const t = store.getTask(id)
+  const t = store.getJob(id)
   if (!t || !l) return { ok: false, status: t ? 409 : 404, error: t ? 'This task is not running.' : 'Not found' }
   if (t.status !== 'waiting_user' || !l.answer) return { ok: false, status: 409, error: 'This task is not waiting for an answer.' }
   if (l.waitingKind === 'continue') {
@@ -305,11 +305,11 @@ function cleanReply(value) {
  * answer (the ask port's contract); otherwise the loop ends its turn and the
  * message is added before it goes on.
  */
-export function steerTask(id, content) {
+export function steerJob(id, content) {
   const text = typeof content === 'string' ? content.trim() : ''
   if (!text) return { ok: false, status: 400, error: 'content is required' }
   const l = live.get(id)
-  const t = store.getTask(id)
+  const t = store.getJob(id)
   if (!t || !l) return { ok: false, status: t ? 409 : 404, error: t ? 'This task is not running.' : 'Not found' }
   if (t.status === 'waiting_user' && l.waitingKind === 'question' && l.answer) {
     l.answer({ text: text.slice(0, 4000) })
@@ -322,8 +322,8 @@ export function steerTask(id, content) {
 }
 
 /** Stop a task. Its partial turn is kept; it ends as cancelled. */
-export function cancelTask(id, by = 'user') {
-  const t = store.getTask(id)
+export function cancelJob(id, by = 'user') {
+  const t = store.getJob(id)
   if (!t) return { ok: false, status: 404, error: 'Not found' }
   if (store.TERMINAL_STATES.includes(t.status)) return { ok: true, already: true }
   const l = live.get(id)
@@ -343,7 +343,7 @@ export function cancelTask(id, by = 'user') {
 /** Replace the tools a task's client runs (a reconnect, or a new client). */
 export function registerClientTools(id, tools) {
   const l = live.get(id)
-  if (!l) return { ok: false, status: store.getTask(id) ? 409 : 404, error: 'This task is not running.' }
+  if (!l) return { ok: false, status: store.getJob(id) ? 409 : 404, error: 'This task is not running.' }
   const clean = cleanClientTools(tools)
   if (!clean.ok) return { ok: false, status: 400, error: clean.error }
   l.clientTools = clean.tools
@@ -383,7 +383,7 @@ export function attachClient(id, send = () => {}) {
 /** A client's result for one of its calls: { callId, text, isError? }. */
 export function clientResult(id, body) {
   const l = live.get(id)
-  if (!l) return { ok: false, status: store.getTask(id) ? 409 : 404, error: 'This task is not running.' }
+  if (!l) return { ok: false, status: store.getJob(id) ? 409 : 404, error: 'This task is not running.' }
   const callId = typeof body?.callId === 'string' ? body.callId : ''
   const wait = l.clientWaits.get(callId)
   if (!wait) return { ok: false, status: 409, error: 'No call with that id is waiting for a result.' }
@@ -403,13 +403,13 @@ export function _liveRuns() {
 /**
  * The daemon is stopping (stopDaemon): stop every run where it is WITHOUT
  * ending it. Records keep their state and the conversation stays claimed, so
- * the next start resumes each one (resumeTasks), as after a crash. A call
+ * the next start resumes each one (resumeJobs), as after a crash. A call
  * that was running when this landed has no stored result, and is closed as
  * interrupted at resume.
  *
  * @returns {Promise<void>} once every run has stopped
  */
-export function suspendAllTasks() {
+export function suspendAllJobs() {
   const runs = []
   for (const l of live.values()) {
     l.suspended = true
@@ -437,16 +437,16 @@ function launch(id, { recovered = false, clientTools = [] } = {}) {
   l.done = run(id, l, { recovered }).catch((err) => {
     // run() handles its own failures; this is a bug in it, and the task must still end.
     console.error('Task runner:', err)
-    const t = store.getTask(id)
+    const t = store.getJob(id)
     if (t) finish(t, 'failed', `Internal error: ${err?.message ?? err}`)
   }).finally(() => live.delete(id))
 }
 
 function finish(task, status, error) {
   // Suspended by an orderly daemon stop: leave the record as it is, so the
-  // next start resumes it (resumeTasks).
+  // next start resumes it (resumeJobs).
   if (live.get(task.id)?.suspended) return
-  store.updateTask(task.id, { status, error, inFlight: null })
+  store.updateJob(task.id, { status, error, inFlight: null })
   conversations.setActiveTask(task.storeAccountId, task.conversationId, null)
   const l = live.get(task.id)
   if (l) for (const approvalId of l.heldApprovals) ledger.withdraw(approvalId)
@@ -507,7 +507,7 @@ function generationOf(taskId) {
 }
 
 async function run(id, l, { recovered }) {
-  let task = store.getTask(id)
+  let task = store.getJob(id)
   if (!task || store.TERMINAL_STATES.includes(task.status)) return
   const signal = l.controller.signal
   const generation = generationOf(id)
@@ -523,32 +523,32 @@ async function run(id, l, { recovered }) {
 
   try {
     while (true) {
-      if (signal.aborted) throw new TaskEnded('cancelled', null)
-      task = store.getTask(id)
+      if (signal.aborted) throw new JobEnded('cancelled', null)
+      task = store.getJob(id)
       const conv = conversations.getConversation(task.storeAccountId, task.conversationId)
-      if (!conv) throw new TaskEnded('cancelled', 'The conversation was deleted.')
+      if (!conv) throw new JobEnded('cancelled', 'The conversation was deleted.')
 
       const outcome = await runOnce(task, l, conv, generation, { resume })
       resume = outcome === 'again' ? 'model' : null
       if (outcome === 'again') continue
-      if (signal.aborted) throw new TaskEnded('cancelled', null)
+      if (signal.aborted) throw new JobEnded('cancelled', null)
 
       // Messages typed while it ran: add them and go on, as chat-ui sends a
       // steering message once the flow has stopped.
       if (l.steering.length > 0) {
         const queued = l.steering.splice(0)
         for (const text of queued) {
-          if (!appendUserMessage(store.getTask(id), text)) throw new TaskEnded('cancelled', 'The conversation was deleted.')
+          if (!appendUserMessage(store.getJob(id), text)) throw new JobEnded('cancelled', 'The conversation was deleted.')
         }
         continue
       }
-      finish(store.getTask(id), 'done', null)
+      finish(store.getJob(id), 'done', null)
       return
     }
   } catch (err) {
-    const t = store.getTask(id)
+    const t = store.getJob(id)
     if (!t || store.TERMINAL_STATES.includes(t.status)) return
-    if (err instanceof TaskEnded) return finish(t, err.status, err.message)
+    if (err instanceof JobEnded) return finish(t, err.status, err.message)
     if (signal.aborted) return finish(t, 'cancelled', null)
     return finish(t, 'failed', err?.message ?? String(err))
   }
@@ -558,7 +558,7 @@ async function run(id, l, { recovered }) {
  * One pass of the loop over the conversation as stored. Returns 'again' when
  * the model went away mid-turn and the pass must be re-entered once it is back
  * (the partial turn is already saved). The pass's state, ports and callbacks
- * are task-ports.mjs's; a restart's open calls, task-resume.mjs's.
+ * are job-ports.mjs's; a restart's open calls, job-resume.mjs's.
  */
 async function runOnce(task, l, conv, generation, { resume }) {
   const pass = createPass({ task, l, conv, generation, seams })
@@ -573,10 +573,10 @@ async function runOnce(task, l, conv, generation, { resume }) {
     await runAgentLoop({ messages: pass.messages, maxTurns: task.limits.maxTurns, ports, callbacks, signal })
   } catch (err) {
     sealTouched(pass)
-    if (err instanceof TaskEnded) throw err
+    if (err instanceof JobEnded) throw err
     if (signal.aborted || isAbortError(err)) return 'done'
     if (isModelGoneError(err) || !seams.upstreamPort()) {
-      store.updateTask(store.getTask(task.id).id, { status: 'waiting_model', waiting: { kind: 'model' } })
+      store.updateJob(store.getJob(task.id).id, { status: 'waiting_model', waiting: { kind: 'model' } })
       await sleep(seams.modelPollMs, signal)
       return 'again'
     }
@@ -594,7 +594,7 @@ async function runOnce(task, l, conv, generation, { resume }) {
  */
 function sealTouched(pass) {
   for (const id of pass.artifactsTouched) {
-    try { sealArtifact(pass.turnCtx.account, id, { conversationId: store.getTask(pass.task.id)?.conversationId ?? null }) } catch { /* the sweep has it */ }
+    try { sealArtifact(pass.turnCtx.account, id, { conversationId: store.getJob(pass.task.id)?.conversationId ?? null }) } catch { /* the sweep has it */ }
   }
   pass.artifactsTouched.clear()
 }
@@ -609,20 +609,20 @@ function sealTouched(pass) {
  *
  * @returns {number} how many were resumed
  */
-export function resumeTasks() {
+export function resumeJobs() {
   let n = 0
-  for (const t of store.listTasks()) {
+  for (const t of store.listJobs()) {
     if (store.TERMINAL_STATES.includes(t.status)) continue
     const conv = conversations.getConversation(t.storeAccountId, t.conversationId)
     if (!conv) {
-      store.updateTask(t.id, { status: 'cancelled', error: 'The conversation was deleted.' })
+      store.updateJob(t.id, { status: 'cancelled', error: 'The conversation was deleted.' })
       continue
     }
     if (conv.activeTaskId !== t.id) conversations.setActiveTask(t.storeAccountId, t.conversationId, t.id)
     // What a waiting task waited on died with the process: an approval id the
     // fresh ledger has never heard of, a question no run is holding. Cleared,
     // so no client acts on it; the resumed run asks again within moments.
-    if (t.status === 'waiting_user' || t.status === 'waiting_approval' || t.status === 'waiting_client') store.updateTask(t.id, { status: 'queued', waiting: null })
+    if (t.status === 'waiting_user' || t.status === 'waiting_approval' || t.status === 'waiting_client') store.updateJob(t.id, { status: 'queued', waiting: null })
     store.appendEvent(t.id, { type: 'resumed' })
     launch(t.id, { recovered: true })
     n++
@@ -632,7 +632,7 @@ export function resumeTasks() {
 }
 
 /** A task as a client may see it: the record without its storage scope. */
-export function publicTask(t) {
+export function publicJob(t) {
   if (!t) return null
   const { storeAccountId: _s, accountKey: _k, ...rest } = t
   return rest

@@ -5,8 +5,8 @@
 		ChatMessageActionCardContinueRequest,
 		ChatMessageActionCardPermissionRequest
 	} from '$lib/components/app';
-	import { tasksStore } from '$lib/stores/tasks.svelte';
-	import { approvalDecisionFor, isChatRun, taskStatusLabel } from '$lib/services/task.service';
+	import { jobsStore } from '$lib/stores/jobs.svelte';
+	import { approvalDecisionFor, isChatRun, jobStatusLabel } from '$lib/services/job.service';
 	import type { ToolPermissionDecision } from '$lib/enums';
 
 	/**
@@ -28,7 +28,7 @@
 
 	let { conversationId }: Props = $props();
 
-	const task = $derived(tasksStore.activeFor(conversationId));
+	const task = $derived(jobsStore.activeFor(conversationId));
 	const waiting = $derived(task?.waiting ?? null);
 	const background = $derived(!!task && !isChatRun(task));
 	let busy = $state(false);
@@ -46,19 +46,19 @@
 	function onPermission(decision: ToolPermissionDecision) {
 		const id = conversationId;
 		if (!id) return;
-		void run(() => tasksStore.decideApproval(id, approvalDecisionFor(decision)));
+		void run(() => jobsStore.decideApproval(id, approvalDecisionFor(decision)));
 	}
 
 	function onContinue(shouldContinue: boolean) {
 		const id = conversationId;
 		if (!id) return;
-		void run(() => tasksStore.answer(id, { continue: shouldContinue }));
+		void run(() => jobsStore.answer(id, { continue: shouldContinue }));
 	}
 
 	function onCancel() {
 		const id = conversationId;
 		if (!id) return;
-		void run(() => tasksStore.cancel(id));
+		void run(() => jobsStore.cancel(id));
 	}
 </script>
 
@@ -72,11 +72,11 @@
 				{#if !waiting || waiting.kind === 'model'}
 					<LoaderCircle class="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
 				{/if}
-				<span class="min-w-0 flex-1 truncate">{taskStatusLabel(task)}</span>
+				<span class="min-w-0 flex-1 truncate">{jobStatusLabel(task)}</span>
 				<span class="hidden text-xs text-muted-foreground sm:inline">
 					Messages you send go to the task.
 				</span>
-				<Button size="sm" variant="ghost" disabled={busy} onclick={onCancel} title="Cancel the task">
+				<Button size="sm" variant="ghost" disabled={busy} onclick={onCancel} title="Cancel the job">
 					<Square class="h-3.5 w-3.5" />
 					Cancel
 				</Button>

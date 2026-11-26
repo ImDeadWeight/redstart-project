@@ -1,15 +1,15 @@
 // =============================================================================
-// One side of test-task-runtime.mjs's restart tests (agent-runtime 3.7)
+// One side of test-job-runtime.mjs's restart tests (agent-runtime 3.7)
 // =============================================================================
 // Run as a separate process against the data folder in
 // REDSTART_TEST_USERDATA_DIR, so a "restart" is a real one: the first process
 // is killed outright (SIGKILL, no exit handlers) and a second one starts from
 // what is on disk.
 //
-//   node task-restart-child.mjs start <scenario>   start a task; prints
+//   node job-restart-child.mjs start <scenario>   start a task; prints
 //        READY <taskId> once it is where the scenario kills it, then hangs
-//   node task-restart-child.mjs resume <scenario> [answer]
-//        resumeTasks(); prints RESULT <json> when the task has ended, or
+//   node job-restart-child.mjs resume <scenario> [answer]
+//        resumeJobs(); prints RESULT <json> when the task has ended, or
 //        WAITING <json> when it is waiting for the person
 //
 // Scenarios:
@@ -30,8 +30,8 @@ await import(pathToFileURL(path.join(scripts, 'electron-stub.mjs')).href)
 const [mode, scenario, answer] = process.argv.slice(2)
 const accounts = await import('../../daemon/accounts-storage.mjs')
 const convs = await import('../../daemon/conversations-storage.mjs')
-const store = await import('../../daemon/task-store.mjs')
-const runner = await import('../../daemon/task-runner.mjs')
+const store = await import('../../daemon/job-store.mjs')
+const runner = await import('../../daemon/job-runner.mjs')
 const { currentBranch } = await import('../../../shared/agent-core/stored-messages.mjs')
 accounts.setAuthRequired(false)
 
@@ -73,10 +73,10 @@ if (mode === 'start') {
   } else {
     seams([toolCalls(['q1', 'ask_user', { question: 'Which colour?' }])], () => ({ content: [] }))
   }
-  const r = runner.startTask({ account: null, storeAccountId: SCOPE, conversationId: CONV, content: 'go' })
+  const r = runner.startJob({ account: null, storeAccountId: SCOPE, conversationId: CONV, content: 'go' })
   taskId = r.task.id
   if (scenario === 'question') {
-    while (store.getTask(taskId).status !== 'waiting_user') await new Promise((res) => setTimeout(res, 10))
+    while (store.getJob(taskId).status !== 'waiting_user') await new Promise((res) => setTimeout(res, 10))
     out('READY', taskId)
   }
   setInterval(() => {}, 1000) // hang until killed
@@ -85,22 +85,22 @@ if (mode === 'start') {
     calls.push({ name, path: args.path })
     return { content: [{ type: 'text', text: `${name} ${args.path} ran` }] }
   })
-  const resumed = runner.resumeTasks()
-  const [task] = store.listTasks()
+  const resumed = runner.resumeJobs()
+  const [task] = store.listJobs()
   const report = () => {
-    const t = store.getTask(task.id)
+    const t = store.getJob(task.id)
     const branch = currentBranch(convs.getConversation(SCOPE, CONV)).map((m) => ({ role: m.role, content: m.content, toolCallId: m.toolCallId }))
     return { resumed, status: t.status, waiting: t.waiting, branch, calls, activeTaskId: convs.getConversation(SCOPE, CONV).activeTaskId ?? null }
   }
   let answered = false
   for (;;) {
-    const t = store.getTask(task.id)
+    const t = store.getJob(task.id)
     if (store.TERMINAL_STATES.includes(t.status)) { out('RESULT', report()); process.exit(0) }
     // The record says waiting_user from before the restart until the resumed
-    // run asks again; only then does an answer land (answerTask is ok).
+    // run asks again; only then does an answer land (answerJob is ok).
     if (t.status === 'waiting_user' && !answered) {
       if (!answer) { out('WAITING', report()); process.exit(0) }
-      answered = runner.answerTask(task.id, { text: answer }).ok
+      answered = runner.answerJob(task.id, { text: answer }).ok
     }
     await new Promise((res) => setTimeout(res, 10))
   }

@@ -20,7 +20,7 @@
 	import ChatMessageActionCardQuestion from '$lib/components/app/chat/ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardQuestion.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { tasksStore } from '$lib/stores/tasks.svelte';
+	import { jobsStore } from '$lib/stores/jobs.svelte';
 	import { agenticIsRunning, agenticPendingQuestion, agenticResolveQuestion } from '$lib/stores/agentic.svelte';
 	import { findOpenQuestion, pickQuestionSource } from '$lib/utils/agentic';
 	import type { AskAnswer } from '$lib/agent-core';
@@ -31,7 +31,7 @@
 	const source = $derived.by(() => {
 		if (!conversationId) return null;
 		return pickQuestionSource({
-			task: tasksStore.activeFor(conversationId),
+			task: jobsStore.activeFor(conversationId),
 			activeTaskId: conversation?.activeTaskId,
 			live: agenticPendingQuestion(conversationId),
 			flowBusy: agenticIsRunning(conversationId) || chatStore.isLoading,
@@ -56,7 +56,7 @@
 		busy = true;
 		try {
 			if (s.kind === 'task') {
-				if (await tasksStore.answer(id, answer ?? { dismissed: true })) answeredKey = s.key;
+				if (await jobsStore.answer(id, answer ?? { dismissed: true })) answeredKey = s.key;
 			} else if (await chatStore.answerOpenQuestion(answer)) {
 				answeredKey = s.key;
 			}

@@ -10,10 +10,10 @@ import {
 	approvalDecisionFor,
 	isChatRun,
 	parseSseFrames,
-	taskStatusLabel,
-	type TaskEvent,
-	type TaskRecord
-} from '$lib/services/task.service';
+	jobStatusLabel,
+	type JobEvent,
+	type JobRecord
+} from '$lib/services/job.service';
 
 describe('parseSseFrames', () => {
 	it('returns complete frames and keeps the unfinished tail', () => {
@@ -61,17 +61,17 @@ describe('wire mappings', () => {
 	});
 
 	it('says what the task waits for', () => {
-		expect(taskStatusLabel({ status: 'waiting_user', waiting: { kind: 'continue' } })).toMatch(
+		expect(jobStatusLabel({ status: 'waiting_user', waiting: { kind: 'continue' } })).toMatch(
 			/turn limit/
 		);
 		expect(
-			taskStatusLabel({
+			jobStatusLabel({
 				status: 'waiting_user',
 				waiting: { kind: 'question', questions: [{ question: 'q', multiSelect: false }] }
 			})
 		).toMatch(/asking/);
-		expect(taskStatusLabel({ status: 'waiting_approval', waiting: null })).toMatch(/approval/);
-		expect(taskStatusLabel({ status: 'waiting_client', waiting: null })).toMatch(/this app/);
+		expect(jobStatusLabel({ status: 'waiting_approval', waiting: null })).toMatch(/approval/);
+		expect(jobStatusLabel({ status: 'waiting_client', waiting: null })).toMatch(/this app/);
 	});
 
 	it("only origin 'chat' is a Send's run; none (an older Nest) and 'background' are tasks", () => {
@@ -185,9 +185,9 @@ const h = vi.hoisted(() => ({
 	taskActiveHandler: null as ((id: string | null) => void) | null
 }));
 
-vi.mock('$lib/services/task.service', async (importOriginal) => ({
-	...(await importOriginal<typeof import('$lib/services/task.service')>()),
-	TaskService: h.svc
+vi.mock('$lib/services/job.service', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/services/job.service')>()),
+	JobService: h.svc
 }));
 vi.mock('$lib/stores/conversations.svelte', () => ({ conversationsStore: h.conv }));
 vi.mock('$lib/stores/chat/chat-options', () => ({
@@ -203,7 +203,7 @@ vi.mock('$lib/services/database.service', () => ({
 	setTaskActiveHandler: (fn: (id: string | null) => void) => (h.taskActiveHandler = fn)
 }));
 
-const record = (over: Partial<TaskRecord> = {}): TaskRecord => ({
+const record = (over: Partial<JobRecord> = {}): JobRecord => ({
 	id: 't1',
 	conversationId: 'c1',
 	status: 'running',
@@ -215,11 +215,11 @@ const record = (over: Partial<TaskRecord> = {}): TaskRecord => ({
 
 /** readEvents as a stream the test drives: push events, then end it. */
 function controllableStream() {
-	let push: (e: TaskEvent) => void = () => {};
+	let push: (e: JobEvent) => void = () => {};
 	let end: () => void = () => {};
 	const calls: number[] = [];
 	h.svc.readEvents.mockImplementation(
-		(_id: string, after: number, onEvent: (e: TaskEvent) => void, signal: AbortSignal) => {
+		(_id: string, after: number, onEvent: (e: JobEvent) => void, signal: AbortSignal) => {
 			calls.push(after);
 			push = onEvent;
 			return new Promise<void>((resolve) => {
@@ -228,15 +228,15 @@ function controllableStream() {
 			});
 		}
 	);
-	return { push: (e: TaskEvent) => push(e), end: () => end(), calls };
+	return { push: (e: JobEvent) => push(e), end: () => end(), calls };
 }
 
 async function freshStore() {
 	vi.resetModules();
-	return (await import('$lib/stores/tasks.svelte')).tasksStore;
+	return (await import('$lib/stores/jobs.svelte')).jobsStore;
 }
 
-describe('tasksStore', () => {
+describe('jobsStore', () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
 		for (const f of Object.values(h.svc)) f.mockReset();
@@ -557,7 +557,7 @@ describe('tasksStore', () => {
 // Found 2026-11-19 (a real chat over HTTPS): a server-run reply showed its
 // open reasoning block as "Cancelled", had no live context readout, and the
 // conversation was never named. The tasks store now reports all three.
-describe('tasksStore: a chat run as the message UI needs it', () => {
+describe('jobsStore: a chat run as the message UI needs it', () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
 		for (const f of Object.values(h.svc)) f.mockReset();
