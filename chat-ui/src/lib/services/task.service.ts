@@ -129,25 +129,25 @@ export function approvalDecisionFor(decision: string): ApprovalDecision {
 export function taskStatusLabel(record: Pick<TaskRecord, 'status' | 'waiting'>): string {
 	switch (record.status) {
 		case 'queued':
-			return 'Background task queued';
+			return 'Background job queued';
 		case 'running':
-			return 'Background task running';
+			return 'Background job running';
 		case 'waiting_user':
 			return record.waiting?.kind === 'continue'
-				? 'Background task paused at the turn limit'
-				: 'Background task is asking you something';
+				? 'Background job paused at the turn limit'
+				: 'Background job is asking you something';
 		case 'waiting_approval':
-			return 'Background task needs your approval';
+			return 'Background job needs your approval';
 		case 'waiting_model':
-			return 'Background task waiting for a model to load';
+			return 'Background job waiting for a model to load';
 		case 'waiting_client':
 			return 'Running a tool in this app';
 		case 'done':
-			return 'Background task finished';
+			return 'Background job finished';
 		case 'failed':
-			return 'Background task failed';
+			return 'Background job failed';
 		case 'cancelled':
-			return 'Background task cancelled';
+			return 'Background job cancelled';
 	}
 }
 

@@ -577,6 +577,17 @@ export function ToolsTab({ config, toolsCatalog, caps, plugins, onOpenImages }: 
               </div>
             </ToolRow>
 
+            <ToolRow name="Tasks" short="Read, add and update the tasks people give each other"
+              status={statusOf(isActive('assignments'), true)} on={isActive('assignments')}
+              onToggle={() => toggleTool('assignments')}
+              open={openId === 'assignments'} onOpen={() => openRow('assignments')}>
+              <p className="text-[13px] leading-relaxed text-zinc-500">
+                People give each other tasks in the chat app whether or not this is on. With it on, the assistant can also list them, add them
+                (the action items from a meeting&rsquo;s notes become one list to approve) and update them. It can do only what the person in the
+                chat could, asks before adding or changing anything, and every change it makes is marked in the task&rsquo;s history.
+              </p>
+            </ToolRow>
+
             <ToolRow name="Artifacts" short="Pages, prototypes and mockups that open beside the chat"
               status={statusOf(artifactsOn, true)} on={artifactsOn}
               onToggle={() => setToolsField('artifactsEnabled', !artifactsOn)}

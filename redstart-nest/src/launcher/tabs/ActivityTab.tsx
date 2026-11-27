@@ -1,7 +1,7 @@
 // Activity tab — background tasks, what approval policy decided, and who
 // always allows what (agent-runtime plan Phase 2, D13/D14; Phase 3).
 //
-//   Background tasks — every account's tasks (daemon/ipc/tasks.mjs): state
+//   Background jobs — every account's tasks (daemon/ipc/tasks.mjs): state
 //                   and owner only, and Cancel.
 //   Decision log  — logger.mjs logPolicy() lines, newest first: a denial (on
 //                   the chat app's card or sent by a client), an approval
@@ -82,7 +82,7 @@ const TASK_TONE: Record<TaskSummary['status'], string> = {
 const LIVE = new Set<TaskSummary['status']>(['queued', 'running', 'waiting_user', 'waiting_approval', 'waiting_model'])
 
 /**
- * Background tasks (agent-runtime Phase 3): what is running for whom, and a
+ * Background jobs (agent-runtime Phase 3): what is running for whom, and a
  * way to stop one. The record only: never the conversation, the question or
  * what an approval is for, which are the account's own.
  */
@@ -98,7 +98,7 @@ function TasksSection() {
     try {
       setTasks((await api().tasks.list()).tasks)
     } catch {
-      setError('Could not read the task list.')
+      setError('Could not read the job list.')
     } finally {
       setLoading(false)
     }
@@ -123,20 +123,20 @@ function TasksSection() {
   return (
     <section className="min-w-0 bg-zinc-900 border border-zinc-800 rounded-xl p-5">
       <div className="flex items-center justify-between mb-2">
-        <SectionTitle className="">Background tasks</SectionTitle>
+        <SectionTitle className="">Background jobs</SectionTitle>
         <button className={btnCls.subtle} onClick={() => void load()} disabled={loading}>
           Refresh
         </button>
       </div>
       <p className="text-xs text-zinc-500 mb-3">
         Chats running in the background on this server, newest first. The list shows who and in what state, never
-        what the chat is about. Cancelling keeps what the task wrote so far.
+        what the chat is about. Cancelling keeps what the job wrote so far.
       </p>
 
       {error && <div className="text-xs text-red-400 mb-2">{error}</div>}
 
       {!error && tasks.length === 0 && !loading && (
-        <div className="text-xs text-zinc-500 italic">No background tasks.</div>
+        <div className="text-xs text-zinc-500 italic">No background jobs.</div>
       )}
 
       {tasks.length > 0 && (

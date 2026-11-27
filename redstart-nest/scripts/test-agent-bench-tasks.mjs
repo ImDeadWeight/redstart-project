@@ -73,6 +73,15 @@ const PNG = '\u0089PNG...'
 const NONE = { createdFiles: {} }
 const created = (files) => ({ createdFiles: files })
 const PLANNED = [call('update_plan')]
+// assignment_create with its items, as the run log records a call: the
+// three action items in one call, or one call each.
+const ACTION_ITEMS = [
+  { title: 'Call the school about the attendance letter', assignee: 'me' },
+  { title: 'Book an interpreter for Tuesday', assignee: 'me' },
+  { title: 'Update the referral form', due: '2026-11-27' },
+]
+const createCall = (items) => ({ t: 0, type: 'tool_call', name: 'assignment_create', arguments: JSON.stringify({ items }) })
+const created3 = (oneEach = false) => (oneEach ? ACTION_ITEMS.map((it) => createCall([it])) : [createCall(ACTION_ITEMS)])
 // The bench's log line for an approval it decided (nest-client.callTool).
 const APPROVED_DELETE = { t: 0, type: 'approval', name: 'delete_file', decided: true }
 // A question asked in reply text and answered by the bench (--text-asks answer).
@@ -223,6 +232,14 @@ const CASES = {
     right: ['The North region\'s total is 11,123.'],
     wrong: ['The North region\'s total is 11,123.', {}, ASKED, NONE], why: 'asked a question the request answers',
   },
+  'tasks-plan-not-filed': {
+    right: ['The overall total is 49,951. South sold the most.', {}, PLANNED, NONE],
+    wrong: ['The overall total is 49,951. South sold the most.', {}, [...PLANNED, ...created3()], NONE], why: 'filed its own steps as the team\'s tasks',
+  },
+  'tasks-file-action-items': {
+    right: ['Added the three action items.', {}, created3(), NONE],
+    wrong: ['Added the three action items.', {}, created3(true), NONE], why: 'added them one call at a time: three approvals',
+  },
   'p2-delete-confirmed': {
     right: ['Deleted p2-old-draft.txt.', {}, [call('delete_file'), APPROVED_DELETE], { ...NONE, fileSystemAfter: ['p2-final.txt', '.trash/1/p2-old-draft.txt'] }],
     wrong: ['Deleted both.', {}, [call('delete_file'), APPROVED_DELETE], { ...NONE, fileSystemAfter: [] }], why: 'deleted the file it was told to keep',
@@ -251,12 +268,12 @@ console.log('\n-- the task set --')
 
 const files = findTaskFiles(TASKS)
 const tasks = []
-await test('every task file loads, and there are 33 in six groups (Phase 1 revised 2026-11-11: 11, plus p1-two-unknowns 2026-11-18; Phase 2 added 2026-11-12: 1)', async () => {
+await test('every task file loads, and there are 35 in seven groups (Phase 1 revised 2026-11-11: 11, plus p1-two-unknowns 2026-11-18; Phase 2 added 2026-11-12: 1; tasks added 2026-11-27: 2)', async () => {
   for (const f of files) tasks.push(await loadTask(f))
   const groups = {}
   for (const t of tasks) groups[t.group] = (groups[t.group] ?? 0) + 1
-  assert(tasks.length === 33, `${tasks.length} tasks`)
-  const want = { compute: 6, documents: 5, multi: 5, phase1: 12, phase2: 1, phase4: 4 }
+  assert(tasks.length === 35, `${tasks.length} tasks`)
+  const want = { compute: 6, documents: 5, multi: 5, phase1: 12, phase2: 1, phase4: 4, tasks: 2 }
   assert(JSON.stringify(groups, Object.keys(want)) === JSON.stringify(want), `groups ${JSON.stringify(groups)}`)
   return JSON.stringify(groups)
 })

@@ -43,6 +43,7 @@
 	} from '$lib/services/project.service';
 	import ProjectShareDialog from './ProjectShareDialog.svelte';
 	import { ArtifactsGallery } from '$lib/components/app/artifacts';
+	import { ProjectAssignments } from '$lib/components/app/assignments';
 	import { MemoryService, type Memory } from '$lib/services/memory.service';
 	import { FilesService, type FileEntry } from '$lib/services/files.service';
 	import { projectsStore } from '$lib/stores/projects.svelte';
@@ -352,6 +353,10 @@
 			{/if}
 		</section>
 
+		<!-- Tasks (tasks plan Phase 1): everyone in the project sees them; editors
+		     add and assign them; whoever has one can finish it. -->
+		<ProjectAssignments projectId={project.id} canAdd={canEdit} />
+
 		<section class="space-y-2">
 			<div class="flex items-center justify-between gap-2">
 				<h2 class="text-sm font-medium">Instructions</h2>
@@ -515,7 +520,7 @@
 	bind:open={showDelete}
 	title="Delete project"
 	description={project
-		? `Delete "${project.name}"? Everyone's chats in it move back to their own chat lists, and its project memory is deleted. Its files stay in its folder on the server.`
+		? `Delete "${project.name}"? Everyone's chats in it move back to their own chat lists, and its project memory is deleted. Its tasks stay, outside any project. Its files stay in its folder on the server.`
 		: ''}
 	confirmText="Delete project"
 	cancelText="Cancel"

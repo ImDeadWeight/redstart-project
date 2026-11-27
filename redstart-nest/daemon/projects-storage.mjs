@@ -199,6 +199,16 @@ export function listAllProjects(account) {
   return read().projects.map((p) => withAccess(p, account)).sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
+/**
+ * The stored record, with no access check and no `access` field. For modules
+ * that hang their own records off a project and decide access through
+ * accessFor() themselves (assignments-storage.mjs). Never send it to a client.
+ */
+export function findProjectById(id) {
+  if (!isProjectId(id)) return null
+  return read().projects.find((p) => p.id === id) || null
+}
+
 /** One project the caller may read (with `access`), or null. */
 export function getProject(account, id) {
   if (!isProjectId(id)) return null

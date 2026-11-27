@@ -45,7 +45,7 @@ export function conversationHeaders(): Record<string, string> {
  */
 export class TaskActiveError extends Error {
   constructor(readonly conversationId: string | null) {
-    super('A background task is writing this conversation. It was reloaded; cancel the task to edit it.');
+    super('A background job is writing this conversation. It was reloaded; cancel the job to edit it.');
     this.name = 'TaskActiveError';
   }
 }

@@ -307,7 +307,10 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 	{
 		// agent-runtime Phase 3.9: the daemon runs the agent loop for this chat
 		// with no browser attached; the chat follows it and shows its cards.
+		// People read "background job": "Tasks" on screen are the ones people
+		// give each other (assignments in code). /job finds it too.
 		name: 'task',
+		aliases: ['job'],
 		summary: 'Run a request in the background, even with this page closed',
 		arg: 'required',
 		argHint: '<request>',
@@ -318,13 +321,13 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 			}
 			let id = conversationsStore.activeConversation?.id ?? null;
 			if (id && tasksStore.activeFor(id)) {
-				toast.info('A background task is already running in this chat. Messages you send go to it.');
+				toast.info('A background job is already running in this chat. Messages you send go to it.');
 				return;
 			}
 			try {
 				if (!id) id = await conversationsStore.createConversation();
 			} catch (e) {
-				toast.error(errorText(e, 'Could not start a chat for the task'));
+				toast.error(errorText(e, 'Could not start a chat for the job'));
 				return;
 			}
 			const task = await tasksStore.start(id, arg);

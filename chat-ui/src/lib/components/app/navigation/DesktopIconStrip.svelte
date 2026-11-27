@@ -13,6 +13,7 @@
 	import { onMount } from 'svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import AssignmentCountBadge from '$lib/components/app/assignments/AssignmentCountBadge.svelte';
 
 	interface Props {
 		sidebarOpen: boolean;
@@ -73,6 +74,7 @@
 			{/if}
 			{#if showIcons}
 				<div
+					class="relative"
 					in:fade={{
 						duration: ICON_STRIP_TRANSITION_DURATION,
 						delay: !initialized
@@ -92,6 +94,9 @@
 							: ''}"
 						{onclick}
 					/>
+					{#if item.badge === 'myAssignments'}
+						<AssignmentCountBadge dot />
+					{/if}
 				</div>
 			{/if}
 		{/each}

@@ -243,7 +243,47 @@ header, which is unauthenticated and acceptable only in that posture. Send one.
 
 ---
 
-## 7. Checklist
+## 7. Tasks
+
+The tasks people give each other, which a planning client (Greenhouse) builds
+on. Nest keeps the only copy: a client reads and writes them here and stores
+none of its own. They live under `/assignments` (people see them as "tasks"; `/tasks` is the
+assistant's background tasks, a different thing).
+
+| Route | Body or query | Answers |
+| --- | --- | --- |
+| `GET /assignments/mine` | `?include=done` `?today=YYYY-MM-DD` | `{ items, counts: { open, overdue }, limits }` |
+| `GET /assignments/count` | `?today=` | `{ open, overdue, dueToday }` |
+| `GET /assignments/created` | `?include=done` | tasks the caller made that are in no project |
+| `GET /assignments/assignees` | `?projectId=` | `{ accounts, groups }` a task can be given to |
+| `GET /assignments` | `?projectId=` (required) `?include=deleted` | `{ items, limits }` |
+| `POST /assignments` | `{ title, notes?, status?, dueDate?, projectId?, assignee? }` | the task, `201` |
+| `GET /assignments/:id` | | the task with `history` |
+| `PATCH /assignments/:id` | any of `title, notes, status, dueDate, assignee, projectId` | the task |
+| `DELETE /assignments/:id` | | `{ deleted: true }`; restorable for 30 days |
+| `POST /assignments/:id/claim` | | the task, now the caller's |
+| `POST /assignments/:id/release` | | the task, back with its group |
+| `POST /assignments/:id/restore` | | the task |
+| `POST /assignments/:id/comments` | `{ text }` | the task with `comments`, `201` |
+| `DELETE /assignments/:id/comments/:cid` | | the task with `comments` |
+| `GET /assignments?programId=` | | `{ items }`: the tasks of the program's projects the caller can open |
+
+**Programs** group projects (`/programs`, `/programs/:id`, `PUT /programs/:id/members`, `PUT /programs/:id/projects { projectIds }`). A program gives no access: its `projects` are only those the caller can already open.
+
+- `assignee` is `{ type: "account" | "group", id }`, `{ type: "agent" }` (the assistant: it starts a background job as the caller; the task carries `agentRun`), or `null`. `status` is
+  `open`, `in_progress`, `blocked` or `done`. `dueDate` is a calendar date with
+  no time or zone; send `today` from the user's own calendar so "overdue" is
+  theirs.
+- Every task carries `can` (`edit`, `status`, `assign`, `claim`, `release`,
+  `delete`, `move`). Show what it allows; do not work the rules out yourself.
+- A task the caller may not see is `404`; one they may see but not change is
+  `403`. A `PATCH` with one field the caller may not change is refused whole.
+- `startDate`, `estimate`, `blockedBy`, `milestoneId` and an assistant
+  assignee are reserved for later phases and refused (`400`) until then.
+
+---
+
+## 8. Checklist
 
 - [ ] Reads `GET /auth/config`; works with auth on **and** off
 - [ ] Sends `Authorization` when it has a token; sends `X-Redstart-Device-Id`

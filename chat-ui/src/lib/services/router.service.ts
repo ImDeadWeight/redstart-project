@@ -13,6 +13,11 @@ export class RouterService {
 		return `${ROUTES.PROJECTS}/${encodeURIComponent(id)}`;
 	}
 
+	/** One program's page: a group of projects (tasks plan Phase 4). */
+	static program(id: string): string {
+		return `#/programs/${encodeURIComponent(id)}`;
+	}
+
 	/** One artifact's own page (artifacts plan §10). */
 	static artifact(id: string): string {
 		return `${ROUTES.ARTIFACTS}/${encodeURIComponent(id)}`;

@@ -169,7 +169,14 @@ export function logAudit(event, fields = {}) {
 const POLICY_FIELDS = ['account', 'tool', 'decision', 'grantId', 'capability', 'role', 'by', 'source']
 // access.denied: a resource grant refused a path (grant-scope.mjs, master
 // plan 6.1). role.saved / role.deleted: who changed what a role may do.
-export const POLICY_EVENTS = new Set(['approval.denied', 'approval.refused', 'grant.added', 'grant.revoked', 'access.denied', 'role.saved', 'role.deleted'])
+// account.roles, group.saved / group.deleted and the two *.transferred events
+// are the People & access page's (gateway/auth-routes.mjs). They were logged
+// before they were listed here, so each threw AFTER its change was saved and
+// the page was told the save failed.
+export const POLICY_EVENTS = new Set([
+  'approval.denied', 'approval.refused', 'grant.added', 'grant.revoked', 'access.denied', 'role.saved', 'role.deleted',
+  'account.roles', 'group.saved', 'group.deleted', 'projects.transferred', 'artifacts.transferred',
+])
 const MAX_POLICY_VALUE = 128
 const MAX_POLICY_BYTES = 2 * 1024 * 1024
 

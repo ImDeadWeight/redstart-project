@@ -115,7 +115,7 @@ class TasksStore {
 	constructor() {
 		setTaskActiveHandler((conversationId) => {
 			toast.info(
-				'A background task is writing this chat, so it was reloaded. Cancel the task to edit it.'
+				'A background job is writing this chat, so it was reloaded. Cancel the job to edit it.'
 			);
 			const id = conversationId ?? conversationsStore.activeConversation?.id;
 			if (!id) return;
@@ -205,7 +205,7 @@ class TasksStore {
 		} catch (error) {
 			// quiet: the caller falls back to the browser loop (a plain Send).
 			if (opts.quiet) console.warn('[tasks] a run on the server did not start:', error);
-			else toast.error(error instanceof Error ? error.message : 'The task could not be started.');
+			else toast.error(error instanceof Error ? error.message : 'The job could not be started.');
 			return null;
 		}
 	}
@@ -218,7 +218,7 @@ class TasksStore {
 			await TaskService.steer(record.id, content);
 			return true;
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : 'The message did not reach the task.');
+			toast.error(error instanceof Error ? error.message : 'The message did not reach the job.');
 			return false;
 		}
 	}
@@ -229,7 +229,7 @@ class TasksStore {
 		if (!record) return false;
 		return this.act(
 			() => TaskService.answer(record.id, answer),
-			'The answer did not reach the task.'
+			'The answer did not reach the job.'
 		);
 	}
 
@@ -239,14 +239,14 @@ class TasksStore {
 		if (!record || waiting?.kind !== 'approval') return;
 		await this.act(
 			() => TaskService.decideApproval(waiting.approval.id, decision),
-			'The decision did not reach the task.'
+			'The decision did not reach the job.'
 		);
 	}
 
 	async cancel(conversationId: string): Promise<void> {
 		const record = this.activeFor(conversationId);
 		if (!record) return;
-		await this.act(() => TaskService.cancel(record.id), 'The task could not be cancelled.');
+		await this.act(() => TaskService.cancel(record.id), 'The job could not be cancelled.');
 	}
 
 	private async act(fn: () => Promise<unknown>, failure: string): Promise<boolean> {
@@ -449,7 +449,7 @@ class TasksStore {
 		// The task sealed its drafts; the panel shows the new revision.
 		artifactPanelStore.turnEnded(f.conversationId);
 		if (record?.status === 'failed')
-			toast.error(`The background task failed: ${record.error || 'no reason given'}`);
+			toast.error(`The background job failed: ${record.error || 'no reason given'}`);
 		this.stopFollowing();
 		if (this.reloadTimer) clearTimeout(this.reloadTimer);
 		this.reloadTimer = null;

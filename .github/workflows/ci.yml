@@ -228,6 +228,12 @@ jobs:
       - name: "Security: shared projects (viewer, editor, owner, admin; chats stay private)"
         run: node scripts/test-project-sharing.mjs
 
+      - name: "Security: tasks reach only who may see them; nothing is lost when people, groups or projects go"
+        run: node scripts/test-assignments.mjs
+
+      - name: "Security: a program gives no access; members see only the projects they can open"
+        run: node scripts/test-programs.mjs
+
       - name: "Agent core: the shared old/new-string matcher (ys_replace and artifact_edit)"
         run: node scripts/test-replace-match.mjs
 

@@ -76,7 +76,7 @@
 				<span class="hidden text-xs text-muted-foreground sm:inline">
 					Messages you send go to the task.
 				</span>
-				<Button size="sm" variant="ghost" disabled={busy} onclick={onCancel} title="Cancel the task">
+				<Button size="sm" variant="ghost" disabled={busy} onclick={onCancel} title="Cancel the job">
 					<Square class="h-3.5 w-3.5" />
 					Cancel
 				</Button>

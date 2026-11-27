@@ -94,7 +94,7 @@ export class ChatSendController {
 		if (activeConv && tasksStore.activeFor(activeConv.id)) {
 			if (extras?.length || workspaceFiles?.length) {
 				toast.info(
-					'Files cannot be sent to a background task. Send text, or cancel the task first.'
+					'Files cannot be sent to a background job. Send text, or cancel the job first.'
 				);
 			}
 			if (content.trim()) await tasksStore.steer(activeConv.id, content.trim());

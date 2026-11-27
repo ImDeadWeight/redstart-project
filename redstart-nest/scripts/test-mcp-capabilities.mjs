@@ -16,6 +16,7 @@
 // =============================================================================
 
 import { registerElectronStub } from './electron-stub-hooks.mjs'
+import { freeBlock } from './lib/free-ports.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -85,7 +86,7 @@ setPluginCapabilityProvider(pluginCapabilities)
 // exercise the providers, not the gate.
 setAuthRequired(false)
 
-const MCP_PORT = 48091
+const MCP_PORT = await freeBlock(3)
 const PG_URL = process.env.REDSTART_TEST_PG_URL || 'postgresql://postgres:postgres@127.0.0.1:5432/postgres'
 
 // ---------------------------------------------------------------------------

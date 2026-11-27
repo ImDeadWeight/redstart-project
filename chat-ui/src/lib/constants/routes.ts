@@ -33,6 +33,8 @@ export const ROUTES = {
 	PROFILE: '#/profile',
 	/** Workflows — full page, reached from the sidebar next to New chat. */
 	WORKFLOWS: '#/workflows',
+	/** My tasks — given to me or my groups, across projects (tasks plan Phase 1). */
+	ASSIGNMENTS: '#/tasks',
 	/** Projects — the list; one project is RouterService.project(id). */
 	PROJECTS: '#/projects',
 	/** Artifacts — the gallery; one artifact is RouterService.artifact(id). */

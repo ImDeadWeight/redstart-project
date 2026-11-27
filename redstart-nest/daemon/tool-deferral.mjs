@@ -25,7 +25,9 @@
 // =============================================================================
 
 /** Built-in capabilities whose tools are catalog-only unless an admin says otherwise. */
-export const DEFERRED_BY_DEFAULT = Object.freeze(['file_system', 'git', 'sqlite', 'postgres', 'vault', 'scholar'])
+// assignments: tasks come up in a few chats, and a small model offered them in
+// every one was expected to file its own plan steps there (tasks plan Phase 2).
+export const DEFERRED_BY_DEFAULT = Object.freeze(['file_system', 'git', 'sqlite', 'postgres', 'vault', 'scholar', 'assignments'])
 
 /**
  * The capability ids that are deferred, sorted.

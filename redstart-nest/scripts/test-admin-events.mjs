@@ -16,6 +16,7 @@
 // =============================================================================
 
 import { registerElectronStub } from './electron-stub-hooks.mjs'
+import { freeBlock } from './lib/free-ports.mjs'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -31,7 +32,7 @@ const { createOwner, createAccount, login, CONTROL_PLANE } = await import('../da
 const { publish } = await import('../daemon/event-broker.mjs')
 const { initProcessLog, appendLine: appendProcessLine } = await import('../daemon/process-log.mjs')
 
-const PORT = 48386
+const PORT = await freeBlock(3)
 const admin = `http://127.0.0.1:${PORT}`
 
 const results = []

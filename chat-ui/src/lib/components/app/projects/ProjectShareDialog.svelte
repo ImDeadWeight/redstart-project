@@ -23,14 +23,35 @@
 		type ProjectMember
 	} from '$lib/services/project.service';
 
+	/** What can be shared: a project, or a program (tasks plan Phase 4). */
+	type Shareable = Pick<Project, 'id' | 'name' | 'ownerKey' | 'ownerName' | 'members'>;
+
 	interface Props {
 		open: boolean;
-		project: Project;
-		/** Called with the updated project after a save or a hand-over. */
-		onChanged: (project: Project) => void;
+		project: Shareable;
+		/** Called with the updated record after a save or a hand-over. */
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		onChanged: (updated: any) => void;
+		/** Saves the members; a project's by default. */
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		saveMembers?: (id: string, members: ProjectMember[]) => Promise<any>;
+		/** What sharing gives, under the title; a project's by default. */
+		description?: string;
+		/** What each role may do, under the list; a project's by default. */
+		rolesNote?: string;
+		/** Offer "Hand this to someone else" (projects only). */
+		allowHandOver?: boolean;
 	}
 
-	let { open = $bindable(), project, onChanged }: Props = $props();
+	let {
+		open = $bindable(),
+		project,
+		onChanged,
+		saveMembers = (id, members) => ProjectService.setMembers(id, members),
+		description = "Everyone here shares the project's instructions, memory and files. Each person's chats stay their own.",
+		rolesNote = 'Viewers open it, chat in it and read everything in it. Editors can also change its instructions, memory and files.',
+		allowHandOver = true
+	}: Props = $props();
 
 	let directory = $state<Directory | null>(null);
 	let members = $state<ProjectMember[]>([]);
@@ -90,7 +111,7 @@
 		saving = true;
 		error = '';
 		try {
-			const updated = await ProjectService.setMembers(project.id, members);
+			const updated = await saveMembers(project.id, members);
 			onChanged(updated);
 			toast.success('Sharing saved');
 			open = false;
@@ -124,10 +145,7 @@
 	<Dialog.Content class="max-w-lg">
 		<Dialog.Header>
 			<Dialog.Title>Share "{project.name}"</Dialog.Title>
-			<Dialog.Description>
-				Everyone here shares the project's instructions, memory and files. Each person's chats stay
-				their own.
-			</Dialog.Description>
+			<Dialog.Description>{description}</Dialog.Description>
 		</Dialog.Header>
 
 		<div class="space-y-4">
@@ -207,51 +225,52 @@
 				{/each}
 			</ul>
 			<p class="text-xs text-muted-foreground">
-				Viewers open it, chat in it and read everything in it. Editors can also change its
-				instructions, memory and files.
+				{rolesNote}
 			</p>
 
 			<!-- Hand over -->
-			<details class="rounded-md border px-3 py-2 text-sm">
-				<summary class="cursor-pointer">Hand this project to someone else</summary>
-				<div class="mt-2 flex flex-wrap items-center gap-2">
-					<select
-						bind:value={newOwnerId}
-						aria-label="New owner"
-						class="min-w-40 flex-1 rounded-md border border-input bg-background px-2 py-1 text-sm"
-					>
-						<option value="">Choose a person…</option>
-						{#each (directory?.accounts ?? []).filter((a) => a.id !== project.ownerKey) as a (a.id)}
-							<option value={a.id}>{a.username}</option>
-						{/each}
-					</select>
-					{#if confirmHandOver}
-						<Button
-							size="sm"
-							variant="destructive"
-							onclick={handOver}
-							disabled={saving || !newOwnerId}
+			{#if allowHandOver}
+				<details class="rounded-md border px-3 py-2 text-sm">
+					<summary class="cursor-pointer">Hand this project to someone else</summary>
+					<div class="mt-2 flex flex-wrap items-center gap-2">
+						<select
+							bind:value={newOwnerId}
+							aria-label="New owner"
+							class="min-w-40 flex-1 rounded-md border border-input bg-background px-2 py-1 text-sm"
 						>
-							Hand it over
-						</Button>
-						<Button size="sm" variant="ghost" onclick={() => (confirmHandOver = false)}
-							>Cancel</Button
-						>
-					{:else}
-						<Button
-							size="sm"
-							variant="outline"
-							onclick={() => (confirmHandOver = true)}
-							disabled={!newOwnerId}
-						>
-							Hand over…
-						</Button>
-					{/if}
-				</div>
-				<p class="mt-1.5 text-xs text-muted-foreground">
-					They become the owner. {project.ownerName ?? 'The current owner'} stays on as an editor.
-				</p>
-			</details>
+							<option value="">Choose a person…</option>
+							{#each (directory?.accounts ?? []).filter((a) => a.id !== project.ownerKey) as a (a.id)}
+								<option value={a.id}>{a.username}</option>
+							{/each}
+						</select>
+						{#if confirmHandOver}
+							<Button
+								size="sm"
+								variant="destructive"
+								onclick={handOver}
+								disabled={saving || !newOwnerId}
+							>
+								Hand it over
+							</Button>
+							<Button size="sm" variant="ghost" onclick={() => (confirmHandOver = false)}
+								>Cancel</Button
+							>
+						{:else}
+							<Button
+								size="sm"
+								variant="outline"
+								onclick={() => (confirmHandOver = true)}
+								disabled={!newOwnerId}
+							>
+								Hand over…
+							</Button>
+						{/if}
+					</div>
+					<p class="mt-1.5 text-xs text-muted-foreground">
+						They become the owner. {project.ownerName ?? 'The current owner'} stays on as an editor.
+					</p>
+				</details>
+			{/if}
 
 			{#if error}<p class="text-sm text-destructive">{error}</p>{/if}
 		</div>

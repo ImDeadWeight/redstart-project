@@ -60,6 +60,7 @@ This is an honest work-in-progress. The project started as a personal home tool 
 - [x] Three-tier accounts with login gate — Owner/Admin/User, session tokens, `rst_` API keys; on by default, localhost bypass removed
 - [x] Roles and groups (2026-11-24) — roles add up, several per account, given directly or through groups; one People & access page for users, groups, roles and every project; the old tiers migrated with everyone's access kept
 - [x] Shared projects (2026-11-24) — viewers and editors (people or groups), shared memory and files, private chats, ownership hand-over, admins manage every project
+- [x] Tasks (2026-11-26) — the assistant can list, add and update them (Tasks capability, asks first; 2026-11-27); comments, and a daily reminder of what is due (2026-11-27); tasks given to the assistant run as background jobs and come back to a person (2026-11-27); programs group projects on one page and give no access of their own (2026-11-27); give a task to a person or a group, in a project or none; My tasks with an open count in the sidebar; a project's tasks on its page; group tasks are claimed and handed back; history on every task; nothing lost when people, groups or projects are deleted
 - [x] Per-account file storage — structurally enforced across the MCP tools, download endpoint and file explorer alike
 - [x] File explorer — Profile → Files: navigate, preview, download, rename, drag-to-move, upload
 - [x] Recoverable deletion — the one destructive-class tool, off by default, deletes to the recycle bin, and always prompts
@@ -76,7 +77,7 @@ This is an honest work-in-progress. The project started as a personal home tool 
 - [x] **One agent loop for every host** — the browser, the benchmark and the daemon run the same core (`shared/agent-core/`), so behaviour measured on the bench is the behaviour users get
 - [x] **Asking and planning** — `ask_user` (up to four questions as one card) and `update_plan` (a checklist the chat shows)
 - [x] **Approvals enforced by the server** — writes and deletes wait for the user's decision on every client, with standing grants per account (never for deletion) and a decision log in the launcher's Activity page
-- [x] **Background tasks** — `/task` runs a request in the daemon with no browser attached; it survives a restart and waits in the chat for answers and approvals
+- [x] **Background tasks** (shown as "background jobs") — `/task` or `/job` runs a request in the daemon with no browser attached; it survives a restart and waits in the chat for answers and approvals
 - [x] **Memory that learns from the work** — facts, guidance and dated state; an automatic review that must quote the user and cannot be steered by a page or a file; full Undo
 - [x] **Agent and memory benchmarks** — `scripts/agent-bench/` and `scripts/memory-bench/`, run against a real model, with the results recorded per model
 

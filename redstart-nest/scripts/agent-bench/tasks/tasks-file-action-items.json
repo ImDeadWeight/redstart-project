@@ -1,0 +1,12 @@
+{
+  "id": "tasks-file-action-items",
+  "group": "tasks",
+  "phase": 0,
+  "prompt": "Notes from today's case meeting: Sam is going to call the school about the attendance letter. I need to book an interpreter for Tuesday's visit. Someone has to update the referral form before Friday. Add these action items to my task list, all for me for now.",
+  "fixtures": [],
+  "approve": "all",
+  "requires": ["assignment_create"],
+  "expectTools": ["assignment_create"],
+  "check": "checks/tasks.mjs#filedActionItems",
+  "notes": "Tasks plan Phase 2 (2026-11-27). Passes when the three action items (school, interpreter, referral form) are added in ONE assignment_create call, so the person approves one card, not three. A file or a plan instead of tasks fails. Needs Nest -> Tools -> Tasks on."
+}
