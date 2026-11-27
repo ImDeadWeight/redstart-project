@@ -46,6 +46,7 @@ import { dropSuggestions } from '../memory-review-store.mjs'
 import { detachProject } from '../conversations-storage.mjs'
 import { detachProjectArtifacts } from '../artifacts-storage.mjs'
 import { detachProjectAssignments } from '../assignments-storage.mjs'
+import { removeProjectEverywhere as removeProjectFromPrograms } from '../programs-storage.mjs'
 import { sendJson, readJsonBody } from './http-json.mjs'
 import { logEvent } from '../logger.mjs'
 
@@ -231,6 +232,7 @@ export async function handleProjectRoute(req, res, urlPath, account) {
       const artifactsMovedOut = detachProjectArtifacts(id)
       // Its tasks keep everything but the project (tasks plan D8).
       const tasksMovedOut = detachProjectAssignments(id)
+      removeProjectFromPrograms(id)
       const memoriesDeleted = deleteProjectMemories(account, id)
       dropSuggestions(account, (s) => s.projectId === id)
       logEvent('project', 'deleted', { account: account?.username ?? undefined, chatsMovedOut, artifactsMovedOut, tasksMovedOut, memoriesDeleted })

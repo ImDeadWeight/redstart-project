@@ -11,7 +11,7 @@
 //   GET    /assignments/count       ?today=  { open, overdue } — the sidebar badge
 //   GET    /assignments/created     ?include=done  tasks I made with no project
 //   GET    /assignments/assignees   ?projectId=  who a task can be given to
-//   GET    /assignments             ?projectId= (required) ?include=deleted
+//   GET    /assignments             ?projectId= (or ?programId=) ?include=deleted
 //   POST   /assignments             { title, notes?, projectId?, assignee?, dueDate?, status? }
 //   GET    /assignments/:id         one task, with its history
 //   PATCH  /assignments/:id         any of title, notes, status, dueDate, assignee, projectId
@@ -39,6 +39,7 @@ import {
 } from '../assignments-storage.mjs'
 import { sendJson } from './http-json.mjs'
 import { startAgentOn, handBackUnstarted } from '../assignment-agent.mjs'
+import { readableProgram, visibleProjectIds } from '../programs-storage.mjs'
 import { logEvent } from '../logger.mjs'
 
 const ITEM = /^\/assignments\/([0-9a-f-]{36})$/
@@ -139,8 +140,22 @@ export async function handleAssignmentRoute(req, res, urlPath, account, caller =
     }
     if (urlPath === '/assignments' && req.method === 'GET') {
       const projectId = q.get('projectId')
+      const programId = q.get('programId')
+      // A program's tasks: those of the projects in it the caller can open,
+      // together (tasks plan Phase 4). The program gives no access of its own.
+      if (programId && !projectId) {
+        const program = readableProgram(account, programId)
+        if (!program) { sendJson(res, 404, NOT_FOUND); return true }
+        const items = []
+        for (const pid of visibleProjectIds(account, program)) {
+          const r = listForProject(account, pid, { includeDone: true })
+          if (r.ok) items.push(...r.items)
+        }
+        sendJson(res, 200, { items, limits: ASSIGNMENT_LIMITS })
+        return true
+      }
       if (!projectId) {
-        sendJson(res, 400, { error: { message: 'projectId is required; your own tasks are /assignments/mine', type: 'invalid_request_error' } })
+        sendJson(res, 400, { error: { message: 'projectId (or programId) is required; your own tasks are /assignments/mine', type: 'invalid_request_error' } })
         return true
       }
       const inc = includes(q)

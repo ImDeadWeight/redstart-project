@@ -19,6 +19,7 @@
 import { handOverAccount, removeGroupEverywhere, countOwnedBy } from '../projects-storage.mjs'
 import { handOverArtifacts, removeGroupFromArtifacts, countArtifactsOwnedBy } from '../artifacts-storage.mjs'
 import { handOverAccountAssignments, unassignGroupAssignments } from '../assignments-storage.mjs'
+import { handOverAccountPrograms, removeGroupFromPrograms } from '../programs-storage.mjs'
 import { findById as findAccountRecord } from '../accounts-storage.mjs'
 import { findGroupById } from '../groups-storage.mjs'
 import { authenticate, login, logout, listAccounts, getAuthRequired, createAccount, deleteAccount, resetPassword, regenerateApiKey, regenerateOwnApiKey, hasAdminAccess, canDo, issueClientKey, revokeClientKey, getOwnClientKeys, listRoles, saveRole, deleteRole, assignRole, assignRoles, listGroups, saveGroup, deleteGroup, describeAccess } from '../auth.mjs'
@@ -263,6 +264,7 @@ export async function handleAuthRoute(req, res, urlPath) {
     removeGroupFromArtifacts(groupMatch[1])
     // Its tasks become unassigned and say which group had them (tasks plan D8).
     unassignGroupAssignments(groupMatch[1], groupName)
+    removeGroupFromPrograms(groupMatch[1])
     logPolicy('group.deleted', { group: groupMatch[1], by: actor?.username ?? '(auth off)' })
     policyChanged()
     return sendJson(res, 200, { ok: true })
@@ -306,6 +308,7 @@ export async function handleAuthRoute(req, res, urlPath) {
       // Tasks given to them are unassigned (or go back to their group); the
       // ones they made go with their projects (tasks plan D8).
       const tasks = handOverAccountAssignments(id, username, transferTo)
+      handOverAccountPrograms(id, transferTo)
       if (tasks.unassigned || tasks.handedOver) logEvent('assignment', 'account_handed_over', { unassigned: tasks.unassigned, handedOver: tasks.handedOver })
       return sendJson(res, 200, { ok: true, projectsTransferred: transferred, artifactsTransferred: artifacts.transferred })
     }

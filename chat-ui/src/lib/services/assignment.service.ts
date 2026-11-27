@@ -189,6 +189,11 @@ export class AssignmentService {
 		);
 	}
 
+	/** A program's tasks: those of the projects in it the caller can open (Phase 4). */
+	static async forProgram(programId: string): Promise<{ items: Assignment[] }> {
+		return apiFetch(`/assignments?programId=${enc(programId)}`);
+	}
+
 	static async assignees(projectId: string | null): Promise<AssigneeChoices> {
 		return apiFetch(`/assignments/assignees${projectId ? `?projectId=${enc(projectId)}` : ''}`);
 	}

@@ -38,6 +38,7 @@ import { isTaskRoute, handleTaskRoute } from './gateway/task-routes.mjs'
 import { isWorkflowRoute, handleWorkflowRoute } from './gateway/workflow-routes.mjs'
 import { isProjectRoute, handleProjectRoute } from './gateway/project-routes.mjs'
 import { isAssignmentRoute, handleAssignmentRoute } from './gateway/assignment-routes.mjs'
+import { isProgramRoute, handleProgramRoute } from './gateway/program-routes.mjs'
 import { isArtifactRoute, handleArtifactRoute } from './gateway/artifact-routes.mjs'
 import { setUpstreamPort } from './completion-activity.mjs'
 import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/document-index-routes.mjs'
@@ -544,6 +545,8 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       if (isProjectRoute(urlPath) && await handleProjectRoute(req, res, urlPath, authResult.account ?? null)) return
       // Tasks people give each other (tasks plan Phase 1). Same account rule;
       // with sign-in off they are one shared personal list, as projects are.
+      // Programs: groups of projects, which give no access (tasks plan Phase 4).
+      if (isProgramRoute(urlPath) && await handleProgramRoute(req, res, urlPath, authResult.account ?? null)) return
       if (isAssignmentRoute(urlPath) && await handleAssignmentRoute(req, res, urlPath, authResult.account ?? null, {
         // For a task given to the assistant, which runs as a job of the
         // caller's (assignment-agent.mjs): the same scope /tasks gets.

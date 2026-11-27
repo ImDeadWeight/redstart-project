@@ -266,8 +266,11 @@ assistant's background tasks, a different thing).
 | `POST /assignments/:id/restore` | | the task |
 | `POST /assignments/:id/comments` | `{ text }` | the task with `comments`, `201` |
 | `DELETE /assignments/:id/comments/:cid` | | the task with `comments` |
+| `GET /assignments?programId=` | | `{ items }`: the tasks of the program's projects the caller can open |
 
-- `assignee` is `{ type: "account" | "group", id }` or `null`. `status` is
+**Programs** group projects (`/programs`, `/programs/:id`, `PUT /programs/:id/members`, `PUT /programs/:id/projects { projectIds }`). A program gives no access: its `projects` are only those the caller can already open.
+
+- `assignee` is `{ type: "account" | "group", id }`, `{ type: "agent" }` (the assistant: it starts a background job as the caller; the task carries `agentRun`), or `null`. `status` is
   `open`, `in_progress`, `blocked` or `done`. `dueDate` is a calendar date with
   no time or zone; send `today` from the user's own calendar so "overdue" is
   theirs.
