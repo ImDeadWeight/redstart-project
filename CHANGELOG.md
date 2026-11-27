@@ -4,6 +4,18 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ---
 
+## 2026-11-27
+
+- **The assistant can work with tasks** (tasks plan Phase 2). A new **Tasks** capability, off until an admin turns it on in Tools, gives the model `assignment_list`, `assignment_create` and `assignment_update`.
+  - **Named for the model, not the screen.** People see "tasks"; the model sees "assignment", because "task" is the work in front of it in every prompt, and a small model given `task_create` was expected to file its own plan steps as the team's to-do list. `assignment_create`'s description says it is not for the model's own steps (`update_plan` is). The prompt's plan line now says "when the request has three or more steps" rather than "the task". The `update_plan` description is unchanged: it is frozen in the retrieval benchmark.
+  - **No more than the person could.** Every call goes through `assignments-storage` with the caller's account, so the chat app's rules decide everything; a viewer's chat cannot add to the project. The project comes from the verified conversation, never from an argument.
+  - **Asks first, all at once.** Both writes are write-class and ask, whoever the task is for: approval in Nest is per tool, and putting work on someone's list is not a thing to do unasked. One `assignment_create` call takes up to 20 tasks, so "the action items from these notes" is one approval card. Every item is checked before any is added; one bad name adds nothing.
+  - **Names as people say them.** The assignee is "me", a username or a group name, matched among the people and groups the task could go to; an unknown or ambiguous name is refused with the choices.
+  - **Marked in the history.** A change made this way reads "carol (through the assistant) created this".
+  - **Catalog-only by default**, so the tools cost nothing in chats that never mention tasks.
+  - **Start a chat from a task.** The task panel's "Start a chat" opens a new chat, in the task's project when it has one, with a first message naming the task and its id, for the person to finish and send.
+  - Tests: 6 new cases in `test-assignments.mjs` (32 now: approval rules, batch by name, nothing added on a bad item, a viewer's chat, list and update by id); the task editor in `assignments.svelte.test.ts`. Two agent-bench tasks, `tasks-plan-not-filed` (plan without filing tasks) and `tasks-file-action-items` (three action items in one call), with right and wrong cases in `test-agent-bench-tasks.mjs`. Not yet run against a real model: they need a Nest with Tasks on and a model loaded.
+
 ## 2026-11-26
 
 - **Background work is called a "background job" on screen.** "Tasks" in the sidebar are now the work people give each other (below), so the assistant's own background work reads as a job wherever people see it: the chat's status bar and messages, the launcher's Activity tab, and `/job`, which runs the same command as `/task`. Only the words people read changed. The code, the `/tasks` routes, stored jobs and everything the model is told keep the name "task". Test: `slash-job-command.test.ts`.

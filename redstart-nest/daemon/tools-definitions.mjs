@@ -164,6 +164,12 @@ export const BUILTIN_CAPABILITIES = [
     description: 'Lets the assistant make web pages, interactive prototypes, document mockups and SVGs that open beside the chat, keep every revision, and can be shared like a project. They run in a sandbox on their own origin and cannot load anything from outside. On by default',
   },
   {
+    id: 'assignments',
+    name: 'Tasks',
+    kind: 'capability',
+    description: 'Lets the assistant read and change the tasks people give each other (My tasks, a project\'s tasks): list them, add them, for example the action items from a meeting\'s notes, and update them. It can do only what the person in the chat could, and asks before adding or changing anything',
+  },
+  {
     id: 'scholar',
     name: 'Scholar',
     kind: 'capability',
@@ -203,6 +209,9 @@ export const BUILTIN_CAPABILITY_TOOL_NAMES = {
   image_generation: ['generate_image'],
   memory: ['memory_save', 'memory_search', 'memory_forget'],
   document_search: ['search_documents'],
+  // assignments-tool.mjs: people's tasks, called assignments in code so the
+  // model never meets "task" as a tool name (tasks plan, Naming).
+  assignments: ['assignment_list', 'assignment_create', 'assignment_update'],
   // artifacts-tool.mjs. artifact_check is host-resolved as well (below): it is
   // listed here so a ban on 'artifacts' strips it with the rest.
   artifacts: ['artifact_create', 'artifact_list', 'artifact_read', 'artifact_write', 'artifact_edit', 'artifact_rename', 'artifact_check'],
@@ -459,6 +468,12 @@ export const TOOL_CLASSES = {
   // Document search — reads the caller's own Documents folder and Nest's own
   // index of it; nothing leaves the machine.
   search_documents: 'read',
+  // Tasks people give each other (assignments-tool.mjs). Adding or changing
+  // one puts work on someone's list, so both writes ask, whoever it is for;
+  // a deleted task is restorable, and the model has no delete.
+  assignment_list: 'read',
+  assignment_create: 'write',
+  assignment_update: 'write',
   // Artifacts (artifacts plan §6). The writes change only Nest-held artifact
   // content the caller may edit, always into a draft that becomes a revision
   // the person can roll back; they cannot reach the network, the person's

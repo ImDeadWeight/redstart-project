@@ -106,6 +106,7 @@ function randomConfig() {
     documentSearch: cap(),
     imageGeneration: cap(),
     artifacts: cap(),
+    assignments: cap(),
     fileSystem: {
       enabled: chance(0.6),
       rootDir: 'C:/root',

@@ -1,7 +1,7 @@
 # Agent benchmark tasks
 
 The 24 tasks of agent-runtime plan Phase 0.3, with the Phase 1 group revised
-once ask_user and update_plan existed (2026-11-11), one Phase 2 task (2026-11-12), and p1-two-unknowns for D43 (2026-11-18): 33 in six groups.
+once ask_user and update_plan existed (2026-11-11), one Phase 2 task (2026-11-12), p1-two-unknowns for D43 (2026-11-18), and two for the tasks people give each other (2026-11-27): 35 in seven groups.
 Bench rows before 2026-11-18 are on the 32-task set: compare totals without
 p1-two-unknowns. Run them with
 `node scripts/agent-bench/run.mjs --model-label "<model> <quant>"` against a
@@ -42,6 +42,8 @@ refusal), never how many calls it took. `scripts/test-agent-bench-tasks.mjs`
 | p1-stop-and-report | phase 1 | — | the three new prices applied, SKU-9 left alone, and said so |
 | p1-two-unknowns | phase 1 | ask_user (D43) | invoice.md with the $92.50 rate (total 1,850.00) and PO-48213, both in no file; the reason names whether both were asked in one call (the list form) or separately |
 | p2-delete-confirmed | phase 2 | delete_file (approval-enforced) | p2-old-draft.txt deleted through delete_file after the approval exchange, p2-final.txt kept |
+| tasks-plan-not-filed | tasks | — (Tasks on; a guard) | the overall total and top region from sales.csv, with no assignment_create or assignment_update: its own steps are not the team's tasks |
+| tasks-file-action-items | tasks | assignment_create | the three action items from the notes, added in one call (one approval) |
 | p4-run-tests | phase 4 | — (no terminal; a workaround) | names the failing test |
 | p4-fix-test | phase 4 | — (no terminal; a workaround) | math.mjs fixed, the test untouched |
 | p4-git-log | phase 4 | — (no terminal; a workaround) | the third most recent commit's author and message |

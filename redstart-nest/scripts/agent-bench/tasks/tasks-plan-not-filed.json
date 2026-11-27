@@ -1,0 +1,14 @@
+{
+  "id": "tasks-plan-not-filed",
+  "group": "tasks",
+  "phase": 0,
+  "prompt": "Using sales.csv: first total each region, then add those up, then tell me which region sold the most. Give me the overall total and the top region.",
+  "fixtures": [
+    { "path": "sales.csv", "from": "fixtures/sales.csv" }
+  ],
+  "approve": "all",
+  "requires": ["assignment_create"],
+  "expectTools": ["run_python", "read_document", "update_plan"],
+  "check": "checks/tasks.mjs#plannedWithoutFiling",
+  "notes": "Tasks plan Phase 2 (2026-11-27). Multi-step work with no request for tasks. Fails if the model calls assignment_create or assignment_update: its own steps belong in update_plan (or nowhere), not on the team's task list. Needs Nest -> Tools -> Tasks on; run.mjs warns when assignment_create is not offered."
+}

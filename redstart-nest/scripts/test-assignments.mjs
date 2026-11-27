@@ -36,6 +36,9 @@ const store = await import('../daemon/assignments-storage.mjs')
 const { handleAssignmentRoute, isAssignmentRoute } = await import('../daemon/gateway/assignment-routes.mjs')
 const { handleProjectRoute } = await import('../daemon/gateway/project-routes.mjs')
 const { handleAuthRoute } = await import('../daemon/gateway/auth-routes.mjs')
+const tool = await import('../daemon/assignments-tool.mjs')
+const convs = await import('../daemon/conversations-storage.mjs')
+const { approvalRule, classifyTool } = await import('../daemon/tools-definitions.mjs')
 
 const results = []
 async function test(name, fn) {
@@ -390,6 +393,88 @@ await test('the per-account limit outside projects', async () => {
 await test('a body over 64 KB is refused before it is parsed', async () => {
   const r = await route('POST', '/assignments', ALICE, { title: 'x', notes: 'n'.repeat(70 * 1024) })
   assert(r.status === 400, `status ${r.status}`)
+})
+
+console.log('\n-- the assistant\'s tools (Phase 2) --')
+
+const ON = { assignments: { enabled: true } }
+const call = (name, args, account, conversationId = null) => tool.callTool(name, args, ON, { account, conversationId })
+const text = (r) => r.content.map((c) => c.text).join('\n')
+
+await test('the writes ask first and the list does not; the model never sees "task" as a tool name', () => {
+  assert(classifyTool('assignment_list') === 'read' && approvalRule('assignment_list') === 'none', 'list')
+  for (const n of ['assignment_create', 'assignment_update']) {
+    assert(classifyTool(n) === 'write' && approvalRule(n) === 'prompt', `${n}: ${classifyTool(n)} / ${approvalRule(n)}`)
+  }
+  assert(tool.TOOL_NAMES.every((n) => !/task/.test(n)), tool.TOOL_NAMES.join())
+  const defs = tool.toolDefs(ON)
+  assert(defs.find((d) => d.name === 'assignment_create').description.includes('update_plan'), 'create does not point at update_plan')
+  assert(tool.toolDefs({ assignments: { enabled: false } }).length === 0, 'served while off')
+})
+
+await test('a disabled capability refuses, and other tools are not claimed', async () => {
+  const off = await tool.callTool('assignment_list', {}, { assignments: { enabled: false } }, { account: CAROL })
+  assert(off.isError && /not enabled/.test(text(off)), JSON.stringify(off))
+  assert((await tool.callTool('memory_save', {}, ON, { account: CAROL })) === null, 'claimed another tool')
+})
+
+await test('action items in one call: by name, into the chat\'s project, marked as the assistant\'s', async () => {
+  convs.createConversation(CAROL.id, { id: 'carol-casework', name: 'notes', projectId: project.id, messages: [] })
+  const r = await call('assignment_create', { items: [
+    { title: 'Call the school', assignee: 'bob', due: '2027-02-01' },
+    { title: 'Find a translator', assignee: 'Intake' },
+    { title: 'Write it up', assignee: 'me', notes: 'Use the new template' },
+  ] }, CAROL, 'carol-casework')
+  assert(!r.isError, text(r))
+  assert(/Added 3 tasks in the project "Casework"/.test(text(r)), text(r))
+  const listed = store.listForProject(CAROL, project.id).items.filter((t) => ['Call the school', 'Find a translator', 'Write it up'].includes(t.title))
+  assert(listed.length === 3, `${listed.length} in the project`)
+  const call1 = listed.find((t) => t.title === 'Call the school')
+  assert(call1.assignee.id === BOB.id && call1.dueDate === '2027-02-01', JSON.stringify(call1))
+  assert(listed.find((t) => t.title === 'Find a translator').assignee.type === 'group', 'group by name')
+  const h = store.getAssignment(CAROL, call1.id).item.history
+  assert(h.every((e) => e.via === 'assistant' && e.byName === 'carol'), JSON.stringify(h))
+})
+
+await test('🔍 one bad item adds nothing: an unknown name, an outsider, a bad date', async () => {
+  const before = store.listForProject(CAROL, project.id).items.length
+  for (const [bad, why] of [[{ title: 'x', assignee: 'nobody-here' }, /No person or group named/], [{ title: 'x', assignee: 'dave' }, /No person or group named "dave" in this project/], [{ title: 'x', due: 'next week' }, /not a date/]]) {
+    const r = await call('assignment_create', { items: [{ title: 'fine' }, bad] }, CAROL, 'carol-casework')
+    assert(r.isError && why.test(text(r)) && /Nothing added: item 2/.test(text(r)), text(r))
+  }
+  assert(store.listForProject(CAROL, project.id).items.length === before, 'something was added')
+  const many = await call('assignment_create', { items: Array.from({ length: tool.MAX_CREATE + 1 }, (_, i) => ({ title: `t${i}` })) }, CAROL)
+  assert(many.isError && /at most/.test(text(many)), text(many))
+})
+
+await test('🔍 the model can do no more than the person: a viewer\'s chat cannot add to the project', async () => {
+  convs.createConversation(BOB.id, { id: 'bob-casework', name: 'mine', projectId: project.id, messages: [] })
+  const r = await call('assignment_create', { items: [{ title: 'sneaky' }] }, BOB, 'bob-casework')
+  assert(r.isError && /view this project but not add/.test(text(r)), text(r))
+  const outside = await call('assignment_create', { items: [{ title: 'my own note' }], in_project: false }, BOB, 'bob-casework')
+  assert(!outside.isError && !/in the project/.test(text(outside)), text(outside))
+})
+
+await test('list: mine, the project\'s, overdue and search; update by id', async () => {
+  const mine = text(await call('assignment_list', {}, BOB))
+  assert(mine.includes('Call the school') && /id [0-9a-f-]{36}/.test(mine), mine)
+  const inProject = text(await call('assignment_list', { which: 'project' }, CAROL, 'carol-casework'))
+  assert(inProject.includes('Write it up') && inProject.includes('Use the new template'), inProject)
+  const noProject = await call('assignment_list', { which: 'project' }, CAROL)
+  assert(noProject.isError, 'project list outside a project chat')
+  const found = text(await call('assignment_list', { which: 'project', search: 'translator' }, CAROL, 'carol-casework'))
+  assert(found.includes('Find a translator') && !found.includes('Call the school'), found)
+  const id = /Call the school · id ([0-9a-f-]{36})/.exec(mine)[1]
+  const done = await call('assignment_update', { id, status: 'done' }, BOB)
+  assert(!done.isError && /done/.test(text(done)), text(done))
+  const renamed = await call('assignment_update', { id, title: 'renamed by a viewer' }, BOB)
+  assert(renamed.isError && /cannot change/.test(text(renamed)), text(renamed))
+  const moved = await call('assignment_update', { id, due: 'none', assignee: 'me' }, CAROL)
+  assert(!moved.isError, text(moved))
+  const t = store.getAssignment(CAROL, id).item
+  assert(t.dueDate === null && t.assignee.id === CAROL.id && t.history.at(-1).via === 'assistant', JSON.stringify(t.history.at(-1)))
+  assert((await call('assignment_update', { id: 'nope', status: 'done' }, CAROL)).isError, 'unknown id')
+  assert((await call('assignment_update', { id, status: 'done' }, DAVE)).isError, 'an outsider changed it')
 })
 
 console.log('\n-- sign-in off --')

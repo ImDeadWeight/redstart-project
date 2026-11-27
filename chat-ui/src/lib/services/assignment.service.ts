@@ -60,6 +60,8 @@ export interface AssignmentHistoryEntry {
 	toName?: string | null;
 	fields?: string[];
 	reason?: string;
+	/** Set when the assistant made the change in this person's chat (Phase 2). */
+	via?: 'assistant';
 }
 
 export interface Assignment {

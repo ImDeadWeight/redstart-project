@@ -6,7 +6,8 @@
 	 * so a viewer finishing their own task never trips over a field they
 	 * cannot touch.
 	 */
-	import { Loader, Trash2, RotateCcw, Hand, Undo2 } from '@lucide/svelte';
+	import { Loader, Trash2, RotateCcw, Hand, Undo2, MessageSquare } from '@lucide/svelte';
+	import { goto } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { Button } from '$lib/components/ui/button';
@@ -26,6 +27,9 @@
 	import { projectsStore } from '$lib/stores/projects.svelte';
 	import { assignmentsStore } from '$lib/stores/assignments.svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { ROUTES } from '$lib/constants/routes';
+	import { RouterService } from '$lib/services/router.service';
 
 	interface Props {
 		open: boolean;
@@ -202,8 +206,27 @@
 		}
 	}
 
+	/**
+	 * A new chat about this task, in its project when it has one, with a first
+	 * message the person can edit before sending. The id is in it so the
+	 * assistant can find the task (assignment_list, assignment_update) when
+	 * Tasks is on; the chat itself stays private, as every chat is.
+	 */
+	function startChat() {
+		if (!task) return;
+		const due = task.dueDate ? `, due ${task.dueDate}` : '';
+		chatStore.savePendingDraft(
+			`About the task "${task.title}" (assignment ${task.id}${due}): `,
+			[]
+		);
+		open = false;
+		void goto(task.projectId ? RouterService.newChatInProject(task.projectId) : ROUTES.NEW_CHAT);
+	}
+
 	function describe(h: AssignmentHistoryEntry): string {
-		const who = h.byName ?? (h.by ? 'A removed account' : 'Redstart');
+		const person = h.byName ?? (h.by ? 'A removed account' : 'Redstart');
+		// Changes the assistant made in someone's chat (tasks plan Phase 2).
+		const who = h.via === 'assistant' ? `${person} (through the assistant)` : person;
 		switch (h.action) {
 			case 'created':
 				return `${who} created this`;
@@ -385,6 +408,11 @@
 								act(() => AssignmentService.release(task!.id), 'Handed back to the group')}
 						>
 							<Undo2 class="h-3 w-3" /> Hand back
+						</Button>
+					{/if}
+					{#if task && !deleted}
+						<Button size="sm" variant="ghost" disabled={saving} onclick={startChat}>
+							<MessageSquare class="h-3 w-3" /> Start a chat
 						</Button>
 					{/if}
 					<div class="flex-1"></div>

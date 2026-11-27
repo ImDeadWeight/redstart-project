@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import MyAssignmentsPage from '$lib/components/app/assignments/MyAssignmentsPage.svelte';
 import ProjectAssignments from '$lib/components/app/assignments/ProjectAssignments.svelte';
+import AssignmentEditor from '$lib/components/app/assignments/AssignmentEditor.svelte';
 import { localToday } from '$lib/services/assignment.service';
 import { setOverride, jsonResponse } from './mock-overrides';
 
@@ -178,5 +179,30 @@ describe("A project's tasks", () => {
 		const screen = await render(ProjectAssignments, { projectId: 'p1', canAdd: true });
 		await expect.element(screen.getByText('left the project')).toBeInTheDocument();
 		await expect.element(screen.getByText('Unassigned (was Intake)')).toBeInTheDocument();
+	});
+});
+
+describe('The task editor', () => {
+	it('marks what the assistant changed, and offers a chat about the task', async () => {
+		setOverride('/assignments/count', () => jsonResponse({ open: 0, overdue: 0 }));
+		setOverride('/assignments/assignees', () => jsonResponse({ accounts: [], groups: [] }));
+		setOverride('/assignments/h1', () =>
+			jsonResponse(
+				task({
+					id: 'h1',
+					title: 'Call the school',
+					history: [
+						{ at: 1, by: 'carol', byName: 'carol', action: 'created', via: 'assistant' },
+						{ at: 2, by: 'bob', byName: 'bob', action: 'status', from: 'open', to: 'done' }
+					]
+				})
+			)
+		);
+		const screen = await render(AssignmentEditor, { open: true, taskId: 'h1' });
+		await expect
+			.element(screen.getByText('carol (through the assistant) created this'))
+			.toBeInTheDocument();
+		await expect.element(screen.getByText('bob moved it from To do to Done')).toBeInTheDocument();
+		await expect.element(screen.getByRole('button', { name: /Start a chat/ })).toBeInTheDocument();
 	});
 });

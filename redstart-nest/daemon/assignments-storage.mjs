@@ -305,6 +305,14 @@ function view(item, account, { project = undefined, withHistory = false } = {}) 
   return out
 }
 
+/**
+ * History entries made by the assistant on someone's behalf say so
+ * (`via: 'assistant'`, tasks plan Phase 2); the person is still `by`.
+ */
+function viaOf(via) {
+  return via === 'assistant' ? { via: 'assistant' } : {}
+}
+
 function addHistory(item, entry) {
   item.history = [...(item.history || []), entry].slice(-MAX_HISTORY)
 }
@@ -414,7 +422,7 @@ export function getAssignment(account, id, { now = Date.now() } = {}) {
 }
 
 /** @returns {{ ok: true, item: object } | { ok: false, error: string, code?: string }} */
-export function createAssignment(account, body, { now = Date.now() } = {}) {
+export function createAssignment(account, body, { now = Date.now(), via = null } = {}) {
   const key = ownerKeyOf(account)
   if (key === null) return { ok: false, error: 'sign in to create tasks', code: 'forbidden' }
   const v = validateAssignment(body)
@@ -462,8 +470,8 @@ export function createAssignment(account, body, { now = Date.now() } = {}) {
     deletedAt: null,
     history: [],
   }
-  addHistory(item, { at: now, by: key, action: 'created' })
-  if (item.assignee) addHistory(item, { at: now, by: key, action: 'assigned', from: null, to: item.assignee })
+  addHistory(item, { at: now, by: key, ...viaOf(via), action: 'created' })
+  if (item.assignee) addHistory(item, { at: now, by: key, ...viaOf(via), action: 'assigned', from: null, to: item.assignee })
   data.items.push(item)
   save(file, data)
   return { ok: true, item: view(item, account, { project: projectId ? project : undefined, withHistory: true }) }
@@ -473,7 +481,7 @@ export function createAssignment(account, body, { now = Date.now() } = {}) {
  * Change some fields. Each is checked against what the caller may do, and one
  * they may not change refuses the whole request: nothing is half-applied.
  */
-export function updateAssignment(account, id, body, { now = Date.now() } = {}) {
+export function updateAssignment(account, id, body, { now = Date.now(), via = null } = {}) {
   const v = validateAssignment(body, { partial: true })
   if (!v.ok) return v
   const found = locate(id, now)
@@ -524,24 +532,24 @@ export function updateAssignment(account, id, body, { now = Date.now() } = {}) {
   for (const k of ['title', 'notes', 'dueDate']) {
     if (k in f && f[k] !== before[k]) { item[k] = f[k]; changed.push(k) }
   }
-  if (changed.length) addHistory(item, { at: now, by: key, action: 'edited', fields: changed })
+  if (changed.length) addHistory(item, { at: now, by: key, ...viaOf(via), action: 'edited', fields: changed })
 
   if ('status' in f && f.status !== before.status) {
     item.status = f.status
     item.completedAt = f.status === 'done' ? now : null
-    addHistory(item, { at: now, by: key, action: 'status', from: before.status, to: f.status })
+    addHistory(item, { at: now, by: key, ...viaOf(via), action: 'status', from: before.status, to: f.status })
   }
 
   if ('assignee' in f && !sameAssignee(f.assignee, before.assignee)) {
     item.assignee = f.assignee
     item.claimedFrom = null
     item.formerAssignee = null
-    addHistory(item, { at: now, by: key, action: 'assigned', from: before.assignee, to: f.assignee })
+    addHistory(item, { at: now, by: key, ...viaOf(via), action: 'assigned', from: before.assignee, to: f.assignee })
   }
 
   if (moving) {
     item.projectId = targetProjectId
-    addHistory(item, { at: now, by: key, action: 'moved', from: before.projectId, to: targetProjectId })
+    addHistory(item, { at: now, by: key, ...viaOf(via), action: 'moved', from: before.projectId, to: targetProjectId })
   }
 
   const touched = changed.length || item.status !== before.status || !sameAssignee(item.assignee, before.assignee) || moving

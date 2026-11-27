@@ -37,6 +37,7 @@ import * as memoryTool from './memory-tool.mjs'
 import * as documentSearchTool from './document-search-tool.mjs'
 import * as skillsTool from './skills-tool.mjs'
 import * as artifactsTool from './artifacts-tool.mjs'
+import * as assignmentsTool from './assignments-tool.mjs'
 import { mcpAppOrigin } from './artifact-session-origin.mjs'
 import { getConversation } from './conversations-storage.mjs'
 import { canWrite, getProject, isProjectId } from './projects-storage.mjs'
@@ -75,7 +76,7 @@ import { unknownToolText } from '../../shared/agent-core/teaching.mjs'
 // searchToolsProvider is LAST, and deliberately: it is the only provider whose
 // job is to describe the others, so it must never shadow one of them on a name
 // collision, and its own tool must never appear in the catalog it searches.
-const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, imageGenTool, memoryTool, documentSearchTool, skillsTool, artifactsTool, interactionTools, searchToolsProvider]
+const BUILTIN_PROVIDERS = [webFetchTool, postgresTool, documentsTool, sqliteTool, vaultTool, gitTool, filesystemProvider, fsDeleteTool, scholarTool, pythonTool, imageGenTool, memoryTool, documentSearchTool, skillsTool, artifactsTool, assignmentsTool, interactionTools, searchToolsProvider]
 
 // Resolved per call, never captured in a const: a plugin installed or removed
 // while Nest is running must take effect without a restart. Built-ins come

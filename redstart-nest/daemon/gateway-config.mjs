@@ -109,6 +109,7 @@ export function buildGatewayConfig(llamaConfig) {
       memory: { enabled: false },
       documentSearch: { enabled: false },
       artifacts: { enabled: false },
+      assignments: { enabled: false },
       ...Object.fromEntries(listPlugins().map((p) => [p.id, { enabled: false, isPlugin: true }])),
     }
   }
@@ -259,6 +260,11 @@ export function buildGatewayConfig(llamaConfig) {
     // the profile. Bans and roles narrow it like any capability.
     artifacts: {
       enabled: toolSettings.artifactsEnabled !== false,
+    },
+    // Tasks people give each other (tasks plan Phase 2). Off until an admin
+    // turns it on, like memory; the tasks themselves work without it.
+    assignments: {
+      enabled: toolIdSet.has('assignments'),
     },
     memory: {
       enabled: toolIdSet.has('memory'),
