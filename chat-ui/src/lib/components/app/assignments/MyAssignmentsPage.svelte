@@ -14,6 +14,32 @@
 	import { authStore } from '$lib/stores/auth.svelte';
 	import AssignmentRow from './AssignmentRow.svelte';
 	import AssignmentEditor from './AssignmentEditor.svelte';
+	import { onMount } from 'svelte';
+
+	// "New" (tasks plan Phase 3): came to you since you last left this page.
+	// Remembered per browser: a convenience, so a cleared storage just means
+	// nothing is marked new on the next visit.
+	const SEEN_KEY = 'redstart.myTasks.seenAt';
+	function readSeen(): number {
+		try {
+			return Number(localStorage.getItem(SEEN_KEY)) || 0;
+		} catch {
+			return 0;
+		}
+	}
+	// The snapshot this visit compares against; the new time is written on leaving,
+	// so what was new stays marked while you look at it.
+	const seenAt = readSeen();
+	onMount(() => {
+		const openedAt = Date.now();
+		return () => {
+			try {
+				localStorage.setItem(SEEN_KEY, String(openedAt));
+			} catch {
+				/* storage blocked: nothing is marked new next time */
+			}
+		};
+	});
 
 	type Filter = 'mine' | 'groups' | 'created';
 
@@ -31,6 +57,12 @@
 
 	const signedIn = $derived(!!authStore.user);
 	const myId = $derived(authStore.user?.id ?? null);
+
+	/** A first visit marks nothing; a task you made for yourself is never new. */
+	function isNew(t: Assignment): boolean {
+		if (!seenAt || (t.assignedAt ?? 0) <= seenAt) return false;
+		return !(t.createdBy === myId && t.assignee?.type === 'account' && t.assignee.id === myId);
+	}
 
 	// "Assigned to me" is mine plus nothing-yet-taken group tasks only when
 	// "My groups" is not its own filter: with sign-in off it is every task.
@@ -218,7 +250,13 @@
 					</h2>
 					<ul class="divide-y rounded-lg border">
 						{#each s.items as task (task.id)}
-							<AssignmentRow {task} hideOwnAssignee onOpen={openTask} onToggleDone={toggleDone} />
+							<AssignmentRow
+								{task}
+								hideOwnAssignee
+								isNew={isNew(task)}
+								onOpen={openTask}
+								onToggleDone={toggleDone}
+							/>
 						{/each}
 					</ul>
 				</section>
@@ -236,7 +274,13 @@
 				<h2 class="text-xs font-medium text-muted-foreground">Done · {doneItems.length}</h2>
 				<ul class="divide-y rounded-lg border">
 					{#each doneItems as task (task.id)}
-						<AssignmentRow {task} hideOwnAssignee onOpen={openTask} onToggleDone={toggleDone} />
+						<AssignmentRow
+							{task}
+							hideOwnAssignee
+							isNew={isNew(task)}
+							onOpen={openTask}
+							onToggleDone={toggleDone}
+						/>
 					{/each}
 				</ul>
 			</section>

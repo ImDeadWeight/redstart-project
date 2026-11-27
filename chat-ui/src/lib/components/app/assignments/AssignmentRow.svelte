@@ -4,7 +4,14 @@
 	 * title, and what it is about — project, who has it, when it is due. The
 	 * whole row opens the editor. Nest's `can` decides whether the box works.
 	 */
-	import { CalendarDays, FolderKanban, User, Users, AlertTriangle } from '@lucide/svelte';
+	import {
+		CalendarDays,
+		FolderKanban,
+		User,
+		Users,
+		AlertTriangle,
+		MessageSquare
+	} from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import {
@@ -22,6 +29,8 @@
 		hideOwnAssignee?: boolean;
 		/** Hide the status word (the list is already grouped by status). */
 		hideStatus?: boolean;
+		/** Came to the viewer since they last looked (My tasks, Phase 3). */
+		isNew?: boolean;
 		onOpen: (task: Assignment) => void;
 		onToggleDone: (task: Assignment, done: boolean) => void;
 	}
@@ -31,6 +40,7 @@
 		hideProject = false,
 		hideOwnAssignee = false,
 		hideStatus = false,
+		isNew = false,
 		onOpen,
 		onToggleDone
 	}: Props = $props();
@@ -66,7 +76,15 @@
 		/>
 	</div>
 	<button class="min-w-0 flex-1 text-left" onclick={() => onOpen(task)}>
-		<div class="truncate {done ? 'text-muted-foreground line-through' : ''}">{task.title}</div>
+		<div class="flex items-center gap-2">
+			<span class="truncate {done ? 'text-muted-foreground line-through' : ''}">{task.title}</span>
+			{#if isNew && !done}
+				<span
+					class="shrink-0 rounded-full bg-primary/15 px-1.5 text-[10px] font-medium text-primary"
+					>New</span
+				>
+			{/if}
+		</div>
 		<div class="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
 			{#if !hideStatus && (task.status === 'in_progress' || task.status === 'blocked')}
 				<span class={task.status === 'blocked' ? 'text-destructive' : ''}
@@ -97,6 +115,11 @@
 				<span class="flex items-center gap-1 {overdue ? 'font-medium text-destructive' : ''}">
 					<CalendarDays class="h-3 w-3" />{formatDue(task.dueDate)}
 				</span>
+			{/if}
+			{#if task.commentCount}
+				<span class="flex items-center gap-1" title="{task.commentCount} comments"
+					><MessageSquare class="h-3 w-3" />{task.commentCount}</span
+				>
 			{/if}
 		</div>
 	</button>

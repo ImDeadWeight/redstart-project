@@ -63,6 +63,9 @@ export const MAX_NOTES_CHARS = 8000
 export const MAX_ITEMS_PER_PROJECT = 2000
 export const MAX_DIRECT_PER_ACCOUNT = 500
 export const MAX_HISTORY = 100
+/** Comments kept per task (the newest), and the length of one (tasks plan Phase 3). */
+export const MAX_COMMENTS = 200
+export const MAX_COMMENT_CHARS = 4000
 export const PURGE_AFTER_MS = 30 * 24 * 60 * 60 * 1000
 export const STATUSES = Object.freeze(['open', 'in_progress', 'blocked', 'done'])
 /** Written into the plan for later phases; refused until then. */
@@ -288,20 +291,43 @@ function historyView(h) {
   return out
 }
 
+/**
+ * When the task last came to whoever has it now: the newest assign, claim
+ * or hand-back in its history, else when it was made. A client marks a task
+ * "new" from this (tasks plan Phase 3).
+ */
+function assignedAtOf(item) {
+  const h = item.history || []
+  for (let i = h.length - 1; i >= 0; i--) {
+    if (['assigned', 'claimed', 'released', 'unassigned'].includes(h[i].action)) return h[i].at
+  }
+  return item.createdAt
+}
+
+function commentView(c, account, canEdit) {
+  const key = ownerKeyOf(account)
+  return { ...c, byName: accountName(c.by), canDelete: canEdit || (key !== null && c.by === key) }
+}
+
 function view(item, account, { project = undefined, withHistory = false } = {}) {
   const p = item.projectId ? (project === undefined ? findProjectById(item.projectId) : project) : null
   const can = accessOf(item, account, item.projectId ? p : undefined)
-  const { history, ...rest } = item
+  const { history, comments, ...rest } = item
   const out = {
     ...rest,
+    commentCount: (comments || []).length,
+    assignedAt: assignedAtOf(item),
     assigneeName: assigneeName(item.assignee),
     claimedFromName: item.claimedFrom ? (findGroupById(item.claimedFrom)?.name ?? null) : null,
     createdByName: accountName(item.createdBy),
     projectName: p?.name ?? null,
     assigneeLeft: assigneeLeft(item, p),
-    can: { edit: can.edit, status: can.status, assign: can.assign, claim: can.claim, release: can.release, delete: can.delete, move: can.move },
+    can: { edit: can.edit, status: can.status, assign: can.assign, claim: can.claim, release: can.release, delete: can.delete, move: can.move, comment: can.see },
   }
-  if (withHistory) out.history = (history || []).map(historyView)
+  if (withHistory) {
+    out.history = (history || []).map(historyView)
+    out.comments = (comments || []).map((c) => commentView(c, account, can.edit))
+  }
   return out
 }
 
@@ -320,7 +346,12 @@ function addHistory(item, entry) {
 /** The parts of a list a client shows as counts. `today` is the caller's date. */
 function countsOf(items, today) {
   const open = items.filter((t) => t.status !== 'done')
-  return { open: open.length, overdue: open.filter((t) => t.dueDate && today && t.dueDate < today).length }
+  return {
+    open: open.length,
+    overdue: open.filter((t) => t.dueDate && today && t.dueDate < today).length,
+    // For the once-a-day reminder (tasks plan Phase 3).
+    dueToday: open.filter((t) => t.dueDate && today && t.dueDate === today).length,
+  }
 }
 
 /** Today's date where the server is, for a caller that sent none. */
@@ -345,7 +376,7 @@ const sortForList = (a, b) =>
  * one personal list, shared by every auth-off caller as projects are.
  */
 export function listMine(account, { includeDone = false, today = null, now = Date.now() } = {}) {
-  if (ownerKeyOf(account) === null) return { items: [], counts: { open: 0, overdue: 0 } }
+  if (ownerKeyOf(account) === null) return { items: [], counts: { open: 0, overdue: 0, dueToday: 0 } }
   const myGroups = new Set(account ? groupsForAccount(account.id).map((g) => g.id) : [])
   const out = []
   for (const f of allFiles(now)) {
@@ -641,6 +672,40 @@ export function restoreAssignment(account, id, { now = Date.now() } = {}) {
   found.item.deletedAt = null
   found.item.updatedAt = now
   addHistory(found.item, { at: now, by: ownerKeyOf(account), action: 'restored' })
+  save(found.file, found.data)
+  return { ok: true, item: view(found.item, account, { withHistory: true }) }
+}
+
+// ---------------------------------------------------------------------------
+// Comments (tasks plan Phase 3)
+// ---------------------------------------------------------------------------
+// Anyone who can see a task may comment on it, a viewer included: a comment
+// changes nothing about the task. Its author deletes it, and so does anyone
+// who can change the task. Kept on the record, the newest MAX_COMMENTS.
+
+export function addComment(account, id, body, { now = Date.now() } = {}) {
+  const found = locate(id, now)
+  if (!found || !accessOf(found.item, account).see) return NOT_FOUND
+  if (found.item.deletedAt) return { ok: false, error: 'this task is deleted; restore it first', code: 'conflict' }
+  const raw = typeof body?.text === 'string' ? body.text.replace(/\r\n?/g, '\n').trim() : ''
+  if (!raw) return { ok: false, error: 'a comment needs text' }
+  if (raw.length > MAX_COMMENT_CHARS) return { ok: false, error: `a comment is at most ${MAX_COMMENT_CHARS} characters; this is ${raw.length}` }
+  const comment = { id: crypto.randomUUID(), at: now, by: ownerKeyOf(account), text: raw }
+  found.item.comments = [...(found.item.comments || []), comment].slice(-MAX_COMMENTS)
+  found.item.updatedAt = now
+  save(found.file, found.data)
+  return { ok: true, item: view(found.item, account, { withHistory: true }) }
+}
+
+export function deleteComment(account, id, commentId, { now = Date.now() } = {}) {
+  const found = locate(id, now)
+  if (!found) return NOT_FOUND
+  const can = accessOf(found.item, account)
+  if (!can.see) return NOT_FOUND
+  const comment = (found.item.comments || []).find((c) => c.id === commentId)
+  if (!comment) return NOT_FOUND
+  if (!(can.edit || comment.by === ownerKeyOf(account))) return { ok: false, error: 'Only its author, or someone who can change the task, can delete a comment', code: 'forbidden' }
+  found.item.comments = found.item.comments.filter((c) => c.id !== commentId)
   save(found.file, found.data)
   return { ok: true, item: view(found.item, account, { withHistory: true }) }
 }

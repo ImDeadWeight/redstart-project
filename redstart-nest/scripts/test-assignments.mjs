@@ -107,7 +107,8 @@ console.log('\n-- routes and validation --')
 
 await test('the route table claims its paths and nothing of /tasks', () => {
   const ok = ['/assignments', '/assignments/mine', '/assignments/count', '/assignments/created', '/assignments/assignees',
-    '/assignments/00000000-0000-4000-8000-000000000000', '/assignments/00000000-0000-4000-8000-000000000000/claim']
+    '/assignments/00000000-0000-4000-8000-000000000000', '/assignments/00000000-0000-4000-8000-000000000000/claim',
+    '/assignments/00000000-0000-4000-8000-000000000000/comments', '/assignments/00000000-0000-4000-8000-000000000000/comments/00000000-0000-4000-8000-000000000001']
   const no = ['/tasks', '/tasks/abc', '/assignments/abc', '/assignments/00000000-0000-4000-8000-000000000000/nope', '/assignmentsx']
   assert(ok.every(isAssignmentRoute), `missed: ${ok.filter((p) => !isAssignmentRoute(p))}`)
   assert(!no.some(isAssignmentRoute), `claimed: ${no.filter(isAssignmentRoute)}`)
@@ -374,6 +375,8 @@ await test('counts use the caller\'s date: overdue is before their today, and do
   await route('PATCH', `/assignments/${c.id}`, z, { status: 'done' })
   const r = (await route('GET', '/assignments/count?today=2026-03-01', z)).json
   assert(r.open === 2 && r.overdue === 1, JSON.stringify(r))
+  const today = (await route('GET', '/assignments/count?today=2026-06-01', z)).json
+  assert(today.dueToday === 1 && today.overdue === 1, `due today: ${JSON.stringify(today)}`)
   const mine = (await route('GET', '/assignments/mine?today=2026-03-01', z)).json
   assert(mine.items.length === 2 && mine.counts.overdue === 1, JSON.stringify(mine.counts))
   assert((await route('GET', '/assignments/mine?include=done', z)).json.items.length === 3, 'include=done missed one')
@@ -393,6 +396,47 @@ await test('the per-account limit outside projects', async () => {
 await test('a body over 64 KB is refused before it is parsed', async () => {
   const r = await route('POST', '/assignments', ALICE, { title: 'x', notes: 'n'.repeat(70 * 1024) })
   assert(r.status === 400, `status ${r.status}`)
+})
+
+console.log('\n-- comments and reminders (Phase 3) --')
+
+await test('a viewer comments; the author and editors delete; others cannot; an outsider sees nothing', async () => {
+  const t = await create(CAROL, { title: 'Discuss me', projectId: project.id })
+  const byBob = await route('POST', `/assignments/${t.id}/comments`, BOB, { text: '  I can take this on Friday.  ' })
+  assert(byBob.status === 201 && byBob.json.comments.length === 1, JSON.stringify(byBob.json))
+  const c = byBob.json.comments[0]
+  assert(c.text === 'I can take this on Friday.' && c.byName === 'bob' && c.canDelete, JSON.stringify(c))
+  assert(byBob.json.commentCount === 1, 'no count')
+  const listed = (await route('GET', `/assignments?projectId=${project.id}`, ERIN)).json.items.find((x) => x.id === t.id)
+  assert(listed.commentCount === 1 && !('comments' in listed), 'lists carry the count, not the comments')
+  const erinsView = (await route('GET', `/assignments/${t.id}`, ERIN)).json.comments[0]
+  assert(erinsView.canDelete === false, 'another viewer may delete it')
+  assert((await route('DELETE', `/assignments/${t.id}/comments/${c.id}`, ERIN)).status === 403, 'another viewer deleted it')
+  assert((await route('POST', `/assignments/${t.id}/comments`, DAVE, { text: 'hi' })).status === 404, 'an outsider commented')
+  assert((await route('POST', `/assignments/${t.id}/comments`, BOB, { text: '   ' })).status === 400, 'an empty comment')
+  assert((await route('POST', `/assignments/${t.id}/comments`, BOB, { text: 'x'.repeat(store.MAX_COMMENT_CHARS + 1) })).status === 400, 'a long comment')
+  const gone = await route('DELETE', `/assignments/${t.id}/comments/${c.id}`, CAROL)
+  assert(gone.status === 200 && gone.json.comments.length === 0, 'an editor could not delete it')
+  const own = (await route('POST', `/assignments/${t.id}/comments`, BOB, { text: 'again' })).json.comments[0]
+  assert((await route('DELETE', `/assignments/${t.id}/comments/${own.id}`, BOB)).status === 200, 'the author could not delete theirs')
+})
+
+await test('comments on a task with no project: creator and assignee only', async () => {
+  const t = await create(DAVE, { title: 'Private thread', assignee: { type: 'account', id: ALICE.id } })
+  assert((await route('POST', `/assignments/${t.id}/comments`, ALICE, { text: 'on it' })).status === 201, 'the assignee could not comment')
+  assert((await route('POST', `/assignments/${t.id}/comments`, BOB, { text: 'me too' })).status === 404, 'a stranger commented')
+})
+
+await test('assignedAt: when the task last came to whoever has it, for "new" in My tasks', async () => {
+  const t0 = 1_800_000_000_000
+  const made = store.createAssignment(CAROL, { title: 'Timed', projectId: project.id }, { now: t0 }).item
+  assert(made.assignedAt === t0, `unassigned: ${made.assignedAt}`)
+  const given = store.updateAssignment(CAROL, made.id, { assignee: { type: 'group', id: INTAKE.id } }, { now: t0 + 1000 }).item
+  assert(given.assignedAt === t0 + 1000, `assigned: ${given.assignedAt}`)
+  const edited = store.updateAssignment(CAROL, made.id, { notes: 'more' }, { now: t0 + 2000 }).item
+  assert(edited.assignedAt === t0 + 1000, 'an edit moved assignedAt')
+  const claimed = store.claimAssignment(ERIN, made.id, { now: t0 + 3000 }).item
+  assert(claimed.assignedAt === t0 + 3000, 'a claim did not move it')
 })
 
 console.log('\n-- the assistant\'s tools (Phase 2) --')

@@ -253,7 +253,7 @@ assistant's background tasks, a different thing).
 | Route | Body or query | Answers |
 | --- | --- | --- |
 | `GET /assignments/mine` | `?include=done` `?today=YYYY-MM-DD` | `{ items, counts: { open, overdue }, limits }` |
-| `GET /assignments/count` | `?today=` | `{ open, overdue }` |
+| `GET /assignments/count` | `?today=` | `{ open, overdue, dueToday }` |
 | `GET /assignments/created` | `?include=done` | tasks the caller made that are in no project |
 | `GET /assignments/assignees` | `?projectId=` | `{ accounts, groups }` a task can be given to |
 | `GET /assignments` | `?projectId=` (required) `?include=deleted` | `{ items, limits }` |
@@ -264,6 +264,8 @@ assistant's background tasks, a different thing).
 | `POST /assignments/:id/claim` | | the task, now the caller's |
 | `POST /assignments/:id/release` | | the task, back with its group |
 | `POST /assignments/:id/restore` | | the task |
+| `POST /assignments/:id/comments` | `{ text }` | the task with `comments`, `201` |
+| `DELETE /assignments/:id/comments/:cid` | | the task with `comments` |
 
 - `assignee` is `{ type: "account" | "group", id }` or `null`. `status` is
   `open`, `in_progress`, `blocked` or `done`. `dueDate` is a calendar date with

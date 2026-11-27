@@ -6,7 +6,7 @@
 	 * so a viewer finishing their own task never trips over a field they
 	 * cannot touch.
 	 */
-	import { Loader, Trash2, RotateCcw, Hand, Undo2, MessageSquare } from '@lucide/svelte';
+	import { Loader, Trash2, RotateCcw, Hand, Undo2, MessageSquare, X } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
 	import * as Sheet from '$lib/components/ui/sheet';
@@ -54,6 +54,8 @@
 	let loading = $state(false);
 	let saving = $state(false);
 	let loadError = $state('');
+	let commentDraft = $state('');
+	let commenting = $state(false);
 
 	let title = $state('');
 	let notes = $state('');
@@ -212,6 +214,32 @@
 	 * assistant can find the task (assignment_list, assignment_update) when
 	 * Tasks is on; the chat itself stays private, as every chat is.
 	 */
+	/** Comments (tasks plan Phase 3): anyone who can see the task may add one. */
+	async function postComment() {
+		const text = commentDraft.trim();
+		if (!task || !text) return;
+		commenting = true;
+		try {
+			fill(await AssignmentService.addComment(task.id, text));
+			commentDraft = '';
+			onChanged?.();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Could not add the comment');
+		} finally {
+			commenting = false;
+		}
+	}
+
+	async function removeComment(commentId: string) {
+		if (!task) return;
+		try {
+			fill(await AssignmentService.deleteComment(task.id, commentId));
+			onChanged?.();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Could not delete the comment');
+		}
+	}
+
 	function startChat() {
 		if (!task) return;
 		const due = task.dueDate ? `, due ${task.dueDate}` : '';
@@ -438,6 +466,54 @@
 						</Button>
 					{/if}
 				</div>
+
+				{#if task}
+					<div class="space-y-2 border-t pt-3">
+						<h3 class="text-xs font-medium text-muted-foreground">
+							Comments{task.comments?.length ? ` · ${task.comments.length}` : ''}
+						</h3>
+						{#if task.comments?.length}
+							<ul class="space-y-2">
+								{#each task.comments as c (c.id)}
+									<li class="group rounded-md bg-muted/40 px-2 py-1.5 text-sm">
+										<div
+											class="flex items-center justify-between gap-2 text-xs text-muted-foreground"
+										>
+											<span>{c.byName ?? 'A removed account'} · {when(c.at)}</span>
+											{#if c.canDelete}
+												<button
+													class="opacity-60 hover:opacity-100"
+													aria-label="Delete comment"
+													onclick={() => removeComment(c.id)}
+												>
+													<X class="h-3 w-3" />
+												</button>
+											{/if}
+										</div>
+										<p class="mt-0.5 whitespace-pre-wrap">{c.text}</p>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+						{#if !deleted && task.can.comment !== false}
+							<Textarea
+								bind:value={commentDraft}
+								rows={2}
+								maxlength={4000}
+								placeholder="Add a comment"
+								aria-label="Add a comment"
+							/>
+							<Button
+								size="sm"
+								variant="outline"
+								disabled={commenting || !commentDraft.trim()}
+								onclick={postComment}
+							>
+								Comment
+							</Button>
+						{/if}
+					</div>
+				{/if}
 
 				{#if task?.history?.length}
 					<div class="space-y-1 border-t pt-3">

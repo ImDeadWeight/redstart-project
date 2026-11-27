@@ -1,4 +1,42 @@
-import { AssignmentService, type AssignmentCounts } from '$lib/services/assignment.service';
+import { toast } from 'svelte-sonner';
+import { goto } from '$app/navigation';
+import {
+	AssignmentService,
+	localToday,
+	type AssignmentCounts
+} from '$lib/services/assignment.service';
+import { ROUTES } from '$lib/constants/routes';
+
+/**
+ * The once-a-day reminder (tasks plan Phase 3): the first count each day that
+ * finds something overdue or due today says so, with a way to My tasks.
+ * Nest has no notifications of its own yet, so this is the reminder: it shows
+ * when the app is opened. Remembered per browser; storage that is blocked or
+ * cleared only means it may show twice in a day.
+ */
+const REMINDED_KEY = 'redstart.myTasks.remindedOn';
+
+function remindOnce(c: AssignmentCounts): void {
+	const overdue = c.overdue ?? 0;
+	const today = c.dueToday ?? 0;
+	if (overdue === 0 && today === 0) return;
+	const day = localToday();
+	try {
+		if (localStorage.getItem(REMINDED_KEY) === day) return;
+		localStorage.setItem(REMINDED_KEY, day);
+	} catch {
+		/* storage blocked: remind anyway */
+	}
+	const parts: string[] = [];
+	if (overdue) parts.push(`${overdue} ${overdue === 1 ? 'task is' : 'tasks are'} overdue`);
+	if (today) parts.push(`${today} ${today === 1 ? 'is' : 'are'} due today`);
+	toast.info(
+		parts.join(' and ').replace(/^./, (ch) => ch.toUpperCase()),
+		{
+			action: { label: 'My tasks', onClick: () => void goto(ROUTES.ASSIGNMENTS) }
+		}
+	);
+}
 
 /**
  * The sidebar's count of the signed-in account's open tasks (tasks plan
@@ -37,6 +75,7 @@ class AssignmentsStore {
 		this.inFlight = AssignmentService.count()
 			.then((c) => {
 				this.counts = c;
+				remindOnce(c);
 			})
 			.catch(() => {
 				this.counts = null;

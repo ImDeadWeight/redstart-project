@@ -37,6 +37,18 @@ export interface AssignmentCan {
 	release: boolean;
 	delete: boolean;
 	move: boolean;
+	/** Anyone who can see the task may comment (tasks plan Phase 3). */
+	comment?: boolean;
+}
+
+export interface AssignmentComment {
+	id: string;
+	at: number;
+	by: string | null;
+	byName: string | null;
+	text: string;
+	/** Its author, or anyone who can change the task. */
+	canDelete: boolean;
 }
 
 export interface AssignmentHistoryEntry {
@@ -88,8 +100,13 @@ export interface Assignment {
 	completedAt: number | null;
 	deletedAt: number | null;
 	can: AssignmentCan;
+	/** How many comments it has (lists carry the count; the task itself, the comments). */
+	commentCount?: number;
+	/** When it last came to whoever has it now: a client marks it "new" from this. */
+	assignedAt?: number;
 	/** Only on a single task (GET /assignments/:id and the answers to writes). */
 	history?: AssignmentHistoryEntry[];
+	comments?: AssignmentComment[];
 }
 
 export interface AssignmentLimits {
@@ -102,6 +119,7 @@ export interface AssignmentLimits {
 export interface AssignmentCounts {
 	open: number;
 	overdue: number;
+	dueToday?: number;
 }
 
 export interface AssigneeChoices {
@@ -179,6 +197,17 @@ export class AssignmentService {
 
 	static async remove(id: string): Promise<void> {
 		await apiFetch(`/assignments/${enc(id)}`, { method: 'DELETE' });
+	}
+
+	static async addComment(id: string, text: string): Promise<Assignment> {
+		return apiFetch(`/assignments/${enc(id)}/comments`, {
+			method: 'POST',
+			body: JSON.stringify({ text })
+		});
+	}
+
+	static async deleteComment(id: string, commentId: string): Promise<Assignment> {
+		return apiFetch(`/assignments/${enc(id)}/comments/${enc(commentId)}`, { method: 'DELETE' });
 	}
 
 	static async restore(id: string): Promise<Assignment> {

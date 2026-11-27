@@ -19,6 +19,8 @@
 //   POST   /assignments/:id/claim   a member of the assigned group takes it
 //   POST   /assignments/:id/release hands a claimed task back to its group
 //   POST   /assignments/:id/restore
+//   POST   /assignments/:id/comments          { text }   anyone who can see it
+//   DELETE /assignments/:id/comments/:cid     its author, or whoever can change the task
 //
 // Access is decided only by assignments-storage (accessOf there). A task the
 // caller may not see answers 404, not 403, so ids cannot be probed; one they
@@ -32,6 +34,7 @@
 import {
   listMine, listCreated, listForProject, listAssignees, getAssignment, createAssignment, updateAssignment,
   claimAssignment, releaseAssignment, deleteAssignment, restoreAssignment, countMine, isDate,
+  addComment, deleteComment, MAX_COMMENT_CHARS,
   MAX_TITLE_CHARS, MAX_NOTES_CHARS, MAX_ITEMS_PER_PROJECT, MAX_DIRECT_PER_ACCOUNT, STATUSES,
 } from '../assignments-storage.mjs'
 import { sendJson } from './http-json.mjs'
@@ -39,6 +42,8 @@ import { logEvent } from '../logger.mjs'
 
 const ITEM = /^\/assignments\/([0-9a-f-]{36})$/
 const ACTION = /^\/assignments\/([0-9a-f-]{36})\/(claim|release|restore)$/
+const COMMENTS = /^\/assignments\/([0-9a-f-]{36})\/comments$/
+const COMMENT = /^\/assignments\/([0-9a-f-]{36})\/comments\/([0-9a-f-]{36})$/
 const LISTS = new Set(['/assignments', '/assignments/mine', '/assignments/count', '/assignments/created', '/assignments/assignees'])
 /** A task's JSON body: the notes limit, with room for the rest. */
 const MAX_BODY_BYTES = 64 * 1024
@@ -49,10 +54,11 @@ export const ASSIGNMENT_LIMITS = Object.freeze({
   maxPerProject: MAX_ITEMS_PER_PROJECT,
   maxWithoutProject: MAX_DIRECT_PER_ACCOUNT,
   statuses: STATUSES,
+  maxCommentChars: MAX_COMMENT_CHARS,
 })
 
 export function isAssignmentRoute(urlPath) {
-  return LISTS.has(urlPath) || ITEM.test(urlPath) || ACTION.test(urlPath)
+  return LISTS.has(urlPath) || ITEM.test(urlPath) || ACTION.test(urlPath) || COMMENTS.test(urlPath) || COMMENT.test(urlPath)
 }
 
 function query(req) {
@@ -136,6 +142,29 @@ export async function handleAssignmentRoute(req, res, urlPath, account) {
       return true
     }
     if (LISTS.has(urlPath)) return false
+
+    // Comments (tasks plan Phase 3): anyone who can see the task adds one;
+    // its author, or anyone who can change the task, deletes it.
+    const comments = COMMENTS.exec(urlPath)
+    if (comments) {
+      if (req.method !== 'POST') return false
+      const body = await readCappedJson(req)
+      if (!body) { sendJson(res, 400, { error: { message: 'Expected { text } of at most 64 KB', type: 'invalid_request_error' } }); return true }
+      const r = addComment(account, comments[1], body)
+      if (!r.ok) { fail(res, r); return true }
+      logEvent('assignment', 'commented', { account: who(account) })
+      sendJson(res, 201, r.item)
+      return true
+    }
+    const comment = COMMENT.exec(urlPath)
+    if (comment) {
+      if (req.method !== 'DELETE') return false
+      const r = deleteComment(account, comment[1], comment[2])
+      if (!r.ok) { fail(res, r); return true }
+      logEvent('assignment', 'comment_deleted', { account: who(account) })
+      sendJson(res, 200, r.item)
+      return true
+    }
 
     const action = ACTION.exec(urlPath)
     if (action) {

@@ -6,6 +6,12 @@ Rolling, human-readable log of changes to the Redstart Nest / Redstart Twig code
 
 ## 2026-11-27
 
+- **Comments on tasks, and a daily reminder** (tasks plan Phase 3).
+  - **Comments.** Anyone who can see a task can comment on it, a viewer included, since a comment changes nothing about the task. Its author deletes it, and so does anyone who can change the task. They are kept on the task (the newest 200, up to 4,000 characters each), shown in the task panel above the history, and counted on each row. Routes: `POST /assignments/:id/comments`, `DELETE /assignments/:id/comments/:cid` (connector-contract §7).
+  - **A reminder when the app opens.** Nest has no notifications yet, so the first count each day that finds something overdue or due today shows it ("2 tasks are overdue and 1 is due today", with a button to My tasks). The count now reports `dueToday`.
+  - **New since your last visit.** My tasks marks a task "New" when it came to you after you last left the page; tasks have an `assignedAt` (their last assign, claim or hand-back) for this. A task you made for yourself is never new, and a first visit marks nothing.
+  - The reminder and "New" remember what you have seen in the browser, per device: a convenience, not a record.
+  - Tests: 3 new cases in `test-assignments.mjs` (35 now), comments and "New" in `assignments.svelte.test.ts`.
 - **The assistant can work with tasks** (tasks plan Phase 2). A new **Tasks** capability, off until an admin turns it on in Tools, gives the model `assignment_list`, `assignment_create` and `assignment_update`.
   - **Named for the model, not the screen.** People see "tasks"; the model sees "assignment", because "task" is the work in front of it in every prompt, and a small model given `task_create` was expected to file its own plan steps as the team's to-do list. `assignment_create`'s description says it is not for the model's own steps (`update_plan` is). The prompt's plan line now says "when the request has three or more steps" rather than "the task". The `update_plan` description is unchanged: it is frozen in the retrieval benchmark.
   - **No more than the person could.** Every call goes through `assignments-storage` with the caller's account, so the chat app's rules decide everything; a viewer's chat cannot add to the project. The project comes from the verified conversation, never from an argument.
