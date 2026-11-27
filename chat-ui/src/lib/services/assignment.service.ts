@@ -23,8 +23,9 @@ export const statusLabel = (s: AssignmentStatus) =>
 	ASSIGNMENT_STATUSES.find((x) => x.value === s)?.label ?? s;
 
 /** Who a task is given to: one person or one group. */
+/** Who a task is given to: a person, a group, or the assistant (Phase 4). */
 export interface Assignee {
-	type: 'account' | 'group';
+	type: 'account' | 'group' | 'agent';
 	id: string;
 }
 
@@ -49,6 +50,19 @@ export interface AssignmentComment {
 	text: string;
 	/** Its author, or anyone who can change the task. */
 	canDelete: boolean;
+	/** Set on the assistant's own comments, when its job ends (Phase 4). */
+	via?: 'assistant';
+}
+
+/** The assistant's run on a task given to it (tasks plan Phase 4). */
+export interface AgentRun {
+	running: boolean;
+	startedAt: number;
+	endedAt: number | null;
+	outcome: 'done' | 'failed' | 'cancelled' | null;
+	byName: string | null;
+	/** The chat it ran in: only for whoever gave it the task (chats are private). */
+	conversationId: string | null;
 }
 
 export interface AssignmentHistoryEntry {
@@ -65,13 +79,16 @@ export interface AssignmentHistoryEntry {
 		| 'moved'
 		| 'deleted'
 		| 'restored'
-		| 'unassigned';
+		| 'unassigned'
+		| 'agent_started'
+		| 'agent_finished';
 	from?: unknown;
 	to?: unknown;
 	fromName?: string | null;
 	toName?: string | null;
 	fields?: string[];
 	reason?: string;
+	outcome?: string;
 	/** Set when the assistant made the change in this person's chat (Phase 2). */
 	via?: 'assistant';
 }
@@ -107,6 +124,7 @@ export interface Assignment {
 	/** Only on a single task (GET /assignments/:id and the answers to writes). */
 	history?: AssignmentHistoryEntry[];
 	comments?: AssignmentComment[];
+	agentRun?: AgentRun | null;
 }
 
 export interface AssignmentLimits {

@@ -275,3 +275,49 @@ describe('Comments and reminders (Phase 3)', () => {
 		localStorage.removeItem('redstart.myTasks.seenAt');
 	});
 });
+
+describe('A task given to the assistant (Phase 4)', () => {
+	it('says it is working, links its chat for the giver, and names its comment', async () => {
+		setOverride('/assignments/count', () => jsonResponse({ open: 0, overdue: 0 }));
+		setOverride('/assignments/assignees', () => jsonResponse({ accounts: [], groups: [] }));
+		setOverride('/assignments/a1', () =>
+			jsonResponse(
+				task({
+					id: 'a1',
+					title: 'Draft the letter',
+					status: 'in_progress',
+					assignee: { type: 'agent', id: 'assistant' },
+					assigneeName: 'the assistant',
+					history: [],
+					comments: [
+						{
+							id: 'k9',
+							at: 1,
+							by: null,
+							byName: null,
+							via: 'assistant',
+							text: 'Earlier run stopped.',
+							canDelete: true
+						}
+					],
+					agentRun: {
+						running: true,
+						startedAt: 1,
+						endedAt: null,
+						outcome: null,
+						byName: 'carol',
+						conversationId: 'conv-1'
+					}
+				})
+			)
+		);
+		const screen = await render(AssignmentEditor, { open: true, taskId: 'a1' });
+		await expect
+			.element(screen.getByText(/The assistant is working on this for carol/))
+			.toBeInTheDocument();
+		await expect
+			.element(screen.getByRole('link', { name: 'Open its chat' }))
+			.toHaveAttribute('href', '#/chat/conv-1');
+		await expect.element(screen.getByText(/^The assistant ·/)).toBeInTheDocument();
+	});
+});

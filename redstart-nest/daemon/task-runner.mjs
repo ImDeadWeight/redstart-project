@@ -442,6 +442,21 @@ function launch(id, { recovered = false, clientTools = [] } = {}) {
   }).finally(() => live.delete(id))
 }
 
+/**
+ * Told when a task ends (done, failed or cancelled), after its record says so.
+ * For modules that started a task for a reason of their own, like a task on
+ * the team's list given to the assistant (assignment-agent.mjs). A listener
+ * that throws does not stop the others or the task's own ending.
+ * @type {Set<(task: object, status: string, error: string | null) => void>}
+ */
+const endListeners = new Set()
+
+/** @returns {() => void} removes the listener */
+export function onTaskEnded(fn) {
+  endListeners.add(fn)
+  return () => endListeners.delete(fn)
+}
+
 function finish(task, status, error) {
   // Suspended by an orderly daemon stop: leave the record as it is, so the
   // next start resumes it (resumeTasks).
@@ -451,6 +466,9 @@ function finish(task, status, error) {
   const l = live.get(task.id)
   if (l) for (const approvalId of l.heldApprovals) ledger.withdraw(approvalId)
   logEvent('task', status, error ? { reason: preview(error) } : {})
+  for (const fn of endListeners) {
+    try { fn(task, status, error ?? null) } catch (err) { logEvent('task', 'end_listener_failed', { reason: preview(err?.message ?? String(err)) }) }
+  }
   // D41: the daemon reviews what the daemon ran. Not awaited: the task has
   // ended whatever the review does. Kept so tests (and a stop) can wait on it.
   // Not after a cancel: Stop means stop, and a review starting the moment

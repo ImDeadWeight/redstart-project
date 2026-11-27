@@ -39,9 +39,15 @@
 // projects reaches project tasks through accessFor(), but never someone
 // else's task that has no project.
 //
-// RESERVED FIELDS (startDate, estimate, blockedBy, milestoneId, an 'agent'
-// assignee) are documented in the plan for the phases that use them and are
-// refused here until then, so no client stores them early.
+// RESERVED FIELDS (startDate, estimate, blockedBy, milestoneId) are
+// documented in the plan for the phases that use them and are refused here
+// until then, so no client stores them early.
+//
+// THE ASSISTANT AS ASSIGNEE (tasks plan Phase 4): `{ type: 'agent', id:
+// 'assistant' }`. Giving a task to it starts a background job as the person
+// who gave it (assignment-agent.mjs), recorded in `agentRun`; when the job
+// ends the task goes back to that person, with a comment, for a person to
+// check. The assistant never marks its own work done.
 //
 // NOTHING IS LOST (plan D7, D8). A delete only marks the record; it is purged
 // 30 days later, on the next write to its file. When a project, an account or
@@ -136,6 +142,7 @@ function assigneeName(a) {
   if (!a) return null
   if (a.type === 'account') return accountName(a.id)
   if (a.type === 'group') return findGroupById(a.id)?.name ?? null
+  if (a.type === 'agent') return 'the assistant'
   return null
 }
 
@@ -188,6 +195,9 @@ function accessOf(item, account, project = undefined) {
 
 /** May this person or group be given a task in this project (or with none)? */
 function assigneeAllowed(assignee, project) {
+  // The assistant works as whoever gives it the task, so it can open
+  // whatever they can (assignment-agent.mjs).
+  if (assignee.type === 'agent') return { ok: true }
   if (assignee.type === 'account') {
     const acct = findAccountById(assignee.id)
     if (!acct || acct.status === 'disabled') return { ok: false, error: 'No such account' }
@@ -265,10 +275,10 @@ export function validateAssignment(body, { partial = false } = {}) {
   if (body.assignee !== undefined) {
     const a = body.assignee
     if (a === null) fields.assignee = null
-    else if (a && typeof a === 'object' && a.type === 'agent') return { ok: false, error: 'not supported yet: an assistant as the assignee' }
+    else if (a && typeof a === 'object' && a.type === 'agent') fields.assignee = { type: 'agent', id: 'assistant' }
     else if (a && typeof a === 'object' && (a.type === 'account' || a.type === 'group') && typeof a.id === 'string' && a.id) {
       fields.assignee = { type: a.type, id: a.id }
-    } else return { ok: false, error: 'assignee is { type: "account" | "group", id }, or null' }
+    } else return { ok: false, error: 'assignee is { type: "account" | "group", id }, { type: "agent" } (the assistant), or null' }
   }
 
   return { ok: true, fields }
@@ -306,15 +316,33 @@ function assignedAtOf(item) {
 
 function commentView(c, account, canEdit) {
   const key = ownerKeyOf(account)
-  return { ...c, byName: accountName(c.by), canDelete: canEdit || (key !== null && c.by === key) }
+  return { ...c, byName: accountName(c.by), canDelete: canEdit || (key !== null && c.by !== null && c.by === key) }
+}
+
+/**
+ * What a response says about the assistant's run. The chat it ran in is
+ * private to whoever gave it the task (every chat is), so only they get its id.
+ */
+function agentRunView(run, account) {
+  if (!run) return null
+  const mine = ownerKeyOf(account) !== null && run.by === ownerKeyOf(account)
+  return {
+    running: !run.endedAt,
+    startedAt: run.startedAt,
+    endedAt: run.endedAt ?? null,
+    outcome: run.outcome ?? null,
+    byName: accountName(run.by),
+    conversationId: mine ? run.conversationId : null,
+  }
 }
 
 function view(item, account, { project = undefined, withHistory = false } = {}) {
   const p = item.projectId ? (project === undefined ? findProjectById(item.projectId) : project) : null
   const can = accessOf(item, account, item.projectId ? p : undefined)
-  const { history, comments, ...rest } = item
+  const { history, comments, agentRun, ...rest } = item
   const out = {
     ...rest,
+    agentRun: agentRunView(agentRun, account),
     commentCount: (comments || []).length,
     assignedAt: assignedAtOf(item),
     assigneeName: assigneeName(item.assignee),
@@ -708,6 +736,67 @@ export function deleteComment(account, id, commentId, { now = Date.now() } = {})
   found.item.comments = found.item.comments.filter((c) => c.id !== commentId)
   save(found.file, found.data)
   return { ok: true, item: view(found.item, account, { withHistory: true }) }
+}
+
+// ---------------------------------------------------------------------------
+// The assistant's runs (tasks plan Phase 4)
+// ---------------------------------------------------------------------------
+// assignment-agent.mjs starts a job and calls these. They take no account:
+// the access check was the route's, before the job was started.
+
+/** The job started: note it, and show the task as in progress. */
+export function recordAgentStart(id, { jobId, conversationId, by }, { now = Date.now() } = {}) {
+  const found = locate(id, now)
+  if (!found) return false
+  const item = found.item
+  item.agentRun = { jobId, conversationId, by, startedAt: now }
+  if (item.status === 'open' || item.status === 'blocked') item.status = 'in_progress'
+  item.updatedAt = now
+  addHistory(item, { at: now, by, via: 'assistant', action: 'agent_started' })
+  save(found.file, found.data)
+  return true
+}
+
+/** Tasks whose run has not been recorded as ended, for the start-up check. */
+export function openAgentRuns({ now = Date.now() } = {}) {
+  const out = []
+  for (const f of allFiles(now)) for (const t of f.data.items) if (t.agentRun && !t.agentRun.endedAt) out.push({ id: t.id, jobId: t.agentRun.jobId })
+  return out
+}
+
+const OUTCOME_COMMENT = {
+  done: 'The assistant finished this. Its chat has what it did: check it, then mark the task done.',
+  failed: 'The assistant could not finish this',
+  cancelled: 'The assistant\'s job was stopped before it finished.',
+}
+
+/**
+ * The job ended. If the task is still the assistant's, it goes back to whoever
+ * gave it, as To do after a finished job and Blocked otherwise, so a person
+ * checks the work. A comment says what happened either way.
+ */
+export function recordAgentEnd(jobId, outcome, error = null, { now = Date.now() } = {}) {
+  for (const f of allFiles(now)) {
+    const item = f.data.items.find((t) => t.agentRun?.jobId === jobId && !t.agentRun.endedAt)
+    if (!item) continue
+    const run = item.agentRun
+    run.endedAt = now
+    run.outcome = outcome
+    const back = run.by && findAccountById(run.by) ? { type: 'account', id: run.by } : null
+    if (item.assignee?.type === 'agent') {
+      addHistory(item, { at: now, by: null, via: 'assistant', action: 'unassigned', from: item.assignee, to: back, reason: `assistant ${outcome}` })
+      item.assignee = back
+      // Someone marked it done meanwhile: that stands.
+      if (item.status !== 'done') item.status = outcome === 'done' ? 'open' : 'blocked'
+    }
+    const text = outcome === 'failed' && error ? `${OUTCOME_COMMENT.failed}: ${String(error).slice(0, 500)}` : (OUTCOME_COMMENT[outcome] ?? OUTCOME_COMMENT.failed)
+    item.comments = [...(item.comments || []), { id: crypto.randomUUID(), at: now, by: null, via: 'assistant', text }].slice(-MAX_COMMENTS)
+    addHistory(item, { at: now, by: null, via: 'assistant', action: 'agent_finished', outcome })
+    item.updatedAt = now
+    save(f.file, f.data)
+    return item.id
+  }
+  return null
 }
 
 /** Counts for the sidebar badge. */

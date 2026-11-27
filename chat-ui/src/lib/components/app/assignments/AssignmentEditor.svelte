@@ -145,6 +145,7 @@
 	const assigneeMissing = $derived(
 		!!task?.assignee &&
 			assigneeKey === keyOf(task.assignee) &&
+			task.assignee.type !== 'agent' &&
 			!choices.accounts.some((a) => `account:${a.id}` === assigneeKey) &&
 			!choices.groups.some((g) => `group:${g.id}` === assigneeKey)
 	);
@@ -280,7 +281,17 @@
 			case 'restored':
 				return `${who} restored it`;
 			case 'unassigned':
+				if (h.reason?.startsWith('assistant'))
+					return `Back to ${h.toName ?? 'no one'} from the assistant`;
 				return `Unassigned: ${h.fromName ?? 'its assignee'} was removed`;
+			case 'agent_started':
+				return 'The assistant started on it';
+			case 'agent_finished':
+				return h.outcome === 'done'
+					? 'The assistant finished'
+					: h.outcome === 'cancelled'
+						? 'The assistant was stopped'
+						: 'The assistant could not finish';
 			default:
 				return h.action;
 		}
@@ -309,6 +320,29 @@
 				</Sheet.Description>
 			{/if}
 		</Sheet.Header>
+
+		{#if task?.agentRun}
+			<div class="mx-4 mb-2 rounded-md border px-2 py-1.5 text-sm">
+				{#if task.agentRun.running}
+					The assistant is working on this{task.agentRun.byName
+						? ` for ${task.agentRun.byName}`
+						: ''}.
+				{:else if task.agentRun.outcome === 'done'}
+					The assistant finished. Check its work, then mark the task done.
+				{:else}
+					The assistant {task.agentRun.outcome === 'cancelled'
+						? 'was stopped'
+						: 'could not finish'}.
+				{/if}
+				{#if task.agentRun.conversationId}
+					<a
+						class="underline"
+						href={RouterService.chat(task.agentRun.conversationId)}
+						onclick={() => (open = false)}>Open its chat</a
+					>
+				{/if}
+			</div>
+		{/if}
 
 		{#if loading}
 			<div class="flex justify-center p-6"><Loader class="h-5 w-5 animate-spin" /></div>
@@ -358,6 +392,7 @@
 						<span class="text-xs font-medium text-muted-foreground">Assigned to</span>
 						<select bind:value={assigneeKey} disabled={!can.assign || deleted} class={selectClass}>
 							<option value="">No one</option>
+							<option value="agent:assistant">The assistant</option>
 							{#if assigneeMissing && task?.assignee}
 								<option value={keyOf(task.assignee)}
 									>{task.assigneeName ?? 'Someone'} (no longer in the project)</option
@@ -479,7 +514,11 @@
 										<div
 											class="flex items-center justify-between gap-2 text-xs text-muted-foreground"
 										>
-											<span>{c.byName ?? 'A removed account'} · {when(c.at)}</span>
+											<span
+												>{c.via === 'assistant'
+													? 'The assistant'
+													: (c.byName ?? 'A removed account')} · {when(c.at)}</span
+											>
 											{#if c.canDelete}
 												<button
 													class="opacity-60 hover:opacity-100"

@@ -10,7 +10,8 @@
 		User,
 		Users,
 		AlertTriangle,
-		MessageSquare
+		MessageSquare,
+		Bot
 	} from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -98,7 +99,9 @@
 			{/if}
 			{#if task.assignee && !(isMe && hideOwnAssignee && !task.assigneeLeft)}
 				<span class="flex items-center gap-1">
-					{#if task.assignee.type === 'group'}<Users class="h-3 w-3" />{:else}<User
+					{#if task.assignee.type === 'agent'}<Bot
+							class="h-3 w-3"
+						/>{:else if task.assignee.type === 'group'}<Users class="h-3 w-3" />{:else}<User
 							class="h-3 w-3"
 						/>{/if}
 					{isMe ? 'you' : (task.assigneeName ?? 'someone')}

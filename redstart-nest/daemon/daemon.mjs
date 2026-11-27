@@ -48,6 +48,7 @@ import { setAdminApi } from './admin/api-routes.mjs'
 import { getPrimaryLanIp, startRouteProbe, stopRouteProbe } from './net-interfaces.mjs'
 import { cleanupOldConversations, allConversationIds } from './conversations-storage.mjs'
 import { resumeTasks, suspendAllTasks } from './task-runner.mjs'
+import { initAssignmentAgent } from './assignment-agent.mjs'
 import { sweepOrphanWorkspaces } from './conversation-workspace.mjs'
 import { initLogger, closeLogger, logEvent } from './logger.mjs'
 import { initProcessLog } from './process-log.mjs'
@@ -524,6 +525,9 @@ export async function startDaemon(entrypoint = {}) {
   // is cancelled rather than resumed. A resumed task waits for a model like
   // any other (waiting_model): starting the daemon never starts one.
   const resumedTasks = resumeTasks()
+  // Tasks on the team's list given to the assistant: hear their jobs end, and
+  // settle any whose job ended while Nest was down (tasks plan Phase 4).
+  initAssignmentAgent()
   if (resumedTasks > 0) console.log(`Resumed ${resumedTasks} background task${resumedTasks === 1 ? '' : 's'}`)
   // A workspace whose conversation is gone (pruned just now, or deleted while
   // its files could not be moved) is orphaned user data on a box nobody looks

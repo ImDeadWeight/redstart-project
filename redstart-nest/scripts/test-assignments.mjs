@@ -37,6 +37,9 @@ const { handleAssignmentRoute, isAssignmentRoute } = await import('../daemon/gat
 const { handleProjectRoute } = await import('../daemon/gateway/project-routes.mjs')
 const { handleAuthRoute } = await import('../daemon/gateway/auth-routes.mjs')
 const tool = await import('../daemon/assignments-tool.mjs')
+const agent = await import('../daemon/assignment-agent.mjs')
+const runner = await import('../daemon/task-runner.mjs')
+const jobs = await import('../daemon/task-store.mjs')
 const convs = await import('../daemon/conversations-storage.mjs')
 const { approvalRule, classifyTool } = await import('../daemon/tools-definitions.mjs')
 
@@ -63,7 +66,7 @@ function fakeRes() {
 }
 async function route(method, url, account, body) {
   const res = fakeRes()
-  const handled = await handleAssignmentRoute(fakeReq(method, body, url), res, url.split('?')[0], account)
+  const handled = await handleAssignmentRoute(fakeReq(method, body, url), res, url.split('?')[0], account, { storeAccountId: account?.id ?? 'device-1', surface: null, timeZone: null })
   return { handled, status: res.status, json: res.body ? JSON.parse(res.body) : null }
 }
 async function projectRoute(method, url, account, body) {
@@ -123,7 +126,8 @@ await test('validation: title, notes, status, date, assignee shape, and the rese
   assert(!v({ title: 'x', status: 'finished' }).ok, 'an unknown status passed')
   assert(!v({ title: 'x', dueDate: '2026-02-30' }).ok && !v({ title: 'x', dueDate: '26-1-1' }).ok, 'a bad date passed')
   assert(v({ title: 'x', dueDate: '2028-02-29' }).ok && v({ title: 'x', dueDate: null }).ok, 'a good date refused')
-  assert(!v({ title: 'x', assignee: { type: 'agent', id: 'a' } }).ok, 'an agent assignee passed')
+  // The assistant as assignee (Phase 4): any id is read as 'assistant'.
+  assert(JSON.stringify(v({ title: 'x', assignee: { type: 'agent', id: 'a' } }).fields.assignee) === '{"type":"agent","id":"assistant"}', 'an agent assignee was not taken')
   assert(!v({ title: 'x', assignee: 'bob' }).ok, 'a bare assignee passed')
   for (const f of store.RESERVED_FIELDS) assert(/not supported yet/.test(v({ title: 'x', [f]: 1 }).error), `${f} was not refused`)
   assert(v({ status: 'done' }, { partial: true }).ok, 'a partial update needed a title')
@@ -437,6 +441,83 @@ await test('assignedAt: when the task last came to whoever has it, for "new" in 
   assert(edited.assignedAt === t0 + 1000, 'an edit moved assignedAt')
   const claimed = store.claimAssignment(ERIN, made.id, { now: t0 + 3000 }).item
   assert(claimed.assignedAt === t0 + 3000, 'a claim did not move it')
+})
+
+console.log('\n-- a task given to the assistant (Phase 4) --')
+
+agent.initAssignmentAgent()
+const waitFor = async (fn, what, ms = 3000) => {
+  const end = Date.now() + ms
+  while (Date.now() < end) { if (fn()) return; await new Promise((r) => setTimeout(r, 20)) }
+  throw new Error(`timed out waiting for ${what}`)
+}
+
+await test('giving a task to the assistant starts a job as the giver, in their own new chat in the project', async () => {
+  const r = await route('POST', '/assignments', CAROL, { title: 'Draft the referral letter', notes: 'Use the county template', projectId: project.id, assignee: { type: 'agent' } })
+  assert(r.status === 201, JSON.stringify(r.json))
+  const t = r.json
+  assert(t.assignee.type === 'agent' && t.assigneeName === 'the assistant' && t.status === 'in_progress', JSON.stringify(t))
+  assert(t.agentRun?.running && t.agentRun.conversationId && t.agentRun.byName === 'carol', JSON.stringify(t.agentRun))
+  const stored = store.openAgentRuns().find((x) => x.id === t.id)
+  const job = jobs.getTask(stored.jobId)
+  assert(job.accountId === CAROL.id && job.storeAccountId === CAROL.id && job.origin === 'background', JSON.stringify(job))
+  const conv = convs.getConversation(CAROL.id, t.agentRun.conversationId)
+  assert(conv && conv.projectId === project.id, 'the chat is not in the project')
+  const asked = conv.messages.find((m) => m.role === 'user')?.content ?? ''
+  assert(/Task: Draft the referral letter/.test(asked) && /Notes: Use the county template/.test(asked) && /carol's task list/.test(asked), asked)
+  // The chat is the giver's: another member reading the task does not get its id.
+  assert((await route('GET', `/assignments/${t.id}`, BOB)).json.agentRun.conversationId === null, 'another member got the chat')
+  // Stopped: back to carol, Blocked, with a comment.
+  runner.cancelTask(stored.jobId, 'owner')
+  await waitFor(() => !store.openAgentRuns().some((x) => x.id === t.id), 'the run to end')
+  const after = (await route('GET', `/assignments/${t.id}`, CAROL)).json
+  assert(after.assignee?.id === CAROL.id && after.status === 'blocked', JSON.stringify({ a: after.assignee, s: after.status }))
+  assert(after.comments.at(-1).via === 'assistant' && /stopped/.test(after.comments.at(-1).text), JSON.stringify(after.comments))
+  assert(after.agentRun.outcome === 'cancelled' && after.agentRun.running === false, JSON.stringify(after.agentRun))
+  assert(after.history.some((h) => h.action === 'agent_started') && after.history.some((h) => h.action === 'agent_finished'), 'history missed the run')
+})
+
+await test('a finished job hands the task back as To do; one marked done meanwhile stays done; one reassigned meanwhile keeps its person', async () => {
+  const mk = (title) => store.createAssignment(CAROL, { title, projectId: project.id }).item
+  const a = mk('finished'), b = mk('done meanwhile'), c = mk('reassigned meanwhile')
+  for (const [t, job] of [[a, 'job-a'], [b, 'job-b'], [c, 'job-c']]) {
+    store.updateAssignment(CAROL, t.id, { assignee: { type: 'agent' } })
+    store.recordAgentStart(t.id, { jobId: job, conversationId: 'conv', by: CAROL.id })
+  }
+  store.updateAssignment(CAROL, b.id, { status: 'done' })
+  store.updateAssignment(CAROL, c.id, { assignee: { type: 'account', id: BOB.id } })
+  for (const job of ['job-a', 'job-b', 'job-c']) store.recordAgentEnd(job, 'done')
+  const A = store.getAssignment(CAROL, a.id).item, B = store.getAssignment(CAROL, b.id).item, C = store.getAssignment(CAROL, c.id).item
+  assert(A.assignee.id === CAROL.id && A.status === 'open' && /check it/.test(A.comments.at(-1).text), JSON.stringify(A))
+  assert(B.status === 'done', `done meanwhile became ${B.status}`)
+  assert(C.assignee.id === BOB.id && C.comments.at(-1).via === 'assistant', 'the person given it meanwhile lost it')
+})
+
+await test('🔍 at start-up, a run whose job ended or vanished while Nest was down is settled', async () => {
+  const t = store.createAssignment(CAROL, { title: 'orphaned run', projectId: project.id }).item
+  store.updateAssignment(CAROL, t.id, { assignee: { type: 'agent' } })
+  store.recordAgentStart(t.id, { jobId: '00000000-0000-4000-8000-00000000dead', conversationId: 'conv', by: CAROL.id })
+  assert(agent.reconcile() >= 1, 'nothing settled')
+  const after = store.getAssignment(CAROL, t.id).item
+  assert(after.status === 'blocked' && after.assignee.id === CAROL.id && /gone/.test(after.comments.at(-1).text), JSON.stringify(after))
+})
+
+await test('a job that cannot start comes straight back, Blocked, with the reason', async () => {
+  const t = store.createAssignment(CAROL, { title: 'cannot start', projectId: project.id }).item
+  store.updateAssignment(CAROL, t.id, { assignee: { type: 'agent' } })
+  // With no account (sign-in off) there is nobody for the assistant to work as.
+  const r = agent.startAgentOn(store.getAssignment(CAROL, t.id).item, { account: null, storeAccountId: 'device-1' })
+  assert(!r.ok && /sign-in/.test(r.error), JSON.stringify(r))
+  agent.handBackUnstarted(CAROL, t, r.error)
+  const after = store.getAssignment(CAROL, t.id).item
+  assert(after.status === 'blocked' && after.assignee.id === CAROL.id && /could not start/.test(after.comments.at(-1).text), JSON.stringify(after))
+})
+
+await test('only someone who can assign gives work to the assistant; the model cannot', async () => {
+  const t = await create(CAROL, { title: 'not for bob to hand off', projectId: project.id, assignee: { type: 'account', id: BOB.id } })
+  assert((await route('PATCH', `/assignments/${t.id}`, BOB, { assignee: { type: 'agent' } })).status === 403, 'a viewer handed it to the assistant')
+  const viaTool = await tool.callTool('assignment_create', { items: [{ title: 'x', assignee: 'assistant' }] }, { assignments: { enabled: true } }, { account: CAROL })
+  assert(viaTool.isError, 'the model gave a task to the assistant')
 })
 
 console.log('\n-- the assistant\'s tools (Phase 2) --')

@@ -38,6 +38,7 @@ import {
   MAX_TITLE_CHARS, MAX_NOTES_CHARS, MAX_ITEMS_PER_PROJECT, MAX_DIRECT_PER_ACCOUNT, STATUSES,
 } from '../assignments-storage.mjs'
 import { sendJson } from './http-json.mjs'
+import { startAgentOn, handBackUnstarted } from '../assignment-agent.mjs'
 import { logEvent } from '../logger.mjs'
 
 const ITEM = /^\/assignments\/([0-9a-f-]{36})$/
@@ -97,7 +98,23 @@ function fail(res, r) {
 
 const who = (account) => account?.username ?? undefined
 
-export async function handleAssignmentRoute(req, res, urlPath, account) {
+/**
+ * After a create or update: a task now given to the assistant starts its job
+ * (assignment-agent.mjs), as this caller. One that cannot start comes back to
+ * them, Blocked, with the reason. Answers with the task as it now stands.
+ */
+function startAgentIfGiven(account, item, caller) {
+  if (item?.assignee?.type !== 'agent' || (item.agentRun && item.agentRun.running)) return item
+  const r = startAgentOn(item, { account, ...caller })
+  if (!r.ok) handBackUnstarted(account, item, r.error)
+  return getAssignment(account, item.id).item ?? item
+}
+
+/**
+ * @param {{ storeAccountId?: string, surface?: string | null, timeZone?: string | null }} [caller]
+ *   what the job runner needs to start the assistant on a task (as /tasks gets it)
+ */
+export async function handleAssignmentRoute(req, res, urlPath, account, caller = {}) {
   try {
     const q = query(req)
 
@@ -137,6 +154,7 @@ export async function handleAssignmentRoute(req, res, urlPath, account) {
       if (!body) { sendJson(res, 400, { error: { message: 'Expected a JSON task of at most 64 KB', type: 'invalid_request_error' } }); return true }
       const r = createAssignment(account, body)
       if (!r.ok) { fail(res, r); return true }
+      r.item = startAgentIfGiven(account, r.item, caller)
       logEvent('assignment', 'created', { account: who(account), project: !!r.item.projectId, assigned: !!r.item.assignee })
       sendJson(res, 201, r.item)
       return true
@@ -192,6 +210,7 @@ export async function handleAssignmentRoute(req, res, urlPath, account) {
       if (!body) { sendJson(res, 400, { error: { message: 'Expected a JSON object of at most 64 KB', type: 'invalid_request_error' } }); return true }
       const r = updateAssignment(account, id, body)
       if (!r.ok) { fail(res, r); return true }
+      r.item = startAgentIfGiven(account, r.item, caller)
       logEvent('assignment', 'updated', { account: who(account), fields: PATCH_FIELDS.filter((k) => k in body).join(',') })
       sendJson(res, 200, r.item)
       return true

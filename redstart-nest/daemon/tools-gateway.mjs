@@ -544,7 +544,13 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       if (isProjectRoute(urlPath) && await handleProjectRoute(req, res, urlPath, authResult.account ?? null)) return
       // Tasks people give each other (tasks plan Phase 1). Same account rule;
       // with sign-in off they are one shared personal list, as projects are.
-      if (isAssignmentRoute(urlPath) && await handleAssignmentRoute(req, res, urlPath, authResult.account ?? null)) return
+      if (isAssignmentRoute(urlPath) && await handleAssignmentRoute(req, res, urlPath, authResult.account ?? null, {
+        // For a task given to the assistant, which runs as a job of the
+        // caller's (assignment-agent.mjs): the same scope /tasks gets.
+        storeAccountId: accountId,
+        surface: authResult.surface ?? null,
+        timeZone: typeof req.headers['x-redstart-timezone'] === 'string' ? req.headers['x-redstart-timezone'] : null,
+      })) return
       // Artifacts (artifacts plan §12): listing, sharing, view tokens. Same
       // account rule. Sharing, deleting and restoring exist only here (D8).
       if (isArtifactRoute(urlPath) && await handleArtifactRoute(req, res, urlPath, authResult.account ?? null)) return
