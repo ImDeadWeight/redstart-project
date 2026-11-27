@@ -9,17 +9,17 @@
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { WorkItemService, localToday, type WorkItem } from '$lib/services/work-item.service';
-	import { workItemsStore } from '$lib/stores/work-items.svelte';
+	import { AssignmentService, localToday, type Assignment } from '$lib/services/assignment.service';
+	import { assignmentsStore } from '$lib/stores/assignments.svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
-	import TaskRow from './TaskRow.svelte';
-	import TaskEditor from './TaskEditor.svelte';
+	import AssignmentRow from './AssignmentRow.svelte';
+	import AssignmentEditor from './AssignmentEditor.svelte';
 
 	type Filter = 'mine' | 'groups' | 'created';
 
 	let filter = $state<Filter>('mine');
-	let mine = $state<WorkItem[]>([]);
-	let created = $state<WorkItem[]>([]);
+	let mine = $state<Assignment[]>([]);
+	let created = $state<Assignment[]>([]);
 	let loading = $state(true);
 	let error = $state('');
 	let showDone = $state(false);
@@ -74,15 +74,15 @@
 	const doneItems = $derived(visible.filter((t) => t.status === 'done'));
 
 	$effect(() => {
-		void workItemsStore.version;
+		void assignmentsStore.version;
 		void load(showDone);
 	});
 
 	async function load(includeDone: boolean) {
 		try {
 			const [m, c] = await Promise.all([
-				WorkItemService.mine(includeDone),
-				signedIn ? WorkItemService.created(includeDone) : Promise.resolve({ items: [] })
+				AssignmentService.mine(includeDone),
+				signedIn ? AssignmentService.created(includeDone) : Promise.resolve({ items: [] })
 			]);
 			mine = m.items;
 			created = c.items;
@@ -99,13 +99,13 @@
 		if (!title) return;
 		adding = true;
 		try {
-			await WorkItemService.create({
+			await AssignmentService.create({
 				title,
 				assignee: myId ? { type: 'account', id: myId } : null
 			});
 			draft = '';
 			if (filter !== 'mine') filter = 'mine';
-			workItemsStore.changed();
+			assignmentsStore.changed();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Could not add the task');
 		} finally {
@@ -113,16 +113,16 @@
 		}
 	}
 
-	async function toggleDone(task: WorkItem, done: boolean) {
+	async function toggleDone(task: Assignment, done: boolean) {
 		try {
-			await WorkItemService.update(task.id, { status: done ? 'done' : 'open' });
-			workItemsStore.changed();
+			await AssignmentService.update(task.id, { status: done ? 'done' : 'open' });
+			assignmentsStore.changed();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Could not change the task');
 		}
 	}
 
-	function openTask(t: WorkItem) {
+	function openTask(t: Assignment) {
 		editingId = t.id;
 		editorOpen = true;
 	}
@@ -218,7 +218,7 @@
 					</h2>
 					<ul class="divide-y rounded-lg border">
 						{#each s.items as task (task.id)}
-							<TaskRow {task} hideOwnAssignee onOpen={openTask} onToggleDone={toggleDone} />
+							<AssignmentRow {task} hideOwnAssignee onOpen={openTask} onToggleDone={toggleDone} />
 						{/each}
 					</ul>
 				</section>
@@ -236,7 +236,7 @@
 				<h2 class="text-xs font-medium text-muted-foreground">Done · {doneItems.length}</h2>
 				<ul class="divide-y rounded-lg border">
 					{#each doneItems as task (task.id)}
-						<TaskRow {task} hideOwnAssignee onOpen={openTask} onToggleDone={toggleDone} />
+						<AssignmentRow {task} hideOwnAssignee onOpen={openTask} onToggleDone={toggleDone} />
 					{/each}
 				</ul>
 			</section>
@@ -244,4 +244,4 @@
 	{/if}
 </div>
 
-<TaskEditor bind:open={editorOpen} taskId={editingId} assignToMe />
+<AssignmentEditor bind:open={editorOpen} taskId={editingId} assignToMe />

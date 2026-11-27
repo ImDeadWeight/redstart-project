@@ -1,66 +1,49 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — gateway routes for background jobs (agent-runtime plan
+// Redstart Nest — gateway routes for background tasks (agent-runtime plan
 // Phase 3, D31)
 // =============================================================================
 // The account's own tasks. Every route acts on the caller's scope only: the
 // task's owner (memoryKey) and its conversations scope must both be the
 // caller's, or the answer is 404, so ids cannot be probed.
 //
-//   POST /jobs                   { conversationId, content, generation?, maxTurns?,
+//   POST /tasks                  { conversationId, content, generation?, maxTurns?,
 //                                  clientTools?, toolLimits?, origin? }
 //                                origin: 'chat' (a plain Send) | 'background' (default)
-//                                start one (job-runner.mjs startJob)
-//   GET  /jobs[?conversationId=]   the caller's jobs, newest first
-//   GET  /jobs/:id               one job
-//   GET  /jobs/:id/events        Server-Sent Events: the log from after
+//                                start one (task-runner.mjs startTask)
+//   GET  /tasks[?conversationId=]  the caller's tasks, newest first
+//   GET  /tasks/:id              one task
+//   GET  /tasks/:id/events       Server-Sent Events: the log from after
 //                                Last-Event-ID (or ?after=), then live; ends
 //                                once the task has ended. Read with fetch, not
 //                                EventSource, which cannot send Authorization.
-//   POST /jobs/:id/steer         { content }  a message typed while it runs
-//   POST /jobs/:id/answer        { chosen?, text? } | { dismissed: true } | { continue }
-//   POST /jobs/:id/cancel
+//   POST /tasks/:id/steer        { content }  a message typed while it runs
+//   POST /tasks/:id/answer       { chosen?, text? } | { dismissed: true } | { continue }
+//   POST /tasks/:id/cancel
 //
 // An approval a task waits on is decided where every approval is: POST
 // /approvals/:id (approval-routes.mjs). Its id is in the task's `waiting`.
 // =============================================================================
 
 import { sendJson, readJsonBody } from './http-json.mjs'
-import * as store from '../job-store.mjs'
-import { startJob, answerJob, steerJob, cancelJob, publicJob, registerClientTools, attachClient, clientResult } from '../job-runner.mjs'
+import * as store from '../task-store.mjs'
+import { startTask, answerTask, steerTask, cancelTask, publicTask, registerClientTools, attachClient, clientResult } from '../task-runner.mjs'
 import { memoryKey } from '../memory-storage.mjs'
-import { logEvent } from '../logger.mjs'
 
 const NOT_FOUND = { error: { message: 'Not found', type: 'not_found' } }
 const bad = (message) => ({ error: { message, type: 'invalid_request_error' } })
-const ONE = /^\/jobs\/([0-9a-f-]{36})$/
-const SUB = /^\/jobs\/([0-9a-f-]{36})\/(events|steer|answer|cancel|client|client-result)$/
-
-// THE OLD PATH (tasks plan Phase 0). These were /tasks until "task" became the
-// work people give each other (/work-items). /tasks still reaches the same
-// handler, for an Android build or a cached page that has not updated, and
-// each use is logged (at most once a minute) so we know when it can go. It is
-// never reused for anything else: an old client's job calls must not land on
-// another API.
-const LEGACY = /^\/tasks(?=\/|$)/
-const LEGACY_LOG_MS = 60_000
-let legacyLoggedAt = 0
-
-/** The /jobs path for a /tasks one; any other path unchanged. */
-export function jobPath(urlPath) {
-  return LEGACY.test(urlPath) ? urlPath.replace(LEGACY, '/jobs') : urlPath
-}
+const ONE = /^\/tasks\/([0-9a-f-]{36})$/
+const SUB = /^\/tasks\/([0-9a-f-]{36})\/(events|steer|answer|cancel|client|client-result)$/
 /** A comment line this often keeps a proxy from closing an idle stream. */
 export const SSE_HEARTBEAT_MS = 25_000
 
-export function isJobRoute(urlPath) {
-  const p = jobPath(urlPath)
-  return p === '/jobs' || ONE.test(p) || SUB.test(p)
+export function isTaskRoute(urlPath) {
+  return urlPath === '/tasks' || ONE.test(urlPath) || SUB.test(urlPath)
 }
 
 function owned(id, account, storeAccountId) {
-  const t = store.getJob(id)
+  const t = store.getTask(id)
   if (!t) return null
   if (t.accountKey !== memoryKey(account) || t.storeAccountId !== storeAccountId) return null
   return t
@@ -74,32 +57,27 @@ function sendResult(res, r, okStatus = 200, body = { ok: true }) {
 /**
  * @param {import('http').IncomingMessage} req
  * @param {import('http').ServerResponse} res
- * @param {string} rawPath  /jobs/..., or the old /tasks/... (see jobPath)
+ * @param {string} urlPath
  * @param {{ account: object | null, storeAccountId: string, surface?: string | null, timeZone?: string | null }} who
  *   storeAccountId: the conversations scope the gateway resolved (account id, or device id with auth off)
  * @returns {Promise<boolean>} false: not ours
  */
-export async function handleJobRoute(req, res, rawPath, who) {
+export async function handleTaskRoute(req, res, urlPath, who) {
   const { account, storeAccountId } = who
-  const urlPath = jobPath(rawPath)
-  if (urlPath !== rawPath && Date.now() - legacyLoggedAt > LEGACY_LOG_MS) {
-    legacyLoggedAt = Date.now()
-    logEvent('task', 'legacy_route', { method: req.method, surface: who.surface ?? undefined })
-  }
   try {
-    if (urlPath === '/jobs') {
+    if (urlPath === '/tasks') {
       if (req.method === 'GET') {
         const url = new URL(req.url, 'http://x')
         const conversationId = url.searchParams.get('conversationId')
-        const mine = store.listJobs(memoryKey(account))
+        const mine = store.listTasks(memoryKey(account))
           .filter((t) => t.storeAccountId === storeAccountId && (!conversationId || t.conversationId === conversationId))
-        sendJson(res, 200, { tasks: mine.map(publicJob) })
+        sendJson(res, 200, { tasks: mine.map(publicTask) })
         return true
       }
       if (req.method === 'POST') {
         const body = await readJsonBody(req)
         if (typeof body?.conversationId !== 'string' || !body.conversationId) { sendJson(res, 400, bad('conversationId is required')); return true }
-        const r = startJob({
+        const r = startTask({
           account,
           surface: who.surface ?? null,
           storeAccountId,
@@ -116,7 +94,7 @@ export async function handleJobRoute(req, res, rawPath, who) {
           timeZone: who.timeZone ?? null,
         })
         if (!r.ok) { sendJson(res, r.status, r.status === 404 ? NOT_FOUND : bad(r.error)); return true }
-        sendJson(res, 201, publicJob(r.task))
+        sendJson(res, 201, publicTask(r.task))
         return true
       }
       return false
@@ -127,7 +105,7 @@ export async function handleJobRoute(req, res, rawPath, who) {
       if (req.method !== 'GET') return false
       const t = owned(one[1], account, storeAccountId)
       if (!t) { sendJson(res, 404, NOT_FOUND); return true }
-      sendJson(res, 200, publicJob(t))
+      sendJson(res, 200, publicTask(t))
       return true
     }
 
@@ -139,10 +117,10 @@ export async function handleJobRoute(req, res, rawPath, who) {
     if (!t) { sendJson(res, 404, NOT_FOUND); return true }
 
     if (action === 'events') return streamEvents(req, res, t)
-    if (action === 'cancel') { sendResult(res, cancelJob(id)); return true }
+    if (action === 'cancel') { sendResult(res, cancelTask(id)); return true }
     const body = await readJsonBody(req)
-    if (action === 'steer') { sendResult(res, steerJob(id, body?.content)); return true }
-    if (action === 'answer') { sendResult(res, answerJob(id, body ?? {})); return true }
+    if (action === 'steer') { sendResult(res, steerTask(id, body?.content)); return true }
+    if (action === 'answer') { sendResult(res, answerTask(id, body ?? {})); return true }
     if (action === 'client') { sendResult(res, registerClientTools(id, body?.tools)); return true }
     if (action === 'client-result') { sendResult(res, clientResult(id, body ?? {})); return true }
     return false
@@ -213,7 +191,7 @@ function streamEvents(req, res, task) {
   for (const e of store.readEvents(task.id, sent)) write(e)
   replaying = false
   for (const e of buffered) write(e)
-  const now = store.getJob(task.id)
+  const now = store.getTask(task.id)
   if (!now || store.TERMINAL_STATES.includes(now.status)) end()
   return true
 }

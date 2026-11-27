@@ -34,10 +34,10 @@ import { handleAuthRoute } from './gateway/auth-routes.mjs'
 import { isConversationRoute, handleConversationRoute } from './gateway/conversation-routes.mjs'
 import { isMemoryRoute, handleMemoryRoute } from './gateway/memory-routes.mjs'
 import { isApprovalRoute, handleApprovalRoute } from './gateway/approval-routes.mjs'
-import { isJobRoute, handleJobRoute } from './gateway/job-routes.mjs'
+import { isTaskRoute, handleTaskRoute } from './gateway/task-routes.mjs'
 import { isWorkflowRoute, handleWorkflowRoute } from './gateway/workflow-routes.mjs'
 import { isProjectRoute, handleProjectRoute } from './gateway/project-routes.mjs'
-import { isWorkItemRoute, handleWorkItemRoute } from './gateway/work-item-routes.mjs'
+import { isAssignmentRoute, handleAssignmentRoute } from './gateway/assignment-routes.mjs'
 import { isArtifactRoute, handleArtifactRoute } from './gateway/artifact-routes.mjs'
 import { setUpstreamPort } from './completion-activity.mjs'
 import { isDocumentIndexRoute, handleDocumentIndexRoute } from './gateway/document-index-routes.mjs'
@@ -435,7 +435,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
           // every /conversations call; without it here, browsers block those
           // cross-origin requests at preflight. X-Redstart-Timezone rides on
           // every completions call (the user's local date, session-time.mjs).
-          // Last-Event-ID: a task's event stream resumes from it (gateway/job-routes.mjs).
+          // Last-Event-ID: a task's event stream resumes from it (gateway/task-routes.mjs).
           'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Redstart-Device-Id, X-Redstart-Timezone, Last-Event-ID',
           'Access-Control-Max-Age': '86400',
         })
@@ -489,7 +489,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       // posture; with auth on, every request already carries a real account.
       const accountId = authResult.account?.id || req.headers['x-redstart-device-id']
       // Tasks run on conversations, so they need the same storage scope.
-      if ((isConversationRoute(urlPath) || isJobRoute(urlPath)) && !accountId) {
+      if ((isConversationRoute(urlPath) || isTaskRoute(urlPath)) && !accountId) {
         res.writeHead(401, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
         res.end(JSON.stringify({ error: { message: 'Unauthorized — no account or device ID', type: 'auth_error' } }))
         return
@@ -531,7 +531,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       if (isApprovalRoute(urlPath) && await handleApprovalRoute(req, res, urlPath, authResult.account ?? null)) return
       // Background tasks (agent-runtime Phase 3). The conversations scope as
       // above; the surface from the credential, for the runner's per-turn check.
-      if (isJobRoute(urlPath) && await handleJobRoute(req, res, urlPath, {
+      if (isTaskRoute(urlPath) && await handleTaskRoute(req, res, urlPath, {
         account: authResult.account ?? null,
         storeAccountId: accountId,
         surface: authResult.surface ?? null,
@@ -544,7 +544,7 @@ export function startGateway(publicPort, config, { bindHost = '127.0.0.1' } = {}
       if (isProjectRoute(urlPath) && await handleProjectRoute(req, res, urlPath, authResult.account ?? null)) return
       // Tasks people give each other (tasks plan Phase 1). Same account rule;
       // with sign-in off they are one shared personal list, as projects are.
-      if (isWorkItemRoute(urlPath) && await handleWorkItemRoute(req, res, urlPath, authResult.account ?? null)) return
+      if (isAssignmentRoute(urlPath) && await handleAssignmentRoute(req, res, urlPath, authResult.account ?? null)) return
       // Artifacts (artifacts plan §12): listing, sharing, view tokens. Same
       // account rule. Sharing, deleting and restoring exist only here (D8).
       if (isArtifactRoute(urlPath) && await handleArtifactRoute(req, res, urlPath, authResult.account ?? null)) return

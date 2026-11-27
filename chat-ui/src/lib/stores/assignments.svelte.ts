@@ -1,4 +1,4 @@
-import { WorkItemService, type WorkItemCounts } from '$lib/services/work-item.service';
+import { AssignmentService, type AssignmentCounts } from '$lib/services/assignment.service';
 
 /**
  * The sidebar's count of the signed-in account's open tasks (tasks plan
@@ -8,13 +8,13 @@ import { WorkItemService, type WorkItemCounts } from '$lib/services/work-item.se
  *
  * Refreshed when first shown, when the window regains focus, after a change
  * here, and every two minutes, so a task someone else gives you appears
- * without a reload. An older Nest has no /work-items: the badge then stays
+ * without a reload. An older Nest has no /assignments: the badge then stays
  * hidden, with no error.
  */
 const POLL_MS = 2 * 60 * 1000;
 
-class WorkItemsStore {
-	counts = $state<WorkItemCounts | null>(null);
+class AssignmentsStore {
+	counts = $state<AssignmentCounts | null>(null);
 	/** Bumped after each change made here; lists reload when it moves. */
 	version = $state(0);
 
@@ -34,7 +34,7 @@ class WorkItemsStore {
 
 	refresh(): Promise<void> {
 		if (this.inFlight) return this.inFlight;
-		this.inFlight = WorkItemService.count()
+		this.inFlight = AssignmentService.count()
 			.then((c) => {
 				this.counts = c;
 			})
@@ -54,4 +54,4 @@ class WorkItemsStore {
 	}
 }
 
-export const workItemsStore = new WorkItemsStore();
+export const assignmentsStore = new AssignmentsStore();

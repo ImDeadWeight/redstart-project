@@ -2,7 +2,7 @@
 // Agent bench — --runtime: the daemon hosts the loop (agent-runtime 3.10)
 // =============================================================================
 // The default bench hosts shared/agent-core's loop itself (bench.mjs). With
-// --runtime it hosts nothing: each run is POSTed to /jobs, so the loop runs
+// --runtime it hosts nothing: each run is POSTed to /tasks, so the loop runs
 // in the daemon's task runner exactly as a background task started from a
 // chat does, and the bench plays the user through the task routes:
 //

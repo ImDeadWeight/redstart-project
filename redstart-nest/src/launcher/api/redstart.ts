@@ -131,9 +131,9 @@ export type RedstartAPI = {
     check: () => Promise<TlsStatus>
     retry: () => Promise<TlsStatus>
   }
-  // Every account's background jobs (agent-runtime Phase 3; daemon/ipc/jobs.mjs).
-  jobs: {
-    list: () => Promise<{ jobs: JobSummary[] }>
+  // Every account's background tasks (agent-runtime Phase 3; daemon/ipc/tasks.mjs).
+  tasks: {
+    list: () => Promise<{ tasks: TaskSummary[] }>
     cancel: (id: string) => Promise<{ ok: true } | { ok: false; error: string }>
   }
   browse: {
@@ -363,8 +363,8 @@ export type PolicyRecord = {
   source?: string
 }
 
-/** One background job as the owner sees it (daemon/ipc/jobs.mjs): the record, never its content. */
-export type JobSummary = {
+/** One background task as the owner sees it (daemon/ipc/tasks.mjs): the record, never its content. */
+export type TaskSummary = {
   id: string
   account: string | null
   status: 'queued' | 'running' | 'waiting_user' | 'waiting_approval' | 'waiting_model' | 'done' | 'failed' | 'cancelled'

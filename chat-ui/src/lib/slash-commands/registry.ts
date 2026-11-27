@@ -28,7 +28,7 @@ import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
 import { isRouterMode } from '$lib/stores/server.svelte';
 import { promptModesStore } from '$lib/stores/prompt-modes.svelte';
 import { projectsStore } from '$lib/stores/projects.svelte';
-import { jobsStore } from '$lib/stores/jobs.svelte';
+import { tasksStore } from '$lib/stores/tasks.svelte';
 import { copyToClipboard, formatMessageForClipboard } from '$lib/utils';
 import { filterOptions, usage, type SlashCommandSpec, type SlashOption } from './parse';
 
@@ -307,10 +307,10 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 	{
 		// agent-runtime Phase 3.9: the daemon runs the agent loop for this chat
 		// with no browser attached; the chat follows it and shows its cards.
-		// It was /task until tasks plan Phase 0, when "task" became the work
-		// people give each other; /task still works.
-		name: 'job',
-		aliases: ['task'],
+		// People read "background job": "Tasks" on screen are the ones people
+		// give each other (assignments in code). /job finds it too.
+		name: 'task',
+		aliases: ['job'],
 		summary: 'Run a request in the background, even with this page closed',
 		arg: 'required',
 		argHint: '<request>',
@@ -320,7 +320,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 				return;
 			}
 			let id = conversationsStore.activeConversation?.id ?? null;
-			if (id && jobsStore.activeFor(id)) {
+			if (id && tasksStore.activeFor(id)) {
 				toast.info('A background job is already running in this chat. Messages you send go to it.');
 				return;
 			}
@@ -330,7 +330,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 				toast.error(errorText(e, 'Could not start a chat for the job'));
 				return;
 			}
-			const task = await jobsStore.start(id, arg);
+			const task = await tasksStore.start(id, arg);
 			if (task) toast.success('Running in the background. You can close this page; it keeps going.');
 		}
 	},

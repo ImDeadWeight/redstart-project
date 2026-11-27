@@ -1,23 +1,17 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — the job store (agent-runtime plan Phase 3, D22-D24)
+// Redstart Nest — the task store (agent-runtime plan Phase 3, D22-D24)
 // =============================================================================
-// A job is one agent flow the daemon runs on its own, against one of the
-// account's conversations, with no client attached (job-runner.mjs). This
+// A task is one agent flow the daemon runs on its own, against one of the
+// account's conversations, with no client attached (task-runner.mjs). This
 // module only keeps its record and its log; it never runs anything.
 //
-// Called "tasks" until tasks plan Phase 0 (2026-11-26), when "task" became
-// the work people give each other (work-items-storage.mjs). What is stored
-// and sent kept its names so nothing has to be rewritten: `task.json`, the
-// conversation's `activeTaskId`, the 'task' log channel. The folder moved
-// from <config>/tasks/ to <config>/jobs/ (jobsDir() below).
-//
-//   <config>/jobs/<id>/task.json      the record, rewritten whole (it is small)
-//   <config>/jobs/<id>/events.jsonl   append-only, one event per line, each
+//   <config>/tasks/<id>/task.json     the record, rewritten whole (it is small)
+//   <config>/tasks/<id>/events.jsonl  append-only, one event per line, each
 //                                     numbered (`seq`) so an SSE client that
 //                                     reconnects replays from where it was
-//                                     (Last-Event-ID, gateway/job-routes.mjs)
+//                                     (Last-Event-ID, gateway/task-routes.mjs)
 //
 // A record, for D23's states:
 //   queued            created, waiting for its first turn
@@ -45,7 +39,7 @@ import * as crypto from 'node:crypto'
 import { configDir } from './platform-paths.mjs'
 import { writeJsonAtomic, readJsonOr } from './json-store.mjs'
 
-export const JOB_STATES = Object.freeze([
+export const TASK_STATES = Object.freeze([
   'queued', 'running', 'waiting_user', 'waiting_approval', 'waiting_model', 'waiting_client', 'done', 'failed', 'cancelled',
 ])
 export const TERMINAL_STATES = Object.freeze(['done', 'failed', 'cancelled'])
@@ -57,39 +51,16 @@ export const MAX_EVENT_CHARS = 8000
 
 const ID_RE = /^[0-9a-f-]{36}$/
 
-/** The folder in use, per config folder (tests change it between cases). */
-const resolvedDirs = new Map()
-
-/**
- * <config>/jobs/, moved from <config>/tasks/ the first time it is asked for
- * (tasks plan Phase 0). The move is one rename, so it is all or nothing; if it
- * fails (a file held open on Windows, say) the old folder is used where it is
- * and the move is tried again on the next start. Jobs are never lost either way.
- */
-export function jobsDir() {
-  const base = configDir()
-  const known = resolvedDirs.get(base)
-  if (known) return known
-  const dir = path.join(base, 'jobs')
-  const legacy = path.join(base, 'tasks')
-  let use = dir
-  if (!fs.existsSync(dir) && fs.existsSync(legacy)) {
-    try {
-      fs.renameSync(legacy, dir)
-    } catch {
-      use = legacy
-    }
-  }
-  resolvedDirs.set(base, use)
-  return use
+function tasksDir() {
+  return path.join(configDir(), 'tasks')
 }
 
-function jobDir(id) {
-  return path.join(jobsDir(), id)
+function taskDir(id) {
+  return path.join(tasksDir(), id)
 }
 
 /** @param {unknown} id */
-export function isJobId(id) {
+export function isTaskId(id) {
   return typeof id === 'string' && ID_RE.test(id)
 }
 
@@ -106,21 +77,21 @@ const subscribers = new Map()
  *   limits: { maxTurns: number }, timeZone: string | null, error: string | null,
  *   inFlight: { callId: string, name: string } | null,
  *   createdAt: number, updatedAt: number, endedAt: number | null
- * }} JobRecord
+ * }} TaskRecord
  */
 
 /**
  * @param {{ accountKey: string, accountId?: string | null, storeAccountId: string, conversationId: string,
  *   surface?: string | null, origin?: 'chat' | 'background', limits?: { maxTurns?: number },
  *   timeZone?: string | null }} spec
- * @returns {JobRecord}
+ * @returns {TaskRecord}
  */
-export function createJob(spec) {
-  if (typeof spec?.accountKey !== 'string' || !spec.accountKey) throw new Error('createJob: accountKey is required')
-  if (typeof spec.storeAccountId !== 'string' || !spec.storeAccountId) throw new Error('createJob: storeAccountId is required')
-  if (typeof spec.conversationId !== 'string' || !spec.conversationId) throw new Error('createJob: conversationId is required')
+export function createTask(spec) {
+  if (typeof spec?.accountKey !== 'string' || !spec.accountKey) throw new Error('createTask: accountKey is required')
+  if (typeof spec.storeAccountId !== 'string' || !spec.storeAccountId) throw new Error('createTask: storeAccountId is required')
+  if (typeof spec.conversationId !== 'string' || !spec.conversationId) throw new Error('createTask: conversationId is required')
   const now = Date.now()
-  /** @type {JobRecord} */
+  /** @type {TaskRecord} */
   const task = {
     id: crypto.randomUUID(),
     accountKey: spec.accountKey,
@@ -146,33 +117,33 @@ export function createJob(spec) {
     updatedAt: now,
     endedAt: null,
   }
-  fs.mkdirSync(jobDir(task.id), { recursive: true })
-  writeJsonAtomic(path.join(jobDir(task.id), 'task.json'), task)
+  fs.mkdirSync(taskDir(task.id), { recursive: true })
+  writeJsonAtomic(path.join(taskDir(task.id), 'task.json'), task)
   lastSeq.set(task.id, 0)
   appendEvent(task.id, { type: 'created', status: task.status })
   pruneFinished(task.accountKey)
   return task
 }
 
-/** @returns {JobRecord | null} */
-export function getJob(id) {
-  if (!isJobId(id)) return null
-  return readJsonOr(path.join(jobDir(id), 'task.json'), null)
+/** @returns {TaskRecord | null} */
+export function getTask(id) {
+  if (!isTaskId(id)) return null
+  return readJsonOr(path.join(taskDir(id), 'task.json'), null)
 }
 
 /**
  * Every task, or one account's, newest first.
  *
  * @param {string} [accountKey]
- * @returns {JobRecord[]}
+ * @returns {TaskRecord[]}
  */
-export function listJobs(accountKey) {
+export function listTasks(accountKey) {
   let names = []
-  try { names = fs.readdirSync(jobsDir()) } catch { return [] }
+  try { names = fs.readdirSync(tasksDir()) } catch { return [] }
   const out = []
   for (const name of names) {
-    if (!isJobId(name)) continue
-    const t = getJob(name)
+    if (!isTaskId(name)) continue
+    const t = getTask(name)
     if (!t) continue
     if (accountKey !== undefined && t.accountKey !== accountKey) continue
     out.push(t)
@@ -181,26 +152,26 @@ export function listJobs(accountKey) {
 }
 
 /** The task that holds this conversation, if one is still going. */
-export function activeJobFor(storeAccountId, conversationId) {
-  return listJobs().find((t) => t.storeAccountId === storeAccountId && t.conversationId === conversationId
+export function activeTaskFor(storeAccountId, conversationId) {
+  return listTasks().find((t) => t.storeAccountId === storeAccountId && t.conversationId === conversationId
     && !TERMINAL_STATES.includes(t.status)) ?? null
 }
 
 /**
- * Change a task's record. `status` must be one of JOB_STATES; a terminal
+ * Change a task's record. `status` must be one of TASK_STATES; a terminal
  * task never changes again (a late callback from a cancelled run cannot
  * bring it back). A status change is logged as an event.
  *
  * @param {string} id
- * @param {Partial<Pick<JobRecord, 'status' | 'waiting' | 'error' | 'inFlight'>>} patch
- * @returns {JobRecord | null} null: no such task, or it had already ended
+ * @param {Partial<Pick<TaskRecord, 'status' | 'waiting' | 'error' | 'inFlight'>>} patch
+ * @returns {TaskRecord | null} null: no such task, or it had already ended
  */
-export function updateJob(id, patch) {
-  const t = getJob(id)
+export function updateTask(id, patch) {
+  const t = getTask(id)
   if (!t || TERMINAL_STATES.includes(t.status)) return null
   const next = { ...t }
   if ('status' in patch) {
-    if (!JOB_STATES.includes(patch.status)) throw new Error(`updateJob: unknown status ${patch.status}`)
+    if (!TASK_STATES.includes(patch.status)) throw new Error(`updateTask: unknown status ${patch.status}`)
     next.status = patch.status
     if (TERMINAL_STATES.includes(patch.status)) next.endedAt = Date.now()
     // Waiting is a property of a waiting state: leaving one clears it.
@@ -210,7 +181,7 @@ export function updateJob(id, patch) {
   if ('error' in patch) next.error = typeof patch.error === 'string' ? patch.error.slice(0, 2000) : null
   if ('inFlight' in patch) next.inFlight = patch.inFlight ?? null
   next.updatedAt = Date.now()
-  writeJsonAtomic(path.join(jobDir(id), 'task.json'), next)
+  writeJsonAtomic(path.join(taskDir(id), 'task.json'), next)
   if ('status' in patch && patch.status !== t.status) {
     appendEvent(id, { type: 'status', status: next.status, waiting: next.waiting, error: next.error ?? undefined })
   }
@@ -222,7 +193,7 @@ function readLastSeq(id) {
   // First append since this process started. A crash mid-write can leave a
   // last line with no newline; the next append would be glued onto it and
   // lost with it, so close it first.
-  const file = path.join(jobDir(id), 'events.jsonl')
+  const file = path.join(taskDir(id), 'events.jsonl')
   try {
     const raw = fs.readFileSync(file, 'utf8')
     if (raw && !raw.endsWith('\n')) fs.appendFileSync(file, '\n')
@@ -241,7 +212,7 @@ function readLastSeq(id) {
  * @param {{ type: string } & Record<string, unknown>} event
  */
 export function appendEvent(id, event) {
-  if (!isJobId(id)) throw new Error('appendEvent: not a task id')
+  if (!isTaskId(id)) throw new Error('appendEvent: not a task id')
   const seq = readLastSeq(id) + 1
   let full = { seq, at: Date.now(), ...event }
   let line = JSON.stringify(full)
@@ -249,7 +220,7 @@ export function appendEvent(id, event) {
     full = { seq, at: full.at, type: event.type, truncated: true }
     line = JSON.stringify(full)
   }
-  fs.appendFileSync(path.join(jobDir(id), 'events.jsonl'), `${line}\n`)
+  fs.appendFileSync(path.join(taskDir(id), 'events.jsonl'), `${line}\n`)
   lastSeq.set(id, seq)
   for (const fn of subscribers.get(id) ?? []) {
     try { fn(full) } catch { /* a subscriber's failure is its own */ }
@@ -278,9 +249,9 @@ export function emitLive(id, event) {
  * write cut short by a crash) is skipped.
  */
 export function readEvents(id, afterSeq = 0) {
-  if (!isJobId(id)) return []
+  if (!isTaskId(id)) return []
   let raw = ''
-  try { raw = fs.readFileSync(path.join(jobDir(id), 'events.jsonl'), 'utf8') } catch { return [] }
+  try { raw = fs.readFileSync(path.join(taskDir(id), 'events.jsonl'), 'utf8') } catch { return [] }
   const out = []
   for (const line of raw.split('\n')) {
     if (!line) continue
@@ -306,9 +277,9 @@ export function subscribe(id, fn) {
 
 /** Finished tasks past MAX_FINISHED_PER_ACCOUNT are removed, oldest first, with their logs. */
 function pruneFinished(accountKey) {
-  const finished = listJobs(accountKey).filter((t) => TERMINAL_STATES.includes(t.status))
+  const finished = listTasks(accountKey).filter((t) => TERMINAL_STATES.includes(t.status))
   for (const t of finished.slice(MAX_FINISHED_PER_ACCOUNT)) {
-    try { fs.rmSync(jobDir(t.id), { recursive: true, force: true }) } catch { /* next time */ }
+    try { fs.rmSync(taskDir(t.id), { recursive: true, force: true }) } catch { /* next time */ }
     lastSeq.delete(t.id)
   }
 }
@@ -317,5 +288,4 @@ function pruneFinished(accountKey) {
 export function _resetMemory() {
   lastSeq.clear()
   subscribers.clear()
-  resolvedDirs.clear()
 }

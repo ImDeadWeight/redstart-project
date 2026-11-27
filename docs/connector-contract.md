@@ -247,24 +247,23 @@ header, which is unauthenticated and acceptable only in that posture. Send one.
 
 The tasks people give each other, which a planning client (Greenhouse) builds
 on. Nest keeps the only copy: a client reads and writes them here and stores
-none of its own. They live under `/work-items`. The assistant's background jobs are `/jobs`
-(formerly `/tasks`, still accepted as an alias), and `/tasks` is never reused
-for these.
+none of its own. They live under `/assignments` (people see them as "tasks"; `/tasks` is the
+assistant's background tasks, a different thing).
 
 | Route | Body or query | Answers |
 | --- | --- | --- |
-| `GET /work-items/mine` | `?include=done` `?today=YYYY-MM-DD` | `{ items, counts: { open, overdue }, limits }` |
-| `GET /work-items/count` | `?today=` | `{ open, overdue }` |
-| `GET /work-items/created` | `?include=done` | tasks the caller made that are in no project |
-| `GET /work-items/assignees` | `?projectId=` | `{ accounts, groups }` a task can be given to |
-| `GET /work-items` | `?projectId=` (required) `?include=deleted` | `{ items, limits }` |
-| `POST /work-items` | `{ title, notes?, status?, dueDate?, projectId?, assignee? }` | the task, `201` |
-| `GET /work-items/:id` | | the task with `history` |
-| `PATCH /work-items/:id` | any of `title, notes, status, dueDate, assignee, projectId` | the task |
-| `DELETE /work-items/:id` | | `{ deleted: true }`; restorable for 30 days |
-| `POST /work-items/:id/claim` | | the task, now the caller's |
-| `POST /work-items/:id/release` | | the task, back with its group |
-| `POST /work-items/:id/restore` | | the task |
+| `GET /assignments/mine` | `?include=done` `?today=YYYY-MM-DD` | `{ items, counts: { open, overdue }, limits }` |
+| `GET /assignments/count` | `?today=` | `{ open, overdue }` |
+| `GET /assignments/created` | `?include=done` | tasks the caller made that are in no project |
+| `GET /assignments/assignees` | `?projectId=` | `{ accounts, groups }` a task can be given to |
+| `GET /assignments` | `?projectId=` (required) `?include=deleted` | `{ items, limits }` |
+| `POST /assignments` | `{ title, notes?, status?, dueDate?, projectId?, assignee? }` | the task, `201` |
+| `GET /assignments/:id` | | the task with `history` |
+| `PATCH /assignments/:id` | any of `title, notes, status, dueDate, assignee, projectId` | the task |
+| `DELETE /assignments/:id` | | `{ deleted: true }`; restorable for 30 days |
+| `POST /assignments/:id/claim` | | the task, now the caller's |
+| `POST /assignments/:id/release` | | the task, back with its group |
+| `POST /assignments/:id/restore` | | the task |
 
 - `assignee` is `{ type: "account" | "group", id }` or `null`. `status` is
   `open`, `in_progress`, `blocked` or `done`. `dueDate` is a calendar date with

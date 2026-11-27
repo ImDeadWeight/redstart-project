@@ -5,7 +5,7 @@
 	 * Hidden at zero and when Nest has no tasks to count (an older server).
 	 */
 	import { onMount } from 'svelte';
-	import { workItemsStore } from '$lib/stores/work-items.svelte';
+	import { assignmentsStore } from '$lib/stores/assignments.svelte';
 
 	interface Props {
 		dot?: boolean;
@@ -13,10 +13,10 @@
 
 	let { dot = false }: Props = $props();
 
-	onMount(() => workItemsStore.start());
+	onMount(() => assignmentsStore.start());
 
-	const open = $derived(workItemsStore.counts?.open ?? 0);
-	const overdue = $derived(workItemsStore.counts?.overdue ?? 0);
+	const open = $derived(assignmentsStore.counts?.open ?? 0);
+	const overdue = $derived(assignmentsStore.counts?.overdue ?? 0);
 	const label = $derived(overdue > 0 ? `${open} open, ${overdue} overdue` : `${open} open`);
 </script>
 

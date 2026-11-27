@@ -561,7 +561,7 @@ async function readDocument(docCfg, args, conversationId) {
 /**
  * The largest image the chat UI will fetch and send to a vision model
  * (MAX_LINKED_IMAGE_BYTES in chat-ui's agentic-tool-exec.ts, and the task
- * runner's own copy in job-ports.mjs). A bigger one is still linked, but the
+ * runner's own copy in task-ports.mjs). A bigger one is still linked, but the
  * model is told it will not be shown, rather than being told to look at
  * nothing.
  */

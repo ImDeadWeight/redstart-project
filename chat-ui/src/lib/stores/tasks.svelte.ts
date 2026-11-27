@@ -9,20 +9,20 @@ import { toolsStore } from '$lib/stores/tools.svelte';
 import { MessageRole, MessageType } from '$lib/enums';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import {
-	JobService,
+	TaskService,
 	isTerminal,
 	isChatRun,
 	type ApprovalDecision,
 	type ClientToolSpec,
-	type JobToolLimits,
-	type JobOrigin,
-	type JobAnswer,
-	type JobEvent,
-	type JobRecord
-} from '$lib/services/job.service';
+	type TaskToolLimits,
+	type TaskOrigin,
+	type TaskAnswer,
+	type TaskEvent,
+	type TaskRecord
+} from '$lib/services/task.service';
 
 /**
- * jobsStore — chat-ui as a client of the daemon's background tasks
+ * tasksStore — chat-ui as a client of the daemon's background tasks
  * (agent-runtime Phase 3.9, U-b: in the chat itself).
  *
  * A task holds one conversation and writes it on the server; this store
@@ -50,7 +50,7 @@ const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 10_000;
 
 /** The sampling settings the task runs every turn with, in the runner's names. */
-export function jobGeneration(): Record<string, unknown> {
+export function taskGeneration(): Record<string, unknown> {
 	const options = getApiOptions();
 	const out: Record<string, unknown> = { ...options };
 	if (options.excludeReasoningFromContext) out.excludeReasoning = true;
@@ -108,7 +108,7 @@ export function serverRunsOn(): boolean {
 
 class TasksStore {
 	/** The followed task per conversation id; only live (not ended) tasks. */
-	private records = $state<Record<string, JobRecord>>({});
+	private records = $state<Record<string, TaskRecord>>({});
 	private follower: Follower | null = null;
 	private reloadTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -143,10 +143,10 @@ class TasksStore {
 	 * ended, so the conversation can be named as the browser loop does.
 	 */
 	onLiveTimings: ((conversationId: string, timings: Record<string, number>) => void) | null = null;
-	onChatRunFinished: ((conversationId: string, record: JobRecord) => void) | null = null;
+	onChatRunFinished: ((conversationId: string, record: TaskRecord) => void) | null = null;
 
 	/** The live task holding this conversation, or null. */
-	activeFor(conversationId: string | null | undefined): JobRecord | null {
+	activeFor(conversationId: string | null | undefined): TaskRecord | null {
 		if (!conversationId) return null;
 		const record = this.records[conversationId];
 		return record && !isTerminal(record.status) ? record : null;
@@ -167,8 +167,8 @@ class TasksStore {
 		if (!hinted && !opts.force) return;
 		try {
 			const record = hinted
-				? await JobService.get(hinted)
-				: (await JobService.listFor(conversationId)).find((t) => !isTerminal(t.status));
+				? await TaskService.get(hinted)
+				: (await TaskService.listFor(conversationId)).find((t) => !isTerminal(t.status));
 			if (!record || isTerminal(record.status)) {
 				if (opts.force) await conversationsStore.reloadActiveFromServer(conversationId);
 				return;
@@ -188,13 +188,13 @@ class TasksStore {
 		conversationId: string,
 		content: string,
 		clientTools?: ClientToolSpec[],
-		opts: { quiet?: boolean; toolLimits?: JobToolLimits; origin?: JobOrigin } = {}
-	): Promise<JobRecord | null> {
+		opts: { quiet?: boolean; toolLimits?: TaskToolLimits; origin?: TaskOrigin } = {}
+	): Promise<TaskRecord | null> {
 		try {
-			const record = await JobService.start(
+			const record = await TaskService.start(
 				conversationId,
 				content,
-				jobGeneration(),
+				taskGeneration(),
 				clientTools,
 				opts.toolLimits,
 				opts.origin
@@ -204,7 +204,7 @@ class TasksStore {
 			return record;
 		} catch (error) {
 			// quiet: the caller falls back to the browser loop (a plain Send).
-			if (opts.quiet) console.warn('[jobs] a run on the server did not start:', error);
+			if (opts.quiet) console.warn('[tasks] a run on the server did not start:', error);
 			else toast.error(error instanceof Error ? error.message : 'The job could not be started.');
 			return null;
 		}
@@ -215,7 +215,7 @@ class TasksStore {
 		const record = this.activeFor(conversationId);
 		if (!record) return false;
 		try {
-			await JobService.steer(record.id, content);
+			await TaskService.steer(record.id, content);
 			return true;
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : 'The message did not reach the job.');
@@ -224,11 +224,11 @@ class TasksStore {
 	}
 
 	/** True when the task took the answer. */
-	async answer(conversationId: string, answer: JobAnswer): Promise<boolean> {
+	async answer(conversationId: string, answer: TaskAnswer): Promise<boolean> {
 		const record = this.activeFor(conversationId);
 		if (!record) return false;
 		return this.act(
-			() => JobService.answer(record.id, answer),
+			() => TaskService.answer(record.id, answer),
 			'The answer did not reach the job.'
 		);
 	}
@@ -238,7 +238,7 @@ class TasksStore {
 		const waiting = record?.waiting;
 		if (!record || waiting?.kind !== 'approval') return;
 		await this.act(
-			() => JobService.decideApproval(waiting.approval.id, decision),
+			() => TaskService.decideApproval(waiting.approval.id, decision),
 			'The decision did not reach the job.'
 		);
 	}
@@ -246,7 +246,7 @@ class TasksStore {
 	async cancel(conversationId: string): Promise<void> {
 		const record = this.activeFor(conversationId);
 		if (!record) return;
-		await this.act(() => JobService.cancel(record.id), 'The job could not be cancelled.');
+		await this.act(() => TaskService.cancel(record.id), 'The job could not be cancelled.');
 	}
 
 	private async act(fn: () => Promise<unknown>, failure: string): Promise<boolean> {
@@ -259,7 +259,7 @@ class TasksStore {
 		}
 	}
 
-	private follow(record: JobRecord, opts: { registered?: boolean } = {}): void {
+	private follow(record: TaskRecord, opts: { registered?: boolean } = {}): void {
 		if (this.follower?.taskId === record.id) return;
 		this.stopFollowing();
 		this.records = { ...this.records, [record.conversationId]: record };
@@ -295,12 +295,12 @@ class TasksStore {
 					f.registerOnConnect = false;
 					const tools = toolsStore.getClientToolsForServerRun();
 					try {
-						if (tools.length) await JobService.registerClient(f.taskId, tools);
+						if (tools.length) await TaskService.registerClient(f.taskId, tools);
 					} catch {
 						/* the run goes on with the tools it had; a call to one is answered unavailable */
 					}
 				}
-				await JobService.readEvents(
+				await TaskService.readEvents(
 					f.taskId,
 					f.lastSeq,
 					(e) => this.onEvent(f, e),
@@ -314,7 +314,7 @@ class TasksStore {
 			if (f.controller.signal.aborted) return;
 			// The stream ended: either the task did, or the connection dropped.
 			try {
-				const record = await JobService.get(f.taskId);
+				const record = await TaskService.get(f.taskId);
 				this.setRecord(f, record);
 				if (isTerminal(record.status)) return this.finish(f, record);
 			} catch (error) {
@@ -325,7 +325,7 @@ class TasksStore {
 		}
 	}
 
-	private onEvent(f: Follower, e: JobEvent): void {
+	private onEvent(f: Follower, e: TaskEvent): void {
 		if (this.follower !== f) return;
 		if (e.live === true) {
 			if (e.type === 'delta') this.onDelta(f, e);
@@ -364,7 +364,7 @@ class TasksStore {
 	 * with the id the stored one will have, so the reload that brings the
 	 * finished message replaces it in place.
 	 */
-	private onDelta(f: Follower, e: JobEvent): void {
+	private onDelta(f: Follower, e: TaskEvent): void {
 		if (conversationsStore.activeConversation?.id !== f.conversationId) return;
 		const messageId = typeof e.messageId === 'string' ? e.messageId : '';
 		if (!messageId) return;
@@ -421,7 +421,7 @@ class TasksStore {
 	}
 
 	/** A call to a tool this app runs: its own card, its executor, the result back. */
-	private async onClientRequest(f: Follower, e: JobEvent): Promise<void> {
+	private async onClientRequest(f: Follower, e: TaskEvent): Promise<void> {
 		const callId = typeof e.callId === 'string' ? e.callId : '';
 		const name = typeof e.name === 'string' ? e.name : '';
 		if (!callId || !name) return;
@@ -433,18 +433,18 @@ class TasksStore {
 		);
 		if (f.controller.signal.aborted) return;
 		try {
-			await JobService.clientResult(f.taskId, callId, result.text, result.isError);
+			await TaskService.clientResult(f.taskId, callId, result.text, result.isError);
 		} catch {
 			/* the run moved on (cancelled, or the call was closed as unavailable) */
 		}
 	}
 
-	private setRecord(f: Follower, record: JobRecord): void {
+	private setRecord(f: Follower, record: TaskRecord): void {
 		if (this.follower !== f) return;
 		this.records = { ...this.records, [f.conversationId]: record };
 	}
 
-	private finish(f: Follower, record: JobRecord | null): void {
+	private finish(f: Follower, record: TaskRecord | null): void {
 		if (this.follower !== f) return;
 		// The task sealed its drafts; the panel shows the new revision.
 		artifactPanelStore.turnEnded(f.conversationId);
@@ -478,4 +478,4 @@ class TasksStore {
 	}
 }
 
-export const jobsStore = new TasksStore();
+export const tasksStore = new TasksStore();

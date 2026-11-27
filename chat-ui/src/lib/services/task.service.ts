@@ -4,7 +4,7 @@ import { conversationHeaders } from './database.service';
 import type { AskRequest } from '$lib/agent-core';
 
 /**
- * JobService — the daemon's background-task routes (agent-runtime Phase 3.6,
+ * TaskService — the daemon's background-task routes (agent-runtime Phase 3.6,
  * D31), as chat-ui calls them (3.9).
  *
  * A task is the daemon running the agent loop for one conversation with no
@@ -18,7 +18,7 @@ import type { AskRequest } from '$lib/agent-core';
  * Authorization.
  */
 
-export type JobStatus =
+export type TaskStatus =
 	| 'queued'
 	| 'running'
 	| 'waiting_user'
@@ -29,10 +29,10 @@ export type JobStatus =
 	| 'failed'
 	| 'cancelled';
 
-export const TERMINAL_JOB_STATES: readonly JobStatus[] = ['done', 'failed', 'cancelled'];
+export const TERMINAL_TASK_STATES: readonly TaskStatus[] = ['done', 'failed', 'cancelled'];
 
 /** What a waiting task waits for (task-runner.mjs). */
-export type JobWaiting =
+export type TaskWaiting =
 	| ({ kind: 'question'; callId?: string } & AskRequest)
 	/** A record written before D43 (one flat question); read as a one-item list. */
 	| {
@@ -60,25 +60,25 @@ export type JobWaiting =
  * is a task the user sent to the background (/background), shown with the
  * task bar. A Nest from before the field sends none: read it as background.
  */
-export type JobOrigin = 'chat' | 'background';
+export type TaskOrigin = 'chat' | 'background';
 
-export interface JobRecord {
+export interface TaskRecord {
 	id: string;
 	conversationId: string;
-	origin?: JobOrigin;
-	status: JobStatus;
-	waiting: JobWaiting | null;
+	origin?: TaskOrigin;
+	status: TaskStatus;
+	waiting: TaskWaiting | null;
 	error?: string | null;
 	createdAt: number;
 	updatedAt: number;
 }
 
 /** One log entry. `status` events carry the task's new status and waiting. */
-export interface JobEvent {
+export interface TaskEvent {
 	seq: number;
 	type: string;
-	status?: JobStatus;
-	waiting?: JobWaiting | null;
+	status?: TaskStatus;
+	waiting?: TaskWaiting | null;
 	error?: string;
 	[k: string]: unknown;
 }
@@ -91,12 +91,12 @@ export interface ClientToolSpec {
 }
 
 /** Nest's tools this app switched off for the chat (master plan 7.1). */
-export interface JobToolLimits {
+export interface TaskToolLimits {
 	nest: boolean;
 	exclude: string[];
 }
 
-export type JobAnswer =
+export type TaskAnswer =
 	| { chosen?: string[]; text?: string }
 	| { answers: Array<{ chosen?: string[]; text?: string } | null> }
 	| { dismissed: true }
@@ -104,13 +104,13 @@ export type JobAnswer =
 
 export type ApprovalDecision = 'once' | 'always' | 'deny';
 
-export class JobRequestError extends Error {
+export class TaskRequestError extends Error {
 	constructor(
 		message: string,
 		readonly status: number
 	) {
 		super(message);
-		this.name = 'JobRequestError';
+		this.name = 'TaskRequestError';
 	}
 }
 
@@ -126,7 +126,7 @@ export function approvalDecisionFor(decision: string): ApprovalDecision {
 }
 
 /** The status bar's words for a task's state. */
-export function jobStatusLabel(record: Pick<JobRecord, 'status' | 'waiting'>): string {
+export function taskStatusLabel(record: Pick<TaskRecord, 'status' | 'waiting'>): string {
 	switch (record.status) {
 		case 'queued':
 			return 'Background job queued';
@@ -152,12 +152,12 @@ export function jobStatusLabel(record: Pick<JobRecord, 'status' | 'waiting'>): s
 }
 
 /** A plain Send's run: no task bar, the composer shows it as a reply in progress. */
-export function isChatRun(record: Pick<JobRecord, 'origin'> | null | undefined): boolean {
+export function isChatRun(record: Pick<TaskRecord, 'origin'> | null | undefined): boolean {
 	return record?.origin === 'chat';
 }
 
-export function isTerminal(status: JobStatus | undefined | null): boolean {
-	return !!status && TERMINAL_JOB_STATES.includes(status);
+export function isTerminal(status: TaskStatus | undefined | null): boolean {
+	return !!status && TERMINAL_TASK_STATES.includes(status);
 }
 
 function headers(extra?: Record<string, string>): Record<string, string> {
@@ -174,7 +174,7 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
 	const data = await res.json().catch(() => null);
 	if (!res.ok) {
 		const message = data?.error?.message || `${res.status} ${res.statusText}`;
-		throw new JobRequestError(message, res.status);
+		throw new TaskRequestError(message, res.status);
 	}
 	return data as T;
 }
@@ -188,11 +188,11 @@ const post = <T>(path: string, body?: unknown) =>
  * heartbeat) and frames with no data are skipped; a frame whose data is not
  * JSON is dropped rather than ending the stream.
  */
-export function parseSseFrames(buffer: string): { events: JobEvent[]; rest: string } {
+export function parseSseFrames(buffer: string): { events: TaskEvent[]; rest: string } {
 	const normalized = buffer.replace(/\r\n/g, '\n');
 	const parts = normalized.split('\n\n');
 	const rest = parts.pop() ?? '';
-	const events: JobEvent[] = [];
+	const events: TaskEvent[] = [];
 	for (const part of parts) {
 		const data = part
 			.split('\n')
@@ -215,16 +215,16 @@ export function parseSseFrames(buffer: string): { events: JobEvent[]; rest: stri
 	return { events, rest };
 }
 
-export class JobService {
+export class TaskService {
 	static start(
 		conversationId: string,
 		content: string,
 		generation: Record<string, unknown>,
 		clientTools?: ClientToolSpec[],
-		toolLimits?: JobToolLimits,
-		origin?: JobOrigin
-	): Promise<JobRecord> {
-		return post<JobRecord>('/jobs', {
+		toolLimits?: TaskToolLimits,
+		origin?: TaskOrigin
+	): Promise<TaskRecord> {
+		return post<TaskRecord>('/tasks', {
 			conversationId,
 			content,
 			generation,
@@ -236,7 +236,7 @@ export class JobService {
 
 	/** The tools this app runs for the task, after a reload or a reconnect. */
 	static registerClient(id: string, tools: ClientToolSpec[]): Promise<{ ok: true }> {
-		return post(`/jobs/${id}/client`, { tools });
+		return post(`/tasks/${id}/client`, { tools });
 	}
 
 	/** This app's result for a client_request. */
@@ -246,31 +246,31 @@ export class JobService {
 		text: string,
 		isError: boolean
 	): Promise<{ ok: true }> {
-		return post(`/jobs/${id}/client-result`, { callId, text, isError });
+		return post(`/tasks/${id}/client-result`, { callId, text, isError });
 	}
 
-	static async listFor(conversationId: string): Promise<JobRecord[]> {
-		const data = await call<{ tasks: JobRecord[] }>(
-			`/jobs?conversationId=${encodeURIComponent(conversationId)}`
+	static async listFor(conversationId: string): Promise<TaskRecord[]> {
+		const data = await call<{ tasks: TaskRecord[] }>(
+			`/tasks?conversationId=${encodeURIComponent(conversationId)}`
 		);
 		return data?.tasks ?? [];
 	}
 
-	static get(id: string): Promise<JobRecord> {
-		return call<JobRecord>(`/jobs/${id}`);
+	static get(id: string): Promise<TaskRecord> {
+		return call<TaskRecord>(`/tasks/${id}`);
 	}
 
 	/** `as`: 'answer' when the task was waiting on a question and took this as the answer. */
 	static steer(id: string, content: string): Promise<{ ok: true; as?: 'answer' | 'steer' }> {
-		return post(`/jobs/${id}/steer`, { content });
+		return post(`/tasks/${id}/steer`, { content });
 	}
 
-	static answer(id: string, answer: JobAnswer): Promise<{ ok: true }> {
-		return post(`/jobs/${id}/answer`, answer);
+	static answer(id: string, answer: TaskAnswer): Promise<{ ok: true }> {
+		return post(`/tasks/${id}/answer`, answer);
 	}
 
 	static cancel(id: string): Promise<{ ok: true }> {
-		return post(`/jobs/${id}/cancel`);
+		return post(`/tasks/${id}/cancel`);
 	}
 
 	/** An approval a task waits on is decided where every approval is (Phase 2). */
@@ -286,20 +286,20 @@ export class JobService {
 	static async readEvents(
 		id: string,
 		afterSeq: number,
-		onEvent: (event: JobEvent) => void,
+		onEvent: (event: TaskEvent) => void,
 		signal: AbortSignal,
 		asClient = false
 	): Promise<void> {
 		// asClient: this app is the run's executor for its own tools (7.1).
 		const res = await fetch(
-			resolveApiPath(`/jobs/${id}/events?after=${afterSeq}${asClient ? '&client=1' : ''}`),
+			resolveApiPath(`/tasks/${id}/events?after=${afterSeq}${asClient ? '&client=1' : ''}`),
 			{
 				headers: headers({ Accept: 'text/event-stream' }),
 				signal
 			}
 		);
 		if (!res.ok || !res.body)
-			throw new JobRequestError(`${res.status} ${res.statusText}`, res.status);
+			throw new TaskRequestError(`${res.status} ${res.statusText}`, res.status);
 		const reader = res.body.getReader();
 		const decoder = new TextDecoder();
 		let buffer = '';

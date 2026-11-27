@@ -1,32 +1,32 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — control plane: every account's background jobs
-// (agent-runtime plan Phase 3, D31; called tasks until tasks plan Phase 0)
+// Redstart Nest — control plane: every account's background tasks
+// (agent-runtime plan Phase 3, D31)
 // =============================================================================
 // Owner-only by the control plane's own gate (admin-listener.mjs), which runs
 // before any table entry; nothing here checks a role again, and nothing here
 // is reachable from the gateway.
 //
-//   jobs:list     every job, newest first, with the owning username. The
+//   tasks:list    every task, newest first, with the owning username. The
 //                 record only: never the conversation's messages, the
 //                 question text or an approval's summary, which are the
 //                 account's own (the same line the decision log keeps).
-//   jobs:cancel   stop one by id (logged).
+//   tasks:cancel  stop one by id (logged).
 //
-// An account's own jobs are on the gateway (gateway/job-routes.mjs).
+// An account's own tasks are on the gateway (gateway/task-routes.mjs).
 // Table-only, like approvals.mjs.
 // =============================================================================
 
-import { listJobs } from '../job-store.mjs'
-import { cancelJob } from '../job-runner.mjs'
+import { listTasks } from '../task-store.mjs'
+import { cancelTask } from '../task-runner.mjs'
 import { findById } from '../accounts-storage.mjs'
 import { logEvent } from '../logger.mjs'
 
 const MAX_LISTED = 200
 
-/** @returns {{ jobs: object[] }} */
-export function listAllJobs() {
+/** @returns {{ tasks: object[] }} */
+export function listAllTasks() {
   const names = new Map()
   const username = (id) => {
     if (!id) return null
@@ -34,7 +34,7 @@ export function listAllJobs() {
     return names.get(id)
   }
   return {
-    jobs: listJobs().slice(0, MAX_LISTED).map((t) => ({
+    tasks: listTasks().slice(0, MAX_LISTED).map((t) => ({
       id: t.id,
       account: username(t.accountId),
       status: t.status,
@@ -50,17 +50,17 @@ export function listAllJobs() {
 }
 
 /** @returns {{ ok: true } | { ok: false, error: string }} */
-export function cancelAnyJob(id) {
-  if (typeof id !== 'string' || !id) return { ok: false, error: 'not a job id' }
-  const r = cancelJob(id, 'owner')
+export function cancelAnyTask(id) {
+  if (typeof id !== 'string' || !id) return { ok: false, error: 'not a task id' }
+  const r = cancelTask(id, 'owner')
   if (!r.ok) return { ok: false, error: r.error }
   logEvent('task', 'cancelled_by_owner', {})
   return { ok: true }
 }
 
-export function jobsHandlers() {
+export function tasksHandlers() {
   return {
-    'jobs:list': () => listAllJobs(),
-    'jobs:cancel': (id) => cancelAnyJob(id),
+    'tasks:list': () => listAllTasks(),
+    'tasks:cancel': (id) => cancelAnyTask(id),
   }
 }

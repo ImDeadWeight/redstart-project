@@ -95,25 +95,25 @@ export function makeRequester({ gateway, auth, doFetch, requestTimeoutMs }) {
  */
 export function taskRoutesClient({ gateway, auth, doFetch, req }) {
   return {
-    /** POST /jobs: the daemon runs the loop for this conversation. */
+    /** POST /tasks: the daemon runs the loop for this conversation. */
     async startTask(conversationId, content, generation, maxTurns) {
-      const res = await req('POST', '/jobs', { json: { conversationId, content, generation, maxTurns } })
+      const res = await req('POST', '/tasks', { json: { conversationId, content, generation, maxTurns } })
       return res.json()
     },
 
     async getTask(id) {
-      const res = await req('GET', `/jobs/${encodeURIComponent(id)}`)
+      const res = await req('GET', `/tasks/${encodeURIComponent(id)}`)
       return res.json()
     },
 
     /** Answer what the task waits on. False when it no longer waits (409). */
     async answerTask(id, body) {
-      const res = await req('POST', `/jobs/${encodeURIComponent(id)}/answer`, { json: body, ok: [200, 409] })
+      const res = await req('POST', `/tasks/${encodeURIComponent(id)}/answer`, { json: body, ok: [200, 409] })
       return res.status === 200
     },
 
     async cancelTask(id) {
-      await req('POST', `/jobs/${encodeURIComponent(id)}/cancel`, { ok: [200, 404] })
+      await req('POST', `/tasks/${encodeURIComponent(id)}/cancel`, { ok: [200, 404] })
     },
 
     /** Decide an approval a task is parked on. False when it was gone. */
@@ -135,11 +135,11 @@ export function taskRoutesClient({ gateway, auth, doFetch, req }) {
      * deadline: the stream lasts as long as the task.
      */
     async taskEvents(id, afterSeq, onEvent, signal) {
-      const res = await doFetch(`${gateway}/jobs/${encodeURIComponent(id)}/events?after=${afterSeq}`, {
+      const res = await doFetch(`${gateway}/tasks/${encodeURIComponent(id)}/events?after=${afterSeq}`, {
         headers: { ...auth, Accept: 'text/event-stream' },
         signal,
       })
-      if (!res.ok || !res.body) throw new Error(`GET /jobs/${id}/events: HTTP ${res.status}`)
+      if (!res.ok || !res.body) throw new Error(`GET /tasks/${id}/events: HTTP ${res.status}`)
       const decoder = new TextDecoder()
       let buffer = ''
       for await (const chunk of res.body) {

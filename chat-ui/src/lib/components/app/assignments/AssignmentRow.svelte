@@ -11,19 +11,19 @@
 		isOverdue,
 		localToday,
 		statusLabel,
-		type WorkItem
-	} from '$lib/services/work-item.service';
+		type Assignment
+	} from '$lib/services/assignment.service';
 
 	interface Props {
-		task: WorkItem;
+		task: Assignment;
 		/** Hide the project name (the list is already one project's). */
 		hideProject?: boolean;
 		/** Hide who has it when it is the viewer (a list of their own tasks). */
 		hideOwnAssignee?: boolean;
 		/** Hide the status word (the list is already grouped by status). */
 		hideStatus?: boolean;
-		onOpen: (task: WorkItem) => void;
-		onToggleDone: (task: WorkItem, done: boolean) => void;
+		onOpen: (task: Assignment) => void;
+		onToggleDone: (task: Assignment, done: boolean) => void;
 	}
 
 	let {

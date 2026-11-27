@@ -47,7 +47,7 @@ import { buildAdminApi } from './admin/api-table.mjs'
 import { setAdminApi } from './admin/api-routes.mjs'
 import { getPrimaryLanIp, startRouteProbe, stopRouteProbe } from './net-interfaces.mjs'
 import { cleanupOldConversations, allConversationIds } from './conversations-storage.mjs'
-import { resumeJobs, suspendAllJobs } from './job-runner.mjs'
+import { resumeTasks, suspendAllTasks } from './task-runner.mjs'
 import { sweepOrphanWorkspaces } from './conversation-workspace.mjs'
 import { initLogger, closeLogger, logEvent } from './logger.mjs'
 import { initProcessLog } from './process-log.mjs'
@@ -523,7 +523,7 @@ export async function startDaemon(entrypoint = {}) {
   // runtime Phase 3.7). After the cleanup above, so a task whose chat is gone
   // is cancelled rather than resumed. A resumed task waits for a model like
   // any other (waiting_model): starting the daemon never starts one.
-  const resumedTasks = resumeJobs()
+  const resumedTasks = resumeTasks()
   if (resumedTasks > 0) console.log(`Resumed ${resumedTasks} background task${resumedTasks === 1 ? '' : 's'}`)
   // A workspace whose conversation is gone (pruned just now, or deleted while
   // its files could not be moved) is orphaned user data on a box nobody looks
@@ -612,9 +612,9 @@ export function stopDaemon() {
   stopRouteProbe()
   logEvent('app', 'quit', {})
   // Background tasks stop where they are, unended, so the next start resumes
-  // them (job-runner.mjs). Not awaited: stopDaemon is synchronous, and a run
+  // them (task-runner.mjs). Not awaited: stopDaemon is synchronous, and a run
   // that is mid-write finishes that write before it sees the abort.
-  void suspendAllJobs()
+  void suspendAllTasks()
   stopArtifactSweep()
   stopContentListener()
   stopGateway()

@@ -13,18 +13,18 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import {
-		WorkItemService,
-		WORK_ITEM_STATUSES,
+		AssignmentService,
+		ASSIGNMENT_STATUSES,
 		statusLabel,
 		type AssigneeChoices,
 		type Assignee,
-		type WorkItem,
-		type WorkItemHistoryEntry,
-		type WorkItemStatus
-	} from '$lib/services/work-item.service';
+		type Assignment,
+		type AssignmentHistoryEntry,
+		type AssignmentStatus
+	} from '$lib/services/assignment.service';
 	import { canEditProject } from '$lib/services/project.service';
 	import { projectsStore } from '$lib/stores/projects.svelte';
-	import { workItemsStore } from '$lib/stores/work-items.svelte';
+	import { assignmentsStore } from '$lib/stores/assignments.svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
 
 	interface Props {
@@ -46,14 +46,14 @@
 		onChanged
 	}: Props = $props();
 
-	let task = $state<WorkItem | null>(null);
+	let task = $state<Assignment | null>(null);
 	let loading = $state(false);
 	let saving = $state(false);
 	let loadError = $state('');
 
 	let title = $state('');
 	let notes = $state('');
-	let status = $state<WorkItemStatus>('open');
+	let status = $state<AssignmentStatus>('open');
 	let dueDate = $state('');
 	let assigneeKey = $state('');
 	let projectId = $state('');
@@ -107,7 +107,7 @@
 		}
 		loading = true;
 		try {
-			fill(await WorkItemService.get(id));
+			fill(await AssignmentService.get(id));
 		} catch (e) {
 			loadError = e instanceof Error ? e.message : 'Could not open this task';
 			task = null;
@@ -116,7 +116,7 @@
 		}
 	}
 
-	function fill(t: WorkItem) {
+	function fill(t: Assignment) {
 		task = t;
 		title = t.title;
 		notes = t.notes;
@@ -128,7 +128,7 @@
 
 	async function loadChoices(pid: string | null) {
 		try {
-			choices = await WorkItemService.assignees(pid);
+			choices = await AssignmentService.assignees(pid);
 		} catch {
 			choices = { accounts: [], groups: [] };
 		}
@@ -143,9 +143,9 @@
 			!choices.groups.some((g) => `group:${g.id}` === assigneeKey)
 	);
 
-	function done(t: WorkItem | null, message?: string) {
+	function done(t: Assignment | null, message?: string) {
 		if (t) fill(t);
-		workItemsStore.changed();
+		assignmentsStore.changed();
 		onChanged?.();
 		if (message) toast.success(message);
 	}
@@ -155,7 +155,7 @@
 		saving = true;
 		try {
 			if (isNew) {
-				const created = await WorkItemService.create({
+				const created = await AssignmentService.create({
 					title: title.trim(),
 					notes,
 					status,
@@ -180,7 +180,7 @@
 				open = false;
 				return;
 			}
-			done(await WorkItemService.update(task.id, draft), 'Saved');
+			done(await AssignmentService.update(task.id, draft), 'Saved');
 			open = false;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Could not save the task');
@@ -189,7 +189,7 @@
 		}
 	}
 
-	async function act(fn: () => Promise<WorkItem | void>, message: string, close = false) {
+	async function act(fn: () => Promise<Assignment | void>, message: string, close = false) {
 		saving = true;
 		try {
 			const r = await fn();
@@ -202,7 +202,7 @@
 		}
 	}
 
-	function describe(h: WorkItemHistoryEntry): string {
+	function describe(h: AssignmentHistoryEntry): string {
 		const who = h.byName ?? (h.by ? 'A removed account' : 'Redstart');
 		switch (h.action) {
 			case 'created':
@@ -210,7 +210,7 @@
 			case 'edited':
 				return `${who} changed the ${(h.fields ?? []).map((f) => (f === 'dueDate' ? 'due date' : f)).join(', ')}`;
 			case 'status':
-				return `${who} moved it from ${statusLabel(h.from as WorkItemStatus)} to ${statusLabel(h.to as WorkItemStatus)}`;
+				return `${who} moved it from ${statusLabel(h.from as AssignmentStatus)} to ${statusLabel(h.to as AssignmentStatus)}`;
 			case 'assigned':
 				return h.to
 					? `${who} gave it to ${h.toName ?? 'someone'}`
@@ -286,7 +286,7 @@
 					<label class="block space-y-1">
 						<span class="text-xs font-medium text-muted-foreground">Status</span>
 						<select bind:value={status} disabled={!can.status || deleted} class={selectClass}>
-							{#each WORK_ITEM_STATUSES as s (s.value)}
+							{#each ASSIGNMENT_STATUSES as s (s.value)}
 								<option value={s.value}>{s.label}</option>
 							{/each}
 						</select>
@@ -371,7 +371,7 @@
 							size="sm"
 							variant="outline"
 							disabled={saving}
-							onclick={() => act(() => WorkItemService.claim(task!.id), 'It is yours now')}
+							onclick={() => act(() => AssignmentService.claim(task!.id), 'It is yours now')}
 						>
 							<Hand class="h-3 w-3" /> Take it
 						</Button>
@@ -382,7 +382,7 @@
 							variant="outline"
 							disabled={saving}
 							onclick={() =>
-								act(() => WorkItemService.release(task!.id), 'Handed back to the group')}
+								act(() => AssignmentService.release(task!.id), 'Handed back to the group')}
 						>
 							<Undo2 class="h-3 w-3" /> Hand back
 						</Button>
@@ -394,7 +394,7 @@
 							variant="ghost"
 							disabled={saving}
 							aria-label="Delete task"
-							onclick={() => act(() => WorkItemService.remove(task!.id), 'Task deleted', true)}
+							onclick={() => act(() => AssignmentService.remove(task!.id), 'Task deleted', true)}
 						>
 							<Trash2 class="h-4 w-4" />
 						</Button>
@@ -404,7 +404,7 @@
 							size="sm"
 							variant="outline"
 							disabled={saving}
-							onclick={() => act(() => WorkItemService.restore(task!.id), 'Task restored')}
+							onclick={() => act(() => AssignmentService.restore(task!.id), 'Task restored')}
 						>
 							<RotateCcw class="h-3 w-3" /> Restore
 						</Button>

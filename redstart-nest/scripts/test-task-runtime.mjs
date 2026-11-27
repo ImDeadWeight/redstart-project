@@ -2,7 +2,7 @@
 // =============================================================================
 // The daemon-side task runtime (agent-runtime plan Phase 3)
 // =============================================================================
-// The task store (job-store.mjs): records, states, the numbered event log
+// The task store (task-store.mjs): records, states, the numbered event log
 // and replay. Later sections cover server-owned conversation writes, the
 // runner against a fake model and fake tools, and the routes.
 // =============================================================================
@@ -17,7 +17,7 @@ process.env.REDSTART_TEST_USERDATA_DIR = tmpDir
 register('./auth-test-loader.mjs', import.meta.url)
 await import('./electron-stub.mjs')
 
-const store = await import('../daemon/job-store.mjs')
+const store = await import('../daemon/task-store.mjs')
 
 const results = []
 async function test(name, fn) {
@@ -38,50 +38,50 @@ const SPEC = { accountKey: 'alice-1', accountId: 'alice-1', storeAccountId: 'ali
 console.log('\n-- the task store (3.3) --')
 
 await test('a new task is queued, on disk, with one created event', () => {
-  const t = store.createJob(SPEC)
-  assert(store.isJobId(t.id), 'id')
+  const t = store.createTask(SPEC)
+  assert(store.isTaskId(t.id), 'id')
   eq(t.status, 'queued', 'status')
-  eq(store.getJob(t.id).conversationId, 'conv-a', 'read back')
+  eq(store.getTask(t.id).conversationId, 'conv-a', 'read back')
   eq(store.readEvents(t.id).map((e) => [e.seq, e.type]), [[1, 'created']], 'events')
   eq(t.limits.maxTurns, 100, 'default turn limit (chat-ui DEFAULT_AGENTIC_CONFIG)')
 })
 
-await test('createJob refuses a spec with no owner or no conversation', () => {
+await test('createTask refuses a spec with no owner or no conversation', () => {
   for (const bad of [{}, { ...SPEC, accountKey: '' }, { ...SPEC, storeAccountId: undefined }, { ...SPEC, conversationId: null }]) {
     let threw = false
-    try { store.createJob(bad) } catch { threw = true }
+    try { store.createTask(bad) } catch { threw = true }
     assert(threw, `accepted ${JSON.stringify(bad)}`)
   }
 })
 
 await test('a status change is logged once; waiting is cleared on leaving a waiting state', () => {
-  const t = store.createJob(SPEC)
-  store.updateJob(t.id, { status: 'running' })
-  store.updateJob(t.id, { status: 'waiting_user', waiting: { kind: 'question', question: 'Which?' } })
-  eq(store.getJob(t.id).waiting.kind, 'question', 'waiting kept')
-  store.updateJob(t.id, { status: 'running' })
-  eq(store.getJob(t.id).waiting, null, 'waiting cleared')
-  store.updateJob(t.id, { status: 'running' }) // no change: no event
+  const t = store.createTask(SPEC)
+  store.updateTask(t.id, { status: 'running' })
+  store.updateTask(t.id, { status: 'waiting_user', waiting: { kind: 'question', question: 'Which?' } })
+  eq(store.getTask(t.id).waiting.kind, 'question', 'waiting kept')
+  store.updateTask(t.id, { status: 'running' })
+  eq(store.getTask(t.id).waiting, null, 'waiting cleared')
+  store.updateTask(t.id, { status: 'running' }) // no change: no event
   eq(store.readEvents(t.id).map((e) => e.status ?? e.type), ['queued', 'running', 'waiting_user', 'running'], 'events')
 })
 
 await test('a terminal task never changes again', () => {
-  const t = store.createJob(SPEC)
-  store.updateJob(t.id, { status: 'cancelled' })
-  eq(store.updateJob(t.id, { status: 'running' }), null, 'refused')
-  eq(store.getJob(t.id).status, 'cancelled', 'still cancelled')
-  assert(store.getJob(t.id).endedAt > 0, 'endedAt')
+  const t = store.createTask(SPEC)
+  store.updateTask(t.id, { status: 'cancelled' })
+  eq(store.updateTask(t.id, { status: 'running' }), null, 'refused')
+  eq(store.getTask(t.id).status, 'cancelled', 'still cancelled')
+  assert(store.getTask(t.id).endedAt > 0, 'endedAt')
 })
 
 await test('an unknown status throws', () => {
-  const t = store.createJob(SPEC)
+  const t = store.createTask(SPEC)
   let threw = false
-  try { store.updateJob(t.id, { status: 'paused' }) } catch { threw = true }
+  try { store.updateTask(t.id, { status: 'paused' }) } catch { threw = true }
   assert(threw, 'accepted')
 })
 
 await test('events replay after a seq, and survive a fresh process (seq read back from disk)', () => {
-  const t = store.createJob(SPEC)
+  const t = store.createTask(SPEC)
   store.appendEvent(t.id, { type: 'message', id: 'm1' })
   store.appendEvent(t.id, { type: 'message', id: 'm2' })
   eq(store.readEvents(t.id, 2).map((e) => e.id), ['m2'], 'after 2')
@@ -91,8 +91,8 @@ await test('events replay after a seq, and survive a fresh process (seq read bac
 })
 
 await test('a torn last line is skipped, not fatal', () => {
-  const t = store.createJob(SPEC)
-  fs.appendFileSync(path.join(tmpDir, 'jobs', t.id, 'events.jsonl'), '{"seq":2,"ty')
+  const t = store.createTask(SPEC)
+  fs.appendFileSync(path.join(tmpDir, 'tasks', t.id, 'events.jsonl'), '{"seq":2,"ty')
   eq(store.readEvents(t.id).length, 1, 'one good event')
   // The next process's first append is not glued onto the torn line.
   store._resetMemory()
@@ -101,13 +101,13 @@ await test('a torn last line is skipped, not fatal', () => {
 })
 
 await test('an oversized event keeps its type and says it was cut', () => {
-  const t = store.createJob(SPEC)
+  const t = store.createTask(SPEC)
   const e = store.appendEvent(t.id, { type: 'tool_result', text: 'x'.repeat(store.MAX_EVENT_CHARS + 10) })
   eq([e.type, e.truncated, e.text], ['tool_result', true, undefined], 'cut')
 })
 
 await test('subscribers hear appends; unsubscribe stops them', () => {
-  const t = store.createJob(SPEC)
+  const t = store.createTask(SPEC)
   const heard = []
   const off = store.subscribe(t.id, (e) => heard.push(e.type))
   store.appendEvent(t.id, { type: 'a' })
@@ -116,34 +116,34 @@ await test('subscribers hear appends; unsubscribe stops them', () => {
   eq(heard, ['a'], 'heard')
 })
 
-await test('listJobs is per account; activeJobFor ignores finished tasks', () => {
-  const bob = store.createJob({ ...SPEC, accountKey: 'bob-2', storeAccountId: 'bob-2', conversationId: 'conv-b' })
-  assert(store.listJobs('bob-2').length === 1 && store.listJobs('bob-2')[0].id === bob.id, 'bob sees his')
-  assert(!store.listJobs('alice-1').some((t) => t.id === bob.id), 'alice does not')
-  eq(store.activeJobFor('bob-2', 'conv-b')?.id, bob.id, 'active')
-  store.updateJob(bob.id, { status: 'done' })
-  eq(store.activeJobFor('bob-2', 'conv-b'), null, 'done is not active')
+await test('listTasks is per account; activeTaskFor ignores finished tasks', () => {
+  const bob = store.createTask({ ...SPEC, accountKey: 'bob-2', storeAccountId: 'bob-2', conversationId: 'conv-b' })
+  assert(store.listTasks('bob-2').length === 1 && store.listTasks('bob-2')[0].id === bob.id, 'bob sees his')
+  assert(!store.listTasks('alice-1').some((t) => t.id === bob.id), 'alice does not')
+  eq(store.activeTaskFor('bob-2', 'conv-b')?.id, bob.id, 'active')
+  store.updateTask(bob.id, { status: 'done' })
+  eq(store.activeTaskFor('bob-2', 'conv-b'), null, 'done is not active')
 })
 
-await test('getJob refuses a path-shaped id', () => {
-  eq(store.getJob('../accounts'), null, 'traversal')
+await test('getTask refuses a path-shaped id', () => {
+  eq(store.getTask('../accounts'), null, 'traversal')
   eq(store.readEvents('../../x'), [], 'traversal events')
 })
 
 await test('finished tasks past the cap are pruned, oldest first; live ones never', () => {
   const key = 'pruner'
-  const live = store.createJob({ ...SPEC, accountKey: key })
+  const live = store.createTask({ ...SPEC, accountKey: key })
   const ids = []
   for (let i = 0; i < store.MAX_FINISHED_PER_ACCOUNT + 3; i++) {
-    const t = store.createJob({ ...SPEC, accountKey: key })
-    store.updateJob(t.id, { status: 'done' })
+    const t = store.createTask({ ...SPEC, accountKey: key })
+    store.updateTask(t.id, { status: 'done' })
     ids.push(t.id)
   }
-  store.createJob({ ...SPEC, accountKey: key }) // prunes on create
-  const left = new Set(store.listJobs(key).map((t) => t.id))
+  store.createTask({ ...SPEC, accountKey: key }) // prunes on create
+  const left = new Set(store.listTasks(key).map((t) => t.id))
   assert(left.has(live.id), 'live task kept')
   assert(!left.has(ids[0]) && !left.has(ids[1]), 'oldest finished removed')
-  eq(store.listJobs(key).filter((t) => t.status === 'done').length, store.MAX_FINISHED_PER_ACCOUNT, 'cap')
+  eq(store.listTasks(key).filter((t) => t.status === 'done').length, store.MAX_FINISHED_PER_ACCOUNT, 'cap')
 })
 
 console.log('\n-- server-owned conversation writes (3.4, D25) --')
@@ -218,7 +218,7 @@ await test('a client can neither set nor clear activeTaskId', async () => {
 
 console.log('\n-- the runner, against a fake model and fake tools (3.5) --')
 
-const runner = await import('../daemon/job-runner.mjs')
+const runner = await import('../daemon/task-runner.mjs')
 const ledger = await import('../daemon/approval-ledger.mjs')
 const grantsMod = await import('../daemon/approval-grants.mjs')
 const { memoryKey } = await import('../daemon/memory-storage.mjs')
@@ -280,7 +280,7 @@ async function waitFor(cond, what, ms = 3000) {
   }
   throw new Error(`timed out waiting for ${what}`)
 }
-const statusOf = (id) => store.getJob(id)?.status
+const statusOf = (id) => store.getTask(id)?.status
 const ended = (id) => store.TERMINAL_STATES.includes(statusOf(id))
 let convCounter = 0
 function newConversation() {
@@ -294,8 +294,8 @@ function branchOf(convId) {
 }
 const runnerHelpers = await import('../../shared/agent-core/stored-messages.mjs')
 function start(convId, content = 'do it', extra = {}) {
-  const r = runner.startJob({ account: null, storeAccountId: SCOPE, conversationId: convId, content, ...extra })
-  assert(r.ok, `startJob: ${r.error}`)
+  const r = runner.startTask({ account: null, storeAccountId: SCOPE, conversationId: convId, content, ...extra })
+  assert(r.ok, `startTask: ${r.error}`)
   return r.task
 }
 
@@ -332,7 +332,7 @@ await test('a write parks on an approval the task holds; "once" runs it, and the
   const conv = newConversation()
   const t = start(conv)
   await waitFor(() => statusOf(t.id) === 'waiting_approval', 'waiting_approval')
-  const waiting = store.getJob(t.id).waiting
+  const waiting = store.getTask(t.id).waiting
   eq([waiting.kind, waiting.tool, waiting.rule], ['approval', 'create_document', 'prompt'], 'waiting')
   eq(w.calls.length, 0, 'nothing ran yet')
   assert(ledger.decide(waiting.approval.id, ANON_KEY, 'once').ok, 'decided')
@@ -347,7 +347,7 @@ await test('a delete (enforced) carries the approval id to callToolAs, which spe
   const conv = newConversation()
   const t = start(conv)
   await waitFor(() => statusOf(t.id) === 'waiting_approval', 'waiting_approval')
-  const id = store.getJob(t.id).waiting.approval.id
+  const id = store.getTask(t.id).waiting.approval.id
   ledger.decide(id, ANON_KEY, 'once')
   await waitFor(() => ended(t.id), 'end')
   eq(w.calls[0].opts.approvalId, id, 'approval id passed')
@@ -360,7 +360,7 @@ await test('🔒 a call_tool delete parks on the inner tool and its arguments, a
   const conv = newConversation()
   const t = start(conv)
   await waitFor(() => statusOf(t.id) === 'waiting_approval', 'waiting_approval')
-  const waiting = store.getJob(t.id).waiting
+  const waiting = store.getTask(t.id).waiting
   eq([waiting.tool, waiting.rule, waiting.approval.tool], ['delete_file', 'always', 'delete_file'], 'parked on the inner tool')
   ledger.decide(waiting.approval.id, ANON_KEY, 'once')
   await waitFor(() => ended(t.id), 'end')
@@ -384,7 +384,7 @@ await test('a denied call gets the denial as its result, and the task goes on', 
   const conv = newConversation()
   const t = start(conv)
   await waitFor(() => statusOf(t.id) === 'waiting_approval', 'waiting_approval')
-  ledger.decide(store.getJob(t.id).waiting.approval.id, ANON_KEY, 'deny')
+  ledger.decide(store.getTask(t.id).waiting.approval.id, ANON_KEY, 'deny')
   await waitFor(() => ended(t.id), 'end')
   eq([statusOf(t.id), w.calls.length], ['done', 0], 'nothing ran')
   eq(branchOf(conv).find((m) => m.role === 'tool').content, DENIED_RESULT, 'denial')
@@ -398,8 +398,8 @@ await test('a standing grant runs a write without parking; it never covers a del
   const t = start(conv)
   await waitFor(() => statusOf(t.id) === 'waiting_approval', 'delete parks')
   eq(w.calls.map((c) => c.name), ['create_document'], 'the write ran unasked')
-  eq(store.getJob(t.id).waiting.tool, 'delete_file', 'the delete waits')
-  runner.cancelJob(t.id)
+  eq(store.getTask(t.id).waiting.tool, 'delete_file', 'the delete waits')
+  runner.cancelTask(t.id)
   await waitFor(() => ended(t.id), 'end')
   for (const g of grantsMod.listGrants(ANON_KEY)) grantsMod.revokeGrant(ANON_KEY, g.id)
 })
@@ -409,10 +409,10 @@ await test('ask_user waits for an answer, which becomes the call\'s result', asy
   const conv = newConversation()
   const t = start(conv)
   await waitFor(() => statusOf(t.id) === 'waiting_user', 'waiting_user')
-  const waiting = store.getJob(t.id).waiting
+  const waiting = store.getTask(t.id).waiting
   eq([waiting.kind, waiting.questions], ['question', [{ question: 'Which city?', options: ['Oslo', 'Rome'], multiSelect: false }]], 'waiting')
-  eq(runner.answerJob(t.id, { continue: true }).status, 400, 'a continue answer to a question')
-  assert(runner.answerJob(t.id, { chosen: ['Rome'] }).ok, 'answered')
+  eq(runner.answerTask(t.id, { continue: true }).status, 400, 'a continue answer to a question')
+  assert(runner.answerTask(t.id, { chosen: ['Rome'] }).ok, 'answered')
   await waitFor(() => ended(t.id), 'end')
   assert(/Rome/.test(branchOf(conv).find((m) => m.role === 'tool').content), 'answer in the result')
 })
@@ -422,9 +422,9 @@ await test('several questions in one ask_user (D43): answered as { answers: [...
   const conv = newConversation()
   const t = start(conv)
   await waitFor(() => statusOf(t.id) === 'waiting_user', 'waiting_user')
-  eq(store.getJob(t.id).waiting.questions.map((q) => q.question), ['Which city?', 'Which month?'], 'both questions waiting')
-  eq(runner.answerJob(t.id, { answers: [null, { text: '  ' }] }).status, 400, 'nothing answered')
-  assert(runner.answerJob(t.id, { answers: [{ chosen: ['Rome'] }, { text: 'May' }, { text: 'extra, dropped' }] }).ok, 'answered')
+  eq(store.getTask(t.id).waiting.questions.map((q) => q.question), ['Which city?', 'Which month?'], 'both questions waiting')
+  eq(runner.answerTask(t.id, { answers: [null, { text: '  ' }] }).status, 400, 'nothing answered')
+  assert(runner.answerTask(t.id, { answers: [{ chosen: ['Rome'] }, { text: 'May' }, { text: 'extra, dropped' }] }).ok, 'answered')
   await waitFor(() => ended(t.id), 'end')
   const result = branchOf(conv).find((m) => m.role === 'tool').content
   assert(/1\. Which city\?\n   The user chose: Rome\n2\. Which month\?\n   The user answered: May$/.test(result), result)
@@ -435,7 +435,7 @@ await test('a message typed while a question is open is its answer', async () =>
   const conv = newConversation()
   const t = start(conv)
   await waitFor(() => statusOf(t.id) === 'waiting_user', 'waiting_user')
-  eq(runner.steerJob(t.id, 'Priya').as, 'answer', 'taken as the answer')
+  eq(runner.steerTask(t.id, 'Priya').as, 'answer', 'taken as the answer')
   await waitFor(() => ended(t.id), 'end')
   assert(/Priya/.test(branchOf(conv).find((m) => m.role === 'tool').content), 'answer in the result')
 })
@@ -445,8 +445,8 @@ await test('the turn limit asks whether to go on (D30); "no" ends the task', asy
   const conv = newConversation()
   const t = start(conv, 'go', { maxTurns: 1 })
   await waitFor(() => statusOf(t.id) === 'waiting_user', 'continue prompt')
-  eq(store.getJob(t.id).waiting.kind, 'continue', 'kind')
-  assert(runner.answerJob(t.id, { continue: false }).ok, 'answered')
+  eq(store.getTask(t.id).waiting.kind, 'continue', 'kind')
+  assert(runner.answerTask(t.id, { continue: false }).ok, 'answered')
   await waitFor(() => ended(t.id), 'end')
   eq(statusOf(t.id), 'done', 'status')
 })
@@ -458,7 +458,7 @@ await test('steering: the turn ends, the message is added, the loop goes on', as
   const conv = newConversation()
   const t = start(conv)
   await waitFor(() => w.bodies.length === 1, 'first turn started')
-  eq(runner.steerJob(t.id, 'also do this').as, 'steer', 'queued')
+  eq(runner.steerTask(t.id, 'also do this').as, 'steer', 'queued')
   release()
   await waitFor(() => ended(t.id), 'end')
   eq(branchOf(conv).slice(1).map((m) => [m.role, m.content]),
@@ -471,7 +471,7 @@ await test('cancel while parked: cancelled, the approval withdrawn, the chat fre
   const conv = newConversation()
   const t = start(conv)
   await waitFor(() => statusOf(t.id) === 'waiting_approval', 'parked')
-  assert(runner.cancelJob(t.id).ok, 'cancel')
+  assert(runner.cancelTask(t.id).ok, 'cancel')
   await waitFor(() => ended(t.id), 'end')
   eq([statusOf(t.id), ledger.pendingCount(), convs.getConversation(SCOPE, conv).activeTaskId], ['cancelled', 0, undefined], 'after')
 })
@@ -558,7 +558,7 @@ await test('8.5: busy retries once, after the completions end; a cancelled task 
   fakeWorld([call('q1', 'ask_user', { question: 'Which city?' })], { effectiveConfigFor: async () => ({ memory: { enabled: true } }), reviewConversation: async () => { reviews.push(0); return { status: 'done' } } })
   const t3 = start(newConversation())
   await waitFor(() => statusOf(t3.id) === 'waiting_user', 'waiting_user')
-  runner.cancelJob(t3.id)
+  runner.cancelTask(t3.id)
   await waitFor(() => ended(t3.id), 'cancel')
   await runner._settleReviews()
   eq([statusOf(t3.id), reviews.length], ['cancelled', 0], 'a cancelled task started a review')
@@ -589,11 +589,11 @@ await test('a second task on a conversation that has one is refused; an unknown 
   fakeWorld([call('c1', 'delete_file', {})])
   const conv = newConversation()
   const t = start(conv)
-  const again = runner.startJob({ account: null, storeAccountId: SCOPE, conversationId: conv, content: 'x' })
+  const again = runner.startTask({ account: null, storeAccountId: SCOPE, conversationId: conv, content: 'x' })
   eq([again.ok, again.status], [false, 409], 'second')
-  eq(runner.startJob({ account: null, storeAccountId: SCOPE, conversationId: 'nope', content: 'x' }).status, 404, 'unknown')
-  eq(runner.startJob({ account: null, storeAccountId: 'other-device', conversationId: conv, content: 'x' }).status, 404, 'another scope')
-  runner.cancelJob(t.id)
+  eq(runner.startTask({ account: null, storeAccountId: SCOPE, conversationId: 'nope', content: 'x' }).status, 404, 'unknown')
+  eq(runner.startTask({ account: null, storeAccountId: 'other-device', conversationId: conv, content: 'x' }).status, 404, 'another scope')
+  runner.cancelTask(t.id)
   await waitFor(() => ended(t.id), 'end')
 })
 
@@ -604,10 +604,10 @@ await test('origin: a Send run is "chat", anything else "background"; an unknown
   fakeWorld([say('a'), say('b')])
   const chat = start(newConversation(), 'hi', { origin: 'chat' })
   eq(chat.origin, 'chat', 'chat')
-  eq(store.getJob(chat.id).origin, 'chat', 'stored')
+  eq(store.getTask(chat.id).origin, 'chat', 'stored')
   const bg = start(newConversation(), 'hi')
   eq(bg.origin, 'background', 'default')
-  const bad = runner.startJob({ account: null, storeAccountId: SCOPE, conversationId: newConversation(), content: 'x', origin: 'tab' })
+  const bad = runner.startTask({ account: null, storeAccountId: SCOPE, conversationId: newConversation(), content: 'x', origin: 'tab' })
   eq([bad.ok, bad.status], [false, 400], 'unknown origin')
   await waitFor(() => ended(chat.id) && ended(bg.id), 'end')
 })
@@ -645,7 +645,7 @@ await test('auth turned on after an auth-off task started: the task fails at its
     const t = start(conv)
     await waitFor(() => ended(t.id), 'end')
     eq(statusOf(t.id), 'failed', 'failed')
-    assert(/Login was turned on/.test(store.getJob(t.id).error), store.getJob(t.id).error)
+    assert(/Login was turned on/.test(store.getTask(t.id).error), store.getTask(t.id).error)
   } finally {
     accounts.setAuthRequired(false)
   }
@@ -673,7 +673,7 @@ await test('the real prepareCompletion runs on a task\'s request: the prompt is 
   convs.updateConversation(SCOPE, conv, { promptMode: 'research' })
   const t = start(conv)
   await waitFor(() => ended(t.id), 'end')
-  eq(statusOf(t.id), 'done', `status (${store.getJob(t.id).error})`)
+  eq(statusOf(t.id), 'done', `status (${store.getTask(t.id).error})`)
   const b = w.bodies[0]
   eq([b.messages[0].role, 'redstart_mode' in b, 'redstart_project' in b, 'redstart_retrieval' in b], ['system', false, false, false], 'body')
   assert(/Redstart/i.test(b.messages[0].content), 'the composed prompt')
@@ -769,7 +769,7 @@ await test('compaction off (the client\'s setting) sends the history whole', asy
 
 console.log('\n-- the routes (3.6, D31) --')
 
-const { handleJobRoute, isJobRoute } = await import('../daemon/gateway/job-routes.mjs')
+const { handleTaskRoute, isTaskRoute } = await import('../daemon/gateway/task-routes.mjs')
 
 /** A response that also records SSE writes and can be told the client left. */
 function sseRes() {
@@ -784,7 +784,7 @@ async function taskRoute(method, urlPath, body, { scope = SCOPE, headers = {} } 
   const req = fakeReq(method, body, urlPath)
   req.headers = headers
   const res = sseRes()
-  const handled = await handleJobRoute(req, res, urlPath.split('?')[0], { account: null, storeAccountId: scope, surface: null, timeZone: null })
+  const handled = await handleTaskRoute(req, res, urlPath.split('?')[0], { account: null, storeAccountId: scope, surface: null, timeZone: null })
   let json = null
   try { json = res.body ? JSON.parse(res.body) : null } catch { /* SSE */ }
   return { handled, status: res.status, json, res, req }
@@ -811,7 +811,7 @@ await test('🔍 live tokens: the reply being written arrives as batched delta e
 })
 
 await test('live deltas carry llama-server\'s latest timings for the readout, and only its numeric fields', async () => {
-  const { liveDeltas } = await import('../daemon/job-ports.mjs')
+  const { liveDeltas } = await import('../daemon/task-ports.mjs')
   const sent = []
   const l = liveDeltas('t1', 'm1', (id, e) => sent.push(e))
   l.onContent('Hi')
@@ -827,7 +827,7 @@ await test('live deltas carry llama-server\'s latest timings for the readout, an
 })
 
 await test('live deltas carry the tool calls being written, as increments only', async () => {
-  const { liveDeltas } = await import('../daemon/job-ports.mjs')
+  const { liveDeltas } = await import('../daemon/task-ports.mjs')
   const sent = []
   const l = liveDeltas('t1', 'm1', (id, e) => sent.push(e))
   // The reader hands over the whole merged list each time.
@@ -853,7 +853,7 @@ await test('🔍 the event stream sends a live event with no id: line, so Last-E
   fakeWorld([(body) => new Promise((resolve) => setTimeout(() => resolve(sse(say('slow reply'))), 150))])
   const conv = newConversation()
   const t = start(conv, 'go')
-  const r = await taskRoute('GET', `/jobs/${t.id}/events`)
+  const r = await taskRoute('GET', `/tasks/${t.id}/events`)
   await waitFor(() => ended(t.id) && r.res.writableEnded, 'stream end')
   const raw = r.res.chunks.join('')
   const blocks = raw.split('\n\n').filter(Boolean)
@@ -889,7 +889,7 @@ await test('🔒 a connected client gets client_call, the run waits, and its POS
   const record = store.readEvents(t.id, 0).find((e) => e.type === 'client_call')
   assert(record && record.arguments === undefined, 'the stored record carries the arguments')
   eq(statusOf(t.id), 'waiting_client', 'status while the client runs it')
-  eq(store.getJob(t.id).waiting, { kind: 'client', callId: 'c2', tool: 'fs_read_file' }, 'waiting')
+  eq(store.getTask(t.id).waiting, { kind: 'client', callId: 'c2', tool: 'fs_read_file' }, 'waiting')
   assert(!store.readEvents(t.id, 0).some((e) => e.type === 'approval'), 'Nest asked for an approval: a client tool is the client\'s own card')
   eq(runner.clientResult(t.id, { callId: 'nope', text: 'x' }).status, 409, 'an unknown call id')
   assert(runner.clientResult(t.id, { callId: 'c2', text: 'the notes say hello' }).ok, 'result refused')
@@ -922,7 +922,7 @@ await test('🔒 a client tool cannot take a Nest tool\'s name, and a banned one
   eq(w.bodies[0].tools.find((x) => x.function.name === 'read_document').function.description, 'read_document', 'the client replaced Nest\'s tool')
   assert(/not allowed on this server/.test(toolMsg(w.bodies[1])), `a banned client tool ran: ${toolMsg(w.bodies[1])}`)
   for (const bad of ['fs_read_file', [{ name: 'has space' }], [FS_READ, FS_READ], Array.from({ length: 65 }, (_, i) => ({ name: `t${i}` }))]) {
-    const r = runner.startJob({ account: null, storeAccountId: SCOPE, conversationId: newConversation(), content: 'x', clientTools: bad })
+    const r = runner.startTask({ account: null, storeAccountId: SCOPE, conversationId: newConversation(), content: 'x', clientTools: bad })
     eq([r.ok, r.status], [false, 400], `accepted ${JSON.stringify(bad).slice(0, 60)}`)
   }
 })
@@ -943,7 +943,7 @@ await test('🔒 Nest tools the client switched off for the chat are not offered
   assert(!w.calls.some((c) => c.name === 'delete_file' || c.name === 'call_tool'), 'a switched-off tool ran')
   assert(/switched off in this chat/.test(toolMsg(w.bodies[1])), toolMsg(w.bodies[1]))
   assert(/switched off in this chat/.test(toolMsg(w.bodies[2])), toolMsg(w.bodies[2]))
-  eq(store.getJob(t.id).toolLimits, { nest: true, exclude: ['delete_file'] }, 'kept on the record for a resume')
+  eq(store.getTask(t.id).toolLimits, { nest: true, exclude: ['delete_file'] }, 'kept on the record for a resume')
 
   // Nest's server off for the chat: none of Nest's, but ask_user, update_plan and the client's own.
   const w2 = fakeWorld([say('ok')])
@@ -952,7 +952,7 @@ await test('🔒 Nest tools the client switched off for the chat are not offered
   eq(w2.bodies[0].tools.map((x) => x.function.name).sort(), ['ask_user', 'fs_read_file', 'update_plan'], 'tools with Nest off')
 
   for (const bad of ['all', { nest: 'no' }, { exclude: 'delete_file' }, { exclude: ['has space'] }]) {
-    const r = runner.startJob({ account: null, storeAccountId: SCOPE, conversationId: newConversation(), content: 'x', toolLimits: bad })
+    const r = runner.startTask({ account: null, storeAccountId: SCOPE, conversationId: newConversation(), content: 'x', toolLimits: bad })
     eq([r.ok, r.status], [false, 400], `accepted ${JSON.stringify(bad)}`)
   }
 })
@@ -960,13 +960,13 @@ await test('🔒 Nest tools the client switched off for the chat are not offered
 await test('the routes: POST /tasks takes clientTools, /client replaces them, /client-result answers; ?client=1 is what counts as connected', async () => {
   const w = fakeWorld([call('c5', 'fs_read_file', {}), say('via routes')])
   const conv = newConversation()
-  const r = await taskRoute('POST', '/jobs', { conversationId: conv, content: 'go', clientTools: [FS_READ] })
+  const r = await taskRoute('POST', '/tasks', { conversationId: conv, content: 'go', clientTools: [FS_READ] })
   eq(r.status, 201, 'start')
   const id = r.json.id
-  const ev = await taskRoute('GET', `/jobs/${id}/events?client=1`)
+  const ev = await taskRoute('GET', `/tasks/${id}/events?client=1`)
   await waitFor(() => statusOf(id) === 'waiting_client', 'waiting_client')
-  eq((await taskRoute('POST', `/jobs/${id}/client`, { tools: 'nope' })).status, 400, 'a malformed re-register')
-  eq((await taskRoute('POST', `/jobs/${id}/client-result`, { callId: 'c5', text: 'from the app' })).status, 200, 'result')
+  eq((await taskRoute('POST', `/tasks/${id}/client`, { tools: 'nope' })).status, 400, 'a malformed re-register')
+  eq((await taskRoute('POST', `/tasks/${id}/client-result`, { callId: 'c5', text: 'from the app' })).status, 200, 'result')
   await waitFor(() => ended(id), 'end')
   ev.req.emit('close')
   eq(toolMsg(w.bodies[1]), 'from the app', 'routed result')
@@ -992,71 +992,24 @@ await test('🔒 two clients connected: the call goes to ONE of them, so a secon
   ;(b.length ? detachA : detachB)()
 })
 
-await test('🔍 the jobs folder: an existing tasks/ moves to jobs/ once, with every job in it (tasks plan Phase 0)', async () => {
-  const { spawnSync } = await import('node:child_process')
-  const { pathToFileURL } = await import('node:url')
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'redstart-jobs-move-'))
-  const id = '0f8fad5b-d9cb-469f-a165-70867728950e'
-  fs.mkdirSync(path.join(base, 'tasks', id), { recursive: true })
-  fs.writeFileSync(path.join(base, 'tasks', id, 'task.json'), JSON.stringify({ id, status: 'done', accountKey: '_local', createdAt: 1, updatedAt: 1 }))
-  const here = path.dirname(new URL(import.meta.url).pathname)
-  const probe = `
-    import { register } from 'node:module'
-    register(${JSON.stringify(pathToFileURL(path.join(here, 'auth-test-loader.mjs')).href)})
-    await import(${JSON.stringify(pathToFileURL(path.join(here, 'electron-stub.mjs')).href)})
-    const store = await import(${JSON.stringify(pathToFileURL(path.join(here, '..', 'daemon', 'job-store.mjs')).href)})
-    console.log(JSON.stringify({ dir: store.jobsDir(), ids: store.listJobs().map((t) => t.id) }))`
-  const run = () => {
-    const r = spawnSync(process.execPath, ['--input-type=module', '-e', probe], { env: { ...process.env, REDSTART_TEST_USERDATA_DIR: base }, encoding: 'utf8' })
-    const line = r.stdout.trim().split('\n').filter((l) => l.startsWith('{')).pop()
-    if (!line) throw new Error(`probe failed: ${r.stderr}`)
-    return JSON.parse(line)
-  }
-  try {
-    const first = run()
-    eq(path.basename(first.dir), 'jobs', 'jobs/ in use')
-    eq(first.ids, [id], 'the job came with it')
-    assert(!fs.existsSync(path.join(base, 'tasks')), 'tasks/ is still there')
-    // A second start finds jobs/ and leaves it alone.
-    eq(run().ids, [id], 'the second start')
-  } finally {
-    fs.rmSync(base, { recursive: true, force: true })
-  }
-})
-
 await test('which paths are ours', () => {
   const id = '0f8fad5b-d9cb-469f-a165-70867728950e'
-  eq(['/jobs', `/jobs/${id}`, `/jobs/${id}/events`, `/jobs/${id}/answer`, `/jobs/${id}/nope`, '/jobs/abc', '/jobsx'].map(isJobRoute),
-    [true, true, true, true, false, false, false], 'isJobRoute')
-  // The old path still reaches the same routes (tasks plan Phase 0)...
-  eq(['/tasks', `/tasks/${id}`, `/tasks/${id}/events`, `/tasks/${id}/nope`, '/tasksx'].map(isJobRoute),
-    [true, true, true, false, false], 'isJobRoute, old path')
-  // ...and never the tasks people give each other.
-  eq(['/work-items', '/work-items/mine'].map(isJobRoute), [false, false], 'not /work-items')
+  eq(['/tasks', `/tasks/${id}`, `/tasks/${id}/events`, `/tasks/${id}/answer`, `/tasks/${id}/nope`, '/tasks/abc', '/tasksx'].map(isTaskRoute),
+    [true, true, true, true, false, false, false], 'isTaskRoute')
 })
 
-await test('🔍 the old /tasks path reaches the same job, logged, for a client that has not updated', async () => {
-  fakeWorld([say('via the old path')])
-  const conv = newConversation()
-  const r = await taskRoute('POST', '/tasks', { conversationId: conv, content: 'old client' })
-  eq(r.status, 201, 'start via /tasks')
-  await waitFor(() => ended(r.json.id), 'end')
-  eq((await taskRoute('GET', `/tasks/${r.json.id}`)).json.id, r.json.id, 'read via /tasks')
-  eq((await taskRoute('GET', `/jobs/${r.json.id}`)).json.id, r.json.id, 'the same job via /jobs')
-})
-
-await test('POST /jobs starts one (201, no storage scope in the body); bad input is 400, an unknown chat 404', async () => {
+await test('POST /tasks starts one (201, no storage scope in the body); bad input is 400, an unknown chat 404', async () => {
   fakeWorld([say('route answer')])
   const conv = newConversation()
-  const r = await taskRoute('POST', '/jobs', { conversationId: conv, content: 'via route' })
+  const r = await taskRoute('POST', '/tasks', { conversationId: conv, content: 'via route' })
   eq(r.status, 201, 'status')
   assert(r.json.id && !('storeAccountId' in r.json) && !('accountKey' in r.json), 'public shape')
   await waitFor(() => ended(r.json.id), 'end')
-  eq((await taskRoute('POST', '/jobs', { conversationId: conv })).status, 400, 'no content')
-  eq((await taskRoute('POST', '/jobs', { content: 'x' })).status, 400, 'no conversation')
-  eq((await taskRoute('POST', '/jobs', { conversationId: 'nope', content: 'x' })).status, 404, 'unknown')
+  eq((await taskRoute('POST', '/tasks', { conversationId: conv })).status, 400, 'no content')
+  eq((await taskRoute('POST', '/tasks', { content: 'x' })).status, 400, 'no conversation')
+  eq((await taskRoute('POST', '/tasks', { conversationId: 'nope', content: 'x' })).status, 404, 'unknown')
   // The route carries origin through to the record the client reads.
-  const sent = await taskRoute('POST', '/jobs', { conversationId: conv, content: 'a send', origin: 'chat' })
+  const sent = await taskRoute('POST', '/tasks', { conversationId: conv, content: 'a send', origin: 'chat' })
   eq([sent.status, sent.json?.origin], [201, 'chat'], 'origin via the route')
   await waitFor(() => ended(sent.json.id), 'end of the send')
 })
@@ -1067,11 +1020,11 @@ await test('another scope sees none of it: GET, events and every action are 404'
   const t = start(conv)
   await waitFor(() => ended(t.id), 'end')
   const other = { scope: 'device-2' }
-  eq((await taskRoute('GET', `/jobs/${t.id}`, null, other)).status, 404, 'get')
-  eq((await taskRoute('GET', `/jobs/${t.id}/events`, null, other)).status, 404, 'events')
-  for (const a of ['steer', 'answer', 'cancel']) eq((await taskRoute('POST', `/jobs/${t.id}/${a}`, {}, other)).status, 404, a)
-  assert(!(await taskRoute('GET', '/jobs', null, other)).json.tasks.some((x) => x.id === t.id), 'listed')
-  assert((await taskRoute('GET', `/jobs?conversationId=${conv}`)).json.tasks.every((x) => x.conversationId === conv), 'filter')
+  eq((await taskRoute('GET', `/tasks/${t.id}`, null, other)).status, 404, 'get')
+  eq((await taskRoute('GET', `/tasks/${t.id}/events`, null, other)).status, 404, 'events')
+  for (const a of ['steer', 'answer', 'cancel']) eq((await taskRoute('POST', `/tasks/${t.id}/${a}`, {}, other)).status, 404, a)
+  assert(!(await taskRoute('GET', '/tasks', null, other)).json.tasks.some((x) => x.id === t.id), 'listed')
+  assert((await taskRoute('GET', `/tasks?conversationId=${conv}`)).json.tasks.every((x) => x.conversationId === conv), 'filter')
 })
 
 await test('events: replay after Last-Event-ID, then live, and the stream ends with the task', async () => {
@@ -1080,12 +1033,12 @@ await test('events: replay after Last-Event-ID, then live, and the stream ends w
   const conv = newConversation()
   const t = start(conv)
   await waitFor(() => statusOf(t.id) === 'waiting_approval', 'parked')
-  const r = await taskRoute('GET', `/jobs/${t.id}/events`, null, { headers: { 'last-event-id': '2' } })
+  const r = await taskRoute('GET', `/tasks/${t.id}/events`, null, { headers: { 'last-event-id': '2' } })
   eq(r.status, 200, 'status')
   const replayed = sseEvents(r.res)
   assert(replayed.length > 0 && replayed.every((e) => e.seq > 2), `replay starts after 2: ${replayed.map((e) => e.seq)}`)
   assert(!r.res.writableEnded, 'still open while the task waits')
-  ledger.decide(store.getJob(t.id).waiting.approval.id, ANON_KEY, 'once')
+  ledger.decide(store.getTask(t.id).waiting.approval.id, ANON_KEY, 'once')
   await waitFor(() => r.res.writableEnded, 'stream ended')
   const all = sseEvents(r.res)
   eq(all.at(-1).status, 'done', 'last event')
@@ -1098,7 +1051,7 @@ await test('events for an ended task: the replay, then closed; ?after= works lik
   const conv = newConversation()
   const t = start(conv)
   await waitFor(() => ended(t.id), 'end')
-  const r = await taskRoute('GET', `/jobs/${t.id}/events?after=1`)
+  const r = await taskRoute('GET', `/tasks/${t.id}/events?after=1`)
   assert(r.res.writableEnded, 'closed')
   assert(sseEvents(r.res).every((e) => e.seq > 1), 'after 1')
 })
@@ -1108,36 +1061,36 @@ await test('answer, steer and cancel through the routes', async () => {
   const conv = newConversation()
   const t = start(conv)
   await waitFor(() => statusOf(t.id) === 'waiting_user', 'asked')
-  eq((await taskRoute('POST', `/jobs/${t.id}/answer`, {})).status, 400, 'empty answer')
-  eq((await taskRoute('POST', `/jobs/${t.id}/answer`, { text: 'yes' })).status, 200, 'answered')
+  eq((await taskRoute('POST', `/tasks/${t.id}/answer`, {})).status, 400, 'empty answer')
+  eq((await taskRoute('POST', `/tasks/${t.id}/answer`, { text: 'yes' })).status, 200, 'answered')
   await waitFor(() => ended(t.id), 'end')
-  eq((await taskRoute('POST', `/jobs/${t.id}/steer`, { content: 'more' })).status, 409, 'steer an ended task')
-  eq((await taskRoute('POST', `/jobs/${t.id}/cancel`)).json.ok, true, 'cancel an ended task is a no-op')
+  eq((await taskRoute('POST', `/tasks/${t.id}/steer`, { content: 'more' })).status, 409, 'steer an ended task')
+  eq((await taskRoute('POST', `/tasks/${t.id}/cancel`)).json.ok, true, 'cancel an ended task is a no-op')
 
   ledger._reset()
   fakeWorld([call('c1', 'delete_file', {})])
   const conv2 = newConversation()
   const t2 = start(conv2)
   await waitFor(() => statusOf(t2.id) === 'waiting_approval', 'parked')
-  eq((await taskRoute('POST', `/jobs/${t2.id}/cancel`)).status, 200, 'cancel')
+  eq((await taskRoute('POST', `/tasks/${t2.id}/cancel`)).status, 200, 'cancel')
   await waitFor(() => ended(t2.id), 'end')
   eq(statusOf(t2.id), 'cancelled', 'cancelled')
 })
 
-await test('control plane: jobs:list carries the record, never the question or an approval summary; jobs:cancel stops one', async () => {
-  const { jobsHandlers } = await import('../daemon/ipc/jobs.mjs')
-  const h = jobsHandlers()
+await test('control plane: tasks:list carries the record, never the question or an approval summary; tasks:cancel stops one', async () => {
+  const { tasksHandlers } = await import('../daemon/ipc/tasks.mjs')
+  const h = tasksHandlers()
   fakeWorld([call('q1', 'ask_user', { question: 'A private question about Priya?' })])
   const conv = newConversation()
   const t = start(conv)
   await waitFor(() => statusOf(t.id) === 'waiting_user', 'asked')
-  const row = h['jobs:list']().jobs.find((x) => x.id === t.id)
+  const row = h['tasks:list']().tasks.find((x) => x.id === t.id)
   eq([row.status, row.waitingFor], ['waiting_user', 'question'], 'row')
   assert(!JSON.stringify(row).includes('Priya') && !('waiting' in row) && !('conversationId' in row), 'no content')
-  eq(h['jobs:cancel'](t.id).ok, true, 'cancel')
+  eq(h['tasks:cancel'](t.id).ok, true, 'cancel')
   await waitFor(() => ended(t.id), 'end')
   eq(statusOf(t.id), 'cancelled', 'cancelled')
-  eq(h['jobs:cancel']('').ok, false, 'no id')
+  eq(h['tasks:cancel']('').ok, false, 'no id')
 })
 
 console.log('\n-- the bench\'s --runtime: the daemon hosts the loop (3.10) --')
@@ -1155,7 +1108,7 @@ const { computeMetrics } = await import('./agent-bench/lib/metrics.mjs')
 async function benchServer() {
   const server = http.createServer(async (req, res) => {
     const p = new URL(req.url, 'http://x').pathname
-    if (isJobRoute(p) && await handleJobRoute(req, res, p, { account: null, storeAccountId: SCOPE, surface: null, timeZone: null })) return
+    if (isTaskRoute(p) && await handleTaskRoute(req, res, p, { account: null, storeAccountId: SCOPE, surface: null, timeZone: null })) return
     if (isApprovalRoute(p) && await handleApprovalRoute(req, res, p, null)) return
     const m = /^\/conversations\/([^/]+)$/.exec(p)
     if (m && req.method === 'GET') {
@@ -1264,7 +1217,7 @@ console.log('\n-- restart recovery, across a real process kill (3.7) --')
 
 const { spawn } = await import('node:child_process')
 const { fileURLToPath } = await import('node:url')
-const CHILD = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib', 'job-restart-child.mjs')
+const CHILD = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib', 'task-restart-child.mjs')
 
 /** Run the child; resolve with the first line tagged with one of `tags`. */
 function child(args, dataDir, tags, { kill = false, noModel = false } = {}) {
@@ -1328,29 +1281,29 @@ await test('killed while a question was open: after the restart it is asked agai
   }
 })
 
-await test('an orderly stop (suspendAllJobs) leaves the task unended, and a resume finishes it', async () => {
+await test('an orderly stop (suspendAllTasks) leaves the task unended, and a resume finishes it', async () => {
   ledger._reset()
   fakeWorld([call('c1', 'delete_file', {}), say('after resume')])
   const conv = newConversation()
   const t = start(conv)
   await waitFor(() => statusOf(t.id) === 'waiting_approval', 'parked')
-  const before = store.getJob(t.id).waiting.approval.id
-  await runner.suspendAllJobs()
+  const before = store.getTask(t.id).waiting.approval.id
+  await runner.suspendAllTasks()
   eq(statusOf(t.id), 'waiting_approval', 'not ended')
   eq(convs.getConversation(SCOPE, conv).activeTaskId, t.id, 'still claimed')
   ledger._reset() // a restart drops the ledger
-  assert(runner.resumeJobs() >= 1, 'resumed')
+  assert(runner.resumeTasks() >= 1, 'resumed')
   // The record shows the old approval until the resumed run asks again.
-  await waitFor(() => { const id = store.getJob(t.id).waiting?.approval?.id; return id && id !== before }, 'asked again')
-  ledger.decide(store.getJob(t.id).waiting.approval.id, ANON_KEY, 'once')
+  await waitFor(() => { const id = store.getTask(t.id).waiting?.approval?.id; return id && id !== before }, 'asked again')
+  ledger.decide(store.getTask(t.id).waiting.approval.id, ANON_KEY, 'once')
   await waitFor(() => ended(t.id), 'end')
   eq([statusOf(t.id), branchOf(conv).at(-1).content], ['done', 'after resume'], 'finished')
 })
 
 await test('resume cancels a task whose conversation is gone', async () => {
-  const t = store.createJob({ accountKey: ANON_KEY, storeAccountId: SCOPE, conversationId: 'gone-conv' })
-  store.updateJob(t.id, { status: 'running' })
-  runner.resumeJobs()
+  const t = store.createTask({ accountKey: ANON_KEY, storeAccountId: SCOPE, conversationId: 'gone-conv' })
+  store.updateTask(t.id, { status: 'running' })
+  runner.resumeTasks()
   eq(statusOf(t.id), 'cancelled', 'cancelled')
 })
 

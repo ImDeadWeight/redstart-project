@@ -25,8 +25,8 @@ import {
 import * as messageRepo from '$lib/stores/chat/chat-message-repo';
 import { ChatTitleService } from '$lib/services/chat-title.service';
 import { memoryReviewStore } from '$lib/stores/memory-review.svelte';
-import { jobsStore, serverRunsOn } from '$lib/stores/jobs.svelte';
-import { isChatRun } from '$lib/services/job.service';
+import { tasksStore, serverRunsOn } from '$lib/stores/tasks.svelte';
+import { isChatRun } from '$lib/services/task.service';
 import { toast } from 'svelte-sonner';
 import {
 	normalizeModelName,
@@ -57,7 +57,7 @@ export class ChatSendController {
 		// 2026-11-19: the live context / speed readout (fed by llama-server's
 		// timings, now carried on the run's delta events), and naming the
 		// conversation after its first answer.
-		jobsStore.onLiveTimings = (convId, timings) => {
+		tasksStore.onLiveTimings = (convId, timings) => {
 			const tokensPerSecond =
 				timings.predicted_ms && timings.predicted_n
 					? (timings.predicted_n / timings.predicted_ms) * 1000
@@ -73,7 +73,7 @@ export class ChatSendController {
 				convId
 			);
 		};
-		jobsStore.onChatRunFinished = (convId) => {
+		tasksStore.onChatRunFinished = (convId) => {
 			this.runtime.setProcessingState(convId, null);
 			void this.nameConversation(convId);
 		};
@@ -91,13 +91,13 @@ export class ChatSendController {
 		// daemon is its only writer, so a message goes to the task, as
 		// steering or as the answer to its open question. Files cannot ride
 		// along: the steer route takes text.
-		if (activeConv && jobsStore.activeFor(activeConv.id)) {
+		if (activeConv && tasksStore.activeFor(activeConv.id)) {
 			if (extras?.length || workspaceFiles?.length) {
 				toast.info(
 					'Files cannot be sent to a background job. Send text, or cancel the job first.'
 				);
 			}
-			if (content.trim()) await jobsStore.steer(activeConv.id, content.trim());
+			if (content.trim()) await tasksStore.steer(activeConv.id, content.trim());
 			return;
 		}
 
@@ -182,7 +182,7 @@ export class ChatSendController {
 				);
 			if (serverRunsOn() && !allExtras?.length) {
 				const { clientTools, toolLimits } = await agenticStore.prepareServerRun();
-				const task = await jobsStore.start(currentConv.id, messageText, clientTools, {
+				const task = await tasksStore.start(currentConv.id, messageText, clientTools, {
 					quiet: true,
 					toolLimits,
 					// A reply, not a background task: no task bar, Stop cancels it.
@@ -596,8 +596,8 @@ export class ChatSendController {
 		// A Send that runs on the server: Stop is that run's Cancel, from the
 		// composer, the sidebar or the keyboard alike. (A real background task
 		// keeps its own Cancel on the task bar.)
-		if (isChatRun(jobsStore.activeFor(activeConv.id))) {
-			await jobsStore.cancel(activeConv.id);
+		if (isChatRun(tasksStore.activeFor(activeConv.id))) {
+			await tasksStore.cancel(activeConv.id);
 			return;
 		}
 		await this.stopGenerationForChat(activeConv.id);

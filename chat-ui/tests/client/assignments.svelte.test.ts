@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { render } from 'vitest-browser-svelte';
-import MyTasksPage from '$lib/components/app/tasks/MyTasksPage.svelte';
-import ProjectTasks from '$lib/components/app/tasks/ProjectTasks.svelte';
-import { localToday } from '$lib/services/work-item.service';
+import MyAssignmentsPage from '$lib/components/app/assignments/MyAssignmentsPage.svelte';
+import ProjectAssignments from '$lib/components/app/assignments/ProjectAssignments.svelte';
+import { localToday } from '$lib/services/assignment.service';
 import { setOverride, jsonResponse } from './mock-overrides';
 
 /**
@@ -53,7 +53,7 @@ function task(over: Record<string, unknown>) {
 
 function record() {
 	const sent: { url: string; method: string; body: unknown }[] = [];
-	setOverride('/work-items/', (init) => {
+	setOverride('/assignments/', (init) => {
 		sent.push({
 			url: 'item',
 			method: init?.method ?? 'GET',
@@ -67,9 +67,9 @@ function record() {
 describe('My tasks', () => {
 	it("sorts by the viewer's date: overdue first, then this week, then no date", async () => {
 		record();
-		setOverride('/work-items/count', () => jsonResponse({ open: 3, overdue: 1 }));
-		setOverride('/work-items/created', () => jsonResponse({ items: [] }));
-		setOverride('/work-items/mine', () =>
+		setOverride('/assignments/count', () => jsonResponse({ open: 3, overdue: 1 }));
+		setOverride('/assignments/created', () => jsonResponse({ items: [] }));
+		setOverride('/assignments/mine', () =>
 			jsonResponse({
 				items: [
 					task({
@@ -90,7 +90,7 @@ describe('My tasks', () => {
 				limits: {}
 			})
 		);
-		const screen = await render(MyTasksPage);
+		const screen = await render(MyAssignmentsPage);
 		await expect.element(screen.getByText('Overdue · 1')).toBeInTheDocument();
 		await expect.element(screen.getByText('Due this week · 1')).toBeInTheDocument();
 		await expect.element(screen.getByText('No due date · 1')).toBeInTheDocument();
@@ -99,16 +99,16 @@ describe('My tasks', () => {
 
 	it('ticking a task sends only its status', async () => {
 		const sent = record();
-		setOverride('/work-items/count', () => jsonResponse({ open: 1, overdue: 0 }));
-		setOverride('/work-items/created', () => jsonResponse({ items: [] }));
-		setOverride('/work-items/mine', () =>
+		setOverride('/assignments/count', () => jsonResponse({ open: 1, overdue: 0 }));
+		setOverride('/assignments/created', () => jsonResponse({ items: [] }));
+		setOverride('/assignments/mine', () =>
 			jsonResponse({
 				items: [task({ id: 't1', title: 'Book the interpreter', can: STATUS_ONLY })],
 				counts: { open: 1, overdue: 0 },
 				limits: {}
 			})
 		);
-		const screen = await render(MyTasksPage);
+		const screen = await render(MyAssignmentsPage);
 		await screen.getByRole('checkbox', { name: 'Mark "Book the interpreter" done' }).click();
 		await expect
 			.poll(() => sent.find((s) => s.method === 'PATCH')?.body)
@@ -118,8 +118,8 @@ describe('My tasks', () => {
 
 describe("A project's tasks", () => {
 	function serve(items: unknown[]) {
-		setOverride('/work-items/count', () => jsonResponse({ open: 0, overdue: 0 }));
-		setOverride('/work-items?projectId=p1', () => jsonResponse({ items, limits: {} }));
+		setOverride('/assignments/count', () => jsonResponse({ open: 0, overdue: 0 }));
+		setOverride('/assignments?projectId=p1', () => jsonResponse({ items, limits: {} }));
 	}
 
 	it('a viewer gets no New task and no add line, and can tick only what Nest allows', async () => {
@@ -127,7 +127,7 @@ describe("A project's tasks", () => {
 			task({ id: 'a', title: 'Mine to finish', projectId: 'p1', can: STATUS_ONLY }),
 			task({ id: 'b', title: "Someone else's", projectId: 'p1', can: NOTHING })
 		]);
-		const screen = await render(ProjectTasks, { projectId: 'p1', canAdd: false });
+		const screen = await render(ProjectAssignments, { projectId: 'p1', canAdd: false });
 		await expect.element(screen.getByText('Mine to finish')).toBeInTheDocument();
 		await expect.element(screen.getByRole('button', { name: /New task/ })).not.toBeInTheDocument();
 		await expect
@@ -144,12 +144,12 @@ describe("A project's tasks", () => {
 	it('an editor adds one from the line, in this project', async () => {
 		const sent: unknown[] = [];
 		serve([]);
-		setOverride('/work-items', (init) => {
+		setOverride('/assignments', (init) => {
 			if (init?.method === 'POST') sent.push(JSON.parse(String(init.body)));
 			return jsonResponse(task({ id: 'n', projectId: 'p1' }), 201);
 		});
-		setOverride('/work-items?projectId=p1', () => jsonResponse({ items: [], limits: {} }));
-		const screen = await render(ProjectTasks, { projectId: 'p1', canAdd: true });
+		setOverride('/assignments?projectId=p1', () => jsonResponse({ items: [], limits: {} }));
+		const screen = await render(ProjectAssignments, { projectId: 'p1', canAdd: true });
 		const line = screen.getByPlaceholder('Add a task and press Enter');
 		await line.fill('Draft the letter');
 		await line
@@ -175,7 +175,7 @@ describe("A project's tasks", () => {
 				formerAssignee: { type: 'group', name: 'Intake' }
 			})
 		]);
-		const screen = await render(ProjectTasks, { projectId: 'p1', canAdd: true });
+		const screen = await render(ProjectAssignments, { projectId: 'p1', canAdd: true });
 		await expect.element(screen.getByText('left the project')).toBeInTheDocument();
 		await expect.element(screen.getByText('Unassigned (was Intake)')).toBeInTheDocument();
 	});

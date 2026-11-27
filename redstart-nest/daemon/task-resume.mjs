@@ -3,7 +3,7 @@
 // =============================================================================
 // Redstart Nest — closing and re-running what a restart left open
 // =============================================================================
-// job-runner.mjs re-enters a job after the daemon went down (resumeJobs,
+// task-runner.mjs re-enters a task after the daemon went down (resumeTasks,
 // 3.7). A turn is stored only once it is complete, so the conversation says
 // where the loop was: a trailing answer means the task had finished and only
 // its status was not written; a trailing assistant message with calls that
@@ -13,7 +13,7 @@
 
 import { runToolCalls } from '../../shared/agent-core/tool-calls.mjs'
 import { createAgenticTimings, createTurnStats } from '../../shared/agent-core/timings.mjs'
-import * as store from './job-store.mjs'
+import * as store from './task-store.mjs'
 
 export const INTERRUPTED_BY_RESTART = 'Interrupted by a restart. Its effect is unknown: check before repeating it.'
 
@@ -40,7 +40,7 @@ export async function resumeOpenCalls(pass, { ports, callbacks }) {
   const open = calls.filter((c) => c?.id && !answered.has(c.id))
   if (open.length === 0) return null
 
-  const inFlightId = store.getJob(pass.task.id).inFlight?.callId
+  const inFlightId = store.getTask(pass.task.id).inFlight?.callId
   const toRun = []
   for (const c of open) {
     if (c.id === inFlightId) {
@@ -50,7 +50,7 @@ export async function resumeOpenCalls(pass, { ports, callbacks }) {
       toRun.push(c)
     }
   }
-  store.updateJob(pass.task.id, { inFlight: null })
+  store.updateTask(pass.task.id, { inFlight: null })
   if (toRun.length > 0) {
     await pass.refresh({ needModel: false })
     const outcome = await runToolCalls({

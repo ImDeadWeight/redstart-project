@@ -28,8 +28,8 @@ export interface DesktopIconStripItem {
 	requiresAuth?: boolean;
 	/** A thin line above it, setting it apart from the items before. */
 	separatedAbove?: boolean;
-	/** Shows a count beside it: 'myTasks' is the open-task badge (workItemsStore). */
-	badge?: 'myTasks';
+	/** Shows a count beside it: 'myAssignments' is the open-task badge (assignmentsStore). */
+	badge?: 'myAssignments';
 }
 
 /**
@@ -64,9 +64,9 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 	{
 		icon: ListTodo,
 		tooltip: 'My tasks',
-		route: ROUTES.TASKS,
+		route: ROUTES.ASSIGNMENTS,
 		activeRoutePrefix: '/tasks',
-		badge: 'myTasks'
+		badge: 'myAssignments'
 	},
 	// Projects hold chats (they are also listed in the sidebar with their chats
 	// nested); this opens the list and New project.

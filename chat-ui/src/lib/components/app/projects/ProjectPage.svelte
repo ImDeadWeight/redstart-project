@@ -43,7 +43,7 @@
 	} from '$lib/services/project.service';
 	import ProjectShareDialog from './ProjectShareDialog.svelte';
 	import { ArtifactsGallery } from '$lib/components/app/artifacts';
-	import { ProjectTasks } from '$lib/components/app/tasks';
+	import { ProjectAssignments } from '$lib/components/app/assignments';
 	import { MemoryService, type Memory } from '$lib/services/memory.service';
 	import { FilesService, type FileEntry } from '$lib/services/files.service';
 	import { projectsStore } from '$lib/stores/projects.svelte';
@@ -355,7 +355,7 @@
 
 		<!-- Tasks (tasks plan Phase 1): everyone in the project sees them; editors
 		     add and assign them; whoever has one can finish it. -->
-		<ProjectTasks projectId={project.id} canAdd={canEdit} />
+		<ProjectAssignments projectId={project.id} canAdd={canEdit} />
 
 		<section class="space-y-2">
 			<div class="flex items-center justify-between gap-2">

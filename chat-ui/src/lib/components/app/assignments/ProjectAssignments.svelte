@@ -10,13 +10,13 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import {
-		WorkItemService,
-		WORK_ITEM_STATUSES,
-		type WorkItem
-	} from '$lib/services/work-item.service';
-	import { workItemsStore } from '$lib/stores/work-items.svelte';
-	import TaskRow from './TaskRow.svelte';
-	import TaskEditor from './TaskEditor.svelte';
+		AssignmentService,
+		ASSIGNMENT_STATUSES,
+		type Assignment
+	} from '$lib/services/assignment.service';
+	import { assignmentsStore } from '$lib/stores/assignments.svelte';
+	import AssignmentRow from './AssignmentRow.svelte';
+	import AssignmentEditor from './AssignmentEditor.svelte';
 
 	interface Props {
 		projectId: string;
@@ -25,36 +25,36 @@
 
 	let { projectId, canAdd }: Props = $props();
 
-	let items = $state<WorkItem[]>([]);
+	let items = $state<Assignment[]>([]);
 	let loading = $state(true);
 	let error = $state('');
 	let draft = $state('');
 	let adding = $state(false);
 	let showDone = $state(false);
 	let showDeleted = $state(false);
-	let deletedItems = $state<WorkItem[]>([]);
+	let deletedItems = $state<Assignment[]>([]);
 
 	let editorOpen = $state(false);
 	let editingId = $state<string | null>(null);
 
 	const groups = $derived(
-		WORK_ITEM_STATUSES.map((s) => ({ ...s, items: items.filter((t) => t.status === s.value) }))
+		ASSIGNMENT_STATUSES.map((s) => ({ ...s, items: items.filter((t) => t.status === s.value) }))
 	);
 	const openCount = $derived(items.filter((t) => t.status !== 'done').length);
 
 	$effect(() => {
-		void workItemsStore.version;
+		void assignmentsStore.version;
 		void load(projectId);
 	});
 
 	async function load(pid: string) {
 		try {
-			const r = await WorkItemService.forProject(pid, showDeleted);
+			const r = await AssignmentService.forProject(pid, showDeleted);
 			items = r.items.filter((t) => !t.deletedAt);
 			deletedItems = r.items.filter((t) => !!t.deletedAt);
 			error = '';
 		} catch (e) {
-			// An older Nest has no /work-items: say so quietly.
+			// An older Nest has no /assignments: say so quietly.
 			error = e instanceof Error ? e.message : 'Could not load tasks';
 		} finally {
 			loading = false;
@@ -66,9 +66,9 @@
 		if (!title) return;
 		adding = true;
 		try {
-			await WorkItemService.create({ title, projectId });
+			await AssignmentService.create({ title, projectId });
 			draft = '';
-			workItemsStore.changed();
+			assignmentsStore.changed();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Could not add the task');
 		} finally {
@@ -76,16 +76,16 @@
 		}
 	}
 
-	async function toggleDone(task: WorkItem, done: boolean) {
+	async function toggleDone(task: Assignment, done: boolean) {
 		try {
-			await WorkItemService.update(task.id, { status: done ? 'done' : 'open' });
-			workItemsStore.changed();
+			await AssignmentService.update(task.id, { status: done ? 'done' : 'open' });
+			assignmentsStore.changed();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Could not change the task');
 		}
 	}
 
-	function openTask(t: WorkItem) {
+	function openTask(t: Assignment) {
 		editingId = t.id;
 		editorOpen = true;
 	}
@@ -141,7 +141,7 @@
 						</h3>
 						<ul class="divide-y rounded-lg border">
 							{#each g.items as task (task.id)}
-								<TaskRow
+								<AssignmentRow
 									{task}
 									hideProject
 									hideStatus
@@ -183,7 +183,7 @@
 				{:else}
 					<ul class="divide-y rounded-lg border opacity-75">
 						{#each deletedItems as task (task.id)}
-							<TaskRow
+							<AssignmentRow
 								task={{ ...task, can: { ...task.can, status: false } }}
 								hideProject
 								onOpen={openTask}
@@ -197,4 +197,4 @@
 	{/if}
 </section>
 
-<TaskEditor bind:open={editorOpen} taskId={editingId} defaultProjectId={projectId} />
+<AssignmentEditor bind:open={editorOpen} taskId={editingId} defaultProjectId={projectId} />

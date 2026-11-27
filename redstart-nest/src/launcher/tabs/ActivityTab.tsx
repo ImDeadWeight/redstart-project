@@ -1,7 +1,7 @@
 // Activity tab — background tasks, what approval policy decided, and who
 // always allows what (agent-runtime plan Phase 2, D13/D14; Phase 3).
 //
-//   Background jobs — every account's tasks (daemon/ipc/jobs.mjs): state
+//   Background jobs — every account's tasks (daemon/ipc/tasks.mjs): state
 //                   and owner only, and Cancel.
 //   Decision log  — logger.mjs logPolicy() lines, newest first: a denial (on
 //                   the chat app's card or sent by a client), an approval
@@ -16,7 +16,7 @@
 
 import { useEffect, useState } from 'react'
 import { api } from '../api/redstart'
-import type { PolicyRecord, StandingGrant, JobSummary } from '../api/redstart'
+import type { PolicyRecord, StandingGrant, TaskSummary } from '../api/redstart'
 import { SectionTitle, btnCls, inputCls } from '../components/ui'
 
 const PAGE = 50
@@ -57,7 +57,7 @@ function detail(r: PolicyRecord): string {
   return bits.join(' · ')
 }
 
-const TASK_LABEL: Record<JobSummary['status'], string> = {
+const TASK_LABEL: Record<TaskSummary['status'], string> = {
   queued: 'Queued',
   running: 'Running',
   waiting_user: 'Waiting for an answer',
@@ -68,7 +68,7 @@ const TASK_LABEL: Record<JobSummary['status'], string> = {
   cancelled: 'Cancelled',
 }
 
-const TASK_TONE: Record<JobSummary['status'], string> = {
+const TASK_TONE: Record<TaskSummary['status'], string> = {
   queued: 'text-zinc-300',
   running: 'text-sky-400',
   waiting_user: 'text-amber-400',
@@ -79,15 +79,15 @@ const TASK_TONE: Record<JobSummary['status'], string> = {
   cancelled: 'text-zinc-500',
 }
 
-const LIVE = new Set<JobSummary['status']>(['queued', 'running', 'waiting_user', 'waiting_approval', 'waiting_model'])
+const LIVE = new Set<TaskSummary['status']>(['queued', 'running', 'waiting_user', 'waiting_approval', 'waiting_model'])
 
 /**
  * Background jobs (agent-runtime Phase 3): what is running for whom, and a
  * way to stop one. The record only: never the conversation, the question or
  * what an approval is for, which are the account's own.
  */
-function JobsSection() {
-  const [tasks, setTasks] = useState<JobSummary[]>([])
+function TasksSection() {
+  const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState<string | null>(null)
@@ -96,7 +96,7 @@ function JobsSection() {
     setLoading(true)
     setError(null)
     try {
-      setTasks((await api().jobs.list()).jobs)
+      setTasks((await api().tasks.list()).tasks)
     } catch {
       setError('Could not read the job list.')
     } finally {
@@ -108,10 +108,10 @@ function JobsSection() {
     void load()
   }, [])
 
-  async function cancel(t: JobSummary) {
+  async function cancel(t: TaskSummary) {
     setCancelling(t.id)
     try {
-      const r = await api().jobs.cancel(t.id)
+      const r = await api().tasks.cancel(t.id)
       if (!r.ok) setError(r.error)
       // The run stops at its next step; give it a moment before re-reading.
       setTimeout(() => void load(), 500)
@@ -241,7 +241,7 @@ export function ActivityTab() {
 
   return (
     <div className="flex flex-col gap-5">
-      <JobsSection />
+      <TasksSection />
 
       <section className="min-w-0 bg-zinc-900 border border-zinc-800 rounded-xl p-5">
         <div className="flex items-center justify-between mb-2">

@@ -1,20 +1,21 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — work items: the tasks people give each other (tasks plan)
+// Redstart Nest — assignments: the tasks people give each other (tasks plan)
 // =============================================================================
-// A work item is a task: a title, notes, a status, a due date, and one
+// An assignment is a task: a title, notes, a status, a due date, and one
 // assignee — a person or a group. It may belong to a project, or to none.
-// People call them "tasks"; the code calls them work items so they never meet
-// job-store.mjs, which is the assistant's own background jobs (called tasks
-// until tasks plan Phase 0).
+// People call them "tasks"; the code calls them assignments, because "task"
+// is already the assistant's own background work (task-store.mjs) and, in
+// every prompt, the work in front of the model. When the model gets tools for
+// these (tasks plan Phase 2) they are assignment_*, for the same reason.
 //
-//   <config>/work-items/project-<project id>.json   one project's tasks
-//   <config>/work-items/direct.json                 every task with no project
+//   <config>/assignments/project-<project id>.json   one project's tasks
+//   <config>/assignments/direct.json                 every task with no project
 //   each { version: 1, items: [item] }
 //
 // NEST KEEPS THE ONE COPY (plan D1). Chat-ui reads and writes these over
-// /work-items (gateway/work-item-routes.mjs); a later planning client
+// /assignments (gateway/assignment-routes.mjs); a later planning client
 // (Greenhouse) uses the same routes and keeps no copy of its own.
 //
 // ACCESS (plan D4) is decided in one place, accessOf() below, and nowhere
@@ -71,7 +72,7 @@ const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/
 const PROJECT_FILE = /^project-([A-Za-z0-9-]{1,64})\.json$/
 
-export function isWorkItemId(id) {
+export function isAssignmentId(id) {
   return typeof id === 'string' && ID.test(id)
 }
 
@@ -79,7 +80,7 @@ export function isWorkItemId(id) {
 // Files
 // ---------------------------------------------------------------------------
 
-function dir() { return path.join(configDir(), 'work-items') }
+function dir() { return path.join(configDir(), 'assignments') }
 function directFile() { return path.join(dir(), 'direct.json') }
 function projectFile(projectId) { return path.join(dir(), `project-${projectId}.json`) }
 function fileFor(projectId) { return projectId ? projectFile(projectId) : directFile() }
@@ -112,7 +113,7 @@ function allFiles(now) {
 
 /** The file holding this item, its data, and the item's index in it. */
 function locate(id, now) {
-  if (!isWorkItemId(id)) return null
+  if (!isAssignmentId(id)) return null
   for (const f of allFiles(now)) {
     const index = f.data.items.findIndex((t) => t.id === id)
     if (index !== -1) return { ...f, index, item: f.data.items[index] }
@@ -221,7 +222,7 @@ export function isDate(s) {
  * @param {{ partial?: boolean }} opts  partial: a PATCH, where absent fields keep their value
  * @returns {{ ok: true, fields: object } | { ok: false, error: string }}
  */
-export function validateWorkItem(body, { partial = false } = {}) {
+export function validateAssignment(body, { partial = false } = {}) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'a JSON object is required' }
   const reserved = RESERVED_FIELDS.filter((f) => body[f] !== undefined)
   if (reserved.length) return { ok: false, error: `not supported yet: ${reserved.join(', ')}` }
@@ -406,17 +407,17 @@ export function listAssignees(account, projectId = null) {
 const NOT_FOUND = { ok: false, error: 'not found', code: 'not_found' }
 
 /** One item the caller can see, with its history; deleted ones too, for restore. */
-export function getWorkItem(account, id, { now = Date.now() } = {}) {
+export function getAssignment(account, id, { now = Date.now() } = {}) {
   const found = locate(id, now)
   if (!found || !accessOf(found.item, account).see) return NOT_FOUND
   return { ok: true, item: view(found.item, account, { withHistory: true }) }
 }
 
 /** @returns {{ ok: true, item: object } | { ok: false, error: string, code?: string }} */
-export function createWorkItem(account, body, { now = Date.now() } = {}) {
+export function createAssignment(account, body, { now = Date.now() } = {}) {
   const key = ownerKeyOf(account)
   if (key === null) return { ok: false, error: 'sign in to create tasks', code: 'forbidden' }
-  const v = validateWorkItem(body)
+  const v = validateAssignment(body)
   if (!v.ok) return v
   const f = v.fields
   const projectId = f.projectId ?? null
@@ -472,8 +473,8 @@ export function createWorkItem(account, body, { now = Date.now() } = {}) {
  * Change some fields. Each is checked against what the caller may do, and one
  * they may not change refuses the whole request: nothing is half-applied.
  */
-export function updateWorkItem(account, id, body, { now = Date.now() } = {}) {
-  const v = validateWorkItem(body, { partial: true })
+export function updateAssignment(account, id, body, { now = Date.now() } = {}) {
+  const v = validateAssignment(body, { partial: true })
   if (!v.ok) return v
   const found = locate(id, now)
   if (!found) return NOT_FOUND
@@ -569,7 +570,7 @@ function sameAssignee(a, b) {
 }
 
 /** A member of the assigned group takes the task (plan D3). */
-export function claimWorkItem(account, id, { now = Date.now() } = {}) {
+export function claimAssignment(account, id, { now = Date.now() } = {}) {
   const found = locate(id, now)
   if (!found) return NOT_FOUND
   const can = accessOf(found.item, account)
@@ -590,7 +591,7 @@ export function claimWorkItem(account, id, { now = Date.now() } = {}) {
 }
 
 /** Give a claimed task back to its group. */
-export function releaseWorkItem(account, id, { now = Date.now() } = {}) {
+export function releaseAssignment(account, id, { now = Date.now() } = {}) {
   const found = locate(id, now)
   if (!found) return NOT_FOUND
   const can = accessOf(found.item, account)
@@ -608,7 +609,7 @@ export function releaseWorkItem(account, id, { now = Date.now() } = {}) {
 }
 
 /** Mark it deleted; it can be restored for 30 days (plan D7). */
-export function deleteWorkItem(account, id, { now = Date.now() } = {}) {
+export function deleteAssignment(account, id, { now = Date.now() } = {}) {
   const found = locate(id, now)
   if (!found) return NOT_FOUND
   const can = accessOf(found.item, account)
@@ -622,7 +623,7 @@ export function deleteWorkItem(account, id, { now = Date.now() } = {}) {
   return { ok: true }
 }
 
-export function restoreWorkItem(account, id, { now = Date.now() } = {}) {
+export function restoreAssignment(account, id, { now = Date.now() } = {}) {
   const found = locate(id, now)
   if (!found) return NOT_FOUND
   const can = accessOf(found.item, account)
@@ -649,7 +650,7 @@ export function countMine(account, { today = null, now = Date.now() } = {}) {
 // a group's become unassigned and say who had them.
 
 /** A project was deleted: its tasks lose their project and keep the rest. */
-export function detachProjectWorkItems(projectId, { now = Date.now() } = {}) {
+export function detachProjectAssignments(projectId, { now = Date.now() } = {}) {
   if (!isProjectId(projectId)) return 0
   const file = projectFile(projectId)
   if (!fs.existsSync(file)) return 0
@@ -684,7 +685,7 @@ function eachItem(fn, now) {
  * were claimed from, or become unassigned and say who had them; tasks it made
  * pass to `toAccountId` (whoever takes over its projects).
  */
-export function handOverAccountWorkItems(accountId, username, toAccountId, { now = Date.now() } = {}) {
+export function handOverAccountAssignments(accountId, username, toAccountId, { now = Date.now() } = {}) {
   let unassigned = 0
   let handedOver = 0
   eachItem((t) => {
@@ -714,7 +715,7 @@ export function handOverAccountWorkItems(accountId, username, toAccountId, { now
 }
 
 /** A group was deleted: its tasks become unassigned and say which group had them. */
-export function unassignGroupWorkItems(groupId, groupName, { now = Date.now() } = {}) {
+export function unassignGroupAssignments(groupId, groupName, { now = Date.now() } = {}) {
   let unassigned = 0
   eachItem((t) => {
     let dirty = false

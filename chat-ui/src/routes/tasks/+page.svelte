@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { browser } from '$app/environment';
 	import { ActionIcon } from '$lib/components/app';
-	import { MyTasksPage } from '$lib/components/app/tasks';
+	import { MyAssignmentsPage } from '$lib/components/app/assignments';
 	import { SETTINGS_FALLBACK_EXIT_ROUTE } from '$lib/constants';
 
 	// Same exit behaviour as the Workflows and Projects pages.
@@ -21,5 +21,5 @@
 		<ActionIcon icon={X} tooltip="Close" onclick={handleClose} />
 	</div>
 
-	<MyTasksPage />
+	<MyAssignmentsPage />
 </div>

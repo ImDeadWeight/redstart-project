@@ -202,7 +202,7 @@ export function listAllProjects(account) {
 /**
  * The stored record, with no access check and no `access` field. For modules
  * that hang their own records off a project and decide access through
- * accessFor() themselves (work-items-storage.mjs). Never send it to a client.
+ * accessFor() themselves (assignments-storage.mjs). Never send it to a client.
  */
 export function findProjectById(id) {
   if (!isProjectId(id)) return null

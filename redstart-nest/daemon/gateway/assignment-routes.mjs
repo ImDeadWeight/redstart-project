@@ -1,27 +1,26 @@
 'use strict'
 
 // =============================================================================
-// Redstart Nest — Gateway /work-items routes (tasks plan Phase 1)
+// Redstart Nest — Gateway /assignments routes (tasks plan Phase 1)
 // =============================================================================
-// The tasks people give each other. Under /work-items, not /tasks: /tasks was
-// the assistant's background jobs and is still their alias (job-routes.mjs),
-// so an old client's job call must never reach this API.
+// The tasks people give each other, called assignments in code. Not under
+// /tasks: that is the assistant's background work (task-routes.mjs).
 //
-//   GET    /work-items/mine        ?include=done ?today=YYYY-MM-DD
+//   GET    /assignments/mine        ?include=done ?today=YYYY-MM-DD
 //                                  { items, counts: { open, overdue }, limits }
-//   GET    /work-items/count       ?today=  { open, overdue } — the sidebar badge
-//   GET    /work-items/created     ?include=done  tasks I made with no project
-//   GET    /work-items/assignees   ?projectId=  who a task can be given to
-//   GET    /work-items             ?projectId= (required) ?include=deleted
-//   POST   /work-items             { title, notes?, projectId?, assignee?, dueDate?, status? }
-//   GET    /work-items/:id         one task, with its history
-//   PATCH  /work-items/:id         any of title, notes, status, dueDate, assignee, projectId
-//   DELETE /work-items/:id         marks it deleted (restorable for 30 days)
-//   POST   /work-items/:id/claim   a member of the assigned group takes it
-//   POST   /work-items/:id/release hands a claimed task back to its group
-//   POST   /work-items/:id/restore
+//   GET    /assignments/count       ?today=  { open, overdue } — the sidebar badge
+//   GET    /assignments/created     ?include=done  tasks I made with no project
+//   GET    /assignments/assignees   ?projectId=  who a task can be given to
+//   GET    /assignments             ?projectId= (required) ?include=deleted
+//   POST   /assignments             { title, notes?, projectId?, assignee?, dueDate?, status? }
+//   GET    /assignments/:id         one task, with its history
+//   PATCH  /assignments/:id         any of title, notes, status, dueDate, assignee, projectId
+//   DELETE /assignments/:id         marks it deleted (restorable for 30 days)
+//   POST   /assignments/:id/claim   a member of the assigned group takes it
+//   POST   /assignments/:id/release hands a claimed task back to its group
+//   POST   /assignments/:id/restore
 //
-// Access is decided only by work-items-storage (accessOf there). A task the
+// Access is decided only by assignments-storage (accessOf there). A task the
 // caller may not see answers 404, not 403, so ids cannot be probed; one they
 // may see but not change answers 403. Each task in a response carries `can`,
 // so a client never works the rules out for itself.
@@ -31,20 +30,20 @@
 // =============================================================================
 
 import {
-  listMine, listCreated, listForProject, listAssignees, getWorkItem, createWorkItem, updateWorkItem,
-  claimWorkItem, releaseWorkItem, deleteWorkItem, restoreWorkItem, countMine, isDate,
+  listMine, listCreated, listForProject, listAssignees, getAssignment, createAssignment, updateAssignment,
+  claimAssignment, releaseAssignment, deleteAssignment, restoreAssignment, countMine, isDate,
   MAX_TITLE_CHARS, MAX_NOTES_CHARS, MAX_ITEMS_PER_PROJECT, MAX_DIRECT_PER_ACCOUNT, STATUSES,
-} from '../work-items-storage.mjs'
+} from '../assignments-storage.mjs'
 import { sendJson } from './http-json.mjs'
 import { logEvent } from '../logger.mjs'
 
-const ITEM = /^\/work-items\/([0-9a-f-]{36})$/
-const ACTION = /^\/work-items\/([0-9a-f-]{36})\/(claim|release|restore)$/
-const LISTS = new Set(['/work-items', '/work-items/mine', '/work-items/count', '/work-items/created', '/work-items/assignees'])
+const ITEM = /^\/assignments\/([0-9a-f-]{36})$/
+const ACTION = /^\/assignments\/([0-9a-f-]{36})\/(claim|release|restore)$/
+const LISTS = new Set(['/assignments', '/assignments/mine', '/assignments/count', '/assignments/created', '/assignments/assignees'])
 /** A task's JSON body: the notes limit, with room for the rest. */
 const MAX_BODY_BYTES = 64 * 1024
 
-export const WORK_ITEM_LIMITS = Object.freeze({
+export const ASSIGNMENT_LIMITS = Object.freeze({
   maxTitleChars: MAX_TITLE_CHARS,
   maxNotesChars: MAX_NOTES_CHARS,
   maxPerProject: MAX_ITEMS_PER_PROJECT,
@@ -52,7 +51,7 @@ export const WORK_ITEM_LIMITS = Object.freeze({
   statuses: STATUSES,
 })
 
-export function isWorkItemRoute(urlPath) {
+export function isAssignmentRoute(urlPath) {
   return LISTS.has(urlPath) || ITEM.test(urlPath) || ACTION.test(urlPath)
 }
 
@@ -92,47 +91,47 @@ function fail(res, r) {
 
 const who = (account) => account?.username ?? undefined
 
-export async function handleWorkItemRoute(req, res, urlPath, account) {
+export async function handleAssignmentRoute(req, res, urlPath, account) {
   try {
     const q = query(req)
 
-    if (urlPath === '/work-items/mine' && req.method === 'GET') {
+    if (urlPath === '/assignments/mine' && req.method === 'GET') {
       const r = listMine(account, { includeDone: includes(q).has('done'), today: todayOf(q) })
-      sendJson(res, 200, { ...r, limits: WORK_ITEM_LIMITS })
+      sendJson(res, 200, { ...r, limits: ASSIGNMENT_LIMITS })
       return true
     }
-    if (urlPath === '/work-items/count' && req.method === 'GET') {
+    if (urlPath === '/assignments/count' && req.method === 'GET') {
       sendJson(res, 200, countMine(account, { today: todayOf(q) }))
       return true
     }
-    if (urlPath === '/work-items/created' && req.method === 'GET') {
-      sendJson(res, 200, { ...listCreated(account, { includeDone: includes(q).has('done') }), limits: WORK_ITEM_LIMITS })
+    if (urlPath === '/assignments/created' && req.method === 'GET') {
+      sendJson(res, 200, { ...listCreated(account, { includeDone: includes(q).has('done') }), limits: ASSIGNMENT_LIMITS })
       return true
     }
-    if (urlPath === '/work-items/assignees' && req.method === 'GET') {
+    if (urlPath === '/assignments/assignees' && req.method === 'GET') {
       const r = listAssignees(account, q.get('projectId') || null)
       if (!r.ok) { fail(res, r); return true }
       sendJson(res, 200, { accounts: r.accounts, groups: r.groups })
       return true
     }
-    if (urlPath === '/work-items' && req.method === 'GET') {
+    if (urlPath === '/assignments' && req.method === 'GET') {
       const projectId = q.get('projectId')
       if (!projectId) {
-        sendJson(res, 400, { error: { message: 'projectId is required; your own tasks are /work-items/mine', type: 'invalid_request_error' } })
+        sendJson(res, 400, { error: { message: 'projectId is required; your own tasks are /assignments/mine', type: 'invalid_request_error' } })
         return true
       }
       const inc = includes(q)
       const r = listForProject(account, projectId, { includeDone: true, includeDeleted: inc.has('deleted') })
       if (!r.ok) { fail(res, r); return true }
-      sendJson(res, 200, { items: r.items, limits: WORK_ITEM_LIMITS })
+      sendJson(res, 200, { items: r.items, limits: ASSIGNMENT_LIMITS })
       return true
     }
-    if (urlPath === '/work-items' && req.method === 'POST') {
+    if (urlPath === '/assignments' && req.method === 'POST') {
       const body = await readCappedJson(req)
       if (!body) { sendJson(res, 400, { error: { message: 'Expected a JSON task of at most 64 KB', type: 'invalid_request_error' } }); return true }
-      const r = createWorkItem(account, body)
+      const r = createAssignment(account, body)
       if (!r.ok) { fail(res, r); return true }
-      logEvent('work_item', 'created', { account: who(account), project: !!r.item.projectId, assigned: !!r.item.assignee })
+      logEvent('assignment', 'created', { account: who(account), project: !!r.item.projectId, assigned: !!r.item.assignee })
       sendJson(res, 201, r.item)
       return true
     }
@@ -142,9 +141,9 @@ export async function handleWorkItemRoute(req, res, urlPath, account) {
     if (action) {
       if (req.method !== 'POST') return false
       const [, id, verb] = action
-      const r = verb === 'claim' ? claimWorkItem(account, id) : verb === 'release' ? releaseWorkItem(account, id) : restoreWorkItem(account, id)
+      const r = verb === 'claim' ? claimAssignment(account, id) : verb === 'release' ? releaseAssignment(account, id) : restoreAssignment(account, id)
       if (!r.ok) { fail(res, r); return true }
-      logEvent('work_item', verb === 'claim' ? 'claimed' : verb === 'release' ? 'released' : 'restored', { account: who(account) })
+      logEvent('assignment', verb === 'claim' ? 'claimed' : verb === 'release' ? 'released' : 'restored', { account: who(account) })
       sendJson(res, 200, r.item)
       return true
     }
@@ -154,7 +153,7 @@ export async function handleWorkItemRoute(req, res, urlPath, account) {
     const id = item[1]
 
     if (req.method === 'GET') {
-      const r = getWorkItem(account, id)
+      const r = getAssignment(account, id)
       if (!r.ok) { sendJson(res, 404, NOT_FOUND); return true }
       sendJson(res, 200, r.item)
       return true
@@ -162,16 +161,16 @@ export async function handleWorkItemRoute(req, res, urlPath, account) {
     if (req.method === 'PATCH') {
       const body = await readCappedJson(req)
       if (!body) { sendJson(res, 400, { error: { message: 'Expected a JSON object of at most 64 KB', type: 'invalid_request_error' } }); return true }
-      const r = updateWorkItem(account, id, body)
+      const r = updateAssignment(account, id, body)
       if (!r.ok) { fail(res, r); return true }
-      logEvent('work_item', 'updated', { account: who(account), fields: PATCH_FIELDS.filter((k) => k in body).join(',') })
+      logEvent('assignment', 'updated', { account: who(account), fields: PATCH_FIELDS.filter((k) => k in body).join(',') })
       sendJson(res, 200, r.item)
       return true
     }
     if (req.method === 'DELETE') {
-      const r = deleteWorkItem(account, id)
+      const r = deleteAssignment(account, id)
       if (!r.ok) { fail(res, r); return true }
-      logEvent('work_item', 'deleted', { account: who(account) })
+      logEvent('assignment', 'deleted', { account: who(account) })
       sendJson(res, 200, { deleted: true })
       return true
     }
